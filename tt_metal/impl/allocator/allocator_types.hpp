@@ -45,11 +45,6 @@ struct AllocatorConfig {
         l1_bank_remap;  // for remapping which l1 bank points to which bank if we assume normal row-major assignment
     CoreRangeSet compute_grid;
     uint32_t l1_alignment = 0;
-    // Alignment for L1 buffer BASE addresses only (the bank-manager free-list), distinct from l1_alignment
-    // (which also does page-size rounding). 0 => fall back to dram_alignment. Used to over-align L1 buffer
-    // bases (e.g. to a face on Quasar, where the packer requires a >=512B-aligned pack target) WITHOUT
-    // inflating small-page buffers or changing the l1_alignment that dispatch reads.
-    uint32_t l1_base_alignment = 0;
     bool disable_interleaved = false;
     AllocatorMode allocator_mode = AllocatorMode::LOCKSTEP;
 

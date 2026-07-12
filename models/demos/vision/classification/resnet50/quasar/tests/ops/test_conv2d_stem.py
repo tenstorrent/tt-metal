@@ -64,9 +64,12 @@ def test_quasar_conv2d_stem(mesh_device):
     torch_input_nchw = torch.randn((batch_size, in_channels, input_height, input_width), dtype=torch.bfloat16).float()
     torch_weight = torch.randn((out_channels, in_channels, *kernel_size), dtype=torch.bfloat16).float()
     torch_bias = torch.randn((1, 1, 1, out_channels), dtype=torch.bfloat16).float()
-    torch_golden = torch.nn.functional.conv2d(
-        torch_input_nchw, torch_weight, bias=torch_bias.reshape(-1), stride=stride, padding=padding
-    )
+    # DIAGNOSTIC (bias-pack vs output-region): run the conv WITHOUT fused bias to isolate whether the
+    # PACR0_TILE_INC fault is the fuse_bias pack path or any pack into the output-tensor L1 region. Golden is
+    # relu(conv) with NO bias to match. If this PASSES (no fault) -> the fused-bias pack is the culprit and
+    # doing bias separately is the fix. If it still faults -> the matmul->output pack itself is the problem
+    # (output region) -> op-local writer-copy. Restore fused bias after diagnosis.
+    torch_golden = torch.nn.functional.conv2d(torch_input_nchw, torch_weight, bias=None, stride=stride, padding=padding)
     torch_golden = torch.relu(torch_golden)
 
     # --- ttnn inputs: NCHW -> NHWC row-major host activation ---
@@ -90,10 +93,11 @@ def test_quasar_conv2d_stem(mesh_device):
         packer_l1_acc=True,
     )
 
-    out, [out_h, out_w], [tt_weight, tt_bias] = ttnn.experimental.quasar.conv2d(
+    # DIAGNOSTIC: bias_tensor=None (see golden note above). Restore bias_tensor=tt_bias after diagnosis.
+    out, [out_h, out_w], [tt_weight, _tt_bias] = ttnn.experimental.quasar.conv2d(
         input_tensor=tt_input,
         weight_tensor=tt_weight,
-        bias_tensor=tt_bias,
+        bias_tensor=None,
         in_channels=in_channels,
         out_channels=out_channels,
         batch_size=batch_size,
