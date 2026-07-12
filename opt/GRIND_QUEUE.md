@@ -72,7 +72,30 @@ a2v `:475-485` / v2a `:493-506` / audio_attn2 `:441-444`) preserved IF a runnabl
 - [x] **v2a + audio_attn2 folds — DEAD (same root cause).** Both audio-path, same un-runnable + un-gatable + below-noise verdict as a2v. **Batch D CLOSED.**
 
 ## Batch E — step-distill characterization (the 6s path; needs the PREWARM path to complete an E2E)
-- [ ] Make a full-pipeline run actually COMPLETE: run the prewarm capture+compile, then submit the run TWICE (first warms the trace, second measures) OR raise the run-stage timeout via a 2-reservation split. Then measure 6+2 E2E speed + quality.
+- [ ] **BLOCKED on the <300s reservation cap — NOT dispatchable as a cron fire-and-exit lap (forensic receipt: job 185309-15).**
+  Make a full-pipeline run actually COMPLETE: measure the traced 6+2 E2E speed + quality. Re-verified 2026-07-12 03:47Z
+  (20:47 PT) from the raw broker log of job **185309-15** (2026-07-11 18:53): that job WAS already the Batch-E run —
+  `test_pipeline_distilled -k bh_4x8sp1tp0_ring`, `LTX_CHECKPOINT=/home/kevinmi/.cache/.../ltx-2.3-22b-distilled-1.1.safetensors`
+  (kevinmi's HF cache; this box's own `~/.cache/ltx-checkpoints/` has only `sulphur_lora_fused_distil` + a dev ckpt, NOT
+  distilled-1.1, so `default_ltx_checkpoint` would fall to an HF-download string — must pass LTX_CHECKPOINT explicitly),
+  `LTX_S1_SIGMAS=1.0,0.99375,0.975,0.909375,0.725,0.421875,0.0` (7 vals = **6 steps**),
+  `LTX_S2_SIGMAS=0.909375,0.421875,0.0` (3 vals = **2 steps**), `RUN_VBENCH=0`, `traced=True`, `--timeout=270`.
+  **Timeline (log-verified):** model-load 32s → `warmup_buffers` 105s (traced=True FORCES it; RUN_WARMUP can't skip) →
+  gen#0 (lazy trace-CAPTURE pass) started ~18:55:30 and was **still running** when pytest-timeout killed it at 272.01s
+  → `1 failed … Failed: Timeout (>270.0s)`. gen#1 (the pure-replay STEADY-STATE measurement) NEVER ran. Device recovered
+  clean (health-gate OK 32 chips, **no reset**). **Root cause = 3 in-process pipeline passes** (warmup + gen#0 capture +
+  gen#1 replay) + VAE/audio/mp4-encode ×gens, NOT kernel compile — the kernel_prewarm banner shows 7742 targets built in
+  **5253ms** (already warm) ⇒ **the prewarm wrapper CANNOT rescue this** (it moves *compile* off-device; compile isn't the
+  cost). The metal TRACE is in-process device-DRAM ⇒ **cannot span two reservations** ⇒ the note's "submit twice / 2-reservation
+  split" does NOT work (each fresh broker job re-captures the trace from scratch). Fitting warmup+gen#0+gen#1 needs a single
+  **~320-350s** reservation vs the **<300s** cron cap ⇒ arithmetically over-budget; re-running at 290s would gain ~20s vs a
+  ~30-50s shortfall = a known re-timeout, not worth the reservation (185309-15 IS that receipt). **Its SPEED result is already
+  PREDICTED −1.89s** from the F0/I0 per-block receipts (S1 12.73ms/blk × 8→6 steps + S2 16.88ms/blk × 3→2 steps × N blocks),
+  and its **QUALITY is pre-known-FAIL** (6+2 on the current checkpoint = min-PCC 0.36; the shipped distilled ckpt fails
+  few-step — see MASTER_PLAN, HF B1a MISS). **Unblock paths (all off-cron):** (a) a broker-policy single >300s reservation
+  to capture the traced number end-to-end; (b) out-of-repo step-distilled checkpoint (the real 6s path, a user resourcing
+  decision). No in-budget cron variant yields a clean traced-comparable number (untraced single-gen would fit but is
+  dispatch-dominated ⇒ non-comparable / misleading, so not recorded).
   NOTE: raw 4x8 full-pipeline = guaranteed timeout; this is why it's last + needs the multi-pass warm.
 
 ## Batch F — CCL-collective matmul (the DOMINANT op, 56.3% = 11.57ms/block; NEVER config-swept)
