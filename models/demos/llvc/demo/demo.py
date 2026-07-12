@@ -40,22 +40,29 @@ def _glob_audio(path: str) -> list[str]:
     return sorted(files)
 
 
-def _load_audio(path: str, sample_rate: int) -> torch.Tensor:
-    import torchaudio
+def _resample(audio: torch.Tensor, sr: int, target: int) -> torch.Tensor:
+    """Linear resample via torch interpolation (no torchaudio/librosa dependency)."""
+    if sr == target:
+        return audio
+    n = int(round(audio.shape[-1] * target / sr))
+    a = audio.reshape(1, 1, -1)
+    a = torch.nn.functional.interpolate(a, size=n, mode="linear", align_corners=False)
+    return a.reshape(-1)
 
-    audio, sr = torchaudio.load(path)
-    audio = audio.mean(0, keepdim=False)
-    if sr != sample_rate:
-        audio = torchaudio.transforms.Resample(sr, sample_rate)(audio)
-    return audio
+
+def _load_audio(path: str, sample_rate: int) -> torch.Tensor:
+    import soundfile as sf
+
+    data, sr = sf.read(path, dtype="float32", always_2d=True)  # [T, C]
+    audio = torch.from_numpy(data).mean(dim=1)  # mono [T]
+    return _resample(audio, sr, sample_rate)
 
 
 def _save_audio(audio: torch.Tensor, path: str, sample_rate: int) -> None:
-    import torchaudio
+    import soundfile as sf
 
-    if audio.dim() == 1:
-        audio = audio.unsqueeze(0)
-    torchaudio.save(path, audio, sample_rate)
+    audio = audio.detach().cpu().reshape(-1).float().numpy()
+    sf.write(path, audio, sample_rate)
 
 
 def run_demo(args: argparse.Namespace, *, device: ttnn.Device) -> None:
