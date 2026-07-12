@@ -1188,10 +1188,38 @@ bool write_to_device_buffer(
                     reinterpret_cast<uintptr_t>(src_region_start),
                     reinterpret_cast<uintptr_t>(src_region_end));
             } else {
-                const uint64_t src_offset_base = static_cast<uintptr_t>(src_region_start - pinned_host_base);
-                pinned_src_addr = pinned_noc_base + src_offset_base;
-                pinned_src_noc_xy = noc_addr_pair_opt->pcie_xy_enc;
-                use_pinned_transfer = true;
+                const uint64_t candidate_src_addr =
+                    pinned_noc_base + static_cast<uint64_t>(src_region_start - pinned_host_base);
+                const uint64_t candidate_end = candidate_src_addr + region.size;
+                // Only use the pinned fast-path when the buffer's device IOVA range is within the
+                // NOC-addressable host window. On an IOMMU host, map_for_dma returns a kernel-
+                // assigned IOVA; once a buffer no longer fits the low reserved IOVA region the
+                // IOMMU hands back a top-down 64-bit IOVA (near 2^64) that the NOC's PCIe address
+                // encoding cannot express (NOC_ADDR_LOCAL_BITS = 36). cq_prefetch's
+                // process_relay_linear_cmd would then read a wrong/unmapped address, its
+                // noc_async_read_barrier_with_trid never returns, and the device wedges. This is
+                // NOT a fixed size limit -- it depends on the IOMMU IOVA allocator -- so guard on
+                // addressability (the same [base, end] the firmware uses for noc_pcie_addr), not on
+                // transfer size. The non-pinned path below streams via the hugepage command queue,
+                // whose IOVA is always addressable. Root fix: constrain the device DMA mask so the
+                // IOMMU never allocates unreachable IOVAs (tenstorrent/tt-metal#49696).
+                const bool iova_noc_addressable = candidate_src_addr >= hal.get_pcie_addr_lower_bound() &&
+                                                  candidate_end >= candidate_src_addr &&  // no overflow
+                                                  candidate_end - 1 <= hal.get_pcie_addr_upper_bound();
+                if (iova_noc_addressable) {
+                    pinned_src_addr = candidate_src_addr;
+                    pinned_src_noc_xy = noc_addr_pair_opt->pcie_xy_enc;
+                    use_pinned_transfer = true;
+                } else {
+                    log_debug(
+                        tt::LogMetal,
+                        "Pinned source IOVA range [{:#x}, {:#x}) is outside the NOC-addressable PCIe "
+                        "window [{:#x}, {:#x}]; using the chunked hugepage path.",
+                        candidate_src_addr,
+                        candidate_end,
+                        hal.get_pcie_addr_lower_bound(),
+                        hal.get_pcie_addr_upper_bound());
+                }
             }
         }
     }

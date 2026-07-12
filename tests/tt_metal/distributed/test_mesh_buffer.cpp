@@ -860,6 +860,72 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
     EXPECT_EQ(dst_aligned, src);
 }
 
+// Regression for the fast-dispatch large single-buffer DRAM write hang (issue #49691).
+//
+// The pinned-memory write path emits a single unchunked CQ_PREFETCH_CMD_RELAY_LINEAR for the whole
+// buffer (write_to_device_buffer / write_interleaved_buffer_to_device does not iterate for pinned
+// transfers), reading the source directly from the buffer's device IOVA. On an IOMMU host, once a
+// buffer no longer fits the low reserved IOVA region, map_for_dma returns a top-down 64-bit IOVA
+// (near 2^64) that the NOC's PCIe address encoding cannot express (NOC_ADDR_LOCAL_BITS = 36).
+// cq_prefetch's process_relay_linear_cmd then reads a wrong/unmapped address, its
+// noc_async_read_barrier_with_trid never returns, and the device wedges. The threshold is NOT a
+// fixed size -- it depends on the IOMMU IOVA allocator; a large buffer is just the reliable way to
+// land a top-down IOVA. The fix only uses the pinned fast-path when the buffer's IOVA range is
+// within the NOC-addressable window, else falls back to the chunked hugepage path.
+TEST_F(MeshBufferTestSuite, EnqueueWritePinnedMemoryLargeInterleavedBuffer) {
+    if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+        return;
+    }
+    const uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
+
+    // Replicated mesh buffer -> per-device buffers are interleaved (not sharded), i.e. the path
+    // that emits the single pinned relay_linear. Make it large enough to reliably land a top-down
+    // (NOC-unaddressable) IOVA on an IOMMU host: 163840 * 4096 B = 640 MiB.
+    DeviceLocalBufferConfig per_device_buffer_config{
+        .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
+    const uint32_t tiles_per_device = 163840;
+    const uint64_t bytes_per_device = static_cast<uint64_t>(tiles_per_device) * single_tile_size;
+
+    ReplicatedBufferConfig global_buffer_config{.size = bytes_per_device};
+    auto mesh_buffer = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
+
+    // Pinned host source buffer with distinct values so a partial/wrong transfer is caught.
+    const size_t num_elems = bytes_per_device / sizeof(uint32_t);
+    auto src = std::make_shared<vector_aligned<uint32_t>>(num_elems, 0);
+    uint32_t* src_ptr = reinterpret_cast<uint32_t*>(src->data());
+    for (size_t i = 0; i < num_elems; ++i) {
+        src_ptr[i] = static_cast<uint32_t>(i);
+    }
+    HostBuffer host_buffer(ttsl::Span<uint32_t>(src_ptr, num_elems), MemoryPin(src));
+
+    const distributed::MeshCoordinate coord(0, 0);
+    auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
+    auto pinned_unique = experimental::PinnedMemory::Create(
+        *mesh_device_,
+        coordinate_range_set,
+        host_buffer,
+        /*map_to_noc=*/true);
+    std::shared_ptr<experimental::PinnedMemory> pinned_shared = std::move(pinned_unique);
+
+    // Pinned write of the full > 512 MiB buffer. Pre-fix this wedges the device; post-fix it
+    // completes via the chunked fallback.
+    auto write_transfer = distributed::ShardDataTransfer{coord}
+                              .host_data(static_cast<void*>(src_ptr))
+                              .region(BufferRegion(0, bytes_per_device));
+    experimental::ShardDataTransferSetPinnedMemory(write_transfer, pinned_shared);
+    mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
+
+    // Bit-exact round trip.
+    std::vector<uint32_t> dst(num_elems, 0);
+    auto read_transfer = distributed::ShardDataTransfer{coord}
+                             .host_data(static_cast<void*>(dst.data()))
+                             .region(BufferRegion(0, bytes_per_device));
+    mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
+
+    EXPECT_EQ(0, std::memcmp(dst.data(), src_ptr, bytes_per_device));
+}
+
 TEST_F(MeshBufferTestSuite, EnqueueReadWithDistributedHostBufferAndPinnedMemory) {
     if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
