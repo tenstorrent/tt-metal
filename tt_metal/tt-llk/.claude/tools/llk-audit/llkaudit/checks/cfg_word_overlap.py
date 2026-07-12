@@ -22,6 +22,7 @@ must NOT be merged:
 So the namespace is decided by the WRITE INSTRUCTION: SETC16 -> "THREAD", every
 other config write -> "CONFIG". (THCON is a sub-range of Config, NOT its own file.)
 """
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -95,10 +96,36 @@ class CfgWordOverlap(Check):
         for pw in fb.family("pointer_write"):
             kind, _ = registry.classify_write(pw)
             if kind not in registry.CFG_WRITE_KINDS:
+                # Not a recognized cfg write. If the PRODUCER NAME looks like a cfg
+                # accessor (renamed/added -> signature drift), surface it UNRESOLVED
+                # rather than drop it; a genuinely non-cfg data write has no cfg-ish
+                # token and is still dropped (else every array write would flood).
+                if registry.is_cfg_looking_unrecognized(pw):
+                    unresolved.append(
+                        self._unresolved(
+                            pw,
+                            f"unrecognized cfg-space producer "
+                            f"'{pw.get('producer','?')}' (signature drift? add it to "
+                            f"registry.CFG_POINTER_PRODUCERS)",
+                        )
+                    )
                 continue
-            word, field = registry.resolve_word(pw.get("index_text", ""), fb.addr32)
+            idx = pw.get("index_text", "")
+            word, field = registry.resolve_word(idx, fb.addr32)
             if word is not None:
                 add("CONFIG", word, field, pw, f"mmio:{kind}")
+                # A runtime/loop additive offset (cfg[FIELD_ADDR32 + i]) resolves only
+                # the BASE word; the write may span base+1..+N and that span is
+                # unknowable — surface it UNRESOLVED so it isn't silently reduced to
+                # the base word (the base write is still recorded above).
+                if registry.has_runtime_word_offset(idx):
+                    unresolved.append(
+                        self._unresolved(
+                            pw,
+                            f"{field or '?'} + <runtime offset> — write may span words "
+                            f"beyond the base ({word}); range unresolved",
+                        )
+                    )
             else:
                 # This IS a config write (kind ∈ CFG_WRITE_KINDS) we couldn't
                 # resolve to a word — including a NON-LITERAL index like

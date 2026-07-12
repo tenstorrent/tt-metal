@@ -1983,6 +1983,54 @@ def test_noc_l1_invalidate():
     )
 
 
+@case
+def test_cfg_word_runtime_offset_surfaces_unresolved():
+    # cfg[FIELD_ADDR32 + i] (runtime/loop offset): the BASE word is still recorded,
+    # but the span beyond it is unknowable -> ALSO surfaced UNRESOLVED, not silently
+    # reduced to the base word.
+    F = "tt_llk_wormhole_b0/common/inc/cpack_common.h"
+    facts = [
+        fn("_llk_pack_", F, 100, 200),
+        pw(F, 110, "get_cfg_pointer", "FIELD_ADDR32 + i", func="_llk_pack_"),
+    ]
+    fb = FactBase("wormhole", facts)
+    fb.addr32 = {"FIELD_ADDR32": 7}
+    out = CfgWordOverlap().run(fb)
+    assert any(
+        f.hint == "UNRESOLVED" and "runtime offset" in f.detail for f in out
+    ), out
+    # a LITERAL offset is fully resolved -> NO runtime-offset UNRESOLVED
+    facts2 = [
+        fn("_llk_pack_", F, 100, 200),
+        pw(F, 110, "get_cfg_pointer", "FIELD_ADDR32 + 2", func="_llk_pack_"),
+    ]
+    fb2 = FactBase("wormhole", facts2)
+    fb2.addr32 = {"FIELD_ADDR32": 7}
+    assert not any("runtime offset" in f.detail for f in CfgWordOverlap().run(fb2))
+
+
+@case
+def test_cfg_word_drift_producer_surfaces_unresolved():
+    # A renamed/unrecognized producer whose NAME looks like a cfg accessor
+    # (get_cfg_pointer_v2) -> UNRESOLVED signature-drift guard, not a silent drop.
+    F = "tt_llk_wormhole_b0/common/inc/cunpack_common.h"
+    drift = [
+        fn("_llk_unpack_", F, 0, 100),
+        pw(F, 10, "get_cfg_pointer_v2", "SOME_ADDR32", func="_llk_unpack_"),
+    ]
+    out = CfgWordOverlap().run(FactBase("wormhole", drift))
+    assert any(
+        f.hint == "UNRESOLVED" and "unrecognized cfg-space producer" in f.detail
+        for f in out
+    ), out
+    # a genuinely non-cfg data producer (no cfg-ish token) is STILL dropped — no flood.
+    data = [
+        fn("_llk_unpack_", F, 0, 100),
+        pw(F, 10, "get_tile_ptr", "SOME_ADDR32", func="_llk_unpack_"),
+    ]
+    assert CfgWordOverlap().run(FactBase("wormhole", data)) == []
+
+
 def main():
     failed = 0
     for c in CASES:

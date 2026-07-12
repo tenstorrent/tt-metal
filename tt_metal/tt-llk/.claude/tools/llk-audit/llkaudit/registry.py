@@ -113,6 +113,29 @@ def classify_write(pw: dict):
     return None, None
 
 
+# Producer-name tokens that mark a pointer accessor as CONFIG-space. Used ONLY to
+# detect signature DRIFT: a producer whose name carries one of these but is not an
+# exact match in CFG_POINTER_PRODUCERS / CFG_VAR_NAME_HINTS (e.g. a renamed
+# get_cfg_pointer_v2, or a new get_cfg32_ptr) — surfaced UNRESOLVED instead of being
+# silently dropped, so a renamed/added cfg accessor can't hide (the tool's job is to
+# EXPOSE drift). Kept tight (the tokens in the RECOGNIZED accessor names) so an
+# ordinary data-pointer write is never mislabeled a cfg write.
+CFG_PRODUCER_NAME_HINTS = ("cfg", "regfile")
+
+
+def is_cfg_looking_unrecognized(pw: dict) -> bool:
+    """True iff classify_write did NOT recognize this pointer_write, but its producer
+    NAME looks like a CONFIG-space accessor — a signature-drift candidate to surface
+    UNRESOLVED rather than drop. False for a recognized write (already handled) and
+    for a producer with no cfg-ish token (an ordinary data write, correctly dropped)."""
+    if classify_write(pw)[0] is not None:
+        return False  # already recognized -> not a drift candidate
+    if pw.get("provenance_kind") not in ("call", "var", "cast"):
+        return False  # no named producer to judge (e.g. 'unresolved' base)
+    prod = (pw.get("producer", "") or "").lower()
+    return any(h in prod for h in CFG_PRODUCER_NAME_HINTS)
+
+
 def write_call_kind(callee: str):
     return MMIO_WRITE_CALLS.get(callee)
 
@@ -464,6 +487,24 @@ _WORD_OFFSET_RE = re.compile(
 # cfg_rmw / cfg_reg_rmw_tensix take a FIELD_RMW composite alias; the sibling
 # word-address macro is FIELD_ADDR32.
 _RMW_ALIAS_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)_RMW\b")
+# An *_ADDR32 word index carrying a NON-LITERAL additive offset, e.g.
+# `cfg[FIELD_ADDR32 + i]` in a loop (with a runtime stride). resolve_word resolves
+# only the base word (its offset group is a literal), so the span base+1..+N is
+# silently lost — has_runtime_word_offset lets the checker surface that as UNRESOLVED
+# instead of reducing the write to the base word. The offset must START with an
+# IDENTIFIER char (`[A-Za-z_]`) — an unambiguous non-literal (a variable / another
+# field), distinguishing `+ i` (runtime) from `+ 0x18` / `+ 2` (literal, handled by
+# resolve_word). A leading-`(?![0-9])` form is wrong: `\s*` can match zero and let the
+# lookahead pass on the space before a literal.
+_RUNTIME_WORD_OFFSET_RE = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_]*_ADDR32\s*[+\-]\s*[A-Za-z_]"
+)
+
+
+def has_runtime_word_offset(text: str) -> bool:
+    """True if an *_ADDR32 index has a non-literal additive offset (runtime/loop
+    stride), so the write may span words beyond the resolved base — unknowable."""
+    return bool(_RUNTIME_WORD_OFFSET_RE.search(text or ""))
 
 
 def resolve_word(text: str, addr32: dict):
