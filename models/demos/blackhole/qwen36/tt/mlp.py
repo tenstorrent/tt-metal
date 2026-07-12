@@ -258,10 +258,12 @@ class Qwen36MLP:
             # Prefill (M>1 tile, compute-bound): FPU-tuned 2D config (grid width -> 1x4 subblock,
             # in0_block_w=4) beats ttnn-auto's 1x1 stall ~2.7x (test_mlp_matmul_sweep_prefill). SILU fused.
             seq = x.shape[-2]
+            # max_cols = device worker-grid width (11 on BH): wide grid (gate/up -> 9x10) vs old 8-wide.
+            _gw = getattr(args, "decode_grid_w", 8)
             pc_gate = tpc.create_prefill_mlp_matmul_program_config(
-                seq, args.dim, w.w1.shape[-1], fused_activation=ttnn.UnaryOpType.SILU
+                seq, args.dim, w.w1.shape[-1], fused_activation=ttnn.UnaryOpType.SILU, max_cols=_gw
             )
-            pc_up = tpc.create_prefill_mlp_matmul_program_config(seq, args.dim, w.w3.shape[-1])
+            pc_up = tpc.create_prefill_mlp_matmul_program_config(seq, args.dim, w.w3.shape[-1], max_cols=_gw)
             # L1 output (gate/up outputs; down output via mc_out below): +FPU, avoids the DRAM round-trip
             # (test_mlp_matmul_sweep_prefill *_outL1). The [seq,N] tensors fit L1 at the prefill chunk.
             w1_out = ttnn.linear(
@@ -320,8 +322,12 @@ class Qwen36MLP:
         if self._mlp_1d_decode and hidden.shape[-2] <= ttnn.TILE_SIZE:
             # 1D mcast decode down-proj on a small explicit grid (~16 cores).
             w2_pc = args.mlp_w2_decode_1d_progcfg
-        elif hidden.shape[-2] > ttnn.TILE_SIZE and getattr(args, "prefill_progcfg", None) is not None:
-            w2_pc = args.prefill_progcfg(hidden.shape[-2], hidden.shape[-1], w.w2.shape[-1])
+        elif hidden.shape[-2] > ttnn.TILE_SIZE:
+            # Prefill down-proj: subblock-tuned 2D config with the wide grid (max_cols=device width),
+            # off the generic 8-wide prefill_progcfg. Output L1 via mc_w2_out below.
+            w2_pc = tpc.create_prefill_mlp_matmul_program_config(
+                hidden.shape[-2], hidden.shape[-1], w.w2.shape[-1], max_cols=getattr(args, "decode_grid_w", 8)
+            )
         # down-proj OUTPUT in L1 for the tuned prefill path (DRAM input `hidden` + L1 output = the
         # validated sweep outL1 config; tt_all_reduce already consumes an L1 partial).
         mc_w2_out = ttnn.L1_MEMORY_CONFIG if (x.shape[-2] <= ttnn.TILE_SIZE or _prefill_tuned) else mc

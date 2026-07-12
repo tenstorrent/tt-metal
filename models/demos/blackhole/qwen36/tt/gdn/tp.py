@@ -276,7 +276,13 @@ class TPGatedDeltaNet:
             if x.shape[-2] > tpc.TILE_SIZE:
                 # Prefill de-fuse arm (QWEN36_FUSE_GDN_OUT_MMRS_PREFILL=0): tuned 2D config vs ttnn-auto.
                 # fp32 [seq,dim] output too big for L1 (42MB) -> DRAM out; separate tt_all_reduce does the RS.
-                pc = tpc.create_prefill_mlp_matmul_program_config(x.shape[-2], weight.shape[-2], weight.shape[-1])
+                # max_cols = device width (11 on BH): wide grid (~10-wide), fp32-neutral.
+                pc = tpc.create_prefill_mlp_matmul_program_config(
+                    x.shape[-2],
+                    weight.shape[-2],
+                    weight.shape[-1],
+                    max_cols=getattr(self.args, "decode_grid_w", 8),
+                )
                 return ttnn.linear(
                     x, weight, compute_kernel_config=self.cfg, program_config=pc, memory_config=ttnn.DRAM_MEMORY_CONFIG
                 )

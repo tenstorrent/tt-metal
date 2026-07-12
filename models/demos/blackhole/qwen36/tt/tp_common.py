@@ -99,17 +99,22 @@ def create_dram_sharded_matmul_program_config(m, k, n, num_cores=None):
     )
 
 
-def create_matmul_1d_decode_progcfg(m, k, n, num_cores, fused_activation=None, fp32_acc=True):
-    """Explicit-grid 1D (mcast_in0) decode matmul progcfg on exactly `num_cores` cores — small grids beat
-    the ~80-core DRAM-sharded grid on the bandwidth-bound skinny decode matmuls. Weight must be interleaved."""
-    cols = next(d for d in range(8, 0, -1) if num_cores % d == 0)
-    rows = num_cores // cols
+def create_matmul_1d_decode_progcfg(m, k, n, num_cores, fused_activation=None, fp32_acc=True, grid_w=8):
+    """Explicit-grid 1D (mcast_in0) decode matmul progcfg on ~`num_cores` cores — small grids beat
+    the ~80-core DRAM-sharded grid on the bandwidth-bound skinny decode matmuls. Weight must be interleaved.
+
+    Grid is shaped WIDE-first (cols up to `grid_w`, the device worker-grid width — 11 on BH P150, 8 on
+    WH): for a fixed core budget a wide-short grid shortens the in0 multicast column and beats a
+    tall-narrow one (~2% on this matmul; see test_mlp_matmul_sweep wide1d_* vs forced1d_*). Default
+    grid_w=8 preserves the legacy shaping for callers that don't pass the device width."""
+    cols = min(grid_w, num_cores)
+    rows = math.ceil(num_cores / cols)
     m_tiles = math.ceil(m / TILE_SIZE)
     k_tiles = math.ceil(k / TILE_SIZE)
     n_tiles = math.ceil(n / TILE_SIZE)
     # mcast_in0: every core streams the full K, so in0_block_w must divide the full k_tiles.
     per_core_k = _find_largest_divisor(k_tiles)
-    per_core_n = math.ceil(n_tiles / num_cores)
+    per_core_n = math.ceil(n_tiles / (cols * rows))
     cap = 4 if fp32_acc else 8  # fp32_dest_acc caps subblock area at 4
     sub_w = max(i for i in range(1, cap + 1) if per_core_n % i == 0)
     sub_h = max(i for i in range(1, cap + 1) if m_tiles % i == 0 and i * sub_w <= cap)
@@ -212,11 +217,16 @@ def _best_prefill_cols(n, max_cols):
     return best_cols
 
 
-def create_prefill_mlp_matmul_program_config(m, k, n, fused_activation=None):
+def create_prefill_mlp_matmul_program_config(m, k, n, fused_activation=None, max_cols=None):
     """FPU-tuned 2D prefill progcfg for MLP matmuls: picks the grid width that maximizes the output
-    subblock (drives prefill FPU) instead of the default full width. gate/up -> 7-wide, down -> 8-wide."""
+    subblock (drives prefill FPU) instead of the default full width.
+
+    max_cols caps the grid width. Default = prefill_grid_default()[0] (8). Pass the device worker-grid
+    width (11 on BH P150) to let the subblock heuristic go wide -> the measured prefill winners
+    (gate 9-wide, down/wo 10-wide, gdn_qkvz 11-wide; test_mlp_matmul_sweep_prefill). Fused AG/RS paths
+    pin 8-wide separately and are unaffected."""
     grid = prefill_grid_default()
-    cols = _best_prefill_cols(n, grid[0])
+    cols = _best_prefill_cols(n, max_cols or grid[0])
     return create_prefill_matmul_program_config(m, k, n, grid_size=(cols, grid[1]), fused_activation=fused_activation)
 
 

@@ -233,9 +233,15 @@ class TPAttention:
             )
         if not self._wo_sharded:
             if x.shape[-2] > tpc.TILE_SIZE:
-                # Prefill: FPU-tuned 2D config (8-wide -> 1x4 subblock) beats ttnn-auto's 1x1 stall;
-                # L1 output (gated stays DRAM) feeds the separate RS. See test_mlp_matmul_sweep_prefill.
-                pc = tpc.create_prefill_mlp_matmul_program_config(x.shape[-2], weight.shape[-2], weight.shape[-1])
+                # Prefill: FPU-tuned 2D config beats ttnn-auto's 1x1 stall; L1 output (gated stays DRAM)
+                # feeds the separate RS. max_cols = device width (11 on BH): wide grid (~10-wide) + the
+                # existing L1-out. See test_mlp_matmul_sweep_prefill.
+                pc = tpc.create_prefill_mlp_matmul_program_config(
+                    x.shape[-2],
+                    weight.shape[-2],
+                    weight.shape[-1],
+                    max_cols=getattr(self.args, "decode_grid_w", 8),
+                )
                 return ttnn.linear(
                     x,
                     weight,
