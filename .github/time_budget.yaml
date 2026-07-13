@@ -314,8 +314,11 @@ models:
     bh_p300: 8
     bh_quietbox_2: 30
   unit:
-    wh_llmbox: 100
-    wh_galaxy_perf: 10
+    wh_llmbox: 177
+    wh_galaxy_perf: 264
+    bh_quietbox_2: 150
+    bh_loudbox: 45
+    wh_n150_civ2: 42
   # Per-tier unit budgets. Consumed by the tiered model pipelines; the plain `unit`
   # key is used for the non-tiered pipelines (galaxy-unit, t3000-unit).
   unit_tier1:

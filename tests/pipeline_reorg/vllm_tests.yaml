@@ -1,0 +1,593 @@
+# Test matrix for the vLLM nightly tests (.github/workflows/vllm-nightly-tests-impl.yaml).
+#
+# Pipeline-reorg format: name, model, cmd, server-timeout, benchmark-timeout, skus:{<sku>:{timeout}},
+# team, owner_id, plus three JSON blobs:
+#   server-config    : how the vLLM server is launched (mesh-device, tt-config, server args, ...)
+#   guards           : which post-launch checks run (coherence, structured-output, multimodal, sampling)
+#   benchmark-config : extra args for the benchmark phases (additional-benchmark-args)
+# `cmd` is the server launcher; the Run-server step runs it in the background with the args/env
+# expanded from server-config. The two phases (server, benchmark) keep their own timeouts
+# (server-timeout / benchmark-timeout); the sku `timeout` is their sum, for budget accounting only.
+# Filter by `model` (substring; 'all' = all).
+#
+# Owners (Slack IDs). Single-owner entries carry owner_id; two-owner entries name both in a comment.
+
+# owners: Pavle Petrovic (U08E1JCDVNX), Radoica Draskic (U08BH66EXAL)
+- name: "[WH-T3K] Gemma3-27B"
+  model: "google/gemma-3-27b-it"
+  cmd: "python3 vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py"
+  server-timeout: 45
+  benchmark-timeout: 5
+  server-config: '{
+      "mesh-device": "T3K",
+      "tt-config": {
+        "sample_on_device_mode": "decode_only",
+        "fabric_config": "FABRIC_1D",
+        "l1_small_size": 4096
+      },
+      "additional-server-args": "--async-scheduling",
+      "tt-llama-text-ver": "tt_transformers"
+    }'
+  guards: '{
+      "multimodal": true
+    }'
+  benchmark-config: '{}'
+  skus:
+    wh_llmbox:
+      timeout: 50  # server-timeout(45) + benchmark-timeout(5); budget only
+  team: models
+
+# owners: Pavle Petrovic (U08E1JCDVNX), Radoica Draskic (U08BH66EXAL)
+- name: "[WH-GLX] Gemma3-27B DP=4"
+  model: "google/gemma-3-27b-it"
+  cmd: "python3 vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py"
+  server-timeout: 45
+  benchmark-timeout: 5
+  server-config: '{
+      "mesh-device": "(4, 8)",
+      "tt-config": {
+        "sample_on_device_mode": "decode_only",
+        "fabric_config": "FABRIC_1D_RING",
+        "l1_small_size": 4096
+      },
+      "additional-server-args": "--data_parallel_size 4 --max_num_seqs 32 --async-scheduling",
+      "tt-llama-text-ver": "tt_transformers",
+      "tt_mm_throttle_perf": 5
+    }'
+  guards: '{
+      "multimodal": true
+    }'
+  benchmark-config: '{}'
+  skus:
+    wh_galaxy_perf:
+      timeout: 50  # server-timeout(45) + benchmark-timeout(5); budget only
+  team: models
+
+- name: "[WH-N150] Gemma4-E2B"
+  model: "google/gemma-4-E2B-it"
+  cmd: "python3 vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py"
+  server-timeout: 30
+  benchmark-timeout: 12
+  server-config: '{
+      "mesh-device": "N150",
+      "additional-server-args": "--max_num_seqs 1 --async-scheduling"
+    }'
+  guards: '{
+      "coherence-test": true,
+      "multimodal": false
+    }'
+  benchmark-config: '{}'
+  skus:
+    wh_n150_civ2:
+      timeout: 42  # server-timeout(30) + benchmark-timeout(12); budget only
+  team: models
+  owner_id: "U08TJ70UFRT"  # Harry Andrews
+
+- name: "[BH-QB-2] Gemma4-12B"
+  model: "google/gemma-4-12B-it"
+  cmd: "python3 vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py"
+  server-timeout: 20
+  benchmark-timeout: 5
+  server-config: '{
+      "mesh-device": "P150x4",
+      "tt-config": {
+        "sample_on_device_mode": "decode_only",
+        "fabric_config": "FABRIC_1D",
+        "trace_region_size": 400000000
+      },
+      "additional-server-args": "--max_model_len 131072 --max_num_seqs 1 --async-scheduling"
+    }'
+  guards: '{
+      "coherence-test": true,
+      "multimodal": false
+    }'
+  benchmark-config: '{}'
+  skus:
+    bh_quietbox_2:
+      timeout: 25  # server-timeout(20) + benchmark-timeout(5); budget only
+  team: models
+  owner_id: "U08TJ70UFRT"  # Harry Andrews
+
+- name: "[BH-QB-2] Gemma4-26B-A4B"
+  model: "google/gemma-4-26B-A4B-it"
+  cmd: "python3 vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py"
+  server-timeout: 30
+  benchmark-timeout: 10
+  server-config: '{
+      "mesh-device": "P150x4",
+      "tt-config": {
+        "sample_on_device_mode": "decode_only",
+        "fabric_config": "FABRIC_1D",
+        "trace_region_size": 300000000
+      },
+      "additional-server-args": "--max_model_len 131072 --max_num_seqs 1 --async-scheduling"
+    }'
+  guards: '{
+      "coherence-test": true,
+      "multimodal": false
+    }'
+  benchmark-config: '{}'
+  skus:
+    bh_quietbox_2:
+      timeout: 40  # server-timeout(30) + benchmark-timeout(10); budget only
+  team: models
+  owner_id: "U08TJ70UFRT"  # Harry Andrews
+
+# KNOWN ERROR — [WH-T3K] Gemma4-31B (kept enabled below to track):
+# device hang (fast-dispatch timeout) during decode on WH-T3K only; the same
+# serving config passes on [BH-QB-2] Gemma4-31B. Not a serving/KV-config issue
+# — a tt-metal dispatch-layer hang. Tracked in
+# https://github.com/tenstorrent/tt-metal/issues/49494
+- name: "[WH-T3K] Gemma4-31B"
+  model: "google/gemma-4-31B-it"
+  cmd: "python3 vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py"
+  server-timeout: 45
+  benchmark-timeout: 5
+  server-config: '{
+      "mesh-device": "T3K",
+      "tt-config": {
+        "sample_on_device_mode": "decode_only",
+        "fabric_config": "FABRIC_1D"
+      },
+      "additional-server-args": "--max_model_len 32768 --max_num_seqs 1 --async-scheduling"
+    }'
+  guards: '{
+      "multimodal": false
+    }'
+  benchmark-config: '{}'
+  skus:
+    wh_llmbox:
+      timeout: 50  # server-timeout(45) + benchmark-timeout(5); budget only
+  team: models
+  owner_id: "U08TJ70UFRT"  # Harry Andrews
+
+- name: "[BH-QB-2] Gemma4-31B"
+  model: "google/gemma-4-31B-it"
+  cmd: "python3 vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py"
+  server-timeout: 20
+  benchmark-timeout: 5
+  server-config: '{
+      "mesh-device": "P150x4",
+      "tt-config": {
+        "sample_on_device_mode": "decode_only",
+        "fabric_config": "FABRIC_1D"
+      },
+      "additional-server-args": "--max_model_len 32768 --max_num_seqs 1 --async-scheduling"
+    }'
+  guards: '{
+      "multimodal": false
+    }'
+  benchmark-config: '{}'
+  skus:
+    bh_quietbox_2:
+      timeout: 25  # server-timeout(20) + benchmark-timeout(5); budget only
+  team: models
+  owner_id: "U08TJ70UFRT"  # Harry Andrews
+
+- name: "[BH-QB-2] Qwen3.6-27B"
+  model: "Qwen/Qwen3.6-27B"
+  cmd: "python3 vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py"
+  server-timeout: 30
+  benchmark-timeout: 10
+  server-config: '{
+      "mesh-device": "P150x4",
+      "tt-config": {
+        "fabric_config": "FABRIC_1D",
+        "trace_region_size": 268435456
+      },
+      "additional-server-args": "--max_num_seqs 1 --async-scheduling",
+      "default-chat-template-kwargs": {
+        "enable_thinking": false
+      }
+    }'
+  guards: '{
+      "coherence-test": true,
+      "multimodal": false
+    }'
+  benchmark-config: '{}'
+  skus:
+    bh_quietbox_2:
+      timeout: 40  # server-timeout(30) + benchmark-timeout(10); budget only
+  team: models
+  owner_id: "U08HL8X1ECD"  # Aniruddha Tupe
+
+# owners: Harry Andrews (U08TJ70UFRT), Stuti Raizada (U06F3ER8X9A)
+- name: "[WH-GLX] GPT-OSS-120B (low-latency)"
+  model: "openai/gpt-oss-120b"
+  cmd: "python3 vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py"
+  server-timeout: 35
+  benchmark-timeout: 15
+  server-config: '{
+      "mesh-device": "(4, 8)",
+      "tt-config": {
+        "sample_on_device_mode": "all"
+      },
+      "additional-server-args": "--max_num_seqs 1 --async-scheduling",
+      "tt-llama-text-ver": "tt_transformers"
+    }'
+  guards: '{
+      "multimodal": false,
+      "structured-output": true,
+      "additional-structured-output-args": "--backend openai-chat --endpoint /v1/chat/completions --dataset json"
+    }'
+  benchmark-config: '{}'
+  skus:
+    wh_galaxy_perf:
+      timeout: 50  # server-timeout(35) + benchmark-timeout(15); budget only
+  team: models
+
+# owners: Harry Andrews (U08TJ70UFRT), Stuti Raizada (U06F3ER8X9A)
+- name: "[WH-GLX] GPT-OSS-120B (high-throughput)"
+  model: "openai/gpt-oss-120b"
+  cmd: "python3 vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py"
+  server-timeout: 35
+  benchmark-timeout: 10
+  server-config: '{
+      "mesh-device": "(4, 8)",
+      "tt-config": {
+        "fabric_config": "FABRIC_1D_RING",
+        "sample_on_device_mode": "all",
+        "trace_region_size": 100000000
+      },
+      "additional-server-args": "--data_parallel_size 4 --max_num_seqs 32 --async-scheduling",
+      "tt-llama-text-ver": "tt_transformers",
+      "tt_mm_throttle_perf": 2
+    }'
+  guards: '{
+      "multimodal": false,
+      "structured-output": true,
+      "additional-structured-output-args": "--backend openai-chat --endpoint /v1/chat/completions --dataset json",
+      "sampling-tests": true,
+      "sampling-test-timeout": 40
+    }'
+  benchmark-config: '{}'
+  skus:
+    wh_galaxy_perf:
+      timeout: 45  # server-timeout(35) + benchmark-timeout(10); budget only
+  team: models
+
+- name: "[WH-T3K] Llama-3.1-8B-Instruct with sampling-tests"
+  model: "meta-llama/Llama-3.1-8B-Instruct"
+  cmd: "python3 vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py"
+  server-timeout: 15
+  benchmark-timeout: 5
+  server-config: '{
+      "mesh-device": "T3K",
+      "tt-config": {
+        "fabric_config": "FABRIC_1D",
+        "sample_on_device_mode": "all",
+        "trace_region_size": 85000000
+      },
+      "additional-server-args": "--async-scheduling",
+      "tt-llama-text-ver": "tt_transformers"
+    }'
+  guards: '{
+      "multimodal": false,
+      "structured-output": true,
+      "sampling-tests": true,
+      "sampling-test-filter": "not test_mixed_params_batch and not TestSeedingAndVariety and not test_repetition_penalty_mixed_batch and not test_presence_penalty_mixed_batch and not test_frequency_penalty_mixed_batch"
+    }'
+  benchmark-config: '{}'
+  skus:
+    wh_llmbox:
+      timeout: 20  # server-timeout(15) + benchmark-timeout(5); budget only
+  team: models
+  owner_id: "U08E1JCDVNX"  # Pavle Petrovic
+
+- name: "[WH-T3K] Llama-3.1-8B-Instruct (prefix caching)"
+  model: "meta-llama/Llama-3.1-8B-Instruct"
+  cmd: "python3 vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py"
+  server-timeout: 10
+  benchmark-timeout: 5
+  server-config: '{
+      "mesh-device": "T3K",
+      "tt-config": {
+        "fabric_config": "FABRIC_1D"
+      },
+      "additional-server-args": "--async-scheduling",
+      "tt-llama-text-ver": "tt_transformers"
+    }'
+  guards: '{
+      "multimodal": false
+    }'
+  benchmark-config: '{
+      "additional-benchmark-args": "--random-prefix-len 128"
+    }'
+  skus:
+    wh_llmbox:
+      timeout: 15  # server-timeout(10) + benchmark-timeout(5); budget only
+  team: models
+  owner_id: "U08E1JCDVNX"  # Pavle Petrovic
+
+- name: "[BH-QB-2] Llama-3.1-8B-Instruct"
+  model: "meta-llama/Llama-3.1-8B-Instruct"
+  cmd: "python3 vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py"
+  server-timeout: 10
+  benchmark-timeout: 10
+  server-config: '{
+      "mesh-device": "P150x4",
+      "tt-config": {
+        "trace_region_size": 76000000
+      },
+      "additional-server-args": "--async-scheduling",
+      "tt-llama-text-ver": "tt_transformers"
+    }'
+  guards: '{
+      "multimodal": false,
+      "structured-output": true
+    }'
+  benchmark-config: '{}'
+  skus:
+    bh_quietbox_2:
+      timeout: 20  # server-timeout(10) + benchmark-timeout(10); budget only
+  team: models
+  owner_id: "U08GELBB1AP"  # Ambrose Ling
+
+- name: "[BH-LB] Llama-3.1-8B-Instruct with sampling-tests"
+  model: "meta-llama/Llama-3.1-8B-Instruct"
+  cmd: "python3 vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py"
+  server-timeout: 35
+  benchmark-timeout: 10
+  server-config: '{
+      "mesh-device": "P150x8",
+      "additional-server-args": "--data_parallel_size 8 --async-scheduling",
+      "tt-llama-text-ver": "tt_transformers"
+    }'
+  guards: '{
+      "multimodal": false,
+      "structured-output": true,
+      "sampling-tests": true
+    }'
+  benchmark-config: '{}'
+  skus:
+    bh_loudbox:
+      timeout: 45  # server-timeout(35) + benchmark-timeout(10); budget only
+  team: models
+  owner_id: "U08GELBB1AP"  # Ambrose Ling
+
+# owners: Pavle Petrovic (U08E1JCDVNX), Radoica Draskic (U08BH66EXAL)
+- name: "[WH-GLX] Llama-3.1-8B-Instruct DP=4"
+  model: "meta-llama/Llama-3.1-8B-Instruct"
+  cmd: "python3 vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py"
+  server-timeout: 20
+  benchmark-timeout: 5
+  server-config: '{
+      "mesh-device": "TG",
+      "tt-config": {
+        "fabric_config": "FABRIC_1D_RING",
+        "sample_on_device_mode": "all"
+      },
+      "additional-server-args": "--data_parallel_size 4 --async-scheduling",
+      "tt-llama-text-ver": "tt_transformers"
+    }'
+  guards: '{
+      "multimodal": false,
+      "structured-output": true
+    }'
+  benchmark-config: '{}'
+  skus:
+    wh_galaxy_perf:
+      timeout: 25  # server-timeout(20) + benchmark-timeout(5); budget only
+  team: models
+
+- name: "[WH-GLX] Llama-3.3-70B-Instruct device with sampling-tests (prefix caching)"
+  model: "meta-llama/Llama-3.3-70B-Instruct"
+  cmd: "python3 vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py"
+  server-timeout: 35
+  benchmark-timeout: 10
+  server-config: '{
+      "mesh-device": "TG",
+      "tt-config": {
+        "dispatch_core_axis": "col",
+        "sample_on_device_mode": "all",
+        "fabric_config": "FABRIC_1D_RING",
+        "worker_l1_size": 1344544,
+        "trace_region_size": 220000000
+      },
+      "additional-server-args": "--data_parallel_size 4 --max_num_seqs 8 --async-scheduling",
+      "tt-llama-text-ver": "llama3_70b_galaxy"
+    }'
+  guards: '{
+      "multimodal": false,
+      "sampling-tests": true
+    }'
+  benchmark-config: '{
+      "additional-benchmark-args": "--random-prefix-len 256"
+    }'
+  skus:
+    wh_galaxy_perf:
+      timeout: 45  # server-timeout(35) + benchmark-timeout(10); budget only
+  team: models
+  owner_id: "U08E1JCDVNX"  # Pavle Petrovic
+
+- name: "[WH-GLX] Qwen3-32B device with sampling-tests"
+  model: "Qwen/Qwen3-32B"
+  cmd: "python3 vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py"
+  server-timeout: 35
+  benchmark-timeout: 10
+  server-config: '{
+      "mesh-device": "TG",
+      "tt-config": {
+        "dispatch_core_axis": "col",
+        "sample_on_device_mode": "all",
+        "fabric_config": "FABRIC_1D_RING",
+        "worker_l1_size": 1344544,
+        "trace_region_size": 184915840
+      },
+      "additional-server-args": "--data_parallel_size 4 --max_num_seqs 8 --async-scheduling",
+      "tt-qwen3-text-ver": "qwen3_32b_galaxy"
+    }'
+  guards: '{
+      "multimodal": false,
+      "sampling-tests": true
+    }'
+  benchmark-config: '{}'
+  skus:
+    wh_galaxy_perf:
+      timeout: 45  # server-timeout(35) + benchmark-timeout(10); budget only
+  team: models
+  owner_id: "U053W15B6JF"  # Djordje Ivanovic
+
+- name: "[WH-T3K] Qwen2.5-VL-72B-Instruct"
+  model: "Qwen/Qwen2.5-VL-72B-Instruct"
+  cmd: "python3 vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py"
+  server-timeout: 12
+  benchmark-timeout: 10
+  server-config: '{
+      "mesh-device": "T3K",
+      "tt-config": {
+        "fabric_config": "FABRIC_1D",
+        "trace_region_size": 28467200
+      },
+      "additional-server-args": "--max_model_len 2048 --async-scheduling",
+      "tt-llama-text-ver": "tt_transformers"
+    }'
+  guards: '{
+      "multimodal": true,
+      "structured-output": true
+    }'
+  benchmark-config: '{}'
+  skus:
+    wh_llmbox:
+      timeout: 22  # server-timeout(12) + benchmark-timeout(10); budget only
+  team: models
+  owner_id: "U07RY6B5FLJ"  # Gongyu Wang
+
+- name: "[WH-T3K] Qwen3-VL-32B-Instruct"
+  model: "Qwen/Qwen3-VL-32B-Instruct"
+  cmd: "python3 vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py"
+  server-timeout: 10
+  benchmark-timeout: 10
+  server-config: '{
+      "mesh-device": "T3K",
+      "tt-config": {
+        "fabric_config": "FABRIC_1D",
+        "trace_region_size": 28467200
+      },
+      "additional-server-args": "--async-scheduling",
+      "tt-llama-text-ver": "tt_transformers"
+    }'
+  guards: '{
+      "coherence-test": false,
+      "multimodal": true,
+      "structured-output": true
+    }'
+  benchmark-config: '{}'
+  skus:
+    wh_llmbox:
+      timeout: 20  # server-timeout(10) + benchmark-timeout(10); budget only
+  team: models
+  owner_id: "U08H31YMN4Q"  # Sarva Sanjay
+
+- name: "[WH-GLX] NoOp test model (vLLM overhead)"
+  model: "models/vllm_test_utils/no_op_test"
+  cmd: "python3 vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py"
+  server-timeout: 2
+  benchmark-timeout: 2
+  server-config: '{
+      "mesh-device": "(1, 1)",
+      "tt-config": {
+        "register_test_models": true,
+        "input_queue_batching_delay": 0
+      },
+      "additional-server-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct --async-scheduling"
+    }'
+  guards: '{
+      "multimodal": false
+    }'
+  benchmark-config: '{
+      "additional-benchmark-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct --temperature 0.0"
+    }'
+  skus:
+    wh_galaxy_perf:
+      timeout: 4  # server-timeout(2) + benchmark-timeout(2); budget only
+  team: models
+  owner_id: "U08E1JCDVNX"  # Pavle Petrovic
+
+# ---------------------------------------------------------------------------
+# Disabled entries — preserved for re-enable. Uncomment to restore.
+# ---------------------------------------------------------------------------
+#
+# [WH-T3K] Gemma4-26B-A4B — temporarily disabled: DRAM OOM during KV cache
+# allocation (layer 25/30) causes EngineCore init failure on WH-T3K. Full
+# unquantized KV cache no longer fits. Re-enable once hybrid KV cache is enabled
+# (sizes sliding-window layers' KV cache to the window instead of the full
+# sequence length, freeing the DRAM needed to fit the full model).
+# Tracked in https://github.com/tenstorrent/tt-metal/issues/49257
+#
+# - name: "[WH-T3K] Gemma4-26B-A4B"
+#   model: "google/gemma-4-26B-A4B-it"
+#   cmd: "python3 vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py"
+#   server-timeout: 30
+#   benchmark-timeout: 10
+#   server-config: '{
+#       "mesh-device": "T3K",
+#       "tt-config": {
+#         "sample_on_device_mode": "decode_only",
+#         "fabric_config": "FABRIC_1D",
+#         "trace_region_size": 200000000
+#       },
+#       "additional-server-args": "--max_num_seqs 1 --async-scheduling"
+#     }'
+#   guards: '{
+#       "coherence-test": true,
+#       "multimodal": false
+#     }'
+#   benchmark-config: '{}'
+#   skus:
+#     wh_llmbox:
+#       timeout: 40  # server-timeout(30) + benchmark-timeout(10); budget only
+#   team: models
+#   owner_id: "U08TJ70UFRT"  # Harry Andrews
+#
+# [WH-T3K] Multi-process reduce scatter test model — disabled due to Metal
+# timeout in reduce-scatter async tests. https://github.com/tenstorrent/vllm/issues/416
+# Originally disabled in: https://github.com/tenstorrent/tt-metal/pull/39088
+# (owner reassigned Salar Hosseini Khorasgani -> Pavle Petrovic on departure)
+#
+# - name: "[WH-T3K] Multi-process reduce scatter test model"
+#   model: "models/vllm_test_utils/t3000_multiproc_test"
+#   cmd: "python3 vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py"
+#   server-timeout: 4
+#   benchmark-timeout: 4
+#   server-config: '{
+#       "mesh-device": "(2, 4)",
+#       "tt-config": {
+#         "rank_binding": "tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml",
+#         "mpi_args": "--allow-run-as-root --tag-output",
+#         "config_pkl_dir": "vllm",
+#         "register_test_models": true
+#       },
+#       "additional-server-args": "--data_parallel_size 8 --tokenizer meta-llama/Llama-3.1-8B-Instruct --async-scheduling"
+#     }'
+#   guards: '{
+#       "multimodal": false
+#     }'
+#   benchmark-config: '{
+#       "additional-benchmark-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct"
+#     }'
+#   skus:
+#     wh_llmbox:
+#       timeout: 8  # server-timeout(4) + benchmark-timeout(4); budget only
+#   team: models
+#   owner_id: "U08E1JCDVNX"  # Pavle Petrovic
