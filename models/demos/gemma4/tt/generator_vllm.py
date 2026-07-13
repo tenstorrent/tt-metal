@@ -7,6 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.generator import ChunkedPrefillPageTableGuardMixin
 from models.demos.gemma4.tt.generator_trace import (
@@ -162,19 +163,47 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         self._bounded_sliding_kv_cache = os.environ.get("GEMMA4_BOUNDED_SLIDING_KV_CACHE", _bounded_default) != "0"
 
     @classmethod
-    def get_max_tokens_all_users(cls, model_name: str = "", **kwargs) -> int:
+    def get_max_tokens_all_users(
+        cls,
+        model_name: str = "",
+        num_devices: int = 1,
+        tt_data_parallel: int = 1,
+        **kwargs,
+    ) -> int:
         # The all-user KV-cache pool size is a per-device / per-model tuning knob,
-        # not a model constant: with hybrid KV groups disabled every layer
-        # allocates a full-length KV buffer, so the pool that fits in DRAM is
-        # hardware-specific (e.g. ~49K on QB2/P300x2 for 31B, ~131K for 12B).
-        # Keep that value OUT of the model code — set ``GEMMA4_MAX_TOKENS_ALL_USERS``
-        # from the tt-inference-server model spec's per-device ``env_vars`` block
-        # (gated there by device + model). This generic, value-free hook just
-        # honors that override and otherwise defers to the default.
+        # not a model constant: with hybrid KV groups disabled (the default, see
+        # ``_HYBRID_KV_CACHE_GROUPS_ENABLED``) every layer allocates a full-length
+        # KV buffer, so the default ~131K pool OOMs DRAM on the larger configs.
+        # The value that fits is hardware-specific, so it belongs here alongside
+        # the model code (mirrors the per-config rules the other model classes
+        # keep in tt_transformers ``get_max_tokens_all_users``) rather than in a
+        # CI/deploy env var. ``GEMMA4_MAX_TOKENS_ALL_USERS`` remains an override so
+        # tt-inference-server (or a benchmark) can retune per deployment.
         override = os.environ.get("GEMMA4_MAX_TOKENS_ALL_USERS")
         if override:
             return int(override)
-        return super().get_max_tokens_all_users(model_name=model_name, **kwargs)
+
+        devices_per_dp_cache = num_devices // tt_data_parallel
+
+        # Gemma4-31B: WH-T3K (8 devices) and BH-QB2/P150x4 (4 devices). With hybrid
+        # KV groups off (no true vLLM chunked prefill yet), every layer allocates a
+        # full-length KV buffer and the default pool OOMs DRAM; 32768 is validated
+        # to fit. The cap is the real DRAM lever, distinct from ``--max_model_len``.
+        # See tt-metal #49745 / #49257 / #49083. Lifts automatically once hybrid KV
+        # groups can be enabled (the sliding layers then allocate only their window).
+        if (
+            not cls._HYBRID_KV_CACHE_GROUPS_ENABLED
+            and "gemma-4-31B" in model_name
+            and ((devices_per_dp_cache == 8 and is_wormhole_b0()) or (devices_per_dp_cache == 4 and is_blackhole()))
+        ):
+            return 32_768
+
+        return super().get_max_tokens_all_users(
+            model_name=model_name,
+            num_devices=num_devices,
+            tt_data_parallel=tt_data_parallel,
+            **kwargs,
+        )
 
     def _maybe_disable_pli_prefill_trace(self, enable_trace: bool, batch_size: int = 1) -> bool:
         return maybe_disable_pli_prefill_trace(enable_trace, self.model[0], batch_size=batch_size)
