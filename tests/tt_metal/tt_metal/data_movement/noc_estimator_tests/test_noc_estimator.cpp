@@ -839,7 +839,10 @@ static void sweep_one_to_all(const shared_ptr<distributed::MeshDevice>& mesh_dev
         CoreCoord size;
     };
     vector<GridConfig> grids = {{{2, 2}}, {{3, 3}}, {{5, 5}}, {{8, 8}}};
-    if (device_grid.x > 8 || device_grid.y > 8) {
+    // Add the full device grid if not already included
+    if (std::none_of(grids.begin(), grids.end(), [&](const GridConfig& g) {
+            return g.size.x == device_grid.x && g.size.y == device_grid.y;
+        })) {
         grids.push_back({device_grid});
     }
 
@@ -928,7 +931,10 @@ static void sweep_all_to_all(const shared_ptr<distributed::MeshDevice>& mesh_dev
     CoreCoord device_grid = device->compute_with_storage_grid_size();
 
     vector<CoreCoord> grid_sizes = {{2, 2}, {3, 3}, {5, 5}, {8, 8}};
-    if (device_grid.x > 8 || device_grid.y > 8) {
+    // Add the full device grid if not already included
+    if (std::none_of(grid_sizes.begin(), grid_sizes.end(), [&](const CoreCoord& g) {
+            return g.x == device_grid.x && g.y == device_grid.y;
+        })) {
         grid_sizes.push_back({device_grid});
     }
 
@@ -957,7 +963,10 @@ static void sweep_all_from_all(const shared_ptr<distributed::MeshDevice>& mesh_d
     CoreCoord device_grid = device->compute_with_storage_grid_size();
 
     vector<CoreCoord> grid_sizes = {{2, 2}, {3, 3}, {5, 5}, {8, 8}};
-    if (device_grid.x > 8 || device_grid.y > 8) {
+    // Add the full device grid if not already included
+    if (std::none_of(grid_sizes.begin(), grid_sizes.end(), [&](const CoreCoord& g) {
+            return g.x == device_grid.x && g.y == device_grid.y;
+        })) {
         grid_sizes.push_back({device_grid});
     }
 
