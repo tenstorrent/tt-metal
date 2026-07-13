@@ -21,6 +21,8 @@ Run (craq-sim, kernel asserts OFF):
   ./qsr_sim_run models/demos/vision/classification/resnet50/quasar/tests/ops/test_max_pool2d_channel_sweep.py
 """
 
+import os
+
 import pytest
 import torch
 
@@ -37,6 +39,11 @@ KERNEL, STRIDE, PADDING = (3, 3), (2, 2), (1, 1)
 
 
 def _run_max_pool_channels(mesh_device, channels):
+    # DIAGNOSTIC: flush a START marker BEFORE any device work. A Quasar packer PACR0_TILE_INC fault
+    # (ERROR_TRISC1, code 0x19) stops the device mid-op and can abort the session before pytest reports
+    # which parametrization faulted -- so the LAST "launching" line printed with NO matching "DONE" names
+    # the faulting channel count. (flush=True so it lands before the fault, unlike buffered logging.)
+    print(f"[channel_sweep] START channels={channels} ({channels // 32} tiles)", flush=True)
     device = mesh_device
     torch.manual_seed(0)
     batch = 1
@@ -68,6 +75,11 @@ def _run_max_pool_channels(mesh_device, channels):
     )
     x = ttnn.from_torch(x_nhwc_flat, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT).to(device, mem_config)
 
+    print(
+        f"[channel_sweep] launching max_pool2d channels={channels} ({channels // 32} tiles) "
+        f"num_cores={num_cores} shard_height={shard_height}",
+        flush=True,
+    )
     max_pool2d = ttnn.experimental.quasar.max_pool2d if is_quasar() else ttnn.max_pool2d
     out = max_pool2d(
         input_tensor=x,
@@ -81,6 +93,7 @@ def _run_max_pool_channels(mesh_device, channels):
         dilation=[1, 1],
     )
     ttnn.synchronize_device(device)
+    print(f"[channel_sweep] DONE device op channels={channels} ({channels // 32} tiles)", flush=True)
 
     got = ttnn.to_torch(out).float().reshape(1, 1, batch * out_h * out_w, channels)
     got_max = got.max().item()
@@ -95,4 +108,14 @@ def _run_max_pool_channels(mesh_device, channels):
 @pytest.mark.parametrize("channels", CHANNELS, ids=[f"{c}c_{c // 32}tiles" for c in CHANNELS])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_quasar_max_pool2d_channel_sweep(mesh_device, channels):
+    # DIAGNOSTIC knobs to pin/bisect the faulting channel count without a session-killing fault blocking
+    # the rest of the sweep (comma-separated channel counts):
+    #   QSR_POOL_SWEEP_ONLY=96        -> run ONLY channels=96 (isolate one)
+    #   QSR_POOL_SWEEP_SKIP=96,160    -> skip these (continue past a known-faulting one to find others)
+    only = os.environ.get("QSR_POOL_SWEEP_ONLY", "").strip()
+    if only and channels not in {int(c) for c in only.split(",") if c.strip()}:
+        pytest.skip(f"channels={channels} not in QSR_POOL_SWEEP_ONLY={only}")
+    skip = os.environ.get("QSR_POOL_SWEEP_SKIP", "").strip()
+    if skip and channels in {int(c) for c in skip.split(",") if c.strip()}:
+        pytest.skip(f"channels={channels} in QSR_POOL_SWEEP_SKIP={skip}")
     _run_max_pool_channels(mesh_device, channels)
