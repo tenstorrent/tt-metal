@@ -189,7 +189,9 @@ def test_resolve_gemma4_config_path_aliases(model_path, sku):
     ],
 )
 def test_resolve_trace_region_size_from_hf_hub_cache_path(hub_path, sku):
-    assert resolve_trace_region_size_for_candidates(hf_model_name_candidates(hub_path), sku) == TRACE_REGION_SIZE_DYNAMIC
+    assert (
+        resolve_trace_region_size_for_candidates(hf_model_name_candidates(hub_path), sku) == TRACE_REGION_SIZE_DYNAMIC
+    )
 
 
 def _gpt_oss_trace_model_key_from_env() -> str:
