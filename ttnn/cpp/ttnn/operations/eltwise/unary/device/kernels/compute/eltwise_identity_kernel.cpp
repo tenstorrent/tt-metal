@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/common.h"
-#include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -14,28 +14,13 @@ void kernel_main() {
     constexpr auto cb_input = tt::CBIndex::c_0;
     constexpr auto cb_output = tt::CBIndex::c_2;
 
-    DataflowBuffer dfb_in(cb_input);
-    DataflowBuffer dfb_out(cb_output);
-
     init_sfpu(cb_input, cb_output);
-    copy_tile_init(cb_input);
 
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        tile_regs_acquire();
-
-        dfb_in.wait_front(1);
-        dfb_out.reserve_back(1);
-
-        copy_tile(cb_input, 0, 0);
-
-        tile_regs_commit();
-        tile_regs_wait();
-
-        pack_tile(0, cb_output);
-
-        dfb_in.pop_front(1);
-        dfb_out.push_back(1);
-
-        tile_regs_release();
-    }
+    compute_kernel_lib::copy<
+        cb_input,
+        cb_output,
+        compute_kernel_lib::InputLifecycle::Streaming,
+        compute_kernel_lib::OutputLifecycle::Streaming,
+        compute_kernel_lib::CopyTileReconfig::None,
+        compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::tiles(num_tiles));
 }

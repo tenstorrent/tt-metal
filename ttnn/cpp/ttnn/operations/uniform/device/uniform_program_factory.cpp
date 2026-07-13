@@ -164,7 +164,7 @@ ProgramDescriptor UniformDeviceOperation::create_descriptor(
         // seed/from/to are DYNAMIC (excluded from compute_program_hash): baked here for the
         // cache-miss build, re-applied on every cache hit via get_dynamic_runtime_args().
         compute_desc.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs{seed, f2u_from, f2u_to, tile_offset, units_per_core});
+            core, KernelDescriptor::CoreRuntimeArgs{seed, f2u_from, f2u_to, units_per_core});
 
         // Register the (in-place) output address as a Buffer* binding so uniform takes the fast
         // cache-hit path; the framework allows the input==output alias (see resolve_bindings).
@@ -184,7 +184,7 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> UniformDeviceOperation::get_dynamic
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // compute is kernel 1; its runtime args are {seed, f2u_from, f2u_to, tile_offset, units_per_core}.
+    // compute is kernel 1; its runtime args are {seed, f2u_from, f2u_to, units_per_core}.
     // seed/from/to are excluded from the hash and re-applied here; the rest are static.
     constexpr uint32_t kComputeKernelIdx = 1;
     auto cores = uniform_work_split(output).cores;

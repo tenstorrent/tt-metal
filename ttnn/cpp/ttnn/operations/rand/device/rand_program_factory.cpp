@@ -190,8 +190,10 @@ ProgramDescriptor RandDeviceOperation::create_descriptor(
 
         // seed/from/to are DYNAMIC (excluded from compute_program_hash): baked here for the
         // cache-miss build, and re-applied on every cache hit via get_dynamic_runtime_args().
+        // NOTE: the compute kernel (compute_uniform.cpp, shared with uniform) reads only
+        // {seed, from, to, num_tiles}; tile_offset is a writer-only arg (output offset).
         compute_desc.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs{seed, from_bits, to_bits, tile_offset, units_per_core});
+            core, KernelDescriptor::CoreRuntimeArgs{seed, from_bits, to_bits, units_per_core});
 
         // Register the output address as a Buffer* binding so rand takes the fast cache-hit path
         // (real program caching) with the address correctly re-patched each dispatch.
@@ -211,7 +213,7 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> RandDeviceOperation::get_dynamic_ru
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    // compute is kernel 1; its runtime args are {seed, from_bits, to_bits, tile_offset, units_per_core}.
+    // compute is kernel 1; its runtime args are {seed, from_bits, to_bits, units_per_core}.
     // seed/from/to are excluded from the hash and re-applied here; the rest are static.
     constexpr uint32_t kComputeKernelIdx = 1;
     auto ws = compute_rand_work_split(operation_attributes, output, mesh_dispatch_coordinate);

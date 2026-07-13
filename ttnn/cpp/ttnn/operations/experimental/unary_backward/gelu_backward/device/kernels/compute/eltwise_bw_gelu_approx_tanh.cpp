@@ -3,22 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-
-#include "api/compute/common.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/binary_bitwise_sfpu.h"
-#include "api/compute/binary_shift.h"
-#include "api/compute/compute_kernel_api.h"
-#include "api/compute/copy_dest_values.h"
-#include "api/compute/eltwise_unary/fill.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_fill.hpp"         // FillScalar
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"         // Square, CopyDest
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_activations.hpp"  // Tanh
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // AddBinary, SubBinary, MulBinary
 #include "api/dataflow/circular_buffer.h"
 
 #define M_SQRT2 1.41421356237309504880f    /* sqrt(2) */
 #define M_2_SQRTPI 1.12837916709551257390f /* 2/sqrt(pi) */
+
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -27,94 +23,54 @@ void kernel_main() {
     constexpr auto cb_input = tt::CBIndex::c_1;
     constexpr auto cb_grad_in = tt::CBIndex::c_2;
 
-    CircularBuffer cb_grad_out_cb(cb_grad_out);
-    CircularBuffer cb_input_cb(cb_input);
-    CircularBuffer cb_grad_in_cb(cb_grad_in);
-
-    constexpr float kBeta = M_SQRT2 * M_2_SQRTPI * 0.5;
-    constexpr float kKappa = 0.044715;
+    constexpr float kBeta = M_SQRT2 * M_2_SQRTPI * 0.5f;
+    constexpr float kKappa = 0.044715f;
 
     unary_op_init_common(cb_grad_out, cb_grad_in);
-    add_binary_tile_init();
-    mul_binary_tile_init();
-    square_tile_init();
-    tanh_tile_init();
-    sub_binary_tile_init();
 
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        cb_grad_in_cb.reserve_back(1);
-        cb_grad_out_cb.wait_front(1);
-        cb_input_cb.wait_front(1);
-
-        tile_regs_acquire();
-
-        copy_tile(cb_grad_out, 0, 0);
-        copy_tile(cb_input, 0, 1);
-        copy_tile(cb_input, 0, 2);  // tile[2] = x
-        copy_tile(cb_input, 0, 5);  // tile[5] = x
-
-        // tile[1] = x^3
-        square_tile(1);
-        mul_binary_tile(1, 2, 1);
-
-        // tile[1] = 0.044715 * x^3
-        fill_tile(3, kKappa);
-        mul_binary_tile(1, 3, 1);
-
-        // tile[1] = x + 0.044715 * x^3
-        add_binary_tile(1, 2, 1);
-
-        // tile[1] = sqrt(2/π) * (x + 0.044715 * x^3)
-        fill_tile(3, kBeta);
-        mul_binary_tile(1, 3, 1);
-
-        // tile[1] = tanh(sqrt(2/π) * (x + 0.044715 * x^3))
-        tanh_tile_init();
-        tanh_tile(1);
-        copy_dest_values(1, 4);  // save tanh to tile[4]
-
-        // CDF term: tile[1] = 0.5 * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x^3)))
-        fill_tile(3, 1.0f);
-        add_binary_tile(1, 3, 1);
-        fill_tile(3, 0.5f);
-        mul_binary_tile(1, 3, 1);
-
-        // tile[4] = 1 - tanh^2
-        square_tile(4);
-        fill_tile(3, 1.0f);
-        sub_binary_tile(3, 4, 3);
-        copy_dest_values(3, 4);
-
-        // tile[2] = (1 + 0.134145 * x**2)
-        fill_tile(3, kKappa * 3.0f);
-        square_tile(2);            // x^2
-        mul_binary_tile(2, 3, 2);  // 0.134145 * x**2
-        fill_tile(3, 1.0f);
-        add_binary_tile(2, 3, 2);  // 1 + 0.134145 * x**2
-
-        // PDF term: tile[2] = 0.5 * sqrt(2/π) * (1 + 0.134145 * x^2) * (1 - tanh^2)
-        mul_binary_tile(2, 4, 2);
-        fill_tile(3, kBeta / 2.0f);
-        mul_binary_tile(2, 3, 2);
-
-        // tile[2] = x * pdf term
-        copy_dest_values(5, 3);
-        mul_binary_tile(2, 3, 2);
-
-        // result: tile[1] = grad * (cdf_term + x * pdf_term)
-        add_binary_tile(1, 2, 1);  // cdf_term + x * pdf_term
-        // tile[0] = grad * (cdf_term + x * pdf_term)
-        mul_binary_tile(0, 1, 0);
-
-        tile_regs_commit();
-        tile_regs_wait();
-
-        pack_tile(0, cb_grad_in);
-
-        tile_regs_release();
-
-        cb_grad_out_cb.pop_front(1);
-        cb_input_cb.pop_front(1);
-        cb_grad_in_cb.push_back(1);
-    }
+    using D = ckl::Dst;
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::tiles(num_tiles),
+        // grad_out -> D0 ; x -> D1 (wait owner) / D2 / D5 (pop owner)
+        ckl::CopyTile<cb_grad_out, D::D0, ckl::InputLifecycle::Streaming, ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<cb_input, D::D1, ckl::InputLifecycle::HeldStream, ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<cb_input, D::D2, ckl::InputLifecycle::CallerManaged, ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<cb_input, D::D5, ckl::InputLifecycle::NoWaitPop, ckl::CopyTileReconfig::None>{},
+        // z = beta * (x + kappa * x^3)
+        ckl::Square<D::D1>{},                   // D1 = x^2
+        ckl::MulBinary<D::D1, D::D2, D::D1>{},  // D1 = x^3
+        ckl::FillScalar<D::D3>{kKappa},
+        ckl::MulBinary<D::D1, D::D3, D::D1>{},  // D1 = kappa*x^3
+        ckl::AddBinary<D::D1, D::D2, D::D1>{},  // D1 = x + kappa*x^3
+        ckl::FillScalar<D::D3>{kBeta},
+        ckl::MulBinary<D::D1, D::D3, D::D1>{},  // D1 = z
+        ckl::Tanh<D::D1>{},                     // D1 = tanh(z)
+        ckl::CopyDest<D::D1, D::D4>{},          // D4 = tanh(z)
+        // cdf_term = 0.5 * (1 + tanh(z))  -> D1
+        ckl::FillScalar<D::D3>{1.0f},
+        ckl::AddBinary<D::D1, D::D3, D::D1>{},
+        ckl::FillScalar<D::D3>{0.5f},
+        ckl::MulBinary<D::D1, D::D3, D::D1>{},
+        // D4 = 1 - tanh^2
+        ckl::Square<D::D4>{},
+        ckl::FillScalar<D::D3>{1.0f},
+        ckl::SubBinary<D::D3, D::D4, D::D3>{},  // D3 = 1 - tanh^2
+        ckl::CopyDest<D::D3, D::D4>{},          // D4 = 1 - tanh^2
+        // D2 = (1 + 3*kappa*x^2)
+        ckl::FillScalar<D::D3>{kKappa * 3.0f},
+        ckl::Square<D::D2>{},                   // D2 = x^2
+        ckl::MulBinary<D::D2, D::D3, D::D2>{},  // D2 = 3*kappa*x^2
+        ckl::FillScalar<D::D3>{1.0f},
+        ckl::AddBinary<D::D2, D::D3, D::D2>{},  // D2 = 1 + 3*kappa*x^2
+        // pdf_term = 0.5 * beta * (1 + 3*kappa*x^2) * (1 - tanh^2)  -> D2
+        ckl::MulBinary<D::D2, D::D4, D::D2>{},
+        ckl::FillScalar<D::D3>{kBeta / 2.0f},
+        ckl::MulBinary<D::D2, D::D3, D::D2>{},
+        // D2 = x * pdf_term
+        ckl::CopyDest<D::D5, D::D3>{},  // D3 = x
+        ckl::MulBinary<D::D2, D::D3, D::D2>{},
+        // D1 = cdf_term + x * pdf_term ; D0 = grad * D1
+        ckl::AddBinary<D::D1, D::D2, D::D1>{},
+        ckl::MulBinary<D::D0, D::D1, D::D0>{},
+        ckl::PackTile<cb_grad_in, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
 }

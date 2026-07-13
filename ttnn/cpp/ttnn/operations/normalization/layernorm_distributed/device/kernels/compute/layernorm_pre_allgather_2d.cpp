@@ -13,10 +13,12 @@ For rmsnorm it computes E(x**2) and returns it as a one tile wide output
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
+#include "api/dataflow/circular_buffer.h"  // CircularBuffer (was transitively via pre_add.h)
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-#include "ttnn/operations/normalization/kernel_util/compute/pre_add.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"  // add
 
-namespace pre_add = norm::kernel_util::compute::pre_add;
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
     constexpr uint32_t NCHt = get_compile_time_arg_val(0);
@@ -51,8 +53,20 @@ void kernel_main() {
     CircularBuffer cb_zero(cb_zero_id);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        // Fuse pre-add: cb_inp_id = cb_in0_id + cb_res_id (no-op when !FUSE_PRE_ADD)
-        pre_add::one_row<FUSE_PRE_ADD>(cb_in0, cb_res, cb_inp, Wt, blk);
+        if constexpr (FUSE_PRE_ADD) {
+            ckl::add<
+                cb_in0_id,
+                cb_res_id,
+                cb_inp_id,
+                ckl::BroadcastDim::None,
+                ckl::InputLifecycle::Bulk,
+                ckl::InputLifecycle::Bulk,
+                ckl::OutputLifecycle::Bulk,
+                ckl::BinaryDataFormatReconfig::Input,
+                ckl::PackTileReconfig::Output,
+                ckl::OperandKind::Block,
+                ckl::OperandKind::Block>(ckl::EltwiseShape::of(Wt / blk, blk));
+        }
 
         /*
          * x**2
@@ -85,13 +99,13 @@ void kernel_main() {
          * sum(x**2)
          */
         // BulkWaitBulkPop: All Wt tiles already in CB (see cumulative wait above)
-        compute_kernel_lib::reduce<
+        ckl::reduce<
             PoolType::AVG,
             ReduceDim::REDUCE_ROW,
             cb_x2_id,
             cb_reduce_id,
             cb_out,
-            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+            ckl::ReduceInputPolicy::BulkWaitBulkPop>(ckl::ReduceInputBlockShape::row(Wt));
         cb_inp.pop_front(Wt);
         cb_reduce.pop_front(1);
     }
