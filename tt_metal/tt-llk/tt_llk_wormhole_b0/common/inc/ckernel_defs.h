@@ -315,6 +315,9 @@ enum class BinaryOp : std::uint8_t
     DIV_INT32       = 24,
     DIV_INT32_FLOOR = 25,
     GCD             = 26,
+    LCM             = 27,
+    RSUB_INT32      = 28,
+    MASK            = 29,
 };
 
 enum class PackMode : std::uint8_t

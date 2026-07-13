@@ -187,7 +187,12 @@ class MathOperation(Enum):
     SubInt32 = OpSpec("sub_int32", MathOpType.SFPU_UNARY)
     AbsInt32 = OpSpec("abs_int32", MathOpType.SFPU_UNARY)
     BitwiseNot = OpSpec("bitwise_not", MathOpType.SFPU_UNARY)
+    # logical_not(x) = (x == 0) ? 1 : 0, exercised on the float (DEFAULT-layout)
+    # path. cpp_enum_value must match the SfpuType enumerator name.
+    # NOTE: main added `LogicalNot` with the same cpp value; keep both so
+    # references to either name resolve (equal values alias in Python enums).
     LogicalNot = OpSpec("logical_not_unary", MathOpType.SFPU_UNARY)
+    LogicalNotUnary = OpSpec("logical_not_unary", MathOpType.SFPU_UNARY)
     TopKLocalSort = OpSpec("topk_local_sort", MathOpType.SFPU_UNARY)
     TopKMerge = OpSpec("topk_merge", MathOpType.SFPU_UNARY)
     TopKRebuild = OpSpec("topk_rebuild", MathOpType.SFPU_UNARY)
@@ -228,6 +233,9 @@ class MathOperation(Enum):
     SfpuDivInt32 = OpSpec("DIV_INT32", MathOpType.SFPU_BINARY)
     SfpuDivInt32Floor = OpSpec("DIV_INT32_FLOOR", MathOpType.SFPU_BINARY)
     SfpuGcd = OpSpec("GCD", MathOpType.SFPU_BINARY)
+    SfpuLcm = OpSpec("LCM", MathOpType.SFPU_BINARY)
+    SfpuRsubInt32 = OpSpec("RSUB_INT32", MathOpType.SFPU_BINARY)
+    SfpuMask = OpSpec("MASK", MathOpType.SFPU_BINARY)
 
     # =============================================================================
     # SFPU TERNARY OPERATIONS

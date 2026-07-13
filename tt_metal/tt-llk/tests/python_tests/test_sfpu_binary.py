@@ -470,6 +470,75 @@ def test_sfpu_binary_gcd(formats, dest_acc, mathop):
 
 
 @parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=[MathOperation.SfpuLcm],
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_sfpu_binary_lcm(formats, dest_acc, mathop):
+    # lcm(a, b) = |a / gcd(a, b) * b| via binary-GCD + fp32 reciprocal. The kernel
+    # abs()es both operands and assumes |a|, |b| < 2**15, so keep a strictly-positive
+    # range < 2**15; the product a/gcd * b then stays well within int32. Both operands
+    # come from src_A's two tiles.
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=1.0, high=20_000.0
+        ),
+    )
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=[MathOperation.SfpuRsubInt32],
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_sfpu_binary_rsub_int32(formats, dest_acc, mathop):
+    # int32 reverse subtract: out = in1 - in0 (tile1 - tile0). Exact integer math on
+    # the full signed range: the kernel is driven with the SM32 (sign-magnitude)
+    # store layout, which matches the harness' int32 pack path, so negative results
+    # round-trip faithfully (unlike the divide kernels, which emit two's-complement).
+    # Uses the default int stimuli, like add/sub.
+    sfpu_binary(formats, dest_acc, mathop)
+
+
+def _mask_stimuli_spec():
+    # mask zeroes the data wherever the mask tile is 0. On a plain sweep the mask
+    # would (almost) never be exactly 0, so the zeroing branch would never fire and
+    # the output would equal the input. Force a regular subset to exactly 0 with a
+    # small integer ramp so ~20% of the mask tile is zero and the output is a real,
+    # non-trivial mix of passthrough and zeroed values.
+    def dist(size, dtype, generator):
+        idx = torch.arange(size, dtype=torch.float32)
+        return ((idx % 5) - 2.0).to(dtype)  # {-2,-1,0,1,2}: exact zeros, no fp16 flush
+
+    return StimuliSpec(distribution=dist, seed=0)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    mathop=[MathOperation.SfpuMask],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_sfpu_binary_mask(formats, dest_acc, mathop):
+    # float mask: data at tile0, mask at tile1 (both from src_A). Output is data where
+    # mask != 0, else 0. calculate_mask reads the mask from the fixed dst_reg[+32]
+    # offset, which lines up with the harness' tile1; the test-only adapter forwards
+    # the (unused) tile indices. Uses crafted stimuli so the mask carries real zeros.
+    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
+        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        broadcast_type=LlkBroadcastType.None_,
+        spec_A=_mask_stimuli_spec(),
+    )
+
+
+@parametrize(
     formats=input_output_formats(
         [
             DataFormat.Float32,

@@ -612,6 +612,54 @@ def test_eltwise_unary_sfpu_isinf_isnan(
     )
 
 
+def _logical_not_stimuli_spec():
+    # logical_not(x) = (x == 0) ? 1 : 0. Random floats never land exactly on 0, so
+    # a plain sweep would make the output all-zero (PCC undefined) and never touch
+    # the == 0 branch. Drive it with a deterministic ramp that forces a regular
+    # subset to exactly 0.0, so both branches fire and the output is non-constant.
+    def dist(size, dtype, generator):
+        idx = torch.arange(size, dtype=torch.float32)
+        x = (idx % 7) - 3.0  # spans [-3, 3], hits 0 once per 7 elements
+        x[0::3] = 0.0  # additional guaranteed zeros
+        return x.to(dtype)
+
+    return StimuliSpec(distribution=dist, seed=0)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    approx_mode=[ApproximationMode.No],
+    mathop=[MathOperation.LogicalNotUnary],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_dimensions=[[64, 64]],
+)
+def test_eltwise_unary_sfpu_logical_not(
+    formats: list[InputOutputFormat],
+    approx_mode: ApproximationMode,
+    mathop: MathOperation,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    if (
+        dest_acc == DestAccumulation.No
+        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+    ):
+        # Only Float32->Float32 is supported on BH with dest_acc=No; skip the rest.
+        if formats != InputOutputFormat(DataFormat.Float32, DataFormat.Float32):
+            pytest.skip(reason="This combination is not supported on BH architecture")
+
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        approx_mode,
+        mathop,
+        FastMode.No,
+        input_dimensions,
+        spec_A=_logical_not_stimuli_spec(),
+    )
+
+
 def eltwise_unary_sfpu(
     test_name,
     formats: list[InputOutputFormat],
