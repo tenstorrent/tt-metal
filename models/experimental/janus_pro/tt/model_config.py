@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import math
 import os
 
 from loguru import logger
@@ -73,28 +72,11 @@ class ModelArgs(TTModelArgs):
         return super().weight_cache_path(dtype)
 
     def get_attn_qkv_program_config(self, mode, seq_len=1, prefetcher=None):
-        # The base config hardcodes per_core_M=7 on P150 regardless of seq_len. For
-        # Janus's wide MHA QKV (qkv_size=12288 -> per_core_N=55) that overflows P150's
-        # 1.5MB L1 on the seq_len<=128 prefill warmup (the only path that reaches the
-        # MatmulMultiCoreReuseMultiCast branch; seq_len>128 uses minimal_matmul). Scale
-        # per_core_M with seq_len like the non-P150 branch does, keeping the P150 cap of 7.
-        # NOTE: mirrors the else-branch of TTModelArgs.get_attn_qkv_program_config; keep in
-        # sync if the base per_core_N / fuse_batch logic changes.
-        if mode == Mode.PREFILL and self.device_name == "P150" and not self.use_minimal_qkv_prefill_matmul(seq_len):
-            return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(8, 10),  # blackhole
-                in0_block_w=1,
-                out_subblock_h=1,
-                out_subblock_w=1,
-                per_core_M=max(
-                    1,
-                    7 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / ttnn.TILE_SIZE / 8),
-                ),
-                per_core_N=math.ceil(self.qkv_size / self.cluster_shape[1] / 32 / self.dram_shard_grid_width),
-                transpose_mcast=False,
-                fused_activation=None,
-                fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
-            )
+        # Prefill QKV: defer to the base config for all devices. The former P150-specific
+        # override only reached the MatmulMultiCoreReuseMultiCast branch at seq_len<=128,
+        # where its per_core_M collapsed to 1 -> byte-identical to the base else-branch
+        # (the P150 cap of 7 vs base 8 only matters at seq_len>=2048, which minimal_matmul
+        # excludes). So it was a no-op and has been removed.
 
         # Decode QKV is a DRAM-sharded matmul whose core count the base picks from k (dim)
         # alone -> 32 cores -> per_core_N = ceil(qkv_size / (32*32)). Janus's wide MHA qkv
