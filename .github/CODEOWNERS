@@ -72,6 +72,7 @@ tests/pipeline_reorg/models_e2e_tests.yaml @mtairum @uaydonat @roseli-TT @tensto
 tests/pipeline_reorg/models_unit_tests.yaml @mtairum @uaydonat @roseli-TT @tenstorrent/codeowner-bypass
 tests/pipeline_reorg/models_sweep_tests.yaml @mtairum @uaydonat @roseli-TT @tenstorrent/codeowner-bypass
 tests/pipeline_reorg/models_device_perf_tests.yaml @mtairum @uaydonat @roseli-TT @tenstorrent/codeowner-bypass
+tests/pipeline_reorg/blaze_models_prefill_tests.yaml @mbezuljTT @mtairum @roseli-TT @tenstorrent/codeowner-bypass
 tests/scripts/single_card/run_single_card_profiler_tests.sh @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tests/scripts/t3000/run_t3000_profiler_tests.sh @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh @cfjchu @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
