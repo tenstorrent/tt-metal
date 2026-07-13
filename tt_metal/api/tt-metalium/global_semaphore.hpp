@@ -18,6 +18,7 @@
 namespace tt::tt_metal {
 class IDevice;
 class GlobalSemaphore;
+class GlobalSemaphoreImpl;
 
 namespace experimental {
 GlobalSemaphore CreateGlobalSemaphore(
@@ -39,11 +40,11 @@ public:
     GlobalSemaphore(
         IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
 
-    GlobalSemaphore(const GlobalSemaphore&) = default;
-    GlobalSemaphore& operator=(const GlobalSemaphore&) = default;
+    GlobalSemaphore(const GlobalSemaphore& other);
+    GlobalSemaphore& operator=(const GlobalSemaphore& other);
 
-    GlobalSemaphore(GlobalSemaphore&&) noexcept = default;
-    GlobalSemaphore& operator=(GlobalSemaphore&&) noexcept = default;
+    GlobalSemaphore(GlobalSemaphore&& other) noexcept;
+    GlobalSemaphore& operator=(GlobalSemaphore&& other) noexcept;
 
     ~GlobalSemaphore();
 
@@ -65,8 +66,7 @@ private:
         BufferType buffer_type,
         uint64_t address);
 
-    class Impl;
-    std::shared_ptr<Impl> impl_;
+    std::unique_ptr<GlobalSemaphoreImpl> pimpl_;
 
     friend GlobalSemaphore experimental::CreateGlobalSemaphore(
         IDevice* device,
