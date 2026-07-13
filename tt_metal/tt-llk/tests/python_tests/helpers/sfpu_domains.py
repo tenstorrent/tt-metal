@@ -228,6 +228,18 @@ _OP_DOMAIN_REGISTRY: Dict[
             distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=100.0
         )
     ),
+    # rsqrt_compat (legacy reciprocal-root): domain x > 0. Keep the range a bit
+    # tighter than accurate rsqrt — the compat approximation loses accuracy at the
+    # extreme small-input end (rsqrt -> very large).
+    MathOperation.RsqrtCompat: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.LOG_UNIFORM, low=1e-2, high=100.0
+        )
+    ),
+    # expm1_cw (component-wise expm1): same safe range as the standalone expm1.
+    MathOperation.Expm1Cw: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
     # sigmoid: cover both saturation regions
     MathOperation.Sigmoid: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-8.0, high=8.0)

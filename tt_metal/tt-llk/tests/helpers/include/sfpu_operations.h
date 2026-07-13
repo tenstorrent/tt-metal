@@ -86,6 +86,7 @@
 #include "sfpu/ckernel_sfpu_add_int.h"
 #include "sfpu/ckernel_sfpu_clamp.h"
 #include "sfpu/ckernel_sfpu_comp.h"
+#include "sfpu/ckernel_sfpu_expm1_cw.h"
 #include "sfpu/ckernel_sfpu_fill.h"
 #include "sfpu/ckernel_sfpu_hardtanh.h"
 #include "sfpu/ckernel_sfpu_isinf_isnan.h"
@@ -109,6 +110,19 @@ inline void calculate_sqrt_custom()
     for (int d = 0; d < ITERATIONS; d++)
     {
         sfpi::dst_reg[0] = sfpu_sqrt_custom<APPROXIMATION_MODE>(sfpi::dst_reg[0]);
+        sfpi::dst_reg++;
+    }
+}
+
+// Test-only loop wrapper. The expm1_cw header exposes only the per-vector helper
+// expm1_cw_clamped() (shared by ELU/CELU/SELU); wrap it in the standard dst_reg
+// loop so it can be driven through call_unary_sfpu_operation like every other op.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+inline void calculate_expm1_cw()
+{
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        sfpi::dst_reg[0] = expm1_cw_clamped(sfpi::dst_reg[0]);
         sfpi::dst_reg++;
     }
 }
@@ -1172,6 +1186,23 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     else if constexpr (OPERATION == SfpuType::sqrt_custom)
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sqrt_custom, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::rsqrt_compat)
+    {
+        // Legacy-compat rsqrt: reciprocal-root method (legacy_compat = true routes
+        // calculate_rsqrt to _calculate_rsqrt_compat_). Distinct from SfpuType::rsqrt,
+        // which exercises the accurate legacy_compat = false path.
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_rsqrt,
+            (APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en, FAST_MODE, true /* legacy_compat */),
+            dst_index,
+            vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::expm1_cw)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_expm1_cw, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::typecast)
     {

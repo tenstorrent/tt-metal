@@ -147,6 +147,12 @@ class MathOperation(Enum):
     # Legacy LUT variant of tanh'(x): 1 - tanh(x)^2 with tanh from the piecewise
     # LUT (distinct kernel path from the accurate sech2 TanhDerivative above).
     TanhDerivativeLut = OpSpec("tanh_derivative_lut", MathOpType.SFPU_UNARY)
+    # Legacy-compat rsqrt (reciprocal-root method); distinct kernel path from the
+    # accurate Rsqrt (which uses legacy_compat=false).
+    RsqrtCompat = OpSpec("rsqrt_compat", MathOpType.SFPU_UNARY)
+    # Component-wise expm1 shared helper (used by ELU/CELU/SELU); distinct from the
+    # standalone Expm1 kernel.
+    Expm1Cw = OpSpec("expm1_cw", MathOpType.SFPU_UNARY)
     Hardmish = OpSpec("hardmish", MathOpType.SFPU_UNARY)
     Lgamma = OpSpec("lgamma", MathOpType.SFPU_UNARY)
     Digamma = OpSpec("digamma", MathOpType.SFPU_UNARY)
