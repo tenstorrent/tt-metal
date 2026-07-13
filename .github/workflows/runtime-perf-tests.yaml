@@ -74,3 +74,39 @@ jobs:
                 inputs.wormhole && ',' || '') || ''
             )
         }}
+
+  # Separate profiler-enabled build so the non-profiler microbenchmarks above are
+  # not perturbed by profiler instrumentation. Used by the profiler-based tests.
+  build-artifact-profiler:
+    needs: check-harbor
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      tracy: true
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      build-type: ${{ inputs.build-type || 'Release' }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
+
+  runtime-perf-profiler-tests:
+    needs: [check-harbor, build-artifact-profiler]
+    uses: ./.github/workflows/runtime-perf-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      tests-yaml-path: ./tests/pipeline_reorg/runtime_perf_profiler_tests.yaml
+      budget-subheading: "perf_profiler"
+      enabled-skus: >-
+        ${{
+          github.event_name == 'schedule'
+            && 'wh_n300_civ2,bh_p150_perf'
+            || format('{0}{1}',
+              inputs.wormhole && 'wh_n300_civ2' || '',
+              inputs.blackhole && format('{0}bh_p150_perf',
+                inputs.wormhole && ',' || '') || ''
+            )
+        }}
