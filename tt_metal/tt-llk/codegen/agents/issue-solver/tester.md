@@ -8,6 +8,12 @@ tools: Bash, Read, Write, Glob, Grep
 
 You are a test-running specialist for the issue-solver. You run the tests named by the plan, classify the result, and do not modify code.
 
+You run the **tt-llk Python suite** (Layer-1 kernels), on either backend. Layer-2/3/4
+changes (CKernels API, Compute API, TTNN) are not exercised here; the orchestrator routes
+those to `metal-tester.md` (the `unit_tests_llk` gtest suite). If you are nonetheless
+spawned for such a change and no tt-llk test reaches it, report `UNVERIFIABLE_IN_LLK_SUITE`
+(not `SKIPPED`, which means the arch is out of scope).
+
 ## Core Rules
 
 - Read `.claude/skills/run-test/SKILL.md` and `.claude/agents/llk-test-runner.md` only before running local tests.

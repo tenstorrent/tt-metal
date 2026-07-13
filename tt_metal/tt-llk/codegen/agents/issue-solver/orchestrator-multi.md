@@ -232,7 +232,8 @@ PIPELINE_STEPS='[
   {"id":"analyzer","name":"Analyze","desc":"Understand the issue and all target arches"},
   {"id":"arch_lookup","name":"Research","desc":"Look up architecture facts only when needed"},
   {"id":"writer","name":"Fix","desc":"Plan and implement one coordinated multi-arch fix"},
-  {"id":"tester","name":"Test","desc":"Run selected backend tests for each target arch"},
+  {"id":"tester","name":"Test","desc":"Run the tt-llk Layer-1 suite for each target arch"},
+  {"id":"metal_test","name":"Metal Test","desc":"Build+run the unit_tests_llk gtest suite for Layer-2/3/4 changes (same backend)"},
   {"id":"review","name":"Review","desc":"Senior LLK review of the shared fix diff (loop, no PR)"},
   {"id":"perf","name":"Perf","desc":"Measure cycle counts vs baseline per BH/WH arch (local only)"},
   {"id":"fix_tests","name":"Retry","desc":"Debug and update the shared fix after a test, review, or perf failure"}
@@ -348,11 +349,12 @@ Agent:
     ISSUE_COMMENTS:
     ${ISSUE_COMMENTS}
 
+    TEST_BACKEND: ${TEST_BACKEND}
     WORKTREE_DIR: ${WORKTREE_DIR}
     LOG_DIR: ${LOG_DIR}
 ```
 
-The analyzer must write `codegen/artifacts/issue_${ISSUE_NUMBER}_analysis.md` and `${LOG_DIR}/agent_issue_analyzer.md`.
+The analyzer must write `codegen/artifacts/issue_${ISSUE_NUMBER}_analysis.md` and `${LOG_DIR}/agent_issue_analyzer.md`. It classifies the **fix layer** and whether the tt-llk Python suite can verify it (`verifiable_in_llk_suite`), plus the metal gtest target when it cannot — consumed by Step 1.5.
 
 If the analyzer declares the issue out of scope for every requested arch, finalize as `skipped`. If only some arches are out of scope, keep the run alive and mark those arches `skipped` in `arch_results`.
 
@@ -367,6 +369,54 @@ case "$PERF_INTENT" in
   maintain) export PERF_GOAL=no_regress ;;
 esac
 ```
+
+## Step 1.5: Route Verification by Fix Layer
+
+Decide **before the writer** how the fix will be verified, so the run doesn't reach the
+tester only to find the chosen suite can't exercise the change. The tt-llk suite
+(`tester.md`) verifies Layer-1 only; the metal `unit_tests_llk` suite (`metal-tester.md`)
+verifies Layer-2/3/4 on the same backend. Read the analyzer's verdict and set the route:
+
+```bash
+ANALYSIS="codegen/artifacts/issue_${ISSUE_NUMBER}_analysis.md"
+gval() { grep -ioE "$1:[[:space:]]*[A-Za-z_]+" "$ANALYSIS" | head -1 | sed -E "s/.*:[[:space:]]*//"; }
+export FIX_LAYER=$(gval 'fix_layer')
+export VERIFIABLE_IN_LLK=$(gval 'verifiable_in_llk_suite')
+export METAL_TARGET=$(grep -A6 'metal_verification:' "$ANALYSIS" | gval 'target')
+export METAL_FILTER=$(grep -A6 'metal_verification:' "$ANALYSIS" | grep -ioE "gtest_filter:.*" | head -1 | sed -E "s/gtest_filter:[[:space:]]*//; s/^['\"]//; s/['\"]$//")
+export METAL_DISPATCH=$(grep -A6 'metal_verification:' "$ANALYSIS" | gval 'dispatch')
+
+case "$VERIFIABLE_IN_LLK" in
+  yes)     export VERIFY_ROUTE=llk ;;                      # Layer-1 → tt-llk suite (Step 4)
+  partial) export VERIFY_ROUTE=both ;;                     # L1 slice → tt-llk; higher slice → metal
+  no)
+    if [ -z "$METAL_TARGET" ] || [ "$METAL_TARGET" = none ]; then
+      export VERIFY_ROUTE=none                             # no in-harness test exists → honest defer
+    else
+      export VERIFY_ROUTE=metal                            # metal gtest suite (Step 4 → metal-tester)
+    fi ;;
+  *)       export VERIFY_ROUTE=llk ;;                      # unknown → default to today's path
+esac
+
+# Surface the route immediately so the dashboard shows the truth at ~analysis time,
+# not 30 minutes later at the tester.
+python codegen/scripts/run_json_writer.py message --log-dir "$LOG_DIR" \
+  --message "Verify route: ${VERIFY_ROUTE} (fix_layer=${FIX_LAYER:-?}); metal=${METAL_TARGET:-n/a} ${METAL_FILTER:-}"
+```
+
+`VERIFY_ROUTE` values, and what each means for Step 4 and Step 6:
+
+| Route | Meaning | Step 4 | Terminal (Step 6) |
+|-------|---------|--------|-------------------|
+| `llk` | Layer-1; tt-llk suite exercises it | `tester.md` | `success` on pass |
+| `metal` | Layer-2/3/4; a metal gtest exercises it | `metal-tester.md` (build+run `unit_tests_llk`) | `success` on pass |
+| `both` | mixed; both slices testable | `tester.md` **then** `metal-tester.md` | `success` iff both pass |
+| `none` | no in-harness test exists anywhere | no real run; mark `UNVERIFIABLE_IN_LLK_SUITE` | `compiled` + Working (fix ready for tt-metal CI), **never** `skipped` |
+
+`VERIFY_ROUTE=metal`/`both` require the metal build provisioning for Step 4: pass
+`METAL_VERIFY_HOME`/`METAL_VERIFY_BUILD_DIR` when a warm pre-built tree is available
+(`CODEGEN_METAL_VERIFY_HOME`/`CODEGEN_METAL_VERIFY_BUILD_DIR` env, else the metal-tester
+builds in the worktree with ccache).
 
 ## Step 2: Research If Needed
 
@@ -415,6 +465,28 @@ git -C "$WORKTREE_DIR" diff --name-only
 
 ## Step 4: Test Once Across Arches
 
+Branch on `VERIFY_ROUTE` from Step 1.5:
+
+- `llk` → run the tt-llk suite (this Step 4) only.
+- `metal` → **skip** the tt-llk tester; go straight to **Step 4b** (metal suite) only.
+- `both` → run this Step 4 (tt-llk, Layer-1 slice), then **Step 4b** (metal, higher slice).
+- `none` → run **neither**. No in-harness test can exercise this change. Mark every
+  in-scope arch `UNVERIFIABLE_IN_LLK_SUITE` and record the deferral, then go to Step 5.3:
+
+  ```bash
+  # VERIFY_ROUTE=none: fix is applied + committed, but no tt-llk OR metal test exercises it.
+  # This is a WORKING outcome (compiled), NOT a failure and NOT skipped. Leave `obstacle`
+  # empty so the dashboard does not red-flag it; the actionable note rides in final_message.
+  for arch in $(echo "$TARGET_ARCHES_JSON" | python -c "import json,sys;print(' '.join(json.load(sys.stdin)))"); do
+    python codegen/scripts/run_json_writer.py metric --log-dir "$LOG_DIR" \
+      --patch-json "{\"arch_results\":{\"${arch}\":{\"status\":\"done\",\"verdict\":\"UNVERIFIABLE_IN_LLK_SUITE\",\"tests_total\":0,\"tests_passed\":0,\"obstacle\":null}}}"
+  done
+  export VERIFY_DEFERRED=1
+  export VERIFY_DEFER_NOTE="fix applied + committed; no tt-llk or metal test exercises this ${FIX_LAYER} change — verify in tt-metal CI"
+  ```
+
+For `llk`/`both`, advance to the tester step and run the tt-llk Python suite:
+
 ```bash
 python codegen/scripts/run_json_writer.py advance \
   --log-dir "$LOG_DIR" \
@@ -454,13 +526,59 @@ The tester must write `${LOG_DIR}/agent_tester.md` and report a per-arch `arch_r
 - `SIM_ISA_GAP`
 - `ENV_ERROR`
 - `COMPILED_ONLY`
-- `SKIPPED`
+- `SKIPPED` — this arch is genuinely **out of scope** for the fix. Do **not** use it for
+  "the fix isn't reachable by this suite"; that is the metal route (Step 4b) or
+  `UNVERIFIABLE_IN_LLK_SUITE` (`VERIFY_ROUTE=none`), which are Working outcomes.
 
 Parse the tester report. Update aggregate `TESTS_TOTAL`, `TESTS_PASSED`, `COMPILATION_ATTEMPTS`, and `arch_results` in the top-level run.
 
+## Step 4b: Metal Suite (Layer-2/3/4 verification)
+
+Run this when `VERIFY_ROUTE` is `metal` or `both`: build and run the metal `unit_tests_llk`
+gtest on the same backend to verify a Layer-2/3/4 change the tt-llk suite can't reach.
+
+```bash
+python codegen/scripts/run_json_writer.py advance \
+  --log-dir "$LOG_DIR" \
+  --new-step "metal_test" \
+  --new-message "Building+running unit_tests_llk (${METAL_FILTER}) for issue #${ISSUE_NUMBER} across ${TARGET_ARCHES_JSON}" \
+  --prev-result "success" \
+  --prev-message "${VERIFY_ROUTE:-metal} route" \
+  --agent "${VERIFY_ROUTE:+writer}"
+```
+
+Spawn `metal-tester.md` once with:
+
+- `TARGET_ARCHES`, `TEST_BACKEND`, `TTSIM_SO_PATHS` (when ttsim)
+- `METAL_VERIFICATION`: `target=${METAL_TARGET}`, `gtest_filter=${METAL_FILTER}`,
+  `dispatch=${METAL_DISPATCH}`, and the kernel from the analysis artifact
+- issue number, fix plan path, changed files, `WORKTREE_DIR`, `LOG_DIR`
+- build provisioning: `METAL_VERIFY_HOME`/`METAL_VERIFY_BUILD_DIR` (from
+  `CODEGEN_METAL_VERIFY_HOME`/`CODEGEN_METAL_VERIFY_BUILD_DIR`, if set)
+- `FIX_PATCH`: `${LOG_DIR}/generated.patch` if it exists yet, else the metal-tester derives
+  the diff from `git -C "$WORKTREE_DIR" diff`
+- silicon (cardless): `HW_TEST_DISPATCH_CMD` + `HW_TEST_SESSION` reach the metal-tester
+  from the environment (the dashboard sets them for a silicon solve). When present with
+  `TEST_BACKEND=local`, the metal-tester offloads the build+run of each arch to the hw_test
+  queue (its Step 0) instead of using a local card — nothing extra to pass here.
+
+Metal-tester guard (mirror of the ttsim guard): every gtest command must set
+`TT_METAL_HOME`, a **fresh** `TT_METAL_CACHE`, and (when `dispatch=slow`)
+`TT_METAL_SLOW_DISPATCH_MODE=1`; in ttsim mode it must set `TT_METAL_SIMULATOR` to the
+arch `.so` and reject `flock`, `--port`, `TT_UMD_SIMULATOR_PATH`, and pytest flags. It must
+leave any warm build tree clean (reverse the applied patch).
+
+It writes `${LOG_DIR}/agent_metal_tester.md` and reports per-arch `arch_results` with
+verdicts `SUCCESS`, `COMPILE_FAILED`, `TESTS_FAILED`, `SIM_ISA_GAP`, `ENV_ERROR`, or
+`UNVERIFIABLE_IN_LLK_SUITE`. Parse it and update `TESTS_TOTAL`, `TESTS_PASSED`, and
+`arch_results` (for `both`, a metal `SUCCESS` combines with the tt-llk result — the arch is
+green only if neither suite failed).
+
 ## Step 5: Debug Once, Then Re-test Once
 
-If any arch returns `COMPILE_FAILED` or `TESTS_FAILED`, record the failure and spawn `issue-worker.md` once more in debug/retry mode:
+If any arch returns `COMPILE_FAILED` or `TESTS_FAILED` — from either the tt-llk tester
+(Step 4) or the metal-tester (Step 4b) — record the failure and spawn `issue-worker.md`
+once more in debug/retry mode:
 
 ```bash
 python codegen/scripts/run_json_writer.py failure \
@@ -480,7 +598,7 @@ python codegen/scripts/run_json_writer.py advance \
   --agent "tester"
 ```
 
-The retry worker reads the existing plan plus the combined tester evidence, patches the shared implementation or narrows arch-specific scope when evidence supports that, and writes `${LOG_DIR}/agent_issue_worker_debug.md`. After it returns, increment `DEBUG_CYCLES`, then re-run Step 4 once. For that re-test transition, use `--agent "fix_tests"` so the dashboard records the retry worker. If the worker returns `HYPOTHESIS_REFUTED` (the failure is inherent to the fix, not a scope issue), finalize as `failed` with that evidence instead of re-testing.
+The retry worker reads the existing plan plus the combined tester evidence, patches the shared implementation or narrows arch-specific scope when evidence supports that, and writes `${LOG_DIR}/agent_issue_worker_debug.md`. After it returns, increment `DEBUG_CYCLES`, then re-run the suite that failed once (Step 4 for a tt-llk failure, Step 4b for a metal failure). For that re-test transition, use `--agent "fix_tests"` so the dashboard records the retry worker. If the worker returns `HYPOTHESIS_REFUTED` (the failure is inherent to the fix, not a scope issue), finalize as `failed` with that evidence instead of re-testing.
 
 Do not debug `SIM_ISA_GAP`; that is a simulator limitation, not an LLK fix failure. Mark the affected arch failed with a simulator obstacle. Continue evaluating other arches when possible.
 
@@ -493,9 +611,11 @@ it runs once for the whole run regardless of backend, and cross-arch **parity**
 gaps are especially relevant here (a change that landed on one arch but not the
 others it should).
 
-Run this only once the functional result is **green** for the arches that ran; a
-green functional result implies a shared fix diff exists, so there is always
-something to review.
+Run this whenever a shared fix diff exists and no arch is in an unresolved *failed*
+state — i.e. after functional tests are **green** (Step 4/4b), **and also** when
+`VERIFY_ROUTE=none` (`VERIFY_DEFERRED=1`): a diff still exists and, with no functional
+test possible in-harness, this static review is the only quality gate before the fix
+goes to tt-metal CI, so it is especially important there.
 
 Advance to the `review` step and run one reviewer over the shared diff:
 
@@ -599,30 +719,57 @@ affected arches, and if still green re-run this Step 5.5 for them.
 
 ## Step 6: Finalize One Run
 
+Compute each in-scope arch's **effective verdict** from `arch_results` (written by the
+tt-llk tester and/or the metal-tester):
+
+- *passed* — `SUCCESS` (tt-llk **or** metal), or `COMPILED_ONLY`
+- *unverified-but-fixed* — `UNVERIFIABLE_IN_LLK_SUITE`: no in-harness test exists, the fix
+  is applied + committed and belongs in tt-metal CI
+- *failed* — `COMPILE_FAILED`, `TESTS_FAILED`, `ENV_ERROR`, `SIM_ISA_GAP`, or a perf miss
+  folded in by Step 5.5
+- *out-of-scope* — `SKIPPED`: the analyzer found no work for this arch
+
 Pick `combined_status`:
 
-- `success`: every in-scope arch passed or explicitly compiled-only
-- `partial`: at least one arch passed/compiled and at least one arch failed
-- `failed`: every in-scope arch failed, hit `ENV_ERROR`, or hit `SIM_ISA_GAP`
-- `skipped`: analyzer found no relevant LLK work for any requested arch
+- `success`: every in-scope arch *passed*, at least one via a real functional test
+  (tt-llk or metal). A Layer-3 fix that the metal suite verified lands here.
+- `compiled`: every in-scope arch is *unverified-but-fixed* or *passed-compiled-only*, and
+  none *failed* — a real fix exists but no functional test ran in-harness (a Layer-2/3/4
+  change with `VERIFY_ROUTE=none`, or compile-only). **This is the bucket that issue #22943
+  was wrongly reported as `skipped`.**
+- `partial`: at least one arch *passed*/*unverified-but-fixed* and at least one *failed*
+- `failed`: every in-scope arch *failed*
+- `skipped`: **only** when the analyzer found no relevant LLK work for any requested arch
+  (every arch *out-of-scope*). Never `skipped` when a fix was produced.
 
-`run_json_writer.py finalize` only accepts `success`, `compiled`, `failed`, or `skipped`. Use:
+`run_json_writer.py finalize` only accepts `success`, `compiled`, `failed`, or `skipped`:
 
-- `status=success` when `combined_status=success` and all successful arches ran functional tests
-- `status=compiled` when every in-scope arch is `COMPILED_ONLY`
+- `status=success` when `combined_status=success`
+- `status=compiled` when `combined_status=compiled`
 - `status=failed` when `combined_status=partial` or `combined_status=failed`
 - `status=skipped` when `combined_status=skipped`
 
-`run_json_writer.py finalize --final-result` only accepts `success`,
-`compile_error`, or `test_failure`. Use:
+`run_json_writer.py finalize --final-result` only accepts `success`, `compile_error`, or
+`test_failure`:
 
-- `final_result=success` for `status=success`, `status=compiled`, or
-  `status=skipped`
-- `final_result=test_failure` for `status=failed` caused by test/runtime/scope
-  failures or simulator/environment blockers
+- `final_result=success` for `status=success`, `status=compiled`, or `status=skipped`
+- `final_result=test_failure` for `status=failed` from test/runtime/scope/sim/env blockers
 - `final_result=compile_error` only when the terminal failure is a compile error
 
-Set `solver_state=working` only for `status=success` or `status=compiled`; otherwise set `solver_state=not_working`.
+Set `solver_state=working` for `status=success` or `status=compiled`; otherwise
+`not_working`.
+
+**Deferred-verification messaging (`VERIFY_DEFERRED=1` → `combined_status=compiled` from
+`UNVERIFIABLE_IN_LLK_SUITE`).** This is a Working outcome, so keep `OBSTACLE` empty — do
+**not** populate the field the dashboard renders as a red "⚠ Obstacle" box — and carry the
+actionable next step in the final message instead:
+
+```bash
+if [ "${VERIFY_DEFERRED:-0}" = 1 ]; then
+  export OBSTACLE=
+  export FINAL_MESSAGE="multi-arch issue #${ISSUE_NUMBER}: fix applied — ${VERIFY_DEFER_NOTE}"
+fi
+```
 
 Write final dashboard state, upsert `runs.jsonl`, copy artifacts, and snapshot changed files:
 
@@ -673,7 +820,7 @@ python codegen/scripts/run_json_writer.py finalize \
   --end-time "$END_TIME" \
   --status "$STATUS" \
   --final-result "$FINAL_RESULT" \
-  --final-message "multi-arch issue #${ISSUE_NUMBER}: ${COMBINED_STATUS}" \
+  --final-message "${FINAL_MESSAGE:-multi-arch issue #${ISSUE_NUMBER}: ${COMBINED_STATUS}}" \
   --solver-state "$SOLVER_STATE" \
   --patch-json "$(python - <<PY
 import json, os
@@ -689,6 +836,7 @@ for agent, filename in [
     ("arch_lookup", "agent_arch_lookup.md"),
     ("writer", "agent_issue_worker.md"),
     ("tester", "agent_tester.md"),
+    ("metal_test", "agent_metal_tester.md"),
     ("reviewer", "agent_reviewer.md"),
     ("perf", "agent_perf_tester.md"),
     ("fix_tests", "agent_issue_worker_debug.md"),
@@ -760,9 +908,10 @@ Multi-Arch Issue-Solver Result:
   create_pr_requested: ${CREATE_PR}
   arch_results:
     - arch: blackhole|wormhole|quasar
-      verdict: SUCCESS|COMPILE_FAILED|TESTS_FAILED|SIM_ISA_GAP|ENV_ERROR|COMPILED_ONLY|SKIPPED
+      verdict: SUCCESS|COMPILE_FAILED|TESTS_FAILED|SIM_ISA_GAP|ENV_ERROR|COMPILED_ONLY|UNVERIFIABLE_IN_LLK_SUITE|SKIPPED
       tests_total: N
       tests_passed: N
+      suite: llk|metal           # which suite produced the verdict (metal = unit_tests_llk gtest)
       perf_verdict: improved|neutral|regressed|not_improved|no_baseline|not_measured
       obstacle: ...
   review:                         # one review over the shared diff (run-level, not per-arch)

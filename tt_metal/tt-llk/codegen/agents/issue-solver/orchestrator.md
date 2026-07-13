@@ -232,7 +232,8 @@ PIPELINE_STEPS='[
   {"id":"analyzer","name":"Analyze","desc":"Understand the issue and scope"},
   {"id":"arch_lookup","name":"Research","desc":"Look up architecture facts only when needed"},
   {"id":"writer","name":"Fix","desc":"Plan and implement the smallest fix"},
-  {"id":"tester","name":"Test","desc":"Run selected backend tests"},
+  {"id":"tester","name":"Test","desc":"Run the tt-llk Layer-1 suite"},
+  {"id":"metal_test","name":"Metal Test","desc":"Build+run the unit_tests_llk gtest for Layer-2/3/4 changes (same backend)"},
   {"id":"review","name":"Review","desc":"Senior LLK review of the fix diff (loop, no PR)"},
   {"id":"perf","name":"Perf","desc":"Measure cycle counts vs baseline (BH/WH local only)"},
   {"id":"fix_tests","name":"Retry","desc":"Debug and update the fix after a test, review, or perf failure"}
@@ -305,11 +306,12 @@ Agent:
     ISSUE_COMMENTS:
     ${ISSUE_COMMENTS}
 
+    TEST_BACKEND: ${TEST_BACKEND}
     WORKTREE_DIR: ${WORKTREE_DIR}
     LOG_DIR: ${LOG_DIR}
 ```
 
-The analyzer must write `codegen/artifacts/issue_${ISSUE_NUMBER}_analysis.md` and `${LOG_DIR}/agent_issue_analyzer.md`.
+The analyzer must write `codegen/artifacts/issue_${ISSUE_NUMBER}_analysis.md` and `${LOG_DIR}/agent_issue_analyzer.md`. It classifies the **fix layer** and whether the tt-llk suite can verify it (`verifiable_in_llk_suite`), plus the metal gtest target when it cannot — consumed by Step 1.5.
 
 If the analyzer declares the issue out of scope, finalize as `skipped`.
 
@@ -325,6 +327,41 @@ case "$PERF_INTENT" in
   maintain) export PERF_GOAL=no_regress ;;
 esac
 ```
+
+## Step 1.5: Route Verification by Fix Layer
+
+Same gate as the multi-arch orchestrator (see `orchestrator-multi.md` → Step 1.5 for the
+full rationale). The tt-llk Python suite (`tester.md`) verifies Layer-1 changes only; a
+Layer-2/3/4 change is verified by the metal `unit_tests_llk` gtest suite
+(`metal-tester.md`) on the **same** backend. Read the analyzer's verdict and route:
+
+```bash
+ANALYSIS="codegen/artifacts/issue_${ISSUE_NUMBER}_analysis.md"
+gval() { grep -ioE "$1:[[:space:]]*[A-Za-z_]+" "$ANALYSIS" | head -1 | sed -E "s/.*:[[:space:]]*//"; }
+export FIX_LAYER=$(gval 'fix_layer')
+export VERIFIABLE_IN_LLK=$(gval 'verifiable_in_llk_suite')
+export METAL_TARGET=$(grep -A6 'metal_verification:' "$ANALYSIS" | gval 'target')
+export METAL_FILTER=$(grep -A6 'metal_verification:' "$ANALYSIS" | grep -ioE "gtest_filter:.*" | head -1 | sed -E "s/gtest_filter:[[:space:]]*//; s/^['\"]//; s/['\"]$//")
+export METAL_DISPATCH=$(grep -A6 'metal_verification:' "$ANALYSIS" | gval 'dispatch')
+case "$VERIFIABLE_IN_LLK" in
+  yes)     export VERIFY_ROUTE=llk ;;
+  partial) export VERIFY_ROUTE=both ;;
+  no)      if [ -z "$METAL_TARGET" ] || [ "$METAL_TARGET" = none ]; then export VERIFY_ROUTE=none; else export VERIFY_ROUTE=metal; fi ;;
+  *)       export VERIFY_ROUTE=llk ;;
+esac
+python codegen/scripts/run_json_writer.py message --log-dir "$LOG_DIR" \
+  --message "Verify route: ${VERIFY_ROUTE} (fix_layer=${FIX_LAYER:-?}); metal=${METAL_TARGET:-n/a} ${METAL_FILTER:-}"
+```
+
+- `llk` → run Step 4 (tt-llk tester) only.
+- `metal` → skip Step 4; run **Step 4b** (spawn `metal-tester.md` with `TARGET_ARCH`,
+  `TEST_BACKEND`, `TTSIM_SO_PATH`, the `METAL_VERIFICATION` mapping, and the metal build
+  provisioning — see `orchestrator-multi.md` Step 4b) and treat its verdict as the
+  functional result.
+- `both` → run Step 4 then Step 4b; the arch is green only if neither failed.
+- `none` → run neither; set `arch_results.<arch>.verdict=UNVERIFIABLE_IN_LLK_SUITE`,
+  `VERIFY_DEFERRED=1`, and `VERIFY_DEFER_NOTE` (see Step 6); this is a `compiled`/Working
+  outcome, **never** `skipped`.
 
 ## Step 2: Research If Needed
 
@@ -404,6 +441,7 @@ The tester must write `${LOG_DIR}/agent_tester.md` and report one of:
 - `SIM_ISA_GAP`
 - `ENV_ERROR`
 - `COMPILED_ONLY`
+- `UNVERIFIABLE_IN_LLK_SUITE` — Layer-2/3/4 change with no tt-llk test (route via Step 4b metal-tester, or defer)
 
 Parse the tester report and update `TESTS_TOTAL` / `TESTS_PASSED` when counts are available. If the tester only reports a single command-level verdict, record `TESTS_TOTAL=1` and `TESTS_PASSED=1` for `SUCCESS`, otherwise `TESTS_PASSED=0`.
 
@@ -616,17 +654,32 @@ still a miss, or `HYPOTHESIS_REFUTED`):
 
 ## Step 6: Finalize
 
-Pick status:
+Pick status from the tester's (or metal-tester's) verdict:
 
-- `success`: compiles and selected tests pass
-- `compiled`: compiles but no relevant test exists and the plan declared compile-only
+- `success`: `SUCCESS` from a real functional test — tt-llk **or** metal (a Layer-3 fix
+  the metal suite verified lands here)
+- `compiled`: `COMPILED_ONLY`, **or** `UNVERIFIABLE_IN_LLK_SUITE` (`VERIFY_ROUTE=none`: the
+  fix is applied + committed but no in-harness test exists — verify in tt-metal CI). A real
+  fix exists; this is a Working outcome. **Do not report this as `skipped`.**
 - `failed`: compile/test failure, `ENV_ERROR`, or `SIM_ISA_GAP`
-- `skipped`: analyzer found no relevant LLK work
+- `skipped`: **only** when the analyzer found no relevant LLK work (out of scope). Never
+  `skipped` when a fix was produced.
 
 `run_json_writer.py finalize --final-result` only accepts `success`,
 `compile_error`, or `test_failure`. Use `success` for terminal
 `success`/`compiled`/`skipped`, `compile_error` for compile failures, and
 `test_failure` for test/runtime/scope/simulator/environment failures.
+
+**Deferred-verification messaging (`VERIFY_DEFERRED=1`).** Keep `OBSTACLE` empty (the
+dashboard renders any obstacle as a red box, and this is a Working outcome) and carry the
+next step in the final message:
+
+```bash
+if [ "${VERIFY_DEFERRED:-0}" = 1 ]; then
+  export OBSTACLE=
+  export FINAL_MESSAGE="${TARGET_ARCH} issue #${ISSUE_NUMBER}: fix applied — ${VERIFY_DEFER_NOTE:-no in-harness test exercises this ${FIX_LAYER} change; verify in tt-metal CI}"
+fi
+```
 
 Write final dashboard state, upsert `runs.jsonl`, copy artifacts, and snapshot changed files:
 
@@ -679,7 +732,7 @@ python codegen/scripts/run_json_writer.py finalize \
   --end-time "$END_TIME" \
   --status "$STATUS" \
   --final-result "$FINAL_RESULT" \
-  --final-message "${TARGET_ARCH} issue #${ISSUE_NUMBER}: ${STATUS}" \
+  --final-message "${FINAL_MESSAGE:-${TARGET_ARCH} issue #${ISSUE_NUMBER}: ${STATUS}}" \
   --solver-state "$SOLVER_STATE" \
   --patch-json "$(python - <<PY
 import json, os
@@ -694,6 +747,7 @@ for agent, filename in [
     ("arch_lookup", "agent_arch_lookup.md"),
     ("writer", "agent_issue_worker.md"),
     ("tester", "agent_tester.md"),
+    ("metal_test", "agent_metal_tester.md"),
     ("reviewer", "agent_reviewer.md"),
     ("perf", "agent_perf_tester.md"),
     ("fix_tests", "agent_issue_worker_debug.md"),
