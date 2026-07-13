@@ -377,6 +377,62 @@ def test_reconfig_stallwait_wait_operand_only():
 
 
 @case
+def test_mmio_cfgshiftmask_is_a_consumer():
+    # CFGSHIFTMASK is a config-RMW that READS the target cfg word + SCRATCH_SEC
+    # (BlackholeA0/.../CFGSHIFTMASK.md), so a RISC MMIO write it later consumes is raced —
+    # a TRISC_CFG guard placed AFTER the CFGSHIFTMASK cannot un-race it. mmio-race must
+    # treat CFGSHIFTMASK as a consumer (scoped) even though it stays classified ordered_write.
+    from llkaudit import registry
+
+    # INVARIANT: the shared classification must NOT change (cfg-word + reconfig rely on it).
+    assert registry.classify_macro("TTI_CFGSHIFTMASK") == "ordered_write"
+    assert "CFGSHIFTMASK" in registry.RECONFIG_WRITE_MACRO_SUBSTR
+
+    F = "tt_llk_blackhole/llk_lib/llk_pack_untilize.h"
+    # write -> CFGSHIFTMASK (consumes) -> TRISC_CFG guard: guard is too late -> unordered.
+    raced = [
+        fn("_llk_pack_cfg_", F, 100, 200),
+        pw(F, 110, "get_cfg_pointer", "SCRATCH_SEC0_val", func="_llk_pack_cfg_"),
+        macro(
+            F,
+            120,
+            "TTI_CFGSHIFTMASK",
+            "TTI_CFGSHIFTMASK(SCRATCH_SEC0_val, ...)",
+            func="_llk_pack_cfg_",
+        ),
+        macro(
+            F,
+            130,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG)",
+            func="_llk_pack_cfg_",
+        ),
+    ]
+    out = MmioRace().run(FactBase("blackhole", raced))
+    assert len(out) == 1 and out[0].hint == "NO_LOCAL_ORDERING", out
+    # control: guard BEFORE the CFGSHIFTMASK consumer -> the write IS ordered.
+    ordered = [
+        fn("_llk_pack_cfg_", F, 100, 200),
+        pw(F, 110, "get_cfg_pointer", "SCRATCH_SEC0_val", func="_llk_pack_cfg_"),
+        macro(
+            F,
+            120,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG)",
+            func="_llk_pack_cfg_",
+        ),
+        macro(
+            F,
+            130,
+            "TTI_CFGSHIFTMASK",
+            "TTI_CFGSHIFTMASK(SCRATCH_SEC0_val, ...)",
+            func="_llk_pack_cfg_",
+        ),
+    ]
+    assert MmioRace().run(FactBase("blackhole", ordered))[0].hint == "LOCALLY_ORDERED"
+
+
+@case
 def test_mmio_guard_after_consumer_is_not_ordering():
     # #4: write, then a consumer, then a TRISC_CFG stall. The stall follows the
     # consumer, so it cannot order that consumer -> NO_LOCAL_ORDERING.
