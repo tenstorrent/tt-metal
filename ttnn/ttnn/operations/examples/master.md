@@ -82,6 +82,31 @@ Ships a `--microbench` mode (`DeviceZoneScopedN` per phase, per TRISC) that show
 engine granularity: the L1 round-trip surfaces as **unpack** cost; dest-reuse surfaces as extra
 **math** cost; SFPU-mul is ~22k ns more math than FPU-mul.
 
+## ⭐⭐ T2 — [`compute_block_size`](compute_block_size/README.md)
+**Concept:** compute block / loop granularity — amortizing the fixed per-helper-call overhead
+(phase-boundary data-format reconfig + LLK init/uninit + unpack/math/pack pipeline fill/drain) over
+more tiles per call (single core, pure compute).
+**Situation:** you built a row-parallel compute chain (here `out = (A + B) @ C`: tilize A, tilize B,
+add, matmul, untilize) the readable way — loop over the M rows a tile-row at a time, running the whole
+chain on each — and wonder whether doing more of M per pass is worth it.
+**Measured win (Wormhole B0, 1 core):** doing the whole chain in **one pass** over M is **1.65×**
+faster than tile-row-by-tile-row (17.4 µs vs 28.7 µs, M=256 K=128 N=128, bf16), identical math (PCC
+0.99999). The curve is monotonic with diminishing returns (1.27× → 1.51× → 1.65× as the block
+doubles) — the amortize-a-fixed-cost signature; ≈1.6 µs of pure overhead per extra pass. The win
+**shrinks as the per-block payload grows** (wider N=256 → 1.40×) and **grows with the phase count**
+(five reconfigs here). Costs L1: intermediate CBs scale with the block.
+**Gist:** don't loop a row-parallel compute chain a tile-row at a time — run each helper on the whole
+row-parallel block in one call (or the largest block your L1 budget allows). Every extra pass repays
+the per-phase reconfig + init + pipeline fill/drain for no extra work. Biggest payoff on many-phase
+chains (tilize/eltwise/matmul/untilize) with small per-call payloads; smaller once each call already
+does a lot.
+**Second lever (same mechanism, other side):** the helpers reconfig data formats at every phase
+boundary by default; when the format never changes (all-bf16 chain) that reconfig is wasted MMIO.
+Turning it off — keep the inits, drop the format reconfig — is correct (PCC unchanged) and up to
+**1.19×** faster, largest where there are the most transitions. Compounds with block size to
+**1.72×** (WH B0). Only safe when the dtype is genuinely constant across the boundary. See the
+example's `report_reconfig_ablation.md`.
+
 ## ⭐⭐⭐ T3 — [`tensix_all_reduce_ring_transport`](tensix_all_reduce_ring_transport/README.md)
 **Concepts:** neighbor semaphore cost and direction-sensitive NoC contention in serpentine rings.
 **Situation:** a reduce-and-forward ring is much slower when a rectangular group spans two rows.
