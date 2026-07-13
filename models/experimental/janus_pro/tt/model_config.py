@@ -239,6 +239,16 @@ class ModelArgs(TTModelArgs):
             config.text_config.num_hidden_layers = self.n_layers
             config.text_config.num_layers = self.n_layers
 
+        # DEBUG (temporary, JANUS_DEBUG_INIT_SCALE): scale up the random-init std. Larger weights
+        # -> wider attention-score spread -> clear softmax winners that survive bf8, testing the
+        # "unstructured attention is precision-unstable" root cause. Affects both reference and TT
+        # (same model), so still a valid parity test. Requires clearing tensor_cache_dummy_bfp8.
+        _init_scale = float(os.environ.get("JANUS_DEBUG_INIT_SCALE", "1"))
+        if _init_scale != 1.0 and getattr(config, "text_config", None) is not None:
+            base = getattr(config.text_config, "initializer_range", 0.02)
+            config.text_config.initializer_range = base * _init_scale
+            logger.info(f"[JanusPro][DEBUG] text initializer_range {base} -> {base * _init_scale}")
+
         build_from_config = getattr(
             JanusForConditionalGeneration, "from_config", JanusForConditionalGeneration._from_config
         )
