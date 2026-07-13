@@ -196,8 +196,8 @@ def preprocess_lm_weights(
     for i in range(config.num_hidden_layers):
         prefix = f"layers.{i}"
 
-        def _w(key: str) -> ttnn.Tensor:
-            return _tile(state_dict[f"{prefix}.{key}.weight"], device)
+        def _w(key: str, dtype=ttnn.bfloat16) -> ttnn.Tensor:
+            return _tile(state_dict[f"{prefix}.{key}.weight"], device, dtype=dtype)
 
         def _b(key: str) -> Optional[ttnn.Tensor]:
             bias_key = f"{prefix}.{key}.bias"
@@ -217,9 +217,12 @@ def preprocess_lm_weights(
             wk=_w("attention.wk"),
             wv=_w("attention.wv"),
             wo=_w("attention.wo"),
-            w1=_w("feed_forward.w1"),
+            # FFN gate/up are the two largest decode matmuls and DRAM-BW-bound; bfp8_b
+            # weights halve their DRAM traffic (~1.5-1.7x) at ~0.99997 per-op PCC.  w2
+            # (down) stays bf16 — its swept 1D config already maxes BW, bfp8 gives nothing.
+            w1=_w("feed_forward.w1", dtype=ttnn.bfloat8_b),
             w2=_w("feed_forward.w2"),
-            w3=_w("feed_forward.w3"),
+            w3=_w("feed_forward.w3", dtype=ttnn.bfloat8_b),
             attn_norm_w=_norm_weight(state_dict[f"{prefix}.attention_norm.weight"], device),
             ffn_norm_w=_norm_weight(state_dict[f"{prefix}.ffn_norm.weight"], device),
             q_bias=_b("attention.wq"),
