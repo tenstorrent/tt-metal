@@ -197,8 +197,10 @@ Then `python3 tests/test_checks.py` to confirm nothing regressed.
   recall-biased, per the augmentor contract.
 - `srcreg-bank` (BH) flags the raw `TTI_SETDVALID` sites — including the three real
   ones in `llk_math_eltwise_unary_datacopy.h` (ISA-unsupported on BH, a genuine
-  recall win) — and recalls the `CLEARDVALID` control points; on WH/QSR the same
-  `SETDVALID` is a plain `DVALID_SET` candidate (no BH flag).
+  recall win) — and recalls the `CLEARDVALID` control points; on WH the same
+  `SETDVALID` is a plain `DVALID_SET` candidate (no BH flag). Quasar emits no
+  `DVALID_SET` candidate: its LLK lib issues data-valid via the supported forms
+  (`set_up_dest_dvalid` / `UNPACR_NOP(..,SET_DVALID,..)`), not a raw `SETDVALID`.
 - `mailbox-sync` (WH/BH) pairs the `MATH→UNPACK` dst_index channel (cmath write ↔
   cunpack read → `PAIRED_CHANNEL`) and marks the thread-agnostic `ckernel_debug.h`
   halt/unhalt endpoints `UNRESOLVED_ENDPOINT`; Quasar has no in-tree FIFO → 0.
