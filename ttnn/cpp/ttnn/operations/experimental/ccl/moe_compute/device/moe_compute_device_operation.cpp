@@ -149,22 +149,11 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     // Both Full and ComputeOnly paths use the same matmul ring kernels, so this applies in both modes.
     //
     // matmul_num_cores must match the actual matmul ring size produced by program_factory:
-    //   - WH: ring = num DRAM banks = 12 (1:1, no padding). args.bh_ring_size is forced to 12
-    //     in invoke() for WH, so reading either source returns the same value.
-    //   - BH: ring = bh_ring_size (8 / 12 / 16). select_moe_compute_cores() pads the 8
-    //     DRAM-adjacent cores up to bh_ring_size inside build_matmul_ring_cores()
-    //     (moe_core_placement.cpp). Using the
-    //     raw DRAM bank count here (=8 on BH always) would under-report and reject shapes
-    //     whose width_shard_dim divides bh_ring_size but not 8 — e.g. GPT-OSS at hidden=2880
-    //     forces output_width_shard_dim=3, valid at N=12 (12%3=0) but the early validate using
-    //     raw 8 would fail (8%3≠0). args.bh_ring_size is already resolved by invoke() before
-    //     this validate runs.
+    //   - WH: ring is always 12 (no DRAM-bank harvesting).
+    //   - BH: ring = live DRAM-bank count (7 or 8). args.bh_ring_size is resolved by invoke()
+    //     to this value before validate runs.
     auto* mesh_device = tensor_args.tilize_input_tensor.device();
-    const uint32_t matmul_num_cores =
-        (mesh_device->arch() == tt::ARCH::BLACKHOLE)
-            ? args.bh_ring_size
-            : mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default)
-                  .size();
+    const uint32_t matmul_num_cores = args.bh_ring_size;
     const uint32_t intermediate_tiles = intermediate_size / 32;
     TT_FATAL(
         intermediate_tiles >= matmul_num_cores,
@@ -436,16 +425,19 @@ std::vector<ttnn::Tensor> moe_compute(
 
     auto* mesh_device = tilize_input_tensor.device();
 
-    // BH ring size: default 8; supported {8, 12, 16}. WH always uses 12 (12 DRAM banks).
-    // Validate before num_data_parallel_cores derivation so ring-aware width dim can use ring_n.
-    const uint32_t ring_n = (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? bh_ring_size.value_or(8u) : 12u;
-    // NOTE: there has been some experimentation with different ring sizes on Blackhole but there are known correctness
-    // issues for some model configurations for values other than 8, which is why this is not exposed in the public API
+    // Ring size is 12 on Wormhole (no DRAM-bank harvesting). On Blackhole it is the live
+    // DRAM-bank count (7 or 8). Resolved by the public API before invocation, but keep a
+    // fallback to the live bank count for direct prim callers.
+    const uint32_t ring_n = bh_ring_size.value_or(
+        mesh_device->arch() == tt::ARCH::BLACKHOLE
+            ? mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default).size()
+            : 12u);
+    // NOTE: the public API auto-detects the ring from the device and does not expose it as a knob.
 
     // Auto-compute num_data_parallel_cores: largest divisor d of hidden_tiles with d <= 4
     // AND ring_n % d == 0. dm1 maps ring cores to combine columns via
     // RING_CORES_PER_COMBINE_COL = num_cores / width_shard_dim, so both must divide evenly.
-    // E.g. GPT-OSS (Ht=90) picks d=3 at N=12 but falls back to d=2 at N=8 or N=16.
+    // E.g. GPT-OSS (Ht=90) picks d=3 on WH (N=12) but falls back to d=2 on BH (N=8/7).
     const uint32_t hidden_tiles = hidden_size / 32;
     uint32_t num_data_parallel_cores = 1;
     for (uint32_t d = 4; d >= 1; --d) {

@@ -41,7 +41,7 @@ struct MoEComputeParams {
 
     // Ring size in matmul cores. On WH this is always 12 (DRAM banks), so keep the
     // field initializer at the WH-neutral default. On BH, invoke() resolves this to
-    // 8, 12, or 16 from the bh_ring_size op kwarg (default 8).
+    // the live DRAM-bank count (7 or 8) from the bh_ring_size op kwarg.
     // num_data_parallel_cores is auto-derived ring-aware (largest d | hidden_tiles
     // with d<=4 and ring_n % d == 0). Stored in attributes() so the program cache
     // distinguishes different ring sizes within the same session.

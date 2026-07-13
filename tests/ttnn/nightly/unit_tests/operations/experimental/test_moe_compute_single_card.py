@@ -87,9 +87,10 @@ def _run_moe_compute_single_card_test(
     Single-card MoE compute test body. cluster_axis is fixed to None
     (no dispatch axis on 1x1 mesh) and compute_only is fixed to True.
 
-    The matmul ring size is auto-detected from the arch (8 on BH, 12 on WH) — the same
-    ``effective_matmul_ring_size(mesh_device)`` the public op uses — and is used to pack the
-    weights so host tensor layout matches the op's ring-aware width-parallel auto-derivation.
+    The matmul ring size is auto-detected from the live DRAM-bank count (12 on WH, 7/8 on
+    BH) — the same ``effective_matmul_ring_size(mesh_device)`` the public op uses — and is used
+    to pack the weights so host tensor layout matches the op's ring-aware width-parallel
+    auto-derivation.
     """
     # The MoE op uses tilize cores keyed off the per-arch layout table in the program
     # factory's `get_layout()` (see #41827) and matmul cores from
@@ -508,19 +509,23 @@ def _run_moe_compute_single_card_test(
 def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape, has_bias, is_ci_env, is_ci_v2_env):
     """compute_only=True on a 1x1 mesh, DeepSeek-shaped workload (hidden=7168).
 
-    The matmul ring size is auto-detected from the arch (12 on WH, 8 on BH); the op no longer
-    exposes a bh_ring_size knob.
+    The matmul ring size is auto-detected from the live DRAM-bank count (12 on WH, 7/8 on
+    BH); the op no longer exposes a bh_ring_size knob. The width-shard dim must match the op's
+    ring-aware derivation, so it is auto-derived.
     """
+    hidden_size = 7168
+    N = 2048
+    ring_n = effective_matmul_ring_size(mesh_device)
     _run_moe_compute_single_card_test(
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
         experts_per_device=8,
         tokens_per_device=32,
         selected_experts_k=8,
-        N=2048,
-        hidden_size=7168,
+        N=N,
+        hidden_size=hidden_size,
         output_height_shard_dim=4,
-        output_width_shard_dim=4,  # DeepSeek hidden=7168 → auto_output_width_shard_dim=4
+        output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
         dtype=ttnn.bfloat16,
         activation_type=MoEActivationFunction.SILU,
         has_bias=has_bias,
@@ -530,7 +535,7 @@ def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape, has_bias, is_
 
 # GPT-OSS canonical config from the GPT-OSS entry in `_MODELS_1x8` (test_moe_compute_6U.py):
 #   experts_per_device=4, has_bias=True, activation=SWIGLU.
-# Ring-aware width dim: N=12 (WH) → width=3; N=8 (BH) → width=2 (90%3==0 but 8%3≠0).
+# Ring-aware width dim is auto-derived using effective_matmul_ring_size (see output_width_shard_dim).
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -545,9 +550,10 @@ def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape, has_bias, is_
 def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape, is_ci_env, is_ci_v2_env):
     """compute_only=True on a 1x1 mesh, GPT-OSS-shaped workload (hidden=N=2880, SWIGLU+bias).
 
-    The matmul ring size is auto-detected from the arch (12 on WH, 8 on BH); the op no longer
-    exposes a bh_ring_size knob.
+    The matmul ring size is auto-detected from the live DRAM-bank count (12 on WH, 7/8 on
+    BH); the op no longer exposes a bh_ring_size knob.
     """
+    hidden_size = 2880
     ring_n = effective_matmul_ring_size(mesh_device)
     _run_moe_compute_single_card_test(
         mesh_device=mesh_device,
@@ -555,10 +561,10 @@ def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape, is_ci_env, is_
         experts_per_device=4,
         tokens_per_device=32,
         selected_experts_k=4,
-        N=2880,
-        hidden_size=2880,
+        N=hidden_size,
+        hidden_size=hidden_size,
         output_height_shard_dim=4,
-        output_width_shard_dim=auto_output_width_shard_dim(2880, matmul_ring_size=ring_n),
+        output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
         dtype=ttnn.bfloat16,
         activation_type=MoEActivationFunction.SWIGLU,
         has_bias=True,
