@@ -142,7 +142,14 @@ HOST_SURFACE_MARKERS = ("tt_metal/impl/", "tt_metal/api/")
 
 def is_host_path(path: str) -> bool:
     """True iff `path` is in a HOST implementation / public-API tree (must not enter
-    the device-only base). Tight enough that a device kernel path never matches."""
+    the device-only base). `in_kernel_surface` WINS: a path that is a kernel surface
+    (contains `/kernels/`) is DEVICE code even under a host tree — e.g. the JIT
+    dispatch/prefetch kernels at `tt_metal/impl/dispatch/kernels/`,
+    `tt_metal/impl/buffers/kernels/` — and must NOT be dropped as host. Only a
+    non-kernel host file (e.g. the host `Semaphore` at impl/buffers/semaphore.hpp)
+    is host."""
+    if in_kernel_surface(path):
+        return False
     return any(h in path for h in HOST_SURFACE_MARKERS)
 
 
