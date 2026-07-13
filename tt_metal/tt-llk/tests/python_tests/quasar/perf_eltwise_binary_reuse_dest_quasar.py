@@ -4,6 +4,7 @@
 import pytest
 from helpers.llk_params import EltwiseBinaryReuseDestType, PERF_RUN_TYPES_QUASAR
 from helpers.param_config import parametrize, runtime
+from helpers.perf_hang_skips import filter_run_types
 from quasar.test_eltwise_binary_reuse_dest_quasar import (
     INPUT_DIMENSIONS,
     OUTPUT_DIMENSIONS,
@@ -47,6 +48,7 @@ def test_perf_eltwise_binary_reuse_dest_quasar(
     loop_factor,
     is_perf,
 ):
+    run_types = filter_run_types(__file__, run_types)
     run_eltwise_binary_reuse_dest(
         formats,
         mathop,

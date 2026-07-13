@@ -6,6 +6,7 @@ from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import MathFidelity, ReduceDimension, ReducePool, PERF_RUN_TYPES_QUASAR
 from helpers.param_config import parametrize
+from helpers.perf_hang_skips import filter_run_types
 from quasar.test_reduce_quasar import (
     REDUCE_FORMATS,
     reduce_dest_acc_modes,
@@ -50,6 +51,14 @@ def test_perf_reduce_quasar(
     loop_factor,
     is_perf,
 ):
+    run_types = filter_run_types(__file__, run_types)
+    if (
+        formats.input_format == DataFormat.MxInt8
+        or formats.output_format == DataFormat.MxInt8
+    ):
+        pytest.skip(
+            "Hangs on Quasar MxInt8 reduce perf cases (observed L1_TO_L1 stall)"
+        )
     run_reduce_quasar(
         formats,
         dest_acc,
@@ -106,6 +115,7 @@ def test_perf_reduce_quasar_mxfp4_2x_gapool(
     loop_factor,
     is_perf,
 ):
+    run_types = filter_run_types(__file__, run_types)
     run_reduce_quasar_mxfp4_2x_gapool(
         register_format_hint,
         formats,

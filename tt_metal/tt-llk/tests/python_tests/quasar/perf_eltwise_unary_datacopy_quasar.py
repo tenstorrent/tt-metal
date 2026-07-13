@@ -4,6 +4,7 @@
 import pytest
 from helpers.llk_params import PERF_RUN_TYPES_QUASAR
 from helpers.param_config import parametrize
+from helpers.perf_hang_skips import filter_run_types
 from quasar.test_eltwise_unary_datacopy_quasar import (
     PERF_DATACOPY_COMBINATIONS,
     datacopy_implied_math_formats,
@@ -33,6 +34,7 @@ def test_perf_eltwise_unary_datacopy_quasar(
     loop_factor,
     is_perf,
 ):
+    run_types = filter_run_types(__file__, run_types)
     run_eltwise_unary_datacopy(
         formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices,
         implied_math_format,

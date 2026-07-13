@@ -364,6 +364,18 @@ def parametrize(**kwargs: any):
         for param, value in zip(parameters, value_tuple):
             if isinstance(value, InputOutputFormat):
                 param_value = f"{value.input_format.name}->{value.output_format.name}"
+            elif (
+                isinstance(value, (list, tuple))
+                and value
+                and all(hasattr(v, "name") and not isinstance(v, type) for v in value)
+            ):
+                # e.g. run_types=[PerfRunType.PACK_ISOLATE] ->
+                # run_types:PerfRunType.PACK_ISOLATE
+                # Prefer "PerfRunType.<name>" so -k PerfRunType.PACK_ISOLATE does
+                # not also match UNPACK_ISOLATE (bare PACK_ISOLATE is a substring).
+                param_value = "+".join(
+                    f"{type(v).__name__}.{v.name}" for v in value
+                )
             elif hasattr(value, "name"):
                 param_value = value.name
             elif hasattr(value, "value"):

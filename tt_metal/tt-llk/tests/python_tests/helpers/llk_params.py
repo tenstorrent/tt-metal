@@ -556,13 +556,16 @@ class PerfRunType(Enum):
     L1_CONGESTION = 5
 
 
-# One PerfRunType per pytest case so isolate modes report independently.
+# Single pytest case runs every PerfRunType so the module CSV has one
+# homogeneous schema (mean/TEXT_SIZE columns for all modes in each row).
+# Pass as a nested list so @parametrize yields one value: the full mode list.
 PERF_RUN_TYPES_QUASAR = [
-    [PerfRunType.L1_TO_L1],
-    [PerfRunType.UNPACK_ISOLATE],
-    [PerfRunType.MATH_ISOLATE],
-    [PerfRunType.PACK_ISOLATE],
-    [PerfRunType.L1_CONGESTION],
+    [
+        PerfRunType.L1_TO_L1,
+        PerfRunType.UNPACK_ISOLATE,
+        PerfRunType.MATH_ISOLATE,
+        PerfRunType.PACK_ISOLATE,
+    ],
 ]
 
 

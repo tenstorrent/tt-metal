@@ -152,6 +152,25 @@ class PerfReport:
         for s in sigs[1:]:
             common = common & s
 
+        # Metric columns named after a PerfRunType, e.g. mean(PACK_ISOLATE),
+        # TEXT_SIZE(UNPACK_ISOLATE), mean(L1_CONGESTION[PACK]).
+        _run_type_names = {rt.name for rt in PerfRunType}
+        _metric_prefixes = ("mean(", "std(", "TEXT_SIZE(")
+
+        def _is_run_type_metric_col(col: str) -> bool:
+            for prefix in _metric_prefixes:
+                if col.startswith(prefix) and col.endswith(")"):
+                    inner = col[len(prefix) : -1]
+                    return inner.split("[", 1)[0] in _run_type_names
+            return False
+
+        all_unique: list[str] = []
+        for info in schemas.values():
+            all_unique.extend(sorted(frozenset(info["columns"]) - common))
+        run_type_only = bool(all_unique) and all(
+            _is_run_type_metric_col(c) for c in all_unique
+        )
+
         lines = [
             f"Perf report schema contamination in {context or 'report'}: "
             f"{len(schemas)} incompatible column schemas were appended to a single CSV.",
@@ -173,15 +192,26 @@ class PerfReport:
                 )
             )
             lines.append(f"    example params: {info['sample']}")
-        lines += [
-            "",
-            "Fix one of two ways:",
-            "  (a) One test emitting different columns across parametrizations — usually a "
-            "template/runtime param that is None for some sweep values and set for others "
-            "(e.g. MATH_OP's pool_type). Make the param set consistent across the sweep.",
-            "  (b) Two genuinely different ops/families share the same py file — split them "
-            "into separate test files, one schema per file.",
-        ]
+        if run_type_only:
+            lines += [
+                "",
+                "These schemas differ only by PerfRunType metric columns (mean/std/TEXT_SIZE).",
+                "PERF_RUN_TYPES_QUASAR uses one PerfRunType per pytest case, so a module "
+                "report is valid for only one isolate mode at a time.",
+                "  - Likely cause: pytest -k PACK_ISOLATE also matches UNPACK_ISOLATE "
+                "(substring). Use -k PerfRunType.PACK_ISOLATE instead.",
+                "  - Or run a single PerfRunType per pytest session / suite invocation.",
+            ]
+        else:
+            lines += [
+                "",
+                "Fix one of two ways:",
+                "  (a) One test emitting different columns across parametrizations — usually a "
+                "template/runtime param that is None for some sweep values and set for others "
+                "(e.g. MATH_OP's pool_type). Make the param set consistent across the sweep.",
+                "  (b) Two genuinely different ops/families share the same py file — split them "
+                "into separate test files, one schema per file.",
+            ]
         raise PerfSchemaError("\n".join(lines))
 
     def frame(self) -> pd.DataFrame:

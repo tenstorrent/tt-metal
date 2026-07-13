@@ -4,6 +4,7 @@
 import pytest
 from helpers.llk_params import Transpose, PERF_RUN_TYPES_QUASAR
 from helpers.param_config import parametrize
+from helpers.perf_hang_skips import filter_run_types
 from quasar.test_matmul_quasar import (
     MATMUL_FORMAT,
     matmul_dest_acc_modes,
@@ -54,6 +55,7 @@ def test_perf_matmul_quasar(
     loop_factor,
     is_perf,
 ):
+    run_types = filter_run_types(__file__, run_types)
     run_matmul(
         math_fidelity,
         dest_sync_mode,

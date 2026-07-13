@@ -4,6 +4,7 @@
 import pytest
 from helpers.llk_params import PERF_RUN_TYPES_QUASAR
 from helpers.param_config import parametrize
+from helpers.perf_hang_skips import filter_run_types
 from quasar.test_unpack_unary_operand_quasar import (
     PERF_UNPACK_UNARY_OPERAND_COMBINATIONS,
 )
@@ -27,6 +28,7 @@ def test_perf_unpack_unary_operand_quasar(
     loop_factor,
     is_perf,
 ):
+    run_types = filter_run_types(__file__, run_types)
     run_unpack_unary_operand(
         formats_dest_acc_sync_transpose_unpack_sel_dims,
         run_types=run_types,

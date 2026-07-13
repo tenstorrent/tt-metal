@@ -4,6 +4,7 @@
 import pytest
 from helpers.llk_params import PERF_RUN_TYPES_QUASAR
 from helpers.param_config import parametrize
+from helpers.perf_hang_skips import filter_run_types
 from quasar.test_transpose_dest_quasar import (
     PERF_TRANSPOSE_DEST_COMBINATIONS,
 )
@@ -34,6 +35,7 @@ def test_perf_transpose_dest_quasar(
     loop_factor,
     is_perf,
 ):
+    run_types = filter_run_types(__file__, run_types)
     run_transpose_dest(
         formats_dest_acc_sync_transpose_dims,
         implied_math_format,

@@ -206,7 +206,7 @@ write_report() {
     echo
     echo "## Notes"
     echo
-    echo "- \`--speed-of-light\` and \`-k <PerfRunType>\` applied for each of: ${PERF_RUN_TYPES[*]}."
+    echo "- \`--speed-of-light\` and \`-k PerfRunType.<PerfRunType>\` applied for each of: ${PERF_RUN_TYPES[*]} (bare PACK_ISOLATE also matches UNPACK_ISOLATE)."
     echo "- \`-x\` stops each file on first failure."
     echo "- tt-exalens 600s timeout: retry up to ${MAX_EXALENS_RETRIES} times. Other failures are not retried."
     echo "- Single-test hang threshold: ${TEST_HANG_SEC}s after tt-exalens is ready (not retried)."
