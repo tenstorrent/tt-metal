@@ -94,7 +94,7 @@ struct StartupNext {
 //   Remap=false — tiled-output pipelines (matmul + default pack): DST stays in
 //                the natural tiled layout the default packer expects.
 template <typename TileIn, typename TileOut, bool Remap = true>
-ALWI auto hw_startup(uint32_t cb_in, uint32_t cb_out) {
+ALWI auto hw_startup() {
     // Each is consumed inside per-TRISC macro-gated calls below (tc_in on
     // UNPACK/MATH, tc_out on PACK), so on the other TRISC builds it is unused —
     // [[maybe_unused]] silences that per-build warning without duplicating the
@@ -120,8 +120,6 @@ ALWI auto hw_startup(uint32_t cb_in, uint32_t cb_out) {
         MATH((hw::math_reconfig_remap(true)));
     }
 
-    (void)cb_in;
-    (void)cb_out;
     return Tag<StartupNext<Remap>::value>{};
 }
 

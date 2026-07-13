@@ -48,9 +48,7 @@ void kernel_main() {
 
     using TileT = Tile32x32_Float16_b;
 
-    // dfb::in / dfb::out are the DFB logical ids (from the generated bindings);
-    // they implicitly convert to the uint32_t id the tensor/ ops take.
-    auto s0 = hw_startup<TileT, TileT>(dfb::in, dfb::out);
+    auto s0 = hw_startup<TileT, TileT>();
 
     // Outer loop over block-rows. reserve_back / push_back are pure dataflow and
     // carry no compute state, so they sit in the body around the tracked ops.
