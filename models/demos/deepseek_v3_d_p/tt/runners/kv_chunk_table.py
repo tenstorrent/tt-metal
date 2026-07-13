@@ -60,7 +60,7 @@ def _num_layers_from_cache(cache, num_users: int) -> int:
     """Layer count a KV cache holds, recovered from its folded batch dim. init_kvpe_cache lays caches
     out user-major with shape[0] = num_users * num_layers, so dividing the batch dim by num_users gives
     this cache's layer count — all layers for the KVPE cache, full-layers-only for the GLM-5.2 index
-    cache (which allocate_index_kv_cache sizes to num_full)."""
+    cache (which allocate_kv_cache sizes to num_full)."""
     return cache.shape[0] // num_users
 
 
