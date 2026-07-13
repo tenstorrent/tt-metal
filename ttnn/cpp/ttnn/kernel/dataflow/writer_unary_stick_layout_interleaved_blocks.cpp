@@ -16,14 +16,14 @@ inline void write_tiles_in_block(
     uint32_t block_row_size,
     uint32_t block_row_size_unpadded,  // to remove padding from the last block in the row
     uint32_t num_rows_unpadded,
+    uint32_t tile_height,
     const TensorAccessor<DSpec>& s) {
-    constexpr uint32_t TILE_HEIGHT = 32;  // TODO: use common source of truth
     uint32_t block_row_id = block_start_row_id;
     for (uint32_t tile_row_id = 0; tile_row_id < block_height_ntiles; tile_row_id++) {
         // We reserve back an entire row of tiles in a block and issue a bunch of reads
         cb_wait_front(cb_id_out0, block_width_ntiles);
         uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
-        for (uint32_t j = 0; j < TILE_HEIGHT; j++) {
+        for (uint32_t j = 0; j < tile_height; j++) {
             if (block_row_id >= num_rows_unpadded) {
                 break;
             }
@@ -49,17 +49,17 @@ void kernel_main() {
     uint32_t block_start_row_offset = get_arg_val<uint32_t>(9);
 
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(0) == 1;
+    // Actual tile height (may be a tiny tile, e.g. 8 or 16, not necessarily 32).
+    constexpr uint32_t tile_height = get_compile_time_arg_val(1);
     constexpr auto dst_args = TensorAccessorArgs<2>();
 
     // NOTE: Row major layout only supports bfp16
     constexpr uint32_t cb_id_out0 = tt::CBIndex::c_16;
 
-    constexpr uint32_t TILE_HEIGHT = 32;  // TODO: use common source of truth
-
     const uint32_t block_width_ntiles =
         FLOAT32_DTYPE ? block_row_size >> 7
                       : block_row_size >> 6;  // Assuming 4/2 bytes per datum, there are 128/64 bytes per tile row
-    const uint32_t block_height_ntiles = num_rows_block / TILE_HEIGHT;
+    const uint32_t block_height_ntiles = num_rows_block / tile_height;
 
     const auto s = TensorAccessor(dst_args, dst_addr);
     uint32_t num_rows_unpadded = num_output_rows_unpadded + block_start_row_id;
@@ -80,6 +80,7 @@ void kernel_main() {
                     block_row_size,
                     current_block_row_size_unpadded,  // padding is only in the last block
                     num_rows_unpadded,
+                    tile_height,
                     s);
                 block_row_offset += block_row_size;
             }  // for num_blocks_w

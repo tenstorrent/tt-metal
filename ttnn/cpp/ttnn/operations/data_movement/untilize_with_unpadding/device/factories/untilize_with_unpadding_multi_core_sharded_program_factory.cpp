@@ -44,8 +44,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tile.get_tile_size(output_cb_data_format);
 
-    uint32_t num_rows_block = 0, block_row_size = 0, output_row_size = 0, last_block_row_size_unpadded = 0,
-             num_output_rows_unpadded = 0;
+    uint32_t num_rows_block = 0, block_row_size = 0, last_block_row_size_unpadded = 0, num_output_rows_unpadded = 0;
     CoreCoord end_core;
     uint32_t last_idx = 0;
     auto shard_spec = a.shard_spec().value();
@@ -65,8 +64,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
     uint32_t ntiles_per_batch = ntiles_per_block * nblocks_per_core / batch;
 
     num_rows_block = out_shard_spec.shape[0];
-    block_row_size = out_shard_spec.shape[1] * output.element_size();     // in0_block_w * TILE_WIDTH * dtype_nbytes
-    output_row_size = output.padded_shape()[-1] * output.element_size();  // output row size bytes
+    block_row_size = out_shard_spec.shape[1] * output.element_size();  // in0_block_w * TILE_WIDTH * dtype_nbytes
     last_block_row_size_unpadded = block_row_size - (tt::round_up(output.padded_shape()[-1], out_shard_spec.shape[1]) -
                                                      output.padded_shape()[-1]) *
                                                         output.element_size();
@@ -173,10 +171,14 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
             "writer_unary_unpad_sharded_to_interleaved.cpp";
         writer_desc.compile_time_args = std::move(writer_ct_args);
     } else {
+        // CT arg 1 carries the (possibly tiny) tile height so the writer knows how many data rows
+        // each tile contributes and how many tile-rows make up a block. Hardcoding 32 here undercounts
+        // both for tiny tiles (e.g. 8x32), so the writer pops fewer tiles than the compute kernel
+        // pushes into c_16 and the two deadlock.
         std::vector<uint32_t> writer_ct_args = {
             (input_cb_data_format == tt::DataFormat::Float32 or input_cb_data_format == tt::DataFormat::UInt32 or
              input_cb_data_format == tt::DataFormat::Int32),
-            output_row_size};
+            tile_height};
         TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
         writer_desc.kernel_source = "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp";
         writer_desc.compile_time_args = std::move(writer_ct_args);

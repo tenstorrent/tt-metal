@@ -247,12 +247,9 @@ TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_specs(
     if (input_tensor_a.memory_config().is_sharded() && operation_attributes.output_mem_config.is_sharded() &&
         input_tensor_a.shard_spec().has_value()) {
         uint32_t fused_height = output_shape.volume() / output_shape[-1];
-        uint32_t num_cores = input_tensor_a.shard_spec().value().num_cores();
         std::array<uint32_t, 2> shard_shape{};
         ShardSpec shard_spec = input_tensor_a.shard_spec().value();
         if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
-            const auto tile = input_tensor_a.tensor_spec().tile();
-            uint32_t tile_height = tile.get_height();
             // Number of whole padded [H_padded, W] matrices packed into a single core's shard. This
             // must match the sharded writer's `batch` (see the multi-core sharded program factory).
             uint32_t batch = std::max(
@@ -269,9 +266,8 @@ TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_specs(
                 shard_idx0 = batch * output_shape[-2];
             } else {
                 // A single matrix split across cores: no interior padding, untilize copies each
-                // core's shard 1:1, so the output shard height must equal the (tile-aligned) input
-                // shard height. See issue #16620.
-                shard_idx0 = tt::round_up(tt::div_up(fused_height, num_cores), tile_height);
+                // core's shard 1:1, so the output shard height must equal the input shard height.
+                shard_idx0 = shard_spec.shape[0];
             }
             shard_shape = {shard_idx0, output_shape[-1]};
         } else {
