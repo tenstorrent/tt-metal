@@ -16,6 +16,21 @@ user_invocable: true
 >
 > **Persisting results — single writer, incremental.** Agents only **return** their findings; they never write a shared file (no concurrent-write clobbering). If findings are persisted to a file, the orchestrator/caller is the **sole writer** and **appends each wave's returns as they arrive** — incremental, never only-at-the-end — so an interrupt preserves every completed wave's findings.
 
+## Recall preflight — run the tool first (augmentor, not a verdict)
+Before enumerating, run the deterministic `cb-sync` checker for a complete
+known-pattern worklist (reserve/push & wait/pop credit balance per CB):
+```bash
+cd .claude/tools/llk-audit && ./run.sh <arch> --full-jit    # cb-sync runs in the kernel tier
+```
+`cb-sync` is **empty over the tt-llk headers** — CBs live in JIT-compiled kernels
+(ttnn/models), so it only emits findings when fed a KERNEL fact base via `--full-jit`
+(the on-request capture; runbook in `race-audit-all`). Treat `findings[]` as a **floor,
+not a ceiling** — widen per its `blind_spots`: it checks WITHIN-function call-count
+balance only, so it MISSES cross-kernel balance, a loop-multiplier imbalance (reserve
+in a loop vs push outside → equal static counts), and the data-before-credit NOC-flush
+ordering (that is noc-sync's join). If the kernel tier isn't built, cb-sync reports
+nothing and you audit the CB surface by reasoning — that is NOT "no findings".
+
 ## The bug class (precise)
 CBs are the credit-based FIFOs connecting **producers** (a reader on RISCV B, or the packer on T2) to **consumers** (compute on T0/T1, or a writer on NC). Flow control is two L1 counters per CB: `tiles_received` (a.k.a. `pages_received`, bumped by the producer in `cb_push_back`) and `tiles_acked` (`pages_acked`, bumped by the consumer in `cb_pop_front`). Misuse → **data corruption** (consumer reads a page before the producer finished writing it, or producer overwrites a page the consumer hasn't read) or **deadlock** (a wait whose credit never arrives). This is the dataflow layer the `mailbox-sync` / `cfg-word-overlap` "is the referenced data ready?" question hands off to.
 
