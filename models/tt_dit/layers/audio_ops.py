@@ -2,11 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Audio-flavored conv primitives for LTX-2 audio decode.
-
-These wrap ``ttnn.experimental.conv3d`` with degenerate axes to express 1D/2D
-convs on the small spectrogram/waveform tensors the mel-VAE and vocoder use.
-"""
+"""Audio conv primitives for LTX-2 audio decode (1D/2D convs via conv3d)."""
 
 from __future__ import annotations
 
@@ -16,13 +12,6 @@ from typing import Sequence
 import torch
 from loguru import logger
 
-# (C, T_pad, K, stride) shapes allowed to use ttnn.conv1d's depthwise kernel
-# instead of the MAC shifted-accumulate. Empty: conv1d diverges from MAC by
-# ~0.9 dB PSNR on the vocoder anti-alias filters (high-frequency amplitude
-# compression), so MAC is the numerical baseline. The conv1d path below stays
-# for a future halo-aware depthwise kernel that matches MAC.
-_CONV1D_SAFE_SHAPES: set = set()
-
 import ttnn
 
 from ..layers.module import Module, Parameter
@@ -30,13 +19,12 @@ from ..parallel.config import AudioTCParallelConfig, AudioTParallelConfig, Paral
 from ..parallel.manager import CCLManager
 from ..utils.conv3d import _ntuple, aligned_channels, get_conv3d_config
 
+# Per-mesh cache of constant zeros buffers, keyed by id(mesh_device).
+_ZEROS_CACHE: dict = {}
+
 
 def channel_axis(parallel_config) -> int | None:
-    """Mesh axis the channel (C) dim is tensor-parallel over, or None.
-
-    Channel-TP is sound on a 2D mesh (channels have no sequence boundary), so it
-    only lives on :class:`AudioTCParallelConfig`; every other config replicates C.
-    """
+    """Mesh axis the channel (C) dim is tensor-parallel over, or None."""
     if isinstance(parallel_config, AudioTCParallelConfig) and parallel_config.channel_parallel.factor > 1:
         return parallel_config.channel_parallel.mesh_axis
     return None
@@ -50,19 +38,14 @@ def channel_factor(parallel_config) -> int:
 
 
 def channel_align_unit(parallel_config) -> int:
-    """Channel alignment unit. ``factor * TILE_WIDTH`` under channel-TP so each
-    per-chip shard (= unit / factor) is itself a TILE_WIDTH multiple; else 32."""
+    """Channel alignment unit: ``factor * TILE_WIDTH`` under channel-TP, else 32."""
     from ..utils.conv3d import ALIGNMENT
 
     return ALIGNMENT * channel_factor(parallel_config)
 
 
 def partition_channel(x: ttnn.Tensor, parallel_config, *, dim: int) -> ttnn.Tensor:
-    """Local slice of a channel-axis-replicated tensor to its per-chip C-shard.
-
-    ``mesh_partition`` of a replicated tensor is local (no communication). No-op
-    unless ``parallel_config`` carries a >1 channel factor.
-    """
+    """Local slice of a channel-replicated tensor to its per-chip C-shard (no-op without C-TP)."""
     axis = channel_axis(parallel_config)
     if axis is None:
         return x
@@ -78,15 +61,24 @@ def all_gather_channel(ccl_manager, x: ttnn.Tensor, parallel_config, *, dim: int
 
 
 def gather_channel_to_full(ccl_manager, x_BTC: ttnn.Tensor, parallel_config) -> ttnn.Tensor:
-    """Gather a ``(B, T, C)`` C-shard back to full C_in for a channel-mixing conv.
-
-    No-op without channel-TP. CCL needs TILE, conv3d needs ROW_MAJOR.
-    """
+    """Gather a ``(B, T, C)`` C-shard back to full C_in (no-op without channel-TP)."""
     if channel_axis(parallel_config) is None:
         return x_BTC
     x_BTC = ttnn.to_layout(x_BTC, ttnn.TILE_LAYOUT)
     x_BTC = all_gather_channel(ccl_manager, x_BTC, parallel_config, dim=2)
     return ttnn.to_layout(x_BTC, ttnn.ROW_MAJOR_LAYOUT)
+
+
+def _pick_c_out_block_shard(*, full: int, shard: int, dst_size: int = 4, tile: int = 32) -> int:
+    """Largest C_out_block ≤ full that divides shard and satisfies conv3d matmul_N_t rules."""
+    max_nt = min(full, shard) // tile
+    for nt in range(max_nt, 0, -1):
+        block = nt * tile
+        if shard % block != 0:
+            continue
+        if nt <= dst_size or nt % dst_size == 0:
+            return block
+    return tile  # 1 tile is always legal
 
 
 def prepare_conv3d_weight_state(
@@ -101,9 +93,7 @@ def prepare_conv3d_weight_state(
     unpadded_in: int | None = None,
     in_channels: int | None = None,
 ) -> None:
-    """Zero-pad the 5D conv weight (C_out, and C_in when given) to its aligned size,
-    run ``prepare_conv3d_weights``, and write the result to ``state['weight']``;
-    ``state['bias']`` is padded to match C_out. C_in padding is opt-in (channel-TP)."""
+    """Zero-pad the 5D conv weight/bias to aligned size, prepare, and write to ``state``."""
     if out_channels != unpadded_out:
         pad_co = out_channels - unpadded_out
         w_5d = torch.nn.functional.pad(w_5d, (0, 0, 0, 0, 0, 0, 0, 0, 0, pad_co))
@@ -127,12 +117,7 @@ def _t_neighbor_pad(
     ccl_manager: CCLManager,
     padding_mode: str = "zeros",
 ) -> ttnn.Tensor:
-    """Halo exchange on the T axis (dim 1 in BTC layout).
-
-    Supports both single-axis sharding (ParallelFactor) and combined 2-axis
-    sharding (AudioTParallelConfig). For 2D sharding the halo is issued as a
-    single two-entry neighbor_pad_async call — both axes exchanged atomically.
-    """
+    """Halo exchange on the T axis (dim 1 in BTC), single- or two-axis sharded."""
     if pad_left == 0 and pad_right == 0:
         return x_BTC
     if parallel_config is None or parallel_config.factor <= 1:
@@ -153,8 +138,7 @@ def _t_neighbor_pad(
     num_links = max(1, min(outer_dims, ccl_manager.num_links))
 
     if isinstance(parallel_config, AudioTParallelConfig):
-        # Two-axis halo: neighbor_pad_async requires distinct pad dims, so issue
-        # one call per mesh axis (axis 0 then axis 1).
+        # Two-axis halo: one call per mesh axis (distinct pad dims required).
         sem0 = ccl_manager.get_np_ping_pong_semaphore(parallel_config.axis0.mesh_axis)
         x_BTC = ccl_manager.neighbor_pad_persistent_buffer(
             x_BTC,
@@ -192,85 +176,58 @@ def _t_neighbor_pad(
 
 
 def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
-    """Valid depthwise filter (same K taps on every channel):
-    ``y[b, t, c] = sum_{j<K} taps[j] * x[b, t*stride + j, c]`` on an
-    already-padded ``(B, T_pad, C)`` ROW_MAJOR input.
+    """Valid depthwise filter (same K taps per channel) on padded ``(B, T_pad, C)`` ROW_MAJOR.
 
-    A single ``ttnn.conv1d`` (groups=C) is ~12x faster than the K-tap shifted
-    multiply-accumulate, but its HEIGHT_SHARDED reader buffers the sequence in
-    L1 and OOMs once T·C is large. So per shape we try conv1d once; on any
-    failure we cache a MAC fallback for that shape. The prepared conv weight is
-    cached per channel count and reused (preparing it per call is what makes
-    conv1d look slow). `cache` is an opaque per-instance dict the caller owns.
+    Returns ``(B, T_out, C)`` with ``T_out = (T_pad - K) / stride + 1`` via a single
+    ``ttnn.conv1d`` (groups=C) with the prepared weight cached in ``cache``.
     """
     B, T_pad, C = int(x_BTC.shape[0]), int(x_BTC.shape[1]), int(x_BTC.shape[2])
     K = len(taps)
     T_out = (T_pad - K) // stride + 1
-    shape_key = (C, T_pad, stride)
 
-    if (C, T_pad, K, stride) not in _CONV1D_SAFE_SHAPES:
-        cache[shape_key] = "mac"
-
-    if cache.get(shape_key) != "mac":
-        try:
-            wprep = cache.get(("w", C))
-            weight = wprep
-            if weight is None:
-                wt = torch.tensor(taps, dtype=torch.float32).reshape(1, 1, K).expand(C, 1, K).contiguous()
-                weight = ttnn.from_torch(wt, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype)
-            if "cc" not in cache:
-                cache["cc"] = ttnn.init_device_compute_kernel_config(
-                    mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
-                )
-            conv_config = ttnn.Conv1dConfig(weights_dtype=dtype, shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
-            out, _, (weight, _bias) = ttnn.conv1d(
-                input_tensor=ttnn.reshape(x_BTC, (B, T_pad, 1, C)),
-                weight_tensor=weight,
-                device=mesh_device,
-                in_channels=C,
-                out_channels=C,
-                batch_size=B,
-                input_length=T_pad,
-                kernel_size=K,
-                stride=stride,
-                padding=0,
-                dilation=1,
-                groups=C,
-                dtype=dtype,
-                conv_config=conv_config,
-                compute_config=cache["cc"],
-                return_output_dim=True,
-                return_weights_and_bias=True,
-            )
-            cache[("w", C)] = weight
-            cache[shape_key] = "conv1d"
-            # conv1d emits HEIGHT_SHARDED TILE; the MAC path and all downstream ops
-            # (T-halo neighbor_pad, convs) expect interleaved ROW_MAJOR — match it.
-            out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
-            out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
-            return ttnn.reshape(out, (B, T_out, C))
-        except Exception:
-            # conv1d doesn't fit this shape's L1 (or is otherwise unsupported);
-            # the MAC loop below is the always-correct fallback.
-            cache[shape_key] = "mac"
-
-    y = None
-    for j in range(K):
-        w = float(taps[j])
-        if stride == 1:
-            slice_j = ttnn.slice(x_BTC, [0, j, 0], [B, j + T_out, C])
-        else:
-            slice_j = ttnn.slice(x_BTC, [0, j, 0], [B, j + (T_out - 1) * stride + 1, C], [1, stride, 1])
-        scaled = ttnn.multiply(slice_j, w)
-        ttnn.deallocate(slice_j)
-        if y is None:
-            y = scaled
-        else:
-            y_new = ttnn.add(y, scaled)
-            ttnn.deallocate(y)
-            ttnn.deallocate(scaled)
-            y = y_new
-    return y
+    # Cache the prepared (tilized/sharded) weight to keep the on-device path; key on
+    # (C, stride, taps) since the upsampler reuses one cache for distinct sub-tap vectors.
+    wkey = ("w", C, stride, K, tuple(taps))
+    weight = cache.get(wkey)
+    prepared = weight is not None
+    if weight is None:
+        wt = torch.tensor(taps, dtype=torch.float32).reshape(1, 1, K).expand(C, 1, K).contiguous()
+        weight = ttnn.from_torch(
+            wt,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=dtype,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+    if "cc" not in cache:
+        cache["cc"] = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
+        )
+    conv_config = ttnn.Conv1dConfig(weights_dtype=dtype, shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
+    out, _, (weight, _bias) = ttnn.conv1d(
+        input_tensor=ttnn.reshape(x_BTC, (B, T_pad, 1, C)),
+        weight_tensor=weight,
+        device=mesh_device,
+        in_channels=C,
+        out_channels=C,
+        batch_size=B,
+        input_length=T_pad,
+        kernel_size=K,
+        stride=stride,
+        padding=0,
+        dilation=1,
+        groups=C,
+        dtype=dtype,
+        conv_config=conv_config,
+        compute_config=cache["cc"],
+        return_output_dim=True,
+        return_weights_and_bias=True,
+    )
+    if not prepared:
+        cache[wkey] = weight
+    # conv1d emits HEIGHT_SHARDED TILE; untilize straight to interleaved DRAM ROW_MAJOR — the
+    # memory_config folds the reshard into the untilize (one op instead of to_memory_config + to_layout).
+    out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return ttnn.reshape(out, (B, T_out, C))
 
 
 def _all_gather_t(ccl_manager, x: "ttnn.Tensor", parallel_config) -> "ttnn.Tensor":
@@ -344,11 +301,7 @@ def _replicate_pad_t(x_BTC: ttnn.Tensor, pad_left: int, pad_right: int, mesh_dev
 
 
 def _tpad_mask(mesh_device, parallel_config, dtype, global_T, tpad_image, cache):
-    """Cached sharded validity mask ``M`` and its complement ``inv``, each ``(1, T, 1)``: ``M`` is
-    1.0 for real rows and 0.0 for the trailing ``tpad_image`` rows, ``inv`` the reverse. Sharded
-    across T so each chip masks its own rows; the zeros land on the last shard(s), where the
-    tile-align pad image lives. Both built on host (0/1 are exact in bf16) so replicate fill is a
-    cache fetch, not a per-call device complement."""
+    """Cached T-sharded validity mask ``M`` (1.0 real, 0.0 on trailing ``tpad_image`` rows) and its complement ``inv``."""
     key = (global_T, tpad_image, dtype)
     cached = cache.get(key)
     if cached is None:
@@ -365,17 +318,9 @@ def _tpad_mask(mesh_device, parallel_config, dtype, global_T, tpad_image, cache)
 
 
 def _set_tpad_tail(x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cache):
-    """Materialize the tile-align pad image — the trailing ``tpad_image`` rows at the global
-    sequence tail — to what the *next* op's own padding produces on the unsharded path, so the
-    sharded global tail bit-matches unsharded:
+    """Set the trailing ``tpad_image`` tail rows: ``mode="zeros"`` zeros them, ``mode="replicate"`` fills the last real row.
 
-    - ``mode="zeros"``: zero the rows. For zeros-pad convs, and the upsamplers (which gather
-      T to full and zero-pad internally, so they must see zeros there).
-    - ``mode="replicate"``: fill with the last real row, for the replicate-pad activations.
-
-    CCL-free: a cached validity mask zeros the pad image (body rows multiply by exactly 1.0,
-    so they stay bit-identical); replicate adds the real-last row, sliced at a uniform local
-    index. Called ~100x per forward, so a gather here would dominate runtime.
+    CCL-free via a cached validity mask (body rows multiply by 1.0, staying bit-identical).
     """
     if tpad_image <= 0 or parallel_config is None or getattr(parallel_config, "factor", 0) <= 1:
         return x_BTC
@@ -388,11 +333,7 @@ def _set_tpad_tail(x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cac
         return xm
     if mode != "replicate":
         raise ValueError(f"unknown mode {mode!r}")
-    # Local index of the real-last row, uniform across shards. When the pad image spans more
-    # than one shard (high factor + short mel), the real->pad boundary is on an interior shard,
-    # not the last; mod local_T lands the slice on it. Shards fully past the boundary get a
-    # garbage fill, but they are trimmed at output and sit beyond every replicate consumer's
-    # (local, halo-bounded) receptive field, and every gather op re-masks them to zeros first.
+    # Local index of the real-last row, uniform across shards (mod local_T handles a multi-shard pad image).
     global_T = local_T * parallel_config.factor
     assert tpad_image < global_T, f"pad image ({tpad_image}) leaves no real rows (global T {global_T})"
     idx = (global_T - tpad_image - 1) % local_T
@@ -405,6 +346,17 @@ def _set_tpad_tail(x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cac
     return out
 
 
+def _persistent_zeros(shape, *, dtype, layout, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
+    """Cached read-only zeros constant for (shape, dtype, layout); avoids per-call host→device writes so traces capture."""
+    cache = _ZEROS_CACHE.setdefault(id(mesh_device), {})
+    key = (tuple(shape), dtype, layout)
+    z = cache.get(key)
+    if z is None:
+        z = ttnn.zeros(shape, dtype=dtype, layout=layout, device=mesh_device)
+        cache[key] = z
+    return z
+
+
 def _zero_pad_t(x_BTC: ttnn.Tensor, pad_left: int, pad_right: int, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
     """Zero-pad along the T axis."""
     if pad_left == 0 and pad_right == 0:
@@ -413,11 +365,11 @@ def _zero_pad_t(x_BTC: ttnn.Tensor, pad_left: int, pad_right: int, mesh_device: 
     pieces = []
     dtype = x_BTC.get_dtype()
     if pad_left > 0:
-        zeros = ttnn.zeros((B, pad_left, C), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+        zeros = _persistent_zeros((B, pad_left, C), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_device=mesh_device)
         pieces.append(zeros)
     pieces.append(x_BTC)
     if pad_right > 0:
-        zeros = ttnn.zeros((B, pad_right, C), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+        zeros = _persistent_zeros((B, pad_right, C), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_device=mesh_device)
         pieces.append(zeros)
     return ttnn.concat(pieces, dim=1)
 
@@ -430,22 +382,20 @@ def _pad_channels_to_aligned(x_BTC: ttnn.Tensor, mesh_device: ttnn.MeshDevice, c
         return x_BTC
     pad_c = aligned - C
     dtype = x_BTC.get_dtype()
-    zeros = ttnn.zeros((B, T, pad_c), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    zeros = _persistent_zeros((B, T, pad_c), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_device=mesh_device)
     return ttnn.concat([x_BTC, zeros], dim=2)
 
 
 def _zero_stuff_t(x_BTC: ttnn.Tensor, *, stride: int, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
-    """Insert ``stride - 1`` zeros between input samples along T, output length
-    ``T*s - (s-1)``. Expresses ``ConvTranspose1d`` as a regular ``Conv1d``.
-
-    Implemented as concat + reshape (O(1) ttnn ops) rather than O(T).
-    """
+    """Insert ``stride-1`` zeros between T samples (output ``T*s - (s-1)``) via concat+reshape."""
     if stride == 1:
         return x_BTC
     B, T, C = x_BTC.shape
     dtype = x_BTC.get_dtype()
     x_btoc = ttnn.reshape(x_BTC, (B, T, 1, C))
-    zero_block = ttnn.zeros((B, T, stride - 1, C), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    zero_block = _persistent_zeros(
+        (B, T, stride - 1, C), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_device=mesh_device
+    )
     stacked = ttnn.concat([x_btoc, zero_block], dim=2)
     interleaved = ttnn.reshape(stacked, (B, T * stride, C))
     out_len = T * stride - (stride - 1)
@@ -453,11 +403,9 @@ def _zero_stuff_t(x_BTC: ttnn.Tensor, *, stride: int, mesh_device: ttnn.MeshDevi
 
 
 class Conv2dViaConv3d(Module):
-    """2D conv via ``ttnn.experimental.conv3d`` with kernel ``(1, kh, kw)`` on a
-    ``(B, 1, H, W, C)`` ROW_MAJOR tensor. Single-device only (no halo).
+    """2D conv via conv3d (kernel ``(1, kh, kw)``) on ``(B, 1, H, W, C)``, single-device.
 
-    Padding modes: ``"zeros"`` (symmetric internal), ``"causal_height"`` /
-    ``"causal_width"`` (external ``k-1`` front pad on the causal axis).
+    Padding: ``"zeros"`` (symmetric internal) or ``"causal_height"``/``"causal_width"`` (external front pad).
     """
 
     def __init__(
@@ -493,8 +441,7 @@ class Conv2dViaConv3d(Module):
         self.mesh_device = mesh_device
         self.dtype = dtype
 
-        # Causal modes pad externally on the causal axis (internal pad=0 there);
-        # zeros mode lets the conv3d kernel pad symmetrically.
+        # Causal modes pad externally (internal pad=0 on that axis); zeros pads symmetrically.
         if padding_mode == "zeros":
             self.internal_padding = (0, kh // 2, kw // 2)
         elif padding_mode == "causal_height":
@@ -516,9 +463,9 @@ class Conv2dViaConv3d(Module):
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4
-            if (is_blackhole() or dtype == ttnn.float32)
-            else ttnn.MathFidelity.HiFi2,
+            math_fidelity=(
+                ttnn.MathFidelity.HiFi4 if (is_blackhole() or dtype == ttnn.float32) else ttnn.MathFidelity.HiFi2
+            ),
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
@@ -540,7 +487,7 @@ class Conv2dViaConv3d(Module):
             assert w.dim() == 4, f"expected 4D Conv2d weight, got {tuple(w.shape)}"
             prepare_conv3d_weight_state(
                 state,
-                w.unsqueeze(2).contiguous(),  # (Cout, Cin, kh, kw) → (Cout, Cin, 1, kh, kw)
+                w.unsqueeze(2).contiguous(),  # → (Cout, Cin, 1, kh, kw)
                 conv_config=self.conv_config,
                 mesh_device=self.mesh_device,
                 dtype=self.dtype,
@@ -558,15 +505,15 @@ class Conv2dViaConv3d(Module):
         if self.padding_mode == "causal_height" and self.pad_h > 0:
             B_, H_, W_, C_ = x_BHWC.shape
             pad_tensor_shape = (B_, self.pad_h, W_, C_)
-            zero_pad = ttnn.zeros(
-                pad_tensor_shape, dtype=x_BHWC.get_dtype(), layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh_device
+            zero_pad = _persistent_zeros(
+                pad_tensor_shape, dtype=x_BHWC.get_dtype(), layout=ttnn.ROW_MAJOR_LAYOUT, mesh_device=self.mesh_device
             )
             x_BHWC = ttnn.concat([zero_pad, x_BHWC], dim=1)
         elif self.padding_mode == "causal_width" and self.pad_w > 0:
             B_, H_, W_, C_ = x_BHWC.shape
             pad_tensor_shape = (B_, H_, self.pad_w, C_)
-            zero_pad = ttnn.zeros(
-                pad_tensor_shape, dtype=x_BHWC.get_dtype(), layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh_device
+            zero_pad = _persistent_zeros(
+                pad_tensor_shape, dtype=x_BHWC.get_dtype(), layout=ttnn.ROW_MAJOR_LAYOUT, mesh_device=self.mesh_device
             )
             x_BHWC = ttnn.concat([zero_pad, x_BHWC], dim=2)
 
@@ -591,12 +538,9 @@ class Conv2dViaConv3d(Module):
 
 
 class Conv1dViaConv3d(Module):
-    """1D conv via ``ttnn.experimental.conv3d`` with kernel ``(k, 1, 1)`` on a
-    ``(B, T, 1, 1, C)`` ROW_MAJOR tensor.
+    """1D conv via conv3d (kernel ``(k, 1, 1)``) on ``(B, T, 1, 1, C)``.
 
-    Padding modes: ``"zeros"`` (internal symmetric, i.e. "same"), ``"causal"``
-    (external ``k-1`` front pad on T). When ``parallel_config`` shards T, the
-    pad becomes a halo exchange via ``ccl_manager``.
+    Padding: ``"zeros"`` (symmetric "same") or ``"causal"`` (front pad on T); T-sharding turns the pad into a halo exchange.
     """
 
     def __init__(
@@ -619,19 +563,13 @@ class Conv1dViaConv3d(Module):
 
         if padding_mode not in ("zeros", "causal"):
             raise ValueError(f"padding_mode must be zeros/causal, got {padding_mode!r}")
-        if dilation != 1:
-            # "same" padding with dilation uses effective_kernel = (k-1)*d+1 below.
-            pass
-
         sharded = parallel_config is not None and parallel_config.factor > 1
         if sharded:
             assert ccl_manager is not None, "T-sharding requires ccl_manager"
-        # Channel-TP gathers C_in then computes only this chip's C_out slice.
         self.channel_shard_output = channel_shard_output
         if channel_axis(parallel_config) is not None:
             assert ccl_manager is not None, "channel-TP requires ccl_manager"
 
-        # Channel-TP rounds C to factor*TILE_WIDTH so each shard is TILE-legal.
         self.channel_align = channel_align_unit(parallel_config)
         self.unpadded_in_channels = in_channels
         self.unpadded_out_channels = out_channels
@@ -683,19 +621,16 @@ class Conv1dViaConv3d(Module):
             w_factor=1,
         )
 
-        # Column-parallel channel-TP: each chip owns out_channels/factor output
-        # channels (the weight is sharded on C_out at load); C_in stays full (gathered).
+        # Column-parallel C-TP: each chip owns out_channels/factor C_out; C_in stays full (gathered).
         self.out_channels_shard = self.out_channels // channel_factor(parallel_config)
         if channel_factor(parallel_config) > 1:
-            # Reuse the full config's C_in_block: the weight is prepared once with it
-            # and C_in stays full, so only C_out_block shrinks to the per-chip slice.
             self.conv_config_shard = ttnn.Conv3dConfig(
                 weights_dtype=self.conv_config.weights_dtype,
                 output_layout=ttnn.ROW_MAJOR_LAYOUT,
                 T_out_block=self.conv_config.T_out_block,
                 W_out_block=self.conv_config.W_out_block,
                 H_out_block=self.conv_config.H_out_block,
-                C_out_block=min(self.conv_config.C_out_block, self.out_channels_shard),
+                C_out_block=_pick_c_out_block_shard(full=self.conv_config.C_out_block, shard=self.out_channels_shard),
                 C_in_block=self.conv_config.C_in_block,
                 compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
             )
@@ -720,11 +655,9 @@ class Conv1dViaConv3d(Module):
         if "weight" in state:
             w = state["weight"]
             assert w.dim() == 3, f"expected 3D Conv1d weight, got {tuple(w.shape)}"
-            # C_in is padded to the aligned count (divisible by conv_config C_in_block;
-            # channel-TP rounds C_in up to factor*32).
             prepare_conv3d_weight_state(
                 state,
-                w.unsqueeze(-1).unsqueeze(-1).contiguous(),  # (Cout, Cin, k) → (Cout, Cin, k, 1, 1)
+                w.unsqueeze(-1).unsqueeze(-1).contiguous(),  # → (Cout, Cin, k, 1, 1)
                 conv_config=self.conv_config,
                 mesh_device=self.mesh_device,
                 dtype=self.dtype,
@@ -740,8 +673,7 @@ class Conv1dViaConv3d(Module):
         return channel_axis(self.parallel_config) is not None and self.channel_shard_output
 
     def _alloc_weight_bias(self) -> None:
-        """Allocate weight/bias. Column-parallel shards C_out across the channel axis
-        at load (each chip stores only its slice); otherwise replicated."""
+        """Allocate weight/bias; column-parallel shards C_out across the channel axis at load."""
         d = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2] * self.in_channels
         mesh_axes = [None, channel_axis(self.parallel_config)] if self._is_col_parallel() else None
         self.weight = Parameter(
@@ -764,23 +696,17 @@ class Conv1dViaConv3d(Module):
         )
 
     def _conv_args(self):
-        """``(weight, bias, conv_config, output_channels)``. The weight is already the
-        per-chip C_out shard when column-parallel, so the output is C-sharded directly."""
+        """``(weight, bias, conv_config, output_channels)``; column-parallel returns the per-chip C_out shard."""
         bias = self.bias.data if self.bias is not None else None
         if self._is_col_parallel():
             return self.weight.data, bias, self.conv_config_shard, self.out_channels_shard
         return self.weight.data, bias, self.conv_config, self.out_channels
 
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
-        """``x_BTC``: ``(B, T, C)`` ROW_MAJOR → ``(B, T_out, C_out)``.
-
-        When sharded, ``T`` is the per-device extent and the halo exchange adds
-        neighbor-chip boundary context before the conv.
-        """
+        """``x_BTC``: ``(B, T, C)`` ROW_MAJOR → ``(B, T_out, C_out)`` (T sharded uses a halo exchange)."""
         assert x_BTC.layout == ttnn.ROW_MAJOR_LAYOUT
 
-        # Channel-TP: gather C_in to full (the conv mixes channels), then column-parallel
-        # produces only this chip's C_out slice (already C-sharded, no scatter).
+        # Channel-TP: gather C_in to full, then column-parallel emits this chip's C_out slice.
         x_BTC = gather_channel_to_full(self.ccl_manager, x_BTC, self.parallel_config)
         weight, bias, conv_config, out_channels = self._conv_args()
 
@@ -819,18 +745,11 @@ class Conv1dViaConv3d(Module):
             dtype=self.dtype,
             compute_kernel_config=self.compute_kernel_config,
         )
-        # Column-parallel output is already the C-shard; no scatter needed.
         return ttnn.reshape(out_5d, (out_5d.shape[0], out_5d.shape[1], out_5d.shape[4]))
 
 
 class _AlignedOutConv1d(Conv1dViaConv3d):
-    """Conv1dViaConv3d variant that rounds ``out_channels`` to a 32-multiple.
-
-    The base ``max(32, out)`` rule lets non-32-multiples (48, 24) reach
-    ``ttnn.experimental.conv3d``, which then produces a buffer whose page size
-    does not divide its length. We round up, zero-pad weight/bias on the ``out``
-    axis, pad input C to aligned in forward, and trim back to the real count.
-    """
+    """Conv1dViaConv3d variant that rounds ``out_channels`` to a 32-multiple, then trims back to the real count."""
 
     def __init__(
         self,
@@ -864,13 +783,11 @@ class _AlignedOutConv1d(Conv1dViaConv3d):
         )
 
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
-        # Under channel-TP the input is a C-shard; super().forward gathers it to
-        # full in_channels, so skip the (replicated-tensor) local pad here.
+        # Channel-TP gathers C_in in super().forward, so skip the local pad here.
         if channel_axis(self.parallel_config) is None:
             x_BTC = _pad_channels_to_aligned(x_BTC, self.mesh_device, channel_align=self.channel_align)
         y = super().forward(x_BTC)
-        # Column-parallel output is the per-chip C_out slice of the (padded) channels
-        # — can't trim to real C_out per chip; the trim happens once at the output.
+        # Column-parallel can't trim per chip; the trim happens once at the output.
         if not self._is_col_parallel() and self.unpadded_out_channels < self.out_channels:
             B, T, C = y.shape
             y = ttnn.slice(y, [0, 0, 0], [B, T, self.unpadded_out_channels])
@@ -878,13 +795,7 @@ class _AlignedOutConv1d(Conv1dViaConv3d):
 
 
 class ConvTranspose1dViaConv3d(Module):
-    """Substitute for ``torch.nn.ConvTranspose1d`` with ``padding=(k-stride)//2``.
-
-    Equivalent to ``Conv1d`` on the zero-stuffed input with the weight flipped
-    along the kernel axis and transposed. The external pad
-    ``p = k - 1 - (k-s)//2`` is the unique value yielding an exact stride x
-    upsample.
-    """
+    """Substitute for ``torch.nn.ConvTranspose1d`` (``padding=(k-stride)//2``): Conv1d on zero-stuffed input with a flipped/transposed weight."""
 
     def __init__(
         self,
@@ -910,11 +821,7 @@ class ConvTranspose1dViaConv3d(Module):
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
 
-        # When sharded the underlying conv stays UNSHARDED: the transposed-conv
-        # math (zero-stuff stride > 1 + asymmetric local zero-pad) is awkward to
-        # halo cleanly on T. Forward gathers across T, runs the unsharded
-        # pipeline, then mesh-partitions the output back. Only 6 per vocoder, so
-        # the gather/partition overhead is small.
+        # Inner conv stays UNSHARDED; forward gathers T, runs unsharded, then re-partitions.
         self.conv = _AlignedOutConv1d(
             in_channels=in_channels,
             out_channels=out_channels,
@@ -931,12 +838,7 @@ class ConvTranspose1dViaConv3d(Module):
         self.conv.external_pad_front = 0
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        """Reshape ConvTranspose1d weight ``(in, out, k)`` → Conv1d ``(out, in, k)``.
-
-        The flip-along-k is required because Conv1d is cross-correlation but the
-        zero-stuff equivalent of ConvTranspose1d needs a flipped kernel. Keys are
-        migrated to ``conv.*`` so the base class can pick them up.
-        """
+        """Reshape ConvTranspose1d weight ``(in, out, k)`` → Conv1d ``(out, in, k)`` (flipped along k)."""
         if "weight" in state:
             w = state.pop("weight")
             assert w.dim() == 3 and tuple(w.shape) == (self.in_channels, self.out_channels, self.kernel_size), (
@@ -953,13 +855,11 @@ class ConvTranspose1dViaConv3d(Module):
         assert x_BTC.layout == ttnn.ROW_MAJOR_LAYOUT
         sharded = self.parallel_config is not None and self.parallel_config.factor > 1
 
-        # Channel-TP: the inner conv runs UNSHARDED (parallel_config=None), so gather
-        # C_in to full here and scatter C_out back at the end.
+        # Channel-TP: gather C_in here, scatter C_out at the end (inner conv is unsharded).
         ch_axis = channel_axis(self.parallel_config)
         if ch_axis is not None:
             x_BTC = gather_channel_to_full(self.ccl_manager, x_BTC, self.parallel_config)
-            # Gathered C is unit-aligned (factor*32); drop the pad channels so the
-            # aligned-32 inner conv sees its real C_in.
+            # Drop the gathered pad channels so the aligned-32 inner conv sees its real C_in.
             x_BTC = ttnn.slice(x_BTC, [0, 0, 0], [x_BTC.shape[0], x_BTC.shape[1], self.in_channels])
 
         if sharded:
@@ -967,8 +867,7 @@ class ConvTranspose1dViaConv3d(Module):
             x_BTC = _all_gather_t(self.ccl_manager, x_BTC, self.parallel_config)
             x_BTC = ttnn.to_layout(x_BTC, ttnn.ROW_MAJOR_LAYOUT)
 
-        # The runtime input C must match the aligned-C the conv weight was
-        # allocated for.
+        # Input C must match the aligned-C the conv weight was allocated for.
         x_BTC = _pad_channels_to_aligned(x_BTC, self.mesh_device)
         x_zs = _zero_stuff_t(x_BTC, stride=self.stride, mesh_device=self.mesh_device)
         x_padded = _zero_pad_t(x_zs, self.external_pad_each, self.external_pad_each, self.mesh_device)
@@ -980,7 +879,7 @@ class ConvTranspose1dViaConv3d(Module):
             y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
 
         if ch_axis is not None:
-            # Re-pad real C_out to unit so the per-chip C-shard is TILE-legal.
+            # Re-pad C_out to unit so the per-chip C-shard is TILE-legal.
             y = _pad_channels_to_aligned(y, self.mesh_device, channel_align=channel_align_unit(self.parallel_config))
             y = partition_channel(y, self.parallel_config, dim=2)
 
@@ -1001,14 +900,14 @@ class Snake(Module):
     ) -> None:
         super().__init__()
         self.channels = channels
-        self.alpha_logscale = alpha_logscale  # If True, learned param is log(α); collapse at load time.
+        self.alpha_logscale = alpha_logscale  # if True, learned param is log(α)
         self.eps = 1e-9
         self.parallel_config = parallel_config
-        # Under channel-TP, pad α to the C-shard unit so it partitions to match the padded activation.
+        # Under channel-TP, pad α to the C-shard unit to match the padded activation.
         unit = channel_align_unit(parallel_config) if channel_axis(parallel_config) is not None else 1
         self._aligned_channels = aligned_channels(channels, unit)
         self.alpha = Parameter(total_shape=[1, 1, self._aligned_channels], device=mesh_device, dtype=dtype)
-        self._alpha_shard = None  # cached per-chip C-shard of the (static) α
+        self._alpha_shard = None
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "alpha" in state:
@@ -1021,7 +920,7 @@ class Snake(Module):
             state["alpha"] = a.contiguous()
 
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
-        # α is per-channel; slice it to the activation's C-shard when channel-TP.
+        # α is per-channel; C-shard it under channel-TP.
         if self._alpha_shard is None:
             self._alpha_shard = partition_channel(self.alpha.data, self.parallel_config, dim=2)
         a = self._alpha_shard
@@ -1054,7 +953,7 @@ class SnakeBeta(Module):
         self._aligned_channels = aligned_channels(channels, unit)
         self.alpha = Parameter(total_shape=[1, 1, self._aligned_channels], device=mesh_device, dtype=dtype)
         self.beta = Parameter(total_shape=[1, 1, self._aligned_channels], device=mesh_device, dtype=dtype)
-        self._ab_shard = None  # cached per-chip C-shards of the (static) α, β
+        self._ab_shard = None
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         for name in ("alpha", "beta"):
@@ -1063,20 +962,26 @@ class SnakeBeta(Module):
                 if self.alpha_logscale:
                     t = torch.exp(t)
                 t = t.reshape(1, 1, -1)
-                if t.shape[-1] < self._aligned_channels:
-                    t = torch.nn.functional.pad(t, (0, self._aligned_channels - t.shape[-1]))
+                real = t.shape[-1]
+                if real < self._aligned_channels:
+                    t = torch.nn.functional.pad(t, (0, self._aligned_channels - real))
+                if name == "beta":
+                    t = t.clone()
+                    t[..., :real] = t[..., :real] + self.eps
+                    if real < self._aligned_channels:
+                        t[..., real:] = 1.0
                 state[name] = t.contiguous()
 
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
-        # α, β are per-channel; slice to the activation's C-shard when channel-TP.
+        # α, β per-channel; C-shard under channel-TP.
         if self._ab_shard is None:
             self._ab_shard = (
                 partition_channel(self.alpha.data, self.parallel_config, dim=2),
                 partition_channel(self.beta.data, self.parallel_config, dim=2),
             )
         a, b = self._ab_shard
-        ax = ttnn.multiply(x_BTC, a)
-        s = ttnn.sin(ax)
-        s2 = ttnn.multiply(s, s)
-        inv = ttnn.reciprocal(ttnn.add(b, self.eps))
-        return ttnn.add(x_BTC, ttnn.multiply(s2, inv))
+        if x_BTC.layout != ttnn.TILE_LAYOUT:
+            x_tile = ttnn.to_layout(x_BTC, ttnn.TILE_LAYOUT)
+        else:
+            x_tile = x_BTC
+        return ttnn.snake_beta(x_tile, a, b)

@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-LTX-2 pipeline tests:
-- Scheduler primitives (no device needed): sigma schedule, Euler step
-- End-to-end one-stage AV generation (LTXPipeline) on a multi-chip mesh
+LTX-2 one-stage pipeline tests:
+- Euler step scheduler primitive (no device needed)
+- End-to-end one-stage AV generation (LTXOneStagePipeline) on a multi-chip mesh
 """
 
 import itertools
@@ -16,24 +16,15 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline, compute_sigmas, euler_step
+from models.tt_dit.pipelines.ltx.pipeline_ltx import euler_step
+from models.tt_dit.pipelines.ltx.pipeline_ltx_one_stage import LTXOneStagePipeline
+from models.tt_dit.utils.ltx import (
+    DEFAULT_LTX_PROMPT,
+    default_ltx_checkpoint,
+    default_ltx_gemma,
+    print_ltx_timing_table,
+)
 from models.tt_dit.utils.test import line_params, ring_params
-
-
-def test_sigma_schedule():
-    """Test sigma schedule produces valid monotonically-decreasing values ending at 0."""
-    steps = 30
-    num_tokens = 2048
-
-    sigmas = compute_sigmas(steps=steps, num_tokens=num_tokens)
-
-    assert sigmas.shape == (steps + 1,), f"Expected {steps+1} sigma values, got {sigmas.shape}"
-    assert sigmas[0] > 0, "First sigma must be positive"
-    assert sigmas[-1] == 0.0, "Last sigma must be 0"
-    # Monotonically decreasing
-    for i in range(len(sigmas) - 1):
-        assert sigmas[i] >= sigmas[i + 1], f"Sigma not decreasing at index {i}: {sigmas[i]} < {sigmas[i+1]}"
-    logger.info(f"Sigma schedule: {sigmas[0]:.4f} -> {sigmas[-1]:.4f} ({len(sigmas)} values)")
 
 
 def test_euler_step():
@@ -59,32 +50,6 @@ def test_euler_step():
 # ---------------------------------------------------------------------------
 # End-to-end one-stage AV generation (requires device + checkpoint)
 # ---------------------------------------------------------------------------
-
-
-def _default_checkpoint() -> str:
-    """Resolve LTX checkpoint: env var > local file > HF repo string default."""
-    explicit = os.environ.get("LTX_CHECKPOINT")
-    if explicit:
-        return explicit
-    local = os.path.expanduser("~/.cache/ltx-checkpoints/ltx-2.3-22b-dev.safetensors")
-    if os.path.exists(local):
-        return local
-    return "Lightricks/LTX-2.3:ltx-2.3-22b-dev.safetensors"
-
-
-def _default_gemma() -> str:
-    """Resolve Gemma path: env var > local HF snapshot > HF repo string default."""
-    explicit = os.environ.get("GEMMA_PATH")
-    if explicit:
-        return explicit
-    import glob
-
-    candidates = glob.glob(
-        os.path.expanduser("~/.cache/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized/snapshots/*/")
-    )
-    if candidates:
-        return candidates[0].rstrip("/")
-    return "google/gemma-3-12b-it-qat-q4_0-unquantized"
 
 
 @pytest.mark.parametrize(
@@ -120,13 +85,13 @@ def _default_gemma() -> str:
 @pytest.mark.parametrize(
     "width, height",
     [
-        (768, 512),
+        (1920, 1088),
     ],
     ids=[
-        "resolution_512p",
+        "resolution_1080p",
     ],
 )
-def test_pipeline_inference(
+def test_pipeline_one_stage(
     mesh_device,
     mesh_shape,
     sp_axis,
@@ -139,22 +104,22 @@ def test_pipeline_inference(
     is_fsdp,
     no_prompt,
 ):
-    ckpt = _default_checkpoint()
-    gemma = _default_gemma()
+    ckpt = default_ltx_checkpoint("ltx-2.3-22b-dev.safetensors")
+    gemma = default_ltx_gemma()
     # ckpt / gemma always resolve (env var → local → HF repo string fallback). The pipeline's
     # resolver downloads from HF if needed.
 
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
-    num_frames = int(os.environ.get("NUM_FRAMES", "121"))
+    num_frames = int(os.environ.get("NUM_FRAMES", "145"))
     num_inference_steps = int(os.environ.get("NUM_STEPS", "30"))
     width = int(os.environ.get("WIDTH", width))
     height = int(os.environ.get("HEIGHT", height))
 
     run_warmup = os.environ.get("RUN_WARMUP", "0") in ("1", "true", "True")
 
-    pipeline = LTXPipeline.create_pipeline(
+    pipeline = LTXOneStagePipeline.create_pipeline(
         mesh_device=mesh_device,
         checkpoint_name=ckpt,
         gemma_path=gemma,
@@ -170,10 +135,7 @@ def test_pipeline_inference(
         width=width,
     )
 
-    prompt = os.environ.get(
-        "PROMPT",
-        "a cat playing piano",
-    )
+    prompt = os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
 
     def run(*, prompt, number, seed):
         logger.info(f"Running inference with prompt: '{prompt}'")
@@ -193,6 +155,19 @@ def test_pipeline_inference(
 
         if int(ttnn.distributed_context_get_rank()) == 0:
             logger.info(f"Saved video to: {output_filename}")
+            print_ltx_timing_table(
+                pipeline,
+                label="LTX ONE-STAGE",
+                num_frames=num_frames,
+                height=height,
+                width=width,
+                mesh_shape=mesh_shape,
+                sp_axis=sp_axis,
+                tp_axis=tp_axis,
+                topology=topology,
+                output_path=output_filename,
+                prompt=prompt,
+            )
         else:
             logger.info(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")
 
