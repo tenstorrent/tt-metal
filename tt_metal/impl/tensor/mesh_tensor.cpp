@@ -15,19 +15,9 @@ MeshTensor::MeshTensor(MeshTensor&& other) noexcept = default;
 MeshTensor& MeshTensor::operator=(MeshTensor&& other) noexcept = default;
 
 MeshTensor::MeshTensor(std::shared_ptr<distributed::MeshBuffer> mesh_buffer, TensorSpec spec, TensorTopology topology) :
-    impl_(std::make_unique<MeshTensorImpl>(std::move(mesh_buffer), std::move(spec), std::move(topology))) {}
+    PimplBase(std::in_place, std::move(mesh_buffer), std::move(spec), std::move(topology)) {}
 
 MeshTensor::~MeshTensor() = default;
-
-MeshTensorImpl& MeshTensor::impl() {
-    TT_FATAL(impl_ != nullptr, "MeshTensor is in a moved-from state.");
-    return *impl_;
-}
-
-const MeshTensorImpl& MeshTensor::impl() const {
-    TT_FATAL(impl_ != nullptr, "MeshTensor is in a moved-from state.");
-    return *impl_;
-}
 
 const distributed::MeshBuffer& MeshTensor::mesh_buffer() const { return impl().mesh_buffer(); }
 
@@ -39,7 +29,7 @@ const TensorSpec& MeshTensor::tensor_spec() const { return impl().spec(); }
 
 const TensorTopology& MeshTensor::tensor_topology() const { return impl().topology(); }
 
-bool MeshTensor::is_valueless_after_move() const { return impl_ == nullptr; }
+bool MeshTensor::is_valueless_after_move() const { return valueless_after_move(); }
 
 DeviceAddr MeshTensor::address() const { return mesh_buffer().address(); }
 
