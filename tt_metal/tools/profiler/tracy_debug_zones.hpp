@@ -46,16 +46,23 @@ constexpr uint32_t category_color(std::size_t index) { return kCategoryColors[in
 constexpr bool zone_name_valid(const char* name) { return name != nullptr; }
 }  // namespace tt::tracy_debug
 
-// TT_TRACY_EMIT(category, disabled, enabled...) expands to `enabled...` when the category is selected, else to
-// `disabled`. It pastes the category's 1/0 define onto TT_TRACY_EMIT_ to pick the branch; the two-step CONCAT
-// is what forces that define to expand before the paste.
+// TT_TRACY_EMIT(category, disabled, enabled...) selects `enabled...` when the category is selected, `disabled`
+// when it is not, and the undeclared identifier TT_TRACY_ERROR_unknown_tracy_debug_category (a readable compile
+// error at the call site) when the category token has no entry in tracy_debug_categories.txt. The category's define
+// resolves to 1/0, or stays an unexpanded token when unknown; PROBE/SELECT then map 1/0/other onto the
+// enabled/disabled/error branch. The two-step CONCAT forces the category define to expand before it is pasted.
 #define TT_TRACY_CONCAT_(a, b) a##b
 #define TT_TRACY_CONCAT(a, b) TT_TRACY_CONCAT_(a, b)
 #define TT_TRACY_EMIT_1(disabled, ...) __VA_ARGS__
 #define TT_TRACY_EMIT_0(disabled, ...) disabled
+#define TT_TRACY_EMIT_BAD(disabled, ...) TT_TRACY_ERROR_unknown_tracy_debug_category
+#define TT_TRACY_PROBE_0 ~, TT_TRACY_EMIT_0
+#define TT_TRACY_PROBE_1 ~, TT_TRACY_EMIT_1
+#define TT_TRACY_SECOND(_1, _2, ...) _2
+#define TT_TRACY_SELECT(...) TT_TRACY_SECOND(__VA_ARGS__, TT_TRACY_EMIT_BAD, ~)
+#define TT_TRACY_BRANCH_FOR(value) TT_TRACY_SELECT(TT_TRACY_CONCAT(TT_TRACY_PROBE_, value))
 #if defined(TRACY_ENABLE)
-#define TT_TRACY_EMIT(category, disabled, ...) \
-    TT_TRACY_CONCAT(TT_TRACY_EMIT_, TT_TRACY_CATEGORY_##category)(disabled, __VA_ARGS__)
+#define TT_TRACY_EMIT(category, disabled, ...) TT_TRACY_BRANCH_FOR(TT_TRACY_CATEGORY_##category)(disabled, __VA_ARGS__)
 #else
 #define TT_TRACY_EMIT(category, disabled, ...) disabled
 #endif

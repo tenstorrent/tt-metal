@@ -247,6 +247,7 @@ if(NOT TRACY_DEBUG_CATEGORY STREQUAL "off")
     string(REPLACE "," ";" _tt_tracy_selected_raw "${TRACY_DEBUG_CATEGORY}")
     foreach(_sel IN LISTS _tt_tracy_selected_raw)
         string(STRIP "${_sel}" _sel)
+        string(TOLOWER "${_sel}" _sel)
         if(NOT _sel IN_LIST _tt_tracy_valid)
             message(
                 FATAL_ERROR
