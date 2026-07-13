@@ -1951,6 +1951,48 @@ def test_kernel_surface_filter():
 
 
 @case
+def test_cmd_is_device_kernel_classification():
+    # Authoritative device/host signal: jit_build's own markers (the riscv-tt-elf
+    # toolchain and -DTENSIX_FIRMWARE, both set env-level for EVERY device kernel),
+    # NOT the file path. Recall-safe: EITHER marker classifies device.
+    kt_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "kernel_tier"
+    )
+    sys.path.insert(0, kt_dir)
+    import capture
+
+    def parse_defs(cmd):
+        _, _, _, defs = capture._parse_cmd(cmd)
+        return defs
+
+    # a real device-kernel command: riscv toolchain + -DTENSIX_FIRMWARE
+    dev = "cd /b && riscv-tt-elf-g++ -DTENSIX_FIRMWARE -DKERNEL_BUILD -I. brisck.cc -o brisck.o"
+    assert capture.cmd_is_device_kernel(dev, parse_defs(dev)) is True
+    # toolchain present but no TENSIX_FIRMWARE in defs -> still device (either marker)
+    tc_only = "cd /b && riscv-tt-elf-g++ -I. k.cc -o k.o"
+    assert capture.cmd_is_device_kernel(tc_only, parse_defs(tc_only)) is True
+    # define present but a non-riscv command spelling -> still device
+    def_only = "cd /b && some-g++ -DTENSIX_FIRMWARE -I. k.cc -o k.o"
+    assert capture.cmd_is_device_kernel(def_only, parse_defs(def_only)) is True
+    # ccache-wrapped device command still contains the toolchain -> device
+    cc = "cd /b && ccache riscv-tt-elf-g++ -DTENSIX_FIRMWARE k.cc -o k.o"
+    assert capture.cmd_is_device_kernel(cc, parse_defs(cc)) is True
+    # -DTENSIX_FIRMWARE=1 value form -> device (startswith)
+    val = "cd /b && riscvx -DTENSIX_FIRMWARE=1 k.cc"
+    assert (
+        capture.cmd_is_device_kernel(
+            "cd /b && x-g++ -DTENSIX_FIRMWARE=1 k.cc", parse_defs(val)
+        )
+        is True
+    )
+    # HOST command: x86 g++, no device markers -> NOT a device kernel (skipped at capture)
+    host = (
+        "cd /b && /usr/bin/g++ -DFMT_HEADER_ONLY -I/usr/include kernel.cpp -o kernel.o"
+    )
+    assert capture.cmd_is_device_kernel(host, parse_defs(host)) is False
+
+
+@case
 def test_noc_atomic_exit():
     K = "ttnn/cpp/x/writer_fused.cpp"
     # A remote atomic (Semaphore.up, argc>=2) is the last NoC op in kernel_main with
