@@ -201,15 +201,28 @@ def run_matmul_measurement(
 
     # Measurement
     if use_trace:
-        tid = ttnn.begin_trace_capture(device, cq_id=0)
-        for _ in range(num_measurement_iterations):
-            output_t = matmul_fn(in0_t, in1_t)
-        ttnn.end_trace_capture(device, tid, cq_id=0)
-        profiler.start("run")
-        ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
-        ttnn.synchronize_device(device)
-        profiler.end("run")
-        ttnn.release_trace(device, tid)
+        tid = None
+        trace_capture_ended = False
+        try:
+            tid = ttnn.begin_trace_capture(device, cq_id=0)
+            for _ in range(num_measurement_iterations):
+                output_t = matmul_fn(in0_t, in1_t)
+            ttnn.end_trace_capture(device, tid, cq_id=0)
+            trace_capture_ended = True
+
+            profiler.start("run")
+            try:
+                ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+                ttnn.synchronize_device(device)
+            finally:
+                profiler.end("run")
+        finally:
+            if tid is not None:
+                try:
+                    if not trace_capture_ended:
+                        ttnn.end_trace_capture(device, tid, cq_id=0)
+                finally:
+                    ttnn.release_trace(device, tid)
     else:
         profiler.start("run")
         for _ in range(num_measurement_iterations):
