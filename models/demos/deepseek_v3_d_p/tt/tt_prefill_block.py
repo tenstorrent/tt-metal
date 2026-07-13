@@ -490,7 +490,7 @@ class TtPrefillBlock(LightweightModule):
                     seq_len_local * self.mla.sp_factor,
                     self.mla.sp_axis,
                 )
-                ttnn.synchronize_device(self.mesh_device)
+            ttnn.synchronize_device(self.mesh_device)
             on_layer_complete(self.mla.layer_idx)
 
         if self.kv_only:
