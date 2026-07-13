@@ -198,6 +198,12 @@ private:
     SocketEndpoint socket_endpoint_type_;
     bool rank_scoped_socket_ = false;
     std::unordered_map<multihost::Rank, multihost::Rank> rank_translation_table_;
+
+    // Per-endpoint table of resolved fabric nodes, indexed by SocketEndpoint ([SENDER], [RECEIVER]).
+    // Each entry maps a socket connection's logical device coordinate (MeshCoordinate) to the physical
+    // tt_fabric::FabricNodeId {mesh_id, chip_id} of that endpoint's chip. Populated at construction from
+    // the endpoints' exchanged descriptors (each advertises its own offset-aware nodes) and read via
+    // get_fabric_node_id(); send_async/recv_async use it to address the peer endpoint over fabric.
     // TODO: replace with enchantum::array
     std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, enchantum::count<SocketEndpoint>>
         fabric_node_id_map_;

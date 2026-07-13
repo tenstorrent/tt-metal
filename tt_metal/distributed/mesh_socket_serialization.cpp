@@ -64,6 +64,21 @@ flatbuffers::Offset<distributed::flatbuffer::SocketMemoryConfig> to_flatbuffer(
         receiver_sub_device);
 }
 
+flatbuffers::Offset<distributed::flatbuffer::FabricNodeId> to_flatbuffer(
+    flatbuffers::FlatBufferBuilder& builder, const tt::tt_fabric::FabricNodeId& fabric_node_id) {
+    return distributed::flatbuffer::CreateFabricNodeId(builder, *fabric_node_id.mesh_id, fabric_node_id.chip_id);
+}
+
+flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<distributed::flatbuffer::FabricNodeId>>> to_flatbuffer(
+    flatbuffers::FlatBufferBuilder& builder, const std::vector<tt::tt_fabric::FabricNodeId>& fabric_node_ids) {
+    std::vector<flatbuffers::Offset<distributed::flatbuffer::FabricNodeId>> fb_fabric_node_ids;
+    fb_fabric_node_ids.reserve(fabric_node_ids.size());
+    for (const auto& fabric_node_id : fabric_node_ids) {
+        fb_fabric_node_ids.push_back(to_flatbuffer(builder, fabric_node_id));
+    }
+    return builder.CreateVector(fb_fabric_node_ids);
+}
+
 CoreCoord from_flatbuffer(const distributed::flatbuffer::CoreCoord* fb_core_coord) {
     return CoreCoord(fb_core_coord->x(), fb_core_coord->y());
 }
@@ -126,6 +141,19 @@ SocketMemoryConfig from_flatbuffer(const distributed::flatbuffer::SocketMemoryCo
     return socket_mem_config;
 }
 
+std::vector<tt::tt_fabric::FabricNodeId> from_flatbuffer(
+    const flatbuffers::Vector<flatbuffers::Offset<distributed::flatbuffer::FabricNodeId>>* fb_fabric_node_ids) {
+    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
+    if (fb_fabric_node_ids) {
+        fabric_node_ids.reserve(fb_fabric_node_ids->size());
+        for (const auto* fb_fabric_node_id : *fb_fabric_node_ids) {
+            fabric_node_ids.emplace_back(
+                tt::tt_fabric::MeshId{fb_fabric_node_id->mesh_id()}, fb_fabric_node_id->chip_id());
+        }
+    }
+    return fabric_node_ids;
+}
+
 }  // namespace
 
 std::vector<uint8_t> serialize_to_bytes(const SocketPeerDescriptor& socket_peer_desc) {
@@ -144,13 +172,16 @@ std::vector<uint8_t> serialize_to_bytes(const SocketPeerDescriptor& socket_peer_
         *socket_config.receiver_rank,
         *socket_config.sender_mesh_id.value(),
         *socket_config.receiver_mesh_id.value());
+    // Build the per-connection resolved fabric nodes FlatBuffer
+    auto fabric_node_ids_fb = to_flatbuffer(builder, socket_peer_desc.fabric_node_ids);
     // Build the SocketPeerDescriptor FlatBuffer (root object)
     auto socket_peer_desc_fb = distributed::flatbuffer::CreateSocketPeerDescriptor(
         builder,
         socket_config_fb,
         socket_peer_desc.config_buffer_address,
         socket_peer_desc.data_buffer_address,
-        *(socket_peer_desc.exchange_tag));
+        *(socket_peer_desc.exchange_tag),
+        fabric_node_ids_fb);
 
     builder.Finish(socket_peer_desc_fb);
     // Extract the FlatBuffer data as a vector of bytes
@@ -181,6 +212,7 @@ SocketPeerDescriptor deserialize_from_bytes(const std::vector<uint8_t>& data) {
     socket_peer_desc.config_buffer_address = socket_peer_desc_fb->config_buffer_address();
     socket_peer_desc.data_buffer_address = socket_peer_desc_fb->data_buffer_address();
     socket_peer_desc.exchange_tag = multihost::Tag{static_cast<int>(socket_peer_desc_fb->exchange_tag())};
+    socket_peer_desc.fabric_node_ids = from_flatbuffer(socket_peer_desc_fb->fabric_node_ids());
     return socket_peer_desc;
 }
 

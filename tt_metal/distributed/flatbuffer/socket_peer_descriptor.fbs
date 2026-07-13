@@ -33,11 +33,18 @@ table SocketConfig {
     receiver_mesh_id: uint32;
 }
 
+table FabricNodeId {
+    mesh_id: uint32;
+    chip_id: uint32;
+}
+
 table SocketPeerDescriptor {
     config: SocketConfig;
     config_buffer_address: uint64;
     data_buffer_address: uint64;
     exchange_tag: uint32;
+    // Resolved fabric nodes for this endpoint's own coords, indexed by socket connection index.
+    fabric_node_ids: [FabricNodeId];
 }
 
 root_type SocketPeerDescriptor;
