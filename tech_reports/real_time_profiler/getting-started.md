@@ -2,7 +2,7 @@
 
 The **real-time profiler** (RT profiler) streams per-program timing from the device over the existing fast-dispatch path (D2H socket). Each completed program yields a `ProgramRealtimeRecord`: `runtime_id`, raw `start_timestamp` / `end_timestamp`, device `frequency` (cycles per ns), `chip_id`, and `kernel_sources` (paths for that program).
 
-You can register **multiple** callbacks; they run concurrently. If you share a resource between callbacks or across multiple meshes, synchronize it (e.g. with a lock). Use `UnregisterProgramRealtimeProfilerCallback(handle)` when done (Python: `ttnn.device.UnregisterProgramRealtimeProfilerCallback`).
+You can register **multiple** callbacks; they are invoked concurrently. If a callback shares a resource with other callbacks or across multiple meshes, access it in a thread-safe way (e.g. with a lock). Use `UnregisterProgramRealtimeProfilerCallback(handle)` when done (Python: `ttnn.device.UnregisterProgramRealtimeProfilerCallback`).
 
 On some dispatch setups (e.g. ETH dispatch, remote chips without the needed resources) the profiler stays inactive — check `ttnn.device.IsProgramRealtimeProfilerActive()` before asserting on record counts.
 
