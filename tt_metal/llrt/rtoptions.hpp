@@ -337,6 +337,9 @@ class RunTimeOptions {
     // Disable dispatch telemetry
     bool dispatch_telemetry_disabled = false;
 
+    // Disable trace capture
+    bool disable_trace_capture = false;
+
     // Using MGD 2.0 syntax for mesh graph descriptor
     bool use_mesh_graph_descriptor_2_0 = false;
 
@@ -832,6 +835,8 @@ public:
     uint32_t get_dispatch_progress_update_ms() const { return dispatch_progress_update_ms; }
 
     bool get_dispatch_telemetry_disabled() const { return dispatch_telemetry_disabled; }
+
+    bool get_disable_trace_capture() const { return disable_trace_capture; }
 
     // Mesh graph descriptor version accessor
     bool get_use_mesh_graph_descriptor_2_0() const { return use_mesh_graph_descriptor_2_0; }
