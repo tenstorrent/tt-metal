@@ -106,6 +106,7 @@ DTYPES = [
     (ttnn.bfloat16, "bf16"),
     (ttnn.float32, "fp32"),
     (ttnn.bfloat8_b, "bfp8"),
+    (ttnn.bfloat4_b, "bfp4"),
 ]
 DTYPE_IDS = [d[1] for d in DTYPES]
 
@@ -162,6 +163,7 @@ _SHAPE_SCENARIO_ALLOWLIST = {
 # and test_reshape_multi_dtype coverage (sharded_in × default_out, TILE only).
 _FP32_CASE_IDS = {"merge_ch", "swap_hw"}
 _BFP8_CASE_IDS = {"merge_ch", "swap_hw", "irreg_aligned"}
+_BFP4_CASE_IDS = _BFP8_CASE_IDS  # bf4 mirrors bf8 scope exactly
 
 
 def _is_valid(scenario_label, case_id, layout, dtype):
@@ -200,6 +202,13 @@ def _is_valid(scenario_label, case_id, layout, dtype):
             return False
         if layout != ttnn.TILE_LAYOUT:
             return False
+    if dtype == ttnn.bfloat4_b:
+        if case_id not in _BFP4_CASE_IDS:
+            return False
+        if scenario_label not in _SHARDED_IN_DEFAULT_OUT:
+            return False
+        if layout != ttnn.TILE_LAYOUT:
+            return False
     # bf16 does NOT run on irreg_aligned in the main test (only cross_strategy + bfp8).
     if dtype == ttnn.bfloat16 and case_id == "irreg_aligned":
         return False
@@ -233,7 +242,9 @@ def _assert_reshape(torch_output, actual, dtype):
     assert list(actual.shape) == list(
         torch_output.shape
     ), f"Shape mismatch: got {list(actual.shape)}, expected {list(torch_output.shape)}"
-    if dtype == ttnn.bfloat8_b:
+    if dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+        # Block-float dtypes quantize, so compare with PCC (bf16/fp32/int reshape is exact).
+        # Measured on-device: bf8 ~0.999, bf4 ~0.993 (seed-fixed) — both clear 0.99.
         assert_with_pcc(torch_output, actual, 0.99)
     else:
         assert torch.equal(torch_output, actual), "Data mismatch: reshape should preserve values exactly"

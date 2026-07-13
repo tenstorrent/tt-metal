@@ -7,26 +7,22 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_recip.h"
-#include "sfpu/ckernel_sfpu_load_config.h"
+#include "sfpu/ckernel_sfpu_converter.h"
 
 namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE>
 inline void init_fmod(const uint value, const uint recip) {
-    // load vConstFloatPrgm0 = value
-    _sfpu_load_config32_(0xC, (value >> 16) & 0xFFFF, value & 0xFFFF);
-    // load vConstFloatPrgm1 = recip
-    _sfpu_load_config32_(0xD, (recip >> 16) & 0xFFFF, recip & 0xFFFF);
+    sfpi::vConstFloatPrgm0 = Converter::as_float(value);
+    sfpi::vConstFloatPrgm1 = Converter::as_float(recip);
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_fmod(const uint value, const uint recip) {
+inline void calculate_fmod() {
     // SFPU microcode
-    sfpi::vFloat s = sfpi::vConstFloatPrgm0;
-    sfpi::vFloat recip_val = sfpi::vConstFloatPrgm1;
-    s = sfpi::abs(s);
-    recip_val = sfpi::abs(recip_val);
+    sfpi::vFloat s = sfpi::abs(sfpi::vConstFloatPrgm0);
+    sfpi::vFloat recip_val = sfpi::abs(sfpi::vConstFloatPrgm1);
 
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
