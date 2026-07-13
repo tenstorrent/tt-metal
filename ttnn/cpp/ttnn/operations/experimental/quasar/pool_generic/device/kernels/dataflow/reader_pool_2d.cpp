@@ -533,6 +533,14 @@ void kernel_main() {
                 for (uint32_t w = 0; w < out_row_bytes >> 2; ++w) {
                     dst_w[w] = src_w[w];
                 }
+                // Write-back the copied output row to TL1 so the host device->host read-back (and any NoC
+                // consumer) sees it, not this DM core's cached copy. Without this the output stick keeps its
+                // pre-kernel stale L1 -> the got.max=2.0 leak. Write-side analog of the scratch invalidate
+                // above and the in_cb write-back in read_kernel_with_top_left_index. (Quasar tt-2xx L2; WH/BH
+                // have no L2 so the write is already visible to the NoC engine.)
+#ifdef ARCH_QUASAR
+                flush_l2_cache_range(reinterpret_cast<uintptr_t>(dst_w), static_cast<size_t>(out_row_bytes));
+#endif
                 // DEBUG (compute-vs-read locator): dump the scratch row-0 (reduced result) the reader sees,
                 // limited to the first few global sticks to avoid flooding/crashing the dprint server.
                 // Distinct sensible values per stick => compute/reduce/pack is fine and the bug is in the
