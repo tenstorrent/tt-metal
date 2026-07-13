@@ -23,11 +23,23 @@ from models.experimental.diffusion_gemma.tt.self_conditioning import (
     _rms_norm_dram,
     build_self_conditioning,
     build_self_conditioning_embedding_weight,
+    build_self_conditioning_embedding_weight_vocab_sharded,
 )
 from models.experimental.diffusion_gemma.weight_mapping import GEMMA4_LM_PREFIX, remap_state_dict
 
 NEG = -1.0e9
 TILE_SIZE = getattr(ttnn, "TILE_SIZE", 32)
+
+
+def _terminal_sharded_enabled() -> bool:
+    """Whether the TP-sharded denoise terminal is opted in (``DG_TERMINAL_SHARDED``, default off).
+
+    When on, :func:`denoise_logits_forward` returns the per-device vocab shard (skipping the
+    ~128 MiB/step full-vocab all-gather) and the terminal argmax/gumbel/entropy + self-cond
+    soft-embedding run on the shard via the sharded ops in ``tt/sampling.py`` and
+    ``tt/self_conditioning.py``. Default off keeps the full-vocab replicated path byte-identical
+    (same gating discipline as ``DG_NORM_FULLCANVAS`` / ``DG_DEDUP_ARGMAX``)."""
+    return os.environ.get("DG_TERMINAL_SHARDED", "0").lower() in ("1", "true", "yes", "on")
 
 
 def default_self_conditioning_compute_kernel_config():
@@ -505,11 +517,15 @@ def denoise_logits_forward(
     prompt_len: int | None = None,
     use_explicit_sliding_mask: bool = False,
     canvas_rope_provider=None,
+    return_sharded: bool = False,
 ):
     """Run a short-prompt DiffusionGemma denoise logits forward.
 
     The returned logits cover all canvas positions, which the diffusion sampler
-    consumes each denoise step.
+    consumes each denoise step. ``return_sharded`` (default ``False``) forwards to
+    ``_apply_lm_head`` so a TP-sharded terminal (``DG_TERMINAL_SHARDED``) can skip the
+    per-step full-vocab all-gather; default off returns the full replicated logits
+    exactly as before.
     """
     hidden_states = denoise_hidden_forward(
         tt_model,
@@ -520,7 +536,51 @@ def denoise_logits_forward(
         use_explicit_sliding_mask=use_explicit_sliding_mask,
         canvas_rope_provider=canvas_rope_provider,
     )
-    return tt_model._apply_lm_head(hidden_states, is_decode=False)
+    return tt_model._apply_lm_head(hidden_states, is_decode=False, return_sharded=return_sharded)
+
+
+def denoise_terminal_reductions_sharded(
+    logits_shard,
+    *,
+    temperature: float,
+    offsets,
+    mesh_config,
+    ccl_manager,
+    gumbel_noise_shard=None,
+    dedup_argmax: bool | None = None,
+):
+    """Sharded terminal vocab reductions (E2 routing): ``(sampled, argmax, entropy)`` from the
+    per-device vocab shard, mirroring ``denoise_loop._sample_and_argmax`` + ``token_entropy`` but on
+    the shard via the ``tt/sampling.py`` sharded ops.
+
+    ``argmax`` (committed token) is BIT-IDENTICAL to the replicated path; ``sampled`` matches the
+    replicated ``gumbel_max`` (same tie rule; ``gumbel_noise_shard=None`` => temperature-scaled
+    argmax, with the dedup fast path when ``DG_DEDUP_ARGMAX`` is on); ``entropy`` is the fp32
+    distributed logsumexp (decision-gated, NOT bf16-bit-identical). The exact global max is computed
+    ONCE and shared by argmax (implicitly, via the value compare) and entropy.
+
+    This composes the sharded ops into the same three outputs ``denoise_step`` consumes; the
+    downstream accept-mask / renoise / commit are vocab-agnostic and unchanged. Callers preallocate
+    ``offsets`` (and any noise shard) OUTSIDE trace capture; see
+    :meth:`DenoiseLogitsAdapter.prepare_sharded_terminal`.
+    """
+    from models.experimental.diffusion_gemma.tt import sampling as TS
+    from models.experimental.diffusion_gemma.tt.denoise_loop import dedup_argmax_enabled
+
+    if dedup_argmax is None:
+        dedup_argmax = dedup_argmax_enabled()
+    if dedup_argmax and gumbel_noise_shard is None and temperature > 0:
+        argmax = TS.argmax_last_dim_sharded(logits_shard, offsets, mesh_config=mesh_config, ccl_manager=ccl_manager)
+        sampled = ttnn.clone(argmax, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    else:
+        sampled = TS.gumbel_max_sharded(
+            logits_shard, temperature, gumbel_noise_shard, offsets, mesh_config=mesh_config, ccl_manager=ccl_manager
+        )
+        argmax = TS.argmax_last_dim_sharded(logits_shard, offsets, mesh_config=mesh_config, ccl_manager=ccl_manager)
+    entropy = TS.token_entropy_sharded(
+        logits_shard, temperature=temperature, mesh_config=mesh_config, ccl_manager=ccl_manager
+    )
+    return sampled, argmax, entropy
 
 
 def collect_prompt_hidden_by_layer(tt_model, prompt_hidden):
@@ -734,6 +794,14 @@ class DenoiseLogitsAdapter:
         # Cross-block-trace-reusable canvas RoPE (constant-shape per-layer-type buffers).
         self.use_canvas_rope = False
         self._canvas_rope_bufs = {}
+        # TP-sharded denoise terminal (DG_TERMINAL_SHARDED). Persistent constants allocated OUTSIDE
+        # any trace by ``prepare_sharded_terminal``: per-device vocab offset + vocab-row-sharded
+        # tied embedding table. Default off keeps the full-vocab replicated terminal.
+        self.sharded_terminal = False
+        self._vocab_offsets = None
+        self._embedding_weight_sharded = None
+        self._sharded_mesh_config = None
+        self._sharded_ccl_manager = None
 
     def prepare_trace_safe_self_conditioning(self, *, canvas_len: int, dtype=ttnn.bfloat16, ping_pong: bool = False):
         """Preallocate the persistent in-place self-cond signal buffer OUTSIDE any trace.
@@ -875,6 +943,72 @@ class DenoiseLogitsAdapter:
             sin_buf.deallocate(True)
         self._canvas_rope_bufs = {}
         self.use_canvas_rope = False
+
+    # --- TP-sharded denoise terminal (DG_TERMINAL_SHARDED) ---------------------------
+    #
+    # Preallocate the sharded-terminal constants BEFORE ``begin_trace_capture`` (session-8 rule):
+    # the per-device vocab index offset and the vocab-row-sharded tied embedding table are
+    # persistent constants with fixed device addresses across replays (the KV-cache pattern). Once
+    # prepared, ``soft_embedding_signal_sharded`` computes the self-cond signal on the logit shard,
+    # and ``denoise_terminal_reductions_sharded`` (module fn) produces the sharded
+    # argmax/gumbel/entropy. The per-step logit shard comes from
+    # ``denoise_logits_forward(return_sharded=True)``.
+
+    def prepare_sharded_terminal(self, *, canvas_len, vocab_size, embedding_weight=None, embedding_weight_sharded=None):
+        """Preallocate the sharded-terminal constants OUTSIDE any trace and enable the sharded path.
+
+        Builds the ``[1,1,canvas_len,TP]`` per-device vocab offset (sharded on tp_axis) and, when a
+        tied ``embedding_weight`` (torch ``[vocab, hidden]``) or a prebuilt
+        ``embedding_weight_sharded`` is supplied and self-conditioning is active, the vocab-row-
+        sharded embedding table. Sets ``self.sharded_terminal``; the offset + table are freed by
+        :meth:`release_sharded_terminal`."""
+        from models.experimental.diffusion_gemma.tt.sampling import build_vocab_shard_offsets
+
+        tt_model = self.tt_model
+        mesh_config = tt_model.mesh_config
+        self._sharded_mesh_config = mesh_config
+        self._sharded_ccl_manager = tt_model.ccl_manager
+        if self._vocab_offsets is not None:
+            self._vocab_offsets.deallocate(True)
+        self._vocab_offsets = build_vocab_shard_offsets(
+            tt_model.mesh_device, mesh_config, canvas_len=canvas_len, vocab_size=vocab_size
+        )
+        if self._embedding_weight_sharded is not None:
+            self._embedding_weight_sharded.deallocate(True)
+            self._embedding_weight_sharded = None
+        if embedding_weight_sharded is not None:
+            self._embedding_weight_sharded = embedding_weight_sharded
+        elif embedding_weight is not None and self.self_conditioning is not None:
+            self._embedding_weight_sharded = build_self_conditioning_embedding_weight_vocab_sharded(
+                tt_model.mesh_device,
+                embedding_weight,
+                mesh_config,
+                hidden_size=self.self_conditioning.hidden_size,
+            )
+        self.sharded_terminal = True
+
+    def soft_embedding_signal_sharded(self, logits_shard):
+        """Sharded self-conditioning soft-embedding signal ``[1,1,C,hidden]`` from the logit shard.
+
+        Drop-in replacement for ``self_conditioning.soft_embedding`` on the per-device shard;
+        requires :meth:`prepare_sharded_terminal` to have built the row-sharded embed table."""
+        if self.self_conditioning is None or self._embedding_weight_sharded is None:
+            raise RuntimeError("prepare_sharded_terminal must build the row-sharded embedding table first")
+        return self.self_conditioning.soft_embedding_sharded(
+            logits_shard,
+            self._embedding_weight_sharded,
+            mesh_config=self._sharded_mesh_config,
+            ccl_manager=self._sharded_ccl_manager,
+        )
+
+    def release_sharded_terminal(self):
+        if self._vocab_offsets is not None:
+            self._vocab_offsets.deallocate(True)
+            self._vocab_offsets = None
+        if self._embedding_weight_sharded is not None:
+            self._embedding_weight_sharded.deallocate(True)
+            self._embedding_weight_sharded = None
+        self.sharded_terminal = False
 
     def _trace_safe_call(self, canvas_tokens, step: int):
         tt_model = self.tt_model

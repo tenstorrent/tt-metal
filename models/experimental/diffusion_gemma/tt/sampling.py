@@ -365,3 +365,212 @@ def sample_gumbel_noise_by_vocab_chunks(shape, *, device, seed: int, vocab_chunk
     for part in parts:
         part.deallocate(True)
     return gumbel
+
+
+# ---------------------------------------------------------------------------------------------
+# TP-sharded denoise terminal (DG_TERMINAL_SHARDED) — argmax / global-max / entropy on the
+# per-device vocab shard, skipping the per-step full-vocab all-gather (#47465, path to 100 t/s).
+#
+# The lm_head is column-parallel over vocab (``models/demos/gemma4/tt/model.py::_apply_lm_head``),
+# so each of the ``TP`` devices already holds the SOFTCAPPED shard ``[1,1,S,vocab/TP]`` covering
+# a contiguous, tile-aligned, unpadded vocab block ``[c*per_dev, (c+1)*per_dev)``. With
+# ``return_sharded=True`` the head skips the ~128 MiB/step ``ccl_allgather`` and these helpers do
+# the reduction on the shard + a tiny cross-shard combine:
+#   * argmax/gumbel  — per-shard local max+argmax, add the per-device offset, all-gather the tiny
+#     ``[S,TP]`` candidates, then a global max + lowest-index-among-winners fold. BIT-IDENTICAL to
+#     the replicated ``argmax_last_dim`` (max is a selection, no bf16 accumulation; the tie rule —
+#     lowest global index wins — is preserved via the offset ordering).
+#   * global max     — exact (bf16 max of bf16 values does no rounding, order-independent).
+#   * entropy        — distributed logsumexp with the exact shared max; fp32 per-shard partials +
+#     fp32 all-reduce(SUM). NOT bf16-bit-identical (the 262144-length sum is re-associated as
+#     ``TP`` partials), same #48291 class as ``DG_NORM_FULLCANVAS``; decision-gated.
+#
+# Trace-safe: no ``ttnn.full`` / ``zeros_like`` (host writes rejected in trace capture) is used in
+# the combine — the tie fold is a masked-min in fp32; the offset constant is preallocated OUTSIDE
+# capture (``build_vocab_shard_offsets``); all shapes are fixed (``S``, ``TP``, ``per_dev``). The
+# ``all_gather`` / ``all_reduce`` are the same collectives gemma4 traced decode already captures.
+# ---------------------------------------------------------------------------------------------
+
+# Larger than any global vocab index (< 262144) so a non-winning shard's candidate index never
+# wins the cross-shard min; exact-enough in fp32 (its exact value is irrelevant, only its rank).
+_ARGMAX_TIE_PENALTY = 1.0e9
+
+
+def build_vocab_shard_offsets(mesh_device, mesh_config, *, canvas_len, vocab_size=None, per_device_vocab=None):
+    """Per-device global-vocab index offset for the sharded terminal (E3).
+
+    Builds ``[1,1,canvas_len,TP]`` int32 with column ``c = c*per_device_vocab`` and shards it on
+    ``tp_axis`` (``mesh_config.column_parallel``), so device ``c`` statically holds the scalar
+    ``[1,1,canvas_len,1]`` offset for its own vocab block. Mirrors the decode offset template
+    ``models/common/sampling/tt_sampling.py::_create_indices_tensors``. Allocate ONCE, OUTSIDE any
+    trace (a persistent constant with a fixed device address across replays — the KV-cache
+    pattern). Adding ``local_argmax_idx + offset`` reproduces the global vocab index the replicated
+    ``argmax_last_dim`` reports, because the column-parallel lm_head lays vocab out in contiguous
+    device-column order.
+    """
+    import torch
+
+    tp = mesh_config.tp
+    if per_device_vocab is None:
+        if vocab_size is None:
+            raise ValueError("build_vocab_shard_offsets requires vocab_size or per_device_vocab")
+        if vocab_size % tp != 0:
+            raise ValueError(f"vocab_size {vocab_size} not divisible by tp {tp}")
+        per_device_vocab = vocab_size // tp
+    offsets = torch.zeros(1, 1, canvas_len, tp, dtype=torch.int32)
+    for c in range(tp):
+        offsets[:, :, :, c] = c * per_device_vocab
+    return ttnn.from_torch(
+        offsets,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=mesh_config.column_parallel(mesh_device),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def _sharded_local_candidates(logits_shard, offsets, *, mesh_config, ccl_manager):
+    """Per-shard ``(max_value, global_argmax_index)`` gathered across TP.
+
+    Returns ``(gathered_vals [1,1,S,TP] TILE, gathered_gidx_f [1,1,S,TP] fp32 TILE)`` replicated on
+    every device. ``offsets`` is the persistent [1,1,S,1] per-device base from
+    :func:`build_vocab_shard_offsets` and is NOT deallocated here.
+    """
+    from models.demos.gemma4.tt.ccl import ccl_allgather
+
+    local_max = ttnn.max(logits_shard, dim=-1, keepdim=True)  # [1,1,S,1] per-device local max
+    local_idx = argmax_last_dim(logits_shard)  # [1,1,S,1] uint32 ROW_MAJOR per-device local argmax
+    local_idx_tile = ttnn.to_layout(local_idx, ttnn.TILE_LAYOUT)
+    if local_idx_tile is not local_idx:
+        local_idx.deallocate(True)
+    # fp32 index arithmetic: local idx < per_dev and global idx < vocab (< 2^24) are exact in fp32.
+    local_idx_f = ttnn.typecast(local_idx_tile, ttnn.float32)
+    local_idx_tile.deallocate(True)
+    offsets_f = ttnn.typecast(offsets, ttnn.float32)
+    global_idx_f = ttnn.add(local_idx_f, offsets_f)
+    local_idx_f.deallocate(True)
+    offsets_f.deallocate(True)
+    gathered_vals = ccl_allgather(local_max, mesh_config, ccl_manager, dim=3)  # deallocates local_max
+    gathered_gidx_f = ccl_allgather(global_idx_f, mesh_config, ccl_manager, dim=3)  # deallocates global_idx_f
+    return gathered_vals, gathered_gidx_f
+
+
+def _combine_sharded_argmax(gathered_vals, gathered_gidx_f):
+    """Global argmax index from gathered per-shard ``(value, global_index)`` (lowest index on ties).
+
+    ``M = max`` over the TP candidate values is exact (selection, no bf16 accumulation). Among the
+    shards whose value equals ``M`` (bf16-exact compare), the lowest global index wins — reproduced
+    by penalising non-winners by :data:`_ARGMAX_TIE_PENALTY` and taking the min. This matches the
+    replicated ``ttnn.argmax`` tie rule (lowest index) exactly. Uses no ``ttnn.full`` (trace-safe).
+    """
+    global_max = ttnn.max(gathered_vals, dim=-1, keepdim=True)  # [1,1,S,1] exact global max
+    not_winner = ttnn.ne(gathered_vals, global_max)  # [1,1,S,TP] 1 where value != global max
+    not_winner_f = ttnn.typecast(not_winner, ttnn.float32)
+    penalty = ttnn.multiply(not_winner_f, _ARGMAX_TIE_PENALTY)
+    masked = ttnn.add(gathered_gidx_f, penalty)  # winners keep gidx; losers pushed above any gidx
+    min_gidx_f = ttnn.min(masked, dim=-1, keepdim=True)
+    result = ttnn.typecast(min_gidx_f, ttnn.uint32)
+    global_max.deallocate(True)
+    not_winner.deallocate(True)
+    not_winner_f.deallocate(True)
+    penalty.deallocate(True)
+    masked.deallocate(True)
+    min_gidx_f.deallocate(True)
+    return result
+
+
+def argmax_last_dim_sharded(logits_shard, offsets, *, mesh_config, ccl_manager):
+    """Global argmax over the TP-sharded vocab (E4). BIT-IDENTICAL to ``argmax_last_dim`` on the
+    full replicated logits. Returns ``[1,1,S,1]`` uint32 (TILE)."""
+    gathered_vals, gathered_gidx_f = _sharded_local_candidates(
+        logits_shard, offsets, mesh_config=mesh_config, ccl_manager=ccl_manager
+    )
+    result = _combine_sharded_argmax(gathered_vals, gathered_gidx_f)
+    gathered_vals.deallocate(True)
+    gathered_gidx_f.deallocate(True)
+    return result
+
+
+def gumbel_max_sharded(logits_shard, temperature: float, noise_shard, offsets, *, mesh_config, ccl_manager):
+    """Gumbel-max sample over the TP-sharded vocab (E4). ``argmax(logits/T + noise)`` where
+    ``noise_shard`` is the vocab-sharded Gumbel slice aligned to ``logits_shard`` (device ``c`` <->
+    vocab block ``c``); ``noise_shard=None`` reduces to :func:`argmax_last_dim_sharded` (temperature
+    scaling preserves the argmax). BIT-IDENTICAL to the replicated ``gumbel_max`` because
+    ``(z+noise)`` on device ``c`` is the identical bits of the replicated tensor's columns
+    ``[c*per_dev, ...)`` (element-wise add, no cross-vocab interaction) and the combine is the exact
+    same max + lowest-index tie rule."""
+    z = temperature_scale(logits_shard, temperature)
+    if noise_shard is None:
+        result = argmax_last_dim_sharded(z, offsets, mesh_config=mesh_config, ccl_manager=ccl_manager)
+        _deallocate_scaled_if_temporary(z, logits_shard)
+        return result
+    perturbed = ttnn.add(z, noise_shard)
+    result = argmax_last_dim_sharded(perturbed, offsets, mesh_config=mesh_config, ccl_manager=ccl_manager)
+    perturbed.deallocate(True)
+    _deallocate_scaled_if_temporary(z, logits_shard)
+    return result
+
+
+def global_vocab_max(logits_shard, *, mesh_config, ccl_manager):
+    """Exact global vocab max ``M = [1,1,S,1]`` from the TP-sharded logits (E5).
+
+    Per-shard local max -> tiny ``all_gather`` -> ``ttnn.max`` over TP. bf16 max of bf16 values does
+    no rounding and is order-independent, so ``M`` equals the replicated ``ttnn.max`` bit-for-bit;
+    shared by :func:`token_entropy_sharded` and the sharded soft-embedding."""
+    from models.demos.gemma4.tt.ccl import ccl_allgather
+
+    local_max = ttnn.max(logits_shard, dim=-1, keepdim=True)
+    gathered = ccl_allgather(local_max, mesh_config, ccl_manager, dim=3)  # deallocates local_max
+    global_max = ttnn.max(gathered, dim=-1, keepdim=True)
+    gathered.deallocate(True)
+    return global_max
+
+
+def token_entropy_sharded(logits_shard, temperature: float = 1.0, *, mesh_config, ccl_manager, global_max=None):
+    """Per-position Shannon entropy over the TP-sharded vocab as a distributed logsumexp (E6).
+
+    ``H = log(Σexp(z-M)) - Σ(exp(z-M)·(z-M))/Σexp(z-M)`` with the shared exact max ``M``. The two
+    per-shard partial sums are accumulated and all-reduced in fp32; ``M`` is bit-identical to the
+    replicated path so every ``exp`` argument matches element-for-element, and ONLY the 262144-length
+    sums are re-associated (TP partials). NOT bf16-bit-identical (same #48291 class as
+    ``DG_NORM_FULLCANVAS``); the fp32 partials + fp32 all-reduce minimise the drift. Decision-gated —
+    validate accept/renoise decision-agreement before any default flip. Returns ``[1,1,S,1]`` in the
+    logits dtype (drop-in for the replicated :func:`token_entropy`)."""
+    from models.demos.gemma4.tt.ccl import ccl_allreduce
+
+    out_dtype = logits_shard.get_dtype()
+    z = temperature_scale(logits_shard, temperature)
+    owns_max = global_max is None
+    max_t = global_vocab_max(z, mesh_config=mesh_config, ccl_manager=ccl_manager) if owns_max else global_max
+    shifted = ttnn.subtract(z, max_t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    exp_shifted = ttnn.exp(shifted, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    # fp32 partial reductions to minimise the cross-shard sum re-association error.
+    exp_f = ttnn.typecast(exp_shifted, ttnn.float32)
+    sum_exp_local = ttnn.sum(exp_f, dim=-1, keepdim=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    exp_f.deallocate(True)
+    weighted = ttnn.multiply(exp_shifted, shifted, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    weighted_f = ttnn.typecast(weighted, ttnn.float32)
+    weighted.deallocate(True)
+    sum_weighted_local = ttnn.sum(weighted_f, dim=-1, keepdim=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    weighted_f.deallocate(True)
+    exp_shifted.deallocate(True)
+    shifted.deallocate(True)
+    # all-reduce(SUM) the two tiny [1,1,S,1] fp32 partials across TP (deallocates its inputs).
+    sum_exp = ccl_allreduce(sum_exp_local, mesh_config, ccl_manager)
+    sum_weighted = ccl_allreduce(sum_weighted_local, mesh_config, ccl_manager)
+    log_sum_exp = ttnn.log(sum_exp)
+    expected_shifted = ttnn.div(sum_weighted, sum_exp)
+    entropy = ttnn.subtract(log_sum_exp, expected_shifted)
+    sum_exp.deallocate(True)
+    sum_weighted.deallocate(True)
+    log_sum_exp.deallocate(True)
+    expected_shifted.deallocate(True)
+    if owns_max:
+        max_t.deallocate(True)
+    _deallocate_scaled_if_temporary(z, logits_shard)
+    if entropy.get_dtype() != out_dtype:
+        entropy_cast = ttnn.typecast(entropy, out_dtype)
+        entropy.deallocate(True)
+        return entropy_cast
+    return entropy

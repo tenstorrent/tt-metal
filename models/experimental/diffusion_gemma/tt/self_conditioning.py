@@ -138,6 +138,40 @@ def build_self_conditioning_embedding_weight(
     return tensor_fn(embedding_weight.unsqueeze(0).unsqueeze(0), **tensor_kwargs)
 
 
+def build_self_conditioning_embedding_weight_vocab_sharded(
+    device,
+    embedding_weight,
+    mesh_config,
+    *,
+    hidden_size: int | None = None,
+    dtype=ttnn.bfloat16,
+    tensor_fn=ttnn.from_torch,
+):
+    """Tied token embedding table ROW-sharded on vocab for the sharded soft-embedding (E7).
+
+    ``row_parallel`` shards the vocab (dim -2) contiguously in device-column order, so device ``c``
+    holds rows ``[c*per_dev, (c+1)*per_dev)`` — the SAME vocab block the column-parallel lm_head
+    scores on device ``c`` (both use ``ShardTensor2dMesh`` with the tp mesh axis, identical device
+    ordering). This aligns each device's embedding rows with its logit shard, so
+    :meth:`TtSelfConditioning.soft_embedding_sharded` can contract the sharded vocab dim locally and
+    combine with one ``all_reduce``. It also SAVES ~1 GB/chip versus the replicated table build.
+    Build ONCE, OUTSIDE any trace.
+    """
+    if len(embedding_weight.shape) != 2:
+        raise ValueError("embedding_weight must have shape [vocab, hidden]")
+    if hidden_size is not None and embedding_weight.shape[-1] != hidden_size:
+        raise ValueError(f"embedding hidden size {embedding_weight.shape[-1]} does not match expected {hidden_size}")
+    full = embedding_weight.unsqueeze(0).unsqueeze(0).contiguous()  # [1,1,vocab,hidden]
+    return tensor_fn(
+        full,
+        device=device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mesh_config.row_parallel(device),
+    )
+
+
 def _dram_for_rms_norm(tensor):
     memory_config = tensor.memory_config()
     if memory_config.buffer_type == ttnn.BufferType.DRAM and not memory_config.is_sharded():
@@ -410,6 +444,72 @@ class TtSelfConditioning:
         denominator.deallocate(True)
         scaled = ttnn.multiply(signal, float(self.hidden_size) ** 0.5)
         signal.deallocate(True)
+        return scaled
+
+    def soft_embedding_sharded(
+        self,
+        prev_logits_shard,
+        embedding_weight_sharded,
+        *,
+        mesh_config,
+        ccl_manager,
+        global_max=None,
+    ):
+        """Probability-weighted token embedding from TP-sharded prev-step logits (E7).
+
+        ``prev_logits_shard`` is the per-device vocab shard ``[1,1,S,vocab/TP]`` (the lm_head output
+        with ``return_sharded=True``); ``embedding_weight_sharded`` is the vocab-ROW-sharded tied
+        table ``[1,1,vocab/TP,hidden]`` from
+        :func:`build_self_conditioning_embedding_weight_vocab_sharded` (device ``c`` rows aligned to
+        the logit shard). Computes ``softmax(prev_logits) @ embed`` distributed over TP:
+
+          numerator_c = Σ_v exp(z_v - M)·embed_v   (a matmul contracting the sharded vocab dim -> a
+                        per-device PARTIAL [1,1,S,hidden], the standard row-parallel pattern)
+          denominator_c = Σ_v exp(z_v - M)          (per-device partial [1,1,S,1])
+
+        with the shared EXACT global max ``M`` (bit-identical to the replicated path). The partials
+        are accumulated/all-reduced in fp32, then ``signal = (numer/denom)·sqrt(hidden)`` is
+        REPLICATED on every device — a drop-in for the replicated :meth:`soft_embedding` signal.
+
+        NOT bit-identical: only the vocab sum is re-associated as TP partials (same class as
+        :func:`token_entropy_sharded`); fp32 partials + fp32 all-reduce keep it near-exact, and the
+        signal passes through RMSNorm so its decision impact is softer than entropy's. The load-
+        bearing ``sqrt(hidden)`` embed scale (self_conditioning.py) is preserved. Decision-gated.
+        """
+        from models.demos.gemma4.tt.ccl import ccl_allreduce
+        from models.experimental.diffusion_gemma.tt.sampling import global_vocab_max
+
+        owns_max = global_max is None
+        max_t = (
+            global_vocab_max(prev_logits_shard, mesh_config=mesh_config, ccl_manager=ccl_manager)
+            if owns_max
+            else global_max
+        )
+        shifted = ttnn.subtract(prev_logits_shard, max_t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if owns_max:
+            max_t.deallocate(True)
+        exp_shard = ttnn.exp(shifted, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        shifted.deallocate(True)
+        # Contract the sharded vocab dim -> per-device PARTIAL numerator/denominator (row-parallel).
+        denom_partial = ttnn.sum(exp_shard, dim=-1, keepdim=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        numer_partial = ttnn.matmul(exp_shard, embedding_weight_sharded, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        exp_shard.deallocate(True)
+        # fp32 combine: all-reduce(SUM) the partials across TP (deallocates its inputs).
+        numer_f = ttnn.typecast(numer_partial, ttnn.float32)
+        numer_partial.deallocate(True)
+        denom_f = ttnn.typecast(denom_partial, ttnn.float32)
+        denom_partial.deallocate(True)
+        numerator = ccl_allreduce(numer_f, mesh_config, ccl_manager)
+        denominator = ccl_allreduce(denom_f, mesh_config, ccl_manager)
+        signal = ttnn.div(numerator, denominator)
+        numerator.deallocate(True)
+        denominator.deallocate(True)
+        scaled = ttnn.multiply(signal, float(self.hidden_size) ** 0.5)
+        signal.deallocate(True)
+        if scaled.get_dtype() != ttnn.bfloat16:
+            out = ttnn.typecast(scaled, ttnn.bfloat16)
+            scaled.deallocate(True)
+            return out
         return scaled
 
     def condition(self, inputs_embeds_tt, prev_logits_tt, embedding_weight_tt, *, compute_kernel_config=None):
