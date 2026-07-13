@@ -83,7 +83,7 @@ AUDIT="$OUT/audit.kernel.$ARCH.json"
 LEDGER="$OUT/kernel_coverage.$ARCH.txt"
 HOLE_ARGS=()
 if [ -f "$LEDGER" ]; then
-  HOLES=$(grep -cE '\[(PARSE-FAIL|EMPTY-OUT|EXEC-FAIL|SKIP-noparse|SKIP-nosrc)' "$LEDGER" || true)
+  HOLES=$(grep -cE '\[(PARSE-FAIL|EMPTY-OUT|EXEC-FAIL|SKIP-noparse|SKIP-nosrc|HOST-LEAK)' "$LEDGER" || true)
   if [ "${HOLES:-0}" -gt 0 ]; then
     HOLE_ARGS=(--degraded-note "kernel-tier capture: $HOLES kernel TU(s) failed to parse/extract (see $LEDGER) — coverage hole, NOT a clean all-clear")
   fi

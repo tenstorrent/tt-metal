@@ -1831,6 +1831,10 @@ def test_kernel_surface_filter():
         "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/r.cpp",
         "models/demos/deepseek_v3_b1/unified_kernels/matmul_expert.hpp",
         "tt_metal/kernels/dataflow/blank.cpp",
+        # DEVICE dispatch/prefetch kernels live UNDER tt_metal/impl/ but ARE device
+        # code (JIT-compiled, run on the RISC cores) — must be kept, not host-dropped.
+        "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+        "tt_metal/impl/buffers/kernels/tensor_prefetcher.cpp",
     ]
     drop = [
         "tt_metal/hw/ckernels/wormhole_b0/metal/common/chlkc_unpack.h",
@@ -1851,6 +1855,16 @@ def test_kernel_surface_filter():
     assert not capture.is_host_path(
         "ttnn/cpp/ttnn/operations/ccl/reduce_to_root/device/kernels/root.cpp"
     ), "device kernel is not host"
+    # REGRESSION (H1): a DEVICE kernel under a host tree (tt_metal/impl/.../kernels/)
+    # is NOT host — in_kernel_surface wins, so the host-leak pass must not drop it.
+    for dev_under_impl in (
+        "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+        "tt_metal/impl/buffers/kernels/tensor_prefetcher.cpp",
+    ):
+        assert not capture.is_host_path(dev_under_impl), (
+            "device-under-impl",
+            dev_under_impl,
+        )
 
 
 @case
