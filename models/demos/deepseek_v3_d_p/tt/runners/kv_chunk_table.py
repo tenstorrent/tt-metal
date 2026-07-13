@@ -22,6 +22,7 @@ from models.demos.common.prefill.runners.migration import serialize_kv_chunk_tab
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
     PREFILL_CHUNK_OUTPUT_TOKENS,
+    SparseKVCache,
     create_kv_chunk_address_table_kimi,
     populate_kv_chunk_address_table_kimi,
 )
@@ -29,17 +30,14 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
 # A KV chunk is one DRAM bank's worth of tokens (NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK=32) x head_dim.
 _TILE_DIM = 32  # bfp8 is tiled 32x32
 _BFP8_TILE_BYTES = 1088  # one 32x32 bfp8 tile: 1024 data + 64 exponent bytes
-_BF16_BYTES = 2
-
-# bfp8 [1, 1, 32, 576] KV chunk: 18 tiles * 1088 B = 19584 B.
-_CHUNK_SIZE_BYTES = 19584
 
 
 def _dram_chunk_size_bytes(cache) -> int:
     """Bytes of one 32-token DRAM-bank chunk ([.., 32, head_dim]) of `cache`, from its dtype:
       * bfp8_b  (block-float, TILE):  (head_dim / 32) tiles x 1088 B/tile (1024 data + 64 exponent).
-      * bfloat16 (ROW_MAJOR):         32 tokens x head_dim x 2 B, contiguous.
-    Derived from the tensor so each cache (dense bf8 KVPE, bf16 sparse KVPE, bf8 index) sizes itself."""
+      * bfloat16/fp8_e4m3 (ROW_MAJOR): 32 native row pages, including any DRAM page alignment.
+    Derived from the tensor so dense tiled-bfp8 KVPE, sparse BF16 or packed scaled-FP8 KVPE, and the
+    tiled-bfp8 index cache each size themselves from their physical representation."""
     head_dim = cache.shape[-1]
     if cache.dtype == ttnn.bfloat8_b:
         # bfp8 is tiled 32x32, so head_dim must be a whole number of tiles — otherwise integer division
@@ -47,12 +45,14 @@ def _dram_chunk_size_bytes(cache) -> int:
         if head_dim % _TILE_DIM != 0:
             raise ValueError(f"bfloat8_b KV cache head_dim {head_dim} must be a multiple of {_TILE_DIM} (tiled)")
         return (head_dim // _TILE_DIM) * _BFP8_TILE_BYTES
-    if cache.dtype == ttnn.bfloat16:
-        # The bf16 contiguous sizing below assumes a ROW_MAJOR cache (32 tokens x head_dim packed with no
-        # tile padding). A TILE-laid-out bf16 cache would need the tiled sizing instead, so reject it here.
+    if cache.dtype in (ttnn.bfloat16, ttnn.fp8_e4m3):
+        # Each token is one native row-major buffer page. Use its physical aligned size rather than
+        # head_dim * element_size: the migration worker copies raw DRAM bytes and must include padding.
         if cache.layout != ttnn.ROW_MAJOR_LAYOUT:
-            raise ValueError(f"bfloat16 KV cache must be ROW_MAJOR for contiguous chunk sizing, got {cache.layout}")
-        return NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK * head_dim * _BF16_BYTES
+            raise ValueError(
+                f"{cache.dtype} KV cache must be ROW_MAJOR for contiguous chunk sizing, got {cache.layout}"
+            )
+        return NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK * cache.buffer_aligned_page_size()
     raise ValueError(f"unsupported KV cache dtype for chunk sizing: {cache.dtype}")
 
 
@@ -98,11 +98,12 @@ def build_and_serialize_kv_chunk_table(
         f"A different period would mismap every position; re-introduce a parametrized builder if needed."
     )
 
-    if index_kv_cache is not None:
+    primary_cache = kvpe_cache.tensor if isinstance(kvpe_cache, SparseKVCache) else kvpe_cache
+    all_caches = (primary_cache,) + ((index_kv_cache,) if index_kv_cache is not None else ())
+    if len(all_caches) > 1:
         return _build_and_serialize_merged_kv_chunk_table(
             mesh_device=mesh_device,
-            kvpe_cache=kvpe_cache,
-            index_kv_cache=index_kv_cache,
+            caches=all_caches,
             seq_len=seq_len,
             num_layers=num_layers,
             mesh_shape=mesh_shape,
@@ -118,7 +119,7 @@ def build_and_serialize_kv_chunk_table(
             mesh_shape=mesh_shape,
             seq_len=seq_len,
             sp_axis=sp_axis,
-            tt_kvpe_cache=kvpe_cache,
+            tt_kvpe_cache=primary_cache,
             chunk_size_bytes=chunk_size_bytes,
             num_users=num_users,
         )
@@ -129,13 +130,13 @@ def build_and_serialize_kv_chunk_table(
         max_seq_len=seq_len,
         num_users=num_users,
         chunk_n_tokens=NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
-        chunk_size_bytes=_CHUNK_SIZE_BYTES,
+        chunk_size_bytes=_dram_chunk_size_bytes(primary_cache),
         path=path,
     )
 
 
 def _build_and_serialize_merged_kv_chunk_table(
-    *, mesh_device, kvpe_cache, index_kv_cache, seq_len, num_layers, mesh_shape, sp_axis, num_users, path
+    *, mesh_device, caches, seq_len, num_layers, mesh_shape, sp_axis, num_users, path
 ) -> str:
     """Sparse (DSA) path: build ONE KvChunkAddressTable holding BOTH caches instead of two tables —
     config 0 = the KVPE cache, config 1 = the index-key cache. Each config carries its own
@@ -155,8 +156,8 @@ def _build_and_serialize_merged_kv_chunk_table(
         cfg.chunk_size_bytes = _dram_chunk_size_bytes(cache)
         return cfg
 
-    # config 0 = KVPE, config 1 = index (a list of configs -> config i is named "i").
-    caches = (kvpe_cache, index_kv_cache)
+    # BF16 and scaled FP8 both own one primary KVPE tensor; scaled FP8 stores its mixed fields in one
+    # packed row. The optional index cache is therefore always the next stable config.
     configs = [_table_config(c) for c in caches]
     table = disagg.KvChunkAddressTable(configs)
 

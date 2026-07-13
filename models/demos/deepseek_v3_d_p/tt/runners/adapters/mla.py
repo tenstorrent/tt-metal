@@ -132,6 +132,7 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             is_last_rank=params.is_last_rank,
             kv_only_last_layer=params.kv_only_last_layer,
             routing_use_l1_small_for_semaphores=self.routing_use_l1_small_for_semaphores,
+            sparse_kv_cache_format=self.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
         )
         return TtPrefillRuntime(
             mesh_device=mesh_device,

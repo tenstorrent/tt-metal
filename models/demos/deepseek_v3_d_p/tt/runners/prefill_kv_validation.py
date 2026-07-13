@@ -30,6 +30,11 @@ from loguru import logger
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
 from models.demos.common.prefill.runners.runner_utils import resolve_trace_dir
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
+    SparseKVCache,
+    SparseKVCacheFormat,
+    reconstruct_scaled_fp8_kv_cache,
+)
 
 if TYPE_CHECKING:
     # Type-only: importing the runtime at module load would pull the device/model stack into the
@@ -177,13 +182,20 @@ def kv_cache_pcc_check(
     kv_lora = pipeline.hf_config.kv_lora_rank
     kvpe_dim = pipeline.hf_config.qk_rope_head_dim + kv_lora
 
-    # One gather: [num_users*num_layers, tp_replicas, seq_len_cache, kvpe] -> collapse TP via [:, :1].
-    cache_full = ttnn.to_torch(
-        kvpe_cache,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-    ).to(torch.float32)[
-        :, :1
-    ]  # [num_users*num_layers, 1, seq_len_cache, kvpe]
+    # Gather the persistent representation and reconstruct scaled FP8 only on the host. This keeps
+    # validation compatible with both cache formats without allocating a BF16 cache on device.
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
+
+    def _to_host(tensor):
+        return ttnn.to_torch(tensor, mesh_composer=composer)[:, :1]
+
+    if isinstance(kvpe_cache, SparseKVCache):
+        if kvpe_cache.format == SparseKVCacheFormat.SCALED_FP8:
+            cache_full = reconstruct_scaled_fp8_kv_cache(_to_host(kvpe_cache.tensor)).to(torch.float32)
+        else:
+            cache_full = _to_host(kvpe_cache.tensor).to(torch.float32)
+    else:
+        cache_full = _to_host(kvpe_cache).to(torch.float32)
 
     p = blockcyclic_positions(sp, chunk_size, seq_len_cache)
     logger.info(f"[kv-pcc] device KV cache vs golden kv_post_transform (slot={slot_id}, per layer):")

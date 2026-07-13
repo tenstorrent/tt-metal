@@ -55,25 +55,23 @@ class GLM51Adapter(MLAPrefillAdapter):
         the same block-cyclic, user-major layout of ``num_users * num_layers`` slots, so the merged
         migration table can address them identically):
 
-          * index 0 — the MLA KVPE cache. sparse_sdpa reads it natively and requires it UNCOMPRESSED
-            (bf16 ROW_MAJOR), not the dense bf8/TILE cache the base MLA adapter allocates.
+          * index 0 — the MLA KVPE cache. sparse_sdpa reads either row-major fp8_e4m3 or bfloat16
+            natively. ``PrefillRunParams.sparse_kv_cache_format`` selects the format explicitly.
           * index 1 — the lightning-indexer's per-user block-cyclic KEY cache (bfp8 TILE,
             ``index_head_dim`` wide).
 
         The engine owns both, exactly like the dense KVPE cache."""
         import ttnn
-        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache, init_sparse_kv_cache
 
-        kvpe_cache = init_kvpe_cache(
-            kvpe_cache_head_dim=hf_config.qk_rope_head_dim + hf_config.kv_lora_rank,
+        kvpe_cache = init_sparse_kv_cache(
+            cache_format=self.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
             mesh_device=mesh_device,
             seq_len=params.max_seq_len,
             mesh_shape=list(params.mesh_shape),
             sp_axis=params.sp_axis,
             num_kvpe_cache_layers=params.num_layers,
             num_users=params.num_users,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         index_cache = init_kvpe_cache(
             kvpe_cache_head_dim=hf_config.index_head_dim,
@@ -84,8 +82,16 @@ class GLM51Adapter(MLAPrefillAdapter):
             num_kvpe_cache_layers=params.num_layers,
             num_users=params.num_users,
             dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
         )
         return MlaKvCaches(kvpe=kvpe_cache, index=index_cache)
+
+    @property
+    def default_sparse_kv_cache_format(self):
+        """Use the model-native packed FP8 cache; callers can explicitly select BF16."""
+        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import SparseKVCacheFormat
+
+        return SparseKVCacheFormat.SCALED_FP8
 
     # --- test metadata (HF download coordinates + PCC thresholds + golden trace) ---
     hf_repo_id = "zai-org/GLM-5.1-FP8"

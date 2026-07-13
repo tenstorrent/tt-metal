@@ -37,7 +37,7 @@ from models.demos.deepseek_v3_d_p.utils.chunked_prefill_utils import (
     partition_iters,
     single_trace,
 )
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import SparseKVCache, SparseKVCacheFormat, init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -91,6 +91,9 @@ def run_mla_inference(
         # goes through update_padded_kv_cache, which asserts cache_batch % layer_num == 0. Dense is
         # unaffected (its single-shot write uses fill_cache_for_user_, which ignores layer_num).
         layer_num=1,
+        sparse_kv_cache_format=(
+            tt_kvpe_cache.format if isinstance(tt_kvpe_cache, SparseKVCache) else SparseKVCacheFormat.BF16
+        ),
     )
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
     rope_tensors = rope_setup.get_rope_tensors(seq_len)

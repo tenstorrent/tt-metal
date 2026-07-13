@@ -29,6 +29,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import SparseKVCacheFormat
 
 
 class TtPrefillTransformer(LightweightModule):
@@ -135,6 +136,7 @@ class TtPrefillTransformer(LightweightModule):
         first_layer_idx: int = 0,
         is_first_rank: bool = True,
         is_last_rank: bool = True,
+        sparse_kv_cache_format: SparseKVCacheFormat = SparseKVCacheFormat.BF16,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -217,6 +219,7 @@ class TtPrefillTransformer(LightweightModule):
                 max_seq_len=max_seq_len,
                 kv_only=kv_only_last_layer and is_last,
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
+                sparse_kv_cache_format=sparse_kv_cache_format,
             )
             self.layers.append(layer)
 

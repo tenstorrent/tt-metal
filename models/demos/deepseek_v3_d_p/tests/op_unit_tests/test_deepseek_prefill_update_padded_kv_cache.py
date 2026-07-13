@@ -17,7 +17,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import SparseKVCacheFormat, init_kvpe_cache, init_sparse_kv_cache
 
 # MLA KVPE head dim (kv_lora_rank=512 + qk_rope_head_dim=64). The op is a pure page copy, so a
 # gathered cache slot must byte-match the input we sent (read back through the same dtype
@@ -57,6 +57,59 @@ def _make_input(torch_chunk, dtype, layout, mesh_device, mesh_mapper):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=mesh_mapper,
     )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=True)
+@pytest.mark.timeout(0)
+def test_update_padded_kv_cache_scaled_fp8_packed_row(mesh_device):
+    """The update op preserves the complete 656-byte mixed-format row as one FP8-typed stream."""
+    if not is_blackhole():
+        pytest.skip("FP8_E4M3 is Blackhole-only")
+
+    head_dim = 656
+    num_users, num_layers = 1, 2
+    cache_tokens = 64
+    chunk_tokens = 32
+    sparse_cache = init_sparse_kv_cache(
+        cache_format=SparseKVCacheFormat.SCALED_FP8,
+        mesh_device=mesh_device,
+        seq_len=cache_tokens,
+        mesh_shape=list(mesh_device.shape),
+        sp_axis=0,
+        num_kvpe_cache_layers=num_layers,
+        num_users=num_users,
+    )
+    cache = sparse_cache.tensor
+
+    torch.manual_seed(17)
+    source = torch.randn(1, 1, chunk_tokens, head_dim, dtype=torch.bfloat16)
+    tt_input = _make_input(
+        source,
+        ttnn.fp8_e4m3,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mesh_device,
+        ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    expected = ttnn.to_torch(tt_input, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).reshape(
+        chunk_tokens, head_dim
+    )
+
+    ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+        cache,
+        tt_input,
+        slot_idx=0,
+        layer_idx=1,
+        num_layers=num_layers,
+        kv_actual_global=0,
+        cluster_axis=0,
+    )
+    result = ttnn.to_torch(cache, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).reshape(
+        num_users * num_layers, 1, cache_tokens, head_dim
+    )
+
+    assert torch.equal(result[1, 0, :chunk_tokens], expected)
+    assert torch.count_nonzero(result[0].float()) == 0
+    assert torch.count_nonzero(result[1, 0, chunk_tokens:].float()) == 0
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=True)
