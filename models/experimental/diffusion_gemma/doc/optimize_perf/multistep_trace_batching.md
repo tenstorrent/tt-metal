@@ -28,9 +28,10 @@ decision, the `0.275·K` slope) is unchanged; only the fixed dispatch term colla
 
 `DG_DENOISE_MULTISTEP_GROUP=G` caps the window as a **trace-region memory knob** (below). It is
 **opt-in and guarded**, takes precedence over `DG_DENOISE_TRACED` in
-`_resolve_default_denoise_block_fn`, and — like the single-step traced path — supports the
-**argmax (`gumbel_noise=None`) regime + contiguous cache** only and needs a large
-`DG_TRACE_REGION_SIZE`. **No `models/demos/gemma4/` edits** — it composes over the existing
+`_resolve_default_denoise_block_fn`. Grouped windows (`G>1`) support the
+**argmax (`gumbel_noise=None`) regime + contiguous cache**; dynamic materialized/chunked Gumbel
+is trace-enabled only with `G=1`, because its full-noise/device-seed input must refresh between
+replays. All traced modes need a large `DG_TRACE_REGION_SIZE`. **No `models/demos/gemma4/` edits** — it composes over the existing
 `DenoiseLogitsAdapter` trace-safe hooks and the `denoise_loop.py` step kernel exactly like the
 single-step controller (it subclasses it and overrides only `_capture`).
 

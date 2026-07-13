@@ -127,7 +127,7 @@ For vocab-sharded logits, split greedy usually should not mean a physical `top_k
 
 If `ArgMaxDeviceOperation`, full-vocab all-gather, generic `TopKDeviceOperation`, or another sampling op dominates greedy token-out decode, the LM-head/sampling boundary is still wrong. Fix that before chasing lower-level decoder optimizations or marking tracing complete.
 
-For DiffusionGemma vLLM serving, bind the persistent canvas, denoise state, frozen-prefix KV, and block position before capture. Reuse one traced denoise controller across blocks; do not recapture per block. Keep `supports_async_decode=False` until a per-block async contract is independently tested. Sampling remains on device and full logits never return to host.
+For DiffusionGemma vLLM serving, bind the persistent canvas, denoise state, frozen-prefix KV, and block position before capture. Reuse one traced denoise controller across blocks, but key each trace set by the visible frozen-prefix shape: the current contiguous-cache implementation releases/recaptures after each 256-token commit because the prefix grows. Eliminating per-block recapture requires paged/fixed-shape prefix inputs; never replay a prompt-only trace after committed KV becomes visible. Keep `supports_async_decode=False` until a per-block async contract is independently tested. Sampling remains on device and full logits never return to host.
 
 Do not collect Tracy, `tt-perf-report`, or `TT_METAL_DEVICE_PROFILER` metrics from a live server. Use direct-server/block-harness evidence from `models/experimental/diffusion_gemma/doc/vllm_integration/`: trace replay succeeds, committed output is unchanged, multi-block requests pass, and per-block TTFT/latency improves. Use non-serving profiles for low-level device context.
 

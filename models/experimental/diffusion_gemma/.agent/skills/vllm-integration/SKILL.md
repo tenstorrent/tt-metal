@@ -132,8 +132,11 @@ skill.
 
 ## Trace and performance
 
-Serving reuses the generator's traced denoise controller. Verify one capture is
-replayed across blocks and is not recaptured per request step.
+Serving reuses the generator's traced denoise controller. Verify trace sets are keyed by the
+visible frozen-prefix shape. The current contiguous-cache path must release/recapture after each
+commit grows the prefix; same-ID cross-block replay is valid only after paged/fixed-shape prefix
+inputs land. Verify no recapture within a fixed-shape denoise block and no stale prompt-only replay
+after committed KV becomes visible.
 
 Report:
 

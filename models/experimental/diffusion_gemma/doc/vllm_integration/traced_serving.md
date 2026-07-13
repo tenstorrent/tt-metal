@@ -27,17 +27,20 @@ global env flag), and (b) the adapter honoring its own `enable_trace`. Both are 
   eager unless a flag is set — serving behavior unchanged). A caller can pass the traced loop to
   make trace explicit + deterministic in serving.
 - `tt/generator_vllm.py` — honors `enable_trace`: `_resolve_trace_pref()` (from `DG_VLLM_TRACE`, else
-  the env dispatcher; forced eager for non-argmax) picks the session's `denoise_block_fn`. The session
-  is created ONCE per request in `prefill_forward` and its logits fn caches ONE traced controller
-  (captured on block 0), `execute_trace`-replayed every `decode_forward` block — **not** re-captured
-  per block. Default follows the env dispatcher, so a plain launch is unchanged.
+  the env dispatcher) picks the session's `denoise_block_fn`. Argmax may use the configured traced
+  variant; dynamic `host`, `device`, and `chunked` Gumbel modes force the single-step controller so
+  their full-noise/device-seed input can be refreshed between replays. The session is created once
+  per request in `prefill_forward` and its logits fn caches one traced controller. A trace set is
+  replayed while its visible frozen-prefix length is unchanged. After commit, the prefix grows by
+  256; the controller releases the old shape and captures the next block at the new prefix length.
+  Eliminating this per-block recapture requires the paged/fixed-shape prefix-input work. Default
+  follows the env dispatcher, so a plain launch is unchanged.
 
-**Capture-once / replay-many (confirmed by construction):** the controller lives on the persistent
-session's `logits_fn` (`_traced_denoise_controller` / `_traced_early_halt_controller`). `decode_block`
-calls `denoise_and_commit_block` → the traced entry, which does `getattr(logits_fn, "_traced…", None)`;
-it is `None` only on block 0 (→ `_capture`), non-`None` after (→ `execute_trace`). One session = one
-capture. `bench_vllm_traced.py` drives this exact session with the explicit `denoise_block_fn` the vLLM
-adapter uses.
+**Prefix-aware lifecycle:** the controller lives on the persistent session's `logits_fn`
+(`_traced_denoise_controller` / `_traced_early_halt_controller`). `decode_block` calls
+`denoise_and_commit_block`; commit advances the mutable contiguous-cache reader from
+`prompt_len` to `prompt_len + 256*N`. The next block sees the changed prefix signature, releases
+the prior traces, and captures against the expanded KV span.
 
 ## TASK 2 — eager vs traced at a fixed context (the trace win)
 
@@ -155,12 +158,62 @@ one 256-token block per decode call (`steps=[48,48]` → two committed blocks, `
 The live tenstorrent/vllm fork server serves DiffusionGemma end-to-end (see `README.md` § Live serving
 verification): #47488 runner+scheduler patches applied, real OpenAI requests → HTTP 200, multi-block
 serve `32→288→544`. The original 2026-07-03 run used the **eager** decode path (~7.3 t/s,
-`vllm_speed_by_context.md`). That historical gap is now closed: the 2026-07-10 real OpenAI-server
-sweep launched with `DG_VLLM_TRACE=1`, captured exactly 48 traces on block 0, replayed the same IDs
-through three `decode_forward` blocks, and released them per request. Actual 32→3072-token prompt
-results and larger-context probes are in `live_context_sweep_results_20260710.md`.
+`vllm_speed_by_context.md`). The 2026-07-10 OpenAI sweep captured 48 traces on block 0 and replayed
+the same IDs through later blocks, but that historical run held the denoise prefix at the initial
+prompt length. It remains performance provenance, not correct growing-prefix evidence. The
+2026-07-13 implementation advances prompt+committed KV and recaptures each changed prefix shape;
+live OpenAI rerun remains a separate gate.
 
 ## Files
 - `tt/generate.py`, `tt/serving.py`, `tt/generator_vllm.py` — the trace wiring.
 - `doc/vllm_integration/bench_vllm_traced.py` — the harness.
 - `doc/vllm_integration/vllmtraced_*.json` — raw benchmark JSON.
+
+## 2026-07-13 — production Gumbel tracing
+
+The single-step traced controller now supports injected/materialized Gumbel noise in addition to
+argmax. It allocates one stable-address Gumbel input before capture and refreshes that buffer in
+place immediately before each step replay. This preserves the caller's distinct per-step and
+per-block noise without recapture. Materialized Gumbel is forced to one-step trace windows; sharing
+one full-vocab tensor across multiple steps inside a grouped trace would silently reuse one draw.
+
+Bounded-memory chunked Gumbel is also trace-enabled. Ordinary `ttnn.rand(seed=<Python int>)` would
+bake block 0's seed into replay, so the traced path uses a DG-local `ttnn.generic_op` uniform kernel
+that reads the seed from one persistent device tile. The controller refreshes that tile before each
+single-step replay; all vocab chunks reuse one persistent uniform buffer. The chunk-selection
+constants are also allocated during warmup so capture contains no host writes. The custom kernels
+live under `models/experimental/diffusion_gemma/tt/kernels/`; no shared Gemma4 or TTNN source is
+modified.
+
+The QB2 gates cover:
+
+```text
+test_trace_seeded_uniform_refresh_matches_rand
+test_traced_materialized_gumbel_refresh_matches_fixed_loop_across_blocks
+test_traced_chunked_gumbel_dynamic_seed_matches_fixed_loop_across_blocks
+test_trace_capture_guard_recovers_after_injected_failure
+
+4 passed in 1.20s
+```
+
+The dynamic-seed uniform output is bit-identical to `ttnn.rand` for both the capture seed and a
+different replay seed. The synthetic materialized and two-vocab-chunk tests keep prefix shape fixed,
+capture once, and match their fixed-loop controls exactly. The real reduced growing-prefix run
+matches eager end-to-end (`committed_sha256=7b7d…fbba`), while a frozen-prefix A/B has the same
+block-0 hash and a different block-1 hash, proving committed KV affects later decisions. The
+injected capture-failure gate ends/releases the aborted trace and then successfully captures and
+replays a second trace on the same device.
+
+Full-model QB2 serving evidence:
+
+- Reduced 1-layer, K=2, two blocks: 37.19 output tok/s including block-1 recapture; two captures,
+  four traces total, four execute calls.
+- Full 30-layer, K=2, two blocks: 25.10 output tok/s including block-1 recapture; position
+  `32→288→544`.
+- Released full 30-layer K=48, two blocks: block-0 TTFT 179.36 s, block 1 including recapture
+  180.82 s, **1.42 output tok/s**; 48 traces per prefix shape, 96 captured/96 executed total,
+  clean release.
+
+Compact evidence is `traced_chunked_gumbel_20260713.json`. Dynamic Gumbel modes intentionally use
+one-step traces; grouped trace windows cannot refresh a per-step noise/seed input inside the window
+without changing the captured graph.

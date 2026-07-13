@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 
@@ -80,6 +82,7 @@ def test_denoise_and_commit_block_threads_position_and_commits():
         calls["commit"] = (tt_model, canvas_tokens, start_pos, page_table, page_tables_per_layer)
 
     logits_fn = _FakeLogitsFn()
+    logits_fn.advance_prefix_after_commit = lambda next_pos: calls.setdefault("advance_prefix", next_pos)
     config = DiffusionConfig(canvas_length=3)
     gumbel_noise_fn = object()
     noise_tokens_fn = object()
@@ -103,6 +106,7 @@ def test_denoise_and_commit_block_threads_position_and_commits():
     assert logits_fn.q_rope_offset == 544
     assert calls["denoise"] == (logits_fn, "init-canvas", config, gumbel_noise_fn, noise_tokens_fn)
     assert calls["commit"] == ("model", committed, 544, None, page_tables_per_layer)
+    assert calls["advance_prefix"] == 547
     assert out.committed is committed
     assert out.next_pos == 547
     assert out.trajectory is trajectory
@@ -311,6 +315,42 @@ def test_generate_blocks_deallocates_init_canvas_if_block_fails(expect_error):
         )
 
     assert init_canvas.deallocated is True
+
+
+def test_generate_blocks_failure_releases_all_controller_and_adapter_state(expect_error):
+    events = []
+
+    def fail(name):
+        def _raise():
+            events.append(name)
+            raise RuntimeError(f"injected {name} cleanup failure")
+
+        return _raise
+
+    class _Logits:
+        def __init__(self):
+            self._traced_denoise_controller = SimpleNamespace(release=fail("controller-0"))
+            self._traced_denoise_multistep_controller = SimpleNamespace(release=lambda: events.append("controller-1"))
+
+        def reset(self):
+            events.append("adapter-reset")
+
+    logits = _Logits()
+
+    with expect_error(RuntimeError, match="injected replay failure"):
+        generate_blocks(
+            "model",
+            logits,
+            prompt_len=32,
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=3),
+            init_canvas_fn=lambda *args: "canvas",
+            block_fn=lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("injected replay failure")),
+        )
+
+    assert events == ["controller-0", "controller-1", "adapter-reset"]
+    assert not hasattr(logits, "_traced_denoise_controller")
+    assert not hasattr(logits, "_traced_denoise_multistep_controller")
 
 
 def test_generate_blocks_rejects_negative_num_blocks(expect_error):

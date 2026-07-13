@@ -64,7 +64,7 @@
         184549376
       ],
       "failure": "reserving enough trace space removes the contiguous 128 MiB buffer needed by token_entropy exp_shifted/expected_terms; exact allocator OOMs are recorded in doc/optimize_perf/selfcond_prechunk.md",
-      "contract": "The advertised 256K model capability is freshly proven with the production memory-bounded chunked-Gumbel sampler for the full 48-step budget. Trace-safe canvas feedback and the selected optimization are independently verified on the full 30-layer traced 1024-allocation RUN-first argmax path at 48 and 12 steps. No max_model_len reduction was made."
+      "contract": "The advertised 256K model capability is freshly proven with the eager production memory-bounded chunked-Gumbel sampler for the full 48-step budget. Production chunked-Gumbel Metal Trace is independently verified on the full 30-layer 1024-allocation path at K=48 across two growing-prefix blocks: 48 traces per prefix shape, 96 captured/96 executed total, 1.42 output tok/s including block-1 recapture. This does not remove the recorded traced-256K allocator conflict; no max_model_len reduction was made."
     }
   },
   "self_conditioning_logits_placement": {
@@ -95,14 +95,14 @@
     "max_num_seqs_note": "Batch-1 single-user latency is the headline target. Larger batch/concurrency (up to 32) is bounded by the 256K-KV per-request footprint; the block-diffusion per-step canvas K/V scratch (#47474 storage class ii) is additional per-request memory. Record the largest tested max_num_seqs in the serving evidence."
   },
   "sampling": {
-    "mode": "on-device canvas sampling (sample_on_device_mode=all). No full-logits readback. The eager diagnostic loop can read compact per-step decision tensors ([B,L] argmax/entropy/sampled/accept); the traced fixed-step RUN-first path keeps canvas feedback device-resident and reads only the final clean commit candidate.",
+    "mode": "on-device canvas sampling (sample_on_device_mode=all). No full-logits readback. The eager diagnostic loop can read compact per-step decision tensors ([B,L] argmax/entropy/sampled/accept); traced argmax/materialized/chunked-Gumbel paths keep canvas feedback device-resident and read only the final clean commit candidate.",
     "procedure": "Per denoise step: temperature-scale (linear 0.8->0.4) -> Gumbel-max argmax(logits/T + gumbel) -> entropy-budget acceptance (sort/cumsum/scatter) -> renoise rejected positions to random tokens. Commit = clean argmax. RUN-first: --argmax-sampling routes clean argmax (gumbel_noise=None) to avoid full-vocab noise allocation at 256K.",
     "eos_token_ids": [
       1,
       106,
       50
     ],
-    "optimize_perf_47465": "Terminal decision path is trace-safe and optimized (decisions unchanged): argmax over the 262144 vocab uses ROW_MAJOR multi-core; accept/renoise constants are preallocated outside capture; the fixed <=48-step trace keeps canvas feedback on device. The ~4176 ms step / ~232 s block values in the original #47465 evidence are historical. Current selected-default RUN-first argmax evidence is selfcond_logits_l1_e2e.json (257.575 ms derived warmed step; 13.5849 s steady @48 block). The production chunked-Gumbel sampler is decision-gated and 256K-capability-gated but is not supported by traced_denoise.py, so no traced Gumbel throughput is claimed."
+    "optimize_perf_47465": "Terminal decision path is trace-safe and optimized (decisions unchanged): argmax over the 262144 vocab uses ROW_MAJOR multi-core; accept/renoise constants are preallocated outside capture; the fixed <=48-step trace keeps canvas feedback on device. The ~4176 ms step / ~232 s block values in the original #47465 evidence are historical. The earlier selected-default RUN-first argmax evidence in selfcond_logits_l1_e2e.json held the prefix at the initial prompt and is performance provenance only. Production chunked-Gumbel tracing uses a persistent device seed plus one reusable 1024-vocab uniform buffer and is validated full-depth at K=48/max_seq_len=1024 with correct growing-prefix visibility: block 1 including recapture is 180.816 s / 1.416 output tok/s. Dynamic Gumbel requires one-step trace windows; eliminating per-block prefix recapture requires paged/fixed-shape inputs; traced 256K remains separately blocked by the recorded allocator conflict."
   },
   "generation_config": {
     "max_denoise_steps": 48,

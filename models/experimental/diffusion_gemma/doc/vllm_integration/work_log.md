@@ -427,7 +427,7 @@ controllers through this exact session. Only the DEFAULT (no flag) was eager, an
 `enable_trace` was dead. **Wired** (DG-local; no `models/demos/gemma4/` edits):
 - `generate.py`: public `select_denoise_block_fn()` / `select_traced_denoise_block_fn()` / `denoise_flags_select_traced()`.
 - `serving.py`: `BlockDiffusionServingSession(denoise_block_fn=None)` threaded into `decode_block` (None ⇒ env dispatcher, default unchanged).
-- `generator_vllm.py`: honors `enable_trace` via `_resolve_trace_pref()` (`DG_VLLM_TRACE`, else the env dispatcher; argmax-only) → passes the traced loop to the session. The session is created ONCE in `prefill_forward`; its logits fn caches ONE traced controller (captured on block 0) and `execute_trace`-replays every `decode_forward` block — verified capture-once by construction.
+- `generator_vllm.py`: honors `enable_trace` via `_resolve_trace_pref()` (`DG_VLLM_TRACE`, else the env dispatcher) → passes the traced loop to the session. The session is created once in `prefill_forward` and its logits fn caches one traced controller. Update 2026-07-13: materialized and bounded-memory chunked Gumbel are trace-enabled through single-step traces with refreshable full-noise/device-seed inputs; grouped dynamic-Gumbel windows remain unsupported. Commit now grows the visible frozen prefix, so the current contiguous-cache path releases/recaptures each changed prefix shape; historical same-ID cross-block runs held a prompt-only prefix and are performance provenance, not correctness evidence.
 
 **Eager-vs-traced (msl=4096, diffusion prompt, @48, `bench_vllm_traced.py`):**
 

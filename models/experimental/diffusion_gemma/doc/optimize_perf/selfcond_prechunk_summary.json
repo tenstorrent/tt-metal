@@ -103,6 +103,6 @@
     "ENABLE_TRACY=OFF; component attribution uses synchronized timings",
     "model-load allocation count increases by 31 while weight payload bytes stay constant",
     "full-depth traced 256K is blocked by the combined trace-region and 128 MiB token-entropy temporary live set; eager production chunked-Gumbel 256K capability passes at the full 48-step budget",
-    "traced_denoise.py explicitly supports gumbel_noise=None only and rejects real Gumbel tensors/descriptors; therefore traced rankings are labeled RUN-first argmax and no traced production-Gumbel throughput is claimed"
+    "the July-10 optimization ranking remains a RUN-first argmax comparison; as of 2026-07-13 traced_denoise.py also supports materialized and production chunked-Gumbel in single-step traces, with separate K=48/max_seq_len=1024 evidence in doc/vllm_integration/traced_chunked_gumbel_20260713.json"
   ]
 }

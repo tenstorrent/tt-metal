@@ -166,6 +166,11 @@ def run(args) -> dict:
         decode_block_latencies = block_latencies[1:] if len(block_latencies) > 1 else block_latencies
         tokens_emitted = sum(e.tokens.shape[1] for e in emissions)
         committed = torch.cat([e.tokens for e in emissions], dim=1)
+        committed_sha256 = hashlib.sha256(committed.to(torch.int64).contiguous().numpy().tobytes()).hexdigest()
+        per_block_sha256 = [
+            hashlib.sha256(emission.tokens.to(torch.int64).contiguous().numpy().tobytes()).hexdigest()
+            for emission in emissions
+        ]
 
         # Detokenize the concatenated committed blocks (RUN-first: may be degenerate).
         text = decode_generation(
@@ -207,6 +212,8 @@ def run(args) -> dict:
             "gumbel_mode": args.gumbel_mode,
             "blocks_emitted": len(emissions),
             "tokens_emitted": tokens_emitted,
+            "committed_sha256": committed_sha256,
+            "per_block_sha256": per_block_sha256,
             "ttft_s": ttft_s,
             "per_block_latency_s": block_latencies,
             "mean_block_latency_s": mean_block_latency_s,
@@ -214,6 +221,7 @@ def run(args) -> dict:
             "denoise_steps_per_block": [e.num_denoise_steps for e in emissions],
             "halted_per_block": [e.halted for e in emissions],
             "final_next_pos": session.next_pos,
+            "trace_stats": session.trace_stats(),
             "text_chars": len(text_str),
             "text": text_str,
         }

@@ -26,9 +26,10 @@ Block-autoregressive **multi-canvas diffusion**. Per 256-token block, the SAME b
 
 Algorithm reference: transformers `modeling_diffusion_gemma.py`; vLLM blog <https://vllm-project.github.io/2026/06/10/diffusion-gemma.html>.
 
-### Live serving status (2026-07-10)
+### Live serving status (updated 2026-07-13)
 - The real patched `tenstorrent/vllm` OpenAI `/v1/completions` path runs full-depth, emits four real 256-token blocks, and exercises the TT adapter plus block-granular runner/scheduler changes. It is no longer a static/reduced-driver-only integration.
-- Metal trace capture/replay is live: the model captures one trace per denoise step on block 0, reuses the same IDs for later blocks, and releases request-owned traces before row removal.
+- Metal trace capture/replay is live. The July-10 same-ID multi-block rows used a prompt-only frozen prefix and are historical performance provenance. Current correctness expands prompt+committed KV after each block, invalidates/releases the old trace shape, and recaptures; paged/fixed-shape prefix inputs are needed to recover cross-block same-ID reuse.
+- Production bounded-memory chunked-Gumbel tracing is validated full-depth at K=48/max_seq_len=1024. Correct growing-prefix two-block evidence captures 48 traces per prefix shape (96 total), advances `32→288→544`, and measures 1.42 output tok/s including block-1 recapture. Reduced eager/traced hashes match exactly, and a frozen-prefix A/B proves block 1 depends on block-0 committed KV.
 - The optimized fixed-256-token-context K=1/4/8/12/16/20/24/32/40/48 sweep measured 166.80/108.28/72.94/54.88/44.46/37.06/32.00/25.54/21.34/18.28 output tok/s. K=48 remains model-faithful; lower caps are performance-only.
 - Primary warmed context evidence is complete for logical prompts 32/256/1024/2048 at `max_model_len=4096`; the lower-priority 3072 warmed rerun was intentionally omitted.
 - Current serving remains one active sequence (`max_num_seqs=1`) on the model-owned contiguous cache. `decode_block` rejects a whole-canvas context overrun before denoise/commit device execution.

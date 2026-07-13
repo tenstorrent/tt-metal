@@ -1,0 +1,119 @@
+{
+  "date": "2026-07-13",
+  "status": "passed",
+  "device": "QB2 / P150x4 / 4x Blackhole / TP=4",
+  "checkpoint_config_sha256": "13b11d2fe87302cc2332c64eb9eb4ac305d9b8a123ffe9c5cb5b1920fc70c506",
+  "implementation": {
+    "mode": "single-step Metal Trace with dynamic device seed",
+    "seed_input": "persistent replicated uint32 tile refreshed before each replay",
+    "uniform_scratch": "one reusable float32 vocab-chunk buffer",
+    "custom_op": "models/experimental/diffusion_gemma/tt/trace_gumbel.py",
+    "kernels": [
+      "models/experimental/diffusion_gemma/tt/kernels/read_trace_seed.cpp",
+      "models/experimental/diffusion_gemma/tt/kernels/compute_trace_seeded_uniform.cpp"
+    ],
+    "shared_source_edits": false
+  },
+  "device_gates": {
+    "result": "4 passed in 1.20s",
+    "tests": [
+      "test_trace_capture_guard_recovers_after_injected_failure",
+      "test_trace_seeded_uniform_refresh_matches_rand",
+      "test_traced_materialized_gumbel_refresh_matches_fixed_loop_across_blocks",
+      "test_traced_chunked_gumbel_dynamic_seed_matches_fixed_loop_across_blocks"
+    ],
+    "capture_failure_cleanup_and_followup_trace": true,
+    "capture_end_failure_release_test": true,
+    "best_effort_multi_resource_cleanup_test": true,
+    "vllm_unregistered_and_registered_failure_cleanup_tests": true,
+    "uniform_exact_shape": [1, 1, 256, 1024],
+    "uniform_seed_refresh_bit_exact_to_ttnn_rand": true,
+    "materialized_two_block_match_fixed_loop": true,
+    "chunked_two_block_match_fixed_loop": true
+  },
+  "growing_prefix_gate": {
+    "eager_vs_traced_committed_sha256": "7b7d7e4813119ccee8b120b1244bf8ab910c0cbd652580756b4639f415f9fbba",
+    "eager_vs_traced_exact": true,
+    "growing_block_sha256": [
+      "3a5dce5cd94caf0aeb157d04a190b90f5825b75d9446c104dc8f61b452f68f94",
+      "07fd917b97610d87d7d122f637a2f427f0538d34c816c2b487b6e86a2937624c"
+    ],
+    "frozen_prompt_control_block_sha256": [
+      "3a5dce5cd94caf0aeb157d04a190b90f5825b75d9446c104dc8f61b452f68f94",
+      "adefdec8aaff989a22db1acd69776a41186cb51c7105bd662cee99e4affa840d"
+    ],
+    "block0_equal": true,
+    "block1_differs": true,
+    "conclusion": "block 1 decisions depend on block-0 committed KV; trace is invalidated and recaptured when the visible prefix grows"
+  },
+  "serving_runs": [
+    {
+      "label": "reduced_k2",
+      "num_layers": 1,
+      "max_seq_len": 1024,
+      "max_denoising_steps": 2,
+      "blocks_emitted": 2,
+      "tokens_emitted": 512,
+      "committed_sha256": "7b7d7e4813119ccee8b120b1244bf8ab910c0cbd652580756b4639f415f9fbba",
+      "ttft_s": 7.859731766046025,
+      "block1_with_recapture_s": 6.883503959979862,
+      "output_tokens_per_s": 37.19036140436083,
+      "final_next_pos": 544,
+      "trace": {
+        "capture_events": 2,
+        "traces_captured": 4,
+        "replay_blocks": 2,
+        "execute_trace_calls": 4,
+        "released": true
+      }
+    },
+    {
+      "label": "full_depth_k2",
+      "num_layers": 30,
+      "max_seq_len": 1024,
+      "max_denoising_steps": 2,
+      "blocks_emitted": 2,
+      "tokens_emitted": 512,
+      "committed_sha256": "63b149c590dcbe9dc7a3b97e1327e634e0b65e39452c2072976f8b3e7edcccd5",
+      "ttft_s": 10.777969730028417,
+      "block1_with_recapture_s": 10.199998822005,
+      "output_tokens_per_s": 25.098042114251776,
+      "final_next_pos": 544,
+      "trace": {
+        "capture_events": 2,
+        "traces_captured": 4,
+        "replay_blocks": 2,
+        "execute_trace_calls": 4,
+        "released": true
+      }
+    },
+    {
+      "label": "full_depth_released_k48",
+      "num_layers": 30,
+      "max_seq_len": 1024,
+      "max_denoising_steps": 48,
+      "blocks_emitted": 2,
+      "tokens_emitted": 512,
+      "committed_sha256": "9c228585d25e2659e103cbfd3fce442b3dc9888a4916846b303a324c5c4de5f8",
+      "ttft_s": 179.36467161000473,
+      "block1_with_recapture_s": 180.8156496050069,
+      "output_tokens_per_s": 1.4158066547847703,
+      "final_next_pos": 544,
+      "trace_region_size": 10737418240,
+      "trace": {
+        "capture_events": 2,
+        "traces_captured": 96,
+        "replay_blocks": 2,
+        "execute_trace_calls": 96,
+        "recapture_after_block0": true,
+        "reason": "prefix length grows from 32 to 288; shape-correctness requires recapture until paged/fixed-shape prefix inputs land",
+        "released": true
+      }
+    }
+  ],
+  "remaining_scope": [
+    "dynamic Gumbel modes intentionally force one-step trace windows",
+    "growing-prefix semantics are correct but recapture on every committed block; paged/fixed-shape trace reuse is follow-up work",
+    "live OpenAI-server and 262144-context validation remain separate gates"
+  ]
+}

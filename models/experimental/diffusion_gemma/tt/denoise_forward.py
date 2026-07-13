@@ -16,6 +16,7 @@ import os
 
 import torch
 import ttnn
+from loguru import logger
 
 from models.experimental.diffusion_gemma.reference.attention_mask import build_canvas_denoise_mask
 from models.experimental.diffusion_gemma.tt.diffusion_attention import denoise_attention
@@ -677,6 +678,32 @@ def read_prompt_kv_cache_by_layer(
     return [read_fn(kv_cache, prompt_len=prompt_len, seq_len_start=seq_len_start) for kv_cache in tt_model.tt_kv_cache]
 
 
+class MutablePrefixKVReader:
+    """Lazy per-layer contiguous-cache reader with a commit-advanced prefix span."""
+
+    def __init__(self, tt_model, *, prompt_len: int, seq_len_start: int = 0, read_fn=read_prompt_kv_cache_by_layer):
+        self.tt_model = tt_model
+        self.prompt_len = int(prompt_len)
+        self.seq_len_start = int(seq_len_start)
+        self.read_fn = read_fn
+
+    def __call__(self, layer_idx: int):
+        return self.read_fn(
+            self.tt_model,
+            prompt_len=self.prompt_len,
+            seq_len_start=self.seq_len_start,
+            layer_idx=layer_idx,
+        )
+
+    def set_prompt_len(self, prompt_len: int) -> None:
+        prompt_len = int(prompt_len)
+        if prompt_len < self.prompt_len:
+            raise ValueError(f"frozen prefix cannot shrink: {self.prompt_len} -> {prompt_len}")
+        if prompt_len % ttnn.TILE_SIZE != 0:
+            raise ValueError(f"frozen prefix length must be tile aligned, got {prompt_len}")
+        self.prompt_len = prompt_len
+
+
 def embed_canvas_tokens(tt_model, canvas_tokens):
     """Embed device canvas token ids into `[1, 1, C, H]` TILE hidden states."""
     if canvas_tokens.shape[0] != 1:
@@ -938,11 +965,16 @@ class DenoiseLogitsAdapter:
         return self._canvas_rope_bufs[layer_type]
 
     def release_canvas_rope_buffers(self):
-        for cos_buf, sin_buf in getattr(self, "_canvas_rope_bufs", {}).values():
-            cos_buf.deallocate(True)
-            sin_buf.deallocate(True)
-        self._canvas_rope_bufs = {}
-        self.use_canvas_rope = False
+        try:
+            for layer_type, pair in getattr(self, "_canvas_rope_bufs", {}).items():
+                for kind, tensor in zip(("cos", "sin"), pair):
+                    try:
+                        tensor.deallocate(True)
+                    except BaseException as cleanup_error:
+                        logger.error(f"failed to release canvas RoPE {layer_type}.{kind}: {cleanup_error}")
+        finally:
+            self._canvas_rope_bufs = {}
+            self.use_canvas_rope = False
 
     # --- TP-sharded denoise terminal (DG_TERMINAL_SHARDED) ---------------------------
     #
@@ -1002,13 +1034,20 @@ class DenoiseLogitsAdapter:
         )
 
     def release_sharded_terminal(self):
-        if self._vocab_offsets is not None:
-            self._vocab_offsets.deallocate(True)
+        try:
+            for name, tensor in (
+                ("vocab_offsets", self._vocab_offsets),
+                ("embedding_weight_sharded", self._embedding_weight_sharded),
+            ):
+                if tensor is not None:
+                    try:
+                        tensor.deallocate(True)
+                    except BaseException as cleanup_error:
+                        logger.error(f"failed to release sharded terminal {name}: {cleanup_error}")
+        finally:
             self._vocab_offsets = None
-        if self._embedding_weight_sharded is not None:
-            self._embedding_weight_sharded.deallocate(True)
             self._embedding_weight_sharded = None
-        self.sharded_terminal = False
+            self.sharded_terminal = False
 
     def sharded_terminal_context(self):
         """Return the :class:`~...tt.denoise_loop.ShardedTerminalContext` for the sharded
@@ -1102,11 +1141,46 @@ class DenoiseLogitsAdapter:
         """Return True when ``logits`` is retained for next-step self-conditioning."""
         return self.prev_logits is logits
 
+    def advance_prefix_after_commit(self, next_pos: int) -> bool:
+        """Expose newly committed KV to later denoise blocks.
+
+        Returns ``True`` for the mutable contiguous-cache reader used by generation
+        and serving. Static prompt-hidden test adapters return ``False``.
+        """
+        if os.environ.get("DG_FROZEN_PREFIX_CONTROL", "0").lower() in ("1", "true", "yes", "on"):
+            logger.warning("[DiffusionGemma] DG_FROZEN_PREFIX_CONTROL keeps the initial prompt-only KV span")
+            return False
+        setter = getattr(self.prompt_hidden_by_layer, "set_prompt_len", None)
+        if not callable(setter):
+            return False
+        setter(next_pos)
+        self.prompt_len = int(next_pos)
+        self.q_rope_offset = int(next_pos)
+        return True
+
     def reset(self):
-        # signal_buf persists across blocks (re-zeroed per block via reset_signal_buffer).
-        if self.prev_logits is not None:
-            self.prev_logits.deallocate(True)
+        """Release eager and trace-persistent adapter state for request teardown."""
+        try:
+            if self.prev_logits is not None:
+                try:
+                    self.prev_logits.deallocate(True)
+                except BaseException as cleanup_error:
+                    logger.error(f"failed to release previous denoise logits: {cleanup_error}")
+            for name in ("signal_buf", "signal_buf_b"):
+                tensor = getattr(self, name, None)
+                if tensor is not None:
+                    try:
+                        tensor.deallocate(True)
+                    except BaseException as cleanup_error:
+                        logger.error(f"failed to release trace self-conditioning {name}: {cleanup_error}")
+            self.release_canvas_rope_buffers()
+            self.release_sharded_terminal()
+        finally:
             self.prev_logits = None
+            self.signal_buf = None
+            self.signal_buf_b = None
+            self.trace_safe_self_conditioning = False
+            self.signal_ping_pong = False
 
 
 def make_denoise_logits_adapter_from_kv_cache(
@@ -1123,13 +1197,12 @@ def make_denoise_logits_adapter_from_kv_cache(
 ):
     """Build a denoise logits adapter from the model's per-layer prompt KV cache."""
 
-    def prompt_kv_for_layer(layer_idx: int):
-        return read_prompt_kv_fn(
-            tt_model,
-            prompt_len=prompt_len,
-            seq_len_start=seq_len_start,
-            layer_idx=layer_idx,
-        )
+    prompt_kv_for_layer = MutablePrefixKVReader(
+        tt_model,
+        prompt_len=prompt_len,
+        seq_len_start=seq_len_start,
+        read_fn=read_prompt_kv_fn,
+    )
 
     return adapter_cls(
         tt_model,

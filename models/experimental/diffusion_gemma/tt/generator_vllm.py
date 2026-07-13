@@ -76,6 +76,7 @@ from models.experimental.diffusion_gemma.tt.generate import (
 )
 from models.experimental.diffusion_gemma.tt.prefix_cache import PrefixKVCache
 from models.experimental.diffusion_gemma.tt.serving import BlockDiffusionServingSession
+from models.experimental.diffusion_gemma.tt.traced_denoise import traced_denoise_block
 from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
 
 MAX_DENOISE_STEPS = 48
@@ -172,12 +173,13 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         # session reuses the generator's env-gated dispatcher; when trace is requested here we
         # pass the traced loop explicitly so the PERSISTENT session's logits fn caches ONE
         # controller (captured on block 0 in prefill_forward) and ``execute_trace``-replays it
-        # every decode_forward block — NOT re-captured per block. Gated to the argmax regime
-        # (the traced controllers support ``gumbel_noise=None`` only) and needs a sized
-        # ``DG_TRACE_REGION_SIZE`` at mesh open. Default follows the env dispatcher (eager unless
-        # a ``DG_DENOISE_*`` flag is set) so a plain launch is unchanged; ``DG_VLLM_TRACE=1``
-        # opts this path into trace without the internal flag and ``DG_VLLM_TRACE=0`` forces
-        # eager. See doc/vllm_integration/README.md (traced serving).
+        # every decode_forward block — NOT re-captured per block. Argmax can use any selected
+        # traced variant; dynamic Gumbel modes force single-step replay (chunked uses a persistent
+        # device seed + bounded uniform chunk buffer, host/device use a persistent full-noise
+        # input). The path needs a sized ``DG_TRACE_REGION_SIZE`` at mesh open. Default follows the
+        # env dispatcher (eager unless a ``DG_DENOISE_*`` flag is set) so a plain launch is
+        # unchanged; ``DG_VLLM_TRACE=1`` opts this path into trace without the internal flag and
+        # ``DG_VLLM_TRACE=0`` forces eager. See doc/vllm_integration/README.md (traced serving).
         self._trace_enabled = self._resolve_trace_pref()
         # Frozen prompt-prefix KV reuse (APC prototype, #47466): a single registry
         # shared across sessions so a request whose aligned prompt is a prefix of the
@@ -297,8 +299,10 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         full_head_dim = getattr(text_config, "global_head_dim", None) or sliding_head_dim
 
         tp = parallel_config.tensor_parallel_size
-        sliding_kv_heads_per_dev = sliding_kv_heads // tp
-        full_kv_heads_per_dev = full_kv_heads // tp
+        # Match Gemma4 split_qkv/cache allocation: when KV heads < TP, each
+        # device receives one replicated/assigned KV head rather than zero.
+        sliding_kv_heads_per_dev = 1 if sliding_kv_heads < tp else sliding_kv_heads // tp
+        full_kv_heads_per_dev = 1 if full_kv_heads < tp else full_kv_heads // tp
 
         dtype = (
             model_config.dtype
@@ -372,23 +376,27 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
 
         Resolved ONCE at construction because block 0 (captured inside ``prefill_forward``) fixes
         the trace, so vLLM's per-decode ``enable_trace`` maps here. Explicit ``DG_VLLM_TRACE``
-        wins; otherwise follow the env dispatcher (``DG_DENOISE_*`` flags). Traced controllers
-        support the argmax (``gumbel_noise=None``) regime only, so any non-argmax mode forces eager.
+        wins; otherwise follow the env dispatcher (``DG_DENOISE_*`` flags). Argmax,
+        injected/materialized host/device Gumbel, and bounded-memory chunked Gumbel can trace.
         """
         raw = os.environ.get("DG_VLLM_TRACE")
         want = raw.strip().lower() in ("1", "true", "yes", "on") if raw is not None else denoise_flags_select_traced()
-        if want and self._gumbel_mode != "argmax":
-            logger.warning(
-                f"[DiffusionGemma vLLM] traced serving supports the argmax regime only "
-                f"(gumbel_mode={self._gumbel_mode!r}); falling back to eager decode"
-            )
-            return False
         if want:
             logger.info(
                 "[DiffusionGemma vLLM] traced serving decode ENABLED (Metal capture/replay); "
                 "ensure DG_TRACE_REGION_SIZE is set at mesh open"
             )
         return want
+
+    def _select_session_denoise_block_fn(self):
+        if not self._trace_enabled:
+            return None
+        if self._gumbel_mode in ("host", "device", "chunked"):
+            # Dynamic Gumbel refreshes a full-noise input (host/device) or a device seed
+            # (chunked) between single-step replays. A grouped trace cannot refresh either
+            # input inside its window, so force the single-step traced controller here.
+            return traced_denoise_block
+        return select_traced_denoise_block_fn()
 
     def _make_session(self, seed: int = 0) -> BlockDiffusionServingSession:
         # Serving contract: vLLM owns the stop decision (EOS / stop strings /
@@ -400,7 +408,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         # the whole 256-token committed canvas to vLLM, which trims at its own
         # stop point (block-diffusion #47488 scheduler-half contract). The
         # standalone ``serving_smoke`` driver keeps its own session-level stop.
-        denoise_block_fn = select_traced_denoise_block_fn() if self._trace_enabled else None
+        denoise_block_fn = self._select_session_denoise_block_fn()
         _metric(
             "session_create",
             trace_enabled=self._trace_enabled,
@@ -465,8 +473,14 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             session = self._make_session()
             prompt_tokens = self._prompt_tokens_for_row(tokens, prompt_lens, row)
             ttft_t0 = time.perf_counter()
-            cache_len = session.prefill(prompt_tokens)
-            emission = session.decode_block()
+            try:
+                cache_len = session.prefill(prompt_tokens)
+                emission = session.decode_block()
+            except BaseException:
+                # The row is not registered in ``_sessions`` until block 0 succeeds, so
+                # request-finished callbacks cannot clean this partially built session.
+                session.reset()
+                raise
             ttft_s = time.perf_counter() - ttft_t0
             dram = _dram_snapshot(self.model[0].mesh_device)
             logger.info(
@@ -549,7 +563,13 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                     stop_id = int(ids[0])
                 blocks.append(torch.full((1, self.canvas_length), stop_id, dtype=torch.long))
                 continue
-            emission = session.decode_block()
+            try:
+                emission = session.decode_block()
+            except BaseException:
+                # A replay/device failure must release every trace and remove the row
+                # before the runner can attempt another request.
+                self.release_request(row)
+                raise
             logger.info(
                 f"[DiffusionGemma vLLM] decode row={row} block={emission.block_idx} "
                 f"start_pos={emission.start_pos} next_pos={emission.next_pos} "

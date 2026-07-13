@@ -395,19 +395,29 @@ class BlockDiffusionServingSession:
 
     def reset(self) -> None:
         """Release per-request Metal traces, buffers, and logits state."""
-        if self._logits_fn is not None:
-            for attr in (
-                "_traced_denoise_controller",
-                "_traced_denoise_multistep_controller",
-                "_traced_early_halt_controller",
-            ):
-                controller = getattr(self._logits_fn, attr, None)
-                if controller is not None:
-                    controller.release()
-                    delattr(self._logits_fn, attr)
-            if hasattr(self._logits_fn, "reset"):
-                self._logits_fn.reset()
-        self._logits_fn = None
-        self.next_pos = None
-        self.finished = False
-        self.block_idx = 0
+        logits_fn = self._logits_fn
+        try:
+            if logits_fn is not None:
+                for attr in (
+                    "_traced_denoise_controller",
+                    "_traced_denoise_multistep_controller",
+                    "_traced_early_halt_controller",
+                ):
+                    controller = getattr(logits_fn, attr, None)
+                    if controller is not None:
+                        try:
+                            controller.release()
+                        except BaseException as cleanup_error:
+                            logger.error(f"failed to release serving controller {attr}: {cleanup_error}")
+                        finally:
+                            delattr(logits_fn, attr)
+                if hasattr(logits_fn, "reset"):
+                    try:
+                        logits_fn.reset()
+                    except BaseException as cleanup_error:
+                        logger.error(f"failed to reset serving logits state: {cleanup_error}")
+        finally:
+            self._logits_fn = None
+            self.next_pos = None
+            self.finished = False
+            self.block_idx = 0

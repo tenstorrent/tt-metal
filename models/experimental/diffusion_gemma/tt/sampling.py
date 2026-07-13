@@ -29,13 +29,56 @@ underflow and reducing accept-boundary flips at the 256-token canvas length.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import NamedTuple
 
 import ttnn
+from loguru import logger
 
 
 class ChunkedGumbelNoise(NamedTuple):
     seed: int
+    vocab_chunk_size: int = 1024
+    dtype: object = ttnn.float32
+
+
+@dataclass
+class TraceChunkedGumbelState:
+    """Persistent device inputs shared by every step in one traced request."""
+
+    seed_tensor: object
+    uniform_buffer: object | None = None
+    uniform_shape: tuple[int, ...] | None = None
+    value_ones: object | None = None
+    index_ones: object | None = None
+
+    def release(self) -> None:
+        try:
+            for name, tensor in (
+                ("seed_tensor", self.seed_tensor),
+                ("uniform_buffer", self.uniform_buffer),
+                ("value_ones", self.value_ones),
+                ("index_ones", self.index_ones),
+            ):
+                if tensor is not None and hasattr(tensor, "deallocate"):
+                    try:
+                        tensor.deallocate(True)
+                    except BaseException as cleanup_error:
+                        logger.error(f"failed to release trace chunked-Gumbel {name}: {cleanup_error}")
+        finally:
+            self.seed_tensor = None
+            self.uniform_buffer = None
+            self.uniform_shape = None
+            self.value_ones = None
+            self.index_ones = None
+
+
+@dataclass(frozen=True)
+class TraceChunkedGumbelNoise:
+    """Chunked Gumbel descriptor whose base seed is a trace input tensor."""
+
+    state: TraceChunkedGumbelState
+    seed_offset: int
     vocab_chunk_size: int = 1024
     dtype: object = ttnn.float32
 
@@ -112,6 +155,14 @@ def gumbel_max(logits, temperature: float, noise):
     is an explicit RUN-first shortcut for argmax sampling without allocating the
     full-vocab Gumbel buffer.
     """
+    if isinstance(noise, TraceChunkedGumbelNoise):
+        return gumbel_max_with_chunked_noise(
+            logits,
+            temperature,
+            vocab_chunk_size=noise.vocab_chunk_size,
+            dtype=noise.dtype,
+            trace_noise=noise,
+        )
     if isinstance(noise, ChunkedGumbelNoise):
         return gumbel_max_with_chunked_noise(
             logits,
@@ -141,21 +192,24 @@ def _offset_argmax_indices(indices, offset: int):
     return out
 
 
-def _select_by_mask(mask, candidate, current):
+def _select_by_mask(mask, candidate, current, *, ones=None):
     mask_t = ttnn.typecast(mask, candidate.get_dtype())
-    ones = ttnn.full(
-        list(candidate.shape),
-        1,
-        dtype=candidate.get_dtype(),
-        layout=ttnn.TILE_LAYOUT,
-        device=candidate.device(),
-    )
+    owns_ones = ones is None
+    if owns_ones:
+        ones = ttnn.full(
+            list(candidate.shape),
+            1,
+            dtype=candidate.get_dtype(),
+            layout=ttnn.TILE_LAYOUT,
+            device=candidate.device(),
+        )
     keep_t = ttnn.subtract(ones, mask_t)
     selected_candidate = ttnn.multiply(candidate, mask_t)
     selected_current = ttnn.multiply(current, keep_t)
     out = ttnn.add(selected_candidate, selected_current)
     mask_t.deallocate(True)
-    ones.deallocate(True)
+    if owns_ones:
+        ones.deallocate(True)
     keep_t.deallocate(True)
     selected_candidate.deallocate(True)
     selected_current.deallocate(True)
@@ -163,7 +217,13 @@ def _select_by_mask(mask, candidate, current):
 
 
 def gumbel_max_with_chunked_noise(
-    logits, temperature: float, *, seed: int, vocab_chunk_size: int = 1024, dtype=ttnn.float32
+    logits,
+    temperature: float,
+    *,
+    seed: int | None = None,
+    vocab_chunk_size: int = 1024,
+    dtype=ttnn.float32,
+    trace_noise: TraceChunkedGumbelNoise | None = None,
 ):
     """Gumbel-max without materializing full-vocab noise or perturbed logits.
 
@@ -172,10 +232,16 @@ def gumbel_max_with_chunked_noise(
     winner with elementwise masks. This is the production-noise fit path for
     large canvases where a full ``[B, L, vocab]`` Gumbel tensor does not fit.
     """
-    seed = _validate_ttnn_rand_seed(seed)
+    if trace_noise is None:
+        seed = _validate_ttnn_rand_seed(seed)
+    elif trace_noise.state.seed_tensor is None:
+        raise RuntimeError("trace chunked-Gumbel state was released")
     if vocab_chunk_size <= 0:
         raise ValueError("vocab_chunk_size must be positive")
     vocab_size = logits.shape[-1]
+    chunk_width = min(vocab_chunk_size, vocab_size)
+    if trace_noise is not None and vocab_size % chunk_width != 0:
+        raise ValueError("trace chunked Gumbel requires vocab_size divisible by the effective chunk size")
     best_values = None
     best_indices = None
 
@@ -192,12 +258,29 @@ def gumbel_max_with_chunked_noise(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         z = temperature_scale(chunk, temperature)
-        noise = sample_gumbel_noise(
-            z.shape,
-            device=logits.device(),
-            seed=seed + offset,
-            dtype=dtype,
-        )
+        if trace_noise is None:
+            noise = sample_gumbel_noise(
+                z.shape,
+                device=logits.device(),
+                seed=seed + offset,
+                dtype=dtype,
+            )
+        else:
+            from models.experimental.diffusion_gemma.tt import trace_gumbel
+
+            state = trace_noise.state
+            shape = tuple(int(dim) for dim in z.shape)
+            if state.uniform_buffer is None:
+                state.uniform_buffer = trace_gumbel.allocate_uniform_buffer(logits.device(), shape, dtype=dtype)
+                state.uniform_shape = shape
+            elif state.uniform_shape != shape:
+                raise ValueError(f"trace chunked-Gumbel shape changed from {state.uniform_shape} to {shape}")
+            uniform = trace_gumbel.trace_seeded_uniform(
+                state.seed_tensor,
+                state.uniform_buffer,
+                seed_offset=trace_noise.seed_offset + offset,
+            )
+            noise = _gumbel_from_uniform(uniform, deallocate_input=False)
         perturbed = ttnn.add(z, noise)
         chunk_values = ttnn.max(perturbed, dim=-1, keepdim=True)
         chunk_indices = _offset_argmax_indices(ttnn.argmax(perturbed, dim=-1, keepdim=True), offset)
@@ -213,9 +296,39 @@ def gumbel_max_with_chunked_noise(
             continue
 
         take_chunk = ttnn.gt(chunk_values, best_values)
-        next_values = _select_by_mask(take_chunk, chunk_values, best_values)
+        if trace_noise is not None:
+            state = trace_noise.state
+            if state.value_ones is None:
+                state.value_ones = ttnn.full(
+                    list(chunk_values.shape),
+                    1,
+                    dtype=chunk_values.get_dtype(),
+                    layout=ttnn.TILE_LAYOUT,
+                    device=chunk_values.device(),
+                )
+            if state.index_ones is None:
+                state.index_ones = ttnn.full(
+                    list(chunk_indices.shape),
+                    1,
+                    dtype=chunk_indices.get_dtype(),
+                    layout=ttnn.TILE_LAYOUT,
+                    device=chunk_indices.device(),
+                )
+        else:
+            state = None
+        next_values = _select_by_mask(
+            take_chunk,
+            chunk_values,
+            best_values,
+            ones=state.value_ones if state is not None else None,
+        )
         take_chunk_u32 = ttnn.typecast(take_chunk, ttnn.uint32)
-        next_indices = _select_by_mask(take_chunk_u32, chunk_indices, best_indices)
+        next_indices = _select_by_mask(
+            take_chunk_u32,
+            chunk_indices,
+            best_indices,
+            ones=state.index_ones if state is not None else None,
+        )
 
         take_chunk.deallocate(True)
         take_chunk_u32.deallocate(True)
@@ -240,14 +353,15 @@ def canvas_sample(logits, temperature: float, gumbel_noise):
     return gumbel_max(logits, temperature, gumbel_noise)
 
 
-def _gumbel_from_uniform(u):
+def _gumbel_from_uniform(u, *, deallocate_input: bool = True):
     u_eps = ttnn.add(u, 1.0e-10)
     log_u = ttnn.log(u_eps)
     neg_log_u = ttnn.multiply(log_u, -1.0)
     neg_log_u_eps = ttnn.add(neg_log_u, 1.0e-10)
     log_neg_log_u = ttnn.log(neg_log_u_eps)
     gumbel = ttnn.multiply(log_neg_log_u, -1.0)
-    u.deallocate(True)
+    if deallocate_input:
+        u.deallocate(True)
     u_eps.deallocate(True)
     log_u.deallocate(True)
     neg_log_u.deallocate(True)

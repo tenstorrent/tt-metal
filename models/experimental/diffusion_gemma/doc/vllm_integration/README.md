@@ -50,7 +50,7 @@ Raw metrics: `serving_smoke_reduced.json`, `serving_smoke_fulldepth.json`,
 `serving_smoke_fulldepth_visible.json`. Metrics are **per-block** — there is no per-token TPOT in
 block-diffusion, so `1000/mean_tpot_ms` is intentionally not reported.
 
-### Traced serving decode (2026-07-09, `traced_serving.md`)
+### Traced serving decode (historical 2026-07-09 performance baseline)
 
 Metal TRACE capture/replay is now wired into the serving decode path (`serving.py` explicit
 `denoise_block_fn`; `generator_vllm.py` honors `enable_trace`). Full-depth 30L @48 on the serving
@@ -60,9 +60,24 @@ early-halt over a 5-prompt set (`DG_DENOISE_EARLY_HALT`, seed 0, threshold 0.005
 0/5 halted** — a measured no-op under #48291. Default stays fixed-48 traced. See `traced_serving.md`
 + `bench_vllm_traced.py` + `vllmtraced_msl{4096,32768}.json`.
 
+The July-09/10 capture-once multi-block rows held the denoise prefix at the initial prompt length.
+They remain same-shape performance provenance, not correct block-autoregressive growing-prefix
+evidence.
+
+### Production Gumbel + growing-prefix trace (2026-07-13)
+
+Materialized and bounded-memory chunked Gumbel are trace-enabled through refreshable full-noise /
+device-seed inputs. Commit now expands the frozen prefix to include committed KV. Because the
+contiguous prefix tensor shape changes by 256 each block, the controller releases and recaptures at
+the new shape; paged/fixed-shape prefix inputs are required to recover capture-once replay. Full
+30-layer K=48 at `max_seq_len=1024` passed two blocks with 96 traces captured/executed total,
+`32→288→544`, and 1.42 output tok/s including block-1 recapture. Reduced eager-vs-traced committed
+hashes match exactly, while a frozen-prefix A/B leaves block 0 unchanged and changes block 1.
+See `traced_serving.md` and `traced_chunked_gumbel_20260713.json`.
+
 ### Live OpenAI-server context sweep (2026-07-10)
 
-The real patched `tenstorrent/vllm` server now has full-depth, four-block trace evidence with the
+The real patched `tenstorrent/vllm` server has historical full-depth, four-block trace evidence with the
 optimized stack explicitly enabled (`DG_SPARSE_MOE=1`, `DG_DEDUP_ARGMAX=1`,
 `DG_SPARSE_MOE_TUNED=1`). At `max_model_len=4096`, the primary warmed,
 compile-marker-free 32/256/1024/2048-token targets measured
@@ -71,13 +86,14 @@ The lower-priority 3072 warmed rerun was intentionally omitted at handoff; its e
 single-request result remains non-primary provenance.
 Bounded 8192/16384/32768 allocation probes all fit; a fixed 32-token prompt stayed ~18.85 tok/s
 across those allocations, while real 6144/8192/16384-token prompts measured
-12.681/11.884/9.489 tok/s. Every request captured exactly 48 traces once, replayed the same IDs for
+12.681/11.884/9.489 tok/s. In that prompt-only-prefix run, every request captured exactly 48 traces once, replayed the same IDs for
 three steady blocks, and released them. See `live_context_sweep_results_20260710.md` and its compact
 JSON companion.
 
 ### Live denoise-step cap sweep (2026-07-10)
 
-With logical prompt context fixed at 256 tokens and one isolated server per budget,
+With logical prompt context fixed at 256 tokens and one isolated server per budget (historical
+prompt-only-prefix performance regime),
 K=1/4/8/12/16/20/24/32/40/48 measured
 **166.800 / 108.281 / 72.936 / 54.877 / 44.458 / 37.063 / 31.998 / 25.538 /
 21.337 / 18.276 output tok/s**. Every row captured exactly K traces once, replayed

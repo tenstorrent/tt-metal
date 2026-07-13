@@ -36,6 +36,8 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.experimental.diffusion_gemma.reference import sampling as S
 from models.experimental.diffusion_gemma.tt import sampling as TS
+from models.experimental.diffusion_gemma.tt import trace_gumbel
+from models.experimental.diffusion_gemma.tt.traced_denoise import _trace_capture_guard
 
 pytestmark = [
     pytest.mark.skipif(
@@ -67,6 +69,88 @@ def _varied_logits(seed=1):
 
 def _to(t, device, dtype):
     return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+
+def test_trace_seeded_uniform_refresh_matches_rand(device):
+    """A replay must read the refreshed device seed rather than block-0's captured seed."""
+    # Production chunk geometry: 256 canvas positions × 1024 vocab entries.
+    shape = (1, 1, 256, 1024)
+
+    def seed_tensor(seed):
+        host = torch.zeros((1, 1, 32, 32), dtype=torch.int64)
+        host[0, 0, 0, 0] = seed
+        return _to(host, device, ttnn.uint32)
+
+    seed = seed_tensor(17)
+    output = trace_gumbel.allocate_uniform_buffer(device, shape)
+    trace_id = None
+    expected_17 = expected_101 = None
+    try:
+        trace_gumbel.trace_seeded_uniform(seed, output, seed_offset=0)
+        ttnn.synchronize_device(device)
+
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        trace_gumbel.trace_seeded_uniform(seed, output, seed_offset=0)
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+        actual_17 = ttnn.to_torch(output)
+        expected_17 = ttnn.rand(
+            shape,
+            device=device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            low=0.0,
+            high=1.0,
+            seed=17,
+        )
+        assert torch.equal(actual_17, ttnn.to_torch(expected_17))
+
+        fresh = seed_tensor(101)
+        ttnn.copy(fresh, seed)
+        fresh.deallocate(True)
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+        actual_101 = ttnn.to_torch(output)
+        expected_101 = ttnn.rand(
+            shape,
+            device=device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            low=0.0,
+            high=1.0,
+            seed=101,
+        )
+        assert torch.equal(actual_101, ttnn.to_torch(expected_101))
+        assert not torch.equal(actual_17, actual_101)
+    finally:
+        if trace_id is not None:
+            ttnn.release_trace(device, trace_id)
+        for tensor in (expected_17, expected_101, output, seed):
+            if tensor is not None:
+                tensor.deallocate(True)
+
+
+def test_trace_capture_guard_recovers_after_injected_failure(device, expect_error):
+    """An exception after begin_trace_capture must not poison the next device command."""
+    with expect_error(RuntimeError, match="injected capture failure"):
+        with _trace_capture_guard(device, cq_id=0):
+            raise RuntimeError("injected capture failure")
+
+    source = _to(torch.ones((1, 1, 32, 32)), device, ttnn.float32)
+    destination = ttnn.clone(source)
+    trace_id = None
+    try:
+        ttnn.copy(source, destination)
+        ttnn.synchronize_device(device)
+        with _trace_capture_guard(device, cq_id=0) as trace_id:
+            ttnn.copy(source, destination)
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+        assert torch.equal(ttnn.to_torch(destination), torch.ones((1, 1, 32, 32)))
+    finally:
+        if trace_id is not None:
+            ttnn.release_trace(device, trace_id)
+        source.deallocate(True)
+        destination.deallocate(True)
 
 
 @pytest.mark.parametrize("temperature", [1.0, 0.6])

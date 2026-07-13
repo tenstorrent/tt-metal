@@ -25,12 +25,15 @@ addresses at capture time; a buffer allocated into post-capture-freed memory ove
 trace scratch and is clobbered on every replay. The serving canvas init and per-step noise are
 re-uploaded/refreshed into these pre-allocated buffers each block. See perf_progress.md session 8.
 
-Scope: argmax (``gumbel_noise=None``) regime, contiguous cache + batched commit (the serving_smoke
-default). Opt-in via ``DG_DENOISE_TRACED``; falls back to the eager loop for the gumbel regime.
+Scope: argmax (``gumbel_noise=None``), injected/materialized Gumbel, and bounded-memory chunked
+Gumbel, contiguous cache + batched commit (the serving_smoke default). Materialized Gumbel uses one
+persistent full-noise input; chunked Gumbel uses a DG-local device-seeded uniform kernel, one
+persistent seed tile, and one reusable vocab-chunk buffer. Both dynamic modes refresh their input
+between single-step replays, so changing per-block/per-step noise never requires recapture.
 Requires a large trace region (≈168 MB/single-step trace at 30L → ~2 GB @12, ~4 GB @24); set
 ``DG_TRACE_REGION_SIZE`` when opening the mesh. Kept opt-in (not default) precisely because those
-prerequisites are not universal — paged/vLLM caches, the gumbel regimes, and a 0-byte trace region
-would all break a default-on traced path.
+prerequisites are not universal — paged caches, dynamic-Gumbel grouped windows, and a 0-byte trace
+region would all break a default-on traced path.
 
 MULTI-STEP TRACE BATCHING (``DG_DENOISE_TRACED_MULTISTEP``, path to 100 t/s lever 10). The
 single-step controller replays **N single-step traces per block** (one ``execute_trace`` per denoise
@@ -57,8 +60,10 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import contextmanager
 from typing import List
 
+import torch
 import ttnn
 from loguru import logger
 
@@ -79,6 +84,7 @@ from models.experimental.diffusion_gemma.tt.denoise_loop import (
     temperature_at_step,
     write_halt_scalars,
 )
+from models.experimental.diffusion_gemma.tt import sampling as TS
 
 
 def traced_denoise_enabled() -> bool:
@@ -89,6 +95,33 @@ def traced_denoise_enabled() -> bool:
 def _trace_metric(event: str, **fields) -> None:
     """Emit a stable, machine-readable live-serving trace marker."""
     logger.info("DG_TRACE_METRIC " + json.dumps({"event": event, **fields}, sort_keys=True, default=str))
+
+
+@contextmanager
+def _trace_capture_guard(mesh_device, *, cq_id: int = 0):
+    """Close and release a partially captured trace before propagating an error."""
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=cq_id)
+    try:
+        yield trace_id
+    except BaseException:
+        try:
+            ttnn.end_trace_capture(mesh_device, trace_id, cq_id=cq_id)
+        except Exception as cleanup_error:
+            logger.error(f"failed to end aborted Metal trace {trace_id}: {cleanup_error}")
+        try:
+            ttnn.release_trace(mesh_device, trace_id)
+        except Exception as cleanup_error:
+            logger.error(f"failed to release aborted Metal trace {trace_id}: {cleanup_error}")
+        raise
+    else:
+        try:
+            ttnn.end_trace_capture(mesh_device, trace_id, cq_id=cq_id)
+        except BaseException:
+            try:
+                ttnn.release_trace(mesh_device, trace_id)
+            except Exception as cleanup_error:
+                logger.error(f"failed to release unfinalized Metal trace {trace_id}: {cleanup_error}")
+            raise
 
 
 class TracedDenoiseController:
@@ -105,11 +138,19 @@ class TracedDenoiseController:
         self.mesh = mesh_device
         self.config = config
         self.consts = consts
+        self._owns_consts = consts is None
         self.captured = False
         self.traces: List = []
         self.canvas_buf = None
         self.committed_buf = None
         self.noise_bufs: List = []
+        self.gumbel_buf = None
+        self.gumbel_step_inputs: List = []
+        self.gumbel_chunked_state = None
+        self.gumbel_chunked_seeds = None
+        self.gumbel_chunked_signature = None
+        self.gumbel_mode = None
+        self.captured_prefix_len = None
         self.capture_events = 0
         self.traces_captured = 0
         self.replay_blocks = 0
@@ -124,6 +165,7 @@ class TracedDenoiseController:
             "replay_blocks": self.replay_blocks,
             "execute_trace_calls": self.execute_trace_calls,
             "trace_ids": [str(tid) for tid in self.traces],
+            "gumbel_mode": self.gumbel_mode,
         }
 
     # -- capture (first block only) ------------------------------------------------
@@ -147,9 +189,157 @@ class TracedDenoiseController:
             if hasattr(fresh, "deallocate"):
                 fresh.deallocate(True)
 
-    def _capture(self, adapter, init_canvas, noise_tokens_fn, start_pos: int) -> None:
+    def _initialize_gumbel_buffer_from(self, gumbel_noise_fn) -> None:
+        """Bind the request's trace-safe Gumbel mode and persistent input buffer.
+
+        ``None`` (or a hook returning ``None``) is the argmax regime. A materialized
+        tensor is cloned once into a stable-address device buffer and refreshed before
+        each replay. ``ChunkedGumbelNoise`` is converted into per-step descriptors that
+        share a persistent device base-seed tensor and one bounded uniform chunk buffer.
+        """
+        if self.gumbel_mode is not None:
+            return
+        fresh = gumbel_noise_fn(0) if gumbel_noise_fn is not None else None
+        if fresh is None:
+            if gumbel_noise_fn is not None:
+                for step in range(1, self.config.max_denoise_steps):
+                    value = gumbel_noise_fn(step)
+                    if value is not None:
+                        if hasattr(value, "deallocate"):
+                            value.deallocate(True)
+                        raise ValueError("gumbel_noise_fn changed mode within the denoise step schedule")
+            self.gumbel_mode = "argmax"
+            return
+        if isinstance(fresh, TS.ChunkedGumbelNoise):
+            descriptors = [fresh] + [gumbel_noise_fn(step) for step in range(1, self.config.max_denoise_steps)]
+            if not all(isinstance(value, TS.ChunkedGumbelNoise) for value in descriptors):
+                raise ValueError("gumbel_noise_fn changed mode within the denoise step schedule")
+            chunk_sizes = {value.vocab_chunk_size for value in descriptors}
+            dtypes = {value.dtype for value in descriptors}
+            if len(chunk_sizes) != 1 or len(dtypes) != 1:
+                raise ValueError("chunked Gumbel chunk size and dtype must stay constant across steps")
+            self.gumbel_chunked_signature = (next(iter(chunk_sizes)), next(iter(dtypes)))
+            seeds = tuple(int(value.seed) for value in descriptors)
+            seed_tensor = self._seed_to_device(seeds[0])
+            self.gumbel_chunked_state = TS.TraceChunkedGumbelState(seed_tensor=seed_tensor)
+            self.gumbel_chunked_seeds = seeds
+            self.gumbel_step_inputs = [
+                TS.TraceChunkedGumbelNoise(
+                    state=self.gumbel_chunked_state,
+                    seed_offset=0,
+                    vocab_chunk_size=descriptors[step].vocab_chunk_size,
+                    dtype=descriptors[step].dtype,
+                )
+                for step in range(len(seeds))
+            ]
+            self.gumbel_mode = "chunked"
+            return
+        if isinstance(fresh, TS.TraceChunkedGumbelNoise):
+            raise ValueError("callers must pass ChunkedGumbelNoise; traced descriptors are controller-owned")
+        self.gumbel_buf = ttnn.clone(fresh)
+        self.gumbel_mode = "materialized"
+        if hasattr(fresh, "deallocate"):
+            fresh.deallocate(True)
+
+    def _refresh_gumbel_buffer_from(self, gumbel_noise_fn, step: int):
+        """Refresh the materialized Gumbel trace input for one step, in place."""
+        if self.gumbel_mode == "argmax":
+            return None
+        if self.gumbel_mode != "materialized" or self.gumbel_buf is None:
+            raise RuntimeError("materialized traced Gumbel buffer was not initialized")
+        if gumbel_noise_fn is None:
+            raise ValueError("materialized traced denoise requires a per-step gumbel_noise_fn")
+        fresh = gumbel_noise_fn(step)
+        if fresh is None or isinstance(fresh, TS.ChunkedGumbelNoise):
+            if fresh is not None and hasattr(fresh, "deallocate"):
+                fresh.deallocate(True)
+            raise ValueError("gumbel_noise_fn changed mode after trace capture")
+        ttnn.copy(fresh, self.gumbel_buf)
+        if hasattr(fresh, "deallocate"):
+            fresh.deallocate(True)
+        return self.gumbel_buf
+
+    def _seed_to_device(self, seed: int):
+        seed = TS._validate_ttnn_rand_seed(seed)
+        host = torch.zeros((1, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE), dtype=torch.int64)
+        host[0, 0, 0, 0] = seed
+        kwargs = {}
+        if hasattr(self.mesh, "shape") and self.mesh.get_num_devices() > 1:
+            kwargs["mesh_mapper"] = ttnn.ReplicateTensorToMesh(self.mesh)
+        return ttnn.from_torch(
+            host,
+            device=self.mesh,
+            dtype=ttnn.uint32,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **kwargs,
+        )
+
+    def _refresh_chunked_gumbel_seed_from(self, gumbel_noise_fn) -> None:
+        if self.gumbel_mode != "chunked" or self.gumbel_chunked_state is None:
+            return
+        if gumbel_noise_fn is None:
+            raise ValueError("traced chunked Gumbel requires a per-step gumbel_noise_fn")
+        descriptors = [gumbel_noise_fn(step) for step in range(self.config.max_denoise_steps)]
+        if not all(isinstance(value, TS.ChunkedGumbelNoise) for value in descriptors):
+            raise ValueError("gumbel_noise_fn changed mode after trace capture")
+        chunk_sizes = {value.vocab_chunk_size for value in descriptors}
+        dtypes = {value.dtype for value in descriptors}
+        if len(chunk_sizes) != 1 or len(dtypes) != 1:
+            raise ValueError("chunked Gumbel chunk size and dtype changed after trace capture")
+        signature = (next(iter(chunk_sizes)), next(iter(dtypes)))
+        if signature != self.gumbel_chunked_signature:
+            raise ValueError(
+                f"chunked Gumbel signature changed after trace capture: "
+                f"{self.gumbel_chunked_signature} -> {signature}"
+            )
+        self.gumbel_chunked_seeds = tuple(int(value.seed) for value in descriptors)
+
+    def _validate_argmax_gumbel_from(self, gumbel_noise_fn) -> None:
+        if self.gumbel_mode != "argmax" or gumbel_noise_fn is None:
+            return
+        for step in range(self.config.max_denoise_steps):
+            value = gumbel_noise_fn(step)
+            if value is not None:
+                if hasattr(value, "deallocate"):
+                    value.deallocate(True)
+                raise ValueError("gumbel_noise_fn changed from argmax after trace capture")
+
+    def _refresh_chunked_gumbel_seed_for_step(self, step: int) -> None:
+        if self.gumbel_mode != "chunked" or self.gumbel_chunked_state is None:
+            return
+        fresh_seed = self._seed_to_device(self.gumbel_chunked_seeds[step])
+        ttnn.copy(fresh_seed, self.gumbel_chunked_state.seed_tensor)
+        fresh_seed.deallocate(True)
+
+    def _gumbel_for_step(self, step: int):
+        if self.gumbel_mode == "materialized":
+            return self.gumbel_buf
+        if self.gumbel_mode == "chunked":
+            return self.gumbel_step_inputs[step]
+        return None
+
+    def _reject_grouped_dynamic_gumbel(self, group_size: int) -> None:
+        if self.gumbel_mode not in ("materialized", "chunked") or group_size == 1:
+            return
+        if self.gumbel_buf is not None and hasattr(self.gumbel_buf, "deallocate"):
+            self.gumbel_buf.deallocate(True)
+        self.gumbel_buf = None
+        if self.gumbel_chunked_state is not None:
+            self.gumbel_chunked_state.release()
+        self.gumbel_chunked_state = None
+        self.gumbel_step_inputs = []
+        self.gumbel_chunked_seeds = None
+        self.gumbel_chunked_signature = None
+        self.gumbel_mode = None
+        raise NotImplementedError(
+            "dynamic Gumbel tracing currently requires one-step trace windows; " "set DG_DENOISE_MULTISTEP_GROUP=1"
+        )
+
+    def _capture(self, adapter, init_canvas, gumbel_noise_fn, noise_tokens_fn, start_pos: int) -> None:
         cfg = self.config
         canvas_len = cfg.canvas_length
+        self._initialize_gumbel_buffer_from(gumbel_noise_fn)
         # Constant-shape trace-safe state: persistent self-cond signal buffer + canvas RoPE
         # buffers (both allocated BEFORE capture). The denoise reads a frozen prompt prefix,
         # so canvas RoPE (refreshed per block) is the only per-block variation inside a step.
@@ -177,7 +367,7 @@ class TracedDenoiseController:
             logits0,
             temperature=t0,
             entropy_budget=cfg.entropy_budget,
-            gumbel_noise=None,
+            gumbel_noise=self._gumbel_for_step(0),
             noise_tokens=self.noise_bufs[0],
             constants=self.consts,
             sharded_terminal=sharded_terminal,
@@ -195,28 +385,40 @@ class TracedDenoiseController:
         # Capture one single-step trace per step index (each bakes its T[i] + reads noise_bufs[i]).
         adapter.reset_signal_buffer()
         self.traces = []
+        forbid_cache_misses = os.environ.get("DG_TRACE_FORBID_CACHE_MISSES", "0").lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
         for step in range(cfg.max_denoise_steps):
             temperature = temperature_at_step(step, cfg.max_denoise_steps, cfg.temperature_start, cfg.temperature_end)
-            tid = ttnn.begin_trace_capture(self.mesh, cq_id=0)
-            logits = adapter(self.canvas_buf, step)
-            next_canvas, argmax = denoise_step_next_canvas(
-                logits,
-                temperature=temperature,
-                entropy_budget=cfg.entropy_budget,
-                gumbel_noise=None,
-                noise_tokens=self.noise_bufs[step],
-                constants=self.consts,
-                sharded_terminal=sharded_terminal,
-            )
-            _deallocate_logits_if_unowned(adapter, logits)
-            ttnn.copy(next_canvas, self.canvas_buf)
-            ttnn.copy(argmax, self.committed_buf)
-            next_canvas.deallocate(True)
-            argmax.deallocate(True)
-            ttnn.end_trace_capture(self.mesh, tid, cq_id=0)
-            self.traces.append(tid)
+            if forbid_cache_misses:
+                self.mesh.set_program_cache_misses_allowed(False)
+            try:
+                with _trace_capture_guard(self.mesh, cq_id=0) as tid:
+                    logits = adapter(self.canvas_buf, step)
+                    next_canvas, argmax = denoise_step_next_canvas(
+                        logits,
+                        temperature=temperature,
+                        entropy_budget=cfg.entropy_budget,
+                        gumbel_noise=self._gumbel_for_step(step),
+                        noise_tokens=self.noise_bufs[step],
+                        constants=self.consts,
+                        sharded_terminal=sharded_terminal,
+                    )
+                    _deallocate_logits_if_unowned(adapter, logits)
+                    ttnn.copy(next_canvas, self.canvas_buf)
+                    ttnn.copy(argmax, self.committed_buf)
+                    next_canvas.deallocate(True)
+                    argmax.deallocate(True)
+                self.traces.append(tid)
+            finally:
+                if forbid_cache_misses:
+                    self.mesh.set_program_cache_misses_allowed(True)
         ttnn.synchronize_device(self.mesh)
         self.captured = True
+        self.captured_prefix_len = int(getattr(adapter, "prompt_len", 0))
         self.capture_events += 1
         self.traces_captured += len(self.traces)
         _trace_metric("capture", start_pos=start_pos, **self.stats())
@@ -225,31 +427,33 @@ class TracedDenoiseController:
     def denoise_block(
         self, adapter, init_canvas, config: DiffusionConfig, *, gumbel_noise_fn=None, noise_tokens_fn=None
     ) -> DenoiseTrajectory:
-        # Argmax regime only: the argmax gumbel hook is a non-None callable whose per-step
-        # value is None (temperature-scaled argmax, no gumbel tensor). A hook that yields a
-        # real gumbel tensor would need per-step gumbel buffers threaded like the noise, which
-        # is not built — fall back by unsetting DG_DENOISE_TRACED for that regime.
-        if gumbel_noise_fn is not None:
-            probe = gumbel_noise_fn(0)
-            if probe is not None:
-                if hasattr(probe, "deallocate"):
-                    probe.deallocate(True)
-                raise NotImplementedError(
-                    "traced denoise supports the argmax (gumbel_noise=None) regime only; "
-                    "unset DG_DENOISE_TRACED for the gumbel regime"
-                )
         if noise_tokens_fn is None:
             raise ValueError("traced denoise requires a per-step noise_tokens_fn")
         cfg = self.config
         start_pos = getattr(adapter, "q_rope_offset", None)
+        current_prefix_len = int(getattr(adapter, "prompt_len", 0))
+        if self.captured and self.captured_prefix_len is not None and self.captured_prefix_len != current_prefix_len:
+            _trace_metric(
+                "invalidate_prefix_growth",
+                captured_prefix_len=self.captured_prefix_len,
+                next_prefix_len=current_prefix_len,
+                **self.stats(),
+            )
+            self.release()
         captured_this_block = not self.captured
 
         if not self.captured:
             # Block 0: capture consumes block-0 noise into the persistent buffers.
-            self._capture(adapter, init_canvas, noise_tokens_fn, start_pos)
+            try:
+                self._capture(adapter, init_canvas, gumbel_noise_fn, noise_tokens_fn, start_pos)
+            except BaseException:
+                self.release()
+                raise
         else:
             # Block N: refresh per-step noise + canvas RoPE (both OUTSIDE the trace).
             self._refresh_noise_buffers_from(noise_tokens_fn)
+            self._refresh_chunked_gumbel_seed_from(gumbel_noise_fn)
+            self._validate_argmax_gumbel_from(gumbel_noise_fn)
             adapter.update_canvas_rope_buffers(start_pos)
 
         # Reset the threaded state from THIS block's fresh canvas init + zeroed signal, replay.
@@ -258,7 +462,11 @@ class TracedDenoiseController:
             init_canvas.deallocate(True)  # consume init_canvas (matches run_fixed_denoise_steps)
         adapter.reset_signal_buffer()
         ttnn.synchronize_device(self.mesh)
-        for tid in self.traces:
+        for step, tid in enumerate(self.traces):
+            if self.gumbel_mode == "materialized" and not (captured_this_block and step == 0):
+                self._refresh_gumbel_buffer_from(gumbel_noise_fn, step)
+            if self.gumbel_mode == "chunked" and not (captured_this_block and step == 0):
+                self._refresh_chunked_gumbel_seed_for_step(step)
             ttnn.execute_trace(self.mesh, tid, blocking=False)
         ttnn.synchronize_device(self.mesh)
         self.replay_blocks += 1
@@ -276,17 +484,48 @@ class TracedDenoiseController:
 
     def release(self) -> None:
         final_stats = self.stats()
-        for tid in self.traces:
-            ttnn.release_trace(self.mesh, tid)
-        self.traces = []
-        for buf in [self.canvas_buf, self.committed_buf, *self.noise_bufs]:
-            if buf is not None and hasattr(buf, "deallocate"):
-                buf.deallocate(True)
-        self.canvas_buf = None
-        self.committed_buf = None
-        self.noise_bufs = []
-        self.captured = False
-        _trace_metric("release", **final_stats)
+        cleanup_errors = []
+
+        def cleanup(label, fn):
+            try:
+                fn()
+            except BaseException as cleanup_error:
+                cleanup_errors.append(f"{label}: {cleanup_error}")
+                logger.error(f"failed to release traced-denoise {label}: {cleanup_error}")
+
+        try:
+            for tid in list(self.traces):
+                cleanup(f"trace {tid}", lambda tid=tid: ttnn.release_trace(self.mesh, tid))
+            for label, buf in [
+                ("canvas_buf", self.canvas_buf),
+                ("committed_buf", self.committed_buf),
+                ("gumbel_buf", self.gumbel_buf),
+                *[(f"noise_buf[{index}]", buf) for index, buf in enumerate(self.noise_bufs)],
+            ]:
+                if buf is not None and hasattr(buf, "deallocate"):
+                    cleanup(label, lambda buf=buf: buf.deallocate(True))
+            if self.gumbel_chunked_state is not None:
+                cleanup("chunked_gumbel_state", self.gumbel_chunked_state.release)
+            if self._owns_consts and self.consts is not None:
+                for name, tensor in zip(self.consts._fields, self.consts):
+                    if tensor is not None and hasattr(tensor, "deallocate"):
+                        cleanup(f"consts.{name}", lambda tensor=tensor: tensor.deallocate(True))
+        finally:
+            self.traces = []
+            self.canvas_buf = None
+            self.committed_buf = None
+            self.gumbel_buf = None
+            self.gumbel_step_inputs = []
+            self.gumbel_chunked_state = None
+            self.gumbel_chunked_seeds = None
+            self.gumbel_chunked_signature = None
+            self.gumbel_mode = None
+            self.captured_prefix_len = None
+            self.noise_bufs = []
+            if self._owns_consts:
+                self.consts = None
+            self.captured = False
+            _trace_metric("release", cleanup_errors=cleanup_errors, **final_stats)
 
 
 def traced_denoise_block(
@@ -390,12 +629,14 @@ class MultiStepTracedDenoiseController(TracedDenoiseController):
         super().__init__(mesh_device, config, consts=consts)
         self.group_size = group_size if group_size is not None else multistep_group_size(config.max_denoise_steps)
 
-    def _capture(self, adapter, init_canvas, noise_tokens_fn, start_pos: int) -> None:
+    def _capture(self, adapter, init_canvas, gumbel_noise_fn, noise_tokens_fn, start_pos: int) -> None:
         cfg = self.config
         canvas_len = cfg.canvas_length
         n_steps = cfg.max_denoise_steps
         g = max(1, min(self.group_size, n_steps))
         self.group_size = g
+        self._initialize_gumbel_buffer_from(gumbel_noise_fn)
+        self._reject_grouped_dynamic_gumbel(g)
         # All persistent cross-replay state allocated BEFORE begin_trace_capture (session-8 rule):
         # self-cond signal buffer + constant-shape canvas RoPE buffers + per-step noise buffers.
         adapter.prepare_trace_safe_self_conditioning(canvas_len=canvas_len)
@@ -422,7 +663,7 @@ class MultiStepTracedDenoiseController(TracedDenoiseController):
             logits0,
             temperature=t0,
             entropy_budget=cfg.entropy_budget,
-            gumbel_noise=None,
+            gumbel_noise=self._gumbel_for_step(0),
             noise_tokens=self.noise_bufs[0],
             constants=self.consts,
             sharded_terminal=sharded_terminal,
@@ -446,37 +687,37 @@ class MultiStepTracedDenoiseController(TracedDenoiseController):
         self.traces = []
         for w_start in range(0, n_steps, g):
             w_end = min(w_start + g, n_steps)
-            tid = ttnn.begin_trace_capture(self.mesh, cq_id=0)
-            canvas = self.canvas_buf
-            committed = None
-            for step in range(w_start, w_end):
-                temperature = temperature_at_step(step, n_steps, cfg.temperature_start, cfg.temperature_end)
-                logits = adapter(canvas, step)
-                next_canvas, argmax = denoise_step_next_canvas(
-                    logits,
-                    temperature=temperature,
-                    entropy_budget=cfg.entropy_budget,
-                    gumbel_noise=None,
-                    noise_tokens=self.noise_bufs[step],
-                    constants=self.consts,
-                    sharded_terminal=sharded_terminal,
-                )
-                _deallocate_logits_if_unowned(adapter, logits)
-                if committed is not None:
-                    committed.deallocate(True)
-                committed = argmax
+            with _trace_capture_guard(self.mesh, cq_id=0) as tid:
+                canvas = self.canvas_buf
+                committed = None
+                for step in range(w_start, w_end):
+                    temperature = temperature_at_step(step, n_steps, cfg.temperature_start, cfg.temperature_end)
+                    logits = adapter(canvas, step)
+                    next_canvas, argmax = denoise_step_next_canvas(
+                        logits,
+                        temperature=temperature,
+                        entropy_budget=cfg.entropy_budget,
+                        gumbel_noise=self._gumbel_for_step(step),
+                        noise_tokens=self.noise_bufs[step],
+                        constants=self.consts,
+                        sharded_terminal=sharded_terminal,
+                    )
+                    _deallocate_logits_if_unowned(adapter, logits)
+                    if committed is not None:
+                        committed.deallocate(True)
+                    committed = argmax
+                    if canvas is not self.canvas_buf:
+                        canvas.deallocate(True)  # free the superseded intra-window intermediate
+                    canvas = next_canvas
+                ttnn.copy(canvas, self.canvas_buf)  # window-end canvas -> carry buffer for the next window
+                ttnn.copy(committed, self.committed_buf)  # window-end committed argmax
                 if canvas is not self.canvas_buf:
-                    canvas.deallocate(True)  # free the superseded intra-window intermediate
-                canvas = next_canvas
-            ttnn.copy(canvas, self.canvas_buf)  # window-end canvas -> carry buffer for the next window
-            ttnn.copy(committed, self.committed_buf)  # window-end committed argmax
-            if canvas is not self.canvas_buf:
-                canvas.deallocate(True)
-            committed.deallocate(True)
-            ttnn.end_trace_capture(self.mesh, tid, cq_id=0)
+                    canvas.deallocate(True)
+                committed.deallocate(True)
             self.traces.append(tid)
         ttnn.synchronize_device(self.mesh)
         self.captured = True
+        self.captured_prefix_len = int(getattr(adapter, "prompt_len", 0))
 
 
 def traced_denoise_multistep_block(
@@ -570,22 +811,29 @@ class EarlyHaltTracedDenoiseController(MultiStepTracedDenoiseController):
             )
 
     def _release_halt_bufs(self) -> None:
-        if self.halt_bufs is not None:
-            for buf in self.halt_bufs:
-                if buf is not None and hasattr(buf, "deallocate"):
-                    buf.deallocate(True)
+        try:
+            if self.halt_bufs is not None:
+                for name, buf in zip(self.halt_bufs._fields, self.halt_bufs):
+                    if buf is not None and hasattr(buf, "deallocate"):
+                        try:
+                            buf.deallocate(True)
+                        except BaseException as cleanup_error:
+                            logger.error(f"failed to release traced early-halt {name}: {cleanup_error}")
+        finally:
             self.halt_bufs = None
 
     def release(self) -> None:
         self._release_halt_bufs()
         super().release()
 
-    def _capture(self, adapter, init_canvas, noise_tokens_fn, start_pos: int) -> None:
+    def _capture(self, adapter, init_canvas, gumbel_noise_fn, noise_tokens_fn, start_pos: int) -> None:
         cfg = self.config
         canvas_len = cfg.canvas_length
         n_steps = cfg.max_denoise_steps
         g = max(1, min(self.group_size, n_steps))
         self.group_size = g
+        self._initialize_gumbel_buffer_from(gumbel_noise_fn)
+        self._reject_grouped_dynamic_gumbel(g)
         # All persistent cross-replay state allocated BEFORE begin_trace_capture (session-8 rule):
         # self-cond signal + canvas RoPE buffers + per-step noise + the halt buffers.
         adapter.prepare_trace_safe_self_conditioning(canvas_len=canvas_len)
@@ -610,7 +858,7 @@ class EarlyHaltTracedDenoiseController(MultiStepTracedDenoiseController):
             logits0,
             temperature=t0,
             entropy_budget=cfg.entropy_budget,
-            gumbel_noise=None,
+            gumbel_noise=self._gumbel_for_step(0),
             noise_tokens=self.noise_bufs[0],
             constants=self.consts,
             sharded_terminal=sharded_terminal,
@@ -646,55 +894,43 @@ class EarlyHaltTracedDenoiseController(MultiStepTracedDenoiseController):
         self.traces = []
         for w_start in range(0, n_steps, g):
             w_end = min(w_start + g, n_steps)
-            tid = ttnn.begin_trace_capture(self.mesh, cq_id=0)
-            canvas = self.canvas_buf
-            committed = None
-            for step in range(w_start, w_end):
-                temperature = temperature_at_step(step, n_steps, cfg.temperature_start, cfg.temperature_end)
-                logits = adapter(canvas, step)
-                next_canvas, argmax = denoise_step_next_canvas_and_halt(
-                    logits,
-                    temperature=temperature,
-                    entropy_budget=cfg.entropy_budget,
-                    gumbel_noise=None,
-                    noise_tokens=self.noise_bufs[step],
-                    halt_bufs=self.halt_bufs,
-                    canvas_len=canvas_len,
-                    constants=self.consts,
-                    sharded_terminal=sharded_terminal,
-                )
-                _deallocate_logits_if_unowned(adapter, logits)
-                if committed is not None:
-                    committed.deallocate(True)
-                committed = argmax
+            with _trace_capture_guard(self.mesh, cq_id=0) as tid:
+                canvas = self.canvas_buf
+                committed = None
+                for step in range(w_start, w_end):
+                    temperature = temperature_at_step(step, n_steps, cfg.temperature_start, cfg.temperature_end)
+                    logits = adapter(canvas, step)
+                    next_canvas, argmax = denoise_step_next_canvas_and_halt(
+                        logits,
+                        temperature=temperature,
+                        entropy_budget=cfg.entropy_budget,
+                        gumbel_noise=self._gumbel_for_step(step),
+                        noise_tokens=self.noise_bufs[step],
+                        halt_bufs=self.halt_bufs,
+                        canvas_len=canvas_len,
+                        constants=self.consts,
+                        sharded_terminal=sharded_terminal,
+                    )
+                    _deallocate_logits_if_unowned(adapter, logits)
+                    if committed is not None:
+                        committed.deallocate(True)
+                    committed = argmax
+                    if canvas is not self.canvas_buf:
+                        canvas.deallocate(True)
+                    canvas = next_canvas
+                ttnn.copy(canvas, self.canvas_buf)
+                ttnn.copy(committed, self.committed_buf)
                 if canvas is not self.canvas_buf:
                     canvas.deallocate(True)
-                canvas = next_canvas
-            ttnn.copy(canvas, self.canvas_buf)
-            ttnn.copy(committed, self.committed_buf)
-            if canvas is not self.canvas_buf:
-                canvas.deallocate(True)
-            committed.deallocate(True)
-            ttnn.end_trace_capture(self.mesh, tid, cq_id=0)
+                committed.deallocate(True)
             self.traces.append(tid)
         ttnn.synchronize_device(self.mesh)
         self.captured = True
+        self.captured_prefix_len = int(getattr(adapter, "prompt_len", 0))
 
     def denoise_block(
         self, adapter, init_canvas, config: DiffusionConfig, *, gumbel_noise_fn=None, noise_tokens_fn=None
     ) -> DenoiseTrajectory:
-        # Argmax regime only (same prerequisite as the traced base): the argmax gumbel hook
-        # yields per-step None. A real gumbel tensor would need per-step gumbel buffers threaded
-        # like the noise, which is not built.
-        if gumbel_noise_fn is not None:
-            probe = gumbel_noise_fn(0)
-            if probe is not None:
-                if hasattr(probe, "deallocate"):
-                    probe.deallocate(True)
-                raise NotImplementedError(
-                    "traced early-halt supports the argmax (gumbel_noise=None) regime only; "
-                    "unset DG_DENOISE_EARLY_HALT for the gumbel regime"
-                )
         if noise_tokens_fn is None:
             raise ValueError("traced early-halt requires a per-step noise_tokens_fn")
         cfg = self.config
@@ -703,10 +939,26 @@ class EarlyHaltTracedDenoiseController(MultiStepTracedDenoiseController):
         n_steps = cfg.max_denoise_steps
         start_pos = getattr(adapter, "q_rope_offset", None)
 
+        current_prefix_len = int(getattr(adapter, "prompt_len", 0))
+        if self.captured and self.captured_prefix_len is not None and self.captured_prefix_len != current_prefix_len:
+            _trace_metric(
+                "invalidate_prefix_growth",
+                captured_prefix_len=self.captured_prefix_len,
+                next_prefix_len=current_prefix_len,
+                **self.stats(),
+            )
+            self.release()
+        captured_this_block = not self.captured
         if not self.captured:
-            self._capture(adapter, init_canvas, noise_tokens_fn, start_pos)
+            try:
+                self._capture(adapter, init_canvas, gumbel_noise_fn, noise_tokens_fn, start_pos)
+            except BaseException:
+                self.release()
+                raise
         else:
             self._refresh_noise_buffers_from(noise_tokens_fn)
+            self._refresh_chunked_gumbel_seed_from(gumbel_noise_fn)
+            self._validate_argmax_gumbel_from(gumbel_noise_fn)
             adapter.update_canvas_rope_buffers(start_pos)
 
         # Reset threaded state from this block's fresh canvas init + zeroed self-cond signal.
@@ -729,6 +981,14 @@ class EarlyHaltTracedDenoiseController(MultiStepTracedDenoiseController):
         steps_run = 0
         for w, tid in enumerate(self.traces):
             w_end = min((w + 1) * g, n_steps)
+            if self.gumbel_mode == "materialized":
+                step = w_end - 1
+                if not (captured_this_block and step == 0):
+                    self._refresh_gumbel_buffer_from(gumbel_noise_fn, step)
+            if self.gumbel_mode == "chunked":
+                step = w_end - 1
+                if not (captured_this_block and step == 0):
+                    self._refresh_chunked_gumbel_seed_for_step(step)
             ttnn.execute_trace(self.mesh, tid, blocking=False)
             ttnn.synchronize_device(self.mesh)
             steps_run = w_end

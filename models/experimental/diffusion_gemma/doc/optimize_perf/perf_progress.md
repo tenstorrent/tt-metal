@@ -874,9 +874,10 @@ Built `TracedDenoiseController` (DiffusionGemma-local): captures N single-step t
 block and replays them for every block, threading cross-step state (canvas + self-cond signal) in
 persistent buffers and refreshing the per-block canvas RoPE + per-step renoise into pre-allocated
 buffers OUTSIDE the trace. Wired behind `DG_DENOISE_TRACED` in `_resolve_default_denoise_block_fn`
-(argmax regime + contiguous cache only; needs `DG_TRACE_REGION_SIZE`, honored by `_open_mesh_device`).
-No gemma4 edits. Kept opt-in (not default) because the prerequisites are not universal (paged/vLLM
-caches, gumbel regimes, and a 0-byte trace region all require the eager path).
+(this historical session validated argmax + contiguous cache; the 2026-07-13 production-Gumbel
+increment adds single-step materialized/chunked tracing; all modes need `DG_TRACE_REGION_SIZE`,
+honored by `_open_mesh_device`). No gemma4 edits. Kept opt-in because paged caches, grouped dynamic
+Gumbel windows, and a 0-byte trace region are not supported.
 
 **Verified via serving_smoke** (the production block-granular serving path, per-block VARYING seeded
 noise, `DG_SPARSE_MOE=1 DG_DEDUP_ARGMAX=1 DG_SPARSE_MOE_TUNED=1`, batched commit, seed 0, 3 blocks,

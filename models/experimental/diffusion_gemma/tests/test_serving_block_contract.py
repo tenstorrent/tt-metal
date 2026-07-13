@@ -106,6 +106,38 @@ def test_session_reset_releases_traced_controller_before_logits_state():
     assert session.block_idx == 0
 
 
+def test_session_reset_continues_after_controller_and_logits_cleanup_failures():
+    events = []
+
+    def fail(name):
+        def _raise():
+            events.append(name)
+            raise RuntimeError(f"injected {name} failure")
+
+        return _raise
+
+    logits_fn = SimpleNamespace(
+        _traced_denoise_controller=SimpleNamespace(release=fail("controller-0")),
+        _traced_denoise_multistep_controller=SimpleNamespace(release=lambda: events.append("controller-1")),
+        reset=fail("logits-reset"),
+    )
+    session = object.__new__(serving.BlockDiffusionServingSession)
+    session._logits_fn = logits_fn
+    session.next_pos = 288
+    session.finished = True
+    session.block_idx = 2
+
+    session.reset()
+
+    assert events == ["controller-0", "controller-1", "logits-reset"]
+    assert not hasattr(logits_fn, "_traced_denoise_controller")
+    assert not hasattr(logits_fn, "_traced_denoise_multistep_controller")
+    assert session._logits_fn is None
+    assert session.next_pos is None
+    assert session.finished is False
+    assert session.block_idx == 0
+
+
 def test_next_block_capacity_accepts_exact_boundary_after_nonaligned_prompt():
     # A 265-token prompt aligns to cache position 288; one 256-token block
     # exactly fills a 544-token model-owned cache.

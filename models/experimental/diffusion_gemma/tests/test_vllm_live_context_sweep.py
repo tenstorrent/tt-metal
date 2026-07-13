@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import torch
 
 from models.experimental.diffusion_gemma.doc.vllm_integration import live_context_sweep as sweep
 
@@ -161,6 +162,127 @@ def test_vllm_adapter_applies_validated_step_override(monkeypatch, expect_error)
         monkeypatch.setenv("DG_VLLM_MAX_DENOISE_STEPS", invalid)
         with expect_error(ValueError, match=r"\[1, 48\]"):
             _with_vllm_max_denoise_steps(DiffusionConfig())
+
+
+def test_vllm_hybrid_kv_spec_keeps_one_full_attention_head_per_device():
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt.generator_vllm import DiffusionGemmaForCausalLM
+
+    text_config = SimpleNamespace(
+        layer_types=["sliding_attention", "full_attention"],
+        num_key_value_heads=8,
+        head_dim=256,
+        sliding_window=1024,
+        num_global_key_value_heads=2,
+        global_head_dim=512,
+    )
+    vllm_config = SimpleNamespace(
+        model_config=SimpleNamespace(hf_config=SimpleNamespace(text_config=text_config), dtype=torch.bfloat16),
+        cache_config=SimpleNamespace(cache_dtype="auto", block_size=64),
+        parallel_config=SimpleNamespace(tensor_parallel_size=4),
+    )
+
+    specs = DiffusionGemmaForCausalLM.get_kv_cache_spec(vllm_config)
+
+    assert specs["model.layers.0.self_attn"].num_kv_heads == 2
+    assert specs["model.layers.1.self_attn"].num_kv_heads == 1
+
+
+@pytest.mark.parametrize(
+    ("gumbel_mode", "trace_enabled"),
+    [
+        ("argmax", True),
+        ("host", True),
+        ("device", True),
+        ("chunked", True),
+    ],
+)
+def test_vllm_adapter_trace_support_matches_gumbel_input_contract(monkeypatch, gumbel_mode, trace_enabled):
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt.generator_vllm import DiffusionGemmaForCausalLM
+
+    model = object.__new__(DiffusionGemmaForCausalLM)
+    model.data_parallel = 1
+    model._gumbel_mode = gumbel_mode
+    monkeypatch.setenv("DG_VLLM_TRACE", "1")
+
+    assert model._resolve_trace_pref() is trace_enabled
+
+
+@pytest.mark.parametrize("gumbel_mode", ["host", "device", "chunked"])
+def test_vllm_dynamic_gumbel_forces_single_step_trace(monkeypatch, gumbel_mode):
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    model = object.__new__(generator_vllm.DiffusionGemmaForCausalLM)
+    model.data_parallel = 1
+    model._gumbel_mode = gumbel_mode
+    model._trace_enabled = True
+    monkeypatch.setattr(
+        generator_vllm,
+        "select_traced_denoise_block_fn",
+        lambda: pytest.fail("materialized Gumbel must not select a grouped trace"),
+    )
+
+    assert model._select_session_denoise_block_fn() is generator_vllm.traced_denoise_block
+
+
+def test_vllm_prefill_failure_resets_unregistered_session(expect_error):
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    events = []
+
+    class _Session:
+        def prefill(self, prompt):
+            assert prompt == "prompt"
+            return 32
+
+        def decode_block(self):
+            raise RuntimeError("injected block-0 failure")
+
+        def reset(self):
+            events.append("reset")
+
+    model = object.__new__(generator_vllm.DiffusionGemmaForCausalLM)
+    model.data_parallel = 1
+    model._sessions = {}
+    model._make_session = lambda: _Session()
+    model._prompt_tokens_for_row = lambda tokens, prompt_lens, row: "prompt"
+
+    with expect_error(RuntimeError, match="injected block-0 failure"):
+        model.prefill_forward(SimpleNamespace(shape=(1, 32)))
+
+    assert events == ["reset"]
+    assert model._sessions == {}
+
+
+def test_vllm_decode_failure_releases_registered_session(expect_error):
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    class _Session:
+        finished = False
+
+        def decode_block(self):
+            raise RuntimeError("injected replay failure")
+
+    model = object.__new__(generator_vllm.DiffusionGemmaForCausalLM)
+    model.data_parallel = 1
+    model._sessions = {3: _Session()}
+    released = []
+
+    def release(row):
+        released.append(row)
+        model._sessions.pop(row)
+
+    model.release_request = release
+
+    with expect_error(RuntimeError, match="injected replay failure"):
+        model.decode_forward()
+
+    assert released == [3]
+    assert model._sessions == {}
 
 
 def test_compact_step_sweep_evidence_matches_passed_raw_requests():

@@ -25,7 +25,7 @@ Single source of truth for the DiffusionGemma bring-up branch. **This file merge
 >
 > The original four device workstreams (W1–W4, Part II) are now mostly done or blocked. This roadmap is authoritative for "what to do next"; W1–W4 in Part II are the detailed specs for the pieces they cover.
 
-### Current live-serving/performance addendum (2026-07-10)
+### Current live-serving/performance addendum (updated 2026-07-13)
 
 This addendum is the current status and supersedes older "open", "immediate next
 step", and "Beyond Functional" wording in the dated June/July 2 narrative below.
@@ -35,9 +35,20 @@ The older sections remain as bring-up history and standing design context.
   QB2. The companion fork has the #47488 block-granular runner and scheduler
   accounting, model registration, and request-release callback; four-block
   1024-token requests have run through the real engine.
-- Traced serving is live rather than inferred from the reduced driver. Block 0
-  captures one Metal trace per denoise step, later blocks replay the same IDs,
-  and request completion releases traces before row removal.
+- Traced serving is live rather than inferred from the reduced driver. The historical
+  July-10 context/perf sweeps replayed block-0 IDs while holding a prompt-only prefix;
+  current growing-prefix correctness releases/recaptures each changed prefix shape.
+- Production bounded-memory chunked-Gumbel tracing is now live on QB2 (2026-07-13).
+  A DG-local device-seeded uniform kernel reads a persistent seed tile and reuses one
+  1024-vocab chunk buffer; the seed is refreshed between single-step replays, so block/step
+  random streams do not repeat. Full 30-layer K=48 two-block evidence at
+  `max_seq_len=1024` uses correct growing-prefix visibility: commit advances the prefix
+  `32→288`, invalidates/releases the first 48 traces, and captures 48 new traces for block 1.
+  Across two blocks it captured/executed 96 traces and measured 180.82 s for block 1 including
+  recapture (1.42 output tok/s). Eager-vs-traced committed output is exact in the reduced
+  control, and a frozen-prefix A/B changes block 1 while leaving block 0 unchanged. This closes
+  production-Gumbel tracing and growing-prefix correctness, not traced 256K, paged/fixed-shape
+  cross-block trace reuse, or the remaining host-seeded renoise-token RNG work.
 - Primary warmed context evidence is complete for logical prompts
   32/256/1024/2048 at `max_model_len=4096`; bounded allocated contexts through
   32768 and real prompts through 16384 passed. The lower-priority 3072 warmed
@@ -51,14 +62,16 @@ The older sections remain as bring-up history and standing design context.
   served-context ceiling, near-limit prefill hardening, production quality
   (#48291), and multimodal serving remain open. Whole-canvas context overruns
   are rejected before denoise/commit execution.
-- Current evidence lives in `doc/vllm_integration/live_context_sweep_results_20260710.md`
-  and `live_denoise_step_sweep_results_20260710.md`.
+- Current evidence lives in `doc/vllm_integration/live_context_sweep_results_20260710.md`,
+  `live_denoise_step_sweep_results_20260710.md`, and
+  `traced_chunked_gumbel_20260713.json`; the July-10 rows are historical same-shape
+  performance provenance.
 
 ### Where we are (2026-06-26)
 
 Foundation (torch reference + PCC harness #47468 ✅ closed, causal backbone #47461 ✅, QB2 fit #47487) plus the device attention/KV/sampling pieces are validated: KV-phase machine (W1/#47474) ✅, bidirectional masked SDPA — **both** ≤32768 (W2a) **and** the long-prompt >32768 path (W2b, resolved with regular non-causal SDPA — no new kernel) (#47462) ✅, on-device canvas sampling (W4/#47472) ✅. The decode-loop control flow (W3/#47463) is built and validated on synthetic logits but **blocked on decision fidelity (#48291)**.
 
-**Runs end-to-end at small scale on real weights (2026-06-30).** Spike R0.1–R0.5 on QB2 joined the two halves: build the real 26B (13.236 GiB/chip), prefill a prompt, build the real-checkpoint denoise adapter (`logits (1,1,256,262144)`), run one full 256-token denoise→commit block, and measure device-vs-HF committed-argmax. Device commit-append, per-block position advancement, full-model + self-conditioning assembly from the real checkpoint, tokenizer/text I/O, and a device-vs-HF acceptance measurement all exist and have run. **Open:** production device RNG, intra-block device-side early stop, multi-block + long-context fit, the #48291 entropy/accept fidelity drift, and the shared-gemma4 decode regression risk introduced to fit the block (see R-new below).
+**Runs end-to-end at small scale on real weights (2026-06-30).** Spike R0.1–R0.5 on QB2 joined the two halves: build the real 26B (13.236 GiB/chip), prefill a prompt, build the real-checkpoint denoise adapter (`logits (1,1,256,262144)`), run one full 256-token denoise→commit block, and measure device-vs-HF committed-argmax. Device commit-append, per-block position advancement, full-model + self-conditioning assembly from the real checkpoint, tokenizer/text I/O, and a device-vs-HF acceptance measurement all exist and have run. **Open:** remaining host-seeded renoise-token RNG (production chunked-Gumbel tracing landed 2026-07-13), intra-block device-side early stop, multi-block + long-context fit, the #48291 entropy/accept fidelity drift, and the shared-gemma4 decode regression risk introduced to fit the block (see R-new below).
 
 ### Two distinct gaps — do not conflate them
 

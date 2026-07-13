@@ -813,9 +813,10 @@ def _resolve_default_denoise_block_fn() -> Callable[..., DenoiseTrajectory]:
     with ``K``, so 100 t/s (``block ≤ 2.56 s``) holds at a higher, quality-safe step budget rather
     than only at ~5 steps. Bit-exact to the ``K`` single-step replays (same committed decisions;
     see :class:`~...tt.traced_denoise.MultiStepTracedDenoiseController`). ``DG_DENOISE_MULTISTEP_GROUP=G``
-    bounds the window / trace-region memory. Same argmax-regime + contiguous-cache prerequisites and
-    the same large ``DG_TRACE_REGION_SIZE`` need as the single-step traced path. Takes precedence
-    over ``DG_DENOISE_TRACED`` when both are set.
+    bounds the window / trace-region memory. Materialized and chunked Gumbel require ``G=1`` because
+    their full-noise/device-seed input is refreshed between replays. Same contiguous-cache + large
+    ``DG_TRACE_REGION_SIZE`` prerequisites as the single-step traced path. Takes precedence over
+    ``DG_DENOISE_TRACED`` when both are set.
 
     ``DG_DENOISE_TRACED`` selects the traced single-step loop
     (:func:`traced_denoise_block`) — one Metal trace per denoise step, replayed once per
@@ -823,8 +824,10 @@ def _resolve_default_denoise_block_fn() -> Callable[..., DenoiseTrajectory]:
     canvas RoPE refreshed outside the trace. Removes the ~137 ms/step host-dispatch tax that
     masks the sparse-MoE compute win: 257.93 ms/step traced vs ~777 ms/step eager at 30L →
     58.1 t/s @12, 33.2 @24 (both > 30), verified bit-exact to the eager committed argmax
-    (perf_progress.md session 8). Argmax (``gumbel_noise=None``) regime + contiguous cache
-    only; needs a large trace region (set ``DG_TRACE_REGION_SIZE`` at mesh open).
+    (perf_progress.md session 8). Supports argmax, injected/materialized Gumbel via a persistent
+    full-noise replay input, and bounded-memory chunked Gumbel via a persistent device seed plus
+    reusable chunk buffer. Contiguous cache only; needs a large trace region (set
+    ``DG_TRACE_REGION_SIZE`` at mesh open).
 
     ``DG_DENOISE_DEVICE_LOOP`` selects :func:`device_loop_denoise_block` — the device-resident
     fixed-step loop with no per-step host readback (removes the 5 readbacks + the
@@ -839,9 +842,10 @@ def _resolve_default_denoise_block_fn() -> Callable[..., DenoiseTrajectory]:
     (mean entropy + argmax-stability mismatch) and branches continue/stop on the host — keeping
     the traced dispatch savings while recovering the eager StableAndConfident early-halt. When
     halt does NOT fire it runs the full budget and commits the byte-identical argmax of the
-    fixed-48 traced path (Guard 1). Argmax-regime + contiguous-cache only, same as the traced
-    paths; takes precedence over the fixed-budget traced flags. Default off: under #48291 the
-    entropy gate never clears the 0.005 threshold so early-halt is a no-op (runs ~48), and the
+    fixed-48 traced path (Guard 1). Dynamic Gumbel requires a one-step halt window; contiguous-cache
+    only, same as the traced paths. Takes precedence over the fixed-budget traced flags. Default
+    off: under #48291 the entropy gate never clears the 0.005 threshold so early-halt is a no-op
+    (runs ~48), and the
     per-window host sync adds orchestration overhead — see ``doc/optimize_perf/early_halt.md``.
 
     All non-eager loops stay opt-in until early-halt is either recovered in a trace-safe shape
@@ -882,8 +886,9 @@ def select_traced_denoise_block_fn() -> Callable[..., DenoiseTrajectory]:
     unlike :func:`select_denoise_block_fn` — falls back to the single-step :func:`traced_denoise_block`
     when NO specific traced flag is set, so a caller that has decided to trace (e.g. the vLLM adapter
     honoring ``enable_trace`` with a sized ``DG_TRACE_REGION_SIZE``) gets a traced loop without also
-    having to set a per-variant env flag. Argmax (``gumbel_noise=None``) regime + contiguous cache
-    only, same prerequisites as the traced paths.
+    having to set a per-variant env flag. Argmax, materialized Gumbel, and chunked Gumbel are
+    supported by the single-step controller. Contiguous cache only, same prerequisites as the
+    traced paths.
     """
     if traced_early_halt_enabled():
         return traced_early_halt_block
@@ -946,11 +951,46 @@ def denoise_and_commit_block(
     commit_s = time.perf_counter() - commit_t0
     if timings is not None:
         timings.update(denoise_s=denoise_s, commit_s=commit_s)
+    next_pos = start_pos + trajectory.committed.shape[1]
+    advance_prefix = getattr(logits_fn, "advance_prefix_after_commit", None)
+    if callable(advance_prefix):
+        advance_prefix(next_pos)
     return GeneratedBlock(
         committed=trajectory.committed,
-        next_pos=start_pos + trajectory.committed.shape[1],
+        next_pos=next_pos,
         trajectory=trajectory,
     )
+
+
+def _release_generation_logits_state(logits_fn) -> None:
+    """Best-effort teardown for direct generator-owned trace/adapter state."""
+    for attr in (
+        "_traced_denoise_controller",
+        "_traced_denoise_multistep_controller",
+        "_traced_early_halt_controller",
+    ):
+        controller = getattr(logits_fn, attr, None)
+        if controller is not None:
+            try:
+                controller.release()
+            except BaseException as cleanup_error:
+                logger.error(f"failed to release generator controller {attr}: {cleanup_error}")
+            finally:
+                try:
+                    delattr(logits_fn, attr)
+                except AttributeError:
+                    # A test double or proxy may expose the controller via its class;
+                    # shadow it so this request cannot reuse the released state.
+                    try:
+                        setattr(logits_fn, attr, None)
+                    except BaseException as cleanup_error:
+                        logger.error(f"failed to clear generator controller {attr}: {cleanup_error}")
+    reset = getattr(logits_fn, "reset", None)
+    if callable(reset):
+        try:
+            reset()
+        except BaseException as cleanup_error:
+            logger.error(f"failed to reset generator logits state: {cleanup_error}")
 
 
 def generate_blocks(
@@ -985,39 +1025,44 @@ def generate_blocks(
     committed_blocks: list[torch.Tensor] = []
     trajectories: list[DenoiseTrajectory] = []
 
-    for block_idx in range(num_blocks):
-        logger.info(f"[generate_blocks] block {block_idx + 1}/{num_blocks} start_pos={next_pos}")
-        init_canvas = init_canvas_fn(block_idx, next_pos)
-        try:
-            block = block_fn(
-                tt_model,
-                logits_fn,
-                init_canvas,
-                config,
-                start_pos=next_pos,
-                gumbel_noise_fn=gumbel_noise_fn(block_idx) if gumbel_noise_fn else None,
-                noise_tokens_fn=noise_tokens_fn(block_idx) if noise_tokens_fn else None,
-                page_table=page_table,
-                page_tables_per_layer=page_tables_per_layer,
-            )
-        except Exception:
-            _deallocate_if_possible(init_canvas)
-            raise
-        _validate_committed_block_shape(block.committed, batch_size=batch_size, canvas_length=config.canvas_length)
-        expected_next_pos = next_pos + block.committed.shape[1]
-        if block.next_pos != expected_next_pos:
-            raise ValueError("block.next_pos must equal start_pos + committed length")
-        committed_blocks.append(block.committed)
-        trajectories.append(block.trajectory)
-        next_pos = block.next_pos
-        if _contains_stop_token(block.committed, stop_token_ids):
-            logger.info(f"[generate_blocks] stop token in block {block_idx + 1}; halting at next_pos={next_pos}")
-            break
+    try:
+        for block_idx in range(num_blocks):
+            logger.info(f"[generate_blocks] block {block_idx + 1}/{num_blocks} start_pos={next_pos}")
+            init_canvas = init_canvas_fn(block_idx, next_pos)
+            try:
+                block = block_fn(
+                    tt_model,
+                    logits_fn,
+                    init_canvas,
+                    config,
+                    start_pos=next_pos,
+                    gumbel_noise_fn=gumbel_noise_fn(block_idx) if gumbel_noise_fn else None,
+                    noise_tokens_fn=noise_tokens_fn(block_idx) if noise_tokens_fn else None,
+                    page_table=page_table,
+                    page_tables_per_layer=page_tables_per_layer,
+                )
+            except Exception:
+                _deallocate_if_possible(init_canvas)
+                raise
+            _validate_committed_block_shape(block.committed, batch_size=batch_size, canvas_length=config.canvas_length)
+            expected_next_pos = next_pos + block.committed.shape[1]
+            if block.next_pos != expected_next_pos:
+                raise ValueError("block.next_pos must equal start_pos + committed length")
+            committed_blocks.append(block.committed)
+            trajectories.append(block.trajectory)
+            next_pos = block.next_pos
+            if _contains_stop_token(block.committed, stop_token_ids):
+                logger.info(f"[generate_blocks] stop token in block {block_idx + 1}; halting at next_pos={next_pos}")
+                break
 
-    generated = (
-        torch.cat(committed_blocks, dim=1) if committed_blocks else torch.zeros((batch_size, 0), dtype=torch.long)
-    )
-    return DeviceGeneration(generated=generated, prompt_len=prompt_len, next_pos=next_pos, trajectories=trajectories)
+        generated = (
+            torch.cat(committed_blocks, dim=1) if committed_blocks else torch.zeros((batch_size, 0), dtype=torch.long)
+        )
+        return DeviceGeneration(
+            generated=generated, prompt_len=prompt_len, next_pos=next_pos, trajectories=trajectories
+        )
+    finally:
+        _release_generation_logits_state(logits_fn)
 
 
 def generate_from_prompt_tokens(

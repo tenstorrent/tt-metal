@@ -58,8 +58,8 @@ def test_to_host_torch_uses_first_device_tensor_for_mesh_readback(monkeypatch):
         (None, None),
     ],
 )
-def test_denoise_block_requires_injected_noise_hooks(gumbel_noise_fn, noise_tokens_fn):
-    with pytest.raises(ValueError, match="requires injected gumbel_noise_fn and noise_tokens_fn"):
+def test_denoise_block_requires_injected_noise_hooks(gumbel_noise_fn, noise_tokens_fn, expect_error):
+    with expect_error(ValueError, match="requires injected gumbel_noise_fn and noise_tokens_fn"):
         DL.denoise_block(
             lambda canvas, step: _FakeTensor("logits"),
             _FakeTensor("init-canvas"),
@@ -84,10 +84,21 @@ def test_denoise_block_deallocates_consumed_injected_noise(monkeypatch):
         argmax=_FakeTensor("argmax"),
     )
 
-    def fake_denoise_step(logits, *, temperature, entropy_budget, gumbel_noise, noise_tokens):
+    def fake_denoise_step(
+        logits,
+        *,
+        temperature,
+        entropy_budget,
+        gumbel_noise,
+        noise_tokens,
+        dedup_argmax=None,
+        sharded_terminal=None,
+    ):
         assert logits.name == "logits"
         assert gumbel_noise is not None and not gumbel_noise.deallocated
         assert noise_tokens is not None and not noise_tokens.deallocated
+        assert dedup_argmax is None
+        assert sharded_terminal is None
         return result
 
     monkeypatch.setattr(DL, "denoise_step", fake_denoise_step)
@@ -123,10 +134,21 @@ def test_denoise_block_allows_argmax_sampling_without_gumbel_tensor(monkeypatch)
         argmax=_FakeTensor("argmax"),
     )
 
-    def fake_denoise_step(logits, *, temperature, entropy_budget, gumbel_noise, noise_tokens):
+    def fake_denoise_step(
+        logits,
+        *,
+        temperature,
+        entropy_budget,
+        gumbel_noise,
+        noise_tokens,
+        dedup_argmax=None,
+        sharded_terminal=None,
+    ):
         assert logits.name == "logits"
         assert gumbel_noise is None
         assert noise_tokens is not None and not noise_tokens.deallocated
+        assert dedup_argmax is None
+        assert sharded_terminal is None
         return result
 
     monkeypatch.setattr(DL, "denoise_step", fake_denoise_step)
@@ -162,10 +184,21 @@ def test_denoise_block_allows_descriptor_gumbel_without_deallocate(monkeypatch):
         argmax=_FakeTensor("argmax"),
     )
 
-    def fake_denoise_step(logits, *, temperature, entropy_budget, gumbel_noise, noise_tokens):
+    def fake_denoise_step(
+        logits,
+        *,
+        temperature,
+        entropy_budget,
+        gumbel_noise,
+        noise_tokens,
+        dedup_argmax=None,
+        sharded_terminal=None,
+    ):
         assert logits.name == "logits"
         assert gumbel_noise is descriptor
         assert noise_tokens is not None and not noise_tokens.deallocated
+        assert dedup_argmax is None
+        assert sharded_terminal is None
         return result
 
     monkeypatch.setattr(DL, "denoise_step", fake_denoise_step)

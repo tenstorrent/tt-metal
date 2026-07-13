@@ -51,6 +51,50 @@ class _RecordingDenoiseAttention:
         return hidden_states
 
 
+def test_denoise_adapter_reset_releases_all_trace_persistent_buffers():
+    tensors = {
+        name: _FakeTensor((name,)) for name in ("prev", "signal-a", "signal-b", "cos", "sin", "offsets", "embed")
+    }
+    adapter = object.__new__(DenoiseLogitsAdapter)
+    adapter.prev_logits = tensors["prev"]
+    adapter.signal_buf = tensors["signal-a"]
+    adapter.signal_buf_b = tensors["signal-b"]
+    adapter.trace_safe_self_conditioning = True
+    adapter.signal_ping_pong = True
+    adapter._canvas_rope_bufs = {"sliding_attention": (tensors["cos"], tensors["sin"])}
+    adapter.use_canvas_rope = True
+    adapter._vocab_offsets = tensors["offsets"]
+    adapter._embedding_weight_sharded = tensors["embed"]
+    adapter.sharded_terminal = True
+
+    adapter.reset()
+
+    assert all(tensor.deallocated for tensor in tensors.values())
+    assert adapter.prev_logits is None
+    assert adapter.signal_buf is None
+    assert adapter.signal_buf_b is None
+    assert adapter.trace_safe_self_conditioning is False
+    assert adapter.signal_ping_pong is False
+    assert adapter._canvas_rope_bufs == {}
+    assert adapter.use_canvas_rope is False
+    assert adapter._vocab_offsets is None
+    assert adapter._embedding_weight_sharded is None
+    assert adapter.sharded_terminal is False
+
+
+def test_denoise_adapter_advances_mutable_prefix_after_commit():
+    seen = []
+    adapter = object.__new__(DenoiseLogitsAdapter)
+    adapter.prompt_hidden_by_layer = SimpleNamespace(set_prompt_len=seen.append)
+    adapter.prompt_len = 32
+    adapter.q_rope_offset = 32
+
+    assert adapter.advance_prefix_after_commit(288) is True
+    assert seen == [288]
+    assert adapter.prompt_len == 288
+    assert adapter.q_rope_offset == 288
+
+
 class _FakeModel:
     def __init__(self, num_layers=1, *, layer_types=None, sliding_window=1024):
         self.mesh_device = object()
@@ -547,6 +591,9 @@ def test_make_denoise_logits_adapter_from_kv_cache_reads_prompt_kv_lazily():
     assert callable(prompt_source)
     assert prompt_source(1) == ("k1", "v1")
     assert calls["read"] == [(model, 64, 32, 1)]
+    prompt_source.set_prompt_len(320)
+    assert prompt_source(0) == ("k0", "v0")
+    assert calls["read"][-1] == (model, 320, 32, 0)
     assert kwargs["self_conditioning"] == "self-conditioning"
     assert kwargs["self_conditioning_embedding_weight"] == "embedding"
     assert kwargs["self_conditioning_compute_kernel_config"] == "kernel"

@@ -14,11 +14,15 @@ from models.experimental.diffusion_gemma.reference import sampling as S
 from models.experimental.diffusion_gemma.reference.denoise_loop import denoise_block as ref_denoise_block
 from models.experimental.diffusion_gemma.tests.trajectory_pcc import compare_trajectories
 from models.experimental.diffusion_gemma.tt.denoise_loop import (
+    _ids_to_torch,
     denoise_block,
     denoise_step,
     renoise,
+    run_fixed_denoise_steps,
     temperature_at_step,
 )
+from models.experimental.diffusion_gemma.tt.sampling import ChunkedGumbelNoise
+from models.experimental.diffusion_gemma.tt.traced_denoise import TracedDenoiseController
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 pytestmark = [
@@ -63,6 +67,41 @@ class _ResettableStaticLogits:
         if self.logits is not None:
             self.logits.deallocate(True)
             self.logits = None
+
+
+class _TraceStaticLogits:
+    """Minimal trace-controller adapter over one persistent synthetic logits tensor."""
+
+    def __init__(self, device, logits, start_pos=32):
+        self.tt_model = type("_TtModel", (), {"mesh_device": device})()
+        self.logits = logits
+        self.q_rope_offset = start_pos
+        self.use_canvas_rope = False
+
+    def __call__(self, canvas, step):
+        del canvas, step
+        return self.logits
+
+    def owns_logits(self, value):
+        return value is self.logits
+
+    def reset(self):
+        pass
+
+    def prepare_trace_safe_self_conditioning(self, *, canvas_len):
+        del canvas_len
+
+    def prepare_canvas_rope_buffers(self, *, canvas_len):
+        del canvas_len
+
+    def update_canvas_rope_buffers(self, start_pos):
+        self.q_rope_offset = start_pos
+
+    def reset_signal_buffer(self):
+        pass
+
+    def sharded_terminal_context(self):
+        return None
 
 
 def test_single_denoise_step_matches_reference(device):
@@ -179,3 +218,175 @@ def test_multi_step_denoise_control_flow_smoke_matches_reference(device):
     assert ref.num_steps == tt.num_steps == 2
     assert accept_flips == 0
     assert tt_logits.reset_calls == 1
+
+
+def test_traced_materialized_gumbel_refresh_matches_fixed_loop_across_blocks(device):
+    """One stable Gumbel trace-input buffer must reproduce fresh per-step/block noise."""
+    torch.manual_seed(29)
+    length = 256
+    vocab_size = 256
+    steps = 2
+    cfg = DiffusionConfig(
+        canvas_length=length,
+        max_denoise_steps=steps,
+        entropy_stop_threshold=-1.0,
+        stable_steps_to_halt=1,
+    )
+    logits_torch = _structured_logits(length, vocab_size).unsqueeze(1)
+    block_inputs = []
+    for block in range(2):
+        generator = torch.Generator().manual_seed(1000 + block)
+        block_inputs.append(
+            {
+                "init": torch.randint(0, vocab_size, (1, 1, length, 1), generator=generator, dtype=torch.int32),
+                "gumbel": [
+                    -torch.log(
+                        -torch.log(
+                            torch.rand((1, 1, length, vocab_size), generator=generator, dtype=torch.float32) + 1.0e-10
+                        )
+                        + 1.0e-10
+                    )
+                    for _ in range(steps)
+                ],
+                "noise": [
+                    torch.randint(
+                        0,
+                        vocab_size,
+                        (1, 1, length, 1),
+                        generator=generator,
+                        dtype=torch.int32,
+                    )
+                    for _ in range(steps)
+                ],
+            }
+        )
+
+    def run_fixed(inputs):
+        logits = _to_device(device, logits_torch)
+        adapter = _TraceStaticLogits(device, logits)
+        committed = run_fixed_denoise_steps(
+            adapter,
+            _to_device(device, inputs["init"], dtype=ttnn.uint32),
+            cfg,
+            gumbel_noise_fn=lambda step: _to_device(device, inputs["gumbel"][step]),
+            noise_tokens_fn=lambda step: _to_device(device, inputs["noise"][step], dtype=ttnn.uint32),
+        )
+        host = _ids_to_torch(committed)
+        committed.deallocate(True)
+        logits.deallocate(True)
+        return host
+
+    expected = [run_fixed(inputs) for inputs in block_inputs]
+
+    traced_logits = _to_device(device, logits_torch)
+    traced_adapter = _TraceStaticLogits(device, traced_logits)
+    controller = TracedDenoiseController(device, cfg)
+    actual = []
+    try:
+        for block, inputs in enumerate(block_inputs):
+            traced_adapter.q_rope_offset = 32 + block * length
+            trajectory = controller.denoise_block(
+                traced_adapter,
+                _to_device(device, inputs["init"], dtype=ttnn.uint32),
+                cfg,
+                gumbel_noise_fn=lambda step, inputs=inputs: _to_device(device, inputs["gumbel"][step]),
+                noise_tokens_fn=lambda step, inputs=inputs: _to_device(
+                    device, inputs["noise"][step], dtype=ttnn.uint32
+                ),
+            )
+            actual.append(trajectory.committed)
+    finally:
+        controller.release()
+        traced_logits.deallocate(True)
+
+    assert torch.equal(actual[0], expected[0])
+    assert torch.equal(actual[1], expected[1])
+    assert controller.capture_events == 1
+    assert controller.traces_captured == steps
+    assert controller.replay_blocks == 2
+
+
+def test_traced_chunked_gumbel_dynamic_seed_matches_fixed_loop_across_blocks(device):
+    """Chunked trace replay must refresh its base seed and preserve per-step offsets."""
+    torch.manual_seed(31)
+    length = 256
+    vocab_size = 512
+    chunk_size = 256
+    steps = 2
+    cfg = DiffusionConfig(
+        canvas_length=length,
+        max_denoise_steps=steps,
+        entropy_stop_threshold=-1.0,
+        stable_steps_to_halt=1,
+    )
+    logits_torch = _structured_logits(length, vocab_size).unsqueeze(1)
+    block_inputs = []
+    for block in range(2):
+        generator = torch.Generator().manual_seed(2000 + block)
+        block_inputs.append(
+            {
+                "init": torch.randint(0, vocab_size, (1, 1, length, 1), generator=generator, dtype=torch.int32),
+                "noise": [
+                    torch.randint(
+                        0,
+                        vocab_size,
+                        (1, 1, length, 1),
+                        generator=generator,
+                        dtype=torch.int32,
+                    )
+                    for _ in range(steps)
+                ],
+                "seed": 37 + block * 1_000_003,
+            }
+        )
+
+    def gumbel_for(inputs):
+        return lambda step: ChunkedGumbelNoise(
+            seed=inputs["seed"] + step,
+            vocab_chunk_size=chunk_size,
+        )
+
+    def run_fixed(inputs):
+        logits = _to_device(device, logits_torch)
+        adapter = _TraceStaticLogits(device, logits)
+        committed = run_fixed_denoise_steps(
+            adapter,
+            _to_device(device, inputs["init"], dtype=ttnn.uint32),
+            cfg,
+            gumbel_noise_fn=gumbel_for(inputs),
+            noise_tokens_fn=lambda step: _to_device(device, inputs["noise"][step], dtype=ttnn.uint32),
+        )
+        host = _ids_to_torch(committed)
+        committed.deallocate(True)
+        logits.deallocate(True)
+        return host
+
+    expected = [run_fixed(inputs) for inputs in block_inputs]
+
+    traced_logits = _to_device(device, logits_torch)
+    traced_adapter = _TraceStaticLogits(device, traced_logits)
+    controller = TracedDenoiseController(device, cfg)
+    actual = []
+    try:
+        for block, inputs in enumerate(block_inputs):
+            traced_adapter.q_rope_offset = 32 + block * length
+            trajectory = controller.denoise_block(
+                traced_adapter,
+                _to_device(device, inputs["init"], dtype=ttnn.uint32),
+                cfg,
+                gumbel_noise_fn=gumbel_for(inputs),
+                noise_tokens_fn=lambda step, inputs=inputs: _to_device(
+                    device, inputs["noise"][step], dtype=ttnn.uint32
+                ),
+            )
+            actual.append(trajectory.committed)
+    finally:
+        controller.release()
+        traced_logits.deallocate(True)
+
+    assert torch.equal(actual[0], expected[0])
+    assert torch.equal(actual[1], expected[1])
+    assert controller.gumbel_chunked_state is None
+    assert controller.capture_events == 1
+    assert controller.traces_captured == steps
+    assert controller.replay_blocks == 2
