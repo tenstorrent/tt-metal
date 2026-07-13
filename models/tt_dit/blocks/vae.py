@@ -14,7 +14,7 @@ from models.common.utility_functions import is_blackhole
 from ..layers.conv2d import Conv2d
 from ..layers.linear import ColParallelLinear, RowParallelLinear
 from ..layers.module import Module, ModuleList, Parameter
-from ..layers.normalization import DistributedRMSNorm, GroupNorm, RMSNorm
+from ..layers.normalization import DistributedGroupNorm, DistributedRMSNorm, GroupNorm, RMSNorm
 from ..parallel.manager import CCLManager
 from ..utils import tensor
 from ..utils.conv3d import get_conv3d_config
@@ -454,7 +454,8 @@ class VaeAttention(Module):
         # Norm runs on the AG'd full-spatial tensor inside forward(), so the inner norm should NOT
         # AG/partition again. Bypass the _VaeSpatialGroupNorm wrap by handing _norm a TP-only ctx.
         norm_ctx = replace(ctx, h_factor=1, w_factor=1, h_mesh_axis=None, w_mesh_axis=None)
-        self.norm = _norm(norm, num_channels=num_channels, ctx=norm_ctx)
+        # self.norm = _norm(norm, num_channels=num_channels, ctx=norm_ctx)
+        self.norm = _norm(norm, num_channels=num_channels, ctx=ctx)
         # Fused QKV: one ColParallelLinear with chunks=3 replaces three RowParallelLinear+RS+AG
         # round-trips. Each output is fractured on out_dim (channels) and gets AG'd before SDPA.
         self.to_qkv = ColParallelLinear(num_channels, 3 * num_channels, chunks=3, **linear_args)
@@ -470,9 +471,11 @@ class VaeAttention(Module):
             ),
         )
 
-        grid_size = ctx.device.compute_with_storage_grid_size()
+        full_grid = ctx.device.compute_with_storage_grid_size()
+        # Reserve last row for CCL (matches attention_opt ring SDPA layout).
+        self._sdpa_worker_grid = (full_grid.x, full_grid.y - 1) if ctx.h_factor > 1 or ctx.w_factor > 1 else full_grid
         self._sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=grid_size,
+            compute_with_storage_grid_size=self._sdpa_worker_grid,
             q_chunk_size=resolved_q_chunk,
             k_chunk_size=resolved_k_chunk,
             exp_approx_mode=False,
@@ -494,6 +497,16 @@ class VaeAttention(Module):
         self._tp_axis = ctx.tp_axis
         self._ccl_manager = ctx.ccl_manager
         self._ctx = ctx
+
+        # For ring attention.
+        self.dummy_joint_input = None
+        if self._ctx.h_factor > 1 or self._ctx.w_factor > 1:
+            self.dummy_joint_input = ttnn.zeros(
+                [1, 1, 0, num_channels],
+                device=self._ctx.device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+            )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "to_out.0", "to_out")
@@ -541,7 +554,7 @@ class VaeAttention(Module):
         identity = x  # [N, H/h, W/w, C/tp] when SP+TP active; identity captured pre-AG
 
         # SDPA over the full spatial extent → AG H+W once (no-op when SP inactive).
-        x = _all_gather_hw(self._ctx, x)
+        # x = _all_gather_hw(self._ctx, x)
 
         x = self.norm.forward(x)
 
@@ -570,14 +583,39 @@ class VaeAttention(Module):
         k = k.reshape([n, 1, h * w, c])
         v = v.reshape([n, 1, h * w, c])
 
-        x = ttnn.transformer.scaled_dot_product_attention(
-            q,
-            k,
-            v,
-            is_causal=False,
-            program_config=self._sdpa_program_config,
-            compute_kernel_config=self._sdpa_compute_kernel_config,
-        )
+        rina_attn_axis = self._ctx.h_mesh_axis or self._ctx.w_mesh_axis
+        if rina_attn_axis is not None:
+            x, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                self.dummy_joint_input,
+                self.dummy_joint_input,
+                self.dummy_joint_input,
+                persistent_output_buffer_k=self._ccl_manager.get_ag_ping_pong_buffer(k.shape, 2, rina_attn_axis),
+                persistent_output_buffer_v=self._ccl_manager.get_ag_ping_pong_buffer(v.shape, 2, rina_attn_axis),
+                joint_strategy="rear",
+                logical_n=q.shape[2],  # update this to account for possible padding
+                program_config=self._sdpa_program_config,
+                compute_kernel_config=self._sdpa_compute_kernel_config,
+                dim=2,
+                multi_device_global_semaphore=self._ccl_manager.get_ag_ping_pong_semaphore(rina_attn_axis),
+                num_links=self._ccl_manager.num_links,
+                cluster_axis=rina_attn_axis,
+                mesh_device=self._ctx.device,
+                topology=self._ccl_manager.topology,
+                subdevice_id=self._ccl_manager.ccl_sub_device_id,
+                ccl_core_grid_offset=(0, self._sdpa_worker_grid[1]),
+            )
+        else:
+            x = ttnn.transformer.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                is_causal=False,
+                program_config=self._sdpa_program_config,
+                compute_kernel_config=self._sdpa_compute_kernel_config,
+            )
 
         x = self.to_out.forward(x, compute_kernel_config=self._mm_compute_kernel_config)
 
@@ -585,7 +623,7 @@ class VaeAttention(Module):
         x = x.reshape([n, h, w, -1])
 
         # Re-partition H+W back to local so the residual add aligns with identity (no-op when SP inactive).
-        x = _partition_hw(self._ctx, x)
+        # x = _partition_hw(self._ctx, x)
 
         return x + identity
 
@@ -674,12 +712,14 @@ class _VaeSpatialGroupNorm(Module):
 
     def __init__(self, num_groups: int, num_channels: int, *, eps: float, ctx: VaeContext) -> None:
         super().__init__()
-        self.inner = GroupNorm(
+        self.inner = DistributedGroupNorm(
             num_groups=num_groups,
             num_channels=num_channels,
             eps=eps,
             mesh_axis=ctx.tp_axis,
             mesh_device=ctx.device,
+            cluster_axis=ctx.h_mesh_axis,
+            ccl_manager=ctx.ccl_manager,
         )
         self._ctx = ctx
         self._compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -694,25 +734,10 @@ class _VaeSpatialGroupNorm(Module):
         rename_substate(state, "", "inner")
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        # logical_h_full: unpadded full-H = local H * h_factor. Used to detect and strip
-        # zero-padding rows that mesh_partition may have added for tile alignment.
-        logical_h_full = x.shape[1] * self._ctx.h_factor
-
-        x = _all_gather_hw(self._ctx, x)  # → [N, H_gathered, W, C], TILE_LAYOUT
-
-        padded_h = x.shape[1]
-        needs_trim = padded_h > logical_h_full
-        if needs_trim:
-            x = x[:, :logical_h_full, :, :]
-
+        # x = _all_gather_hw(self._ctx, x)  # → [N, H_gathered, W, C], TILE_LAYOUT
         x = self.inner.forward(x, compute_kernel_config=self._compute_kernel_config)
-
-        # Restore padding rows so _partition_hw receives the same padded shape.
-        if needs_trim:
-            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-            x = ttnn.pad(x, [(0, 0), (0, padded_h - logical_h_full), (0, 0), (0, 0)], value=0.0)
-
-        return _partition_hw(self._ctx, x)
+        # return _partition_hw(self._ctx, x)
+        return x
 
 
 def _norm(norm: VaeNormDesc, num_channels: int, *, ctx: VaeContext) -> GroupNorm | _VaeSpatialGroupNorm | VaeRmsNorm:
