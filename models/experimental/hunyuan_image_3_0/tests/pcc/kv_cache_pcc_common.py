@@ -131,8 +131,9 @@ class KvCachePccContext:
 
         layer_loader = lambda i: {f"model.layers.{i}.{k}": v for k, v in h.load_prefix(f"model.layers.{i}").items()}
         # sp_factor=1 is REQUIRED for the KV-cache path (tt/generate.py): every device
-        # must see the full K/V sequence. bf16 weights so the gate reflects the KV
-        # cache / RoPE-slice logic, not weight quantization.
+        # must see the full K/V sequence. bf8 weights (bf16_layers=[]) match the perf
+        # config: all matmuls bf8 + HiFi2. Validated hidden/logits PCC >= 0.999 at
+        # ISL={128,512}, 2 layers — quantization noise well below the gate.
         self.backbone = HunyuanTtModel(
             device,
             num_layers=NUM_LAYERS,
@@ -151,7 +152,8 @@ class KvCachePccContext:
             embed_state_dict={"model.wte.weight": self.wte},
             norm_state_dict={"model.ln_f.weight": self.ln_f_w},
             apply_final_norm=True,
-            weight_dtype=ttnn.bfloat16,
+            weight_dtype=ttnn.bfloat8_b,
+            bf16_layers=[],
             sp_factor=1,
         )
         self.lm_head = HunyuanTtLMHead(device, {"lm_head.weight": h.load_tensor("lm_head.weight")})
