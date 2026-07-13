@@ -24,11 +24,11 @@ denoise steps that's ~15k roundtrips per generate. Fusing everything
 on-device cuts it to ~1 roundtrip per layer (only the layer boundary).
 
 Tensor layout:
-  - Inputs (und_seq, gen_seq): replicated `[1, 1, N, hidden_size]`.
-  - All intermediates stay on device, replicated across the mesh
-    (RMSNorm is per-chip, attention/MLP do their own internal sharding
-    and gather back to replicated at the layer boundary).
-  - Outputs: replicated `[1, 1, N, hidden_size]`.
+  - At tp=1: inputs and outputs are replicated `[1, 1, N, hidden_size]`.
+  - At tp>1: inputs and outputs are TP-fractured `[1, 1, N, hidden_size / tp]`.
+    All norms use DistributedRMSNorm (stats-only all-gather on a tiny
+    `[1, 1, N, 1]` tensor). Attention and MLP return their RS outputs
+    directly; no data all-gather at the layer boundary.
 
 mRoPE cos/sin are still pre-computed on host and passed in as tuples —
 that's a separate task (Phase 2 item 2). The forward signature matches
@@ -41,7 +41,7 @@ from __future__ import annotations
 import ttnn
 
 from ....layers.module import Module
-from ....layers.normalization import RMSNorm
+from ....layers.normalization import DistributedRMSNorm, RMSNorm
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from .attention import Cosmos3JointAttention
 from .mlp import Cosmos3VLTextMLP
@@ -90,6 +90,8 @@ class Cosmos3VLTextMoTDecoderLayer(Module):
             "mesh_device": mesh_device,
             "dtype": dtype,
         }
+        tp_factor = parallel_config.tensor_parallel.factor
+        tp_axis = parallel_config.tensor_parallel.mesh_axis
         attn_kw = {
             "hidden_size": hidden_size,
             "head_dim": head_dim,
@@ -111,11 +113,25 @@ class Cosmos3VLTextMoTDecoderLayer(Module):
             "dtype": dtype,
         }
 
-        self.input_layernorm = RMSNorm(hidden_size, **norm_kw)
-        self.input_layernorm_moe_gen = RMSNorm(hidden_size, **norm_kw)
+        if tp_factor > 1:
+            dist_norm_kw = {
+                "norm_eps": rms_norm_eps,
+                "norm_elementwise_affine": True,
+                "bias": False,
+                "mesh_axis": tp_axis,
+                "mesh_device": mesh_device,
+                "ccl_manager": ccl_manager,
+            }
+            self.input_layernorm = DistributedRMSNorm(hidden_size, **dist_norm_kw)
+            self.input_layernorm_moe_gen = DistributedRMSNorm(hidden_size, **dist_norm_kw)
+            self.post_attention_layernorm = DistributedRMSNorm(hidden_size, **dist_norm_kw)
+            self.post_attention_layernorm_moe_gen = DistributedRMSNorm(hidden_size, **dist_norm_kw)
+        else:
+            self.input_layernorm = RMSNorm(hidden_size, **norm_kw)
+            self.input_layernorm_moe_gen = RMSNorm(hidden_size, **norm_kw)
+            self.post_attention_layernorm = RMSNorm(hidden_size, **norm_kw)
+            self.post_attention_layernorm_moe_gen = RMSNorm(hidden_size, **norm_kw)
         self.self_attn = Cosmos3JointAttention(**attn_kw)
-        self.post_attention_layernorm = RMSNorm(hidden_size, **norm_kw)
-        self.post_attention_layernorm_moe_gen = RMSNorm(hidden_size, **norm_kw)
         self.mlp = Cosmos3VLTextMLP(**mlp_kw)
         self.mlp_moe_gen = Cosmos3VLTextMLP(**mlp_kw)
 
@@ -132,23 +148,22 @@ class Cosmos3VLTextMoTDecoderLayer(Module):
         """Run one decoder layer entirely on device.
 
         Args:
-            und_seq: Replicated `[1, 1, N_und, hidden_size]`.
-            gen_seq: Replicated at sp=1, sp-sharded at sp>1.
+            und_seq: Replicated `[1, 1, N_und, hidden_size]` at tp=1; fractured
+                `[1, 1, N_und, hidden_size / tp]` at tp>1.
+            gen_seq: Same TP layout as und_seq. Additionally sp-sharded at sp>1.
             cos_und, sin_und, cos_gen, sin_gen: Match the corresponding seq tensor's layout.
             logical_n_gen: Unpadded N_gen, required when sp_factor>1.
 
-        At sp>1, gen tensors stay sp-sharded across the entire layer — RMSNorm,
-        residual add, and MLP are per-token, so they compose with sp-sharding
-        without any cross-token collectives.
+        Outputs match the input TP layout. All intermediates stay fractured when tp>1 —
+        DistributedRMSNorm uses a tiny stats all-gather instead of a full data all-gather.
         """
         # NOTE: `self.self_attn(...)` and `self.mlp(...)` return persistent ping-pong buffers
         # from ccl_manager when tp_factor > 1. Do NOT `ttnn.deallocate` their return values —
-        # the ccl_manager owns those buffers, and freeing them corrupts the cache for the next
-        # CCL op of the same shape (e.g. a later layer's attention or MLP all-gather). Same
-        # constraint applies to RMSNorm outputs that feed directly into a sub-module that
-        # might return a persistent buffer. To stay correct without micro-managing which
-        # specific tensors are persistent, we don't manually deallocate inside the layer.
-        # Python GC + the ccl_manager's ping-pong rotation handle memory reuse.
+        # the ccl_manager owns those buffers, and freeing them corrupts the RS ping-pong cache.
+        # DistributedRMSNorm consumes those buffers directly; the same ownership rule applies.
+        # To stay correct without micro-managing which tensors are persistent, we don't manually
+        # deallocate inside the layer. Python GC + the ccl_manager's ping-pong rotation handle
+        # memory reuse.
         und_norm = self.input_layernorm(und_seq)
         gen_norm = self.input_layernorm_moe_gen(gen_seq)
 
