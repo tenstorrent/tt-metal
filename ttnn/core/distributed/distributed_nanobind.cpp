@@ -14,6 +14,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/make_iterator.h>
 #include <nanobind/operators.h>
+#include <nanobind/stl/map.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/shared_ptr.h>
@@ -541,15 +542,16 @@ void py_module(nb::module_& mod) {
                     coord (MeshCoordinate): The mesh coordinate of the device to query.
 
                 Returns:
-                    List[CoreCoord]: List of logical worker coordinates optimally mapped to DRAM banks.
+                    Dict[int, CoreCoord]: Map from DRAM bank id to the logical worker coordinate
+                    optimally mapped to that bank.
 
                 Example:
                     >>> mesh_device = ttnn.open_mesh_device(...)
                     >>> coord = ttnn.MeshCoordinate(0, 0)
-                    >>> worker_cores = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(
+                    >>> assignment = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(
                     ...     ttnn.NOC.NOC_0, coord)
-                    >>> for i, core in enumerate(worker_cores):
-                    ...     print(f"DRAM bank {i} -> worker core ({core.x}, {core.y})")
+                    >>> for bank_id, core in assignment.items():
+                    ...     print(f"DRAM bank {bank_id} -> worker core ({core.x}, {core.y})")
             )doc");
 
     // Deprecated overload: returns only the mesh's reference (front) device assignment, which is

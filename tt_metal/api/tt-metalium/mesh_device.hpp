@@ -125,12 +125,14 @@ public:
         "meshes. Use get_optimal_dram_bank_to_logical_worker_assignment(noc, coord) instead.")]]
     std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) override;
 
-    // Returns the optimal DRAM-bank-to-logical-worker assignment for the device at `coord`. The assignment
-    // is a device-local physical property (it depends on that device's harvesting and DRAM configuration),
-    // so it may differ per device on a heterogeneous mesh. If `coord` maps to a remote device, this falls
-    // back to an arbitrary local device's assignment (best-effort, exact only on homogeneous meshes); it
-    // throws only when the mesh has no local device to fall back to.
-    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc, const MeshCoordinate& coord);
+    // Returns the optimal DRAM-bank-to-logical-worker assignment for the device at `coord` as a map from
+    // DRAM bank id to the logical worker core that should service it. The assignment is a device-local
+    // physical property (it depends on that device's harvesting and DRAM configuration), so it may differ
+    // per device on a heterogeneous mesh. If `coord` maps to a remote device, this falls back to an
+    // arbitrary local device's assignment (best-effort, exact only on homogeneous meshes); it throws only
+    // when the mesh has no local device to fall back to.
+    std::map<uint32_t, CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(
+        NOC noc, const MeshCoordinate& coord);
 
     CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const override;
     CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const override;
