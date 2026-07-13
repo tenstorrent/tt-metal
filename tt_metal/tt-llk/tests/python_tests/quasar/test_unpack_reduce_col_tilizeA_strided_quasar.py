@@ -72,6 +72,13 @@ def generate_unpack_reduce_col_tilizeA_strided_combinations(
     unpack_reduce_col_tilizeA_strided_dims = {
         (DestSync.Half, DestAccumulation.No): [
             [32, 32],
+            # Pool bring-up repro widths (col-tiles = cols/32). The prior sweep jumps 1 -> 4 -> 8 tiles and
+            # never covered 2 or 6, which is exactly where the tt-metal Quasar max_pool2d fails:
+            #   [32, 64]  = 2 col-tiles -> reduce reads the wrong rows (max_pool2d_strided_reduce PCC ~0.92)
+            #   [32, 192] = 6 col-tiles -> PACR0_TILE_INC pack fault (ERROR_TRISC1 code 0x19,
+            #               max_pool2d_channel_sweep). Note: 5 tiles [32,160] survives, 6 faults.
+            [32, 64],
+            [32, 192],
             [32, 256],
             [256, 32],
             [64, 128],
