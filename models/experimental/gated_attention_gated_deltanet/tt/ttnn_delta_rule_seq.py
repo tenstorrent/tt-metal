@@ -50,6 +50,15 @@ def _token_major_out():
     return _os.environ.get("QWEN_GDN_TOKEN_MAJOR_OUT", "1") != "0"
 
 
+def _gqa_late_expand():
+    """Default-ON switch for GQA late-expand: leave q/k at Nk heads through the token->head permute
+    and L2-norm, then block-repeat to Nv AFTER (dim-0 repeat_interleave in the adapter) — ~rf x less
+    per-head prep on q/k. Bit-identical to pre-expanding (L2-norm is per-head; the dim-0 repeat
+    reproduces the same head order). Set ``QWEN_GDN_GQA_LATE=0`` to pre-expand (legacy). The adapter
+    is backward-compatible either way (no-op expand when q already has Nv heads)."""
+    return _os.environ.get("QWEN_GDN_GQA_LATE", "1") != "0"
+
+
 def _ck(name, t):
     if not _DBG:
         return
@@ -142,7 +151,10 @@ def chunk_gated_delta_rule_seq_adapter(
     """
     B = q.shape[0]
     T = q.shape[1]
-    H = q.shape[2]
+    H = v.shape[2]  # value-head count (Nv): beta/g/v/output/state all use this
+    Hq = q.shape[2]  # q/k head count — may be < H (GQA late-expand). When < H, q/k are L2-normed +
+    # permuted at Hq heads (~rf x less work) then block-repeated to H AFTER, via a cheap dim-0
+    # repeat_interleave (no untilize). No-op when Hq == H (pre-expanded path) -> backward-compatible.
     K = q.shape[3]
     V = v.shape[3]
     BH = B * H
@@ -155,11 +167,11 @@ def chunk_gated_delta_rule_seq_adapter(
         # Tilize + cast in one op, which avoids a separate typecast pass.
         return ttnn.to_layout(t, ttnn.TILE_LAYOUT, dtype=dtype, memory_config=_DRAM)
 
-    def _to_bhtd(t, D):  # payload [B,T,H,D] -> [BH,T,D] _pdt TILE/DRAM (ROW_MAJOR-correct)
+    def _to_bhtd(t, D, Hh):  # payload [B,T,Hh,D] -> [B*Hh,T,D] _pdt TILE/DRAM (ROW_MAJOR-correct)
         t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT, memory_config=_DRAM)
-        t = ttnn.reshape(t, [B, T, H, D])
-        t = ttnn.permute(t, (0, 2, 1, 3))  # [B,H,T,D]
-        t = ttnn.reshape(t, [BH, T, D])
+        t = ttnn.reshape(t, [B, T, Hh, D])
+        t = ttnn.permute(t, (0, 2, 1, 3))  # [B,Hh,T,D]
+        t = ttnn.reshape(t, [B * Hh, T, D])
         return _tilize(t, _pdt)
 
     def _to_bht(t):  # spine [B,T,H] -> [BH,T] float32 TILE/DRAM
@@ -170,12 +182,20 @@ def chunk_gated_delta_rule_seq_adapter(
         return _tilize(t, ttnn.float32)
 
     _spc("core.prep")  # layout transforms (_to_bhtd/_to_bht) + l2_norm
-    q_bh = _to_bhtd(q, K)
-    k_bh = _to_bhtd(k, K)
-    v_bh = _to_bhtd(v, V)
+    q_bh = _to_bhtd(q, K, Hq)
+    k_bh = _to_bhtd(k, K, Hq)
+    v_bh = _to_bhtd(v, V, H)
 
     q_bh = _l2norm_qk(q_bh, cached_masks)
     k_bh = _l2norm_qk(k_bh, cached_masks)
+    if Hq != H:
+        # GQA late-expand: replicate each q/k head rf times along the BH (outer, non-tile) axis — a
+        # cheap tile-block copy. q_bh rows are b*Hq+h, so dim-0 repeat_interleave maps output row
+        # b*H + (h*rf+j) <- key-head h == value-head (h*rf+j) uses key-head h. Bit-identical to the
+        # token-major pre-expand, but the L2-norm + permute above ran on Hq (not H) heads.
+        rf = H // Hq
+        q_bh = ttnn.repeat_interleave(q_bh, rf, dim=0)
+        k_bh = ttnn.repeat_interleave(k_bh, rf, dim=0)
     g_bh = _to_bht(g)
     beta_bh = ttnn.reshape(_to_bht(beta), [BH, T, 1])
 

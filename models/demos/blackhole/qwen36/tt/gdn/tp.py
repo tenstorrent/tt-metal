@@ -21,6 +21,7 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops i
     recurrent_gated_delta_rule_decode_ttnn,
 )
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq import (
+    _gqa_late_expand,
     _token_major_out,
     chunk_gated_delta_rule_seq_adapter,
     create_chunk_masks_seq,
@@ -438,8 +439,12 @@ class TPGatedDeltaNet:
         k = ttnn.reshape(ttnn.slice(conv, (0, 0, kd), (1, T, 2 * kd)), (1, T, Nk, Dk))
         v = ttnn.reshape(ttnn.slice(conv, (0, 0, 2 * kd), (1, T, self.qkv_dim_tp)), (1, T, Nv, Dv))
         ttnn.deallocate(conv)
-        q = ttnn.repeat_interleave(q, rf, dim=2)
-        k = ttnn.repeat_interleave(k, rf, dim=2)
+        if not _gqa_late_expand():
+            # Legacy: pre-expand q/k to Nv here (Nk->Nv), so core.prep permutes+L2-norms Nv heads.
+            q = ttnn.repeat_interleave(q, rf, dim=2)
+            k = ttnn.repeat_interleave(k, rf, dim=2)
+        # else (default): leave q/k at Nk heads; the adapter permutes + L2-norms at Nk and block-
+        # repeats to Nv AFTER (~rf x less q/k prep across the token->head seam). Bit-identical.
 
         beta = ttnn.reshape(ttnn.sigmoid(b), (1, T, Nv))
         ttnn.deallocate(b)
