@@ -166,6 +166,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Temporal chunk size for the TT VAE encoder. Default 4; same memory/perf trade as the decoder.",
     )
     p.add_argument(
+        "--device-proj-in",
+        action="store_true",
+        help="Move proj_in (192→5120 vision entry projection) onto the device. Reduces gen-seq upload bandwidth 26×.",
+    )
+    p.add_argument(
         "--guidance-scale",
         type=float,
         default=6.0,
@@ -294,6 +299,7 @@ def main(argv: list[str] | None = None) -> int:
             vae_decoder_t_chunk_size=args.vae_decoder_t_chunk_size,
             vae_encoder_t_chunk_size=args.vae_encoder_t_chunk_size,
             serial_dispatch=args.cfg_serial_dispatch,
+            enable_device_proj_in=args.device_proj_in,
         )
         print(f"[generate] pipeline built and weights placed in {time.time() - t0:.1f}s", flush=True)
 

@@ -332,6 +332,8 @@ def build_cosmos3_i2v_native_cfg_pipeline(
             vae_decoder_t_chunk_size=vae_decoder_t_chunk_size,
             flow_shift=flow_shift,
             cache_namespace=cache_namespace,
+            enable_device_proj_in=enable_device_proj_in,
+            enable_device_proj_out=enable_device_proj_out,
         )
 
     # Split along the smaller axis (default): each submesh keeps the TP axis intact.
@@ -376,8 +378,8 @@ def build_cosmos3_i2v_native_cfg_pipeline(
         vae_decoder_t_chunk_size=vae_decoder_t_chunk_size,
         flow_shift=flow_shift,
         cache_namespace=cache_namespace,
-        enable_device_proj_out=True,
-        enable_device_proj_in=False,
+        enable_device_proj_out=enable_device_proj_out,
+        enable_device_proj_in=enable_device_proj_in,
     )
     trunk_a = pipe_a.transformer.layers[0]._native_trunk
 
@@ -390,8 +392,8 @@ def build_cosmos3_i2v_native_cfg_pipeline(
         num_links=num_links,
         trunk_weight_dtype=trunk_weight_dtype,
         cache_namespace=cache_namespace,
-        enable_device_proj_out=True,
-        enable_device_proj_in=False,
+        enable_device_proj_out=enable_device_proj_out,
+        enable_device_proj_in=enable_device_proj_in,
     )
 
     dual_proxy = DualSubmeshProxy(trunk_a, submesh_a, trunk_b, submesh_b)
@@ -432,6 +434,8 @@ def _install_device_proj_out_forward(pipe) -> None:
     import types
 
     _hoist_timing_enabled = _os.environ.get("TT_COSMOS3_TIMING") in ("1", "true", "True")
+    # Detect once at install time — avoid per-step attribute lookup.
+    _has_device_proj_in = pipe.transformer.layers[0]._proxy_a._native_trunk.proj_in is not None
 
     def _native_forward(
         self,
@@ -506,55 +510,53 @@ def _install_device_proj_out_forward(pipe) -> None:
         if _hoist_timing_enabled:
             t_after_cache = _time.perf_counter()
 
-        # Per-step: patchify + host proj_in + time embed + noisy-token scatter.
-        # proj_in stays on host until the Phase B PCC regression (0.83) on the
-        # ttnn.multiply broadcast semantics is resolved (see git history).
         packed_tokens_vision, original_latent_shapes = self._patchify_and_pack_latents(vision_tokens)
         t_after_patchify = _time.perf_counter() if _hoist_timing_enabled else 0.0
-        packed_tokens_vision = self.proj_in(packed_tokens_vision)
-        t_after_projin = _time.perf_counter() if _hoist_timing_enabled else 0.0
-        # vision_timesteps is torch.full((N,), t) — N identical scalars. time_embedder
-        # is row-wise, so running it on all N rows gives N identical outputs. Compute
-        # once on the scalar, expand the (1, D) result to (N, D) as a view; downstream
-        # scatter_add reads it row-wise so the non-contiguous broadcast is fine.
+
         scalar_timestep = vision_timesteps[:1] * self.config.timestep_scale
         single_embed = self.time_embedder(self.time_proj(scalar_timestep)).to(target_dtype)
         t_after_timeembed = _time.perf_counter() if _hoist_timing_enabled else 0.0
 
-        # Noisy tokens are packed after the conditioning frame tokens; add the embed
-        # in-place on the noisy slice to avoid allocating any temporary tensor.
-        # _native_forward is pure-I2V only (sound/action raise NotImplementedError above),
-        # so conditioning tokens are always the first n_clean rows of packed_tokens_vision.
-        import math as _math
+        if _has_device_proj_in:
+            # proj_in and time-embed scatter run on device; pass raw patches + mask.
+            from models.tt_dit.experimental.cosmos3_i2v.pipelines.pipeline_cosmos3_native import _build_noisy_mask_gen
 
-        _n_noisy = sum(
-            ni.shape[0] * _math.prod(ts[1:]) for ni, ts in zip(vision_noisy_frame_indexes, vision_token_shapes)
-        )
-        _n_clean = packed_tokens_vision.shape[0] - _n_noisy
-        packed_tokens_vision[_n_clean:].add_(single_embed)
+            noisy_mask_gen = _build_noisy_mask_gen(
+                packed_tokens_vision, vision_noisy_frame_indexes, vision_token_shapes
+            )
+            t_after_projin = t_after_timeembed
+            t_after_vision_pre = _time.perf_counter() if _hoist_timing_enabled else 0.0
+            layer_kwargs: dict = {"time_embed": single_embed, "noisy_mask_gen": noisy_mask_gen}
+        else:
+            packed_tokens_vision = self.proj_in(packed_tokens_vision)
+            t_after_projin = _time.perf_counter() if _hoist_timing_enabled else 0.0
+
+            import math as _math
+
+            _n_noisy = sum(
+                ni.shape[0] * _math.prod(ts[1:]) for ni, ts in zip(vision_noisy_frame_indexes, vision_token_shapes)
+            )
+            _n_clean = packed_tokens_vision.shape[0] - _n_noisy
+            packed_tokens_vision[_n_clean:].add_(single_embed)
+            t_after_vision_pre = _time.perf_counter() if _hoist_timing_enabled else 0.0
+            layer_kwargs = {}
 
         if _hoist_timing_enabled:
-            t_after_vision_pre = _time.perf_counter()
             print(
                 f"[timing] vpre patchify={(t_after_patchify - t_after_cache) * 1000:.1f}ms "
-                f"projin={(t_after_projin - t_after_patchify) * 1000:.1f}ms "
-                f"timeembed={(t_after_timeembed - t_after_projin) * 1000:.1f}ms "
-                f"applytsembed={(t_after_vision_pre - t_after_timeembed) * 1000:.1f}ms",
+                f"timeembed={(t_after_timeembed - t_after_patchify) * 1000:.1f}ms "
+                f"projin/mask={(t_after_projin - t_after_timeembed) * 1000:.1f}ms "
+                f"applytsembed={(t_after_vision_pre - t_after_projin) * 1000:.1f}ms",
                 flush=True,
             )
 
-        # pure-I2V: vision_sequence_indexes = arange(und_len, und_len + gen_len),
-        # so vision_sequence_indexes - und_len = arange(gen_len). The scatter is a
-        # full copy; use packed_tokens_vision directly as gen_seq.
         gen_seq = packed_tokens_vision
 
         if _hoist_timing_enabled:
             t_after_gen_build = _time.perf_counter()
 
-        # LAYERS: trunk runs the 64-layer stack + on-device proj_out, returning
-        # preds-packed [N_gen, patch_latent_dim].
         proxy = self.layers[0]
-        _und_out, gen_out_proj = proxy(und_seq, gen_seq, rotary_emb)
+        _und_out, gen_out_proj = proxy(und_seq, gen_seq, rotary_emb, **layer_kwargs)
 
         if _hoist_timing_enabled:
             t_after_layers = _time.perf_counter()

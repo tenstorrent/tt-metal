@@ -99,11 +99,17 @@ class NativeLayerProxy(nn.Module):
         # must be a multiple of k_chunk_size for the ring SDPA op. k_chunk_size=128 is
         # set in the attention module — keep them in sync.
         object.__setattr__(self, "_gen_seq_multiple", 128 * sp_factor if sp_factor > 1 else 1)
-        # When the trunk has a device-side proj_out, gen_out comes back with the
-        # patch_latent_dim last-dim (e.g. 192) instead of hidden_size (5120). The
-        # download path needs the right reshape width and the consumer needs to
-        # know we're returning preds-packed-shape, not gen-shape.
-        gen_out_last_dim = native_trunk.proj_out.out_features if native_trunk.proj_out is not None else None
+        # gen_out last-dim depends on which projections live on device:
+        #   proj_out only → output = patch_latent_dim (192)
+        #   proj_in only  → gen enters at 192 but trunk outputs hidden_size (5120)
+        #   both          → output = patch_latent_dim (192)
+        #   neither       → gen_shape[-1] == hidden_size already, leave None
+        if native_trunk.proj_out is not None:
+            gen_out_last_dim = native_trunk.proj_out.out_features
+        elif native_trunk.proj_in is not None:
+            gen_out_last_dim = native_trunk.proj_in.out_features
+        else:
+            gen_out_last_dim = None
         object.__setattr__(self, "_gen_out_last_dim", gen_out_last_dim)
         # Lazy tracer — captured on first forward, replayed on subsequent calls.
         # Opt out with TT_COSMOS3_DISABLE_TRACE=1 if the trace region overflows or a
@@ -367,6 +373,170 @@ class NativeLayerProxy(nn.Module):
             )
 
         return und_out, gen_out
+
+
+def _build_noisy_mask_gen(
+    packed_tokens_vision: torch.Tensor,
+    vision_noisy_frame_indexes: list[torch.Tensor],
+    vision_token_shapes: list[tuple[int, int, int]],
+) -> torch.Tensor:
+    """[N_gen, 1] float mask: 1.0 at noisy token rows, 0.0 at clean rows."""
+    import math
+
+    N_gen = packed_tokens_vision.shape[0]
+    mask = packed_tokens_vision.new_zeros(N_gen, 1)
+    start = 0
+    for noisy_idxs, shape in zip(vision_noisy_frame_indexes, vision_token_shapes):
+        spatial_numel = math.prod(shape[1:])
+        spatial_idxs = torch.arange(spatial_numel, device=packed_tokens_vision.device)
+        frame_offsets = (noisy_idxs * spatial_numel).unsqueeze(-1) + spatial_idxs + start
+        mask[frame_offsets.flatten()] = 1.0
+        start += shape[0] * spatial_numel
+    return mask
+
+
+def _install_device_proj_in_forward(transformer: nn.Module) -> None:
+    """Patch transformer.forward to bypass host proj_in and time-embed scatter for vision.
+
+    gen_seq enters the proxy as raw 192-dim patches; time_embed and noisy_mask_gen are
+    computed on the host and threaded through to the proxy layer call so the device
+    trunk can run proj_in → hidden and broadcast-add the timestep embedding itself.
+    """
+    import types
+
+    def _patched_forward(
+        self,
+        input_ids,
+        text_indexes,
+        position_ids,
+        und_len,
+        sequence_length,
+        vision_tokens,
+        vision_token_shapes,
+        vision_sequence_indexes,
+        vision_mse_loss_indexes,
+        vision_timesteps,
+        vision_noisy_frame_indexes,
+        sound_tokens=None,
+        sound_token_shapes=None,
+        sound_sequence_indexes=None,
+        sound_mse_loss_indexes=None,
+        sound_timesteps=None,
+        sound_noisy_frame_indexes=None,
+        action_tokens=None,
+        action_token_shapes=None,
+        action_sequence_indexes=None,
+        action_mse_loss_indexes=None,
+        action_timesteps=None,
+        action_noisy_frame_indexes=None,
+        action_domain_ids=None,
+    ):
+        has_sound = sound_tokens is not None and sound_sequence_indexes is not None
+        has_action = action_tokens is not None and action_sequence_indexes is not None
+
+        packed_text_embedding = self.embed_tokens(input_ids)
+        target_dtype = packed_text_embedding.dtype
+        hidden_states = packed_text_embedding.new_zeros(size=(sequence_length, self.config.hidden_size))
+        hidden_states[text_indexes] = packed_text_embedding
+
+        # Patchify vision but skip host proj_in and host time-embed scatter —
+        # the device trunk handles both via its on-device proj_in + masked add.
+        packed_tokens_vision, original_latent_shapes = self._patchify_and_pack_latents(vision_tokens)
+        timesteps_vision = vision_timesteps * self.config.timestep_scale
+        time_embed = self.time_embedder(self.time_proj(timesteps_vision)).to(target_dtype)
+        noisy_mask_gen = _build_noisy_mask_gen(packed_tokens_vision, vision_noisy_frame_indexes, vision_token_shapes)
+
+        if has_sound:
+            packed_tokens_sound = self._pack_sound_latents(sound_tokens, sound_token_shapes).to(target_dtype)
+            packed_tokens_sound = self.audio_proj_in(packed_tokens_sound) + self.audio_modality_embed
+            timesteps_sound = sound_timesteps * self.config.timestep_scale
+            packed_timestep_embeds_sound = self.time_embedder(self.time_proj(timesteps_sound)).to(target_dtype)
+            packed_tokens_sound = self._apply_timestep_embeds_to_noisy_tokens(
+                packed_tokens=packed_tokens_sound,
+                packed_timestep_embeds=packed_timestep_embeds_sound,
+                noisy_frame_indexes=sound_noisy_frame_indexes,
+                token_shapes=sound_token_shapes,
+            )
+            hidden_states[sound_sequence_indexes] = packed_tokens_sound
+
+        if has_action:
+            packed_tokens_action, per_token_domain_ids = self._pack_action_latents(
+                action_tokens, action_token_shapes, action_domain_ids
+            )
+            packed_tokens_action = packed_tokens_action.to(target_dtype)
+            per_token_domain_ids = per_token_domain_ids.to(device=packed_tokens_action.device)
+            packed_tokens_action = self.action_proj_in(packed_tokens_action, per_token_domain_ids)
+            packed_tokens_action = packed_tokens_action + self.action_modality_embed
+            if action_mse_loss_indexes.numel() > 0:
+                timesteps_action = action_timesteps * self.config.timestep_scale
+                packed_timestep_embeds_action = self.time_embedder(self.time_proj(timesteps_action)).to(target_dtype)
+                packed_tokens_action = self._apply_timestep_embeds_to_noisy_tokens(
+                    packed_tokens=packed_tokens_action,
+                    packed_timestep_embeds=packed_timestep_embeds_action,
+                    noisy_frame_indexes=action_noisy_frame_indexes,
+                    token_shapes=action_token_shapes,
+                )
+            hidden_states[action_sequence_indexes] = packed_tokens_action
+
+        cos, sin = self.rotary_emb(
+            position_ids=position_ids.unsqueeze(0) if position_ids.ndim == 1 else position_ids.unsqueeze(1),
+            device=hidden_states.device,
+            dtype=hidden_states.dtype,
+        )
+        cos = cos.squeeze(0)
+        sin = sin.squeeze(0)
+
+        # gen_seq is raw patches (patch_latent_dim), not the hidden_states slice.
+        und_seq = hidden_states[:und_len]
+        gen_seq = packed_tokens_vision
+        rotary_emb_tuple = (cos[:und_len], sin[:und_len], cos[und_len:], sin[und_len:])
+
+        for decoder_layer in self.layers:
+            if torch.is_grad_enabled() and self.gradient_checkpointing:
+                und_seq, gen_seq = self._gradient_checkpointing_func(
+                    decoder_layer.__call__, und_seq, gen_seq, rotary_emb_tuple
+                )
+            else:
+                und_seq, gen_seq = decoder_layer(
+                    und_seq,
+                    gen_seq,
+                    rotary_emb_tuple,
+                    time_embed=time_embed,
+                    noisy_mask_gen=noisy_mask_gen,
+                )
+
+        und_out = self.norm(und_seq)
+        gen_out = self.norm_moe_gen(gen_seq)
+        last_hidden_state = torch.cat([und_out, gen_out], dim=0)
+
+        preds_vision_packed = self.proj_out(last_hidden_state[vision_mse_loss_indexes])
+        preds_vision = self._unpatchify_and_unpack_latents(
+            preds_vision_packed,
+            token_shapes_vision=vision_token_shapes,
+            noisy_frame_indexes_vision=vision_noisy_frame_indexes,
+            original_latent_shapes=original_latent_shapes,
+        )
+
+        preds_sound = None
+        if has_sound:
+            preds_sound_packed = self.audio_proj_out(last_hidden_state[sound_mse_loss_indexes])
+            preds_sound = self._unpack_sound_latents(preds_sound_packed, sound_token_shapes, sound_noisy_frame_indexes)
+
+        preds_action = None
+        if has_action:
+            per_noisy_domain_ids = [
+                domain_id.reshape(1).expand(len(noisy_idxs))
+                for domain_id, noisy_idxs in zip(action_domain_ids, action_noisy_frame_indexes)
+            ]
+            per_noisy_domain_ids = torch.cat(per_noisy_domain_ids, dim=0).to(device=last_hidden_state.device)
+            preds_action_packed = self.action_proj_out(last_hidden_state[action_mse_loss_indexes], per_noisy_domain_ids)
+            preds_action = self._unpack_action_latents(
+                preds_action_packed, action_token_shapes, action_noisy_frame_indexes
+            )
+
+        return preds_vision, preds_sound, preds_action
+
+    transformer.forward = types.MethodType(_patched_forward, transformer)
 
 
 def build_cosmos3_i2v_native_pipeline(
@@ -879,6 +1049,8 @@ def build_cosmos3_i2v_native_pipeline(
     pipe.transformer.layers = nn.ModuleList([NativeLayerProxy(native_trunk, device)])
     pipe.transformer.norm = nn.Identity()
     pipe.transformer.norm_moe_gen = nn.Identity()
+    if enable_device_proj_in:
+        _install_device_proj_in_forward(pipe.transformer)
 
     # JSON-object prompts carry the generation specs inline and must be reformatted
     # (not tokenized as free text). The native-cfg builder reuses this builder, so
