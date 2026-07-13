@@ -748,7 +748,8 @@ def build_cosmos3_i2v_native_pipeline(
     # Step 3: pull config off the loaded HF transformer + sanity-check the GQA constraint.
     config = pipe.transformer.config
     mesh_shape = tuple(device.shape)
-    tp_axis = max(range(len(mesh_shape)), key=lambda i: mesh_shape[i])
+    _tp_key = min if os.getenv("TT_COSMOS3_SWAP_TP_SP", "0") == "1" else max
+    tp_axis = _tp_key(range(len(mesh_shape)), key=lambda i: mesh_shape[i])
     tp_factor = mesh_shape[tp_axis]
     sp_axis = 1 - tp_axis if len(mesh_shape) == 2 else 0
     sp_factor = mesh_shape[sp_axis] if len(mesh_shape) == 2 else 1
