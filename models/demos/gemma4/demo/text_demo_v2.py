@@ -780,15 +780,13 @@ def _run_spec_decode(
     import math
     import time
 
-    from models.demos.gemma4.tt.common import create_assistant_model
+    from models.demos.gemma4.tt.common import create_assistant_model, default_assistant_model_path
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
 
     model_path = _model_path()
-    assistant_path = os.getenv("GEMMA4_ASSISTANT_MODEL")
-    if not assistant_path:
-        # Default to the matching it-assistant drafter so the demo runs without
-        # an explicit env (e.g. google/gemma-4-12B-it -> ...-it-assistant).
-        assistant_path = f"{model_path}-assistant"
+    # Prefer GEMMA4_ASSISTANT_MODEL; else derive hub/cache path (…-it → …-it-assistant).
+    assistant_path = default_assistant_model_path(model_path)
+    if not os.getenv("GEMMA4_ASSISTANT_MODEL"):
         logger.info(f"GEMMA4_ASSISTANT_MODEL unset; defaulting drafter to {assistant_path}")
     temperature = sampling_params.get("temperature", 0)
     top_p = sampling_params.get("top_p", 1.0)
@@ -996,15 +994,14 @@ def _run_spec_decode_batched(
     import math
     import time
 
-    from models.demos.gemma4.tt.common import create_assistant_model
+    from models.demos.gemma4.tt.common import create_assistant_model, default_assistant_model_path
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
     from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
     B = len(prompts)
     model_path = _model_path()
-    assistant_path = os.getenv("GEMMA4_ASSISTANT_MODEL")
-    if not assistant_path:
-        assistant_path = f"{model_path}-assistant"
+    assistant_path = default_assistant_model_path(model_path)
+    if not os.getenv("GEMMA4_ASSISTANT_MODEL"):
         logger.info(f"GEMMA4_ASSISTANT_MODEL unset; defaulting drafter to {assistant_path}")
     temperature = sampling_params.get("temperature", 0)
     if temperature and temperature > 0:
