@@ -56,11 +56,14 @@ class HunyuanTtRMSNorm(LightweightModule):
             fp32_dest_acc_en=True,
         )
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, out_memory_config=None) -> ttnn.Tensor:
         """
         Args:
             x: TTNN tensor, shape [B, S, H] or [B, heads, S, head_dim] in TILE_LAYOUT.
+            out_memory_config: optional memory config for the normalised output
+                (e.g. ttnn.L1_MEMORY_CONFIG); defaults to the input's placement.
         Returns:
-            Normalised tensor, same shape and memory config as input.
+            Normalised tensor, same shape as input.
         """
-        return self._norm(x, mode=Mode.PREFILL)
+        norm_config = {"output_mem_config": out_memory_config} if out_memory_config is not None else None
+        return self._norm(x, mode=Mode.PREFILL, norm_config=norm_config)
