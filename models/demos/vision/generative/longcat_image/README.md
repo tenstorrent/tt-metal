@@ -216,6 +216,25 @@ capture ~46 s (512) / ~58 s (1024) + VAE warm-decode ~0.5 s (512) / ~15 s (1024)
 request additionally pays ~23 s for the encoder weight upload. 1024 fits on one 32 GB chip
 (no OOM).
 
+**4-chip tensor-parallel, all-resident** — measured on QB2 (one 1×4 `FABRIC_1D_RING` mesh,
+`--cq 2`), everything **resident** across all 4 chips with **no weight reloads**: the DiT is
+tensor-parallel tp=4, and the fp32 text encoder is ALSO tensor-parallel tp=4 (col q/k/v/gate/up,
+row o/down + all_reduce; one GQA group per chip) so its ~28 GB shard to ~7 GB/chip and co-fit with
+the ~1.5 GB/chip DiT shard + VAE. Steady-state (fully-warm request), HF-reference 50 steps
+(`demo/demo_4chip.py`):
+
+| Setting (tp=4, all 4 chips) | text-enc ×2 | denoise / step | denoise (50) | VAE | end-to-end |
+| --- | --- | --- | --- | --- | --- |
+| 512×512 / 50 steps | ~1.14 s | 279 ms | 14.0 s | 0.31 s | **15.4 s** |
+| 1024×1024 / 50 steps | ~1.16 s | 819 ms | 40.9 s | 1.45 s | **43.6 s** |
+
+tp=4 gives 279 ms/step at 512 (2.30× over the single-chip DiT) and 819 ms/step at 1024. Text
+encode is warm/resident (~0.58 s/branch, resolution-independent — no per-request ~28 GB reload).
+Numerically verified: DiT tp=4 forward PCC 0.998 vs single-chip, encoder tp=4 last_hidden_state PCC
+0.9986; e2e images match the single-chip reference (latent/pixel PCC 0.987/0.991 at 512) and are
+visually coherent at both resolutions. One-time warmup (encoder upload + DiT trace capture + VAE
+warm): ~90 s (512) / ~140 s (1024), paid once. Needs 4 chips.
+
 ## Results
 
 <!-- FINAL_NUMBERS -->
