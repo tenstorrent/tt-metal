@@ -159,7 +159,7 @@ class HunyuanTtDecoderLayer(LightweightModule):
 
         # --- self-attention block ---
         residual = x
-        h = self.input_layernorm(x)
+        h = self.input_layernorm(x, out_memory_config=ttnn.L1_MEMORY_CONFIG)
         attn_out = self.self_attn(
             h,
             cos_tt,
@@ -177,16 +177,16 @@ class HunyuanTtDecoderLayer(LightweightModule):
         # layers (a 4-D hidden would break the next layer's QKV reshape).
         if len(attn_out.shape) == 4:
             attn_out = ttnn.reshape(attn_out, [residual.shape[0], residual.shape[1], residual.shape[2]])
-        x = ttnn.add(residual, attn_out)
+        x = ttnn.add(residual, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(residual)
         ttnn.deallocate(attn_out)
 
         # --- MoE block ---
         residual = x
-        h = self.post_attention_layernorm(x)
+        h = self.post_attention_layernorm(x, out_memory_config=ttnn.L1_MEMORY_CONFIG)
         moe_out = self.mlp(h)
         ttnn.deallocate(h)
-        out = ttnn.add(residual, moe_out)
+        out = ttnn.add(residual, moe_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(residual)
         ttnn.deallocate(moe_out)
 

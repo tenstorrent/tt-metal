@@ -237,7 +237,7 @@ class HunyuanTtModel(LightweightModule):
         """Embed input_ids ([B, S] uint32, ROW_MAJOR) -> [B, S, H] TILE."""
         if self.embed_weight is None:
             raise ValueError("model was built without embed_state_dict; pass inputs_embeds to forward() instead")
-        emb = ttnn.embedding(input_ids, self.embed_weight, layout=ttnn.TILE_LAYOUT)
+        emb = ttnn.embedding(input_ids, self.embed_weight, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         # Normalise to rank-3 [B, S, H] (ttnn.embedding may emit a leading 1-dim);
         # downstream attention assumes a 3-D hidden tensor.
         bsz = input_ids.shape[0]
@@ -313,10 +313,12 @@ class HunyuanTtModel(LightweightModule):
                     # padding; padded query ROWS can be anything (sliced off later).
                     attention_mask = ttnn.pad(attention_mask, [(0, 0), (0, 0), (0, 0), (0, sp_pad)], value=-1.0e30)
                     attention_mask = ttnn.pad(attention_mask, [(0, 0), (0, 0), (0, sp_pad), (0, 0)], value=0.0)
-            hidden = sp_shard(ccl, hidden, dim=1, mesh_axis=ax, n=n)  # [B, S_pad/n, H]
+            # hidden feeds the input_layernorm next: land it L1-resident to avoid a
+            # DRAM->L1 copy. cos/sin/mask keep the DRAM default (the SDPA mask MUST be DRAM).
+            hidden = sp_shard(ccl, hidden, dim=1, mesh_axis=ax, n=n, out_memory_config=ttnn.L1_MEMORY_CONFIG)
             caller_owns_hidden = False  # we created a fresh sharded tensor
-            cos_tt = sp_shard(ccl, cos_tt, dim=2, mesh_axis=ax, n=n)  # [1,1,S_pad/n,hd]
-            sin_tt = sp_shard(ccl, sin_tt, dim=2, mesh_axis=ax, n=n)
+            cos_tt = sp_shard(ccl, cos_tt, dim=2, mesh_axis=ax, n=n, out_memory_config=ttnn.L1_MEMORY_CONFIG)
+            sin_tt = sp_shard(ccl, sin_tt, dim=2, mesh_axis=ax, n=n, out_memory_config=ttnn.L1_MEMORY_CONFIG)
             if attention_mask is not None:
                 attention_mask = sp_shard(ccl, attention_mask, dim=2, mesh_axis=ax, n=n)  # [B,1,S_pad/n,S_pad]
                 sp_owned.append(attention_mask)
