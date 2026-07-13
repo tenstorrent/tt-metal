@@ -27,7 +27,13 @@ def gate_merge_enabled() -> bool:
     A merged weight carries a single dtype, and under LTX_QUANT the gate is deliberately kept at
     bf16 while the projections drop to bf8 — merging would silently demote it. So the quant path
     keeps its standalone gate; the bf16 path merges.
+
+    LTX_NO_GATE_MERGE forces the standalone gate back on. The transformer cache is keyed on this
+    (the merge widens the Q/QKV weights), so the flag also selects the un-merged cache — which
+    makes it a SAME-BUILD A/B lever: the identical binary, one env var apart.
     """
+    if os.environ.get("LTX_NO_GATE_MERGE"):
+        return False
     return not os.environ.get("LTX_QUANT")
 
 
