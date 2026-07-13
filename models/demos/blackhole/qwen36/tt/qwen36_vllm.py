@@ -135,6 +135,15 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
         """All prefill is model-owned (Generator drives decode only)."""
         model = self.model[0]
+        # Decode-drift mitigation (Option A) — stash this sequence's prompt tokens + page table so
+        # decode_forward can periodically re-prefill (rebuild paged KV + GDN state in prefill's
+        # chunk-space). B=1 only; gated by TT_QWEN_DECODE_RESYNC_N (0 = off, default). See
+        # qwen36_decode_drift_fix_design.md.
+        if int(os.environ.get("TT_QWEN_DECODE_RESYNC_N", "0")) > 0 and tokens.shape[0] == 1:
+            T = int(prompt_lens[0]) if prompt_lens is not None else tokens.shape[1]
+            self._resync_seq = [int(x) for x in tokens[0, :T].tolist()]
+            self._resync_step = 0
+            self._resync_pt = page_table
         if model.num_devices > 1:
             return self._prefill_forward_tp(model, tokens, page_table, prompt_lens)
         seq_len = int(prompt_lens[0]) if prompt_lens is not None else tokens.shape[1]
@@ -182,7 +191,41 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         if not getattr(self, "_decode_logged", False):
             self._decode_logged = True
             logger.info("Decode trace replay active (Qwen)")
+        # Decode-drift mitigation (Option A): every N decode steps, re-prefill positions [0,pos) to
+        # refresh the paged KV cache + GDN recurrent state into prefill's chunk-space (the recurrent
+        # decode path is accurate but drifts from the chunk-space context the model reasons under),
+        # then DELEGATE the actual step to the standard decode (so the decode output contract is
+        # untouched). B=1 + host sampling only; gated by TT_QWEN_DECODE_RESYNC_N (0 = off, default).
+        self._maybe_resync(*args, **kwargs)
         return super().decode_forward(*args, **kwargs)
+
+    def _maybe_resync(self, *args, **kwargs):
+        N = int(os.environ.get("TT_QWEN_DECODE_RESYNC_N", "0"))
+        if N <= 0 or getattr(self, "_resync_seq", None) is None:
+            return
+        tokens = kwargs.get("tokens", args[0] if len(args) > 0 else None)
+        start_pos = kwargs.get("start_pos", args[1] if len(args) > 1 else None)
+        page_table = kwargs.get("page_table", getattr(self, "_resync_pt", None))
+        if tokens is None or start_pos is None or page_table is None:
+            return
+        try:
+            if int(tokens.shape[0]) != 1:  # B=1 only
+                return
+            pos = int(start_pos.reshape(-1)[0])
+            tok0 = int(tokens.reshape(-1)[0])
+        except Exception:
+            return
+        # _resync_seq must hold exactly positions [0,pos) before this step caches tok0 at pos.
+        if len(self._resync_seq) == pos:
+            if self._resync_step > 0 and self._resync_step % N == 0 and pos >= 1:
+                seq = torch.tensor([self._resync_seq[:pos]], dtype=torch.long)
+                self.model[0].prefill_traced_chunked(seq, page_table, actual_len=pos)
+                logger.info(f"[resync] re-prefilled {pos} tokens at decode step {self._resync_step}")
+            self._resync_seq.append(tok0)
+        elif len(self._resync_seq) > pos:  # resync from a stale/re-run position: realign
+            self._resync_seq[pos] = tok0
+            del self._resync_seq[pos + 1:]
+        self._resync_step += 1
 
     def warmup_model_prefill(self, kv_cache, enable_trace, *args, **kwargs):
         # Single-device AND TP share this path: capture_prefill_trace_chunked dispatches to its

@@ -213,6 +213,34 @@ class Qwen36Model:
         lt = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
         return lt[0].reshape(-1)[: self.vocab_size]
 
+    def score_tp(self, token_ids, valid_len=None):
+        """All-position next-token logits for teacher-forced scoring / perplexity (num_devices>1).
+
+        token_ids: torch [1, T] (pad T to a 128-multiple for the GDN chunk kernel). Runs the full
+        prefill and projects EVERY position through norm + lm_head (no single-row slice — that
+        garbles at long T; projecting all positions is fine). Returns torch logits [T, vocab] (host,
+        one replica). Stateless: resets GDN/KV first. Decode-independent (fused path unused here)."""
+        from models.demos.blackhole.qwen36.tt.attention.rope_tp import rot_mats_prefill
+
+        B, T = token_ids.shape
+        assert B == 1, "score_tp is single-sequence"
+        self.reset_tp()
+        tok = ttnn.from_torch(
+            token_ids.to(torch.int32), dtype=ttnn.uint32, device=self.device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+        )
+        x = self.embd(tok)
+        x = ttnn.reshape(x, (1, 1, T, x.shape[-1]))
+        cos, sin = rot_mats_prefill(self.device, self.args.rope_head_dim, T, self.args.rope_theta)
+        for layer in self.layers:
+            x = layer.forward(x, cos=cos, sin=sin, mode="prefill", chunk_size=128, valid_len=valid_len or T)
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        x = self.norm(x, mode=Mode.PREFILL)  # DistributedNorm gathers → replicated full-dim, all positions
+        logits = ttnn.linear(x, self.lm_head_weight)  # [1, 1, T, vocab] replicated
+        lt = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
+        lt = lt.reshape(-1, T, lt.shape[-1])[0]  # one replica → [T, vocab]
+        return lt[:, : self.vocab_size].float()
+
     def reset_tp(self):
         """Reset every TP layer's KV cache / GDN recurrent+conv state for a new sequence."""
         for layer in self.layers:
@@ -268,6 +296,61 @@ class Qwen36Model:
             logits = self.decode_tp(nxt, pos)
             nxt = int(torch.argmax(logits).item())
             out.append(nxt)
+        return out
+
+    def generate_tp_resync(self, prompt_ids, max_new_tokens=256, resync_every=4, eos_id=None, window=None):
+        """Decode-drift mitigation (Option A). The recurrent decode path is numerically accurate
+        (0.99998 vs torch) but continues a context prefill built in the chunk kernel's slightly-off
+        "chunk-space" (0.988 vs torch); the space mismatch compounds over a long generation into
+        number-confabulation and loops. This keeps decode consistent with chunk-space by periodically
+        re-prefilling: every `resync_every` generated tokens rebuild the attention KV cache + GDN
+        state via a chunk-prefill over the context, then resume fast recurrent decode.
+
+        window: None -> re-prefill the whole sequence-so-far (exact context, O(L) per re-sync). An
+        int W -> re-prefill prompt + the last W generated tokens only (bounded O(P+W) cost); positions
+        are relabeled to the compacted context, which retains the problem statement (the numbers that
+        confabulate) while dropping stale middle reasoning. resync_every<=0 -> pure decode (no re-sync).
+        B=1. Returns list[int] of generated ids.
+        """
+        import math as _math
+
+        assert self.args.max_batch_size == 1, "generate_tp_resync is B=1"
+        P = len(prompt_ids)
+        seq = list(prompt_ids)
+
+        def _prefill(ctx):
+            T = len(ctx)
+            Tp = max(128, _math.ceil(T / 128) * 128)
+            padded = list(ctx) + [0] * (Tp - T)
+            self.reset_tp()
+            lg = self.prefill_seed_tp(torch.tensor([padded], dtype=torch.long), valid_len=T, batch_slot=0)
+            for layer in self.layers:
+                if not layer.is_full_attention:
+                    layer.attention.finalize_seed(1)
+            return int(torch.argmax(lg).item()), T  # (next token id, next decode position)
+
+        def _ctx():
+            if window is None or len(seq) <= P + window:
+                return list(seq)
+            return list(seq[:P]) + list(seq[-window:])  # prompt + recent window (compacted positions)
+
+        nxt, effpos = _prefill(seq)
+        out = [nxt]
+        seq.append(nxt)
+        since = 0
+        for _ in range(max_new_tokens - 1):
+            if eos_id is not None and nxt == eos_id:
+                break
+            if resync_every and resync_every > 0 and since >= resync_every:
+                nxt, effpos = _prefill(_ctx())
+                since = 0
+            else:
+                lg = self.decode_tp_batched([seq[-1]], [effpos])
+                nxt = int(torch.as_tensor(lg).float().reshape(-1)[: self.vocab_size].argmax().item())
+                effpos += 1
+                since += 1
+            out.append(nxt)
+            seq.append(nxt)
         return out
 
     def prefill_seed_tp(self, token_ids, valid_len, batch_slot):
