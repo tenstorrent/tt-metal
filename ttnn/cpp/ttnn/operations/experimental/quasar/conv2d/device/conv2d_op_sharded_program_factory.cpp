@@ -286,6 +286,14 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // keeps the working original path (and avoids the sender producer/consumer self-deadlock the workaround
     // introduces when the writer both mcasts weights/coordinates the reader AND waits on OUT).
     const bool qsr_writer_copy = device->arch() == tt::ARCH::QUASAR;
+    // DEBUG (gate confirmation): shows whether the writer-copy workaround activated and the runtime arch the
+    // gate saw. arch enum: Invalid=0, GRAYSKULL=1, WORMHOLE_B0=2, BLACKHOLE=3, QUASAR=4. If qsr_writer_copy=0
+    // on the emulator, device->arch() did NOT resolve to QUASAR and the gate needs a different signal.
+    log_debug(
+        tt::LogOp,
+        "QSR conv writer-copy gate: qsr_writer_copy={} device->arch()={}",
+        qsr_writer_copy,
+        static_cast<int>(device->arch()));
     TT_FATAL(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_FATAL(a.memory_config().is_sharded(), "Conv activation must be sharded.");
     TT_FATAL(output_channels <= b.padded_shape()[3], "Invalid weight shape. Incorrect weight tensor.");
