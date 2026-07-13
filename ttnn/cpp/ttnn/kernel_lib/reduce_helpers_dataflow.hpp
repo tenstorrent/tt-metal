@@ -55,7 +55,7 @@ constexpr uint32_t SUM_AND_MAX_REDUCE_FACTOR = 1;
  *        dimension is partially filled, this specifies how many row or column elements contain
  *        valid data; the remaining positions are zeroed out so they do not affect the result.
  */
-template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim>
+template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim, bool compute_uses_reduce_tile = false>
 FORCE_INLINE void prepare_reduce_scaler(
     float scaler_f, uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH);
 
@@ -80,7 +80,12 @@ FORCE_INLINE void prepare_reduce_scaler(
  *        dimension is partially filled, this specifies how many row or column elements contain
  *        valid data; the remaining positions are zeroed out so they do not affect the result.
  */
-template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim, uint32_t reduce_factor = SUM_AND_MAX_REDUCE_FACTOR>
+template <
+    uint32_t dfb_id,
+    PoolType pool_type,
+    ReduceDim reduce_dim,
+    uint32_t reduce_factor = SUM_AND_MAX_REDUCE_FACTOR,
+    bool compute_uses_reduce_tile = false>
 FORCE_INLINE void calculate_and_prepare_reduce_scaler(
     uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH);
 
