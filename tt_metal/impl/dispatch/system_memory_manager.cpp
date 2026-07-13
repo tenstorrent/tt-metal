@@ -115,6 +115,10 @@ void loop_and_wait_with_timeout(
 }
 }  // namespace
 
+bool d2h_uses_hugepage_fallback(const MetalContext& ctx) {
+    return !ctx.hal().get_supports_64_bit_pcie_addressing() && !ctx.get_cluster().is_iommu_enabled();
+}
+
 SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id, uint8_t num_hw_cqs) :
     context_id(context_id),
     device_id(device_id),
@@ -210,10 +214,8 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
                            (channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
 
     static constexpr uint32_t AUX_PAGES_PER_CQ = 2;
-    const bool d2h_uses_hugepage_fallback =
-        !ctx.hal().get_supports_64_bit_pcie_addressing() && !ctx.get_cluster().is_iommu_enabled();
     uint32_t per_cq_reduction = AUX_PAGES_PER_CQ * DispatchSettings::TRANSFER_PAGE_SIZE;
-    if (d2h_uses_hugepage_fallback) {
+    if (d2h_uses_hugepage_fallback(ctx)) {
         per_cq_reduction += tt::align(
             (DispatchSettings::HUGEPAGE_D2H_FALLBACK_RESERVE_BYTES + num_hw_cqs - 1) / num_hw_cqs,
             DispatchSettings::TRANSFER_PAGE_SIZE);
