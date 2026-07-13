@@ -560,8 +560,29 @@ no gate does not ship.** Measure on the block harness (`test_ltx_transformer_blo
       (`compute.cpp:329,404,405,440`), sender pushes each K-block to compute BEFORE mcasting ("frees sender to start
       next read earlier", `dm_in0_sender.cpp:403-404`). No full-tensor barrier. **⇒ overlap already exploited; W2
       lever DEAD.** ⚠ **REFUTES the W1 premise** ("the fused gather barely overlaps its matmul") — see W1 note.
-- [ ] **W3 — the ~90 µs per-op fixed SETUP cost.** The single largest unexplained term. Where does it go — program
-      binary/CB config, semaphore setup, runtime-arg writes? Attack the biggest offenders (`to_qkv` 89.9 µs).
+- [x] **W3 — the ~90 µs per-op fixed SETUP cost → NO NEW LEVER (the one candidate is receipt-DEAD; the rest have no API).**
+      Off-device source attribution (2026-07-13 23:17Z lap), citations re-verified in-tree. The census-priced 89.9 µs is
+      **100% on-device replay command-stream time, NOT host program-setup** — traced `enqueue_trace` emits one fixed-size
+      command independent of op count (`fd_mesh_command_queue.cpp:1066-1107`, `trace/dispatch.cpp:79-167`,
+      `compute_trace_cmd_size:169-189`); all RTA/CB/semaphore payloads are assembled ONCE at capture (`TraceNode`,
+      `trace_node.hpp:33-47`) and binaries cached — so replay re-pays only the recorded dispatch + the op's own kernels.
+      **Decomposition via the qkv-vs-gate 2.4× ratio** (both are the SAME fused `all_gather_minimal_matmul_async` on the
+      SAME input `spatial_1BND`, so their AG/fabric half is byte-identical; qkv N_out=3·4096=12288 vs gate N_out=32=384×
+      wider — `attention_ltx.py:124` vs `:130-132`, dims `transformer_ltx.py:475-476`): **~52 µs = qkv's wide-matmul
+      weight DRAM read + per-N-block LLK/CB overhead; ~31.7 µs = shared per-op fabric-mux/AG-ring handshake; ~5.8 µs =
+      dispatch.** LEVER VERDICT — all DEAD: **(1) bf8 wide-matmul weights (the subagent's only "real" lever) is
+      RECEIPT-DEAD — Batch H `all_bf8_lofi` (qkv/out/ffn weights+acts→bf8) already measured −1.1% NULL @ passing PCC
+      (job 010011-89).** The physics says bf8 halves the 52 µs weight BW, but the WALL doesn't move ⇒ the weight read is
+      hidden behind the collective/dispatch critical path (block is collective/dispatch-bound per H0/F2), OR the
+      slope-priced marginal is off the replay critical path. Either way precision does not cut the floor. **(2) persistent
+      fabric-mux to erase the 31.7 µs handshake — DEAD: the mux is program-scoped (`..._program_factory.cpp:841`,
+      `FabricMuxConfig`), each op does a per-invocation `build_and_connect`/`close_mux` (`dm_in0_sender.cpp:157-158,
+      629-645`) baked into the trace + re-run every replay; NO ttnn API hoists it cross-op (only the device-1D-EDM
+      underneath is persistent, already amortized). Hoisting = new fabric arch, not a knob.** (3) L1 weight cache across
+      replays — DEAD (48 blocks × 12-25 MB ≫ L1, no intra-step reuse). **⇒ W3 CLOSED: the residual floor's biggest term
+      is NOT precision-attackable and has no persistent-connection API. Reconciles W0's per-op census with Batch H's null
+      quant — the 52 µs is real per-op work but off the wall's critical path. Consistent with the whole-session
+      collective/dispatch-bound thesis. Reinforces: 6.0s needs step-distillation, not a per-op setup cut.**
 - [ ] **W4 — the audio branch's one-tile pathology.** Half the block's programs push ONE TILE across 32 devices.
       (SP-replicating audio was priced and is a net loss: saves 77 µs of SP AGs but inflates 11 AG-mms 32→256 rows.
       A different attack is needed — e.g. fewer/bigger audio ops, or not sharding audio at all.)
