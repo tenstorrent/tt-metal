@@ -2008,6 +2008,9 @@ size_t ControlPlane::get_num_usable_routing_planes(
 
 void ControlPlane::reserve_routing_planes(
     FabricNodeId fabric_node_id, RoutingDirection routing_direction, size_t num_reserved) {
+    if (num_reserved == 0) {
+        return;
+    }
     TT_FATAL(
         this->router_port_directions_to_num_reserved_planes_map_.contains(fabric_node_id) &&
             this->router_port_directions_to_num_reserved_planes_map_.at(fabric_node_id).contains(routing_direction),
