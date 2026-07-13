@@ -511,9 +511,7 @@ ProgramArtifacts create_no_bcast_artifacts(
                   "n_stride_b",
                   "c_stride_b",
                   "src_num_tiles_b"}},
-        .hw_config =
-            m2::DataMovementHardwareConfig{
-                .gen1_config = m2::DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_1}},
+        .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::READER},
     };
 
     m2::Group<m2::TensorBinding> writer_tensor_bindings;
@@ -530,9 +528,7 @@ ProgramArtifacts create_no_bcast_artifacts(
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"start_tile_id", "dst_num_tiles", "dst_shard_width", "D", "N", "C", "Ht", "Wt", "cND"}},
-        .hw_config =
-            m2::DataMovementHardwareConfig{
-                .gen1_config = m2::DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_0}},
+        .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::WRITER},
     };
 
     // Compute: consumes pre_lhs/pre_rhs, produces out. When an operand has activations, the kernel both

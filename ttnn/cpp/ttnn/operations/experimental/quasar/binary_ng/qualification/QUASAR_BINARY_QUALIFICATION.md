@@ -139,7 +139,7 @@ foundation grid is expensive and overlaps craq-sim's own `quasar-llk.yml` sweep.
    for "does our op still work on the new foundation" (real FPU/SFPU paths, every layout, the fused
    activations, PCC-vs-torch), under the QSR-sim env (see "The driver" above for the exact env):
    ```bash
-   <QSR-sim env>  pytest tests/ttnn/unit_tests/operations/experimental/quasar/test_binary_ng_no_bcast.py
+   <QSR-sim env>  pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_binary_ng_no_bcast.py
    ```
    - **Green** → nothing regressed; the gate passes. Done (optionally do step 2).
    - **Fails** → localize with step 3.

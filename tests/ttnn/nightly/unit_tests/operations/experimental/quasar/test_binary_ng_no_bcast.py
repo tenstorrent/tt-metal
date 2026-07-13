@@ -19,13 +19,13 @@ runs on real Wormhole and the Quasar simulator. Shapes/grids fit both Wormhole (
 simulator (8x4).
 
 Run on Wormhole:
-    pytest tests/ttnn/unit_tests/operations/experimental/quasar/test_binary_ng_no_bcast.py
+    pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_binary_ng_no_bcast.py
 
 Run on the Quasar simulator (only fp32 add/sub auto-skip — no SFPU float-add primitive on Quasar, see
 _run; everything else runs: the full bf16 FPU/SFPU matrix incl. lhs/rhs activations, plus fp32 mul/div):
     TT_METAL_SIMULATOR=<path>/libttsim.so TT_SIMULATOR_LOCALHOST=1 ARCH_NAME=quasar CHIP_ARCH=quasar \
         TT_METAL_SLOW_DISPATCH_MODE=1 \
-        pytest tests/ttnn/unit_tests/operations/experimental/quasar/test_binary_ng_no_bcast.py
+        pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_binary_ng_no_bcast.py
 """
 
 import os

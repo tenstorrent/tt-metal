@@ -6,11 +6,11 @@ Scope: the `SubtileBroadcastType::NONE`, tensor-tensor, TILE binary op in
 
 This is the **op-author's view** (gate / structural / arch / test-coverage). For **which LLK primitive
 is available on Quasar**, the authoritative source is the WH-baseline matrix
-`tests/ttnn/unit_tests/operations/experimental/quasar/QUASAR_LLK_GAPS.md` — this doc **references** it
+`qualification/QUASAR_LLK_GAPS.md` — this doc **references** it
 rather than duplicating per-op LLK status (that duplication is what previously drifted). The runbook
-`QUASAR_BINARY_QUALIFICATION.md` documents the localize / verify-on-bump process, and
-`qualify_quasar_binary.py --coverage` / `--supports OP` track the LLK side live. (`METAL2_PORT_REPORT.md`
-remains a local, unstaged working note.)
+`qualification/QUASAR_BINARY_QUALIFICATION.md` documents the localize / verify-on-bump process, and
+`qualification/qualify_quasar_binary.py --coverage` / `--supports OP` track the LLK side live.
+(`METAL2_PORT_REPORT.md` remains a local, unstaged working note.)
 
 **Keep current** as Quasar / LLK / craq-sim development closes or opens gaps.
 

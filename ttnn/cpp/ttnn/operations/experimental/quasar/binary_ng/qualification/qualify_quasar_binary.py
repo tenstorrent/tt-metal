@@ -76,6 +76,7 @@ OP_TEST = (
     REPO_ROOT
     / "tests"
     / "ttnn"
+    / "nightly"
     / "unit_tests"
     / "operations"
     / "experimental"
