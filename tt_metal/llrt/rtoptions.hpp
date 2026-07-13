@@ -466,10 +466,7 @@ public:
     bool watcher_eth_link_status_disabled() const { return watcher_feature_disabled(watcher_eth_link_status_str); }
     bool watcher_cb_sanitize_disabled() const { return watcher_feature_disabled(watcher_cb_sanitize_str); }
 
-    // TODO: Remove these Watcher NOC sanitize functions once NOC sanitization is supported on Quasar in fast dispatch
-    // (#45878)
     bool watcher_noc_sanitize_disabled() const { return watcher_feature_disabled(watcher_noc_sanitize_str); }
-    void disable_watcher_noc_sanitize() { watcher_disabled_features.insert(watcher_noc_sanitize_str); }
 
     void disable_watcher_assert() { watcher_disabled_features.insert(watcher_assert_str); }
     void enable_watcher_assert() { watcher_disabled_features.erase(watcher_assert_str); }

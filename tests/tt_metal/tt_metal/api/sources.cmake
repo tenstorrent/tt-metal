@@ -20,8 +20,11 @@ set(UNIT_TESTS_API_SOURCES
     core_coord/test_CoreRangeSet_intersects.cpp
     core_coord/test_CoreRangeSet_merge.cpp
     dataflow_buffer/test_alias_dataflow_buffer.cpp
-    dataflow_buffer/test_dataflow_buffer.cpp
-    dataflow_buffer/test_dataflow_buffer_2_0.cpp
+    dataflow_buffer/test_dataflow_buffer_base.cpp
+    dataflow_buffer/test_dataflow_buffer_multinode.cpp
+    dataflow_buffer/test_dataflow_buffer_intra.cpp
+    dataflow_buffer/test_dataflow_buffer_edge_cases.cpp
+    dataflow_buffer/test_dataflow_buffer_overrides.cpp
     dataflow_buffer/test_dataflow_buffer_configs.cpp
     dataflow_buffer/test_borrowed_memory_dataflow_buffer.cpp
     distribution_spec/test_buffer_distribution_spec.cpp

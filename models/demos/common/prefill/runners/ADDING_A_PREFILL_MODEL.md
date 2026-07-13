@@ -64,12 +64,14 @@ class MyModelAdapter(PrefillModelAdapter):
         """The TTNN weight-cache dir for this model + mesh (or None if disabled).
         Mirror the layout the cache-populate run wrote so the runner reads the same files."""
 
-    def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams):
-        """Allocate (and zero) this model's KV cache on device and return it — the single
-        place your model's KV layout is defined. The ENGINE owns the returned tensor: it
-        allocates it once, passes it into every runtime call that touches it, and frees it
-        with the mesh at shutdown. `params` carries max_seq_len / mesh_shape / this rank's
-        num_layers / num_users / ... ."""
+    def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams) -> KvCaches:
+        """Allocate (and zero) this model's KV cache(s) on device and return them as a `KvCaches`
+        (ordered tuple) — the single place your model's KV layout is defined. Index 0 is the primary
+        KV cache; a dense model returns `KvCaches([kvpe])`, a sparse-attention (DSA) model appends its
+        secondary cache (`KvCaches([kvpe, index])`) instead of implementing a second method. The
+        ENGINE owns the returned caches: it allocates them once, passes them into every runtime call
+        that touches them, and frees them with the mesh at shutdown. `params` carries max_seq_len /
+        mesh_shape / this rank's num_layers / num_users / ... ."""
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
         """Construct the model for this rank and return the runtime handle (section 2).

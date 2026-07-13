@@ -40,7 +40,7 @@ SPARSE_KVPE_PCC = 0.99
 # quantization noise. Measured ~0.99991 on 2x4 BH (both variants, chunked + rotated), tracking the
 # bf16 KVPE cache; 0.999 keeps ample bf8 headroom while still catching a real write regression.
 SPARSE_INDEX_PCC = 0.999
-SPARSE_VARIANTS = ["deepseek_v32", "glm_5_1"]
+SPARSE_VARIANTS = ["deepseek_v32", "glm_5_1", "glm_5_2"]
 
 # ---------------------------------------------------------------------------
 # TEST MATRIX — single source of truth (see _sparse_cases for how it expands)
@@ -594,6 +594,67 @@ def test_sparse_mla_accuracy(
 ):
     topology = _topology_from_device_params(device_params)
     run_sparse_mla_accuracy_case(variant, config_only, mesh_device, seq_len, topology, ds_layer, ds_checkpoint, ds_repo)
+
+
+# GLM-5.2 indexer reuse: anchor cases for the reuse-capable variant only (others have no shared layers).
+SPARSE_REUSE_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_2" in c.id]
+
+
+@pytest.mark.parametrize("variant, mesh_device, seq_len", SPARSE_REUSE_CASES, indirect=["variant", "mesh_device"])
+@pytest.mark.parametrize("device_params", SPARSE_DEVICE_PARAMS, ids=SPARSE_DEVICE_IDS, indirect=True)
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_sparse_mla_indexer_reuse(
+    mesh_device, seq_len, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo
+):
+    """GLM-5.2 indexer reuse: a layer fed a prior layer's top-k indices (indexer_indices=...) must
+    produce the SAME output as computing them itself — validates the MLA return + accept path. Same
+    weights + input + selection -> identical sparse attention, so the two outputs match bit-for-bit."""
+    config = config_only
+    config.max_seq_len = seq_len
+    weights, _ = build_weights(variant, config, layer=ds_layer, checkpoint_path=ds_checkpoint, repo=ds_repo)
+    mesh_shape = list(mesh_device.shape)
+    sp_axis, tp_axis = 0, 1
+    topology = _topology_from_device_params(device_params)
+
+    def _kvpe():
+        # sparse_sdpa reads the KVPE cache natively and requires it uncompressed (bf16 ROW_MAJOR), not
+        # the bfloat8_b/TILE default — mla.py asserts this. Mirror the accuracy case's cache.
+        return init_kvpe_cache(
+            kvpe_cache_head_dim=config.kv_lora_rank + config.qk_rope_head_dim,
+            mesh_device=mesh_device,
+            seq_len=seq_len,
+            mesh_shape=mesh_shape,
+            sp_axis=sp_axis,
+            num_kvpe_cache_layers=1,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+
+    common = dict(
+        config=config,
+        weights=weights,
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        is_balanced=False,
+        topology=topology,
+    )
+    # A: compute the indexer, capture its top-k selection + output.
+    out_a, _, _, shard_dims, idx = run_mla_inference(tt_kvpe_cache=_kvpe(), return_indices=True, **common)
+    # B: a fresh MLA (same weights + input) fed A's indices -> skips its own indexer.
+    out_b, _, _, _ = run_mla_inference(tt_kvpe_cache=_kvpe(), inject_indices=idx, **common)
+
+    def _to_torch(t):
+        return ttnn.to_torch(
+            t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
+        ).to(torch.bfloat16)
+
+    _, pcc_message = assert_with_pcc(_to_torch(out_a), _to_torch(out_b), 0.9999)
+    logger.info(f"[{variant.name}] indexer-reuse compute-vs-inject PCC: {pcc_message}")
+    ttnn.synchronize_device(mesh_device)
 
 
 # Anchor cases (per-variant prod-closest mesh, seq=4096); collected == run.
