@@ -76,7 +76,16 @@ class ReconfigStall(Check):
             # correctly-drained write falsely flagged NO_UNIT_DRAIN (latent today:
             # all reconfig fns live in pack/unpack/math files).
             thr = registry.thread_of_fact({"file": fn.file, "function": fn.name})
-            drain_tokens = registry.DRAIN_UNIT_TOKENS.get(thr, ())
+            # Token list shown in the THCON_ONLY hint's "needs one of ..." text only
+            # (never a decision — the drain DECISION uses unit_drain_state). MATH
+            # drains via TWO engines whose real token sets include the Quasar SFPU
+            # alias SFPU1, so derive the MATH list from MATH_FPU/ SFPU_TOKENS;
+            # DRAIN_UNIT_TOKENS["MATH"] is a coarser display tuple that omits SFPU1.
+            drain_tokens = (
+                registry.MATH_FPU_TOKENS + registry.MATH_SFPU_TOKENS
+                if thr == "MATH"
+                else registry.DRAIN_UNIT_TOKENS.get(thr, ())
+            )
 
             facts = fb.facts_in(fn, ("macro", "call", "pointer_write"))
 
