@@ -173,6 +173,7 @@ def run_exp_ring_joint_sdpa_nightly(
     max_mse=DEFAULT_MAX_MSE,
     do_check=True,
     num_iterations=1,
+    check_program_cache_hit=False,
     num_links=2,
     num_workers_per_link=5,
     num_buffers_per_channel=32,
@@ -187,6 +188,15 @@ def run_exp_ring_joint_sdpa_nightly(
 
     When `num_iterations > 1`, checks that all outputs are bitwise equal (determinism).
     When `num_iterations == 1`, checks accuracy against PyTorch SDPA reference.
+
+    When `check_program_cache_hit=True`, runs the semaphore-realloc cache-hit regression instead:
+    program cache is enabled and each iteration is dispatched with a FRESHLY-ALLOCATED (distinct
+    address) global-semaphore set — all sets kept alive so their addresses never collide. It asserts
+    the program-cache entry count stays constant after the first dispatch (genuine cache hit — the
+    per-link GlobalSemaphore addresses are hash-excluded) AND that every iteration matches the PyTorch
+    reference (PCC/MSE). If a semaphore address froze on the cache-hit fast path, iterations 1+ would
+    sync on iteration 0's stale semaphore and either hang or produce a wrong result. This exercises
+    ExpRingJointSDPADeviceOperation::get_dynamic_runtime_args re-applying the addresses every dispatch.
     """
     num_devices = detect_devices_without_opening()
     sp_size, tp_size, arch_type = calculate_mesh_config(num_devices)
@@ -377,16 +387,41 @@ def run_exp_ring_joint_sdpa_nightly(
         main_row_dim = sdpa_input_shard_dims[0] if sdpa_input_shard_dims[0] is not None else -1
         main_col_dim = sdpa_input_shard_dims[1] if sdpa_input_shard_dims[1] is not None else -1
 
-        # Pre-create all semaphore sets before the loop to avoid device writes between iterations
+        # Pre-create all semaphore sets before the loop to avoid device writes between iterations.
+        # Every iteration gets its OWN set; keeping every set alive here guarantees the allocator
+        # hands out a distinct address per set (a live buffer's address is never reused), which is
+        # exactly the fresh-semaphore scenario the cache-hit freeze regression needs.
         ccl_semaphores_list = [
             [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_links)]
             for _ in range(num_iterations)
         ]
 
+        if check_program_cache_hit:
+            # Program cache must be ON so iterations 1+ take the cache-HIT fast path (the path that
+            # re-applies the hash-excluded semaphore addresses); otherwise every dispatch is a miss
+            # and the regression is vacuous.
+            mesh_device.enable_program_cache()
+
+        # Cache-hit freeze regression bookkeeping.
+        seen_sem_addrs = []
+        program_cache_entries_baseline = None
+
         tt_out_list = []
 
         for i in range(num_iterations):
             ttnn.synchronize_device(mesh_device)
+
+            if check_program_cache_hit:
+                # Fresh semaphore set for this iteration must have addresses never seen before,
+                # otherwise we cannot prove the cache-hit path re-applied a NEW address.
+                iter_sem_addrs = [ttnn.get_global_semaphore_address(sem) for sem in ccl_semaphores_list[i]]
+                for addr in iter_sem_addrs:
+                    assert addr not in seen_sem_addrs, (
+                        f"Iteration {i}: fresh global semaphore reused a prior address ({addr}); "
+                        "cannot prove the cache-hit path re-applied a NEW semaphore address."
+                    )
+                seen_sem_addrs.extend(iter_sem_addrs)
+                logger.info(f"[cache-hit iter {i}] semaphore addresses: {iter_sem_addrs}")
 
             tt_out, _tt_joint_out, _tt_lse = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(
                 tt_Q,
@@ -414,6 +449,25 @@ def run_exp_ring_joint_sdpa_nightly(
 
             tt_out_list.append(tt_out)
 
+            if check_program_cache_hit:
+                # Program-cache entries are inserted host-side at enqueue time. The composite op may
+                # cache several programs, so we assert the count is STABLE after the first dispatch
+                # (not necessarily 1): a genuine cache hit adds nothing. If the hash-excluded
+                # semaphore addresses leaked into the key, the count would grow every iteration.
+                entries = mesh_device.num_program_cache_entries()
+                if program_cache_entries_baseline is None:
+                    program_cache_entries_baseline = entries
+                    assert entries > 0, (
+                        f"Expected >0 program-cache entries after the first dispatch, got {entries}; "
+                        "program cache may not be enabled, so the cache-hit fast path is never exercised."
+                    )
+                else:
+                    assert entries == program_cache_entries_baseline, (
+                        f"Iteration {i}: expected the program-cache entry count to stay "
+                        f"{program_cache_entries_baseline} (genuine cache hit — only the freshly-allocated "
+                        f"global-semaphore addresses changed, and they are hash-excluded), got {entries}."
+                    )
+
         # to_torch only after all iterations (avoids PCIe readback between launches)
         def to_torch_out(tt_tensor):
             out = ttnn.to_torch(
@@ -423,6 +477,27 @@ def run_exp_ring_joint_sdpa_nightly(
                 ),
             )
             return out[:, :, :total_seq, :]
+
+        if check_program_cache_hit:
+            # Correctness on EVERY dispatch. joint_seq_len==0 -> pure non-causal SDPA over Q/K/V, so
+            # the reference is identical every iteration. A frozen semaphore address on the cache-hit
+            # path would make iterations 1+ sync on iteration 0's stale semaphore and fail here
+            # (wrong output) — or hang before ever reaching this check.
+            gt = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=False)
+            gt_out = gt[:, :, :total_seq, :]
+            for i in range(num_iterations):
+                tt_out_torch = to_torch_out(tt_out_list[i])
+                out_pass, out_pcc = comp_pcc(gt_out, tt_out_torch, pcc_threshold)
+                mse = ((gt_out - tt_out_torch) ** 2).mean().item()
+                logger.info(f"[cache-hit iter {i}] PCC: {out_pcc}, MSE: {mse:.2e}")
+                assert out_pass, (
+                    f"Iteration {i}: PCC {out_pcc} below threshold {pcc_threshold}. On a cache HIT the "
+                    "per-link GlobalSemaphore addresses must be re-applied via get_dynamic_runtime_args; "
+                    "a frozen (stale) address would sync on an earlier iteration's semaphore and corrupt "
+                    "the output."
+                )
+                assert mse <= max_mse, f"Iteration {i}: MSE {mse:.2e} exceeds threshold {max_mse:.2e}"
+            return
 
         if num_iterations > 1:
             N_local = total_seq // sp_size
@@ -601,6 +676,44 @@ def test_exp_ring_joint_attention_sdpa_determinism(
         dtype,
         num_iterations=4,
         max_payload_size=max_payload_size,
+    )
+
+
+# === TEST 3b: PROGRAM-CACHE-HIT SEMAPHORE-REALLOC REGRESSION ===
+@pytest.mark.skipif(len(TEST_CONFIGS) == 0, reason="No valid device configuration detected")
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("b, nh, total_seq, d, q_chunk_size, k_chunk_size", TEST_CONFIGS, ids=TEST_CONFIG_IDS)
+def test_exp_ring_joint_attention_sdpa_semaphore_realloc_cache_hit(
+    b, nh, total_seq, d, q_chunk_size, k_chunk_size, dtype, reset_seeds
+):
+    """
+    Cache-hit freeze regression for the hash-excluded per-link GlobalSemaphore addresses.
+
+    The per-link GlobalSemaphore addresses are excluded from exp_ring_joint_sdpa's program-cache
+    hash, so calls that differ only in which semaphores they pass still cache-hit. That makes the
+    addresses DYNAMIC: the factory bakes them on the cache-miss build and
+    ExpRingJointSDPADeviceOperation::get_dynamic_runtime_args() must re-apply them on every dispatch.
+    If an address froze on the cache-hit fast path, a later dispatch reusing the cached program with
+    a freshly-allocated semaphore set would sync on the stale address and hang or produce garbage.
+
+    This test dispatches the SAME cached program num_iterations times, each with a fresh (distinct
+    address, all kept alive) global-semaphore set on fixed Q/K/V inputs, and asserts:
+      - the program-cache entry count is stable after the first dispatch (genuine cache hit), and
+      - every iteration matches the PyTorch SDPA reference (PCC/MSE).
+    A frozen semaphore address fails one or both.
+    """
+    run_exp_ring_joint_sdpa_nightly(
+        b,
+        nh,
+        total_seq,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        pcc_threshold=DEFAULT_PCC_THRESHOLD,
+        max_mse=DEFAULT_MAX_MSE,
+        num_iterations=4,
+        check_program_cache_hit=True,
     )
 
 
