@@ -156,15 +156,24 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
         auto gen_hostnames = gen_mapping["hostnames"];
         auto gold_hostnames = gold_mapping["hostnames"];
 
-        // Collect all chip mappings from all hostnames and meshes (skip hostname comparison)
-        // Key format: "mesh_id:chip_id" (fabric node ID) to uniquely identify each mapping
-        // Index by fabric node ID to compare tray assignments for each fabric node
-        std::map<std::string, YAML::Node> gen_map_by_fabric_node_id;
-        std::map<std::string, YAML::Node> gold_map_by_fabric_node_id;
+        struct FabricNodeMappingEntry {
+            YAML::Node chip;
+            std::string hostname;
+        };
 
-        // Helper function to collect chips from a host entry (handles both old and new formats)
-        // Ignores hostname - collects chips by fabric_node_id (mesh_id:chip_id) for uniqueness
-        auto collect_chips_from_host = [](const YAML::Node& host_node, std::map<std::string, YAML::Node>& chip_map) {
+        // Collect all chip mappings from all hostnames and meshes.
+        // Key format: "mesh_id:chip_id" (fabric node ID) to uniquely identify each mapping.
+        std::map<std::string, FabricNodeMappingEntry> gen_map_by_fabric_node_id;
+        std::map<std::string, FabricNodeMappingEntry> gold_map_by_fabric_node_id;
+
+        // Helper function to collect chips from a host entry (handles both old and new formats).
+        auto collect_chips_from_host = [](const YAML::Node& host_node,
+                                          std::map<std::string, FabricNodeMappingEntry>& chip_map) {
+            std::string hostname;
+            if (host_node["hostname"]) {
+                hostname = host_node["hostname"].as<std::string>();
+            }
+
             if (host_node.IsMap()) {
                 // Check if this is the new format: map with "hostname" and "mesh" keys
                 if (host_node["mesh"]) {
@@ -189,7 +198,7 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
                                         uint32_t mesh_id = chip_entry["fabric_node_id"]["mesh_id"].as<uint32_t>();
                                         uint32_t chip_id = chip_entry["fabric_node_id"]["chip_id"].as<uint32_t>();
                                         std::string key = std::to_string(mesh_id) + ":" + std::to_string(chip_id);
-                                        chip_map[key] = YAML::Clone(chip_entry);
+                                        chip_map[key] = FabricNodeMappingEntry{YAML::Clone(chip_entry), hostname};
                                     }
                                 }
                             }
@@ -213,10 +222,15 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
                                 if (mesh_entry["chips"]) {
                                     auto chips_list = mesh_entry["chips"];
                                     for (const auto& chip_entry : chips_list) {
-                                        if (chip_entry["asic_id"]) {
+                                        if (chip_entry["fabric_node_id"]) {
+                                            uint32_t mesh_id = chip_entry["fabric_node_id"]["mesh_id"].as<uint32_t>();
+                                            uint32_t chip_id = chip_entry["fabric_node_id"]["chip_id"].as<uint32_t>();
+                                            std::string key = std::to_string(mesh_id) + ":" + std::to_string(chip_id);
+                                            chip_map[key] = FabricNodeMappingEntry{YAML::Clone(chip_entry), hostname};
+                                        } else if (chip_entry["asic_id"]) {
                                             uint64_t asic_id = chip_entry["asic_id"].as<uint64_t>();
                                             std::string key = std::to_string(asic_id);
-                                            chip_map[key] = YAML::Clone(chip_entry);
+                                            chip_map[key] = FabricNodeMappingEntry{YAML::Clone(chip_entry), hostname};
                                         }
                                     }
                                 }
@@ -242,7 +256,7 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
                                     uint32_t mesh_id = chip_entry["fabric_node_id"]["mesh_id"].as<uint32_t>();
                                     uint32_t chip_id = chip_entry["fabric_node_id"]["chip_id"].as<uint32_t>();
                                     std::string key = std::to_string(mesh_id) + ":" + std::to_string(chip_id);
-                                    chip_map[key] = YAML::Clone(chip_entry);
+                                    chip_map[key] = FabricNodeMappingEntry{YAML::Clone(chip_entry), hostname};
                                 }
                             }
                         }
@@ -277,8 +291,7 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
             }
         }
 
-        // Compare the collected fabric_node_id mappings
-        // Compare asic_position (tray_id + asic_location) and fabric_node_id (mesh_id + chip_id), ignore ASIC IDs
+        // Compare the collected fabric_node_id mappings (tray placement, fabric node, ASIC ID, hostname).
         std::vector<std::string> mismatch_details;
 
         // First, check that we have the same number of entries
@@ -328,15 +341,22 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
         }
 
         // Compare all entries that exist in both files
-        // Compare asic_position (tray_id + asic_location) and fabric_node_id, ignore ASIC IDs and other fields
-        for (const auto& [fabric_node_key, gen_mapping_node] : gen_map_by_fabric_node_id) {
+        for (const auto& [fabric_node_key, gen_entry] : gen_map_by_fabric_node_id) {
             if (!gold_map_by_fabric_node_id.contains(fabric_node_key)) {
                 // Already reported as missing above, skip detailed comparison
                 continue;
             }
 
-            auto gold_mapping_node = gold_map_by_fabric_node_id[fabric_node_key];
+            const auto& gen_mapping_node = gen_entry.chip;
+            const auto& gold_entry = gold_map_by_fabric_node_id[fabric_node_key];
+            const auto& gold_mapping_node = gold_entry.chip;
             std::vector<std::string> chip_mismatches;
+
+            if (gen_entry.hostname != gold_entry.hostname) {
+                std::ostringstream oss;
+                oss << "hostname: generated=\"" << gen_entry.hostname << "\", golden=\"" << gold_entry.hostname << "\"";
+                chip_mismatches.push_back(oss.str());
+            }
 
             // Compare tray_id
             uint32_t gen_tray_id = gen_mapping_node["asic_position"]["tray_id"].as<uint32_t>();
@@ -371,6 +391,18 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
                 std::ostringstream oss;
                 oss << "fabric_node_id.chip_id: generated=" << gen_chip_id << ", golden=" << gold_chip_id;
                 chip_mismatches.push_back(oss.str());
+            }
+
+            if (gen_mapping_node["asic_id"] && gold_mapping_node["asic_id"]) {
+                uint64_t gen_asic_id = gen_mapping_node["asic_id"].as<uint64_t>();
+                uint64_t gold_asic_id = gold_mapping_node["asic_id"].as<uint64_t>();
+                if (gen_asic_id != gold_asic_id) {
+                    std::ostringstream oss;
+                    oss << "asic_id: generated=" << gen_asic_id << ", golden=" << gold_asic_id;
+                    chip_mismatches.push_back(oss.str());
+                }
+            } else if (gen_mapping_node["asic_id"] || gold_mapping_node["asic_id"]) {
+                chip_mismatches.push_back("asic_id: present in one file but missing in the other");
             }
 
             if (!chip_mismatches.empty()) {
@@ -443,10 +475,23 @@ void check_asic_mapping_against_golden(const std::string& test_name, const std::
     // Ranks are 0-based in distributed_context, but files use 1-based indexing
     std::string generated_filename =
         "asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) + "_of_" + std::to_string(world_size) + ".yaml";
-    std::string golden_filename = golden_file_base + ".yaml";
 
     std::filesystem::path generated_file = generated_dir / generated_filename;
-    std::filesystem::path golden_file = golden_dir / golden_filename;
+
+    // Golden path: explicit env (automapper runner), else default golden_mapping_files/<name>.yaml
+    std::filesystem::path golden_file;
+    if (const char* golden_path_env = std::getenv("TT_METAL_ASIC_MAPPING_GOLDEN_PATH")) {
+        if (golden_path_env[0] == '\0') {
+            return;
+        }
+        golden_file = std::filesystem::path(golden_path_env);
+    } else {
+        std::string golden_filename = golden_file_base + ".yaml";
+        golden_file = golden_dir / golden_filename;
+        if (!std::filesystem::exists(golden_file) && std::getenv("TT_METAL_ASIC_MAPPING_GOLDEN_OPTIONAL") != nullptr) {
+            return;
+        }
+    }
 
     // First check if the generated file exists - if ControlPlane didn't create it, the test must fail
     if (!std::filesystem::exists(generated_file)) {
@@ -455,12 +500,24 @@ void check_asic_mapping_against_golden(const std::string& test_name, const std::
                << ". This indicates the ControlPlane initialization did not generate the expected mapping file.";
     }
 
+    // Regolden mode (TT_METAL_REGOLDEN=1): overwrite the golden with this run's generated mapping instead of
+    // comparing. Only rank 0 (which produces rank_1's file) writes the golden, since the golden is rank 1's view
+    // and all ranks must produce identical mappings. See golden_mapping_files/README.md.
+    if (const char* regolden_env = std::getenv("TT_METAL_REGOLDEN");
+        regolden_env != nullptr && regolden_env[0] != '\0') {
+        if (rank == 0) {
+            std::filesystem::create_directories(golden_file.parent_path());
+            std::filesystem::copy_file(generated_file, golden_file, std::filesystem::copy_options::overwrite_existing);
+            log_info(tt::LogTest, "Regoldened {} -> {}", generated_file.string(), golden_file.string());
+        }
+        return;
+    }
+
     // If golden file doesn't exist, the test must fail - we need a golden file to compare against
     // This check ensures all tests have corresponding golden files and will fail immediately if missing
     if (!std::filesystem::exists(golden_file)) {
-        FAIL() << "Golden file does not exist: " << golden_file.string()
-               << ". Expected golden file name: " << golden_filename << ". Test: " << test_name << " on rank " << rank
-               << ". See tests/tt_metal/tt_fabric/golden_mapping_files/README.md "
+        FAIL() << "Golden file does not exist: " << golden_file.string() << ". Test: " << test_name << " on rank "
+               << rank << ". See tests/tt_metal/tt_fabric/golden_mapping_files/README.md "
                << "for instructions on generating golden files. "
                << "The test cannot proceed without a golden reference file to compare against.";
     }
