@@ -49,6 +49,16 @@ _HIFI4 = ttnn.WormholeComputeKernelConfig(
     packer_l1_acc=False,
 )
 
+# FFN linear matmuls are memory-bound (skinny, low FLOPs efficiency): bf8_b weights halve
+# the weight DRAM traffic and HiFi2 doubles math throughput.  Applied only to the two FFN
+# linears (conv/norm fidelity stays HiFi4).  Gated on the decode PCC test.
+_HIFI2 = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    math_approx_mode=False,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=False,
+)
+
 
 # ──────────────────────────────────────────────────────────────
 # Host-side weight containers (torch tensors, not TTNN)
@@ -239,7 +249,7 @@ def preprocess_semantic_tokenizer_weights(
 
 def _tile_linear(t: torch.Tensor, device, dtype=ttnn.bfloat16) -> ttnn.Tensor:
     """[out, in] → [1, 1, in, out] TILE for ttnn.linear (x @ w semantics)."""
-    tdtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    tdtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
     return ttnn.as_tensor(
         t.to(tdtype).t().unsqueeze(0).unsqueeze(0).contiguous(),
         device=device,
@@ -380,15 +390,17 @@ class TTConv1d:
             if extra_pad > 0:
                 x_ctx = ttnn.pad(x_ctx, [(0, 0), (0, 0), (0, extra_pad), (0, 0)], value=0.0)
             x = x_ctx
-            T_padded = cp + T + extra_pad
+            input_width = cp + T + extra_pad
+            conv_padding = (0, 0, 0, 0)  # padding already materialised into x_ctx
         else:
+            # Fold the causal (left) + ceil-alignment (right) zero-padding into conv2d's
+            # own input prep via its 4-tuple padding [top, bottom, left, right] (H=1, so
+            # only the width/time dim is padded).  This drops the separate ttnn.pad — which
+            # forced ROW_MAJOR and a full DRAM copy — and lets conv2d shard directly from a
+            # TILE input (TILE→sharded is far cheaper than RM→sharded).
             extra_pad = self._extra_right_pad(T)
-            T_padded = T + cp + extra_pad
-            if cp > 0 or extra_pad > 0:
-                # ttnn.pad front padding requires ROW_MAJOR layout
-                if x.layout != ttnn.ROW_MAJOR_LAYOUT:
-                    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-                x = ttnn.pad(x, [(0, 0), (0, 0), (cp, extra_pad), (0, 0)], value=0.0)
+            input_width = T
+            conv_padding = (0, 0, cp, extra_pad)
 
         x_out, [_, w_out], [self.weight, self.bias] = ttnn.conv2d(
             input_tensor=x,
@@ -399,10 +411,10 @@ class TTConv1d:
             out_channels=self.out_ch,
             batch_size=B,
             input_height=1,
-            input_width=T_padded,
+            input_width=input_width,
             kernel_size=(1, self.K),
             stride=(1, self.stride),
-            padding=(0, 0),
+            padding=conv_padding,
             groups=self.groups,
             return_output_dim=True,
             return_weights_and_bias=True,
@@ -432,12 +444,40 @@ class TTBlock1DDevice:
         self.dim = bw.dim
 
         tdtype = torch.bfloat16 if compute_dtype == ttnn.bfloat16 else torch.float32
-        self.dw_conv = TTConv1d(bw.dw_conv, device, compute_dtype=compute_dtype)
+
+        # Fold the per-channel layer-scales into the conv / linear2 weights so the two
+        # per-block scalar muls disappear.  Both gammas are exact output-channel scales
+        # (reference: x = x * gamma.unsqueeze(-1)): gamma scales the depthwise-conv
+        # output channel; ffn_gamma scales the linear2 output channel.
+        dw_cw = bw.dw_conv
+        if bw.gamma is not None:
+            g = bw.gamma.reshape(-1).float()  # [dim]
+            w = (bw.dw_conv.weight.float() * g.view(-1, 1, 1)).contiguous()  # [dim, 1, K]
+            b = (bw.dw_conv.bias.float() * g).contiguous() if bw.dw_conv.bias is not None else None
+            dw_cw = ConvWeightsHost(
+                weight=w,
+                bias=b,
+                stride=bw.dw_conv.stride,
+                groups=bw.dw_conv.groups,
+                causal_pad=bw.dw_conv.causal_pad,
+            )
+        self.dw_conv = TTConv1d(dw_cw, device, compute_dtype=compute_dtype)
+
         self.norm_w = _norm_w_tt(bw.norm_w, device, dtype=compute_dtype)
         self.ffn_norm_w = _norm_w_tt(bw.ffn_norm_w, device, dtype=compute_dtype)
-        # linear1_w is [ffn_dim, C] in PyTorch → _tile_linear transposes to [C, ffn_dim]
-        self.linear1_w = _tile_linear(bw.linear1_w, device, dtype=compute_dtype)
-        self.linear2_w = _tile_linear(bw.linear2_w, device, dtype=compute_dtype)
+
+        # linear1_w is [ffn_dim, C] in PyTorch → _tile_linear transposes to [C, ffn_dim].
+        # linear1 (up-projection) weight is stored bf8_b and both FFN linears run at HiFi2
+        # (mirrors the LM's w1/w3 choice).  linear2 (down-projection) stays bf16 — it feeds
+        # the residual, so it's kept at higher precision.
+        self.linear1_w = _tile_linear(bw.linear1_w, device, dtype=ttnn.bfloat8_b)
+        l2_w_host = bw.linear2_w.float()  # [C_out=dim, ffn_dim]
+        l2_b_host = bw.linear2_b.float() if bw.linear2_b is not None else None
+        if bw.ffn_gamma is not None:
+            fg = bw.ffn_gamma.reshape(-1).float()  # [dim] = linear2 output channels
+            l2_w_host = l2_w_host * fg.view(-1, 1)
+            l2_b_host = (l2_b_host * fg) if l2_b_host is not None else None
+        self.linear2_w = _tile_linear(l2_w_host.contiguous(), device, dtype=compute_dtype)
 
         def _bias(b: Optional[torch.Tensor]) -> Optional[ttnn.Tensor]:
             if b is None:
@@ -450,22 +490,11 @@ class TTBlock1DDevice:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        def _scale(s: Optional[torch.Tensor]) -> Optional[ttnn.Tensor]:
-            if s is None:
-                return None
-            C = s.shape[0]
-            return ttnn.as_tensor(
-                s.to(tdtype).view(1, 1, 1, C).contiguous(),
-                device=device,
-                dtype=compute_dtype,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-
         self.linear1_b = _bias(bw.linear1_b)
-        self.linear2_b = _bias(bw.linear2_b)
-        self.gamma = _scale(bw.gamma)
-        self.ffn_gamma = _scale(bw.ffn_gamma)
+        self.linear2_b = _bias(l2_b_host)
+        # gammas are folded into the weights above; keep the attrs for __call__ guards.
+        self.gamma = None
+        self.ffn_gamma = None
 
     def reset_cache(self) -> None:
         self.dw_conv.reset_cache()
@@ -495,11 +524,11 @@ class TTBlock1DDevice:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         x = ttnn.linear(
-            x, self.linear1_w, bias=self.linear1_b, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            x, self.linear1_w, bias=self.linear1_b, compute_kernel_config=_HIFI2, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         x = ttnn.gelu(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x = ttnn.linear(
-            x, self.linear2_w, bias=self.linear2_b, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            x, self.linear2_w, bias=self.linear2_b, compute_kernel_config=_HIFI2, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         if self.ffn_gamma is not None:
             x = ttnn.mul(x, self.ffn_gamma, memory_config=ttnn.DRAM_MEMORY_CONFIG)
