@@ -211,7 +211,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Multic
 /* ========== TEST CASES ========== */
 
 TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSource) {
-    uint32_t test_id = 321;
+    uint32_t test_id = 342;
 
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_device(0);
@@ -234,7 +234,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSource) {
 }
 
 TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSource) {
-    uint32_t test_id = 322;
+    uint32_t test_id = 343;
 
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_device(0);
@@ -257,7 +257,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSource) {
 }
 
 TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSourceNOC1) {
-    uint32_t test_id = 323;
+    uint32_t test_id = 344;
 
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_device(0);
@@ -280,7 +280,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSourceNOC1) {
 }
 
 TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSourceNOC1) {
-    uint32_t test_id = 324;
+    uint32_t test_id = 345;
 
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_device(0);
@@ -303,7 +303,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSourceNOC1) {
 }
 
 TEST_F(GenericMeshDeviceFixture, MulticastAtomicLargerIncrement) {
-    uint32_t test_id = 325;
+    uint32_t test_id = 346;
 
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_device(0);
@@ -328,7 +328,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicLargerIncrement) {
 }
 
 TEST_F(GenericMeshDeviceFixture, MulticastAtomicLargerIncrementNOC1) {
-    uint32_t test_id = 326;
+    uint32_t test_id = 347;
 
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_device(0);
@@ -355,7 +355,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicLargerIncrementNOC1) {
 /* ========== NOC 2.0 API TEST CASES ========== */
 
 TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSource_2_0) {
-    uint32_t test_id = 327;
+    uint32_t test_id = 348;
 
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_device(0);
@@ -379,7 +379,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSource_2_0) {
 }
 
 TEST_F(GenericMeshDeviceFixture, MulticastAtomicLargerIncrement_2_0) {
-    uint32_t test_id = 328;
+    uint32_t test_id = 349;
 
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_device(0);
@@ -405,7 +405,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicLargerIncrement_2_0) {
 }
 
 TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSource_2_0) {
-    uint32_t test_id = 329;
+    uint32_t test_id = 350;
 
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_device(0);
@@ -429,7 +429,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSource_2_0) {
 }
 
 TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSourceNOC1_2_0) {
-    uint32_t test_id = 330;
+    uint32_t test_id = 351;
 
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_device(0);
@@ -453,7 +453,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSourceNOC1_2_0) {
 }
 
 TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSourceNOC1_2_0) {
-    uint32_t test_id = 331;
+    uint32_t test_id = 352;
 
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_device(0);
@@ -477,7 +477,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSourceNOC1_2_0) {
 }
 
 TEST_F(GenericMeshDeviceFixture, MulticastAtomicLargerIncrementNOC1_2_0) {
-    uint32_t test_id = 332;
+    uint32_t test_id = 353;
 
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_device(0);

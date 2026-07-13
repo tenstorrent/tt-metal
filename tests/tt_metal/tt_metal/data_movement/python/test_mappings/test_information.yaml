@@ -229,6 +229,12 @@ tests:
   43:
     name: "DRAM Channels 2.0"
 
+  44:
+    name: "Loopback Packet Sizes 2.0"
+
+  45:
+    name: "Loopback Directed Ideal 2.0"
+
   50:
     name: "One to One Directed Ideal"
 
@@ -494,15 +500,21 @@ tests:
     name: "One from One Packet Sizes 2.0"
 
   160:
-    name: "One from All Packet Sizes 2.0"
+    name: "One to One Directed Ideal 2.0"
 
   161:
-    name: "One from All Directed Ideal 2.0"
+    name: "One from One Directed Ideal 2.0"
 
   162:
-    name: "One from All Virtual Channels 2.0"
+    name: "One from All Packet Sizes 2.0"
 
   163:
+    name: "One from All Directed Ideal 2.0"
+
+  164:
+    name: "One from All Virtual Channels 2.0"
+
+  165:
     name: "One from All Custom 2.0"
 
   170:
@@ -585,86 +597,137 @@ tests:
 
   309:
     name: "All to All Packet Sizes 2.0"
+    memory_type: "l1"
+    mechanism: "unicast"
+    pattern: "all_to_all"
 
   310:
-    name: "All from All Directed Ideal"
+    name: "All to All Directed Ideal 2.0"
 
   311:
-    name: "All from All Packet Sizes"
-    memory_type: "l1"
-    mechanism: "unicast"
-    pattern: "all_from_all"
+    name: "All to All 2x2 to 1x1 Directed Ideal 2.0"
 
   312:
-    name: "All from All 2x2 From 1x1 Directed Ideal"
+    name: "All to All 4x4 to 1x1 Directed Ideal 2.0"
 
   313:
-    name: "All from All 4x4 From 1x1 Directed Ideal"
+    name: "All to All 1x1 to 2x2 Directed Ideal 2.0"
 
   314:
-    name: "All from All 1x1 From 2x2 Directed Ideal"
+    name: "All to All 1x1 to 4x4 Directed Ideal 2.0"
 
   315:
-    name: "All from All 1x1 From 4x4 Directed Ideal"
+    name: "All to All 2x2 to 2x2 Directed Ideal 2.0"
 
   316:
-    name: "All from All 2x2 From 2x2 Directed Ideal"
-
-  317:
-    name: "All from All Virtual Channels"
-
-  318:
-    name: "All from All Custom"
-
-  319:
-    name: "Atomic Semaphore Adjacent Bandwidth Sweep"
-
-  320:
-    name: "Atomic Semaphore Non Adjacent Bandwidth Sweep"
-
-  321:
-    name: "Single source Multicast Atomic Increment"
-
-  322:
-    name: "Multi source Multicast Atomic Increment"
-
-  323:
-    name: "Single source Multicast Atomic Increment - NOC 1"
-
-  324:
-    name: "Multi source Multicast Atomic Increment - NOC 1"
-
-  325:
-    name: "Multicast Atomic Larger Increment"
-
-  326:
-    name: "Multicast Atomic Larger Increment - NOC 1"
-
-  327:
-    name: "Single source Multicast Atomic Increment 2.0 API"
-
-  328:
-    name: "Multicast Atomic Larger Increment 2.0 API"
-
-  329:
-    name: "All from All Grid Sweep Packet Sizes 2.0"
-    memory_type: "l1"
-    mechanism: "unicast"
-    pattern: "all_from_all"
-    bandwidth_mode: "combined"
-
-  330:
     name: "All to All Grid Sweep Packet Sizes 2.0"
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "all_to_all"
     bandwidth_mode: "combined"
 
+  320:
+    name: "All from All Directed Ideal"
+
+  321:
+    name: "All from All Packet Sizes"
+    memory_type: "l1"
+    mechanism: "unicast"
+    pattern: "all_from_all"
+
+  322:
+    name: "All from All 2x2 From 1x1 Directed Ideal"
+
+  323:
+    name: "All from All 4x4 From 1x1 Directed Ideal"
+
+  324:
+    name: "All from All 1x1 From 2x2 Directed Ideal"
+
+  325:
+    name: "All from All 1x1 From 4x4 Directed Ideal"
+
+  326:
+    name: "All from All 2x2 From 2x2 Directed Ideal"
+
+  327:
+    name: "All from All Virtual Channels"
+
+  328:
+    name: "All from All Custom"
+
+  329:
+    name: "All from All Packet Sizes 2.0"
+    memory_type: "l1"
+    mechanism: "unicast"
+    pattern: "all_from_all"
+
+  330:
+    name: "All from All Directed Ideal 2.0"
+
   331:
-    name: "Multi source Multicast Atomic Increment - NOC 1 2.0 API"
+    name: "All from All 2x2 From 1x1 Directed Ideal 2.0"
 
   332:
-    name: "Multicast Atomic Larger Increment - NOC 1 2.0 API"
+    name: "All from All 4x4 From 1x1 Directed Ideal 2.0"
+
+  333:
+    name: "All from All 1x1 From 2x2 Directed Ideal 2.0"
+
+  334:
+    name: "All from All 1x1 From 4x4 Directed Ideal 2.0"
+
+  335:
+    name: "All from All 2x2 From 2x2 Directed Ideal 2.0"
+
+  336:
+    name: "All from All Grid Sweep Packet Sizes 2.0"
+    memory_type: "l1"
+    mechanism: "unicast"
+    pattern: "all_from_all"
+    bandwidth_mode: "combined"
+
+  340:
+    name: "Atomic Semaphore Adjacent Bandwidth Sweep"
+
+  341:
+    name: "Atomic Semaphore Non Adjacent Bandwidth Sweep"
+
+  342:
+    name: "Single source Multicast Atomic Increment"
+
+  343:
+    name: "Multi source Multicast Atomic Increment"
+
+  344:
+    name: "Single source Multicast Atomic Increment - NOC 1"
+
+  345:
+    name: "Multi source Multicast Atomic Increment - NOC 1"
+
+  346:
+    name: "Multicast Atomic Larger Increment"
+
+  347:
+    name: "Multicast Atomic Larger Increment - NOC 1"
+
+  348:
+    name: "Single source Multicast Atomic Increment 2.0"
+
+  349:
+    name: "Multicast Atomic Larger Increment 2.0"
+
+  350:
+    name: "Multi source Multicast Atomic Increment 2.0"
+
+  351:
+    name: "Single source Multicast Atomic Increment - NOC 1 2.0"
+
+  352:
+    name: "Multi source Multicast Atomic Increment - NOC 1 2.0"
+
+  353:
+    name: "Multicast Atomic Larger Increment - NOC 1 2.0"
 
   400:
     name: "I2S - DRAM Sharded Row Major Writer"

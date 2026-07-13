@@ -477,11 +477,6 @@ void grid_packet_sizes_test(
 /  ========== TEST CASES FOR ALL-TO-ALL DATA MOVEMENT ==========  /
 /  ============================================================= */
 
-/*
-TO-DO:
-    - Implement a test case that shuffles through several grid sizes to test grids of different sizes
-*/
-
 /* ======== DIRECTED IDEAL ======== */
 
 /* ======== All to All ======== */
@@ -736,7 +731,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAllGridSweepPacketSizes2
     auto* device = mesh_device->get_device(0);
     auto grid = device->compute_with_storage_grid_size();
 
-    uint32_t test_case_id = 330;
+    uint32_t test_case_id = 316;
 
     struct GridConfig {
         CoreCoord mst_grid;

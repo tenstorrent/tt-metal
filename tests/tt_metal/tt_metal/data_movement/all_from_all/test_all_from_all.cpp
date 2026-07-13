@@ -23,7 +23,7 @@ using namespace test_utils;
 
 namespace unit_tests::dm::all_from_all {
 
-constexpr uint32_t START_ID = 310;
+constexpr uint32_t START_ID = 320;
 
 // Test Config (i.e. test parameters)
 struct AllFromAllConfig {
@@ -470,17 +470,12 @@ void grid_packet_sizes_test(
 /  ========== TEST CASES FOR ALL-TO-ALL DATA MOVEMENT ==========  /
 /  ============================================================= */
 
-/*
-TO-DO:
-    - Implement a test case that shuffles through several grid sizes to test grids of different sizes
-*/
-
 /* ======== DIRECTED IDEAL ======== */
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllDirectedIdeal) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
-    uint32_t test_case_id = 310;
+    uint32_t test_case_id = 320;
 
     /* Parameters */
 
@@ -500,7 +495,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllPacketSizes) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
 
-    uint32_t test_case_id = 311;
+    uint32_t test_case_id = 321;
 
     /* Parameters */
     CoreCoord mst_start_coord = {0, 0};
@@ -515,7 +510,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllPacketSizes) {
 
 /* ======== 2x2 to 1x1 ======== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll2x2From1x1DirectedIdeal) {
-    uint32_t test_case_id = 312;
+    uint32_t test_case_id = 322;
 
     /* Parameters */
     CoreCoord mst_start_coord = {0, 0};
@@ -530,7 +525,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll2x2From1x1DirectedI
 
 /* ======== 4x4 to 1x1 ======== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll4x4From1x1DirectedIdeal) {
-    uint32_t test_case_id = 313;
+    uint32_t test_case_id = 323;
 
     /* Parameters */
     CoreCoord mst_start_coord = {0, 0};
@@ -545,7 +540,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll4x4From1x1DirectedI
 
 /* ======== 1x1 to 2x2 ======== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll1x1From2x2DirectedIdeal) {
-    uint32_t test_case_id = 314;
+    uint32_t test_case_id = 324;
 
     /* Parameters */
     CoreCoord mst_start_coord = {0, 0};
@@ -560,7 +555,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll1x1From2x2DirectedI
 
 /* ======== 1x1 to 4x4 ======== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll1x1From4x4DirectedIdeal) {
-    uint32_t test_case_id = 315;
+    uint32_t test_case_id = 325;
 
     /* Parameters */
     CoreCoord mst_start_coord = {0, 0};
@@ -575,7 +570,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll1x1From4x4DirectedI
 
 /* ======== 2x2 to 2x2 ======== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll2x2From2x2DirectedIdeal) {
-    uint32_t test_case_id = 316;
+    uint32_t test_case_id = 326;
 
     /* Parameters */
     CoreCoord mst_start_coord = {0, 0};
@@ -592,14 +587,14 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll2x2From2x2DirectedI
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllVirtualChannels) {
     GTEST_SKIP() << "Skipping test";
-    uint32_t test_case_id = 317;
+    uint32_t test_case_id = 327;
 
     unit_tests::dm::all_from_all::virtual_channels_test(get_mesh_device(), test_case_id);
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllCustom) {
     GTEST_SKIP() << "Skipping test";
-    uint32_t test_case_id = 318;
+    uint32_t test_case_id = 328;
 
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
@@ -630,7 +625,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllPacketSizes2_0) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_device(0);
 
-    uint32_t test_case_id = 319;
+    uint32_t test_case_id = 329;
 
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord sub_start_coord = {0, 0};
@@ -651,7 +646,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllPacketSizes2_0) {
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllDirectedIdeal_2_0) {
-    uint32_t test_id = 320;
+    uint32_t test_id = 330;
 
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_device(0);
@@ -716,23 +711,23 @@ void all_from_all_grid_directed_ideal_2_0(
 }  // namespace
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll2x2From1x1DirectedIdeal_2_0) {
-    all_from_all_grid_directed_ideal_2_0(get_mesh_device(), 333, {0, 0}, {4, 4}, {2, 2}, {1, 1});
+    all_from_all_grid_directed_ideal_2_0(get_mesh_device(), 331, {0, 0}, {4, 4}, {2, 2}, {1, 1});
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll4x4From1x1DirectedIdeal_2_0) {
-    all_from_all_grid_directed_ideal_2_0(get_mesh_device(), 334, {0, 0}, {0, 0}, {4, 4}, {1, 1});
+    all_from_all_grid_directed_ideal_2_0(get_mesh_device(), 332, {0, 0}, {0, 0}, {4, 4}, {1, 1});
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll1x1From2x2DirectedIdeal_2_0) {
-    all_from_all_grid_directed_ideal_2_0(get_mesh_device(), 335, {0, 0}, {4, 4}, {1, 1}, {2, 2});
+    all_from_all_grid_directed_ideal_2_0(get_mesh_device(), 333, {0, 0}, {4, 4}, {1, 1}, {2, 2});
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll1x1From4x4DirectedIdeal_2_0) {
-    all_from_all_grid_directed_ideal_2_0(get_mesh_device(), 336, {0, 0}, {0, 0}, {1, 1}, {4, 4});
+    all_from_all_grid_directed_ideal_2_0(get_mesh_device(), 334, {0, 0}, {0, 0}, {1, 1}, {4, 4});
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAll2x2From2x2DirectedIdeal_2_0) {
-    all_from_all_grid_directed_ideal_2_0(get_mesh_device(), 337, {0, 0}, {0, 0}, {2, 2}, {2, 2});
+    all_from_all_grid_directed_ideal_2_0(get_mesh_device(), 335, {0, 0}, {0, 0}, {2, 2}, {2, 2});
 }
 
 /* ======== GRID + PACKET SIZE SWEEP ======== */
@@ -742,7 +737,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllGridSweepPacketSize
     auto* device = mesh_device->get_device(0);
     auto grid = device->compute_with_storage_grid_size();
 
-    uint32_t test_case_id = 329;
+    uint32_t test_case_id = 336;
 
     struct GridConfig {
         CoreCoord mst_grid;
