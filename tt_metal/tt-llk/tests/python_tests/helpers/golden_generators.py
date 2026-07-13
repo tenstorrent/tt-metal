@@ -3242,6 +3242,15 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuElwGe: self._ge,
                 MathOperation.SfpuElwEq: self._eq,
                 MathOperation.SfpuElwNe: self._ne,
+                MathOperation.SfpuBinaryMax: self._max,
+                MathOperation.SfpuBinaryMin: self._min,
+                MathOperation.SfpuBinaryFmod: self._fmod,
+                MathOperation.SfpuBinaryRemainder: self._remainder,
+                MathOperation.SfpuBitwiseAnd: self._bitwise_and,
+                MathOperation.SfpuBitwiseOr: self._bitwise_or,
+                MathOperation.SfpuBitwiseXor: self._bitwise_xor,
+                MathOperation.SfpuDivInt32Floor: self._div_int32_floor,
+                MathOperation.SfpuGcd: self._gcd,
             }
         )
 
@@ -3422,6 +3431,42 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
 
     def _ne(self, t1, t2):
         return float(t1 != t2)
+
+    def _max(self, t1, t2):
+        wide = self._wide_dtype(t1)
+        return torch.maximum(t1.to(wide), t2.to(wide)).to(t1.dtype)
+
+    def _min(self, t1, t2):
+        wide = self._wide_dtype(t1)
+        return torch.minimum(t1.to(wide), t2.to(wide)).to(t1.dtype)
+
+    def _fmod(self, t1, t2):
+        # fmod(a, b) = a - trunc(a/b) * b (result takes the sign of a). Computed in
+        # fp32 to mirror the SFPU reciprocal path; the final cast models the bf16 store.
+        return torch.fmod(t1.to(torch.float32), t2.to(torch.float32)).to(t1.dtype)
+
+    def _remainder(self, t1, t2):
+        # remainder(a, b) = a - floor(a/b) * b (result takes the sign of b), matching
+        # torch.remainder and the SFPU floor-based kernel.
+        return torch.remainder(t1.to(torch.float32), t2.to(torch.float32)).to(t1.dtype)
+
+    def _bitwise_and(self, t1, t2):
+        return torch.bitwise_and(t1.to(torch.int32), t2.to(torch.int32)).to(torch.int32)
+
+    def _bitwise_or(self, t1, t2):
+        return torch.bitwise_or(t1.to(torch.int32), t2.to(torch.int32)).to(torch.int32)
+
+    def _bitwise_xor(self, t1, t2):
+        return torch.bitwise_xor(t1.to(torch.int32), t2.to(torch.int32)).to(torch.int32)
+
+    def _div_int32_floor(self, t1, t2):
+        # int32 floor division (rounds toward -inf), matching calculate_div_int32_floor.
+        return torch.div(
+            t1.to(torch.int64), t2.to(torch.int64), rounding_mode="floor"
+        ).to(torch.int32)
+
+    def _gcd(self, t1, t2):
+        return torch.gcd(t1.to(torch.int32), t2.to(torch.int32)).to(torch.int32)
 
     def _add_top_row(
         self,

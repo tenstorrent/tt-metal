@@ -216,6 +216,18 @@ class MathOperation(Enum):
     SfpuElwGe = OpSpec("GE", MathOpType.SFPU_BINARY)
     SfpuElwEq = OpSpec("EQ", MathOpType.SFPU_BINARY)
     SfpuElwNe = OpSpec("NE", MathOpType.SFPU_BINARY)
+    # Binary SFPU kernels wired up for functional coverage (no dedicated production
+    # BinaryOp; the enum values live at the end of ckernel::BinaryOp).
+    SfpuBinaryMax = OpSpec("MAX", MathOpType.SFPU_BINARY)
+    SfpuBinaryMin = OpSpec("MIN", MathOpType.SFPU_BINARY)
+    SfpuBinaryFmod = OpSpec("FMOD", MathOpType.SFPU_BINARY)
+    SfpuBinaryRemainder = OpSpec("REMAINDER", MathOpType.SFPU_BINARY)
+    SfpuBitwiseAnd = OpSpec("BITWISE_AND", MathOpType.SFPU_BINARY)
+    SfpuBitwiseOr = OpSpec("BITWISE_OR", MathOpType.SFPU_BINARY)
+    SfpuBitwiseXor = OpSpec("BITWISE_XOR", MathOpType.SFPU_BINARY)
+    SfpuDivInt32 = OpSpec("DIV_INT32", MathOpType.SFPU_BINARY)
+    SfpuDivInt32Floor = OpSpec("DIV_INT32_FLOOR", MathOpType.SFPU_BINARY)
+    SfpuGcd = OpSpec("GCD", MathOpType.SFPU_BINARY)
 
     # =============================================================================
     # SFPU TERNARY OPERATIONS
