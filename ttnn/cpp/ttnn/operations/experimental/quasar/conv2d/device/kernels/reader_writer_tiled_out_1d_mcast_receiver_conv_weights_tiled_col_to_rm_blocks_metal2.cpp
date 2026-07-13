@@ -84,6 +84,12 @@ void kernel_main() {
     Semaphore<> weights_mcast_sender_sem(sem::weights_mcast_sender);
     Semaphore<> weights_mcast_receiver_sem(sem::weights_mcast_receiver);
     DataflowBuffer cb_weight_obj(dfb::weights);
+#ifdef ARCH_QUASAR
+    // WRITER-COPY (QSR off-grid-PACR0 workaround, Quasar-only): the compute packs each conv output block into
+    // this working-region CB; this writer NOC-copies it into the real OUTPUT tensor shard per height block.
+    // On non-Quasar OUT is borrowed and packed in place by compute; the writer never binds/touches it.
+    DataflowBuffer cb_out_obj(dfb::out);
+#endif
 #ifdef SPLIT_READER
     DataflowBuffer cb_reader_indices_obj(dfb::reader_indices);
     DataflowBuffer cb_sharded_act_obj(dfb::act_sharded);
@@ -121,6 +127,14 @@ void kernel_main() {
 #ifdef FUSE_BIAS
     bool load_bias = true;
 #endif
+#ifdef ARCH_QUASAR
+    // WRITER-COPY: OUTPUT tensor (NOC-copy destination) + per-block tile geometry (OUT CB is sized to one
+    // output block by the factory). out_tile_nbytes = bytes/tile (same convention as the sender's weights).
+    const auto s_out_dest = TensorAccessor(tensor::out_dest);
+    const uint32_t out_tile_nbytes = cb_out_obj.get_entry_size();
+    const uint32_t out_block_tiles = cb_out_obj.get_total_num_entries();
+#endif
+
     [[maybe_unused]] uint32_t l1_write_addr_act = 0;
     for (uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
         // MCAST RECEIVE WEIGHTS
@@ -238,6 +252,24 @@ void kernel_main() {
             // Increment reader index for the next number of segments (number of segments for other reader)
             start_reader_idx = reader_idx + static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1;
         }
+#endif
+#ifdef ARCH_QUASAR
+        // WRITER-COPY (QSR off-grid-PACR0 workaround): the compute has now packed this height block's conv
+        // output into the working-region OUT CB. NOC-copy it into the real OUTPUT tensor shard. Height-sharded
+        // 1D => sequential blocks: block bh -> output tiles [bh*out_block_tiles, (bh+1)*out_block_tiles).
+        cb_out_obj.wait_front(out_block_tiles);
+        uint32_t out_src_offset_bytes = 0;
+        for (uint32_t out_t = 0; out_t < out_block_tiles; ++out_t) {
+            noc.async_write(
+                cb_out_obj,
+                s_out_dest,
+                out_tile_nbytes,
+                {.offset_bytes = out_src_offset_bytes},
+                {.page_id = bh * out_block_tiles + out_t});
+            out_src_offset_bytes += out_tile_nbytes;
+        }
+        noc.async_write_barrier();
+        cb_out_obj.pop_front(out_block_tiles);
 #endif
     }  // out_num_blocks_h
 

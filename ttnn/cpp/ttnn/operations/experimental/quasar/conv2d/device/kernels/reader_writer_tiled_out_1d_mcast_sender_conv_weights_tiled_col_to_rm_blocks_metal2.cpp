@@ -97,6 +97,12 @@ void kernel_main() {
     Semaphore<> weights_mcast_receiver_sem(sem::weights_mcast_receiver);
     MulticastEndpoint mcast_ep;
     DataflowBuffer cb_weight_obj(dfb::weights);
+#ifdef ARCH_QUASAR
+    // WRITER-COPY (QSR off-grid-PACR0 workaround, Quasar-only): the compute packs each conv output block into
+    // this working-region CB; the writer NOC-copies it into the real OUTPUT tensor shard per height block. On
+    // non-Quasar OUT is borrowed and packed in place by compute; the writer never binds/touches it.
+    DataflowBuffer cb_out_obj(dfb::out);
+#endif
 #ifdef SPLIT_READER
     DataflowBuffer cb_reader_indices_obj(dfb::reader_indices);
     DataflowBuffer cb_sharded_act_obj(dfb::act_sharded);
@@ -155,6 +161,13 @@ void kernel_main() {
 
     const uint32_t weight_tile_nbytes = cb_weight_obj.get_entry_size();
     const auto s_weight = TensorAccessor(tensor::weights);
+#ifdef ARCH_QUASAR
+    // WRITER-COPY: OUTPUT tensor (NOC-copy destination) + per-block tile geometry. out_block_tiles = the OUT
+    // CB capacity (factory sized it to exactly one output block). out_tile_nbytes mirrors weight_tile_nbytes.
+    const auto s_out_dest = TensorAccessor(tensor::out_dest);
+    const uint32_t out_tile_nbytes = cb_out_obj.get_entry_size();
+    const uint32_t out_block_tiles = cb_out_obj.get_total_num_entries();
+#endif
 
     // OUTER most loop is looping over out blocks in width dim because blocks from compute are in col major order.
     // Write out col major blocks in row major layout to output
@@ -373,6 +386,25 @@ void kernel_main() {
             // Increment reader index for the next number of segments (number of segments for other reader)
             start_reader_idx = reader_idx + static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1;
         }
+#endif
+        // WRITER-COPY (QSR off-grid-PACR0 workaround): the compute has now packed this height block's conv
+        // output (matmul + optional fused bias/relu) into the working-region OUT CB. NOC-copy it into the real
+        // OUTPUT tensor shard. Height-sharded 1D => blocks are SEQUENTIAL: block bh -> output tiles
+        // [bh*out_block_tiles, (bh+1)*out_block_tiles). Per-tile write mirrors the bias read above.
+#ifdef ARCH_QUASAR
+        cb_out_obj.wait_front(out_block_tiles);
+        uint32_t out_src_offset_bytes = 0;
+        for (uint32_t out_t = 0; out_t < out_block_tiles; ++out_t) {
+            noc.async_write(
+                cb_out_obj,
+                s_out_dest,
+                out_tile_nbytes,
+                {.offset_bytes = out_src_offset_bytes},
+                {.page_id = bh * out_block_tiles + out_t});
+            out_src_offset_bytes += out_tile_nbytes;
+        }
+        noc.async_write_barrier();
+        cb_out_obj.pop_front(out_block_tiles);
 #endif
     }  // out_num_blocks_h
     // Drain outstanding NOC writes AND atomics before returning (Metal 2.0 FW epilogue does not).
