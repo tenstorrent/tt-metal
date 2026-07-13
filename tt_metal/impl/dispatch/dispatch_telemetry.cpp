@@ -33,42 +33,44 @@ struct SMCRuntimeTelemetryBuffer {
 };
 
 std::optional<SMCRuntimeTelemetryBuffer> discover_smc_dispatch_telemetry_control(tt::umd::TTDevice& tt_device) {
-    // Dispatch telemetry is best-effort: any failure to reach the SMC/firmware side must degrade to
-    // "unavailable" rather than propagate, otherwise it would break device init/close on devices that
-    // don't back a firmware info provider. Note get_firmware_info_provider() THROWS (does not return
-    // null) when uninitialized -- e.g. simulators (TtSimTTDevice has no firmware_info_provider) -- so
-    // this must be a try/catch, not a null check.
+    tt::umd::FirmwareInfoProvider* firmware_info_provider = nullptr;
     try {
-        auto* firmware_info_provider = tt_device.get_firmware_info_provider();
-        auto size = firmware_info_provider->get_runtime_telemetry_buffer_size();
-        if (!size.has_value()) {
-            log_warning(tt::LogMetal, "Dispatch telemetry SMC buffer is unavailable");
-            return std::nullopt;
-        }
-        if (size.value() < sizeof(dispatch_telemetry_types::SMCDispatchTelemetryControl)) {
-            log_warning(
-                tt::LogMetal,
-                "Dispatch telemetry SMC buffer is too small: got {} bytes, expected at least {} bytes",
-                size.value(),
-                sizeof(dispatch_telemetry_types::SMCDispatchTelemetryControl));
-            return std::nullopt;
-        }
-
-        auto addr = firmware_info_provider->get_runtime_telemetry_buffer_address();
-        if (!addr.has_value()) {
-            log_warning(tt::LogMetal, "Dispatch telemetry SMC buffer address is unavailable or invalid");
-            return std::nullopt;
-        }
-
-        return SMCRuntimeTelemetryBuffer{
-            .arc_core = tt_device.get_arc_core(), .addr = addr.value(), .size = size.value()};
+        // Throws when the device has no firmware info provider (ex: simulators)
+        // Dispatch telemetry is best-effort: any failure to reach the SMC/firmware side must degrade to
+        // "unavailable" rather than propagate, otherwise it would break device init/close on devices that
+        // don't back a firmware info provider.
+        firmware_info_provider = tt_device.get_firmware_info_provider();
     } catch (const std::exception& e) {
         log_warning(
             tt::LogMetal,
             "Dispatch telemetry SMC buffer unavailable (no firmware info provider, e.g. simulator): {}",
             e.what());
+    }
+    if (firmware_info_provider == nullptr) {
         return std::nullopt;
     }
+
+    auto size = firmware_info_provider->get_runtime_telemetry_buffer_size();
+    if (!size.has_value()) {
+        log_warning(tt::LogMetal, "Dispatch telemetry SMC buffer is unavailable");
+        return std::nullopt;
+    }
+    if (size.value() < sizeof(dispatch_telemetry_types::SMCDispatchTelemetryControl)) {
+        log_warning(
+            tt::LogMetal,
+            "Dispatch telemetry SMC buffer is too small: got {} bytes, expected at least {} bytes",
+            size.value(),
+            sizeof(dispatch_telemetry_types::SMCDispatchTelemetryControl));
+        return std::nullopt;
+    }
+
+    auto addr = firmware_info_provider->get_runtime_telemetry_buffer_address();
+    if (!addr.has_value()) {
+        log_warning(tt::LogMetal, "Dispatch telemetry SMC buffer address is unavailable or invalid");
+        return std::nullopt;
+    }
+
+    return SMCRuntimeTelemetryBuffer{.arc_core = tt_device.get_arc_core(), .addr = addr.value(), .size = size.value()};
 }
 
 template <typename T>
