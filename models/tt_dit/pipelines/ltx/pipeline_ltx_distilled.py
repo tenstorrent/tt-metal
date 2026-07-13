@@ -529,6 +529,10 @@ class LTXDistilledPipeline(LTXPipeline):
         image_conds: list | None = None,
         traced: bool = False,
         trace_key: str | None = None,
+        # Draining the device profiler is only legal BETWEEN trace replays: a read issued while the
+        # trace is still capturing trips !trace_id_.has_value(). Warmup captures, so only the replay
+        # path (generate) may set this.
+        profile_drain: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         B = 1
         latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
@@ -677,6 +681,18 @@ class LTXDistilledPipeline(LTXPipeline):
                 )
                 video_ts_pair_tt = state.tt_video_ts_pair
                 video_pin_mask_tt = state.tt_video_pin_mask
+            # Drain BEFORE the step: the profiler's DRAM buffer holds a fixed number of programs and the
+            # eager warmup already filled it, so a post-step drain would find the traced programs
+            # already dropped. Draining first resets the buffer, so this step's trace fills it clean and
+            # the NEXT drain reads it back. The drain issues an event-sync, illegal while the command
+            # queue is in kernel capture (prewarm's capture stage) — there is no live replay to sync
+            # against — so it is confined to the real run.
+            if (
+                profile_drain
+                and os.environ.get("LTX_PROFILE_FLUSH")
+                and not os.environ.get("TT_METAL_KERNEL_CAPTURE_ONLY")
+            ):
+                ttnn.ReadDeviceProfiler(self.mesh_device)
             # video_N_real is the logical (unpadded) count so ring SDPA masks padded K positions.
             _t_step = time.perf_counter()
             v_out, a_out = self.transformer.inner_step(
@@ -730,15 +746,10 @@ class LTXDistilledPipeline(LTXPipeline):
             ttnn.multiply_(a_vel, dt)
             ttnn.add_(state.tt_audio_lat, a_vel)
             ttnn.multiply_(state.tt_audio_lat, state.tt_audio_pad_mask)
-            # STEP_MS covers the step body only. The profiler drain below is host work, so an
-            # inter-log-line delta would fold it into the step wall and corrupt the measurement.
+            # STEP_MS covers the step body only. The profiler drain is host work, so an inter-log-line
+            # delta would fold it into the step wall and corrupt the measurement.
             _step_ms = (time.perf_counter() - _t_step) * 1000.0
             logger.info(f"  Step {step_idx + 1}/{num_steps}: σ {sigma:.4f} → {sigma_next:.4f} STEP_MS={_step_ms:.1f}")
-            # Under LTX_PROFILE_FLUSH, drain the device profiler each step so an untraced render
-            # (~18k ops) doesn't overflow the 12k-marker DRAM buffer, which drops markers and
-            # breaks the ops report. Profiling only; no effect on the normal traced path.
-            if os.environ.get("LTX_PROFILE_FLUSH"):
-                ttnn.ReadDeviceProfiler(self.mesh_device)
 
         v_final = LTXTransformerModel.device_to_host(
             state.tt_video_lat,
@@ -899,6 +910,7 @@ class LTXDistilledPipeline(LTXPipeline):
             image_conds=s1_image_conds,
             traced=self._traced and "s1" not in eager_stages,
             trace_key="s1",
+            profile_drain=True,
         )
         t_stage1 = time.time() - t0
         timings.append(("Stage 1 denoise", t_stage1))
@@ -932,6 +944,7 @@ class LTXDistilledPipeline(LTXPipeline):
             image_conds=full_image_conds,
             traced=self._traced and "s2" not in eager_stages,
             trace_key="s2",
+            profile_drain=True,
         )
         t_stage2 = time.time() - t0
         timings.append(("Stage 2 denoise", t_stage2))
