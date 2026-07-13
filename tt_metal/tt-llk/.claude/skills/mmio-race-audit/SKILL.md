@@ -53,7 +53,7 @@ Especially dangerous when a MOP/replay runs, an MMIO write changes a register it
 - any raw `volatile T* p = reinterpret_cast<...>(BASE); p[i] = ...` to cfg/GPR/MOP-cfg/TDMA register space (`cfg_write()`, `xmov_*`, `mop_cfg[]=`)
 
 ## SAFE (ordered in the thread stream — not the bug)
-- `cfg_reg_rmw_tensix<>` (emits `TT_RMWCIB`), `TTI_REG2FLOP`, `TTI_WRCFG`, `TTI_SETC16`, `TTI_RMWCIB*`, `TTI_SETADC*`, `TTI_SETDMAREG` — Tensix instructions, in-order through the config unit.
+- `cfg_reg_rmw_tensix<>` (emits `TT_RMWCIB`), `TTI?_REG2FLOP`, `TTI?_WRCFG`, `TTI?_SETC16`, `TTI?_RMWCIB*`, `TTI?_SETADC*`, `TTI?_SETDMAREG` (`TTI?_` = both the `TTI_` and Quasar `TT_` prefix) — Tensix instructions, in-order through the config unit.
 - `sync_regfile_write(idx)` after a `regfile[]` block — a read-back fence that retires the GPR store before dependent instructions issue. (Syncing the LAST index drains all prior regfile writes in the block.)
 - A `TTI_STALLWAIT` whose **condition operand** includes `p_stall::TRISC_CFG` (the "this thread has a RISC cfg/GPR write emitted but not yet processed" condition — **encoded per-arch**: WH = C13, BH = bit 10 / `0x400`, QSR = index 21; the checkers match by token NAME, not value, for this reason) placed BEFORE the consumer. NOTE: a *trailing* `TRISC_CFG` stall only orders the write before the NEXT run — it does **not** protect a *prior* in-flight consumer.
 - The consuming unit is provably idle when the write lands (context-acquire / semaphore handshake), with no consumer before the function returns or a sync.
