@@ -808,6 +808,16 @@ NOC_FLUSH_CALLS = (
 # false-clear otherwise). See the dataflow-API posted/non-posted counter split.
 NOC_POSTED_FLUSH_CALLS = ("noc_async_posted_writes_flushed",)
 
+# noc_async_full_barrier (free fn) / .async_full_barrier (Noc method) drains ALL
+# outstanding NoC transactions — reads AND non-posted writes AND non-posted atomics
+# (dataflow_api.h: "all transaction queues will be empty for the current Tensix core").
+# It is therefore a strict SUPERSET of every barrier below and satisfies a write-commit,
+# an atomic drain, AND a read drain simultaneously — so it is recognized by each of the
+# flush/barrier, atomic-barrier, and read-barrier predicates. Defined once here and
+# referenced from those predicates (single source) rather than duplicated into each set.
+NOC_FULL_BARRIERS = ("noc_async_full_barrier",)
+NOC_METHOD_FULL_BARRIER = ("async_full_barrier",)
+
 
 def noc_op(callee: str):
     """Return inc|set|mcast (a credit SIGNAL) | wait | flush | None."""
@@ -815,7 +825,11 @@ def noc_op(callee: str):
         return NOC_SIGNAL_CALLS[callee]
     if callee in NOC_WAIT_CALLS:
         return "wait"
-    if callee in NOC_FLUSH_CALLS or callee in NOC_POSTED_FLUSH_CALLS:
+    if (
+        callee in NOC_FLUSH_CALLS
+        or callee in NOC_POSTED_FLUSH_CALLS
+        or callee in NOC_FULL_BARRIERS
+    ):
         return "flush"
     return None
 
@@ -863,9 +877,11 @@ def noc_op_of(fact: dict):
     if op:
         return op
     name = fact.get("name", "")
-    if (name in NOC_METHOD_FLUSH or name in NOC_METHOD_POSTED_FLUSH) and any(
-        t in (fact.get("recv_type", "") or "") for t in _NOC_RECV_TYPES
-    ):
+    if (
+        name in NOC_METHOD_FLUSH
+        or name in NOC_METHOD_POSTED_FLUSH
+        or name in NOC_METHOD_FULL_BARRIER
+    ) and any(t in (fact.get("recv_type", "") or "") for t in _NOC_RECV_TYPES):
         return "flush"
     if _is_noc_signal_receiver(fact.get("recv_type", "")):
         if name in NOC_METHOD_SIGNAL_MCAST:
@@ -949,7 +965,11 @@ def noc_flush_kind(fact: dict):
     if noc_op_of(fact) != "flush":
         return None
     name = fact.get("name", "")
-    if name in NOC_WRITE_BARRIERS:
+    if (
+        name in NOC_WRITE_BARRIERS
+        or name in NOC_FULL_BARRIERS
+        or name in NOC_METHOD_FULL_BARRIER
+    ):
         return "barrier"
     if name in NOC_POSTED_FLUSH_CALLS or name in NOC_METHOD_POSTED_FLUSH:
         return "posted"
@@ -970,13 +990,14 @@ NOC_METHOD_ATOMIC_BARRIER = ("async_atomic_barrier",)  # Noc-object method form
 
 
 def noc_is_atomic_barrier(fact: dict) -> bool:
-    """True if the call drains the non-posted ATOMIC counter (free-fn or Noc method)."""
+    """True if the call drains the non-posted ATOMIC counter (free-fn or Noc method).
+    noc_async_full_barrier / .async_full_barrier drain the atomic counter too."""
     name = fact.get("name", "")
-    if name in NOC_ATOMIC_BARRIERS:
+    if name in NOC_ATOMIC_BARRIERS or name in NOC_FULL_BARRIERS:
         return True
-    return name in NOC_METHOD_ATOMIC_BARRIER and any(
-        t in (fact.get("recv_type", "") or "") for t in _NOC_RECV_TYPES
-    )
+    return (
+        name in NOC_METHOD_ATOMIC_BARRIER or name in NOC_METHOD_FULL_BARRIER
+    ) and any(t in (fact.get("recv_type", "") or "") for t in _NOC_RECV_TYPES)
 
 
 # A data-movement kernel's outermost entry body. The NOC-idle-at-exit contract applies
@@ -1012,11 +1033,12 @@ def noc_is_read(fact: dict) -> bool:
 def noc_is_read_barrier(fact: dict) -> bool:
     """A read-drain barrier: free-fn noc_async_read_barrier[_with_trid] or the Noc
     method form. (A bare noc_async_reads_flushed is NOT treated as the drain — it does
-    not invalidate the L1 cache, so the checker keeps flagging conservatively.)"""
+    not invalidate the L1 cache, so the checker keeps flagging conservatively.)
+    noc_async_full_barrier / .async_full_barrier drain the read counter too."""
     n = fact.get("name", "")
-    if n.startswith("noc_async_read_barrier"):
+    if n.startswith("noc_async_read_barrier") or n in NOC_FULL_BARRIERS:
         return True
-    return n in NOC_METHOD_READ_BARRIER and any(
+    return (n in NOC_METHOD_READ_BARRIER or n in NOC_METHOD_FULL_BARRIER) and any(
         t in (fact.get("recv_type", "") or "") for t in _NOC_RECV_TYPES
     )
 

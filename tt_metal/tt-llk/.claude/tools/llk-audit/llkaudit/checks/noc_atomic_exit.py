@@ -5,7 +5,8 @@ noc-atomic-exit checker — a non-posted NoC ATOMIC left in flight at kernel exi
 
 A remote atomic credit (`noc_semaphore_inc` / `Semaphore::up(noc, ...)`) is tracked
 by its own HW counter (noc_nonposted_atomics_acked), distinct from writes. Only
-`noc_async_atomic_barrier()` drains it — a write barrier / writes_flushed does not.
+`noc_async_atomic_barrier()` (or the all-draining `noc_async_full_barrier()`) drains
+it — a write barrier / writes_flushed does not.
 The post-`kernel_main` firmware epilogue does NOT drain in-flight atomics in
 release / Watcher-off builds (it only ASSERTs idle under DM_DEDICATED_NOC), so a
 kernel that issues an atomic and returns without an atomic barrier leaves it in
@@ -75,7 +76,7 @@ class NocAtomicExit(Check):
                     detail=f"{last.get('name','')} (non-posted atomic) is the last atomic "
                     f"in {func} with no following noc_async_atomic_barrier — the atomic "
                     "is in flight at kernel exit (write/flush barriers do NOT drain the "
-                    "atomic counter; only noc_async_atomic_barrier does)",
+                    "atomic counter; only noc_async_atomic_barrier or noc_async_full_barrier does)",
                     evidence=[self._ev(last, last.get("name", ""))],
                 )
             )

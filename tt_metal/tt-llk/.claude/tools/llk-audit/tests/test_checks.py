@@ -2129,6 +2129,47 @@ def test_noc_read_barrier():
     assert NocReadBarrier().run(FactBase("wormhole", batch)) == []
 
 
+@case
+def test_noc_full_barrier_drains_all_counters():
+    # noc_async_full_barrier (free fn) / .async_full_barrier (Noc method) drains reads +
+    # non-posted writes + non-posted atomics (dataflow_api.h) — a strict superset of every
+    # barrier, so it must satisfy the write-commit, atomic, AND read drains.
+    from llkaudit import registry as r
+
+    for f in (
+        {"name": "noc_async_full_barrier"},
+        {"name": "async_full_barrier", "recv_type": "Noc"},
+    ):
+        assert r.noc_op_of(f) == "flush", f
+        assert r.noc_flush_kind(f) == "barrier", f  # committed, not merely departed
+        assert r.noc_is_atomic_barrier(f) is True, f
+        assert r.noc_is_read_barrier(f) is True, f
+    # the object-method form is TYPE-gated: a `.async_full_barrier()` on a non-Noc
+    # receiver must NOT match (mirrors the other Noc-method predicates).
+    foo = {"name": "async_full_barrier", "recv_type": "Foo"}
+    assert r.noc_is_atomic_barrier(foo) is False
+    assert r.noc_is_read_barrier(foo) is False
+
+    K = "ttnn/cpp/x/quasar_reader.cpp"
+    # end-to-end: a full barrier after a terminal atomic drains it -> NOT flagged.
+    ok_atomic = [
+        fn("kernel_main", K, 0, 100),
+        call(
+            K, 20, "up", func="kernel_main", recv="sem", recv_type="Semaphore", argc=4
+        ),
+        call(K, 30, "async_full_barrier", func="kernel_main", recv_type="Noc"),
+    ]
+    assert NocAtomicExit().run(FactBase("wormhole", ok_atomic)) == []
+    # end-to-end: read; full_barrier; consume -> the full barrier drains the read -> safe.
+    ok_read = [
+        fn("kernel_main", K, 0, 100),
+        call(K, 10, "noc_async_read", func="kernel_main", arg0="src"),
+        call(K, 20, "noc_async_full_barrier", func="kernel_main"),
+        call(K, 30, "cb_push_back", func="kernel_main", arg0="cb0"),
+    ]
+    assert NocReadBarrier().run(FactBase("wormhole", ok_read)) == []
+
+
 def pr_read(file, off, producer, func="", prov="call"):
     # a pointer_read fact (volatile-pointer read inside a loop) as the extractor emits.
     return {
