@@ -43,9 +43,23 @@ class Qwen36Model:
         else:
             self.tt_ccl = None
         self.configuration = args  # Generator reads model.configuration.max_seq_len
-        self.sampling = None  # host sampling only (no on-device sampler)
         self.sampling_dp = 1
-        self._supports_on_device_sampling = False
+        # Rope is host-recomputed each step (not advanced on-device) → force the trace to refresh decode inputs (else stale rope).
+        self._tt_vllm_always_refresh_decode_trace_inputs = True
+        # Reuses the vocab-sharded lm_head as the sampler's shard: needs divisible vocab; 64K = top-k limit.
+        self._supports_on_device_sampling = (
+            self.num_devices > 1
+            and args.vocab_size % self.num_devices == 0
+            and (args.vocab_size // self.num_devices <= 64 * 1024)
+        )
+        if self._supports_on_device_sampling:
+            from models.common.sampling.generator import SamplingGenerator
+
+            # vocab/num_devices isn't a power of 2; the multi-device TopK kernel needs it padded.
+            args.pad_logits_to_power_of_2 = True
+            self.sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=self.tt_ccl)
+        else:
+            self.sampling = None
 
         # Embedding — framework Embedding (mesh-aware: ShardTensor2dMesh(dims=(None,3))
         # replicates the table on a 1-device mesh, identical to the old single-device path).
@@ -943,9 +957,12 @@ class Qwen36Model:
 
         return logits
 
-    def _forward_decode(self, token_ids_buf, cos, sin, cur_pos_tensor, page_table):
+    def _forward_decode(self, token_ids_buf, cos, sin, cur_pos_tensor, page_table, sharded_lm_head=False):
         """Device-facing paged decode forward. ALL inputs are device tensors.
         Trace-safe: no host-device transfers inside this function.
+
+        sharded_lm_head=True: return the pre-gather vocab-sharded logits (no all-gather)
+        for the on-device sampler, which does its own cross-device top-k + gather.
         """
         x = self.embd(token_ids_buf)
         if self.num_devices > 1:
@@ -957,9 +974,10 @@ class Qwen36Model:
             else:
                 x = layer.forward(x, mode="decode")
         x = self._final_norm_decode(x)
-        if self._ondev_argmax:
+        if sharded_lm_head or self._ondev_argmax:
             # PRE-gather vocab-sharded logits [1,1,vocab/nd] (distinct per device) for on-device
-            # greedy: caller argmaxes each shard + combines, skipping the all-gather + big readback.
+            # greedy/sampling: caller argmaxes/samples each shard + combines, skipping the
+            # all-gather + big readback.
             logits = ttnn.linear(x, self.lm_head_weight)
         else:
             logits = self._lm_head(x)
@@ -2516,8 +2534,7 @@ class Qwen36Model:
         rot_mat_idxs=None,
         page_table=None,
         kv_cache=None,
-        sampling_on_device=False,
-        capture_sampling_trace=False,
+        on_device_logits=False,
         **kwargs,
     ):
         """Generator-contract decode forward.
@@ -2526,23 +2543,35 @@ class Qwen36Model:
         trace-safe _forward_decode. GDN and attention KV state are model-bound
         (set by allocate_kv_caches), so kv_cache is accepted but unused.
 
-        Returns: (logits, None)
+        on_device_logits=True: return the raw vocab-sharded shard for the on-device sampler.
+        Returns: (logits, None), or a bare logits tensor when on_device_logits=True.
         """
         from models.demos.blackhole.qwen36.tt.generator_interface import unpack_rope
 
         cos, sin = unpack_rope(rot_mat_idxs)
+        if on_device_logits:
+            assert self.sampling is not None, "on_device_logits=True but self.sampling is None"
+            logits = self._forward_decode(tokens, cos, sin, current_pos, page_table, sharded_lm_head=True)
+            # Sampler runs >=32-wide; pad B up to it (else shape mismatch). Extra slots unused.
+            sampler_batch = self.sampling.tt_sampling.max_batch_size
+            B = logits.shape[2]
+            if B < sampler_batch:
+                logits = ttnn.pad(logits, [(0, 0), (0, 0), (0, sampler_batch - B), (0, 0)], value=0.0)
+            # Bare tensor (not a tuple): the traced path passes this straight to capture_trace().
+            return logits
         logits = self._forward_decode(tokens, cos, sin, current_pos, page_table)
         return logits, None
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False):
-        """Convert decode logits from device ttnn to a host float tensor.
-
-        Qwen's _forward_decode returns 3D logits [B, 1, vocab_size]; slice accordingly.
-        On-device sampling / log-probs are not supported by this port (host sampling only,
-        ``_supports_on_device_sampling=False``), so the is_tokens / is_log_probs branches the
-        reference handles never fire here. Assert rather than silently return wrong-shaped data.
+        """Convert decode output to host torch. Host-sampling returns logits [B,S,vocab];
+        on-device sampling (is_tokens) returns sampled token ids. Log-probs out of scope.
         """
-        assert not (is_tokens or is_log_probs), "on-device sampling/log-probs unsupported (host sampling only)"
+        assert not is_log_probs, "on-device log-probs unsupported"
+        if is_tokens:
+            # Sampled ids are identical across devices; read one, flatten, take B.
+            if self.num_devices > 1:
+                return ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).reshape(-1)[:B]
+            return ttnn.to_torch(tt_out).reshape(-1)[:B]
         if self.num_devices > 1:
             # TP: logits are replicated (full vocab on every device). Read ONE replica (device 0)
             # instead of ConcatMeshToTensor, which reads all 4 device copies (~4x the 248320-wide
