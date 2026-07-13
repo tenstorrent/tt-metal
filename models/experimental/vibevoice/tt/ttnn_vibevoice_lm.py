@@ -63,6 +63,25 @@ _QO_DECODE_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
 # program config.  Downstream ops that need interleaved input reshard automatically.
 _QO_DECODE_OUT_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
 
+# Decode-only program config for the FFN down projection w2 (32x8960x1536, single-
+# token step).  Sweep winner: same 8x3=24-core / per_core_N=2 / out_subblock 1x2
+# shape as _QO, but in0_block_w=8 (K=8960 is deep, wider block amortizes) -> 6.6us
+# vs 14.2us auto baseline (2.15x).  The gate/up matmuls (32x1536x8960) are already
+# DRAM-BW-bound under the auto config, so no config beats them and they stay auto.
+# per_core_M=1 makes this valid ONLY for S==1 decode.  Output reuses the _QO width-
+# sharded spec (same N=1536, same grid).
+_W2_DECODE_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    compute_with_storage_grid_size=ttnn.CoreCoord(8, 3),
+    in0_block_w=8,
+    out_subblock_h=1,
+    out_subblock_w=2,
+    per_core_M=1,
+    per_core_N=2,
+    fuse_batch=True,
+    fused_activation=None,
+    mcast_in0=True,
+)
+
 
 # ──────────────────────────────────────────────────────────────
 # Host-side weight preparation
@@ -497,11 +516,19 @@ class TTVibeVoiceLM:
         if layer_w.v_bias is not None:
             v = ttnn.add(v, layer_w.v_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # Reshape [B, 1, S, n*hd] → [B, S, n, hd] then permute → [B, n, S, hd]
-        # Matches PyTorch: view(B, S, n, hd).transpose(1, 2)
-        q = ttnn.permute(_reshape_tt(q, [B, S, n_heads, head_dim]), (0, 2, 1, 3))  # [B, n_heads, S, hd]
-        k = ttnn.permute(_reshape_tt(k, [B, S, n_kv, head_dim]), (0, 2, 1, 3))  # [B, n_kv, S, hd]
-        v = ttnn.permute(_reshape_tt(v, [B, S, n_kv, head_dim]), (0, 2, 1, 3))  # [B, n_kv, S, hd]
+        # Split into per-head tensors: [B, 1, S, n*hd] → [B, n, S, hd], matching
+        # PyTorch view(B, S, n, hd).transpose(1, 2).  One fused data-movement op
+        # (concat + nlp_create_qkv_heads) replaces the per-tensor untilize→reshape→
+        # tilize→permute round-trip.  Bit-exact vs the old path (pure shuffle, PCC 1.0);
+        # ~4-5x faster on this split.
+        qkv = ttnn.concat([q, k, v], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv,
+            num_heads=n_heads,
+            num_kv_heads=n_kv,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
         # Apply RoPE on device (validated fp32 path); cos/sin sliced [start_pos : start_pos+S].
         if cos_sin_tt is not None:
@@ -584,7 +611,9 @@ class TTVibeVoiceLM:
             attn = ttnn.softmax(scores, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             out = ttnn.matmul(attn, v_f32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             out = ttnn.typecast(out, ttnn.bfloat16)
-            out = _reshape_tt(ttnn.permute(out, (0, 2, 1, 3)), [B, 1, S, n_heads * head_dim])
+            # Merge heads [B, n, S, hd] → [B, 1, S, n*hd] in one shuffle (was
+            # permute + untilize→reshape→tilize).  Bit-exact; ~7x faster on this split.
+            out = ttnn.experimental.nlp_concat_heads(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         else:
             # ── Decode: write one token at start_pos, then fused flash-decode over the
             # cache prefix.  GQA handled natively (no KV-head materialization, no fp32
@@ -618,7 +647,12 @@ class TTVibeVoiceLM:
                     program_config=_SDPA_DECODE_CFG,
                     compute_kernel_config=_HIFI4,
                 )  # [1, B, n_heads, hd]
-                out = _reshape_tt(attn, [B, 1, S, n_heads * head_dim])
+                # Merge heads → [B, 1, S, n*hd] in one shuffle (was untilize→reshape→
+                # tilize).  permute lands SDPA's [1, B, n, hd] as [B, n, 1, hd] for the
+                # concat op.  Bit-exact; ~1.9x faster incl. the permute.  Hot path.
+                out = ttnn.experimental.nlp_concat_heads(
+                    ttnn.permute(attn, (0, 2, 1, 3)), memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
             else:
                 # Fallback: fp32 manual GQA decode over cache prefix (slower but no hang).
                 k_all = ttnn.slice(
@@ -662,7 +696,9 @@ class TTVibeVoiceLM:
                 attn = ttnn.softmax(scores, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 out = ttnn.matmul(attn, v_f32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 out = ttnn.typecast(out, ttnn.bfloat16)
-                out = _reshape_tt(out, [B, 1, S, n_heads * head_dim])
+                # Merge heads [B, n, 1, hd] → [B, 1, 1, n*hd] in one shuffle (was
+                # untilize→reshape→tilize).  Bit-exact; ~4x faster.
+                out = ttnn.experimental.nlp_concat_heads(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # Output projection (1536x1536; same decode fast-path as wq).
         out = ttnn.linear(
@@ -676,11 +712,20 @@ class TTVibeVoiceLM:
 
     def _ffn_layer(self, x: ttnn.Tensor, layer_w: LayerWeights) -> ttnn.Tensor:
         """SwiGLU FFN: gate_proj(x) * silu(gate_proj(x)) → down_proj."""
+        S = x.shape[2]
         gate = ttnn.linear(x, layer_w.w1, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         up = ttnn.linear(x, layer_w.w3, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         gate = ttnn.silu(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         hidden = ttnn.mul(gate, up, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        out = ttnn.linear(hidden, layer_w.w2, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Down proj: on a single-token decode step use the swept fast config (2.15x);
+        # prefill (S>1) keeps the auto config.
+        out = ttnn.linear(
+            hidden,
+            layer_w.w2,
+            compute_kernel_config=_HIFI4,
+            program_config=_W2_DECODE_PROGCFG if S == 1 else None,
+            memory_config=_QO_DECODE_OUT_MEMCFG if S == 1 else ttnn.DRAM_MEMORY_CONFIG,
+        )
         return out
 
     def _transformer_layer(

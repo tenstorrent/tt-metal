@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import NamedTuple
 
 import torch
@@ -93,6 +94,8 @@ def run_decoder_layer_decode_pcc_sweep(
     num_steps: int = DECODE_GENERATION_LENGTH,
 ) -> list[float]:
     """10 decode steps at positions 0–9 with random hidden states and empty KV cache."""
+    if "VV_DECODER_LAYER_PCC_STEPS" in os.environ:
+        num_steps = int(os.environ["VV_DECODER_LAYER_PCC_STEPS"])
     ctx = build_decoder_layer_pcc_context(mesh_device, lm_state, vv_config)
     hf_cache = DynamicCache()
     kv_cache = ctx.tt_probe.alloc_kv_cache(num_steps + 8)
