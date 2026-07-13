@@ -591,6 +591,27 @@ def test_reconfig_drain_tokens_cover_all_packer_subunits():
     assert ReconfigStall().run(FactBase("wormhole", facts)) == []
 
 
+@case
+def test_math_sfpu_drain_token_precision():
+    # The SFPU drain must be matched on the real drain tokens (WAIT_SFPU / SFPU1) at
+    # word boundaries, NOT a bare "SFPU" substring: Quasar's p_stall::SFPU_SRCS_RDY is
+    # a SOURCES-READY wait (not a pipeline drain) and STALL_SFPU is a block-res mask —
+    # neither idles the SFPU, so neither may clear a MATH reconfig the SFPU samples.
+    from llkaudit import registry
+
+    # real drain spellings -> SFPU engine drained (partial MATH drain: FPU still busy)
+    assert registry.unit_drain_state("p_stall::WAIT_SFPU", "MATH") == (True, False)
+    assert registry.unit_drain_state("p_stall::SFPU1", "MATH") == (True, False)
+    # both engines named -> full drain
+    assert registry.unit_drain_state("p_stall::MATH, p_stall::WAIT_SFPU", "MATH") == (
+        True,
+        True,
+    )
+    # non-drains must NOT be read as an SFPU drain (were false-cleared by the substring)
+    assert registry.unit_drain_state("p_stall::SFPU_SRCS_RDY", "MATH") == (False, False)
+    assert registry.unit_drain_state("p_stall::STALL_SFPU", "MATH") == (False, False)
+
+
 # --- Quasar validation regressions ----------------------------------------
 
 
@@ -1950,6 +1971,27 @@ def test_noc_atomic_exit():
         call(K, 20, "noc_semaphore_inc", func="send_signal", arg0="sem"),
     ]
     assert NocAtomicExit().run(FactBase("wormhole", helper)) == []
+
+
+@case
+def test_noc_raw_atomic_increment_recognized():
+    # A kernel that posts its credit via the RAW remote-atomic form (the low-level
+    # call noc_semaphore_inc itself lowers to; used directly by dispatch/prefetch fast
+    # paths) must be recognized as an atomic credit — otherwise noc-sync and
+    # noc-atomic-exit silently miss it (a false negative).
+    from llkaudit import registry
+
+    for nm in ("noc_atomic_increment", "noc_fast_atomic_increment"):
+        assert registry.noc_op(nm) == "inc", nm
+        assert registry.noc_signal_is_atomic({"name": nm}) is True, nm
+    # end-to-end: a raw atomic left in flight at kernel exit is flagged.
+    K = "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp"
+    bad = [
+        fn("kernel_main", K, 0, 100),
+        call(K, 20, "noc_fast_atomic_increment", func="kernel_main", arg0="sem"),
+    ]
+    r = NocAtomicExit().run(FactBase("wormhole", bad))
+    assert len(r) == 1 and r[0].hint == "NO_ATOMIC_BARRIER_AT_EXIT", r
 
 
 @case
