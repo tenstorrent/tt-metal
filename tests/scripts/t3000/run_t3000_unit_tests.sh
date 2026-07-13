@@ -271,6 +271,7 @@ run_t3000_ccl_tests() {
   pytest tests/nightly/t3000/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_1d -k "zeros_width_dim-check"
   pytest tests/nightly/t3000/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_2d -k "small_5d_h0w1"
 
+<<<<<<< HEAD
   # all_gather_matmul fp32 accumulation precision on the classic mcast program paths (2D and 1D).
   # Both tests in one pytest invocation so a failure in one doesn't stop the other one from running.
   pytest tests/nightly/t3000/ccl/test_minimal_all_gather_matmul_async.py::test_all_gather_matmul_async_fp32_reload_precision \
@@ -279,6 +280,8 @@ run_t3000_ccl_tests() {
   # ring attention all gather: cache-hit regression that re-applies hash-excluded semaphore addresses
   pytest "tests/nightly/t3000/ccl/test_ring_attention_all_gather.py::test_ring_attention_all_gather_semaphore_realloc_cache_hit[wormhole_b0-line-check-mem_config_input0-mem_config_ag0-shape2_2input_rp4-tile_bfloat16-1link-mesh_device0]"
 
+=======
+>>>>>>> cf9e25f7014 (ring_attention_all_gather: drop dead+redundant t3000-unit shell registration; test already runs nightly via t3k_e2e t3k_ccl_tests (wh_llmbox))
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
