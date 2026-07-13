@@ -2,15 +2,17 @@
 
 ## 0. Proper Initialization
 
-Prior to running your models and CCL Ops, Fabric is initialized via `mesh_device` instantiation. There are several available Fabric configurations:
+Prior to running your models and CCL Ops, Fabric is configured and initialized before `mesh_device` instantiation. There are several available Fabric configurations:
 
 - `FABRIC_1D`
 - `FABRIC_1D_RING`
 - `FABRIC_2D`
 - `FABRIC_2D_TORUS_X`
 - `FABRIC_2D_TORUS_Y`
+- `FABRIC_2D_TORUS_XY`
 
-Generally, `FABRIC_1D_RING` is the best choice for performance. Not all hardware and mesh configurations support ring — it depends on the physical connectivity of the hardware. The `FABRIC_2D` variants are not generally used by `ttnn` CCLs and are necessarily less performant.
+Generally, `FABRIC_1D_RING` is the best choice for performance. Not all hardware and mesh configurations support ring — the supported Fabric configurations depend on the physical connectivity of the hardware. The `FABRIC_2D` variants are not generally used by `ttnn` CCLs and are necessarily less performant.
+
 
 ```python
 import ttnn
