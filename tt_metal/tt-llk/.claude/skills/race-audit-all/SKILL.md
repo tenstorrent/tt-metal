@@ -34,7 +34,8 @@ schema reconciliation):
     # PR-scoped sweep: add --changed [BASE] (default main) to scope every check to files changed vs BASE.
     # out/audit.<arch>.json -> .checks[{mmio-race, cfg-word-overlap,
     #                                    semaphore-handshake, reconfig-stall,
-    #                                    srcreg-bank, mailbox-sync, cb-sync, noc-sync}]
+    #                                    srcreg-bank, mailbox-sync, cb-sync, noc-sync,
+    #                              noc-atomic-exit, noc-read-barrier, noc-l1-invalidate}]
     #   (cb-sync/noc-sync are committed + deterministic but need a KERNEL fact base
     #    to yield findings — over tt-llk they are trivially empty; see kernel tier.)
 
@@ -101,8 +102,8 @@ follow the commit-twice pre-commit discipline. Then re-run recall so the sweep
 reflects the widened tables. This keeps the tool a living superset of the codebase
 instead of decaying into a false all-clear as the APIs move.
 
-## Full-audit kernel tier (opt-in) — the committed JIT capture for cb-sync / noc-sync / mailbox-sync
-The `cb-sync`, `noc-sync`, and `mailbox-sync` **checkers are committed and
+## Full-audit kernel tier (opt-in) — the committed JIT capture for cb-sync / noc-sync / noc-atomic-exit / noc-read-barrier / noc-l1-invalidate / mailbox-sync
+The `cb-sync`, `noc-sync`, `noc-atomic-exit`, `noc-read-barrier`, `noc-l1-invalidate`, and `mailbox-sync` **checkers are committed and
 deterministic** — but their kernel surface lives in **JIT-compiled kernels OUTSIDE
 tt-llk** (`ttnn/`, `models/`, `tt_metal/hw/inc/api`), which have no static compile
 database the in-tree fixed-flags parse can reach. So the checkers are always
@@ -111,7 +112,7 @@ The `kernel_tier/` module (committed in-tree) produces that fact base; the only
 runtime-dependent step is the capture RUN itself.
 
 > **What is durable vs runtime-dependent (the clean split):**
-> - **DURABLE (committed, in the tool):** the `cb-sync` / `noc-sync` / `mailbox-sync`
+> - **DURABLE (committed, in the tool):** the `cb-sync` / `noc-sync` / `noc-atomic-exit` / `noc-read-barrier` / `noc-l1-invalidate` / `mailbox-sync`
 >   checkers themselves — plain Python over a fact base, unit-tested, no JIT hook —
 >   AND `kernel_tier/{capture.py,bootstrap.sh,MANIFEST}`, the capture pipeline.
 >   Over the tt-llk fact base **cb-sync / noc-sync are trivially empty** (no cb/noc
@@ -136,7 +137,7 @@ workload (`LLK_KT_WORKLOAD` [+ `LLK_KT_CLEAR_CACHE=1`], which needs a device/sim
    `--changed` run). A diff/PR run **never** prompts — the fast path stays clean.
 2. **Runtime:** the capture needs a build log or a device/sim. If neither is
    available, do **NOT** silently improvise. Proceed with the in-tree sweep and
-   **tell the user precisely what that means for cb-sync / noc-sync / mailbox: they
+   **tell the user precisely what that means for cb-sync / noc-sync / noc-atomic-exit / noc-read-barrier / noc-l1-invalidate / mailbox: they
    are NOT tool-recalled *over kernels* this run, but they are STILL AUDITED —
    LLM-driven via each skill's (ttnn-widened) grep + reasoning + ISA docs. "Not
    tool-recalled" ≠ "left out."** The only thing forgone is the extra deterministic

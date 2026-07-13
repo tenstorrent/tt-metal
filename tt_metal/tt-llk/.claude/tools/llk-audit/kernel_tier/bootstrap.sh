@@ -4,13 +4,13 @@
 #
 # kernel_tier/bootstrap.sh <arch> <out_dir>
 #
-# The on-request kernel tier for cb-sync / noc-sync / noc-atomic-exit / noc-read-barrier / mailbox-sync over the
+# The on-request kernel tier for cb-sync / noc-sync / noc-atomic-exit / noc-read-barrier / noc-l1-invalidate / mailbox-sync over the
 # JIT-compiled kernel surface (OUTSIDE tt-llk). Invoked by `run.sh --full-jit`
 # when this module is present (kernel_tier/MANIFEST). It:
 #   1. obtains a tt-metal build log carrying `g++ compile cmd:` lines (either a
 #      pre-captured LLK_KT_LOG, or by RUNNING a workload with the capture env var),
 #   2. translates + extracts each kernel TU into a KERNEL fact base (capture.py),
-#   3. runs cb-sync / noc-sync / noc-atomic-exit / noc-read-barrier / mailbox-sync over it,
+#   3. runs cb-sync / noc-sync / noc-atomic-exit / noc-read-barrier / noc-l1-invalidate / mailbox-sync over it,
 #   4. writes out/audit.kernel.<arch>.json + a coverage ledger.
 #
 # Controls (env):

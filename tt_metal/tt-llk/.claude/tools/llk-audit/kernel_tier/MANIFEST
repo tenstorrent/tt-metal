@@ -2,7 +2,7 @@ llk-audit kernel-tier module (present).
 
 The presence of this file flips `run.sh --kernel-tier-status` to "available" and
 lets `run.sh --full-jit` invoke bootstrap.sh. The kernel tier is the opt-in,
-off-main, JIT-dependent recall of cb-sync / noc-sync / mailbox-sync over the
+off-main, JIT-dependent recall of cb-sync / noc-sync / noc-atomic-exit / noc-read-barrier / noc-l1-invalidate / mailbox-sync over the
 JIT-compiled kernel surface OUTSIDE tt-llk (ttnn/models/compute-API kernels).
 
 Entry point: bootstrap.sh <arch> <out_dir>  (see its header for env controls).

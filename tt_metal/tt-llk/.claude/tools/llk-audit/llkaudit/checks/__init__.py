@@ -14,7 +14,7 @@ from .reconfig_stall import ReconfigStall
 from .semaphore_handshake import SemaphoreHandshake
 from .srcreg_bank import SrcRegBank
 
-#: All available checks, keyed by their CLI name. cb-sync / noc-sync are
+#: All available checks, keyed by their CLI name. cb-sync / noc-sync / noc-atomic-exit / noc-read-barrier / noc-l1-invalidate are
 #: deterministic but their surface is JIT-compiled kernels OUTSIDE tt-llk, so
 #: they only produce findings when fed a KERNEL fact base (the on-request
 #: capture — run.sh --full-jit); over the tt-llk fact base they are trivially
