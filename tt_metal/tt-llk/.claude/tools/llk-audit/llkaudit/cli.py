@@ -214,6 +214,27 @@ def main(argv=None) -> int:
         print(f"llk-audit: WARNING (external) {note}", file=sys.stderr)
         degraded.append(note)
 
+    # (5) UNCERTAIN attribution under partial parse — the "double collapse" residual.
+    # When a fact's own function AND an enclosing one both lost their end location, the
+    # C++ leaves function="" and the repaired (guessed) extents can't recover the true
+    # owner, so the fact was filled from a REPAIRED function. Which checker scope it
+    # lands in is then untrustworthy — a function-keyed checker that gates on the
+    # enclosing function (e.g. noc-atomic-exit's kernel-entry gate) may drop it. The end
+    # locations are gone, so we CANNOT resolve it; we surface it as a coverage hole so an
+    # ambiguously-scoped fact never reads as a clean 0-findings. Naturally 0 on the
+    # multi-TU tt-llk run (the dedup merge fills empties from a resolved TU before the
+    # re-attribution), so this fires only on the single-TU kernel tier.
+    if fb.uncertain_attribution:
+        note = (
+            f"{fb.uncertain_attribution} fact(s) attributed to a function whose extent "
+            "collapsed during parse (a nested end-location was dropped) — ambiguous "
+            "scope; a checker that gates on the enclosing function (e.g. noc-atomic-exit's "
+            "kernel-entry gate) may under-report for these. NOT a clean all-clear — verify "
+            "the affected kernel TU's atomics/credits manually."
+        )
+        print(f"llk-audit: WARNING {note}", file=sys.stderr)
+        degraded.append(note)
+
     out = {
         "tool": "llk-audit",
         "arch": args.arch,

@@ -2374,6 +2374,67 @@ def test_factbase_reattributes_facts_after_extent_repair():
 
 
 @case
+def test_factbase_flags_uncertain_attribution_on_double_collapse():
+    # The residual the B fix cannot resolve: when a fact's OWN function AND an enclosing
+    # one both collapse (a "double collapse"), the C++ leaves function="" and the
+    # repaired extents can't recover the true owner — the collapsed parent (kernel_main)
+    # is capped at its first child's start, so a later body fact is filled from the inner
+    # collapsed-and-over-extended lambda. The end locations are gone, so we can't RESOLVE
+    # it; we COUNT it (uncertain_attribution) so the kernel-tier surfaces a coverage hole
+    # instead of a silent 0-findings (option 1).
+    fb = FactBase(
+        "wormhole",
+        [
+            {
+                "family": "function",
+                "file": "k.cpp",
+                "off": 0,
+                "end_off": 0,
+                "name": "kernel_main",
+            },
+            {
+                "family": "function",
+                "file": "k.cpp",
+                "off": 40,
+                "end_off": 40,
+                "name": "operator()",
+            },
+            {
+                "family": "call",
+                "file": "k.cpp",
+                "off": 500,
+                "function": "",
+                "name": "noc_semaphore_inc",
+            },
+        ],
+    )
+    assert (
+        fb.uncertain_attribution == 1
+    ), fb.uncertain_attribution  # filled from a REPAIRED fn
+    # a fully-parsed base (no collapse) never flags uncertainty
+    clean = FactBase(
+        "wormhole",
+        [
+            {
+                "family": "function",
+                "file": "k.cpp",
+                "off": 0,
+                "end_off": 1000,
+                "name": "kernel_main",
+            },
+            {
+                "family": "call",
+                "file": "k.cpp",
+                "off": 500,
+                "function": "",
+                "name": "noc_semaphore_inc",
+            },
+        ],
+    )
+    assert clean.uncertain_attribution == 0, clean.uncertain_attribution
+
+
+@case
 def test_cli_degraded_note_appended():
     # --degraded-note surfaces an EXTERNAL coverage hole (e.g. bootstrap reporting
     # failed kernel captures) into the envelope's `degraded`, so a coverage-holed run

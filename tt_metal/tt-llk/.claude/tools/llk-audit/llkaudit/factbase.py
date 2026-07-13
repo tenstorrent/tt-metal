@@ -28,6 +28,11 @@ class Function:
     file: str
     begin_off: int
     end_off: int
+    #: True if this function's extent was REPAIRED (its end_off collapsed to <= begin
+    #: at parse — a macro-wrapped body whose end location dropped — and was extended
+    #: by the repair loop). Its extent is a heuristic guess, so an attribution that
+    #: relies on it is UNCERTAIN (see FactBase.uncertain_attribution).
+    repaired: bool = False
 
     def contains(self, file: str, off: int) -> bool:
         return file == self.file and self.begin_off <= off <= self.end_off
@@ -72,11 +77,24 @@ class FactBase:
             ordered = sorted(fns, key=lambda x: x.begin_off)
             for i, fn in enumerate(ordered):
                 if fn.end_off <= fn.begin_off:
+                    fn.repaired = True
                     fn.end_off = (
                         ordered[i + 1].begin_off - 1
                         if i + 1 < len(ordered)
                         else fn.begin_off + OPEN_ENDED_EXTENT
                     )
+        #: Count of empty-`function` facts filled below from a function whose extent
+        #: was REPAIRED — an UNCERTAIN attribution. This is the residual the B fix
+        #: cannot fully resolve: when a fact's own function AND an enclosing one both
+        #: collapse (a "double collapse"), the C++ leaves function="" and the repaired
+        #: extents can't recover the true owner (the collapsed parent gets capped at
+        #: its first child, so a later body fact is attributed to an inner
+        #: collapsed-and-over-extended lambda). We can't RESOLVE it (the end locations
+        #: are gone), so we COUNT it — the kernel-tier path surfaces a nonzero count in
+        #: the audit JSON `degraded` so an ambiguous scope reads as a coverage hole,
+        #: never a silent all-clear. Naturally 0 on the multi-TU tt-llk run (the merge
+        #: fills empties from a resolved TU before this loop, so nothing is filled here).
+        self.uncertain_attribution = 0
         # Fill an EMPTY `function` from the now-REPAIRED extents. The C++ side stamped
         # `function` using the raw (pre-repair) ranges, so a macro-wrapped / partial-parse
         # function whose end_off collapsed to its begin left its body facts with
@@ -101,6 +119,8 @@ class FactBase:
             owner = self.enclosing(f["file"], f["off"])
             if owner is not None:
                 f["function"] = owner.name
+                if owner.repaired:
+                    self.uncertain_attribution += 1
 
     # -- construction ---------------------------------------------------------
     @staticmethod
