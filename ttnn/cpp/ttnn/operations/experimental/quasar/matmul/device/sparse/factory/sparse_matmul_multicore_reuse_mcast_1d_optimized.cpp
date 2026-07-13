@@ -445,6 +445,20 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         mm_kernel_in1_sender_writer_defines["WRITER_SCALE"] = "1";
     }
 
+    // SPARSE_MATMUL_IN0_GATHER (DiffusionGemma fused-MoE increment 3 scaffold, opt-in): when
+    // TTNN_SPARSE_MATMUL_IN0_GATHER is set, the in0 sender reader compiles a per-row gather hook that
+    // would read each expert's assigned token rows from a [S,H] activation via a gather-index side
+    // page (folding away the denoise MoE's `disp^T @ hidden` gather matmul + its [EC,H]
+    // materialization). Off by default -> the define is not emitted and the read path is
+    // byte-identical (the dense matmul factories that share this kernel never emit it). The gather
+    // itself is not yet implemented: the hook falls back to the contiguous read, so this flag is a
+    // no-op today and lands only the gate + reader hook. Caveat: this env-gate is not part of the
+    // program hash; do not reuse a cached program built with the flag in the opposite state for the
+    // same shapes. See models/experimental/diffusion_gemma/doc/optimize_perf/fused_moe_kernel.md.
+    if (std::getenv("TTNN_SPARSE_MATMUL_IN0_GATHER") != nullptr) {
+        mm_kernel_in0_sender_writer_defines["SPARSE_MATMUL_IN0_GATHER"] = "1";
+    }
+
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());

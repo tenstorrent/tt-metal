@@ -207,6 +207,21 @@ def _l1_or_dram(use_l1):
     return ttnn.L1_MEMORY_CONFIG if use_l1 else ttnn.DRAM_MEMORY_CONFIG
 
 
+def fused_gather_enabled():
+    """DG_MOE_FUSED_GATHER (fused-MoE increment 3, default OFF): route the expert gate/up matmul
+    through a sparse_matmul whose in0 reader GATHERS each expert's token rows directly from
+    ``hidden`` (via a per-(expert,slot) gather index built on-device from ``build_capacity_dispatch``
+    machinery), deleting the ``disp^T @ hidden`` gather matmul and the [EC,H] materialization.
+
+    NOT yet implemented on the kernel side: the sparse in0 reader only carries the compile gate +
+    hook (TTNN_SPARSE_MATMUL_IN0_GATHER -> SPARSE_MATMUL_IN0_GATHER, identity fallback), and the
+    ``gather_index`` op input does not exist yet. Enabling this flag therefore raises until the
+    kernel gather lands, so no run silently produces wrong output. See
+    doc/optimize_perf/fused_moe_kernel.md (increment 3) for the remaining steps and the A/B command.
+    """
+    return os.environ.get("DG_MOE_FUSED_GATHER", "0") != "0"
+
+
 def _divisors(n):
     return [d for d in range(1, n + 1) if n % d == 0]
 
@@ -793,6 +808,17 @@ def sparse_experts_forward(
         [1, 1, S, H] on device — expert output, all-reduced across TP.
     """
     assert capacity % TILE == 0, f"capacity must be a multiple of {TILE}, got {capacity}"
+    if fused_gather_enabled():
+        # Increment-3 integration point (see fused_gather_enabled / doc). The in-reader gather is not
+        # implemented yet (kernel scaffold only), so fail loudly rather than run the identity-fallback
+        # gather and return wrong output. Wiring (once the gather + gather_index op input land):
+        # build gather_index[E,C] on-device from the build_capacity_dispatch col/slot machinery
+        # (trace-safe, no host round-trip), then replace `disp^T @ hidden` + `_batched_experts` gate/up
+        # with sparse_matmul(hidden, w_gate, gather_index=..., sparsity=..., nnz=...).
+        raise NotImplementedError(
+            "DG_MOE_FUSED_GATHER: in-reader gather kernel not implemented yet (increment-3 scaffold "
+            "only). See models/experimental/diffusion_gemma/doc/optimize_perf/fused_moe_kernel.md."
+        )
     weights = experts.weights
     cfg = experts.config
     mesh_config = experts.mesh_config

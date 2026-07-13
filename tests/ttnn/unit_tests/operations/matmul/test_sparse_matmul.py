@@ -1101,3 +1101,190 @@ def test_sparse_matmul_writer_scale(monkeypatch, device, mkn, num_experts, num_b
             frobenius_threshold=0.002 * k,
             pcc_threshold=0.999,
         )
+
+
+# DiffusionGemma fused-MoE increment 3 (scaffold): SPARSE_MATMUL_IN0_GATHER.
+#
+# The in0 sender reader, when TTNN_SPARSE_MATMUL_IN0_GATHER is set, compiles a per-row gather hook
+# intended to read each expert's assigned token rows directly from a [S,H] activation via a
+# gather-index side page -- folding the denoise MoE's `disp^T @ hidden` gather matmul (and its
+# ~23 MB [EC,H] materialization) into this matmul's in0 reader (see
+# models/experimental/diffusion_gemma/doc/optimize_perf/fused_moe_kernel.md). The gather itself is
+# NOT yet implemented -- the hook falls back to the contiguous read -- so under the flag the op is a
+# NO-OP relative to today. This test asserts exactly that contract: with the flag on, the scaffold
+# JIT-compiles, runs, and is byte-identical to the ungathered sparse_matmul (== plain per-batch torch
+# matmul). It is the increment-3 analogue of test_sparse_matmul_writer_scale.
+#
+# Requires a Tenstorrent device (the reader kernel is JIT-compiled on device). The env var is read in
+# the program factory and is NOT part of the program hash, so this test uses a distinct shape and
+# sets the flag via monkeypatch before the first op -- do not run it in the same process after a
+# same-shape sparse_matmul that built the program with the flag off.
+@pytest.mark.parametrize("mkn", [(16, 128, 512)])
+@pytest.mark.parametrize("num_experts", [16])
+@pytest.mark.parametrize("num_batches", [2])
+@pytest.mark.parametrize("tile_h", [16])
+@pytest.mark.parametrize("tile_w", [32])
+@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("core_grid", [(4, 4)])
+def test_sparse_matmul_in0_gather_scaffold(
+    monkeypatch, device, mkn, num_experts, num_batches, tile_h, tile_w, in1_dtype, core_grid
+):
+    monkeypatch.setenv("TTNN_SPARSE_MATMUL_IN0_GATHER", "1")
+    assert os.environ.get("TTNN_SPARSE_MATMUL_IN0_GATHER") == "1"
+
+    torch.manual_seed(0)
+    m, k, n = mkn
+    b = num_batches
+    # is_input_a_sparse path: in0 (input A) is the tensor whose rows the fused gather targets.
+    in0 = torch.randn((b, num_experts, m, k), dtype=torch.bfloat16)
+    in1 = torch.randn((1, num_experts, k, n), dtype=torch.bfloat16)
+
+    sparsity_shape = (1, 1, b, num_experts)
+    sparsity = torch.rand(sparsity_shape)
+    sparsity[(sparsity == 0)] = 0.1
+    number_of_zeros = random.randint(0, sparsity.numel() - 1)
+    zero_indices = torch.randperm(sparsity.numel())[:number_of_zeros]
+    sparsity.view(-1)[zero_indices] = 0.0
+    sparsity = sparsity.to(dtype=torch.bfloat16)
+
+    nnz = int((sparsity != 0).sum().item())
+    logger.info(f"in0_gather scaffold nnz: {nnz}")
+
+    in0_t = ttnn.from_torch(
+        in0,
+        tile=ttnn.Tile((tile_h, 32)),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    in1_t = ttnn.from_torch(
+        in1,
+        tile=ttnn.Tile((32, tile_w)),
+        dtype=in1_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    sparsity_t = ttnn.from_torch(
+        sparsity,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    core_x, core_y = core_grid
+    output_tile = ttnn.Tile([tile_h, tile_w])
+    output_t = ttnn.sparse_matmul(
+        in0_t,
+        in1_t,
+        sparsity=sparsity_t,
+        nnz=nnz,
+        is_input_a_sparse=True,
+        is_input_b_sparse=False,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        output_tile=output_tile,
+        program_config=ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            out_block_h=1,
+            out_block_w=1,
+            per_core_M=m // tile_h,
+            per_core_N=int(math.ceil(n / tile_w)) // (core_x * core_y),
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=True,
+        ),
+    )
+
+    output_tensor = ttnn.to_torch(output_t)
+
+    # Contract: the scaffold gather is an identity no-op, so the output equals the ordinary
+    # ungathered sparse_matmul == plain per-batch torch matmul.
+    for b_i, e_i in itertools.product(range(b), range(num_experts)):
+        if sparsity[0, 0, b_i, e_i] == 0.0:
+            continue
+        pt_out = torch.matmul(in0[b_i, e_i, :, :], in1[0, e_i, :, :])
+        assert_numeric_metrics(
+            pt_out,
+            output_tensor[b_i, e_i, :, :],
+            atol=0.01 * k,
+            rtol=22.25 * k,
+            frobenius_threshold=0.001 * k,
+            pcc_threshold=0.999,
+            check_ulp=False,
+        )
+
+
+def _gathered_matmul_reference(hidden, gather_index, weights):
+    """Torch reference for the increment-3 fused gather: out[e] = hidden[gather_index[e]] @ weights[e].
+
+    hidden: [S, H]; gather_index: [E, C] int (row of hidden per (expert, slot), S == DEAD/empty);
+    weights: [E, H, N]. Returns [E, C, N]. This is the semantics a real gathered sparse_matmul must
+    satisfy (see doc section 3). Kept as an executable spec for the future implementation.
+    """
+    S, H = hidden.shape
+    E, C = gather_index.shape
+    padded = torch.cat([hidden, torch.zeros((1, H), dtype=hidden.dtype)], dim=0)  # DEAD row -> zeros
+    idx = gather_index.clamp(min=0, max=S).long()
+    gathered = padded[idx.reshape(-1)].reshape(E, C, H)  # [E, C, H]
+    return torch.matmul(gathered, weights)  # [E, C, N]
+
+
+def test_sparse_matmul_in0_gather_reference(monkeypatch, device):
+    """Full increment-3 gather contract (self-skips until the gather_index op input lands).
+
+    Encodes the reference a real gathered sparse_matmul must satisfy: gather rows of `hidden` per
+    (expert, slot) via `gather_index`, then per-expert matmul. Today `ttnn.sparse_matmul` has no
+    `gather_index` argument (the op ABI change is the remaining increment-3/4 work), so this test
+    skips -- it is a ready device spec that activates once the input is wired. See
+    models/experimental/diffusion_gemma/doc/optimize_perf/fused_moe_kernel.md.
+    """
+    monkeypatch.setenv("TTNN_SPARSE_MATMUL_IN0_GATHER", "1")
+    torch.manual_seed(0)
+    S, H, N, E, C = 256, 128, 192, 8, 32
+    hidden = torch.randn((S, H), dtype=torch.bfloat16)
+    weights = torch.randn((1, E, H, N), dtype=torch.bfloat16)
+    # Each expert's C slots gather C distinct tokens; a few slots are DEAD (index == S -> zero row).
+    gather_index = torch.stack([torch.randperm(S)[:C] for _ in range(E)], dim=0)  # [E, C]
+    gather_index[0, -1] = S  # exercise one DEAD/empty slot
+
+    reference = _gathered_matmul_reference(hidden.float(), gather_index, weights[0].float())  # [E, C, N]
+
+    hidden_t = ttnn.from_torch(hidden.reshape(1, 1, S, H), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    weights_t = ttnn.from_torch(weights, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    gather_index_t = ttnn.from_torch(
+        gather_index.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    sparsity_t = ttnn.from_torch(
+        torch.ones((1, 1, 1, E), dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+
+    try:
+        output_t = ttnn.sparse_matmul(
+            hidden_t,
+            weights_t,
+            sparsity=sparsity_t,
+            gather_index=gather_index_t,  # increment-3/4 op input (not yet implemented)
+            nnz=E,
+            is_input_a_sparse=True,
+            is_input_b_sparse=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    except TypeError:
+        pytest.skip("gather_index op input not implemented yet (increment-3/4 scaffold only)")
+
+    output = ttnn.to_torch(output_t).float().reshape(E, C, N)
+    for e in range(E):
+        assert_numeric_metrics(
+            reference[e],
+            output[e],
+            atol=0.02 * H,
+            rtol=10.0 * H,
+            frobenius_threshold=0.002 * H,
+            pcc_threshold=0.999,
+            check_ulp=False,
+        )

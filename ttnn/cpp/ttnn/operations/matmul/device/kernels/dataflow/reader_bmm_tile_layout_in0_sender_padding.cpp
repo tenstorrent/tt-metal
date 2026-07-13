@@ -17,6 +17,37 @@
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+
+#ifdef SPARSE_MATMUL_IN0_GATHER
+// SPARSE_MATMUL_IN0_GATHER (DiffusionGemma fused-MoE increment 3 scaffold): teach this in0 reader to
+// GATHER each expert's assigned token rows directly from a [S, H] activation tensor via a per-batch
+// gather-index side page, folding the denoise MoE's `disp^T @ hidden` gather matmul (and its ~23 MB
+// [EC, H] materialization) into this matmul's in0 reader. Gated by the SPARSE_MATMUL_IN0_GATHER
+// compile define, which the sparse matmul factory emits only when the env var
+// TTNN_SPARSE_MATMUL_IN0_GATHER is set; unset -> none of this compiles and the read path is
+// byte-identical. The define is NEVER emitted by the dense matmul factories that share this kernel.
+//
+// SCAFFOLD STATUS: the gather itself is NOT yet implemented. This lands only the compile gate and the
+// per-row source-page hook (below), which FALLS BACK to the contiguous read (identity source page),
+// so the output is byte-identical whether the flag is on or off. The remaining work -- a new
+// `gather_index` op input, its side-page read into a CB, and the index-derived face-aware sub-tile
+// row gather -- is the increment-3 body; see
+// models/experimental/diffusion_gemma/doc/optimize_perf/fused_moe_kernel.md.
+//
+// Real address math (bf16 32x32 tile = 4 row-major 16x16 faces, face order (0,0),(0,1),(1,0),(1,1),
+// BPE = bytes-per-element): dest row `slot` of the in0 block <- hidden logical row t =
+// gather_index[batch, slot].
+//   source hidden tile (tiled [S, H]):   page_id = (t / 32) * (H / 32) + tile_col
+//   logical row t is at intra-tile row (t % 32); face_row = (t % 32) / 16, r16 = (t % 32) % 16, and
+//   the row spans the TWO horizontal faces -> two 16-element runs:
+//     run0 byte offset = (face_row * 2 + 0) * 256 * BPE + r16 * 16 * BPE   (cols  0..15)
+//     run1 byte offset = (face_row * 2 + 1) * 256 * BPE + r16 * 16 * BPE   (cols 16..31)
+//   written to the mirror offsets of dest row (slot % 32). So a real gather is 2*C sub-tile reads per
+//   tile-col vs today's 1 tile read; being a win therefore needs a ROW-MAJOR hidden + on-the-fly
+//   tilize (the ttnn.embedding gather already used by sparse_moe.py::ragged_sparse_prefill_forward),
+//   not a face-aware read from a tiled hidden.
+#endif  // SPARSE_MATMUL_IN0_GATHER
+
 void kernel_main() {
     uint32_t rt_args_idx = 0;
     // in0 tensor args
@@ -258,12 +289,28 @@ void kernel_main() {
                             uint32_t in0_tensor_tile_id = in0_tensor_row_start_tile_id;
                             for (uint32_t w = 0; w < in0_block_w; ++w) {
                                 if (bh < num_blocks_h_dim - 1 || h < last_block_h) {
+#ifdef SPARSE_MATMUL_IN0_GATHER
+                                    // Gather hook (increment-3 scaffold). The real fused-MoE gather
+                                    // derives the source page id + sub-tile face offsets from the
+                                    // per-batch gather_index side page here (see top-of-file note).
+                                    // Scaffold: identity fallback -> byte-identical to the contiguous
+                                    // read, so this compiles and runs as a no-op until the index
+                                    // input + face-aware read land.
+                                    const uint32_t in0_read_page_id = in0_tensor_tile_id;
+                                    noc.async_read(
+                                        s0,
+                                        cb_in0,
+                                        in0_single_tile_size_bytes,
+                                        {.page_id = in0_read_page_id},
+                                        {.offset_bytes = in0_write_offset});
+#else
                                     noc.async_read(
                                         s0,
                                         cb_in0,
                                         in0_single_tile_size_bytes,
                                         {.page_id = in0_tensor_tile_id},
                                         {.offset_bytes = in0_write_offset});
+#endif  // SPARSE_MATMUL_IN0_GATHER
                                 }
 
                                 // Zero out padded regions for the very last tile

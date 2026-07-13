@@ -1,8 +1,11 @@
 # Fused per-layer MoE kernel for DiffusionGemma denoise
 
-Status: **DESIGN + increment-1 landed (WRITER_SCALE plumbing).** This is a multi-week ttnn C++
-effort. This doc is the contract + staged plan; increment 1 is the smallest buildable, testable,
-tree-green step and is implemented behind an env-gated compile define.
+Status: **DESIGN + increment-1 landed (WRITER_SCALE plumbing) + increment-3 SCAFFOLD landed
+(in0-gather gate + reader hook, default off).** This is a multi-week ttnn C++ effort. This doc is the
+contract + staged plan; increments land behind env-gated compile defines that default to
+byte-identical existing behavior. Increment 3's in-reader gather was judged genuinely hard (§7): the
+per-token row gather from a *tiled* hidden blows up NoC transactions ~64×, so only the gate + reader
+hook (identity fallback) were landed this pass; §7.5 lists the exact remaining C++.
 
 Owner-scope note: this work touches ONLY `tt/sparse_moe.py`,
 `ttnn/cpp/ttnn/operations/matmul/device/sparse/**` (+ its quasar mirror
@@ -144,7 +147,7 @@ next increment because it reuses machinery already proven bit-exact in the prefi
 |---|-----------|-------------|--------|------|
 | 1 | **WRITER_SCALE** — fold a per-batch route-weight (carried in the existing `cb_sparsity` page) into the down write, env-gated, bit-identical when off. | writer kernel `#ifdef` block + 3-line env-gate in both factories | **~2 days (done)** | low — JIT kernel, no host ABI change |
 | 2 | **Compact route-weighted output** — wire the scaled+compact output through `sparse_moe.py` and replace the `comb @ down_flat` matmul with the `embedding`+`fast_reduce_nc` combine (structure 1). Deletes the combine matmul + `[EC,H]` materialization. | `sparse_moe.py` only (kernel from inc 1) | ~1 wk | low-med |
-| 3 | **Gather reader** — per-expert `gather_index` side page in the in0 reader; read `hidden[index]` rows into in0 CB; pinned zero page for empty slots. Deletes the `disp^T @ hidden` matmul + `dispatched` materialization. | in0 reader kernel + factory (new side input) | ~2 wk | med — new op input, index-read dataflow |
+| 3 | **Gather reader** — per-expert `gather_index` side page in the in0 reader; read `hidden[index]` rows into in0 CB; pinned zero page for empty slots. Deletes the `disp^T @ hidden` matmul + `dispatched` materialization. **SCAFFOLD landed** (gate `TTNN_SPARSE_MATMUL_IN0_GATHER` + reader hook, identity fallback, byte-identical off); real gather + `gather_index` op input remain — see §7. | in0 reader kernel + factory (new side input) | ~2 wk | med — new op input, index-read dataflow |
 | 4 | **Single-op fuse** — gather + experts + compact scaled scatter as one `fused_moe` op; expose in `sparse_moe.py` behind a flag; program-cache + trace-safety. | factory + op wrapper + pybind + `sparse_moe.py` | ~2 wk | med-high — new op ABI |
 | 5 | **Fuse the TP all-reduce** via the `matmul_reduce_scatter_async` pattern. | new fused ccl+matmul path | ~1 wk | high — CCL |
 
@@ -201,3 +204,116 @@ sets the env var before the first op.
 
 **Verification status.** `.so` builds and links (both factories). Kernel change is JIT — cannot
 affect the `.so`. Device run of the new test is gated on free hardware.
+
+---
+
+## 7. Increment 3: in-reader GATHER — feasibility verdict + landed scaffold
+
+**Verdict: the in-reader per-row gather is genuinely hard (the ~2-week increment the roadmap
+scoped), and CANNOT be landed as a working, *faster* gather in one buildable increment.** This
+section records the analysis, the buildable scaffold that *was* landed (gate + reader hook, default
+off, byte-identical), and the exact remaining C++ so the next session starts from a green tree.
+
+### 7.1 Why it is hard (the crux)
+
+The target is the denoise MoE gate/up matmul. Today `sparse_experts_forward` expresses the gather as
+a dense one-hot matmul (`dispatched = disp^T @ hidden`, `sparse_moe.py:823-834`) and then runs the
+batched experts with a plain reuse `ttnn.matmul` (`_batched_experts`). Increment 3 wants the gather
+folded into the **sparse mcast-1d in0 sender reader**
+(`ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp`),
+so each expert's `[C=32, H]` in0 block is assembled directly from `C` arbitrary rows of `hidden[S,H]`.
+
+The dispatch is **per-token (per-row)**: expert `e`'s 32 capacity slots are 32 arbitrary tokens of
+the 256-row canvas (`gather_index[e,slot] ∈ [0,S)`, `=S` for empty). `hidden` is **TILE layout**
+(validated: `sparse_matmul_device_operation.cpp:87` forces in0 TILE). A logical row `t` therefore
+lives at intra-tile row `t%32` of tile-row `t/32`, and inside a bf16 32×32 tile (4 row-major 16×16
+faces, order (0,0),(0,1),(1,0),(1,1)) one logical row spans the **two horizontal faces** — two
+discontiguous 16-element (32-byte) runs 256 elements apart. So gathering one dest tile-column of one
+expert = `32 rows × 2 face-runs = 64` sub-tile NoC reads, vs **1** tile read today; over `H/32=88`
+tile-cols that is **~5632 reads/expert vs 88** — a ~64× NoC-transaction blow-up. Since the denoise
+step is *movement/op-count bound*, a face-aware gather from a **tiled** hidden would almost certainly
+run *slower*, defeating the increment's purpose (op-count tweaks `transpose_a` and a compact
+embedding gather already measured ~0/slower).
+
+The only variant that reduces movement is a **ROW-MAJOR hidden + on-the-fly tilize**: row `t` is then
+one contiguous `H·BPE`-byte read (`32` reads/expert), but the reader must then tilize the gathered
+rows into the tiled in0 CB — an extra pipeline stage the matmul reader does not have. That is exactly
+what `ttnn.embedding(..., layout=TILE)` already does in `ragged_sparse_prefill_forward`
+(`sparse_moe.py:677`), and folding it into the matmul reader is the multi-week body.
+
+### 7.2 Precise address math (for the real implementation)
+
+Per dest row `slot` of expert `e`, `t = gather_index[e,slot]` (`t==S` → pinned zero row):
+
+```
+source hidden tile (tiled [S,H]):  page_id = (t / 32) * (H / 32) + tile_col
+intra-tile row = t % 32:  face_row = (t%32) / 16,  r16 = (t%32) % 16
+  run0 byte off = (face_row*2 + 0) * 256 * BPE + r16 * 16 * BPE   (cols  0..15)
+  run1 byte off = (face_row*2 + 1) * 256 * BPE + r16 * 16 * BPE   (cols 16..31)
+```
+
+written to the mirror offsets of dest row `slot % 32` in the in0 CB tile. (Row-major variant:
+`src byte off = t * H * BPE`, one contiguous `H·BPE` read, then tilize.) `BPE=2` for bf16. This math
+is duplicated in the kernel top-of-file comment at the gather hook.
+
+### 7.3 CB / op-input plan (remaining work)
+
+- **New op input `gather_index`** `[E, C]` (or `[batchA, C]`) `uint32` ROW_MAJOR, plumbed exactly like
+  `sparsity`: a 4th tensor in `SparseMatmulInputs`, an `is_*`/nnz-style attr, a pybind arg, a
+  `TensorAccessorArgs` append in both factories, a per-core runtime arg for its address, and an
+  `override_runtime_arguments` refresh. (This is the op-ABI change — the reason it is its own
+  increment.)
+- **New CB `cb_gather_index`** (next free index, e.g. `c_8`) sized to one page = `C` `uint32`
+  (`C=32 → 128 B`), read once per batch `b` in the in0 sender exactly like `cb_sparsity`
+  (`reader_bmm_tile_layout_in0_sender_padding.cpp:176-179`).
+- **Pinned zero page** for `gather_index==S` (empty slot) — one zero-filled L1 page the read redirects
+  to, so dropped/empty slots contribute 0.
+- **in0 sender read loop** (`:255-291`): replace the contiguous `in0_tensor_tile_id` page id with the
+  index-derived source page + the two sub-tile face reads above (or the row-major read + tilize).
+
+### 7.4 What was landed this increment (buildable scaffold, default OFF)
+
+1. **Gate** `TTNN_SPARSE_MATMUL_IN0_GATHER` → compile define `SPARSE_MATMUL_IN0_GATHER`, emitted only
+   by the sparse mcast-1d factory (both the main and quasar mirrors) into
+   `mm_kernel_in0_sender_writer_defines`. Unset → not emitted; the dense matmul factories that share
+   the in0 kernel never emit it → **byte-identical**. (`.so` rebuilds + links, both factories.)
+2. **Reader hook** in the shared in0 sender kernel: a gated `#ifdef SPARSE_MATMUL_IN0_GATHER` block at
+   the read site with the §7.2 address math in comments and an **identity fallback** (source page ==
+   contiguous tile id). The `#else` path is textually identical to the pre-scaffold read, so the flag
+   is a **no-op** whether on or off until the gather lands.
+3. **Tests** (`tests/ttnn/unit_tests/operations/matmul/test_sparse_matmul.py`):
+   `test_sparse_matmul_in0_gather_scaffold` (device-runnable) proves the gate+hook JIT-compile, run,
+   and are byte-identical to the ungathered sparse_matmul; `test_sparse_matmul_in0_gather_reference`
+   encodes the full gather↔torch reference (`_gathered_matmul_reference`) and **self-skips** until the
+   `gather_index` op input exists.
+4. **`sparse_moe.py` gate** `DG_MOE_FUSED_GATHER` (`fused_gather_enabled`, default off): the
+   integration point in `sparse_experts_forward` **raises `NotImplementedError`** when set (rather
+   than silently running the identity gather) until the kernel lands. Off → the path is bit-identical.
+
+### 7.5 Exact remaining C++ steps (in order)
+
+1. Add the `gather_index` op input end-to-end (types/hpp, `sparse_matmul(...)` overload,
+   `create_sparse_matmul_attributes`, pybind) — the ABI change; validate shape `[·, C]` uint32
+   ROW_MAJOR, `count_nonzero`-independent.
+2. Factory: append its `TensorAccessorArgs`, add `cb_gather_index` + a pinned zero CB, pass its
+   address as a runtime arg, refresh in `override_runtime_arguments` (both factories + quasar mirror).
+3. Kernel: read the index page per batch; in the read loop compute the §7.2 source page/offsets and
+   issue the sub-tile reads (start with the tiled face-aware read for correctness; then add the
+   row-major + tilize fast path for the actual movement win).
+4. Un-skip `test_sparse_matmul_in0_gather_reference`; confirm it passes on device.
+5. Wire `sparse_moe.py`: build `gather_index[E,C]` on-device from the `build_capacity_dispatch`
+   `col = e*C + slot` machinery (the `col_u`/`pos` tensors already computed there), replace
+   `disp^T @ hidden` + `_batched_experts` gate/up with the gathered `sparse_matmul`. Remove the
+   `NotImplementedError` guard.
+
+### 7.6 A/B command (once wired)
+
+```
+# baseline (current dense gather):
+DG_SPARSE_MOE=1 DG_SPARSE_MOE_TUNED=1 <denoise/serve bench>
+# fused gather (kernel + DG_MOE_FUSED_GATHER):
+DG_SPARSE_MOE=1 DG_SPARSE_MOE_TUNED=1 TTNN_SPARSE_MATMUL_IN0_GATHER=1 DG_MOE_FUSED_GATHER=1 <same bench>
+```
+
+**Verification status (increment 3).** `.so` builds + links (both factories); scaffold is JIT/no-op
+→ cannot change `.so`. Scaffold device test result recorded alongside the WRITER_SCALE test run.
