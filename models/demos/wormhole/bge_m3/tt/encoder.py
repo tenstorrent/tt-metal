@@ -23,10 +23,17 @@ class BgeM3TransformerBlock(LightweightModule):
         self.dtype = dtype
         self.layer_num = layer_num
 
-        attention_weights = build_attention_weights(state_dict, layer_num, dtype, ttnn.bfloat16)
-        mlp_weights = build_mlp_weights(state_dict, layer_num, dtype, ttnn.bfloat16)
         max_seq_len = getattr(args, "max_seq_len", None)
         max_batch_size = getattr(args, "max_batch_size", None)
+        # S8192: fold the SDPA attention scale (1/sqrt(head_dim)) into the Q
+        # projection weight at build time so the per-layer runtime q*scale multiply
+        # is removed and SDPA runs with scale=1.0. attention.py mirrors this gate.
+        q_scale = None
+        if max_seq_len == 8192:
+            head_dim = getattr(args, "head_dim", None) or (args.dim // args.n_heads)
+            q_scale = head_dim**-0.5
+        attention_weights = build_attention_weights(state_dict, layer_num, dtype, ttnn.bfloat16, q_scale=q_scale)
+        mlp_weights = build_mlp_weights(state_dict, layer_num, dtype, ttnn.bfloat16)
 
         self.attention = BgeM3Attention.from_config(
             _build_attention_config(

@@ -227,13 +227,14 @@ class BgeM3Attention(LightweightModule):
         # Stage 4: encoder SDPA (chunk sizes depend on runtime seq_len)
         # N300 B12/S8192: when both scale and an explicit dense [B,1,S,S] mask are
         # passed, ttnn SDPA pre-scales the mask by 1/scale as a separate op on the
-        # full 12x8192x8192 mask EVERY layer (~7% of runtime) even though the mask
-        # is identical across all 24 layers. Fold the scale into Q once (a tiny
-        # [B,H,S,64] op) and pass scale=1.0 so SDPA has nothing to fold into the
-        # mask. Numerically identical: softmax(Q@K^T*s + m) == softmax((Q*s)@K^T + m).
+        # full 12x8192x8192 mask EVERY layer (~7% of runtime). We avoid it by
+        # passing scale=1.0. The attention scale is folded into the Q projection
+        # WEIGHT at build time (encoder.py q_scale, weight_adapter.build_attention_
+        # weights) so no per-layer q*scale multiply is needed either. Numerically
+        # identical: softmax(Q@K^T*s + m) == softmax(((Q*s)@K^T) + m), and folding
+        # into the fp32 weight before bf8 quant is at least as accurate.
         sdpa_scale = self.config.attention_scale
         if seq_len == 8192 and sdpa_mask is not None and sdpa_scale is not None:
-            q = ttnn.multiply(q, sdpa_scale)
             sdpa_scale = 1.0
         sdpa_program_config = _sdpa_program_config(seq_len, self.config.mesh_device, batch_size=batch_size)
         context = ttnn.transformer.scaled_dot_product_attention(
