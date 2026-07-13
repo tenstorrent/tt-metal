@@ -20,6 +20,8 @@
 #include <tt-metalium/device.hpp>
 
 #include <llrt/hal.hpp>
+#include "llrt/llrt.hpp"
+#include "llrt/hal/generated/dev_msgs.hpp"
 
 namespace tt::tt_metal::internal {
 
@@ -89,6 +91,12 @@ void ServiceCoreManagerImpl::release(IDevice* device, const std::vector<CoreCoor
                 device->id());
         }
     }
+}
+
+void ServiceCoreManagerImpl::wait_done(IDevice* device, CoreCoord core) const {
+    const auto physical_core = device->virtual_core_from_logical_core(core, CoreType::WORKER);
+    std::unordered_set<CoreCoord> not_done{physical_core};
+    tt::llrt::internal_::wait_until_cores_done(device->id(), dev_msgs::RUN_MSG_GO, not_done);
 }
 
 std::unordered_set<CoreCoord> ServiceCoreManagerImpl::claimed_cores(ChipId device_id) const {
@@ -172,6 +180,40 @@ DeviceAddr ServiceCoreManagerImpl::allocate_l1(IDevice* device, CoreCoord core, 
     return *addr;
 }
 
+void ServiceCoreManagerImpl::reserve_l1_to_top(IDevice* device, CoreCoord core, DeviceAddr addr) {
+    auto dit = devices_.find(device->id());
+    TT_FATAL(
+        dit != devices_.end() && dit->second.cores.contains(core),
+        "internal::ServiceCoreManager::reserve_l1_to_top called on unclaimed core {}",
+        core);
+    // Carve out [addr, L1_top) so subsequent allocate_l1() calls don't hand out an address that
+    // overlaps externally-owned L1 sitting at the top of this core (e.g. MeshSocket config buffer
+    // / data FIFO that the device allocator placed there). The device allocator and this per-core
+    // allocator both grow top-down from L1_END with no mutual awareness, so without this
+    // reservation they collide. Reserving to the top (rather than each buffer's exact size) covers
+    // the whole socket region in one allocation regardless of individual buffer footprints, and
+    // must be called before any allocate_l1() on this core so the top range is still free.
+    auto& alloc = dit->second.cores.at(core).alloc;
+    DeviceAddr top = addr;
+    for (const auto& [start, end] : alloc->available_addresses(0)) {
+        top = std::max(top, end);
+    }
+    TT_FATAL(
+        top > addr,
+        "internal::ServiceCoreManager::reserve_l1_to_top: addr {:#x} is at/above L1 range top {:#x} on core {}",
+        static_cast<uint64_t>(addr),
+        static_cast<uint64_t>(top),
+        core);
+    auto reserved = alloc->allocate_at_address(addr, top - addr);
+    TT_FATAL(
+        reserved.has_value(),
+        "internal::ServiceCoreManager::reserve_l1_to_top: could not reserve [{:#x}, {:#x}) on core {} "
+        "(out of range or already allocated)",
+        static_cast<uint64_t>(addr),
+        static_cast<uint64_t>(top),
+        core);
+}
+
 void ServiceCoreManagerImpl::deallocate_l1(IDevice* device, CoreCoord core, DeviceAddr addr) {
     auto dit = devices_.find(device->id());
     TT_FATAL(
@@ -232,8 +274,15 @@ void ServiceCoreManager::deallocate_l1(IDevice* device, CoreCoord core, DeviceAd
 size_t ServiceCoreManager::bytes_available(IDevice* device, CoreCoord core) const {
     return pimpl_->bytes_available(device, core);
 }
+void ServiceCoreManager::reserve_l1_to_top(IDevice* device, CoreCoord core, DeviceAddr addr) {
+    pimpl_->reserve_l1_to_top(device, core, addr);
+}
+
+void ServiceCoreManager::wait_done(IDevice* device, CoreCoord core) const { pimpl_->wait_done(device, core); }
 
 ServiceCoreManagerImpl& ServiceCoreManager::impl() { return *pimpl_; }
 const ServiceCoreManagerImpl& ServiceCoreManager::impl() const { return *pimpl_; }
+
+ServiceCoreManager& service_core_manager() { return MetalContext::instance().get_service_core_manager(); }
 
 }  // namespace tt::tt_metal::internal

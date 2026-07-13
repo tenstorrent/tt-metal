@@ -11,7 +11,10 @@
 namespace ckernel {
 namespace sfpu {
 
-inline void calculate_rsqrt(const int iterations = SFPU_ITERATIONS) { _calculate_rsqrt_(iterations); }
+template <int ITERATIONS = SFPU_ITERATIONS>
+inline void calculate_rsqrt() {
+    _calculate_rsqrt_<ITERATIONS>();
+}
 
 }  // namespace sfpu
 }  // namespace ckernel

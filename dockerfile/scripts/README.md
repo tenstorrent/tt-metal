@@ -55,6 +55,9 @@ Tool images are automatically built and pushed by `build-docker-tools.yaml` when
 # Build dev image - tools and venvs are built automatically via bake contexts
 docker buildx bake -f dockerfile/docker-bake.hcl dev
 
+# Build dev-light image - tools only, no pre-built Python venv layer
+docker buildx bake -f dockerfile/docker-bake.hcl dev-light
+
 # Or use the wrapper script
 ./dockerfile/build-local.sh dev
 ```

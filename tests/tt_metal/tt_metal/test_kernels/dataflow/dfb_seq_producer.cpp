@@ -6,9 +6,9 @@
 //
 // All N producer threads cooperate on DFB_0 (each handling its own strided slice),
 // then cooperate on DFB_1, and so on.  Every DFB has its own independent DRAM
-// source buffer: each DFB binds via dfb::dfb_<i> + ta::src_<i> (compile-time names);
+// source buffer: each DFB binds via dfb::dfb_<i> + tensor::src_<i> (compile-time names);
 // the kernel unrolls one block per declared DFB. TEST_NUM_DFBS compiler define
-// gates how many ta::src_<i> bindings the kernel references (must match the host's
+// gates how many tensor::src_<i> bindings the kernel references (must match the host's
 // KernelSpec bindings count). The name is prefixed to avoid collision with
 // dfb::NUM_DFBS from dataflow_buffer_config.h.
 //
@@ -46,7 +46,7 @@
     do {                                                                                    \
         DataflowBuffer dfb(dfb::dfb_##I);                                                   \
         const uint32_t entry_size = dfb.get_entry_size();                                   \
-        const auto tensor_accessor = TensorAccessor(ta::src_##I);                           \
+        const auto tensor_accessor = TensorAccessor(tensor::src_##I);                       \
         for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id++) {         \
             const uint32_t page_id = tile_id * num_producers + producer_idx;                \
             if constexpr (implicit_sync) {                                                  \

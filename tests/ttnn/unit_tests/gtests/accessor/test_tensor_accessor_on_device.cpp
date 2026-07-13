@@ -482,9 +482,6 @@ class ShardedAccessorTestsReshardOnDevice : public GenericMeshDeviceFixture,
                                             public ::testing::WithParamInterface<InputOutputBufferParams> {};
 
 TEST_P(ShardedAccessorTestsReshardOnDevice, SingleCoreReshard) {
-    if (mesh_device_->num_devices() >= 8 && mesh_device_->arch() == tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "Disabled on T3K Wormhole: see #45681";
-    }
     const auto& params = GetParam();
 
     switch (params.dtype) {
@@ -496,6 +493,33 @@ TEST_P(ShardedAccessorTestsReshardOnDevice, SingleCoreReshard) {
 
 std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
     std::vector<InputOutputBufferParams> base_params{
+        // Shard-contiguous (CONTIGUOUS_1D) distribution with shards_per_core == 2 (32 shards over 16 cores), so
+        // shard-contiguous and round-robin map shards to banks differently. Swept across all arg configs, this
+        // exercises both the compile-time shard-contiguous path (flag packed in the top bit of the compile-time
+        // num_banks word, when num_banks is a CTA) and the runtime shard-contiguous path (same flag in the runtime
+        // num_banks word, when num_banks is a CRTA). The output buffer stays round-robin to also cover a
+        // mixed-distribution reshard.
+        InputOutputBufferParams{
+            .tensor_shape = tt::tt_metal::Shape{8, 64, 64},
+            .layout = Layout::TILE,
+            .dtype = DataType::UINT16,
+            .input_buffer_type = BufferType::L1,
+            .output_buffer_type = BufferType::L1,
+
+            .input_shard_spec =
+                NdShardSpec{
+                    .shard_shape = tt::tt_metal::Shape{1, 32, 32},
+                    .grid = CoreRangeSet(CoreRange({0, 0}, {3, 3})),
+                    .orientation = ShardOrientation::ROW_MAJOR,
+                    .shard_distribution_strategy = ShardDistributionStrategy::CONTIGUOUS_1D,
+                },
+            .output_shard_spec =
+                NdShardSpec{
+                    .shard_shape = tt::tt_metal::Shape{2, 32, 32},
+                    .grid = CoreRangeSet(CoreRange({0, 0}, {3, 3})),
+                    .orientation = ShardOrientation::ROW_MAJOR,
+                },
+        },
         InputOutputBufferParams{
             .tensor_shape = tt::tt_metal::Shape{4, 64, 96},
             .layout = Layout::TILE,
@@ -526,7 +550,7 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
             .input_shard_spec =
                 NdShardSpec{
                     .shard_shape = tt::tt_metal::Shape{1, 64, 96},
-                    .grid = CoreRangeSet(tt::stl::Span<const CoreRange>(
+                    .grid = CoreRangeSet(ttsl::Span<const CoreRange>(
                         {CoreRange({4, 6}, {6, 6}), CoreRange({1, 1}, {1, 1}), CoreRange({0, 3}, {3, 3})})),
                     .orientation = ShardOrientation::ROW_MAJOR,
                 },
@@ -588,7 +612,7 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
                 NdShardSpec{
                     .shard_shape = tt::tt_metal::Shape{1, 1, 2, 64, 64},
                     .grid = CoreRangeSet(
-                        tt::stl::Span<const CoreRange>({CoreRange({0, 0}, {2, 0}), CoreRange({0, 1}, {1, 1})})),
+                        ttsl::Span<const CoreRange>({CoreRange({0, 0}, {2, 0}), CoreRange({0, 1}, {1, 1})})),
                     .orientation = ShardOrientation::COL_MAJOR,
                 },
             .output_shard_spec =
@@ -648,7 +672,7 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
             .input_shard_spec =
                 NdShardSpec{
                     .shard_shape = tt::tt_metal::Shape{1, 64, 96},
-                    .grid = CoreRangeSet(tt::stl::Span<const CoreRange>(
+                    .grid = CoreRangeSet(ttsl::Span<const CoreRange>(
                         {CoreRange({4, 6}, {6, 6}), CoreRange({1, 1}, {1, 1}), CoreRange({0, 3}, {3, 3})})),
                     .orientation = ShardOrientation::ROW_MAJOR,
                 },
@@ -710,9 +734,6 @@ class ShardedAccessorTestsCopyOnDevice : public GenericMeshDeviceFixture,
                                          public ::testing::WithParamInterface<CopyParams> {};
 
 TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocal) {
-    if (mesh_device_->num_devices() >= 8 && mesh_device_->arch() == tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "Disabled on T3K Wormhole: see #45681";
-    }
     const auto& params = GetParam();
 
     const std::string kernel_path = "tests/ttnn/unit_tests/gtests/accessor/kernels/copy_local.cpp";
@@ -725,9 +746,6 @@ TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocal) {
 }
 
 TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocalShardIterator) {
-    if (mesh_device_->num_devices() >= 8 && mesh_device_->arch() == tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "Disabled on T3K Wormhole: see #45681";
-    }
     const auto& params = GetParam();
 
     const std::string kernel_path = "tests/ttnn/unit_tests/gtests/accessor/kernels/copy_local_shard_iterator.cpp";
@@ -740,9 +758,6 @@ TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocalShardIterator) {
 }
 
 TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocalViaBankBaseAddress) {
-    if (mesh_device_->num_devices() >= 8 && mesh_device_->arch() == tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "Disabled on T3K Wormhole: see #45681";
-    }
     const auto& params = GetParam();
 
     const std::string kernel_path = "tests/ttnn/unit_tests/gtests/accessor/kernels/copy_local_via_bank_base.cpp";
@@ -755,9 +770,6 @@ TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocalViaBankBaseAddress) {
 }
 
 TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocalShardIteratorBigStep) {
-    if (mesh_device_->num_devices() >= 8 && mesh_device_->arch() == tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "Disabled on T3K Wormhole: see #45681";
-    }
     const auto& params = GetParam();
 
     const std::string kernel_path = "tests/ttnn/unit_tests/gtests/accessor/kernels/copy_local_shard_iterator.cpp";
@@ -776,9 +788,6 @@ TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocalShardIteratorBigStep)
 }
 
 TEST_P(ShardedAccessorTestsCopyOnDevice, SingleCoreCopyAllPages) {
-    if (mesh_device_->num_devices() >= 8 && mesh_device_->arch() == tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "Disabled on T3K Wormhole: see #45681";
-    }
     const auto& params = GetParam();
 
     switch (params.dtype) {
@@ -793,9 +802,6 @@ class InterleavedAccessorTestsCopyOnDevice : public GenericMeshDeviceFixture,
                                              public ::testing::WithParamInterface<CopyParams> {};
 
 TEST_P(InterleavedAccessorTestsCopyOnDevice, SingleCoreCopyAllPages) {
-    if (mesh_device_->num_devices() >= 8 && mesh_device_->arch() == tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "Disabled on T3K Wormhole: see #45681";
-    }
     const auto& params = GetParam();
 
     switch (params.dtype) {
@@ -818,9 +824,6 @@ TEST_P(InterleavedAccessorTestsCopyOnDevice, SingleCoreCopyAllPagesAbstractWrapp
 }
 
 TEST_P(InterleavedAccessorTestsCopyOnDevice, MultiCoreCopyAllPages) {
-    if (mesh_device_->num_devices() >= 8 && mesh_device_->arch() == tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "Disabled on T3K Wormhole: see #45681";
-    }
     const auto& params = GetParam();
 
     // Use all available cores for multi-core testing
@@ -837,9 +840,6 @@ TEST_P(InterleavedAccessorTestsCopyOnDevice, MultiCoreCopyAllPages) {
 }
 
 TEST_P(InterleavedAccessorTestsCopyOnDevice, MultiCoreCopyAllPagesBigStep) {
-    if (mesh_device_->num_devices() >= 8 && mesh_device_->arch() == tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "Disabled on T3K Wormhole: see #45681";
-    }
     const auto& params = GetParam();
 
     // Use all available cores for multi-core testing
@@ -1206,7 +1206,7 @@ INSTANTIATE_TEST_SUITE_P(
                            .input_shard_spec =
                                NdShardSpec{
                                    .shard_shape = tt::tt_metal::Shape{1, 1, 2, 64, 64},
-                                   .grid = CoreRangeSet(tt::stl::Span<const CoreRange>(
+                                   .grid = CoreRangeSet(ttsl::Span<const CoreRange>(
                                        {CoreRange({0, 0}, {2, 0}), CoreRange({0, 1}, {1, 1})})),
                                    .orientation = ShardOrientation::COL_MAJOR,
                                },

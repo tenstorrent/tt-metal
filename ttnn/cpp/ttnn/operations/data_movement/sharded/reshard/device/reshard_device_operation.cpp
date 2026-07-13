@@ -162,13 +162,23 @@ std::pair<bool, std::string> ReshardDeviceOperation::validate_inputs(
         return {false, "output must be sharded"};
     }
 
-    // ReshardSameWidthFactory (height↔height) has explicit unaligned handling,
-    // but all other legacy and ND factories require L1-aligned shard widths for correct NOC transfers.
+    // Two reshard paths handle unaligned shard widths and so don't need the alignment check:
+    //  1. The height->height same-width factory (selected when at least one buffer is in L1): its
+    //     reader path (L1 output) re-strides via a scratch buffer and its writer path (non-L1
+    //     output) re-strides row-by-row.
+    //  2. The DRAM->DRAM ND copy-pages factory (selected when both buffers are in DRAM): it copies
+    //     each page whole at aligned_page_size, so per-row padding is carried along transparently.
+    // Every other legacy/ND path requires L1-aligned shard widths for correct NOC transfers.
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
         bool is_height_to_height = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
                                    out_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+        bool one_buffer_in_l1 = input_tensor.memory_config().buffer_type() == BufferType::L1 ||
+                                out_mem_config.buffer_type() == BufferType::L1;
+        bool both_in_dram = input_tensor.memory_config().buffer_type() == BufferType::DRAM &&
+                            out_mem_config.buffer_type() == BufferType::DRAM;
+        bool has_unaligned_handling = (is_height_to_height && one_buffer_in_l1) || both_in_dram;
 
-        if (!is_height_to_height) {
+        if (!has_unaligned_handling) {
             const uint32_t alignment = hal::get_l1_alignment();
 
             uint32_t input_page_size = input_tensor.buffer()->page_size();
@@ -181,7 +191,7 @@ std::pair<bool, std::string> ReshardDeviceOperation::validate_inputs(
                         "which must be aligned to {} bytes for reshard",
                         input_tensor.memory_config().shard_spec().has_value()
                             ? input_tensor.memory_config().shard_spec().value().shape[1]
-                            : 0,
+                            : input_tensor.memory_config().nd_shard_spec().value().shard_shape[-1],
                         input_tensor.dtype(),
                         input_page_size,
                         alignment)};

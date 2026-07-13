@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_experimental_cnn OBJECT)
 add_library(TTNN::Ops::Experimental::CNN ALIAS ttnn_op_experimental_cnn)
 
-tt_reuse_precompile_headers(ttnn_op_experimental_cnn TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_cnn TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_cnn)
 
 set_target_properties(

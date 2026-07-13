@@ -4,19 +4,19 @@
 # to /install, which can then be used as a source for COPY --from.
 #
 # Usage:
-#   docker build -f dockerfile/Dockerfile.tools --target ccache -t ghcr.io/.../tool-ccache:v4.10.2 .
+#   docker build -f dockerfile/Dockerfile.tools --target ccache -t ghcr.io/.../tool-ccache:v4.13.6 .
 #   docker build -f dockerfile/Dockerfile.tools --target mold -t ghcr.io/.../tool-mold:v2.40.4 .
 #
 # The main Dockerfile can then use:
-#   FROM ghcr.io/.../tool-ccache:v4.10.2 AS ccache-layer
+#   FROM ghcr.io/.../tool-ccache:v4.13.6 AS ccache-layer
 
 #############################################################
 # Version and hash configuration
 # These must match the versions in the main Dockerfile
 #############################################################
 
-ARG CCACHE_VERSION=4.13.2
-ARG CCACHE_SHA256=e9e2bcec3cd816ba58ff1c331fdeaa3465760683eeec9f462c31b909e2651e35
+ARG CCACHE_VERSION=4.13.6
+ARG CCACHE_SHA256=508b2a1217dc6e04a23e967c7b95a0fb45d8a7e16fde9e180919698f2e2be060
 
 ARG MOLD_VERSION=2.40.4
 ARG MOLD_SHA256=4c999e19ffa31afa5aa429c679b665d5e2ca5a6b6832ad4b79668e8dcf3d8ec1
@@ -60,17 +60,21 @@ ARG OMPI_COMMIT_SHA=29341e55efaabf7a6968444b4bb6f1f1fb40d664
 # The install-sfpi.sh script sources these files directly.
 
 #############################################################
-# ccache - simple binary extraction
-# Outputs: /install/bin/ccache
+# ccache - binary extraction with install.sh
+# Outputs: /install/bin/ccache, /install/libexec/ccache
 #############################################################
 
-FROM alpine:3.19 AS ccache-builder
+FROM ubuntu:22.04 AS ccache-builder
 ARG CCACHE_VERSION
 ARG CCACHE_SHA256
-# Install bash first (required for SHELL directive)
-RUN apk add --no-cache bash wget
+
+ENV DEBIAN_FRONTEND=noninteractive
 # Enforce strict error handling: exit on error, unset vars, pipe failures
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+# python3 is required by install.sh (runs patch-binary.py to bake libexecdir/sysconfdir into the binary)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget ca-certificates python3 xz-utils \
+    && rm -rf /var/lib/apt/lists/*
 COPY dockerfile/scripts/install-ccache.sh /tmp/install-ccache.sh
 RUN CCACHE_VERSION=${CCACHE_VERSION} \
     CCACHE_SHA256=${CCACHE_SHA256} \

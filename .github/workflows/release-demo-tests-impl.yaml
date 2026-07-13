@@ -40,6 +40,7 @@ jobs:
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
       - name: Install dependencies
@@ -140,6 +141,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -173,8 +175,6 @@ jobs:
         if: ${{ contains(matrix.test-group.sku, 'bh_') }}
         uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         timeout-minutes: 10
-        with:
-          runner-label: ${{ join(matrix.test-group.runs_on, ' ') }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
@@ -183,7 +183,7 @@ jobs:
             source tests/scripts/single_card/run_single_card_demo_tests.sh
           fi
           # For T3000 tests, source the test functions
-          if [[ "${{ matrix.test-group.sku }}" == "wh_llmbox_perf" || "${{ matrix.test-group.sku }}" == "wh_llmbox_perf_release" ]]; then
+          if [[ "${{ matrix.test-group.sku }}" == "wh_llmbox_perf" ]]; then
             source tests/scripts/t3000/run_t3000_demo_tests.sh
           fi
           # Execute the command

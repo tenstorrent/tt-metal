@@ -26,7 +26,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t SELECTED_UNPACKER = unpack_to_dest ? p_unpacr::UNP_DEST : p_unpacr::UNP_A;
     tdma_descriptor_t td_val;
     const std::uint32_t buf_desc_id          = 0;
-    const std::uint32_t num_tiles_per_unpack = TILE_CNT;
+    const std::uint32_t num_tiles_per_unpack = params.TILE_CNT;
 
     // Setup data valid scheme
     if constexpr (unpack_to_dest)
@@ -56,9 +56,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     bd_val.f.l1_addr_16B = params.buffer_A[0] / 16;
     bd_val.f.format      = static_cast<std::uint8_t>(formats.unpack_A_src);
-    bd_val.f.x_dim       = TEST_FACE_C_DIM;
-    bd_val.f.y_dim       = TEST_FACE_R_DIM;
-    bd_val.f.z_dim       = num_faces;
+    bd_val.f.x_dim       = params.TEST_FACE_C_DIM;
+    bd_val.f.y_dim       = params.TEST_FACE_R_DIM;
+    bd_val.f.z_dim       = params.num_faces;
 
     td_val.buf_desc        = bd_val;
     td_val.buf_desc_id     = buf_desc_id;
@@ -71,10 +71,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Unpack one tile row at a time for double-buffering with packer (SyncHalf).
         // Writing all tiles at once would cause _llk_pack_dest_dvalid_section_done_'s
         // ZEROACC to wipe subsequent tile rows after packing the first one.
-        _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, BLOCK_CT_DIM);
+        _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, BLOCK_CT_DIM);
         for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
         {
-            _llk_unpack_unary_operand_<SELECTED_UNPACKER>(block_rt * BLOCK_CT_DIM);
+            _llk_unpack_unary_operand_<SELECTED_UNPACKER>(block_rt * BLOCK_CT_DIM, ckernel::DEFAULT_TENSOR_SHAPE);
             _llk_unpack_dest_dvalid_section_done_<dest_sync>();
         }
     }
@@ -89,8 +89,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_unpack_configure_unary_<SELECTED_UNPACKER>(td_val);
         }
-        _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, num_tiles_per_unpack);
-        _llk_unpack_unary_operand_<SELECTED_UNPACKER>(0);
+        _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(
+            buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_unpack);
+        _llk_unpack_unary_operand_<SELECTED_UNPACKER>(0, ckernel::DEFAULT_TENSOR_SHAPE);
     }
 }
 
@@ -129,12 +130,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
         }
 
-        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
+        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(
+            params.num_faces * params.TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
         for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
         {
             for (std::uint32_t block_ct = 0; block_ct < BLOCK_CT_DIM; block_ct++)
             {
-                _llk_math_eltwise_unary_datacopy_(num_faces * TEST_FACE_R_DIM /*num_rows_per_tile*/, block_ct);
+                _llk_math_eltwise_unary_datacopy_(block_ct);
             }
             _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
         }
@@ -170,9 +172,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     bd_val.f.l1_addr_16B = params.buffer_Res[0] / 16;
     bd_val.f.format      = static_cast<std::uint8_t>(formats.pack_dst);
-    bd_val.f.x_dim       = TEST_FACE_C_DIM;
-    bd_val.f.y_dim       = TEST_FACE_R_DIM;
-    bd_val.f.z_dim       = num_faces;
+    bd_val.f.x_dim       = params.TEST_FACE_C_DIM;
+    bd_val.f.y_dim       = params.TEST_FACE_R_DIM;
+    bd_val.f.z_dim       = params.num_faces;
 
     tdma_desc.buf_desc        = bd_val;
     tdma_desc.buf_desc_id     = buf_desc_id;

@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_examples ${LIB_TYPE})
 add_library(TTNN::Ops::Examples ALIAS ttnn_op_examples)
 
-tt_reuse_precompile_headers(ttnn_op_examples TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_examples TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_examples)
 
 set_target_properties(

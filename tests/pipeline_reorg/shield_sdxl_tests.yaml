@@ -1,0 +1,69 @@
+# This file defines the test matrix for the shield sdxl tests pipeline.
+
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run for the test.
+#   skus: A mapping of SKU names to their configuration.
+#     Each SKU entry contains:
+#       timeout: The maximum allowed runtime for this job in minutes on that SKU.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+#   category: Selector used by shield_sdxl_tests.yaml's additional_test_categories
+#     dispatch input. On dispatch the impl filters this matrix to entries whose
+#     category appears in the comma-separated list; on schedule the filter is
+#     bypassed and every entry runs.
+#
+# For max allowed timeout refer to .github/time_budget.yaml.
+
+- name: ttnn nightly sdxl tests (wormhole)
+  cmd: |
+    exit_code=0
+    pytest models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600 || exit_code=$?
+    pytest models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600 || exit_code=$?
+    pytest models/demos/stable_diffusion_xl_base/lora/tests/test_lora_rollback.py -v -m "not disable_fast_runtime_mode" --timeout=600 || exit_code=$?
+    exit $exit_code
+  skus:
+    wh_n150:
+      timeout: 90
+    wh_n300:
+      timeout: 90
+  owner_id: U0ACLAM77PS # Kosta Grujcic
+  team: shield
+  category: sdxl
+
+- name: ttnn nightly sdxl tests (blackhole P150b)
+  cmd: |
+    exit_code=0
+    pytest models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600 || exit_code=$?
+    pytest models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600 || exit_code=$?
+    exit $exit_code
+  skus:
+    bh_p150b_civ2:
+      timeout: 70
+  owner_id: U0ACLAM77PS # Kosta Grujcic
+  team: shield
+  category: sdxl
+
+- name: ttnn nightly sdxl demo cfg parallel test (N300)
+  cmd: 'pytest models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and use_cfg_parallel" --timeout=600'
+  skus:
+    wh_n300:
+      timeout: 25
+  owner_id: U0ACLAM77PS # Kosta Grujcic
+  team: shield
+  category: sdxl
+
+- name: nightly sdxl demo (blackhole P150b)
+  cmd: |
+    exit_code=0
+    pytest models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
+    pytest models/demos/stable_diffusion_xl_base/demo/demo_base_and_refiner.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
+    pytest models/demos/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
+    pytest models/demos/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
+    exit $exit_code
+  skus:
+    bh_p150b_civ2:
+      timeout: 55
+  owner_id: U09LK84G4TF # Nikola Milicevic
+  team: shield
+  category: sdxl

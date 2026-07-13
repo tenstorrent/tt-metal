@@ -109,27 +109,27 @@ def test_valid_inputs_2d_index_first_dim_one(device):
 # ---------------------------------------------------------------------------
 
 
-def test_global_tensor_wrong_dtype(device):
-    g = _make_global(device, dtype=ttnn.bfloat16)
+def test_global_tensor_wrong_dtype(device, expect_error):
+    g = _make_global(device, dtype=ttnn.float32)
     s = _make_index(device)
     c = _make_index(device)
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "global_tensor must be BFLOAT8_B or BFLOAT16"):
         _run(g, s, c)
 
 
-def test_global_tensor_must_be_2d(device):
+def test_global_tensor_must_be_2d(device, expect_error):
     g = _make_global(device, shape=(1, GLOBAL_ROWS, HIDDEN_DIM))
     s = _make_index(device)
     c = _make_index(device)
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "global_tensor must be 2D"):
         _run(g, s, c)
 
 
-def test_global_tensor_must_be_dram_interleaved(device):
+def test_global_tensor_must_be_dram_interleaved(device, expect_error):
     g = _make_global(device, memory_config=ttnn.L1_MEMORY_CONFIG)
     s = _make_index(device)
     c = _make_index(device)
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "global_tensor must be DRAM interleaved"):
         _run(g, s, c)
 
 
@@ -138,35 +138,35 @@ def test_global_tensor_must_be_dram_interleaved(device):
 # ---------------------------------------------------------------------------
 
 
-def test_start_wrong_dtype(device):
+def test_start_wrong_dtype(device, expect_error):
     g = _make_global(device)
     s = _make_index(device, dtype=ttnn.uint16)
     c = _make_index(device)
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "start must be UINT32"):
         _run(g, s, c)
 
 
-def test_start_must_be_dram_interleaved(device):
+def test_start_must_be_dram_interleaved(device, expect_error):
     g = _make_global(device)
     s = _make_index(device, memory_config=ttnn.L1_MEMORY_CONFIG)
     c = _make_index(device)
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "start must be DRAM interleaved"):
         _run(g, s, c)
 
 
-def test_start_2d_first_dim_not_one(device):
+def test_start_2d_first_dim_not_one(device, expect_error):
     g = _make_global(device)
     s = _make_index(device, shape=(2, NUM_EXPERTS))
     c = _make_index(device)
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "start must be 1D or 2D with first dimension == 1"):
         _run(g, s, c)
 
 
-def test_start_3d_rejected(device):
+def test_start_3d_rejected(device, expect_error):
     g = _make_global(device)
     s = _make_index(device, shape=(1, 1, NUM_EXPERTS))
     c = _make_index(device)
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "start must be 1D or 2D with first dimension == 1"):
         _run(g, s, c)
 
 
@@ -175,35 +175,35 @@ def test_start_3d_rejected(device):
 # ---------------------------------------------------------------------------
 
 
-def test_counts_wrong_dtype(device):
+def test_counts_wrong_dtype(device, expect_error):
     g = _make_global(device)
     s = _make_index(device)
     c = _make_index(device, dtype=ttnn.uint16)
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "counts must be UINT32"):
         _run(g, s, c)
 
 
-def test_counts_must_be_dram_interleaved(device):
+def test_counts_must_be_dram_interleaved(device, expect_error):
     g = _make_global(device)
     s = _make_index(device)
     c = _make_index(device, memory_config=ttnn.L1_MEMORY_CONFIG)
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "counts must be DRAM interleaved"):
         _run(g, s, c)
 
 
-def test_counts_2d_first_dim_not_one(device):
+def test_counts_2d_first_dim_not_one(device, expect_error):
     g = _make_global(device)
     s = _make_index(device)
     c = _make_index(device, shape=(2, NUM_EXPERTS))
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "counts must be 1D or 2D with first dimension == 1"):
         _run(g, s, c)
 
 
-def test_counts_3d_rejected(device):
+def test_counts_3d_rejected(device, expect_error):
     g = _make_global(device)
     s = _make_index(device)
     c = _make_index(device, shape=(1, 1, NUM_EXPERTS))
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "counts must be 1D or 2D with first dimension == 1"):
         _run(g, s, c)
 
 
@@ -212,43 +212,43 @@ def test_counts_3d_rejected(device):
 # ---------------------------------------------------------------------------
 
 
-def test_start_and_counts_last_dim_mismatch_1d(device):
+def test_start_and_counts_last_dim_mismatch_1d(device, expect_error):
     g = _make_global(device)
     s = _make_index(device, shape=(NUM_EXPERTS,))
     c = _make_index(device, shape=(NUM_EXPERTS + 1,))
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "start and counts must have the same last dimension"):
         _run(g, s, c)
 
 
-def test_start_and_counts_last_dim_mismatch_2d(device):
+def test_start_and_counts_last_dim_mismatch_2d(device, expect_error):
     g = _make_global(device)
     s = _make_index(device, shape=(1, NUM_EXPERTS))
     c = _make_index(device, shape=(1, NUM_EXPERTS + 1))
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "start and counts must have the same last dimension"):
         _run(g, s, c)
 
 
-def test_start_and_counts_last_dim_mismatch_mixed_rank(device):
+def test_start_and_counts_last_dim_mismatch_mixed_rank(device, expect_error):
     g = _make_global(device)
     s = _make_index(device, shape=(NUM_EXPERTS,))
     c = _make_index(device, shape=(1, NUM_EXPERTS + 1))
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "start and counts must have the same last dimension"):
         _run(g, s, c)
 
 
-def test_global_expert_id_equal_to_last_dim_rejected(device):
+def test_global_expert_id_equal_to_last_dim_rejected(device, expect_error):
     g = _make_global(device)
     s = _make_index(device, shape=(NUM_EXPERTS,))
     c = _make_index(device, shape=(NUM_EXPERTS,))
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "local_expert_id .* must be in the range"):
         _run(g, s, c, global_expert_id=NUM_EXPERTS)
 
 
-def test_global_expert_id_beyond_last_dim_rejected(device):
+def test_global_expert_id_beyond_last_dim_rejected(device, expect_error):
     g = _make_global(device)
     s = _make_index(device, shape=(NUM_EXPERTS,))
     c = _make_index(device, shape=(NUM_EXPERTS,))
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "local_expert_id .* must be in the range"):
         _run(g, s, c, global_expert_id=NUM_EXPERTS + 5)
 
 
@@ -265,19 +265,19 @@ def test_global_expert_id_max_valid_accepted(device):
 # ---------------------------------------------------------------------------
 
 
-def test_max_tokens_zero_rejected(device):
+def test_max_tokens_zero_rejected(device, expect_error):
     g = _make_global(device)
     s = _make_index(device)
     c = _make_index(device)
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "max_dispatched_tokens_per_expert must be > 0"):
         _run(g, s, c, max_tokens=0)
 
 
-def test_max_tokens_not_tile_aligned_rejected(device):
+def test_max_tokens_not_tile_aligned_rejected(device, expect_error):
     g = _make_global(device)
     s = _make_index(device)
     c = _make_index(device)
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "max_dispatched_tokens_per_expert .* must be a multiple of TILE_HEIGHT"):
         _run(g, s, c, max_tokens=17)
 
 

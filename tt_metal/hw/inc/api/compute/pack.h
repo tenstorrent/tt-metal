@@ -6,6 +6,7 @@
 
 #include "common_globals.h"
 #include "sentinel/compute_kernel_sentinel.h"
+#include "sanitizer/api.h"
 #ifdef TRISC_PACK
 #include "llk_pack_tile_api.h"
 #ifndef ARCH_QUASAR
@@ -84,6 +85,7 @@ ALWI void pack_init(uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
 // clang-format on
 template <bool out_of_order_output = false>
 ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_index = 0) {
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     PACK((llk_pack<DST_ACCUM_MODE, out_of_order_output, PackMode::Default>(ifrom_dst, icb, output_tile_index)));
 #else
@@ -124,6 +126,7 @@ ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_
  */
 // clang-format on
 ALWI void pack_tile_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
 #else
@@ -170,11 +173,11 @@ ALWI void pack_reconfig_l1_acc(const uint32_t l1_acc_en) { PACK((llk_pack_reconf
  * | Function   | num_rows | Number of rows to pack from dest to L1 (each row = 16 datums)  | uint32_t | 1 to 64     | True     |
  */
 // clang-format on
-ALWI void pack_rows_init(uint32_t num_rows) {
 #ifndef ARCH_QUASAR
+ALWI void pack_rows_init(uint32_t num_rows) {
     PACK((llk_pack_rows_init(num_rows)));
-#endif
 }
+#endif
 
 // clang-format off
 /**
@@ -199,11 +202,11 @@ ALWI void pack_rows_init(uint32_t num_rows) {
  * | Function   | output_index | The index in the output CB to write to            | uint32_t | Must be less than the size of the CB                 | False    |
  */
 // clang-format on
-ALWI void pack_rows(uint32_t idst, uint32_t ocb, uint32_t output_index = 0) {
 #ifndef ARCH_QUASAR
+ALWI void pack_rows(uint32_t idst, uint32_t ocb, uint32_t output_index = 0) {
     PACK((llk_pack_rows(idst, ocb, output_index)));
-#endif
 }
+#endif
 
 // clang-format off
 /**
@@ -218,11 +221,11 @@ ALWI void pack_rows(uint32_t idst, uint32_t ocb, uint32_t output_index = 0) {
  * Return value: None
  */
 // clang-format on
-ALWI void pack_rows_uninit() {
 #ifndef ARCH_QUASAR
+ALWI void pack_rows_uninit() {
     PACK((llk_pack_rows_uninit()));
-#endif
 }
+#endif
 
 /**
  * Configures packer ReLU activation at runtime.

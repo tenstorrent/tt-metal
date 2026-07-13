@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "ckernel_trisc_common.h"
+#include "cmath_common.h"
 #include "cunpack_common.h"
 #include "llk_assert.h"
 using namespace ckernel;
@@ -19,9 +20,10 @@ enum class p_dim_stride_target
 };
 
 /**
- * @brief Programs unpacker l1 info & source register format
- * @tparam UNP_SEL: Sets unpacker to configure. values = p_unpacr::UNP_A/UNP_B/UNP_S
- * @param tdma_desc_src: Contains source reg format
+ * @brief Programs unpacker L1 info and source register format.
+ *
+ * @tparam UNP_SEL: Selects which unpacker to configure, values = <p_unpacr::UNP_A/UNP_B/UNP_S/UNP_DEST>
+ * @param tdma_desc_src: Contains source register format.
  */
 template <std::uint32_t UNP_SEL>
 inline void _llk_unpack_hw_configure_(const tdma_descriptor_t& tdma_desc_src)
@@ -48,9 +50,10 @@ inline void _llk_unpack_hw_configure_(const tdma_descriptor_t& tdma_desc_src)
 
 // RT: make defines to aggregate _llk_unpack_hw_configure_ calls into one
 /**
- * @brief Programs unpacker l1 info & source register format for unary operation
- * @tparam UNP_SEL: Sets unpacker to configure. values = p_unpacr::UNP_A/UNP_B/UNP_S
- * @param tdma_desc_src: Contains L1 buffer descriptor information & source reg format for Src Reg
+ * @brief Programs unpacker L1 info and source register format for a unary operation.
+ *
+ * @tparam UNP_SEL: Selects which unpacker to configure, values = <p_unpacr::UNP_A/UNP_B/UNP_S>
+ * @param tdma_desc_src: Contains L1 buffer descriptor information and source register format for the source register.
  */
 template <std::uint32_t UNP_SEL>
 inline void _llk_unpack_configure_unary_(const tdma_descriptor_t& tdma_desc_src)
@@ -59,9 +62,10 @@ inline void _llk_unpack_configure_unary_(const tdma_descriptor_t& tdma_desc_src)
 }
 
 /**
- * @brief Programs unpacker l1 info & source register format for binary operation
- * @tparam UNP_SEL0/1: Sets unpacker to configure. values = p_unpacr::UNP_A/UNP_B/UNP_S
- * @param tdma_desc_src0/1: Contains L1 buffer descriptor information & source reg format for Src Reg
+ * @brief Programs unpacker L1 info and source register format for a binary operation.
+ *
+ * @tparam UNP_SEL_0/1: Selects which unpacker to configure, values = <p_unpacr::UNP_A/UNP_B/UNP_S>
+ * @param tdma_desc_src0/1: Contains L1 buffer descriptor information and source register format for the source register.
  */
 template <std::uint32_t UNP_SEL_0, std::uint32_t UNP_SEL_1>
 inline void _llk_unpack_configure_binary_(const tdma_descriptor_t& tdma_desc_src0, const tdma_descriptor_t& tdma_desc_src1)
@@ -70,6 +74,14 @@ inline void _llk_unpack_configure_binary_(const tdma_descriptor_t& tdma_desc_src
     _llk_unpack_hw_configure_<UNP_SEL_1>(tdma_desc_src1);
 }
 
+/**
+ * @brief Clears the unpack-to-dest data valid for the dest section after unpacking directly into DEST.
+ *
+ * For DstSync::SyncFull, also clears dvalid for dest bank 1 and resets the dest bank id to 0 so the
+ * next section starts from bank 0, allowing the full dest register to be used.
+ *
+ * @tparam DST: Destination register buffering mode, values = <DstSync::SyncHalf/DstSync::SyncFull>
+ */
 template <DstSync DST>
 inline void _llk_unpack_dest_dvalid_section_done_()
 {
@@ -84,16 +96,17 @@ inline void _llk_unpack_dest_dvalid_section_done_()
 }
 
 /**
+ * @brief Reprograms the unpacker output DataFormat at runtime.
+ *
  * Quasar unpack dynamic output format: reprograms only THCON `UNPACKER*_REG0_OUT_DATA_FORMAT`.
  * L1 layout and input encoding stay in the buffer descriptor; `unpack_src_format` is the BD/L1
- * DataFormat and is not written to unpacker config here.
+ * DataFormat and is not written to unpacker config here. UNP_DEST is not a valid selector: there
+ * is no source register to reprogram for the dest path.
  *
- * UNP_DEST is not a valid selector: there is no source register to reprogram for the dest path.
- *
- * @tparam UNP_SEL              Unpacker to update
- * @tparam EN_32BIT_DEST  FP32 dest accumulation (validated with `unpack_src_format` / `unpack_dst_format`).
- * @param unpack_src_format     BD/L1 input DataFormat (used only for the conversion check).
- * @param unpack_dst_format     OUT_DATA_FORMAT register value to program (unpacker gasket output).
+ * @tparam UNP_SEL: Unpacker to update, values = <p_unpacr::UNP_A/UNP_B/UNP_S>
+ * @tparam EN_32BIT_DEST: FP32 dest accumulation (validated with unpack_src_format / unpack_dst_format).
+ * @param unpack_src_format: BD/L1 input DataFormat (used only for the conversion check).
+ * @param unpack_dst_format: OUT_DATA_FORMAT register value to program (unpacker gasket output).
  */
 template <std::uint32_t UNP_SEL, bool EN_32BIT_DEST>
 inline void _llk_unpack_reconfig_data_format_src_(const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format)
@@ -123,7 +136,7 @@ inline void _llk_unpack_reconfig_data_format_src_(const std::uint32_t unpack_src
 }
 
 /**
- * @brief Sets dummy SrcB dvalid
+ * @brief Sets a dummy SrcB data valid via an UNPACR NOP.
  */
 inline void _llk_unpack_set_srcB_dummy_valid_()
 {

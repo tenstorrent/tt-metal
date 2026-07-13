@@ -28,6 +28,8 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include <tt-metalium/constants.hpp>
 
 void kernel_main() {
@@ -40,6 +42,11 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
     constexpr uint32_t cb_id_local = get_compile_time_arg_val(2);
+
+    Noc noc;
+    CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_out0(cb_id_out0);
+    CircularBuffer cb_local(cb_id_local);
     constexpr bool src_is_dram = (bool)get_compile_time_arg_val(3);
     constexpr bool dst_offsets_is_dram = (bool)get_compile_time_arg_val(4);
     constexpr bool dst_totals_is_dram = (bool)get_compile_time_arg_val(5);
@@ -69,25 +76,21 @@ void kernel_main() {
     const auto dst_expert_region_accessor = TensorAccessor(dst_expert_region_args, dst_expert_region_addr);
 
     // running_sum accumulates totals across all H rows
-    uint32_t out_cb_addr = get_write_ptr(cb_id_out0);
-    volatile tt_l1_ptr uint32_t* running_sum = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_cb_addr);
+    volatile tt_l1_ptr uint32_t* running_sum = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_out0.get_write_ptr());
 
     // local_off stores the local offsets (sum of rows 0..row_idx-1) for later combination
-    uint32_t local_cb_addr = get_write_ptr(cb_id_local);
-    volatile tt_l1_ptr uint32_t* local_off = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_cb_addr);
+    volatile tt_l1_ptr uint32_t* local_off = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_local.get_write_ptr());
 
     for (uint32_t i = 0; i < W; i++) {
         running_sum[i] = 0;
         local_off[i] = 0;
     }
 
-    uint32_t in_cb_addr = get_write_ptr(cb_id_in0);
-
     for (uint32_t h = 0; h < H; h++) {
-        noc_async_read_page(h, src_accessor, in_cb_addr);
-        noc_async_read_barrier();
+        noc.async_read(src_accessor, cb_in0, input_page_size, {.page_id = h}, {.offset_bytes = 0});
+        noc.async_read_barrier();
 
-        volatile tt_l1_ptr uint32_t* stick = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in_cb_addr);
+        volatile tt_l1_ptr uint32_t* stick = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_in0.get_write_ptr());
         for (uint32_t i = 0; i < W; i++) {
             running_sum[i] += stick[i];
         }
@@ -103,8 +106,8 @@ void kernel_main() {
     // --- Post-loop: running_sum now contains totals ---
 
     // 1. Write totals to DRAM
-    noc_async_write(out_cb_addr, dst_totals_accessor.get_noc_addr(0), totals_page_size);
-    noc_async_write_barrier();
+    noc.async_write(cb_out0, dst_totals_accessor, totals_page_size, {}, {.page_id = 0});
+    noc.async_write_barrier();
 
     // 2. Compute exclusive prefix sum of tile-aligned totals, grouped by experts_per_chip
     //    Pad each expert's count to TILE_HEIGHT so each expert starts at a tile boundary
@@ -121,8 +124,8 @@ void kernel_main() {
     }
 
     // 3. Write expert region offsets (shared component, before adding local offset) to DRAM
-    noc_async_write(out_cb_addr, dst_expert_region_accessor.get_noc_addr(0), expert_region_page_size);
-    noc_async_write_barrier();
+    noc.async_write(cb_out0, dst_expert_region_accessor, expert_region_page_size, {}, {.page_id = 0});
+    noc.async_write_barrier();
 
     // 4. Add saved local offsets to get global offsets
     for (uint32_t i = 0; i < W; i++) {
@@ -130,6 +133,6 @@ void kernel_main() {
     }
 
     // 5. Write global offsets to DRAM
-    noc_async_write(out_cb_addr, dst_offsets_accessor.get_noc_addr(0), offsets_page_size);
-    noc_async_write_barrier();
+    noc.async_write(cb_out0, dst_offsets_accessor, offsets_page_size, {}, {.page_id = 0});
+    noc.async_write_barrier();
 }

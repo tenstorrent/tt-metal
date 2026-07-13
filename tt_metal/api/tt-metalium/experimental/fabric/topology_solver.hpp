@@ -400,6 +400,20 @@ public:
     const std::vector<std::set<GlobalNode>>& get_same_rank_global_groups() const { return same_rank_global_groups_; }
 
     /**
+     * @brief Opt-in objective: minimize the number of distinct same-rank GLOBAL groups (e.g. host partitions)
+     * that the mapping touches.
+     *
+     * When enabled (and same-rank global groups are present), the SAT backend adds a host-usage budget: it tries
+     * to confine the whole mapping to the provably-minimal number of groups (ceil(num_targets / max_group_size))
+     * and walks the budget upward only if that is infeasible. This packs connected targets (e.g. a pipeline) onto
+     * the fewest hosts. It is a best-effort objective: if no budget is satisfiable the solver falls back to an
+     * unconstrained solve, so enabling it can never turn a solvable instance UNSAT. The DFS backend approximates
+     * the same goal via a host-affinity value-ordering bias. Off by default; intended for inter-mesh mapping.
+     */
+    void set_minimize_same_rank_groups_used(bool enable) { minimize_same_rank_groups_used_ = enable; }
+    bool minimize_same_rank_groups_used() const { return minimize_same_rank_groups_used_; }
+
+    /**
      * @brief Get forbidden (target, global) pairs that are invalid even when no required constraints exist
      *
      * Used when add_forbidden_constraint is called for a target with no valid_mappings_ entry.
@@ -459,6 +473,9 @@ private:
     std::vector<std::set<TargetNode>> same_rank_target_groups_;
     std::vector<std::set<GlobalNode>> same_rank_global_groups_;
 
+    // Opt-in objective: minimize number of distinct same-rank global groups (host partitions) used.
+    bool minimize_same_rank_groups_used_ = false;
+
     // Track which global nodes are exclusively reserved by many-to-many constraints
     // Maps global node -> set of target nodes that are allowed to map to it via many-to-many constraints
     std::map<GlobalNode, std::set<TargetNode>> reserved_global_nodes_;
@@ -473,9 +490,10 @@ private:
     // and that they are satisfiable together
     bool validate_cardinality_constraints() const;
 
-    // Same-rank: there must exist an injective assignment of non-empty target groups to distinct
-    // non-empty global groups such that each target in a group has some allowed mapping into that
-    // group's assigned global partition (forbidden + valid_mappings / staged rules).
+    // Same-rank feasibility: every non-empty logical target group must have at least one physical
+    // host partition where all members still allow a mapping (forbidden + valid_mappings / staged
+    // rules). Multiple target groups may share the same partition (e.g. several mesh_host_ranks
+    // carved from one galaxy host); partitions are not required to be distinct.
     bool validate_same_rank_groups_feasible() const;
 };
 
@@ -770,6 +788,9 @@ struct ConstraintIndexData {
     std::vector<std::set<size_t>> same_rank_groups;
     std::vector<size_t> target_to_group;
 
+    // Opt-in objective: minimize the number of distinct same-rank global groups (host partitions) used.
+    bool minimize_same_rank_groups_used = false;
+
     /**
      * @brief Construct ConstraintIndexData from MappingConstraints and GraphIndexData
      *
@@ -888,6 +909,7 @@ struct TopologySatConstraintView {
     const std::vector<int>& global_to_same_rank_group;
     const std::vector<std::set<size_t>>& same_rank_groups;
     const std::vector<size_t>& target_to_group;
+    bool minimize_same_rank_groups_used = false;
 
     template <typename TargetNode, typename GlobalNode>
     explicit TopologySatConstraintView(const ConstraintIndexData<TargetNode, GlobalNode>& c) :
@@ -897,7 +919,8 @@ struct TopologySatConstraintView {
         cardinality_constraints(c.cardinality_constraints),
         global_to_same_rank_group(c.global_to_same_rank_group),
         same_rank_groups(c.same_rank_groups),
-        target_to_group(c.target_to_group) {}
+        target_to_group(c.target_to_group),
+        minimize_same_rank_groups_used(c.minimize_same_rank_groups_used) {}
 
     bool is_valid_mapping(size_t target_idx, size_t global_idx) const {
         if (target_idx < forbidden_global_indices.size() && !forbidden_global_indices[target_idx].empty()) {
@@ -1072,8 +1095,12 @@ private:
         const std::vector<int>& mapping,
         ConnectionValidationMode validation_mode);
 
-    // Cost weights (ensure hard >> soft >> runtime)
+    // Cost weights (ensure hard >> host-affinity >> soft >> runtime)
     static constexpr int HARD_WEIGHT = 1000000;
+    // Host-affinity (packing) bias: must dominate the softer channel/preferred biases so connected targets
+    // consolidate onto the fewest host partitions, but stay well below HARD_WEIGHT so it never competes with
+    // hard feasibility. Applied per same-host already-mapped neighbor.
+    static constexpr int HOST_AFFINITY_WEIGHT = 10000;
     static constexpr int SOFT_WEIGHT = 1000;
     static constexpr int RUNTIME_WEIGHT = 1;
 };

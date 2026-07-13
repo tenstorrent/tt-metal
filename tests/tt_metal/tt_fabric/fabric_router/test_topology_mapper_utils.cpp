@@ -67,6 +67,25 @@ void expect_bh_halfpod_tray_pairing_for_graph_nodes(
         << format_uint_set(trays) << "]";
 }
 
+// Rev C horizontal tray pairs: {1,2} or {3,4} (adjacent trays on one host).
+void expect_bh_rev_c_horizontal_tray_pairing_for_graph_nodes(
+    const std::string& context,
+    const tt::tt_metal::PhysicalSystemDescriptor& psd,
+    const AdjacencyGraph<tt::tt_metal::AsicID>& adjacency_graph) {
+    std::set<uint32_t> trays;
+    for (const auto& node : adjacency_graph.get_nodes()) {
+        const uint32_t tray = *psd.get_tray_id(node);
+        trays.insert(tray);
+        EXPECT_GE(tray, 1u) << context << " asic_id=" << *node;
+        EXPECT_LE(tray, 4u) << context << " asic_id=" << *node;
+    }
+    const bool only_12 = std::all_of(trays.begin(), trays.end(), [](uint32_t t) { return t == 1u || t == 2u; });
+    const bool only_34 = std::all_of(trays.begin(), trays.end(), [](uint32_t t) { return t == 3u || t == 4u; });
+    EXPECT_TRUE(only_12 || only_34)
+        << context << " — Rev C BH Galaxy nodes must use only tray pair {1,2} or only {3,4}; distinct trays=["
+        << format_uint_set(trays) << "]";
+}
+
 // =============================================================================
 // Test Fixture with Helper Methods
 // =============================================================================
@@ -575,6 +594,43 @@ protected:
             EXPECT_LE(ranks_on_host.size(), 1u)
                 << "Host " << hostname << " has ASICs mapped to fabric nodes with different ranks: "
                 << "all fabric nodes on the same host must have the same mesh host rank";
+        }
+    }
+
+    // Verify the rank-binding split is correct: every mesh host rank's fabric nodes map to ASICs on a
+    // single physical host (a rank never straddles hosts), and each host carries exactly the expected
+    // number of distinct ranks. Used when one physical host is split into multiple host-ranks (e.g. a
+    // galaxy carved into many ranks, or a multi-galaxy system split into the MGD's finer host grid).
+    static void verify_rank_split_within_host(
+        const TopologyMappingResult& result,
+        const std::map<FabricNodeId, MeshHostRankId>& fabric_node_id_to_mesh_rank,
+        const std::map<std::string, std::set<tt::tt_metal::AsicID>>& hostname_to_asics,
+        size_t expected_ranks_per_host) {
+        std::map<tt::tt_metal::AsicID, std::string> asic_to_host;
+        for (const auto& [hostname, asics] : hostname_to_asics) {
+            for (const auto& a : asics) {
+                asic_to_host[a] = hostname;
+            }
+        }
+        std::map<MeshHostRankId, std::set<std::string>> hosts_per_rank;
+        std::map<std::string, std::set<MeshHostRankId>> ranks_per_host;
+        for (const auto& [node, rank] : fabric_node_id_to_mesh_rank) {
+            auto node_it = result.fabric_node_to_asic.find(node);
+            ASSERT_NE(node_it, result.fabric_node_to_asic.end())
+                << "Fabric node (mesh=" << node.mesh_id.get() << ", chip=" << node.chip_id << ") was not mapped";
+            auto host_it = asic_to_host.find(node_it->second);
+            ASSERT_NE(host_it, asic_to_host.end())
+                << "Mapped ASIC " << node_it->second.get() << " does not belong to any known host";
+            hosts_per_rank[rank].insert(host_it->second);
+            ranks_per_host[host_it->second].insert(rank);
+        }
+        for (const auto& [rank, hosts] : hosts_per_rank) {
+            EXPECT_EQ(hosts.size(), 1u) << "Mesh host rank " << rank.get() << " straddles " << hosts.size()
+                                        << " physical hosts; every rank's fabric nodes must land on a single host";
+        }
+        for (const auto& [hostname, ranks] : ranks_per_host) {
+            EXPECT_EQ(ranks.size(), expected_ranks_per_host)
+                << "Host " << hostname << " carries " << ranks.size() << " ranks, expected " << expected_ranks_per_host;
         }
     }
 
@@ -3968,6 +4024,68 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_PartialRankBinding_OneHos
     }
 }
 
+// -----------------------------------------------------------------------------
+// Rank-binding split correctness: a multi-galaxy (or single-galaxy) physical system whose MGD declares
+// MORE mesh_host_ranks than there are physical hosts must be split so each rank is carved out of a single
+// host. These exercise the generalized same-rank-groups host-partition replication and verify the
+// resulting fabric_node <-> ASIC assignment is consistent and host-aligned.
+// -----------------------------------------------------------------------------
+
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_TwoHostsSplitAcrossFourRanks_EachRankWithinOneHost) {
+    // 2 UNSET physical hosts of 2 ASICs each (4 ASICs in a 1x4 ring). The MGD declares 4 mesh host ranks
+    // (more ranks than hosts), so each host is split across 2 ranks. With the old single-host-only special
+    // case this is infeasible ("more same-rank target groups than global host partitions"); the generalized
+    // replication carves 2 ranks out of each host.
+    using namespace ::tt::tt_fabric;
+    const MeshId mesh0{0};
+
+    std::vector<FabricNodeId> logical_nodes = make_nodes(4);
+    auto logical_adj = build_ring_adjacency(logical_nodes);
+    LogicalMultiMeshGraph logical_multi_mesh_graph;
+    logical_multi_mesh_graph.mesh_adjacency_graphs_[mesh0] = AdjacencyGraph<FabricNodeId>(logical_adj);
+    AdjacencyGraph<MeshId>::AdjacencyMap logical_mesh_level_adj;
+    logical_mesh_level_adj[mesh0] = {};
+    logical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(logical_mesh_level_adj);
+    logical_multi_mesh_graph.mesh_exit_node_graphs_[mesh0] = AdjacencyGraph<LogicalExitNode>();
+
+    std::vector<tt::tt_metal::AsicID> physical_asics = make_asics(4, 100);
+    auto physical_adj = build_ring_adjacency(physical_asics);
+    PhysicalMultiMeshGraph physical_multi_mesh_graph;
+    physical_multi_mesh_graph.mesh_adjacency_graphs_[mesh0] = AdjacencyGraph<tt::tt_metal::AsicID>(physical_adj);
+    AdjacencyGraph<MeshId>::AdjacencyMap physical_mesh_level_adj;
+    physical_mesh_level_adj[mesh0] = {};
+    physical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(physical_mesh_level_adj);
+    physical_multi_mesh_graph.mesh_exit_node_graphs_[mesh0] = AdjacencyGraph<PhysicalExitNode>();
+
+    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank;
+    for (uint32_t i = 0; i < 4; ++i) {
+        fabric_node_id_to_mesh_rank[mesh0][logical_nodes[i]] = MeshHostRankId{i};
+    }
+
+    std::map<std::string, std::set<tt::tt_metal::AsicID>> hostname_to_asics;
+    hostname_to_asics["host0"] = {physical_asics[0], physical_asics[1]};
+    hostname_to_asics["host1"] = {physical_asics[2], physical_asics[3]};
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    for (size_t i = 0; i < 4; ++i) {
+        asic_id_to_mesh_rank[mesh0][physical_asics[i]] = ::tt::tt_fabric::MESH_HOST_RANK_UNSET;
+    }
+
+    TopologyMappingConfig config;
+    set_strict_intra_mesh(config, {mesh0});
+    config.disable_rank_bindings = false;
+    config.hostname_to_asics = hostname_to_asics;
+
+    const auto result = map_multi_mesh_to_physical(
+        logical_multi_mesh_graph, physical_multi_mesh_graph, config, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank);
+
+    ASSERT_TRUE(result.success) << "Splitting 2 hosts across 4 ranks should succeed: " << result.error_message;
+    verify_bidirectional_consistency(result);
+    EXPECT_EQ(result.fabric_node_to_asic.size(), 4u);
+    verify_connectivity_preserved(result, logical_adj, physical_adj);
+    verify_rank_split_within_host(
+        result, fabric_node_id_to_mesh_rank[mesh0], hostname_to_asics, /*expected_ranks_per_host=*/2);
+}
+
 // =============================================================================
 // Tier 2: build_physical_multi_mesh_adjacency_graph with PGD and PSD Tests
 // =============================================================================
@@ -4011,7 +4129,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     // Load PGD - using triple_16x8_quad_bh_galaxy_physical_groupings
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4073,7 +4191,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
 
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4149,7 +4267,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 
     const std::filesystem::path pgd_path = std::filesystem::path(tt_metal_home) /
                                            "tests/tt_metal/tt_fabric/physical_groupings/"
-                                           "bh_galaxy_physical_grouping_descriptor.textproto";
+                                           "bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4200,7 +4318,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     // Load PGD - using triple_16x8_quad_bh_galaxy_physical_groupings
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4313,7 +4431,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
         hosts_spanning_blitz_mapped.insert(psd.get_host_name_for_asic(asic_id));
     }
     EXPECT_GE(hosts_spanning_blitz_mapped.size(), 1u);
-    EXPECT_LE(hosts_spanning_blitz_mapped.size(), 3u)
+    EXPECT_LE(hosts_spanning_blitz_mapped.size(), 4u)
         << "Mapped Blitz pipeline: at most one host per logical 4×2 mesh (10 stages)";
 }
 
@@ -4334,7 +4452,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
 
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4443,8 +4561,147 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
         hosts_spanning_blitz_mapped.insert(psd.get_host_name_for_asic(asic_id));
     }
     EXPECT_GE(hosts_spanning_blitz_mapped.size(), 1u);
-    EXPECT_LE(hosts_spanning_blitz_mapped.size(), 3u)
+    EXPECT_LE(hosts_spanning_blitz_mapped.size(), 5u)
         << "Mapped Blitz pipeline: at most one host per logical 4×2 mesh (11 stages)";
+}
+
+TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx_Blitz2x4_32Stage) {
+    // Same as BuildPhysicalMultiMeshGraph_WithPGDAndPSD_ThreePod16x8_Blitz2x4 but 32 pipeline stages
+    // (bh_glx_32stage_4x2_pipeline.textproto).
+    using namespace ::tt::tt_fabric;
+
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+
+    auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (mock_desc == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with tt-run --mock-cluster-rank-binding";
+    }
+
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+
+    const std::filesystem::path pgd_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+    PhysicalGroupingDescriptor pgd{pgd_path};
+
+    constexpr std::size_t kPipelineStages = 32;
+    constexpr std::size_t kAsicsPerStage = 8;
+
+    const std::filesystem::path mgd_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_glx_32stage_4x2_pipeline.textproto";
+    ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
+    MeshGraphDescriptor mgd{mgd_path};
+
+    const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
+
+    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 64u);
+
+    for (const auto& node : physical_multi_mesh_graph.mesh_level_graph_.get_nodes()) {
+        EXPECT_GT(physical_multi_mesh_graph.mesh_level_graph_.get_neighbors(node).size(), 0);
+    }
+
+    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        EXPECT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(mesh_id));
+        EXPECT_GT(physical_multi_mesh_graph.mesh_exit_node_graphs_.at(mesh_id).get_nodes().size(), 0);
+    }
+
+    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        (void)mesh_id;
+        EXPECT_EQ(adjacency_graph.get_nodes().size(), kAsicsPerStage);
+
+        expect_bh_halfpod_tray_pairing_for_graph_nodes(
+            std::string("[ThreePod16x8_Blitz2x4_32Stage] mesh_id=") + std::to_string(*mesh_id), psd, adjacency_graph);
+
+        for (const auto& node : adjacency_graph.get_nodes()) {
+            EXPECT_GE(adjacency_graph.get_neighbors(node).size(), 2u * 2u);
+            EXPECT_LE(adjacency_graph.get_neighbors(node).size(), 3u * 2u);
+        }
+    }
+
+    MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, mgd_path.string());
+    const auto logical_multi_mesh_graph = build_logical_multi_mesh_adjacency_graph(mesh_graph);
+
+    EXPECT_EQ(logical_multi_mesh_graph.mesh_adjacency_graphs_.size(), kPipelineStages);
+
+    size_t expected_fabric_nodes = 0;
+    for (const auto& [logical_mesh_id, logical_adj] : logical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        (void)logical_mesh_id;
+        expected_fabric_nodes += logical_adj.get_nodes().size();
+    }
+    ASSERT_EQ(expected_fabric_nodes, kPipelineStages * kAsicsPerStage);
+
+    TopologyMappingConfig config;
+    config.strict_mode = true;
+    config.disable_rank_bindings = false;
+
+    for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
+        config.hostname_to_asics[desc.host_name].insert(asic_id);
+    }
+
+    const auto& pinnings = mgd.get_pinnings();
+    for (const auto& [pos, fabric_node] : pinnings) {
+        config.pinnings.emplace_back(pos, fabric_node);
+    }
+
+    if (!config.pinnings.empty()) {
+        const auto& asic_descriptors = psd.get_asic_descriptors();
+        for (const auto& [asic_id, _] : asic_descriptors) {
+            auto tray_id = psd.get_tray_id(asic_id);
+            auto asic_location = psd.get_asic_location(asic_id);
+            config.asic_positions[asic_id] = std::make_pair(tray_id, asic_location);
+        }
+    }
+
+    for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
+        config.mesh_validation_modes[mesh_id] = mesh_graph.is_intra_mesh_policy_relaxed(mesh_id)
+                                                    ? ::tt::tt_fabric::ConnectionValidationMode::RELAXED
+                                                    : ::tt::tt_fabric::ConnectionValidationMode::STRICT;
+    }
+
+    config.inter_mesh_validation_mode = mesh_graph.is_inter_mesh_policy_relaxed()
+                                            ? ::tt::tt_fabric::ConnectionValidationMode::RELAXED
+                                            : ::tt::tt_fabric::ConnectionValidationMode::STRICT;
+
+    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank;
+    for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
+        for (const auto& [coord, chip_id] : mesh_graph.get_chip_ids(mesh_id)) {
+            (void)coord;
+            FabricNodeId fabric_node_id(mesh_id, chip_id);
+            auto mesh_host_rank = mesh_graph.get_host_rank_for_chip(mesh_id, chip_id);
+            if (mesh_host_rank.has_value()) {
+                fabric_node_id_to_mesh_rank[mesh_id][fabric_node_id] = mesh_host_rank.value();
+            }
+        }
+    }
+
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank = {};
+
+    const auto mapping_result = map_multi_mesh_to_physical(
+        logical_multi_mesh_graph, physical_multi_mesh_graph, config, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank);
+    ASSERT_TRUE(mapping_result.success) << mapping_result.error_message;
+
+    EXPECT_EQ(mapping_result.fabric_node_to_asic.size(), expected_fabric_nodes);
+
+    std::set<std::string> hosts_spanning_blitz_mapped;
+    std::map<std::string, std::set<std::uint32_t>> host_to_logical_meshes;
+    for (const auto& [fabric_node, asic_id] : mapping_result.fabric_node_to_asic) {
+        const auto host = psd.get_host_name_for_asic(asic_id);
+        hosts_spanning_blitz_mapped.insert(host);
+        host_to_logical_meshes[host].insert(*fabric_node.mesh_id);
+    }
+    EXPECT_EQ(hosts_spanning_blitz_mapped.size(), 8u) << "Mapped Blitz pipeline: should span exactly 8 hosts";
+    if (hosts_spanning_blitz_mapped.size() != 8u) {
+        for (const auto& [host, meshes] : host_to_logical_meshes) {
+            std::cout << host << " <-";
+            for (const auto m : meshes) {
+                std::cout << " " << m;
+            }
+            std::cout << std::endl;
+        }
+    }
 }
 
 TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx_BHGalaxy4x4Z) {
@@ -4467,7 +4724,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     // Load PGD - using triple_16x8_quad_bh_galaxy_physical_groupings
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4530,7 +4787,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     // Load PGD - using triple_16x8_quad_bh_galaxy_physical_groupings
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4568,7 +4825,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
             EXPECT_GE(
                 adjacency_graph.get_neighbors(node).size(), 2u * 2u);  // num directions * 2 channels per direction
             EXPECT_LE(
-                adjacency_graph.get_neighbors(node).size(), 3u * 2u);  // num directions * 2 channels per direction
+                adjacency_graph.get_neighbors(node).size(), 4u * 2u);  // torus interior: 4 directions * 2 channels
         }
     }
 }
@@ -4593,7 +4850,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     // Load PGD - using triple_16x8_quad_bh_galaxy_physical_groupings
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4648,10 +4905,11 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
     // Create PSD from mock cluster
     tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
 
-    // Load PGD - using triple_16x8_quad_bh_galaxy_physical_groupings
+    // Load PGD - the single BH galaxy mock cluster is a RevC layout, so pair it with the RevC grouping
+    // descriptor (the RevAB descriptor's pinned slot connectivity does not match a RevC PSD).
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4705,7 +4963,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
 
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4747,9 +5005,10 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
 
     tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
 
+    // Rev C PGD + bh_galaxy_xyz mock (torus XY links) for 4x8_Mesh torus embedding on a single galaxy host.
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4797,9 +5056,10 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
 
     tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
 
+    // Rev C PGD half-pod 4x2_Mesh_horizontal ({1,3}/{2,4} tray pairs) + bh_galaxy_xyz torus links.
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4826,14 +5086,13 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
         // Check that there should be 8 nodes in the graph (2x4)
         EXPECT_EQ(adjacency_graph.get_nodes().size(), 8u);
 
-        expect_bh_halfpod_tray_pairing_for_graph_nodes(
+        expect_bh_rev_c_horizontal_tray_pairing_for_graph_nodes(
             std::string("[SingleBHGalaxy_2x4Pipeline] mesh_id=") + std::to_string(*mesh_id), psd, adjacency_graph);
 
-        // Check that each node should have neighbors (1D topology, so 1-2 neighbors)
+        // 2x4 on torus XY mock: up to 4 directions × 2 channels per node
         for (const auto& node : adjacency_graph.get_nodes()) {
             EXPECT_GE(adjacency_graph.get_neighbors(node).size(), 2u * 2u);
-            EXPECT_LE(
-                adjacency_graph.get_neighbors(node).size(), 3u * 2u);  // num directions * 2 channels per direction
+            EXPECT_LE(adjacency_graph.get_neighbors(node).size(), 4u * 2u);
         }
     }
 

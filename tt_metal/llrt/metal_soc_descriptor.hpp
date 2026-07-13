@@ -42,6 +42,15 @@ public:
 
     CoreCoord get_preferred_worker_core_for_dram_view(int dram_view, uint8_t noc) const;
     CoreCoord get_preferred_eth_core_for_dram_view(int dram_view, uint8_t noc) const;
+
+    // The DRAM cores Metal may place kernels/firmware on, in the requested coordinate system. This is
+    // the single source of truth for "usable DRAM cores": every DRAM loop in Metal (firmware init,
+    // launch-message reset, watcher, inspector) should iterate this rather than get_cores(DRAM) so the
+    // usable set is defined in one place. On Blackhole it excludes each DRAM view's NOC0 worker
+    // endpoint, which is owned by the syseng firmware (CMFW DRAM telemetry, SYS-1419) and runs no
+    // DRISC firmware. Hardware without that restriction returns all DRAM cores -- callers never need
+    // to special-case it.
+    std::vector<CoreCoord> get_metal_dram_cores(tt::CoordSystem coord_system) const;
     CoreCoord get_logical_core_for_dram_view(int dram_view) const;
     size_t get_address_offset(int dram_view) const;
     size_t get_channel_for_dram_view(int dram_view) const;
@@ -66,6 +75,16 @@ public:
     std::map<CoreCoord, int32_t> physical_routing_to_profiler_flat_id;
 
 private:
+    // Physical DRAM channel (device-descriptor numbering, with harvested-channel gaps) for a dram
+    // view. Internal building block for get_channel_for_dram_view, which compacts it to the logical
+    // index get_dram_core_for_channel expects; callers want the logical one.
+    size_t get_physical_channel_for_dram_view(int dram_view) const;
+
+    // True if `translated_coord` is any DRAM view's NOC0 worker endpoint (the subchannel a NOC0 DRAM
+    // access routes to) -- the syseng-owned endpoint excluded by get_metal_dram_cores on Blackhole.
+    // Argument must be a TRANSLATED (UMD) coord; a metal-logical {view, subchannel} coord never matches.
+    bool is_noc0_dram_endpoint(const CoreCoord& translated_coord) const;
+
     void load_dram_metadata_from_device_descriptor();
     void generate_logical_eth_coords_mapping();
     void generate_physical_routing_to_profiler_flat_id();

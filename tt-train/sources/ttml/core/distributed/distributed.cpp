@@ -31,7 +31,7 @@ ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, const ttsl::SmallVec
     }
     auto result = tensor;
     for (const auto& cluster_axis : cluster_axes) {
-        result = ttnn::all_reduce(result, cluster_axis);
+        result = ttml::ttnn_fixed::distributed::all_reduce(result, cluster_axis);
     }
 
     result = ttnn::multiply(result, 1.0F / static_cast<float>(scaler));

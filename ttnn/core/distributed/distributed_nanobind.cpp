@@ -291,6 +291,15 @@ void py_module(nb::module_& mod) {
                     List[MeshDevice]: The submeshes created on this MeshDevice.
         )doc")
         .def(
+            "quiesce_devices",
+            &MeshDevice::quiesce_devices,
+            nb::call_guard<nb::gil_scoped_release>(),
+            R"doc(
+              Drain all command queues of this MeshDevice and its submeshes and reset their
+              in-use state. Call before closing a mesh that has carved submeshes so the shared
+              command queue is idle, otherwise close throws "cq is in use by child submesh".
+        )doc")
+        .def(
             "compute_with_storage_grid_size",
             &MeshDevice::compute_with_storage_grid_size,
             R"doc(
@@ -539,6 +548,17 @@ void py_module(nb::module_& mod) {
         .def("is_local", &MeshDeviceView::is_local, nb::arg("coord"));
 
     auto py_tensor_to_mesh = static_cast<nb::class_<TensorToMesh>>(mod.attr("CppTensorToMesh"));
+    py_tensor_to_mesh.def(
+        "config",
+        &TensorToMesh::config,
+        nb::rv_policy::reference_internal,
+        R"doc(
+            Returns the MeshMapperConfig used to construct this mapper.
+
+            Use ``mapper.config().placements`` to introspect how the mapper
+            distributes a tensor across each mesh axis (e.g. to decide a
+            non-conflicting shard dim when layering FSDP on top of TP).
+        )doc");
 
     auto py_mesh_to_tensor = static_cast<nb::class_<MeshToTensor>>(mod.attr("CppMeshToTensor"));
 

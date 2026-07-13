@@ -22,6 +22,7 @@ def _get_golden_map_for_unary_op():
         ttnn.UnaryOpType.LOG: torch.log,
         ttnn.UnaryOpType.SOFTPLUS: torch.nn.functional.softplus,
         ttnn.UnaryOpType.GELU: torch.nn.functional.gelu,
+        ttnn.UnaryOpType.GELU_TANH: lambda x: torch.nn.functional.gelu(x, approximate="tanh"),
         ttnn.UnaryOpType.SQRT: torch.sqrt,
     }
 
@@ -48,6 +49,9 @@ def _get_golden_activation_from_string(activation: str) -> callable:
     """Return a torch golden function for a string activation.
     e.g. "relu6" -> torch.nn.functional.relu6.
     """
+    # "gelu_tanh" has no top-level ttnn.gelu_tanh op; route directly through the UnaryOpType map.
+    if activation == "gelu_tanh":
+        return _get_golden_function_for_unary_op_type(ttnn.UnaryOpType.GELU_TANH)
     name = activation[:-7] if activation.endswith("_approx") else activation
     op = getattr(ttnn, name, None)
     if op is None:

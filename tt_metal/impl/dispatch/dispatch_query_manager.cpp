@@ -94,12 +94,12 @@ NOC DispatchQueryManager::go_signal_noc() const { return go_signal_noc_; }
 void DispatchQueryManager::reset(DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs) {
     num_hw_cqs_ = num_hw_cqs;
     dispatch_core_config_ = dispatch_core_config;
+    const tt::ARCH arch = MetalEnvAccessor(env_).impl().get_cluster().arch();
     dispatch_s_enabled_ =
         (num_hw_cqs == 1 or dispatch_core_config_.get_dispatch_core_type() == DispatchCoreType::WORKER);
     distributed_dispatcher_ =
         (num_hw_cqs == 1 and dispatch_core_config_.get_dispatch_core_type() == DispatchCoreType::ETH);
-    const auto arch = MetalEnvAccessor(env_).impl().get_cluster().arch();
-    go_signal_noc_ = (dispatch_s_enabled_ && arch != tt::ARCH::QUASAR) ? NOC::NOC_1 : NOC::NOC_0;
+    go_signal_noc_ = (dispatch_s_enabled_ and arch != tt::ARCH::QUASAR) ? NOC::NOC_1 : NOC::NOC_0;
     // Reset the dispatch cores reported by the manager. Will be re-populated when the associated query is made
     dispatch_cores_ = {};
     // Populate dispatch

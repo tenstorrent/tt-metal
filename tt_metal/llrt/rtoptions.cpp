@@ -91,31 +91,31 @@ enum class EnvVarID {
     // ========================================
     // HARDWARE CONFIGURATION
     // ========================================
-    TT_METAL_ENABLE_HW_CACHE_INVALIDATION,              // Enable HW cache invalidation
-    TT_METAL_DISABLE_RELAXED_MEM_ORDERING,              // Disable relaxed memory ordering
-    TT_METAL_ENABLE_GATHERING,                          // Enable instruction gathering
-    TT_METAL_FABRIC_BW_TELEMETRY,                       // Enable fabric bandwidth telemetry
-    TT_METAL_FABRIC_TELEMETRY,                          // Enable fabric telemetry
-    TT_FABRIC_PROFILE_RX_CH_FWD,                        // Enable fabric RX channel forwarding profiling
-    TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE,           // Enable channel trimming resource usage capture
-    TT_METAL_FABRIC_TRIMMING_PROFILE,                   // Path to channel trimming profile YAML for import
-    TT_METAL_FABRIC_TRIMMING_OVERRIDE,                  // Path to channel trimming global override YAML
-    TT_METAL_ENABLE_FABRIC_VC2,                         // Enable fabric VC2 (neighbour exchange)
-    TT_METAL_FORCE_REINIT,                              // Force context reinitialization
-    TT_METAL_DISABLE_FABRIC_TWO_ERISC,                  // Disable fabric 2-ERISC mode
-    TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,              // Log kernel compilation commands
-    TT_METAL_SLOW_DISPATCH_MODE,                        // Use slow dispatch mode
-    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN,               // Skip Ethernet cores during retrain
-    TT_METAL_VALIDATE_PROGRAM_BINARIES,                 // Validate kernel binary integrity
-    TT_METAL_DISABLE_DMA_OPS,                           // Disable DMA operations
-    RELIABILITY_MODE,                                   // Fabric reliability mode (strict/relaxed)
-    TT_METAL_DISABLE_MULTI_AERISC,                      // Disable multi-erisc mode (inverted logic, enabled by default)
-    TT_METAL_USE_MGD_2_0,                               // Use mesh graph descriptor 2.0
-    TT_METAL_FORCE_JIT_COMPILE,                         // Force JIT compilation
-    TT_METAL_DISABLE_SFPLOADMACRO,                      // Disable use of SFPLOADMACRO instructions
-    TT_METAL_DRAM_BACKED_CQ,                            // Store command queues in device DRAM
-    TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,            // Simulator tensor preload bypasses FD CQ copies
-    TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES,  // Enable Blackhole DRAM programmable cores
+    TT_METAL_ENABLE_HW_CACHE_INVALIDATION,     // Enable HW cache invalidation
+    TT_METAL_DISABLE_RELAXED_MEM_ORDERING,     // Disable relaxed memory ordering
+    TT_METAL_ENABLE_GATHERING,                 // Enable instruction gathering
+    TT_METAL_FABRIC_BW_TELEMETRY,              // Enable fabric bandwidth telemetry
+    TT_METAL_FABRIC_TELEMETRY,                 // Enable fabric telemetry
+    TT_FABRIC_PROFILE_RX_CH_FWD,               // Enable fabric RX channel forwarding profiling
+    TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE,  // Enable channel trimming resource usage capture
+    TT_METAL_FABRIC_TRIMMING_PROFILE,          // Path to channel trimming profile YAML for import
+    TT_METAL_FABRIC_TRIMMING_OVERRIDE,         // Path to channel trimming global override YAML
+    TT_METAL_ENABLE_FABRIC_VC2,                // Enable fabric VC2 (neighbour exchange)
+    TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH,  // Enable experimental VC1 inter-mesh pass-through
+    TT_METAL_FORCE_REINIT,                     // Force context reinitialization
+    TT_METAL_DISABLE_FABRIC_TWO_ERISC,         // Disable fabric 2-ERISC mode
+    TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,     // Log kernel compilation commands
+    TT_METAL_SLOW_DISPATCH_MODE,               // Use slow dispatch mode
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN,      // Skip Ethernet cores during retrain
+    TT_METAL_VALIDATE_PROGRAM_BINARIES,        // Validate kernel binary integrity
+    TT_METAL_DISABLE_DMA_OPS,                  // Disable DMA operations
+    RELIABILITY_MODE,                          // Fabric reliability mode (strict/relaxed)
+    TT_METAL_DISABLE_MULTI_AERISC,             // Disable multi-erisc mode (inverted logic, enabled by default)
+    TT_METAL_USE_MGD_2_0,                      // Use mesh graph descriptor 2.0
+    TT_METAL_FORCE_JIT_COMPILE,                // Force JIT compilation
+    TT_METAL_DISABLE_SFPLOADMACRO,             // Disable use of SFPLOADMACRO instructions
+    TT_METAL_DRAM_BACKED_CQ,                   // Store command queues in device DRAM
+    TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,   // Simulator tensor preload bypasses FD CQ copies
 
     // ========================================
     // PROFILING & PERFORMANCE
@@ -132,6 +132,7 @@ enum class EnvVarID {
     TT_METAL_PROFILER_MID_RUN_DUMP,                // Force mid-run profiler dumps
     TT_METAL_PROFILER_CPP_POST_PROCESS,            // Enable C++ post-processing for profiler
     TT_METAL_PROFILER_SUM,                         // Enable sum profiling
+    TT_METAL_PROFILER_ACCUMULATE,                  // Accumulate multiple kernels in L1 before DRAM push
     TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT,       // Maximum number of programs supported by the profiler
     TT_METAL_TRACY_MID_RUN_PUSH,                   // Force Tracy mid-run pushes
     TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES,       // Disable dumping collected device data to files
@@ -207,6 +208,18 @@ enum class EnvVarID {
     // LLK ASSERTIONS
     // ========================================
     TT_METAL_LLK_ASSERTS,  // Enable LLK assertions
+
+    // ========================================
+    // LLK SANITIZER
+    // For detailed description look at tt-llk/sanitizer/settings.h
+    // ========================================
+    TT_METAL_LLK_SANITIZER,  // Enable LLK sanitizer (master switch)
+    TT_METAL_LLK_SANITIZER_PEDANTIC,
+    TT_METAL_LLK_SANITIZER_WARN,
+    TT_METAL_LLK_SANITIZER_ERROR,
+    TT_METAL_LLK_SANITIZER_INFO,
+    TT_METAL_LLK_SANITIZER_FAULT,
+    TT_METAL_LLK_SANITIZER_INTERNAL,
 
     // ========================================
     // DEVICE MANAGER
@@ -341,8 +354,13 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
 
     InitializeFromEnvVars();
 
-    if (this->runtime_target_device_ != tt::TargetDevice::Silicon) {
-        log_info(tt::LogMetal, "Disabling multi-erisc mode with simulator/mock target device");
+    // Mock devices mirror real silicon of the same architecture: leave the 2-erisc default (and any
+    // TT_METAL_DISABLE_MULTI_AERISC override) intact so that HAL construction and kernel compilation match
+    // what a real device would produce. Architecture gating still happens downstream (only Blackhole's HAL
+    // acts on the flag). The simulator and emule backends cannot model dual-erisc, so force it off for them.
+    if (this->runtime_target_device_ == tt::TargetDevice::Simulator ||
+        this->runtime_target_device_ == tt::TargetDevice::Emule) {
+        log_info(tt::LogMetal, "Disabling multi-erisc mode with simulator/emule target device");
         this->enable_2_erisc_mode = false;
     }
 
@@ -411,7 +429,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 
         // TT_METAL_KERNEL_PATH
         // Path to kernel source files.
-        // Default: Uses TT_METAL_RUNTIME_ROOT/tt_metal/kernels if not set
+        // Default: resolved relative to TT_METAL_RUNTIME_ROOT if not set
         // Usage: export TT_METAL_KERNEL_PATH=/path/to/kernels
         case EnvVarID::TT_METAL_KERNEL_PATH:
             this->is_kernel_dir_env_var_set = true;
@@ -665,6 +683,16 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_ENABLE_FABRIC_VC2=1
         case EnvVarID::TT_METAL_ENABLE_FABRIC_VC2: this->enable_fabric_vc2 = true; break;
 
+        // TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH
+        // EXPERIMENTAL: Enables VC1 inter-mesh pass-through routing (e.g. A->B->C), where inter-mesh
+        // (VC1) traffic is forwarded across intermediate meshes instead of sinking at the first mesh
+        // boundary. Selects IntermeshVCConfig::full_mesh_with_pass_through() when intermesh VC is active.
+        // WARNING: This reuses VC1 for both in-mesh delivery and cross-mesh pass-through and is NOT
+        // guaranteed deadlock-free; a fully deadlock-free implementation requires a dedicated VC.
+        // Default: false
+        // Usage: export TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH=1
+        case EnvVarID::TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH: this->enable_fabric_mesh_pass_through = true; break;
+
         // RELIABILITY_MODE
         // Sets the fabric reliability mode (STRICT, RELAXED, or DYNAMIC).
         // Default: nullopt (uses system default)
@@ -701,14 +729,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_DISABLE_MULTI_AERISC:
             log_info(tt::LogMetal, "Disabling multi-erisc mode with TT_METAL_DISABLE_MULTI_AERISC");
             this->enable_2_erisc_mode = false;
-            break;
-
-        // TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES
-        // Enable DRAM programmable cores in the Blackhole HAL on silicon.
-        // Default: false
-        // Usage: export TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1
-        case EnvVarID::TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES:
-            this->enable_blackhole_dram_programmable_cores = is_env_enabled(value);
             break;
 
         // TT_METAL_USE_MGD_2_0
@@ -939,6 +959,16 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
         }
 
+        // TT_METAL_PROFILER_ACCUMULATE
+        // Accumulate kernel invocations in per-RISC L1 (main zones use the growing index), flush to DRAM when nearly
+        // full, read residual via DRAM_AND_L1. Default: false Usage: export TT_METAL_PROFILER_ACCUMULATE=1
+        case EnvVarID::TT_METAL_PROFILER_ACCUMULATE: {
+            if (this->profiler_enabled && is_env_enabled(value)) {
+                this->profiler_accumulate = true;
+            }
+            break;
+        }
+
         // TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT
         // Specifies the maximum number of programs supported by the profiler.
         // Default: nullopt (uses profiler default)
@@ -984,9 +1014,18 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // the profiler infrastructure will be used to continuously dump NOC debug packets to a file. Default: false
         // (debug dump mode disabled) Usage: export TT_METAL_NOC_DEBUG_DUMP=1
         case EnvVarID::TT_METAL_NOC_DEBUG_DUMP: {
+#if !defined(TRACY_ENABLE)
+            if (is_env_enabled(value)) {
+                log_warning(
+                    tt::LogMetal,
+                    "TT_METAL_NOC_DEBUG_DUMP=1 requires a Tracy-enabled build (build with ENABLE_TRACY=ON). "
+                    "Ignoring; NOC debug events will not be collected.");
+            }
+#else
             if (is_env_enabled(value)) {
                 this->set_experimental_noc_debug_dump_enabled(true);
             }
+#endif
             break;
         }
 
@@ -1429,6 +1468,55 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (disabled)
         // Usage: export TT_METAL_LLK_ASSERTS=1
         case EnvVarID::TT_METAL_LLK_ASSERTS: this->enable_llk_asserts = true; break;
+
+        // ========================================
+        // LLK SANITIZER
+        // ========================================
+        // TT_METAL_LLK_SANITIZER
+        // Enables the LLK sanitizer (master switch).
+        // Default: false (disabled)
+        // Usage: export TT_METAL_LLK_SANITIZER=1
+        case EnvVarID::TT_METAL_LLK_SANITIZER: {
+            this->sanitizer_settings.enabled = is_env_enabled(value);
+            break;
+        }
+
+        // TT_METAL_LLK_SANITIZER_PEDANTIC
+        // Usage: export TT_METAL_LLK_SANITIZER_PEDANTIC=1
+        case EnvVarID::TT_METAL_LLK_SANITIZER_PEDANTIC:
+            this->sanitizer_settings.pedantic = is_env_enabled(value);
+            break;
+
+        // TT_METAL_LLK_SANITIZER_WARN
+        // Usage: export TT_METAL_LLK_SANITIZER_WARN=1
+        case EnvVarID::TT_METAL_LLK_SANITIZER_WARN:
+            this->sanitizer_settings.warn = is_env_enabled(value);
+            break;
+
+        // TT_METAL_LLK_SANITIZER_ERROR
+        // Usage: export TT_METAL_LLK_SANITIZER_ERROR=1
+        case EnvVarID::TT_METAL_LLK_SANITIZER_ERROR:
+            this->sanitizer_settings.error = is_env_enabled(value);
+            break;
+
+        // TT_METAL_LLK_SANITIZER_INFO
+        // Usage: export TT_METAL_LLK_SANITIZER_INFO=1
+        case EnvVarID::TT_METAL_LLK_SANITIZER_INFO:
+            this->sanitizer_settings.info = is_env_enabled(value);
+            break;
+
+        // TT_METAL_LLK_SANITIZER_FAULT
+        // Usage: export TT_METAL_LLK_SANITIZER_FAULT=1
+        case EnvVarID::TT_METAL_LLK_SANITIZER_FAULT:
+            this->sanitizer_settings.fault = is_env_enabled(value);
+            break;
+
+        // TT_METAL_LLK_SANITIZER_INTERNAL
+        // Enables LLK developer internal mode.
+        // Usage: export TT_METAL_LLK_SANITIZER_INTERNAL=1
+        case EnvVarID::TT_METAL_LLK_SANITIZER_INTERNAL:
+            this->sanitizer_settings.internal = is_env_enabled(value);
+            break;
 
         // ========================================
         // DEVICE MANAGER
@@ -2034,6 +2122,21 @@ std::string RunTimeOptions::get_watcher_hash() const {
     hash_str += std::to_string(get_watcher_enabled());
     hash_str += std::to_string(get_lightweight_kernel_asserts());
     hash_str += std::to_string(get_llk_asserts());
+    return hash_str;
+}
+
+std::string RunTimeOptions::get_sanitizer_hash() const {
+    auto optional_hash = [](const std::optional<bool>& optional) { return optional.has_value() ? std::to_string(*optional) : "nullopt"; };
+
+    const auto& san = get_sanitizer_settings();
+    std::string hash_str;
+    hash_str += std::to_string(san.enabled);
+    hash_str += optional_hash(san.pedantic);
+    hash_str += optional_hash(san.warn);
+    hash_str += optional_hash(san.error);
+    hash_str += optional_hash(san.info);
+    hash_str += optional_hash(san.fault);
+    hash_str += optional_hash(san.internal);
     return hash_str;
 }
 

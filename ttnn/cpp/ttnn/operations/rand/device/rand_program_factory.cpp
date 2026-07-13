@@ -24,8 +24,8 @@ std::uniform_int_distribution distribution(1, std::numeric_limits<int32_t>::max(
 
 auto get_random_seed() -> uint32_t { return distribution(rng); }
 
-constexpr const char* WRITER_KERNEL_PATH = "ttnn/cpp/ttnn/operations/rand/device/kernels/writer_uniform.cpp";
-constexpr const char* COMPUTE_KERNEL_PATH = "ttnn/cpp/ttnn/operations/rand/device/kernels/compute_uniform.cpp";
+constexpr const char* WRITER_KERNEL_PATH = "ttnn/cpp/ttnn/operations/uniform/device/kernels/writer_uniform.cpp";
+constexpr const char* COMPUTE_KERNEL_PATH = "ttnn/cpp/ttnn/operations/uniform/device/kernels/compute_uniform.cpp";
 
 // Work split + per-device seed offset, shared by create_descriptor (cache miss) and
 // get_dynamic_runtime_args (cache hit) so both derive the identical core list and seed offset.

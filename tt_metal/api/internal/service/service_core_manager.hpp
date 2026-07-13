@@ -113,11 +113,14 @@ public:
     // handed out by allocate_l1() for these cores become invalid after this call.
     // Silent no-op for unclaimed cores — safe to call in teardown/destructor paths.
     // Caller contract: the service kernel must already be stopped before release() - the
-    // runtime cannot detect completion of a persistent (looping) kernel.
-    // TODO: accept an optional user completion predicate (e.g. polls an L1 done-signal that the
-    // kernel sets on exit) so release() can verify/wait for termination instead of relying on
-    // caller ordering.
+    // runtime cannot detect completion of a persistent (looping) kernel. Pair with wait_done()
+    // when the caller needs to block until the kernel has actually exited.
     void release(IDevice* device, const std::vector<CoreCoord>& cores);
+
+    // Block until the persistent service kernel on `core` of `device` has returned (left the GO
+    // run-state). Intended for use just before release(), so the per-core L1 isn't torn down
+    // while the kernel is still running.
+    void wait_done(IDevice* device, CoreCoord core) const;
 
     // Returns the set of currently claimed cores for a device.
     std::unordered_set<CoreCoord> claimed_cores(ChipId device_id) const;
@@ -130,6 +133,12 @@ public:
     // Allocates top-down (from L1_END downward) so service buffers and CBs (which grow up
     // from DEFAULT_UNRESERVED) stay in disjoint zones — same convention as worker-core L1 buffers.
     DeviceAddr allocate_l1(IDevice* device, CoreCoord core, size_t size);
+    // Reserve [addr, L1_top) in this core's allocator so a later allocate_l1() won't hand out an
+    // address overlapping externally-owned L1 at the top of the core (e.g. MeshSocket config /
+    // data-FIFO buffers the device allocator placed there; both allocators grow top-down from
+    // L1_END independently and would otherwise collide). Must be called before any allocate_l1()
+    // on this core. TT_FATALs if addr is at/above the range top or the span is already allocated.
+    void reserve_l1_to_top(IDevice* device, CoreCoord core, DeviceAddr addr);
     void deallocate_l1(IDevice* device, CoreCoord core, DeviceAddr addr);
     size_t bytes_available(IDevice* device, CoreCoord core) const;
 
@@ -144,5 +153,7 @@ public:
 private:
     std::unique_ptr<ServiceCoreManagerImpl> pimpl_;
 };
+
+ServiceCoreManager& service_core_manager();
 
 }  // namespace tt::tt_metal::internal

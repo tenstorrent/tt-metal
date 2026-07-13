@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_ops.h"
@@ -15,19 +16,14 @@ namespace sfpu {
 // probability should be between 0 - INT_MAX (signed)
 // scale should be binary representation of a float32
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_dropout(uint probability, uint scale) {
-    // SFPU microcode
-
+inline void calculate_dropout(std::uint32_t probability, std::uint32_t scale) {
     TT_SFPLOADI(p_sfpu::LREG1, 10, scale & 0xFFFF);
     TT_SFPLOADI(p_sfpu::LREG1, 8, scale >> 16);
     TT_SFPLOADI(p_sfpu::LREG2, 10, probability & 0xFFFF);
     TT_SFPLOADI(p_sfpu::LREG2, 8, probability >> 16);
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
-        ////////////////////////
         // Scale samples
-        // sfpi::dst_reg[0] = sfpi::dst_reg[0] * sFloat16b(scale);
-        ///////////////////////
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, 3, 0);
         TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
 
@@ -43,7 +39,7 @@ inline void calculate_dropout(uint probability, uint scale) {
         ////////////////////////
         // Drop samples
         // v_if (rand < probability)
-        //   sfpi::dst_reg[0] = vConst0;
+        //   sfpi::dst_reg[0] = 0.0f;
         ///////////////////////
         TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG3, 10);
         TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
@@ -55,7 +51,7 @@ inline void calculate_dropout(uint probability, uint scale) {
 }
 
 template <bool APPROXIMATION_MODE /*unused*/>
-inline void dropout_init(const uint seed) {
+inline void dropout_init(const std::uint32_t seed) {
     init_prng_seed(seed);
 }
 

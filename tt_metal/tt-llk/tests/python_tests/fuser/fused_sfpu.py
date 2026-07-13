@@ -8,9 +8,9 @@ import torch
 
 if TYPE_CHECKING:
     from .block_data import BlockData
-    from .compute_node import ComputeNode
     from .fused_operation import FusedOperation
     from .fuser_config import GlobalConfig
+    from .sfpu_node import SfpuNode
 
 
 class Sfpu:
@@ -21,10 +21,10 @@ class Sfpu:
     SFPU Unit, plus a Python golden function for test validation.
 
     Unlike Fpu, SFPU operates on dest register data that was already computed
-    by a prior FPU stage or loaded via datacopy. It has no unpacker the
-    ComputeNode enforces that sfpu and unpacker are mutually exclusive.
+    by a prior FPU stage or loaded via datacopy. It has no unpacker — SfpuNode
+    has no unpacker field at all.
 
-    The lifecycle called by ComputeNode.sfpu_calculate() is:
+    The lifecycle called by SfpuNode.sfpu_run() is:
         init() -> calculate() -> uninit()
 
     Entirely skipped during UNPACK_ISOLATE, PACK_ISOLATE, and L1_CONGESTION perf runs.
@@ -40,7 +40,7 @@ class Sfpu:
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "SfpuNode",
         block: "BlockData",
     ) -> str:
         """Return C++ code that initializes the SFPU before calculation.
@@ -54,7 +54,7 @@ class Sfpu:
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "SfpuNode",
         block: "BlockData",
     ) -> str:
         """Return C++ code that performs the SFPU operation.
@@ -68,7 +68,7 @@ class Sfpu:
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "SfpuNode",
         block: "BlockData",
     ) -> str:
         """Return C++ code that tears down the SFPU after calculation.
@@ -83,7 +83,7 @@ class Sfpu:
         tensor: torch.Tensor,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "SfpuNode",
         batch_dims: tuple,
         batch_tile_cnt: int,
     ) -> torch.Tensor:
@@ -92,7 +92,7 @@ class Sfpu:
         Operates on tilized dest data per block. batch_dims and batch_tile_cnt
         describe the current block's tile layout. Returns the transformed tensor.
 
-        Called by ComputeNode.golden() on each block of the tilized dest tensor.
+        Called by SfpuNode.golden() on each block of the tilized dest tensor.
         """
         return tensor
 

@@ -5,6 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -56,8 +57,8 @@ void kernel_main() {
     uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
 
-    const uint32_t concat_semaphore_send_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    const uint32_t concat_semaphore_send_addr2 = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    Semaphore<> concat_sem(get_arg_val<uint32_t>(arg_idx++));
+    Semaphore<> concat_sem2(get_arg_val<uint32_t>(arg_idx++));
 
     tt_l1_ptr uint32_t* core_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_cores;
@@ -165,8 +166,6 @@ void kernel_main() {
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
     // increment locally
-    // Device 2.0 migration: legacy primitive retained — out_ready_sem_bank_addr is a GlobalSemaphore
-    // address, and Semaphore<> binds to per-program ids (no GlobalSemaphore wrapper exists).
     uint64_t out_ready_sem_noc_addr =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
     noc_semaphore_inc(out_ready_sem_noc_addr, 1);
@@ -178,22 +177,9 @@ void kernel_main() {
     }
 
     // Set up for mcasting to concat workers
-    // Device 2.0 migration: legacy primitives retained: set + raw L1 read pattern does not map to
-    // Semaphore<>, which exposes set/wait but not raw-pointer value reads.
     if (wait_output_semaphore) {
-        volatile tt_l1_ptr uint32_t* concat_semaphore_send_addr_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(concat_semaphore_send_addr);
-        volatile tt_l1_ptr uint32_t* concat_semaphore_send_addr_ptr2 =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(concat_semaphore_send_addr2);
-
-        noc_semaphore_set(concat_semaphore_send_addr_ptr, 1);
-        noc_semaphore_set(concat_semaphore_send_addr_ptr2, 1);
-        if (concat_semaphore_send_addr_ptr[0] != 1) {
-            noc_semaphore_set(concat_semaphore_send_addr_ptr, 1);
-        }
-        if (concat_semaphore_send_addr_ptr2[0] != 1) {
-            noc_semaphore_set(concat_semaphore_send_addr_ptr2, 1);
-        }
+        concat_sem.set(1);
+        concat_sem2.set(1);
     }
 
     if (wait_output_semaphore) {
@@ -204,30 +190,20 @@ void kernel_main() {
             } else if (i == 2) {
                 mcast_dest_num = 8;
             }
-            const uint64_t concat_sem_rcv_addr = get_noc_multicast_addr(
+            concat_sem.set_multicast(
+                noc_obj,
                 mcast_dest_noc_start_x[i],
                 mcast_dest_noc_start_y[i],
                 mcast_dest_noc_end_x[i],
                 mcast_dest_noc_end_y[i],
-                concat_semaphore_send_addr);
-            noc_semaphore_set_multicast(
-                concat_semaphore_send_addr,
-                concat_sem_rcv_addr,
-                mcast_dest_num,
-                false);  // linked = false
-
-            const uint64_t concat_sem_rcv_addr2 = get_noc_multicast_addr(
+                mcast_dest_num);
+            concat_sem2.set_multicast(
+                noc_obj,
                 mcast_dest_noc_start_x[i],
                 mcast_dest_noc_start_y[i],
                 mcast_dest_noc_end_x[i],
                 mcast_dest_noc_end_y[i],
-                concat_semaphore_send_addr2);
-
-            noc_semaphore_set_multicast(
-                concat_semaphore_send_addr2,
-                concat_sem_rcv_addr2,
-                mcast_dest_num,
-                false);  // linked = false
+                mcast_dest_num);
         }
     }
 
@@ -236,7 +212,6 @@ void kernel_main() {
     }
 
     if (reset_global_semaphore) {
-        // Device 2.0 migration: legacy primitive retained: out_ready_sem_bank_addr is a GlobalSemaphore address.
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), 0);
     }
 

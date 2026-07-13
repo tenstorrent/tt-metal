@@ -16,12 +16,45 @@ void IndexFillOperation::validate(
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Index fill: Input must be on device");
     TT_FATAL(input.buffer() != nullptr, "Index fill: Input must be allocated in buffer on device");
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Index fill: Only supporting row major layout");
+
+    auto input_mem_layout = input.memory_config().memory_layout();
     TT_FATAL(
-        input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "Index fill: Not currently supporting sharding");
+        input_mem_layout == TensorMemoryLayout::INTERLEAVED || input_mem_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
+            input_mem_layout == TensorMemoryLayout::WIDTH_SHARDED ||
+            input_mem_layout == TensorMemoryLayout::BLOCK_SHARDED,
+        "Index fill: Unsupported input memory layout: {}",
+        input_mem_layout);
+
+    auto out_mem_layout = operation_attributes.memory_config.memory_layout();
     TT_FATAL(
-        operation_attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "Index fill: Not currently supporting sharding");
+        out_mem_layout == TensorMemoryLayout::INTERLEAVED || out_mem_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
+            out_mem_layout == TensorMemoryLayout::WIDTH_SHARDED || out_mem_layout == TensorMemoryLayout::BLOCK_SHARDED,
+        "Index fill: Unsupported output memory layout: {}",
+        out_mem_layout);
+
+    // Column-sharded → column-sharded (WIDTH↔WIDTH, BLOCK↔BLOCK, WIDTH↔BLOCK) is supported
+    // as long as the column fragmentation matches. The kernel addresses output pages as
+    // page_id = row * KW + col_shard, which is identical for WIDTH and BLOCK layouts; the
+    // TensorAccessor resolves each page to the physically-owning core. The only requirement
+    // is that the column shard WIDTH (shard_spec.shape[1]) — and hence the column shard count
+    // KW — matches between input and output. The row sharding (BLOCK's shard height) may
+    // differ freely, since rows are distributed by the accessor, not by the page formula.
+    bool input_is_col_sharded =
+        (input_mem_layout == TensorMemoryLayout::WIDTH_SHARDED ||
+         input_mem_layout == TensorMemoryLayout::BLOCK_SHARDED);
+    bool out_is_col_sharded =
+        (out_mem_layout == TensorMemoryLayout::WIDTH_SHARDED || out_mem_layout == TensorMemoryLayout::BLOCK_SHARDED);
+    if (input_is_col_sharded && out_is_col_sharded) {
+        TT_FATAL(
+            input.shard_spec().has_value() && operation_attributes.memory_config.shard_spec().has_value(),
+            "Index fill: both input and output must have a shard spec when both are column-sharded");
+        TT_FATAL(
+            input.shard_spec().value().shape[1] == operation_attributes.memory_config.shard_spec().value().shape[1],
+            "Index fill: When input and output are both column-sharded (WIDTH/BLOCK), their column shard width "
+            "(shard_spec.shape[1]) must match; got input={} output={}",
+            input.shard_spec().value().shape[1],
+            operation_attributes.memory_config.shard_spec().value().shape[1]);
+    }
 
     // Validate index tensor properties expected by the kernel.
     TT_FATAL(index.storage_type() == StorageType::DEVICE, "Index fill: Index tensor must be on device");
@@ -63,9 +96,14 @@ void IndexFillOperation::validate_on_program_cache_miss(
 
 IndexFillOperation::spec_return_value_t IndexFillOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& old_spec = tensor_args.input.tensor_spec();
     return TensorSpec(
-        tensor_args.input.logical_shape(),
-        tensor_args.input.tensor_spec().tensor_layout().with_memory_config(operation_attributes.memory_config));
+        old_spec.logical_shape(),
+        tt::tt_metal::TensorLayout(
+            old_spec.tensor_layout().get_data_type(),
+            old_spec.tensor_layout().get_page_config(),
+            operation_attributes.memory_config,
+            old_spec.tensor_layout().get_alignment()));
 }
 IndexFillOperation::tensor_return_value_t IndexFillOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {

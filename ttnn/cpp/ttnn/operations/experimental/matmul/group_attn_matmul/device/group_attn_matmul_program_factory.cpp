@@ -355,17 +355,17 @@ tt::tt_metal::ProgramDescriptor GroupAttnMatmulProgramFactory::create_descriptor
         const uint32_t in1_mcast_num_dests =
             Q_HEADS < TILE_HEIGHT ? std::min(mcast_num_cores_for_core, num_active_cores - 1) : mcast_num_dests - 1;
 
-        std::vector<uint32_t> reader_runtime_args = {
+        std::vector<std::variant<uint32_t, Buffer*>> reader_runtime_args = {
             has_work_for_mcast_kv_heads,
             has_work_for_q_heads,
-            src1_buffer->address(),
+            src1_buffer,
             Mt,
             Nt,
             KV_HEADS,
             in1_CKtNt,
             in1_CKtNt * TILE_HEIGHT,
             num_output_blocks_per_core,
-            0,  // in1_start_id
+            0u,  // in1_start_id
 
             in0_block_w,
             out_block_w,
@@ -397,30 +397,31 @@ tt::tt_metal::ProgramDescriptor GroupAttnMatmulProgramFactory::create_descriptor
             reader_runtime_args.end(), in1_mcast_sender_noc_x.begin(), in1_mcast_sender_noc_x.end());
         reader_runtime_args.insert(
             reader_runtime_args.end(), in1_mcast_sender_noc_y.begin(), in1_mcast_sender_noc_y.end());
-        reader_desc.runtime_args.emplace_back(core, std::move(reader_runtime_args));
+        reader_desc.emplace_runtime_args(core, reader_runtime_args);
 
-        std::vector<uint32_t> writer_runtime_args = {
-            has_work_for_q_heads,
-            src0_buffer->address(),
-            dst_buffer->address(),
-            Mt,
-            Kt,
-            Nt,
-            MtKt,
-            num_output_blocks_per_core,
-            num_blocks_written * MtKt,
-            num_blocks_written * MtNt,
+        writer_desc.emplace_runtime_args(
+            core,
+            {
+                has_work_for_q_heads,
+                src0_buffer,
+                dst_buffer,
+                Mt,
+                Kt,
+                Nt,
+                MtKt,
+                num_output_blocks_per_core,
+                num_blocks_written * MtKt,
+                num_blocks_written * MtNt,
 
-            in0_block_w,
-            in1_num_subblocks,
-            in1_num_blocks,
-            MtNt,
+                in0_block_w,
+                in1_num_subblocks,
+                in1_num_blocks,
+                MtNt,
 
-            bfloat16_row_bytes,
-            bfloat16_Nt_bytes,
-            bfloat16_last_row_bytes_read,
-        };
-        writer_desc.runtime_args.emplace_back(core, std::move(writer_runtime_args));
+                bfloat16_row_bytes,
+                bfloat16_Nt_bytes,
+                bfloat16_last_row_bytes_read,
+            });
 
         std::vector<uint32_t> compute_runtime_args = {
             has_work_for_q_heads,

@@ -51,7 +51,7 @@ void kernel_main() {
     bool read_mask = true;
     constexpr auto cb_fused_scale = tt::CBIndex::c_3;
     const uint32_t pre_scale = get_arg_val<uint32_t>(2);
-    generate_bcast_unary_scalar(cb_fused_scale, pre_scale);
+    generate_bcast_unary_scalar(CircularBuffer(cb_fused_scale), pre_scale);
 #endif
 
     const auto src_a = TensorAccessor(src0_args, src_addr);

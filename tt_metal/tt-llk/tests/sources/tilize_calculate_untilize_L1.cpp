@@ -194,7 +194,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     run = 1;                                   // second L1-to-L1 run, we access the second set of formats_array in our array
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(formats_array[run].pack_src, formats_array[run].pack_dst, 16 * 16 * 4);
-    _llk_pack_init_<ckernel::PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */>();
+    // The hw-configure above re-established the packer strides, so skip strides here. The X (datum)
+    // counter is not touched by configure_pack; this init programs it (init owns SETADCXX).
+    _llk_pack_init_<ckernel::PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
+        formats_array[run].pack_src, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
 #endif
 
     _llk_packer_wait_for_math_done_();

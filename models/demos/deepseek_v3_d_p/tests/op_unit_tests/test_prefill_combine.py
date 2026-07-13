@@ -16,6 +16,14 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
@@ -40,29 +48,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
 
 
-# dispatch_buffer_capacity_factor below is ceil(N/2) of the most conservative
-# integer N such that dgs*seq*N >= theoretical worst-case dispatch buffer.
-# Real traffic never approaches the worst case, so half-capacity is sufficient.
-@pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
-    [
-        pytest.param(128, 7 * 1024, 16, 4, 4, True, id="pcc"),
-        pytest.param(3200, 7168, 64, 2, 8, False, id="perf_no_pcc"),
-    ],
-)
-@pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
-    ALL_MESH_CONFIGS,
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
-@pytest.mark.parametrize(
-    "dispatched_buffer_layout",
-    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-    ids=["tile", "row_major"],
-)
-@pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
-def test_ttnn_combine(
+def run_combine(
     mesh_device,
     seq_len_per_chip,
     emb_dim,
@@ -75,8 +61,12 @@ def test_ttnn_combine(
     run_pcc_check,
     dispatched_buffer_layout,
     use_fp8_output,
+    is_ci_env,
+    is_ci_v2_env,
 ):
-    """Test TTNN combine operation in isolation using torch reference inputs."""
+    """Run the TTNN combine op in isolation against the torch reference. Shared body for the
+    per-model test entrypoints below — they differ only on the (emb_dim, num_routed_experts,
+    num_experts_per_tok) shape axis."""
     num_devices = mesh_device.get_num_devices()
     if num_devices >= 8 and not run_pcc_check and use_predictable_data:
         pytest.skip("8-chip perf only runs with random data")
@@ -101,6 +91,15 @@ def test_ttnn_combine(
     # non-BH; skip cleanly here so this surfaces as "skipped" instead of an error.
     if use_fp8_output and mesh_device.arch() != ttnn.Arch.BLACKHOLE:
         pytest.skip("fp8 combine output requires Blackhole hardware")
+
+    # ROW_MAJOR perf coverage is redundant in CI; TILE (all paths) and ROW_MAJOR PCC still run.
+    if (is_ci_env or is_ci_v2_env) and not run_pcc_check and dispatched_buffer_layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("ROW_MAJOR perf coverage does not run in CI")
+
+    # 1-link linear/ring coverage is redundant on BH in CI. `1 in shape` selects the 1D
+    # linear/ring meshes; 2D mesh / fabric2d (both dims > 1) and 2-link variants still run.
+    if (is_ci_env or is_ci_v2_env) and is_blackhole() and num_links == 1 and 1 in tuple(mesh_device.shape):
+        pytest.skip("1-link linear/ring coverage does not run on BH in CI")
 
     torch.manual_seed(42)
 
@@ -336,3 +335,95 @@ def test_ttnn_combine(
     result.assert_passed("Combine data mismatch")
 
     logger.debug("✅ TTNN combine operation matches torch reference!")
+
+
+# Per-model combine shapes as (id_prefix, config, extended_model). Each model contributes a pcc
+# param (seq 128, // 16 experts, top-4) and a perf param (seq 640, // 4 experts, top-2). DeepSeek
+# V3 is the baseline and runs by default; every other model is gated behind
+# @pytest.mark.extended_model. dispatch_buffer_capacity_factor is ceil(N/2) of the most
+# conservative integer N such that dgs*seq*N >= worst-case dispatch buffer.
+COMBINE_MODELS = [
+    ("dsv3", DeepSeekV3Config, False),
+    ("glm_51", GLM51Config, True),
+    ("kimi_k26", KimiK26Config, True),
+    ("minimax_m27", MiniMaxM27Config, True),
+    ("dsv4_pro", DeepSeekV4ProConfig, True),
+    ("dsv4_flash", DeepSeekV4FlashConfig, True),
+    ("gptoss_120b", GptOss120BConfig, True),
+]
+
+
+def combine_shape_params():
+    """Build the per-model (shape, run_pcc_check) parametrization. Non-baseline models carry the
+    extended_model marker on their params so they stay gated exactly as the separate tests were."""
+    params = []
+    for name, config, extended in COMBINE_MODELS:
+        marks = (pytest.mark.extended_model,) if extended else ()
+        shapes = [
+            ("pcc", 128, config.NUM_ROUTED_EXPERTS // 16, 4, 4, True),
+            ("perf_no_pcc", 640, config.NUM_ROUTED_EXPERTS // 4, 2, 8, False),
+        ]
+        for shape_id, seq, num_experts, topk, capacity, run_pcc in shapes:
+            params.append(
+                pytest.param(
+                    seq,
+                    config.EMB_SIZE,
+                    num_experts,
+                    topk,
+                    capacity,
+                    run_pcc,
+                    marks=marks,
+                    id=f"{name}-{shape_id}",
+                )
+            )
+    return params
+
+
+@pytest.mark.parametrize(
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    combine_shape_params(),
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    ALL_MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.parametrize(
+    "dispatched_buffer_layout",
+    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    ids=["tile", "row_major"],
+)
+@pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
+def test_ttnn_combine(
+    mesh_device,
+    seq_len_per_chip,
+    emb_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    num_links,
+    topology,
+    use_predictable_data,
+    run_pcc_check,
+    dispatched_buffer_layout,
+    use_fp8_output,
+    is_ci_env,
+    is_ci_v2_env,
+):
+    run_combine(
+        mesh_device,
+        seq_len_per_chip,
+        emb_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        num_links,
+        topology,
+        use_predictable_data,
+        run_pcc_check,
+        dispatched_buffer_layout,
+        use_fp8_output,
+        is_ci_env,
+        is_ci_v2_env,
+    )

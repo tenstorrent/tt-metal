@@ -24,13 +24,15 @@ std::array<ttnn::Tensor, 2> dispatch(
     uint32_t num_experts_per_tok,
     uint32_t metadata_len,
     uint32_t max_dispatch_buffer_token_size,
+    const std::optional<ttnn::Tensor>& padding_config,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     std::optional<uint32_t> cluster_axis,
     std::optional<uint32_t> num_links,
     std::optional<tt::tt_fabric::Topology> topology,
     bool use_l1_small_for_semaphores,
-    bool use_fp8_dispatch) {
+    bool use_fp8_dispatch,
+    uint32_t num_untilizers_per_sender) {
     auto* mesh_device = input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
@@ -69,13 +71,15 @@ std::array<ttnn::Tensor, 2> dispatch(
         num_experts_per_tok,
         metadata_len,
         max_dispatch_buffer_token_size,
+        padding_config,
         axis,
         num_links_,
         usable_topology,
         memory_config_,
         subdevice_core_range_set,
         use_l1_small_for_semaphores,
-        use_fp8_dispatch);
+        use_fp8_dispatch,
+        num_untilizers_per_sender);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch

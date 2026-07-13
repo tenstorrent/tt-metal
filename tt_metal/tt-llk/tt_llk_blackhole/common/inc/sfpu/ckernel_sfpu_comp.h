@@ -76,7 +76,7 @@ sfpi_inline void _calculate_comp_(const int iterations, std::uint32_t exponent_s
             // Result will be either 0x0000(0.0) or 0x3F80(1.0)
             if constexpr (is_less_than_equal_zero)
             {
-                result = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vUInt>(flag1) | sfpi::reinterpret<sfpi::vUInt>(flag2));
+                result = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(flag1) | sfpi::as<sfpi::vUInt>(flag2));
             }
             else
             {
@@ -86,7 +86,7 @@ sfpi_inline void _calculate_comp_(const int iterations, std::uint32_t exponent_s
                 // Do a bitwise And (flag1 & flag2) to get > condition.
                 // flag2 >= 0 AND flag1 != 0 => DST is Greater than zero
                 // Result will be either 0x0000(0.0) or 0x3F80(1.0)
-                result = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vUInt>(flag1) & sfpi::reinterpret<sfpi::vUInt>(flag2));
+                result = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(flag1) & sfpi::as<sfpi::vUInt>(flag2));
             }
         }
         else

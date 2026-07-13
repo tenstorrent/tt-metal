@@ -48,7 +48,7 @@ sfpi_inline void _calculate_log_body_(const std::uint32_t log_base_scale_factor,
     ////////////////////////////
     auto exp = sfpi::convert<sfpi::vSMag>(sfpi::exexp(in));
 
-    sfpi::vFloat expf      = sfpi::convert<sfpi::vFloat>(exp, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat expf      = sfpi::convert<sfpi::vFloat>(exp, sfpi::RoundMode::Nearest);
     sfpi::vFloat vConstLn2 = sfpi::vConstFloatPrgm0;
     sfpi::vFloat result    = expf * vConstLn2 + series_result; // exp correction: ln(1+x) + exp*ln(2)
 
@@ -79,7 +79,7 @@ sfpi_inline sfpi::vFloat _calculate_log_body_no_init_(sfpi::vFloat base)
 
     // Convert exponent to float
     auto exp          = sfpi::convert<sfpi::vSMag>(sfpi::exexp(base));
-    sfpi::vFloat expf = sfpi::convert<sfpi::vFloat>(exp, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat expf = sfpi::convert<sfpi::vFloat>(exp, sfpi::RoundMode::Nearest);
 
     // De-normalize to original range
     sfpi::vFloat vConstLn2  = 0.692871f;

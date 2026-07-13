@@ -120,6 +120,7 @@ class TtMoERoutingSetup(LightweightModule):
         expert_dispatch_table: torch.Tensor,
         num_links: int = 1,
         experts_per_chip: int = 32,
+        use_l1_small_for_semaphores: bool = False,
     ):
         """
         Initialize routing setup with the expert-to-chip mapping.
@@ -130,16 +131,21 @@ class TtMoERoutingSetup(LightweightModule):
                 Used as a mask in masked_bincount so each chip only counts experts it is responsible for.
                 Values >= 0 indicate the destination chip ID for that expert; -1 means the expert is
                 absent from this dispatch group.
-                Shape: (num_dispatch_groups, num_routed_experts), int32
+                Shape: (num_dispatch_groups, num_routed_experts) or, with padding awareness, a wider
+                (num_dispatch_groups, num_routed_experts + 1) where the trailing sentinel column is
+                always -1. masked_bincount only reads indices < num_routed_experts, so the extra
+                column is ignored here (it exists so the dispatch reader maps padded sentinel tokens
+                to -1).
                 Sharded across mesh with dims=(None, 0): replicated across rows (dispatch axis),
                 sharded on dim 0 across columns (dispatch groups).
-                Per-device shape after sharding: (1, num_routed_experts)
+                Per-device shape after sharding: (1, num_routed_experts) (or +1 with the sentinel column)
             num_links: Number of fabric links to use for cross-chip communication in offset_cumsum
             experts_per_chip: Number of experts per chip (for expert region offset grouping in offset_cumsum)
         """
         self.mesh_device = mesh_device
         self.num_links = num_links
         self.experts_per_chip = experts_per_chip
+        self.use_l1_small_for_semaphores = use_l1_small_for_semaphores
 
         self.experts_in_dispatch_group = ttnn.from_torch(
             expert_dispatch_table,
@@ -273,6 +279,10 @@ class TtMoERoutingSetup(LightweightModule):
             num_links=self.num_links,
             experts_per_chip=self.experts_per_chip,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # Route the internal all-gather's global semaphores to L1_SMALL so they don't pin the main-L1
+            # floor and clash with the next layer's MLA static CBs. Off by default; enabled only where the
+            # device is opened with l1_small_size > 0 (e.g. the Kimi chunked test).
+            use_l1_small_for_semaphores=self.use_l1_small_for_semaphores,
         )
         signpost(header="moe_gate_calculate_global_dispatch_offsets")
 

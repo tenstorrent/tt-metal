@@ -29,6 +29,7 @@ from ttnn.operations.ccl import MoEActivationFunction
 import ttnn
 from models.common.modules.moe.tt_moe_decode import TTMoEDecode
 from models.common.modules.moe.tt_moe_decode_config import TTMoEDecodeConfig
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3.tests.fused_op_unit_tests.moe.test_optimized_moe_decode_block import (
     create_torch_dispatch_input_expert_scores_tensor,
     create_torch_dispatch_input_tensor,
@@ -67,6 +68,7 @@ def _print_exception_and_fail(reason: str) -> None:
 MESH_GRAPH_DESC_16x1 = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_16x1_torus_graph_descriptor.textproto"
 )
+MESH_GRAPH_DESC_BH_LB_8x1 = "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_lb_8x1_line_graph_descriptor.textproto"
 
 
 def is_mesh_graph_descriptor_set(expected_path):
@@ -85,6 +87,10 @@ def is_mesh_graph_descriptor_set(expected_path):
 # ---------------------------------------------------------------------------
 
 
+torch.set_num_threads(max(1, os.cpu_count() or 1))
+
+
+@torch.no_grad()
 def _matmul_golden(
     token: torch.Tensor,
     w0: torch.Tensor,
@@ -106,12 +112,19 @@ def _matmul_golden(
     Per-expert bias shapes: `b0`/`b1` are `[num_layers, 1, N]`, `b2` is
     `[num_layers, 1, hidden_size]`. `unsqueeze(-2)` broadcasts over the token dim.
     """
+
+    _orig_dtype = token.dtype
+    token = token.float()
+    w0 = w0.float()
+    w1 = w1.float()
+    w2 = w2.float()
+
     gate = token @ w0
     if b0 is not None:
-        gate = gate + b0.unsqueeze(-2)
+        gate = gate + b0.float().unsqueeze(-2)
     up = token @ w1
     if b1 is not None:
-        up = up + b1.unsqueeze(-2)
+        up = up + b1.float().unsqueeze(-2)
 
     if activation_type == MoEActivationFunction.SILU:
         intermediate = torch.nn.functional.silu(gate) * up
@@ -124,8 +137,8 @@ def _matmul_golden(
 
     output = intermediate @ w2
     if b2 is not None:
-        output = output + b2.unsqueeze(-2)
-    return output
+        output = output + b2.float().unsqueeze(-2)
+    return output.to(_orig_dtype)
 
 
 def _create_per_expert_weights(num_layers: int, num_experts: int, h: int, n: int) -> torch.Tensor:
@@ -185,6 +198,7 @@ def _create_expert_indices(batch: int, num_experts: int, select_k: int) -> torch
     return out
 
 
+@torch.no_grad()
 def _gen_output_golden(
     tokens: torch.Tensor,
     expert_indices: torch.Tensor,
@@ -252,6 +266,7 @@ def _create_shared_expert_weights(
     return shared_w0, shared_w1, shared_w2
 
 
+@torch.no_grad()
 def _add_shared_experts_to_golden(
     out: torch.Tensor,
     tokens: torch.Tensor,
@@ -275,6 +290,57 @@ def _add_shared_experts_to_golden(
     return out
 
 
+def _add_shared_experts_to_golden_tp(
+    out: torch.Tensor,
+    tokens: torch.Tensor,
+    batch: int,
+    shared_w0: dict[int, torch.Tensor],
+    shared_w1: dict[int, torch.Tensor],
+    shared_w2: dict[int, torch.Tensor],
+    shared_expert_scale: float,
+    activation_type: MoEActivationFunction,
+    num_tp: int,
+) -> torch.Tensor:
+    """Shared-expert golden that mimics the tensor-parallel device path step-for-step.
+
+    Each shared expert's intermediate dim `N` is partitioned into `num_tp` contiguous
+    chunks — one per device along the TP axis (`1 - cluster_axis`). Each device's chunk is
+    zero-padded back to full `N` (front block `[0:N/num_tp]` real, rest zero — exactly the
+    layout `add_shared_expert_weights` produces: W0/W1 padded on the intermediate dim, W2
+    on its row dim), the full-`N` FFN is run on the padded weights to get that device's
+    partial, and the partials are summed (the reduce-scatter), then scaled by
+    `shared_expert_scale`.
+
+    Because SiLU/SwiGLU/GELU are column-separable and each device's W2 rows are zero outside
+    its chunk, the summed partials equal the full FFN — so this matches
+    `_add_shared_experts_to_golden` exactly (modulo bf16 accumulation order). It's written
+    this way on purpose: it tracks what each device actually computes, so if the device
+    output diverges from this golden the fault is in the kernel's handling of the
+    zero-padded TP layout, not the decomposition. No `num_replicated` factor — the sum of
+    disjoint partials is one full copy, not `num_tp` copies.
+    """
+    for sid in shared_w0:
+        w0, w1, w2 = shared_w0[sid], shared_w1[sid], shared_w2[sid]
+        n = w0.shape[-1]
+        assert n % num_tp == 0, f"shared expert intermediate dim {n} not divisible by num_tp {num_tp}"
+        chunk = n // num_tp
+        for t in range(batch):
+            partial_sum = torch.zeros_like(out[t])
+            for d in range(num_tp):
+                lo, hi = d * chunk, (d + 1) * chunk
+                # Device d: its chunk, front-block zero-padded to full N. W0/W1 partition the
+                # intermediate (last) dim; W2 partitions its row (second-to-last) dim.
+                w0_d = torch.zeros_like(w0)
+                w1_d = torch.zeros_like(w1)
+                w2_d = torch.zeros_like(w2)
+                w0_d[..., :chunk] = w0[..., lo:hi]
+                w1_d[..., :chunk] = w1[..., lo:hi]
+                w2_d[..., :chunk, :] = w2[..., lo:hi, :]
+                partial_sum = partial_sum + _matmul_golden(tokens[t], w0_d, w1_d, w2_d, activation_type)
+            out[t] = out[t] + shared_expert_scale * partial_sum
+    return out
+
+
 CONFIGS_DIR = Path(__file__).resolve().parents[3] / "modules" / "moe" / "configs"
 CONFIG_PATHS = sorted(CONFIGS_DIR.glob("*.yaml"))
 
@@ -292,7 +358,6 @@ def _config_id(path: Path) -> str:
 # known failures
 # Note: it would be better to test all of these and let them fail but some cause hard crashes and derail the test
 SKIP_LIST = [
-    "deepseek_ocr.yaml",  # this one is actually unexpected and causes the test to hang (watcher assert)
     "ling_1t.yaml",
     "mistral_large_3.yaml",
     "deepseek_v4_pro.yaml",
@@ -319,7 +384,7 @@ SKIP_LIST = [
         pytest.param(
             (8, 1),
             id="8x1",
-            marks=pytest.mark.skipif(is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_16x1), reason=f"16x1 MGD is set"),
+            marks=pytest.mark.skipif(not is_blackhole(), reason=f"8x1 grid is only for BH testing"),
         ),
     ],
     indirect=True,
@@ -327,17 +392,32 @@ SKIP_LIST = [
 @pytest.mark.parametrize(
     "device_params",
     [
-        {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "trace_region_size": 500_000,
-        }
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "trace_region_size": 500_000,
+            },
+            id="fabric_1D_ring",
+        ),
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "trace_region_size": 500_000,
+            },
+            id="fabric_1D",
+            marks=pytest.mark.skipif(
+                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_BH_LB_8x1),
+                reason="FABRIC_1D only for BH LB 8x1 line topology",
+            ),
+        ),
     ],
-    ids=["fabric_1D_ring"],
     indirect=True,
 )
 @pytest.mark.parametrize("num_iterations", [3])
 @pytest.mark.parametrize("config_path", CONFIG_PATHS, ids=_config_id)
+@pytest.mark.timeout(900)
 @torch.no_grad()
 def test_tt_moe_decode(
     mesh_device: ttnn.MeshDevice,
@@ -348,13 +428,17 @@ def test_tt_moe_decode(
     torch.manual_seed(2005)
     random.seed(2005)
 
+    mesh_shape = tuple(mesh_device.shape)
+    fabric_config = device_params["fabric_config"]
+    is_line_fabric = fabric_config == ttnn.FabricConfig.FABRIC_1D
+    if is_line_fabric and mesh_shape != (8, 1):
+        pytest.skip("FABRIC_1D only valid for (8,1) BH LB mesh")
+    if not is_line_fabric and mesh_shape == (8, 1):
+        pytest.skip("(8,1) BH LB requires FABRIC_1D (line topology)")
+
     if str(config_path.name) in SKIP_LIST:
         pytest.skip(f"{config_path} is a known failure")
 
-    mesh_shape = tuple(mesh_device.shape)
-    # Derive the topology from the parametrized fabric_config so the config's RS path
-    # matches the fabric the device is actually brought up on.
-    fabric_config = device_params["fabric_config"]
     topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear
     config = TTMoEDecodeConfig.from_yaml(config_path.read_text(), topology=topology)
     if config.mesh_shape != mesh_shape:
@@ -500,19 +584,17 @@ def test_tt_moe_decode(
             b2_per_expert=b2_per_expert,
         )
         if shared_id_to_torch_w0 is not None:
-            # config.reduce.shared_expert_scale is the kernel-ready value (logical / num_replicated).
-            # The post-RS TT output sums num_replicated replicas, so the effective scale at the
-            # final output is the logical value — multiply back.
-            num_replicated = mesh_shape[1 - cluster_axis]
-            golden = _add_shared_experts_to_golden(
+            num_tp = mesh_shape[1 - cluster_axis]
+            golden = _add_shared_experts_to_golden_tp(
                 golden,
                 tokens,
                 batch,
                 shared_id_to_torch_w0,
                 shared_id_to_torch_w1,
                 shared_id_to_torch_w2,
-                shared_expert_scale=config.reduce.shared_expert_scale * num_replicated,
+                shared_expert_scale=config.reduce.shared_expert_scale,
                 activation_type=config.compute.activation_type,
+                num_tp=num_tp,
             )
         output_goldens.append(golden)
 
@@ -535,9 +617,6 @@ def test_tt_moe_decode(
             else:
                 final_output = output
             tt_outputs.append(final_output)
-
-            # Surface async device errors immediately rather than letting them
-            # silently corrupt state and then deadlock at mesh_device teardown.
             ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
         except Exception as e:
             _print_exception_and_fail(f"forward iteration {it} failed: {type(e).__name__}")

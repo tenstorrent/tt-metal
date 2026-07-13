@@ -74,16 +74,8 @@ template <uint32_t cb_id>
 ALWI void zero_out_tiles(Noc noc, experimental::CB cb) {
     constexpr uint32_t tile_size = get_tile_size(cb_id);
     const uint32_t num_tiles = get_local_cb_interface(cb_id).fifo_num_pages;
-    const uint32_t num_zeros_reads = (tile_size / MEM_ZEROS_SIZE) * num_tiles;
-
-    constexpr uint32_t packet_size = MEM_ZEROS_SIZE;
-
-    experimental::set_read_state<packet_size>(noc, MEM_ZEROS_BASE);
-
-    for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-        experimental::read_with_state(noc, cb, MEM_ZEROS_BASE, {.offset_bytes = i * packet_size});
-    }
-    noc.async_read_barrier();
+    noc.async_write_zeros(cb, tile_size * num_tiles);
+    noc.write_zeros_l1_barrier();
 }
 
 template <uint32_t config_dram_addr, uint32_t config_page_size, uint32_t tensor_args_index, uint32_t cb_reader_index>
@@ -135,21 +127,6 @@ ALWI void fill_scalar(
 
 ALWI void zero_out_page(Noc noc, experimental::CB cb) {
     const uint32_t page_size = get_local_cb_interface(cb.get_cb_id()).fifo_page_size;
-    const uint32_t num_zeros_reads = page_size / MEM_ZEROS_SIZE;
-    const uint32_t remainder_bytes = page_size % MEM_ZEROS_SIZE;
-    constexpr uint32_t packet_size = MEM_ZEROS_SIZE;
-
-    experimental::set_read_state<packet_size>(noc, MEM_ZEROS_BASE);
-    for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-        experimental::read_with_state(noc, cb, MEM_ZEROS_BASE, {.offset_bytes = i * packet_size});
-    }
-    if (remainder_bytes > 0) {
-        UnicastEndpoint self_ep;
-        noc.async_read(
-            self_ep,
-            cb,
-            remainder_bytes,
-            experimental::local_addr(MEM_ZEROS_BASE, noc.get_noc_id()),
-            {.offset_bytes = num_zeros_reads * packet_size});
-    }
+    noc.async_write_zeros(cb, page_size);
+    noc.write_zeros_l1_barrier();
 }

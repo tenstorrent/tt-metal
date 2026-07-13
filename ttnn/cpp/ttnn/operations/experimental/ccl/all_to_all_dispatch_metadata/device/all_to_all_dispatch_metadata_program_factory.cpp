@@ -495,6 +495,8 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
 
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+    const auto dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    const uint32_t payload_alignment = std::max(l1_alignment, dram_alignment);
 
     // New mapping format: [devices, experts]
     // Each page is one device's view. Kernels only need to read 1 page (source device's mapping row).
@@ -773,9 +775,11 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
 
             // Calculate payload split parameters
             // Worker 0 sends first portion, worker 1 sends second portion, etc.
+            // Round up chunks to aligned addresses, final worker gets remainder.
             uint32_t full_payload_size = input_page_size;
-            uint32_t payload_size = full_payload_size / workers_per_link;
-            uint32_t payload_offset = worker_idx_within_link * payload_size;
+            uint32_t payload_chunk = tt::round_up(tt::div_up(full_payload_size, workers_per_link), payload_alignment);
+            uint32_t payload_offset = std::min(worker_idx_within_link * payload_chunk, full_payload_size);
+            uint32_t payload_size = std::min(payload_chunk, full_payload_size - payload_offset);
             // Primary worker (worker 0) sends metadata + atomic_inc and is also termination master
             bool is_primary_payload_worker = (worker_idx_within_link == 0);
 

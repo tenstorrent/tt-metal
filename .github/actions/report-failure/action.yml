@@ -62,7 +62,7 @@ runs:
           echo 'EOF'
         } >> $GITHUB_OUTPUT
     - name: Send Slack notification
-      uses: slackapi/slack-github-action@v2.1.1
+      uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
       env:
         SLACK_CHANNEL_ID: ${{ inputs.slack_channel_id }}
         SLACK_MESSAGE_TEXT: ${{ steps.message.outputs.text }}

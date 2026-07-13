@@ -1,11 +1,12 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.data_format_inference import data_formats
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIM,
     MatmulGolden,
@@ -26,13 +27,16 @@ from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import BootMode, TestConfig
+from helpers.test_config import BootMode, InputOutputFormat, TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     DEST_SYNC,
+    ENABLE_2X_FORMAT,
+    ENABLE_DIRECT_INDEXING,
     IMPLIED_MATH_FORMAT,
     MATH_FIDELITY,
     NUM_FACES,
@@ -43,25 +47,31 @@ from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
 kt_dims = [1, 2, 4]
-matmul_dimensions_dest_sync = [
-    (
-        [mt_dim * TILE_DIM, kt_dim * TILE_DIM],
-        [kt_dim * TILE_DIM, nt_dim * TILE_DIM],
-        dest_acc,
-        dest_sync,
-    )
-    for dest_sync in (DestSync.Half, DestSync.Full)
-    for dest_acc in (DestAccumulation.Yes, DestAccumulation.No)
-    for max_tiles in (
-        DEST_SYNC_TILE_LIMITS[dest_sync]
-        // (2 if dest_acc == DestAccumulation.Yes else 1),
-    )
-    for mt_dim in range(1, max_tiles + 1)
-    for nt_dim in range(1, max_tiles // mt_dim + 1)
-    for kt_dim in kt_dims
-]
 
-# Generate format-aware combinations
+
+def _matmul_dest_acc_sync(dest_acc_modes):
+    return [
+        (dest_acc, dest_sync)
+        for dest_sync in (DestSync.Half, DestSync.Full)
+        for dest_acc in dest_acc_modes
+    ]
+
+
+def _matmul_dimensions(dest_acc, dest_sync):
+    max_tiles = DEST_SYNC_TILE_LIMITS[dest_sync] // (
+        2 if dest_acc == DestAccumulation.Yes else 1
+    )
+    return [
+        ([mt_dim * TILE_DIM, kt_dim * TILE_DIM], [kt_dim * TILE_DIM, nt_dim * TILE_DIM])
+        for mt_dim in range(1, max_tiles + 1)
+        for nt_dim in range(1, max_tiles // mt_dim + 1)
+        for kt_dim in kt_dims
+    ]
+
+
+# Generate format-aware combinations. MxFp4 is an input-only (L1) format here: the
+# unpacker produces MxFp4_2x_A/B in the src registers, so drop the cross-product
+# entries where MxFp4 would land as an output.
 MATMUL_FORMAT = input_output_formats(
     [
         DataFormat.Float16,
@@ -69,50 +79,91 @@ MATMUL_FORMAT = input_output_formats(
         DataFormat.MxFp8R,
         DataFormat.MxFp8P,
         DataFormat.MxFp4,
+        DataFormat.MxInt8,
+        DataFormat.MxInt4,
+        DataFormat.MxInt2,
     ],
-)
+) + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
+
+_ARCH = get_chip_architecture()
 
 
 @pytest.mark.quasar
 @parametrize(
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
-    dimensions_dest_acc_dest_sync=matmul_dimensions_dest_sync,
     format=MATMUL_FORMAT,
+    # Integer matmul is LoFi-only on Quasar.
+    math_fidelity=lambda format: (
+        [MathFidelity.LoFi]
+        if format.input_format == DataFormat.Int8
+        else [
+            MathFidelity.LoFi,
+            MathFidelity.HiFi2,
+            MathFidelity.HiFi3,
+            MathFidelity.HiFi4,
+        ]
+    ),
+    dest_acc_dest_sync=lambda format: (
+        _matmul_dest_acc_sync((DestAccumulation.Yes,))
+        if format.input_format == DataFormat.Int8
+        else _matmul_dest_acc_sync((DestAccumulation.Yes, DestAccumulation.No))
+    ),
+    dimensions=runtime(
+        lambda dest_acc_dest_sync: _matmul_dimensions(
+            dest_acc_dest_sync[0], dest_acc_dest_sync[1]
+        )
+    ),
     implied_math_format=lambda format: (
         [ImpliedMathFormat.Yes]
         if format.input_format.is_mx_format()
         else [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+    ),
+    register_format_hint=lambda format: (
+        [DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B]
+        # MxFp4_2x is Quasar only. Quasar Architecture derivations don't support it.
+        if format.input_format == DataFormat.MxFp4 and _ARCH == ChipArchitecture.QUASAR
+        else [None]
+    ),
+    enable_direct_indexing=lambda register_format_hint: (
+        [False] if register_format_hint is None else [True, False]
     ),
     transpose=[Transpose.No],
 )
 # Note: this test is used to test boot modes, that is why it has them piped as default arguments to the test itself
 def test_matmul(
     math_fidelity,
-    dimensions_dest_acc_dest_sync,
+    dest_acc_dest_sync,
+    dimensions,
     format,
     implied_math_format,
+    register_format_hint,
+    enable_direct_indexing,
     transpose,
 ):
 
-    input_A_dimensions, input_B_dimensions, dest_acc, dest_sync_mode = (
-        dimensions_dest_acc_dest_sync
+    # Reassign format with register_format_hint so that test config generation and stimulus generation are aware of the register format hint.
+    format = InputOutputFormat(
+        format.input_format,
+        format.output_format,
+        input_format_B=format.input_format_B,
+        register_format_hint=register_format_hint,
     )
+
+    dest_acc, dest_sync_mode = dest_acc_dest_sync
+    input_A_dimensions, input_B_dimensions = dimensions
 
     torch_format = format_dict[format.output_format]
 
-    sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
+    if format.input_format == DataFormat.Int8:
+        stimuli_spec = StimuliSpec.uniform(low=-127.0, high=127.0)
+    else:
+        stimuli_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=format.input_format,
         input_dimensions_A=input_A_dimensions,
         stimuli_format_B=format.input_format,
         input_dimensions_B=input_B_dimensions,
-        spec_A=sfpu_false_spec,
-        spec_B=sfpu_false_spec,
+        spec_A=stimuli_spec,
+        spec_B=stimuli_spec,
         output_format=format.output_format,
     )
 
@@ -171,7 +222,12 @@ def test_matmul(
         is_fp32_dest_acc_en=dest_acc,
         num_iterations=1,
         unpacking_to_dest=False,
-        disable_format_inference=format.input_format.is_mx_format(),
+        # 2x register-format opt-in needs to flow through inference; only disable
+        # for plain MX formats where there's nothing to infer.
+        disable_format_inference=(
+            format.input_format.is_mx_format() and format.register_format_hint is None
+        ),
+        register_format_hint=format.register_format_hint,
     )[0]
     pack_src_format = formats_config.pack_src
 
@@ -198,13 +254,19 @@ def test_matmul(
         templates=[
             MATH_FIDELITY(math_fidelity),
             IMPLIED_MATH_FORMAT(implied_math_format),
+            ENABLE_2X_FORMAT(
+                format.register_format_hint
+                in (DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B)
+            ),
+            ENABLE_DIRECT_INDEXING(enable_direct_indexing),
             DEST_SYNC(dest_sync_mode),
             UNPACK_TRANS_FACES(transpose),
+        ],
+        runtimes=[
             CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
             TILE_COUNT(matmul_dims.output_tile_cnt),
             NUM_FACES(num_faces, num_faces, num_faces),
         ],
-        runtimes=[],
         variant_stimuli=StimuliConfig(
             tilized_A.flatten(),
             format.input_format,
@@ -219,7 +281,11 @@ def test_matmul(
         unpack_to_dest=False,
         dest_acc=dest_acc,
         boot_mode=BootMode.TRISC,
-        disable_format_inference=format.input_format.is_mx_format(),
+        # 2x register-format opt-in needs to flow through inference; only disable
+        # for plain MX formats where there's nothing to infer.
+        disable_format_inference=(
+            format.input_format.is_mx_format() and format.register_format_hint is None
+        ),
     )
 
     res_from_L1 = configuration.run().result

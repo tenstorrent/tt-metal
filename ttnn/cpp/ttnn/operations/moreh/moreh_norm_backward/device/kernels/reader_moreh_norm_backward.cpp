@@ -4,7 +4,7 @@
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 static constexpr int32_t MAX_NUM_DIMENSIONS = 8;
@@ -91,12 +91,13 @@ void kernel_main() {
     // output_grad
     const auto output_grad_addrg = TensorAccessor(output_grad_args, output_grad_addr);
 
-    fill_cb_with_value(cb_id_decimal, decimal);
+    DataflowBuffer dfb_decimal(cb_id_decimal);
+    fill_cb_with_value(dfb_decimal, decimal);
 
     Noc noc;
-    CircularBuffer cb_input(cb_id_input);
-    CircularBuffer cb_output(cb_id_output);
-    CircularBuffer cb_output_grad(cb_id_output_grad);
+    DataflowBuffer dfb_input(cb_id_input);
+    DataflowBuffer dfb_output(cb_id_output);
+    DataflowBuffer dfb_output_grad(cb_id_output_grad);
     const auto input_tile_bytes = get_tile_size(cb_id_input);
     const auto output_tile_bytes = get_tile_size(cb_id_output);
     const auto output_grad_tile_bytes = get_tile_size(cb_id_output_grad);
@@ -106,21 +107,21 @@ void kernel_main() {
         auto read_tile_id = get_output_grad_tile(
             i, input_grad_rank, output_grad_dim, output_grad_stride, input_grad_dim, input_grad_stride, need_bcast_dim);
 
-        cb_input.reserve_back(1);
-        noc.async_read(input_addrg, cb_input, input_tile_bytes, {.page_id = input_tile_id}, {.offset_bytes = 0});
+        dfb_input.reserve_back(1);
+        noc.async_read(input_addrg, dfb_input, input_tile_bytes, {.page_id = input_tile_id}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_input.push_back(1);
+        dfb_input.push_back(1);
 
-        cb_output.reserve_back(1);
-        noc.async_read(output_addrg, cb_output, output_tile_bytes, {.page_id = read_tile_id}, {.offset_bytes = 0});
+        dfb_output.reserve_back(1);
+        noc.async_read(output_addrg, dfb_output, output_tile_bytes, {.page_id = read_tile_id}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_output.push_back(1);
+        dfb_output.push_back(1);
 
-        cb_output_grad.reserve_back(1);
+        dfb_output_grad.reserve_back(1);
         noc.async_read(
-            output_grad_addrg, cb_output_grad, output_grad_tile_bytes, {.page_id = read_tile_id}, {.offset_bytes = 0});
+            output_grad_addrg, dfb_output_grad, output_grad_tile_bytes, {.page_id = read_tile_id}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_output_grad.push_back(1);
+        dfb_output_grad.push_back(1);
     }
 
 }  // void kernel_main()
