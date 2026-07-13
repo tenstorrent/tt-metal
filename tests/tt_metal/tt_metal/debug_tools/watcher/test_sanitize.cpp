@@ -57,6 +57,7 @@ enum watcher_features_t {
     SanitizeNOCInlineWriteDram,
     SanitizeNOCLinkedTransaction,
     SanitizeL1Overflow,
+    SanitizeL1OverflowStraddle,
     SanitizeEthSrcL1Overflow,
     SanitizeEthDestL1Overflow,
     SanitizeNOCMulticastInvalidRange,
@@ -121,8 +122,10 @@ void RunTestOnCore(
     if (multi_dm_race && !is_quasar) {
         GTEST_SKIP() << "Multi-DM race test only runs on Quasar";
     }
-    if (feature == SanitizeNOCMailboxWriteUncachedAlias && (!is_quasar || is_eth_core)) {
-        GTEST_SKIP() << "Uncached mailbox alias only applies to Quasar DM cores";
+    // Both exercise Quasar's uncached L1 alias, which only exists on Quasar DM cores.
+    if ((feature == SanitizeNOCMailboxWriteUncachedAlias || feature == SanitizeL1OverflowStraddle) &&
+        (!is_quasar || is_eth_core)) {
+        GTEST_SKIP() << "Uncached-alias tests only apply to Quasar DM cores";
     }
 
     // TENSIX cores use the Metal 2.0 variant; ETH cores stay on the legacy kernel/API.
@@ -344,6 +347,10 @@ void RunTestOnCore(
         case SanitizeNOCInlineWriteDram: use_inline_dw_write = true; break;
         case SanitizeNOCLinkedTransaction: bad_linked_transaction = true; break;
         case SanitizeL1Overflow: l1_overflow_addr = 0xDDDDDDDD; break;
+        case SanitizeL1OverflowStraddle:
+            // 4-byte access starting 2 bytes below the top of L1, straddling the cached/uncached-alias seam.
+            l1_overflow_addr = hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) - 2;
+            break;
         case SanitizeEthSrcL1Overflow: eth_src_overflow_addr_words = 0xAAAAAAAA; break;
         case SanitizeEthDestL1Overflow: eth_dest_overflow_addr_words = 0xBBBBBBBB; break;
         case SanitizeNOCMulticastInvalidRange: {
@@ -624,6 +631,7 @@ void RunTestOnCore(
                 output_core_virtual_coords.str(),
                 output_buffer_addr);
         } break;
+        case SanitizeL1OverflowStraddle:
         case SanitizeL1Overflow: {
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} core overflowed L1 with access to {:#x} "
@@ -930,6 +938,15 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeL1Overflow) {
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, mesh_device, core, false, SanitizeL1Overflow);
+        },
+        this->devices_[0]);
+}
+
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeL1OverflowStraddle) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeL1OverflowStraddle);
         },
         this->devices_[0]);
 }

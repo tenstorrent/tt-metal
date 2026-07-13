@@ -46,6 +46,19 @@ using debug_sanitize_noc_cast_t = bool;
 #define DEBUG_SANITIZE_NOC_LOCAL false
 using debug_sanitize_noc_which_core_t = bool;
 
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+// Quasar DM reaches L1 through two aliased views of the same physical memory: the cached view
+// [MEM_L1_BASE, +MEM_L1_SIZE) and the uncached alias [MEM_L1_UNCACHED_BASE, +MEM_L1_SIZE).
+// A valid access lies wholly within one view. Crossing the seam is not a contiguous transfer:
+// the bytes below the seam hit the top of physical L1 and the bytes at or above it hit the bottom,
+// so such an access is illegal. Returns true when [addr, addr+len) is entirely contained in a single view.
+inline bool debug_l1_access_within_single_view(uint64_t addr, uint64_t len) {
+    bool in_cached_view = (addr + len <= MEM_L1_BASE + MEM_L1_SIZE);
+    bool in_uncached_view = (addr >= MEM_L1_UNCACHED_BASE) && (addr + len <= MEM_L1_UNCACHED_BASE + MEM_L1_SIZE);
+    return in_cached_view || in_uncached_view;
+}
+#endif
+
 // Helper function to get the core type from noc coords.
 AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y, bool& is_virtual_coord) {
     core_info_msg_t tt_l1_ptr* core_info = GET_MAILBOX_ADDRESS_DEV(core_info);
@@ -175,11 +188,10 @@ inline uint16_t debug_valid_worker_addr(uint64_t addr, uint64_t len, bool write,
         return DebugSanitizeNocAddrUnderflow;
     }
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-    // Quasar DM local buffers may use the cached view or the uncached alias (valid up to the top of
-    // the alias). Remote NOC target offsets are always physical (cached-range) and must stay within
-    // MEM_L1_SIZE.
+    // Local buffers may use the cached view or the uncached alias (and must not straddle the seam).
+    // Remote NOC target offsets are always physical (cached-range) and must stay within MEM_L1_SIZE.
     if (is_local_buffer) {
-        if (addr + len > MEM_L1_UNCACHED_BASE + MEM_L1_SIZE) {
+        if (!debug_l1_access_within_single_view(addr, len)) {
             return DebugSanitizeNocAddrOverflow;
         }
     } else {
@@ -635,19 +647,19 @@ void debug_throw_on_dram_addr(uint8_t noc_id, uint64_t addr, uint32_t len) {
 }
 
 void debug_sanitize_l1_access(uint64_t addr, uint32_t len) {
+    bool illegal = (addr + len <= addr);  // zero length / wraparound
 #if defined(COMPILE_FOR_ERISC)
-    constexpr uint64_t l1_overflow_addr = MEM_ETH_SIZE;
+    illegal = illegal || (addr + len > MEM_ETH_SIZE);
 #elif defined(COMPILE_FOR_DRISC)
-    constexpr uint64_t l1_overflow_addr = MEM_DRISC_L1_SIZE;
+    illegal = illegal || (addr + len > MEM_DRISC_L1_SIZE);
 #elif defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-    // Quasar DM kernels can access TL1 via the cached view or the uncached alias (same physical
-    // memory), so the valid range spans up to the top of the alias. Report the raw address, not a
-    // normalized one, so error messages reflect what the kernel actually used.
-    constexpr uint64_t l1_overflow_addr = MEM_L1_UNCACHED_BASE + MEM_L1_SIZE;
+    // Access must lie wholly within the cached view or the uncached alias (not straddle the seam).
+    // Report the raw address (not a normalized one) so errors reflect what the kernel used.
+    illegal = illegal || !debug_l1_access_within_single_view(addr, len);
 #else
-    constexpr uint64_t l1_overflow_addr = MEM_L1_SIZE;
+    illegal = illegal || (addr + len > MEM_L1_SIZE);
 #endif
-    if (addr + len <= addr || addr + len > l1_overflow_addr) {
+    if (illegal) {
         debug_sanitize_post_addr_and_hang(
             0,  // unused (not a noc transaction)
             0,  // unused (not a noc transaction)
