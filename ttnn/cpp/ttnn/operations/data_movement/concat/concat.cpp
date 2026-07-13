@@ -192,7 +192,10 @@ MassagedConcat build_non_aligned_last_dim_concat(
         return std::all_of(tensors.begin(), tensors.end(), [&](const ttnn::Tensor& tensor) {
             auto storage_type = tensor.storage_type();
             if (storage_type == tt::tt_metal::StorageType::DEVICE) {
-                return tensor.padded_shape()[dim] * tensor.element_size() % tensor.buffer()->alignment() == 0;
+                // Use logical size: for TILE inputs the untilize→RM path produces sticks of
+                // logical width, and for 1D TILE tensors padded_shape[0] is tile height (e.g. 8
+                // for an 8x32 tiny tile), not the concat width.
+                return tensor.logical_shape()[dim] * tensor.element_size() % tensor.buffer()->alignment() == 0;
             }
             TT_THROW(
                 "ttnn.concat: expected a tensor with device storage, but got a tensor with storage type"
@@ -202,7 +205,13 @@ MassagedConcat build_non_aligned_last_dim_concat(
     };
 
     auto predicate = [dim_aligned](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int /*groups*/) -> bool {
-        auto last_dim = tensors.front().logical_shape().rank() - 1;
+        const auto rank = tensors.front().logical_shape().rank();
+        // transpose(-2, -1) is invalid for rank < 2; 1D unaligned RM is handled by
+        // build_unsqueeze_squeeze_1D_rm_unaligned_concat instead.
+        if (rank < 2) {
+            return false;
+        }
+        auto last_dim = rank - 1;
         if (dim == last_dim) {
             bool res = !dim_aligned(tensors, dim);
             concat_db_print(res, "[DEBUG] alignment fixedup required");

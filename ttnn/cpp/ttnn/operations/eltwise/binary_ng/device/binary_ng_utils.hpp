@@ -8,8 +8,6 @@
 #include "ttnn/operations/eltwise/binary_ng/types.hpp"
 #include "ttnn/tensor/types.hpp"
 
-#include <tt-metalium/tile.hpp>
-
 #include <optional>
 #include <string>
 
@@ -122,10 +120,7 @@ struct AllShardSpecs {
 };
 
 tt::tt_metal::ShardSpec adjust_to_shape(
-    const tt::tt_metal::ShardSpec& shard_spec,
-    const ttnn::Shape& from_shape,
-    const ttnn::Shape& to_shape,
-    const tt::tt_metal::Tile& tile = tt::tt_metal::Tile());
+    const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape);
 
 struct AllShardVolumes {
     std::optional<std::uint32_t> a_shard_volume;

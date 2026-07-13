@@ -113,10 +113,9 @@ std::optional<AllShardSpecs> get_shard_specs(
     const auto& c_shape = c.padded_shape();
 
     TT_FATAL(get_shard_spec(c).has_value(), "C must have a shard spec");
-    const auto& tile = c.tile();
     return AllShardSpecs{
-        a_sharded ? *get_shard_spec(a) : adjust_to_shape(*get_shard_spec(c), c_shape, a_shape, tile),
-        b_sharded ? *get_shard_spec(*b) : adjust_to_shape(*get_shard_spec(c), c_shape, b_shape, tile),
+        a_sharded ? *get_shard_spec(a) : adjust_to_shape(*get_shard_spec(c), c_shape, a_shape),
+        b_sharded ? *get_shard_spec(*b) : adjust_to_shape(*get_shard_spec(c), c_shape, b_shape),
         *get_shard_spec(c)};
 }
 
@@ -424,13 +423,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     const auto b_data_format = datatype_to_dataformat_converter(b_dtype);
     const auto c_data_format = datatype_to_dataformat_converter(c_dtype);
 
-    const auto& a_tile = a.tensor_spec().tile();
-    const auto& b_tile = b.has_value() ? b->tensor_spec().tile() : a_tile;
-    const auto& c_tile = c.tensor_spec().tile();
-
-    uint32_t a_single_tile_size = a_tile.get_tile_size(a_data_format);
-    uint32_t b_single_tile_size = b_tile.get_tile_size(b_data_format);
-    uint32_t c_single_tile_size = c_tile.get_tile_size(c_data_format);
+    uint32_t a_single_tile_size = tt::tile_size(a_data_format);
+    uint32_t b_single_tile_size = tt::tile_size(b_data_format);
+    uint32_t c_single_tile_size = tt::tile_size(c_data_format);
 
     // we parallelize the computation across the output tiles
     const auto& all_device_cores = operation_attributes.worker_grid;
@@ -573,12 +568,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     const bool inputs_row_major =
         CMAKE_UNIQUE_NAMESPACE::should_use_row_major_path(operation_attributes, b, has_sharding);
 
-    // Attach TileDescriptor on TILE-layout CBs so JIT get_tile_size(cb) matches tiny tiles.
-    // Row-major path still packs into tiled CBs, so keep the tile metadata there as well.
-    const auto a_tile_desc = TileDescriptor(a_tile);
-    const auto b_tile_desc = TileDescriptor(b_tile);
-    const auto c_tile_desc = TileDescriptor(c_tile);
-
     // CB: a (c_0)
     {
         uint32_t a_num_pages = a_num_tiles_per_shard.value_or(2);
@@ -589,7 +578,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_0),
                 .data_format = a_data_format,
                 .page_size = a_single_tile_size,
-                .tile = a_tile_desc,
             }}},
             .buffer = a_sharded ? a_buffer : nullptr,
         });
@@ -599,7 +587,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         auto a_intermediate_format = is_sfpu_op   ? a_data_format
                                      : op_has_exp ? tt::DataFormat::Float16_b
                                                   : a_data_format;
-        uint32_t a_intermediate_single_tile_size = a_tile.get_tile_size(a_intermediate_format);
+        uint32_t a_intermediate_single_tile_size = tt::tile_size(a_intermediate_format);
         desc.cbs.push_back(CBDescriptor{
             .total_size = a_intermediate_single_tile_size * num_tiles_per_cycle,
             .core_ranges = all_device_cores,
@@ -607,7 +595,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),
                 .data_format = a_intermediate_format,
                 .page_size = a_intermediate_single_tile_size,
-                .tile = a_tile_desc,
             }}},
         });
     }
@@ -622,7 +609,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
                 .data_format = b_data_format,
                 .page_size = b_single_tile_size,
-                .tile = b_tile_desc,
             }}},
             .buffer = b_sharded ? b_buffer : nullptr,
         });
@@ -632,7 +618,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         auto b_intermediate_format = is_sfpu_op   ? b_data_format
                                      : op_has_exp ? tt::DataFormat::Float16_b
                                                   : b_data_format;
-        uint32_t b_intermediate_single_tile_size = b_tile.get_tile_size(b_intermediate_format);
+        uint32_t b_intermediate_single_tile_size = tt::tile_size(b_intermediate_format);
         desc.cbs.push_back(CBDescriptor{
             .total_size = b_intermediate_single_tile_size * num_tiles_per_cycle,
             .core_ranges = all_device_cores,
@@ -640,7 +626,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_4),
                 .data_format = b_intermediate_format,
                 .page_size = b_intermediate_single_tile_size,
-                .tile = b_tile_desc,
             }}},
         });
     }
@@ -656,7 +641,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_5),
                 .data_format = a_data_format,
                 .page_size = a_single_tile_size,
-                .tile = a_tile_desc,
             }}},
         });
     }
@@ -671,7 +655,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_6),
                 .data_format = b_data_format,
                 .page_size = b_single_tile_size,
-                .tile = b_tile_desc,
             }}},
         });
     }
@@ -686,7 +669,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_2),
                 .data_format = c_data_format,
                 .page_size = c_single_tile_size,
-                .tile = c_tile_desc,
             }}},
             .buffer = c_sharded ? c_buffer : nullptr,
         });
