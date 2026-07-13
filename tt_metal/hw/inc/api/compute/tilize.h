@@ -32,6 +32,10 @@
 #endif
 #endif
 
+#ifdef ARCH_QUASAR
+#include "api/debug/dprint.h"  // DEBUG (conv tilize-pack PACR0_TILE_INC localizer, remove after)
+#endif
+
 namespace ckernel {
 
 // clang-format off
@@ -173,6 +177,11 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
 // clang-format on
 ALWI void tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
+#ifdef ARCH_QUASAR
+    // DEBUG (conv tilize PACR0_TILE_INC localizer): the LAST TZBLK/TZPK that flushes before the fault tells
+    // us how far the tilize got (block start reached; which tile's pack faulted). Remove after.
+    PACK(DPRINT("TZBLK ocb={} block={} oti={}\n", (uint32_t)ocb, (uint32_t)block, (uint32_t)output_tile_index));
+#endif
     UNPACK((llk_unpack_tilize_block(icb, block, input_tile_index)));
 
     for (uint32_t t = 0; t < block; t++) {
@@ -187,6 +196,8 @@ ALWI void tilize_block(
         PACK((llk_pack<DST_ACCUM_MODE, true, PackMode::Default>(0 /*tile index*/, ocb, t + output_tile_index)));
 #else
         MATH((llk_math_eltwise_unary_datacopy(0 /*dst index*/, icb)));
+        // DEBUG: print immediately BEFORE the tilize pack; last TZPK before the fault = the faulting tile.
+        PACK(DPRINT("TZPK t={} l1idx={}\n", (uint32_t)t, (uint32_t)(t + output_tile_index)));
         PACK((llk_pack<true /*out_of_order*/>(0 /*tile index*/, ocb, t + output_tile_index)));
 #endif
         // Release dest
