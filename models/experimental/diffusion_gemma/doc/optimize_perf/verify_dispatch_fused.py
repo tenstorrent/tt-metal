@@ -19,6 +19,7 @@ import ttnn
 
 from models.experimental.diffusion_gemma.tt.sparse_moe import (
     _build_capacity_dispatch_fused,
+    _build_capacity_dispatch_fused2,
     _build_capacity_dispatch_impl,
 )
 
@@ -62,21 +63,25 @@ def _run_case(mesh, name, S, E, C, top_k, skew_expert=None, seed=0):
 
     disp_i, comb_i = _build_capacity_dispatch_impl(routing, E, C, top_k)
     disp_f, comb_f = _build_capacity_dispatch_fused(routing, E, C, top_k)
+    disp_g, comb_g = _build_capacity_dispatch_fused2(routing, E, C, top_k)
 
     di, ci = _to_host0(disp_i), _to_host0(comb_i)
     df, cf = _to_host0(disp_f), _to_host0(comb_f)
+    dg, cg = _to_host0(disp_g), _to_host0(comb_g)
     routing.deallocate(True)
-    for t in (disp_i, comb_i, disp_f, comb_f):
+    for t in (disp_i, comb_i, disp_f, comb_f, disp_g, comb_g):
         t.deallocate(True)
 
     disp_max = (di - df).abs().max().item()
     comb_max = (ci - cf).abs().max().item()
+    disp2_max = (di - dg).abs().max().item()
+    comb2_max = (ci - cg).abs().max().item()
     n_dispatched = int(di.sum().item())  # kept assignments (post-overflow-drop)
-    ok = disp_max == 0.0 and comb_max == 0.0
+    ok = disp_max == 0.0 and comb_max == 0.0 and disp2_max == 0.0 and comb2_max == 0.0
     print(
         f"[{name}] S={S} E={E} C={C} k={top_k} skew={skew_expert} "
-        f"disp_maxdiff={disp_max} comb_maxdiff={comb_max} kept_assignments={n_dispatched} "
-        f"{'OK' if ok else 'MISMATCH'}"
+        f"fused[disp={disp_max} comb={comb_max}] fused2[disp={disp2_max} comb={comb2_max}] "
+        f"kept_assignments={n_dispatched} {'OK' if ok else 'MISMATCH'}"
     )
     return ok
 

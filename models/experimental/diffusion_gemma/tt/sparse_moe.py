@@ -124,6 +124,8 @@ def build_capacity_dispatch(dense_routing, num_experts, capacity, top_k):
     """
     if _dispatch_ablate_enabled():
         return _ablation_const_dispatch(dense_routing, num_experts, capacity, top_k)
+    if _dispatch_fused2_enabled():
+        return _build_capacity_dispatch_fused2(dense_routing, num_experts, capacity, top_k)
     if _dispatch_fused_enabled():
         return _build_capacity_dispatch_fused(dense_routing, num_experts, capacity, top_k)
     return _build_capacity_dispatch_impl(dense_routing, num_experts, capacity, top_k)
@@ -181,6 +183,153 @@ def _build_capacity_dispatch_fused(dense_routing, num_experts, capacity, top_k):
     comb = ttnn.slice(comb, [0, 0, 0, 0], [1, 1, S, EC])
 
     for t in (vals, idx, idx_f, mask, cum, pos, col, overflow, col_u):
+        t.deallocate(True)
+    return disp, comb
+
+
+# ---------------------------------------------------------------------------------------------
+# DG_MOE_DISPATCH_FUSED2 (default OFF): a custom C++ device kernel (``dispatch_build.cpp``, run via
+# ``ttnn.generic_op``) that fuses the ENTIRE post-cumsum tail of ``_build_capacity_dispatch_impl``
+# into ONE dispatched device op. Step-1 ablation proved skipping the whole build chain drops the @16
+# block 3.46->3.02s (12.7%); the removable Python ops were off the critical path, so the *serialized*
+# cost lives in the dependent tail: gather(cum,idx) -> sub -> mul/add -> ge -> where -> typecast ->
+# scatter(disp) -> scatter(comb) -> slice -> slice. Each ttnn.scatter/gather additionally round-trips
+# TILE<->ROW_MAJOR internally, so that tail is many serialized device ops. This variant keeps only
+# topk -> scatter(mask) -> cumsum on the critical path and replaces the tail with a single kernel that
+# gathers the per-expert count, computes the capacity column, and scatters ones/weights into disp/comb.
+# BIT-IDENTICAL to the impl kept columns [0:EC] (verify_dispatch_fused.py). Kernel is JIT-compiled by
+# generic_op (no _ttnncpp.so change), so the C++ tree stays byte-identical when the flag is off.
+# ---------------------------------------------------------------------------------------------
+
+_FUSED2_KERNEL = "ttnn/cpp/ttnn/operations/data_movement/moe_dispatch_build/device/kernels/dispatch_build.cpp"
+_FUSED2_PLAN_CACHE = {}
+
+
+def _dispatch_fused2_enabled():
+    return os.environ.get("DG_MOE_DISPATCH_FUSED2", "0") != "0"
+
+
+def _round_up(x, m):
+    return ((x + m - 1) // m) * m
+
+
+def _get_fused2_plan(mesh, S, num_experts, capacity, top_k):
+    """Static (routing-value-independent) op geometry: per-core token bands + page sizes. Cached."""
+    key = (id(mesh), S, num_experts, capacity, top_k)
+    plan = _FUSED2_PLAN_CACHE.get(key)
+    if plan is not None:
+        return plan
+    EC = num_experts * capacity
+    grid = mesh.compute_with_storage_grid_size()
+    gx, gy = int(grid.x), int(grid.y)
+    all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))])
+    cores = ttnn.corerange_to_cores(all_cores, row_wise=True)
+    num_cores = min(len(cores), S)
+    rows_per_core = (S + num_cores - 1) // num_cores
+    active = []
+    r = 0
+    for c in cores:
+        start = min(r, S)
+        end = min(r + rows_per_core, S)
+        if end > start:
+            active.append((c, start, end))
+        r = end
+    active_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for (c, _, _) in active])
+    # read sizes = logical row bytes; CB pages rounded up to 32B for L1 validity (no over-read).
+    plan = {
+        "EC": EC,
+        "active": active,
+        "core_set": active_core_set,
+        "cum_read": num_experts * 4,
+        "idx_read": top_k * 4,
+        "vals_read": top_k * 2,
+        "out_read": EC * 2,
+        "cum_cb": _round_up(num_experts * 4, 32),
+        "idx_cb": _round_up(top_k * 4, 32),
+        "vals_cb": _round_up(top_k * 2, 32),
+        "out_cb": _round_up(EC * 2, 32),
+    }
+    _FUSED2_PLAN_CACHE[key] = plan
+    return plan
+
+
+def _build_fused2_program(plan, cum_rm, idx_rm, vals_rm, disp_rm, comb_rm, num_experts, capacity, top_k):
+    cs = plan["core_set"]
+
+    def cb(idx, fmt, page):
+        return ttnn.CBDescriptor(
+            total_size=page,
+            core_ranges=cs,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=idx, data_format=fmt, page_size=page)],
+        )
+
+    cbs = [
+        cb(0, ttnn.float32, plan["cum_cb"]),
+        cb(1, ttnn.uint32, plan["idx_cb"]),
+        cb(2, ttnn.bfloat16, plan["vals_cb"]),
+        cb(3, ttnn.bfloat16, plan["out_cb"]),
+        cb(4, ttnn.bfloat16, plan["out_cb"]),
+    ]
+
+    ct = [top_k, capacity, plan["EC"], plan["cum_read"], plan["idx_read"], plan["vals_read"], plan["out_read"]]
+    for tsr in (cum_rm, idx_rm, vals_rm, disp_rm, comb_rm):
+        ct.extend(ttnn.TensorAccessorArgs(tsr).get_compile_time_args())
+
+    rt = ttnn.RuntimeArgs()
+    addrs = [
+        cum_rm.buffer_address(),
+        idx_rm.buffer_address(),
+        vals_rm.buffer_address(),
+        disp_rm.buffer_address(),
+        comb_rm.buffer_address(),
+    ]
+    for core, start, end in plan["active"]:
+        rt[core.x][core.y] = addrs + [start, end]
+
+    kernel = ttnn.KernelDescriptor(
+        kernel_source=_FUSED2_KERNEL,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=cs,
+        compile_time_args=ct,
+        runtime_args=rt,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    return ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=cbs)
+
+
+def _build_capacity_dispatch_fused2(dense_routing, num_experts, capacity, top_k):
+    """Custom-kernel variant of ``_build_capacity_dispatch_impl`` (see ``_dispatch_fused2_enabled``)."""
+    mesh = dense_routing.device()
+    S = dense_routing.shape[2]
+    EC = num_experts * capacity
+    plan = _get_fused2_plan(mesh, S, num_experts, capacity, top_k)
+    consts = _get_dispatch_constants(mesh, S, num_experts, capacity, top_k)
+    ones_sk, zeros_se = consts["ones_sk"], consts["zeros_se"]
+
+    # critical-path prefix kept as-is: topk -> mask scatter -> inclusive cumsum over tokens
+    vals, idx = ttnn.topk(dense_routing, k=top_k, dim=-1)  # vals [1,1,S,k] bf16, idx uint16
+    mask = ttnn.scatter(zeros_se, dim=-1, index=idx, src=ones_sk)
+    cum = ttnn.cumsum(mask, dim=2, dtype=ttnn.float32)  # inclusive count 0..t of same-expert tokens
+
+    idx_u = ttnn.typecast(idx, ttnn.uint32)
+    cum_rm = ttnn.to_layout(cum, ttnn.ROW_MAJOR_LAYOUT)
+    idx_rm = ttnn.to_layout(idx_u, ttnn.ROW_MAJOR_LAYOUT)
+    vals_rm = ttnn.to_layout(vals, ttnn.ROW_MAJOR_LAYOUT)
+
+    disp_rm = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, S, EC]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
+    )
+    comb_rm = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, S, EC]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    prog = _build_fused2_program(plan, cum_rm, idx_rm, vals_rm, disp_rm, comb_rm, num_experts, capacity, top_k)
+    ttnn.generic_op([cum_rm, idx_rm, vals_rm, disp_rm, comb_rm], prog)
+
+    disp = ttnn.to_layout(disp_rm, ttnn.TILE_LAYOUT)
+    comb = ttnn.to_layout(comb_rm, ttnn.TILE_LAYOUT)
+
+    for t in (vals, idx, idx_u, mask, cum, cum_rm, idx_rm, vals_rm, disp_rm, comb_rm):
         t.deallocate(True)
     return disp, comb
 
