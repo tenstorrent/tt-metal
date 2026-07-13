@@ -19,7 +19,7 @@
 FORCE_INLINE void generate_col_mask(
     uint32_t cb_col_mask, uint32_t block_w, uint32_t logical_K, uint32_t width_shard_tile_start_id) {
     constexpr uint32_t tile_w = 32;
-    CircularBuffer cb_col_mask_obj(cb_col_mask);
+    DataflowBuffer dfb_col_mask_obj(cb_col_mask);
     // A width shard always starts on a block boundary, so this offset is an exact multiple of block_w.
     ASSERT(width_shard_tile_start_id % block_w == 0);
     const uint32_t core_start_col = width_shard_tile_start_id * tile_w;
@@ -35,6 +35,6 @@ FORCE_INLINE void generate_col_mask(
         }
         // The mask holds only 1.0 or 0.0 (exact in bfloat16) and is always generated as bfloat16;
         // each masking multiply reconfigures the unpacker so SrcB reads it in this format.
-        generate_mask_w<uint16_t>(cb_col_mask_obj, mask_w);
+        generate_mask_w<uint16_t>(dfb_col_mask_obj, mask_w);
     }
 }

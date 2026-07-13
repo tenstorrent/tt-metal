@@ -5,7 +5,7 @@
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 #include <cstdint>
@@ -40,25 +40,25 @@ void kernel_main() {
         calculate_and_prepare_reduce_scaler<cb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
 
     // Generate mask tile
-    CircularBuffer cb_mask_obj(cb_mask);
+    DataflowBuffer dfb_mask_obj(cb_mask);
     if (is_fp32) {
-        generate_mask_w<uint32_t>(cb_mask_obj, mask_w);
+        generate_mask_w<uint32_t>(dfb_mask_obj, mask_w);
     } else {
-        generate_mask_w<uint16_t>(cb_mask_obj, mask_w);
+        generate_mask_w<uint16_t>(dfb_mask_obj, mask_w);
     }
 
     Noc noc;
-    CircularBuffer cb_in_obj(cb_in);
+    DataflowBuffer dfb_in_obj(cb_in);
 
     uint32_t curr_tile = tile_offset;
     for (uint32_t i = 0; i < N; i += onetile) {
-        cb_in_obj.reserve_back(Wt);
+        dfb_in_obj.reserve_back(Wt);
         for (uint32_t w = 0; w < Wt; w++) {
             noc.async_read(
-                src_in, cb_in_obj, src_in_tile_bytes, {.page_id = curr_tile}, {.offset_bytes = w * src_in_tile_bytes});
+                src_in, dfb_in_obj, src_in_tile_bytes, {.page_id = curr_tile}, {.offset_bytes = w * src_in_tile_bytes});
             curr_tile++;
         }
         noc.async_read_barrier();
-        cb_in_obj.push_back(Wt);
+        dfb_in_obj.push_back(Wt);
     }
 }

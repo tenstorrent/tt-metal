@@ -12,7 +12,13 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.tt.mla.indexer import NullIndexer, TtIndexer, resolve_has_indexer
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
+    NullIndexer,
+    ReuseIndexer,
+    TtIndexer,
+    indexer_layer_is_reused,
+    resolve_has_indexer,
+)
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
@@ -226,8 +232,10 @@ class ttMLA:
         ttMLA._convert_and_cache_weights(
             state_dict, mesh_device, config, layer_idx, sp_axis, tp_axis, cache_path, device=None, kv_only=kv_only
         )
+        # GLM-5.2 shared layers are sparse but own no indexer weights (they reuse a prior full layer's
+        # top-k) -> build the MLA cache only, skip the indexer tensorbins.
         resolved_has_indexer = resolve_has_indexer(config, state_dict=state_dict, explicit=has_indexer)
-        if resolved_has_indexer:
+        if resolved_has_indexer and not indexer_layer_is_reused(config, layer_idx):
             if not TtIndexer.has_host_weights(state_dict):
                 raise ValueError(
                     f"Sparse MLA cache build for layer {layer_idx} resolved has_indexer=True but the "
@@ -415,6 +423,11 @@ class ttMLA:
             weight_cache_path=self.weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.mla",
         )
+        # GLM-5.2 indexer reuse: a "shared" layer is sparse but owns no indexer weights — it reuses the
+        # most recent "full" layer's top-k indices, injected at forward, and binds a weight-less
+        # ReuseIndexer (never computes). Absent indexer_types (v3.1 / v3.2 / GLM-5.1) every layer is
+        # "full" -> current behavior, unchanged.
+        self._indexer_reuse = indexer_layer_is_reused(config, layer_idx)
         if self._has_indexer:
             # The indexer assumes natural-order SP sharding (contiguous per-chip query blocks: its
             # device RoPE and the indexer_score per-device causal offset both index positions as
@@ -423,28 +436,33 @@ class ttMLA:
             # kv_only (last-layer KV-only fast path) skips Q/SDPA AND the indexer K-cache write, so a
             # sparse decode would read an unpopulated indexer cache. Not implemented — fail at construction.
             assert not self.kv_only, "DSA sparse path does not support kv_only (skips the indexer K-cache write)"
-            # TtIndexer warns (does not raise) if given neither host weights nor a complete cache —
-            # mirroring dense MLA's lenient placeholder load, but loudly. The layer still stays sparse
-            # (binds TtIndexer), so it never silently falls back to dense.
-            self._indexer = TtIndexer(
-                idx_host if idx_host else None,  # None → TtIndexer loads cache-only placeholders
-                config=config,
-                mesh_device=self.mesh_device,
-                sp_axis=self.sp_axis,
-                tp_axis=self.tp_axis,
-                default_compute_kernel_config=self.default_compute_kernel_config,
-                hifi4_fp32_compute_kernel_config=self.hifi4_fp32_compute_kernel_config,
-                weight_cache_path=self.weight_cache_path,
-                layer_idx=self.layer_idx,
-                tt_ccl=self.tt_ccl,
-                ccl_num_links=self.ccl_num_links,
-                ccl_topology=self.ccl_topology,
-                seq_len=seq_len,
-                slot_num=slot_num,
-                is_chunked=is_chunked,
-            )
+            if self._indexer_reuse:
+                self._indexer = ReuseIndexer()  # shared layer: reused indices injected at forward
+            else:
+                # TtIndexer warns (does not raise) if given neither host weights nor a complete cache —
+                # mirroring dense MLA's lenient placeholder load, but loudly. The layer still stays sparse
+                # (binds TtIndexer), so it never silently falls back to dense.
+                self._indexer = TtIndexer(
+                    idx_host if idx_host else None,  # None → TtIndexer loads cache-only placeholders
+                    config=config,
+                    mesh_device=self.mesh_device,
+                    sp_axis=self.sp_axis,
+                    tp_axis=self.tp_axis,
+                    default_compute_kernel_config=self.default_compute_kernel_config,
+                    hifi4_fp32_compute_kernel_config=self.hifi4_fp32_compute_kernel_config,
+                    weight_cache_path=self.weight_cache_path,
+                    layer_idx=self.layer_idx,
+                    tt_ccl=self.tt_ccl,
+                    ccl_num_links=self.ccl_num_links,
+                    ccl_topology=self.ccl_topology,
+                    seq_len=seq_len,
+                    slot_num=slot_num,
+                    layer_num=self.layer_num,
+                    is_chunked=is_chunked,
+                )
         else:
             self._indexer = NullIndexer()  # dense v3.1: forward calls .forward() -> None (dense path)
+            self._indexer_reuse = False
 
         # Bind the attention core once, by config — sparsity (self._has_indexer) × chunking
         # (self.is_chunked) — exactly as self._apply_rope is bound above. forward() then calls
@@ -981,6 +999,8 @@ class ttMLA:
         cache_user_id: int = 0,
         return_kv_intermediates: bool = False,
         index_kv_cache: Optional[ttnn.Tensor] = None,
+        indexer_indices: Optional[ttnn.Tensor] = None,
+        return_indexer_indices: bool = False,
     ) -> "ttnn.Tensor | tuple[ttnn.Tensor, Optional[dict]]":
         if self.kv_only:
             return self._forward_kv_only(
@@ -1031,14 +1051,21 @@ class ttMLA:
         # indexer top-k simply selects all available causal keys, so sparse is numerically equal to dense
         # there.) The indexer's forward also writes its K-cache (a no-op on the dense null-indexer), so no
         # separate warm-up write is needed.
-        indices = self._indexer.forward(
-            hidden_states,
-            qr,
-            seq_len_local,
-            start_pos=kv_actual_isl or 0,
-            rope_tensors=rope_tensors,
-            cache_user_id=cache_user_id,
-            index_kv_cache=index_kv_cache,
+        # GLM-5.2 reuse: a shared layer receives a prior full layer's top-k indices and skips its own
+        # indexer (its ReuseIndexer.forward would raise). Absent injection -> compute as usual.
+        indices = (
+            indexer_indices
+            if indexer_indices is not None
+            else self._indexer.forward(
+                hidden_states,
+                qr,
+                seq_len_local,
+                start_pos=kv_actual_isl or 0,
+                rope_tensors=rope_tensors,
+                cache_user_id=cache_user_id,
+                cache_layer_idx=cache_layer_idx,
+                index_kv_cache=index_kv_cache,
+            )
         )
 
         tt_q = self._q_stem(qr, rope_tensors, kv_actual_isl, seq_len_local)
@@ -1065,8 +1092,14 @@ class ttMLA:
 
         out = self._o_proj_epilogue(attn_out, seq_len_local)
         signpost(header="MLA_END")
+        # ``indices`` survives _sparse_mla (it deallocs only re-sharded copies), so it is safe to return
+        # for a "full" layer to hand to downstream "shared" layers (GLM-5.2 reuse).
+        if return_kv_intermediates and return_indexer_indices:
+            return out, kv_intermediates, indices
         if return_kv_intermediates:
             return out, kv_intermediates
+        if return_indexer_indices:
+            return out, indices
         return out
 
     # Attention core variants, one bound to self._attention at construction (sparsity × chunking).
@@ -1179,10 +1212,12 @@ class ttMLA:
 
         cache_batch_idx = self._cache_batch_idx(cache_user_id, cache_layer_idx)
 
-        # Chunked: the prefix lives in the BLOCK-CYCLIC cache. Gather it on device and hand it to
-        # sparse_sdpa still block-cyclic — the op remaps the natural top-k indices to physical pages
-        # in-kernel (block_cyclic_chunk_local = per-shard chunk = seq_len_local), so no host reorder.
-        # The whole multi-user cache is handed over; sparse_sdpa selects this slot via cache_batch_idx.
+        # Chunked: the prefix lives in the BLOCK-CYCLIC cache. Slice this (user, layer) slot out and
+        # gather ONLY that slot on device, then hand it to sparse_sdpa still block-cyclic — the op remaps
+        # the natural top-k indices to physical pages in-kernel (block_cyclic_chunk_local = per-shard
+        # chunk = seq_len_local), so no host reorder. Slicing the slot BEFORE the gather keeps the
+        # all-gather to a single [1,1,T,576] slot (gathering the whole B=num_users*num_layers cache OOMs
+        # at 78 layers). The gathered kv is batch-1, so cache_batch_idx is unset (None) below.
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
             kvpe_cache,
             tt_kvpe,
@@ -1192,12 +1227,13 @@ class ttMLA:
             kv_actual_global=kv_actual_isl,
             cluster_axis=self.sp_axis,
         )
-        kvpe_dev = self._gather_kvpe_prefix(kvpe_cache)
+        kvpe_dev = self._gather_kvpe_prefix(kvpe_cache, cache_batch_idx)
         ttnn.deallocate(tt_kvpe)
 
-        # Sparse attention runs over latent V; project to v_head_dim afterwards.
+        # Sparse attention runs over latent V; project to v_head_dim afterwards. The prefix is already
+        # sliced to this slot (batch-1), so no cache_batch_idx.
         attn_out = self._sparse_mla(
-            tt_q, kvpe_dev, indices, block_cyclic_chunk_local=seq_len_local, cache_batch_idx=cache_batch_idx
+            tt_q, kvpe_dev, indices, block_cyclic_chunk_local=seq_len_local, cache_batch_idx=None
         )
         ttnn.deallocate(kvpe_dev)
         ttnn.deallocate(tt_q)
@@ -1401,22 +1437,37 @@ class ttMLA:
             ttnn.deallocate(out_all_heads)
         return ret
 
-    def _gather_kvpe_prefix(self, kvpe_cache):
+    def _gather_kvpe_prefix(self, kvpe_cache, cache_batch_idx):
         """On-device read-back of the chunked KVPE prefix for sparse attention. The cache is
         ND-sharded / block-cyclic across SP, in the op's format (bf16 or fp8_e4m3, ROW_MAJOR — the
         sparse cache is uncompressed). sparse_sdpa consumes it replicated and remaps the
         natural-position indices to physical block-cyclic pages in-kernel (invP), so the buffer is
-        LEFT in block-cyclic order — no host reorder. Pipeline (all on device): ND→interleaved, SP
+        LEFT in block-cyclic order — no host reorder.
+
+        SLOT SELECT BEFORE THE GATHER: the persistent cache is [B, 1, seq_len_cache, 576], B =
+        num_users*num_layers (user-major slots). Slice the active (user, layer) slot out of dim 0 FIRST,
+        then all-gather only that single [1, 1, seq_len_cache, 576] slot over SP — NOT the whole B-slot
+        cache. At 78 layers the full-cache gather is ~5 GB (×2 in-flight → OOM against the near-full
+        78-layer weights); the single-slot gather is B× smaller. The gathered kv is then batch-1, so
+        sparse_sdpa needs NO cache_batch_idx (the op requires B==1 when cache_batch_idx is unset). This
+        mirrors the dense ring_mla single-slot gather (kv_cache_batch_idx → batch-1 scratch).
+
+        Pipeline (all on device): ND→interleaved, slot slice (no-op for a single-slot cache), SP
         all-gather to full-T (no-op at sp==1). The cache is already in the op format, so there is NO
-        read-back dtype/layout conversion — the all-gather moves the native cache format directly.
-        Returns the WHOLE multi-user cache [B, 1, seq_len_cache, 576] (block-cyclic, B =
-        num_users*num_layers user-major slots); sparse_sdpa selects this user/layer slot itself via
-        cache_batch_idx (no host slot-slice). The unwritten suffix is never addressed since indices
-        stay < populated."""
+        read-back dtype/layout conversion. The unwritten suffix is never addressed since indices stay
+        < populated."""
         cache_i = ttnn.to_memory_config(kvpe_cache, ttnn.DRAM_MEMORY_CONFIG)  # ND_SHARDED → INTERLEAVED
+        if cache_i.shape[0] > 1:  # user-major slot select BEFORE the gather (single-slot cache → skip)
+            sel = ttnn.slice(
+                cache_i,
+                [cache_batch_idx, 0, 0, 0],
+                [cache_batch_idx + 1, 1, cache_i.shape[2], cache_i.shape[3]],
+            )
+            ttnn.deallocate(cache_i)
+            cache_i = sel
         full = self._all_gather(
             cache_i, dim=2, cluster_axis=self.sp_axis
-        )  # → [B,1,seq_len_cache,576] repl, block-cyclic
+        )  # → [1,1,seq_len_cache,576] repl, block-cyclic
         if self.sp_factor > 1:
             ttnn.deallocate(cache_i)
         return full

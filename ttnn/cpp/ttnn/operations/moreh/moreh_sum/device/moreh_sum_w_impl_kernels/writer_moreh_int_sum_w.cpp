@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -22,13 +22,13 @@ void kernel_main() {
     const auto s = TensorAccessor(dst_args, dst_addr);
 
     Noc noc;
-    CircularBuffer cb_out_obj(cb_id_out);
+    DataflowBuffer dfb_out_obj(cb_id_out);
     const auto out_tile_bytes = get_tile_size(cb_id_out);
 
     uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id; ++i) {
-        cb_out_obj.wait_front(onetile);
-        uint32_t l1_read_addr = cb_out_obj.get_read_ptr();
+        dfb_out_obj.wait_front(onetile);
+        uint32_t l1_read_addr = dfb_out_obj.get_read_ptr();
 
         volatile tt_l1_ptr int32_t* out_l1_ptr = reinterpret_cast<volatile tt_l1_ptr int32_t*>(l1_read_addr);
         for (uint32_t h = 0; h < 16; h++) {
@@ -38,8 +38,8 @@ void kernel_main() {
             }
         }
 
-        noc.async_write(cb_out_obj, s, out_tile_bytes, {.offset_bytes = 0}, {.page_id = i});
+        noc.async_write(dfb_out_obj, s, out_tile_bytes, {.offset_bytes = 0}, {.page_id = i});
         noc.async_write_barrier();
-        cb_out_obj.pop_front(onetile);
+        dfb_out_obj.pop_front(onetile);
     }
 }
