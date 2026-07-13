@@ -83,4 +83,4 @@ Repo: `/localdev/mvasiljevic/tt-metal`
 
 Branch: `mvasiljevic/shard-advise-fresh`
 
-Commit: `02b2b0f3f0161de4efa2366c95abf11aef82157e`
+Stage checkpoint commit: `0803a93063948ce6e375e5af6cfe9a7ddc279a39`
