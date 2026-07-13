@@ -270,6 +270,13 @@ def _solve_lower_triangular_ttnn(L, eye_1cc, mesh_device):
     C = L.shape[1]
     batch = L.shape[0]
 
+    # Horner bmm on MatmulMultiCoreReuse (bmm_large_block kernel), which folds the per-step "I +"
+    # into the matmul packer via a full-tile elementwise bias (eye_1cc [1,C,C]) — dropping the
+    # ~C-2 standalone adds and the eye repeat. Bit-identical; requires the fused-elementwise-bias
+    # support added to matmul_multicore_reuse_optimized. Falls back to auto-config if _bmm_progcfg
+    # returns None (non-tiling shapes), in which case the wrapper post-processes bias via add().
+    _linv_bmm = _bmm_progcfg(mesh_device, C // _TILE, C // _TILE, C // _TILE)
+
     D_mat = ttnn.multiply(L, eye_1cc, memory_config=mc)  # [batch, C, C]
     # keepdim -> D_inv_row is [batch, C, 1] straight from the reduce (no reshape+clone; the
     # [batch,C]->[batch,C,1] reshape is a TILE relayout). Col form still needs one reshape.
@@ -326,23 +333,17 @@ def _solve_lower_triangular_ttnn(L, eye_1cc, mesh_device):
 
         return L_inv
 
-    # DEFAULT: Horner R = I + (-N)@R
+    # Horner R = I + (-N)@R, with the "I +" fused into the matmul packer (full-tile bias).
     neg_N = ttnn.neg(N, memory_config=mc)  # -N (strictly lower)
     ttnn.deallocate(N)
-    # Pre-broadcast eye to [batch,C,C] when batch>1 (~-4% prefill; batch==1 unchanged).
-    _eye = eye_1cc
-    if batch > 1:
-        _eye = ttnn.repeat(eye_1cc, ttnn.Shape([batch, 1, 1]))
-    R = ttnn.add(_eye, neg_N, memory_config=mc)  # R_1 = I - N  ([batch,C,C])
+    R = ttnn.add(eye_1cc, neg_N, memory_config=mc)  # R_1 = I - N (broadcast add over batch)
     for _ in range(C - 2):  # R_1 -> R_{C-1} = sum (-N)^j (exact: N^C=0)
-        NR = ttnn.matmul(neg_N, R, memory_config=mc, compute_kernel_config=_hifi_cfg)  # (-N) @ R
-        R_new = ttnn.add(_eye, NR, memory_config=mc)  # I + (-N) @ R
-        ttnn.deallocate(NR)
+        R_new = ttnn.linear(
+            neg_N, R, bias=eye_1cc, program_config=_linv_bmm, compute_kernel_config=_hifi_cfg, memory_config=mc
+        )  # (-N) @ R + I  (fused elementwise bias)
         ttnn.deallocate(R)
         R = R_new
     ttnn.deallocate(neg_N)
-    if _eye is not eye_1cc:
-        ttnn.deallocate(_eye)
 
     # L_inv = (I+N)^{-1} @ D^{-1} via column scaling
     L_inv = ttnn.multiply(R, D_inv_col, memory_config=mc)
