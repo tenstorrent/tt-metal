@@ -76,3 +76,53 @@ def test_setupowner_caller_reconfig_illegal(device, expect_error):
     """SetupOwner::Caller with a live (non-None) reconfig knob — under Caller the chain emits
     no reconfig, so the knob is inert/deceptive; must not compile (force the caller to declare None)."""
     _expect_build_failure(device, expect_error, "setupowner_caller_reconfig.cpp", "non-None reconfig knob")
+
+
+def test_l1_accumulation_wrong_lifecycle_illegal(device, expect_error):
+    """L1 accumulation cannot use a general-purpose streaming output lifecycle."""
+    _expect_build_failure(
+        device,
+        expect_error,
+        "l1_accumulation_wrong_lifecycle.cpp",
+        "L1 accumulation requires OutputLifecycle::L1Accumulation",
+    )
+
+
+def test_l1_lifecycle_without_accumulation_illegal(device, expect_error):
+    """L1-purpose output lifecycles cannot silently run with accumulation disabled."""
+    _expect_build_failure(
+        device,
+        expect_error,
+        "l1_lifecycle_without_accumulation.cpp",
+        "those lifecycles require L1 accumulation",
+    )
+
+
+def test_l1_accumulation_multiple_output_cbs_illegal(device, expect_error):
+    """The packer-global accumulation bracket may target only one output CB."""
+    _expect_build_failure(
+        device,
+        expect_error,
+        "l1_accumulation_multiple_output_cbs.cpp",
+        "L1 accumulation supports only one output CB",
+    )
+
+
+def test_l1_accumulation_mixed_pack_modes_illegal(device, expect_error):
+    """Ordinary packs cannot inherit the chain-wide L1-accumulation mode."""
+    _expect_build_failure(
+        device,
+        expect_error,
+        "l1_accumulation_mixed_pack_modes.cpp",
+        "cannot mix accumulating and ordinary PackTile elements",
+    )
+
+
+def test_l1_accumulation_multiple_lifecycle_owners_illegal(device, expect_error):
+    """Only one pack may reserve and publish the shared accumulator tile."""
+    _expect_build_failure(
+        device,
+        expect_error,
+        "l1_accumulation_multiple_lifecycle_owners.cpp",
+        "only one PackTile may own the L1-accumulation",
+    )

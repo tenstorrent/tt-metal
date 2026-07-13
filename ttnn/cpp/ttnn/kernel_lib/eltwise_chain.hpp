@@ -60,8 +60,8 @@
  *
  * Not supported: per-iteration (mid-loop) dtype swaps — each element's dtype reconfig point is
  * resolved per element at compile time (fold-driven, emitted once at element entry), so there is
- * no per-loop-iteration reconfig path; L1 pack accumulation / pack-relu; and the legacy
- * `acquire_dst/release_dst` macros (modern dst-sync only).
+ * no per-loop-iteration reconfig path; pack-relu; and the legacy `acquire_dst/release_dst` macros
+ * (modern dst-sync only).
  */
 
 #include <cstdint>
@@ -144,11 +144,13 @@ enum class SetupOwner {
 };
 
 // =============================================================================
-// 1c. Taxonomy: Lifecycle as a two-axis struct
+// 1c. Taxonomy: Lifecycle as reserve/push axes plus a purpose tag
 // =============================================================================
 //
-// Each input's lifecycle is a `(WaitPolicy, PopPolicy)` pair and each output's a
-// `(ReservePolicy, PushPolicy)` pair. The named constants below are the legal set:
+// Each input's lifecycle is a `(WaitPolicy, PopPolicy)` pair and each output's core behavior is a
+// `(ReservePolicy, PushPolicy)` pair. OutputLifecycle also carries a purpose tag so the no-op
+// L1-accumulation lifecycle remains distinguishable from general CallerManaged synchronization.
+// The named constants below are the legal set:
 // `is_legal_input_lifecycle` / `is_legal_output_lifecycle` are whitelists of exactly
 // those constants. A custom struct literal is accepted only when it equals one of the
 // named constants (e.g. `InputLifecycle{WaitPolicy::Upfront, PopPolicy::PerTile}` is just
@@ -244,6 +246,7 @@ enum class ReservePolicy : uint8_t {
     PerTile,
     PerChunk,
     Upfront,
+    OneUpfront,  // reserve one accumulator tile once at chain entry
 };
 
 enum class PushPolicy : uint8_t {
@@ -251,14 +254,21 @@ enum class PushPolicy : uint8_t {
     PerTile,
     PerChunk,
     AtEnd,
+    OneAtEnd,  // push one accumulator tile once at chain exit
+};
+
+enum class OutputLifecyclePurpose : uint8_t {
+    General,
+    L1Accumulation,
 };
 
 struct OutputLifecycle {
     ReservePolicy reserve;
     PushPolicy push;
+    OutputLifecyclePurpose purpose = OutputLifecyclePurpose::General;
 
     constexpr bool operator==(OutputLifecycle other) const noexcept {
-        return reserve == other.reserve && push == other.push;
+        return reserve == other.reserve && push == other.push && purpose == other.purpose;
     }
     constexpr bool operator!=(OutputLifecycle other) const noexcept { return !(*this == other); }
 
@@ -267,7 +277,7 @@ struct OutputLifecycle {
     // reserve and push move together; the asymmetric cells spell BOTH axes literally as
     // Reserve<rate>Push<rate> (e.g. ReserveAllPushPerTile = reserve all upfront, push one per tile).
     static const OutputLifecycle Streaming, Chunked, Bulk, ReserveAllPushPerTile, ReserveAllPushPerChunk, CallerManaged,
-        ReserveNonePushEnd;
+        ReserveNonePushEnd, L1Accumulation, L1AccumulationCallerManaged;
 };
 
 // Default: reserve and push 1 output tile each step.
@@ -286,11 +296,24 @@ inline constexpr OutputLifecycle OutputLifecycle::ReserveAllPushPerChunk = {
 inline constexpr OutputLifecycle OutputLifecycle::CallerManaged = {ReservePolicy::None, PushPolicy::None};
 // Do not reserve (you reserved upfront yourself), push all at the end.
 inline constexpr OutputLifecycle OutputLifecycle::ReserveNonePushEnd = {ReservePolicy::None, PushPolicy::AtEnd};
+// L1 accumulation owns one persistent output tile for the whole chain: reserve it once, repeatedly
+// accumulate into it, then publish exactly that one tile at chain exit.
+inline constexpr OutputLifecycle OutputLifecycle::L1Accumulation = {
+    ReservePolicy::OneUpfront, PushPolicy::OneAtEnd, OutputLifecyclePurpose::L1Accumulation};
+// L1 accumulation with both synchronization edges owned by the caller. The chain only accumulates
+// into the caller's already-reserved tile; the caller decides when to publish it.
+inline constexpr OutputLifecycle OutputLifecycle::L1AccumulationCallerManaged = {
+    ReservePolicy::None, PushPolicy::None, OutputLifecyclePurpose::L1Accumulation};
 
 constexpr bool is_legal_output_lifecycle(OutputLifecycle lc) noexcept {
     return lc == OutputLifecycle::Streaming || lc == OutputLifecycle::Chunked || lc == OutputLifecycle::Bulk ||
            lc == OutputLifecycle::ReserveAllPushPerTile || lc == OutputLifecycle::ReserveAllPushPerChunk ||
-           lc == OutputLifecycle::CallerManaged || lc == OutputLifecycle::ReserveNonePushEnd;
+           lc == OutputLifecycle::CallerManaged || lc == OutputLifecycle::ReserveNonePushEnd ||
+           lc == OutputLifecycle::L1Accumulation || lc == OutputLifecycle::L1AccumulationCallerManaged;
+}
+
+constexpr bool is_l1_accumulation_output_lifecycle(OutputLifecycle lc) noexcept {
+    return lc == OutputLifecycle::L1Accumulation || lc == OutputLifecycle::L1AccumulationCallerManaged;
 }
 
 /// Which tile of an input operand to read at each step of the (Ht x Wt) walk.
@@ -521,6 +544,13 @@ enum class PackTileReconfig : uint8_t {
     Output,  // fold emits pack_reconfig_data_format(prev_p, curr_p) when prev_p known, else (curr_p)
 };
 
+/// Whether this PackTile adds DEST into its existing L1 output tile instead of overwriting it.
+/// The chain brackets all accumulating packs with pack_reconfig_l1_acc(1) / (0).
+enum class PackTileL1Accumulation : uint8_t {
+    Disabled,
+    Enabled,
+};
+
 // (The CRTP op bases — UnaryOp / BinaryOp / TernaryOp, from which SFPU/FPU op-helper
 //  headers derive their concrete ops — are defined in eltwise_chain.inl. They are not
 //  part of the kernel-author surface; only op-helper headers (eltwise_math.hpp, …)
@@ -593,7 +623,8 @@ template <
     OutputLifecycle Policy = OutputLifecycle::Streaming,
     PackTileReconfig Reconfig = PackTileReconfig::Output,
     Dst DstSlot = Dst::D0,
-    TileOffset Offset = TileOffset::Unset>
+    TileOffset Offset = TileOffset::Unset,
+    PackTileL1Accumulation L1Accumulation = PackTileL1Accumulation::Disabled>
 struct PackTile;
 
 // Fill / Rand forward declarations — implementations live in eltwise_fill.hpp / eltwise_rand.hpp.
