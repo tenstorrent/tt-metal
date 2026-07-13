@@ -41,12 +41,12 @@ struct TileConfig {
 };
 
 // ----------------------------------------------------------------------------
-// tile_size_bytes_from_tc — one tile's on-L1 footprint from a resolved
+// tile_size_bytes_from_tile_config — one tile's on-L1 footprint from a resolved
 // TileConfig. `tile_hw` is the total datum count = face_r_dim*face_c_dim*num_faces.
 // ----------------------------------------------------------------------------
-constexpr inline uint32_t tile_size_bytes_from_tc(const TileConfig& tc) {
-    const uint32_t tile_hw = tc.face_r_dim * tc.face_c_dim * tc.num_faces;
-    return tile_size_bytes_of(static_cast<DataFormat>(tc.data_format), tile_hw);
+constexpr inline uint32_t tile_size_bytes_from_tile_config(const TileConfig& tile_config) {
+    const uint32_t tile_hw = tile_config.face_r_dim * tile_config.face_c_dim * tile_config.num_faces;
+    return tile_size_bytes_of(static_cast<DataFormat>(tile_config.data_format), tile_hw);
 }
 
 // ----------------------------------------------------------------------------

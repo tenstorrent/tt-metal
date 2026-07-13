@@ -37,9 +37,9 @@ using namespace ckernel;
 
 // One-shot math configure (srcA == srcB format). Float16_b: no int8 math, no
 // fp32 dest.
-inline void math_hw_cfg(const sst::TileConfig& tc) {
+inline void math_hw_cfg(const sst::TileConfig& tile_config) {
     constexpr bool fp32 = (DST_ACCUM_MODE != 0);
-    const std::uint32_t df = tc.data_format;
+    const std::uint32_t df = tile_config.data_format;
 
     cfg_reg_rmw_tensix<DEST_ACCESS_CFG_zeroacc_absolute_tile_mode_RMW>(0);
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
@@ -77,14 +77,14 @@ inline void math_remap_cfg(bool remap_enable) {
 
 // Program the A2D datacopy MOP: addrmods (idle / per-row / MOV_8_ROWS) + a
 // MOV_8_ROWS MOP (num_faces outer, 16>>3=2 inner) + dvalid/counter epilogue.
-inline void math_a2d_cfg(const sst::TileConfig& tc) {
+inline void math_a2d_cfg(const sst::TileConfig& tile_config) {
     constexpr bool fp32 = (DST_ACCUM_MODE != 0);
 
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_3);
     addr_mod_t{.srca = {.incr = 1}, .srcb = {.incr = 0}, .dest = {.incr = 1}}.set(ADDR_MOD_0);
     addr_mod_t{.srca = {.incr = 8}, .srcb = {.incr = 0}, .dest = {.incr = 8}}.set(ADDR_MOD_2);
 
-    const std::uint32_t outerloop = tc.num_faces;
+    const std::uint32_t outerloop = tile_config.num_faces;
     const std::uint32_t innerloop = 16u >> 3;
     if constexpr (fp32) {
         ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0));

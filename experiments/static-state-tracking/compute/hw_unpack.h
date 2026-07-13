@@ -4,7 +4,7 @@
 //
 // UNPACK-engine hardware configurations.
 //   unpack_hw_cfg              — one-shot format/tile-descriptor programming (startup).
-//   unpack_datacopy_face_cfg — within-face transpose + per-face x_end (keyed on tc).
+//   unpack_datacopy_face_cfg — within-face transpose + per-face x_end (keyed on tile_config).
 //   unpack_datacopy_mop_cfg    — the SrcA UNPACR datacopy MOP (keyed on op mode).
 //   unpack_a                   — issue one tile's unpack (per copied tile, steady state).
 
@@ -35,13 +35,21 @@ using namespace ckernel;
 using namespace ckernel::unpacker;
 
 // One-shot unpack configure.
-inline void unpack_hw_cfg(const sst::TileConfig& tc) {
+inline void unpack_hw_cfg(const sst::TileConfig& tile_config) {
     constexpr bool fp32 = (DST_ACCUM_MODE != 0);
-    const std::uint32_t df = tc.data_format;
-    const std::uint32_t tile_size_bytes = sst::tensor::tile_size_bytes_from_tc(tc);
+    const std::uint32_t df = tile_config.data_format;
+    const std::uint32_t tile_size_bytes = sst::tensor::tile_size_bytes_from_tile_config(tile_config);
 
     configure_unpack_AB<fp32>(
-        df, df, df, df, tc.face_r_dim, tc.face_r_dim, /*transpose_xy_srca_en=*/false, tc.num_faces, tc.num_faces);
+        df,
+        df,
+        df,
+        df,
+        tile_config.face_r_dim,
+        tile_config.face_r_dim,
+        /*transpose_xy_srca_en=*/false,
+        tile_config.num_faces,
+        tile_config.num_faces);
 
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size_bytes), 0, LO_16(p_gpr_unpack::TILE_SIZE_B));
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size_bytes), 0, LO_16(p_gpr_unpack::TILE_SIZE_A));
@@ -50,23 +58,23 @@ inline void unpack_hw_cfg(const sst::TileConfig& tc) {
 // --- SrcA-copy configure, split into two field-keyed sub-steps so the tracker
 // can reprogram only what changed:
 //   unpack_datacopy_face_cfg — within-face transpose + per-face x_end. Depends on
-//                            the tile geometry (face_r_dim), i.e. the tracked tc.
+//                            the tile geometry (face_r_dim), i.e. the tracked tile_config.
 //   unpack_datacopy_mop_cfg    — the UNPACR SrcA MOP (outer loop = num_faces). Depends
 //                            on the op mode (datacopy) and num_faces.
-inline void unpack_datacopy_face_cfg(const sst::TileConfig& tc) {
+inline void unpack_datacopy_face_cfg(const sst::TileConfig& tile_config) {
     // within_face_16x16_transpose = 0
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
     // Unpack the entire face on UNP_A.
-    config_unpacker_x_end<p_setadc::UNP_A>(tc.face_r_dim);
+    config_unpacker_x_end<p_setadc::UNP_A>(tile_config.face_r_dim);
 }
 
-inline void unpack_datacopy_mop_cfg(const sst::TileConfig& tc) {
+inline void unpack_datacopy_mop_cfg(const sst::TileConfig& tile_config) {
     static constexpr std::uint32_t unpack_srca = TT_OP_UNPACR(
         SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /*OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srcb_set_dvalid =
         TT_OP_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
 
-    ckernel_template tmp(tc.num_faces, 1, unpack_srcb_set_dvalid);
+    ckernel_template tmp(tile_config.num_faces, 1 /*inner_loop*/, unpack_srcb_set_dvalid);
     tmp.set_start_op(unpack_srca);
     tmp.program();
 }
@@ -75,7 +83,8 @@ inline void unpack_datacopy_mop_cfg(const sst::TileConfig& tc) {
 inline void unpack_a(std::uint32_t l1_addr_16B) {
     const std::uint32_t address = l1_addr_16B - 1;
 
-    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    // Reset both unpackers' Z/W address counters to 0 so this tile's unpack starts at the tile base.
+    TTI_SETADCZW(0b011 /*UNP_A|UNP_B*/, 0 /*Ch1_W*/, 0 /*Ch1_Z*/, 0 /*Ch0_W*/, 0 /*Ch0_Z*/, 0b1111 /*write all Z/W*/);
 
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
     wait_for_next_context(2);

@@ -40,12 +40,19 @@ using namespace ckernel;
 using namespace ckernel::packer;
 
 // One-shot pack configure (dest read format == L1 write format, no conversion).
-inline void pack_hw_cfg(const sst::TileConfig& tc) {
+inline void pack_hw_cfg(const sst::TileConfig& tile_config) {
     constexpr bool fp32 = (DST_ACCUM_MODE != 0);
-    const std::uint32_t df = tc.data_format;
-    const std::uint32_t tile_size_bytes = sst::tensor::tile_size_bytes_from_tc(tc);
+    const std::uint32_t df = tile_config.data_format;
+    const std::uint32_t tile_size_bytes = sst::tensor::tile_size_bytes_from_tile_config(tile_config);
     configure_pack<fp32, ckernel::PackMode::Default>(
-        df, df, tile_size_bytes, tc.face_r_dim, TILE_C_DIM, tc.num_faces, /*partial_face=*/false, /*relu_config=*/0);
+        df,
+        df,
+        tile_size_bytes,
+        tile_config.face_r_dim,
+        TILE_C_DIM,
+        tile_config.num_faces,
+        /*partial_face=*/false,
+        /*relu_config=*/0);
 }
 
 inline void pack_dest_offset_cfg() {
@@ -67,28 +74,28 @@ inline void pack_dest_cfg() {
 // --- Untilize PACK configure, split into two independent sub-steps so the state
 // tracker can reprogram only what actually changed (granular reconfiguration).
 //
-//   pack_untilize_mop_cfg<Bct>     — the strided-untilize PACR MOP + addr modifiers +
+//   pack_untilize_mop_cfg<TilesPerBlock>     — the strided-untilize PACR MOP + addr modifiers +
 //                                within-face setup. Its shape is a function of the
-//                                block width (MOP inner loop = Bct), face_r_dim
+//                                block width (MOP inner loop = TilesPerBlock), face_r_dim
 //                                (MOP outer loop) and the op mode. This is the
 //                                EXPENSIVE piece (a full ckernel_template::program()
 //                                plus a replay-buffer load).
-//   pack_untilize_row_cfg<Fct> — the per-row L1 Z-stride and the output-row address
+//   pack_untilize_row_cfg<TilesPerRow> — the per-row L1 Z-stride and the output-row address
 //                                offset. A function of the data format, face_r_dim
-//                                and the FULL row width (Fct) only — independent of
+//                                and the FULL row width (TilesPerRow) only — independent of
 //                                the block width. This is the CHEAP tail (one cfg
 //                                RMW + two SETDMAREG + a WRCFG).
 //
 // Splitting them means a kernel that changes only the block width reprograms the
 // MOP but keeps the strides; a kernel that changes only the row width keeps the
 // MOP and reprograms just the strides.
-template <std::uint32_t BlockCtDim>
-inline void pack_untilize_mop_cfg(const sst::TileConfig& tc) {
+template <std::uint32_t TilesPerBlock>
+inline void pack_untilize_mop_cfg(const sst::TileConfig& tile_config) {
     addr_mod_pack_t{.y_src = {.incr = 0, .clr = 0}}.set(ADDR_MOD_0);
     addr_mod_pack_t{.y_src = {.incr = 1, .clr = 0}}.set(ADDR_MOD_1);
 
-    const std::uint32_t MOP_INNER_LOOP = BlockCtDim;
-    const std::uint32_t MOP_OUTER_LOOP = tc.face_r_dim;
+    const std::uint32_t MOP_INNER_LOOP = TilesPerBlock;
+    const std::uint32_t MOP_OUTER_LOOP = tile_config.face_r_dim;
     const std::uint32_t PACK_INTF_SEL = p_pacr::TWO_INTFS_ACTIVE;
 
     ckernel_template tmp(
@@ -138,19 +145,19 @@ inline void pack_untilize_mop_cfg(const sst::TileConfig& tc) {
     TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
 }
 
-template <std::uint32_t FullCtDim>
-inline void pack_untilize_row_cfg(const sst::TileConfig& tc) {
-    const std::uint32_t df = tc.data_format;
+template <std::uint32_t TilesPerRow>
+inline void pack_untilize_row_cfg(const sst::TileConfig& tile_config) {
+    const std::uint32_t df = tile_config.data_format;
 
     const std::uint32_t x_stride = (df & 0x3) == to_underlying(DataFormat::Float32)   ? 4
                                    : (df & 0x3) == to_underlying(DataFormat::Float16) ? 2
                                                                                       : 1;
     const std::uint32_t y_stride = FACE_C_DIM * x_stride;
-    const std::uint32_t z_stride = 2 * tc.face_r_dim * y_stride;
+    const std::uint32_t z_stride = 2 * tile_config.face_r_dim * y_stride;
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(z_stride);
 
     const std::uint32_t output_addr_offset =
-        SCALE_DATUM_SIZE(df, FullCtDim * ((tc.num_faces == 1) ? 1 : 2) * FACE_C_DIM);
+        SCALE_DATUM_SIZE(df, TilesPerRow * ((tile_config.num_faces == 1) ? 1 : 2) * FACE_C_DIM);
     TT_SETDMAREG(0, LOWER_HALFWORD(output_addr_offset / 16), 0, LO_16(p_gpr_pack::OUTPUT_ADDR_OFFSET));
     TT_SETDMAREG(0, UPPER_HALFWORD(output_addr_offset / 16), 0, HI_16(p_gpr_pack::OUTPUT_ADDR_OFFSET));
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
@@ -158,38 +165,39 @@ inline void pack_untilize_row_cfg(const sst::TileConfig& tc) {
     TTI_NOP;
 }
 
-// Drain one block (BlockCtDim tiles) from DST to L1 untilized. `out_l1_addr_16B`
+// Drain one block (TilesPerBlock tiles) from DST to L1 untilized. `out_l1_addr_16B`
 // is the reserved output CB write pointer; `col_tile_offset` is the number of
 // output-row tiles to the LEFT of this block (0 for the first block in a row).
 // Taking an explicit tile offset (rather than block_index * uniform_width) lets a
 // row be packed as a sequence of DIFFERENT-width blocks and still land each block
 // at the correct column — which is what the granularity benchmark needs.
-template <std::uint32_t BlockCtDim>
+template <std::uint32_t TilesPerBlock>
 inline void pack_untilize(
     std::uint32_t out_l1_addr_16B,
     std::uint32_t col_tile_offset,
-    const sst::TileConfig& tc,
+    const sst::TileConfig& tile_config,
     std::uint32_t dst_tile_index = 0) {
-    const std::uint32_t col_faces = (tc.num_faces > 2) ? (tc.num_faces / 2) : tc.num_faces;
-    const std::uint32_t off16 = SCALE_DATUM_SIZE(tc.data_format, col_tile_offset * col_faces * FACE_C_DIM) / 16;
+    const std::uint32_t col_faces = (tile_config.num_faces > 2) ? (tile_config.num_faces / 2) : tile_config.num_faces;
+    const std::uint32_t off16 =
+        SCALE_DATUM_SIZE(tile_config.data_format, col_tile_offset * col_faces * FACE_C_DIM) / 16;
     const std::uint32_t address = out_l1_addr_16B - 1 + off16;
 
     program_packer_destination(address);
 
-    const std::uint32_t num_faces_per_rdim_tile = (tc.num_faces > 2) ? 2 : 1;
+    const std::uint32_t num_faces_per_rdim_tile = (tile_config.num_faces > 2) ? 2 : 1;
     const std::uint32_t tile_dst_offset = dst_tile_index;
 
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0001);
+    TTI_SETADCZW(p_setadc::PAC, 0 /*Ch1_W*/, 0 /*Ch1_Z*/, 0 /*Ch0_W*/, 0 /*Ch0_Z*/, 0b0001 /*write Ch0_Z*/);
     TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, (15 + tile_dst_offset) & 0xF);
-    TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0011);
+    TTI_SETADCXY(p_setadc::PAC, 0 /*Ch1_Y*/, 0 /*Ch1_X*/, 0 /*Ch0_Y*/, 0 /*Ch0_X*/, 0b0011 /*write Ch0_X+Ch0_Y*/);
 
     for (std::uint32_t face = 0; face < num_faces_per_rdim_tile; face++) {
         ckernel::ckernel_template::run();
         TTI_INCADCZW(p_setadc::PAC, 0, 0, 0, 1);
-        TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0010);
+        TTI_SETADCXY(p_setadc::PAC, 0 /*Ch1_Y*/, 0 /*Ch1_X*/, 0 /*Ch0_Y*/, 0 /*Ch0_X*/, 0b0010 /*write Ch0_Y*/);
     }
 
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
+    TTI_SETADCZW(p_setadc::PAC, 0 /*Ch1_W*/, 0 /*Ch1_Z*/, 0 /*Ch0_W*/, 0 /*Ch0_Z*/, 0b0101 /*write Ch0_Z+Ch1_Z*/);
     TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_dst_offset);
 }
 

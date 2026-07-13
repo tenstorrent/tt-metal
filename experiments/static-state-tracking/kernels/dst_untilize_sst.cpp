@@ -43,8 +43,8 @@ void kernel_main() {
 
     constexpr bool fp32 = (DST_ACCUM_MODE != 0);
     constexpr uint32_t num_blocks_per_col = compute_num_blocks_per_col(per_core_block_tile_cnt, fp32);
-    constexpr uint16_t block_ct = static_cast<uint16_t>(per_core_block_tile_cnt / num_blocks_per_col);
-    constexpr uint16_t full_ct = static_cast<uint16_t>(per_core_block_tile_cnt);
+    constexpr uint16_t tiles_per_block = static_cast<uint16_t>(per_core_block_tile_cnt / num_blocks_per_col);
+    constexpr uint16_t tiles_per_row = static_cast<uint16_t>(per_core_block_tile_cnt);
 
     using TileT = Tile32x32_Float16_b;
 
@@ -53,21 +53,22 @@ void kernel_main() {
     // Outer loop over block-rows. reserve_back / push_back are pure dataflow and
     // carry no compute state, so they sit in the body around the tracked ops.
     loop(s0, static_cast<std::size_t>(per_core_block_cnt), [&](auto s_r, std::size_t /*r*/) {
-        auto out = Tensor<TileT, Dfb>::reserve_back(dfb::out, full_ct);
+        auto out = Tensor<TileT, Dfb>::reserve_back(dfb::out, tiles_per_row);
 
         auto s_row_end = loop(s_r, static_cast<std::size_t>(num_blocks_per_col), [&](auto s_b, std::size_t b) {
-            auto in = Tensor<TileT, Dfb>::wait_front(dfb::in, block_ct);
+            auto in = Tensor<TileT, Dfb>::wait_front(dfb::in, tiles_per_block);
 
             sst::compute::tile_regs_acquire();
-            // Inner loop: copy block_ct tiles A -> DST[0..block_ct-1].
-            auto s_copied = loop(s_b, static_cast<std::size_t>(block_ct), [&](auto s, std::size_t i) {
+            // Inner loop: copy tiles_per_block tiles A -> DST[0..tiles_per_block-1].
+            auto s_copied = loop(s_b, static_cast<std::size_t>(tiles_per_block), [&](auto s, std::size_t i) {
                 return copy_tile(s, in, static_cast<uint32_t>(i), static_cast<uint32_t>(i));
             });
             sst::compute::tile_regs_commit();
 
             sst::compute::tile_regs_wait();
             // Drain the DST block to L1 in untilized (row-major) layout.
-            auto s_packed = pack_untilize_dest<block_ct, full_ct>(s_copied, out, static_cast<uint32_t>(b) * block_ct);
+            auto s_packed = pack_untilize_dest<tiles_per_block, tiles_per_row>(
+                s_copied, out, static_cast<uint32_t>(b) * tiles_per_block);
             sst::compute::tile_regs_release();
 
             pop_front(in);
