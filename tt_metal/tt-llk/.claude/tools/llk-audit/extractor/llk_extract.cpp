@@ -22,6 +22,9 @@
 //                   PROVENANCE of the base pointer (the name of the function or
 //                   variable that produced it) — the registry maps that name to
 //                   a write kind (cfg32/cfg16/regfile_gpr/...)
+//   pointer_reads   a volatile-pointer READ inside a loop (the hand-rolled busy-
+//                   poll of a remotely-written L1 flag) — consumed by the
+//                   noc-l1-invalidate check to flag a missing cache invalidate
 //   calls           every call: callee name, callee source text (so template
 //                   args like cfg_reg_rmw_tensix<FIELD> survive), first arg text,
 //                   arg count, and for a member call the receiver expr + its type
@@ -75,12 +78,12 @@ static llvm::cl::opt<std::string> ArchTag("arch", llvm::cl::desc("Architecture t
 namespace
 {
 
-// A raw fact. `kind` distinguishes the four fact families; the remaining fields
+// A raw fact. `family` distinguishes the five fact families; the remaining fields
 // are populated as relevant per family (empty otherwise). Keeping one struct
 // keeps ordering/attribution uniform.
 struct Fact
 {
-    std::string family; // "function" | "pointer_write" | "call" | "macro"
+    std::string family; // "function" | "pointer_write" | "call" | "macro" | "pointer_read"
     std::string file;
     unsigned line   = 0;
     unsigned off    = 0;        // file offset of the (spelling) location
@@ -230,7 +233,7 @@ static std::string recvTypeFromText(const std::string &t)
     return "";
 }
 
-// ---- AST pass: functions, pointer writes, calls -----------------------------
+// ---- AST pass: functions, pointer writes, pointer reads, calls --------------
 class Visitor : public RecursiveASTVisitor<Visitor>
 {
     State &S;
