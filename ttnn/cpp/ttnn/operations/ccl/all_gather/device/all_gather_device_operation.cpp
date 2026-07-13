@@ -221,7 +221,9 @@ AllGatherDeviceOperation::create_op_performance_model(
 
 AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_program_factory(
     const AllGatherParams& /*args*/, const AllGatherInputs& tensor_args) {
-    // Heuristics to pick the kernel algorithm
+    // Heuristics to pick the kernel algorithm.
+    // Multicast supports all Fabric topologies, unicast only supports Fabric 1D topologies.
+    // Unicast is empirically found to be faster for large tensors.
     bool use_unicast = false;
     const auto fabric_config = tt::tt_fabric::GetFabricConfig();
     if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE) {
