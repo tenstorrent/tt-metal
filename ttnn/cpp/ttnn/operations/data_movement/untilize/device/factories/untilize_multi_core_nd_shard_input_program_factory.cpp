@@ -29,10 +29,11 @@ ProgramDescriptor UntilizeMultiCoreNDShardInputProgramFactory::create_descriptor
     const auto& a = tensor_args.input;
     const Tensor& output = tensor_return_value;
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
+    const auto& tile = a.tensor_spec().tile();
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
+    uint32_t input_single_tile_size = tile.get_tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    uint32_t output_single_tile_size = tile.get_tile_size(output_cb_data_format);
 
     Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
@@ -41,7 +42,7 @@ ProgramDescriptor UntilizeMultiCoreNDShardInputProgramFactory::create_descriptor
     uint32_t tensor_width = a.padded_shape()[-1];
     uint32_t output_tensor_width = output.padded_shape()[-1];
     uint32_t output_tensor_height = output.physical_volume() / output_tensor_width;
-    const auto& tile_shape = a.tensor_spec().tile().get_tile_shape();
+    const auto& tile_shape = tile.get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
 
@@ -94,6 +95,7 @@ ProgramDescriptor UntilizeMultiCoreNDShardInputProgramFactory::create_descriptor
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
+            .tile = TileDescriptor(tile),
         }}},
     });
 
@@ -113,6 +115,7 @@ ProgramDescriptor UntilizeMultiCoreNDShardInputProgramFactory::create_descriptor
             .buffer_index = static_cast<uint8_t>(output_cb_index),
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
+            .tile = TileDescriptor(tile),
         }}},
     });
 
