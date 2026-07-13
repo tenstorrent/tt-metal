@@ -1,0 +1,180 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "label": "chunked-ragged-long-64k",
+  "tt_metal_head": "233b88276abf8a8383c9d1a8afeffb1d27a9c934",
+  "checkpoint": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+  "hardware": {
+    "mesh": "P150x4",
+    "mesh_shape": [
+      1,
+      4
+    ],
+    "architecture": "Blackhole",
+    "tensor_parallel": 4
+  },
+  "contract": {
+    "num_layers": 30,
+    "max_seq_len": 65536,
+    "prompt_lengths": [
+      1024,
+      4096,
+      8192,
+      16384,
+      32768,
+      65536
+    ],
+    "prompt_recipe": "token[i] = (i*1103515245 + 12345) % (vocab_size-1) + 1",
+    "canvas_length": 256,
+    "num_blocks": 0,
+    "prefill_only": true,
+    "max_denoise_steps": 4,
+    "gumbel_mode": "argmax",
+    "seed": 0,
+    "steady_block": 1,
+    "timing": "synchronized device wall time"
+  },
+  "environment": {
+    "DG_PREFILL_MOE_TUNED": "1",
+    "DG_SPARSE_MOE": "<unset>",
+    "DG_SPARSE_MOE_TUNED": "<unset>",
+    "DG_SPARSE_MOE_CAPACITY": "<unset>",
+    "DG_DEDUP_ARGMAX": "<unset>",
+    "DG_COMMIT_BATCHED": "<unset>",
+    "DG_SELFCOND_PRECHUNK_EMBED": "<unset>",
+    "DG_SELFCOND_LOGITS_L1": "<unset>",
+    "DG_NORM_FULLCANVAS": "<unset>",
+    "DG_MOE_L1": "<unset>",
+    "DG_DENOISE_TRACED": "<unset>",
+    "DG_DENOISE_TRACED_MULTISTEP": "<unset>",
+    "DG_DENOISE_EARLY_HALT": "<unset>",
+    "DG_PREFIX_CACHE": "<unset>",
+    "TT_METAL_WATCHER": "<unset>",
+    "TT_METAL_DEVICE_PROFILER": "<unset>"
+  },
+  "resolved_defaults": {
+    "prefill_moe_tuned": true,
+    "sparse_moe_tuned": true,
+    "batched_commit": true,
+    "selfcond_prechunk": true,
+    "selfcond_logits_l1": "chain",
+    "denoise_block_fn": "denoise_block"
+  },
+  "model_build": {
+    "dram_before": {
+      "used": 0.0,
+      "free": 31.867186546325684,
+      "usable_total": 31.867186546325684,
+      "banks": 8
+    },
+    "elapsed_s": 21.480597662040964,
+    "dram_after": {
+      "used": 17.328871726989746,
+      "free": 14.538314819335938,
+      "usable_total": 31.867186546325684,
+      "banks": 8
+    },
+    "num_layers": 30,
+    "prefill_expert_layers_guarded": 30
+  },
+  "rows": [
+    {
+      "prompt_len": 1024,
+      "cache_len": 1024,
+      "prompt_token_sha256": "ae538b066e7ea6bf7c539865d2fc5548b927407dfc26b32ba3c80f8a86ba130f",
+      "prefill_s": 0.7820475689950399,
+      "prefill_tokens_per_s": 1309.3832659257262,
+      "dram_after_prefill": {
+        "used": 17.335951805114746,
+        "free": 14.531234741210938,
+        "usable_total": 31.867186546325684,
+        "banks": 8
+      },
+      "blocks": [],
+      "final_next_pos": 1024
+    },
+    {
+      "prompt_len": 4096,
+      "cache_len": 4096,
+      "prompt_token_sha256": "2caccb1735e6e37cfb83eb4b227195e7823d596485c1c7ee7165c63b37359aa1",
+      "prefill_s": 1.3714686390012503,
+      "prefill_tokens_per_s": 2986.579410946535,
+      "dram_after_prefill": {
+        "used": 17.342284202575684,
+        "free": 14.52490234375,
+        "usable_total": 31.867186546325684,
+        "banks": 8
+      },
+      "blocks": [],
+      "final_next_pos": 4096
+    },
+    {
+      "prompt_len": 8192,
+      "cache_len": 8192,
+      "prompt_token_sha256": "1ea7627e6298610436f07afa301c3d47d495c0ec6eb3bfd1e40e2734031a48df",
+      "prefill_s": 4.152926609967835,
+      "prefill_tokens_per_s": 1972.5848225532325,
+      "dram_after_prefill": {
+        "used": 17.34721279144287,
+        "free": 14.519973754882812,
+        "usable_total": 31.867186546325684,
+        "banks": 8
+      },
+      "blocks": [],
+      "final_next_pos": 8192
+    },
+    {
+      "prompt_len": 16384,
+      "cache_len": 16384,
+      "prompt_token_sha256": "9d3e382906b5c9544b2e5989c1bc5442a391a783b8282fcb69ee6f0615958de8",
+      "prefill_s": 5.553553461038973,
+      "prefill_tokens_per_s": 2950.1831782015183,
+      "dram_after_prefill": {
+        "used": 17.34983730316162,
+        "free": 14.517349243164062,
+        "usable_total": 31.867186546325684,
+        "banks": 8
+      },
+      "blocks": [],
+      "final_next_pos": 16384
+    },
+    {
+      "prompt_len": 32768,
+      "cache_len": 32768,
+      "prompt_token_sha256": "910f64be4fb64afc08e44bc25b27aff27f811583f6e7d4067a9ef7742f21d97c",
+      "prefill_s": 10.844854007998947,
+      "prefill_tokens_per_s": 3021.525229922964,
+      "dram_after_prefill": {
+        "used": 17.355589866638184,
+        "free": 14.5115966796875,
+        "usable_total": 31.867186546325684,
+        "banks": 8
+      },
+      "blocks": [],
+      "final_next_pos": 32768
+    },
+    {
+      "prompt_len": 65536,
+      "cache_len": 65536,
+      "prompt_token_sha256": "276402cb06838249af29133bd9b3bae97f8973309410b215b4488fb8d4b359f0",
+      "prefill_s": 35.58172706904588,
+      "prefill_tokens_per_s": 1841.8442666604753,
+      "dram_after_prefill": {
+        "used": 17.364577293395996,
+        "free": 14.502609252929688,
+        "usable_total": 31.867186546325684,
+        "banks": 8
+      },
+      "blocks": [],
+      "final_next_pos": 65536
+    }
+  ],
+  "completed_prompt_lengths": [
+    1024,
+    4096,
+    8192,
+    16384,
+    32768,
+    65536
+  ]
+}

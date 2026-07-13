@@ -117,9 +117,31 @@ python models/experimental/diffusion_gemma/doc/optimize_perf/context_window_swee
 Expect 8192/16384/32768/65536 to climb out of the ~279–380 tok/s dense regime toward the ~3213 tok/s
 ragged regime (minus the full-`S` attention cost, which grows separately and dominates at 32K+).
 
+## Throughput recovery (QB2, pure-prefill sweep, 65536 build)
+
+`context_window_sweep.py --prefill-only` with `DG_PREFILL_RAGGED_LONG=1`
+(`context_window_prefill_only_chunkedlong_20260713_msl65536.json`) vs the original dense-fallback
+cliff:
+
+| context | prefill | tok/s (fix on) | tok/s (was) | speedup | DRAM after |
+|---:|---:|---:|---:|---:|---:|
+| 1,024 | 0.78 s | 1,309 | 1,474 | ~1× (var) | 17.34 GiB |
+| 4,096 | 1.37 s | 2,987 | 3,213 | ~1× (var) | 17.34 GiB |
+| 8,192 | 4.15 s | 1,973 | — | — | 17.35 GiB |
+| 16,384 | 5.55 s | **2,950** | 379 | **7.8×** | 17.35 GiB |
+| 32,768 | 10.84 s | **3,021** | 339 | **8.9×** | 17.36 GiB |
+| 65,536 | 35.58 s | **1,842** | 278 | **6.6×** | 17.36 GiB |
+
+The cliff is gone: 16K/32K now run at full ragged throughput (~3000 tok/s, matching the 4096 anchor).
+DRAM after prefill is **flat (~17.35 GiB) at every context** — the chunked path adds no resident
+growth with S. Notes: 1024/4096 match the pre-fix ragged regime (same code path; the ~1× deltas are
+first-execution timing variance). 8192 is the first long row so it pays the multi-chunk program
+compile; the S-independent ragged program configs are then warm for 16K/32K. 65536 drops to 1,842
+because at S>32768 the attention SDPA itself chunks (`chunked_prefill_sdpa`) — that residual is the
+long-context *attention* cost, a separate lever from this MoE fix.
+
 ## Status
 
-Implemented, host-verified (68/68), **QB2 device bit-identical (`max_abs == 0`), default ON**. Set
-`DG_PREFILL_RAGGED_LONG=0` to force the shared dense fallback. Next: extend the pure-prefill sweep to
-16K/32K/64K to quantify the recovered tok/s at the original cliff points (the >32K rows also carry the
-separate long-context attention cost).
+Implemented, host-verified (34/34), **QB2 device bit-identical (`max_abs == 0`) and throughput-verified,
+default ON**. Set `DG_PREFILL_RAGGED_LONG=0` to force the shared dense fallback. The remaining 64K
+gap is attention (chunked SDPA at >32768), not MoE.
