@@ -107,8 +107,6 @@ void kernel_main() {
     Semaphore<> in1_sender_sem(in1_sender_semaphore_id);
     Semaphore<> in1_receiver_sem(in1_receiver_semaphore_id);
     Semaphore<> in1_valid_sem(in1_valid_semaphore_id);
-    const uint32_t in1_valid_semaphore_addr = get_semaphore(in1_valid_semaphore_id);
-    const uint32_t in1_receiver_semaphore_addr = get_semaphore(in1_receiver_semaphore_id);
     const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
@@ -207,9 +205,6 @@ void kernel_main() {
 #endif
 
     in1_valid_sem.set(VALID);
-
-    const uint64_t in1_receiver_semaphore_noc_addr =
-        get_noc_addr(in1_dest_noc_x, in1_dest_noc_y, in1_receiver_semaphore_addr);
 
     const uint64_t in1_unicast_data_base_addr = get_noc_addr(in1_dest_noc_x, in1_dest_noc_y, 0);
 
@@ -513,7 +508,7 @@ void kernel_main() {
                     noc_obj.async_writes_flushed();
 #endif
 
-                    noc_semaphore_set_remote(in1_valid_semaphore_addr, in1_receiver_semaphore_noc_addr);
+                    in1_valid_sem.relay_unicast(noc_obj, in1_receiver_sem, in1_dest_noc_x, in1_dest_noc_y);
                 }
 #ifdef FSDP_FUSED
                 // Fabric relay (uni-ring, mirrors in0): on the first m-pass, relay the just-consumed

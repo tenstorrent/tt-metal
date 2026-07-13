@@ -28,9 +28,6 @@ void kernel_main() {
     constexpr uint32_t in0_tile_size = get_compile_time_arg_val(11);
     constexpr uint32_t out_tile_size = get_compile_time_arg_val(12);
     constexpr uint32_t in2_tile_size = get_compile_time_arg_val(13);
-    uint32_t in0_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
-    uint32_t in0_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(15));
-    uint32_t in0_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
     constexpr uint32_t is_output_writer = get_compile_time_arg_val(17);
     constexpr uint32_t is_injector_core = get_compile_time_arg_val(18);
     constexpr uint32_t N_chunks = get_compile_time_arg_val(19);
@@ -184,15 +181,11 @@ void kernel_main() {
     }
 #endif
 
-    volatile tt_l1_ptr uint32_t* in0_valid_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_valid_semaphore_addr);
-    *(in0_valid_semaphore_addr_ptr) = VALID;
-
     Semaphore<> in0_receiver_sem(get_compile_time_arg_val(15));
     Semaphore<> in0_sender_sem(get_compile_time_arg_val(14));
+    Semaphore<> in0_valid_sem(get_compile_time_arg_val(16));
 
-    const uint64_t in0_receiver_semaphore_noc_addr =
-        get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_receiver_semaphore_addr);
+    in0_valid_sem.set(VALID);
 
     /**
      * This is a Row-Major output block ordering.
@@ -319,7 +312,7 @@ void kernel_main() {
                     noc.async_writes_flushed();
 #endif
 
-                    noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
+                    in0_valid_sem.relay_unicast(noc, in0_receiver_sem, in0_dest_noc_x, in0_dest_noc_y);
                 }
 #ifdef SRS_FUSE_OP_SIGNALER
                 if constexpr (is_output_writer) {
