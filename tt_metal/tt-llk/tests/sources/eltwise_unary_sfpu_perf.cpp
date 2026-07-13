@@ -43,6 +43,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const bool UNPACK_TRANSPOSE_FACES       = params.UNPACK_TRANSPOSE_FACES;
     const bool UNPACK_TRANSPOSE_WITHIN_FACE = params.UNPACK_TRANSPOSE_WITHIN_FACE;
+
+    const auto& buffer_A = params.buffer_A;
 #endif
     const EltwiseBinaryReuseDestType reuse_dest_type = EltwiseBinaryReuseDestType::NONE;
 
@@ -92,7 +94,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     // (StimuliConfig layout) instead of the fixed PERF_INPUT_A, so
                     // the harness's stimuli line up with what the kernel consumes.
                     _llk_unpack_A_<BROADCAST_TYPE, false /* acc_to_dest (see init) */, reuse_dest_type, unpack_to_dest>(
-                        L1_ADDRESS(params.buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
+                        L1_ADDRESS(buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
                 }
             }
         }
@@ -293,6 +295,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t num_faces   = params.num_faces;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const auto& buffer_Res          = params.buffer_Res;
 #endif
     {
         START_PERF_MEASURE("INIT")
@@ -323,7 +326,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             (block_tile < get_dest_max_tiles<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "block_tile exceeds max dest tiles");
                         _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
-                            block_tile, L1_ADDRESS(params.buffer_Res[block_start + block_tile]));
+                            block_tile, L1_ADDRESS(buffer_Res[block_start + block_tile]));
                     }
                 }
             }
@@ -343,7 +346,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             (block_tile < get_dest_max_tiles<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "block_tile exceeds max dest tiles");
                         _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
-                            block_tile, L1_ADDRESS(params.buffer_Res[block_start + block_tile]));
+                            block_tile, L1_ADDRESS(buffer_Res[block_start + block_tile]));
                     }
                     _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
                 }
