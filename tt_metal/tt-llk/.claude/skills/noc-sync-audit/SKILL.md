@@ -39,7 +39,7 @@ Cores coordinate across the NoC with **NoC semaphores** (L1 counters bumped by r
 
 ## Ground-truth mechanism (`tt_metal/hw/inc/api/dataflow/dataflow_api.h`, NoC docs)
 - `noc_async_read` / `noc_async_write` return before the transfer completes. Completion is established only by `noc_async_read_barrier` / `noc_async_write_barrier` / `noc_async_writes_flushed`.
-- `noc_semaphore_wait(ptr, val)` spins until the L1 semaphore reaches `val`; `noc_semaphore_inc` / `noc_semaphore_set` bump it (often via remote NoC atomic). Multicast writes/incs fan out to N receivers.
+- `noc_semaphore_wait(ptr, val)` spins until the L1 semaphore reaches `val`. A REMOTE credit is `noc_semaphore_inc` (a remote NoC atomic) or `noc_semaphore_set_remote` / `noc_semaphore_set_multicast` (a remote 4-byte WRITE); **bare `noc_semaphore_set` is a LOCAL store `*sem=val` (reset/init), NOT a remote signal — the tool deliberately excludes it** (registry `NOC_SIGNAL_CALLS`). Multicast writes/incs fan out to N receivers.
 - `fence` / memory-ordering caveats are NoC- and arch-specific; the barrier primitive must match the transfer type and NoC in use.
 
 ## What to check
@@ -80,7 +80,12 @@ Same surface as checks 1–5, but distinct mechanisms — each has its own commi
    `registry.noc_op_of`. The third alternation above catches them. Caveats: the
    LOCAL `sem.up(value)` / `sem.set(value)` (no NoC arg) are NOT remote signals —
    exclude them (the tool gates remote `up` on argc≥2); and `.up(` can match an
-   unrelated receiver, so keep only `Semaphore`-typed receivers.
+   unrelated receiver, so keep only `Semaphore`-typed receivers. Likewise the
+   FREE-FUNCTION bare `noc_semaphore_set(ptr,val)` is a LOCAL store (reset/init),
+   NOT a write credit — the tool EXCLUDES it (only `noc_semaphore_set_remote` /
+   `noc_semaphore_set_multicast[_loopback_src]` / `relay_*` are write credits), so
+   the grep's `|set|` over-matches it: exclude bare `noc_semaphore_set` from the
+   data-before-signal analysis by hand.
    **Exhaustive run — in scope, no sampling.** The tt-llk header tree has ~0 NoC sites — that is *expected* (the primitives live one layer up) and is **NOT** a reason to report "no findings / out of layer." The sites are in `tt_metal/hw/inc/api/dataflow` + `ttnn/cpp` + `models`, which the grep above (and the frontmatter) target. Enumerate **all** matching kernels into the run's coverage ledger and fan out per kernel-family; do not sample.
 2. Per cross-core handshake, pair the signaller (write + inc/set) with the waiter (`noc_semaphore_wait` + read). Confirm a flush/barrier sits between the data write and the credit, and between the read and any buffer reuse.
 3. Run checks 1–5; for multicast, resolve the receiver count from the grid.
