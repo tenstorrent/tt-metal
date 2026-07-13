@@ -505,7 +505,7 @@ def run_request_loop(
     _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
 
 
-def run_standalone_loop(runtime, kv_cache, rank: int, num_ranks: int, *, d2d_in=None, d2d_out=None) -> None:
+def run_standalone_loop(runtime, kv_caches, rank: int, num_ranks: int, *, d2d_in=None, d2d_out=None) -> None:
     """Bring-up / benchmark loop — BOUNDED, golden-trace input. rank 0 drives NUM_CHUNKS chunks from the
     trace; downstream ranks receive the same count over D2D. Every rank knows NUM_CHUNKS (propagated via
     global_env), so each loops a fixed range independently — no end-of-stream marker needed. With
@@ -566,7 +566,7 @@ def run_standalone_loop(runtime, kv_cache, rank: int, num_ranks: int, *, d2d_in=
             )
         # Pass the raw trace path; the validation helper resolves it (descends the vllm hash subdir).
         pcc_check(
-            kv_cache,
+            kv_caches,
             slot_id=slot_id,
             n_chunks=n_chunks,
             trace_dir=os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default),
@@ -675,15 +675,18 @@ def main() -> None:
     )
 
     runtime = ADAPTER.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
-    # The engine owns the KV cache: allocate it once (the adapter defines the layout), pass it into
-    # every runtime call, and let it free with the mesh at shutdown.
-    kv_cache = ADAPTER.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
-    runtime.compile(kv_cache)
+    # The engine owns the KV cache(s): allocate them once (the adapter defines the layout) as an opaque
+    # KvCaches, hand that container to every runtime call, and let it free with the mesh at shutdown. The
+    # runner stays model-agnostic — it never unpacks the container; the (model-specific) runtime pulls out
+    # the primary cache and any secondary cache (e.g. a sparse/DSA model's index cache) it needs, and folds
+    # both into the merged migration table (see build_kv_chunk_table).
+    kv_caches = ADAPTER.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
+    runtime.compile(kv_caches)
 
     if os.environ.get("PREFILL_STANDALONE", "0") == "1":
-        _serve_standalone(runtime, kv_cache, mesh_device, hf_config, rank, num_ranks, is_first_rank)
+        _serve_standalone(runtime, kv_caches, mesh_device, hf_config, rank, num_ranks, is_first_rank)
     else:
-        _serve_request(runtime, kv_cache, mesh_device, hf_config, rank, num_ranks, is_first_rank)
+        _serve_request(runtime, kv_caches, mesh_device, hf_config, rank, num_ranks, is_first_rank)
 
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
     ttnn.close_mesh_device(mesh_device)
@@ -691,7 +694,7 @@ def main() -> None:
 
 
 def _serve_standalone(
-    runtime, kv_cache, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool
+    runtime, kv_caches, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool
 ) -> None:
     """Bring-up / benchmark path: golden-trace input on rank 0, D2D-socket transport between ranks,
     per-rank KV PCC. Self-contained (no external producer); covers num_ranks 1..N."""
@@ -713,7 +716,7 @@ def _serve_standalone(
         ttnn.distributed_context_barrier()
 
     logger.info(f"[pp rank {rank}] setup complete, entering standalone loop")
-    run_standalone_loop(runtime, kv_cache, rank, num_ranks, d2d_in=d2d_in, d2d_out=d2d_out)
+    run_standalone_loop(runtime, kv_caches, rank, num_ranks, d2d_in=d2d_in, d2d_out=d2d_out)
 
     if d2d_in is not None or d2d_out is not None:
         # Free the services while the mesh + command queues are still alive (their dtors free a command
@@ -724,7 +727,7 @@ def _serve_standalone(
         gc.collect()
 
 
-def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:
+def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:
     """Production serving: token chunks + PrefillMetadata arrive over the H2D socket from an external
     producer (prefill_producer.py / the scheduler); unbounded (runs to SIGTERM). Same pipeline
     mechanics as standalone (num_ranks 1..N over D2D); the only difference is the trigger (H2D input)
@@ -788,9 +791,11 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
             # Full migration bring-up: the runtime builds the model-specific KV chunk table from
             # its device cache layout; the runner publishes it (+ device map) to the worker and blocks
             # on WORKER_READY before the request loop opens (the worker gates on SetTable + AssignDevMap).
+            # A sparse model's KvCaches carries its index cache too, so the table describes BOTH caches
+            # in one (merged); a dense model's is a single-config table.
             table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
             wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
-            runtime.build_kv_chunk_table(kv_cache, path=table_path)
+            runtime.build_kv_chunk_table(kv_caches, path=table_path)
             publish_table_and_wait_ready(
                 mesh_device=mesh_device,
                 mesh_shape=GLOBAL_MESH_SHAPE,
@@ -801,9 +806,10 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
             # Mock integration (prefill_producer.py): serialize the KV chunk table so an external
             # producer can read it back via ttnn.experimental.disaggregation.import_from_protobuf_file
             # and locate each chunk — WITHOUT the migration_endpoint worker (no MigrationLayerClient,
-            # no WORKER_READY). One galaxy => one complete table spanning all NUM_LAYERS / NUM_USERS.
+            # no WORKER_READY). One galaxy => one complete table spanning all NUM_LAYERS / NUM_USERS
+            # (both caches, merged, for a sparse model).
             table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
-            runtime.build_kv_chunk_table(kv_cache, path=table_path)
+            runtime.build_kv_chunk_table(kv_caches, path=table_path)
             # Also publish the fabric_node -> ASIC unique_id device map so the producer can resolve chips
             # for its device-less UMD read (read_dram_umd) without touching the ControlPlane.
             device_map_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
@@ -837,7 +843,7 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
     run_request_loop(
         runtime,
-        kv_cache,
+        kv_caches,
         rank,
         num_ranks,
         hidden_size=hf_config.hidden_size,
