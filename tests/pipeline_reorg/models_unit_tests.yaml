@@ -728,41 +728,108 @@
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
-# Split into separate pytest invocations to avoid host OOM (LoRA loads ~15GB per case).
-# WH/BH split kept separate so env stays faithful to the original frequent job:
-# WH sets TT_MM_THROTTLE_PERF=5, BH runs without it.
-- name: Stable Diffusion XL unit tests (WH)
+# Split per sub-suite into separate jobs: keeps each job small (<=20min) and isolates
+# host OOM (LoRA loads ~15GB per case). WH sets TT_MM_THROTTLE_PERF=5, BH runs without it.
+- name: Stable Diffusion XL LoRA unit tests (WH)
   cmd: |
     export TT_MM_THROTTLE_PERF=5
-    exit_code=0
-    pytest --timeout 900 tests/nightly/single_card/stable_diffusion_xl_base/lora || exit_code=$?
-    pytest --timeout 600 tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner/test_unet_loop.py || exit_code=$?
-    pytest --timeout 600 tests/nightly/single_card/stable_diffusion_xl_base/vae || exit_code=$?
-    pytest --timeout 600 tests/nightly/single_card/stable_diffusion_xl_base --ignore=tests/nightly/single_card/stable_diffusion_xl_base/lora --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/vae --ignore=tests/nightly/single_card/stable_diffusion_xl_base/test_unet_loop.py || exit_code=$?
-    exit $exit_code
-  model: sdxl-wh
+    pytest --timeout 900 tests/nightly/single_card/stable_diffusion_xl_base/lora
+  model: sdxl
   skus:
     wh_n150:
-      timeout: 80
+      timeout: 20
       tier: 2
     wh_n300:
-      timeout: 80
+      timeout: 20
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
-- name: Stable Diffusion XL unit tests (BH)
+- name: Stable Diffusion XL refiner unit tests (WH)
   cmd: |
-    exit_code=0
-    pytest --timeout 900 tests/nightly/single_card/stable_diffusion_xl_base/lora || exit_code=$?
-    pytest --timeout 600 tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner/test_unet_loop.py || exit_code=$?
-    pytest --timeout 600 tests/nightly/single_card/stable_diffusion_xl_base/vae || exit_code=$?
-    pytest --timeout 600 tests/nightly/single_card/stable_diffusion_xl_base --ignore=tests/nightly/single_card/stable_diffusion_xl_base/lora --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/vae --ignore=tests/nightly/single_card/stable_diffusion_xl_base/test_unet_loop.py || exit_code=$?
-    exit $exit_code
-  model: sdxl-bh
+    export TT_MM_THROTTLE_PERF=5
+    pytest --timeout 600 tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner/test_unet_loop.py
+  model: sdxl
+  skus:
+    wh_n150:
+      timeout: 20
+      tier: 2
+    wh_n300:
+      timeout: 20
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: Stable Diffusion XL VAE unit tests (WH)
+  cmd: |
+    export TT_MM_THROTTLE_PERF=5
+    pytest --timeout 600 tests/nightly/single_card/stable_diffusion_xl_base/vae
+  model: sdxl
+  skus:
+    wh_n150:
+      timeout: 20
+      tier: 2
+    wh_n300:
+      timeout: 20
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: Stable Diffusion XL base unit tests (WH)
+  cmd: |
+    export TT_MM_THROTTLE_PERF=5
+    pytest --timeout 600 tests/nightly/single_card/stable_diffusion_xl_base --ignore=tests/nightly/single_card/stable_diffusion_xl_base/lora --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/vae --ignore=tests/nightly/single_card/stable_diffusion_xl_base/test_unet_loop.py
+  model: sdxl
+  skus:
+    wh_n150:
+      timeout: 20
+      tier: 2
+    wh_n300:
+      timeout: 20
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: Stable Diffusion XL LoRA unit tests (BH)
+  cmd: |
+    pytest --timeout 900 tests/nightly/single_card/stable_diffusion_xl_base/lora
+  model: sdxl
   skus:
     bh_p150:
-      timeout: 60
+      timeout: 15
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: Stable Diffusion XL refiner unit tests (BH)
+  cmd: |
+    pytest --timeout 600 tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner/test_unet_loop.py
+  model: sdxl
+  skus:
+    bh_p150:
+      timeout: 15
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: Stable Diffusion XL VAE unit tests (BH)
+  cmd: |
+    pytest --timeout 600 tests/nightly/single_card/stable_diffusion_xl_base/vae
+  model: sdxl
+  skus:
+    bh_p150:
+      timeout: 15
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: Stable Diffusion XL base unit tests (BH)
+  cmd: |
+    pytest --timeout 600 tests/nightly/single_card/stable_diffusion_xl_base --ignore=tests/nightly/single_card/stable_diffusion_xl_base/lora --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/vae --ignore=tests/nightly/single_card/stable_diffusion_xl_base/test_unet_loop.py
+  model: sdxl
+  skus:
+    bh_p150:
+      timeout: 15
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
