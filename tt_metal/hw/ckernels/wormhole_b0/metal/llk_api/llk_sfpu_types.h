@@ -171,4 +171,5 @@ enum class SfpuType {
     ne,
     digamma,
     identity,
+    sqrt_custom,
 };

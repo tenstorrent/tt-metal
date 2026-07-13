@@ -30,6 +30,7 @@
 #include "llk_sfpu/ckernel_sfpu_expm1.h"
 #include "llk_sfpu/ckernel_sfpu_fmod.h"
 #include "llk_sfpu/ckernel_sfpu_hardmish.h"
+#include "llk_sfpu/ckernel_sfpu_hardshrink.h"
 #include "llk_sfpu/ckernel_sfpu_i1.h"
 #include "llk_sfpu/ckernel_sfpu_identity.h"
 #include "llk_sfpu/ckernel_sfpu_lgamma.h"
@@ -37,8 +38,11 @@
 #include "llk_sfpu/ckernel_sfpu_prelu.h"
 #include "llk_sfpu/ckernel_sfpu_remainder.h"
 #include "llk_sfpu/ckernel_sfpu_rpow.h"
+#include "llk_sfpu/ckernel_sfpu_sigmoid_appx.h"
 #include "llk_sfpu/ckernel_sfpu_sign.h"
 #include "llk_sfpu/ckernel_sfpu_signbit.h"
+#include "llk_sfpu/ckernel_sfpu_softplus.h"
+#include "llk_sfpu/ckernel_sfpu_sqrt_custom.h"
 #include "llk_sfpu/ckernel_sfpu_tanh_derivative.h"
 #include "llk_sfpu/ckernel_sfpu_unary_comp.h"
 #include "llk_sfpu/ckernel_sfpu_unary_max_min.h"
@@ -89,6 +93,22 @@
 #include "sfpu/ckernel_sfpu_silu.h"
 #include "sfpu/ckernel_sfpu_sub_int.h"
 #include "sfpu/ckernel_sfpu_threshold.h"
+
+namespace ckernel::sfpu
+{
+// Test-only loop wrapper. The production sqrt_custom header exposes only the
+// per-vector helper sfpu_sqrt_custom(); wrap it in the standard dst_reg loop so
+// it can be driven through call_unary_sfpu_operation like every other unary op.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+inline void calculate_sqrt_custom()
+{
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        sfpi::dst_reg[0] = sfpu_sqrt_custom<APPROXIMATION_MODE>(sfpi::dst_reg[0]);
+        sfpi::dst_reg++;
+    }
+}
+} // namespace ckernel::sfpu
 
 namespace test_utils
 {
@@ -455,6 +475,10 @@ void call_unary_sfpu_operation_init()
     else if constexpr (OPERATION == SfpuType::xielu)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(xielu_init<APPROX_MODE>);
+    }
+    else if constexpr (OPERATION == SfpuType::sigmoid_appx)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(sigmoid_appx_init);
     }
     else if constexpr (OPERATION == SfpuType::sigmoid)
     {
@@ -1090,6 +1114,32 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             vector_mode,
             0x3f800000u /* alpha_p = 1.0f */,
             0x3f800000u /* alpha_n = 1.0f */);
+    }
+    else if constexpr (OPERATION == SfpuType::hardshrink)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_hardshrink, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0x3f000000u /* lambda = 0.5f */);
+    }
+    else if constexpr (OPERATION == SfpuType::softplus)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_softplus,
+            (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS),
+            dst_index,
+            vector_mode,
+            0x3f800000u /* beta = 1.0f */,
+            0x3f800000u /* 1/beta = 1.0f */,
+            0x41a00000u /* threshold = 20.0f */);
+    }
+    else if constexpr (OPERATION == SfpuType::sigmoid_appx)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sigmoid_appx, (ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::sqrt_custom)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sqrt_custom, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::typecast)
     {

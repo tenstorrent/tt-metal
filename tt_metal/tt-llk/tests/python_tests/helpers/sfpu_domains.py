@@ -349,6 +349,22 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Xielu: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
+    # hardshrink: piecewise around +/-lambda (0.5); span past both knees
+    MathOperation.Hardshrink: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-4.0, high=4.0)
+    ),
+    # softplus: smooth; span both signs, stay well below the linear threshold (20)
+    MathOperation.Softplus: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # sigmoid_appx: LUT approximation of sigmoid; span both signs across the knee at 0
+    MathOperation.SigmoidAppx: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # sqrt_custom: domain x >= 0
+    MathOperation.SqrtCustom: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=100.0)
+    ),
     # comparison-to-zero: span both signs so the </<=/>/>= branches are exercised
     MathOperation.EqualZero: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
