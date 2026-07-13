@@ -90,6 +90,10 @@ class _DecodeTraceSamplingState:
     mtp_trace_id: int | None = None
     mtp_top1_values_tt: ttnn.Tensor | None = None
     mtp_top1_indices_tt: ttnn.Tensor | None = None
+    # trace+2cq overlap: event recorded on CQ0 after execute_trace, used to gate
+    # the *next* step's CQ1 input write behind the current step's compute (the
+    # single persistent input buffer must not be clobbered while the trace reads it).
+    decode_op_event: Any | None = None
 
 
 @dataclass
@@ -2929,8 +2933,13 @@ class Glm4MoeLiteDenseOnlyTT:
         tokens: torch.Tensor,
         start_pos: torch.Tensor,
         page_table: torch.Tensor,
+        cq_id: Any | None = None,
     ) -> None:
-        """Copy host decode inputs into persistent device tensors for a bucket state."""
+        """Copy host decode inputs into persistent device tensors for a bucket state.
+
+        ``cq_id`` selects the command queue for the host->device copies (default
+        CQ0); pass CQ1 for the trace+2cq overlap path.
+        """
         if (
             state.tokens_tt is None
             or state.positions_tt is None
@@ -2992,7 +3001,7 @@ class Glm4MoeLiteDenseOnlyTT:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mapper,
         )
-        ttnn.copy_host_to_device_tensor(host_tokens, state.tokens_tt)
+        ttnn.copy_host_to_device_tensor(host_tokens, state.tokens_tt, cq_id=cq_id)
 
         host_pos = ttnn.from_torch(
             start_pos.to(torch.int32),
@@ -3002,7 +3011,7 @@ class Glm4MoeLiteDenseOnlyTT:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mapper,
         )
-        ttnn.copy_host_to_device_tensor(host_pos, state.positions_tt)
+        ttnn.copy_host_to_device_tensor(host_pos, state.positions_tt, cq_id=cq_id)
 
         # Trace-mode RoPE: copy rot_idxs (positions) to device and generate cos/sin
         # *inside* the trace graph. Copying host-side RoPE slices directly into
@@ -3029,7 +3038,7 @@ class Glm4MoeLiteDenseOnlyTT:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mapper,
         )
-        ttnn.copy_host_to_device_tensor(host_rot_idxs, state.rot_idxs_tt)
+        ttnn.copy_host_to_device_tensor(host_rot_idxs, state.rot_idxs_tt, cq_id=cq_id)
 
         host_pt = ttnn.from_torch(
             page_table.to(torch.int32),
@@ -3039,7 +3048,7 @@ class Glm4MoeLiteDenseOnlyTT:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mapper,
         )
-        ttnn.copy_host_to_device_tensor(host_pt, state.page_table_tt)
+        ttnn.copy_host_to_device_tensor(host_pt, state.page_table_tt, cq_id=cq_id)
 
         # Batch-expansion serial cache update: copy masked position tensors
         if self.batch_expand and state.positions_main_tt is not None and self._batch_expand_num_main > 0:
@@ -3056,7 +3065,7 @@ class Glm4MoeLiteDenseOnlyTT:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=mapper,
             )
-            ttnn.copy_host_to_device_tensor(host_pos_main, state.positions_main_tt)
+            ttnn.copy_host_to_device_tensor(host_pos_main, state.positions_main_tt, cq_id=cq_id)
             host_pos_draft = ttnn.from_torch(
                 pos_draft,
                 device=None,
@@ -3065,7 +3074,7 @@ class Glm4MoeLiteDenseOnlyTT:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=mapper,
             )
-            ttnn.copy_host_to_device_tensor(host_pos_draft, state.positions_draft_tt)
+            ttnn.copy_host_to_device_tensor(host_pos_draft, state.positions_draft_tt, cq_id=cq_id)
 
     def _copy_mtp_trace_inputs(
         self,
@@ -3168,6 +3177,84 @@ class Glm4MoeLiteDenseOnlyTT:
                 best_global = max(0, vocab - 1)
             main_ids[b] = int(best_global)
         return main_ids
+
+    def _decode_2cq_enabled(self) -> bool:
+        """Overlap decode host I/O on CQ1 behind the trace execute on CQ0.
+
+        Default ON. Set ``GLM4_MOE_LITE_DECODE_2CQ=0`` to force the original
+        single-CQ blocking path. When on, the per-step decode input write is
+        issued on CQ1 and ``execute_trace`` runs non-blocking on CQ0 with event
+        sync, so the (small) host->device input DMA and host dispatch overlap
+        device compute. See the caller for the event choreography and the
+        single-input-buffer clobber guard.
+
+        Requires the device to have been opened with ``num_command_queues>=2``
+        (true whenever traced decode is used). There is no Python API to query
+        the CQ count, so we probe CQ1 once and cache the result — this keeps the
+        default-on safe on harnesses that open a single-CQ device (e.g. some
+        vLLM/demo configs): if CQ1 is unavailable we transparently fall back to
+        the blocking single-CQ path instead of crashing.
+        """
+        raw = os.environ.get("GLM4_MOE_LITE_DECODE_2CQ", "1").strip().lower()
+        if raw in {"0", "false", "no", "off"}:
+            return False
+        if not _is_mesh_device(self.device):
+            return False
+        cached = getattr(self, "_cq1_available", None)
+        if cached is None:
+            try:
+                ttnn.record_event(self.device, ttnn.QueueId(1))
+                cached = True
+            except Exception as e:
+                logger.warning(
+                    "GLM4_MOE_LITE_DECODE_2CQ on but CQ1 is unavailable ({}); "
+                    "falling back to single-CQ blocking decode",
+                    e,
+                )
+                cached = False
+            self._cq1_available = cached
+        return bool(cached)
+
+    def _execute_decode_trace_2cq(
+        self,
+        *,
+        state: _DecodeTraceSamplingState,
+        tokens: torch.Tensor,
+        start_pos: torch.Tensor,
+        page_table: torch.Tensor,
+    ) -> None:
+        """Copy decode inputs + execute the main decode trace.
+
+        When ``GLM4_MOE_LITE_DECODE_2CQ`` is on: write inputs on CQ1 and replay
+        the trace non-blocking on CQ0, event-synced. The persistent input buffer
+        is single-copy, so the next step's CQ1 write is gated behind the current
+        step's compute (``decode_op_event``) to avoid clobbering inputs the trace
+        is still reading. Falls back to the original blocking CQ0 path otherwise.
+        """
+        if not self._decode_2cq_enabled():
+            self._copy_decode_trace_inputs(state=state, tokens=tokens, start_pos=start_pos, page_table=page_table)
+            if os.environ.get("GLM4_MOE_LITE_SYNC_BEFORE_TRACE", "").strip() == "1":
+                ttnn.synchronize_device(self.device)
+            ttnn.execute_trace(self.device, state.trace_id, cq_id=0, blocking=True)
+            return
+
+        cq0 = ttnn.QueueId(0)
+        cq1 = ttnn.QueueId(1)
+        # Gate the input write behind the previous step's compute: the trace reads
+        # the single persistent input buffer on CQ0, so CQ1 must not overwrite it
+        # until that compute has consumed it.
+        if state.decode_op_event is not None:
+            ttnn.wait_for_event(cq1, state.decode_op_event)
+        self._copy_decode_trace_inputs(
+            state=state, tokens=tokens, start_pos=start_pos, page_table=page_table, cq_id=cq1
+        )
+        write_ev = ttnn.record_event(self.device, cq1)
+        # CQ0 (compute) waits until the CQ1 input write is complete.
+        ttnn.wait_for_event(cq0, write_ev)
+        ttnn.execute_trace(self.device, state.trace_id, cq_id=cq0, blocking=False)
+        # Record compute completion; the token/logits readback (also on CQ0)
+        # serializes after this naturally, and the next step's CQ1 write waits on it.
+        state.decode_op_event = ttnn.record_event(self.device, cq0)
 
     def _sampling_allgather_enabled(self) -> bool:
         """All-gather sharded logits then a single argmax, instead of the slow
@@ -3608,10 +3695,7 @@ class Glm4MoeLiteDenseOnlyTT:
         assert state.logits_tt is not None
         assert state.top1_indices_tt is not None
 
-        self._copy_decode_trace_inputs(state=state, tokens=tokens, start_pos=start_pos, page_table=page_table)
-        if os.environ.get("GLM4_MOE_LITE_SYNC_BEFORE_TRACE", "").strip() == "1":
-            ttnn.synchronize_device(self.device)
-        ttnn.execute_trace(self.device, state.trace_id, cq_id=0, blocking=True)
+        self._execute_decode_trace_2cq(state=state, tokens=tokens, start_pos=start_pos, page_table=page_table)
 
         # MTP: run after main trace completes (traced or eager fallback)
         self._last_draft_token_ids = None
@@ -3694,10 +3778,7 @@ class Glm4MoeLiteDenseOnlyTT:
         assert state.trace_id is not None
         assert state.logits_tt is not None
 
-        self._copy_decode_trace_inputs(state=state, tokens=tokens, start_pos=start_pos, page_table=page_table)
-        if os.environ.get("GLM4_MOE_LITE_SYNC_BEFORE_TRACE", "").strip() == "1":
-            ttnn.synchronize_device(self.device)
-        ttnn.execute_trace(self.device, state.trace_id, cq_id=0, blocking=True)
+        self._execute_decode_trace_2cq(state=state, tokens=tokens, start_pos=start_pos, page_table=page_table)
 
         # MTP: run after main trace completes (logits path)
         global _mtp_total, _mtp_accepted

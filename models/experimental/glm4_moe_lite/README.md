@@ -18,7 +18,10 @@ is only accurate on a 1D mesh: the MoE all-reduce is single-axis (like Blackhole
 whereas the 2×4 two-axis reduce drops PCC to ~0.65. On 1×8, prefill-logits PCC vs HF is
 **0.93–0.96** across ISL 128→8192 (`tests/pipeline_tests/test_text_prefill_logits_wh.py::test_text_prefill_logits_wh_tp1_1x8`).
 
-**Required env (see `agent_logs/run_baseline_b1_wh_1x8.sh`):**
+**This config is now applied automatically** by `debug_run_full_tt_greedy.py` (when run on a
+1×8 WH mesh), by the sweep script, and by the `apply_wh_*_env` test helpers — so you do **not**
+need to export any of it by hand. It is documented here for reference (and mirrored verbatim in
+`agent_logs/run_baseline_b1_wh_1x8.sh`); export a variable yourself only to override the default:
 
 ```bash
 # mesh: --mesh-rows 1 --mesh-cols 8
@@ -66,6 +69,33 @@ Two optimizations vs the initial 1×8 baseline: **ring all-reduce** (−5.5% dec
 were ~37% of device time as an O(N) linear reduce across 8 chips) and **WH HiFi3** (−5.6%
 prefill). Net ~+5% throughput at every ISL, prefill notably better at long context
 (65K: 423s → 370s), PCC held/improved.
+
+#### trace + 2 command queues (decode I/O overlap) — investigated, flat, lever closed
+
+`GLM4_MOE_LITE_DECODE_2CQ` (**default on**; set `=0` to disable) writes each decode step's inputs on
+**CQ1** and replays the trace **non-blocking on CQ0** with event sync (`record_event`/`wait_for_event`),
+so the host→device input DMA and host dispatch overlap device compute. It probes CQ1 once and
+transparently falls back to the single-CQ blocking path on a 1-command-queue device. A/B at ISL=512
+(decode-only, fake context), all runs greedy-equivalent (byte-identical output):
+
+| Mode | 2CQ off (ms/tok) | 2CQ on (ms/tok) |
+| --- | ---: | ---: |
+| sampling, batch 1 (production path) | 88.9 | 89.0 |
+| logits, batch 1 (full-vocab readback) | 106.9 | 107.8 |
+| sampling, batch 4 | 86.1 | 86.8 |
+
+**No improvement in any mode** (deltas within run-to-run noise). Decode here is device-bound
+(~89 ms/token) with negligible per-step host I/O, and two structural facts block the overlap:
+(1) the decode inputs use a **single persistent buffer**, so CQ1 cannot write step N+1 until step
+N's trace has finished reading it — the write is serialized behind compute, not overlapped; and
+(2) decode is **autoregressive** — step N+1's input token is the argmax of step N's output, so the
+output readback (even the 154,880-vocab logits readback) sits on the critical path and cannot be
+hidden behind the next compute. Unlocking a real win would require **double-buffered decode inputs**
+*and* **on-device token feedback** (keep the sampled token on device, re-embed inside the trace,
+breaking the host round-trip) so `execute_trace` can run fully pipelined non-blocking. The flag is
+kept **default-on** as a correct, latency-neutral, greedy-equivalent building block for that future
+work. (The overlap itself being closed is consistent with the ~37% all-reduce lever, which is also
+fabric-limited and closed.)
 
 ## Performance Results
 
@@ -145,43 +175,38 @@ export PYTHONPATH=$(pwd)
 
 ### Greedy Debug Script (single run)
 
+The script **auto-applies the tuned perf config for the detected platform** (from the mesh
+shape + arch), so no env prefix is needed — the commands below reproduce the README numbers
+as-is. The platform is picked from the mesh: Wormhole LoudBox `--mesh-rows 1 --mesh-cols 8`
+(T3K 1×8), Wormhole `--mesh-rows 4 --mesh-cols 8` (Galaxy), Blackhole `--mesh-rows 1
+--mesh-cols 4` (QB-2 1×4). Any flag you export yourself still overrides the auto default.
+
+**Wormhole LoudBox (T3K, 1×8):**
+
 ```bash
 cd $TT_METAL_HOME && \
-GLM4_MOE_LITE_SKIP_DEFENSIVE_CLONES=1 \
-GLM4_MOE_LITE_FUSE_QKV_A=1 \
-GLM4_MOE_LITE_FUSE_SHARED_GATE_UP=1 \
-GLM4_MOE_LITE_BATCHED_PREFILL=1 \
-GLM4_MOE_LITE_DECODE_L1_ACT=1 \
-GLM4_MOE_LITE_EP_L1=1 \
-GLM4_MOE_LITE_CCL_NUM_LINKS=4 \
-GLM4_MOE_LITE_CCL_TOPOLOGY=ring \
-GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE=1 \
-GLM4_MOE_LITE_SKIP_TYPECAST=1 \
 python models/experimental/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py \
   --prompt "Summarize" \
   --simulate-context-len 128 \
   --min-cache-tokens 256 \
   --max-new-tokens 128 \
   --batch-size 1 \
-  --mesh-rows 4 --mesh-cols 8 \
+  --mesh-rows 1 --mesh-cols 8 \
+  --cache-dir ~/.cache/ttnn/models/glm4_moe_lite/wh_1x8 \
   --kv-cache-dtype bf16 \
   --phase both \
   --enable-trace --trace-mode sampling
 ```
+
+**Wormhole Galaxy (4×8):** same command with `--mesh-rows 4 --mesh-cols 8` (drop the
+`--cache-dir` override). The auto config switches to the Galaxy flag set (`CCL_NUM_LINKS=4`,
+`FUSE_MLP_MOE_REDUCE=1`, `SKIP_TYPECAST=1`, …).
 
 ### Batch & ISL Sweep
 
 ```bash
 cd $TT_METAL_HOME && \
 mkdir -p models/experimental/glm4_moe_lite/experiments/g1_multilink_4_ring_isl_sweep && \
-GLM4_MOE_LITE_SKIP_DEFENSIVE_CLONES=1 \
-GLM4_MOE_LITE_FUSE_QKV_A=1 \
-GLM4_MOE_LITE_FUSE_SHARED_GATE_UP=1 \
-GLM4_MOE_LITE_BATCHED_PREFILL=1 \
-GLM4_MOE_LITE_DECODE_L1_ACT=1 \
-GLM4_MOE_LITE_EP_L1=1 \
-GLM4_MOE_LITE_CCL_NUM_LINKS=4 \
-GLM4_MOE_LITE_CCL_TOPOLOGY=ring \
 python models/experimental/glm4_moe_lite/scripts/run_sweep_isl_batch.py \
   --out-dir models/experimental/glm4_moe_lite/experiments/g1_multilink_4_ring_isl_sweep \
   --timeout 1200 \
@@ -189,7 +214,7 @@ python models/experimental/glm4_moe_lite/scripts/run_sweep_isl_batch.py \
   --batch 1
 ```
 
-> **Note:** The sweep script (`run_sweep_isl_batch.py`) already sets `EXPERTS_TT_DTYPE=bf4`, `TP=1`, `FUSE_MLP_MOE_REDUCE=1`, and `SKIP_TYPECAST=1` internally — no need to pass them on the command line. On Blackhole QB-2, add `--mesh-rows 1 --mesh-cols 4 --timeout 3600` (longer timeout needed due to avoid timeout error).
+> **Note:** The sweep script (`run_sweep_isl_batch.py`) bakes the full tuned perf config internally (`TP=1`, `FUSE_MLP_MOE_REDUCE=1`, `SKIP_TYPECAST=1`, `CCL_*`, etc.) — no env prefix needed. On Blackhole QB-2, add `--mesh-rows 1 --mesh-cols 4 --timeout 3600` (longer timeout to avoid the timeout error).
 
 ---
 
@@ -216,6 +241,13 @@ python models/experimental/glm4_moe_lite/scripts/run_sweep_isl_batch.py \
 ---
 
 ## Environment Variables
+
+> **You normally don't set these by hand.** The run scripts apply the tuned per-platform
+> config automatically: `debug_run_full_tt_greedy.py` auto-detects arch + mesh shape (WH T3K
+> 1×8 / WH Galaxy 4×8 / Blackhole 1×4) and applies the matching set via `setdefault`;
+> `run_sweep_isl_batch.py` bakes it in; and the `apply_wh_*_env` pytest helpers set it for the
+> PCC tests. Every value is a **default** — export a variable yourself and it wins. The table
+> below documents what each flag does and what the auto-defaults are.
 
 ### Required
 
@@ -256,6 +288,7 @@ python models/experimental/glm4_moe_lite/scripts/run_sweep_isl_batch.py \
 | `GLM4_MOE_LITE_MOE_FP32_ACC=1` | Off | FP32 accumulation for MoE matmuls |
 | `GLM4_MOE_LITE_MLA_FP32_ACC=1` | Off | FP32 accumulation for FlashMLA (unsafe without `UNSAFE_ALLOW_FP32_MLA=1`) |
 | `GLM4_MOE_LITE_ROUTER_L1=1` | On | Keep MoE router intermediates in L1 (for decode, T<=32) |
+| `GLM4_MOE_LITE_DECODE_2CQ=0` | **On** | Overlap decode host I/O on CQ1 behind the trace execute on CQ0 (non-blocking `execute_trace` + event sync). On by default (set `=0` to force the single-CQ blocking path); auto-falls back to single-CQ if the device was opened with 1 command queue. **Measured latency-neutral on WH 1×8** (see note below) — greedy-equivalent, kept on as the ready building block for future double-buffered / on-device-token overlap. |
 
 ### Data Type Overrides
 
