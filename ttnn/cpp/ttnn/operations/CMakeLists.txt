@@ -41,6 +41,7 @@ add_subdirectory(full_like)
 add_subdirectory(index_fill)
 add_subdirectory(kv_cache)
 add_subdirectory(loss)
+add_subdirectory(my_matmul)
 add_subdirectory(prefetcher)
 add_subdirectory(rand)
 add_subdirectory(randn)
@@ -71,6 +72,7 @@ target_link_libraries(
         TTNN::Ops::KvCache
         TTNN::Ops::Loss
         TTNN::Ops::Matmul
+        TTNN::Ops::MyMatmul
         TTNN::Ops::Normalization
         TTNN::Ops::PointToPoint
         TTNN::Ops::Pool
@@ -112,6 +114,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::KvCache>
         $<TARGET_OBJECTS:TTNN::Ops::Loss>
         $<TARGET_OBJECTS:TTNN::Ops::Matmul>
+        $<TARGET_OBJECTS:TTNN::Ops::MyMatmul>
         $<TARGET_OBJECTS:TTNN::Ops::Normalization>
         $<TARGET_OBJECTS:TTNN::Ops::PointToPoint>
         $<TARGET_OBJECTS:TTNN::Ops::Pool>

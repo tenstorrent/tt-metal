@@ -64,6 +64,7 @@
 #include "ttnn/operations/kv_cache/kv_cache_nanobind.hpp"
 #include "ttnn/operations/loss/loss_nanobind.hpp"
 #include "ttnn/operations/matmul/matmul_nanobind.hpp"
+#include "ttnn/operations/my_matmul/my_matmul_nanobind.hpp"
 #include "ttnn/operations/moreh/moreh_nanobind.hpp"
 #include "ttnn/operations/normalization/normalization_nanobind.hpp"
 #include "ttnn/operations/point_to_point/point_to_point_nanobind.hpp"
@@ -146,6 +147,9 @@ void py_module(nb::module_& mod) {
 
     auto m_full = mod.def_submodule("full", "full operation");
     full::bind_full_operation(m_full);
+
+    auto m_my_matmul = mod.def_submodule("my_matmul", "my_matmul operation");
+    my_matmul::bind_my_matmul_operation(m_my_matmul);
 
     auto m_loss = mod.def_submodule("loss", "loss operations");
     loss::bind_loss_functions(m_loss);

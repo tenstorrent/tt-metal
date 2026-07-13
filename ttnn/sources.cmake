@@ -263,6 +263,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_nanobind.cpp
     cpp/ttnn/operations/experimental/reduction/integral_image/intimg_nanobind.cpp
     cpp/ttnn/operations/full/full_nanobind.cpp
+    cpp/ttnn/operations/my_matmul/my_matmul_nanobind.cpp
     cpp/ttnn/operations/full_like/full_like_nanobind.cpp
     cpp/ttnn/operations/generic/generic_op_nanobind.cpp
     cpp/ttnn/operations/index_fill/index_fill_nanobind.cpp
