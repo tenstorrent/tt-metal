@@ -271,6 +271,15 @@ def pytest_addoption(parser):
         help="Export raw hardware counter values to a separate .counters.csv file (implies --enable-perf-counters)",
     )
 
+    parser.addoption(
+        "--disable-sfploadmacro",
+        action="store_true",
+        default=False,
+        help="Compile kernels with -DDISABLE_SFPLOADMACRO so SFPLOADMACRO-based SFPU "
+        "kernels fall back to their plain sfpi/TTI calculate path (equivalent to "
+        "setting TT_METAL_DISABLE_SFPLOADMACRO=1).",
+    )
+
 
 _RECORD_TEST_ORDER: bool = False
 _UNIFIED_ORDER_FILE: str = "DEFAULT"
@@ -287,6 +296,11 @@ def pytest_configure(config):
     if log_level is not None:
         config.option.log_cli_level = log_level
         config.option.log_cli = True
+
+    # Let the CLI flag drive the compile define; test_config reads the env var
+    # when assembling per-variant compile options.
+    if config.getoption("--disable-sfploadmacro", default=False):
+        os.environ["TT_METAL_DISABLE_SFPLOADMACRO"] = "1"
 
     config.coverage_enabled = config.getoption("--coverage", default=False)
     TestConfig.DUMP_RAW_COUNTERS = config.getoption(
