@@ -157,7 +157,7 @@ must never read as "all kernels covered").
 2. **Run the tier:** `LLK_KT_LOG=build.log ./run.sh <arch> --full-jit` (log path),
    or `LLK_KT_CLEAR_CACHE=1 LLK_KT_WORKLOAD='<cmd>' ./run.sh <arch> --full-jit`
    (run-a-workload path). bootstrap → `capture.py` (scrape → GCC→clang translate →
-   `llk_extract` per kernel → merged fact base) → cb/noc/mailbox over it.
+   `llk_extract` per kernel → merged fact base) → cb/noc/read/atomic/l1/mailbox over it.
 3. **Coverage is emitted automatically:** `kernel_coverage.<arch>.txt` lists every
    TU as parsed / `EMPTY-OUT` / `PARSE-FAIL` / `SKIP-*` (no silent caps); an empty
    fact base makes bootstrap exit non-zero rather than emit a false all-clear.

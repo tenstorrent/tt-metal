@@ -110,7 +110,7 @@ their surface lives*:
 ```bash
 ./run.sh wormhole                  # or blackhole | quasar   [--checks a,b] [--changed [BASE]] [--full-jit] [out_dir]
                                    #   --changed scopes output to files changed vs BASE (default main)
-                                   #   --full-jit ALSO runs the opt-in kernel tier (cb/noc/mailbox) IF built
+                                   #   --full-jit ALSO runs the opt-in kernel tier (cb/noc/read/atomic/l1/mailbox) IF built
                                    #     (it never builds it — that is on-request, off-main); degrades
                                    #     honestly + names the uncovered classes when the module is absent
                                    #   auto-builds the C++ extractor on first run
