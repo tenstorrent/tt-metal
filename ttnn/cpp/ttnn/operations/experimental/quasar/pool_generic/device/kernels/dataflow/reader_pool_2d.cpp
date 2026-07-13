@@ -111,6 +111,13 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                     for (uint32_t rp_i = 0; rp_i < rp_nwords; ++rp_i) {
                         rp_dst[rp_i] = rp_src[rp_i];
                     }
+                    // Write-back the DM cache to TL1: the compute unpack reads in_cb directly from TL1 (not
+                    // through this DM core's L1/L2 cache — see the SCRATCH2OUT coherency note below), so the
+                    // CPU-store copy above is invisible to compute until flushed. The original noc.async_read
+                    // wrote TL1 directly and needed no flush; the CPU copy does. Without this, compute reduces
+                    // stale/zero in_cb (the per-stick-inconsistent zeros in the const-channel test).
+                    flush_l2_cache_range(
+                        reinterpret_cast<uintptr_t>(rp_dst), static_cast<size_t>(read_bytes * w_multiple));
                 }
 #else
                 noc.async_read(
