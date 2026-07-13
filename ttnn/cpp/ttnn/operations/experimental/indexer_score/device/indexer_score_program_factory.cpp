@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <array>
-#include <map>
 #include <string>
 #include <utility>
 #include <vector>
@@ -15,7 +14,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-logger/tt-logger.hpp>         // log_info: per-program schedule/mcast summary
+#include <tt-logger/tt-logger.hpp>  // log_info: per-program schedule/mcast summary
 #include <tt-metalium/mesh_workload.hpp>
 #include "hostdevcommon/kernel_structs.h"  // tt::CBIndex
 
@@ -43,8 +42,8 @@ constexpr uint32_t mcast_args_per_dir = 8;      // role, rect (xs,ys,xe,ye), sen
 constexpr uint32_t reader_num_mcast_dirs = 2;   // K column, then Q/W row
 constexpr uint32_t reader_k_batch_offset = reader_num_scalars + reader_num_mcast_dirs * mcast_args_per_dir;  // 25
 constexpr uint32_t reader_kv_len_tiles = reader_k_batch_offset + 1;                                          // 26
-constexpr uint32_t compute_kv_len_tiles = 6;     // after the 6 schedule scalars {row_group0..max_bands}
-constexpr uint32_t writer_kv_len_tiles = 1 + 6;  // out_addr + the 6 schedule scalars {row_group0..max_bands}
+constexpr uint32_t compute_kv_len_tiles = 6;          // after the 6 schedule scalars {row_group0..max_bands}
+constexpr uint32_t writer_kv_len_tiles = 1 + 6;       // out_addr + the 6 schedule scalars {row_group0..max_bands}
 constexpr uint32_t writer_chunk_start_tiles = 1 + 7;  // after out_addr + 6 sched scalars + kv_len[7]; match writer
 constexpr uint32_t writer_straddle_q_tile = 1 + 8;    // mid-slab forced-local block jump (block-pool only)
 constexpr uint32_t writer_straddle_jump_tiles = 1 + 9;
@@ -82,7 +81,8 @@ inline DeviceCausalGeometry device_causal_geometry(
     if (args.cluster_axis.has_value()) {
         TT_FATAL(
             device_index < sp,
-            "indexer_score: device_index {} out of range for block-cyclic sp={} (check cluster_axis vs block_cyclic_sp_axis)",
+            "indexer_score: device_index {} out of range for block-cyclic sp={} (check cluster_axis vs "
+            "block_cyclic_sp_axis)",
             device_index,
             sp);
         // SP-only block-cyclic: device_index is the SP-ring index and owns ONE block (Sq == chunk_local).
@@ -414,25 +414,26 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     reader_ct.push_back(q_valid_sem);
     // Fused single-head: reader reads q+w FIRST (the matmul gate needs them), then streams k (when no mcast).
     reader_ct.push_back(fuse_single ? 1u : 0u);
-    reader_ct.push_back(fused_stream_k ? 1u : 0u);  // fused: stream k (no mcast) vs whole mcast block
+    reader_ct.push_back(fused_stream_k ? 1u : 0u);        // fused: stream k (no mcast) vs whole mcast block
     reader_ct.push_back(args.synthesize_gate ? 1u : 0u);  // fill cb_w with gate_scale in L1 vs read DRAM
     reader_ct.push_back(gate_scale_bits);                 // bf16 pair, the in-kernel gate fill value
-
-    // Block-cyclic (per-SP-shard) K: bake invP's divisors as reader defines (only when a block-cyclic layout
-    // is present, so the contiguous path emits no defines -> byte-identical reader binary). cl_t = per-shard
-    // chunk in tiles; the kernel maps logical tile L -> L + shard*BC_SHARD_STRIDE_GAP - slab*BC_SLAB_STRIDE_GAP.
-    // sp/chunk_local/T are all hashed, so the gaps are pure compile-time constants (no per-dispatch arg).
-    std::map<std::string, std::string> reader_defines;
-    if (args.has_block_cyclic()) {
+    const auto block_cyclic_ct = [&args, Tt]() {
+        std::array<uint32_t, 5> ct{0, 1, 1, 0, 0};
+        if (!args.has_block_cyclic()) {
+            return ct;
+        }
         const uint32_t sp = args.block_cyclic->sp;
-        const uint32_t cl_t = args.block_cyclic->chunk_local / tt::constants::TILE_WIDTH;  // per-shard chunk (tiles)
-        const uint32_t chunk_tiles = sp * cl_t;                                            // global chunk (tiles)
-        reader_defines["BC_ENABLE"] = "1";
-        reader_defines["BC_SP"] = std::to_string(sp);
-        reader_defines["BC_CHUNK_LOCAL_T"] = std::to_string(cl_t);
-        reader_defines["BC_SLAB_STRIDE_GAP"] = std::to_string(cl_t * (sp - 1));
-        reader_defines["BC_SHARD_STRIDE_GAP"] = std::to_string((Tt - chunk_tiles) / sp);
-    }
+        const uint32_t chunk_local = args.block_cyclic->chunk_local / tt::constants::TILE_WIDTH;
+        ct = {
+            1,
+            chunk_local,
+            sp,
+            (Tt / sp) - chunk_local,
+            chunk_local * (sp - 1),
+        };
+        return ct;
+    }();
+    reader_ct.insert(reader_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
 
     std::vector<uint32_t> writer_ct = common_ct;
     const uint32_t out_elem_bytes = out.element_size();  // bf16 today
@@ -453,10 +454,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/indexer_score/device/kernels/";
     auto reader_id = tt::tt_metal::CreateKernel(
-        program,
-        kdir + "reader_indexer_score.cpp",
-        core_ranges,
-        tt::tt_metal::ReaderDataMovementConfig(reader_ct, reader_defines));
+        program, kdir + "reader_indexer_score.cpp", core_ranges, tt::tt_metal::ReaderDataMovementConfig(reader_ct));
     auto writer_id = tt::tt_metal::CreateKernel(
         program, kdir + "writer_indexer_score.cpp", core_ranges, tt::tt_metal::WriterDataMovementConfig(writer_ct));
     auto compute_id = tt::tt_metal::CreateKernel(

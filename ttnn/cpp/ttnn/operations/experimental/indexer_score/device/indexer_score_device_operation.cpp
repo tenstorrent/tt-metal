@@ -191,7 +191,7 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         attrs.cluster_axis.value_or(0u),
         attrs.has_indexed_kv_cache(),
         attrs.has_runtime_kv_len(),
-        // The block-cyclic layout bakes invP divisors into the reader as compile-time defines, so sp/chunk_local
+        // The block-cyclic layout bakes invP divisors into the reader as compile-time arguments, so sp/chunk_local
         // must be hashed (a contiguous vs block-cyclic read, or a different layout shape, is a different binary).
         attrs.has_block_cyclic(),
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->sp : 0u,
