@@ -406,6 +406,51 @@ def _compute_L_inv_ttnn(L_mat_4d, BH, NC, C, mesh_device, _cmc=None, eye_32=None
     return L_inv_4d
 
 
+def _bmm_progcfg(device, mt, nt, kt):
+    """Batched-matmul program config for the per-chunk [C,C]@[C,C] bmms (kk, qk).
+
+    TTNN auto-config pins these to ~16 cores (one [C,C] output tiled across cores, the
+    chunk-batch looped serially). Here per_core_M/N = the full [mt,nt] output block and
+    num_output_blocks == batch, so the ~192 chunk-batch elements fan out across the whole
+    device grid instead. Pure parallelization — matmul math is config-independent. Returns
+    None (-> TTNN auto-config, prior behaviour) when device is None or shapes don't tile.
+
+    Ported from tenstorrent/tt-metal#48861 (commit aac46950e). Applied unconditionally to
+    the kk (L_mat) and qk (intra_attn) matmuls.
+    """
+    if device is None or mt < 1 or nt < 1 or kt < 1:
+        return None
+    try:
+        grid = device.compute_with_storage_grid_size()
+        per_core_M, per_core_N = mt, nt
+        # out_subblock: largest h*w <= 4 tiles (fp32 DST limit) dividing per_core_M/N
+        osb_h, osb_w, best = 1, 1, 0
+        for h in range(1, per_core_M + 1):
+            if per_core_M % h:
+                continue
+            for w in range(1, per_core_N + 1):
+                if per_core_N % w:
+                    continue
+                if h * w <= 4 and h * w > best:
+                    best, osb_h, osb_w = h * w, h, w
+        # in0_block_w: largest divisor of kt, capped at 4 for L1 safety in fp32
+        in0_bw = 1
+        for c in (4, 3, 2, 1):
+            if c <= kt and kt % c == 0:
+                in0_bw = c
+                break
+        return ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=(grid.x, grid.y),
+            in0_block_w=in0_bw,
+            out_subblock_h=osb_h,
+            out_subblock_w=osb_w,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+        )
+    except Exception:
+        return None
+
+
 def chunk_gated_delta_rule_seq(
     q,  # [BH, T, K] float32 on mesh
     k,  # [BH, T, K] float32 on mesh
@@ -450,6 +495,12 @@ def chunk_gated_delta_rule_seq(
 
     if scale is None:
         scale = K**-0.5
+
+    # Batched-bmm progcfg for the per-chunk [C,C]@[C,C] kk (L_mat) and qk (intra_attn) matmuls:
+    # fan the chunk-batch across the full device grid instead of TTNN auto-config's ~16 cores
+    # (measured 16/110 -> 110/110, ~7.7x each matmul, -1.97 ms Total). Same tile dims for both.
+    # Math-invariant; None -> auto-config fallback. See _bmm_progcfg (PR #48861 / aac46950e).
+    _bmm_cfg = _bmm_progcfg(mesh_device, chunk_size // _TILE, chunk_size // _TILE, K // _TILE)
 
     _spc("core.chunk")  # valid_len mask + scale + pad/concat + chunk reshape + mask setup
 
@@ -576,7 +627,14 @@ def chunk_gated_delta_rule_seq(
     k_c = ttnn.move(k_c)
     k_c_t = ttnn.transpose(k_c, 1, 2, memory_config=_l1)
     # bf16-in/fp32-out (dtype=float32): feeds the fp32 L_mat/L_unit/L_inv spine.
-    kk = ttnn.matmul(k_beta_c, k_c_t, memory_config=_l1, compute_kernel_config=_hifi_cfg, dtype=ttnn.float32)
+    kk = ttnn.matmul(
+        k_beta_c,
+        k_c_t,
+        memory_config=_l1,
+        compute_kernel_config=_hifi_cfg,
+        dtype=ttnn.float32,
+        program_config=_bmm_cfg,
+    )
     ttnn.deallocate(k_c_t)
 
     _ck("kk", kk)
@@ -669,7 +727,14 @@ def chunk_gated_delta_rule_seq(
     k_c_4d_t = ttnn.transpose(k_c_4d, 2, 3, memory_config=_cmc)
     ttnn.deallocate(k_c_4d)  # dead after the transpose (R2)
     # bf16-in/fp32-out (dtype=float32): feeds intra_attn * fp32 mask and the kernel boundary.
-    qk_4d = ttnn.matmul(q_c_4d, k_c_4d_t, memory_config=_cmc, compute_kernel_config=_hifi_cfg, dtype=ttnn.float32)
+    qk_4d = ttnn.matmul(
+        q_c_4d,
+        k_c_4d_t,
+        memory_config=_cmc,
+        compute_kernel_config=_hifi_cfg,
+        dtype=ttnn.float32,
+        program_config=_bmm_cfg,
+    )
     ttnn.deallocate(k_c_4d_t)
     ttnn.deallocate(q_c_4d)  # dead after the matmul (R2)
     intra_attn_4d = ttnn.multiply(qk_4d, L_mask_4d, memory_config=_cmc)
