@@ -10,16 +10,50 @@ data — and no other test can see it: the block harness disables its PCC path w
 the gate) is on. So this compares the merged attention against the unmerged one directly, from the
 same weights, rather than against a reference derived from the fold itself."""
 
+import os
+
 import pytest
 import torch
+from safetensors import safe_open
 
 import models.tt_dit.models.transformers.ltx.attention_ltx as attention_ltx
 import ttnn
 from models.tt_dit.models.transformers.ltx.attention_ltx import LTXAttention
+from models.tt_dit.models.transformers.ltx.transformer_ltx import (
+    LTXTransformerBlock,
+    build_audio_masks,
+    build_video_pad_mask,
+)
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
+
+# The block harness (shapes, rope, masks, the 22B checkpoint) already exists; reuse it rather than
+# re-deriving production's exact latent grids and padding rules here.
+from models.tt_dit.tests.models.ltx.test_transformer_ltx import (  # noqa: E402
+    AUDIO_CTX_DIM,
+    AUDIO_DIM,
+    CTX_DIM,
+    DIM,
+    EPS,
+    INPUT_SEED,
+    NUM_HEADS,
+    PROMPT_LEN,
+    _audio_cross_pe_freqs,
+    _audio_rope_freqs,
+    _audio_seq_lens,
+    _make_ccl_manager,
+    _make_parallel_config,
+    _pad_seq_dim,
+    _resolve_checkpoint_22b,
+    _sp_pad_len,
+    _tt_rope,
+    _tt_rope_full,
+    _video_cross_pe_freqs,
+    _video_rope_freqs,
+)
 from models.tt_dit.utils.check import assert_quality
-from models.tt_dit.utils.tensor import bf16_tensor_2dshard, from_torch, to_torch
+from models.tt_dit.utils.mochi import get_rot_transformation_mat
+from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch, to_torch
 from models.tt_dit.utils.test import ring_params
 
 # (id, is_self, dim, num_heads, query_input_dim, M) — every gated projection the AV model runs, at
@@ -223,3 +257,204 @@ def test_gate_merge_forward_matches_standalone_gate(
         t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat, mesh_shape=tuple(mesh_device.shape))
     )
     assert_quality(to_t(out_p), to_t(out_m), pcc=0.999, relative_rmse=0.02)
+
+
+# ---------------------------------------------------------------------------
+# Block-level guard
+# ---------------------------------------------------------------------------
+# The tests above prove ONE LTXAttention is equivalent merged vs standalone. That is not the
+# claim the pipeline needs. A gated block runs SIX attentions, and two of them — audio_to_video
+# (output_dim != dim) and video_to_audio (whose K/V stay SP-sharded, so it takes the ring-cross
+# SDPA branch) — have a forward no attention test covers, only a projection test. The block also
+# adds what an isolated attention cannot: rope, the audio/video padding masks, and the fused
+# to_out addcmul that folds the residual into the projection epilogue.
+#
+# The pipeline decodes to noise while the tests above pass, so the bug lives in exactly that gap.
+# This closes it: one real block, real block-0 weights, merged vs standalone, same inputs.
+#
+# `merge_sel` selects WHICH attentions merge, so the same test bisects: the block builds its
+# attentions in a fixed order, and gate_merge_enabled() is consulted once per attention.
+_ATTN_ORDER = ("attn1", "attn2", "audio_attn1", "audio_attn2", "a2v", "v2a")
+
+
+def _build_block(merge: set[str], **kwargs):
+    """LTXTransformerBlock with the gate merge forced on for the named attentions only."""
+    pending = iter(_ATTN_ORDER)
+    original = attention_ltx.gate_merge_enabled
+    attention_ltx.gate_merge_enabled = lambda: next(pending) in merge
+    try:
+        block = LTXTransformerBlock(**kwargs)
+    finally:
+        attention_ltx.gate_merge_enabled = original
+    assert next(pending, None) is None, "block built fewer attentions than _ATTN_ORDER"
+    return block
+
+
+def _block0_state_dict(checkpoint_path: str) -> dict[str, torch.Tensor]:
+    """Block 0's weights, read straight out of the checkpoint (per-tensor, not the whole 45GB file)."""
+    prefix = "model.diffusion_model.transformer_blocks.0."
+    with safe_open(checkpoint_path, framework="pt") as f:
+        return {k[len(prefix) :]: f.get_tensor(k) for k in f.keys() if k.startswith(prefix)}
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology"),
+    [pytest.param((4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, id="ring_bh_4x8sp1tp0")],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    ("F", "H", "W"), [pytest.param(19, 17, 30, id="stage_1"), pytest.param(19, 34, 60, id="stage_2")]
+)
+@pytest.mark.parametrize(
+    "merge_sel",
+    [pytest.param(set(_ATTN_ORDER), id="all"), *[pytest.param({n}, id=n) for n in _ATTN_ORDER]],
+)
+def test_gate_merge_block_matches_standalone_gate(
+    mesh_device, sp_axis, tp_axis, num_links, topology, F, H, W, merge_sel, reset_seeds
+):
+    """A whole gated LTXTransformerBlock, merged gate vs standalone gate, from identical weights."""
+    checkpoint = _resolve_checkpoint_22b("fast")
+    if not os.path.exists(checkpoint):
+        pytest.skip(f"22B checkpoint not found at {checkpoint}")
+
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    video_N_real = F * H * W
+    video_N = _sp_pad_len(video_N_real, sp_factor)
+    audio_N, audio_N_real = _audio_seq_lens(F, sp_factor)
+
+    ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
+    parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
+    block_kwargs = dict(
+        video_dim=DIM,
+        video_ffn_dim=DIM * 4,
+        video_num_heads=NUM_HEADS,
+        video_cross_attention_dim=CTX_DIM,
+        audio_dim=AUDIO_DIM,
+        audio_ffn_dim=AUDIO_DIM * 4,
+        audio_num_heads=NUM_HEADS,
+        audio_cross_attention_dim=AUDIO_CTX_DIM,
+        eps=EPS,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        is_fsdp=False,  # production bh_4x8sp1tp0_ring
+        has_audio=True,
+        apply_gated_attention=True,
+        cross_attention_adaln=True,
+    )
+    merged = _build_block(set(merge_sel), **block_kwargs)
+    plain = _build_block(set(), **block_kwargs)
+    assert [a.merge_gate for a in (merged.attn1, merged.attn2)] != [False, False] or merge_sel.isdisjoint(
+        {"attn1", "attn2"}
+    )
+    assert not any(
+        a.merge_gate
+        for a in (
+            plain.attn1,
+            plain.attn2,
+            plain.audio_attn1,
+            plain.audio_attn2,
+            plain.audio_to_video_attn,
+            plain.video_to_audio_attn,
+        )
+    )
+
+    state = _block0_state_dict(checkpoint)
+    merged.load_torch_state_dict({k: v.clone() for k, v in state.items()}, strict=False)
+    plain.load_torch_state_dict({k: v.clone() for k, v in state.items()}, strict=False)
+
+    # Inputs: identical for both blocks, built exactly as test_ltx_transformer_block's AV path.
+    torch.manual_seed(INPUT_SEED)
+    x = torch.randn(1, video_N_real, DIM, dtype=torch.float32)
+    context = torch.randn(1, PROMPT_LEN, CTX_DIM, dtype=torch.float32)
+    temb = torch.randn(1, 1, 9 * DIM, dtype=torch.float32)
+    prompt_temb = torch.randn(1, 1, 2 * DIM, dtype=torch.float32)
+
+    a_x = torch.zeros(1, audio_N, AUDIO_DIM, dtype=torch.float32)
+    a_x[:, :audio_N_real, :] = torch.randn(1, audio_N_real, AUDIO_DIM, dtype=torch.float32)
+    a_ctx = torch.randn(1, PROMPT_LEN, AUDIO_CTX_DIM, dtype=torch.float32)
+    a_temb = torch.randn(1, 1, 9 * AUDIO_DIM, dtype=torch.float32)
+    a_prompt_temb = torch.randn(1, 1, 2 * AUDIO_DIM, dtype=torch.float32)
+    av_ca_v = torch.randn(1, 1, 5 * DIM, dtype=torch.float32)
+    av_ca_a = torch.randn(1, 1, 5 * AUDIO_DIM, dtype=torch.float32)
+
+    a_cos, a_sin = _tt_rope(_audio_rope_freqs, audio_N, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis)
+    vx_cos, vx_sin = _tt_rope(
+        _video_cross_pe_freqs, F, H, W, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis, pad_to=video_N
+    )
+    ax_cos, ax_sin = _tt_rope(_audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis)
+    ax_cos_full, ax_sin_full = _tt_rope_full(_audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, tp_axis=tp_axis)
+    a_attn_mask, a_pad_sp, a_pad_full = build_audio_masks(
+        audio_N, audio_N_real, mesh_device=mesh_device, sp_axis=sp_axis
+    )
+    v_pad_sp = build_video_pad_mask(video_N, video_N_real, mesh_device=mesh_device, sp_axis=sp_axis)
+
+    def forward_kwargs():
+        # Rebuilt per block: the block consumes its activation inputs, and both must see the same values.
+        return dict(
+            video_1BND=bf16_tensor_2dshard(
+                _pad_seq_dim(x, video_N, dim=1).unsqueeze(0), device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3}
+            ),
+            video_prompt=bf16_tensor(context.unsqueeze(0), device=mesh_device),
+            video_temb=bf16_tensor(
+                temb.reshape(9, DIM).unsqueeze(1).unsqueeze(1), device=mesh_device, mesh_axis=tp_axis, shard_dim=3
+            ),
+            video_N=video_N_real,
+            video_rope_cos=v_cos,
+            video_rope_sin=v_sin,
+            trans_mat=tt_trans_mat,
+            video_prompt_temb=bf16_tensor(prompt_temb.reshape(2, DIM).unsqueeze(1).unsqueeze(1), device=mesh_device),
+            audio_1BND=bf16_tensor_2dshard(
+                a_x.unsqueeze(0), device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3}
+            ),
+            audio_prompt=bf16_tensor(a_ctx.unsqueeze(0), device=mesh_device),
+            audio_temb=bf16_tensor(
+                a_temb.reshape(9, AUDIO_DIM).unsqueeze(1).unsqueeze(1),
+                device=mesh_device,
+                mesh_axis=tp_axis,
+                shard_dim=3,
+            ),
+            audio_prompt_temb=bf16_tensor(
+                a_prompt_temb.reshape(2, AUDIO_DIM).unsqueeze(1).unsqueeze(1), device=mesh_device
+            ),
+            av_ca_temb=bf16_tensor(
+                av_ca_v.reshape(5, DIM).unsqueeze(1).unsqueeze(1), device=mesh_device, mesh_axis=tp_axis, shard_dim=3
+            ),
+            av_ca_audio_temb=bf16_tensor(
+                av_ca_a.reshape(5, AUDIO_DIM).unsqueeze(1).unsqueeze(1),
+                device=mesh_device,
+                mesh_axis=tp_axis,
+                shard_dim=3,
+            ),
+            audio_N=audio_N,
+            audio_rope_cos=a_cos,
+            audio_rope_sin=a_sin,
+            video_cross_pe_cos=vx_cos,
+            video_cross_pe_sin=vx_sin,
+            audio_cross_pe_cos=ax_cos,
+            audio_cross_pe_sin=ax_sin,
+            audio_cross_pe_cos_full=ax_cos_full,
+            audio_cross_pe_sin_full=ax_sin_full,
+            audio_attn_mask=a_attn_mask,
+            audio_padding_mask=a_pad_sp,
+            audio_padding_mask_full=a_pad_full,
+            video_padding_mask=v_pad_sp,
+        )
+
+    v_cos, v_sin = _tt_rope(
+        _video_rope_freqs, F, H, W, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis, pad_to=video_N
+    )
+    tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
+
+    v_m, a_m = merged(**forward_kwargs())
+    v_p, a_p = plain(**forward_kwargs())
+
+    concat = [None, None]
+    concat[sp_axis] = 2
+    concat[tp_axis] = 3
+    to_t = lambda t: ttnn.to_torch(  # noqa: E731
+        t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat, mesh_shape=tuple(mesh_device.shape))
+    ).squeeze(0)
+
+    assert_quality(to_t(v_p)[:, :video_N_real, :], to_t(v_m)[:, :video_N_real, :], pcc=0.99, relative_rmse=0.05)
+    assert_quality(to_t(a_p)[:, :audio_N_real, :], to_t(a_m)[:, :audio_N_real, :], pcc=0.99, relative_rmse=0.05)
