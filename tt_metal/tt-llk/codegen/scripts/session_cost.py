@@ -38,6 +38,9 @@ Usage:
 
     # Or just print JSON to stdout (no patch)
     python codegen/scripts/session_cost.py --since "$START_TIME"
+
+    # Print the running session's full model id (e.g. claude-opus-4-8) and exit
+    python codegen/scripts/session_cost.py --print-model
 """
 
 from __future__ import annotations
@@ -84,6 +87,30 @@ def _tier(model_str: str | None) -> str:
     return "opus"
 
 
+def _last_model(jsonl_path: Path) -> str | None:
+    """Return the raw model id of the most recent real assistant turn.
+
+    Claude Code stamps each ``type: assistant`` entry with ``message.model``
+    (e.g. ``claude-opus-4-8``). Synthetic/system turns carry ``<synthetic>`` —
+    skip them. Returns None when the transcript has no model-bearing turn.
+    """
+    if not jsonl_path.exists():
+        return None
+    last: str | None = None
+    with jsonl_path.open() as fh:
+        for line in fh:
+            try:
+                d = json.loads(line)
+            except Exception:
+                continue
+            if d.get("type") != "assistant":
+                continue
+            m = (d.get("message") or {}).get("model")
+            if m and m != "<synthetic>":
+                last = m
+    return last
+
+
 def _parse_ts(ts: str | None) -> datetime | None:
     if not ts:
         return None
@@ -99,6 +126,19 @@ def _build_paths(session_id: str, cwd: str) -> tuple[Path, Path]:
     proj_name = cwd.replace("_", "-").replace("/", "-")
     proj_dir = home / ".claude" / "projects" / proj_name
     return proj_dir / f"{session_id}.jsonl", proj_dir / session_id / "subagents"
+
+
+def _find_by_session_id(session_id: str) -> tuple[Path, Path] | None:
+    home = Path(os.path.expanduser("~"))
+    matches = sorted(
+        (home / ".claude" / "projects").glob(f"*/{session_id}.jsonl"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    if not matches:
+        return None
+    jsonl = matches[0]
+    return jsonl, jsonl.parent / session_id / "subagents"
 
 
 def _discover_session(preferred_pid: str | None) -> tuple[str, Path, Path] | None:
@@ -268,12 +308,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--session-id",
         default=None,
-        help="Explicit session UUID (overrides PID discovery).",
+        help="Explicit session UUID; resolved by globbing ~/.claude/projects/ (overrides PID discovery).",
     )
     ap.add_argument(
         "--project-cwd",
         default=None,
-        help="CWD that maps to the project dir under ~/.claude/projects/ (required with --session-id).",
+        help="CWD that maps to the project dir under ~/.claude/projects/ (optional with --session-id).",
     )
     ap.add_argument(
         "--log-dir",
@@ -288,19 +328,37 @@ def main(argv: list[str] | None = None) -> int:
         "to capture the session identity at startup so refresh_cost.sh can pass it "
         "explicitly on later calls (when PID-based discovery may pick the wrong session).",
     )
+    ap.add_argument(
+        "--print-model",
+        action="store_true",
+        default=False,
+        help="Print the running session's full model id (e.g. claude-opus-4-8) from its "
+        "most recent turn and exit; prints nothing if undeterminable. Used by the "
+        "orchestrator to record the model actually running in run.json instead of a "
+        "hard-coded default.",
+    )
     args = ap.parse_args(argv)
 
     since_dt = _parse_ts(args.since) if args.since else None
 
-    if args.session_id and args.project_cwd:
+    session_id = args.session_id or os.environ.get("CLAUDE_CODE_SESSION_ID")
+    found_by_id = _find_by_session_id(session_id) if session_id else None
+
+    if found_by_id:
+        main_jsonl, subs_dir = found_by_id
+        discovered_sid = session_id
+        discovered_cwd = args.project_cwd or os.getcwd()
+    elif args.session_id and args.project_cwd:
         main_jsonl, subs_dir = _build_paths(args.session_id, args.project_cwd)
-        discovered_cwd = args.project_cwd
         discovered_sid = args.session_id
+        discovered_cwd = args.project_cwd
     else:
         found = _discover_session(args.session_pid)
         if not found:
             if args.print_session:
                 print(" ")  # empty pair — caller checks for blank
+            elif args.print_model:
+                print("")  # undeterminable — caller falls back to its default
             else:
                 print(
                     json.dumps(
@@ -317,28 +375,23 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         discovered_sid, main_jsonl, subs_dir = found
         discovered_cwd = str(main_jsonl.parent.parent.name).replace("-", "/")
+        home = Path(os.path.expanduser("~"))
+        sessions_dir = home / ".claude" / "sessions"
+        for f in sessions_dir.glob("*.json"):
+            try:
+                meta = json.loads(f.read_text())
+                if meta.get("sessionId") == discovered_sid and meta.get("cwd"):
+                    discovered_cwd = meta["cwd"]
+                    break
+            except Exception:
+                pass
 
     if args.print_session:
-        # Recover the original cwd string from the project dir name.
-        # _build_paths maps cwd → proj_name via cwd.replace("_","-").replace("/","-"),
-        # so we cannot perfectly invert it for all paths — instead we read it
-        # from the session file directly when we did PID discovery.
-        if not (args.session_id and args.project_cwd):
-            # Re-read the cwd from the session metadata for accuracy.
-            home = Path(os.path.expanduser("~"))
-            sessions_dir = home / ".claude" / "sessions"
-            real_cwd = discovered_cwd
-            for f in sessions_dir.glob("*.json"):
-                try:
-                    meta = json.loads(f.read_text())
-                    if meta.get("sessionId") == discovered_sid and meta.get("cwd"):
-                        real_cwd = meta["cwd"]
-                        break
-                except Exception:
-                    pass
-        else:
-            real_cwd = args.project_cwd
-        print(f"{discovered_sid} {real_cwd}")
+        print(f"{discovered_sid} {discovered_cwd}")
+        return 0
+
+    if args.print_model:
+        print(_last_model(main_jsonl) or "")
         return 0
 
     totals = dict(

@@ -20,8 +20,9 @@ Behaviour:
   run_test.sh exit 2     → compile_failures++, compile_failure_{N}.txt
   run_test.sh exit 1/3/5 → run_failures++, failed_attempt_{N}/test_run.txt
 
-LOG_DIR is read from /tmp/codegen_run_state.sh (written by the orchestrator Step 0).
-If the state file is absent or LOG_DIR does not exist, the hook exits silently.
+LOG_DIR is read from .codegen_run_state.json in the tool call's cwd (written
+by the orchestrator Step 0 via state.py). If the state file is absent or
+LOG_DIR does not exist, the hook exits silently.
 """
 
 from __future__ import annotations
@@ -38,21 +39,22 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 
-def _load_run_state() -> dict[str, str]:
-    state_file = Path("/tmp/codegen_run_state.sh")
+def _load_run_state(cwd: str) -> dict[str, str]:
+    if not cwd:
+        return {}
+    state_file = Path(cwd) / ".codegen_run_state.json"
     if not state_file.exists():
         return {}
-    state: dict[str, str] = {}
-    for line in state_file.read_text().splitlines():
-        m = re.match(r'^export\s+(\w+)="([^"]*)"', line)
-        if m:
-            state[m.group(1)] = m.group(2)
-    return state
+    try:
+        data = json.loads(state_file.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
-def _log_dir() -> Path | None:
-    state = _load_run_state()
-    raw = state.get("LOG_DIR", "").strip()
+def _log_dir(cwd: str) -> Path | None:
+    state = _load_run_state(cwd)
+    raw = str(state.get("LOG_DIR", "")).strip()
     if not raw:
         return None
     p = Path(raw)
@@ -222,7 +224,7 @@ def main() -> None:
     output = _tool_output(payload)
     exit_code = _exit_code(output)
 
-    log_dir = _log_dir()
+    log_dir = _log_dir(payload.get("cwd", ""))
     if log_dir is None:
         return  # not inside a codegen run
 

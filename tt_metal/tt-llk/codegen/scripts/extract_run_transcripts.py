@@ -37,11 +37,12 @@ produce human-readable per-agent markdown files that survive past the session:
 ``INDEX.md``   — one-line-per-agent summary with tool call counts and time
                  range, plus relative links to the three per-agent files.
 
-Session discovery mirrors ``session_cost.py``: pass ``--session-id`` +
-``--project-cwd`` explicitly, or let the script read
-``~/.claude/sessions/<pid>.json`` using ``$CLAUDE_SESSION_PID`` / ``$PPID``
-(falling back to the most-recently-started session). Run once from the
-orchestrator at the end of Step 5e; all writes are idempotent.
+Session discovery mirrors ``session_cost.py``: pass ``--session-id`` (resolved
+by globbing ``~/.claude/projects/``, falling back to ``$CLAUDE_CODE_SESSION_ID``
+when omitted), or let the script read ``~/.claude/sessions/<pid>.json`` using
+``$CLAUDE_SESSION_PID`` / ``$PPID`` (falling back to the most-recently-started
+session). Run once from the orchestrator at the end of Step 5e; all writes are
+idempotent.
 """
 
 from __future__ import annotations
@@ -65,6 +66,16 @@ def _build_paths(session_id: str, cwd: str) -> tuple[Path, Path]:
     proj_name = cwd.replace("_", "-").replace("/", "-")
     proj_dir = home / ".claude" / "projects" / proj_name
     return proj_dir / f"{session_id}.jsonl", proj_dir / session_id / "subagents"
+
+
+def _find_by_session_id(session_id: str) -> Path | None:
+    home = Path(os.path.expanduser("~"))
+    matches = sorted(
+        (home / ".claude" / "projects").glob(f"*/{session_id}.jsonl"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return matches[0].parent / session_id / "subagents" if matches else None
 
 
 def _discover_session(preferred_pid: str | None) -> tuple[str, str] | None:
@@ -628,18 +639,21 @@ def run(
     transcripts_dir = log_dir_path / "transcripts"
     transcripts_dir.mkdir(parents=True, exist_ok=True)
 
-    if session_id and project_cwd:
-        _, subs_dir = _build_paths(session_id, project_cwd)
-    else:
-        found = _discover_session(session_pid)
-        if not found:
-            print(
-                "extract_run_transcripts: no claude session discovered via ~/.claude/sessions",
-                file=sys.stderr,
-            )
-            return 1
-        sid, cwd = found
-        _, subs_dir = _build_paths(sid, cwd)
+    sid = session_id or os.environ.get("CLAUDE_CODE_SESSION_ID")
+    subs_dir = _find_by_session_id(sid) if sid else None
+    if subs_dir is None:
+        if session_id and project_cwd:
+            _, subs_dir = _build_paths(session_id, project_cwd)
+        else:
+            found = _discover_session(session_pid)
+            if not found:
+                print(
+                    "extract_run_transcripts: no claude session discovered via ~/.claude/sessions",
+                    file=sys.stderr,
+                )
+                return 1
+            fsid, cwd = found
+            _, subs_dir = _build_paths(fsid, cwd)
 
     if not subs_dir.is_dir():
         print(
@@ -724,12 +738,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--session-id",
         default=None,
-        help="Explicit session UUID (overrides PID discovery). Requires --project-cwd.",
+        help="Explicit session UUID; resolved by globbing ~/.claude/projects/ (overrides PID discovery).",
     )
     ap.add_argument(
         "--project-cwd",
         default=None,
-        help="CWD mapped under ~/.claude/projects/ (required with --session-id).",
+        help="CWD mapped under ~/.claude/projects/ (optional with --session-id).",
     )
     ap.add_argument(
         "--session-pid",
