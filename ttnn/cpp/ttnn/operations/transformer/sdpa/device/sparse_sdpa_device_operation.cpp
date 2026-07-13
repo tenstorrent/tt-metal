@@ -112,12 +112,24 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
         const uint32_t T = kv.logical_shape()[2];
         TT_FATAL(bc.sp > 0, "block_cyclic.sp must be > 0");
         TT_FATAL(bc.chunk_local > 0, "block_cyclic.chunk_local must be > 0");
-        TT_FATAL(T % bc.sp == 0, "kv length T ({}) must be divisible by block_cyclic.sp ({})", T, bc.sp);
-        TT_FATAL(
-            (T / bc.sp) % bc.chunk_local == 0,
-            "seq_len_local (T/sp = {}) must be divisible by block_cyclic.chunk_local ({})",
-            T / bc.sp,
-            bc.chunk_local);
+        if (bc.is_shard_local()) {
+            // Shard-local: kv is THIS rank's stripe [1,1,shard_len,K_DIM], shard_len = T_full/sp = an integral
+            // number of chunks. The global T is shard_len*sp; only shard_len % chunk_local must hold here.
+            // my_shard is read per-device from the shard_id input tensor (required).
+            TT_FATAL(t.shard_id.has_value(), "sparse_sdpa shard-local mode requires the shard_id input tensor");
+            TT_FATAL(
+                T % bc.chunk_local == 0,
+                "shard-local stripe length ({}) must be divisible by block_cyclic.chunk_local ({})",
+                T,
+                bc.chunk_local);
+        } else {
+            TT_FATAL(T % bc.sp == 0, "kv length T ({}) must be divisible by block_cyclic.sp ({})", T, bc.sp);
+            TT_FATAL(
+                (T / bc.sp) % bc.chunk_local == 0,
+                "seq_len_local (T/sp = {}) must be divisible by block_cyclic.chunk_local ({})",
+                T / bc.sp,
+                bc.chunk_local);
+        }
     }
     TT_FATAL(is.rank() == 4 && is[0] == 1 && is[1] == 1 && is[2] == S, "indices must be [1,1,S,TOPK]");
     const uint32_t TOPK = is[3];
@@ -238,6 +250,9 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         attrs.has_block_cyclic(),
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->sp : 0u,
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
+        // shard-local: only the MODE gates a compile #ifdef (BC_SHARD_LOCAL); my_shard is a runtime reader arg
+        // (patched per-device), so its VALUE is NOT hashed — one program serves every stripe/device.
+        attrs.block_cyclic.has_value() && attrs.block_cyclic->is_shard_local(),
         // return_stats gates two extra outputs + a compute/writer #ifdef, so it is a distinct program.
         attrs.return_stats,
         t.indices.logical_shape(),
@@ -249,11 +264,10 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> SparseSDPAOperation::get_dynamic_ru
     const SparseSDPAInputs& t,
     tensor_return_value_t& /*output*/,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // kv_batch_page_offset = cache_batch_idx*T depends on the runtime SLOT (and T, which is NOT hashed for an
-    // interleaved kv), so the same program is reused across slots/T — create_descriptor bakes it at build time
-    // and on a program-cache HIT it would be STALE, so re-apply it from the current slot/T every dispatch. The
-    // block-cyclic remap needs NOTHING here: all its constants are compile-time defines (T is hashed for that
-    // path, so a different cache size is a different program). Non-indexed programs have nothing to re-apply.
+    // kv_batch_page_offset = cache_batch_idx*T is the only per-slot value create_descriptor bakes that a
+    // program-cache HIT would leave stale, so re-apply it every dispatch. (Shard-local my_shard needs NO
+    // re-apply: it is read per-device from the SP-sharded shard_id tensor, whose buffer binding the framework
+    // patches per-device already.) Block-cyclic remap constants are compile-time defines (T hashed).
     const bool indexed = attrs.has_indexed_kv_cache();
     if (!indexed) {
         return {};
@@ -295,7 +309,8 @@ std::vector<Tensor> sparse_sdpa(
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<BlockCyclicLayout> block_cyclic,
-    bool return_stats) {
+    bool return_stats,
+    std::optional<Tensor> shard_id) {
     using OperationType = ttnn::prim::SparseSDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -311,6 +326,7 @@ std::vector<Tensor> sparse_sdpa(
             .q = q,
             .kv = kv,
             .indices = indices,
+            .shard_id = std::move(shard_id),
         });
 }
 

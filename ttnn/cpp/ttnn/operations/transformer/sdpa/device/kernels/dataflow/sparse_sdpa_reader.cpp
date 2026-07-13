@@ -48,6 +48,11 @@ void kernel_main() {
         TensorAccessorArgs<q_args.next_compile_time_args_offset(), q_args.next_common_runtime_args_offset()>();
     constexpr auto idx_args =
         TensorAccessorArgs<kv_args.next_compile_time_args_offset(), kv_args.next_common_runtime_args_offset()>();
+#ifdef BC_SHARD_LOCAL
+    // shard_id accessor chains after idx (compile args appended by the factory only in shard-local mode).
+    constexpr auto shard_args =
+        TensorAccessorArgs<idx_args.next_compile_time_args_offset(), idx_args.next_common_runtime_args_offset()>();
+#endif
 
     const uint32_t q_addr = get_arg_val<uint32_t>(0);
     const uint32_t kv_addr = get_arg_val<uint32_t>(1);
@@ -58,6 +63,12 @@ void kernel_main() {
     const uint32_t kv_batch_page_offset = get_arg_val<uint32_t>(5);
     // Block-cyclic remap (BC_ENABLE): all its constants are compile-time defines (the cache length T is hashed
     // for this path), so there is no runtime arg to read here. See sparse_sdpa_gather.hpp for the remap.
+#ifdef BC_SHARD_LOCAL
+    // qr-ring shard-local: which stripe (0..sp-1) THIS device holds, read from the SP-sharded shard_id tensor
+    // (arg 6 = its buffer address). Because it is a per-device SHARD, one broadcast program is correct across
+    // the whole mesh — each device's accessor resolves its own value. Read below (once, before the token loop).
+    const uint32_t shard_id_addr = get_arg_val<uint32_t>(6);
+#endif
 
     constexpr uint32_t q_row_bytes = k_dim * q_elem_bytes;     // Q row (bf16)
     constexpr uint32_t k_row_bytes = k_dim * kv_elem_bytes;    // K row (native dtype: fp8 or bf16)
@@ -75,6 +86,14 @@ void kernel_main() {
     const uint32_t idx_l1 = idx_cb.get_write_ptr();
     volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1);
 
+#ifdef BC_SHARD_LOCAL
+    // Read THIS device's stripe id (page 0 of the SP-sharded shard_id tensor) into the idx scratch, once.
+    const auto shard_id_t = TensorAccessor(shard_args, shard_id_addr);
+    noc.async_read(shard_id_t, idx_cb, sizeof(uint32_t), {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read_barrier();
+    const uint32_t my_shard = idx_ptr[0];
+#endif
+
     for (uint32_t tok = tok_start; tok < tok_start + tok_count; ++tok) {
         // Q: H head-rows -> cb_q_rm.  Q is [1,H,S,576] row-major: row (h,tok) = page h*S+tok.
         q_cb.reserve_back(H);
@@ -88,6 +107,28 @@ void kernel_main() {
         noc.async_read(idx, idx_cb, idx_row_bytes, {.page_id = tok}, {.offset_bytes = 0});
         noc.async_read_barrier();
 
+#ifdef BC_SHARD_LOCAL
+        // qr-ring SHARD-LOCAL: this rank holds only stripe BC_MY_SHARD. Keep only the natural indices that
+        // land in it, remap them to LOCAL pages, compact to a prefix, sentinel-fill the tail. nv may be 0
+        // (this query selected no keys from this stripe) -> n_active==0 -> compute emits the identity partial.
+        uint32_t nv;
+        {
+            uint32_t w = 0;
+            for (uint32_t r = 0; r < topk; ++r) {
+                const uint32_t n = idx_ptr[r];
+                if (n == sentinel) {
+                    break;  // global sentinels are a contiguous tail (indexer contract)
+                }
+                if (sparse_sdpa::logical_in_shard(n, BC_CHUNK_LOCAL, BC_SP, my_shard)) {
+                    idx_ptr[w++] = sparse_sdpa::logical_to_shard_local_page(n, BC_CHUNK_LOCAL, BC_SP);
+                }
+            }
+            for (uint32_t r = w; r < topk; ++r) {
+                idx_ptr[r] = sentinel;
+            }
+            nv = w;  // 0 allowed
+        }
+#else
         // binary-search the first sentinel -> nv (valid-key count); only ceil(nv/k_chunk) chunks are active.
         uint32_t nv = topk;
         {
@@ -102,7 +143,8 @@ void kernel_main() {
             }
             nv = lo == 0 ? 1 : lo;  // contract guarantees >=1 valid; guard anyway
         }
-        const uint32_t n_active = (nv + k_chunk - 1) / k_chunk;
+#endif
+        const uint32_t n_active = (nv + k_chunk - 1) / k_chunk;  // 0 when nv==0 (shard-local empty row)
 
         // hand the active chunk count + valid-key count to compute (it can't issue DRAM reads to derive
         // them). nv lets compute place the boundary mask (which key tiles of the last chunk to -inf).
@@ -113,6 +155,27 @@ void kernel_main() {
             cp[1] = nv;
         }
         ctrl_cb.push_back(1);
+
+        // Shard-local empty row (n_active==0): no chunks, so the per-chunk loop below never pushes a kreq --
+        // but the writer's K-gather while-loop blocks on kreq until it sees is_last. Push one terminating
+        // {base=0, half=0, is_last=1} so the writer's loop ends without gathering. Compute emits the identity
+        // partial for this token. (n_active is only ever 0 in shard-local mode; a no-op otherwise.)
+        if (n_active == 0) {
+            kreq_cb.reserve_back(1);
+            {
+                volatile tt_l1_ptr uint32_t* rq =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_write_ptr());
+                rq[0] = 0;
+                rq[1] = 0;
+                rq[2] = 1;
+            }
+            kreq_cb.push_back(1);
+            // The writer acks even the terminating kreq (it runs its gather-half loop once). The normal path
+            // pops one kack per chunk; with no chunks here we must still consume that ack, or orphaned kacks
+            // pile up and the writer eventually blocks on kack_cb.reserve_back -> deadlock (all-empty tokens).
+            kack_cb.wait_front(1);
+            kack_cb.pop_front(1);
+        }
 
         for (uint32_t chunk = 0; chunk < n_active; ++chunk) {
             const uint32_t base = chunk * k_chunk;

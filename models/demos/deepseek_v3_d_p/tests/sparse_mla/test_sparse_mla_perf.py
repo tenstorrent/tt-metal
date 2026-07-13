@@ -420,6 +420,8 @@ def test_mla_chunked_perf_impl(mesh_device, device_params, variant, config_only)
         layer_num=1,
         has_indexer=has_indexer,  # sparse: DSA indexer + sparse_sdpa; dense: NullIndexer + ring MLA
     )
+    if os.environ.get("QR_RING"):  # opt-in: profile the qr-ring Q-gather sparse-MLA path (stationary KV)
+        mla.qr_ring = True
 
     rope = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(total, chunk)
     # KVPE cache format is mode-specific. sparse: sparse_sdpa reads it natively and requires an

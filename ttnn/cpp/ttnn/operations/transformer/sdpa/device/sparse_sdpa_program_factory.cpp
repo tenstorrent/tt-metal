@@ -167,6 +167,13 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     tt::tt_metal::TensorAccessorArgs(t.kv.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(reader_ct, reader_crt);
     tt::tt_metal::TensorAccessorArgs(t.indices.buffer()).append_to(reader_ct, reader_crt);
+    // qr-ring shard-local: the reader reads its stripe id from the SP-sharded shard_id tensor. Its accessor
+    // chains right after idx (the reader's #ifdef BC_SHARD_LOCAL shard_args uses that offset). Appended only in
+    // shard-local mode, so the non-shard-local reader compile-arg layout is byte-identical.
+    if (attrs.has_block_cyclic() && attrs.block_cyclic->is_shard_local()) {
+        TT_FATAL(t.shard_id.has_value(), "sparse_sdpa shard-local mode requires the shard_id input tensor");
+        tt::tt_metal::TensorAccessorArgs(t.shard_id->buffer()).append_to(reader_ct, reader_crt);
+    }
 
     // The writer is the lighter dataflow kernel, so it builds the three persistent compute-input tiles.
     std::vector<uint32_t> writer_ct = {H, S, vDHt, cb_out_rm, cb_scale, cb_col_identity, cb_neginf, out_elem_bytes};
@@ -228,12 +235,21 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         }
         const uint32_t bc_sp = attrs.block_cyclic->sp;
         const uint32_t bc_chunk_local = attrs.block_cyclic->chunk_local;
-        const uint32_t bc_seq_len_local = t.kv.logical_shape()[2] / bc_sp;
-        defs["BC_ENABLE"] = "1";
         defs["BC_CHUNK_LOCAL"] = std::to_string(bc_chunk_local);
         defs["BC_SP"] = std::to_string(bc_sp);
-        defs["BC_SLAB_STRIDE_GAP"] = std::to_string(bc_chunk_local * (bc_sp - 1));
-        defs["BC_SHARD_STRIDE_GAP"] = std::to_string(bc_seq_len_local - bc_chunk_local);
+        if (attrs.block_cyclic->is_shard_local()) {
+            // qr-ring SHARD-LOCAL: kv is ONLY this rank's stripe [1,1,T/sp,K_DIM]. The reader compacts each
+            // token's index row to the keys that land in THIS device's stripe (my_shard, a runtime reader arg),
+            // remapped to LOCAL pages, so the gather uses them as-is (NO global invP remap -> BC_ENABLE off).
+            // Empty rows -> identity. my_shard is runtime (not a define) so one program serves every device.
+            defs["BC_SHARD_LOCAL"] = "1";
+        } else {
+            // Full block-cyclic prefix: the gather remaps each natural index -> global physical page (invP).
+            const uint32_t bc_seq_len_local = t.kv.logical_shape()[2] / bc_sp;
+            defs["BC_ENABLE"] = "1";
+            defs["BC_SLAB_STRIDE_GAP"] = std::to_string(bc_chunk_local * (bc_sp - 1));
+            defs["BC_SHARD_STRIDE_GAP"] = std::to_string(bc_seq_len_local - bc_chunk_local);
+        }
     };
     {
         std::map<std::string, std::string> rdefs{
@@ -344,7 +360,17 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         // kv_batch_page_offset sits at a fixed index (sparse_sdpa_rt::k{Reader,Writer}BatchOffsetArg), re-applied
         // on a cache hit by get_dynamic_runtime_args (the slot changes per dispatch). If you reorder the args
         // before it, update those constants or the re-apply targets the wrong slot.
-        reader_desc.emplace_runtime_args(core, {q_buf, kv_buf, idx_buf, tok_start, tok_count, kv_batch_page_offset});
+        // Reader args {q, kv, idx, tok_start, tok_count, kv_batch_page_offset[, shard_id_buf]}. shard_id_buf
+        // (index 6, the SP-sharded stripe-id tensor's per-device buffer address) is appended ONLY in
+        // shard-local mode; the reader reads page 0 of it -> my_shard. Buffer addresses are patched per-device
+        // by the framework, so this is correct across the mesh with one broadcast program.
+        if (attrs.has_block_cyclic() && attrs.block_cyclic->is_shard_local()) {
+            reader_desc.emplace_runtime_args(
+                core, {q_buf, kv_buf, idx_buf, tok_start, tok_count, kv_batch_page_offset, t.shard_id->buffer()});
+        } else {
+            reader_desc.emplace_runtime_args(
+                core, {q_buf, kv_buf, idx_buf, tok_start, tok_count, kv_batch_page_offset});
+        }
         if (return_stats) {
             // {out, tok_start, tok_count, kv, kv_batch_page_offset, m, l} — m/l appended last (indices 5,6).
             writer_desc.emplace_runtime_args(

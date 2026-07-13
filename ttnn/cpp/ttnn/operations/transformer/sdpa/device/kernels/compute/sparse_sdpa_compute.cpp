@@ -14,7 +14,8 @@
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/bcast.h"  // add_tiles_bcast_rows (mask add)
+#include "api/compute/bcast.h"               // add_tiles_bcast_rows (mask add)
+#include "api/compute/eltwise_unary/fill.h"  // fill_tile (shard-local empty-row identity partial)
 // compute_streaming.hpp needs declarations from compute_common.hpp (LightweightMaskContext, reduce helpers,
 // DEST_AUTO_LIMIT); include it first. Only compute_streaming primitives are used.
 #include "compute_common.hpp"
@@ -72,6 +73,25 @@ ALWI void copy_front_to_cb(uint32_t src_cb, uint32_t dst_cb, uint32_t num_tiles)
     dst.push_back(num_tiles);
 }
 #endif
+
+// Fill `num_tiles` tiles of `cb` with the constant `val` (shard-local empty-row identity partial: O=0,
+// m=-BIG, l=0). Reserves+packs+pushes like copy_front_to_cb; explicit out-of-order pack index so it is
+// correct for any num_tiles (Sqt may be > 1).
+ALWI void fill_cb_const(uint32_t cb, uint32_t num_tiles, float val) {
+    CircularBuffer c(cb);
+    c.reserve_back(num_tiles);
+    pack_reconfig_data_format(cb);
+    fill_tile_init();
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        tile_regs_acquire();
+        fill_tile(0, val);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile<true>(0, cb, i);
+        tile_regs_release();
+    }
+    c.push_back(num_tiles);
+}
 
 void kernel_main() {
     constexpr uint32_t H = get_compile_time_arg_val(0);
@@ -138,6 +158,26 @@ void kernel_main() {
         const uint32_t num_active_chunks = ckernel::read_tile_value(cb_ctrl, /*tile=*/0, /*element_offset=*/0);
         const uint32_t num_valid_keys = ckernel::read_tile_value(cb_ctrl, /*tile=*/0, /*element_offset=*/1);
         ctrl_cb.pop_front(1);
+
+        // Shard-local empty row (num_active_chunks==0): this query selected no keys from this stripe. Emit the
+        // identity partial (O=0, m=-BIG, l=0) instead of running the flash loop (an all-masked row would be
+        // exp(-inf-(-inf))=NaN). In the cross-shard merge M=max(scale*m_i); w_i=exp(scale*m_i-M)*l_i, so
+        // scale*(-1e30) underflows w_i to 0 and this stripe contributes nothing. Q was already tilized; drop it.
+        if (num_active_chunks == 0) {
+            fill_cb_const(cb_out_im, Sqt * vDHt, 0.0f);
+#ifdef RETURN_STATS
+            fill_cb_const(cb_m_im, Sqt, -1.0e30f);
+            fill_cb_const(cb_l_im, Sqt, 0.0f);
+#endif
+            q_in_cb.wait_front(Sqt * DHt);  // Q was tilized above but never consumed; reclaim it
+            q_in_cb.pop_front(Sqt * DHt);
+            compute_kernel_lib::untilize<vDHt, cb_out_im, cb_out_rm>(/*num_blocks=*/Sqt);
+#ifdef RETURN_STATS
+            compute_kernel_lib::untilize<1, cb_m_im, cb_m_rm>(/*num_blocks=*/Sqt);
+            compute_kernel_lib::untilize<1, cb_l_im, cb_l_rm>(/*num_blocks=*/Sqt);
+#endif
+            continue;
+        }
 
         // Flash running state, ping-pong. Reset every token; all buffers start empty.
         CircularBuffer max_prev(cb_max_a), max_cur(cb_max_b);

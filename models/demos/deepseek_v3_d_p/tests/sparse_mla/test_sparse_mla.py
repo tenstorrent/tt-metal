@@ -378,6 +378,8 @@ def run_sparse_mla_chunked_case(
         is_chunked=True,
         layer_num=1,
     )
+    if os.environ.get("QR_RING"):  # opt-in: exercise the qr-ring Q-gather sparse-MLA path (default off)
+        mla_tt.qr_ring = True
     rope = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
     rope_tensors = rope.get_rope_tensors_indexed(seq_len, chunk)
 

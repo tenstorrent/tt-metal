@@ -130,4 +130,45 @@ std::vector<ttnn::Tensor> sparse_sdpa_stats(
         /*return_stats=*/true);
 }
 
+std::vector<ttnn::Tensor> sparse_sdpa_stats_shard_local(
+    const ttnn::Tensor& q,
+    const ttnn::Tensor& kv,
+    const ttnn::Tensor& indices,
+    const ttnn::Tensor& shard_id,
+    uint32_t v_dim,
+    uint32_t sp,
+    uint32_t chunk_local,
+    std::optional<float> scale,
+    uint32_t k_chunk_size,
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    // qr-ring building block: kv is ONLY this rank's stationary block-cyclic stripe [1,1,T/sp,K_DIM]. Which
+    // stripe THIS device holds is read PER DEVICE from `shard_id` ([1,1,1,1] uint32, SP-sharded so device s
+    // holds s), so ONE broadcast program is correct on 1 chip or a full mesh (the reader's shard_id accessor
+    // resolves each device's value). sp/chunk_local describe the block-cyclic layout. Always returns stats
+    // {O, m, l} (the cross-shard merge needs m,l). Empty rows yield the identity partial (see kernels).
+    const uint32_t k_dim = q.logical_shape()[3];
+    const float resolved_scale = scale.value_or(1.0f / std::sqrt(static_cast<float>(k_dim)));
+    const bool any_fp8 = (kv.dtype() == ttnn::DataType::FP8_E4M3) || (q.dtype() == ttnn::DataType::FP8_E4M3);
+    auto kernel_config = init_device_compute_kernel_config(
+        tt::tt_metal::hal::get_arch(),
+        compute_kernel_config,
+        /*default_fidelity=*/MathFidelity::HiFi2,
+        /*default_approx_mode=*/true,
+        /*default_fp32_acc=*/any_fp8,
+        /*default_l1_acc=*/false);
+    ttnn::prim::BlockCyclicLayout bc{sp, chunk_local, /*shard_local=*/true};
+    return ttnn::prim::sparse_sdpa(
+        q,
+        kv,
+        indices,
+        resolved_scale,
+        v_dim,
+        k_chunk_size,
+        kernel_config,
+        /*cache_batch_idx=*/std::nullopt,
+        bc,
+        /*return_stats=*/true,
+        /*shard_id=*/shard_id);
+}
+
 }  // namespace ttnn::transformer

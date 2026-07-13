@@ -67,4 +67,22 @@ std::vector<ttnn::Tensor> sparse_sdpa_stats(
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
     std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);
 
+// qr-ring SHARD-LOCAL building block. kv is ONLY this rank's stationary block-cyclic stripe [1,1,T/sp,K_DIM];
+// `shard` (0..sp-1) says which. Keeps the natural indices that land in this stripe ((n/chunk_local)%sp==shard),
+// remaps them to LOCAL pages, and computes the per-shard sparse partial + stats {O, m, l}. A query that
+// selected no keys from this stripe yields the identity partial (O=0, m=-BIG, l=0). sp/chunk_local/shard are
+// EXPLICIT (not mesh-derived), so it runs single-device for validating the per-shard + flash-merge decomposition.
+// Merge across shards i: M=max_i(scale*m_i); w_i=exp(scale*m_i - M)*l_i; out = sum_i w_i O_i / sum_i w_i.
+std::vector<ttnn::Tensor> sparse_sdpa_stats_shard_local(
+    const ttnn::Tensor& q,
+    const ttnn::Tensor& kv,
+    const ttnn::Tensor& indices,
+    const ttnn::Tensor& shard_id,  // [1,1,1,1] uint32, SP-sharded so device s holds its stripe id s
+    uint32_t v_dim,
+    uint32_t sp,
+    uint32_t chunk_local,
+    std::optional<float> scale = std::nullopt,
+    uint32_t k_chunk_size = 128,
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+
 }  // namespace ttnn::transformer

@@ -397,6 +397,33 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("block_cyclic_sp_axis") = nb::none(),
         nb::arg("block_cyclic_chunk_local") = nb::none());
 
+    ttnn::bind_function<"sparse_sdpa_stats_shard_local", "ttnn.transformer.">(
+        mod,
+        R"doc(
+        qr-ring SHARD-LOCAL building block. kv is ONLY this rank's stationary block-cyclic stripe
+        [1, 1, T/sp, K_DIM]; `shard` (0..sp-1) says which. Keeps the natural top-k indices that land in this
+        stripe ((n/chunk_local) % sp == shard), remaps them to LOCAL pages, and returns the per-shard sparse
+        partial + stats {O, m, l}. A query that selected no keys from this stripe yields the identity partial
+        (O=0, m=-BIG, l=0). sp/chunk_local/shard are EXPLICIT (not mesh-derived) so it runs on a single device,
+        for validating the per-shard + flash-merge decomposition against the full-prefix golden.
+
+        Returns:
+            [O, m, l] — same layout/semantics as sparse_sdpa_stats.
+            Merge across shards i: M=max_i(scale*m_i); w_i=exp(scale*m_i - M)*l_i; out=Σ w_i O_i / Σ w_i.
+        )doc",
+        &ttnn::transformer::sparse_sdpa_stats_shard_local,
+        nb::arg("q").noconvert(),
+        nb::arg("kv").noconvert(),
+        nb::arg("indices").noconvert(),
+        nb::arg("shard_id").noconvert(),
+        nb::arg("v_dim"),
+        nb::arg("sp"),
+        nb::arg("chunk_local"),
+        nb::kw_only(),
+        nb::arg("scale") = nb::none(),
+        nb::arg("k_chunk_size") = 128,
+        nb::arg("compute_kernel_config") = nb::none());
+
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
         mod,
         R"doc(

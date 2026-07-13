@@ -51,6 +51,18 @@ FORCE_INLINE uint32_t logical_to_chunked_physical(
     return n + shard * shard_stride_gap - slab * slab_stride_gap;
 }
 
+// qr-ring SHARD-LOCAL remap. This rank holds ONLY stripe `my_shard` (T/sp rows). A natural index n belongs to
+// this stripe iff (n/chunk_local)%sp == my_shard; if so, its LOCAL page within the stripe is
+// (n/chunk_global)*chunk_local + n%chunk_local  (chunk_global = chunk_local*sp). Both fold to compile-time
+// divides at the call site (all args are compile-time defines). The reader uses these to compact each token's
+// index row to its in-stripe keys (remapped to local pages) before the normal valid-prefix gather.
+FORCE_INLINE bool logical_in_shard(uint32_t n, uint32_t chunk_local, uint32_t sp, uint32_t my_shard) {
+    return ((n / chunk_local) % sp) == my_shard;
+}
+FORCE_INLINE uint32_t logical_to_shard_local_page(uint32_t n, uint32_t chunk_local, uint32_t sp) {
+    return (n / (chunk_local * sp)) * chunk_local + (n % chunk_local);
+}
+
 template <typename Accessor>
 FORCE_INLINE void trid_ring_gather(
     Noc& noc,

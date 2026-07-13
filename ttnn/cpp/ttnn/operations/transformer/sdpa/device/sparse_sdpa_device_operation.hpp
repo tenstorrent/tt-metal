@@ -28,6 +28,7 @@ inline constexpr uint32_t kReaderKernelIdx = 0;
 inline constexpr uint32_t kWriterKernelIdx = 1;
 inline constexpr uint32_t kReaderBatchOffsetArg = 5;  // {q, kv, idx, tok_start, tok_count, [kv_batch_page_offset]}
 inline constexpr uint32_t kWriterBatchOffsetArg = 4;  // {out, tok_start, tok_count, kv, [kv_batch_page_offset]}
+inline constexpr uint32_t kReaderMyShardArg = 6;      // shard-local only: my_shard, appended after batch offset
 }  // namespace sparse_sdpa_rt
 
 struct SparseSDPAOperation {
@@ -76,6 +77,7 @@ std::vector<Tensor> sparse_sdpa(
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
     std::optional<BlockCyclicLayout> block_cyclic = std::nullopt,
-    bool return_stats = false);
+    bool return_stats = false,
+    std::optional<Tensor> shard_id = std::nullopt);  // shard-local only: per-device [1,1,1,1] uint32 stripe id
 
 }  // namespace ttnn::prim

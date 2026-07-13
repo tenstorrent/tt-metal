@@ -1227,6 +1227,26 @@ class ttMLA:
             kv_actual_global=kv_actual_isl,
             cluster_axis=self.sp_axis,
         )
+        # qr-ring path (default OFF via self.qr_ring): keep each chip's block-cyclic KVPE STRIPE stationary
+        # (NO O(T) prefix gather — the win), gather Q instead, and flash-merge the per-stripe partials. The
+        # underlying ops are hardware-validated (test_qr_ring_composed_e2e.py); this integrated path still needs
+        # a GLM-harness run (test_sparse_mla.py / _perf.py) before it replaces the default.
+        if getattr(self, "qr_ring", False) and self.sp_factor > 1:
+            kvpe_stripe = ttnn.to_memory_config(kvpe_cache, ttnn.DRAM_MEMORY_CONFIG)  # local SP stripe, block-cyclic
+            if kvpe_stripe.shape[0] > 1:  # user-major cache: slice this (user,layer) slot; no gather
+                sel = ttnn.slice(
+                    kvpe_stripe,
+                    [cache_batch_idx, 0, 0, 0],
+                    [cache_batch_idx + 1, 1, kvpe_stripe.shape[2], kvpe_stripe.shape[3]],
+                )
+                ttnn.deallocate(kvpe_stripe)
+                kvpe_stripe = sel
+            ttnn.deallocate(tt_kvpe)
+            attn_out = self._sparse_mla_qr(tt_q, kvpe_stripe, indices, seq_len_local)
+            ttnn.deallocate(kvpe_stripe)
+            ttnn.deallocate(tt_q)
+            return self._apply_wkv_b2(attn_out, seq_len_local)
+
         kvpe_dev = self._gather_kvpe_prefix(kvpe_cache, cache_batch_idx)
         ttnn.deallocate(tt_kvpe)
 
@@ -1238,6 +1258,136 @@ class ttMLA:
         ttnn.deallocate(kvpe_dev)
         ttnn.deallocate(tt_q)
         return self._apply_wkv_b2(attn_out, seq_len_local)
+
+    def _qr_shard_id_tensor(self):
+        """[sp,1,1,1] uint32 SP-sharded so chip s holds its stripe id s (built once). Feeds the shard-local op's
+        per-device my_shard — one broadcast program stays correct across the mesh."""
+        if getattr(self, "_qr_shard_id", None) is None:
+            ids = torch.arange(self.sp_factor, dtype=torch.int32).reshape(self.sp_factor, 1, 1, 1)
+            dims = [None, None]
+            dims[self.sp_axis] = 0
+            self._qr_shard_id = ttnn.from_torch(
+                ids,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, dims=tuple(dims), mesh_shape=tuple(self.mesh_device.shape)
+                ),
+            )
+        return self._qr_shard_id
+
+    def _sparse_mla_qr(self, q, kvpe_stripe, indices, seq_len_local):
+        """qr-ring sparse MLA: keep each chip's block-cyclic KVPE STRIPE stationary (no O(T) gather), gather Q
+        across SP, compute each stripe's sparse partial (O,m,l), and flash-merge across SP -> full attention,
+        re-sharded to [1,H/tp,S/sp,v] to match _sparse_mla's contract. sp==1 falls back to plain _sparse_mla.
+
+        Building blocks are hardware-validated (test_qr_ring_composed_e2e.py, sp8): shard-local op +
+        all_gather(partials) + online-softmax merge == full-T golden. Handles the head->seq reshard when
+        H/tp < 32 (GLM tp=4) by wrapping the unchanged qr core (same as _sparse_mla). Efficiency follow-up:
+        gather the compact q_lora latent instead of the absorbed per-head q; replace the all_gather-merge with
+        reduce_scatter(w*O, w)."""
+        sp = self.sp_factor
+        if sp == 1:
+            return self._sparse_mla(q, kvpe_stripe, indices, block_cyclic_chunk_local=seq_len_local)
+        assert self.sp_axis == 0 and self.tp_axis == 1, "qr sparse_mla assumes sp_axis=0, tp_axis=1"
+        # tp thin enough that H/tp < 32 (e.g. GLM tp=4 -> 16 heads/chip): mirror _sparse_mla's head->seq reshard
+        # around the qr core. All-gather q's heads over TP (each chip regains all H heads) then re-shard its seq
+        # over TP, so every chip attends a DISTINCT seq slice at full H (seq now over sp*tp). The qr core below
+        # is UNCHANGED; only the sharding of q/indices/out differs. After the merge we invert it. tp=1 / fat
+        # shards are untouched.
+        transpose = self._needs_head_to_seq_reshard
+        q_local = q  # [1,H/tp,S/sp,K_DIM]
+        if transpose:
+            q_all_heads = self._all_gather(q, dim=1, cluster_axis=self.tp_axis)  # [1,H,S/sp,K_DIM] repl on TP
+            q_local = ttnn.mesh_partition(q_all_heads, dim=2, cluster_axis=self.tp_axis)  # [1,H,S/(sp*tp),K_DIM]
+            ttnn.deallocate(q_all_heads)
+
+        # Indices matched to q_local's seq sharding: normalize to SP-sharded [1,1,S/sp,k], then split over TP
+        # when reshaping. (Incoming indices are either replicated full-glob [1,1,S,k] or SP-sharded [1,1,S/sp,k].)
+        idx = indices
+        if idx.shape[2] == seq_len_local * sp:  # replicated full-glob -> SP shard
+            idx = ttnn.mesh_partition(indices, dim=2, cluster_axis=self.sp_axis)
+        if transpose and idx.shape[2] != q_local.shape[2]:
+            idx_t = ttnn.mesh_partition(idx, dim=2, cluster_axis=self.tp_axis)
+            if idx is not indices:
+                ttnn.deallocate(idx)
+            idx = idx_t
+
+        # qr core: gather Q + indices across SP so every chip holds the full (per-TP-group) query set against its
+        # stationary KV stripe. seq goes S/(sp*tp)->S/tp (reshard) or S/sp->S (no reshard).
+        q_gathered = self._all_gather(q_local, dim=2, cluster_axis=self.sp_axis)
+        if q_local is not q:
+            ttnn.deallocate(q_local)
+        q_rm = ttnn.to_layout(q_gathered, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(q_gathered)
+        idx_g = self._all_gather(idx, dim=2, cluster_axis=self.sp_axis)
+        if idx is not indices:
+            ttnn.deallocate(idx)
+        idx = idx_g
+
+        k_chunk = next((c for c in (128, 64, 32) if idx.shape[-1] % c == 0), 32)
+        parts = ttnn.transformer.sparse_sdpa_stats_shard_local(
+            q_rm,
+            kvpe_stripe,
+            idx,
+            self._qr_shard_id_tensor(),
+            self.kv_lora_rank,
+            sp=sp,
+            chunk_local=seq_len_local,
+            scale=self.scale,
+            k_chunk_size=k_chunk,
+        )
+        ttnn.deallocate(q_rm)
+        if idx is not indices:
+            ttnn.deallocate(idx)
+
+        # Cross-SP online-softmax merge via REDUCE-SCATTER (each chip keeps its S/sp output slice). O and l stay
+        # LOCAL; only the tiny m-stat is all-gathered to form the global row-max M. reduce_scatter then sums the
+        # sp weighted partials AND scatters seq in one shot, producing a 1/sp-sized result -> far less transport
+        # than all-gathering sp copies of the wide per-head O. Math: M=max_s(scale*m_s); w_s=exp(scale*m_s-M)*Σl_s;
+        # out = reduce_scatter(w_s*O_s) / reduce_scatter(w_s).
+        tl = ttnn.TILE_LAYOUT
+        H_dyn, Sg = parts[0].shape[1], parts[0].shape[2]
+        m_all = self._all_gather(parts[1], dim=0, cluster_axis=self.sp_axis)  # [sp,H,Sg,32], col0 = raw row-max
+        M = None
+        for s in range(sp):
+            sm0 = ttnn.multiply(ttnn.to_layout(ttnn.slice(m_all, [s, 0, 0, 0], [s + 1, H_dyn, Sg, 1]), tl), self.scale)
+            if M is None:
+                M = sm0
+            else:
+                newM = ttnn.maximum(M, sm0)
+                ttnn.deallocate(M)
+                ttnn.deallocate(sm0)
+                M = newM
+        ttnn.deallocate(m_all)
+        # This chip's own partial: w_s = exp(scale*m_s - M) * Σ_cols l_s, then w_s * O_s (broadcast over v).
+        m_loc = ttnn.multiply(ttnn.to_layout(ttnn.slice(parts[1], [0, 0, 0, 0], [1, H_dyn, Sg, 1]), tl), self.scale)
+        l_loc = ttnn.sum(ttnn.to_layout(parts[2], tl), dim=-1, keepdim=True)  # [1,H,Sg,1]
+        w = ttnn.multiply(ttnn.exp(ttnn.subtract(m_loc, M)), l_loc)  # [1,H,Sg,1]
+        num_loc = ttnn.multiply(ttnn.to_layout(parts[0], tl), w)  # [1,H,Sg,v]
+        for p in parts:
+            ttnn.deallocate(p)
+        ttnn.deallocate(m_loc)
+        ttnn.deallocate(l_loc)
+        ttnn.deallocate(M)
+        rs = dict(dim=2, cluster_axis=self.sp_axis, num_links=self.ccl_num_links, topology=self.ccl_topology)
+        num = ttnn.reduce_scatter(num_loc, **rs)  # Σ_s w_s O_s, scattered on seq -> [1,H,Sg/sp,v]
+        den = ttnn.reduce_scatter(w, **rs)  # Σ_s w_s -> [1,H,Sg/sp,1]
+        ttnn.deallocate(num_loc)
+        ttnn.deallocate(w)
+        out = ttnn.multiply(num, ttnn.reciprocal(den))  # [1,H(/tp),Sg/sp,v] (already SP-seq-sharded)
+        ttnn.deallocate(num)
+        ttnn.deallocate(den)
+        if transpose:
+            # Invert the head->seq reshard: gather the per-TP seq slices back to S/sp, then re-shard heads onto
+            # TP -> [1,H/tp,S/sp,v], the layout the wkv_b2 / o_proj epilogue expects.
+            out_all_heads = self._all_gather(out, dim=2, cluster_axis=self.tp_axis)  # [1,H,S/sp,v]
+            out_reshard = ttnn.mesh_partition(out_all_heads, dim=1, cluster_axis=self.tp_axis)  # [1,H/tp,S/sp,v]
+            ttnn.deallocate(out_all_heads)
+            out = out_reshard
+        return out
 
     def _forward_kv_only(
         self,

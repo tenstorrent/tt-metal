@@ -23,6 +23,16 @@ namespace ttnn::prim {
 struct BlockCyclicLayout {
     uint32_t sp;           // SP shard count the cache was written across (resolved from the mesh)
     uint32_t chunk_local;  // per-shard chunk length (chunk_size_global / sp == per-chip seq_len_local)
+    // qr-ring SHARD-LOCAL mode: when set, kv is ONLY this rank's stationary stripe [1,1,T/sp,K_DIM] (not the
+    // full gathered prefix). The reader keeps only the natural indices that land in THIS device's stripe
+    // ((n/chunk_local)%sp == my_shard), remaps them to LOCAL pages, and compacts; a query whose top-k all miss
+    // this stripe yields an identity partial (O=0, m=-BIG, l=0) so the cross-shard flash-merge ignores it.
+    // Requires return_stats (the merge needs m,l). `my_shard` (0..sp-1) is read PER DEVICE at runtime from the
+    // `shard_id` input tensor (SparseSDPAInputs) — SP-sharded so each device holds its own stripe id — which
+    // makes one broadcast program correct across the whole mesh (no per-coord recompile). When false, kv is
+    // the full block-cyclic prefix (global invP remap, BC_ENABLE).
+    bool shard_local = false;
+    bool is_shard_local() const { return shard_local; }
 };
 
 // Sparse MLA prefill (DeepSeek DSA).
@@ -53,6 +63,9 @@ struct SparseSDPAInputs {
     Tensor q;   // [1, H, S, K_DIM] bf16/fp8_e4m3 ROW_MAJOR  (K_DIM = head dim, e.g. 576)
     Tensor kv;  // [1, 1, T, K_DIM] bf16/fp8_e4m3 ROW_MAJOR  (or [B,1,T,K_DIM] when indexed; may be ND-sharded DRAM)
     Tensor indices;  // [1, 1, S, TOPK] uint32 ROW_MAJOR  (0xFFFFFFFF = masked)
+    // qr-ring shard-local only: [1,1,1,1] uint32 ROW_MAJOR holding THIS device's stripe id (0..sp-1). SP-sharded
+    // across the mesh so each device reads its own; the reader reads page 0 -> my_shard. Absent otherwise.
+    std::optional<Tensor> shard_id = std::nullopt;
 };
 
 }  // namespace ttnn::prim
