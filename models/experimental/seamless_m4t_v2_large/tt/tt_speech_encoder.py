@@ -1527,14 +1527,8 @@ class TTSeamlessM4Tv2SpeechEncoder:
         return attn_out
 
     def _f32_softmax_query_chunk(self, seq_len: int) -> int:
-        """Query-block size for the f32 QK/softmax path.
-
-        At the longest audio (S≈4096) the f32 matmul/typecast working set is largest, so the block is
-        kept smaller on TP>1 (which also carries a persistent L1 buffer); single-device and shorter
-        seq can take a larger block.
-        """
         if seq_len >= _ATTN_QUERY_CHUNK_MATMUL_THRESHOLD:
-            return 128 if self._tp > 1 else 256
+            return 128
         return 256
 
     def _chunked_relative_attention_matmul_f32_softmax(
@@ -1562,13 +1556,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         right_max = int(attn_module.right_max_position_embeddings)
         mc = self._mc_act(seq_len=seq_len)
         query_chunk = self._f32_softmax_query_chunk(seq_len)
-        # The numeric-stable softmax CB is width-bound (S wide); in f32 at S≈4096 it overflows L1
-        # against a persistent TP>1 L1 buffer. There, run the softmax on a bf16 copy of the
-        # (f32-accurate) scores — the f32 QK/bias/mask above is the precision win, so a bf16 softmax
-        # still clears the ASR WER. Single-device (whole L1) and shorter seq keep the full-f32 softmax.
-        f32_softmax_fits = not (self._tp > 1 and seq_len >= _ATTN_QUERY_CHUNK_MATMUL_THRESHOLD)
-        # Band-window the relative-position gather only for the longest audio (where it dominated
-        # device time); mid-range keeps the full-S fused gather it was validated with.
+        f32_softmax_fits = seq_len < _ATTN_QUERY_CHUNK_MATMUL_THRESHOLD
         use_windowed_rel = seq_len >= _ATTN_QUERY_CHUNK_MATMUL_THRESHOLD
         k_f32 = ttnn.typecast(k, ttnn.float32)
         ttnn.deallocate(k)
