@@ -6,6 +6,8 @@ from infra.data_collection.cicd import create_cicd_json_for_data_analysis
 from infra.data_collection.models import InfraErrorV1, TestErrorV1
 from infra.data_collection.github.utils import (
     get_job_failure_signature_,
+    get_job_row_from_github_job,
+    get_civ2_node_name_and_serial_from_annotations,
     _card_type_from_job_labels,
     _generic_runner_labels,
     _load_sku_config_skus,
@@ -380,6 +382,88 @@ def test_generic_runner_labels_derived_from_sim_skus():
 )
 def test_card_type_from_job_labels(labels, expected_card_type):
     assert _card_type_from_job_labels(labels) == expected_card_type
+
+
+def test_get_civ2_node_name_and_serial_from_annotations():
+    # Card runner: both node name and (possibly composite) serial present
+    annotations = [
+        {"title": "k8s-node-name", "message": "CIV2 runner foo is running on Kubernetes node: aus-glx-03"},
+        {"title": "tt-card-serial", "message": "CIV2 runner foo has serial number(s): TT-BH-00111:TT-BH-00222"},
+        {"title": "", "message": "some unrelated infra annotation"},
+    ]
+    assert get_civ2_node_name_and_serial_from_annotations(annotations) == ("aus-glx-03", "TT-BH-00111:TT-BH-00222")
+
+    # CPU-only runner: a tt-card-serial notice is still emitted, but with a
+    # "Not a Tenstorrent card runner" message that carries no serial
+    cpu_annotations = [
+        {
+            "title": "tt-card-serial",
+            "message": "Not a Tenstorrent card runner (runner name: tt-ubuntu-2204-large-stable-w77km-runner-djpn9)",
+        },
+        {
+            "title": "k8s-node-name",
+            "message": "CIV2 runner tt-ubuntu-2204-large-stable-w77km-runner-djpn9 is running on Kubernetes node: f10-cpu-01",
+        },
+    ]
+    assert get_civ2_node_name_and_serial_from_annotations(cpu_annotations) == ("f10-cpu-01", None)
+
+    # No annotations at all
+    assert get_civ2_node_name_and_serial_from_annotations(None) == (None, None)
+
+
+def _make_completed_civ2_job(job_id, runner_name, labels):
+    return {
+        "id": job_id,
+        "run_id": 999,
+        "runner_name": runner_name,
+        "labels": labels,
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-07-10T00:00:00Z",
+        "started_at": "2026-07-10T00:01:00Z",
+        "completed_at": "2026-07-10T00:05:00Z",
+        "name": "some test job",
+        "html_url": "https://github.com/tenstorrent/tt-metal/actions/runs/999/job/1",
+        "run_attempt": 1,
+        "steps": [],
+    }
+
+
+def test_civ2_host_name_replaced_with_node_and_serial():
+    job = _make_completed_civ2_job(
+        1,
+        "tt-ubuntu-2204-n300-viommu-stable-abcde-runner-fghij",
+        ["tt-ubuntu-2204-n300-viommu-stable"],
+    )
+    annotations = {
+        1: [
+            {
+                "title": "k8s-node-name",
+                "message": "CIV2 runner foo is running on Kubernetes node: aus-glx-03",
+                "annotation_level": "notice",
+                "path": ".github",
+            },
+            {
+                "title": "tt-card-serial",
+                "message": "CIV2 runner foo has serial number(s): TT-BH-02345",
+                "annotation_level": "notice",
+                "path": ".github",
+            },
+        ]
+    }
+    row = get_job_row_from_github_job(job, annotations, INFRA_TESTS_DIR)
+    assert row["host_name"] == "aus-glx-03_TT-BH-02345"
+
+
+def test_civ2_host_name_falls_back_to_truncation_without_annotations():
+    job = _make_completed_civ2_job(
+        2,
+        "tt-ubuntu-2204-n300-viommu-stable-abcde-runner-fghij",
+        ["tt-ubuntu-2204-n300-viommu-stable"],
+    )
+    # No node/serial annotations -> keep current ephemeral-suffix truncation behavior
+    row = get_job_row_from_github_job(job, {}, INFRA_TESTS_DIR)
+    assert row["host_name"] == "tt-ubuntu-2204-n300-viommu-stable-abcde-runner"
 
 
 def test_create_pipeline_json_assigns_sku_card_type_to_n300_job(workflow_run_gh_environment):
