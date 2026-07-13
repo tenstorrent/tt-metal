@@ -439,6 +439,8 @@ DOMAIN_MATHOPS = [
     MathOperation.Add1,
     MathOperation.CastFp32ToFp16a,
     MathOperation.TanhDerivativeLut,
+    MathOperation.RsqrtCompat,
+    MathOperation.Expm1Cw,
 ]
 
 # Per-op tolerance overrides for the domain suite. Ops whose kernel is a coarse
