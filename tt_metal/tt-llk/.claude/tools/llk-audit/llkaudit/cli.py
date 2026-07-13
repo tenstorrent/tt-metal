@@ -24,6 +24,7 @@ A successful run exits 0 (augmentor, never a gate — it does not fail on findin
 Argument errors (unknown check, unreadable --facts, bad --arch) exit 2 via
 argparse, as usual.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -99,6 +100,16 @@ def main(argv=None) -> int:
         "are reported. run.sh --changed populates this from git.",
     )
     ap.add_argument("--list", action="store_true", help="list checks and exit")
+    ap.add_argument(
+        "--degraded-note",
+        action="append",
+        default=[],
+        metavar="MSG",
+        help="append an EXTERNAL degradation note to the envelope's `degraded` list — "
+        "for coverage holes this process can't see from the merged fact base (e.g. "
+        "bootstrap.sh reporting N kernel TUs that failed to parse/extract). Repeatable; "
+        "keeps a coverage-holed run from reading as a clean all-clear to a JSON consumer.",
+    )
     args = ap.parse_args(argv)
 
     if args.list:
@@ -194,6 +205,14 @@ def main(argv=None) -> int:
                 "diff-scoped: changed file(s) with 0 facts (verify they parsed): "
                 + ", ".join(missing)
             )
+
+    # (4) EXTERNAL degradation notes — coverage this process can't see from the merged
+    # fact base (e.g. the kernel-tier capture reporting per-kernel parse/extract
+    # failures via bootstrap.sh). Surfaced in the envelope so a coverage-holed run
+    # can't read as a clean all-clear to a JSON-only consumer.
+    for note in args.degraded_note:
+        print(f"llk-audit: WARNING (external) {note}", file=sys.stderr)
+        degraded.append(note)
 
     out = {
         "tool": "llk-audit",

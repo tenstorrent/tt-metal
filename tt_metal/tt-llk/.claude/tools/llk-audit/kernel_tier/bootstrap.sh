@@ -76,9 +76,21 @@ if [ ! -s "$FACTS" ] || ! grep -q '"family"' "$FACTS"; then
 fi
 
 AUDIT="$OUT/audit.kernel.$ARCH.json"
+# Surface per-kernel capture coverage holes into the audit JSON's `degraded`: a run
+# where kernel TUs failed to parse/extract must NOT read as a clean 0-findings to a
+# JSON-only consumer. Count the GENUINE failure statuses in the coverage ledger (not
+# the expected 'nonkernel' skips) and pass them as an external degraded note.
+LEDGER="$OUT/kernel_coverage.$ARCH.txt"
+HOLE_ARGS=()
+if [ -f "$LEDGER" ]; then
+  HOLES=$(grep -cE '\[(PARSE-FAIL|EMPTY-OUT|EXEC-FAIL|SKIP-noparse|SKIP-nosrc)' "$LEDGER" || true)
+  if [ "${HOLES:-0}" -gt 0 ]; then
+    HOLE_ARGS=(--degraded-note "kernel-tier capture: $HOLES kernel TU(s) failed to parse/extract (see $LEDGER) — coverage hole, NOT a clean all-clear")
+  fi
+fi
 PYTHONPATH="$TOOL" python3 -m llkaudit.cli --arch "$ARCH" --facts "$FACTS" \
   --checks cb-sync,noc-sync,noc-atomic-exit,noc-read-barrier,noc-l1-invalidate,mailbox-sync \
-  --metal-root "$REPO" > "$AUDIT"
+  --metal-root "$REPO" "${HOLE_ARGS[@]}" > "$AUDIT"
 
 echo "" >&2
 echo "=== kernel-tier findings ($ARCH) ===" >&2

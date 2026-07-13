@@ -2130,6 +2130,47 @@ def test_dedup_merge_prefers_resolved_duplicate():
         assert s[0]["recv_type"] == "CircularBuffer" and s[0]["argc"] == 1, (order, s)
 
 
+@case
+def test_cli_degraded_note_appended():
+    # --degraded-note surfaces an EXTERNAL coverage hole (e.g. bootstrap reporting
+    # failed kernel captures) into the envelope's `degraded`, so a coverage-holed run
+    # can't read as a clean all-clear to a JSON consumer.
+    import contextlib
+    import io
+    import json
+    import os
+    import tempfile
+
+    from llkaudit import cli
+
+    fd, p = tempfile.mkstemp(suffix=".jsonl")
+    os.write(
+        fd,
+        b'{"arch":"wormhole","parse_errors":0,"facts":[{"family":"function",'
+        b'"name":"f","file":"tt_llk_x/a.h","off":0,"end_off":9,"line":0}]}\n',
+    )
+    os.close(fd)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        cli.main(
+            [
+                "--arch",
+                "wormhole",
+                "--facts",
+                p,
+                "--checks",
+                "mmio-race",
+                "--degraded-note",
+                "CAPTURE-HOLE-XYZ",
+            ]
+        )
+    os.unlink(p)
+    d = json.loads(buf.getvalue())
+    assert "degraded" in d and any(
+        "CAPTURE-HOLE-XYZ" in n for n in d["degraded"]
+    ), d.get("degraded")
+
+
 def main():
     failed = 0
     for c in CASES:
