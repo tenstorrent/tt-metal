@@ -249,7 +249,8 @@ class CfgWordOverlap(Check):
             ev = [self._w_ev(w) for w in ws]
             fields = sorted({w["field"] for w in ws})
             safety, bits = self._safety(ws, fb.addr32)
-            if len(threads) < 2:  # 1 known + unknown co-writer: low-confidence widen
+            # <2 known (lone known OR all-unknown) + co-writer: low-confidence widen
+            if len(threads) < 2:
                 safety = "UNRESOLVED_COWRITER"
             bits_str = ", ".join(f"{t}=0x{m:x}" for t, m in sorted(bits.items()))
             # anchor the finding at the first writer
