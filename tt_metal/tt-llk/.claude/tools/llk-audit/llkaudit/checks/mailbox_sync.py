@@ -58,8 +58,16 @@ class MailboxSync(Check):
         "FIFO overflow (depth-4), or the ordering caveat (a mailbox write does "
         "not fence a prior store to a different region; a plain fence is a no-op "
         "on WH and insufficient on BH). The issuing thread is inferred from the "
-        "file, so endpoints in thread-agnostic files (ckernel_debug.h) are "
-        "UNRESOLVED. Quasar mailbox HW semantics are unverified here."
+        "file (registry.thread_of, an LLK-HEADER naming convention), so endpoints "
+        "in thread-agnostic files (ckernel_debug.h) are UNRESOLVED. IN THE OPT-IN "
+        "KERNEL TIER that file convention does NOT hold: a JIT kernel PATH that "
+        "coincidentally contains a bare pack/math/unpack/sfpu token (e.g. "
+        "ttnn/.../pack_untilize/.../writer.cpp) is WRONGLY resolved to that thread "
+        "(not merely UNRESOLVED), fabricating a wrong (src,dst) and a spurious "
+        "PAIRED/UNPAIRED endpoint — confirm the issuing thread from the kernel's "
+        "actual RISC, not its path. (thread_of is NOT narrowed in code: it is shared "
+        "and load-bearing for cfg-word/reconfig/srcreg over tt-llk.) Quasar mailbox "
+        "HW semantics are unverified here."
     )
 
     def run(self, fb: FactBase) -> list[Finding]:
