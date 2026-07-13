@@ -10,5 +10,6 @@ namespace ttnn::operations::experimental::transformer {
 
 namespace nb = nanobind;
 void bind_rotary_embedding(nb::module_& mod);
+void bind_rotary_embedding_to_cache(nb::module_& mod);
 
 }  // namespace ttnn::operations::experimental::transformer
