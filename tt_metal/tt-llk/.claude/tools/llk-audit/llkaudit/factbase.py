@@ -77,17 +77,26 @@ class FactBase:
                         if i + 1 < len(ordered)
                         else fn.begin_off + OPEN_ENDED_EXTENT
                     )
-        # Re-attribute each fact's `function` from the now-REPAIRED extents. The C++
-        # side stamped `function` using the raw (pre-repair) ranges, so a macro-wrapped
-        # / partial-parse function whose end_off collapsed to its begin left its body
-        # facts with function="" (or an outer fn). The function-keyed grouping checkers
-        # (cb-sync, noc-sync, noc-atomic-exit, noc-read-barrier, noc-l1-invalidate,
-        # semaphore-handshake) read this field DIRECTLY, so a stale "" lumps distinct
-        # functions into one "?" bucket and can cancel a real imbalance (a false
-        # negative under partial parse). Recompute from enclosing() so they see the
-        # repaired owner; leave a genuine file-scope fact (no enclosing fn) untouched.
+        # Fill an EMPTY `function` from the now-REPAIRED extents. The C++ side stamped
+        # `function` using the raw (pre-repair) ranges, so a macro-wrapped / partial-parse
+        # function whose end_off collapsed to its begin left its body facts with
+        # function="". The function-keyed grouping checkers (cb-sync, noc-sync,
+        # noc-atomic-exit, noc-read-barrier, noc-l1-invalidate, semaphore-handshake) read
+        # this field DIRECTLY, so a stale "" lumps distinct functions into one "?" bucket
+        # and can cancel a real imbalance (a false negative under partial parse). Recompute
+        # ONLY the empty case from enclosing().
+        #
+        # CRITICAL: do NOT overwrite a NON-empty C++ attribution. The repair loop above
+        # has no nesting model — it treats a file's functions as flat siblings, so a
+        # collapsed NESTED function (a lambda whose end_off dropped) that is last-by-begin
+        # gets an OPEN_ENDED extent that swallows the rest of its ENCLOSING function; then
+        # enclosing() (max begin_off) would re-stamp an enclosing-function fact onto that
+        # lambda. For a name-gated checker (noc-atomic-exit's is_kernel_entry, semaphore's
+        # ctor/wrapper skip) that clobber turns a real finding into a false-all-clear.
+        # Trusting the C++ innermost-lexical `function` whenever it is present avoids that;
+        # only the genuinely-unattributed ("") collapsed-body facts are filled here.
         for f in clean:
-            if f["family"] == "function":
+            if f["family"] == "function" or f.get("function"):
                 continue
             owner = self.enclosing(f["file"], f["off"])
             if owner is not None:
