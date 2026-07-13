@@ -17,6 +17,7 @@ buffers the reference threads through ``forward``) is held in ``LLVCState``.
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -220,8 +221,18 @@ class LLVCModel:
         cfg = self.config
         dev = self.device
 
+        # Persistent ring buffers held in ROW_MAJOR/DRAM so their addresses stay
+        # stable across chunks: streaming updates them in-place via ``ttnn.copy``
+        # (see ``_carry``), which is what lets the whole ``forward_chunk`` be
+        # captured once as a device trace and replayed per chunk.
         def zeros(t: int, c: int) -> ttnn.Tensor:
-            return ttnn.zeros((batch_size, t, c), dtype=self.dtype, layout=ttnn.TILE_LAYOUT, device=dev)
+            return ttnn.zeros(
+                (batch_size, t, c),
+                dtype=self.dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=dev,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         convnet_ctx = [zeros(blk["buf_len"], 1) for blk in self.convnet_taps]
         enc_ctx = [zeros(layer["buf_len"], cfg.enc_dim) for layer in self.enc_layers]
@@ -230,12 +241,29 @@ class LLVCModel:
         out_buf = zeros(cfg.out_buf_len, cfg.enc_dim)
         return LLVCState(convnet_ctx, enc_ctx, dec_mem_ctx, dec_tgt_ctx, out_buf)
 
+    @staticmethod
+    def _carry(buf: ttnn.Tensor, new_ctx: ttnn.Tensor) -> None:
+        """Write the next chunk's context into the persistent ring buffer in place.
+
+        Reassigning ``state.x = slice(...)`` would bind a fresh device tensor each
+        chunk (new address), which breaks trace replay. Copying into the existing
+        buffer keeps the address stable so ``forward_chunk`` can be traced once.
+        The old context has already been consumed (concat'd) before this runs, so
+        overwriting the buffer here is safe.
+        """
+        ttnn.copy(new_ctx, buf)
+
     # ------------------------------------------------------------------ blocks
     def _run_conv1d(self, cache_key, x, weight, bias, **kw):
-        prepared = self._conv_weight_cache.get(cache_key, weight)
-        out, weight_dev = ops.conv1d(
+        # Reuse the device-prepared weight *and* bias once cached: passing the
+        # already-prepared tensors back means ttnn.conv1d does no host->device
+        # upload, which is required for the call to be captured inside a trace.
+        cached = self._conv_weight_cache.get(cache_key)
+        if cached is not None:
+            weight, bias = cached
+        out, weight_dev, bias_dev = ops.conv1d(
             x,
-            prepared,
+            weight,
             bias,
             device=self.device,
             weights_dtype=self.weights_dtype,
@@ -243,19 +271,20 @@ class LLVCModel:
             math_fidelity=self.math_fidelity,
             **kw,
         )
-        self._conv_weight_cache[cache_key] = weight_dev
+        self._conv_weight_cache[cache_key] = (weight_dev, bias_dev)
         return out
 
     def _cached_convnet(self, x, state: LLVCState):
         """12 gated residual blocks with per-block causal context; top-level 'add' skip."""
         residual_input = x
         for i, blk in enumerate(self.convnet_taps):
-            ctx = state.convnet_ctx[i]
-            filt, ctx_new = ops.mac_causal_conv1d(
-                x, ctx, blk["filter"], blk["filter_bias"], dilation=1, buf_len=blk["buf_len"]
-            )
-            gate, _ = ops.mac_causal_conv1d(x, ctx, blk["gate"], blk["gate_bias"], dilation=1, buf_len=blk["buf_len"])
-            state.convnet_ctx[i] = ctx_new
+            # Filter and gate are two convs over the *same* causal window, so build
+            # the window (concat + slice + tilize) once and share it across both.
+            T = x.shape[1]
+            x_ext_tile, ctx_new = ops.causal_window(x, state.convnet_ctx[i], buf_len=blk["buf_len"])
+            filt = ops.apply_taps(x_ext_tile, T, blk["filter"], blk["filter_bias"], dilation=1)
+            gate = ops.apply_taps(x_ext_tile, T, blk["gate"], blk["gate_bias"], dilation=1)
+            self._carry(state.convnet_ctx[i], ctx_new)
             residual = ttnn.mul(ops.tanh(filt), ops.sigmoid(gate))
             x = ttnn.add(x, residual)  # ResidualBlock internal residual (crop == prepend)
         if self.config.convnet.skip_connection == "add":
@@ -269,7 +298,7 @@ class LLVCModel:
         for i, layer in enumerate(self.enc_layers):
             ctx = state.enc_ctx[i]
             dcc_in = ops.concat_time(ctx, x)  # [B, buf_len + T, C]
-            state.enc_ctx[i] = ops.slice_time(dcc_in, dcc_in.shape[1] - layer["buf_len"], dcc_in.shape[1])
+            self._carry(state.enc_ctx[i], ops.slice_time(dcc_in, dcc_in.shape[1] - layer["buf_len"], dcc_in.shape[1]))
 
             # depthwise dilated conv (padding=0 consumes the prepended context).
             # Expressed as a shifted per-channel MAC: ttnn.conv1d cannot find a
@@ -339,7 +368,7 @@ class LLVCModel:
 
         # memory (cross-attention keys/values)
         mem = ops.concat_time(state.dec_mem_ctx, e)
-        state.dec_mem_ctx = ops.slice_time(mem, mem.shape[1] - cfg.dec_buf_len, mem.shape[1])
+        self._carry(state.dec_mem_ctx, ops.slice_time(mem, mem.shape[1] - cfg.dec_buf_len, mem.shape[1]))
         mem_ctx = ops.as_tile(self._build_windows(mem, num_windows))
         if cfg.use_pos_enc:
             mem_ctx = ttnn.add(mem_ctx, self.dec_pos_enc)
@@ -347,7 +376,7 @@ class LLVCModel:
         tgt = m
         for li, spec in enumerate(self.dec_layers):
             seq = ops.concat_time(state.dec_tgt_ctx[li], tgt)
-            state.dec_tgt_ctx[li] = ops.slice_time(seq, seq.shape[1] - cfg.dec_buf_len, seq.shape[1])
+            self._carry(state.dec_tgt_ctx[li], ops.slice_time(seq, seq.shape[1] - cfg.dec_buf_len, seq.shape[1]))
             tgt_ctx = ops.as_tile(self._build_windows(seq, num_windows))
             if cfg.use_pos_enc and li == 0:
                 tgt_ctx = ttnn.add(tgt_ctx, self.dec_pos_enc)
@@ -424,7 +453,7 @@ class LLVCModel:
 
         # prepend output buffer, update it, synthesise waveform
         x = ops.concat_time(state.out_buf, x)
-        state.out_buf = ops.slice_time(x, x.shape[1] - cfg.out_buf_len, x.shape[1])
+        self._carry(state.out_buf, ops.slice_time(x, x.shape[1] - cfg.out_buf_len, x.shape[1]))
         wav, self.out_conv_w, _ = ops.conv_transpose1d(
             x,
             self._conv_weight_cache.get("out_conv", self.out_conv_w),
@@ -462,8 +491,6 @@ class LLVCModel:
 
         Returns ``(converted [1, 1, T], rtf, per_chunk_latency_ms)``.
         """
-        import time
-
         cfg = self.config
         L = cfg.L
         if waveform.dim() == 2:
@@ -482,16 +509,11 @@ class LLVCModel:
             prepped.append(torch.cat([front, c]))
 
         state = self.init_state(1)
-        outputs, times = [], []
-        for chunk in prepped:
-            x = chunk.reshape(1, 1, -1).transpose(1, 2)  # [1, T, 1]
-            x_btc = _to_device(x, device=self.device, dtype=self.dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
-            ttnn.synchronize_device(self.device)
-            start = time.time()
-            wav = self.forward_chunk(x_btc, state)
-            ttnn.synchronize_device(self.device)
-            times.append(time.time() - start)
-            outputs.append(ops.to_torch(wav).float().transpose(1, 2))
+        # Trace needs at least one warmup + one capture chunk before it can replay.
+        if cfg.use_trace and len(prepped) >= 3:
+            outputs, times = self._stream_traced(prepped, state)
+        else:
+            outputs, times = self._stream_eager(prepped, state)
 
         out = torch.cat(outputs, dim=2)[:, :, :original_len]
         avg_time = float(sum(times) / max(1, len(times)))
@@ -502,6 +524,79 @@ class LLVCModel:
         rtf = avg_time / max(chunk_audio_s, 1e-9)
         e2e_latency_ms = ((2 * L + chunk_len) / cfg.sample_rate + avg_time) * 1000.0
         return out, rtf, e2e_latency_ms
+
+    def _host_chunk(self, chunk: torch.Tensor) -> ttnn.Tensor:
+        """A single prepped chunk as a host ``[1, T, 1]`` ROW_MAJOR tensor."""
+        x = chunk.reshape(1, 1, -1).transpose(1, 2)  # [1, T, 1]
+        return ttnn.from_torch(x, dtype=self.dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    def _stream_eager(self, prepped: list[torch.Tensor], state: LLVCState):
+        """One host-dispatched ``forward_chunk`` per chunk (no trace)."""
+        outputs, times = [], []
+        for chunk in prepped:
+            x_btc = _to_device(
+                chunk.reshape(1, 1, -1).transpose(1, 2),
+                device=self.device,
+                dtype=self.dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            ttnn.synchronize_device(self.device)
+            start = time.time()
+            wav = self.forward_chunk(x_btc, state)
+            ttnn.synchronize_device(self.device)
+            times.append(time.time() - start)
+            outputs.append(ops.to_torch(wav).float().transpose(1, 2))
+        return outputs, times
+
+    def _stream_traced(self, prepped: list[torch.Tensor], state: LLVCState):
+        """Capture ``forward_chunk`` once, then replay it per chunk with no host dispatch.
+
+        The streaming state is threaded naturally: chunk 0 runs eager (compiles the
+        kernels and pins the conv weights on device), chunk 1 is captured (advancing
+        the in-place ring buffers), and every later chunk copies its samples into the
+        persistent input tensor and replays the trace. Because the ring buffers live
+        at fixed addresses and are updated in place, replay reproduces the exact same
+        recurrence as the eager path. Only the replayed chunks are timed (steady state).
+        """
+        dev = self.device
+        seq_len = int(prepped[0].shape[0])
+        in_dev = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, seq_len, 1]), self.dtype, ttnn.ROW_MAJOR_LAYOUT, dev, ttnn.DRAM_MEMORY_CONFIG
+        )
+        outputs, times = [], []
+
+        # chunk 0 — eager warmup (JIT + conv-weight prep so capture has no host->device moves)
+        ttnn.copy_host_to_device_tensor(self._host_chunk(prepped[0]), in_dev)
+        wav0 = self.forward_chunk(in_dev, state)
+        outputs.append(ops.to_torch(wav0).float().transpose(1, 2))
+
+        # chunk 1 — capture the trace (ring buffers advance in place as usual).
+        # end_trace_capture must run even if forward_chunk raises, otherwise the
+        # device is left mid-capture and every later synchronize/close fails.
+        ttnn.copy_host_to_device_tensor(self._host_chunk(prepped[1]), in_dev)
+        tid = ttnn.begin_trace_capture(dev, cq_id=0)
+        try:
+            traced_out = self.forward_chunk(in_dev, state)
+        finally:
+            ttnn.end_trace_capture(dev, tid, cq_id=0)
+        outputs.append(ops.to_torch(traced_out).float().transpose(1, 2))
+
+        # chunks 2..N — replay
+        try:
+            for chunk in prepped[2:]:
+                ttnn.copy_host_to_device_tensor(self._host_chunk(chunk), in_dev)
+                ttnn.synchronize_device(dev)
+                start = time.time()
+                ttnn.execute_trace(dev, tid, cq_id=0, blocking=True)
+                ttnn.synchronize_device(dev)
+                times.append(time.time() - start)
+                outputs.append(ops.to_torch(traced_out).float().transpose(1, 2))
+        finally:
+            ttnn.release_trace(dev, tid)
+
+        if not times:
+            times = [0.0]
+        return outputs, times
 
     def _pad_input(self, waveform: torch.Tensor):
         cfg = self.config

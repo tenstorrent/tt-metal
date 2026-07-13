@@ -65,6 +65,7 @@ class LLVCConfig:
     use_l1: bool = True
     use_sharded: bool = True
     use_program_cache: bool = True
+    use_trace: bool = True  # capture forward_chunk once and replay it per streaming chunk
     attn_mask_value: float = -1e4
 
     def __post_init__(self):

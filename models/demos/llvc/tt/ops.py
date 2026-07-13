@@ -120,13 +120,14 @@ def conv1d(
     dilation: int = 1,
     activation: str = "",
     shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+) -> tuple[ttnn.Tensor, ttnn.Tensor, Optional[ttnn.Tensor]]:
     """Wrap ``ttnn.conv1d`` for a ROW_MAJOR ``[B, T, Cin]`` tensor.
 
     ``activation`` (e.g. ``"relu"``) is applied after the conv as a separate op.
     (Conv-fused activation via ``UnaryWithParam`` is a Stage-2 optimization.)
-    Returns ``([B, Tout, Cout] ROW_MAJOR, prepared_weight)``; store the prepared
-    weight so program-cache/trace reuse it.
+    Returns ``([B, Tout, Cout] ROW_MAJOR, prepared_weight, prepared_bias)``; store
+    *both* prepared tensors and pass them back so subsequent calls (and trace
+    capture) reuse them instead of re-uploading host weights/bias to device.
     """
     x_rm = as_row_major(x_btc)
     batch = x_rm.shape[0]
@@ -167,7 +168,7 @@ def conv1d(
             raise ValueError(f"Unsupported conv activation: {activation}")
     out = as_row_major(out)
     out = ttnn.reshape(out, (batch, out_length, out_channels))
-    return out, weight_dev
+    return out, weight_dev, bias_dev
 
 
 def conv_transpose1d(
@@ -231,6 +232,51 @@ def conv_transpose1d(
     return out, weight_dev, bias_dev
 
 
+def causal_window(
+    x_btc: ttnn.Tensor,
+    ctx_btc: ttnn.Tensor,
+    *,
+    buf_len: int,
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Prepend the cached context and return ``(x_ext TILE, new_ctx)``.
+
+    ``x_ext = concat(ctx, x)`` is the input a causal conv consumes with
+    ``padding=0``; ``new_ctx`` is the trailing ``buf_len`` frames to carry to the
+    next chunk. Split out from :func:`mac_causal_conv1d` so that several tap sets
+    (e.g. the prenet's filter *and* gate) can share one window build instead of
+    rebuilding the concat/slice/tilize per path.
+    """
+    x_ext = concat_time(ctx_btc, x_btc)  # [B, buf_len + T, Cin]
+    new_ctx = slice_time(x_ext, x_ext.shape[1] - buf_len, x_ext.shape[1])
+    return as_tile(x_ext), new_ctx
+
+
+def apply_taps(
+    x_ext_tile: ttnn.Tensor,
+    seq_len: int,
+    taps: list[ttnn.Tensor],
+    biases: Optional[list[ttnn.Tensor]],
+    *,
+    dilation: int,
+) -> ttnn.Tensor:
+    """Shifted matmul-accumulate over kernel taps on a prepared TILE window.
+
+    ``y[t] = sum_j x_ext[t + j*dilation] @ taps[j]`` for ``t`` in ``[0, seq_len)``.
+    ``taps[j]`` is ``[Cin, Cout]`` (transposed for ``ttnn.linear``); ``biases`` is
+    added per-tap (conv bias is folded onto tap 0 by the caller) or ``None``.
+    """
+    out = None
+    for j in range(len(taps)):
+        offset = j * dilation
+        window = ttnn.slice(
+            x_ext_tile, [0, offset, 0], [x_ext_tile.shape[0], offset + seq_len, x_ext_tile.shape[2]]
+        )
+        bias = biases[j] if biases is not None else None
+        term = ttnn.linear(window, taps[j], bias=bias, transpose_b=True)
+        out = term if out is None else ttnn.add(out, term)
+    return out
+
+
 def mac_causal_conv1d(
     x_btc: ttnn.Tensor,
     ctx_btc: ttnn.Tensor,
@@ -243,27 +289,13 @@ def mac_causal_conv1d(
     """Streaming causal 1x1-style conv with kernel taps via shifted matmul-accumulate.
 
     For a conv with kernel ``K`` and ``dilation``, the layer keeps the previous
-    ``buf_len = (K-1)*dilation`` frames as context. ``taps[j]`` is the per-tap
-    weight matrix ``[Cin, Cout]`` (already transposed for ``ttnn.linear``), so the
-    output is ``y[t] = sum_j x_ext[t + j*dilation] @ taps[j]``, where ``x_ext`` is
-    ``concat(ctx, x)``. Returns ``(y[B, T, Cout], new_ctx)``.
+    ``buf_len = (K-1)*dilation`` frames as context. Returns ``(y[B, T, Cout], new_ctx)``.
 
     This mirrors the reference ring-buffer semantics exactly and stays in TILE
     layout throughout (cheap for the K=3 kernels LLVC uses).
     """
-    x_ext = concat_time(ctx_btc, x_btc)  # [B, buf_len + T, Cin]
-    T = x_btc.shape[1]
-    new_ctx = slice_time(x_ext, x_ext.shape[1] - buf_len, x_ext.shape[1])
-
-    x_ext_tile = as_tile(x_ext)
-    out = None
-    kernel = len(taps)
-    for j in range(kernel):
-        offset = j * dilation
-        window = ttnn.slice(x_ext_tile, [0, offset, 0], [x_ext_tile.shape[0], offset + T, x_ext_tile.shape[2]])
-        bias = biases[j] if biases is not None else None
-        term = ttnn.linear(window, taps[j], bias=bias, transpose_b=True)
-        out = term if out is None else ttnn.add(out, term)
+    x_ext_tile, new_ctx = causal_window(x_btc, ctx_btc, buf_len=buf_len)
+    out = apply_taps(x_ext_tile, x_btc.shape[1], taps, biases, dilation=dilation)
     return out, new_ctx
 
 

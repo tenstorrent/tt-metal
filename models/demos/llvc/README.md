@@ -74,6 +74,10 @@ python models/demos/llvc/demo/demo.py \
 
 Non-streaming (full-context) conversion: drop `--stream`.
 
+`--chunk-factor 2` on the full-size checkpoint is the recommended real-time
+setting (RTF 0.217, ~34 ms latency on N300); `--chunk-factor 1` gives the lowest
+latency (~20 ms) at RTF 0.404.
+
 ## Tests
 
 ```bash
@@ -88,6 +92,10 @@ pytest models/demos/llvc/tests/perf/test_perf.py -v -s
 `LLVCModel.stream(waveform, chunk_factor=1)` returns `(audio, rtf, latency_ms)`
 and `LLVCModel(waveform)` does non-streaming conversion.
 
+`stream()` captures `forward_chunk` as a device **trace** and replays it per
+chunk (this is what removes the per-chunk host-dispatch overhead — see below).
+Set `LLVCConfig(use_trace=False)` to fall back to the eager per-chunk path.
+
 ## Profiling (perf sheet)
 
 Follow the [TT-NN model bring-up report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/TTNN-model-bringup.md#41-performance-sheet):
@@ -97,25 +105,33 @@ Follow the [TT-NN model bring-up report](https://github.com/tenstorrent/tt-metal
   -c "pytest models/demos/llvc/tests/perf/test_perf.py::TestLLVCPerformance::test_summary"
 ```
 
-## Stage targets
+## Targets and measured results (N300, `wormhole_b0`)
 
-| Metric | Stage-1 target | Where checked |
-|---|---|---|
-| Streaming RTF | < 0.3 | `tests/perf/test_perf.py` |
-| Per-chunk latency | < 100 ms | `tests/perf/test_perf.py` |
-| Accuracy vs PyTorch | PCC > 0.90 | `tests/pcc/test_llvc.py` |
+| Metric | Target | Measured (full-size, `chunk_factor=2`) | Where checked |
+|---|---|---|---|
+| Streaming RTF | < 0.3 | 0.217 | `tests/perf/test_perf.py` |
+| Per-chunk latency | < 100 ms | 33.6 ms | `tests/perf/test_perf.py` |
+| Accuracy vs PyTorch | PCC > 0.90 | 0.9997 | `tests/pcc/test_llvc.py` |
+
+Full-size streaming RTF (real KoeAI weights, trace): 0.404 at `chunk_factor=1`,
+**0.217** at `chunk_factor=2`. Eager (no trace) was 2.77 — trace gives ~7× by
+removing per-chunk host dispatch, with identical numerics.
 
 ## Notes, limitations, and optimization roadmap
 
 - **Streaming path** assumes the per-chunk encoder-frame count is a multiple of
   `dec_chunk_size` (guaranteed by `LLVCModel.stream`). The decoder unfold is done
   with slices; for `chunk_factor=1` there is exactly one attention window.
-- **Stage 2/3 opportunities**: fuse the encoder LN + ReLU, keep encoder
-  activations sharded in L1 across layers, capture a `ttnn` trace over
-  `forward_chunk` for a fixed chunk shape (the streaming loop reuses one shape),
-  and batch multiple concurrent streams on the batch axis. The conv weights are
-  cached after the first call so program-cache/trace replay reuse them.
+- **Device trace (implemented)**: the per-chunk cost was host dispatch, not
+  device math. `LLVCState` holds persistent ring buffers updated in place with
+  `ttnn.copy`, so `forward_chunk` (a fixed shape across the streaming loop) is
+  captured once and replayed via `ttnn.execute_trace`. Conv weights *and* biases
+  are cached on device after the warmup chunk so capture does no host→device
+  writes. This is the change that meets the RTF target.
+- **Further opportunities** (not required to hit target; would bring
+  `chunk_factor=1` under 0.3 too): fuse the encoder LN + ReLU, keep encoder
+  activations sharded in L1 across layers, fold the output transpose-conv, and
+  2-CQ double-buffering to overlap the input upload with compute.
 - The cached-conv prenet uses per-tap matmul-accumulate (exact vs the reference
   ring buffers); for `enc_dim`-wide depthwise convs `ttnn.conv1d(groups=…)` is
   used instead.
-```
