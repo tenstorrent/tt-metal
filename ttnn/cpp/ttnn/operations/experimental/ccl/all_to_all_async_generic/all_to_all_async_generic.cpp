@@ -36,4 +36,28 @@ ttnn::Tensor all_to_all_async_generic(
         cluster_axis);
 }
 
+ttnn::Tensor all_to_all_async_2d(
+    const ttnn::Tensor& input_tensor,
+    int32_t in_dim,
+    int32_t out_dim,
+    const std::optional<Tensor>& persistent_output_buffer,
+    std::optional<uint32_t> num_links,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    std::optional<uint32_t> cluster_axis) {
+    TT_FATAL(
+        tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()), "all_to_all_async_2d requires FABRIC_2D");
+    TT_FATAL(cluster_axis.has_value(), "all_to_all_async_2d requires a cluster_axis");
+    return all_to_all_async_generic(
+        input_tensor,
+        in_dim,
+        out_dim,
+        persistent_output_buffer,
+        num_links,
+        memory_config,
+        ttnn::ccl::Topology::Linear,
+        subdevice_id,
+        cluster_axis);
+}
+
 }  // namespace ttnn::experimental

@@ -4,6 +4,7 @@
 
 #include "all_to_all_async_generic_program_factory.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -87,6 +88,13 @@ AllToAllAsyncGenericProgram::create_at(
         mesh_coordinate,
         -1,
         operation_attributes.topology,
+        operation_attributes.cluster_axis);
+
+    const bool is_fabric_2d = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    const auto [fabric_neighbors, fabric_directions] = ttnn::operations::ccl::common::get_neighbors(
+        tensor_args.input_tensor.device()->get_view(),
+        mesh_coordinate,
+        tt::tt_fabric::Topology::Linear,
         operation_attributes.cluster_axis);
 
     TT_FATAL(device_index < operation_attributes.num_devices, "DEBUG: device_index: {}", device_index);
@@ -205,9 +213,10 @@ AllToAllAsyncGenericProgram::create_at(
             }
         }
     } else {
-        // Linear topology
-        for (uint32_t i = 0; i < operation_attributes.num_devices; ++i) {
-            device_offsets[0].push_back(i - device_index);
+        // Permutation phases avoid the many-to-one bursts that can exhaust FABRIC_2D credits.
+        for (uint32_t phase = 0; phase < operation_attributes.num_devices; ++phase) {
+            const int32_t target_device = (device_index + phase) % operation_attributes.num_devices;
+            device_offsets[0].push_back(target_device - static_cast<int32_t>(device_index));
         }
     }
     uint32_t semaphore_sent = 0;
@@ -235,6 +244,11 @@ AllToAllAsyncGenericProgram::create_at(
 
     auto sender_writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     sender_writer_kernel_config.defines.emplace("TOPOLOGY", topology_type);
+    if (is_fabric_2d) {
+        sender_writer_kernel_config.defines.emplace("FABRIC_2D", "1");
+        sender_writer_kernel_config.defines.emplace(
+            "DIRECTIONS", ttnn::operations::ccl::common::stringify(fabric_directions));
+    }
     sender_writer_kernel_config.compile_args = {
         tt::CB::c_in0,                              // cb0_id
         device_index,                               // device_index
@@ -303,36 +317,65 @@ AllToAllAsyncGenericProgram::create_at(
             sender_writer_rt_args.push_back(
                 block_starts[core_id % num_blocks_devices][core_id / num_blocks_devices][i]);
             sender_writer_rt_args.push_back(block_ends[core_id % num_blocks_devices][core_id / num_blocks_devices][i]);
-        }
-        bool with_forward =
-            (num_senders_per_link == 1 || (core_id % num_blocks_devices == 0)) && forward_coord.has_value();
-        bool with_backward =
-            (num_senders_per_link == 1 || (core_id % num_blocks_devices == 1)) && backward_coord.has_value();
-        sender_writer_rt_args.push_back(with_forward);
 
-        if (with_forward) {
-            const auto sender_device_fabric_node_id = device->get_fabric_node_id(mesh_coordinate);
-            const auto forward_device_fabric_node_id = device->get_fabric_node_id(forward_coord.value());
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                sender_device_fabric_node_id,
-                forward_device_fabric_node_id,
-                core_id / num_senders_per_link,
-                program,
-                {core},
-                sender_writer_rt_args);
-        }
+            const int32_t device_offset = device_offsets[core_id % num_blocks_devices][i];
+            const auto target_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+                tensor_args.input_tensor,
+                mesh_coordinate,
+                device_offset,
+                operation_attributes.topology,
+                operation_attributes.cluster_axis);
+            TT_FATAL(target_coord.has_value(), "No all-to-all target at device offset {}", device_offset);
 
-        sender_writer_rt_args.push_back(with_backward);
-        if (with_backward) {
-            const auto sender_device_fabric_node_id = device->get_fabric_node_id(mesh_coordinate);
-            const auto backward_device_fabric_node_id = device->get_fabric_node_id(backward_coord.value());
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                sender_device_fabric_node_id,
-                backward_device_fabric_node_id,
-                core_id / num_senders_per_link,
-                program,
-                {core},
-                sender_writer_rt_args);
+            if (tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig())) {
+                const auto target_node_id = device->get_fabric_node_id(target_coord.value());
+                sender_writer_rt_args.push_back(*target_node_id.mesh_id);
+                sender_writer_rt_args.push_back(target_node_id.chip_id);
+            } else {
+                // The low-latency 1D header uses the second route field as a hop count.
+                sender_writer_rt_args.push_back(0);
+                sender_writer_rt_args.push_back(std::abs(device_offset));
+            }
+        }
+        const auto sender_device_fabric_node_id = device->get_fabric_node_id(mesh_coordinate);
+        if (is_fabric_2d) {
+            // Append connections in the same {E, W, N, S} order as DIRECTIONS.
+            for (const auto& neighbor_coord : fabric_neighbors) {
+                tt::tt_fabric::append_fabric_connection_rt_args(
+                    sender_device_fabric_node_id,
+                    device->get_fabric_node_id(neighbor_coord),
+                    core_id / num_senders_per_link,
+                    program,
+                    {core},
+                    sender_writer_rt_args);
+            }
+        } else {
+            bool with_forward =
+                (num_senders_per_link == 1 || (core_id % num_blocks_devices == 0)) && forward_coord.has_value();
+            bool with_backward =
+                (num_senders_per_link == 1 || (core_id % num_blocks_devices == 1)) && backward_coord.has_value();
+            sender_writer_rt_args.push_back(with_forward);
+
+            if (with_forward) {
+                tt::tt_fabric::append_fabric_connection_rt_args(
+                    sender_device_fabric_node_id,
+                    device->get_fabric_node_id(forward_coord.value()),
+                    core_id / num_senders_per_link,
+                    program,
+                    {core},
+                    sender_writer_rt_args);
+            }
+
+            sender_writer_rt_args.push_back(with_backward);
+            if (with_backward) {
+                tt::tt_fabric::append_fabric_connection_rt_args(
+                    sender_device_fabric_node_id,
+                    device->get_fabric_node_id(backward_coord.value()),
+                    core_id / num_senders_per_link,
+                    program,
+                    {core},
+                    sender_writer_rt_args);
+            }
         }
         tt::tt_metal::SetRuntimeArgs(program, sender_writer_kernel_id, {core}, sender_writer_rt_args);
     }
