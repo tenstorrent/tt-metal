@@ -352,6 +352,8 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     _temp = float(os.environ.get("QWEN35_TEMP", "0") or 0)
     _rep_pen = float(os.environ.get("QWEN35_REP_PENALTY", "1.0") or 1.0)
     _no_repeat = int(os.environ.get("QWEN35_NO_REPEAT_NGRAM", "0") or 0)
+    _top_k = int(os.environ.get("QWEN35_TOP_K", "0") or 0)
+    _top_p = float(os.environ.get("QWEN35_TOP_P", "1.0") or 1.0)
     generated = []
 
     def _pick(vec):
@@ -367,7 +369,17 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
                 if tuple(generated[i : i + n - 1]) == prefix:
                     v[generated[i + n - 1]] = float("-inf")
         if _temp > 0:
-            return int(torch.multinomial(torch.softmax(v / _temp, dim=-1), 1).item())
+            probs = torch.softmax(v / _temp, dim=-1)
+            # top_k then top_p (vLLM order); multinomial takes unnormalized weights.
+            if _top_k > 0:
+                probs[probs < torch.topk(probs, min(_top_k, probs.numel())).values[-1]] = 0
+            if _top_p < 1.0:
+                srt, idx = torch.sort(probs, descending=True)
+                remove = torch.cumsum(srt, dim=-1) > _top_p
+                remove[1:] = remove[:-1].clone()  # keep first token crossing p
+                remove[0] = False
+                probs = torch.zeros_like(probs).scatter(0, idx, srt.masked_fill(remove, 0))
+            return int(torch.multinomial(probs, 1).item())
         return int(torch.argmax(v).item())
 
     # Chunk-outer prefill; TTFT includes first-token sampling
@@ -392,8 +404,22 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     def _read(out):
         return _pick(model.process_output_decode(out, B=1, S=1).reshape(-1)[:vocab])
 
+    # On-device sampling when sampler exists, temp>0, no rep-penalty/no-repeat (not wired on device); else greedy/host.
+    _ondev_sample = model.sampling is not None and _temp > 0 and _rep_pen == 1.0 and _no_repeat == 0
+    if _ondev_sample:
+        from models.common.sampling.generator import SamplingParams, format_sampling_params
+
+        _sbatch = model.sampling.tt_sampling.max_batch_size
+        # No explicit seed: a seed would bake a fixed value into the folded trace → same
+        # token every step. Unseeded, the device RNG self-advances each replay (varied tokens).
+        _sp = format_sampling_params(
+            SamplingParams(temperature=_temp, top_k=_top_k, top_p=_top_p),
+            _sbatch,
+        )
+        model.sampling.apply_prefill_state(sampling_params=_sp, prompt_tokens=None, empty_slots=[0])
+
     # On-device per-shard argmax+max for pure greedy (skips full-vocab gather/readback)
-    _greedy = (not eager) and _temp == 0 and _rep_pen == 1.0 and _no_repeat == 0
+    _greedy = (not eager) and (not _ondev_sample) and _temp == 0 and _rep_pen == 1.0 and _no_repeat == 0
     model._ondev_argmax = _greedy
     _per_shard = vocab // model.num_devices
 
@@ -478,24 +504,41 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
         page_table=page_table,
     )
 
+    def _decode_fwd():
+        # on_device_logits=True → bare (sharded, padded) tensor for the sampler; else (logits, None).
+        out = model.ttnn_decode_forward(
+            dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3], on_device_logits=_ondev_sample
+        )
+        return out if _ondev_sample else out[0]
+
     trace_id = None
     tt_logits = None
+    tt_tok = None
     tt_idx = tt_val = None
     signpost("compile_decode")
     profiler.start("compile_decode")
     if not eager:
         gdn_snap = _snapshot_gdn()
         # Eager compile + throwaway capture; restore GDN state and warm argmax kernels before trace
-        _warm_logits, _ = model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
+        _warm_logits = _decode_fwd()
         if _greedy:
             _wi, _wv = _argmax_dev(_warm_logits)
             ttnn.deallocate(_wi)
             ttnn.deallocate(_wv)
+        if _ondev_sample:
+            # Warm sampling kernels + advance the seed to SKIP before capture, so the trace self-advances the RNG each replay.
+            model.sampling.seed_manager.get_new_values([0])
+            model.sampling.sample(_warm_logits, enable_trace=False)
         trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
-        tt_logits, _ = model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
+        tt_logits = _decode_fwd()
         # Fold per-shard argmax+max into trace for tiny readback when greedy
         if _greedy:
             tt_idx, tt_val = _argmax_dev(tt_logits)
+        if _ondev_sample:
+            # Fold sampling INTO the decode trace: a separate trace aliases the model trace's
+            # buffers → intermittent garbage (the op itself is fine — see test_ondevice_sampling.py).
+            model.sampling.seed_manager.get_new_values([0])  # steady no-op; keeps the machine in sync
+            tt_tok, _ = model.sampling.sample(tt_logits, enable_trace=False)
         ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
         _restore_gdn(gdn_snap)
     profiler.end("compile_decode")
@@ -509,11 +552,26 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
         # Timing includes forward + sampling
         t_step = time.time()
         if eager:
-            tt_logits, _ = model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
+            tt_logits = _decode_fwd()
+            if _ondev_sample:
+                model.sampling.seed_manager.get_new_values([0])
+                tt_tok, _ = model.sampling.sample(tt_logits, enable_trace=False)
         else:
+            # Folded decode+sampling trace: tt_tok is written by this same execute_trace.
             ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh)
-        nxt = _read_tok(tt_idx, tt_val) if (_greedy and not eager) else _read(tt_logits)
+        if _ondev_sample:
+            nxt = int(model.process_output_decode(tt_tok, B=1, is_tokens=True)[0])
+            if not (0 <= nxt < vocab):
+                # Should never fire (fold fixes the aliasing). Cheap guard: log + argmax-fallback
+                # instead of crashing _update on a garbage id.
+                logger.warning(f"[ondev-sample] step={len(generated)} out-of-vocab id {nxt}; falling back to argmax")
+                _g = ttnn.to_torch(tt_logits, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=3)).float()
+                nxt = int(_g.reshape(model.sampling.tt_sampling.max_batch_size, -1)[0, :vocab].argmax())
+        elif _greedy and not eager:
+            nxt = _read_tok(tt_idx, tt_val)
+        else:
+            nxt = _read(tt_logits)
         decode_times.append(time.time() - t_step)
         generated.append(nxt)
         pos += 1
