@@ -72,6 +72,9 @@ set(TTNNCPP_SRCS
     cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/dit_fused_distributed_rmsnorm.cpp
     cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation.cpp
     cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+    cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_groupnorm/dit_fused_distributed_groupnorm.cpp
+    cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_groupnorm/device/dit_fused_distributed_groupnorm_device_operation.cpp
+    cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_groupnorm/device/dit_fused_distributed_groupnorm_program_factory.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/combine/combine.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_common.cpp
@@ -395,6 +398,7 @@ set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
     cpp/ttnn/operations/experimental/ccl/ccl_experimental_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/rms_allgather/rms_allgather_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/dit_fused_distributed_rmsnorm_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_groupnorm/dit_fused_distributed_groupnorm_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/llama_reduce_scatter_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_create_heads/llama_reduce_scatter_create_heads_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/all_to_all_async/all_to_all_async_nanobind.cpp

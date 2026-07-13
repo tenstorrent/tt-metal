@@ -9,7 +9,14 @@ from loguru import logger
 
 import ttnn
 
-from ...layers.normalization import DistributedLayerNorm, DistributedRMSNorm, GroupNorm, LayerNorm, RMSNorm
+from ...layers.normalization import (
+    DistributedGroupNorm,
+    DistributedLayerNorm,
+    DistributedRMSNorm,
+    GroupNorm,
+    LayerNorm,
+    RMSNorm,
+)
 from ...parallel.manager import CCLManager
 from ...utils.check import assert_quality
 from ...utils.tensor import bf16_tensor
@@ -369,7 +376,6 @@ def test_distributed_layernorm(
     ids=["fabric1d"],
     indirect=True,
 )
-@pytest.mark.parametrize("group_count", [32])
 @pytest.mark.parametrize(
     "mesh_axis",
     [1, None],
@@ -428,6 +434,118 @@ def test_group_norm(
         mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1) if mesh_axis is not None else None,
     )
 
+    tt_torch = tt_torch.permute(0, 3, 1, 2)
+
+    assert_quality(torch_output, tt_torch, pcc=0.999_300)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, cluster_axis, device_params",
+    [
+        pytest.param(
+            (1, 1),
+            1,
+            {"fabric_config": None, "require_exact_physical_num_devices": False},
+            id="local_1x1",
+        ),
+        pytest.param(
+            (1, 2),
+            1,
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True},
+            id="sp2_axis1",
+        ),
+        pytest.param(
+            (1, 4),
+            1,
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True},
+            id="sp4_axis1",
+        ),
+        pytest.param(
+            (2, 1),
+            0,
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True},
+            id="sp2_axis0",
+        ),
+        pytest.param(
+            (4, 8),
+            0,
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True},
+            id="mesh4x8_axis0",
+        ),
+        pytest.param(
+            (4, 8),
+            1,
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True},
+            id="mesh4x8_axis1",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    ("group_count", "input_shape"),
+    [
+        # NCHW; H must be divisible by cluster width. C % 32 == 0 for fused v1.
+        (32, (1, 128, 64, 64)),
+        (32, (1, 256, 128, 128)),
+        (8, (1, 64, 64, 64)),
+    ],
+    ids=["c128_h64", "c256_h128", "c64_g8"],
+)
+def test_distributed_group_norm(
+    *,
+    mesh_device: ttnn.MeshDevice,
+    cluster_axis: int,
+    input_shape: tuple[int, int, int, int],
+    group_count: int,
+) -> None:
+    """Spatially shard H on cluster_axis; match torch GroupNorm on the full tensor."""
+    torch_dtype = torch.bfloat16
+    torch.manual_seed(0)
+
+    cluster_size = tuple(mesh_device.shape)[cluster_axis]
+    n, c, h, w = input_shape
+    assert h % cluster_size == 0, f"H={h} must be divisible by cluster_size={cluster_size}"
+
+    torch_model = torch.nn.GroupNorm(num_groups=group_count, num_channels=c)
+    torch.nn.init.normal_(torch_model.weight)
+    torch.nn.init.normal_(torch_model.bias)
+    torch_model.eval()
+
+    torch_input = torch.randn(input_shape, dtype=torch_dtype)
+    with torch.no_grad():
+        torch_output = torch_model(torch_input)
+
+    ccl_manager = CCLManager(mesh_device=mesh_device, topology=ttnn.Topology.Linear)
+    tt_model = DistributedGroupNorm.from_torch(
+        torch_ref=torch_model,
+        mesh_device=mesh_device,
+        cluster_axis=cluster_axis,
+        mesh_axis=None,
+        ccl_manager=ccl_manager,
+        core_grid=ttnn.CoreGrid(x=8, y=8),
+    )
+
+    # NHWC, shard height (dim 1) across cluster_axis.
+    nhwc = torch_input.permute(0, 2, 3, 1).contiguous()
+    tt_input = bf16_tensor(nhwc, device=mesh_device, mesh_axis=cluster_axis, shard_dim=1)
+
+    tt_output = tt_model(tt_input)
+
+    shard_dims = [None, None]
+    shard_dims[cluster_axis] = 1  # gather H
+    shard_dims[1 - cluster_axis] = 0
+    tt_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=tuple(mesh_device.shape)),
+    )
+    # ConcatMesh2dToTensor may introduce a leading mesh-replica dim when the other axis is used as batch.
+    if tt_torch.ndim == 5:
+        tt_torch = tt_torch[0]
+    # The non-cluster mesh axis holds identical replicas of the (replicated) input; keep one so the
+    # batch matches torch's. The meaningful distributed comparison (H gathered over cluster_axis)
+    # is preserved by the retained replica.
+    if tt_torch.shape[0] != torch_output.shape[0]:
+        tt_torch = tt_torch[: torch_output.shape[0]]
     tt_torch = tt_torch.permute(0, 3, 1, 2)
 
     assert_quality(torch_output, tt_torch, pcc=0.999_300)
