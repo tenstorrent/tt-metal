@@ -1341,11 +1341,13 @@ class ttMLA:
 
     @property
     def _needs_head_to_seq_reshard(self) -> bool:
-        """True when the per-chip MLA head shard is too thin for sparse_sdpa (needs H % 32 == 0 and
-        H >= 32). When the TP head shard is too thin (e.g. GLM's 64 heads at tp=4 → 16), _sparse_mla
-        transposes the TP sharding axis heads → sequence for the duration of the attention."""
-        heads_local = self.num_heads // self.tp_factor
-        return self.tp_factor > 1 and (heads_local < 32 or heads_local % 32 != 0)
+        """Always False: sparse_sdpa now pads a thin per-chip head shard (H not a multiple of 32, e.g.
+        GLM's 16 = 64 heads / tp=4) up to a full 32-row query tile INSIDE the op — the reader zero-fills
+        the pad rows, compute processes the padded tile, and the writer drains only the real H heads. So
+        the op runs directly on the native head-sharded q, eliminating the head→seq transpose that used to
+        cost two TP all-gathers per layer (the largest GLM collectives). Attention is per-head-row
+        independent, so the zero-pad rows cannot contaminate the real rows."""
+        return False
 
     def _sparse_mla(
         self,
