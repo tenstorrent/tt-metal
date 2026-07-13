@@ -17,7 +17,7 @@ cpp_paths = "tt_metal/ ttnn/ *.cpp *.hpp *.cmake"
 [run]
 preflight_cmd = ""
 verify_cmd = "bash tmp/run_ltx.sh"
-worry_threshold_s = 120
+worry_threshold_s = 240
 timeout_s = 280
 
 [gate]
