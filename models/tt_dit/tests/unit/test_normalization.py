@@ -9,7 +9,14 @@ from loguru import logger
 
 import ttnn
 
-from ...layers.normalization import DistributedLayerNorm, DistributedRMSNorm, GroupNorm, LayerNorm, RMSNorm
+from ...layers.normalization import (
+    DistributedGroupNorm,
+    DistributedLayerNorm,
+    DistributedRMSNorm,
+    GroupNorm,
+    LayerNorm,
+    RMSNorm,
+)
 from ...parallel.manager import CCLManager
 from ...utils.check import assert_quality
 from ...utils.tensor import bf16_tensor
@@ -430,3 +437,208 @@ def test_group_norm(
     tt_torch = tt_torch.permute(0, 3, 1, 2)
 
     assert_quality(torch_output, tt_torch, pcc=0.999_300)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, cluster_axis, device_params",
+    [
+        pytest.param(
+            (1, 1),
+            1,
+            {"fabric_config": None, "require_exact_physical_num_devices": False},
+            id="local_1x1",
+        ),
+        pytest.param(
+            (1, 2),
+            1,
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True},
+            id="sp2_axis1",
+        ),
+        pytest.param(
+            (1, 4),
+            1,
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True},
+            id="sp4_axis1",
+        ),
+        pytest.param(
+            (2, 1),
+            0,
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True},
+            id="sp2_axis0",
+        ),
+        pytest.param(
+            (4, 8),
+            0,
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True},
+            id="mesh4x8_axis0",
+        ),
+        pytest.param(
+            (4, 8),
+            1,
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True},
+            id="mesh4x8_axis1",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    ("group_count", "input_shape"),
+    [
+        # NCHW; H must be divisible by cluster width. C % 32 == 0 for fused v1.
+        (32, (1, 128, 64, 64)),
+        (32, (1, 256, 128, 128)),
+        (8, (1, 64, 64, 64)),
+    ],
+    ids=["c128_h64", "c256_h128", "c64_g8"],
+)
+@pytest.mark.parametrize("activation_fn", [None, "silu"], ids=["no_act", "silu"])
+def test_distributed_group_norm(
+    *,
+    mesh_device: ttnn.MeshDevice,
+    cluster_axis: int,
+    input_shape: tuple[int, int, int, int],
+    group_count: int,
+    activation_fn: str | None,
+) -> None:
+    """Spatially shard H on cluster_axis; match torch GroupNorm on the full tensor."""
+    torch_dtype = torch.bfloat16
+    torch.manual_seed(0)
+
+    cluster_size = tuple(mesh_device.shape)[cluster_axis]
+    n, c, h, w = input_shape
+    assert h % cluster_size == 0, f"H={h} must be divisible by cluster_size={cluster_size}"
+
+    torch_model = torch.nn.GroupNorm(num_groups=group_count, num_channels=c)
+    torch.nn.init.normal_(torch_model.weight)
+    torch.nn.init.normal_(torch_model.bias)
+    torch_model.eval()
+
+    torch_input = torch.randn(input_shape, dtype=torch_dtype)
+    with torch.no_grad():
+        torch_output = torch_model(torch_input)
+        if activation_fn == "silu":
+            torch_output = torch.nn.functional.silu(torch_output)
+
+    ccl_manager = CCLManager(mesh_device=mesh_device, topology=ttnn.Topology.Linear)
+    tt_model = DistributedGroupNorm.from_torch(
+        torch_ref=torch_model,
+        mesh_device=mesh_device,
+        cluster_axis=cluster_axis,
+        mesh_axis=None,
+        ccl_manager=ccl_manager,
+        core_grid=ttnn.CoreGrid(x=8, y=8),
+        activation_fn=activation_fn,
+    )
+
+    # NHWC, shard height (dim 1) across cluster_axis.
+    nhwc = torch_input.permute(0, 2, 3, 1).contiguous()
+    tt_input = bf16_tensor(nhwc, device=mesh_device, mesh_axis=cluster_axis, shard_dim=1)
+
+    tt_output = tt_model(tt_input)
+
+    tt_torch = _gather_group_norm_output(tt_output, mesh_device, cluster_axis, torch_output.shape[0])
+
+    assert_quality(torch_output, tt_torch, pcc=0.999_300)
+
+
+def _gather_group_norm_output(
+    tt_output: ttnn.Tensor,
+    mesh_device: ttnn.MeshDevice,
+    cluster_axis: int,
+    batch: int,
+) -> torch.Tensor:
+    """Gather the H-sharded NHWC output back to a torch NCHW tensor."""
+    shard_dims = [None, None]
+    shard_dims[cluster_axis] = 1  # gather H
+    shard_dims[1 - cluster_axis] = 0
+    tt_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=tuple(mesh_device.shape)),
+    )
+    # ConcatMesh2dToTensor may introduce a leading mesh-replica dim when the other axis is used as batch.
+    if tt_torch.ndim == 5:
+        tt_torch = tt_torch[0]
+    # The non-cluster mesh axis holds identical replicas of the (replicated) input; keep one so the
+    # batch matches torch's. The meaningful distributed comparison (H gathered over cluster_axis)
+    # is preserved by the retained replica.
+    if tt_torch.shape[0] != batch:
+        tt_torch = tt_torch[:batch]
+    return tt_torch.permute(0, 3, 1, 2)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, cluster_axis, device_params",
+    [
+        pytest.param(
+            (4, 8),
+            1,
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True},
+            id="mesh4x8_axis1",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_distributed_group_norm_fused_vs_unfused_silu(
+    *,
+    mesh_device: ttnn.MeshDevice,
+    cluster_axis: int,
+) -> None:
+    """Fused SiLU vs unfused GroupNorm + ``ttnn.silu``, both in one session.
+
+    Two things under test:
+      1. Both paths match the torch golden. The fused path applies SiLU to the fp32 DEST value
+         while the unfused path applies it to the bf16-rounded GroupNorm output, so the two are
+         NOT bit-exact — fused is expected to score equal or better against torch. Only a PCC
+         bound is asserted between them.
+      2. The program cache distinguishes them: identical shapes/tensors with the activation as
+         the only differing attribute, launched in the same session. If ``activation_fn``
+         were missing from ``compute_program_hash``, the second launch would reuse the first
+         one's compiled program and one of the golden checks would fail.
+    """
+    torch_dtype = torch.bfloat16
+    torch.manual_seed(0)
+
+    input_shape = (1, 128, 64, 64)
+    group_count = 32
+    n, c = input_shape[0], input_shape[1]
+
+    torch_model = torch.nn.GroupNorm(num_groups=group_count, num_channels=c)
+    torch.nn.init.normal_(torch_model.weight)
+    torch.nn.init.normal_(torch_model.bias)
+    torch_model.eval()
+
+    torch_input = torch.randn(input_shape, dtype=torch_dtype)
+    with torch.no_grad():
+        torch_gn = torch_model(torch_input)
+        torch_silu = torch.nn.functional.silu(torch_gn)
+
+    ccl_manager = CCLManager(mesh_device=mesh_device, topology=ttnn.Topology.Linear)
+    nhwc = torch_input.permute(0, 2, 3, 1).contiguous()
+
+    def build(activation_fn: str | None) -> DistributedGroupNorm:
+        return DistributedGroupNorm.from_torch(
+            torch_ref=torch_model,
+            mesh_device=mesh_device,
+            cluster_axis=cluster_axis,
+            mesh_axis=None,
+            ccl_manager=ccl_manager,
+            core_grid=ttnn.CoreGrid(x=8, y=8),
+            activation_fn=activation_fn,
+        )
+
+    # Unfused: GroupNorm, then a separate ttnn.silu (what the model did before fusion).
+    tt_input = bf16_tensor(nhwc, device=mesh_device, mesh_axis=cluster_axis, shard_dim=1)
+    unfused_out = build(None)(tt_input)
+    unfused_out = ttnn.silu(unfused_out, output_tensor=unfused_out)
+    unfused = _gather_group_norm_output(unfused_out, mesh_device, cluster_axis, n)
+
+    # Fused: same shapes, activation is the only differing op attribute.
+    tt_input = bf16_tensor(nhwc, device=mesh_device, mesh_axis=cluster_axis, shard_dim=1)
+    fused = _gather_group_norm_output(build("silu")(tt_input), mesh_device, cluster_axis, n)
+
+    logger.info("unfused vs torch:")
+    assert_quality(torch_silu, unfused, pcc=0.999_300)
+    logger.info("fused vs torch:")
+    assert_quality(torch_silu, fused, pcc=0.999_300)
+    logger.info("fused vs unfused:")
+    assert_quality(unfused, fused, pcc=0.999_500)
