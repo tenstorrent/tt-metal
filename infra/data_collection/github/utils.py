@@ -210,6 +210,28 @@ def get_failure_signature_and_description_from_annotations(
     return failure_signature, failure_description
 
 
+def get_civ2_node_name_and_serial_from_annotations(annotation_info):
+    """Extract the (node_name, serial) a CIv2 runner emitted at job start.
+
+    CIv2 runners emit GitHub Actions notice annotations at job start
+    (see tenstorrent/github-ci-infra#1408):
+        ::notice title=k8s-node-name::CIV2 runner <name> is running on Kubernetes node: <node>
+        ::notice title=tt-card-serial::CIV2 runner <name> has serial number(s): <serial>
+
+    Returns (node_name, serial), each None if its annotation is absent (e.g. CPU-only
+    runners have no card serial).
+    """
+    node_name, serial = None, None
+    for _annot in annotation_info or []:
+        title = _annot.get("title") or ""
+        message = _annot.get("message") or ""
+        if title == "k8s-node-name" and "Kubernetes node:" in message:
+            node_name = message.rsplit("Kubernetes node:", 1)[-1].strip() or None
+        elif title == "tt-card-serial" and "serial number(s):" in message:
+            serial = message.rsplit("serial number(s):", 1)[-1].strip() or None
+    return node_name, serial
+
+
 def get_job_row_from_github_job(github_job, github_job_id_to_annotations, workflow_outputs_dir):
     github_job_id = github_job["id"]
 
@@ -244,7 +266,7 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations, workfl
         ubuntu_version = None
 
     # Clean up ephemeral runner names
-    if host_name and (host_name.startswith("tt-beta") or host_name.startswith("tt-ubuntu")):
+    if host_name and host_name.startswith("tt-ubuntu"):
         parts = host_name.split("-")
         # Issue: https://github.com/tenstorrent/tt-metal/issues/21694
         # Issue: https://github.com/tenstorrent/tt-metal/issues/26445
@@ -253,6 +275,18 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations, workfl
         # E.g. tt-beta-ubuntu-2204-n150-large-stable-nk6pd-runner-5g5f9 -> tt-beta-ubuntu-2204-n150-large-stable-nk6pd
         if len(parts) >= 2 and parts[-2] == "runner":
             host_name = "-".join(parts[:-1])
+
+        # For CIv2 runners (tt-ubuntu), the ephemeral runner identity is not useful for data
+        # analysis since it changes every pod. Instead, identify the physical node/card that ran
+        # the job using the <node name>_<serial> emitted by the job-start hook annotations
+        # Fall back to the truncated name above when the
+        # annotations are unavailable (e.g. not downloaded, or CPU-only runners without a serial).
+        if host_name.startswith("tt-ubuntu"):
+            node_name, serial = get_civ2_node_name_and_serial_from_annotations(
+                github_job_id_to_annotations.get(github_job_id)
+            )
+            if node_name and serial:
+                host_name = f"{node_name}_{serial}"
 
     # Cleanup GitHub-hosted runner names because we're sending the whole thing, which is unnecessary
     # and clogs up the data with 1000s of hosts
