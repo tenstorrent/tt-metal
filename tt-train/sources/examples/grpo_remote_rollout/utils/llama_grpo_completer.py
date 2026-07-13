@@ -7,8 +7,8 @@
 Runs on the ttml rank: ``compute_nlog_probs`` runs locally (gradient path);
 ``generate`` / ``generate_str`` proxy to the remote :class:`TttGenerationWorker`
 via :class:`MPIRolloutClient`; :meth:`push_weights` ships the ttml weights over.
-Push once before :meth:`GRPOTrainer.train` (to overwrite the worker's dummy boot
-weights) and after every step (via :class:`WeightSyncCallback`).
+Push once before :meth:`GRPOTrainer.train` to overwrite the worker's dummy boot
+weights; the caller drives any periodic re-sync during training.
 """
 
 from __future__ import annotations
@@ -30,7 +30,6 @@ from ttml.common.config import TransformerConfig
 from ttml.common.utils import no_grad
 from ttml.models import RunnerType, WeightTyingType
 from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors
-from ttml.trainers.callback import TrainerCallback
 from ttml.trainers.grpo_trainer import GRPOCompleter
 
 from .mpi_rollout import MPIRolloutClient
@@ -332,8 +331,8 @@ class LlamaCompleterRemoteRollout(GRPOCompleter):
     def push_weights(self) -> None:
         """Export the ttml model to an HF-keyed dict and send_weights it once.
 
-        Call once before ``GRPOTrainer.train()`` (to overwrite the worker's
-        dummy boot weights) and periodically via :class:`WeightSyncCallback`.
+        Call once before ``GRPOTrainer.train()`` to overwrite the worker's dummy
+        boot weights; the caller re-invokes it to re-sync during training.
         """
         hf_dict = self._model.weights_ref_hf_dict()
         try:
@@ -377,36 +376,3 @@ class LlamaCompleterRemoteRollout(GRPOCompleter):
         assert mask_4d.shape == (B, 1, padded_q, padded_w)
 
         return ttml.autograd.Tensor.from_numpy(mask_4d, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, self._dp_mapper)
-
-
-class WeightSyncCallback(TrainerCallback):
-    """Push fresh ttml weights to the ttt worker on ``on_step_end`` every
-    ``every`` steps (``(step + 1) % every == 0``).
-
-    The initial push (overwriting the worker's dummy boot weights before the
-    first ``trainer.train()`` generate) is the caller's responsibility.
-    """
-
-    def __init__(self, completer: LlamaCompleterRemoteRollout, every: int = 1) -> None:
-        if every < 1:
-            raise ValueError(f"WeightSyncCallback: 'every' must be >= 1 (got {every})")
-        self._completer = completer
-        self._every = int(every)
-
-    def on_step_end(self, trainer: Any, step: int, *args: Any, **kwargs: Any) -> None:
-        print(
-            f"[WeightSyncCallback] on_step_end called: step={step}, every={self._every}",
-            flush=True,
-        )
-        if (int(step) + 1) % self._every == 0:
-            print(f"[WeightSyncCallback] step={step}: push_weights() start", flush=True)
-            import time as _t
-
-            _t0 = _t.perf_counter()
-            self._completer.push_weights()
-            print(
-                f"[WeightSyncCallback] step={step}: push_weights() done in " f"{_t.perf_counter() - _t0:.2f}s",
-                flush=True,
-            )
-        else:
-            print(f"[WeightSyncCallback] step={step}: skipped (not aligned with every={self._every})", flush=True)
