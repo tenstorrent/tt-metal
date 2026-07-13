@@ -95,7 +95,7 @@ The three Tensix threads coordinate through **8 hardware semaphores** (`Semaphor
      tt_metal/tt-llk/tt_llk_* --include=*.h | grep -v /tests/
    # init sites, incl. ABOVE tt-llk (kernels/firmware do some SEMINIT — e.g.
    # brisc.cc initialize_tensix_semaphores()); ALSO from the repo root:
-   grep -rInE "SEMINIT|t6_semaphore_init|initialize_tensix_semaphores" tt_metal/hw tt_metal/tt-llk ttnn/cpp models --include=*.h --include=*.cc --include=*.cpp
+   grep -rInE "SEMINIT|t6_semaphore_init|initialize_tensix_semaphores" tt_metal/hw tt_metal/tt-llk ttnn/cpp models --include=*.h --include=*.cc --include=*.cpp | grep -v /tests/
    ```
 2. **Per semaphore**, list every (thread, op, condition, file:line). Classify ops: `SEMINIT`(Max,Value) / `SEMPOST`(producer) / `SEMGET`(consumer) / `SEMWAIT`(max|zero) / RISC-MMIO post|get.
 3. **Run the rules**: init present + correct Max/Value (#1) → balance over all branches (#2) → directions (#3) → MMIO ordering (#4) → mutex balance (#5) → deadlock graph (#6).
