@@ -228,7 +228,8 @@ using namespace ckernel;
 // This must be done BEFORE including the TopK LLK API header.
 #define DST_SYNC_MODE  dest_sync
 #define DST_ACCUM_MODE is_fp32_dest_acc_en
-#include "llk_sfpu/llk_math_eltwise_unary_sfpu_topk.h"
+#include "llk_sfpu/ckernel_sfpu_topk.h"
+#include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 #undef DST_SYNC_MODE
 #undef DST_ACCUM_MODE
 
@@ -249,7 +250,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr int start_phase         = 0;
     constexpr int end_step            = 0;
     constexpr int start_step          = 0;
-    constexpr int vector_mode         = (int)VectorMode::RC_custom;
+    constexpr VectorMode vector_mode  = VectorMode::RC_custom;
 
     const std::uint32_t math_data_types[NUM_STAGES] = {formats.math, ckernel::to_underlying(DataFormat::UInt16)};
 
@@ -301,9 +302,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         DataCopyType::A2D,
                         is_fp32_dest_acc_en,
                         BroadcastType::NONE,
-                        false /* tilize */,
-                        false /* is_int_fpu_en */
-                        >(/*num_rows_per_matrix=*/4, /*math_format=*/math_format);
+                        false /* is_int_fpu_en */,
+                        PackMode::Default>(/*num_rows_per_matrix=*/4, /*math_format=*/math_format);
 
                     const int first_tile_in_pair_idx = stage_index * NUM_TILES_PER_STAGE;
 
@@ -322,8 +322,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 if (first_iteration)
                 {
                     // same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_local_sort from metal.
-                    _llk_math_eltwise_unary_sfpu_params_(
-                        ckernel::sfpu::calculate_bitonic_topk_phases_steps<APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT>,
+                    SFPU_UNARY_CALL(
+                        dest_sync,
+                        is_fp32_dest_acc_en,
+                        calculate_bitonic_topk_phases_steps,
+                        (APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT),
                         dst_index,
                         vector_mode,
                         TOPK_SORT_DIRECTION,
@@ -335,20 +338,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 else
                 {
                     // Same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_rebuild from metal.
-                    _llk_math_eltwise_unary_sfpu_params_(
-                        ckernel::sfpu::calculate_bitonic_topk_rebuild<APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT>,
+                    SFPU_UNARY_CALL(
+                        dest_sync,
+                        is_fp32_dest_acc_en,
+                        calculate_bitonic_topk_rebuild,
+                        (APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT),
                         dst_index,
                         vector_mode,
                         TOPK_SORT_DIRECTION,
                         current_iteration,
                         TOPK_K,
                         TOPK_LOGK,
-                        0 /* skip_second */);
+                        0 /*skip_second*/);
                 }
 
                 // Always a second operation.
-                _llk_math_eltwise_unary_sfpu_params_(
-                    ckernel::sfpu::calculate_bitonic_topk_merge<APPROX, is_fp32_dest_acc_en, TOPK_SORT_DIRECTION, TOPK_STABLE_SORT>,
+                SFPU_UNARY_CALL(
+                    dest_sync,
+                    is_fp32_dest_acc_en,
+                    calculate_bitonic_topk_merge,
+                    (APPROX, is_fp32_dest_acc_en, TOPK_SORT_DIRECTION, TOPK_STABLE_SORT),
                     dst_index,
                     vector_mode,
                     current_iteration,
@@ -358,15 +367,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 if (last_iteration)
                 {
                     // Same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_rebuild from metal.
-                    _llk_math_eltwise_unary_sfpu_params_(
-                        ckernel::sfpu::calculate_bitonic_topk_rebuild<APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT>,
+                    SFPU_UNARY_CALL(
+                        dest_sync,
+                        is_fp32_dest_acc_en,
+                        calculate_bitonic_topk_rebuild,
+                        (APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT),
                         dst_index,
                         vector_mode,
                         TOPK_SORT_DIRECTION,
                         current_iteration,
                         TOPK_K,
                         TOPK_LOGK,
-                        1 /* skip_second */);
+                        1 /*skip_second*/);
                 }
 
                 _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
@@ -397,7 +409,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // We pack the result with index tiles right after value tiles.
     const int NUM_TILES_IN_RESULT_BUFFER_PER_ROW = (TOPK_K / ckernel::TILE_C_DIM) * NUM_STAGES;
 
-    _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, false /* untilize */>();
+    _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>();
 
     const std::uint32_t pack_src_data_types[NUM_STAGES] = {formats.pack_src, ckernel::to_underlying(DataFormat::UInt16)};
     const std::uint32_t pack_dst_data_types[NUM_STAGES] = {formats.pack_dst, ckernel::to_underlying(DataFormat::UInt16)};
@@ -427,8 +439,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                     if (first_hardware_configuration)
                     {
-                        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false /* untilize */, false /* tilize */>(
-                            pack_src_format, pack_dst_format, 16 * 16 * 4 /* tile_size */);
+                        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(pack_src_format, pack_dst_format, 16 * 16 * 4 /* tile_size */);
                     }
                     else
                     {
@@ -446,7 +457,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             1 /* num_tiles */);
                     }
 
-                    _llk_pack_init_wrapper_<false /* untilize */, false /* zero_output */>(pack_dst_format);
+                    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(pack_dst_format);
 
                     const int tile_dest_offset = stage_index * NUM_TILES_PER_STAGE;
 
@@ -457,7 +468,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                         // Pack only the first tile from the pair in the last iteration since after final merge/rebuild,
                         // the result is in the first tile of each pair (DEST indices 0 and 2 for values and indices respectively).
-                        _llk_pack_<dest_sync, is_fp32_dest_acc_en, false>(tile_dest_offset, L1_ADDRESS(params.buffer_Res[tile_L1_offset]));
+                        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile_dest_offset, L1_ADDRESS(params.buffer_Res[tile_L1_offset]));
                     }
                     else
                     {
@@ -470,7 +481,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         const int tile_L1_offset = tile_row_offset + stage_offset + tile_pair_offset;
 
                         // Pack both tiles in the pair back to L1 for next iteration.
-                        _llk_pack_<dest_sync, is_fp32_dest_acc_en, false>(tile_dest_offset, L1_ADDRESS(params.buffer_A[tile_L1_offset]));
+                        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile_dest_offset, L1_ADDRESS(params.buffer_A[tile_L1_offset]));
                     }
 
                 } // Stage loop.

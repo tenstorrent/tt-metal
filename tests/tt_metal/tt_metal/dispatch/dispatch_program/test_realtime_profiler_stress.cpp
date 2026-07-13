@@ -77,7 +77,7 @@ constexpr uint32_t kNumProgramsInTrace = 4096;
 constexpr size_t kTraceRegionSize = 64 * 1024 * 1024;
 
 // Programs in the trace use this runtime_id so every record we receive can
-// be attributed to this test (records with program_id == 0 are reserved for
+// be attributed to this test (records with runtime_id == 0 are reserved for
 // infrastructure traffic and dropped host-side).
 constexpr uint32_t kStressRuntimeId = 0xBEEFu;
 
@@ -129,15 +129,15 @@ distributed::MeshWorkload build_blank_kernel_workload(const std::shared_ptr<dist
     const CoreCoord stress_core{0, 0};
     CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/blank.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
         stress_core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/blank.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
         stress_core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-    CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", stress_core, ComputeConfig{});
+    CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", stress_core, ComputeConfig{});
 
     program.set_runtime_id(static_cast<uint64_t>(kStressRuntimeId));
 
@@ -222,7 +222,7 @@ TEST(RealtimeProfilerStress, RingBufferOverflowFromTrace) {
     // hooked up.
     uint32_t stress_records = 0;
     for (const auto& rec : collected) {
-        if (rec.program_id == kStressRuntimeId) {
+        if (rec.runtime_id == kStressRuntimeId) {
             ++stress_records;
         }
     }
@@ -256,7 +256,7 @@ TEST(RealtimeProfilerStress, RingBufferOverflowFromTrace) {
     uint32_t implausible_duration = 0;
     int64_t worst_negative_delta = 0;
     for (const auto& rec : collected) {
-        if (rec.program_id != kStressRuntimeId) {
+        if (rec.runtime_id != kStressRuntimeId) {
             continue;
         }
         if (rec.end_timestamp < rec.start_timestamp) {

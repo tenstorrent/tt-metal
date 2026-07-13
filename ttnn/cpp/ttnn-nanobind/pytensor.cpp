@@ -225,6 +225,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
         const auto tt_dtype = tensor_spec.data_type();
         switch (tt_dtype) {
             case DataType::UINT8: return dispatch_to_concrete.template operator()<uint8_t>(buffer);
+            case DataType::FP8_E4M3: TT_THROW("FP8_E4M3 single-device to_torch is not supported");
             case DataType::UINT16: return dispatch_to_concrete.template operator()<uint16_t>(buffer);
             case DataType::INT32: return dispatch_to_concrete.template operator()<int32_t>(buffer);
             case DataType::UINT32: return dispatch_to_concrete.template operator()<uint32_t>(buffer);
@@ -277,6 +278,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(
 
     switch (tt_tensor.dtype()) {
         case DataType::UINT8: return dispatch_to_concrete.template operator()<uint8_t>(tt_tensor);
+        case DataType::FP8_E4M3: return dispatch_to_concrete.template operator()<float8_e4m3>(tt_tensor);
         case DataType::UINT16: return dispatch_to_concrete.template operator()<uint16_t>(tt_tensor);
         case DataType::INT32: return dispatch_to_concrete.template operator()<int32_t>(tt_tensor);
         case DataType::UINT32: return dispatch_to_concrete.template operator()<uint32_t>(tt_tensor);
@@ -456,7 +458,7 @@ void pytensor_module(nb::module_& mod) {
             "__init__",
             [](Tensor* t,
                std::vector<T>&& data,
-               const ttnn::SmallVector<uint32_t>& shape,
+               const ttsl::SmallVector<uint32_t>& shape,
                DataType data_type,
                Layout layout,
                const std::optional<Tile>& tile,
@@ -510,7 +512,7 @@ void pytensor_module(nb::module_& mod) {
             "__init__",
             [](Tensor* t,
                std::vector<T>&& data,
-               const ttnn::SmallVector<uint32_t>& shape,
+               const ttsl::SmallVector<uint32_t>& shape,
                DataType data_type,
                Layout layout,
                std::optional<MeshDevice*> device,
@@ -565,7 +567,7 @@ void pytensor_module(nb::module_& mod) {
             "__init__",
             [](Tensor* t,
                std::vector<T>&& data,
-               const ttnn::SmallVector<uint32_t>& shape,
+               const ttsl::SmallVector<uint32_t>& shape,
                DataType data_type,
                Layout layout,
                std::optional<MeshDevice*> device,
@@ -856,6 +858,7 @@ void pytensor_module(nb::module_& mod) {
                         case DataType::UINT32: return self.to_vector<uint32_t>()[0];
                         case DataType::UINT16: return self.to_vector<uint16_t>()[0];
                         case DataType::UINT8: return self.to_vector<uint8_t>()[0];
+                        case DataType::FP8_E4M3: TT_THROW("FP8_E4M3 item() is not supported");
                         case DataType::INVALID: TT_THROW("Unsupported DataType");
                     }
                     TT_THROW("Unreachable");
@@ -905,8 +908,8 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "pad",
             [](const Tensor& self,
-               const ttnn::SmallVector<uint32_t>& output_tensor_shape,
-               const ttnn::SmallVector<uint32_t>& input_tensor_start,
+               const ttsl::SmallVector<uint32_t>& output_tensor_shape,
+               const ttsl::SmallVector<uint32_t>& input_tensor_start,
                float pad_value) {
                 return self.pad(ttnn::Shape(output_tensor_shape), ttnn::Shape(input_tensor_start), pad_value);
             },
@@ -979,8 +982,8 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "unpad",
             [](const Tensor& self,
-               const ttnn::SmallVector<uint32_t>& output_tensor_start,
-               const ttnn::SmallVector<uint32_t>& output_tensor_end) {
+               const ttsl::SmallVector<uint32_t>& output_tensor_start,
+               const ttsl::SmallVector<uint32_t>& output_tensor_end) {
                 return self.unpad(ttnn::Shape(output_tensor_start), ttnn::Shape(output_tensor_end));
             },
             R"doc(
@@ -1102,7 +1105,7 @@ void pytensor_module(nb::module_& mod) {
         )doc")
         .def(
             "unpad_from_tile",
-            [](const Tensor& self, const ttnn::SmallVector<uint32_t>& output_tensor_shape) {
+            [](const Tensor& self, const ttsl::SmallVector<uint32_t>& output_tensor_shape) {
                 return self.unpad_from_tile(ttnn::Shape(output_tensor_shape));
             },
             R"doc(
@@ -1503,7 +1506,7 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "reshape",
             [](Tensor& self, int N, int C, int H, int W) {
-                return ttnn::reshape(self, ttnn::SmallVector<int>{N, C, H, W});
+                return ttnn::reshape(self, ttsl::SmallVector<int>{N, C, H, W});
             },
             nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
@@ -1526,7 +1529,7 @@ void pytensor_module(nb::module_& mod) {
             )doc")
         .def(
             "reshape",
-            [](Tensor& self, const ttnn::SmallVector<int32_t>& shape) -> Tensor { return ttnn::reshape(self, shape); },
+            [](Tensor& self, const ttsl::SmallVector<int32_t>& shape) -> Tensor { return ttnn::reshape(self, shape); },
             nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Reshapes TT tensor
@@ -1557,6 +1560,14 @@ void pytensor_module(nb::module_& mod) {
                             std::is_same_v<T, bfloat8_b> || std::is_same_v<T, bfloat4_b> ||
                             std::is_same_v<T, bfloat16>) {
                             return self.to_vector<float>();
+                        } else if constexpr (std::is_same_v<T, float8_e4m3>) {
+                            // to_vector<float>() doesn't yet handle FP8 source (see
+                            // host_tensor_factory.cpp::to_vector_float). Until that gains an
+                            // FP8 case, to_list() on an FP8 tensor isn't wired up. Print path
+                            // (Tensor::__repr__) still works via the to_dtype float pivot in
+                            // ttnn/core/tensor/tensor_impl.cpp.
+                            TT_THROW("Tensor.to_list(): FP8_E4M3 is not supported");
+                            return self.to_vector<float>();  // unreachable, satisfies return type
                         } else {
                             return self.to_vector<T>();
                         }
@@ -1664,7 +1675,8 @@ void pytensor_module(nb::module_& mod) {
                 tt::tt_metal::distributed::MeshShape(1, 1),
                 {tt::tt_metal::distributed::MeshMapperConfig::Replicate{}},
                 {coord});
-            DeviceStorage device_storage(MeshTensor(std::move(mesh_buffer), tensor_spec, std::move(topology)), {coord});
+            DeviceStorage device_storage(
+                MeshTensor::from_buffer(std::move(*mesh_buffer), tensor_spec, std::move(topology)), {coord});
             return Tensor(std::move(device_storage));
         },
         nb::arg("host_tensor"),

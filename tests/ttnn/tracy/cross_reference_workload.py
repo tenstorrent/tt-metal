@@ -113,7 +113,7 @@ def main():
         with lock:
             rt_records.append(
                 {
-                    "program_id": record.program_id,
+                    "runtime_id": record.runtime_id,
                     "chip_id": record.chip_id,
                     "start_timestamp": record.start_timestamp,
                     "end_timestamp": record.end_timestamp,

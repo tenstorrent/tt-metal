@@ -32,9 +32,9 @@ struct BinaryNgDeviceOperation {
 
     struct operation_attributes_t {
         BinaryOpType binary_op_type;
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations;
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations;
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> post_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> post_activations;
         std::optional<unary::ScalarVariant> scalar;
         tt::tt_metal::MemoryConfig memory_config;
         DataType input_dtype;
@@ -47,6 +47,9 @@ struct BinaryNgDeviceOperation {
         bool is_sfpu = false;
         bool is_quant_op = false;
         bool is_where_op = false;
+        float rtol = 0.0f;
+        float atol = 0.0f;
+        bool equal_nan = false;
         Layout input_layout_a = Layout::TILE;
         Layout input_layout_b = Layout::TILE;
         Layout output_layout = Layout::TILE;
@@ -94,11 +97,14 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
     std::optional<ttnn::operations::unary::ScalarVariant> scalar_value = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt,
+    float rtol = 0.0f,
+    float atol = 0.0f,
+    bool equal_nan = false);
 
 ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t binary_ng(
     const Tensor& input_tensor_a_arg,
-    float scalar,
+    ttnn::operations::unary::ScalarVariant scalar,
     ttnn::operations::binary_ng::BinaryOpType binary_op_type,
     const std::optional<const DataType>& output_dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,

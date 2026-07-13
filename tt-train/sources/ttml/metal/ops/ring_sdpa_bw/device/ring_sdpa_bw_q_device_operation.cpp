@@ -59,20 +59,6 @@ RingSDPABwQDeviceOperation::tensor_return_value_t RingSDPABwQDeviceOperation::cr
     return {grad_query, u_scaler};
 }
 
-ttsl::hash::hash_t RingSDPABwQDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    return ttsl::hash::hash_objects(
-        0,  // Q marker (different from KV)
-        attrs.ring_size,
-        attrs.ring_axis,
-        attrs.step,
-        static_cast<int>(attrs.mask_type),
-        static_cast<int>(attrs.ring_direction),
-        tensor_args.query.logical_shape(),
-        tensor_args.query.dtype(),
-        tensor_args.key.logical_shape());
-}
-
 }  // namespace ttml::metal::ops::ring_sdpa_bw::q
 
 namespace ttnn::prim {

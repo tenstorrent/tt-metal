@@ -31,9 +31,14 @@ on:
         description: "Enable Link Time Optimization (LTO)"
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
@@ -43,7 +48,7 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       tracy: true
   run-microbenchmarks:
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     uses: ./.github/workflows/metal-run-microbenchmarks-impl.yaml
     secrets: inherit
     with:

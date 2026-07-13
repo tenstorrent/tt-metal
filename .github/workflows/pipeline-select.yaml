@@ -16,7 +16,7 @@ on:
         type: string
         default: "in-service"
       single-card-demo:
-        description: "Demo tests. Input 'all', 'disabled', or a list of requested models as JSON array, for example: [\"resnet\", \"sdxl\"]"
+        description: 'Demo tests. Input ''all'', ''disabled'', or a list of requested models as JSON array, for example: ["resnet", "sdxl"]'
         default: disabled
         type: string
       single-card-perf-models:
@@ -32,6 +32,7 @@ on:
         type: boolean
         default: false
       cpp-unit:
+        description: "Run cpp unit tests"
         required: false
         type: boolean
         default: false
@@ -97,13 +98,18 @@ jobs:
               echo "run-cpp-unit=true" >> $GITHUB_OUTPUT
               ;;
           esac
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
+    needs: [check-harbor, determine-tests]
     uses: ./.github/workflows/build-artifact.yaml
-    needs: determine-tests
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
@@ -155,9 +161,10 @@ jobs:
     if: ${{ needs.determine-tests.outputs.run-cpp-unit == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
-    uses: ./.github/workflows/cpp-post-commit.yaml
+    uses: ./.github/workflows/ops-unit-tests-impl.yaml
     with:
-      arch: wormhole_b0
-      runner-label: tt-ubuntu-2204-n300-stable
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: "wh_n300_civ2"
+      additional_test_categories: "cpp_accessor,cpp_lab_examples"

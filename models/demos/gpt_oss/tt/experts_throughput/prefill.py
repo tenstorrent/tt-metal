@@ -66,6 +66,7 @@ class DeepSeekPrefillConfig:
         self.config = config
         self.dispatch_group_size = dispatch_group_size
         self.num_dispatch_groups = num_dispatch_groups
+        self.num_links = num_links
 
         experts_per_chip = config.num_experts // (dispatch_group_size * num_dispatch_groups)
         self.experts_per_chip = experts_per_chip
@@ -142,41 +143,32 @@ class DeepSeekPrefillConfig:
         )
 
         self.permuted_weights = None  # Set by mlp.py after host-side permutation
-        self._per_expert_weights = None
 
-        logger.info(
+        logger.debug(
             f"DeepSeekPrefillConfig: experts_per_chip={experts_per_chip}, "
             f"max_dispatched={max_dispatched}, max_buf={max_dispatch_buffer_token_size}, "
             f"dgs={dispatch_group_size}, ndg={num_dispatch_groups}"
         )
 
-    def get_per_expert_weights(self, pw):
-        """Slice EPC-batched weights into per-expert tensors. Cached after first call."""
-        if self._per_expert_weights is not None:
-            return self._per_expert_weights
-
+    def slice_expert_weights(self, pw, e):
+        """Slice EPC-batched weights for a single expert. Caller MUST deallocate the
+        returned tensors after use; nothing is cached."""
         H = self.config.hidden_size
         I = self.config.intermediate_size
-
-        slices = []
-        for e in range(self.experts_per_chip):
-            if pw.w1_w3_fused is not None:
-                w1_w3_e = ttnn.slice(pw.w1_w3_fused, [0, e, 0, 0], [1, e + 1, H, 2 * I], [1, 1, 1, 1])
-                w1_w3_bias_e = ttnn.slice(pw.w1_w3_bias_fused, [0, e, 0, 0], [1, e + 1, 1, 2 * I], [1, 1, 1, 1])
-                w2_e = ttnn.slice(pw.w2, [0, e, 0, 0], [1, e + 1, I, H], [1, 1, 1, 1])
-                w2_bias_e = ttnn.slice(pw.w2_bias, [0, e, 0, 0], [1, e + 1, 1, H], [1, 1, 1, 1])
-                slices.append((w1_w3_e, w1_w3_bias_e, w2_e, w2_bias_e))
-            else:
-                w1_e = ttnn.slice(pw.w1, [0, e, 0, 0], [1, e + 1, H, I], [1, 1, 1, 1])
-                w1_bias_e = ttnn.slice(pw.w1_bias, [0, e, 0, 0], [1, e + 1, 1, I], [1, 1, 1, 1])
-                w3_e = ttnn.slice(pw.w3, [0, e, 0, 0], [1, e + 1, H, I], [1, 1, 1, 1])
-                w3_bias_e = ttnn.slice(pw.w3_bias, [0, e, 0, 0], [1, e + 1, 1, I], [1, 1, 1, 1])
-                w2_e = ttnn.slice(pw.w2, [0, e, 0, 0], [1, e + 1, I, H], [1, 1, 1, 1])
-                w2_bias_e = ttnn.slice(pw.w2_bias, [0, e, 0, 0], [1, e + 1, 1, H], [1, 1, 1, 1])
-                slices.append((w1_e, w1_bias_e, w3_e, w3_bias_e, w2_e, w2_bias_e))
-
-        self._per_expert_weights = slices
-        return slices
+        if pw.w1_w3_fused is not None:
+            w1_w3_e = ttnn.slice(pw.w1_w3_fused, [0, e, 0, 0], [1, e + 1, H, 2 * I], [1, 1, 1, 1])
+            w1_w3_bias_e = ttnn.slice(pw.w1_w3_bias_fused, [0, e, 0, 0], [1, e + 1, 1, 2 * I], [1, 1, 1, 1])
+            w2_e = ttnn.slice(pw.w2, [0, e, 0, 0], [1, e + 1, I, H], [1, 1, 1, 1])
+            w2_bias_e = ttnn.slice(pw.w2_bias, [0, e, 0, 0], [1, e + 1, 1, H], [1, 1, 1, 1])
+            return (w1_w3_e, w1_w3_bias_e, w2_e, w2_bias_e)
+        else:
+            w1_e = ttnn.slice(pw.w1, [0, e, 0, 0], [1, e + 1, H, I], [1, 1, 1, 1])
+            w1_bias_e = ttnn.slice(pw.w1_bias, [0, e, 0, 0], [1, e + 1, 1, I], [1, 1, 1, 1])
+            w3_e = ttnn.slice(pw.w3, [0, e, 0, 0], [1, e + 1, H, I], [1, 1, 1, 1])
+            w3_bias_e = ttnn.slice(pw.w3_bias, [0, e, 0, 0], [1, e + 1, 1, I], [1, 1, 1, 1])
+            w2_e = ttnn.slice(pw.w2, [0, e, 0, 0], [1, e + 1, I, H], [1, 1, 1, 1])
+            w2_bias_e = ttnn.slice(pw.w2_bias, [0, e, 0, 0], [1, e + 1, 1, H], [1, 1, 1, 1])
+            return (w1_e, w1_bias_e, w3_e, w3_bias_e, w2_e, w2_bias_e)
 
 
 # Keep for backward compatibility
@@ -305,7 +297,9 @@ def _forward_prefill_deepseek_chunk(
     # Step 1: All-gather x across TP axis
     x_full_is_new = False
     if mesh_device.shape[1] > 1 and hidden_states.shape[-1] < config.hidden_size:
-        x_full = ttnn.all_gather(hidden_states, dim=-1, cluster_axis=1, num_links=4, topology=ttnn.Topology.Linear)
+        x_full = ttnn.all_gather(
+            hidden_states, dim=-1, cluster_axis=1, num_links=pc.num_links, topology=ttnn.Topology.Linear
+        )
         x_full_is_new = True
     else:
         x_full = hidden_states
@@ -336,14 +330,8 @@ def _forward_prefill_deepseek_chunk(
     ttnn.deallocate(idx_for_routing)
 
     # Step 3: Format indices/scores for dispatch
-    if topk_expert_indices.dtype != ttnn.int32:
-        indices_tile = ttnn.to_layout(topk_expert_indices, ttnn.TILE_LAYOUT)
-        indices_i32 = ttnn.typecast(indices_tile, ttnn.int32)
-        ttnn.deallocate(indices_tile)
-        indices_rm = ttnn.to_layout(indices_i32, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(indices_i32)
-    else:
-        indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
+    # Indices stay as uint16 from the gate - dispatch reads them natively.
+    indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
     scores_rm = ttnn.to_layout(topk_expert_weights, ttnn.ROW_MAJOR_LAYOUT)
     scores_for_reduce = ttnn.clone(scores_rm, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -378,9 +366,11 @@ def _forward_prefill_deepseek_chunk(
     else:
         buf_work = buf_tiled
 
-    per_expert_w = pc.get_per_expert_weights(pw)
-
     for local_expert in range(pc.experts_per_chip):
+        # Slice per-expert weights on-demand; deallocate at end of iter so they
+        # never persist across iters or across layers.
+        expert_w = pc.slice_expert_weights(pw, local_expert)
+
         tokens = ttnn.experimental.deepseek_prefill.extract(
             buf_work,
             expert_region_offsets,
@@ -395,38 +385,50 @@ def _forward_prefill_deepseek_chunk(
         tokens_4d = ttnn.reshape(tokens_bf16, (1, 1, max_per_expert, H))
 
         if pw.w1_w3_fused is not None:
-            w1_w3_e, w1_w3_bias_e, w2_e, w2_bias_e = per_expert_w[local_expert]
+            w1_w3_e, w1_w3_bias_e, w2_e, w2_bias_e = expert_w
 
             w1_w3_out = ttnn.matmul(tokens_4d, w1_w3_e, memory_config=memory_config)
             ttnn.deallocate(tokens_4d)
             ttnn.deallocate(tokens_bf16)
+            ttnn.deallocate(w1_w3_e)
             ttnn.add(w1_w3_out, w1_w3_bias_e, output_tensor=w1_w3_out)
+            ttnn.deallocate(w1_w3_bias_e)
             sh = w1_w3_out.shape
             w1_out = ttnn.slice(w1_w3_out, [0, 0, 0, 0], [sh[0], sh[1], sh[2], I], [1, 1, 1, 1])
             w3_out = ttnn.slice(w1_w3_out, [0, 0, 0, I], [sh[0], sh[1], sh[2], 2 * I], [1, 1, 1, 1])
             ttnn.deallocate(w1_w3_out)
         else:
-            w1_e, w1_bias_e, w3_e, w3_bias_e, w2_e, w2_bias_e = per_expert_w[local_expert]
+            w1_e, w1_bias_e, w3_e, w3_bias_e, w2_e, w2_bias_e = expert_w
 
             w1_out = ttnn.matmul(tokens_4d, w1_e, memory_config=memory_config)
+            ttnn.deallocate(w1_e)
             ttnn.add(w1_out, w1_bias_e, output_tensor=w1_out)
+            ttnn.deallocate(w1_bias_e)
             w3_out = ttnn.matmul(tokens_4d, w3_e, memory_config=memory_config)
+            ttnn.deallocate(w3_e)
             ttnn.deallocate(tokens_4d)
             ttnn.deallocate(tokens_bf16)
             ttnn.add(w3_out, w3_bias_e, output_tensor=w3_out)
+            ttnn.deallocate(w3_bias_e)
 
         activated = _apply_swiglu(w1_out, w3_out, config.alpha, config.swiglu_limit, memory_config)
+        # _apply_swiglu deallocates w1_out and w3_out internally.
 
         expert_out_4d = ttnn.matmul(activated, w2_e, memory_config=memory_config)
         ttnn.deallocate(activated)
+        ttnn.deallocate(w2_e)
         ttnn.add(expert_out_4d, w2_bias_e, output_tensor=expert_out_4d)
+        ttnn.deallocate(w2_bias_e)
 
-        expert_out_2d = ttnn.reshape(expert_out_4d, (max_per_expert, H))
-        if expert_out_2d.dtype != ttnn.bfloat8_b:
-            expert_out_bf8 = ttnn.typecast(expert_out_2d, ttnn.bfloat8_b)
+        # Reshape is a view of expert_out_4d; rebind same name to avoid keeping two Python refs.
+        expert_out_4d = ttnn.reshape(expert_out_4d, (max_per_expert, H))
+        if expert_out_4d.dtype != ttnn.bfloat8_b:
+            expert_out_bf8 = ttnn.typecast(expert_out_4d, ttnn.bfloat8_b)
             ttnn.deallocate(expert_out_4d)
+            bf8_owns_alloc = True
         else:
-            expert_out_bf8 = expert_out_2d
+            expert_out_bf8 = expert_out_4d
+            bf8_owns_alloc = False
 
         buf_work = ttnn.experimental.deepseek_prefill.insert(
             buf_work,
@@ -436,13 +438,18 @@ def _forward_prefill_deepseek_chunk(
             pc.global_expert_idx_table,
             local_expert_id=local_expert,
         )
-        ttnn.deallocate(expert_out_bf8)
+        if bf8_owns_alloc:
+            ttnn.deallocate(expert_out_bf8)
+        else:
+            # expert_out_bf8 is a view of expert_out_4d (no typecast). Free the underlying buffer.
+            ttnn.deallocate(expert_out_4d)
 
     expert_outputs_bf16 = ttnn.typecast(buf_work, ttnn.bfloat16)
     ttnn.deallocate(buf_work)
-    expert_out_rm_2d = ttnn.to_layout(expert_outputs_bf16, ttnn.ROW_MAJOR_LAYOUT, memory_config=memory_config)
+    expert_out_rm = ttnn.to_layout(expert_outputs_bf16, ttnn.ROW_MAJOR_LAYOUT, memory_config=memory_config)
     ttnn.deallocate(expert_outputs_bf16)
-    expert_out_rm = ttnn.reshape(expert_out_rm_2d, (1, 1, pc.max_dispatch_buffer_token_size, H))
+    # Reshape is a view; rebind same name so we only hold one Python ref to the underlying buffer.
+    expert_out_rm = ttnn.reshape(expert_out_rm, (1, 1, pc.max_dispatch_buffer_token_size, H))
 
     # Step 7: Combine (post-#41668 takes token counts and region offsets)
     combined = pc.combine_module(expert_out_rm, metadata, tt_counts, expert_region_offsets)
@@ -487,7 +494,7 @@ def _forward_prefill_deepseek_chunk(
     ttnn.deallocate(scores_for_reduce)
 
     if mesh_device.shape[1] > 1:
-        output = ttnn.all_reduce(summed, cluster_axis=1, num_links=4, topology=ttnn.Topology.Linear)
+        output = ttnn.all_reduce(summed, cluster_axis=1, num_links=pc.num_links, topology=ttnn.Topology.Linear)
         if output is not summed:
             ttnn.deallocate(summed)
     else:

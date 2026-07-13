@@ -63,12 +63,16 @@ void ExtractDeviceOperation::validate_on_program_cache_miss(
     const auto& counts = tensor_args.counts;
     const auto& global_expert_idx_table = tensor_args.global_expert_idx_table;
 
-    // Global tensor validation: 2D, BFLOAT8_B, TILE layout, DRAM interleaved, on device.
+    // Global tensor validation: 2D, BFLOAT8_B or BFLOAT16, TILE layout, DRAM interleaved, on device.
+    // The op is byte-level tile-copy (no math on the data), so the kernels work for either dtype.
+    // The CB and output tensor both derive their format from global_tensor.dtype(). Production
+    // uses BFLOAT8_B; BFLOAT16 is needed for the PCC-comparison test path (bf16 everywhere).
     TT_FATAL(global_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "global_tensor must be on device");
     TT_FATAL(global_tensor.buffer() != nullptr, "global_tensor must have a buffer");
     TT_FATAL(
-        global_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B,
-        "global_tensor must be BFLOAT8_B, got {}",
+        global_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B ||
+            global_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
+        "global_tensor must be BFLOAT8_B or BFLOAT16, got {}",
         global_tensor.dtype());
     TT_FATAL(
         global_tensor.layout() == tt::tt_metal::Layout::TILE,
@@ -137,8 +141,9 @@ ExtractDeviceOperation::spec_return_value_t ExtractDeviceOperation::compute_outp
     const auto& global_tensor = tensor_args.global_tensor;
     const auto hidden_dim = global_tensor.logical_shape()[-1];
     // Output shape: [max_dispatched_tokens_per_expert, hidden_dim], TILE layout,
-    // BFLOAT8_B, DRAM interleaved. Kernels fill only the first
-    // ceil_tile(counts[global_expert_id]) rows/tokens; the rest is undefined.
+    // dtype inherited from global_tensor (BFLOAT8_B or BFLOAT16), DRAM interleaved.
+    // Kernels fill only the first ceil_tile(counts[global_expert_id]) rows/tokens;
+    // the rest is undefined.
     const ttnn::Shape output_shape({operation_attributes.max_dispatched_tokens_per_expert, hidden_dim});
     const auto mem_config =
         tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};

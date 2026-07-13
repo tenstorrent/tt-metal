@@ -601,6 +601,24 @@ def _strip_object_addresses(value):
     return value
 
 
+_SHAPE_RE = re.compile(r"^Shape\(\[([0-9,\s]+)\]\)$")
+
+
+def _parse_shape_object(obj):
+    """Convert a serialized Shape dict to a plain int list.
+
+    The tracer sometimes serializes ttnn.Shape as
+    {"type": "Shape", "value": "Shape([1, 32, 32, 384])"} instead of a
+    plain list [1, 32, 32, 384].  Canonicalize to the list form so the
+    hash is stable regardless of serialization path.
+    """
+    if isinstance(obj, dict) and obj.get("type") == "Shape" and isinstance(obj.get("value"), str):
+        m = _SHAPE_RE.match(obj["value"])
+        if m:
+            return [int(x.strip()) for x in m.group(1).split(",")]
+    return None
+
+
 def _normalize_for_hash(obj):
     """
     Normalize arguments in-place for stable config_hash computation.
@@ -618,9 +636,19 @@ def _normalize_for_hash(obj):
         if "shard_spec" in obj and obj["shard_spec"] is None:
             obj["shard_spec"] = "None"
 
+        # allowed_worker_cores: a newer program_config field that older traces predate.
+        # Drop it when unset (None) so the hash stays stable across ttnn versions — a
+        # default-None value carries no config identity that pre-existing hashes lacked.
+        if "allowed_worker_cores" in obj and obj["allowed_worker_cores"] is None:
+            del obj["allowed_worker_cores"]
+
         for k in list(obj.keys()):
             v = obj[k]
-            if isinstance(v, str):
+            # Serialized Shape objects → plain int lists
+            parsed = _parse_shape_object(v) if isinstance(v, dict) else None
+            if parsed is not None:
+                obj[k] = parsed
+            elif isinstance(v, str):
                 obj[k] = _strip_object_addresses(v)
             else:
                 _normalize_for_hash(v)
@@ -1506,13 +1534,17 @@ Examples (Import existing traces):
 
         if not args.load and not result["trace_files"]:
             if result["success"]:
-                print("❌ Error: Test run completed but produced no operation trace files")
+                print(
+                    "⚠️ Warning: Test run completed but produced no operation trace files.\n"
+                    "   All test vectors may have been invalidated (e.g., unsupported layout or mesh shape)."
+                )
+                return 0
             else:
                 print(
                     f"❌ Error: Test execution failed with exit code {result['exit_code']} "
                     "before any operation trace files were generated"
                 )
-            return 1
+                return result["exit_code"] or 1
 
         if result["trace_files"]:
             # Load valid operations and excluded operations
@@ -1641,14 +1673,24 @@ Examples (Import existing traces):
                 signature = f"{op_name}::{hashlib.md5(args_str.encode()).hexdigest()}"
                 operation["execution_count"] = execution_counts[signature]
 
-            # Deduplicate operations with same config (keep one with execution count)
+            # Deduplicate operations with same config (keep one with execution count).
+            # In sweep-validation mode each operation carries a sweep_source_hash
+            # that maps it to exactly one master config — dedup by that so two
+            # distinct vectors that happen to reconstruct to identical args (e.g.
+            # an embedding pair differing only in the master's recorded index
+            # dtype) are both preserved. Fall back to the args signature for
+            # plain master generation (no sweep_source_hash).
             print("\n🔍 Deduplicating configurations...")
             unique_operations = {}
             for operation in tqdm(filtered_operations, desc="Deduplicating", unit="op"):
                 op_name = operation.get("operation", "unknown")
-                op_args = operation.get("arguments", {})
-                args_str = json.dumps(op_args, sort_keys=True, default=str)
-                signature = f"{op_name}::{hashlib.md5(args_str.encode()).hexdigest()}"
+                sweep_source_hash = operation.get("sweep_source_hash")
+                if sweep_source_hash:
+                    signature = f"{op_name}::ssh::{sweep_source_hash}"
+                else:
+                    op_args = operation.get("arguments", {})
+                    args_str = json.dumps(op_args, sort_keys=True, default=str)
+                    signature = f"{op_name}::{hashlib.md5(args_str.encode()).hexdigest()}"
                 if signature not in unique_operations:
                     unique_operations[signature] = operation
 

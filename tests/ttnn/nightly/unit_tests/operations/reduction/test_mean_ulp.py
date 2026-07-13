@@ -48,6 +48,7 @@ from loguru import logger
 
 import ttnn
 from tests.ttnn.utils_for_testing import measure_ulp_with_near_zero_atol
+from tests.ttnn.nightly.unit_tests.operations.reduction.utility_functions import ttnn_mean
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +88,7 @@ def _run_ttnn_mean(
     """Send tensor to device, run ttnn.mean, return host torch tensor."""
     tt_input = ttnn.from_torch(input_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn.fill_implicit_tile_padding(tt_input, 42)
-    tt_out = ttnn.mean(tt_input, dim=dim, keepdim=keepdim, compute_kernel_config=compute_kernel_config)
+    tt_out = ttnn_mean(tt_input, dim=dim, keepdim=keepdim, compute_kernel_config=compute_kernel_config)
     return ttnn.to_torch(tt_out)
 
 

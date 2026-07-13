@@ -78,6 +78,24 @@ static_assert(sizeof(TensorShape) == 4, "TensorShape must be 4 bytes");
 constexpr TensorShape DEFAULT_TENSOR_SHAPE = {MAX_FACE_R_DIM, MAX_FACE_C_DIM, MAX_NUM_FACES_R_DIM, MAX_NUM_FACES_C_DIM};
 
 /**
+ * @brief Build a TensorShape from a flat face count and face row dimension.
+ *
+ * Bridges legacy APIs that still carry a flat num_faces / face_r_dim (e.g. CB metadata) into a
+ * TensorShape. Uses the canonical face-grid decomposition for tile-dependent ops, which are
+ * constrained to num_faces in {1, 2, 4}: 1 -> 1x1, 2 -> 1x2, 4 -> 2x2. The face column dimension
+ * is always 16 in hardware.
+ *
+ * @param num_faces: Total number of faces in the tile (1, 2, or 4).
+ * @param face_r_dim: Row dimension of each face (defaults to the full 16-row face).
+ */
+constexpr TensorShape tensor_shape_from_num_faces(const std::uint32_t num_faces, const std::uint32_t face_r_dim = MAX_FACE_R_DIM)
+{
+    const std::uint8_t num_faces_r_dim = (num_faces == 4) ? 2 : 1;
+    const std::uint8_t num_faces_c_dim = (num_faces == 4) ? 2 : static_cast<std::uint8_t>(num_faces);
+    return TensorShape {static_cast<std::uint8_t>(face_r_dim), MAX_FACE_C_DIM, num_faces_r_dim, num_faces_c_dim};
+}
+
+/**
  * @brief Validates tensor shape for operations that depend on face positioning within a tile.
  * Will start relaxing this constraint once we test larger tensor shapes.
  *

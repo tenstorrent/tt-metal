@@ -38,8 +38,8 @@ void kernel_main() {
     CircularBuffer final_indices_cb(final_indices_cb_index);
 
     // Memory transfer configuration
-    const uint32_t tile_bytes_values = get_tile_size(values_cb_index);
-    const uint32_t tile_bytes_ind = get_tile_size(output_ind_cb_index);
+    const uint32_t tile_bytes_values = values_cb.get_tile_size();
+    const uint32_t tile_bytes_ind = indices_cb.get_tile_size();
 
     // Calculate target addresses in final core's L1 memory
     const uint32_t final_values_cb_addr = final_values_cb.get_write_ptr();

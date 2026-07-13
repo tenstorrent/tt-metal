@@ -1,0 +1,35 @@
+# Connected 2-galaxy mesh graph descriptor for D2D-socket pipeline prefill: ONE fabric link between
+# the two galaxies so the D2D MeshSocket has a path: stage 0 (mesh 0) -> stage 1 (mesh 1).
+#
+# Structure adapted from the decode superpod MGD
+# (models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto),
+# which chains 64 4x2 meshes 0<->1<->...<->63 with count:8 RELAXED links and NO pinnings (pure
+# discovery) on these same machines. We keep that connection format but use the prefill 8x4
+# full-galaxy geometry ([LINE, RING], validated by the single-galaxy run) — one mesh per galaxy,
+# one inter-galaxy link. d07u02<->d07u08 are directly cabled (UMD topology: 4 matched remote chips),
+# so discovery maps mesh 0 -> first --host, mesh 1 -> second, and binds the inter-galaxy link.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 8, 4 ] dim_types: [ LINE, RING ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+
+  # Inter-galaxy fabric link (the D2D pipeline hop). count:8 matches the decode superpod's
+  # per-galaxy-boundary link on this hardware.
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 8 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

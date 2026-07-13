@@ -4,8 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
-#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // run-time args
@@ -19,6 +20,7 @@ void kernel_main() {
     constexpr uint32_t num_cores = get_compile_time_arg_val(3);
     const uint32_t tile_size_bytes = get_tile_size(cb_id_in0);
 
+    Noc noc;
     CircularBuffer cb_in(cb_id_in0);
 
     constexpr auto src_args = TensorAccessorArgs<4>();
@@ -28,10 +30,13 @@ void kernel_main() {
         for (auto page_iter = shard_pages.begin(); page_iter != shard_pages.end();
              page_iter += num_tiles_per_input_block) {
             cb_in.reserve_back(num_tiles_per_input_block);
-            uint64_t noc_read_addr = page_iter->noc_addr();
-            uint32_t l1_write_addr = cb_in.get_write_ptr();
-            noc_async_read(noc_read_addr, l1_write_addr, tile_size_bytes * num_tiles_per_input_block);
-            noc_async_read_barrier();
+            noc.async_read(
+                accessor_src,
+                cb_in,
+                tile_size_bytes * num_tiles_per_input_block,
+                {.page_id = page_iter->page_id(), .offset_bytes = 0},
+                {.offset_bytes = 0});
+            noc.async_read_barrier();
             cb_in.push_back(num_tiles_per_input_block);
         }
     }

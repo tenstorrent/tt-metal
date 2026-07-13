@@ -26,9 +26,11 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc, profiler
+from models.common.utility_functions import comp_pcc, profiler, skip_for_blackhole
 from models.demos.gpt_oss.tests.test_factory import TestFactory
 from models.demos.gpt_oss.tt.mlp import MLP
+from models.demos.gpt_oss.utils.general_utils import throughput_experts_supported_on_arch
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 DEVICE_PERF_ENV_VAR = "GPT_OSS_MOE_DEVICE_PERF"
@@ -219,7 +221,7 @@ def _run_moe_test(
 
     # Create TTNN MLP
     # For throughput experts, need high throughput mode when using 4x8 mesh
-    use_throughput_experts = mesh_shape[0] > 1 and batch_size * seq_len > 1
+    use_throughput_experts = mesh_shape[0] > 1 and batch_size * seq_len > 1 and throughput_experts_supported_on_arch()
 
     tt_mlp = MLP(
         mesh_device=mesh_device,
@@ -349,11 +351,12 @@ def _skip_single_device_ccl():
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "trace_region_size": 30000000,
+            TRACE_MODEL_KEY_PARAM: "gpt-oss-20b",
         }
     ],
     indirect=True,
 )
+@skip_for_blackhole("gpt_oss_moe multi-device test exclusively exercises throughput experts, unsupported on Blackhole")
 def test_gpt_oss_moe(
     mode,
     seq_len,
@@ -431,7 +434,7 @@ def test_gpt_oss_moe(
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "trace_region_size": 30000000,
+            TRACE_MODEL_KEY_PARAM: "gpt-oss-20b",
         }
     ],
     indirect=True,

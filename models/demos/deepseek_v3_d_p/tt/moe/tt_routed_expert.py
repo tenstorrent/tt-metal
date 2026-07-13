@@ -21,6 +21,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 
 COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
@@ -200,6 +201,8 @@ class TtRoutedExpert(LightweightModule):
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_LOFI,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
+        *,
+        activation: "ttnn.RoutedExpertActivation",
     ):
         """
         Initialize TtRoutedExpert module.
@@ -222,6 +225,11 @@ class TtRoutedExpert(LightweightModule):
                           Produced by sharding ExpertMapping.create_global_expert_idx_table via
                           get_ep_mesh_mapper, so each device holds (1, 1, experts_per_chip) of
                           global ids. Required.
+            activation: Required ttnn.RoutedExpertActivation selecting the fused kernel's
+                          activation. Pass RoutedExpertActivation.Silu for the DeepSeek path
+                          (byte-identical) or RoutedExpertActivation.SwiGluOai for the
+                          MiniMax-M3 / gpt-oss clamped swigluoai activation. Keyword-only and
+                          without a default so the caller must choose explicitly.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -236,6 +244,17 @@ class TtRoutedExpert(LightweightModule):
         self.weight_cache_path = weight_cache_path
         self.cache_name_prefix = cache_name_prefix
         self.global_expert_idx_table = global_expert_idx_table
+        # Activation variant for the fused unified_routed_expert_moe kernel.
+        # Required RoutedExpertActivation, chosen explicitly by the caller (no
+        # silent default): pass ttnn.RoutedExpertActivation.Silu for the DeepSeek
+        # path (byte-identical) or .SwiGluOai for the MiniMax-M3 / gpt-oss clamped
+        # swigluoai activation. Enforcing presence avoids silently running the
+        # wrong activation when a caller forgets to set it.
+        if activation is None:
+            raise ValueError(
+                "TtRoutedExpert requires an explicit `activation` (ttnn.RoutedExpertActivation.Silu or .SwiGluOai)"
+            )
+        self.activation = activation
 
         total_experts = self.num_devices * experts_per_chip
         logger.debug(f"Initializing TtRoutedExpert with experts_per_chip={experts_per_chip}")
@@ -366,40 +385,6 @@ class TtRoutedExpert(LightweightModule):
 
         return tt_weight
 
-    def _expert_ffn(
-        self,
-        x: ttnn.Tensor,
-        gate_proj: ttnn.Tensor,
-        up_proj: ttnn.Tensor,
-        down_proj: ttnn.Tensor,
-        out: Optional[ttnn.Tensor] = None,
-    ) -> ttnn.Tensor:
-        """
-        Single expert FFN computation.
-
-        Args:
-            x: Input tensor. Shape is (1, tokens, emb_dim) for the Blackhole path
-                (after ttnn.narrow) or (tokens, emb_dim) for the Wormhole path
-                (after tensor indexing).
-            gate_proj: Gate projection weight (emb_dim, hidden_dim)
-            up_proj: Up projection weight (emb_dim, hidden_dim)
-            down_proj: Down projection weight (hidden_dim, emb_dim)
-            out: Optional pre-allocated output tensor for in-place matmul result.
-                When provided, the final matmul writes directly into this buffer.
-                When None, a new tensor is allocated for the output.
-
-        Returns:
-            Output tensor matching the shape of ``x``.
-        """
-        return ttnn.experimental.deepseek_prefill.routed_expert_ffn(
-            x,
-            gate_proj,
-            up_proj,
-            down_proj,
-            compute_kernel_config=self.compute_kernel_config,
-            output=out,
-        )
-
     def forward(
         self,
         dispatched_buffer: ttnn.Tensor,
@@ -407,18 +392,17 @@ class TtRoutedExpert(LightweightModule):
         expert_region_offsets: ttnn.Tensor,
     ) -> ttnn.Tensor:
         """
-        Blackhole forward implementation using narrow and in-place writes.
-
-        Pre-allocates the output tensor with empty_like and uses narrow to extract
-        per-expert slices and write FFN results directly into the output buffer,
-        avoiding extra allocations from unsqueeze/concat.
+        On Blackhole, delegates the per-local-expert work to the
+        `unified_routed_expert_moe` C++ composite (no Python per-expert loop,
+        no host-device count sync). On non-Blackhole archs (Wormhole), falls
+        back to the per-expert Python loop with extract → routed_expert_ffn
+        → insert.
 
         Args:
             dispatched_buffer: Dispatched tokens
                 shape: (max_dispatch_buffer_token_size, emb_dim)
             expert_token_counts: Token counts per expert per chip
-                If provided, only processes tokens up to the count (currently unused,
-                all tokens are processed for simplicity)
+                Shape per device: (1, num_routed_experts).
             expert_region_offsets: Expert region start offsets per expert
                 (shared across source devices in a dispatch group). Produced by
                 offset_cumsum. Shape per device: (1, num_routed_experts).
@@ -433,17 +417,28 @@ class TtRoutedExpert(LightweightModule):
             logger.warning(f"{dispatched_buffer.dtype=} typecasting to {self.activations_dtype}")
             dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
 
-        # Process each local expert
-        # dispatched_buffer: (experts_per_chip, max_tokens, emb_dim)
-        # We process expert by expert and reassemble
+        if is_blackhole():
+            signpost(header="UnifiedRoutedExpertMoe")
+            expert_outputs = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
+                dispatched_buffer,
+                expert_region_offsets,
+                expert_token_counts,
+                self.global_expert_idx_table,
+                self.gate_projs,
+                self.up_projs,
+                self.down_projs,
+                max_dispatched_tokens_per_expert=self.max_tokens,
+                compute_kernel_config=self.compute_kernel_config,
+                activation=self.activation,
+            )
+            logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
+            return expert_outputs
 
+        # Wormhole fallback: per-expert Python loop with extract → FFN → insert.
         expert_outputs = dispatched_buffer
         for local_expert in range(self.experts_per_chip):
             signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")
 
-            # Extract tokens for this expert using the deepseek_prefill extract op,
-            # which uses expert_region_offsets and expert_token_counts to slice out
-            # this expert's valid rows
             tokens = ttnn.experimental.deepseek_prefill.extract(
                 dispatched_buffer,
                 expert_region_offsets,
@@ -454,18 +449,16 @@ class TtRoutedExpert(LightweightModule):
             )
             logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
 
-            # Run FFN
-            output = self._expert_ffn(
+            output = ttnn.experimental.deepseek_prefill.routed_expert_ffn(
                 tokens,
                 self.gate_projs[local_expert],
                 self.up_projs[local_expert],
                 self.down_projs[local_expert],
-                out=None,
+                compute_kernel_config=self.compute_kernel_config,
+                output=None,
             )
             logger.debug(f"Expert {local_expert}: output shape {output.shape}")
 
-            # Insert this expert's output back into the flat expert_outputs buffer at
-            # the expert's region (determined by expert_region_offsets and expert_token_counts).
             expert_outputs = ttnn.experimental.deepseek_prefill.insert(
                 expert_outputs,
                 output,
@@ -475,7 +468,5 @@ class TtRoutedExpert(LightweightModule):
                 local_expert_id=local_expert,
             )
 
-        # Shape: (experts_per_chip, max_tokens, emb_dim)
         logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
-
         return expert_outputs

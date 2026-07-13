@@ -4,6 +4,7 @@
 
 #include "tt_metal/distributed/shm_resource_tracker.hpp"
 
+#include <mutex>
 #include <tt-logger/tt-logger.hpp>
 #include <fmt/format.h>
 
@@ -52,16 +53,6 @@ pid_t extract_pid_from_shm_name(const std::string& filename) {
         return static_cast<pid_t>(std::stol(filename.substr(first + 1, second - first - 1)));
     } catch (...) {
         return 0;
-    }
-}
-
-void atexit_handler() {
-    try {
-        ShmResourceTracker::instance().cleanup_all();
-    } catch (const std::exception& e) {
-        log_warning(LogMetal, "ShmResourceTracker atexit: cleanup failed: {}", e.what());
-    } catch (...) {
-        log_warning(LogMetal, "ShmResourceTracker atexit: cleanup failed with unknown exception");
     }
 }
 
@@ -114,7 +105,6 @@ bool ShmResourceTracker::is_pid_alive(pid_t pid) {
 
 ShmResourceTracker::ShmResourceTracker() : manifest_path_(manifest_path_for_pid(getpid())) {
     cleanup_stale_resources();
-    std::atexit(atexit_handler);
 
     struct sigaction sa{};
     sa.sa_handler = signal_handler;
@@ -122,6 +112,16 @@ ShmResourceTracker::ShmResourceTracker() : manifest_path_(manifest_path_for_pid(
     sa.sa_flags = 0;
     sigaction(SIGINT, &sa, &prev_sigint);
     sigaction(SIGTERM, &sa, &prev_sigterm);
+}
+
+ShmResourceTracker::~ShmResourceTracker() {
+    try {
+        cleanup_all();
+    } catch (const std::exception& e) {
+        log_warning(LogMetal, "ShmResourceTracker cleanup failed: {}", e.what());
+    } catch (...) {
+        log_warning(LogMetal, "ShmResourceTracker cleanup failed with unknown exception");
+    }
 }
 
 ShmResourceTracker& ShmResourceTracker::instance() {

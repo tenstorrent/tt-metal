@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_prefetcher ${LIB_TYPE})
 add_library(TTNN::Ops::Prefetcher ALIAS ttnn_op_prefetcher)
 
-tt_reuse_precompile_headers(ttnn_op_prefetcher TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_prefetcher TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_prefetcher)
 
 set_target_properties(
@@ -21,7 +21,7 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
+        FILES ${TTNN_OP_PREFETCHER_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -30,13 +30,7 @@ target_sources(
         ${TTNN_OP_PREFETCHER_SRCS}
 )
 
-target_include_directories(ttnn_op_prefetcher PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_prefetcher
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_prefetcher PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(
     TARGETS
@@ -47,4 +41,4 @@ install(
         COMPONENT ttnn-runtime
 )
 
-install(TARGETS ttnn_op_prefetcher LIBRARY COMPONENT tar)
+install(TARGETS ttnn_op_prefetcher FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)

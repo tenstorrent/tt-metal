@@ -44,7 +44,7 @@ void bind_pad(nb::module_& mod) {
         ttnn::overload_t(
             nb::overload_cast<
                 const ttnn::Tensor&,
-                const ttnn::SmallVector<std::array<uint32_t, 2>>&,
+                const ttsl::SmallVector<std::array<uint32_t, 2>>&,
                 float,
                 bool,
                 const std::optional<MemoryConfig>&,
@@ -70,7 +70,7 @@ void bind_pad(nb::module_& mod) {
             nb::arg("input_tensor_start"),
             nb::arg("value"),
             nb::kw_only(),
-            nb::arg("use_multicore") = false,
+            nb::arg("use_multicore") = true,
             nb::arg("memory_config") = nb::none(),
             nb::arg("sub_core_grids") = nb::none()));
 }

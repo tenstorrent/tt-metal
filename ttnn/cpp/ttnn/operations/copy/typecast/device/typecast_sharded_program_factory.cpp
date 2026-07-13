@@ -7,13 +7,14 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 
 namespace ttnn::prim {
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::create(
+tt::tt_metal::ProgramDescriptor TypecastShardedProgramFactory::create_descriptor(
     const TypecastParams& args, const TypecastInputs& tensor_args, Tensor& output) {
     using namespace tt;
     using namespace tt::tt_metal;
@@ -22,7 +23,7 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
     const auto& input_dtype = args.input_dtype;
     const auto& output_dtype = args.output_dtype;
 
-    tt::tt_metal::Program program = CreateProgram();
+    tt::tt_metal::ProgramDescriptor desc;
 
     auto shard_spec = input.shard_spec().value();
     auto all_cores = shard_spec.grid;
@@ -76,29 +77,39 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
         num_tile_per_core = (shard_size_in_bytes + input_tile_size - 1) / input_tile_size;  // ceil value
     }
 
-    uint32_t in_cb_id = tt::CBIndex::c_0;
+    const uint8_t in_cb_id = tt::CBIndex::c_0;
     uint32_t buffering_factor = 1;  // data is already fully buffered in the CBs since its sharded
     uint32_t aligned_input_tile_nbytes =
         round_up_to_mul32(input_tile_size);  // will have issue if the page is not multiple of 32
     uint32_t in_cb_pagesize = aligned_input_tile_nbytes;
     uint32_t in_cb_npages = num_tile_per_core * buffering_factor;
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{in_cb_id, act_df}})
-            .set_page_size(in_cb_id, in_cb_pagesize)
-            .set_globally_allocated_address(*input.buffer());
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+        .total_size = in_cb_pagesize * in_cb_npages,
+        .core_ranges = all_cores,
+        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+            .buffer_index = in_cb_id,
+            .data_format = act_df,
+            .page_size = in_cb_pagesize,
+        }}},
+        .buffer = input.buffer(),
+    });
 
     // output sharded CB
-    uint32_t out_cb_id = tt::CBIndex::c_2;
+    const uint8_t out_cb_id = tt::CBIndex::c_2;
     uint32_t aligned_output_tile_nbytes =
         round_up_to_mul32(output_tile_size);  // will have issue if the page is not multiple of 32
     uint32_t out_cb_pagesize = aligned_output_tile_nbytes;
     uint32_t out_cb_npages = num_tile_per_core * buffering_factor;
-    tt::tt_metal::CircularBufferConfig out_cb_config =
-        tt::tt_metal::CircularBufferConfig(out_cb_pagesize * out_cb_npages, {{out_cb_id, out_df}})
-            .set_page_size(out_cb_id, out_cb_pagesize)
-            .set_globally_allocated_address(*output.buffer());
-    auto out_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, out_cb_config);
+    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+        .total_size = out_cb_pagesize * out_cb_npages,
+        .core_ranges = all_cores,
+        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+            .buffer_index = out_cb_id,
+            .data_format = out_df,
+            .page_size = out_cb_pagesize,
+        }}},
+        .buffer = output.buffer(),
+    });
 
     log_debug(tt::LogOp, "input_cb: {}, npages: {}, pagesize: {}", in_cb_id, in_cb_npages, in_cb_pagesize);
     log_debug(tt::LogOp, "out_cb_id: {}, npages: {}, pagesize: {}", out_cb_id, out_cb_npages, out_cb_pagesize);
@@ -134,11 +145,16 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
     TT_FATAL(dst_is_dram == 0, "Output buffer should be in L1");
 
     std::map<std::string, std::string> kernel_defines;
-    tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
+    tt::tt_metal::KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp";
+    reader_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    for (const auto& [name, value] : kernel_defines) {
+        reader_desc.defines.emplace_back(name, value);
+    }
+    reader_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
 
     std::vector<uint32_t> compute_kernel_args_group_1 = {
         1,                  // per_core_block_cnt
@@ -163,43 +179,29 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
         static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
         static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
 
-    tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp",
-        all_cores,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-            .fp32_dest_acc_en = args.fp32_dest_acc_en,
-            .unpack_to_dest_mode = unpack_to_dest_mode,
-            .bfp8_pack_precise = args.bfp8_pack_precise,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_kernel_args_group_1,
-            .defines = unary_defines});
+    tt::tt_metal::KernelDescriptor compute_desc;
+    compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
+    compute_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = all_cores;
+    compute_desc.compile_time_args = compute_kernel_args_group_1;
+    for (const auto& [name, value] : unary_defines) {
+        compute_desc.defines.emplace_back(name, value);
+    }
+    compute_desc.config = tt::tt_metal::ComputeConfigDescriptor{
+        .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+        .fp32_dest_acc_en = args.fp32_dest_acc_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
+        .bfp8_pack_precise = args.bfp8_pack_precise,
+        .math_approx_mode = math_approx_mode};
 
-    tt::tt_metal::SetRuntimeArgs(
-        program,
-        unary_reader_kernel_id,
-        all_cores,
-        {
-            static_cast<uint32_t>(num_tile_per_core),
-        });
+    for (const CoreCoord& core : corerange_to_cores(all_cores)) {
+        reader_desc.runtime_args.emplace_back(core, tt::tt_metal::KernelDescriptor::CoreRuntimeArgs{num_tile_per_core});
+    }
 
-    return cached_program_t{std::move(program), {cb_src0, out_cb}};
-}
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(compute_desc));
 
-void TypecastShardedProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const TypecastParams& /*operation_attributes*/,
-    const TypecastInputs& tensor_args,
-    Tensor& output) {
-    auto& program = cached_program.program;
-    const auto& cb_src0 = cached_program.shared_variables.cb_src0;
-    const auto& out_cb = cached_program.shared_variables.out_cb;
-
-    auto* src_buffer = tensor_args.input.buffer();
-    auto* dst_buffer = output.buffer();
-    tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
-    tt::tt_metal::UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
+    return desc;
 }
 
 }  // namespace ttnn::prim

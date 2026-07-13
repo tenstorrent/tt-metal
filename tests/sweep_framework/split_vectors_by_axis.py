@@ -85,7 +85,28 @@ def _scan_pc(obj, state):
         state["needs_col"] = True
 
 
+def _is_galaxy_vector(vec):
+    """Return True if the vector was traced on a Galaxy (multi-card) device."""
+    mi = vec.get("traced_machine_info")
+    if isinstance(mi, dict):
+        entries = [mi]
+    elif isinstance(mi, list):
+        entries = mi
+    else:
+        return False
+    return any(
+        str(e.get("device_series", "")).lower().replace("-", "_") == "tt_galaxy_wh"
+        or (isinstance(e.get("card_count"), int) and e["card_count"] >= 32)
+        for e in entries
+    )
+
+
 def vector_axis(vec):
+    # Galaxy always uses COL dispatch regardless of shard spec heuristics.
+    # Galaxy vectors with x=7 in shard grids would incorrectly classify as
+    # ROW, but Galaxy physically dispatches on COL axis.
+    if _is_galaxy_vector(vec):
+        return "col"
     state = {"needs_col": False, "needs_row": False}
     for k, v in vec.items():
         if "memory_config" in k:

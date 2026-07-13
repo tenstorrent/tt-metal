@@ -72,7 +72,7 @@ void GlobalSemaphore::setup_buffer(
 IDevice* GlobalSemaphore::device() const { return device_; }
 
 std::ostream& operator<<(std::ostream& os, const GlobalSemaphore& global_semaphore) {
-    tt::stl::reflection::operator<<(os, global_semaphore);
+    ttsl::reflection::operator<<(os, global_semaphore);
     return os;
 }
 
@@ -86,11 +86,16 @@ void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const {
     std::vector<uint32_t> host_buffer(cores_.num_cores(), reset_value);
     auto mesh_buffer = buffer_.get_mesh_buffer();
     bool using_fast_dispatch = MetalContext::instance().rtoptions().get_fast_dispatch();
-    if (using_fast_dispatch) {
+    bool using_simulator = MetalContext::instance().rtoptions().get_simulator_enabled();
+    if (using_fast_dispatch && !using_simulator) {
         distributed::EnqueueWriteMeshBuffer(
             mesh_buffer->device()->mesh_command_queue(), mesh_buffer, host_buffer, true);
     } else {
-        for (const auto& coord : distributed::MeshCoordinateRange(mesh_buffer->device()->shape())) {
+        auto* mesh_device = mesh_buffer->device();
+        for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
+            if (!mesh_device->is_local(coord)) {
+                continue;
+            }
             tt::tt_metal::detail::WriteToBuffer(*mesh_buffer->get_device_buffer(coord), host_buffer);
         }
     }
@@ -102,7 +107,7 @@ namespace std {
 
 std::size_t hash<tt::tt_metal::GlobalSemaphore>::operator()(
     const tt::tt_metal::GlobalSemaphore& global_semaphore) const {
-    return tt::stl::hash::hash_objects_with_default_seed(global_semaphore.attribute_values());
+    return ttsl::hash::hash_objects_with_default_seed(global_semaphore.attribute_values());
 }
 
 }  // namespace std

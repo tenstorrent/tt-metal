@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_experimental_padded_slice ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::PaddedSlice ALIAS ttnn_op_experimental_padded_slice)
 
-tt_reuse_precompile_headers(ttnn_op_experimental_padded_slice TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_padded_slice TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_padded_slice)
 set_target_properties(
     ttnn_op_experimental_padded_slice
@@ -19,7 +19,7 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
+        FILES ${TTNN_OP_EXPERIMENTAL_PADDED_SLICE_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -28,13 +28,7 @@ target_sources(
         ${TTNN_OP_EXPERIMENTAL_PADDED_SLICE_SRCS}
 )
 
-target_include_directories(ttnn_op_experimental_padded_slice PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_experimental_padded_slice
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_experimental_padded_slice PRIVATE TT::Metalium PUBLIC TTNN::Core)
 
 install(
     TARGETS
@@ -45,4 +39,4 @@ install(
         COMPONENT ttnn-runtime
 )
 
-install(TARGETS ttnn_op_experimental_padded_slice LIBRARY COMPONENT tar)
+install(TARGETS ttnn_op_experimental_padded_slice FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)

@@ -10,6 +10,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_ops.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
 #include "perf.h"
@@ -46,7 +47,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const EltwiseBinaryReuseDestType reuse_dest_type = EltwiseBinaryReuseDestType::NONE;
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
 
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
@@ -56,7 +57,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
@@ -112,7 +113,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const DataCopyType data_copy_type = DataCopyType::A2D;
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
 
         _llk_math_eltwise_unary_datacopy_init_<data_copy_type, is_fp32_dest_acc_en>(num_faces, formats.math);
         _llk_math_pack_sync_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
@@ -122,7 +123,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
@@ -279,19 +280,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
 #endif
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
 
         // Configure packer hardware
-        _llk_pack_hw_configure_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * num_faces);
+        _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * num_faces);
 
-        _llk_pack_init_wrapper_<false /* untilize */, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces);
+        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces);
         // Initialize destination for packing
         _llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
 
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
@@ -306,7 +307,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         LLK_ASSERT(
                             (block_tile < get_dest_max_tiles<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "block_tile exceeds max dest tiles");
-                        _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, /* untilize */ false>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
+                        _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+                            block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
                     }
                 }
             }
@@ -325,7 +327,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         LLK_ASSERT(
                             (block_tile < get_dest_max_tiles<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "block_tile exceeds max dest tiles");
-                        _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, /* untilize */ false>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
+                        _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+                            block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
                     }
                     _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
                 }

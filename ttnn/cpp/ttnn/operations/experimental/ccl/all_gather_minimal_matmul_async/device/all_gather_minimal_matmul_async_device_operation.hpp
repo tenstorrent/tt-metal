@@ -36,8 +36,6 @@ struct AllGatherMinimalMatmulAsyncOp {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static tt::tt_metal::operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::experimental::prim
@@ -66,6 +64,11 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     uint32_t num_workers_per_link,
     uint32_t num_buffers_per_channel,
     int32_t chunks = 1,
-    int32_t dim = -1);
+    int32_t dim = -1,
+    std::optional<uint32_t> fsdp_cluster_axis = std::nullopt,
+    const std::vector<GlobalSemaphore>& fsdp_multi_device_global_semaphore = {},
+    const std::optional<ttnn::Tensor>& persistent_weight_buffer = std::nullopt,
+    std::optional<ttnn::ccl::Topology> fsdp_topology = std::nullopt,
+    bool fuse_swiglu = false);
 
 }  // namespace ttnn::prim

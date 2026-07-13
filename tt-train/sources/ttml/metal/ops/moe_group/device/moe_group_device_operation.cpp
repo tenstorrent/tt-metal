@@ -5,6 +5,7 @@
 #include "moe_group_device_operation.hpp"
 
 #include <enchantum/enchantum.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 
 #include "moe_group_program_factory.hpp"
@@ -131,12 +132,6 @@ tensor_return_value_t MoeGroupDeviceOperation::create_output_tensors(
     };
 }
 
-ttsl::hash::hash_t MoeGroupDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attrs, const tensor_args_t& args) {
-    return tt::tt_metal::operation::hash_operation<MoeGroupDeviceOperation>(
-        attrs, args.dispatched.dtype(), args.dispatched.logical_shape());
-}
-
 }  // namespace ttml::metal::ops::moe_group::device
 
 namespace ttnn::prim {
@@ -162,7 +157,9 @@ ttml::metal::ops::moe_group::device::MoeGroupDeviceOperation::tensor_return_valu
     uint32_t num_total_cores = grid.x * grid.y;
     uint32_t l1_align_bytes = tt::tt_metal::hal::get_l1_alignment();
     uint32_t cursor_align = l1_align_bytes / sizeof(uint16_t);
-    uint32_t t_cap = std::min(e_local, k) * d * b * s + e_local * (32U + (cursor_align - 1U) * num_total_cores);
+    uint32_t t_cap_unaligned = std::min(e_local, k) * d * b * s +
+                               e_local * (tt::constants::TILE_HEIGHT + (cursor_align - 1U) * num_total_cores);
+    uint32_t t_cap = tt::round_up(t_cap_unaligned, tt::constants::TILE_HEIGHT);
 
     auto attrs = Op::operation_attributes_t{
         .e_local = e_local,

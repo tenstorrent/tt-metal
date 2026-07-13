@@ -30,9 +30,7 @@ void kernel_main() {
     // program cache hits.
     const auto s0 = TensorAccessor(dst_args, dst_addr, W << 1);
 
-    // DPRINT << "fill_rm_8bank: NC=" << NC << " H=" << H << " W=" << W << " fillH=" << fillH << " fillW=" << fillW <<
-    // ENDL();
-    // DEVICE_PRINT("fill_rm_8bank: NC={} H={} W={} fillH={} fillW={}\n", NC, H, W, fillH, fillW);
+    // DPRINT("fill_rm_8bank: NC={} H={} W={} fillH={} fillW={}\n", NC, H, W, fillH, fillW);
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
     CircularBuffer cb_in0(cb_id_in0);

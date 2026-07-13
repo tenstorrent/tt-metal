@@ -6,6 +6,8 @@
 GPT-OSS specific implementation of create_tt_model that's compatible with tt_transformers
 """
 
+from loguru import logger
+
 import ttnn
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
@@ -50,13 +52,27 @@ def create_tt_model(
         gpt_oss_model_args.hf_config.num_hidden_layers = num_layers
         gpt_oss_model_args.n_layers = num_layers
 
-    # Avoid loading state_dict for every DP model
-    if not state_dict:
-        state_dict = gpt_oss_model_args.load_state_dict(
-            weights_path=gpt_oss_model_args.model_path,
-            dummy_weights=gpt_oss_model_args.dummy_weights,
-            convert_to_meta_format=True,
-        )
+    # Decide whether the HF weights are still needed on host. When the ttnn weight cache for
+    # this (model, dtype, mesh shape) was already fully built on a previous run, ttnn.as_tensor
+    # loads every weight from disk and the state_dict is never read -- so skip the expensive
+    # from_pretrained host load entirely. This is what spares the e2e demo the prefill host-OOM
+    # (#48509) on warm-cache runs, without relying on the manual --skip-model-load flag.
+    #
+    # state_dict is None  -> decide here (warm cache => {} skip, else cold load).
+    # state_dict == {}     -> explicit skip (--skip-model-load) or a prior DP model already skipped.
+    # state_dict populated -> reuse across DP models (avoid reloading for every submesh).
+    loaded_real_weights = False
+    if state_dict is None:
+        if not gpt_oss_model_args.dummy_weights and gpt_oss_model_args.weight_cache_is_complete(dtype):
+            logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load.")
+            state_dict = {}
+        else:
+            state_dict = gpt_oss_model_args.load_state_dict(
+                weights_path=gpt_oss_model_args.model_path,
+                dummy_weights=gpt_oss_model_args.dummy_weights,
+                convert_to_meta_format=True,
+            )
+            loaded_real_weights = bool(state_dict) and not gpt_oss_model_args.dummy_weights
 
     # Create GPT-OSS model using transformer-compatible constructor
     model = Model.create_transformer_compatible(
@@ -71,6 +87,12 @@ def create_tt_model(
         users_row_sharded=users_row_sharded,
         use_throughput_experts=use_throughput_experts,
     )
+
+    # If this run populated the cache from a cold host load, record completion so future runs
+    # can skip the load. Only for full-model builds (a num_layers override produces a partial
+    # cache that must not satisfy the completeness check).
+    if loaded_real_weights and num_layers is None:
+        gpt_oss_model_args.mark_weight_cache_complete(dtype)
 
     # Extract tt_kv_cache like tt_transformers does
     tt_kv_cache = []
