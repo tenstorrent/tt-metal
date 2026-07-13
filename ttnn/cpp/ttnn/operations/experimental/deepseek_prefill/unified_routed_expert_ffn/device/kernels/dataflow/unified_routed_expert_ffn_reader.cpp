@@ -30,6 +30,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/debug/dprint.h"  // TEMP: config dump
 
 void kernel_main() {
     // -------------------------- runtime args ------------------------------
@@ -250,6 +251,21 @@ void kernel_main() {
     // Clamp to compile-time num_chunks just in case (defensive against bad input).
     const uint32_t effective_chunks = effective_chunks_runtime < num_chunks ? effective_chunks_runtime : num_chunks;
 
+    // TEMP config dump (one core): understand RM vs TILE blocking difference.
+    if (is_in0_sender && my_mt == 0 && my_nt_gu == 0) {
+        DPRINT(
+            "CFG rm="
+            "{}"
+            " ibw_gu={} per_core_M={} chunk_M={} num_chunks={} eff={} K_gate={}\n",
+            (uint32_t)x_is_row_major,
+            in0_block_w_gu,
+            per_core_M,
+            chunk_M_tiles,
+            num_chunks,
+            effective_chunks,
+            K_gate_tiles);
+    }
+
     // x-read row offset. Zero unless read_x_at_offset: then x is a shared buffer
     // and this expert's rows begin at start[global_id]. Fetch the start page and
     // convert the token row to a tile-page offset (row_tile * K_gate_tiles), the
@@ -400,56 +416,59 @@ void kernel_main() {
                 // DRAM. Reading them would feed garbage (NaN/Inf) into the matmul.
                 // Skip them; the pre-zero above left those L1 bytes zero
                 // (silu(0)=0, 0*up=0, 0@W_down=0 — safe).
-                if constexpr (x_is_row_major != 0) {
-                    // Row-major: read this K-block's column window (in0_block_w_gu
-                    // tiles wide) from each of the 32 token-row sticks of every
-                    // tile-row, laid contiguously so each tile-row forms one
-                    // 32 x (in0_block_w_gu*32) strip for tilize_block. page_id is
-                    // the token-row stick; offset_bytes is the K-block column
-                    // window within the emb-wide stick.
-                    constexpr uint32_t rm_kblock_bytes = in0_block_w_gu * 32 * 2;
-                    const uint32_t col_off_bytes = kb * rm_kblock_bytes;
-                    for (uint32_t m = 0; m < per_core_M; ++m) {
-                        const uint32_t tile_row = this_core_first_row + m;
-                        if (tile_row < count_tiles) {
-                            for (uint32_t r = 0; r < 32; ++r) {
-                                // x_start_stick offsets into this expert's region
-                                // of the shared row-major buffer (0 when x is a
-                                // standalone per-expert buffer).
-                                const uint32_t stick = x_start_stick + tile_row * 32 + r;
-                                noc_read.async_read(
-                                    x_acc_rm,
-                                    CoreLocalMem<uint32_t>(l1_x),
-                                    rm_kblock_bytes,
-                                    {.page_id = stick, .offset_bytes = col_off_bytes},
-                                    {});
-                                l1_x += rm_kblock_bytes;
+                {  // TEMP profiling: time the x DRAM read (row-major strided vs tiled)
+                    DeviceZoneScopedN("XREAD");
+                    if constexpr (x_is_row_major != 0) {
+                        // Row-major: read this K-block's column window (in0_block_w_gu
+                        // tiles wide) from each of the 32 token-row sticks of every
+                        // tile-row, laid contiguously so each tile-row forms one
+                        // 32 x (in0_block_w_gu*32) strip for tilize_block. page_id is
+                        // the token-row stick; offset_bytes is the K-block column
+                        // window within the emb-wide stick.
+                        constexpr uint32_t rm_kblock_bytes = in0_block_w_gu * 32 * 2;
+                        const uint32_t col_off_bytes = kb * rm_kblock_bytes;
+                        for (uint32_t m = 0; m < per_core_M; ++m) {
+                            const uint32_t tile_row = this_core_first_row + m;
+                            if (tile_row < count_tiles) {
+                                for (uint32_t r = 0; r < 32; ++r) {
+                                    // x_start_stick offsets into this expert's region
+                                    // of the shared row-major buffer (0 when x is a
+                                    // standalone per-expert buffer).
+                                    const uint32_t stick = x_start_stick + tile_row * 32 + r;
+                                    noc_read.async_read(
+                                        x_acc_rm,
+                                        CoreLocalMem<uint32_t>(l1_x),
+                                        rm_kblock_bytes,
+                                        {.page_id = stick, .offset_bytes = col_off_bytes},
+                                        {});
+                                    l1_x += rm_kblock_bytes;
+                                }
+                            } else {
+                                l1_x += 32 * rm_kblock_bytes;
                             }
-                        } else {
-                            l1_x += 32 * rm_kblock_bytes;
+                        }
+                    } else {
+                        for (uint32_t m = 0; m < per_core_M; ++m) {
+                            const uint32_t row = this_core_first_row + m;
+                            const bool row_valid = row < count_tiles;
+                            if (row_valid) {
+                                for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
+                                    const uint32_t col = kb * in0_block_w_gu + k;
+                                    // x_start_tile_idx offsets into this expert's region
+                                    // of a shared buffer (0 when x is per-expert).
+                                    const uint32_t tile_idx = x_start_tile_idx + row * K_gate_tiles + col;
+                                    noc_read.async_read(
+                                        x_acc, CoreLocalMem<uint32_t>(l1_x), x_tile_bytes, {.page_id = tile_idx}, {});
+                                    l1_x += x_tile_bytes;
+                                }
+                            } else {
+                                // Pre-zero already covered these L1 bytes. Just advance.
+                                l1_x += in0_block_w_gu * x_tile_bytes;
+                            }
                         }
                     }
-                } else {
-                    for (uint32_t m = 0; m < per_core_M; ++m) {
-                        const uint32_t row = this_core_first_row + m;
-                        const bool row_valid = row < count_tiles;
-                        if (row_valid) {
-                            for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
-                                const uint32_t col = kb * in0_block_w_gu + k;
-                                // x_start_tile_idx offsets into this expert's region
-                                // of a shared buffer (0 when x is per-expert).
-                                const uint32_t tile_idx = x_start_tile_idx + row * K_gate_tiles + col;
-                                noc_read.async_read(
-                                    x_acc, CoreLocalMem<uint32_t>(l1_x), x_tile_bytes, {.page_id = tile_idx}, {});
-                                l1_x += x_tile_bytes;
-                            }
-                        } else {
-                            // Pre-zero already covered these L1 bytes. Just advance.
-                            l1_x += in0_block_w_gu * x_tile_bytes;
-                        }
-                    }
-                }
-                noc_read.async_read_barrier();
+                    noc_read.async_read_barrier();
+                }  // end TEMP XREAD profiling zone
 
                 const uint32_t block_bytes = g_in0_block_num_tiles * x_stage_tile_bytes;
                 // linked=true keeps the multicast path RESERVED so the in0_valid
