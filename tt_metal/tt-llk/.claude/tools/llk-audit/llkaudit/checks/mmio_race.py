@@ -122,7 +122,14 @@ class MmioRace(Check):
                 Finding(
                     file=w["file"],
                     line=w.get("line", 0),
-                    function=w.get("function", "<file-scope>"),
+                    # Label from the SAME enclosing fn used for the ordering scan
+                    # (facts_in(fn)), so the reported function matches the analyzed
+                    # scope; fall back to the write's recorded field, then file-scope.
+                    function=(
+                        fn.name
+                        if fn and fn.name
+                        else (w.get("function") or "<file-scope>")
+                    ),
                     kind=kind,
                     hint=hint,
                     detail=detail,
