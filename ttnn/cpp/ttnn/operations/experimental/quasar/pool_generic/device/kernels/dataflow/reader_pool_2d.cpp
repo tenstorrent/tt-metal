@@ -96,12 +96,30 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 const uint32_t stick_offset = ind + w_offset + h * dilation_h * in_w_padded;
                 const uint32_t read_offset =
                     in_l1_read_base_addr + (stick_offset * shard_width_bytes + c_i * MAX_BYTES_PER_REDUCTION);
+#ifdef ARCH_QUASAR
+                // Quasar sim: a local self-loopback NOC read (self_ep, src_coord==dst_coord) into in_cb drops
+                // data / reads stale SRAM -- the same sim limitation the clear-path below works around with
+                // async_write_zeros (see the ~287-312 comments). It's what the LLK team saw as "all zeros in
+                // curr_in_cb before unpack_tilizeA_B". The window gather is a same-core L1->L1 copy, so do it
+                // with a direct RISC copy (no NOC loopback) for reliable data. read_offset and the in_cb write
+                // ptr are L1-aligned (>=16B) and read_bytes is L1-aligned, so a uint32 word copy is safe.
+                {
+                    volatile tt_l1_ptr uint32_t* rp_src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(read_offset);
+                    volatile tt_l1_ptr uint32_t* rp_dst =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in_cb.get_write_ptr() + write_offset);
+                    const uint32_t rp_nwords = (read_bytes * w_multiple) >> 2;
+                    for (uint32_t rp_i = 0; rp_i < rp_nwords; ++rp_i) {
+                        rp_dst[rp_i] = rp_src[rp_i];
+                    }
+                }
+#else
                 noc.async_read(
                     self_ep,
                     in_cb,
                     read_bytes * w_multiple,
                     experimental::local_addr(read_offset),
                     {.offset_bytes = write_offset});
+#endif
                 // if compute is using tilize_reconfig we will only untilize the needed number of tiles rather
                 // than the entire MAX_TILES_PER_REDUCTION, thus we use a different offset for the write address
                 if constexpr (tilize_reconfig) {
