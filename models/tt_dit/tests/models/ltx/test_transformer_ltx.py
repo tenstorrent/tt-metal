@@ -19,6 +19,7 @@ from loguru import logger
 from safetensors.torch import load_file
 
 import ttnn
+from models.tt_dit.models.transformers.ltx import transformer_ltx
 from models.tt_dit.models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis
 from models.tt_dit.models.transformers.ltx.transformer_ltx import (
     LTXTransformerBlock,
@@ -96,6 +97,26 @@ TIMESTEP_VAL = 0.01
 
 # Toggle PCC verification via env (mirrors Wan's `dit_unit_test`). Default ON.
 _RUN_PCC_DEFAULT = {"1": False, "0": True}.get(os.environ.get("LTX_SKIP_PCC"), True)
+
+# Fused-vs-unfused agreement bounds for LTX_FOLD_GATED_RESIDUAL. Folding the gated add into the
+# to_out matmul epilogue re-associates the bf16 accumulation, so the two paths agree to rounding,
+# not to the bit. CONTROL is the device's own run-to-run noise, measured by repeating a single
+# path: the equivalence bound is only meaningful while the floor sits well inside it, so the
+# control is asserted first and a regression there invalidates the gate rather than the fold.
+# The device is bit-deterministic, so the floor is exact and the whole fused-vs-unfused delta is
+# the fold's.
+#
+# Bounds are set from the separation between a correct fold and a wrong one. Feeding a fold the
+# self-attention gate in place of the cross-attention gate (same shape, so it fails silently)
+# moves audio to PCC 99.85 / RMSE 6.0%, against 99.9996 / 0.3% when correct. Note that wrong fold
+# still clears the diffusers oracle below (pcc=0.992), which is why that oracle cannot gate this
+# and these bounds sit an order of magnitude tighter. RMSE/σ carries the gate: PCC is shift- and
+# scale-invariant, so a fold that dropped the gate multiply outright would still score high PCC
+# wherever the gate is near-constant.
+_FOLD_CONTROL_PCC = 0.999999
+_FOLD_CONTROL_RMSE = 0.002
+_FOLD_EQUIV_PCC = 0.9995
+_FOLD_EQUIV_RMSE = 0.015
 
 
 # ---------------------------------------------------------------------------
@@ -925,6 +946,37 @@ def test_ltx_transformer_block(
         logger.info(f"PASSED block (no PCC): video {tuple(tt_v_torch.shape)}")
 
 
+def _assert_fold_equivalence(forward_to_host, *, fused_video, fused_audio) -> None:
+    """Gate LTX_FOLD_GATED_RESIDUAL: the fused path must match the unfused one to within bf16 rounding.
+
+    The caller has already run the fused path. Re-running with the module flag cleared exercises the
+    standalone-addcmul path on the same weights, inputs, device and process, so a difference between
+    the two is attributable to the fold and nothing else. A second unfused run pins the device's
+    run-to-run noise floor, which must land well inside the equivalence bound for that bound to mean
+    anything — a floor as wide as the bound would pass the fold without having tested it.
+    """
+    assert transformer_ltx.LTX_FOLD_GATED_RESIDUAL, "the fused path must be the one already run"
+    assert fused_audio is not None, "the gated residuals under test exist only on the AV path"
+
+    transformer_ltx.LTX_FOLD_GATED_RESIDUAL = False
+    try:
+        unfused_video, unfused_audio = forward_to_host()
+        control_video, control_audio = forward_to_host()
+    finally:
+        transformer_ltx.LTX_FOLD_GATED_RESIDUAL = True
+
+    logger.info("fold A/B — noise floor, unfused vs unfused (video):")
+    assert_quality(unfused_video, control_video, pcc=_FOLD_CONTROL_PCC, relative_rmse=_FOLD_CONTROL_RMSE)
+    logger.info("fold A/B — noise floor, unfused vs unfused (audio):")
+    assert_quality(unfused_audio, control_audio, pcc=_FOLD_CONTROL_PCC, relative_rmse=_FOLD_CONTROL_RMSE)
+
+    logger.info("fold A/B — fused vs unfused (video):")
+    assert_quality(unfused_video, fused_video, pcc=_FOLD_EQUIV_PCC, relative_rmse=_FOLD_EQUIV_RMSE)
+    logger.info("fold A/B — fused vs unfused (audio):")
+    assert_quality(unfused_audio, fused_audio, pcc=_FOLD_EQUIV_PCC, relative_rmse=_FOLD_EQUIV_RMSE)
+    logger.info("PASSED fold equivalence")
+
+
 def _run_inner_step(
     *,
     mesh_device,
@@ -940,6 +992,7 @@ def _run_inner_step(
     run_pcc,
     checkpoint_variant: str,
     use_forward_alias: bool,
+    fold_ab: bool = False,
 ):
     """Shared body for the model forward tests; use_forward_alias picks tt_model(...) vs .forward(...)."""
     # Checkpoint variant only affects AV weight loading; skip the redundant copy in video mode.
@@ -1087,22 +1140,32 @@ def _run_inner_step(
         )
 
     # === Forward ===
-    t0 = time.time()
-    result = tt_model(**call_kwargs) if use_forward_alias else tt_model.forward(**call_kwargs)
-    logger.info(f"TT forward: {time.time() - t0:.1f}s")
+    # The model is functional (no input mutation), so this may be re-invoked to compare code paths
+    # on identical weights and inputs — see the fold A/B below.
+    def _forward_to_host():
+        t0 = time.time()
+        result = tt_model(**call_kwargs) if use_forward_alias else tt_model.forward(**call_kwargs)
+        logger.info(f"TT forward: {time.time() - t0:.1f}s")
 
-    # Crop the SP-padding tail off the gathered video output before checking/comparing real tokens.
-    if has_audio:
-        tt_v_dev, tt_a_dev = result
-        tt_video = LTXTransformerModel.device_to_host(tt_v_dev).squeeze(0)[:, :video_N_real, :]
-        tt_audio = LTXTransformerModel.device_to_host(tt_a_dev).squeeze(0)
-        assert tt_video.shape == (1, video_N_real, OUT_CHANNELS), f"video shape {tt_video.shape}"
-        assert tt_audio.shape == (1, audio_N, AUDIO_IN_CHANNELS), f"audio shape {tt_audio.shape}"
-        assert torch.isfinite(tt_video).all() and torch.isfinite(tt_audio).all(), "NaN/Inf in TT output"
-    else:
-        tt_video = LTXTransformerModel.device_to_host(result).squeeze(0)[:, :video_N_real, :]
-        assert tt_video.shape == (1, video_N_real, OUT_CHANNELS), f"video shape {tt_video.shape}"
-        assert torch.isfinite(tt_video).all(), "NaN/Inf in TT output"
+        # Crop the SP-padding tail off the gathered video output before checking/comparing real tokens.
+        if has_audio:
+            tt_v_dev, tt_a_dev = result
+            video = LTXTransformerModel.device_to_host(tt_v_dev).squeeze(0)[:, :video_N_real, :]
+            audio = LTXTransformerModel.device_to_host(tt_a_dev).squeeze(0)
+            assert video.shape == (1, video_N_real, OUT_CHANNELS), f"video shape {video.shape}"
+            assert audio.shape == (1, audio_N, AUDIO_IN_CHANNELS), f"audio shape {audio.shape}"
+            assert torch.isfinite(video).all() and torch.isfinite(audio).all(), "NaN/Inf in TT output"
+            return video, audio
+
+        video = LTXTransformerModel.device_to_host(result).squeeze(0)[:, :video_N_real, :]
+        assert video.shape == (1, video_N_real, OUT_CHANNELS), f"video shape {video.shape}"
+        assert torch.isfinite(video).all(), "NaN/Inf in TT output"
+        return video, None
+
+    tt_video, tt_audio = _forward_to_host()
+
+    if fold_ab:
+        _assert_fold_equivalence(_forward_to_host, fused_video=tt_video, fused_audio=tt_audio)
 
     del tt_model
 
@@ -1154,6 +1217,50 @@ def test_ltx_transformer_model(
         run_pcc=run_pcc,
         checkpoint_variant=checkpoint_variant,
         use_forward_alias=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    _LTX_TRANSFORMER_MESH_PARAMS,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(("F", "H", "W"), _LTX_TRANSFORMER_SHAPE_PARAMS)
+@pytest.mark.parametrize("checkpoint_variant", _LTX_TRANSFORMER_CKPT_PARAMS)
+def test_ltx_fold_gated_residual(
+    mesh_device,
+    sp_axis,
+    tp_axis,
+    num_links,
+    topology,
+    is_fsdp,
+    F,
+    H,
+    W,
+    checkpoint_variant,
+    reset_seeds,
+) -> None:
+    """LTX_FOLD_GATED_RESIDUAL must not move the AV output: fused vs unfused, plus the diffusers oracle.
+
+    AV-only, because the three residuals it folds (audio cross-attn, A→V, V→A) exist only there.
+    """
+    if not transformer_ltx.LTX_FOLD_GATED_RESIDUAL:
+        pytest.skip("LTX_FOLD_GATED_RESIDUAL=0: the fused path this gates is compiled out")
+    _run_inner_step(
+        mesh_device=mesh_device,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_links=num_links,
+        topology=topology,
+        is_fsdp=is_fsdp,
+        F=F,
+        H=H,
+        W=W,
+        has_audio=True,
+        run_pcc=True,
+        checkpoint_variant=checkpoint_variant,
+        use_forward_alias=True,
+        fold_ab=True,
     )
 
 
