@@ -520,7 +520,50 @@ noise-floor control, and a deliberately-wrong-gate mutant proving the gate bites
 no gate does not ship.** Measure on the block harness (`test_ltx_transformer_block -k 'ring_bh_4x8sp1tp0 and av'`,
 `LTX_PROFILE_ITERS>1` for warm laps), not the raw pipeline.
 
-- [ ] **W0 — CENSUS + measured per-collective cost.** Exact table of every collective in one AV block (type /
+- [x] **W0 — CENSUS + measured per-collective cost. → THE CCL-LATENCY HYPOTHESIS IS DEAD. Harness `test_ccl_census.py` (3d44dbc80d4).**
+      **49 collectives/block × 48 = 2,352/step.** Slope-priced from traced replay wall-time (trace K copies, replay,
+      (T64−T16)/48 = marginal cost of one more op in a traced step; cancels replay overhead, sidesteps the profiler
+      entirely — so the METAL TRACE ID acid test is moot, there is no CSV). Reproduced across 2 runs, spread <1%.
+      **A collective's FIXED cost is 6.6 µs (activation AG) to 9.3 µs (stat AG) — i.e. 1–1.6 program launches.
+      All 2,352 collectives/step = ≈19 ms/step, against a 37–236 ms residual. Collectives are BANDWIDTH-bound**
+      (video activation AG scales 105.5 → 402.2 µs for 4× tokens, ~72 GB/s, flat across stages). **There is no fixed
+      collective latency to amortize. Cutting collective COUNT is NOT the lever. I predicted it was; the data says no.**
+      What the floor IS, per the same census (two parts, both new):
+      (a) **The audio branch is work-independent BY CONSTRUCTION.** Both stages use F=19 latent frames, so
+      `audio_N=256` at S1 AND S2 → **32 rows/device = ONE TILE** either way. ~24 of the 49 collectives and roughly
+      half the block's programs run on a one-tile tensor and cost the SAME at both stages ⇒ ≈30–55 ms/step, all of
+      it landing in `a` by construction. **CAVEAT: this is REAL AUDIO COMPUTE, not overhead — the a+bN+cN² fit
+      measures N in VIDEO tokens, so audio work is correctly but misleadingly binned into `a`. It cannot simply be
+      deleted.** (It is, however, pathologically under-utilized: one tile of work spread over 32 devices.)
+      (b) **Per-op fixed SETUP ≫ program launch.** `to_qkv` AG-mm carries **89.9 µs** of N-independent cost,
+      `to_gate` 37.5 µs, vs a 5.83 µs bare program launch. Over ~195 ops/block that is plausibly 50–100 ms/step.
+      **BONUS (the biggest lever found): `all_gather_minimal_matmul_async` DOES NOT OVERLAP.** agmm_gate 166.3 µs
+      vs AG 105.5 + mm 58.3 = 163.8 ⇒ **only 1.6% of the gather is hidden**; to_qkv hides ~23%. The gather is
+      serialized before the matmul. 11 video AG-mms/block ⇒ full-overlap ceiling ≈1.0 ms/block ≈ **−1.0 s E2E**.
+      **REDUNDANCY: in all 6 attentions, `to_gate_logits` and `to_q`/`to_qkv` each fuse an AG of the IDENTICAL
+      tensor** (attention_ltx.py:416 vs :419/:438) ⇒ **6 duplicate activation AGs/block, 288/step.**
+      Also flagged (not a collective issue): `ff2` (mm+RS, 645 µs) + `ff1` (438 µs) = 1.08 ms/block = **52 ms/step
+      at S1 — ~15% of the step in TWO ops.**
+- [~] **W1 — CUT 1b: dedup the duplicate gate/qkv gather** (math-identical: one explicit AG + two plain matmuls,
+      vs today's two fused AG-mms that gather the same tensor twice). Predicted **−83.9 µs/video attn**. IN FLIGHT.
+- [~] **W2 — WHY doesn't `all_gather_minimal_matmul_async` overlap?** Highest ceiling (≈−1.0 s E2E). Determine
+      mechanically (cite kernel code) whether the gathered dim is the matmul's contraction dim (⇒ overlap IS
+      possible via partial-product accumulation) or a dim needed whole (⇒ impossible, close the lever). IN FLIGHT.
+- [ ] **W3 — the ~90 µs per-op fixed SETUP cost.** The single largest unexplained term. Where does it go — program
+      binary/CB config, semaphore setup, runtime-arg writes? Attack the biggest offenders (`to_qkv` 89.9 µs).
+- [ ] **W4 — the audio branch's one-tile pathology.** Half the block's programs push ONE TILE across 32 devices.
+      (SP-replicating audio was priced and is a net loss: saves 77 µs of SP AGs but inflates 11 AG-mms 32→256 rows.
+      A different attack is needed — e.g. fewer/bigger audio ops, or not sharding audio at all.)
+
+### DEAD, with evidence — do not retry
+- **Merging the RMSNorm stat all-gathers: DEAD, quantitatively.** 2 AGs = 30.7 µs; 1 merged (2× width) = 22.7 µs
+  ⇒ saves 8.0 µs, but the merge needs ≥1 concat + 2 strided slices ≈ **≥17 µs of programs — a net loss.** On audio
+  it loses outright even before the extra programs (2×4.46=8.9 → merged 12.3). **This is the quantitative reason the
+  earlier Q/K-norm merge was slower: an AG's fixed cost is only ~1.6 launches, so there is nothing to amortize.**
+- **`norm3` twice/block is NOT redundant** — the residual is updated between the two calls. No cut.
+- **TP-replicated residual stream:** trades a 105 µs AG for an all-reduce (RS+AG ≈ 300 µs). Strictly worse.
+- **num_links=4:** physically impossible on BH (2 eth channels). 1→2 already gives 184.2 → 105.5 µs. Maxed.
+- ~~[ ] **W0 — CENSUS + measured per-collective cost.**~~ Exact table of every collective in one AV block (type /
       file:line / mesh axis / payload shape / count), split **stat-sized** (RMSNorm stats — tiny payload, pure
       latency) vs **activation-sized** (bandwidth-bound). Then the MEASURED fixed latency per collective from
       `cpp_device_perf_report.csv` (`OP TO OP LATENCY` + `DEVICE FW DURATION`). **ACID TEST: rows with a non-empty
