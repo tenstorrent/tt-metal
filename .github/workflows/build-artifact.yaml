@@ -48,6 +48,11 @@ on:
         type: boolean
         default: true
         description: "Make resulting debian packages available in the workflow"
+      build-ttnn-import-artifact:
+        required: false
+        type: boolean
+        default: false
+        description: "Upload a lean artifact (build/lib *.so + runtime) so consumers can import ttnn in-place via TT_FROM_PRECOMPILED_DIR"
       skip-tt-train:
         # FIXME: TT-Train needs to get fixed to not assume a specific toolchain.
         #        Fow now enabling an opt-out. But this should get removed.
@@ -183,6 +188,11 @@ on:
               jobs.build-wheel.outputs.artifact-name ||
               (jobs.download-artifacts.result == 'success' &&
                jobs.download-artifacts.outputs.wheel_artifact_name || '') }}
+      ttnn-import-artifact-name:
+        description: "Name of the lean artifact (build/lib *.so + runtime) for importing ttnn in-place without a wheel"
+        value: >-
+          ${{ jobs.build-artifact.result == 'success' &&
+              jobs.build-artifact.outputs.ttnn_import_artifact_name || '' }}
   workflow_dispatch:
     inputs:
       tracy:
@@ -404,6 +414,7 @@ jobs:
     outputs:
       packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
       build_artifact_name: ${{ steps.set_build_artifact_name.outputs.build_artifact_name }}
+      ttnn_import_artifact_name: ${{ steps.set_ttnn_import_name.outputs.name }}
     env:
       # Platform values from parse-platform job (handles both workflow_dispatch and workflow_call)
       DISTRO: ${{ needs.parse-platform.outputs.distro }}
@@ -704,6 +715,25 @@ jobs:
           path: |
             /work/build/*.deb
             /work/build/*.ddeb
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Set ttnn-import artifact name
+        id: set_ttnn_import_name
+        if: ${{ inputs.build-ttnn-import-artifact }}
+        run: |
+          echo "name=ttnn-import-${{ inputs.build-type }}-${{ github.run_id }}-${{ github.run_attempt }}" >> "$GITHUB_OUTPUT"
+
+      - name: ☁️ Upload ttnn-import artifact
+        if: ${{ inputs.build-ttnn-import-artifact }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        timeout-minutes: 10
+        with:
+          name: ${{ steps.set_ttnn_import_name.outputs.name }}
+          path: |
+            /work/build/lib/*.so
+            /work/build/lib/*.so.*
+            /work/runtime/**
           compression-level: 0
           if-no-files-found: error
 
