@@ -16,7 +16,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.common.utility_functions import profiler
+from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
@@ -592,6 +592,8 @@ def test_ttnn_routed_expert_models(
 
 
 @torch.no_grad()
+# unified_routed_expert_ffn requires an 11x8 compute grid; only Blackhole (13x10) has it.
+@pytest.mark.skipif(not is_blackhole(), reason="unified_routed_expert_ffn is Blackhole-only (needs 11x8 grid)")
 @pytest.mark.parametrize(
     "mesh_device, device_params", [ROUTED_EXPERT_MESH_PARAMS[0]], indirect=["mesh_device", "device_params"]
 )
@@ -651,6 +653,8 @@ def test_ttnn_routed_expert_ffn_row_major(mesh_device, device_params):
 
 
 @torch.no_grad()
+# unified_routed_expert_ffn requires an 11x8 compute grid; only Blackhole (13x10) has it.
+@pytest.mark.skipif(not is_blackhole(), reason="unified_routed_expert_ffn is Blackhole-only (needs 11x8 grid)")
 @pytest.mark.parametrize(
     "mesh_device, device_params", [ROUTED_EXPERT_MESH_PARAMS[0]], indirect=["mesh_device", "device_params"]
 )
