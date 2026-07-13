@@ -1307,7 +1307,8 @@ namespace reuse_mcast_optimized_helpers {
                     mm_in1_sender_writer_args.push_back(0);
                 }
 
-                mm_in1_sender_writer_args.push_back(bias_mesh.has_value() ? (std::uint32_t)bias_mesh->address() : 0);
+                mm_in1_sender_writer_args.push_back(
+                    bias_mesh.has_value() ? (std::uint32_t)bias_mesh->address() : 0);  // smuggled-rta-ok
                 mm_in1_sender_writer_args.push_back(
                     bias_mesh.has_value() ? (std::uint32_t)per_core_N * in1_idx : 0);  // in1_tensor_start_tile_id
                 if (!output_is_sharded) {
@@ -2761,7 +2762,8 @@ create_program_mcast_in0_in1(
                     mm_in1_sender_writer_args.push_back(0);
                 }
 
-                mm_in1_sender_writer_args.push_back(bias_mesh.has_value() ? (std::uint32_t)bias_mesh->address() : 0);
+                mm_in1_sender_writer_args.push_back(
+                    bias_mesh.has_value() ? (std::uint32_t)bias_mesh->address() : 0);  // smuggled-rta-ok
                 mm_in1_sender_writer_args.push_back(
                     bias_mesh.has_value() ? (std::uint32_t)per_core_N * in1_idx : 0);  // in1_tensor_start_tile_id
                 if (!output_is_sharded) {
@@ -3052,6 +3054,7 @@ void override_runtime_arguments_impl(
 }  // namespace reuse_mcast_optimized_helpers
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 // ===========================================================================================
 // Metal 2.0 (ProgramArtifacts) port of the resnet50 mcast_2d path.
@@ -4660,6 +4663,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
     };
 }
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 static ttnn::device_operation::CachedProgram<MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t>
@@ -5008,7 +5012,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast2DProgramFacto
     }
 
     (void)dst_full_sync_en;
-    return create_program_mcast_in0_in1_artifacts(
+    return CMAKE_UNIQUE_NAMESPACE::create_program_mcast_in0_in1_artifacts(
         a,
         device,
         math_fidelity,

@@ -19,6 +19,7 @@ using namespace tt::tt_metal::experimental;
 namespace ttnn::prim::qsr {
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 // Spec/binding names. The DFB accessor names surface kernel-side as dfb::in0 / dfb::in1 / dfb::out;
 // the tensor accessor names surface as tensor::in0 / tensor::in1 / tensor::out.
@@ -35,12 +36,14 @@ const KernelSpecName WRITER_KERNEL{"writer"};
 const KernelSpecName COMPUTE_KERNEL_G1{"compute_g1"};
 const KernelSpecName COMPUTE_KERNEL_G2{"compute_g2"};
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_program_artifacts(
     const ttnn::prim::qsr::MatmulParams& operation_attributes,
     const ttnn::prim::qsr::MatmulInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;  // resolve the file-local ids below
     if (!tensor_args.optional_input_tensors.empty()) {
         TT_FATAL(!tensor_args.optional_input_tensors[0].has_value(), "Bias is not supported for matmul multi core");
     }

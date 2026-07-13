@@ -4,9 +4,8 @@ add_library(ttnn_op_experimental_quasar ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::Quasar ALIAS ttnn_op_experimental_quasar)
 
 tt_reuse_precompile_headers(ttnn_op_experimental_quasar TTNN::PCHFull)
-# NOTE: unity build intentionally NOT enabled here. The quasar ops are clones of ops that
-# originally live in separate libraries; combining them in one unity translation unit could
-# surface file-local-helper name collisions across ops. Compiling each file standalone avoids that.
+# Enable unity builds for faster compilation.
+TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_quasar)
 
 set_target_properties(
     ttnn_op_experimental_quasar

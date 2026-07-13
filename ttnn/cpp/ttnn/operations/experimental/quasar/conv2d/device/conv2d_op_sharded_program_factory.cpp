@@ -201,6 +201,7 @@ ActivationReuseConfig calculate_activation_reuse_params(
 }
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 // ---- Metal 2.0 resource names (ProgramSpec scope) ----
 // DFB accessor names surface kernel-side as dfb::<name> tokens; the ported sharded kernels reference
@@ -231,10 +232,12 @@ const m2::KernelSpecName KERNEL_WRITER_SENDER{"writer_mcast_sender"};
 const m2::KernelSpecName KERNEL_WRITER_RECEIVER{"writer_mcast_receiver"};
 const m2::KernelSpecName KERNEL_COMPUTE{"compute"};
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_program_artifacts(
     const Conv2dParams& operation_attributes, const Conv2dInputs& tensor_args, Tensor& output_tensor) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;  // resolve the file-local ids/helpers below
     const auto& a = tensor_args.a;
     const auto& b = tensor_args.b;
     const auto& ashape = ttnn::Shape(operation_attributes.input_tensor_shape);
@@ -702,7 +705,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     const uint32_t tilized_act_tile_size = tt::tile_size(tilized_act_df);
 
     // Only enable packer l1 accumulation when there are in0_num_blocks_w > 2.
-    const bool packer_l1_acc_en = determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
+    const bool packer_l1_acc_en = ttnn::prim::determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
     const uint32_t batch = sliding_window_config.get_output_shape()[0];
     const uint32_t output_image_width = sliding_window_config.get_output_shape()[2];
     const uint32_t output_image_height = sliding_window_config.get_output_shape()[1];

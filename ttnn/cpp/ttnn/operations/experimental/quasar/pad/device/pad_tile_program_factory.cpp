@@ -18,6 +18,7 @@ using ttnn::operations::data_movement::float_to_uint16;
 using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 // Metal 2.0 named resource ids for this factory.
 const KernelSpecName READER{"reader"};
 const KernelSpecName WRITER{"writer"};
@@ -26,10 +27,12 @@ const DFBSpecName PAD{"pad"};    // c_1: writer-only scratch (fake CB -> self-lo
 const TensorParamName INPUT{"input"};
 const TensorParamName OUTPUT{"output"};
 const std::string WU{"wu"};
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts PadTileCoreProgramFactory::create_program_artifacts(
     const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& tensor_return_value) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;  // resolve the file-local ids below
     const auto& a = tensor_args.input;
     Tensor& output = tensor_return_value;
     const auto& pad_value = operation_attributes.pad_value;

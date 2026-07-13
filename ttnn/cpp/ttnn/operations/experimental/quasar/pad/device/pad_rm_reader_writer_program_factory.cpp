@@ -27,6 +27,7 @@ using ttnn::operations::data_movement::float_to_uint16;
 using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 // Allocate and fill the op-owned pad-value const tensor.  Mirrors the legacy
 // build_pad_value_const_tensor_sc(): build a host tensor holding the pad value, then write it to
@@ -49,10 +50,12 @@ MeshTensor build_pad_value_const_mesh_tensor(const PadInputs& tensor_args, float
     return tt::tt_metal::enqueue_write_tensor(cq, host_pad.host_tensor(), *device, mem_cfg);
 }
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create_program_artifacts(
     const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& tensor_return_value) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;  // resolve the file-local ids/helpers below
     // Metal 2.0 named resource handles (locals to avoid unity-build name collisions).
     const DFBSpecName CB_IN0{"cb_in0"};  // legacy c_0: input stream (reader produces, writer consumes)
 

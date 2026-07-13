@@ -62,6 +62,7 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_opt_conv_activat
 }
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 // ---- Metal 2.0 resource names (ProgramSpec scope) ----
 // DFB accessor names surface kernel-side as dfb::<name> tokens; the ported width-sharded kernels
@@ -89,10 +90,12 @@ const m2::KernelSpecName KERNEL_ACT{"act_reader"};
 const m2::KernelSpecName KERNEL_WEIGHTS{"weights_reader"};
 const m2::KernelSpecName KERNEL_COMPUTE{"compute"};
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::create_program_artifacts(
     const Conv2dParams& operation_attributes, const Conv2dInputs& tensor_args, Tensor& output_tensor) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;  // resolve the file-local ids/helpers below
     const auto& a = tensor_args.a;
     const auto& b = tensor_args.b;
     const auto& bias = tensor_args.bias;
