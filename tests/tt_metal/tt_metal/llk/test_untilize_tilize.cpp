@@ -1316,7 +1316,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputePackUntilizeDst) {
 
 // Static-state-tracking test — same input/output config as TensixComputePackUntilizeDst,
 // but the JIT-compiled compute kernel is the from-scratch static-state-tracking
-// implementation at experiments/static-state-tracking/kernels/dst_untilize_device.cpp.
+// implementation at experiments/static-state-tracking/kernels/dst_untilize_sst.cpp.
 TEST_F(LLKMeshDeviceFixture, TensixComputePackUntilizeDstStaticState) {
     vector<vector<std::uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}, {10, 10}, {2, 40}};
     for (auto num_tile : num_tiles) {
@@ -1329,7 +1329,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputePackUntilizeDstStaticState) {
                 .num_tiles_c = num_tile[1],
                 .untilize_type = unit_tests::compute::tilize::UntilizeType::DST,
                 .golden_function = ::unit_tests::compute::gold_standard_untilize,
-                .compute_kernel_override = "experiments/static-state-tracking/kernels/dst_untilize_device.cpp"};
+                .compute_kernel_override = "experiments/static-state-tracking/kernels/dst_untilize_sst.cpp"};
             unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
         }
     }
