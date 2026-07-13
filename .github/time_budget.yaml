@@ -87,7 +87,7 @@ ttnn:
     bh_p100: 545
     bh_p150b_civ2: 545
     bh_quietbox_2: 35
-    bh_quietbox_2_iommu: 20 # sdpa nightly tests moved here from bh_quietbox_2 (IOMMU-enabled QB2)
+    bh_quietbox_2_iommu: 30 # sdpa nightly (20) + ring sdpa PERF (10); both need IOMMU for the RT profiler (IOMMU-enabled QB2)
     bh_p300: 15
     wh_llmbox: 25
     sim_wormhole_b0: 680

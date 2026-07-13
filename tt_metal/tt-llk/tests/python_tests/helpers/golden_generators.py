@@ -2139,6 +2139,7 @@ class UnarySFPUGolden:
             MathOperation.Relu: self._relu,
             MathOperation.Rsqrt: self._rsqrt,
             MathOperation.Sin: self._sin,
+            MathOperation.Signbit: self._signbit,
             MathOperation.Sqrt: self._sqrt,
             MathOperation.Square: self._square,
             MathOperation.Tanh: self._tanh,
@@ -2154,6 +2155,11 @@ class UnarySFPUGolden:
             MathOperation.Rdiv: self._rdiv,
             MathOperation.Clamp: self._clamp,
             MathOperation.Hardtanh: self._hardtanh,
+            MathOperation.Tanhshrink: self._tanhshrink,
+            MathOperation.Floor: self._floor,
+            MathOperation.Ceil: self._ceil,
+            MathOperation.Trunc: self._trunc,
+            MathOperation.Frac: self._frac,
             MathOperation.Gelu: self._gelu,
             MathOperation.GeluTanh: self._gelu_tanh,
             MathOperation.Neg: self._neg,
@@ -2379,6 +2385,11 @@ class UnarySFPUGolden:
     def _not_equal_zero(self, x):
         return 1.0 if x != 0.0 else 0.0
 
+    def _signbit(self, x):
+        # Mirrors the kernel: logical-shift the fp32 bit pattern right by 31,
+        # i.e. return 1.0 iff the sign bit is set (negative, incl. -0.0).
+        return 1.0 if math.copysign(1.0, x) < 0.0 else 0.0
+
     def _less_than_zero(self, x):
         return 1.0 if x < 0.0 else 0.0
 
@@ -2427,6 +2438,23 @@ class UnarySFPUGolden:
 
     def _tanh(self, x):
         return math.tanh(x)
+
+    def _tanhshrink(self, x):
+        # tanhshrink(x) = x - tanh(x)
+        return x - math.tanh(x)
+
+    def _floor(self, x):
+        return math.floor(x) if math.isfinite(x) else x
+
+    def _ceil(self, x):
+        return math.ceil(x) if math.isfinite(x) else x
+
+    def _trunc(self, x):
+        return math.trunc(x) if math.isfinite(x) else x
+
+    def _frac(self, x):
+        # Fractional part with sign of x: frac(x) = x - trunc(x)
+        return (x - math.trunc(x)) if math.isfinite(x) else x
 
     def _square(self, x):
         if not math.isfinite(x * x):
@@ -3105,12 +3133,24 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         pass
 
     def _right_shift(self, t1, t2):
+        # The kernel defines shift amounts outside [0, 31] as producing 0 (see
+        # ckernel_sfpu_shift.h). torch.bitwise_right_shift is an *arithmetic* shift,
+        # so for a negative value an out-of-range shift would sign-extend to -1 rather
+        # than 0; guard here so the golden matches the hardware contract.
+        if int(t2) < 0 or int(t2) >= 32:
+            return 0
         return torch.bitwise_right_shift(t1, t2).item()
 
     def _left_shift(self, t1, t2):
+        # Shift amounts outside [0, 31] produce 0 to match the kernel contract.
+        if int(t2) < 0 or int(t2) >= 32:
+            return 0
         return torch.bitwise_left_shift(t1, t2).item()
 
     def _logical_right_shift(self, t1, t2):
+        # Shift amounts outside [0, 31] produce 0 to match the kernel contract.
+        if int(t2) < 0 or int(t2) >= 32:
+            return 0
         # Perform logical right shift by treating t1 as unsigned 32-bit
         t1_uint = t1.to(torch.int64) & 0xFFFFFFFF
         result = (t1_uint >> t2).to(torch.int32)
