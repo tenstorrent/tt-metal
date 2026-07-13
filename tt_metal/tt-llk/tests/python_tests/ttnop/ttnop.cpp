@@ -787,7 +787,7 @@ struct BatchArgs
     std::string base_dir, out_root, thread = "math";
     std::vector<std::string> components = {"unpack", "math", "pack"};
     std::vector<std::uint32_t> counts;
-    bool verify = false;
+    int jobs = 0;
 };
 
 int do_batch(BatchArgs a)
@@ -837,14 +837,23 @@ int do_batch(BatchArgs a)
 
     const int N = static_cast<int>(a.counts.size());
 #ifdef _OPENMP
-    // Assign jobs for openMP equal to the threads of host PC
-    const int jobs = std::max(1, std::min(N, omp_get_num_procs()));
+    // Cap OpenMP workers to omp_get_max_threads()
+    // so batch threads don't oversubscribe when many xdist workers run at once.
+    // If jobs are higher than max_threads, then the OS time-slices them and there are more context switches
+    const int max_threads = std::max(1, omp_get_max_threads());
+    int jobs              = std::max(1, std::min(N, max_threads));
+    if (a.jobs > 0)
+    {
+        jobs = std::max(1, std::min(jobs, a.jobs));
+    }
 #else
-    const int jobs = N;
+    // not using openMP set jobs to 1 and ignore -j
+    const int jobs = 1;
+    (void)a.jobs;
 #endif
     std::fprintf(
         stderr,
-        "ttnop batch: base_dir=%s thread=%s site=0x%08x (%s) payload=RISCV_NOP variants=%d jobs=%d (host_procs=%d)\n",
+        "ttnop batch: base_dir=%s thread=%s site=0x%08x (%s) payload=RISCV_NOP variants=%d jobs=%d (max_threads=%d)\n",
         a.base_dir.c_str(),
         a.thread.c_str(),
         site_vaddr,
@@ -852,7 +861,7 @@ int do_batch(BatchArgs a)
         N,
         jobs,
 #ifdef _OPENMP
-        omp_get_num_procs()
+        max_threads
 #else
         1
 #endif
@@ -922,16 +931,21 @@ int run_batch(int argc, char** argv)
                 {
                     die("batch: bad --counts value '" + tok + "'");
                 }
+                if (std::find(a.counts.begin(), a.counts.end(), v) != a.counts.end())
+                {
+                    die("batch: duplicate --counts value '" + tok + "'");
+                }
                 a.counts.push_back(v);
             }
         }
-        else if (s == "--verify")
-        {
-            a.verify = true;
-        }
         else if (s == "-j")
         {
-            (void)take(i);
+            std::uint32_t v;
+            if (!parse_u32(take(i), v) || v == 0)
+            {
+                die("batch: bad -j value (want positive integer)");
+            }
+            a.jobs = static_cast<int>(v);
         }
         else
         {
@@ -949,12 +963,11 @@ void usage()
         "usage: ttnop <in.elf> -o <out.elf> [SITE ...] [options]\n"
         "       ttnop batch --counts <csv> [options]\n\n"
         "BATCH MODE (OpenMP: parse base once, emit one perturbed ELF set per count):\n"
-        "  --counts CSV       one perturbed set per value (the NOP count)\n"
+        "  --counts CSV       one perturbed set per value (the NOP count; no duplicates)\n"
         "  --thread T         component that receives the NOPs (default math)\n"
+        "  -j N               cap OpenMP workers (default: OMP_NUM_THREADS / OpenMP max)\n"
         "  (ELF set is always unpack/math/pack; siblings hardlinked from base dir)\n"
-        "  (injection site is always run_kernel entry)\n"
-        "  (OpenMP jobs = min(counts, host CPU count); -j ignored)\n"
-        "  (also honours --verify below)\n\n"
+        "  (injection site is always run_kernel entry)\n\n"
         "SINGLE-ELF MODE:\n"
         "A SITE is  LOC=N  meaning: inject a delay of N before the instruction at LOC.\n"
         "  LOC is  0xADDR | symbol | symbol+0xOFF | 0xADDR+0xOFF\n"

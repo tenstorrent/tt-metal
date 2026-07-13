@@ -1,14 +1,14 @@
 # OpenMP NOP-injection pytest plugin (space-efficient, xdist-safe).
 #
-# For every test case (when OMP_NOP=1):
+# For every test case (when OPENMP_NOP=1):
 #   1. Baseline: compile (DEFAULT) + device run; capture TestConfig.
 #   2. Snapshot ELFs into a per-nodeid work dir.
 #   3. OpenMP `ttnop batch` 1..100 into that private dir.
 #   4. Re-run each count via a unique temporary variant_id.
-#       Keep ONLY failing sets under OMP_NOP_OUT/fails/.
+#       Keep ONLY failing sets under OPENMP_NOP_OUT/fails/.
 #   5. Wipe this item's private work dir + temp variant dirs;
 #
-# Failures kept under OMP_NOP_OUT/fails/
+# Failures kept under OPENMP_NOP_OUT/fails/
 
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ def _item_key(item) -> str:
 
 
 def _out_base() -> Path:
-    return Path(os.environ.get("OMP_NOP_OUT", "/tmp/tt-llk-build/nop_injector"))
+    return Path(os.environ.get("OPENMP_NOP_OUT", "/tmp/tt-llk-build/nop_injector"))
 
 
 def _record_fail(item, text: str) -> None:
@@ -101,7 +101,7 @@ def _move_dir(src: Path, dst: Path) -> None:
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_call(item):
-    if os.environ.get("OMP_NOP") != "1":
+    if os.environ.get("OPENMP_NOP") != "1":
         yield
         return
 
@@ -147,7 +147,7 @@ def pytest_runtest_call(item):
 
 
 def _keep_elfs() -> bool:
-    return os.environ.get("OMP_NOP_KEEP", "").strip() in ("1", "true", "yes")
+    return os.environ.get("OPENMP_NOP_KEEP", "").strip() in ("1", "true", "yes")
 
 
 def _sweep(item) -> None:
@@ -199,19 +199,18 @@ def _sweep(item) -> None:
     ]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
-        _record_fail(
-            item,
-            f"BATCH-ERR\trc={r.returncode}\t{(r.stderr or '').strip()[:200]}\n",
-        )
+        message = f"BATCH-ERR\trc={r.returncode}\t{(r.stderr or '').strip()[:200]}"
+        _record_fail(item, f"{message}\n")
         if not keep:
             _rm_tree(work)
-        return
+        raise RuntimeError(message)
 
     for n in counts:
         src = batch_root / f"n{n}"
         if not (src / f"{thread}.elf").is_file():
-            _record_fail(item, f"n{n}\tFAIL-ERR\tmissing perturbed ELF set\n")
-            continue
+            message = f"n{n}\tFAIL-ERR\tmissing perturbed ELF set"
+            _record_fail(item, f"{message}\n")
+            raise RuntimeError(message)
 
         # Unique temp variant so we never clobber the shared baseline elf dir.
         per_suffix = f"__omp_{key}_n{n}"
@@ -243,7 +242,8 @@ def _sweep(item) -> None:
 
     if keep:
         print(
-            f"[omp_nop] kept ELFs: {work} " f"(bk=baseline, batch/n<count>=perturbed)",
+            f"[openmp_nop] kept ELFs: {work} "
+            f"(bk=baseline, batch/n<count>=perturbed)",
             flush=True,
         )
     else:
