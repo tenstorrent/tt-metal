@@ -128,8 +128,6 @@ void kernel_main() {
     Semaphore<> in0_sender_sem(in0_sender_semaphore_id);
     Semaphore<> in0_receiver_sem(in0_receiver_semaphore_id);
     Semaphore<> in0_valid_sem(in0_valid_semaphore_id);
-    uint32_t in0_valid_semaphore_addr = get_semaphore(in0_valid_semaphore_id);
-    uint32_t in0_receiver_semaphore_addr = get_semaphore(in0_receiver_semaphore_id);
     const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
@@ -249,8 +247,6 @@ void kernel_main() {
 
     in0_valid_sem.set(VALID);
 
-    const uint64_t in0_receiver_semaphore_noc_addr =
-        get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_receiver_semaphore_addr);
     // all gather
     volatile tt_l1_ptr uint32_t* out_ready_sem_backward_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_backward);
@@ -443,7 +439,7 @@ void kernel_main() {
                     noc_obj.async_writes_flushed();
 #endif
 
-                    noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
+                    in0_valid_sem.relay_unicast(noc_obj, in0_receiver_sem, in0_dest_noc_x, in0_dest_noc_y);
                 }
 #ifdef USE_MUX
                 if (n_block_iter == 0) {
