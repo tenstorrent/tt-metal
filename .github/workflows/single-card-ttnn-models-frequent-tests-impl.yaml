@@ -1,4 +1,4 @@
-name: "[internal] Nightly fast dispatch tests impl"
+name: "[internal] Single-card Frequent model and ttnn tests impl"
 
 on:
   workflow_call:
@@ -90,7 +90,7 @@ jobs:
           echo "$UPDATED" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
 
-  fast-dispatch-models-tests:
+  single-card-ttnn-models-frequent-tests:
     needs: load-test-matrix
     if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
     strategy:
@@ -168,7 +168,7 @@ jobs:
         if: ${{ failure() }}
 
   aggregate-ops-recording:
-    needs: [fast-dispatch-models-tests]
+    needs: [single-card-ttnn-models-frequent-tests]
     if: ${{ !cancelled() && inputs.enable-ops-recording }}
     runs-on: ubuntu-latest
     steps:
