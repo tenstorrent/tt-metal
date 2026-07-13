@@ -409,14 +409,16 @@ CPMAddPackage(
 # Upstream has no CMakeLists.txt; after CPM download we build STATIC from the same sources as makefile.in
 # (src/*.cpp minus cadical/mobical, plus src/*.c). NBUILD avoids generated build.hpp; patch fixes vivify.hpp.
 ####################################################################################################################
-CPMAddPackage(
-    NAME cadical
-    GITHUB_REPOSITORY arminbiere/cadical
-    GIT_TAG rel-2.2.1
-    DOWNLOAD_ONLY YES
-    PATCHES
-        cadical_vivify_include_tuple.patch
-)
+if(NOT DEFINED cadical_SOURCE_DIR)
+    CPMAddPackage(
+        NAME cadical
+        GITHUB_REPOSITORY arminbiere/cadical
+        GIT_TAG rel-2.2.1
+        DOWNLOAD_ONLY YES
+        PATCHES
+            cadical_vivify_include_tuple.patch
+    )
+endif()
 
 file(GLOB CADICAL_CXX CONFIGURE_DEPENDS "${cadical_SOURCE_DIR}/src/*.cpp")
 list(FILTER CADICAL_CXX EXCLUDE REGEX ".*/(cadical|mobical)\\.cpp$")
