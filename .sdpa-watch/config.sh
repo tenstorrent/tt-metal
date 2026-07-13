@@ -39,6 +39,26 @@ MODEL="claude-opus-4-8"
 #   npm i -g @anthropic-ai/claude-code
 export DISABLE_AUTOUPDATER=1
 
+# Cron starts with a minimal PATH (/usr/bin:/bin) that omits the nvm-installed
+# `claude` CLI. Pre-reboot this happened to work only because `service cron
+# start` had inherited an interactive shell's PATH; a cron daemon that comes up
+# fresh after a reboot does not, so the preflight died with "claude: command
+# not found" — which the FATAL handler then misreported as an expired token.
+# Self-heal PATH here (config.sh is sourced before the preflight): if `claude`
+# isn't already resolvable, splice in the newest nvm node bin dir that has it
+# (matches nvm's LTS default and survives node-version bumps).
+if ! command -v claude >/dev/null 2>&1; then
+  _newest_claude=""
+  for _c in "$HOME"/.nvm/versions/node/*/bin/claude; do
+    [[ -x "$_c" ]] || continue
+    if [[ -z "$_newest_claude" || "$_c" -nt "$_newest_claude" ]]; then
+      _newest_claude="$_c"
+    fi
+  done
+  [[ -n "$_newest_claude" ]] && { PATH="$(dirname "$_newest_claude"):$PATH"; export PATH; }
+  unset _newest_claude _c
+fi
+
 # Pipelines to watch.
 # Format per entry: "workflow_filename.yml|Display Name|test focus hint|job_name_pattern"
 # - workflow_filename is the .yml/.yaml file under .github/workflows in REPO
