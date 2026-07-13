@@ -54,7 +54,7 @@ CBs are the credit-based FIFOs connecting **producers** (a reader on RISCV B, or
 1. Enumerate CB sites:
    ```bash
    # from the repo root (ttnn/ and models/ are siblings of tt_metal/, NOT under it)
-   grep -rInE '\bcb_(reserve_back|push_back|wait_front|pop_front)\b|\.(reserve_back|push_back|wait_front|pop_front)[[:space:]]*\(|pages_(received|acked)|fifo_(rd|wr)_ptr|Remote(Sender|Receiver)CBInterface' \
+   grep -rInE '\bcb_(reserve_back|push_back(_hold_wr_ptr)?|wait_fronts?|pop_front)\b|\bremote_cb_(reserve_back|push_back_and_write_pages|wait_front|pop_front)\b|\.(reserve_back|push_back|wait_front|pop_front)[[:space:]]*\(|pages_(received|acked)|fifo_(rd|wr)_ptr|Remote(Sender|Receiver)CBInterface' \
      tt_metal/hw/inc/api ttnn/cpp models --include=*.h --include=*.cpp | grep -v '/tests/'
    ```
    **Both API forms.** Modern ttnn kernels use the OBJECT form
