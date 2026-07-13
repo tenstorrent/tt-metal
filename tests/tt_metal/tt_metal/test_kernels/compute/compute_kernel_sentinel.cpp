@@ -39,7 +39,9 @@ void kernel_main() {
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
 
     binary_dest_reuse_tiles_init(cb_in2);
-    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
+    // binary_dest_reuse_tiles_init now forwards to binary_tiles_init, which configures both source
+    // operands (both set to cb_in2), so this reconfigures SrcA and SrcB.
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
 
     state_configure<Operand::PACK>(cb_out1, __builtin_LINE());
     matmul_init(cb_in0, cb_in1);

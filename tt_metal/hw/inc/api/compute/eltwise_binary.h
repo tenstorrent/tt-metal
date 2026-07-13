@@ -18,8 +18,20 @@ namespace ckernel {
 
 // clang-format off
 /**
- * Init function for all binary ops
- * Followed by the specific init required with an opcode (binrary_op_specific_init)
+ * Performs the hardware and software initialization shared by every element-wise binary op (add, sub,
+ * mul). Configures the unpacker, math (FPU), and packer for the given input/output circular buffers.
+ * It must be followed by the op-specific init (binary_tiles_init, or one of add_tiles_init /
+ * sub_tiles_init / mul_tiles_init) before the matching *_tiles call.
+ *
+ * NOTE: This function currently performs full hardware bring-up (unpack/math/pack hardware configure
+ * plus pack init) that duplicates the one-time hardware start programmed by compute_kernel_hw_startup -
+ * the initialization our programming model expects at the very top of a compute kernel, and which
+ * reduce and matmul already rely on. The intended end state is for this function to become
+ * functionally equivalent to a per-op binary_tiles_init (software-only init), with the hardware
+ * bring-up owned solely by compute_kernel_hw_startup. That convergence is deferred to a follow-up
+ * because a large number of existing callers still depend on this function for hardware configuration.
+ *
+ * Return value: None
  *
  * | Argument       | Description                                                   | Type     | Valid Range                | Required |
  * |----------------|---------------------------------------------------------------|----------|----------------------------|----------|
@@ -55,36 +67,64 @@ ALWI void binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint
 }
 
 // clang-format off
- /**
- * Template for initializing element-wise binary operations.
- * Template parameters:
- * full_init: if true, the full init is performed (unpack+math), otherwise only math init is performed
- * eltwise_binary_type: the binary operation type
+/**
+ * Initializes an element-wise binary operation (add, sub, mul), including the optional dest-reuse
+ * variant. This is the software init that pairs with mul_tiles / add_tiles / sub_tiles, or - when a
+ * dest-reuse mode is selected - with binary_dest_reuse_tiles. Call binary_op_init_common (or
+ * compute_kernel_hw_startup) once before this to perform the hardware configuration.
  *
- * Function
- * | Argument       | Description                                                   | Type     | Valid Range | Required |
- * |----------------|---------------------------------------------------------------|----------|-------------|----------|
- * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31     | True     |
- * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
- * | acc_to_dest    | If true, operation = A [+,-,x] B + dst_tile_idx of *_tiles, depending on the eltwise_binary_type | bool | 0,1  | False |
+ * Template parameters:
+ * full_init:           if true, both the unpacker and math are initialized; if false, only the math
+ *                      init is performed (use when the unpacker is already configured for these CBs).
+ * eltwise_binary_type: the binary operation type, values = ELWADD / ELWSUB / ELWMUL.
+ * binary_reuse_dest:   dest-reuse mode, values = NONE / DEST_TO_SRCA / DEST_TO_SRCB. NONE performs a
+ *                      standard two-operand unpack init. DEST_TO_SRCA / DEST_TO_SRCB configure the
+ *                      single-operand unpack path that loads one source register from the DST register
+ *                      (see binary_dest_reuse_tiles); this is the path used by
+ *                      binary_dest_reuse_tiles_init.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                                                       | Type     | Valid Range | Required |
+ * |----------------|---------------------------------------------------------------------------------------------------|----------|-------------|----------|
+ * | icb0           | The identifier of the circular buffer (CB) containing A                                           | uint32_t | 0 to 31     | True     |
+ * | icb1           | The identifier of the circular buffer (CB) containing B                                           | uint32_t | 0 to 31     | True     |
+ * | acc_to_dest    | If true, operation = A [+,-,x] B + dst_tile_idx of *_tiles, depending on the eltwise_binary_type  | bool     | 0,1         | False    |
  */
 // clang-format on
-template <bool full_init, EltwiseBinaryType eltwise_binary_type>
+template <
+    bool full_init,
+    EltwiseBinaryType eltwise_binary_type,
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 ALWI void binary_tiles_init(
     uint32_t icb0, uint32_t icb1, bool acc_to_dest = false, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
 
-    MATH((llk_math_eltwise_binary_init<eltwise_binary_type, BroadcastType::NONE, MATH_FIDELITY>(
+    MATH((llk_math_eltwise_binary_init<eltwise_binary_type, BroadcastType::NONE, MATH_FIDELITY, binary_reuse_dest>(
         icb0, icb1, acc_to_dest)));
 
     if constexpr (full_init) {
-        UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, Transpose::None)));
+        if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::NONE) {
+            UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, Transpose::None)));
+        } else {
+#ifndef ARCH_QUASAR
+            UNPACK(constexpr bool acc_to_dest_reuse = true);
+#else
+            UNPACK(constexpr bool acc_to_dest_reuse = false);
+#endif
+            UNPACK((llk_unpack_A_init<BroadcastType::NONE, acc_to_dest_reuse, binary_reuse_dest>(false, false, icb0)));
+        }
     }
 }
 
 // clang-format off
 /**
- * Short init function
+ * Short init for element-wise multiply; pairs with mul_tiles. Configures the unpacker and math for the
+ * two input CBs. Call binary_op_init_common (or compute_kernel_hw_startup) once before this. For
+ * back-compatibility with Quasar this variant always accumulates into DST (acc_to_dest = true); use the
+ * three-argument overload for explicit control over accumulation.
+ *
+ * Return value: None
  *
  * | Argument       | Description                                                   | Type     | Valid Range | Required |
  * |----------------|---------------------------------------------------------------|----------|-------------|----------|
@@ -101,12 +141,17 @@ ALWI void mul_tiles_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __bu
 
 // clang-format off
 /**
- * Short init function
+ * Short init for element-wise multiply with explicit accumulation control; pairs with mul_tiles.
+ * Configures the unpacker and math for the two input CBs. Call binary_op_init_common (or
+ * compute_kernel_hw_startup) once before this.
+ *
+ * Return value: None
  *
  * | Argument       | Description                                                   | Type     | Valid Range | Required |
  * |----------------|---------------------------------------------------------------|----------|-------------|----------|
  * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31     | True     |
  * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
+ * | acc_to_dest    | If true, operation = A * B + dst_tile_idx of mul_tiles        | uint32_t | 0,1         | True     |
  */
 // clang-format on
 ALWI void mul_tiles_init(uint32_t icb0, uint32_t icb1, uint32_t acc_to_dest, uint32_t call_line = __builtin_LINE()) {
@@ -116,7 +161,10 @@ ALWI void mul_tiles_init(uint32_t icb0, uint32_t icb1, uint32_t acc_to_dest, uin
 
 // clang-format off
 /**
- * Short init function
+ * Short init for element-wise addition; pairs with add_tiles. Configures the unpacker and math for the
+ * two input CBs. Call binary_op_init_common (or compute_kernel_hw_startup) once before this.
+ *
+ * Return value: None
  *
  * | Argument       | Description                                                   | Type     | Valid Range | Required |
  * |----------------|---------------------------------------------------------------|----------|-------------|----------|
@@ -133,7 +181,10 @@ ALWI void add_tiles_init(
 
 // clang-format off
 /**
- * Short init function
+ * Short init for element-wise subtraction; pairs with sub_tiles. Configures the unpacker and math for
+ * the two input CBs. Call binary_op_init_common (or compute_kernel_hw_startup) once before this.
+ *
+ * Return value: None
  *
  * | Argument       | Description                                                   | Type     | Valid Range | Required |
  * |----------------|---------------------------------------------------------------|----------|-------------|----------|
@@ -241,22 +292,34 @@ ALWI void sub_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
 }
 
+// clang-format off
 /**
- * Please refer to documentation for any_init.
+ * Init for the dest-reuse element-wise binary path; pairs with binary_dest_reuse_tiles. In this path
+ * one source register is loaded from the DST register (selected by binary_reuse_dest) rather than from
+ * a second CB, so only a single input CB is configured. Call binary_op_init_common (or
+ * compute_kernel_hw_startup) once before this.
+ *
+ * This is a thin wrapper that forwards to binary_tiles_init<true, eltwise_binary_type,
+ * binary_reuse_dest> with both operands set to icb0; it is retained as a backward-compatible alias so
+ * existing callers keep compiling. The dest-reuse init logic now lives in binary_tiles_init.
+ *
+ * Template parameters:
+ * eltwise_binary_type: the binary operation type, values = ELWADD / ELWSUB / ELWMUL.
+ * binary_reuse_dest:   which source register is loaded from DST, values = NONE / DEST_TO_SRCA / DEST_TO_SRCB.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                             | Type     | Valid Range | Required |
+ * |----------------|---------------------------------------------------------|----------|-------------|----------|
+ * | icb0           | The identifier of the circular buffer (CB) containing A | uint32_t | 0 to 31     | True     |
  */
+// clang-format on
 template <
     EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 ALWI void binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_line = __builtin_LINE()) {
-    state_configure(icb0, call_line);
-#ifndef ARCH_QUASAR
-    UNPACK(constexpr bool acc_to_dest = true);
-#else
-    UNPACK(constexpr bool acc_to_dest = false);
-#endif
-    UNPACK((llk_unpack_A_init<BroadcastType::NONE, acc_to_dest, binary_reuse_dest>(false, false, icb0)));
-    MATH((llk_math_eltwise_binary_init<eltwise_binary_type, BroadcastType::NONE, MATH_FIDELITY, binary_reuse_dest>(
-        icb0, icb0, false /* acc_to_dest */)));
+    binary_tiles_init<true /* full_init */, eltwise_binary_type, binary_reuse_dest>(
+        icb0, icb0, false /* acc_to_dest */, call_line);
 }
 
 // clang-format off
