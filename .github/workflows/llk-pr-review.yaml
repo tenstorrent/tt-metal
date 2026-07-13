@@ -133,7 +133,7 @@ jobs:
       #    on-prem connectors with a stable, allowlistable exit IP. Vars are set
       #    by IT onboarding; scoped to an exact repo:branch pair.
       - name: Tailscale
-        uses: tailscale/github-action@v4
+        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8 # v4.1.2
         with:
           oauth-client-id: ${{ vars.TS_GHA_PUBLIC_INTERNET_CLIENT_ID }}
           audience: ${{ vars.TS_GHA_PUBLIC_INTERNET_AUDIENCE }}
