@@ -102,7 +102,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_srcs.h"
 #include "params.h"
-#include "sfpu/ckernel_sfpu_exp.h"
 
 using namespace ckernel;
 using namespace ckernel::math;
@@ -159,15 +158,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_sfpu_init_();
 
     const int num_sfpu_iterations = PARAM_SRCS_YDIM >> 1;
-    const int load_base_addr      = ckernel::math::SFPU_SRCS_BASE_ADDR;
-    const int store_base_addr     = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * PARAM_SRCS_YDIM;
-
-    // One-time setup: program the exp LOADMACRO sequence and record the per-slice
-    // instruction stream (load+exp via SFPLOADMACRO, then explicit store to the output slice).
-    _exp_init_loadmacro_(load_base_addr, store_base_addr, num_sfpu_iterations);
-    const std::uint32_t exp_replay_len = _exp_loadmacro_replay_len_(num_sfpu_iterations);
-
-    // Full TRISC3 path: UNP_S -> SFPU exp (SFPLOADMACRO replay) -> PACK1.
     for (std::uint32_t i = 0; i < num_tiles; ++i)
     {
         _llk_unpack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_unpack, i * PARAM_SRCS_SLICE_COUNT);
@@ -175,18 +165,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         for (std::uint32_t slice = 0; slice < PARAM_SRCS_SLICE_COUNT; slice++)
         {
-            TT_REPLAY(0, exp_replay_len, 0, 0, 0, 0);
-            // Drain the LOADMACRO pipeline before clearing the SrcS valids so PACK1 reads the
-            // exp result, not a store still in flight. dest_done stays 0: this is a SrcS-only path.
-            TTI_SFPNOP(0, 0, 0);
-            TTI_SFPNOP(0, 0, 0);
+            const int load_base_addr  = ckernel::math::SFPU_SRCS_BASE_ADDR;
+            const int store_base_addr = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * PARAM_SRCS_YDIM;
+
+#pragma GCC unroll 8
+            for (int d = 0; d < num_sfpu_iterations; d++)
+            {
+                TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, load_base_addr + (d << 1));
+                TTI_SFPNONLINEAR(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpnonlinear::EXP_MODE);
+                TT_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, store_base_addr + (d << 1));
+            }
 
             _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>();
         }
     }
 
-    wait_unpack_idle();
     wait_sfpu_idle();
+    wait_unpack_idle();
     wait_pack_idle();
 }
 
