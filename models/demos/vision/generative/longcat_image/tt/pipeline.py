@@ -314,7 +314,7 @@ class LongCatImagePipelineTT:
 
     PIPELINE_STAGES = PIPELINE_STAGES
 
-    def __init__(self, device, pipe, num_cqs=None, profile=None, text_encoder_device=None):
+    def __init__(self, device, pipe, num_cqs=None, profile=None, text_encoder_device=None, resident_text_encoder=False):
         self.device = device
         self.pipe = pipe
         self.vae_scale_factor = pipe.vae_scale_factor
@@ -353,9 +353,29 @@ class LongCatImagePipelineTT:
         # there we still reuse ONE stub for a request's pos+neg branches (tier 1) but free it before
         # denoise. Lazily built on first _acquire_text_encoder(); released by close().
         self._resident_text_encoder = None
-        self._text_encoder_resident = self.text_encoder_device is not self.device
+        # Resident when the encoder has its OWN device (text_encoder_device != self.device), OR
+        # when explicitly forced (resident_text_encoder=True) — the latter is the tp=4 all-resident
+        # case where the encoder is TENSOR-PARALLEL across the SAME mesh as the DiT (each ~28GB/tp =
+        # ~7GB/chip at tp=4, so it co-fits with the ~1.5GB/chip DiT shard on every chip — no longer
+        # the single-chip OOM the dedicated-chip split was built to avoid).
+        self._text_encoder_resident = (self.text_encoder_device is not self.device) or bool(resident_text_encoder)
 
     # ── stage 1: text encode (qwen2_v_l_model stub) ──────────────────────────
+    def _text_encoder_tp(self):
+        """Tensor-parallel degree for the encoder = chip count of text_encoder_device.
+        >1 iff the encoder runs on a >1 mesh -> the Qwen stub column/row-shards its fp32
+        weights (Megatron TP); a plain/1-chip device -> 1 (unchanged single-chip path)."""
+        try:
+            n = int(self.text_encoder_device.get_num_devices())
+        except Exception:
+            return 1
+        return n if n > 1 else 1
+
+    def _build_text_encoder(self):
+        stub = _load_stub("qwen2_v_l_model").build(self.text_encoder_device, self.pipe.text_encoder.model)
+        stub.tp = self._text_encoder_tp()  # >1 iff text_encoder_device is a >1 mesh -> shard encoder
+        return stub
+
     def _acquire_text_encoder(self):
         """Return (stub, owned) for this request's text encode(s).
 
@@ -377,9 +397,7 @@ class LongCatImagePipelineTT:
         if self._text_encoder_resident:
             if self._resident_text_encoder is None:
                 try:
-                    self._resident_text_encoder = _load_stub("qwen2_v_l_model").build(
-                        self.text_encoder_device, self.pipe.text_encoder.model
-                    )
+                    self._resident_text_encoder = self._build_text_encoder()
                 except Exception as _e:  # noqa: BLE001
                     print(
                         f"[text_encode] resident encoder build failed ({type(_e).__name__}: "
@@ -390,7 +408,7 @@ class LongCatImagePipelineTT:
                     self._text_encoder_resident = False
             if self._resident_text_encoder is not None:
                 return self._resident_text_encoder, False
-        return _load_stub("qwen2_v_l_model").build(self.text_encoder_device, self.pipe.text_encoder.model), True
+        return self._build_text_encoder(), True
 
     def _tt_text_encode(self, input_ids, attention_mask, prefix_len, suffix_len, stub=None):
         """Run the Qwen text encoder for one (pos or neg) branch. `stub`: a qwen2_v_l_model stub

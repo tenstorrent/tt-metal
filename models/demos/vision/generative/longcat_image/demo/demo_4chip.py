@@ -2,24 +2,29 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""LongCat-Image interactive server on a 4-chip QB2 — ALL weights resident, nothing reloads.
+"""LongCat-Image interactive server on a 4-chip QB2 — ALL weights resident at tp=4, nothing reloads.
 
-This is the 4-chip generalization of demo_server.py's warm 2-chip server. The one (1,4)
-FABRIC_1D_RING mesh is carved into two non-overlapping submeshes, one per role:
+Every stage is tensor-parallel across ALL 4 chips of one (1,4) FABRIC_1D_RING mesh, and every
+stage stays resident — no dedicated chips, no weight reloads between requests:
 
-    chip 3        text encoder (fp32, ~28GB) — RESIDENT ((1,1) submesh)
-    chips 0,1,2   DiT tensor-parallel tp=3 + VAE — RESIDENT + traced ((1,3) submesh)
+    chips 0-3   text encoder tp=4 (RESIDENT) + DiT tp=4 (RESIDENT + traced) + VAE
 
-Why this split (and not tp=4): the Qwen2.5-VL text encoder runs fp32 weights (~28GB — bf16
-caps its PCC at ~0.82 over the 28-layer stack) and, on its own, fills a ~32GB chip to the
-edge. It cannot co-reside with a resident DiT shard, so it gets a chip to itself and the DiT
-tensor-parallels across the other three (tp=3 divides cleanly: 24 heads/3 = 8, FFN 12288/3 =
-4096). The pipeline auto-detects tp from the DiT submesh (get_num_devices) — no caller flag.
+This became possible once the Qwen2.5-VL text encoder was made tensor-parallel: its fp32 weights
+(~28GB — bf16 caps its PCC at ~0.82) shard to ~7GB/chip, so it co-fits with the ~1.5GB/chip DiT
+shard on every chip (a resident fp32 encoder on ONE chip fills it and can't co-reside with a tp=4
+DiT shard — that's why the earlier 2-chip server, and the dedicated-encoder-chip tp=3 variant,
+kept the encoder off the DiT's chips). Encoder TP numerically verified: last_hidden_state PCC
+tp4-vs-tp1 = 0.9986.
 
-After warmup() + the first request (which uploads the resident encoder once), EVERY stage is
-resident: a request pays only compute (encode forward + traced tp=3 denoise + VAE), no weight
-reloads. Measured warm e2e ~17.8s / 512px-50step image (encode ~1.5s + denoise ~15.9s [318
-ms/step] + VAE ~0.3s).
+Ordering: the resident encoder is uploaded BEFORE warmup() captures the DiT trace, so the trace
+planner reserves around the resident encoder weights (allocating persistent buffers after trace
+capture can corrupt the trace — same reason warmup warms the VAE pre-capture). The pipeline
+auto-detects tp from get_num_devices on each device; resident_text_encoder=True keeps the encoder
+resident even though it shares self.device with the DiT.
+
+Measured warm e2e ~15.4s / 512px-50step image: encode ~0.57s + neg ~0.57s (resident) + tp=4 denoise
+~14.0s (279 ms/step) + VAE ~0.31s. (~13% faster than the tp=3 dedicated-encoder-chip variant's
+17.75s, because the DiT gets all 4 chips.)
 
 Run:
     python -m models.demos.vision.generative.longcat_image.demo.demo_4chip \
@@ -37,6 +42,7 @@ import torch
 import ttnn
 from models.demos.vision.generative.longcat_image.demo._demo_common import save_png as _save_png
 from models.demos.vision.generative.longcat_image.tt import pipeline as P
+from models.demos.vision.generative.longcat_image.tt.pipeline import build_text_input_ids
 
 HF_MODEL_ID = "meituan-longcat/LongCat-Image"
 OUTPUT_DIR = "outputs"
@@ -44,7 +50,7 @@ WARMUP_PROMPT = "a cat sitting on a mat"
 
 
 def main():
-    ap = argparse.ArgumentParser(description="LongCat-Image interactive server (all-resident, 4 chips)")
+    ap = argparse.ArgumentParser(description="LongCat-Image interactive server (tp=4 all-resident, 4 chips)")
     ap.add_argument("--steps", type=int, default=50)  # HF reference default
     ap.add_argument("--size", type=int, default=512)
     ap.add_argument("--max_length", type=int, default=512)
@@ -72,12 +78,11 @@ def main():
     pipe.set_progress_bar_config(disable=True)
     pipe.tokenizer_max_length = args.max_length
 
-    if ttnn.get_num_devices() < 4:
-        raise SystemExit(f"demo_4chip needs 4 chips; found {ttnn.get_num_devices()} (use demo_server.py for 2)")
+    if ttnn.get_num_devices() != 4:
+        raise SystemExit(f"demo_4chip needs exactly 4 chips; found {ttnn.get_num_devices()} (use demo_server.py for 2)")
 
     bar = "=" * 72
-    # One coherent 4-chip ring mesh, carved into two non-overlapping submeshes (see module
-    # docstring): a 1x1 for the resident fp32 encoder, a 1x3 for the tensor-parallel DiT + VAE.
+    # ONE coherent 4-chip ring mesh; encoder + DiT + VAE all tensor-parallel across it (tp=4).
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING, ttnn.FabricReliabilityMode.RELAXED_INIT)
     mesh = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(1, 4),
@@ -85,36 +90,32 @@ def main():
         num_command_queues=args.cq,
         trace_region_size=209715200,  # 200 MB for the resident denoise trace
     )
-    text_encoder_device = dit_device = None
-    try:
-        text_encoder_device = mesh.create_submesh(ttnn.MeshShape(1, 1), offset=ttnn.MeshCoordinate(0, 0))
-        dit_device = mesh.create_submesh(ttnn.MeshShape(1, 3), offset=ttnn.MeshCoordinate(0, 1))
-    except Exception:
-        ttnn.close_mesh_device(mesh)
-        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
-        raise
-    print(
-        f"[server-4chip] text_encoder chip={text_encoder_device.get_device_ids()}  "
-        f"dit+vae tp={dit_device.get_num_devices()} chips={dit_device.get_device_ids()}",
-        flush=True,
-    )
-
     ttp = None
     try:
         ttp = P.LongCatImagePipelineTT(
-            dit_device, pipe, text_encoder_device=text_encoder_device, num_cqs=args.cq, profile=True
+            mesh, pipe, num_cqs=args.cq, text_encoder_device=mesh, resident_text_encoder=True, profile=True
+        )
+        print(
+            f"[server-4chip] DiT tp={ttp._device_tp()}  encoder tp={ttp._text_encoder_tp()}  "
+            f"chips={mesh.get_device_ids()}",
+            flush=True,
         )
 
         print(bar, flush=True)
         print(
-            "Warming up (chips 0-2: DiT tp=3 + VAE resident + traced; chip 3: text encoder, "
-            "resident after the first request) — one-time setup, not paid per request.",
+            "Warming up (all 4 chips: text encoder tp=4 + DiT tp=4 + VAE resident) — one-time setup, "
+            "not paid per request.",
             flush=True,
         )
         print(bar, flush=True)
         t0 = time.time()
+        # Upload the RESIDENT tp=4 encoder FIRST (one throwaway forward) so warmup()'s DiT trace
+        # capture reserves around the resident encoder weights rather than colliding with them.
+        ids, mask, pre, suf = build_text_input_ids(pipe, WARMUP_PROMPT, args.max_length)
+        te, _owned = ttp._acquire_text_encoder()
+        ttp._tt_text_encode(ids, mask, pre, suf, stub=te)
         ttp.warmup(max_length=args.max_length, height=args.size, width=args.size, guidance_scale=args.guidance)
-        print(f"  warmup() took {time.time() - t0:.1f}s\n", flush=True)
+        print(f"  warmup() (encoder + DiT + VAE resident) took {time.time() - t0:.1f}s\n", flush=True)
 
         def generate(prompt, idx):
             t0 = time.time()
@@ -136,14 +137,11 @@ def main():
                     print(f"    {label:24s} {secs * 1000:9.1f} ms", flush=True)
 
         print(bar, flush=True)
-        print(
-            f"Generating a warmup image for {WARMUP_PROMPT!r} (first request uploads the resident encoder) ...",
-            flush=True,
-        )
+        print(f"Generating a warmup image for {WARMUP_PROMPT!r} ...", flush=True)
         generate(WARMUP_PROMPT, 0)
 
         print(bar, flush=True)
-        print("Ready. Type a prompt and press ENTER to generate (all stages warm/resident now).")
+        print("Ready. Type a prompt and press ENTER to generate (all stages warm/resident, tp=4).")
         print("Ctrl-D or Ctrl-C to exit.")
         print(bar, flush=True)
 
@@ -167,11 +165,6 @@ def main():
     finally:
         if ttp is not None:
             ttp.close()
-        # Close submeshes before the parent mesh they were carved from.
-        if dit_device is not None:
-            ttnn.close_mesh_device(dit_device)
-        if text_encoder_device is not None:
-            ttnn.close_mesh_device(text_encoder_device)
         ttnn.close_mesh_device(mesh)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 

@@ -65,6 +65,17 @@ class _TextEncoder:
         self._rms = {}
         self._emb_w = None
         self._compute = None
+        # Tensor-parallel factor across the device mesh (1 = single-chip, unchanged).
+        # When >1 (self.device is a 1xTP MeshDevice): q/k/v/gate/up projections are
+        # COLUMN-parallel (shard weight out-dim -> local heads = num_heads//tp, local kv =
+        # num_kv_heads//tp), o/down projections ROW-parallel (shard weight in-dim) + all_reduce;
+        # norms/embed/rope/mask/residual replicated. The limb precision math is unchanged
+        # (each chip runs the same hi·hi+lo·hi+hi·lo on its shard; row all_reduce sums the fp32
+        # partials, exact). tp=4 only: 28 q-heads and 4 kv-heads both divide by 4 (one GQA group/
+        # chip); tp=3 does NOT divide 28 heads. Set by the caller AFTER build().
+        self.tp = 1
+        self._emul_fp32_tp = {}  # fp32-limb TP weight cache, keyed (id(module), role)
+        self._emul_bf16w_tp = {}  # bf16-limb TP weight cache
 
     # ── helpers ──────────────────────────────────────────────────────────
     def _ck(self):
@@ -84,6 +95,15 @@ class _TextEncoder:
             )
         return self._compute
 
+    # ── mesh mappers (tp>1 only; return None on a single device so from_torch is unchanged) ──
+    def _rep(self):
+        """Replicate a host tensor across the TP mesh (embeds/norms/rope/mask/bias-on-row)."""
+        return ttnn.ReplicateTensorToMesh(self.device) if self.tp > 1 else None
+
+    def _shard(self, dim):
+        """Shard a host tensor along `dim` across the TP mesh (col=weight dim0, row=weight dim1)."""
+        return ttnn.shard_tensor_to_mesh_mapper(self.device, dim=dim)
+
     def _to_ttnn(self, t, dtype=F32):
         if isinstance(t, ttnn.Tensor):
             if t.layout != TILE:
@@ -92,7 +112,9 @@ class _TextEncoder:
                 t = ttnn.typecast(t, dtype)
             return t
         td = t.to(torch.bfloat16) if dtype == BF16 else t.to(torch.float32)
-        return ttnn.from_torch(td, dtype=dtype, layout=TILE, device=self.device, memory_config=DRAM)
+        return ttnn.from_torch(
+            td, dtype=dtype, layout=TILE, device=self.device, memory_config=DRAM, mesh_mapper=self._rep()
+        )
 
     def _linear(self, x, tm):
         # Store weights in TRUE fp32: the ttnn HiFi4 matmul only exploits the
@@ -122,7 +144,9 @@ class _TextEncoder:
             x, wt, bias=bt, transpose_b=True, memory_config=DRAM, dtype=F32, compute_kernel_config=self._ck()
         )
 
-    def _emul_linear_bf16w(self, x, tm):
+    def _emul_linear_bf16w(self, x, tm, role="rep"):
+        if self.tp > 1:
+            return self._emul_tp(x, tm, role, bf16w=True)
         # 16-bit emulated linear with BF16-STORED weight limbs. Same 3-term
         # limb math as `_emul_linear` (hi·hi + lo·hi + hi·lo → ~16-bit), and
         # bit-exact: each limb is bf16-valued, so storing it as bf16 loses
@@ -184,7 +208,9 @@ class _TextEncoder:
         lo = ttnn.subtract(x, hi)
         return hi, lo
 
-    def _emul_linear(self, x, tm):
+    def _emul_linear(self, x, tm, role="rep"):
+        if self.tp > 1:
+            return self._emul_tp(x, tm, role, bf16w=False)
         key = id(tm)
         if key not in self._emul:
             w = tm.weight.detach().to(torch.float32)
@@ -212,6 +238,62 @@ class _TextEncoder:
         y = ttnn.add(y, ttnn.linear(xh, wl, transpose_b=True, memory_config=DRAM, dtype=F32, compute_kernel_config=ck))
         return ttnn.add(y, bt) if bt is not None else y
 
+    def _emul_tp(self, x, tm, role, bf16w):
+        """Tensor-parallel limb linear (tp>1). role:
+        'col' = shard weight OUT dim (dim0) -> output + bias sharded, no CCL;
+        'row' = shard weight IN  dim (dim1), input already sharded -> partial, all_reduce(sum),
+                then add replicated bias ONCE;
+        'rep' = replicate weight+bias -> identical on every chip.
+        bf16w stores the weight limbs as bf16 (memory-neutral, MLP) else fp32 (attention). The
+        hi·hi+lo·hi+hi·lo limb math is identical to the single-device path; for 'row' the fp32
+        partials are summed across chips by all_reduce (exact), so precision is preserved."""
+        cache = self._emul_bf16w_tp if bf16w else self._emul_fp32_tp
+        key = (id(tm), role)
+        if key not in cache:
+            w = tm.weight.detach().to(torch.float32)  # [out, in]
+            wh = w.to(torch.bfloat16).to(torch.float32)
+            wl = w - wh
+            store = BF16 if bf16w else F32
+            wh_host = wh.to(torch.bfloat16) if bf16w else wh
+            wl_host = wl.to(torch.bfloat16) if bf16w else wl.to(torch.bfloat16).to(torch.float32)
+            b = tm.bias
+            if role == "col":  # shard weight out-dim (dim0); bias [1,1,out] shard last dim
+                wmap, bmap = self._shard(0), self._shard(2)
+            elif role == "row":  # shard weight in-dim (dim1); bias replicated, added post-all_reduce
+                wmap, bmap = self._shard(1), self._rep()
+            else:  # rep
+                wmap = bmap = self._rep()
+            cache[key] = (
+                ttnn.from_torch(
+                    wh_host, dtype=store, layout=TILE, device=self.device, memory_config=DRAM, mesh_mapper=wmap
+                ),
+                ttnn.from_torch(
+                    wl_host, dtype=store, layout=TILE, device=self.device, memory_config=DRAM, mesh_mapper=wmap
+                ),
+                ttnn.from_torch(
+                    b.detach().reshape(1, 1, -1).to(torch.float32),
+                    dtype=F32,
+                    layout=TILE,
+                    device=self.device,
+                    memory_config=DRAM,
+                    mesh_mapper=bmap,
+                )
+                if b is not None
+                else None,
+            )
+        wht, wlt, bt = cache[key]
+        xh, xl = self._limbs(x)
+        if bf16w:
+            xh = ttnn.typecast(xh, BF16)
+            xl = ttnn.typecast(xl, BF16)
+        ck = self._ck()
+        y = ttnn.linear(xh, wht, transpose_b=True, memory_config=DRAM, dtype=F32, compute_kernel_config=ck)
+        y = ttnn.add(y, ttnn.linear(xl, wht, transpose_b=True, memory_config=DRAM, dtype=F32, compute_kernel_config=ck))
+        y = ttnn.add(y, ttnn.linear(xh, wlt, transpose_b=True, memory_config=DRAM, dtype=F32, compute_kernel_config=ck))
+        if role == "row":
+            y = ttnn.all_reduce(y, cluster_axis=1, topology=ttnn.Topology.Linear)
+        return ttnn.add(y, bt) if bt is not None else y
+
     def _emul_matmul_bt(self, a, b):
         # a @ b^T with both operands limb-split (used for q · kᵀ).
         ah, al = self._limbs(a)
@@ -230,7 +312,9 @@ class _TextEncoder:
         key = id(norm)
         if key not in self._rms:
             w = norm.weight.detach().reshape(1, 1, -1).to(torch.float32)
-            self._rms[key] = ttnn.from_torch(w, dtype=F32, layout=TILE, device=self.device, memory_config=DRAM)
+            self._rms[key] = ttnn.from_torch(
+                w, dtype=F32, layout=TILE, device=self.device, memory_config=DRAM, mesh_mapper=self._rep()
+            )
         w = self._rms[key]
         xf = x if x.dtype == F32 else ttnn.typecast(x, F32)
         msq = ttnn.mean(ttnn.mul(xf, xf), dim=2, keepdim=True, compute_kernel_config=self._ck())
@@ -244,9 +328,10 @@ class _TextEncoder:
         return ttnn.to_layout(t, TILE)
 
     def _merge_heads(self, t, S):
+        heads = t.shape[1]  # LOCAL head count under TP (heads//tp); == self.num_heads single-device
         t = ttnn.to_layout(t, RM)
         t = ttnn.permute(t, [0, 2, 1, 3])
-        t = ttnn.reshape(t, [1, S, self.hidden])
+        t = ttnn.reshape(t, [1, S, heads * self.head_dim])
         return ttnn.to_layout(t, TILE)
 
     def _rotate_half(self, x):
@@ -327,9 +412,16 @@ class _TextEncoder:
     def _embed(self, input_ids):
         if self._emb_w is None:
             w = self.lm.embed_tokens.weight.detach().to(torch.bfloat16)
-            self._emb_w = ttnn.from_torch(w, dtype=BF16, layout=RM, device=self.device, memory_config=DRAM)
+            self._emb_w = ttnn.from_torch(
+                w, dtype=BF16, layout=RM, device=self.device, memory_config=DRAM, mesh_mapper=self._rep()
+            )
         ids = ttnn.from_torch(
-            input_ids.to(torch.int32).reshape(1, -1), dtype=U32, layout=RM, device=self.device, memory_config=DRAM
+            input_ids.to(torch.int32).reshape(1, -1),
+            dtype=U32,
+            layout=RM,
+            device=self.device,
+            memory_config=DRAM,
+            mesh_mapper=self._rep(),
         )
         h = ttnn.embedding(ids, self._emb_w, layout=TILE)  # [1,S,hidden] bf16
         return ttnn.typecast(h, F32)
@@ -342,9 +434,15 @@ class _TextEncoder:
         # Emulated-fp32 on the attention critical path: the peaked-softmax
         # amplification of the late-layer massive-activation scores needs ~16-bit
         # q/k rather than the multiplier's ~11-bit default (see _emul_matmul_bt).
-        q = self._split_heads(self._emul_linear(h, a.q_proj), S, self.num_heads)
-        k = self._split_heads(self._emul_linear(h, a.k_proj), S, self.num_kv_heads)
-        v = self._split_heads(self._emul_linear(h, a.v_proj), S, self.num_kv_heads)
+        # Column-parallel QKV under TP: local heads = num_heads//tp (7), local kv = num_kv_heads//tp
+        # (1). 28/4 and 4/4 both divide, so each chip holds exactly one GQA group (1 kv -> n_rep=7
+        # local q). Attention (rope/repeat_kv/scores/softmax/PV) is fully LOCAL — no CCL; only the
+        # row-parallel o_proj needs an all_reduce.
+        lheads = self.num_heads // self.tp
+        lkv = self.num_kv_heads // self.tp
+        q = self._split_heads(self._emul_linear(h, a.q_proj, "col"), S, lheads)
+        k = self._split_heads(self._emul_linear(h, a.k_proj, "col"), S, lkv)
+        v = self._split_heads(self._emul_linear(h, a.v_proj, "col"), S, lkv)
         q = self._rope(q, cos, sin)
         k = self._rope(k, cos, sin)
         k = self._repeat_kv(k)
@@ -355,7 +453,7 @@ class _TextEncoder:
         probs = self._softmax(scores)
         out = ttnn.matmul(probs, v, dtype=F32, compute_kernel_config=self._ck(), memory_config=DRAM)
         out = self._merge_heads(out, S)
-        x = ttnn.add(residual, self._emul_linear(out, a.o_proj))
+        x = ttnn.add(residual, self._emul_linear(out, a.o_proj, "row"))
 
         residual = x
         h = self._rmsnorm(x, blk.post_attention_layernorm)
@@ -366,9 +464,11 @@ class _TextEncoder:
         # the padded-row hidden) short of PCC 0.99. bf16-limb storage makes the
         # 16-bit weights cost the SAME DRAM as the single fp32 copy, so this is
         # memory-neutral (see _emul_linear_bf16w).
-        gate = ttnn.silu(self._emul_linear_bf16w(h, mlp.gate_proj))
-        up = self._emul_linear_bf16w(h, mlp.up_proj)
-        x = ttnn.add(residual, self._emul_linear_bf16w(ttnn.mul(gate, up), mlp.down_proj))
+        # Megatron MLP under TP: gate/up COLUMN-parallel (shard intermediate), down ROW-parallel
+        # (+ all_reduce). The col-out sharding feeds the row-in directly — no interior CCL.
+        gate = ttnn.silu(self._emul_linear_bf16w(h, mlp.gate_proj, "col"))
+        up = self._emul_linear_bf16w(h, mlp.up_proj, "col")
+        x = ttnn.add(residual, self._emul_linear_bf16w(ttnn.mul(gate, up), mlp.down_proj, "row"))
         return x
 
     # ── forward ──────────────────────────────────────────────────────────
