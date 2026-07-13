@@ -66,6 +66,30 @@ void bind_all_to_all_async_generic(nb::module_& mod) {
         nb::arg("topology") = nb::none(),
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("cluster_axis") = nb::none());
+
+    ttnn::bind_function<"all_to_all_async_2d", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Redistributes a tensor by splitting ``in_dim`` and concatenating ``out_dim`` across one
+        axis of a FABRIC_2D mesh. Packets are injected through the routing-table-selected compass
+        connection, so this API supports logical mesh rows or columns on LoudBox and Galaxy.
+
+        Args:
+            input_tensor (ttnn.Tensor): Input tensor to redistribute.
+            in_dim (int): Dimension split evenly across devices on ``cluster_axis``.
+            out_dim (int): Dimension concatenated from all devices on ``cluster_axis``.
+            cluster_axis (int): Logical mesh axis participating in the all-to-all.
+        )doc",
+        &ttnn::experimental::all_to_all_async_2d,
+        nb::arg("input_tensor"),
+        nb::arg("in_dim"),
+        nb::arg("out_dim"),
+        nb::kw_only(),
+        nb::arg("persistent_output_buffer") = nb::none(),
+        nb::arg("num_links") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("cluster_axis") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::ccl

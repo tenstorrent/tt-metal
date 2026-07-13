@@ -335,3 +335,31 @@ def test_all_to_all(
         reuse_inputs=False,
         cluster_axis=cluster_axis,
     )
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"trace_region_size": 100000, "fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_all_to_all_fabric_2d_glm_head_to_sequence(mesh_device):
+    """Exercise the GLM sparse-MLA head-to-sequence redistribution on a LoudBox fabric."""
+    run_all_to_all_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        logical_shape=[1, 64, 1280, 576],
+        in_dim=1,
+        out_dim=2,
+        num_links=2,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        topology=ttnn.Topology.Linear,
+        num_iters=2,
+        input_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        do_check=True,
+        trace_mode=False,
+        reuse_inputs=True,
+        cluster_axis=1,
+    )
