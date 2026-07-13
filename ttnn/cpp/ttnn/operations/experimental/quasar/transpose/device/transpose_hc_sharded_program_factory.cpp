@@ -449,7 +449,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCShardedProgramFactory::creat
             const auto& w = all_runtime_args[i].second;
 
             KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
-            SetRuntimeArgsForNode(
+            AddRuntimeArgsForNode(
                 reader_rtas,
                 node,
                 {
@@ -464,7 +464,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCShardedProgramFactory::creat
             reader_run.advanced_options.runtime_varargs[node] = std::move(r_varargs);
 
             KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
-            SetRuntimeArgsForNode(
+            AddRuntimeArgsForNode(
                 writer_rtas,
                 node,
                 {
@@ -516,7 +516,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCShardedProgramFactory::creat
             const NodeCoord node = node_for_index(i);
             const auto& r = all_runtime_args[i].first;
             KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
-            SetRuntimeArgsForNode(
+            AddRuntimeArgsForNode(
                 reader_rtas,
                 node,
                 {

@@ -102,11 +102,11 @@ static void run_a1_pipeline(const std::shared_ptr<distributed::MeshDevice>& mesh
     params.kernel_run_args = {
         m2::ProgramRunArgs::KernelRunArgs{
             .kernel = PRODUCER,
-            .runtime_arg_values = m2::CreateRuntimeArgsForNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}),
+            .runtime_arg_values = m2::MakeRuntimeArgsForNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}),
         },
         m2::ProgramRunArgs::KernelRunArgs{
             .kernel = CONSUMER,
-            .runtime_arg_values = m2::CreateRuntimeArgsForNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}),
+            .runtime_arg_values = m2::MakeRuntimeArgsForNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}),
         },
         m2::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
@@ -208,11 +208,11 @@ static void run_dm_dfb_dm_implicit_sync_2_0(
     params.kernel_run_args = {
         m2::ProgramRunArgs::KernelRunArgs{
             .kernel = PRODUCER,
-            .runtime_arg_values = m2::CreateRuntimeArgsForNode(node, {{"chunk_offset", 0u}, {"entries_per_core", total_tiles}}),
+            .runtime_arg_values = m2::MakeRuntimeArgsForNode(node, {{"chunk_offset", 0u}, {"entries_per_core", total_tiles}}),
         },
         m2::ProgramRunArgs::KernelRunArgs{
             .kernel = CONSUMER,
-            .runtime_arg_values = m2::CreateRuntimeArgsForNode(node, {{"chunk_offset", 0u}, {"entries_per_core", total_tiles}}),
+            .runtime_arg_values = m2::MakeRuntimeArgsForNode(node, {{"chunk_offset", 0u}, {"entries_per_core", total_tiles}}),
         },
     };
     params.tensor_args = {
@@ -346,11 +346,11 @@ TEST_F(MeshDeviceFixture, D1_2_0_LongImplicitSync_PostCounterWrap) {
     params.kernel_run_args = {
         m2::ProgramRunArgs::KernelRunArgs{
             .kernel = PRODUCER,
-            .runtime_arg_values = m2::CreateRuntimeArgsForNode(node, {{"chunk_offset", 0u}, {"entries_per_core", kPushTiles}}),
+            .runtime_arg_values = m2::MakeRuntimeArgsForNode(node, {{"chunk_offset", 0u}, {"entries_per_core", kPushTiles}}),
         },
         m2::ProgramRunArgs::KernelRunArgs{
             .kernel = CONSUMER,
-            .runtime_arg_values = m2::CreateRuntimeArgsForNode(node, {{"chunk_offset", 0u}, {"entries_per_core", kPushTiles}}),
+            .runtime_arg_values = m2::MakeRuntimeArgsForNode(node, {{"chunk_offset", 0u}, {"entries_per_core", kPushTiles}}),
         },
     };
     params.tensor_args = {
@@ -568,21 +568,21 @@ TEST_F(MeshDeviceFixture, D3_2_0_MultiCoreDFB_TwoGroupsViaDecoy) {
     params.kernel_run_args = {
         m2::ProgramRunArgs::KernelRunArgs{
             .kernel = DECOY_PRODUCER,
-            .runtime_arg_values = m2::CreateRuntimeArgsForNode(core_a, {{"chunk_offset", 0u}, {"entries_per_core", 0u}}),
+            .runtime_arg_values = m2::MakeRuntimeArgsForNode(core_a, {{"chunk_offset", 0u}, {"entries_per_core", 0u}}),
         },
         m2::ProgramRunArgs::KernelRunArgs{
             .kernel = DECOY_CONSUMER,
-            .runtime_arg_values = m2::CreateRuntimeArgsForNode(core_a, {{"chunk_offset", 0u}, {"entries_per_core", 0u}}),
+            .runtime_arg_values = m2::MakeRuntimeArgsForNode(core_a, {{"chunk_offset", 0u}, {"entries_per_core", 0u}}),
         },
         m2::ProgramRunArgs::KernelRunArgs{
             .kernel = PRODUCER,
             .runtime_arg_values =
-                m2::CreateRuntimeArgsForNode(core_b, {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}),
+                m2::MakeRuntimeArgsForNode(core_b, {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}),
         },
         m2::ProgramRunArgs::KernelRunArgs{
             .kernel = CONSUMER,
             .runtime_arg_values =
-                m2::CreateRuntimeArgsForNode(core_b, {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}),
+                m2::MakeRuntimeArgsForNode(core_b, {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}),
         },
     };
     params.tensor_args = {

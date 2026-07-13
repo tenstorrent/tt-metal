@@ -221,7 +221,7 @@ UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory::create_program_artif
         // This factory is not reachable via select_program_factory (dormant path), so the values are
         // preserved as-observed by the legacy kernel; width_size's legacy value was undefined and is
         // set here to the intended per-block width (TILE_WIDTH * el_size). See FLAG in port notes.
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             writer_node_args,
             node,
             {
@@ -232,7 +232,7 @@ UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory::create_program_artif
             });
 
         // Reader named RTAs (legacy: src_addr, i, num_tiles_per_row, number_blocks_per_core).
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             reader_node_args,
             node,
             {

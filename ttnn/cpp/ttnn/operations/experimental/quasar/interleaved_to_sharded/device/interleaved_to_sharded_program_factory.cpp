@@ -359,7 +359,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
             curr_num_units_per_shard = shard_height * num_units_per_shard_width;
 
             // Reader run-time args (buffer-address slot 0 is gone — bound via TensorParameter).
-            SetRuntimeArgsForNode(
+            AddRuntimeArgsForNode(
                 reader_rtas,
                 core,
                 {
@@ -375,7 +375,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
             // Writer run-time args
             uint32_t pad_offset = (num_units_per_shard_width - shard_width) * output_unit_size;
             if (dst_is_dram) {
-                SetRuntimeArgsForNode(
+                AddRuntimeArgsForNode(
                     writer_rtas,
                     core,
                     {
@@ -462,7 +462,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
             // Reader run-time args (buffer-address slot 0 is gone — bound via TensorParameter;
             // legacy slot 1 `num_units_per_row` was emitted but never read by the kernel, so it
             // is dropped here to match the kernel's actual reads).
-            SetRuntimeArgsForNode(
+            AddRuntimeArgsForNode(
                 reader_rtas,
                 core,
                 {
@@ -481,7 +481,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
                 uint32_t page_id_within_row = curr_idx_w / input_unit_size;
                 uint32_t output_width_in_pages = tt::div_up(num_units_per_row, input_unit_size);
                 uint32_t start_id = (curr_idx_h * output_width_in_pages) + page_id_within_row;
-                SetRuntimeArgsForNode(
+                AddRuntimeArgsForNode(
                     writer_rtas,
                     core,
                     {

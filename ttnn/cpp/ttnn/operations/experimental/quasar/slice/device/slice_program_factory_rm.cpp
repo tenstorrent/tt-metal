@@ -330,7 +330,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
 
     for (size_t i = 0; i < all_cores_vec.size(); ++i) {
         const auto& core = all_cores_vec[i];
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             reader_node_args,
             core,
             {
@@ -341,7 +341,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
             });
         reader_run_advanced.runtime_varargs.emplace(core, rt.id_per_dim[i]);
 
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             writer_node_args,
             core,
             {

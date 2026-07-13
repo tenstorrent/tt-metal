@@ -408,7 +408,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
         // writer_args = {num_sticks_per_core, start_id, front_pad_n, front_pad_c, front_pad_h,
         //                start_dim_offset[0..3]} (start_dim_offset is always 4 elements: {0,h,c,n}).
         KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             writer_rtas,
             node,
             {

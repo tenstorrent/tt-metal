@@ -409,7 +409,7 @@ static void matmul_tile_block(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = experimental::CreateRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
                 node,
                 {{"src0_addr", ctx.src0_dram_buffer->address()},
                  {"src0_dram_bank_id", 0u},
@@ -423,7 +423,7 @@ static void matmul_tile_block(
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = experimental::CreateRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
                 node, {{"dst_addr", ctx.dst_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", ctx.num_tiles}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},

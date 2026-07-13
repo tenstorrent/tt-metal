@@ -246,7 +246,7 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
         KernelRunArgs run_args{.kernel = KernelSpecName{name}};
         KernelRunArgs::RuntimeArgValues& run_args_rtas = run_args.runtime_arg_values;
         for (const auto& pa : per_node) {
-            SetRuntimeArgsForNode(
+            AddRuntimeArgsForNode(
                 run_args_rtas,
                 pa.node,
                 {

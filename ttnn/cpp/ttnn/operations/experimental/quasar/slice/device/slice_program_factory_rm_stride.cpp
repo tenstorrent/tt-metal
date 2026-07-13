@@ -187,7 +187,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_pro
         }
 
         if (using_4d_kernels) {
-            SetRuntimeArgsForNode(
+            AddRuntimeArgsForNode(
                 reader_node_args,
                 core,
                 {
@@ -217,7 +217,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_pro
                     {"start_row_for_this_core", row_start_id},
                 });
 
-            SetRuntimeArgsForNode(
+            AddRuntimeArgsForNode(
                 writer_node_args,
                 core,
                 {
@@ -231,14 +231,14 @@ ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_pro
                     {"start_row_for_this_core", row_start_id},
                 });
         } else {
-            SetRuntimeArgsForNode(
+            AddRuntimeArgsForNode(
                 reader_node_args,
                 core,
                 {
                     {"num_rows_for_this_core", rows_for_this_core},
                     {"start_row_for_this_core", row_start_id},
                 });
-            SetRuntimeArgsForNode(
+            AddRuntimeArgsForNode(
                 writer_node_args,
                 core,
                 {

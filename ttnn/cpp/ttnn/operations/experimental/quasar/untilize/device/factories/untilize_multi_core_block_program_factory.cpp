@@ -359,7 +359,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
             single_sub_block_size_row_arg = single_sub_block_size;
         }
 
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             reader_node_args,
             node,
             {
@@ -368,7 +368,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
                 {"single_block_size_col_arg", single_block_size_col_arg},
             });
 
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             writer_node_args,
             node,
             {

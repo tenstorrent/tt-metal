@@ -199,7 +199,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
     KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
     for (uint32_t i = 0; i < ncores_full; ++i) {
         const CoreCoord& core = cores[i];
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             reader_rtas,
             core,
             {
@@ -209,7 +209,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
                 {"num_full_blocks_in_row", 1u},
                 {"start_page_id", page_start_id},
             });
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             writer_rtas,
             core,
             {
@@ -221,7 +221,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
     }
     if (has_cliff) {
         const CoreCoord& core = cores[ncores_full];
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             reader_rtas,
             core,
             {
@@ -231,7 +231,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
                 {"num_full_blocks_in_row", 1u},
                 {"start_page_id", page_start_id},
             });
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             writer_rtas,
             core,
             {

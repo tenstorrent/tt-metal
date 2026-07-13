@@ -152,7 +152,7 @@ static void run_pack_relu_test(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = experimental::CreateRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
                 node,
                 {{"src_addr", dram_buffer_src_addr},
                  {"src_bank_id", 0u},
@@ -161,7 +161,7 @@ static void run_pack_relu_test(
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = experimental::CreateRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
                 node,
                 {{"dst_addr", dram_buffer_dst_addr},
                  {"dst_bank_id", 0u},
@@ -170,7 +170,7 @@ static void run_pack_relu_test(
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = COMPUTE,
-            .runtime_arg_values = experimental::CreateRuntimeArgsForNode(node, {{"relu_config", relu_config}}),
+            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(node, {{"relu_config", relu_config}}),
         },
     };
     experimental::SetProgramRunArgs(program, params);

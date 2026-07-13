@@ -232,7 +232,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
             KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
             KernelRunArgs::RuntimeArgValues& compute_rtas = compute_run.runtime_arg_values;
-            SetRuntimeArgsForNode(
+            AddRuntimeArgsForNode(
                 reader_rtas,
                 node,
                 {
@@ -240,7 +240,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
                     {"num_hw_blocks", num_hw_blocks_per_core},
                 });
             compute_rtas["num_hw_blocks"][node] = num_hw_blocks_per_core;
-            SetRuntimeArgsForNode(
+            AddRuntimeArgsForNode(
                 writer_rtas,
                 node,
                 {
@@ -333,7 +333,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
             KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
             KernelRunArgs::RuntimeArgValues& compute_rtas = compute_run.runtime_arg_values;
-            SetRuntimeArgsForNode(
+            AddRuntimeArgsForNode(
                 reader_rtas,
                 node,
                 {
@@ -346,7 +346,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
                     {"HtWt", HtWt_walk},
                 });
             compute_rtas["NHtWt"][node] = num_tiles_per_core;
-            SetRuntimeArgsForNode(
+            AddRuntimeArgsForNode(
                 writer_rtas,
                 node,
                 {

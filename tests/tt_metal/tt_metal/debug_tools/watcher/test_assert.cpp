@@ -192,7 +192,7 @@ static void RunTest(
             experimental::ProgramRunArgs params;
             params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
                 .kernel = ASSERT_KERNEL_NAME,
-                .runtime_arg_values = experimental::CreateRuntimeArgsForNode(
+                .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
                     experimental::NodeCoord{logical_core},
                     {
                         {"a", args[0]},

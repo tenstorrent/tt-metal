@@ -283,7 +283,7 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
                 }
             }
             // Writer run-time args (buffer-address slot 0 is gone — bound via TensorParameter).
-            SetRuntimeArgsForNode(
+            AddRuntimeArgsForNode(
                 writer_rtas,
                 core,
                 {
@@ -338,7 +338,7 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
             // Writer run-time args (buffer-address slot 0 is gone — bound via TensorParameter;
             // legacy slot 1 `num_units_per_row` was emitted but never read by the kernel, so it
             // is dropped here to match the kernel's actual reads).
-            SetRuntimeArgsForNode(
+            AddRuntimeArgsForNode(
                 writer_rtas,
                 core,
                 {

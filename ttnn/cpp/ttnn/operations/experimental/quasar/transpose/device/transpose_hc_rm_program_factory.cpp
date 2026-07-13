@@ -161,7 +161,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCRMProgramFactory::create_pro
         const NodeCoord node = core;
         KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
         KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             reader_rtas,
             node,
             {
@@ -172,7 +172,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCRMProgramFactory::create_pro
                 {"curr_h", curr_h},
                 {"curr_n", curr_n},
             });
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             writer_rtas,
             node,
             {

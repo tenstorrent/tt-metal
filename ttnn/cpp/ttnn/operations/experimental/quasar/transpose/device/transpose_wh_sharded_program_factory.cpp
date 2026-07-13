@@ -173,7 +173,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
         reader_run.runtime_arg_values["num_tiles"][node] = num_blocks;
         writer_run.runtime_arg_values["num_units"][node] = num_blocks;
         KernelRunArgs::RuntimeArgValues& compute_rtas = compute_run.runtime_arg_values;
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             compute_rtas,
             node,
             {

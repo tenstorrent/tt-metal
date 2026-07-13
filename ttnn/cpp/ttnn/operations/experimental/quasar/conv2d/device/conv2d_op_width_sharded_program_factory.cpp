@@ -806,7 +806,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
         CoreCoord core(core_x, core_y);
 
         m2::KernelRunArgs::RuntimeArgValues& act_rtas = act_run_args.runtime_arg_values;
-        m2::SetRuntimeArgsForNode(
+        m2::AddRuntimeArgsForNode(
             act_rtas,
             core,
             {
@@ -823,7 +823,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
 
         if (core_index < total_num_active_cores) {
             m2::KernelRunArgs::RuntimeArgValues& weights_rtas = weights_run_args.runtime_arg_values;
-            m2::SetRuntimeArgsForNode(
+            m2::AddRuntimeArgsForNode(
                 weights_rtas,
                 core,
                 {

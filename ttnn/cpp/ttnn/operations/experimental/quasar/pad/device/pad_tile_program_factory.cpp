@@ -182,11 +182,11 @@ ttnn::device_operation::ProgramArtifacts PadTileCoreProgramFactory::create_progr
     run_args.kernel_run_args = {
         KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = CreateRuntimeArgsForNode(core, {{"num_pages", num_unpadded_tiles}, {"start_id", 0u}}),
+            .runtime_arg_values = MakeRuntimeArgsForNode(core, {{"num_pages", num_unpadded_tiles}, {"start_id", 0u}}),
         },
         KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = CreateRuntimeArgsForNode(
+            .runtime_arg_values = MakeRuntimeArgsForNode(
                 core,
                 {{"num_unpadded_W", num_unpadded_W},
                  {"num_padded_Wt", num_padded_Wt},

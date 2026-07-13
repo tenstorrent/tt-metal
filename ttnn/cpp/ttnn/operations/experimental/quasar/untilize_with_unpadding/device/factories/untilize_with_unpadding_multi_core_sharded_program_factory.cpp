@@ -273,7 +273,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
         for (const auto& core : all_core_coords) {
             const NodeCoord node = core;
             if (unpad_tensor_w_16) {
-                SetRuntimeArgsForNode(
+                AddRuntimeArgsForNode(
                     writer_node_args,
                     node,
                     {
@@ -281,7 +281,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
                         {"num_padded_tiles_per_core", num_input_tiles},
                     });
             } else {
-                SetRuntimeArgsForNode(
+                AddRuntimeArgsForNode(
                     writer_node_args,
                     node,
                     {
@@ -356,7 +356,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
             // Legacy positional RTAs (dst_addr dropped -> carried by the OUTPUT TensorAccessor):
             //   {dst_addr, num_rows_block, block_row_size, 1, 1, 1, row_size_unpadded,
             //    num_rows_unpadded, block_start_row_id_offset, block_start_row_offset}
-            SetRuntimeArgsForNode(
+            AddRuntimeArgsForNode(
                 writer_node_args,
                 node,
                 {

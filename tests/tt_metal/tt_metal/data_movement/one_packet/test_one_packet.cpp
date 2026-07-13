@@ -120,7 +120,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
 
     ProgramRunArgs run_params;
     ProgramRunArgs::KernelRunArgs krp{.kernel = kspec.unique_id};
-    SetRuntimeArgsForNode(
+    AddRuntimeArgsForNode(
         krp.runtime_arg_values,
         test_config.master_core_coord,
         {

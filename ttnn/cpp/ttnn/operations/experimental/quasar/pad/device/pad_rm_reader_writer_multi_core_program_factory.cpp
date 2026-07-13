@@ -417,7 +417,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreProgramFactor
 
                 const NodeCoord node = core;
                 KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
-                SetRuntimeArgsForNode(
+                AddRuntimeArgsForNode(
                     reader_rtas,
                     node,
                     {
@@ -441,7 +441,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreProgramFactor
                     });
 
                 KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
-                SetRuntimeArgsForNode(
+                AddRuntimeArgsForNode(
                     writer_rtas,
                     node,
                     {

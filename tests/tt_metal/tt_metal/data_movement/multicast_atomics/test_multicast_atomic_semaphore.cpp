@@ -167,7 +167,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Multic
     ProgramRunArgs run_params;
     ProgramRunArgs::KernelRunArgs sender_run_params{.kernel = sender_spec.unique_id};
     for (const auto& sender_core : test_config.sender_cores) {
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             sender_run_params.runtime_arg_values,
             sender_core,
             {

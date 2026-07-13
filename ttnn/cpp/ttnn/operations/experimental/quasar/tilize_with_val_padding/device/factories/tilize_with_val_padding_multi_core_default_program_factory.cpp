@@ -226,7 +226,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
         const uint32_t n_block_reps = static_cast<uint32_t>(assignment.size());
         max_varargs = std::max<uint32_t>(max_varargs, static_cast<uint32_t>(reader_tail.size()));
 
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             reader_node_args,
             core,
             {
@@ -238,7 +238,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
         reader_varargs.emplace(core, std::move(reader_tail));
 
         uint32_t num_tiles_per_core = num_tiles_per_row * nblocks_per_core_local;
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             writer_node_args,
             core,
             {

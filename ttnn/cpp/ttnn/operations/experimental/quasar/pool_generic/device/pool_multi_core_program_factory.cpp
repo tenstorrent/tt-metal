@@ -1262,14 +1262,14 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
             const uint32_t start_mod_batch = start_index % (in_w_padded * in_h_padded);
             const uint32_t start_row = start_mod_batch / in_w_padded;
             const uint32_t start_col = start_mod_batch % in_w_padded;
-            SetRuntimeArgsForNode(
+            AddRuntimeArgsForNode(
                 reader0_rtas,
                 node,
                 {
                     {"start_row", start_row},
                     {"start_col", start_col},
                 });
-            SetRuntimeArgsForNode(
+            AddRuntimeArgsForNode(
                 compute_rtas,
                 node,
                 {
@@ -1277,7 +1277,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
                     {"start_col", start_col},
                 });
             if (reader1.has_value()) {
-                SetRuntimeArgsForNode(
+                AddRuntimeArgsForNode(
                     reader1_rtas,
                     node,
                     {

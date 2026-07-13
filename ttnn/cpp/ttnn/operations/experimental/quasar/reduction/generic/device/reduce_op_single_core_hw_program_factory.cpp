@@ -212,8 +212,8 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
         out_dim_divider);
 
     KernelRunArgs::RuntimeArgValues reader_node_args =
-        CreateRuntimeArgsForNode(selected_core_coord, {{"num_tiles", num_tensor_tiles}, {"start_id", 0u}});
-    KernelRunArgs::RuntimeArgValues writer_node_args = CreateRuntimeArgsForNode(
+        MakeRuntimeArgsForNode(selected_core_coord, {{"num_tiles", num_tensor_tiles}, {"start_id", 0u}});
+    KernelRunArgs::RuntimeArgValues writer_node_args = MakeRuntimeArgsForNode(
         selected_core_coord, {{"num_pages", num_tensor_tiles / out_dim_divider}, {"start_id", 0u}});
 
     ProgramSpec spec{

@@ -208,7 +208,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledProgramFactory::create_
         const NodeCoord node = core;
         KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
         KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             reader_rtas,
             node,
             {
@@ -226,7 +226,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledProgramFactory::create_
                 {"ctoffs", ct * TILE_HEIGHT * HW_bytes},
                 {"wt", num_tiles_read % Wt},
             });
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             writer_rtas,
             node,
             {

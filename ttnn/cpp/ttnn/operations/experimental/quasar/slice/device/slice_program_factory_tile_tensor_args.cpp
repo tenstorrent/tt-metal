@@ -162,7 +162,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
             // no-op core
-            SetRuntimeArgsForNode(
+            AddRuntimeArgsForNode(
                 reader_node_args,
                 core,
                 {
@@ -170,7 +170,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
                     {"num_tiles", 0u},
                 });
             reader_run_advanced.runtime_varargs.emplace(core, std::vector<uint32_t>(num_dims, 0));
-            SetRuntimeArgsForNode(
+            AddRuntimeArgsForNode(
                 writer_node_args,
                 core,
                 {
@@ -190,7 +190,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
             start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1];
         }
 
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             reader_node_args,
             core,
             {
@@ -199,7 +199,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
             });
         reader_run_advanced.runtime_varargs.emplace(core, std::move(id_per_dim));
 
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             writer_node_args,
             core,
             {

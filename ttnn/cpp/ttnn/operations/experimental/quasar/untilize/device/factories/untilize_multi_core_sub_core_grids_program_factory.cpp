@@ -166,14 +166,14 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreSubCoreGridsProgramFac
     KernelRunArgs::RuntimeArgValues writer_node_args;
 
     for (const auto& core : cores) {
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             reader_node_args,
             core,
             {
                 {"num_pages", ntiles_per_core},
                 {"start_id", tile_start_id},
             });
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             writer_node_args,
             core,
             {

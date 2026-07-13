@@ -181,7 +181,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeSingleCoreProgramFactory::creat
     KernelRunArgs reader_args{
         .kernel = READER,
         .runtime_arg_values =
-            CreateRuntimeArgsForNode(core.start_coord, {{"num_tiles", num_tiles}, {"start_page_id", start_page_id}})};
+            MakeRuntimeArgsForNode(core.start_coord, {{"num_tiles", num_tiles}, {"start_page_id", start_page_id}})};
 
     ProgramSpec spec{
         .name = "untilize_single_core",

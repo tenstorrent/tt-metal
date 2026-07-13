@@ -6242,7 +6242,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             } else {
                 in0_sharded_run_args = &in0_no_work_not_in_recv_run_args;
             }
-            m2::SetRuntimeArgsForNode(
+            m2::AddRuntimeArgsForNode(
                 in0_sharded_run_args->runtime_arg_values,
                 core,
                 {
@@ -6255,7 +6255,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             in0_sharded_run_args->advanced_options.runtime_varargs.emplace(core, v);
         } else if (core == start_core) {
             m2::KernelRunArgs::RuntimeArgValues& in0_sender_rtas = in0_sender_run_args.runtime_arg_values;
-            m2::SetRuntimeArgsForNode(
+            m2::AddRuntimeArgsForNode(
                 in0_sender_rtas,
                 core,
                 {
@@ -6269,7 +6269,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
                 });
         } else if (has_in0_receiver) {
             m2::KernelRunArgs::RuntimeArgValues& in0_receiver_rtas = in0_receiver_run_args.runtime_arg_values;
-            m2::SetRuntimeArgsForNode(
+            m2::AddRuntimeArgsForNode(
                 in0_receiver_rtas,
                 core,
                 {
@@ -6280,7 +6280,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
 
         if (i < num_cores_with_work) {
             m2::KernelRunArgs::RuntimeArgValues& in1_sender_writer_rtas = in1_sender_writer_run_args.runtime_arg_values;
-            m2::SetRuntimeArgsForNode(
+            m2::AddRuntimeArgsForNode(
                 in1_sender_writer_rtas,
                 core,
                 {
@@ -6294,7 +6294,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
                      ((uint32_t)output_idx_x * per_core_N) + (output_idx_y * per_core_M * N)},
                 });
             if (output_idx_x == num_blocks_x - 1) {
-                m2::SetRuntimeArgsForNode(
+                m2::AddRuntimeArgsForNode(
                     in1_sender_writer_rtas,
                     core,
                     {
@@ -6309,7 +6309,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
                         {"padded_block_tiles_w_skip", last_block_padded_block_tiles_w_skip},
                     });
             } else {
-                m2::SetRuntimeArgsForNode(
+                m2::AddRuntimeArgsForNode(
                     in1_sender_writer_rtas,
                     core,
                     {
@@ -7159,7 +7159,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
 
         if (core == start_core) {
             m2::KernelRunArgs::RuntimeArgValues& in1_sender_writer_rtas = in1_sender_writer_run_args.runtime_arg_values;
-            m2::SetRuntimeArgsForNode(
+            m2::AddRuntimeArgsForNode(
                 in1_sender_writer_rtas,
                 core,
                 {
@@ -7190,7 +7190,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         } else if (has_in1_receiver) {
             m2::KernelRunArgs::RuntimeArgValues& in1_receiver_writer_rtas =
                 in1_receiver_writer_run_args.runtime_arg_values;
-            m2::SetRuntimeArgsForNode(
+            m2::AddRuntimeArgsForNode(
                 in1_receiver_writer_rtas,
                 core,
                 {
@@ -7200,7 +7200,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
                      ((uint32_t)output_idx_x * per_core_N) + (output_idx_y * per_core_M * N)},
                 });
             if (output_idx_y == num_blocks_y - 1) {
-                m2::SetRuntimeArgsForNode(
+                m2::AddRuntimeArgsForNode(
                     in1_receiver_writer_rtas,
                     core,
                     {
@@ -7215,7 +7215,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
                         {"padded_block_tiles_w_skip", 0u},
                     });
             } else {
-                m2::SetRuntimeArgsForNode(
+                m2::AddRuntimeArgsForNode(
                     in1_receiver_writer_rtas,
                     core,
                     {
@@ -7231,7 +7231,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
                     });
             }
             if (!output_is_sharded) {
-                m2::SetRuntimeArgsForNode(
+                m2::AddRuntimeArgsForNode(
                     in1_receiver_writer_rtas,
                     core,
                     {
@@ -7243,7 +7243,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         }
 
         m2::KernelRunArgs::RuntimeArgValues& in0_sender_rtas = in0_sender_run_args.runtime_arg_values;
-        m2::SetRuntimeArgsForNode(
+        m2::AddRuntimeArgsForNode(
             in0_sender_rtas,
             core,
             {

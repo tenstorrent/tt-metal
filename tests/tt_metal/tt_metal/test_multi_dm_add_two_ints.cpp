@@ -104,11 +104,11 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = KERNEL_2,
             .runtime_arg_values =
-                experimental::CreateRuntimeArgsForNode(experimental::NodeCoord{0, 0}, {{"a", 5}, {"b", 6}})},
+                experimental::MakeRuntimeArgsForNode(experimental::NodeCoord{0, 0}, {{"a", 5}, {"b", 6}})},
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = KERNEL_3,
             .runtime_arg_values =
-                experimental::CreateRuntimeArgsForNode(experimental::NodeCoord{1, 0}, {{"a", 7}, {"b", 8}})},
+                experimental::MakeRuntimeArgsForNode(experimental::NodeCoord{1, 0}, {{"a", 7}, {"b", 8}})},
     };
     experimental::SetProgramRunArgs(program, params);
 

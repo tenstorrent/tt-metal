@@ -283,7 +283,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
                                 uint32_t num_input_blocks_to_process,
                                 uint32_t num_tiles_to_read) {
         if (use_block_reader) {
-            SetRuntimeArgsForNode(
+            AddRuntimeArgsForNode(
                 reader_node_args,
                 core,
                 {
@@ -293,7 +293,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
         } else if (use_backed_cb) {
             reader_node_args["num_tiles_per_core"][core] = num_tiles_to_read;
         } else {
-            SetRuntimeArgsForNode(
+            AddRuntimeArgsForNode(
                 reader_node_args,
                 core,
                 {
@@ -338,7 +338,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
         uint32_t width_wise_output_block_start_index = input_block_global_col_index / num_cols_per_output_block;
         uint32_t num_cols_already_processed_in_first_output_block =
             input_block_global_col_index % num_cols_per_output_block;
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             writer_node_args,
             core,
             {
@@ -367,7 +367,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
         // Cliff core (interleaved only) always starts at the first output block, column 0.
         uint32_t width_wise_output_block_start_index = 0;
         uint32_t num_cols_already_processed_in_first_output_block = 0;
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             writer_node_args,
             cliff_core,
             {
@@ -380,7 +380,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
 
         uint32_t num_tiles_to_read = num_tiles_per_input_block * num_input_blocks_to_process;
         // Cliff core only exists for interleaved input.
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             reader_node_args,
             cliff_core,
             {

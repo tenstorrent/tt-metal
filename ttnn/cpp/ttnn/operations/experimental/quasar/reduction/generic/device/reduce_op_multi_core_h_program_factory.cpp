@@ -223,7 +223,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         } else {
             TT_THROW("Core not in specified core ranges");
         }
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             reader_node_args,
             core,
             {
@@ -231,7 +231,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
                 {"curr_col_in_batch", num_cols_read % Wt},
                 {"num_cols", num_cols_per_core},
             });
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             writer_node_args,
             core,
             {

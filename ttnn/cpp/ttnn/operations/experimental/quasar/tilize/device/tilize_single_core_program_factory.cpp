@@ -178,7 +178,7 @@ ttnn::device_operation::ProgramArtifacts TilizeSingleCoreProgramFactory::create_
     run_args.kernel_run_args = {
         KernelRunArgs{
             .kernel = SC_READER_KERNEL,
-            .runtime_arg_values = CreateRuntimeArgsForNode(
+            .runtime_arg_values = MakeRuntimeArgsForNode(
                 core.start_coord,
                 {{"num_sticks", num_sticks},
                  {"num_tiles_per_block", num_tiles_per_block},
@@ -188,7 +188,7 @@ ttnn::device_operation::ProgramArtifacts TilizeSingleCoreProgramFactory::create_
         KernelRunArgs{
             .kernel = SC_WRITER_KERNEL,
             .runtime_arg_values =
-                CreateRuntimeArgsForNode(core.start_coord, {{"num_pages", num_tiles}, {"start_id", 0u}})},
+                MakeRuntimeArgsForNode(core.start_coord, {{"num_pages", num_tiles}, {"start_id", 0u}})},
     };
     run_args.tensor_args = {
         {SC_INPUT_TENSOR, TensorArgument{a.mesh_tensor()}},

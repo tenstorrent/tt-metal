@@ -132,7 +132,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DM_READER,
-            .runtime_arg_values = experimental::CreateRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
                 node,
                 {{"dram_addr", dram_src_addr},
                  {"l1_addr", buf_a_addr},
@@ -142,7 +142,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = DM_TRANSFORM},
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DM_WRITER,
-            .runtime_arg_values = experimental::CreateRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
                 node,
                 {{"dram_addr", dram_dst_addr},
                  {"l1_addr", buf_b_addr},
@@ -342,7 +342,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = DM_TRANSFORM_1},
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DM_WRITER_0,
-            .runtime_arg_values = experimental::CreateRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
                 node_0,
                 {{"dram_addr", dram_mid_addr},
                  {"l1_addr", buf_b_addr},
@@ -353,7 +353,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DM_READER_1,
-            .runtime_arg_values = experimental::CreateRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
                 node_1,
                 {{"dram_addr", dram_mid_addr},
                  {"l1_addr", buf_a_addr},
@@ -362,7 +362,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DM_WRITER_1,
-            .runtime_arg_values = experimental::CreateRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
                 node_1,
                 {{"dram_addr", dram_dst_addr},
                  {"l1_addr", buf_b_addr},

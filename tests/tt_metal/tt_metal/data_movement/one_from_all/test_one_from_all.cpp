@@ -140,7 +140,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
 
     ProgramRunArgs run_params;
     ProgramRunArgs::KernelRunArgs gatherer_run_params{.kernel = gatherer_spec.unique_id};
-    SetRuntimeArgsForNode(
+    AddRuntimeArgsForNode(
         gatherer_run_params.runtime_arg_values,
         test_config.master_core_coord,
         {

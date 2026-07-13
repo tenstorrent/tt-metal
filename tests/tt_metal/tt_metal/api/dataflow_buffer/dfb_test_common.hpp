@@ -453,7 +453,7 @@ inline void run_single_dfb_program(
         RuntimeArgValues result;
         for (const auto& [core, chunk_offset] : core_to_chunk_offset) {
             const experimental::NodeCoord node{core.x, core.y};
-            experimental::SetRuntimeArgsForNode(
+            experimental::AddRuntimeArgsForNode(
                 result,
                 node,
                 {
@@ -804,7 +804,7 @@ inline void run_single_dfb_program_2_0(
         params.kernel_run_args.push_back({
             .kernel = PRODUCER,
             .runtime_arg_values =
-                experimental::CreateRuntimeArgsForNode(node, {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}),
+                experimental::MakeRuntimeArgsForNode(node, {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}),
         });
     } else {
         params.kernel_run_args.push_back({.kernel = PRODUCER});
@@ -813,7 +813,7 @@ inline void run_single_dfb_program_2_0(
         params.kernel_run_args.push_back({
             .kernel = CONSUMER,
             .runtime_arg_values =
-                experimental::CreateRuntimeArgsForNode(node, {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}),
+                experimental::MakeRuntimeArgsForNode(node, {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}),
         });
     } else {
         params.kernel_run_args.push_back({.kernel = CONSUMER});

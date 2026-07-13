@@ -288,7 +288,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
             TT_THROW("Core not in specified core ranges");
         }
         ProgramRunArgs::KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run_args.runtime_arg_values;
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             reader_rtas,
             core,
             {
@@ -304,7 +304,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
                 {"MtNt", MtNt},
             });
         ProgramRunArgs::KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run_args.runtime_arg_values;
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             writer_rtas,
             core,
             {

@@ -344,7 +344,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
         KernelRunArgs::RuntimeArgValues& reader_rtas = reader_runs[gi].runtime_arg_values;
         KernelRunArgs::RuntimeArgValues& writer_rtas = writer_runs[gi].runtime_arg_values;
 
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             reader_rtas,
             core,
             {
@@ -358,7 +358,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
                 {"single_sub_block_size_row_arg", single_sub_block_size_row_arg},
             });
 
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             writer_rtas,
             core,
             {

@@ -221,7 +221,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
         // Writer named RTAs (the legacy fixed prefix, minus the dropped buffer address).
         // start_stick_id (legacy row_start_id at the core's start) is filled in by the
         // fixup loop below.
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             writer_node_args,
             core,
             {
@@ -234,7 +234,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
 
         uint32_t num_tiles_per_core = num_tiles_per_row * nblocks_per_core_core;
 
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             reader_node_args,
             core,
             {

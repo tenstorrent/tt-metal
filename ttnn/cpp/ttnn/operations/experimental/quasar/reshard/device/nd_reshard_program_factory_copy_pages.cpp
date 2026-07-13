@@ -130,14 +130,14 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyPagesFactory::create_progr
         const uint32_t end_page = start_page + num_pages_for_core;
         ProgramRunArgs::KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run_args.runtime_arg_values;
         ProgramRunArgs::KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run_args.runtime_arg_values;
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             reader_rtas,
             core,
             {
                 {"start_page", start_page},
                 {"end_page", end_page},
             });
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             writer_rtas,
             core,
             {

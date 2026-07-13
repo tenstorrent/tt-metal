@@ -204,7 +204,7 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
 
         KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
         KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             reader_rtas,
             core,
             {
@@ -218,7 +218,7 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
                 {"hw", hw},
                 {"n", n},
             });
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             writer_rtas,
             core,
             {

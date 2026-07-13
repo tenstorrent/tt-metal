@@ -80,7 +80,7 @@ bool run_l2_flush_test(
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
         .kernel = DM_KERNEL,
-        .runtime_arg_values = experimental::CreateRuntimeArgsForNode(
+        .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
             node, {{"base_addr", config.base_addr}, {"test_mode", config.test_mode}}),
         .common_runtime_arg_values = {{"value", config.value}, {"num_words", config.num_words}},
     }};
@@ -167,7 +167,7 @@ bool run_l1_dcache_test(
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
         .kernel = DM_KERNEL,
-        .runtime_arg_values = experimental::CreateRuntimeArgsForNode(
+        .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
             node, {{"base_addr", config.base_addr}, {"test_mode", config.test_mode}}),
         .common_runtime_arg_values = {{"value", config.value}, {"num_words", config.num_words}},
     }};

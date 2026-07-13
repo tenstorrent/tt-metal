@@ -208,7 +208,7 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
         }
 
         KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             reader_rtas,
             node,
             {
@@ -218,7 +218,7 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
         reader_run.advanced_options.runtime_varargs[node] = varargs;
 
         KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             writer_rtas,
             node,
             {

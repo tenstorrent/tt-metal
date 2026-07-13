@@ -169,7 +169,7 @@ ttnn::device_operation::ProgramArtifacts ReshardSameHeightFactory<local_is_outpu
 
         KernelRunArgs::RuntimeArgValues& k0_rtas = k0_run_args.runtime_arg_values;
         KernelRunArgs::RuntimeArgValues& k1_rtas = k1_run_args.runtime_arg_values;
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             k0_rtas,
             node,
             {
@@ -178,7 +178,7 @@ ttnn::device_operation::ProgramArtifacts ReshardSameHeightFactory<local_is_outpu
                 {"remote_stride_bytes", remote_stride_bytes},
                 {"num_segments", num_segments},
             });
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             k1_rtas,
             node,
             {

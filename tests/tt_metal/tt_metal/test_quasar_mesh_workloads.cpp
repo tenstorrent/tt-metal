@@ -93,13 +93,13 @@ distributed::MeshWorkload create_workload(
         params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = experimental::KernelSpecName{std::string("dm_") + workload_id_str + "_" + std::to_string(i)},
             .runtime_arg_values =
-                experimental::CreateRuntimeArgsForNode(node, {{"address", dm_base_address + i * sizeof(uint32_t)}}),
+                experimental::MakeRuntimeArgsForNode(node, {{"address", dm_base_address + i * sizeof(uint32_t)}}),
             .common_runtime_arg_values = {{"value", dm_base_value + i}},
         });
     }
     params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
         .kernel = COMPUTE_KERNEL,
-        .runtime_arg_values = experimental::CreateRuntimeArgsForNode(node, {{"l1_address", compute_address}}),
+        .runtime_arg_values = experimental::MakeRuntimeArgsForNode(node, {{"l1_address", compute_address}}),
     });
     experimental::SetProgramRunArgs(program, params);
 

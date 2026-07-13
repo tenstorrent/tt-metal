@@ -129,12 +129,12 @@ using TensorArgument = ProgramRunArgs::TensorArgument;
 
 // Set several named RTAs for a single node.
 //
-//   SetRuntimeArgsForNode(rtas, node, {
+//   AddRuntimeArgsForNode(rtas, node, {
 //       {"mcast_dest_noc_start_x", mcast[0]},
 //       {"mcast_dest_noc_start_y", mcast[1]},
 //       ...
 //   });
-inline void SetRuntimeArgsForNode(
+inline void AddRuntimeArgsForNode(
     KernelRunArgs::RuntimeArgValues& runtime_arg_values,
     const NodeCoord& node,
     std::initializer_list<std::pair<std::string, uint32_t>> named_values) {
@@ -145,15 +145,15 @@ inline void SetRuntimeArgsForNode(
 
 // Build RuntimeArgValues for a single node from a flat name→value list.
 //
-//   .runtime_arg_values = CreateRuntimeArgsForNode(node, {
+//   .runtime_arg_values = MakeRuntimeArgsForNode(node, {
 //       {"src0_addr", addr},
 //       {"num_tiles", 1u},
 //       ...
 //   }),
-inline KernelRunArgs::RuntimeArgValues CreateRuntimeArgsForNode(
+inline KernelRunArgs::RuntimeArgValues MakeRuntimeArgsForNode(
     const NodeCoord& node, std::initializer_list<std::pair<std::string, uint32_t>> named_values) {
     KernelRunArgs::RuntimeArgValues runtime_arg_values;
-    SetRuntimeArgsForNode(runtime_arg_values, node, named_values);
+    AddRuntimeArgsForNode(runtime_arg_values, node, named_values);
     return runtime_arg_values;
 }
 

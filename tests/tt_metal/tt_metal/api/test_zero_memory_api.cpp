@@ -166,12 +166,12 @@ TEST_F(MeshDeviceSingleCardFixture, ZeroMemoryApi) {
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = L1_PRODUCER,
-            .runtime_arg_values = experimental::CreateRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
                 node, {{"total_bytes", scratch_bytes}, {"flag_addr", flag_addr}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DRAM_CONSUMER,
-            .runtime_arg_values = experimental::CreateRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
                 node, {{"page_start", 0u}, {"page_end", num_pages}, {"page_size", page_size_bytes}}),
         },
     };
@@ -277,12 +277,12 @@ TEST_F(MeshDeviceSingleCardFixture, ZeroMemoryApiBatchedL1) {
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = L1_BATCHED_PRODUCER,
-            .runtime_arg_values = experimental::CreateRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
                 node, {{"total_bytes", scratch_bytes}, {"flag_addr", flag_addr}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DRAM_CONSUMER,
-            .runtime_arg_values = experimental::CreateRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
                 node, {{"page_start", 0u}, {"page_end", num_pages}, {"page_size", page_size_bytes}}),
         },
     };

@@ -158,7 +158,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const AllFro
     ProgramRunArgs run_params;
     ProgramRunArgs::KernelRunArgs requestor_run_params{.kernel = requestor_spec.unique_id};
     for (auto& mst_logical_core : corerange_to_cores(mst_logical_core_set)) {
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             requestor_run_params.runtime_arg_values,
             mst_logical_core,
             {

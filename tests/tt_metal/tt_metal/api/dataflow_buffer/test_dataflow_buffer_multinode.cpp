@@ -536,7 +536,7 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
         params.kernel_run_args.push_back(
             {.kernel = m2::KernelSpecName{CONSUMER_NAMES[i]},
              .runtime_arg_values =
-                 m2::CreateRuntimeArgsForNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}})});
+                 m2::MakeRuntimeArgsForNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}})});
     }
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         params.tensor_args.insert({m2::TensorParamName{DST_NAMES[i]}, std::cref(out_tensors[i])});

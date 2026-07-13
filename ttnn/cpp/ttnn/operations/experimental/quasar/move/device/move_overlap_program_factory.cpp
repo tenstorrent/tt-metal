@@ -279,7 +279,7 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
 
         const bool is_controller = (i == 0);
 
-        m2::SetRuntimeArgsForNode(
+        m2::AddRuntimeArgsForNode(
             reader_rtas,
             core,
             {
@@ -310,7 +310,7 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
             reader_rtas["aligned_page_size"][core] = aligned_page_size;
         }
 
-        m2::SetRuntimeArgsForNode(
+        m2::AddRuntimeArgsForNode(
             writer_rtas,
             core,
             {

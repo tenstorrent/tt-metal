@@ -210,7 +210,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create
 
     KernelRunArgs reader_run{.kernel = READER_KERNEL};
     KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
-    SetRuntimeArgsForNode(
+    AddRuntimeArgsForNode(
         reader_rtas,
         node,
         {
@@ -235,7 +235,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create
 
     KernelRunArgs writer_run{.kernel = WRITER_KERNEL};
     KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
-    SetRuntimeArgsForNode(
+    AddRuntimeArgsForNode(
         writer_rtas,
         node,
         {

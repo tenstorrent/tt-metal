@@ -199,14 +199,14 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
         if (!full_cores.contains(core)) {
             continue;
         }
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             reader_rta,
             core,
             {
                 {"start_block_id", block_start_id},
                 {"num_blocks", nblocks_per_core},
             });
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             writer_rta,
             core,
             {
@@ -225,14 +225,14 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
         uint32_t output_offset =
             (patch_size * curr_output_height_idx * output_width) + (patch_height_offset * stride_w);
         CoreCoord core = CoreCoord{ncores_full % ncores_x, ncores_full / ncores_x};
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             reader_rta,
             core,
             {
                 {"start_block_id", block_start_id},
                 {"num_blocks", nblocks_per_core_cliff},
             });
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             writer_rta,
             core,
             {
@@ -451,7 +451,7 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
         }
 
         curr_patches += patches_per_core;
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             reader_rta,
             core,
             {

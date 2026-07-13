@@ -132,7 +132,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToO
 
     ProgramRunArgs run_params;
     ProgramRunArgs::KernelRunArgs sender_run_params{.kernel = sender_spec.unique_id};
-    SetRuntimeArgsForNode(
+    AddRuntimeArgsForNode(
         sender_run_params.runtime_arg_values,
         test_config.master_core_coord,
         {

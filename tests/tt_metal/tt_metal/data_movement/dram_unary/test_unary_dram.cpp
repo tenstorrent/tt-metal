@@ -153,7 +153,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
 
     ProgramRunArgs run_params;
     ProgramRunArgs::KernelRunArgs reader_run{.kernel = reader_spec.unique_id};
-    SetRuntimeArgsForNode(
+    AddRuntimeArgsForNode(
         reader_run.runtime_arg_values,
         test_config.core_coord,
         {
@@ -163,7 +163,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
     run_params.kernel_run_args.push_back(reader_run);
 
     ProgramRunArgs::KernelRunArgs writer_run{.kernel = writer_spec.unique_id};
-    SetRuntimeArgsForNode(
+    AddRuntimeArgsForNode(
         writer_run.runtime_arg_values,
         test_config.core_coord,
         {

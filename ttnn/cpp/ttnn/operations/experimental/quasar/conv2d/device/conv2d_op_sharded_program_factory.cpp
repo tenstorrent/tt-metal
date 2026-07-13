@@ -1708,7 +1708,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                     act_mcast_sender_id = core.x;
                     act_mcast_sender_noc_x = core_physical.y;
                 }
-                m2::SetRuntimeArgsForNode(
+                m2::AddRuntimeArgsForNode(
                     reader_run_args.runtime_arg_values,
                     core,
                     {
@@ -1734,7 +1734,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         uint32_t core_index = 0;
         for (const CoreRange& core_range : input_cores.ranges()) {
             for (const CoreCoord& core : core_range) {
-                m2::SetRuntimeArgsForNode(
+                m2::AddRuntimeArgsForNode(
                     reader_run_args.runtime_arg_values,
                     core,
                     {
@@ -1754,7 +1754,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         for (const CoreCoord& core : core_range) {
             if (populate_skipped_work_cores && !output_cores.contains(core)) {
                 // Pad-out path: zeros with only the bias-flag/skip slots populated.
-                m2::SetRuntimeArgsForNode(
+                m2::AddRuntimeArgsForNode(
                     writer_sender_rtas,
                     core,
                     {
@@ -1793,7 +1793,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                         right_core_physical.y,
                         bottom_right_core_physical.x,
                         right_core_physical.y);
-                    m2::SetRuntimeArgsForNode(
+                    m2::AddRuntimeArgsForNode(
                         writer_sender_rtas,
                         core,
                         {
@@ -1818,7 +1818,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                         top_left_core_plus_one_physical.y,
                         top_core_physical.x,
                         bottom_right_core_physical.y);
-                    m2::SetRuntimeArgsForNode(
+                    m2::AddRuntimeArgsForNode(
                         writer_sender_rtas,
                         core,
                         {
@@ -1841,7 +1841,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                     top_left_core_physical.y,
                     bottom_right_core_physical.x,
                     bottom_right_core_physical.y);
-                m2::SetRuntimeArgsForNode(
+                m2::AddRuntimeArgsForNode(
                     writer_sender_rtas,
                     core,
                     {
@@ -1883,7 +1883,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                         sender_noc_y = top_left_core_physical.y;
                     }
                     const bool is_sender_core = input_cores.contains(core);
-                    m2::SetRuntimeArgsForNode(
+                    m2::AddRuntimeArgsForNode(
                         writer_receiver_rtas,
                         core,
                         {
@@ -1893,7 +1893,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                         });
                 } else {
                     bool is_no_op_core = !input_cores.contains(core);
-                    m2::SetRuntimeArgsForNode(
+                    m2::AddRuntimeArgsForNode(
                         writer_receiver_rtas,
                         core,
                         {

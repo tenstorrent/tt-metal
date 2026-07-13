@@ -4473,7 +4473,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         } else if (in1_idx == 0) {
             // in0 interleaved sender (left column).
             m2::KernelRunArgs::RuntimeArgValues& in0_sender_rtas = in0_sender_run_args.runtime_arg_values;
-            m2::SetRuntimeArgsForNode(
+            m2::AddRuntimeArgsForNode(
                 in0_sender_rtas,
                 core,
                 {
@@ -4491,7 +4491,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                 ((core.x - start_core_x) <= half_core || (!transpose_mcast and core.y == start_core_y))
                     ? in0_receiver_run_args.runtime_arg_values
                     : in0_receiver_other_run_args.runtime_arg_values;
-            m2::SetRuntimeArgsForNode(
+            m2::AddRuntimeArgsForNode(
                 in0_receiver_rtas,
                 core,
                 {
@@ -4505,7 +4505,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             if (in0_idx == 0) {
                 m2::KernelRunArgs::RuntimeArgValues& in1_sender_writer_rtas =
                     in1_sender_writer_run_args.runtime_arg_values;
-                m2::SetRuntimeArgsForNode(
+                m2::AddRuntimeArgsForNode(
                     in1_sender_writer_rtas,
                     core,
                     {
@@ -4518,7 +4518,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                         {"out_tensor_start_tile_id", ((uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)},
                     });
                 if (in1_idx == in1_end_idx) {
-                    m2::SetRuntimeArgsForNode(
+                    m2::AddRuntimeArgsForNode(
                         in1_sender_writer_rtas,
                         core,
                         {
@@ -4533,7 +4533,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                             {"padded_block_tiles_w_skip", last_block_padded_block_tiles_w_skip},
                         });
                 } else {
-                    m2::SetRuntimeArgsForNode(
+                    m2::AddRuntimeArgsForNode(
                         in1_sender_writer_rtas,
                         core,
                         {

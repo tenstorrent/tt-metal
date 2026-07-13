@@ -140,7 +140,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
     ProgramRunArgs run_params;
     ProgramRunArgs::KernelRunArgs reader_run_params{.kernel = reader_spec.unique_id};
     for (auto& core : corerange_to_cores(test_config.cores)) {
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             reader_run_params.runtime_arg_values,
             core,
             {

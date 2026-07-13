@@ -194,14 +194,14 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreParallelizeColumnProgr
             continue;
         }
         uint32_t ntiles_per_core = ntiles_per_block * nblocks_per_core;
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             reader_node_args,
             core,
             {
                 {"num_pages", ntiles_per_core},
                 {"start_id", tile_start_id},
             });
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             writer_node_args,
             core,
             {
@@ -219,7 +219,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreParallelizeColumnProgr
         CoreCoord core = row_major ? CoreCoord{ncores_full % ncores_x, ncores_full / ncores_x}
                                    : CoreCoord{ncores_full / ncores_y, ncores_full % ncores_y};
         uint32_t ntiles_per_core_cliff = ntiles_per_block * nblocks_per_core_cliff;
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             reader_node_args,
             core,
             {
@@ -231,7 +231,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreParallelizeColumnProgr
         // is correct). Metal 2.0 named args bind by name, so this port emits the cliff writer with the
         // same named args the kernel actually reads, correcting the cliff-core behavior. Flagged for
         // owner review in METAL2_PORT_REPORT.md.
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             writer_node_args,
             core,
             {

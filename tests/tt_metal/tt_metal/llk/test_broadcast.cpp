@@ -418,7 +418,7 @@ void run_single_core_broadcast(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = experimental::CreateRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
                 node,
                 {{"src0_addr", static_cast<uint32_t>(dram_buffer_src_a_addr)},
                  {"src0_bank_id", 0u},
@@ -428,7 +428,7 @@ void run_single_core_broadcast(
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = experimental::CreateRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
                 node,
                 {{"dst_addr", static_cast<uint32_t>(dram_buffer_dst_addr)},
                  {"bank_id", 0u},

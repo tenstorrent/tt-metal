@@ -169,7 +169,7 @@ static vector<uint32_t> run_mxfp8_typecast(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = experimental::CreateRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
                 node,
                 {{"src_addr", src_buffer->address()},
                  {"src_bank_id", 0u},
@@ -178,7 +178,7 @@ static vector<uint32_t> run_mxfp8_typecast(
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = experimental::CreateRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
                 node,
                 {{"dst_addr", dst_buffer->address()},
                  {"dst_bank_id", 0u},

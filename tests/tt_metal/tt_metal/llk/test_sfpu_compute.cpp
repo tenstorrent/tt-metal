@@ -794,7 +794,7 @@ std::vector<uint32_t> run_sfpu_pipeline(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = experimental::CreateRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
                 node,
                 {{"src_addr", input_dram_buffer->address()},
                  {"bank_id", 0u},
@@ -802,7 +802,7 @@ std::vector<uint32_t> run_sfpu_pipeline(
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = experimental::CreateRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
                 node,
                 {{"dst_addr", output_dram_buffer->address()},
                  {"bank_id", 0u},
@@ -1097,7 +1097,7 @@ bool run_sfpu_binary_two_input_buffer(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = experimental::CreateRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
                 node,
                 {{"src0_addr", input0_dram_buffer->address()},
                  {"src0_bank_id", 0u},
@@ -1106,7 +1106,7 @@ bool run_sfpu_binary_two_input_buffer(
                  {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}})},
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = experimental::CreateRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
                 node,
                 {{"dst_addr", output_dram_buffer->address()},
                  {"bank_id", 0u},
@@ -1277,7 +1277,7 @@ bool run_sfpu_ternary_three_input_buffer(
         params.kernel_run_args = {
             experimental::ProgramRunArgs::KernelRunArgs{
                 .kernel = READER,
-                .runtime_arg_values = experimental::CreateRuntimeArgsForNode(
+                .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
                     node,
                     {{"src0_addr", input0_dram_buffer->address()},
                      {"src0_bank_id", 0u},
@@ -1289,7 +1289,7 @@ bool run_sfpu_ternary_three_input_buffer(
             },
             experimental::ProgramRunArgs::KernelRunArgs{
                 .kernel = WRITER,
-                .runtime_arg_values = experimental::CreateRuntimeArgsForNode(
+                .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
                     node,
                     {{"dst_addr", output_dram_buffer->address()},
                      {"bank_id", 0u},

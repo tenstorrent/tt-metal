@@ -351,7 +351,7 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
             single_sub_block_size_row_arg = single_sub_block_size;
         }
 
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             reader_node_args,
             node,
             {
@@ -360,7 +360,7 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
                 {"single_block_size_col_arg", single_block_size_col_arg},
             });
 
-        SetRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             writer_node_args,
             node,
             {
