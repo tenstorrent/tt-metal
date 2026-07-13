@@ -86,3 +86,85 @@ def test_merged_matmul_blocking_matches_torch(
         w = N_dev // chunks
         exp = torch.cat([ref[..., d * N_dev + c * w : d * N_dev + (c + 1) * w] for d in range(tp)], dim=-1)
         assert_quality(exp, got, pcc=0.999, relative_rmse=0.03)
+
+
+# (id, M, K, N_dev, chunks_a, act_a, chunks_b, act_b) — two projections that are spec-identical to
+# all_gather_minimal_matmul_async (same input, weight, bias and MinimalMatmulConfig) and differ ONLY
+# in a field the op bakes into its kernels. Run in one process, first then second, exactly as a block
+# runs them. If such a field is missing from the op's program-cache key the second call reuses the
+# first's compiled program and silently computes the wrong thing, so only a vs-torch check on BOTH
+# can see it — a merged-vs-standalone A/B cannot, and neither can a test that builds one at a time.
+ALIAS_CASES = [
+    # Baseline (NOT merge-specific): attn2.to_q runs chunks=1, then video_to_audio_attn.to_kv runs
+    # chunks=2 on the same (M,4096)x[4096,1024] shape. V2A's K/V were reusing to_q's 1-chunk program.
+    ("cross_q_then_v2a_kv_s1", 1216, 4096, 1024, 1, None, 2, None),
+    ("cross_q_then_v2a_kv_s2", 4864, 4096, 1024, 1, None, 2, None),
+    # Gate merge: attn1.to_qkv widens to [4096,4096] chunks=4, which is ffn.ff1's exact shape —
+    # ff1 differs only in chunks (1) and its fused gelu_tanh.
+    ("self_qkv_then_ffn_ff1_s1", 1216, 4096, 4096, 4, None, 1, "gelu_tanh"),
+    ("audio_self_qkv_then_ff1", 32, 2048, 2048, 4, None, 1, "gelu_tanh"),
+]
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology"),
+    [pytest.param((4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, id="ring_bh_4x8sp1tp0")],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    ("case", "M", "K", "N_dev", "chunks_a", "act_a", "chunks_b", "act_b"),
+    ALIAS_CASES,
+    ids=[c[0] for c in ALIAS_CASES],
+)
+def test_same_shape_different_chunks_do_not_alias(
+    mesh_device, sp_axis, tp_axis, num_links, topology, case, M, K, N_dev, chunks_a, act_a, chunks_b, act_b
+):
+    """Two spec-identical projections differing only in chunks/activation must not share a program."""
+    torch.manual_seed(0)
+    tp = tuple(mesh_device.shape)[tp_axis]
+    parallel_config = DiTParallelConfig(
+        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
+        sequence_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[sp_axis], mesh_axis=sp_axis),
+        tensor_parallel=ParallelFactor(factor=tp, mesh_axis=tp_axis),
+    )
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+    out_features = N_dev * tp
+
+    x = torch.randn(1, 1, M, K)
+    x_tt = from_torch(
+        x, device=mesh_device, layout=ttnn.Layout.TILE, dtype=ttnn.bfloat16, mesh_axes=[None, None, None, tp_axis]
+    )
+
+    def build_and_run(chunks, activation_fn):
+        linear = ColParallelLinear(
+            K,
+            out_features,
+            bias=True,
+            chunks=chunks,
+            activation_fn=activation_fn,
+            mesh_device=mesh_device,
+            mesh_axis=tp_axis,
+            ccl_manager=ccl_manager,
+        )
+        weight = torch.randn(out_features, K) * 0.05
+        bias = torch.randn(out_features) * 0.05
+        linear.load_torch_state_dict({"weight": weight.clone(), "bias": bias.clone()})
+        outs = linear(x_tt, parallel_config=parallel_config)
+        outs = outs if isinstance(outs, list) else [outs]
+        assert len(outs) == chunks
+
+        ref = x @ weight.T + bias
+        if activation_fn == "gelu_tanh":
+            ref = torch.nn.functional.gelu(ref, approximate="tanh")
+        return outs, ref
+
+    # Order matters: the first call is the one that compiles and caches the program.
+    outs_a, ref_a = build_and_run(chunks_a, act_a)
+    outs_b, ref_b = build_and_run(chunks_b, act_b)
+
+    for tag, outs, ref, chunks in (("first", outs_a, ref_a, chunks_a), ("second", outs_b, ref_b, chunks_b)):
+        w = N_dev // chunks
+        for c, o in enumerate(outs):
+            got = to_torch(o, mesh_axes=[None, None, None, tp_axis])
+            exp = torch.cat([ref[..., d * N_dev + c * w : d * N_dev + (c + 1) * w] for d in range(tp)], dim=-1)
+            assert_quality(exp, got, pcc=0.999, relative_rmse=0.03)

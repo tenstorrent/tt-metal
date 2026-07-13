@@ -99,9 +99,17 @@ struct AllGatherMinimalMatmulAsyncParams {
     // compile-time (chunks is an N_chunks compile arg that sets the output count and the runtime-arg
     // count, fused_activation sets the compute defines, fused_ternary_scalar is baked as a literal,
     // output_dtype picks the CB formats) — omitting them silently aliased ops that differ only in
-    // those. That is not hypothetical: with the LTX gate merged into the QKV projection, attn1.to_qkv
-    // (4096x4096 local weight, chunks=4, no activation) becomes spec-identical to ffn.ff1
-    // (4096x4096, chunks=1, gelu_tanh), so the FFN ran the QKV program — deterministic garbage.
+    // those.
+    //
+    // Two such pairs exist in LTX, and neither is hypothetical:
+    //   * merged only: attn1.to_qkv (4096x4096 local weight, chunks=4, no activation) is
+    //     spec-identical to ffn.ff1 (4096x4096, chunks=1, gelu_tanh) once the gate is folded into
+    //     the QKV projection, so the FFN ran the QKV program — deterministic garbage.
+    //   * ALREADY IN THE BASELINE: attn2.to_q (chunks=1) is spec-identical to
+    //     video_to_audio_attn.to_kv (chunks=2) — same (1,1,M,1024) input, same [4096,1024] weight,
+    //     same bias, same MinimalMatmulConfig — so V2A's K/V ran to_q's 1-chunk program. Fixing
+    //     this changes baseline output; see test_ltx_merged_mm_configs.py::
+    //     test_same_shape_different_chunks_do_not_alias.
     static constexpr auto attribute_names = std::make_tuple(
         "num_links",
         "ring_size",
