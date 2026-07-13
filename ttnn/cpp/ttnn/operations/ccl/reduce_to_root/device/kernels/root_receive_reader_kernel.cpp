@@ -193,6 +193,8 @@ void kernel_main() {
 
     uint64_t packet_noc_addr = get_noc_addr(core_noc_x, core_noc_y, intermediate_base_addr);
     noc_async_read(packet_noc_addr, packet_l1_addr, new_packet_size_bytes);
+    // Wait for the packet to arrive before the tt_memmove copies consume packet_l1_addr.
+    noc_async_read_barrier();
 
     // moving l tensor
     tt_memmove<true, false, false, 0>(noc, dest_page_base_addr, packet_l1_addr, packet_size_bytes);
@@ -215,8 +217,6 @@ void kernel_main() {
     cb_push_back(receiver_cb_id_m, 1);
 
     cb_push_back(packet_cb_id, 1);
-
-    noc_async_read_barrier();
 
     // now the similar behaviour when device 2 is sending data to device 1
     // will be waiting on another semaphore, and fabric is for the other 2 muxes
@@ -260,7 +260,7 @@ void kernel_main() {
     mux_connection_handle2 = &mux_connection2;
 
     tt::tt_fabric::wait_for_fabric_endpoint_ready(
-        fabric_mux_x2, fabric_mux_y2, fabric_mux_status_address, local_fabric_mux_status_address);
+        fabric_mux_x2, fabric_mux_y2, fabric_mux_status_address, local_fabric_mux_status_address2);
     tt::tt_fabric::fabric_client_connect(*mux_connection_handle2);
 
     cb_reserve_back(packet_header_cb_id, 1);
@@ -302,6 +302,8 @@ void kernel_main() {
     dest_page_base_addr = get_write_ptr(receiver_cb_id_l);
     packet_noc_addr = get_noc_addr(core_noc_x, core_noc_y, intermediate_base_addr);
     noc_async_read(packet_noc_addr, packet_l1_addr, new_packet_size_bytes);
+    // Wait for the packet to arrive before the tt_memmove copies consume packet_l1_addr.
+    noc_async_read_barrier();
 
     tt_memmove<true, false, false, 0>(noc, dest_page_base_addr, packet_l1_addr, packet_size_bytes);
     cb_push_back(receiver_cb_id_l, input_num_tiles);
@@ -321,6 +323,4 @@ void kernel_main() {
     cb_push_back(receiver_cb_id_s, 1);
     cb_push_back(receiver_cb_id_m, 1);
     cb_push_back(packet_cb_id, 1);
-
-    noc_async_read_barrier();
 }
