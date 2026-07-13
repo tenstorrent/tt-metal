@@ -175,6 +175,7 @@ def test_transpose_dest_quasar(
 
     if formats.input_format == DataFormat.Float32:
         # The *10000 scaling stresses Int32/Float32 output paths with large values.
+        n = src_A.numel()
         src_A = (torch.randn(n, dtype=torch.float32) * 10000.0).reshape_as(src_A)
         src_B = (torch.randn(n, dtype=torch.float32) * 10000.0).reshape_as(src_B)
 
