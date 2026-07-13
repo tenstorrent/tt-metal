@@ -202,8 +202,7 @@ def _stats_timings(perf_data: pd.DataFrame) -> pd.DataFrame:
 def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
     raw_data = data.zones().raw()
 
-    # WC build (PERF_COUNTERS_COMPILED) emits no ZONE_START/ZONE_END events because
-    # ZONE_SCOPED is muted; only HW counter values are produced. Skip wall_clock stats.
+    # Defensive: skip if no zone events were captured (empty wall-clock dataset).
     if raw_data.empty:
         return pd.DataFrame()
 
@@ -254,7 +253,7 @@ def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
 
 
 def _stats_thread(stat: str, raw_thread: pd.DataFrame) -> pd.DataFrame:
-    # WC build emits no zone events — skip wall_clock stats, counters provide values instead.
+    # Defensive: skip if no zone events were captured.
     if raw_thread.empty:
         return pd.DataFrame()
 
