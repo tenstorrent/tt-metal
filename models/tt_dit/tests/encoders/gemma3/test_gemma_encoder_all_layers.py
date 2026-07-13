@@ -5,7 +5,7 @@
 """Per-layer parity: TTNN GemmaEncoder vs HF reference, real-token PCC over the first
 ``N_LAYERS`` decoder layers (the full 12B encoder doesn't fit one chip at tp=1).
 
-    pytest models/tt_dit/tests/encoders/gemma/test_gemma_encoder_all_layers.py -s
+    pytest models/tt_dit/tests/encoders/gemma3/test_gemma_encoder_all_layers.py -s
 """
 
 import glob
@@ -23,7 +23,7 @@ from loguru import logger
 from safetensors.torch import load_file
 
 import ttnn
-from models.tt_dit.encoders.gemma.model_gemma import GemmaConfig, GemmaEncoder
+from models.tt_dit.encoders.gemma3.model_gemma import GemmaConfig, GemmaEncoder
 from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality

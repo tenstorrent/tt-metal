@@ -348,9 +348,15 @@ class DistributedLayerNorm(Module):
             weight = self.weight.data if self.weight is not None else None
             bias = self.bias.data if self.bias is not None else None
 
+        # Welford sum + sumsq must live in fp32; the underlying op defaults to bfloat16 stats
+        # (see dit_layernorm_pre_all_gather.hpp — DataType dtype = DataType::BFLOAT16), which
+        # quantizes ``sum(x)`` and ``sum(x**2)`` over the full hidden dim and loses precision
+        # for the subsequent variance computation. WanRMSNorm sets ``dtype=ttnn.float32`` for
+        # exactly this reason (normalization.py:214).
         stats = ttnn.experimental.dit_layernorm_pre_allgather(
             x,
             self.recip_tensor,
+            dtype=ttnn.float32,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
         )
 
