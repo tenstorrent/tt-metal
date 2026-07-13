@@ -35,10 +35,14 @@ from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 
 @torch.no_grad()
 @parametrize_mesh_tp()
-@pytest.mark.parametrize("seq_len", [1, 32], ids=["decode", "prefill"])
+@pytest.mark.parametrize(
+    "seq_len",
+    [1, 32, 256, 512],
+    ids=["decode", "prefill32", "prefill256", "prefill512"],
+)
 def test_moe_tp(mesh_device, seq_len, reset_seeds, ensure_gc, request):
     os.environ.setdefault("HF_MODEL", model_path())
-    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=1024)
     if args.moe_num_experts <= 0:
         pytest.skip("not a MoE checkpoint (moe_num_experts == 0)")
 
