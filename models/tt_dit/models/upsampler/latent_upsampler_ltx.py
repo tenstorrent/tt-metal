@@ -6,15 +6,22 @@
 
 from __future__ import annotations
 
+import json
+import os
+
 import torch
+from loguru import logger
+from safetensors import safe_open
+from safetensors.torch import load_file
 
 import ttnn
 
 from ...layers.module import Module, ModuleList
 from ...layers.normalization import GroupNorm3D
-from ...parallel.config import VaeHWParallelConfig
+from ...parallel.config import DiTParallelConfig, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils.conv3d import ConvDims, conv_pad_height, conv_pad_width
+from ...utils import cache as cache_module
+from ...utils.conv3d import ConvDims, conv3d_blocking_hash, conv_pad_height, conv_pad_width
 from ...utils.tensor import fast_device_to_host, typed_tensor_2dshard
 from ..vae.vae_ltx import LTXCausalConv3d
 
@@ -76,11 +83,14 @@ def _gn_hw_sharded(
 
 
 def _depth_to_space_bthwc_2x(x: ttnn.Tensor) -> ttnn.Tensor:
-    """``PixelShuffleND(dims=2)`` on a ``(B, T, H, W, 4C)`` BTHWC tensor."""
+    """``PixelShuffleND(dims=2)`` on a ``(B, T, H, W, 4C)`` BTHWC tensor.
+
+    Channel order is (1,2,2,C); the feeding conv reorders via depth_to_space_stride=(1,2,2).
+    """
     B, T, H, W, total_c = x.shape
     C = total_c // 4
-    x = ttnn.reshape(x, (B, T, H, W, C, 1, 2, 2))
-    x = ttnn.permute(x, (0, 1, 5, 2, 6, 3, 7, 4))
+    x = ttnn.reshape(x, (B, T, H, W, 1, 2, 2, C))
+    x = ttnn.permute(x, (0, 1, 4, 2, 5, 3, 6, 7))
     return ttnn.reshape(x, (B, T, H * 2, W * 2, C))
 
 
@@ -146,15 +156,13 @@ class LTXUpsamplerResBlock(Module):
 def compute_upsampler_dims(
     *,
     input_hw: tuple[int, int],
-    num_frames: int | None,
+    num_frames: int,
     h_factor: int = 1,
     w_factor: int = 1,
-) -> tuple[ConvDims | None, ConvDims | None, ConvDims | None]:
+) -> tuple[ConvDims, ConvDims, ConvDims]:
     """``(pre_dims, ups_dims, post_dims)`` for the upsampler's three conv shape
     classes. T = cur_T + (kT-1); H/W are per-device shards of mesh-factor-padded
-    spatial. Returns ``(None, None, None)`` when ``num_frames`` is ``None``."""
-    if num_frames is None:
-        return None, None, None
+    spatial."""
     H_in, W_in = input_hw
     padded_h = ((H_in + h_factor - 1) // h_factor) * h_factor
     padded_w = ((W_in + w_factor - 1) // w_factor) * w_factor
@@ -238,7 +246,13 @@ class LTXLatentUpsampler(Module):
         )
 
         self.upsampler = LTXCausalConv3d(
-            mid_channels, 4 * mid_channels, kernel_size=(1, 3, 3), stride=1, conv_dims=ups_dims, **block_kwargs
+            mid_channels,
+            4 * mid_channels,
+            kernel_size=(1, 3, 3),
+            stride=1,
+            conv_dims=ups_dims,
+            depth_to_space_stride=(1, 2, 2),
+            **block_kwargs,
         )
 
         self.post_upsample_res_blocks = ModuleList(
@@ -251,6 +265,71 @@ class LTXLatentUpsampler(Module):
         self.final_conv = LTXCausalConv3d(
             mid_channels, in_channels, kernel_size=3, stride=1, conv_dims=post_dims, **block_kwargs
         )
+
+        # Set by ``from_checkpoint`` for ``reload_weights`` (the disk-cache path).
+        self._checkpoint_path: str | None = None
+        self._dit_parallel_config: DiTParallelConfig | None = None
+
+    @classmethod
+    def from_checkpoint(
+        cls,
+        upsampler_path: str,
+        *,
+        input_hw: tuple[int, int],
+        latent_frames: int,
+        mesh_device: ttnn.MeshDevice,
+        parallel_config: VaeHWParallelConfig,
+        ccl_manager: CCLManager,
+        dit_parallel_config: DiTParallelConfig,
+    ) -> "LTXLatentUpsampler":
+        """Build a latent upsampler from a checkpoint's JSON metadata config.
+
+        Stage-1 shape math (``input_hw`` / ``latent_frames``) is computed by the caller and passed
+        in — the model never reads pipeline state. ``dit_parallel_config`` is retained for the cache
+        key used by ``reload_weights``.
+        """
+        with safe_open(upsampler_path, framework="pt") as f:
+            cfg = json.loads(f.metadata()["config"])
+        ups = cls(
+            input_hw=input_hw,
+            in_channels=cfg["in_channels"],
+            mid_channels=cfg["mid_channels"],
+            num_blocks_per_stage=cfg["num_blocks_per_stage"],
+            spatial_upsample=cfg["spatial_upsample"],
+            temporal_upsample=cfg["temporal_upsample"],
+            spatial_scale=cfg["spatial_scale"],
+            rational_resampler=cfg["rational_resampler"],
+            mesh_device=mesh_device,
+            parallel_config=parallel_config,
+            ccl_manager=ccl_manager,
+            num_frames=latent_frames,
+        )
+        ups._checkpoint_path = upsampler_path
+        ups._dit_parallel_config = dit_parallel_config
+        return ups
+
+    def reload_weights(self) -> None:
+        """Push upsampler weights onto the mesh via the disk cache. Blocking-hash subfolder
+        invalidates the cache when conv3d ``C_in_block`` changes. Idempotent (no-op if loaded)."""
+        if self.is_loaded():
+            return
+        assert self._checkpoint_path is not None, "reload_weights requires construction via from_checkpoint"
+
+        def _state_provider() -> dict[str, torch.Tensor]:
+            logger.info(f"Upsampler cache miss — loading safetensors: {self._checkpoint_path}")
+            return load_file(self._checkpoint_path)
+
+        blocking_key = conv3d_blocking_hash(self)
+        subfolder = f"upsampler_{blocking_key}" if blocking_key else "upsampler"
+        cache_module.load_model(
+            self,
+            model_name=os.path.basename(self._checkpoint_path).removesuffix(".safetensors"),
+            subfolder=subfolder,
+            parallel_config=self._dit_parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            get_torch_state_dict=_state_provider,
+        )
+        logger.info("Loaded TTNN latent upsampler")
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         """Reference upsampler is ``Sequential[Conv2d, PixelShuffleND]``; flatten to Conv3d."""
