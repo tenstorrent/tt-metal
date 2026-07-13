@@ -2203,6 +2203,8 @@ class UnarySFPUGolden:
             MathOperation.Softplus: self._softplus,
             MathOperation.SigmoidAppx: self._sigmoid_appx,
             MathOperation.SqrtCustom: self._sqrt,
+            MathOperation.Add1: self._add1,
+            MathOperation.CastFp32ToFp16a: self._cast_fp32_to_fp16a,
             MathOperation.ReduceColumn: self._reduce_columns,
             MathOperation.ReduceRow: self._reduce_rows,
             MathOperation.Typecast: self._typecast,
@@ -2401,6 +2403,26 @@ class UnarySFPUGolden:
     # Operation methods
     def _abs(self, x):
         return abs(x)
+
+    def _add1(self, x):
+        # add1(x) = x + 1
+        return x + 1.0
+
+    def _cast_fp32_to_fp16a(self, x):
+        # cast_fp32_to_fp16a rounds the value to IEEE half-precision (fp16a,
+        # 10-bit mantissa) and writes it back. Mirror the HW round-to-nearest
+        # by round-tripping through torch.float16. Values outside the fp16
+        # range (|x| > 65504) overflow to +/-inf, then follow the format-aware
+        # NaN rule for A-exponent dest.
+        result = (
+            torch.tensor(x, dtype=torch.float32)
+            .to(torch.float16)
+            .to(torch.float32)
+            .item()
+        )
+        if math.isinf(result) and not self.data_format.is_exponent_B():
+            return math.nan
+        return result
 
     # Comparison-to-zero ops. The Quasar kernel builds the strict comparisons from
     # SFPSETCC sign + magnitude tests (ltz = negative AND nonzero, gtz = positive AND

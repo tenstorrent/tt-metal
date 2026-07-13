@@ -19,10 +19,12 @@
 // 3. Add the if constexpr branches in call_unary_sfpu_operation_init() and call_unary_sfpu_operation() below
 #include "ckernel_sfpu_where.h"
 #include "llk_sfpu/ckernel_sfpu_activations.h"
+#include "llk_sfpu/ckernel_sfpu_add1.h"
 #include "llk_sfpu/ckernel_sfpu_addcdiv.h"
 #include "llk_sfpu/ckernel_sfpu_addcmul.h"
 #include "llk_sfpu/ckernel_sfpu_binary.h"
 #include "llk_sfpu/ckernel_sfpu_binary_comp.h"
+#include "llk_sfpu/ckernel_sfpu_cast_fp32_to_fp16a.h"
 #include "llk_sfpu/ckernel_sfpu_cbrt.h"
 #include "llk_sfpu/ckernel_sfpu_digamma.h"
 #include "llk_sfpu/ckernel_sfpu_erf.h"
@@ -597,6 +599,14 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     if constexpr (OPERATION == SfpuType::abs)
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_abs_, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, ITERATIONS);
+    }
+    else if constexpr (OPERATION == SfpuType::add1)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_add1, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::cast_fp32_to_fp16a)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, cast_fp32_to_fp16a, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::acosh)
     {

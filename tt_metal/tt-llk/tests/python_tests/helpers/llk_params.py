@@ -165,6 +165,8 @@ class MathOperation(Enum):
     Softplus = OpSpec("softplus", MathOpType.SFPU_UNARY)
     SigmoidAppx = OpSpec("sigmoid_appx", MathOpType.SFPU_UNARY)
     SqrtCustom = OpSpec("sqrt_custom", MathOpType.SFPU_UNARY)
+    Add1 = OpSpec("add1", MathOpType.SFPU_UNARY)
+    CastFp32ToFp16a = OpSpec("cast_fp32_to_fp16a", MathOpType.SFPU_UNARY)
     AddInt32 = OpSpec("add_int32", MathOpType.SFPU_UNARY)
     SubInt32 = OpSpec("sub_int32", MathOpType.SFPU_UNARY)
     TopKLocalSort = OpSpec("topk_local_sort", MathOpType.SFPU_UNARY)
