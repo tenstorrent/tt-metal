@@ -204,6 +204,13 @@ ALWI void reduce_block_max_row_reinit_minimal_runtime(
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
 
+// num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4).
+ALWI void reduce_block_max_row_reinit_minimal_runtime(
+    std::uint32_t ocb, std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_t num_faces = 4) {
+    reduce_block_max_row_reinit_minimal_runtime(
+        ckernel::tensor_shape_from_num_faces(num_faces), ocb, block_ct_dim, respect_trigger);
+}
+
 /**
  * Short reinit (runtime variant): Reprograms reduce MOP and restores addrmods.
  * Used when reduce follows custom SDPA sub path with runtime block_ct_dim.
@@ -217,6 +224,13 @@ ALWI void reduce_block_max_row_reinit_short_runtime(
         (llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger, tensor_shape)));
     MATH((llk_math_reduce_block_max_row_reinit_short_runtime<DST_ACCUM_MODE>(block_ct_dim, tensor_shape)));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
+}
+
+// num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4).
+ALWI void reduce_block_max_row_reinit_short_runtime(
+    std::uint32_t ocb, std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_t num_faces = 4) {
+    reduce_block_max_row_reinit_short_runtime(
+        ckernel::tensor_shape_from_num_faces(num_faces), ocb, block_ct_dim, respect_trigger);
 }
 #endif
 

@@ -197,6 +197,13 @@ _only_32x32_or_16x32_tile = (
     "Only (32, 32) or (16, 32) tiles are supported for this operation",
 )
 
+# 32x32-only: for ops whose Blackhole fuser generators do not yet plumb tile shape / dst_index
+# (e.g. SubBcastColCustom, whose BH math generator calls the ct_dim-only overload -> 32x32 default).
+_only_32x32_tile = (
+    lambda s, a, b: _tile_dims(a.tile_shape) != (32, 32),
+    "Only (32, 32) tiles are supported for this operation",
+)
+
 _datacopy_only_32x32 = (
     lambda s, a, b: _tile_dims(a.tile_shape) != (32, 32)
     and (
@@ -304,7 +311,7 @@ FPU_MAP = {
         [
             _no_reuse_dest,
             _forced_unpacker("SubBcastColCustomUnpacker"),
-            _only_32x32_or_16x32_tile,
+            _only_32x32_tile,
         ],
     ),
 }

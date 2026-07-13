@@ -26,8 +26,8 @@ template <bool is_fp32_dest_acc_en = false>
 inline void llk_math_eltwise_binary_sub_bcast_cols_custom(
     const std::uint32_t operandA, const std::uint32_t dst_index, const std::uint32_t ct_dim = 1) {
     LLK_ASSERT(
-        (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
-        "dst_index out of range");
+        (dst_index + ct_dim <= get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
+        "dst_index + ct_dim out of range");
 
     const std::uint32_t operand_id = get_operand_id(operandA);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
