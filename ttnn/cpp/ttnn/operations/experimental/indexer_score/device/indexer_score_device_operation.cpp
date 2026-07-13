@@ -580,8 +580,8 @@ ttnn::Tensor launch_indexer_score(
 
     // base = the absolute chunk_start of this op's rank 0. Omit it -> deduce the start of the gathered chunk:
     //   * block-cyclic: the gathered chunk IS the global chunk (sp*chunk_local) -> base = T - chunk.
-    //   * contiguous: the gathered chunk is sp_ring*Sq (each SP device contributes Sq) -> base = T - sp_ring*Sq,
-    //     the same deduction as before this feature (single chip: sp_ring = 1 -> base = T - Sq).
+    //   * contiguous: the gathered chunk is seq_ring*Sq. Normally seq_ring is the SP ring; for the identity
+    //     block-cyclic SP=1 + TP sub-shard it is the TP ring instead.
     // The deduced window ends at T (incompatible with a growing kv_len < T -- pass chunk_start_idx there).
     uint32_t base = 0;
     if (chunk_start_idx.has_value()) {
@@ -598,18 +598,20 @@ ttnn::Tensor launch_indexer_score(
                 chunk);
             base = T - chunk;
         } else {
-            // sp_ring = max_rank + 1 (get_linearized_index returns coord-min; get_topological_dimension would
-            // over-count on a nonzero-offset sub-mesh). max_linearized_rank is shared with the validated window.
-            const uint32_t sp_ring =
-                ttnn::operations::experimental::indexer_score::max_linearized_rank(q, cluster_axis) + 1;
+            // seq_ring = max_rank + 1 (get_linearized_index returns coord-min; get_topological_dimension would
+            // over-count on a nonzero-offset sub-mesh). A TP sub-shard is possible here only for SP=1, whose
+            // block-cyclic permutation is stored as contiguous, so TP is the sequence-bearing axis.
+            const auto seq_axis = seq_subshard_axis.has_value() ? seq_subshard_axis : cluster_axis;
+            const uint32_t seq_ring =
+                ttnn::operations::experimental::indexer_score::max_linearized_rank(q, seq_axis) + 1;
             TT_FATAL(
-                T >= sp_ring * Sq,
-                "indexer_score: cannot deduce chunk_start_idx -- T={} < sp_ring({})*Sq({}). Pass chunk_start_idx "
-                "explicitly if K does not equal history + the SP-gathered chunk.",
+                T >= seq_ring * Sq,
+                "indexer_score: cannot deduce chunk_start_idx -- T={} < seq_ring({})*Sq({}). Pass chunk_start_idx "
+                "explicitly if K does not equal history + the gathered query chunk.",
                 T,
-                sp_ring,
+                seq_ring,
                 Sq);
-            base = T - sp_ring * Sq;
+            base = T - seq_ring * Sq;
         }
     }
 

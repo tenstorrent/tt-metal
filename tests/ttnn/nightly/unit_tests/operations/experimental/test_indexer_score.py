@@ -1949,7 +1949,8 @@ def test_indexer_score_qb_both_axes_seq(mesh_device, case_id, heads, expect_erro
 def test_indexer_score_sp1_tp4_seq_subshard(mesh_device):
     """A size-one SP axis is still a valid SP×TP query shard: TP rank t owns rows [t*Sq,(t+1)*Sq),
     so its causal diagonal must start at chunk_start + t*Sq even though the block-cyclic K permutation is
-    the identity for sp=1. This is the QuietBox chunked-indexer layout."""
+    the identity for sp=1. An omitted chunk_start must likewise deduct the full TP-sharded chunk from T.
+    This is the QuietBox chunked-indexer layout."""
     heads, chunk, t, chunk_start = 8, 256, 512, 128
     q_g, k_g, w_g = _global_inputs(heads, chunk, t, seed=42)
     mesh_shape = tuple(mesh_device.shape)
@@ -1972,6 +1973,23 @@ def test_indexer_score_sp1_tp4_seq_subshard(mesh_device):
     out_t = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(1, 2)))
     ref = indexer_score_dsa_ref(q_g, k_g, w_g, chunk_start)
     assert_indexer_match(out_t, ref, chunk, t, check_neg=True)
+
+    out_default = ttnn.experimental.indexer_score_dsa(
+        q_dev,
+        k_dev,
+        w_dev,
+        cluster_axis=0,
+        seq_subshard_axis=1,
+        block_cyclic_sp_axis=0,
+        block_cyclic_chunk_local=chunk,
+        program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0),
+    )
+    out_default_t = ttnn.to_torch(
+        out_default, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(1, 2))
+    )
+    default_start = t - chunk
+    ref_default = indexer_score_dsa_ref(q_g, k_g, w_g, default_start)
+    assert_indexer_match(out_default_t, ref_default, chunk, t, check_neg=True)
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["sp1xtp4"], indirect=True)
