@@ -33,7 +33,7 @@ from loguru import logger
 from ttnn.operations.ccl import Topology
 
 import ttnn
-from models.common.utility_functions import skip_with_llk_assert
+from models.common.utility_functions import skip_with_llk_assert, skip_with_watcher
 
 # ============================================================================
 # CONFIGURATION CONSTANTS
@@ -3503,6 +3503,7 @@ else:
     ids=[f"{cfg[0]}-q{cfg[1]}-k{cfg[2]}-ring{cfg[3]}" for cfg in RING_JOINT_PERF_CHECK_CONFIGS],
 )
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_ring_joint_attention_perf_check(
     model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util, margin
 ):
@@ -3557,6 +3558,8 @@ def test_ring_joint_attention_perf_check(
     )
 
 
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_ring_mla_perf_better_than_separate_v_ring_joint():
     """Profile ring_mla against the existing separate-V MLA ring joint path and require a speedup."""
     model_name = "mla_100k"
@@ -4361,6 +4364,7 @@ else:
     ids=[f"{cfg[0]}-q{cfg[1]}-k{cfg[2]}-ring{cfg[3]}" for cfg in RING_MLA_CHUNKED_PERF_CHECK_CONFIGS],
 )
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util):
     """Measure ring_mla chunked-prefill math utilization for the kimi 50k+5k galaxy chunk (a 5k Q
     chunk against a 50k K/V prefix), simulated on the 4-device QuietBox, via realtime profiler and assert
@@ -4424,6 +4428,8 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
     MINIMAX3_GQA_CHUNKED_PERF_CHECK_CONFIGS,
     ids=[f"{cfg[0]}-q{cfg[1]}-k{cfg[2]}-ring{cfg[3]}" for cfg in MINIMAX3_GQA_CHUNKED_PERF_CHECK_CONFIGS],
 )
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_ring_joint_attention_minimax3_gqa_chunked_perf_check(
     model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util
 ):

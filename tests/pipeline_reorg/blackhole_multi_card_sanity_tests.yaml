@@ -56,13 +56,18 @@
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
 
-- name: ring sdpa PERF tests (QB2 only)
+- name: ring sdpa PERF tests (QB2 IOMMU only)
+  # These perf checks measure device kernel duration via the realtime device profiler. On Blackhole
+  # the RT profiler's D2H socket uses 64-bit PCIe addressing, which requires host IOMMU (there is no
+  # hugepage fallback) — see evaluate_realtime_profiler_eligibility in realtime_profiler_manager.cpp.
+  # Without IOMMU the profiler never activates and the tests fail the guard (issue #49665), so this
+  # job must run on the IOMMU-enabled runner, matching the sdpa nightly job above.
   cmd: |
     pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_perf_check -svv
     pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_perf_check -svv
     pytest tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py::test_exp_ring_joint_attention_perf_check -svv
   skus:
-    bh_quietbox_2:
+    bh_quietbox_2_iommu:
       timeout: 10
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
