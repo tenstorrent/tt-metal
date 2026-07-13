@@ -188,7 +188,10 @@ Then `python3 tests/test_checks.py` to confirm nothing regressed.
   BH 79: 60/19 — one BH write is `NO_LOCAL_ORDERING` because its only guard
   follows a consumer, which the "guard must precede the first consumer" rule
   correctly refuses to credit), incl. `_llk_unpack_A_`→`LOCALLY_ORDERED` and the
-  `THCON_SEC0_REG3_Base_address` writes→`NO_LOCAL_ORDERING`.
+  `THCON_SEC*_REG3_Base_address` writes in the unguarded configure fns
+  (`_llk_unpack_configure_addresses_` / `_configure_single_address_`)→`NO_LOCAL_ORDERING`
+  (a STALLWAIT-guarded write to the same field in `unpack_tilize_to_dest_impl` is
+  correctly `LOCALLY_ORDERED` — so the field name alone is not the discriminator).
 - `cfg-word-overlap` finds the known shared MAIN words (ALU-format words 0/1/2 incl.
   STACC_RELU on WH; 1/2 on BH) and suppresses the THCON/main same-index false alias.
   It surfaces (as `UNRESOLVED`, never a silent drop) two coverage-gap classes: a
