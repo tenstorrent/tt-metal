@@ -261,12 +261,6 @@ def filter_params_with_constraints(all_params):
             # when unpack_to_dest=True. Block this combination.
             continue
 
-        # Format-specific checks (most expensive, do last)
-        # Block Bfp8_b output with stochastic rounding (Pack or All)
-        if formats.output_format == DataFormat.Bfp8_b:
-            if stochastic_rnd in (StochasticRounding.Pack, StochasticRounding.All):
-                continue
-
         # Block Float16/Float16_b transpose combinations that produce garbage values on CI runners
         if (
             formats.input_format in (DataFormat.Float16_b, DataFormat.Float16)
