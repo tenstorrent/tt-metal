@@ -1756,7 +1756,6 @@ std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
                 inter_mesh_constraints.add_required_constraint(mesh_id, mesh_id);
             }
         }
-        return inter_mesh_constraints;
     }
 
     add_inter_mesh_minimal_host_cover_from_hostname_map(
@@ -2513,7 +2512,6 @@ TopologyMappingResult map_multi_mesh_to_physical(
     // Incremental inter-mesh enumeration: encode hard CNF once, then append blocking clauses for each
     // rejected full mesh-level assignment (intra-mesh failure) instead of re-solving from scratch.
     TopologyMappingEnumerationSession<MeshId, MeshId> inter_mesh_session;
-    std::vector<std::map<MeshId, MeshId>> excluded_inter_mesh_mappings;
 
     // Maximum retry attempts to prevent infinite loops
     // This should be sufficient for most cases: if we have N logical meshes and M physical meshes,
@@ -2556,14 +2554,8 @@ TopologyMappingResult map_multi_mesh_to_physical(
         }
 
         // Perform inter-mesh mapping (incremental: reuses prior SAT encoding across retries)
-        auto solver_result = inter_mesh_session.next(
-            mesh_logical_graph,
-            mesh_physical_graph,
-            inter_mesh_constraints,
-            excluded_inter_mesh_mappings,
-            inter_mesh_validation_mode,
-            quiet_mode,
-            TopologyMappingSolverEngine::Sat);
+        auto solver_result = ::tt::tt_fabric::solve_topology_mapping(
+            mesh_logical_graph, mesh_physical_graph, inter_mesh_constraints, inter_mesh_validation_mode, quiet_mode);
 
         // If the solver fails, return error results for all meshes with detailed information
         if (!solver_result.success) {

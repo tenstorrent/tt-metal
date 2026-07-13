@@ -414,7 +414,7 @@ PhysicalGroupingDescriptor find_and_load_physical_grouping_descriptor(
     const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) {
     if (pgd_path.has_value() && !pgd_path->empty()) {
         if (auto loaded = load_pgd_if_regular_file(*pgd_path)) {
-            return std::move(*loaded);
+            return *loaded;
         }
         TT_THROW("Physical Grouping Descriptor path provided but file does not exist: {}", pgd_path->string());
     }
@@ -423,7 +423,7 @@ PhysicalGroupingDescriptor find_and_load_physical_grouping_descriptor(
     if (pgd_path_env != nullptr && std::strlen(pgd_path_env) > 0) {
         const std::filesystem::path explicit_path(pgd_path_env);
         if (auto loaded = load_pgd_if_regular_file(explicit_path)) {
-            return std::move(*loaded);
+            return *loaded;
         }
         TT_THROW(
             "TT_METAL_PHYSICAL_GROUPING_DESCRIPTOR_PATH is set but file does not exist: {}", explicit_path.string());
@@ -432,7 +432,7 @@ PhysicalGroupingDescriptor find_and_load_physical_grouping_descriptor(
     const auto search_paths = build_physical_grouping_descriptor_search_paths(physical_system_descriptor);
     for (const auto& path : search_paths) {
         if (auto loaded = load_pgd_if_regular_file(path)) {
-            return std::move(*loaded);
+            return *loaded;
         }
     }
 

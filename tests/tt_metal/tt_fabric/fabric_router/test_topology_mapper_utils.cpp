@@ -5077,7 +5077,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
 
         // Logical chip ids must be the contiguous row-major range 0..N-1.
         for (std::uint32_t c = 0; c < mesh_nodes.size(); ++c) {
-            EXPECT_TRUE(chip_ids.count(c) > 0) << "Logical chip id " << c << " missing from pinning";
+            EXPECT_TRUE(chip_ids.contains(c)) << "Logical chip id " << c << " missing from pinning";
         }
 
         // Every pinned position must correspond to an ASIC in this mesh's footprint, and for an exact match the
