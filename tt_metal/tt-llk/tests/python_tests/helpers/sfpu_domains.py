@@ -365,6 +365,17 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.SqrtCustom: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=100.0)
     ),
+    # add1: x + 1; defined for all reals
+    MathOperation.Add1: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
+    ),
+    # cast_fp32_to_fp16a: rounds to fp16; keep |x| well below the fp16 max
+    # (65504) so the cast does not overflow to inf.
+    MathOperation.CastFp32ToFp16a: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-100.0, high=100.0
+        )
+    ),
     # comparison-to-zero: span both signs so the </<=/>/>= branches are exercised
     MathOperation.EqualZero: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)

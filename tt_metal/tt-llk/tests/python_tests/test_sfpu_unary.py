@@ -436,6 +436,8 @@ DOMAIN_MATHOPS = [
     MathOperation.Softplus,
     MathOperation.SigmoidAppx,
     MathOperation.SqrtCustom,
+    MathOperation.Add1,
+    MathOperation.CastFp32ToFp16a,
 ]
 
 # Per-op tolerance overrides for the domain suite. Ops whose kernel is a coarse
