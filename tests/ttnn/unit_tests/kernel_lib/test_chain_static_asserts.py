@@ -118,6 +118,16 @@ def test_l1_accumulation_mixed_pack_modes_illegal(device, expect_error):
     )
 
 
+def test_l1_accumulation_mixed_accumulation_modes_illegal(device, expect_error):
+    """Preloaded and seed-first packs cannot share one packer-global accumulation region."""
+    _expect_build_failure(
+        device,
+        expect_error,
+        "l1_accumulation_mixed_accumulation_modes.cpp",
+        "must all use the same L1 accumulation mode",
+    )
+
+
 def test_l1_accumulation_multiple_lifecycle_owners_illegal(device, expect_error):
     """Only one pack may reserve and publish the shared accumulator tile."""
     _expect_build_failure(

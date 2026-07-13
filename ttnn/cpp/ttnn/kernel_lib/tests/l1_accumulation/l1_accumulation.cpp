@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Functional coverage for both L1-accumulation output lifecycles. The first input tile seeds a
-// one-page accumulator CB normally. After cycling that page through push/pop, the L1-accumulating
-// chain adds every remaining input tile into the same physical L1 tile. The final chain copies the
-// accumulated tile to the externally visible output CB.
+// Functional coverage for both L1-accumulation output lifecycles. One seed-first chain overwrites
+// the accumulator with the first input tile, enables L1 accumulation for the remaining tiles, and
+// restores overwrite mode before publishing. The final chain copies the accumulated tile to the
+// externally visible output CB.
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
@@ -23,42 +23,31 @@ void kernel_main() {
     using namespace compute_kernel_lib;
     CircularBuffer accumulator(cb_acc);
 
-    // Seed the accumulator without L1 accumulation, then cycle the one-page CB so its write pointer
-    // returns to the same physical tile while preserving the packed data in L1.
-    accumulator.reserve_back(1);
-    eltwise_chain(
-        EltwiseShape::single(),
-        CopyTile<cb_in, Dst::D0, InputLifecycle::Streaming, CopyTileReconfig::None>{},
-        PackTile<cb_acc, OutputLifecycle::CallerManaged, PackTileReconfig::None>{});
-    accumulator.push_back(1);
-    accumulator.wait_front(1);
-    accumulator.pop_front(1);
-
     using L1ManagedPack = PackTile<
         cb_acc,
         OutputLifecycle::L1Accumulation,
         PackTileReconfig::None,
         Dst::D0,
         TileOffset::Unset,
-        PackTileL1Accumulation::Enabled>;
+        PackTileL1Accumulation::SeedFirst>;
     using L1CallerManagedPack = PackTile<
         cb_acc,
         OutputLifecycle::L1AccumulationCallerManaged,
         PackTileReconfig::None,
         Dst::D0,
         TileOffset::Unset,
-        PackTileL1Accumulation::Enabled>;
+        PackTileL1Accumulation::SeedFirst>;
 
     if constexpr (caller_managed) {
         accumulator.reserve_back(1);
         eltwise_chain(
-            EltwiseShape::tiles(n - 1),
+            EltwiseShape::tiles(n),
             CopyTile<cb_in, Dst::D0, InputLifecycle::Streaming, CopyTileReconfig::None>{},
             L1CallerManagedPack{});
         accumulator.push_back(1);
     } else {
         eltwise_chain(
-            EltwiseShape::tiles(n - 1),
+            EltwiseShape::tiles(n),
             CopyTile<cb_in, Dst::D0, InputLifecycle::Streaming, CopyTileReconfig::None>{},
             L1ManagedPack{});
     }

@@ -544,11 +544,14 @@ enum class PackTileReconfig : uint8_t {
     Output,  // fold emits pack_reconfig_data_format(prev_p, curr_p) when prev_p known, else (curr_p)
 };
 
-/// Whether this PackTile adds DEST into its existing L1 output tile instead of overwriting it.
-/// The chain brackets all accumulating packs with pack_reconfig_l1_acc(1) / (0).
+/// How this PackTile accumulates DEST into its pinned L1 output tile.
+/// `Enabled` expects that tile to be preloaded and accumulates every logical input tile.
+/// `SeedFirst` overwrites it with the first logical input tile, then enables accumulation for
+/// every remaining tile. In both modes the chain restores the packer to overwrite mode at exit.
 enum class PackTileL1Accumulation : uint8_t {
     Disabled,
     Enabled,
+    SeedFirst,
 };
 
 // (The CRTP op bases — UnaryOp / BinaryOp / TernaryOp, from which SFPU/FPU op-helper

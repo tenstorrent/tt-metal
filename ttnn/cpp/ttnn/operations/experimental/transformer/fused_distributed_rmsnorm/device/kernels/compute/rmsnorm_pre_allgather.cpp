@@ -40,81 +40,31 @@ void kernel_main() {
         reconfig_data_format(input_cb, input_cb);
         pack_reconfig_data_format(intermediate_cb);
 
-        cb_reserve_back(intermediate_cb, onetile);
-        for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-            const uint32_t current_block_size =
-                (col_tile + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col_tile);
-            cb_wait_front(input_cb, block_size);
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::tiles(num_tile_cols, block_size),
+            ckl::BinaryFpu<
+                input_cb,
+                input_cb,
+                ckl::BinaryFpuOp::Mul,
+                ckl::BroadcastDim::None,
+                ckl::InputLifecycle::Chunked,
+                ckl::InputLifecycle::Chunked,
+                ckl::BinaryDataFormatReconfig::None,
+                ckl::Dst::D0,
+                ckl::OperandKind::Block>{},
+            ckl::PackTile<
+                intermediate_cb,
+                ckl::OutputLifecycle::L1Accumulation,
+                ckl::PackTileReconfig::None,
+                ckl::Dst::D0,
+                ckl::TileOffset::Unset,
+                ckl::PackTileL1Accumulation::SeedFirst>{});
 
-            if (col_tile == 0) {
-                // Seed the row accumulator by overwriting its single reserved tile.
-                ckl::eltwise_chain(
-                    ckl::EltwiseShape::single(),
-                    ckl::BinaryFpu<
-                        input_cb,
-                        input_cb,
-                        ckl::BinaryFpuOp::Mul,
-                        ckl::BroadcastDim::None,
-                        ckl::InputLifecycle::CallerManaged,
-                        ckl::InputLifecycle::CallerManaged,
-                        ckl::BinaryDataFormatReconfig::None>{},
-                    ckl::PackTile<
-                        intermediate_cb,
-                        ckl::OutputLifecycle::CallerManaged,
-                        ckl::PackTileReconfig::None,
-                        ckl::Dst::D0,
-                        ckl::TileOffset::Set>{0});
-
-                if (current_block_size > 1) {
-                    // Fold the rest of the first input block into that same output tile.
-                    ckl::eltwise_chain(
-                        ckl::EltwiseShape::tiles(current_block_size - 1, current_block_size - 1),
-                        ckl::BinaryFpu<
-                            input_cb,
-                            input_cb,
-                            ckl::BinaryFpuOp::Mul,
-                            ckl::BroadcastDim::None,
-                            ckl::InputLifecycle::CallerManaged,
-                            ckl::InputLifecycle::CallerManaged,
-                            ckl::BinaryDataFormatReconfig::None,
-                            ckl::Dst::D0,
-                            ckl::OperandKind::Block,
-                            ckl::OperandKind::Block,
-                            ckl::TileOffset::Set,
-                            ckl::TileOffset::Set>{1, 1},
-                        ckl::PackTile<
-                            intermediate_cb,
-                            ckl::OutputLifecycle::L1AccumulationCallerManaged,
-                            ckl::PackTileReconfig::None,
-                            ckl::Dst::D0,
-                            ckl::TileOffset::Unset,
-                            ckl::PackTileL1Accumulation::Enabled>{});
-                }
-            } else {
-                ckl::eltwise_chain(
-                    ckl::EltwiseShape::tiles(current_block_size, current_block_size),
-                    ckl::BinaryFpu<
-                        input_cb,
-                        input_cb,
-                        ckl::BinaryFpuOp::Mul,
-                        ckl::BroadcastDim::None,
-                        ckl::InputLifecycle::CallerManaged,
-                        ckl::InputLifecycle::CallerManaged,
-                        ckl::BinaryDataFormatReconfig::None,
-                        ckl::Dst::D0,
-                        ckl::OperandKind::Block>{},
-                    ckl::PackTile<
-                        intermediate_cb,
-                        ckl::OutputLifecycle::L1AccumulationCallerManaged,
-                        ckl::PackTileReconfig::None,
-                        ckl::Dst::D0,
-                        ckl::TileOffset::Unset,
-                        ckl::PackTileL1Accumulation::Enabled>{});
-            }
-
-            cb_pop_front(input_cb, block_size);
+        // The reader publishes a full block for the tail; the chain consumes only logical tiles.
+        constexpr uint32_t tail_tiles = num_tile_cols % block_size;
+        if constexpr (tail_tiles != 0) {
+            cb_pop_front(input_cb, block_size - tail_tiles);
         }
-        cb_push_back(intermediate_cb, onetile);
 
         /*
          * sum(x**2)

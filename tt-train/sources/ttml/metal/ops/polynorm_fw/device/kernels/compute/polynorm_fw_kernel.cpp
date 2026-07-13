@@ -106,78 +106,45 @@ void reduce_sum_pows_to_inv_rms_triplet() {
 // into the same 3 output slots. The triplet is consumed in one shot by
 // reduce_sum_pows_to_inv_rms_triplet() which produces the inv_rms triplet.
 void accumulate_sum_x2_x4_x6_for_row() {
-    bool first_tile = true;
     cb_reserve_back(cb_sum_pows, /*num_tiles=*/3U);
 
-    for (uint32_t col = 0; col < num_inner; col += block_size) {
-        const uint32_t current_block_size = std::min(block_size, num_inner - col);
-        cb_wait_front(cb_input_pass_1, block_size);
-        for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
-            const auto compute_powers = ckl::CopyTile<
-                cb_input_pass_1,
-                ckl::Dst::D3,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::CopyTileReconfig::Input,
-                ckl::OperandKind::Scalar,
-                ckl::TileOffset::Set>{block_idx};
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::tiles(num_inner, block_size),
+        ckl::CopyTile<
+            cb_input_pass_1,
+            ckl::Dst::D3,
+            ckl::InputLifecycle::Chunked,
+            ckl::CopyTileReconfig::Input,
+            ckl::OperandKind::Block>{},
+        ckl::MulBinary<ckl::Dst::D3, ckl::Dst::D3, ckl::Dst::D0>{},  // x^2
+        ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D0, ckl::Dst::D1>{},  // x^4
+        ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D0, ckl::Dst::D2>{},  // x^6
+        ckl::PackTile<
+            cb_sum_pows,
+            ckl::OutputLifecycle::L1AccumulationCallerManaged,
+            ckl::PackTileReconfig::Output,
+            ckl::Dst::D0,
+            ckl::TileOffset::Set,
+            ckl::PackTileL1Accumulation::SeedFirst>{0},
+        ckl::PackTile<
+            cb_sum_pows,
+            ckl::OutputLifecycle::L1AccumulationCallerManaged,
+            ckl::PackTileReconfig::Output,
+            ckl::Dst::D1,
+            ckl::TileOffset::Set,
+            ckl::PackTileL1Accumulation::SeedFirst>{1},
+        ckl::PackTile<
+            cb_sum_pows,
+            ckl::OutputLifecycle::L1AccumulationCallerManaged,
+            ckl::PackTileReconfig::Output,
+            ckl::Dst::D2,
+            ckl::TileOffset::Set,
+            ckl::PackTileL1Accumulation::SeedFirst>{2});
 
-            if (first_tile) {
-                ckl::eltwise_chain(
-                    ckl::EltwiseShape::single(),
-                    compute_powers,
-                    ckl::MulBinary<ckl::Dst::D3, ckl::Dst::D3, ckl::Dst::D0>{},  // x^2
-                    ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D0, ckl::Dst::D1>{},  // x^4
-                    ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D0, ckl::Dst::D2>{},  // x^6
-                    ckl::PackTile<
-                        cb_sum_pows,
-                        ckl::OutputLifecycle::CallerManaged,
-                        ckl::PackTileReconfig::Output,
-                        ckl::Dst::D0,
-                        ckl::TileOffset::Set>{0},
-                    ckl::PackTile<
-                        cb_sum_pows,
-                        ckl::OutputLifecycle::CallerManaged,
-                        ckl::PackTileReconfig::Output,
-                        ckl::Dst::D1,
-                        ckl::TileOffset::Set>{1},
-                    ckl::PackTile<
-                        cb_sum_pows,
-                        ckl::OutputLifecycle::CallerManaged,
-                        ckl::PackTileReconfig::Output,
-                        ckl::Dst::D2,
-                        ckl::TileOffset::Set>{2});
-            } else {
-                ckl::eltwise_chain(
-                    ckl::EltwiseShape::single(),
-                    compute_powers,
-                    ckl::MulBinary<ckl::Dst::D3, ckl::Dst::D3, ckl::Dst::D0>{},  // x^2
-                    ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D0, ckl::Dst::D1>{},  // x^4
-                    ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D0, ckl::Dst::D2>{},  // x^6
-                    ckl::PackTile<
-                        cb_sum_pows,
-                        ckl::OutputLifecycle::L1AccumulationCallerManaged,
-                        ckl::PackTileReconfig::Output,
-                        ckl::Dst::D0,
-                        ckl::TileOffset::Set,
-                        ckl::PackTileL1Accumulation::Enabled>{0},
-                    ckl::PackTile<
-                        cb_sum_pows,
-                        ckl::OutputLifecycle::L1AccumulationCallerManaged,
-                        ckl::PackTileReconfig::Output,
-                        ckl::Dst::D1,
-                        ckl::TileOffset::Set,
-                        ckl::PackTileL1Accumulation::Enabled>{1},
-                    ckl::PackTile<
-                        cb_sum_pows,
-                        ckl::OutputLifecycle::L1AccumulationCallerManaged,
-                        ckl::PackTileReconfig::Output,
-                        ckl::Dst::D2,
-                        ckl::TileOffset::Set,
-                        ckl::PackTileL1Accumulation::Enabled>{2});
-            }
-            first_tile = false;
-        }
-        cb_pop_front(cb_input_pass_1, block_size);
+    // The reader publishes a full block for the tail; the chain consumes only logical tiles.
+    constexpr uint32_t tail_tiles = num_inner % block_size;
+    if constexpr (tail_tiles != 0) {
+        cb_pop_front(cb_input_pass_1, block_size - tail_tiles);
     }
 
     cb_push_back(cb_sum_pows, /*num_tiles=*/3U);
