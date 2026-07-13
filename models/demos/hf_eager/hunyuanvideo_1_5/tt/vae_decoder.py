@@ -404,11 +404,44 @@ class TTVAEDecodeAdapter:
             )
         return b
 
+    def _decode_batch_sharded(self, batch):
+        """Decode a batch of uniform latent tiles (torch NCTHW, N=num tiles) by
+        SHARDING the batch across the mesh -- each device decodes one tile per round
+        (rounds of `num_devices`), so N tiles cost ceil(N/num_devices) batched decoder
+        passes instead of N sequential ones. Per-device peak stays at ONE tile (so it
+        fits the same DRAM the replicated single-tile path did), but the wall-clock is
+        ~num_devices smaller. Returns torch NCTHW (N, Cout, T', H', W')."""
+        dev = self.__dict__["_device"]
+        ndev = dev.get_num_devices()
+        n_total = batch.shape[0]
+        out_chunks = []
+        for r in range(0, n_total, ndev):
+            chunk = batch[r : r + ndev]
+            n = chunk.shape[0]
+            if n < ndev:  # pad the round up to one tile/device (dummies get dropped)
+                chunk = torch.cat([chunk, chunk[-1:].expand(ndev - n, *chunk.shape[1:])], dim=0)
+            mm = ttnn.ShardTensorToMesh(dev, dim=0) if ndev > 1 else None
+            zt = ttnn.from_torch(
+                chunk.permute(0, 2, 3, 4, 1).contiguous().float(),
+                dtype=self.__dict__["_dtype_tt"],
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=dev,
+                mesh_mapper=mm,
+            )
+            out = self.__dict__["_dec"](zt)
+            comp = ttnn.ConcatMeshToTensor(dev, dim=0) if ndev > 1 else None
+            ot = ttnn.to_torch(out, mesh_composer=comp).float().permute(0, 4, 1, 2, 3)
+            out_chunks.append(ot[:n])
+        return torch.cat(out_chunks, dim=0)
+
     def _tiled_decode(self, z):
-        """Spatial (H/W) tiled decode mirroring diffusers `tiled_decode`, but each
-        latent tile is decoded by the ttnn decoder (blend/crop stay on host torch).
-        Tiling the latent H/W shrinks the mid-block attention (seq = T*Hl*Wl) enough
-        to fit high frame counts on device that the full-res decode OOMs on."""
+        """Spatial (H/W) tiled decode mirroring diffusers `tiled_decode`. Tiling the
+        latent H/W shrinks the mid-block attention (seq = T*Hl*Wl) so high frame counts
+        fit. Tiles are decoded batch-SHARDED across the mesh (see _decode_batch_sharded)
+        so a replicated 32-chip VAE no longer redundantly decodes every tile on every
+        chip -- the tiles are split across chips. Edge tiles are padded to a uniform
+        size for batching and cropped back to their real output extent; blend/crop
+        stay on host torch, matching the reference."""
         rv = self.__dict__["_real"]
         tlh, tlw = rv.tile_latent_min_height, rv.tile_latent_min_width
         tsh, tsw = rv.tile_sample_min_height, rv.tile_sample_min_width
@@ -420,15 +453,28 @@ class TTVAEDecodeAdapter:
         blend_w = int(tsw * ov)
         row_limit_h = tsh - blend_h
         row_limit_w = tsw - blend_w
+        up = tsh // tlh  # spatial upscale (latent -> sample), == spatial_compression_ratio
 
-        rows = []
+        # Enumerate tiles at the reference positions; record each tile's real (h,w).
+        coords = []
         for i in range(0, height, overlap_h):
-            row = []
             for j in range(0, width, overlap_w):
-                tile = z[:, :, :, i : i + tlh, j : j + tlw]
-                row.append(self._decode_tile(tile))
-            rows.append(row)
+                t = z[:, :, :, i : i + tlh, j : j + tlw]
+                coords.append((i, j, int(t.shape[-2]), int(t.shape[-1])))
+        ncol = len(range(0, width, overlap_w))
 
+        # Uniform-pad each tile to (tlh, tlw) so they can be batched together.
+        padded = []
+        for i, j, rh, rw in coords:
+            t = z[:, :, :, i : i + tlh, j : j + tlw]
+            if rh < tlh or rw < tlw:
+                t = torch.nn.functional.pad(t, (0, tlw - rw, 0, tlh - rh))
+            padded.append(t)
+        decoded_batch = self._decode_batch_sharded(torch.cat(padded, dim=0))
+        # Crop each decoded tile back to its real output extent (real_latent * up).
+        decoded = [decoded_batch[k : k + 1, :, :, : coords[k][2] * up, : coords[k][3] * up] for k in range(len(coords))]
+
+        rows = [decoded[r * ncol : (r + 1) * ncol] for r in range(len(coords) // ncol)]
         result_rows = []
         for i, row in enumerate(rows):
             result_row = []
