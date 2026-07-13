@@ -376,7 +376,7 @@ def test_generic_runner_labels_derived_from_sim_skus():
         # legacy partial wh_n300 labels
         (["N300", "in-service"], "wh_n300"),
         (["build", "in-service"], None),
-        (["ubuntu-latest"], "ubuntu-latest"),
+        (["tt-ubuntu-2204-medium-stable"], "tt-ubuntu-2204-medium-stable"),
         (["tt-ubuntu-2204-large-stable"], "tt-ubuntu-2204-large-stable"),
     ],
 )
