@@ -412,14 +412,9 @@ class TtRoutedExpert(LightweightModule):
         """
         logger.debug(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
 
-        # ROW_MAJOR input is the Blackhole fused path: the op tilizes x and packs
-        # bf8 internally, so it must stay bf16. Otherwise match the activations
-        # dtype for the per-expert extract loop.
-        if dispatched_buffer.layout != ttnn.ROW_MAJOR_LAYOUT and dispatched_buffer.dtype != self.activations_dtype:
-            logger.warning(f"{dispatched_buffer.dtype=} typecasting to {self.activations_dtype}")
-            dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
-
         if is_blackhole():
+            # Fused path: the op consumes the ROW_MAJOR bf16 buffer directly,
+            # tilizing x and packing bf8 internally, and returns a fresh output.
             signpost(header="UnifiedRoutedExpertMoe")
             expert_outputs = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
                 dispatched_buffer,
@@ -436,7 +431,10 @@ class TtRoutedExpert(LightweightModule):
             logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
             return expert_outputs
 
-        # Wormhole fallback: per-expert Python loop with extract → FFN → insert.
+        # Wormhole fallback: tile to the activation dtype for the per-expert
+        # extract → FFN → insert loop. expert_outputs aliases this buffer; the
+        # insert writes each expert's result back in place.
+        dispatched_buffer = ttnn.to_layout(dispatched_buffer, ttnn.TILE_LAYOUT, dtype=self.activations_dtype)
         expert_outputs = dispatched_buffer
         for local_expert in range(self.experts_per_chip):
             signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")
