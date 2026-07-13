@@ -700,6 +700,8 @@
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
+# ── Stable Diffusion XL ────────────────────────────────────────────
+
 # WH/BH split kept separate so env stays faithful to the original frequent job:
 # WH sets TT_MM_THROTTLE_PERF=5, BH runs without it.
 - name: Stable Diffusion XL UNet-loop e2e tests (WH)
@@ -734,8 +736,8 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
-# Nightly SDXL from tt-metal-l2-nightly (shield_sdxl_tests.yaml)
-# (target ~40min WH / ~30-40min BH; tighten after first CI run reveals real durations).
+# Nightly SDXL, consolidated from tt-metal-l2-nightly (shield_sdxl_tests.yaml) and the
+# single-card-demo pipeline, split into smaller per-component jobs.
 - name: ttnn nightly sdxl base unet-loop (wormhole)
   cmd: |
     export TT_MM_THROTTLE_PERF=5
@@ -793,7 +795,26 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
-- name: ttnn nightly sdxl demo cfg parallel test (N300)
+# From single-card-demo (run_sdxl_func, N150): the 4 no_cfg demos + lora demo.
+- name: ttnn nightly sdxl demo tests (wormhole N150)
+  cmd: |
+    export TT_MM_THROTTLE_PERF=5
+    exit_code=0
+    pytest models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
+    pytest models/demos/stable_diffusion_xl_base/demo/demo_base_and_refiner.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
+    pytest models/demos/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
+    pytest models/demos/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
+    pytest models/demos/stable_diffusion_xl_base/demo/demo_lora.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
+    exit $exit_code
+  model: sdxl-nightly-wh
+  skus:
+    wh_n150:
+      timeout: 35
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: ttnn nightly sdxl demo tests (N300 cfg-parallel)
   cmd: |
     export TT_MM_THROTTLE_PERF=5
     pytest models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and use_cfg_parallel" --timeout=600
@@ -805,7 +826,7 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
-- name: nightly sdxl demo (blackhole)
+- name: ttnn nightly sdxl demo tests (blackhole)
   cmd: |
     export TT_MM_THROTTLE_PERF=0
     exit_code=0
