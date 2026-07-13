@@ -31,6 +31,7 @@ namespace tt::tt_metal {
  * reader that cannot keep up loses its oldest unread items (tracked by Reader::dropped()).
  *
  * If the compile-time constant `is_always_lock_free` is true, then the ring is guaranteed to be lock-free.
+ * In particular, all publish and read operations are wait-free in this case.
  *
  * Obtain the writer from writer() (driven by a single thread) and each reader from make_reader().
  * Readers are single-threaded, and all readers must be destroyed before the ring.
@@ -129,6 +130,8 @@ public:
             SharedState* const shared_state = shared_state_;
             const size_t skip = n > view.capacity ? n - view.capacity : 0;
 
+            // bump claim before the slot stores, so a reader we lap mid-copy sees the
+            // raised claim in its recheck and drops the potentially overwritten items
             shared_state->claim.store(head + n, std::memory_order_relaxed);
             std::atomic_thread_fence(std::memory_order_release);
             for (size_t k = skip; k < n; k++) {
@@ -169,21 +172,6 @@ public:
             if (out.empty()) {
                 return out;
             }
-            // the furthest the cursor may fall behind claim; beyond it the oldest records would (likely) be
-            // overwritten before we finish copying them, so we drop them now and spend the copies on records
-            // we can actually keep
-            const auto max_lag = [this](uint64_t want, uint64_t cap) {
-                const uint64_t margin = std::min<uint64_t>(skip_margin_, cap >> 1);
-                return std::max<uint64_t>(want, cap - margin);
-            };
-            // running max of how far the writer advances while we copy a batch, plus 25% headroom; decays
-            // slowly so it tracks recent advances rather than pinning to the highest ever seen
-            const auto update_skip_margin = [this](uint64_t advance) {
-                const uint64_t decayed = skip_margin_ - (skip_margin_ >> 6);
-                const uint64_t target = advance + (advance >> 2);
-                skip_margin_ = target > decayed ? target : decayed;
-            };
-
             const SharedState* const shared_state = shared_state_;
             const uint64_t head = shared_state->head.load(std::memory_order_acquire);
             if (cursor_ >= head) {
@@ -192,11 +180,12 @@ public:
 
             const uint64_t claim_before = shared_state->claim.load(std::memory_order_relaxed);
             const SlotsView view = view_;
-            const uint64_t want = std::min<uint64_t>(out.size(), view.capacity);
-            const uint64_t lag_limit = max_lag(want, view.capacity);
-            if (claim_before - cursor_ > lag_limit) {
-                dropped_ += (claim_before - cursor_) - lag_limit;
-                cursor_ = claim_before - lag_limit;
+
+            const uint64_t max_lag = view.capacity - std::min<uint64_t>(writer_advance_estimate_, view.capacity >> 1);
+            if (uint64_t lag = claim_before - cursor_; lag > max_lag) {
+                const uint64_t drop = lag - max_lag;
+                dropped_ += drop;
+                cursor_ += drop;
             }
 
             const uint64_t start = cursor_;
@@ -204,10 +193,12 @@ public:
             for (size_t k = 0; k < n; k++) {
                 view.slot_at(start + k).load(out[k]);
             }
+            // we order the slot loads before we reload claim, so slots the writer lapped mid-copy show up as
+            // claim - start > capacity below and are dropped
             std::atomic_thread_fence(std::memory_order_acquire);
 
             const uint64_t claim = shared_state->claim.load(std::memory_order_relaxed);
-            update_skip_margin(claim - claim_before);
+            observe_advance(claim - claim_before);
             if (claim - start > view.capacity) {
                 const uint64_t oldest = claim - view.capacity;
                 const uint64_t lost = oldest - start;
@@ -269,7 +260,7 @@ public:
             view_(other.view_),
             cursor_(other.cursor_),
             dropped_(other.dropped_),
-            skip_margin_(other.skip_margin_),
+            writer_advance_estimate_(other.writer_advance_estimate_),
             active_readers_(std::exchange(other.active_readers_, nullptr)) {}
         Reader& operator=(Reader&& other) noexcept {
             if (this != &other) {
@@ -278,7 +269,7 @@ public:
                 view_ = other.view_;
                 cursor_ = other.cursor_;
                 dropped_ = other.dropped_;
-                skip_margin_ = other.skip_margin_;
+                writer_advance_estimate_ = other.writer_advance_estimate_;
                 active_readers_ = std::exchange(other.active_readers_, nullptr);
             }
             return *this;
@@ -303,11 +294,22 @@ public:
             }
         }
 
+        // proactive dropping to avoid copying records that are likely to be discarded by the claim re-check
+        static constexpr unsigned kAdvanceDecayShift = 4;     // estimate decays by ~1/16 per read
+        static constexpr unsigned kAdvanceHeadroomShift = 2;  // 25% headroom on the tracked advance
+        void observe_advance(uint64_t advance) noexcept {
+            const uint64_t decayed = writer_advance_estimate_ - (writer_advance_estimate_ >> kAdvanceDecayShift);
+            const uint64_t target = advance + (advance >> kAdvanceHeadroomShift);
+            writer_advance_estimate_ = std::max(target, decayed);
+        }
+
         const SharedState* shared_state_;
         SlotsView view_;
         uint64_t cursor_;
         uint64_t dropped_ = 0;
-        uint64_t skip_margin_ = 0;
+        // decaying max of how far the writer advances while we copy a batch, plus headroom;
+        // decays so it tracks recent advances rather than pinning to the highest ever seen
+        uint64_t writer_advance_estimate_ = 0;
         std::atomic<uint32_t>* active_readers_;
     };
 
