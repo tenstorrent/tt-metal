@@ -22,7 +22,7 @@ from loguru import logger
 from ttnn.operations.ccl import Topology
 
 import ttnn
-from models.common.utility_functions import skip_with_llk_assert
+from models.common.utility_functions import skip_with_llk_assert, skip_with_watcher
 from tests.nightly.sdpa_perf_utils import (
     compute_cores_used,
     compute_math_utilization,
@@ -821,6 +821,7 @@ EXP_RING_JOINT_PERF_CHECK_CONFIGS = [
     ids=[f"ring{cfg[0]}-{cfg[2]}" for cfg in EXP_RING_JOINT_PERF_CHECK_CONFIGS],
 )
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_exp_ring_joint_attention_perf_check(ring_size_expected, max_payload_size, payload_id, expected_util):
     """Measure exp ring joint SDPA math utilization via real-time device program records."""
     num_devices = detect_devices_without_opening()

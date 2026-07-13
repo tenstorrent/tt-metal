@@ -13,6 +13,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 import ttnn
 from loguru import logger
 import pytest
+from models.common.utility_functions import skip_with_llk_assert, skip_with_watcher
 
 
 def fa_rand(*shape):
@@ -435,6 +436,8 @@ SDPA_PERF_CHECK_CONFIGS = [
     SDPA_PERF_CHECK_CONFIGS,
     ids=[f"{cfg[0]}-q{cfg[1]}-k{cfg[2]}" for cfg in SDPA_PERF_CHECK_CONFIGS],
 )
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_sdpa_perf_check(sdpa_realtime_profiled_device, shape_id, q_chunk_size, k_chunk_size, expected_util):
     """Measure single-chip SDPA math utilization via real-time device program records."""
     idx = INPUT_IDS.index(shape_id)
