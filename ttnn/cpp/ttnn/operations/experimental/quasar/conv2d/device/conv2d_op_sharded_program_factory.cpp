@@ -324,7 +324,9 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // height-block on (works on WH, hangs on BH). Full sync drains DEST per op, preventing the backup.
     // (This also selects the standard tilize, since can_use_fast_tilize() requires !dst_full_sync.)
     // Numerically identical; localized perf cost on this conv only.
-    if (block_sharded) {
+    // Also force it on height-sharded to route WH/BH off the racy fast_tilize path onto regular tilize_block
+    // (the fixed-latency PACK nop race-guard could not mask the fast_tilize dest handshake race).
+    if (block_sharded || height_sharded) {
         dst_full_sync_en = true;
     }
 

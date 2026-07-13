@@ -411,10 +411,22 @@ void kernel_main() {
 #endif
     DataflowBuffer cb_untilize_mode_out(untilize_mode_out_cb_id);
 
-    // DEBUG: the kernel-start CBLAYOUT/PACKGEO/TGEO/MMGEO probes were removed — they confirmed the
-    // writer-copy workaround is active (pcuo=0, part/out in the low working region, geometry 16/4). They ate
-    // DPRINT-ring slots; removed so the tilize TZBLK/TZPK localizers (below) have room to show the true
-    // faulting tile before the ring stops draining at the fault.
+    // WH fast_tilize RACE-GUARD (DPRINT-independent; do NOT remove without the LLK fix). The WH fast_tilize
+    // dest/semaphore handshake has a timing-sensitive race that deadlocks the tilize on the PACK thread
+    // (first tile). Bisect proved conv PASSES on WH at 26ce761e002 (which had two plain PACK(DPRINT) calls
+    // here) and HANGS once they were removed — NO other WH-path change — and that it only passes when DPRINT
+    // actually executes (TT_METAL_DPRINT_CORES=all). So the mask is PACK-thread latency before
+    // compute_kernel_hw_startup. Replicate that latency WITHOUT DPRINT: on the PACK thread, read the same CB
+    // interface registers into a volatile sink and spin briefly. `kRaceGuardSpin` is a TUNABLE delay — if WH
+    // still hangs, raise it. Real fix = the fast_tilize LLK handshake race (TEN-4746 class).
+#ifndef ARCH_QUASAR
+    PACK({
+        constexpr uint32_t kRaceGuardSpin = 512;  // TUNABLE — raise if WH still hangs
+        for (uint32_t g = 0; g < kRaceGuardSpin; ++g) {
+            asm volatile("nop");  // volatile asm: cannot be optimized away
+        }
+    });
+#endif
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(mm_in0_cb_id, in1_cb_id, out_cb_id);
     matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
