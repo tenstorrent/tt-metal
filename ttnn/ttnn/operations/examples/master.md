@@ -107,6 +107,63 @@ Turning it off — keep the inits, drop the format reconfig — is correct (PCC 
 **1.72×** (WH B0). Only safe when the dtype is genuinely constant across the boundary. See the
 example's `report_reconfig_ablation.md`.
 
+## ⭐⭐ T2 — [`row_reduce_accumulate`](row_reduce_accumulate/README.md)
+**Concept:** how to sum a **row of `W` tiles** for a mean (`REDUCE_ROW`) — fold the cross-tile sum into the
+reduce, or do it separately (FPU `add_tiles` into DEST, or the packer's L1 accumulator) and finalize the
+within-tile collapse on the **FPU reduce library or the SFPU** (`sfpu_reduce` in DEST) — measured on two
+precision axes: **input dtype × accumulation dtype**, over three input distributions (single core, pure compute).
+**Situation:** you wrote a row-mean as one reduce over the whole strip and it scales badly as the row widens,
+because the reduce pays its per-tile datapath cost `W` times.
+**Measured win (WH B0, 1 core, sweep 1→32 tiles = 32→1024 elements):** at narrow rows (1–2 tiles) the single
+reduce (`reduce_fold`) is *fastest*; from **W≥4** the cheapest path is **pairwise `add_tiles(acc_to_dest)`
+then one finalize reduce** (`dest_accum_pairs`) — **2.91×** at 32 tiles (bf16 input); `dest_accum` **1.84×**;
+packer L1-accumulate (`l1_accum`) only ties the baseline (1.03×) at 32 tiles. fp32 input ≈ halves the win
+(pairs 1.86×) since the add path unpacks 2× the bytes; `reduce_fold`'s cost is input-dtype-insensitive.
+**Accuracy (error vs fp64 mean, swept over input distributions signal/uniform/positive):** the two precision
+axes behave oppositely — bf16 **input** error *averages DOWN* with width (a wide mean washes out input
+quantization: `reduce_fold` bf16-fp32 0.17→0.04 ULP, all methods stay sub-ULP; fp32 accumulation is ~exact),
+while bf16 **accumulation** error *grows UP* with width. In bf16 accumulation on all-positive/`signal` data
+`reduce_fold` is worst (**13.3 ULP** @ W=32 — the full running sum lives in one bf16 DEST), `dest_accum` 2.4,
+`dest_accum_pairs` 1.4 (fewer rounding steps), `l1_accum` best at **0.24 ULP** (packer L1-acc is
+**fp32-DEST-only**, so its finalize reduce stays fp32). On zero-mean `uniform` data every method keeps max-abs
+tiny (~1e-3) — a near-zero mean has little to lose — so max-abs (not ULP, which is inflated near zero) is the
+honest metric and the method choice barely matters there.
+**SFPU vs FPU finalize:** doing the within-tile collapse on the SFPU in DEST (`sfpu_reduce` + a scalar-mul for
+1/N) instead of the FPU reduce library reads DEST natively and skips the pack→L1→unpack round-trip, but is
+**not faster** (the SFPU vector reduce costs more than the FPU matmul-reduce, just outweighing the saved
+round-trip) — it buys **bf16 accuracy** instead (it collapses the columns in fp32 internally): `dest_accum_pairs_sfpu`
+is ~2.85× and the most accurate bf16 DEST-add option.
+**Odd tile count:** don't reach for a phantom zero CB to give the unpaired tile a partner — resolve parity at
+the SEED (`copy_tile` one tile when odd, `add_tiles` the first pair when even) so the remainder is always even
+and the pair loop needs no zero CB (fewer L1 CBs, no dataflow zero-fill, ~1–2% faster at odd widths, `W==1`
+free). `copy_tile` is unary; only strict 1-tile-per-add needs the binary zero operand.
+**Gist:** for a mean over a wide row of tiles, don't fold it into one reduce — accumulate the tiles first
+(`add_tiles(acc_to_dest)`, two tiles per add, parity resolved at the seed) and reduce **once** at the
+end (fastest AND the more accurate of the DEST-add methods). Keep the single reduce only for narrow rows
+(≤2 tiles). bf16 *input* is nearly free for a wide mean; bf16 *accumulation* is what costs precision — use
+fp32 DEST if it matters (packer L1-accumulate forces fp32 DEST regardless), or the SFPU finalize for a bit
+more bf16 accuracy at equal speed.
+
+## ⭐⭐ T2 — [`reduce_accumulate`](reduce_accumulate/README.md)
+**Concept:** build a SUM/mean reduce as cross-tile **FPU `add_tiles` accumulate + within-tile SFPU
+`sfpu_reduce` finalize** (SFPU reads DEST in place, no L1 round-trip), across all three reduce dims, vs the
+standard reduce library (FPU matmul-with-ones) — with a dispatch that picks per (dim, width). Single core,
+pure compute.
+**Situation:** you reduce N tiles with the reduce library and wonder whether accumulating first + finalizing
+on the SFPU is faster / more accurate, and whether it generalizes past width reductions.
+**Measured win (WH B0, 1 core, N tiles reduced):** the fast path wins once there are enough tiles, and the
+**crossover is dim-dependent** because the FPU REDUCE_COL datapath is cheaper than REDUCE_ROW: **row wins from
+4t → 2.87× @32t; scalar from ~8t → 2.94×; col from ~8t → only 1.71×** (col benefits least). Below the
+crossover the single matmul-reduce is faster, so `dispatch` (row≥4, col≥8, scalar≥8) falls back and is **never
+slower than the library**. Accuracy: **equal in fp32, better in bf16** (the SFPU collapses columns in fp32
+before one rounding — row/col bf16 ~3–5.5× lower error @32t); for **scalar the fast path is ~100× more
+accurate even in fp32** — it multiplies by 1/N once vs the library's AVG-scalar applying a 1/√N scaler twice.
+**Gist:** for a *wide* SUM/mean reduce, accumulate the tiles (pairwise `add_tiles`, copy-seed the odd one)
+then finalize on the SFPU (`sfpu_reduce` + a `mul_unary_tile` 1/N) — it generalizes to row/col/scalar and is
+markedly more accurate for scalar. But it's a **dispatched fast path, not a replacement**: it loses below the
+(dim-dependent) crossover, benefits least on col, and the win is compute-only/single-core (most real reductions
+are data-movement-bound, where it won't show).
+
 ## ⭐⭐⭐ T3 — [`tensix_all_reduce_ring_transport`](tensix_all_reduce_ring_transport/README.md)
 **Concepts:** neighbor semaphore cost and direction-sensitive NoC contention in serpentine rings.
 **Situation:** a reduce-and-forward ring is much slower when a rectangular group spans two rows.
