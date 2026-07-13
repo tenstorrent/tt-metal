@@ -445,7 +445,8 @@ class LTXAttention(Module):
         if gate_logits.shape[-1] != self.n_local_heads:
             # Merged: drop the zero tail of the gate chunk. Tile-aligned begins keep this on the
             # TILE path; the unaligned end only pads.
-            gate_logits = ttnn.slice(gate_logits, [0, 0, 0, 0], [*gate_logits.shape[:-1], self.n_local_heads])
+            shape = list(gate_logits.shape)
+            gate_logits = ttnn.slice(gate_logits, [0] * len(shape), [*shape[:-1], self.n_local_heads])
 
         gate = ttnn.multiply(ttnn.sigmoid(gate_logits), 2.0)
 
