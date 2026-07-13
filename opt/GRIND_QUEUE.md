@@ -583,9 +583,35 @@ no gate does not ship.** Measure on the block harness (`test_ltx_transformer_blo
       is NOT precision-attackable and has no persistent-connection API. Reconciles W0's per-op census with Batch H's null
       quant — the 52 µs is real per-op work but off the wall's critical path. Consistent with the whole-session
       collective/dispatch-bound thesis. Reinforces: 6.0s needs step-distillation, not a per-op setup cut.**
-- [ ] **W4 — the audio branch's one-tile pathology.** Half the block's programs push ONE TILE across 32 devices.
-      (SP-replicating audio was priced and is a net loss: saves 77 µs of SP AGs but inflates 11 AG-mms 32→256 rows.
-      A different attack is needed — e.g. fewer/bigger audio ops, or not sharding audio at all.)
+- [x] **W4 — the audio one-tile pathology → DEAD (the ~28 audio collectives/block are ARCHITECTURALLY pinned).**
+      Off-device source dig (2026-07-13 23:30Z lap), citations re-verified in-tree. The audio branch issues **28
+      collectives/block** (12 stat-sized TP RMSNorm AGs + 16 activation; 24 TP + 4 SP), but only ~14 are true one-tile
+      audio (self-attn + text-cross + FFN); the 2 A↔V cross-attentions are **video-scale** (their sharding is dictated by
+      video, not audio). The one-tile count cannot be cut: **(1) SP-replicate = the pre-priced-DEAD lever** (saves 4 audio
+      SP AGs, inflates ~11 AG-mms 32→256 rows). **(2) TP-replicate audio → BLOCKED by construction:** A↔V cross-attn
+      requires audio K/V TP-sharded to 8 heads/device to match video's head layout (`transformer_ltx.py:488-509`,
+      `attention_ltx.py:96,487`); un-TP-sharding breaks the cross SDPA. **(3) sub-mesh / fewer-device audio → DEAD:** A↔V
+      couples audio↔video EVERY block (`transformer_ltx.py:480-537` re-verified) — A→V needs audio KV visible to all 32
+      video devices, V→A needs full SP-sharded video KV at the audio devices; those cross collectives are pinned by
+      *video's* 4×8 layout, so a sub-mesh removes only the ~14 tiny audio collectives at the cost of a full↔sub-mesh
+      entry-gather + exit-broadcast **per block**, each fully exposed + video-scale ⇒ strictly worse. No ttnn mid-trace
+      submesh-dispatch API on the statically-4×8 tensors either. **(4) batch/merge → DEAD:** stat-AG merge pre-priced dead;
+      TP activation gathers are sequential-dependent (Q-gather→SDPA→out-gather chain), not batchable. **Kill term:** the
+      residual floor `a` is fixed per-collective latency, and audio's collective COUNT is pinned by the A↔V head-layout +
+      SP-layout coupling to video — every count-reducing reshard either breaks cross-attn or adds ≥2 exposed video-scale
+      reshards/block. **⇒ W4 CLOSED. Reinforces the whole-session thesis: the count is architectural, 6.0s needs
+      step-distillation (fewer STEPS), not a per-block collective cut.** One lean-loss survivor spun out to W5 below.
+- [ ] **W5 — A→V ring-fold (the sole un-dead crumb from W4; honestly LEAN-LOSS, run only when the tree is clean).**
+      A→V currently does an EXPLICIT `all_gather_persistent_buffer` on the small audio KV (`transformer_ltx.py:494-497`)
+      then a locally-tuned SDPA on the LONG video Q; V→A already ring-folds its gather (`attention_ltx.py:587-614`,
+      `is_cross=True`). Lever: make A→V also hit `use_ring_cross` (pass SP-sharded audio K-rope + `kv_logical_n=audio_N`)
+      → removes 1 exposed SP collective/block ×48. **Predicted sign = WASH, leaning LOSS** (INCLUDING exposed latency):
+      saves ~1 fixed collective latency but pays ~1 ring-PC fixed overhead + retile risk — the ring cross-PC is tuned
+      `q_chunk=64` for the SHORT audio Q (`attention_ltx.py:204-211`), badly sized for A→V's LONG video Q; the existing
+      explicit/ring asymmetry looks deliberate for exactly this reason. **A/B (gated on a CLEAN tree — blocked now by the
+      driver's uncommitted W1 WIP in these files):** add `LTX_A2V_RING_CROSS` env toggle, slope-price the A→V attention
+      body both ways at S1 (q=1216) + S2 (q=4864) via the census harness, confirm STEP_MS delta. Revert unless slope drop
+      beats the added ring-PC fixed cost. LOW priority — a ~1/28-collective crumb against a 2.2s gap.
 
 ### DEAD, with evidence — do not retry
 - **Merging the RMSNorm stat all-gathers: DEAD, quantitatively.** 2 AGs = 30.7 µs; 1 merged (2× width) = 22.7 µs
