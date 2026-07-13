@@ -56,7 +56,7 @@
   team: models
 - name: vit nightly
   cmd: |
-    export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub HF_DATASETS_CACHE=/tmp/huggingface/datasets
+    unset HF_HUB_OFFLINE
     $PYTEST_CMD tests/nightly/single_card/vit
   model: vit
   skus:
@@ -118,7 +118,7 @@
   team: models
 - name: segformer nightly
   cmd: |
-    export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub HF_DATASETS_CACHE=/tmp/huggingface/datasets
+    unset HF_HUB_OFFLINE
     $PYTEST_CMD tests/nightly/single_card/segformer
   model: segformer
   skus:
@@ -223,7 +223,7 @@
 - name: stable_diffusion_xl_base nightly WH
   cmd: |
     export TT_MM_THROTTLE_PERF=5
-    export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub HF_DATASETS_CACHE=/tmp/huggingface/datasets
+    unset HF_HUB_OFFLINE
     exit_code=0
     $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/lora || exit_code=$?
     $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/refiner || exit_code=$?
@@ -241,7 +241,7 @@
 - name: stable_diffusion nightly
   cmd: |
     export TT_MM_THROTTLE_PERF=5
-    export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub HF_DATASETS_CACHE=/tmp/huggingface/datasets
+    unset HF_HUB_OFFLINE
     $PYTEST_CMD tests/nightly/single_card/stable_diffusion
   model: stable_diffusion
   skus:
