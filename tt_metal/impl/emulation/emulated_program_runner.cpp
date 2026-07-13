@@ -2339,6 +2339,30 @@ extern "C" void __emule_fabric_set_route(
     r.kind = kind; r.a = a; r.b = b; r.c = c; r.d = d; r.e = e; r.f = f;  // dir_index set separately at send
 }
 
+// A worker composes a packet header (its route stamped by the setters above, keyed by the header's L1
+// address) and then COPIES the header bytes into a forwarder core's relay slot; the forwarder later
+// teleports the send FROM that slot. The slot is a different L1 address, so the teleport's route lookup
+// (keyed by the header address it reads) would miss and fall back to the physical neighbor — the wrong
+// chip on a multi-hop forwarder relay (blaze all_gather_4x2), so the destination worker's recv semaphore
+// is never incremented and every consumer fiber parks (deadlock). On silicon the routing fields live IN
+// the packet header and therefore travel with the byte copy for free; emule keeps them in this address-keyed
+// side-table, so the copy has to carry the entry across explicitly. This mirrors that: when a NOC write
+// copies bytes out of an address that carries a stamped route, replicate the route onto the destination
+// address (the forwarder slot the teleport will read). Same address (no relocation) is a no-op. This is a
+// single faithful mechanism, not a divergent path. See tt-emule docs/fabric-ccl-emulation.md.
+extern "C" void __emule_fabric_route_follow(uint32_t src_key, uint32_t dst_key) {
+    if (src_key == dst_key) {
+        return;
+    }
+    std::lock_guard<std::mutex> lk(g_route_meta_mu);
+    auto it = g_route_meta.find(src_key);
+    if (it == g_route_meta.end()) {
+        return;  // src carries no route — not a packet-header copy; nothing to follow.
+    }
+    const EmuleRoute r = it->second;  // copy before the insert below can rehash/invalidate `it`.
+    g_route_meta[dst_key] = r;
+}
+
 // Record a 1D send's per-connection direction signals: the fwd/bwd conn_index (direct path) and the
 // worker's mux NOC coords (MUX path); 0xFFFF means unset. See tt-emule docs/fabric-ccl-emulation.md.
 extern "C" void __emule_fabric_set_route_dir(
