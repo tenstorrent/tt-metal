@@ -91,12 +91,14 @@
 #include "sfpu/ckernel_sfpu_comp.h"
 #include "sfpu/ckernel_sfpu_fill.h"
 #include "sfpu/ckernel_sfpu_hardtanh.h"
+#include "sfpu/ckernel_sfpu_isinf_isnan.h"
 #include "sfpu/ckernel_sfpu_log.h"
 #include "sfpu/ckernel_sfpu_negative.h"
 #include "sfpu/ckernel_sfpu_relu.h"
 #include "sfpu/ckernel_sfpu_rounding_ops.h"
 #include "sfpu/ckernel_sfpu_silu.h"
 #include "sfpu/ckernel_sfpu_sub_int.h"
+#include "sfpu/ckernel_sfpu_tanh_derivative.h"
 #include "sfpu/ckernel_sfpu_threshold.h"
 
 namespace ckernel::sfpu
@@ -548,6 +550,12 @@ void call_unary_sfpu_operation_init()
     else if constexpr (OPERATION == SfpuType::tanhshrink)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(sfpu::tanhshrink_init<APPROX_MODE, is_fp32_dest_acc_en>);
+    }
+    else if constexpr (OPERATION == SfpuType::tanh_derivative_lut)
+    {
+        // Legacy LUT tanh': tanh_derivative_init loads the tanh piecewise-linear
+        // LUT into LReg0/1/2, which _calculate_tanh_derivative_ then consumes.
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(tanh_derivative_init<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::typecast)
     {
@@ -1006,6 +1014,14 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
         SFPU_UNARY_CALL(
             DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_zero_comp_, (APPROX_MODE, OPERATION, ITERATIONS), dst_index, vector_mode, 0u /* exponent_size_8 */);
     }
+    else if constexpr (
+        OPERATION == SfpuType::isinf || OPERATION == SfpuType::isposinf || OPERATION == SfpuType::isneginf || OPERATION == SfpuType::isnan ||
+        OPERATION == SfpuType::isfinite)
+    {
+        // Predicate ops: write 1.0f where the (isinf/isposinf/isneginf/isnan/isfinite)
+        // test holds, else 0.0f. The concrete predicate is selected by OPERATION.
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_sfpu_isinf_isnan_, (OPERATION, APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+    }
     else if constexpr (OPERATION == SfpuType::erfinv)
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfinv, (APPROX_MODE), dst_index, VectorMode::RC);
@@ -1041,6 +1057,12 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     else if constexpr (OPERATION == SfpuType::tanh_derivative)
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_tanh_derivative_sech2, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::tanh_derivative_lut)
+    {
+        // Legacy tt-llk primitive: computes 1 - tanh(x)^2 with tanh from the LUT
+        // (WITH_PRECOMPUTED_TANH = 0). Distinct from the accurate sech2 variant above.
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_tanh_derivative_, (APPROX_MODE, 0, ITERATIONS), dst_index, vector_mode, ITERATIONS);
     }
     else if constexpr (OPERATION == SfpuType::hardmish)
     {

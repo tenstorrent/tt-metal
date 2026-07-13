@@ -438,6 +438,7 @@ DOMAIN_MATHOPS = [
     MathOperation.SqrtCustom,
     MathOperation.Add1,
     MathOperation.CastFp32ToFp16a,
+    MathOperation.TanhDerivativeLut,
 ]
 
 # Per-op tolerance overrides for the domain suite. Ops whose kernel is a coarse
@@ -528,6 +529,84 @@ def test_eltwise_unary_sfpu_signbit(
         FastMode.No,
         input_dimensions,
         spec_A=spec_A,
+    )
+
+
+# isinf/isnan family: predicate ops that write 1.0 where the test holds, else 0.0.
+# On purely finite stimuli every output would be constant (all 0 for isinf/isnan,
+# all 1 for isfinite), which leaves PCC undefined — the same degeneracy that made
+# the eq/ne comparison ops untestable via the plain sweep. So drive them with a
+# crafted spec that interleaves +inf / -inf / nan among finite values, guaranteeing
+# a non-constant output and exercising every predicate branch.
+ISINF_ISNAN_MATHOPS = [
+    MathOperation.Isinf,
+    MathOperation.Isposinf,
+    MathOperation.Isneginf,
+    MathOperation.Isnan,
+    MathOperation.Isfinite,
+]
+
+
+def _isinf_isnan_stimuli_spec():
+    def dist(size, dtype, generator):
+        # Deterministic finite ramp in [-5, 5], then overwrite regular subsets
+        # with +inf / -inf / nan so every face carries all three special classes
+        # plus finite values (covers is_pos/is_neg/is_inf/is_nan/is_finite).
+        idx = torch.arange(size, dtype=torch.float32)
+        x = (idx % 11) - 5.0
+        x[0::7] = float("inf")
+        x[1::7] = float("-inf")
+        x[2::7] = float("nan")
+        return x.to(dtype)
+
+    return StimuliSpec(distribution=dist, seed=0)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    approx_mode=[ApproximationMode.No],
+    mathop=ISINF_ISNAN_MATHOPS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_dimensions=[[64, 64]],
+)
+def test_eltwise_unary_sfpu_isinf_isnan(
+    formats: list[InputOutputFormat],
+    approx_mode: ApproximationMode,
+    mathop: MathOperation,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    if (
+        dest_acc == DestAccumulation.No
+        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+    ):
+        # Only Float32->Float32 is supported on BH with dest_acc=No; skip the rest.
+        if formats != InputOutputFormat(DataFormat.Float32, DataFormat.Float32):
+            pytest.skip(reason="This combination is not supported on BH architecture")
+
+    # A non-32-bit input with dest_acc=Yes takes the Tensix unpacker's bf16->fp32
+    # dest conversion, which does not faithfully preserve -inf / nan bit patterns
+    # (they no longer read back as -inf / nan in the fp32 dest). That mangles the
+    # is_neg / is_nan predicates specifically, so skip this combo — the kernel
+    # logic for all five predicates is fully covered by the Float32-input cases
+    # and the Float16_b-input / dest_acc=No case.
+    if (
+        formats.input_format == DataFormat.Float16_b
+        and dest_acc == DestAccumulation.Yes
+    ):
+        pytest.skip(
+            reason="bf16->fp32 dest unpack does not preserve -inf/nan special values"
+        )
+
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        approx_mode,
+        mathop,
+        FastMode.No,
+        input_dimensions,
+        spec_A=_isinf_isnan_stimuli_spec(),
     )
 
 
