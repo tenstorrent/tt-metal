@@ -1928,6 +1928,26 @@ def test_kernel_surface_filter():
             "device-under-impl",
             dev_under_impl,
         )
+    # REGRESSION (C): the host tt::tt_metal::Kernel management tree lives DIRECTLY under
+    # impl/ (tt_metal/impl/kernels/) and ALSO contains '/kernels/', so the H1 yield would
+    # wrongly admit it as device unless the host-exception catches it first. It is host.
+    for host_kernel_mgmt in (
+        "tt_metal/impl/kernels/kernel.cpp",
+        "tt_metal/impl/kernels/kernel.hpp",
+        "tt_metal/impl/kernels/kernel_source.hpp",
+    ):
+        assert capture.is_host_path(host_kernel_mgmt), (
+            "host-kernel-mgmt",
+            host_kernel_mgmt,
+        )
+    # ...but the device subsystem-kernel trees (a segment between impl/ and kernels/) and
+    # the fabric device kernels stay DEVICE — the exception must not over-reach.
+    for still_device in (
+        "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+        "tt_metal/impl/buffers/kernels/tensor_prefetcher.cpp",
+        "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+    ):
+        assert not capture.is_host_path(still_device), ("still-device", still_device)
 
 
 @case

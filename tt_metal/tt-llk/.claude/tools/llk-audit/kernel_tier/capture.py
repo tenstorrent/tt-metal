@@ -138,16 +138,28 @@ def in_kernel_surface(path: str, keep=KERNEL_SURFACE_KEEP, drop=KERNEL_SURFACE_D
 # 'tt_metal/hw/inc/api', which is the DEVICE api) and carry no leading slash so they
 # match both relative and absolute fact paths.
 HOST_SURFACE_MARKERS = ("tt_metal/impl/", "tt_metal/api/")
+# HOST trees whose path CONTAINS a kernels/ segment yet are host code, so they must be
+# caught BEFORE the in_kernel_surface yield below. `tt_metal/impl/kernels/` is the host
+# `tt::tt_metal::Kernel` / `KernelSource` management classes (kernel.cpp/hpp,
+# kernel_source.hpp, kernel_types.cpp) — kernels DIRECTLY under impl/, no subsystem
+# segment. DEVICE kernel trees always have an intervening subsystem
+# (`impl/dispatch/kernels/`, `impl/buffers/kernels/`, `fabric/impl/kernels/`), so this
+# exact substring does not touch them.
+HOST_KERNEL_MGMT_MARKERS = ("tt_metal/impl/kernels/",)
 
 
 def is_host_path(path: str) -> bool:
     """True iff `path` is in a HOST implementation / public-API tree (must not enter
-    the device-only base). `in_kernel_surface` WINS: a path that is a kernel surface
-    (contains `/kernels/`) is DEVICE code even under a host tree — e.g. the JIT
+    the device-only base). `in_kernel_surface` WINS in general: a path that is a kernel
+    surface (contains `/kernels/`) is DEVICE code even under a host tree — e.g. the JIT
     dispatch/prefetch kernels at `tt_metal/impl/dispatch/kernels/`,
-    `tt_metal/impl/buffers/kernels/` — and must NOT be dropped as host. Only a
-    non-kernel host file (e.g. the host `Semaphore` at impl/buffers/semaphore.hpp)
-    is host."""
+    `tt_metal/impl/buffers/kernels/` — and must NOT be dropped as host. The ONE
+    exception is the host Kernel-management tree at `tt_metal/impl/kernels/` (kernels
+    directly under impl/), which also contains `/kernels/` but is host — checked first.
+    Only a non-kernel host file (e.g. the host `Semaphore` at impl/buffers/semaphore.hpp)
+    or that Kernel-management tree is host."""
+    if any(h in path for h in HOST_KERNEL_MGMT_MARKERS):
+        return True
     if in_kernel_surface(path):
         return False
     return any(h in path for h in HOST_SURFACE_MARKERS)
