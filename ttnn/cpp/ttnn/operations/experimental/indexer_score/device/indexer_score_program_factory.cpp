@@ -73,7 +73,12 @@ inline DeviceCausalGeometry device_causal_geometry(
     const operation_attributes_t& args, uint32_t device_index, uint32_t tp_index, uint32_t Sq) {
     const uint32_t TW = tt::constants::TILE_WIDTH;
     if (!args.block_cyclic.has_value()) {
-        return {(args.chunk_start_idx + device_index * Sq) / TW, 0u, 0u};  // contiguous K -> linear diagonal
+        // Contiguous K -> linear diagonal at chunk_start + (seq-shard rank)*Sq. The rank is device_index for an
+        // SP-only seq shard; but a 2D SP×TP sub-shard whose SP axis is size-1 (e.g. QuietBox sp=1) is stored
+        // as no-block-cyclic (identity permutation), and there the query is seq-sharded over the TP axis, so the
+        // rank is tp_index. The two are mutually exclusive nonzero here (tp_index!=0 requires block_cyclic_sp_axis
+        // set with sp==1, which forces device_index==0; no sub-shard -> tp_index==0), so their sum is the rank.
+        return {(args.chunk_start_idx + (device_index + tp_index) * Sq) / TW, 0u, 0u};
     }
     const uint32_t sp = args.block_cyclic->sp;
     const uint32_t chunk_local = args.block_cyclic->chunk_local;  // cache per-shard slab width (elements)
