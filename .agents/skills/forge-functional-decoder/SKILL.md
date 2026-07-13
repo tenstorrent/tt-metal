@@ -1,6 +1,6 @@
 ---
 name: forge-functional-decoder
-description: Bring up a functionally correct TTNN decoder layer for the model-specific autoport directory by TRANSLATING a tt-forge / tt-torch codegen-emitted TTNN model into the functional-decoder output shape. Use this instead of $functional-decoder when a forge emit already exists and you must adapt it (not author from scratch). Scope is emit-driven: always translate prefill, and translate a correctness-first decode path too when the emit ships a decode graph (SDPA-decode / paged_update_cache); when it does not, decode is an honest stub that defers to the optimize stage.
+description: "Bring up a functionally correct TTNN decoder layer for the model-specific autoport directory by TRANSLATING a tt-forge / tt-torch codegen-emitted TTNN model into the functional-decoder output shape. Use this instead of $functional-decoder when a forge emit already exists and you must adapt it (not author from scratch). Scope is emit-driven — always translate prefill, and translate a correctness-first decode path too when the emit ships a decode graph (SDPA-decode / paged_update_cache); when it does not, decode is an honest stub that defers to the optimize stage."
 ---
 
 # Forge → Functional Decoder Bringup
