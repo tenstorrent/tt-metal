@@ -18,8 +18,7 @@ kernels/
 ├── reader_interleaved.cpp    NCRISC reader
 ├── writer_interleaved.cpp    BRISC writer
 └── compute_copy_with_nops.cpp  TRISC copy + tunable NOP spin
-op_to_op_postprocess.py       turns the profiler CSVs into scalar CI metrics
-test_op_to_op_ci.py           pytest: run pinned config -> post-process -> gate vs golden
+op_to_op_postprocess.py       turns the profiler CSVs into scalar CI metrics; with --golden it gates vs golden
 op_to_op_golden.json          Wormhole golden (values populated from a real CI run)
 op_to_op_blackhole_golden.json  Blackhole golden
 ```
@@ -48,10 +47,12 @@ profiler is active.
 
 ## Where it runs
 
-On the **single-card profiler pipeline** (`tests/pipeline_reorg/single_card_profiler_tests.yaml`,
-job "Op-to-op latency"), which builds with `ENABLE_TRACY=ON` and already runs the
-device + realtime profiler suites. SKUs: `wh_n150_civ2`, `wh_n300_civ2`,
-`bh_p100a_civ2_viommu`, `bh_p150b_civ2_viommu`.
+On the **(Runtime) Performance Tests** pipeline (`.github/workflows/runtime-perf-tests.yaml`,
+job `runtime-perf-profiler-tests`), via `tests/pipeline_reorg/runtime_perf_profiler_tests.yaml`
+(entry `runtime_perf_op_to_op_latency`). That job uses a dedicated profiler build
+(`build-artifact-profiler`, `tracy: true` / `ENABLE_TRACY=ON`) so the non-profiler
+dispatch/bandwidth microbenchmarks in `runtime_perf_tests.yaml` are not perturbed.
+SKUs: `wh_n300_civ2`, `bh_p150_perf`. Budget subheading: `perf_profiler`.
 
 ## Run locally
 
@@ -61,25 +62,27 @@ Needs a Tracy-enabled build (default; i.e. do **not** pass `build_metal.sh --dis
 export TT_METAL_HOME=$(pwd)
 cmake --build build --target test_op_to_op_latency -j
 
-# via the CI wrapper (runs the pinned config, post-processes, gates vs golden)
-pytest tests/tt_metal/tt_metal/perf_microbenchmark/op_to_op_latency/test_op_to_op_ci.py
-
-# or drive the binary + post-proc directly
+# the exact CI flow: run the pinned config, then post-process + gate vs golden
 TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/op_to_op_latency/test_op_to_op_latency \
   --use-trace --trace-warmup-replays 2 --num-programs 8 --num-pages-per-core 4 \
   --compute-nops 2000 --use-device-profiler --use-realtime-profiler
 
+# print metrics only (no gate)
 python3 tests/tt_metal/tt_metal/perf_microbenchmark/op_to_op_latency/op_to_op_postprocess.py --min-prog-id 3
+
+# print metrics and gate against the golden (record mode passes while golden is null)
+python3 tests/tt_metal/tt_metal/perf_microbenchmark/op_to_op_latency/op_to_op_postprocess.py \
+  --min-prog-id 3 --golden tests/tt_metal/tt_metal/perf_microbenchmark/op_to_op_latency/op_to_op_golden.json
 ```
 
 ## Populating / updating the golden
 
 The golden files ship with `null` values ("record mode"): until a golden is
-populated the pytest **only prints the measured metrics and skips the gate**, so
-the test can land before we have silicon numbers.
+populated the post-proc **only prints the measured metrics and skips the gate**
+(passes), so the test can land before we have silicon numbers.
 
 To enable the gate:
-1. Run the pytest (or the binary + post-proc) on the target SKU.
+1. Run the binary + post-proc on the target SKU.
 2. Copy the measured `official_op2op_us` into the matching golden file's
    `golden.official_op2op_us` (WH → `op_to_op_golden.json`, BH →
    `op_to_op_blackhole_golden.json`), and optionally record the tracked values.
