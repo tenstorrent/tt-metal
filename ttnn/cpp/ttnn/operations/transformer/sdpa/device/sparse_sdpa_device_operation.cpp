@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/sparse_sdpa_device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_common.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/device.hpp"
@@ -15,12 +16,11 @@ namespace ttnn::prim {
 namespace {
 // All input invariants the program hash does NOT key on, so they can vary while hitting the same cached
 // program and must be re-checked on EVERY dispatch (miss AND hit). The hash keys only on q/indices shape+dtype
-// and kv dtype+memory_config — NOT on tensor layout, padding, q/indices buffer type/sharding, the kv logical
-// shape (its T rides on the kv TensorAccessor's RuntimeTensorShape runtime metadata, not a kernel scalar),
-// cache_batch_idx (a dynamic runtime arg), or device
-// placement. The accessors assume ROW_MAJOR, unpadded, DRAM, interleaved q/indices, so a cache hit with a
-// tiled/padded/L1/sharded/off-device tensor would otherwise run on wrong assumptions. K_DIM comes from q,
-// whose shape IS hashed, so it is pinned. Shared by validate_on_program_cache_miss and _hit.
+// and kv dtype+memory_config — NOT on tensor layout, padding, q/indices buffer type/sharding, the logical shape
+// of a plain interleaved kv, cache_batch_idx (a dynamic runtime arg), or device placement. The accessors assume
+// ROW_MAJOR, unpadded, DRAM, interleaved q/indices, so a cache hit with a tiled/padded/L1/sharded/off-device tensor
+// would otherwise run on wrong assumptions. K_DIM comes from q, whose shape IS hashed, so it is pinned. Shared by
+// validate_on_program_cache_miss and _hit.
 void validate_non_hashed(const SparseSDPAParams& attrs, const SparseSDPAInputs& t) {
     const auto& q = t.q;
     const auto& kv = t.kv;
@@ -37,16 +37,20 @@ void validate_non_hashed(const SparseSDPAParams& attrs, const SparseSDPAInputs& 
     // kv: ROW_MAJOR and unpadded; may be interleaved OR ND-sharded DRAM (the accessor resolves the per-page
     // bank/shard either way — kv's DRAM/shard layout is pinned via the hashed kv.memory_config(), its
     // ROW_MAJOR layout and padding are not).
-    TT_FATAL(kv.layout() == Layout::ROW_MAJOR, "sparse_sdpa kv must be ROW_MAJOR");
-    TT_FATAL(kv.padded_shape() == kv.logical_shape(), "sparse_sdpa kv must not be padded");
+    TT_FATAL(kv.layout() == Layout::ROW_MAJOR, "sparse_sdpa KV cache must be ROW_MAJOR");
+    TT_FATAL(kv.padded_shape() == kv.logical_shape(), "sparse_sdpa KV cache must not be padded");
+    TT_FATAL(kv.memory_config().buffer_type() == BufferType::DRAM, "sparse_sdpa KV cache must be in DRAM");
     const uint32_t K_DIM = q.logical_shape()[3];
     const auto kvs = kv.logical_shape();
     // kv is [B,1,T,K_DIM]: B == 1 normally; when indexed (cache_batch_idx set) B is the cache's batch slots
     // and cache_batch_idx selects one. q is always batch-1, so the selected slot serves the whole query.
+    const uint32_t packed_kv_width = ::sparse_sdpa::packed_kv_width(K_DIM, attrs.v_dim);
+    const uint32_t expected_kv_width = t.has_scaled_kv() ? packed_kv_width : K_DIM;
     TT_FATAL(
-        kvs.rank() == 4 && kvs[1] == 1 && kvs[3] == K_DIM,
-        "kv must be [B,1,T,K_DIM] with K_DIM matching q ({})",
-        K_DIM);
+        kvs.rank() == 4 && kvs[1] == 1 && kvs[3] == expected_kv_width,
+        "kv must be [B,1,T,{}] (got {})",
+        expected_kv_width,
+        kvs);
     TT_FATAL(kvs[2] > 0, "kv T (cache length) must be > 0");
     const uint32_t B = kvs[0];
     if (attrs.cache_batch_idx.has_value()) {
@@ -79,12 +83,14 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
     const bool q_is_fp8 = (q.dtype() == DataType::FP8_E4M3);
     TT_FATAL(q.dtype() == DataType::BFLOAT16 || q_is_fp8, "q must be bf16 or fp8_e4m3");
     TT_FATAL(kv.dtype() == DataType::BFLOAT16 || kv_is_fp8, "kv must be bf16 or fp8_e4m3");
+    if (t.has_scaled_kv()) {
+        TT_FATAL(kv_is_fp8, "packed scaled KV must use fp8_e4m3 byte storage");
+        TT_FATAL(
+            attrs.v_dim % ::sparse_sdpa::SCALE_BLOCK_WIDTH == 0,
+            "scaled KV v_dim must be divisible by {}",
+            ::sparse_sdpa::SCALE_BLOCK_WIDTH);
+    }
     TT_FATAL(idx.dtype() == DataType::UINT32, "indices must be uint32");
-
-    // kv DRAM residency is keyed by the hash (kv.memory_config()), so it is checked on miss only. The
-    // remaining layout/memory/padding/device invariants (q/indices layout+memory+padding, kv layout+padding,
-    // same-device) are NOT hashed and are checked in validate_non_hashed (called below, run on miss AND hit).
-    TT_FATAL(kv.memory_config().buffer_type() == BufferType::DRAM, "sparse_sdpa kv must be in DRAM");
 
     const auto qs = q.logical_shape();
     const auto is = idx.logical_shape();
@@ -97,6 +103,19 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
     // scale with H — so a too-large H simply fails CB allocation at program creation rather than here.
     constexpr uint32_t tile_h = tt::constants::TILE_HEIGHT;
     TT_FATAL(H % tile_h == 0 && H >= tile_h, "sparse_sdpa: H must be a multiple of {} (got {})", tile_h, H);
+    // Validate v_dim before validate_non_hashed derives the packed mixed-format row width. In particular,
+    // reject v_dim > K_DIM before the unsigned RoPE-width subtraction.
+    TT_FATAL(attrs.v_dim > 0 && attrs.v_dim <= K_DIM, "v_dim must be in (0, K_DIM={}] (got {})", K_DIM, attrs.v_dim);
+    TT_FATAL(
+        attrs.v_dim % tt::constants::TILE_WIDTH == 0,
+        "v_dim must be a multiple of {} (got {})",
+        tt::constants::TILE_WIDTH,
+        attrs.v_dim);
+    TT_FATAL(
+        K_DIM % tt::constants::TILE_WIDTH == 0,
+        "K_DIM (q/kv last dim) must be a multiple of {} (got {})",
+        tt::constants::TILE_WIDTH,
+        K_DIM);
     // All non-hashed invariants (q/indices/kv layout+memory+padding, kv shape, cache_batch_idx, same-device).
     // kv may be oversized: a persistent max-size cache whose logical T far exceeds the keys any query attends
     // to. No valid-length bound is needed — reads are index-driven (indices < populated length, sentinels mark
@@ -123,19 +142,6 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
     const uint32_t TOPK = is[3];
     TT_FATAL(S > 0 && TOPK > 0, "S/TOPK must be > 0");
 
-    // V is the leading v_dim cols of the K_DIM-wide KV cache.
-    TT_FATAL(attrs.v_dim > 0 && attrs.v_dim <= K_DIM, "v_dim must be in (0, K_DIM={}] (got {})", K_DIM, attrs.v_dim);
-    TT_FATAL(
-        attrs.v_dim % tt::constants::TILE_WIDTH == 0,
-        "v_dim must be a multiple of {} (got {})",
-        tt::constants::TILE_WIDTH,
-        attrs.v_dim);
-    TT_FATAL(
-        K_DIM % tt::constants::TILE_WIDTH == 0,
-        "K_DIM (q/kv last dim) must be a multiple of {} (got {})",
-        tt::constants::TILE_WIDTH,
-        K_DIM);
-
     // k_chunk_size: multiple of the tile width (it tiles the key axis), divides TOPK
     constexpr uint32_t tile_w = tt::constants::TILE_WIDTH;
     TT_FATAL(
@@ -153,7 +159,12 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
     // matches q (compute_output_specs), so its row width uses q's element size.
     const uint32_t dram_align = tt::tt_metal::hal::get_dram_alignment();
     TT_FATAL((K_DIM * q.element_size()) % dram_align == 0, "Q row bytes must be {}B aligned", dram_align);
-    TT_FATAL((K_DIM * kv.element_size()) % dram_align == 0, "K row bytes must be {}B aligned", dram_align);
+    if (!t.has_scaled_kv()) {
+        TT_FATAL(
+            (kv.logical_shape()[3] * kv.element_size()) % dram_align == 0,
+            "K row bytes must be {}B aligned",
+            dram_align);
+    }
     TT_FATAL((TOPK * idx.element_size()) % dram_align == 0, "indices row bytes must be {}B aligned", dram_align);
     TT_FATAL((attrs.v_dim * q.element_size()) % dram_align == 0, "output row bytes must be {}B aligned", dram_align);
 
@@ -205,13 +216,14 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         t.q.logical_shape(),
         t.q.dtype(),
         t.kv.dtype(),
+        t.has_scaled_kv(),
         // kv.memory_config(): an ND-sharded kv produces different TensorAccessor compile-time args than an
         // interleaved one, so they must be distinct programs.
         t.kv.memory_config(),
         // kv.logical_shape() when sharded (see above) OR block-cyclic: the block-cyclic remap bakes its
         // T-dependent stride gap as a compile-time argument, so the cache length T must be in the hash (a
-        // different cache size is a distinct program). A plain interleaved kv keeps T out of the hash (sentinel
-        // shape) so changing T does not recompile.
+        // different cache size is a distinct program). A plain interleaved kv keeps T out of the hash by using
+        // a sentinel shape, so changing only T does not recompile.
         (t.kv.memory_config().is_sharded() || attrs.has_block_cyclic()) ? t.kv.logical_shape() : tt::tt_metal::Shape{},
         // Only whether kv is indexed (not which slot): cache_batch_idx's VALUE is a dynamic runtime arg
         // (see get_dynamic_runtime_args), so indexing into a different slot reuses the same program.
@@ -234,8 +246,7 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> SparseSDPAOperation::get_dynamic_ru
     // interleaved kv), so the same program is reused across slots/T — create_descriptor bakes it at build time
     // and on a program-cache HIT it would be STALE, so re-apply it from the current slot/T every dispatch. The
     // Block-cyclic remap configuration is compile-time, so only indexed programs need dynamic patching.
-    const bool indexed = attrs.has_indexed_kv_cache();
-    if (!indexed) {
+    if (!attrs.has_indexed_kv_cache()) {
         return {};
     }
     const uint32_t T = t.kv.logical_shape()[2];

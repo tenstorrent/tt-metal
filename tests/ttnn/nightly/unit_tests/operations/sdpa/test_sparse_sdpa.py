@@ -212,7 +212,38 @@ _NV = {
 }
 
 
+def _run_sparse_sdpa_perf(device, H, S, T, TOPK, kc, nv, cache_format):
+    nv_fn = _NV[nv]
+    q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: nv_fn(s, T, TOPK))
+    if cache_format == "bf16":
+        out, _ = run_op(q, kv, indices, device, kc, V_DIM)
+    elif cache_format == "raw_fp8":
+        out, _ = run_op(q, kv, indices, device, kc, V_DIM, kv_dtype=ttnn.fp8_e4m3)
+    else:
+        tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+        tt_latent_bf16 = to_dev(kv[..., :V_DIM].to(torch.bfloat16), device, ttnn.bfloat16)
+        tt_latent, tt_scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
+            tt_latent_bf16, round_scale_to_power_of_two=True
+        )
+        tt_rope = to_dev(kv[..., V_DIM:].to(torch.bfloat16), device, ttnn.bfloat16)
+        tt_packed = ttnn.experimental.deepseek_prefill.pack_scaled_fp8_kv_cache(tt_latent, tt_scales, tt_rope)
+        tt_indices = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+        tt_out = ttnn.transformer.sparse_sdpa(
+            tt_q,
+            tt_packed,
+            tt_indices,
+            V_DIM,
+            scale=K_DIM**-0.5,
+            k_chunk_size=kc,
+        )
+        out = ttnn.to_torch(tt_out)
+    assert tuple(out.shape) == (1, H, S, V_DIM)
+
+
 @run_for_blackhole()
+@pytest.mark.parametrize(
+    "cache_format", ["bf16", "raw_fp8", "scaled_fp8"], ids=["kv-bf16", "kv-raw-fp8", "kv-scaled-fp8"]
+)
 @pytest.mark.parametrize(
     "S,T,TOPK,kc,nv",
     [
@@ -226,9 +257,12 @@ _NV = {
     ],
     ids=["prod-dense", "prod-half", "prod-causal", "prod-sparse", "prod-mixed", "zone1tok", "lowcore"],
 )
-def test_sparse_sdpa_perf(device, S, T, TOPK, kc, nv):
-    H = 32
-    nv_fn = _NV[nv]
-    q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: nv_fn(s, T, TOPK))
-    out, _ = run_op(q, kv, indices, device, kc, V_DIM)  # no golden; correctness covered by the PCC tests
-    assert tuple(out.shape) == (1, H, S, V_DIM)
+def test_sparse_sdpa_perf(device, S, T, TOPK, kc, nv, cache_format):
+    _run_sparse_sdpa_perf(device, 32, S, T, TOPK, kc, nv, cache_format)
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize("cache_format", ["bf16", "scaled_fp8"], ids=["kv-bf16", "kv-scaled-fp8"])
+def test_sparse_sdpa_perf_glm_h64(device, cache_format):
+    """GLM production geometry, including multi-row query sub-blocking for the scaled mixed-format cache."""
+    _run_sparse_sdpa_perf(device, 64, 640, 56320, 2048, 256, "dense", cache_format)
