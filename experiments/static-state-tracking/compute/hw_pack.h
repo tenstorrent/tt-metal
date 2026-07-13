@@ -4,10 +4,13 @@
 //
 // PACK-engine hardware configurations.
 //
-//   pack_hw_cfg              — one-shot format/stride programming (startup).
-//   pack_init / pack_dest_init — packer MOP + dest-offset registers (startup).
-//   pack_untilize_cfg        — program the untilize-mode PACR MOP + row stride.
-//   pack_untilize            — drain one DST block to L1 untilized (per block).
+//   pack_hw_cfg               — one-shot format/stride programming (startup).
+//   pack_dest_offset_cfg      — program the packer's DST-read offset registers.
+//   pack_dest_cfg             — packer dest-state setup at startup (sync + reset
+//                               + offset regs + addr counter).
+//   pack_untilize_mop_cfg     — the untilize-mode PACR MOP (keyed on block width).
+//   pack_untilize_row_cfg — per-row L1 strides + output offset (keyed on row width).
+//   pack_untilize             — drain one DST block to L1 untilized (per block).
 //   packer_wait_for_math_done / pack_dest_section_done — tile_regs_* (PACK).
 
 #ifndef SST_COMPUTE_HW_PACK_H
@@ -45,7 +48,7 @@ inline void pack_hw_cfg(const sst::TileConfig& tc) {
         df, df, tile_size_bytes, tc.face_r_dim, TILE_C_DIM, tc.num_faces, /*partial_face=*/false, /*relu_config=*/0);
 }
 
-inline void init_packer_dest_offset_registers() {
+inline void pack_dest_offset_cfg() {
     TTI_STALLWAIT(p_stall::STALL_TDMA | p_stall::STALL_THCON, p_stall::PACK);
     TTI_SETDMAREG(0, 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
     TTI_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
@@ -53,10 +56,10 @@ inline void init_packer_dest_offset_registers() {
     select_packer_dest_registers<DST_SYNC_MODE>();
 }
 
-inline void pack_dest_init() {
+inline void pack_dest_cfg() {
     tensix_sync();
     reset_dest_offset_id();
-    init_packer_dest_offset_registers();
+    pack_dest_offset_cfg();
     packer_addr_counter_init();
     pack_sync_tile_dst_ptr = 0;
 }
@@ -64,13 +67,13 @@ inline void pack_dest_init() {
 // --- Untilize PACK configure, split into two independent sub-steps so the state
 // tracker can reprogram only what actually changed (granular reconfiguration).
 //
-//   pack_untilize_mop<Bct>     — the strided-untilize PACR MOP + addr modifiers +
+//   pack_untilize_mop_cfg<Bct>     — the strided-untilize PACR MOP + addr modifiers +
 //                                within-face setup. Its shape is a function of the
 //                                block width (MOP inner loop = Bct), face_r_dim
 //                                (MOP outer loop) and the op mode. This is the
 //                                EXPENSIVE piece (a full ckernel_template::program()
 //                                plus a replay-buffer load).
-//   pack_untilize_strides<Fct> — the per-row L1 Z-stride and the output-row address
+//   pack_untilize_row_cfg<Fct> — the per-row L1 Z-stride and the output-row address
 //                                offset. A function of the data format, face_r_dim
 //                                and the FULL row width (Fct) only — independent of
 //                                the block width. This is the CHEAP tail (one cfg
@@ -80,7 +83,7 @@ inline void pack_dest_init() {
 // MOP but keeps the strides; a kernel that changes only the row width keeps the
 // MOP and reprograms just the strides.
 template <std::uint32_t BlockCtDim>
-inline void pack_untilize_mop(const sst::TileConfig& tc) {
+inline void pack_untilize_mop_cfg(const sst::TileConfig& tc) {
     addr_mod_pack_t{.y_src = {.incr = 0, .clr = 0}}.set(ADDR_MOD_0);
     addr_mod_pack_t{.y_src = {.incr = 1, .clr = 0}}.set(ADDR_MOD_1);
 
@@ -136,7 +139,7 @@ inline void pack_untilize_mop(const sst::TileConfig& tc) {
 }
 
 template <std::uint32_t FullCtDim>
-inline void pack_untilize_strides(const sst::TileConfig& tc) {
+inline void pack_untilize_row_cfg(const sst::TileConfig& tc) {
     const std::uint32_t df = tc.data_format;
 
     const std::uint32_t x_stride = (df & 0x3) == to_underlying(DataFormat::Float32)   ? 4

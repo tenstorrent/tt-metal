@@ -5,8 +5,8 @@
 // MATH-engine hardware configurations.
 //
 //   math_hw_cfg              — one-shot ALU/format programming (startup).
-//   math_pack_sync_init      — claim the whole DST at startup.
-//   math_reconfig_remap      — enable the stride-16 DST read the untilizer wants.
+//   math_pack_sync_cfg       — claim the whole DST at startup.
+//   math_remap_cfg           — enable the stride-16 DST read the untilizer wants.
 //   math_a2d_cfg             — program the MOV_8_ROWS datacopy MOP.
 //   math_a2d                 — copy one tile A->DST[i] (per tile).
 //   math_wait_for_dest_available / math_dest_section_done — tile_regs_* (MATH).
@@ -52,7 +52,7 @@ inline void math_hw_cfg(const sst::TileConfig& tc) {
 }
 
 // Claim the whole DST for MATH at startup (blocks until previous packs drain).
-inline void math_pack_sync_init() {
+inline void math_pack_sync_cfg() {
     tensix_sync();
     while (semaphore_read(semaphore::MATH_PACK) > 0) {
     }
@@ -67,7 +67,7 @@ inline void math_pack_sync_init() {
 
 // Enable/disable the DEST stride-16 remap the untilize packer consumes. Must be
 // enabled BEFORE the producer writes DST (Blackhole ordering constraint).
-inline void math_reconfig_remap(bool remap_enable) {
+inline void math_remap_cfg(bool remap_enable) {
     tensix_sync();
     while (semaphore_read(semaphore::MATH_PACK) > 0) {
     }

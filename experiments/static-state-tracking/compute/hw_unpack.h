@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // UNPACK-engine hardware configurations.
-//   unpack_hw_cfg   — one-shot format/tile-descriptor programming (startup).
-//   unpack_a_cfg    — program the per-face UNPACR MOP for a SrcA copy.
-//   unpack_a        — issue one tile's unpack (per copied tile, steady state).
+//   unpack_hw_cfg              — one-shot format/tile-descriptor programming (startup).
+//   unpack_datacopy_face_cfg — within-face transpose + per-face x_end (keyed on tc).
+//   unpack_datacopy_mop_cfg    — the SrcA UNPACR datacopy MOP (keyed on op mode).
+//   unpack_a                   — issue one tile's unpack (per copied tile, steady state).
 
 #ifndef SST_COMPUTE_HW_UNPACK_H
 #define SST_COMPUTE_HW_UNPACK_H
@@ -48,18 +49,18 @@ inline void unpack_hw_cfg(const sst::TileConfig& tc) {
 
 // --- SrcA-copy configure, split into two field-keyed sub-steps so the tracker
 // can reprogram only what changed:
-//   unpack_datacopy_format — within-face transpose + per-face x_end. Depends on
+//   unpack_datacopy_face_cfg — within-face transpose + per-face x_end. Depends on
 //                            the tile geometry (face_r_dim), i.e. the tracked tc.
-//   unpack_datacopy_mop    — the UNPACR SrcA MOP (outer loop = num_faces). Depends
+//   unpack_datacopy_mop_cfg    — the UNPACR SrcA MOP (outer loop = num_faces). Depends
 //                            on the op mode (datacopy) and num_faces.
-inline void unpack_datacopy_format(const sst::TileConfig& tc) {
+inline void unpack_datacopy_face_cfg(const sst::TileConfig& tc) {
     // within_face_16x16_transpose = 0
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
     // Unpack the entire face on UNP_A.
     config_unpacker_x_end<p_setadc::UNP_A>(tc.face_r_dim);
 }
 
-inline void unpack_datacopy_mop(const sst::TileConfig& tc) {
+inline void unpack_datacopy_mop_cfg(const sst::TileConfig& tc) {
     static constexpr std::uint32_t unpack_srca = TT_OP_UNPACR(
         SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /*OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srcb_set_dvalid =

@@ -109,15 +109,15 @@ ALWI auto hw_startup() {
     // MOP built at startup is always thrown away. The first pack op builds it
     // exactly once (straight-line: the only time; in a loop: hoisted by `loop`).
     UNPACK((hw::unpack_hw_cfg(tc_in)));
-    MATH((hw::math_pack_sync_init()));
+    MATH((hw::math_pack_sync_cfg()));
     MATH((hw::math_hw_cfg(tc_in)));
     PACK((hw::pack_hw_cfg(tc_out)));
-    PACK((hw::pack_dest_init()));
+    PACK((hw::pack_dest_cfg()));
 
     if constexpr (Remap) {
         // Row-major output => enable the DEST stride-16 remap up front, before any
         // producer writes DST.
-        MATH((hw::math_reconfig_remap(true)));
+        MATH((hw::math_remap_cfg(true)));
     }
 
     return Tag<StartupNext<Remap>::value>{};
@@ -145,10 +145,10 @@ ALWI auto copy_tile(Tag<S>, const Tensor<TileT, B>& in, uint32_t in_idx, uint32_
 
     // UNPACK: format sub-step keys on geometry (tc); MOP sub-step keys on op mode.
     if constexpr (!S.u.tc.matches(tc)) {
-        UNPACK((hw::unpack_datacopy_format(tc)));
+        UNPACK((hw::unpack_datacopy_face_cfg(tc)));
     }
     if constexpr (!S.u.mode.matches(UnpackMode::DataCopy)) {
-        UNPACK((hw::unpack_datacopy_mop(tc)));
+        UNPACK((hw::unpack_datacopy_mop_cfg(tc)));
     }
     if constexpr (m_all) {
         MATH((hw::math_a2d_cfg(tc)));
@@ -177,10 +177,10 @@ ALWI auto pack_untilize_dest(Tag<S>, const Tensor<TileT, B>& out, uint32_t col_t
     // Changing only the block width thus reprograms the MOP but keeps the strides;
     // changing only the row width keeps the MOP and redoes the strides.
     if constexpr (!S.p.mode.matches(PackMode::Untilize) || !S.p.block_ct.matches(Bct)) {
-        PACK((hw::pack_untilize_mop<Bct>(tc)));
+        PACK((hw::pack_untilize_mop_cfg<Bct>(tc)));
     }
     if constexpr (!S.p.tc.matches(tc) || !S.p.full_ct.matches(Fct)) {
-        PACK((hw::pack_untilize_strides<Fct>(tc)));
+        PACK((hw::pack_untilize_row_cfg<Fct>(tc)));
     }
 
     PACK((hw::pack_untilize<Bct>(out.l1_addr_16B, col_tile_offset, tc, /*dst_tile_index=*/0)));
