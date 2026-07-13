@@ -8362,16 +8362,33 @@ def _cmd_up_core_impl(args) -> int:
         if args.strict:
             return 2
         compat_rc = 0
-    if compat_rc not in (0, None):
+    _strict = getattr(args, "strict", False)
+    if compat_rc == 1:
         print(
-            f"  Compatibility gate FAILED: {MODEL} cannot run on {BOX} as-is "
-            f"(cmd_compat exit={compat_rc}). The compat report above lists the "
-            f"BLOCKED building blocks or kernel-divisibility issues. Aborting "
-            f"before scaffold / autofill / prepare so you don't generate a "
-            f"demo skeleton against an unsupported (model, box) pair.",
+            f"  Compatibility gate FAILED: could not analyze {MODEL} on {BOX} "
+            f"(cmd_compat exit=1) -- config.json unavailable, nothing to build "
+            f"against. Aborting before scaffold / autofill / prepare.",
             file=sys.stderr,
         )
         return compat_rc
+    if compat_rc in (2, 3):
+        _kind = "missing building block(s)" if compat_rc == 2 else "kernel-level constraint(s)"
+        if _strict:
+            print(
+                f"  Compatibility gate FAILED (--strict): {MODEL} on {BOX} has "
+                f"{_kind} (cmd_compat exit={compat_rc}). Aborting before scaffold.",
+                file=sys.stderr,
+            )
+            return compat_rc
+        print(
+            f"  Compatibility gate: {MODEL} on {BOX} has {_kind} (cmd_compat "
+            f"exit={compat_rc}). NOT aborting -- recording as work-item(s) and "
+            f"continuing into the bring-up loop (ADAPT / REUSE / NEW). Blockers "
+            f"listed above are graduated where possible and isolated "
+            f"(stub / CPU-fallback) otherwise. Re-run with --strict to hard-fail "
+            f"instead.",
+            file=sys.stderr,
+        )
 
     mem_fit_rc = _enforce_memory_fit_or_abort(
         MODEL,

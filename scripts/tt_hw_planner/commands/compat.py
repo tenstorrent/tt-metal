@@ -42,17 +42,16 @@ def cmd_compat(args) -> int:
     else:
         print(render_compat_table(report, kernel_report, verbose=args.verbose, chips=_chips))
 
-    if report.overall == "BLOCKED":
-        return 2
+    _arch_blocked = report.overall == "BLOCKED"
+    if not _arch_blocked:
+        try:
+            from ..compatibility import Status as _CompatStatus
 
-    try:
-        from ..compatibility import Status as _CompatStatus
-
-        _arch_blocked = any(
-            r.needed and r.status == _CompatStatus.MISSING for r in (getattr(report, "results", None) or [])
-        )
-    except Exception:
-        _arch_blocked = False
+            _arch_blocked = any(
+                r.needed and r.status == _CompatStatus.MISSING for r in (getattr(report, "results", None) or [])
+            )
+        except Exception:
+            _arch_blocked = False
     if _arch_blocked:
         return 2
     if kernel_report is not None:
@@ -68,5 +67,5 @@ def cmd_compat(args) -> int:
             except Exception:
                 _mesh_tp = 1
         if kernel_report.has_blockers(tp=_mesh_tp):
-            return 2
+            return 3
     return 0
