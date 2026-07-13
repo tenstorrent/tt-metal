@@ -733,3 +733,91 @@
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
+
+# Nightly SDXL from tt-metal-l2-nightly (shield_sdxl_tests.yaml)
+# (target ~40min WH / ~30-40min BH; tighten after first CI run reveals real durations).
+- name: ttnn nightly sdxl base unet-loop (wormhole)
+  cmd: |
+    export TT_MM_THROTTLE_PERF=5
+    pytest models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600
+  model: sdxl-nightly-wh
+  skus:
+    wh_n150:
+      timeout: 40
+      tier: 2
+    wh_n300:
+      timeout: 40
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: ttnn nightly sdxl refiner + lora (wormhole)
+  cmd: |
+    export TT_MM_THROTTLE_PERF=5
+    exit_code=0
+    pytest models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600 || exit_code=$?
+    pytest models/demos/stable_diffusion_xl_base/lora/tests/test_lora_rollback.py -v -m "not disable_fast_runtime_mode" --timeout=600 || exit_code=$?
+    exit $exit_code
+  model: sdxl-nightly-wh
+  skus:
+    wh_n150:
+      timeout: 40
+      tier: 2
+    wh_n300:
+      timeout: 40
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: ttnn nightly sdxl base unet-loop (blackhole)
+  cmd: |
+    export TT_MM_THROTTLE_PERF=0
+    pytest models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600
+  model: sdxl-nightly-bh
+  skus:
+    bh_p150:
+      timeout: 40
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: ttnn nightly sdxl refiner unet-loop (blackhole)
+  cmd: |
+    export TT_MM_THROTTLE_PERF=0
+    pytest models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600
+  model: sdxl-nightly-bh
+  skus:
+    bh_p150:
+      timeout: 40
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: ttnn nightly sdxl demo cfg parallel test (N300)
+  cmd: |
+    export TT_MM_THROTTLE_PERF=5
+    pytest models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and use_cfg_parallel" --timeout=600
+  model: sdxl-nightly-wh
+  skus:
+    wh_n300:
+      timeout: 15
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: nightly sdxl demo (blackhole)
+  cmd: |
+    export TT_MM_THROTTLE_PERF=0
+    exit_code=0
+    pytest models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
+    pytest models/demos/stable_diffusion_xl_base/demo/demo_base_and_refiner.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
+    pytest models/demos/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
+    pytest models/demos/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
+    exit $exit_code
+  model: sdxl-nightly-bh
+  skus:
+    bh_p150:
+      timeout: 30
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
