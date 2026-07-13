@@ -100,7 +100,21 @@ class FactBase:
         for o in objects:
             parse_errors += o.get("parse_errors", 0)
             for f in o.get("facts", []):
-                seen.setdefault(cls._dedup_key(f), f)
+                k = cls._dedup_key(f)
+                prev = seen.get(k)
+                if prev is None:
+                    seen[k] = f
+                    continue
+                # Same call site parsed by >1 TU (the dedup key excludes recv_type /
+                # argc / recv / arg0). MERGE preferring NON-EMPTY fields so a TU where
+                # the object-API receiver type / argc RESOLVED is not lost to a
+                # dependent-parse TU where it didn't — first-win would silently keep
+                # the empty copy and disable cb_classify / noc_signal_is_atomic on it.
+                # Only fills a field that is empty on the kept fact (same site → same
+                # semantics); a set numeric 0 (e.g. off) is NOT "empty" so it stays.
+                for fk, fv in f.items():
+                    if fv not in (None, "", -1) and prev.get(fk) in (None, "", -1):
+                        prev[fk] = fv
         return cls(arch, list(seen.values()), parse_errors)
 
     @classmethod
