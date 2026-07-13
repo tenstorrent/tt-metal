@@ -25,6 +25,7 @@ You are an LLK issue triage specialist. Your job is to turn raw GitHub issue tex
 - `ISSUE_BODY`
 - `ISSUE_LABELS`
 - `ISSUE_COMMENTS`
+- `TEST_BACKEND`: `local` or `ttsim` (execution target only; does not change the layer/verifiability decision)
 - `WORKTREE_DIR`
 - `LOG_DIR`
 
@@ -64,6 +65,8 @@ You are an LLK issue triage specialist. Your job is to turn raw GitHub issue tex
    - `missing_impl`
    - `porting_gap`
    - `perf_issue`
+   - `cleanup_refactor` — API cleanup/refactor, init/signature restructuring, or docs
+     (e.g. `cleanup`/`compute_api_split` issues); do not force these into `test_harness`.
    - `test_harness`
    - `unknown`
 4. Identify the likely LLK area:
@@ -74,14 +77,55 @@ You are an LLK issue triage specialist. Your job is to turn raw GitHub issue tex
    - sync/reconfig
    - test harness
    - metal integration
-5. Search for relevant files/functions/tests.
-6. Decide the **perf intent** of the fix (used by the perf stage):
+5. **Determine the fix layer and how it will be verified.** Decide which layer(s) the fix
+   will change, from the 4-layer stack (see `.claude/references/metal-integration.md`):
+   - `llk_lib` (Layer 1) — `tt_metal/tt-llk/tt_llk_{arch}/` (the `_llk_*`/`llk_*` library)
+   - `ckernels_api` (Layer 2) — `tt_metal/hw/ckernels/{arch}/metal/llk_api/`
+   - `compute_api` (Layer 3) — `tt_metal/hw/inc/api/compute/`
+   - `ttnn` (Layer 4) — `ttnn/.../kernels/compute/`
+   - `metal_tests` — only `tests/tt_metal/**`
+   - `mixed` — more than one of the above
+
+   Then set `verifiable_in_llk_suite` (does the tt-llk **Python suite** exercise it?):
+   - `yes` — the change is in Layer 1 **and** an existing tt-llk test source under
+     `tests/sources/**` `#include`s and calls the changed `_llk_*`/`llk_*` symbol. That
+     suite (run on either backend) exercises it directly.
+   - `no` — the change is confined to Layer 2/3/4 or `metal_tests`. **No tt-llk test
+     source includes those headers** (they call the Layer-1 library directly), so the
+     tt-llk suite compiles byte-identical kernels before/after and cannot exercise the
+     change. It is still verifiable — by the metal suite (below), not the tt-llk suite.
+   - `partial` — `mixed`: the Layer-1 slice is `yes`, the higher-layer slice is `no`.
+
+   Confirm with evidence, do not guess:
+   ```bash
+   # Does any tt-llk test source actually include/call the changed higher-layer symbol?
+   grep -rnE '<changed_symbol>|api/compute/|metal/llk_api/' tests/sources tests/python_tests
+   ```
+
+   When `verifiable_in_llk_suite` is `no` or `partial`, find the **metal verification
+   target** — the `unit_tests_llk` gtest that drives a compute kernel calling the changed
+   Compute-API symbol (the metal-tester builds+runs it on the same backend):
+   ```bash
+   # 1) which compute test-kernel calls the changed symbol
+   grep -rlnE '<changed_symbol>' tests/tt_metal/tt_metal/test_kernels/compute/
+   # 2) which gtest drives that kernel (→ the --gtest_filter)
+   grep -rlnE '<kernel_basename>|<operation>' tests/tt_metal/tt_metal/llk/
+   # 3) list concrete gtest names (fixtures may be slow-dispatch-only)
+   #    <build>/test/tt_metal/unit_tests_llk --gtest_list_tests | grep -i <operation>
+   ```
+   Record `target` (usually `unit_tests_llk`), a tight `gtest_filter`, the `kernel`
+   source, and `dispatch` (`slow` if the fixture name ends `*SlowDispatchOnly`, else
+   `fast`). If **no** metal test exercises the symbol, set `metal_verification: none`
+   with the reason — only then is the change genuinely unverifiable in-harness, and the
+   fixer still produces a reviewed patch for tt-metal CI.
+6. Search for relevant files/functions/tests.
+7. Decide the **perf intent** of the fix (used by the perf stage):
    - `optimize` — the issue asks the kernel to get *faster* (optimization, perf
      recovery, "too slow", reduce cycles). The perf stage will require an
      improvement.
    - `maintain` — any other fix (bug fix, new behavior, test harness). The perf
      stage will only guard against a regression.
-7. Decide whether architecture research is needed. It is needed for ISA semantics, register layout, instruction scheduling, cross-arch porting, or hardware contract questions. It is not needed for simple call-site fixes, typos, missing includes, or obvious test harness updates.
+8. Decide whether architecture research is needed. It is needed for ISA semantics, register layout, instruction scheduling, cross-arch porting, or hardware contract questions. It is not needed for simple call-site fixes, typos, missing includes, or obvious test harness updates.
 
 ## Output Artifact
 
@@ -95,8 +139,17 @@ in_scope: true|false
 reason: ...
 
 ## Category
-category: compile_error|test_failure|runtime_error|missing_impl|porting_gap|perf_issue|test_harness|unknown
+category: compile_error|test_failure|runtime_error|missing_impl|porting_gap|perf_issue|cleanup_refactor|test_harness|unknown
 perf_intent: optimize|maintain
+
+## Verification
+fix_layer: llk_lib|ckernels_api|compute_api|ttnn|metal_tests|mixed
+verifiable_in_llk_suite: yes|no|partial
+metal_verification:            # required when verifiable_in_llk_suite is no|partial
+  target: unit_tests_llk       # or "none" if no metal test exercises the change
+  gtest_filter: '<tight filter, e.g. *BinaryComputeSingleCore*>'
+  kernel: tests/tt_metal/tt_metal/test_kernels/compute/<...>.cpp
+  dispatch: slow|fast
 
 ## Target
 arch: blackhole|wormhole|quasar|multi
@@ -138,6 +191,9 @@ ANALYZED - issue #<number>
 - scope: in_scope|out_of_scope
 - category: ...
 - target_arches: ...
+- fix_layer: llk_lib|ckernels_api|compute_api|ttnn|metal_tests|mixed
+- verifiable_in_llk_suite: yes|no|partial
+- metal_verification: unit_tests_llk --gtest_filter='<...>' | none
 - likely files: N
 - needs_arch_research: true|false
 ```

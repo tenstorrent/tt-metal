@@ -149,6 +149,53 @@ Grep for "{operation}" in tests/tt_metal/tt_metal/llk/ (*.cpp files)
 
 ---
 
+## Verifying a Layer-2/3/4 Change (the metal test suite)
+
+**The tt-llk test suite (`tt_metal/tt-llk/tests/`) cannot verify a Layer-2/3/4 change.**
+Its C++ sources (`tests/sources/**`) `#include` and call the Layer-1 library directly
+(`llk_unpack_*`, `llk_math_*`, `llk_pack_*`); **none** include the CKernels API
+(`metal/llk_api`), the Compute API (`api/compute`), or TTNN kernels. So a change confined
+to Layer 2/3/4 compiles byte-identical tt-llk kernels — there is nothing to pass or fail.
+This is true on **both** the `ttsim` and `local` (silicon) backends, because both run the
+same Layer-1 suite; the backend is the execution target, not the test set.
+
+The change **is** verifiable — by the **metal `unit_tests_llk` gtest suite**, which drives
+real compute kernels (`tests/tt_metal/tt_metal/test_kernels/compute/*.cpp`) that call the
+Compute API. Two facts make this cheap:
+
+1. `unit_tests_llk` opens the device through metal's own `CreateDevice`/`MeshDevice` path,
+   which honors `TT_METAL_SIMULATOR`. So the **same `libttsim_*.so`** used by the tt-llk
+   suite also backs a metal `MeshDevice` — a slow-dispatch gtest boots and passes on
+   `libttsim_bh.so` (verified). No silicon required for slow-dispatch tests.
+2. The Compute-API headers are **JIT-compiled at runtime** from `$TT_METAL_HOME`. A change
+   confined to those headers does **not** require rebuilding the host binary — only a fresh
+   `TT_METAL_CACHE` so the compute kernel recompiles against the changed header.
+
+**Recipe** (proven for the eltwise-binary Compute API; generalize the filter per op):
+
+```bash
+# 0. Have a built binary: cmake --build <build> --target unit_tests_llk  (warm ≈ minutes)
+# 1. Ensure the changed Compute-API header is on disk under TT_METAL_HOME (the checkout/worktree).
+# 2. Run the mapped gtest with a FRESH cache so the kernel recompiles with the new header:
+FRESH=$(mktemp -d)
+TT_METAL_HOME="$PWD" \
+TT_METAL_CACHE="$FRESH" \
+TT_METAL_SLOW_DISPATCH_MODE=1 \                 # for *SlowDispatchOnly fixtures
+TT_METAL_SIMULATOR=~/sim/bh/libttsim_bh.so \    # omit to run on local silicon
+  ./build/test/tt_metal/unit_tests_llk --gtest_filter='*BinaryComputeSingleCore*'
+```
+
+Find the target/filter for a given change:
+
+```bash
+grep -rlnE '<changed_symbol>' tests/tt_metal/tt_metal/test_kernels/compute/   # which kernel calls it
+grep -rlnE '<kernel>|<operation>' tests/tt_metal/tt_metal/llk/                # which gtest drives it
+./build/test/tt_metal/unit_tests_llk --gtest_list_tests | grep -i <operation> # concrete names
+```
+
+A **fresh `TT_METAL_CACHE` per run is mandatory** — the kernel cache persists across
+processes, so a stale entry silently tests the *old* header and gives a false pass.
+
 ## Propagation Checklist
 
 Before completing any LLK change, verify:
@@ -156,5 +203,7 @@ Before completing any LLK change, verify:
 - [ ] CKernels wrapper updated for each affected architecture (`tt_metal/hw/ckernels/{arch}/metal/llk_api/`)
 - [ ] Compute API updated if the public interface changed (`tt_metal/hw/inc/api/compute/`)
 - [ ] TTNN bypass files checked for direct includes of changed headers
-- [ ] Metal integration tests still compile and pass (`tests/tt_metal/tt_metal/llk/`)
+- [ ] Metal integration tests still compile and pass (`tests/tt_metal/tt_metal/llk/`) — run the
+      `unit_tests_llk` gtest per the recipe above (ttsim or silicon); a tt-llk-suite pass does
+      **not** cover a Layer-2/3/4 change
 - [ ] tt-llk's own tests pass (`tt_metal/tt-llk/tests/`)
