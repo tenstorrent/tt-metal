@@ -134,6 +134,9 @@ class TPGatedDeltaNet:
         self.K = args.gdn_conv_kernel_size
         self.scale = self.Dk**-0.5
         self.cfg = tpc.COMPUTE_HIFI2
+        # Decode-precision probe: route decode linears (qkvz/ab/out) to HiFi4 (4-pass) under
+        # QWEN_DECODE_HIFI4=1, to test if decode's HiFi2 rounding drives the reasoning drift.
+        self.cfg_dec = tpc.COMPUTE_HIFI4 if os.environ.get("QWEN_DECODE_HIFI4") == "1" else self.cfg
         # Pre-build the chunk-prefill masks ONCE (replicated across the mesh) so the seq kernel
         # reads them from cache instead of rebuilding eye/triu/tril via from_torch on every call.
         # The from_torch fallback is a host write that TT_FATALs inside the captured chunk-outer
@@ -515,11 +518,11 @@ class TPGatedDeltaNet:
         if len(x.shape) == 4:
             x = ttnn.reshape(x, (1, x.shape[-2], x.shape[-1]))  # [1,B,dim]
 
-        qkvz = ttnn.linear(x, tw["qkvz"], compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        qkvz = ttnn.linear(x, tw["qkvz"], compute_kernel_config=self.cfg_dec, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         qkv = ttnn.slice(qkvz, (0, 0, 0), (1, B, self.qkv_dim_tp))
         z = ttnn.slice(qkvz, (0, 0, self.qkv_dim_tp), (1, B, self.qkvz_dim_tp))
         ttnn.deallocate(qkvz)
-        ab = ttnn.linear(x, tw["ab"], compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ab = ttnn.linear(x, tw["ab"], compute_kernel_config=self.cfg_dec, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         a = ttnn.slice(ab, (0, 0, 0), (1, B, Nv))
         b = ttnn.slice(ab, (0, 0, Nv), (1, B, 2 * Nv))
         ttnn.deallocate(ab)
@@ -660,7 +663,7 @@ class TPGatedDeltaNet:
         ttnn.deallocate(out_f)
         ttnn.deallocate(z)
 
-        partial = ttnn.linear(gated, tw["out"], compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        partial = ttnn.linear(gated, tw["out"], compute_kernel_config=self.cfg_dec, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
         return tt_all_reduce(

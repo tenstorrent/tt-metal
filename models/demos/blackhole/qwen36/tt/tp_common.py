@@ -35,6 +35,16 @@ COMPUTE_HIFI2 = ttnn.WormholeComputeKernelConfig(
     packer_l1_acc=True,
 )
 
+# Highest-fidelity (4-pass, full bf16 mantissa, no math-approx) — decode-precision probe.
+# QWEN_DECODE_HIFI4=1 routes the decode matmuls + SDPA here to test whether decode's per-op
+# rounding (vs the healthy prefill) is the reasoning-drift cause.
+COMPUTE_HIFI4 = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_approx_mode=False,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=True,
+)
+
 
 # ── Grid helpers ────────────────────────────────────────────────────────────
 def prefill_grid_default():

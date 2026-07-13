@@ -124,7 +124,14 @@ class Qwen36DecoderLayer:
         valid_len=None,
         batch_slot=None,
     ):
+        import os as _os
+
         _norm_mode = Mode.PREFILL if mode == "prefill" else Mode.DECODE
+        # Root-cause ablation: force decode norms to PREFILL mode (QWEN_DECODE_NORM_PREFILL=1) to
+        # test if the DistributedNorm decode-mode (all-gather-then-norm) vs prefill-mode is the
+        # decode-vs-prefill divergence source.
+        if mode == "decode" and _os.environ.get("QWEN_DECODE_NORM_PREFILL") == "1":
+            _norm_mode = Mode.PREFILL
         if self.num_devices > 1:
             # TP: DistributedNorm uses the framework's per-norm memory configs.
             _attn_norm_config = self.args.get_norm_config("attn", _norm_mode)

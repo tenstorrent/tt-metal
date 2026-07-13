@@ -109,6 +109,11 @@ class Qwen36MLP:
         self.compute_kernel_config_decode = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=True
         )
+        # Decode-precision probe: raise decode MLP matmuls to HiFi4 under QWEN_DECODE_HIFI4=1.
+        if os.environ.get("QWEN_DECODE_HIFI4") == "1":
+            self.compute_kernel_config_decode = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
+            )
 
     def forward(self, x):
         if self.num_devices > 1:

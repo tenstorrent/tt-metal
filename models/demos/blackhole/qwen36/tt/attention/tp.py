@@ -26,6 +26,19 @@ from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.attention.rope_tp import apply_partial_rope_decode, apply_partial_rope_prefill
 from models.tt_transformers.tt.ccl import tt_all_reduce
 
+# Root-cause instrumentation (QWEN_ATTN_CAPTURE=1): per full-attn-layer capture of q-post-rope and
+# the SDPA output, in both prefill and decode paths, so a test can localize the decode divergence to
+# RoPE (q) vs SDPA/KV (attn out). Each call appends (mode, name, device0-shard torch tensor).
+_ATTN_CAP = []
+
+
+def _cap(mode, name, t, mesh):
+    import os as _os
+    if _os.environ.get("QWEN_ATTN_CAPTURE") != "1":
+        return
+    tt = ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
+    _ATTN_CAP.append((mode, name, tt))
+
 
 def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     """Shard one full-attention layer's weights across the mesh.
@@ -117,6 +130,8 @@ class TPAttention:
         self.scale = self.HD**-0.5
         self.rope_dim = args.rope_head_dim
         self.compute_cfg = tpc.COMPUTE_HIFI2
+        # Decode-precision probe: HiFi4 for decode QKV/out linears + SDPA under QWEN_DECODE_HIFI4=1.
+        self.compute_cfg_dec = tpc.COMPUTE_HIFI4 if os.environ.get("QWEN_DECODE_HIFI4") == "1" else self.compute_cfg
         self.k_caches = None
         self.v_caches = None
         # Paged KV cache (vLLM / model-contract path). Bound via set_paged_kv_cache;
@@ -177,6 +192,7 @@ class TPAttention:
         k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6), tw["k_norm"])
         q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
         k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim)
+        _cap("prefill", "q_rope", q, self.mesh)
 
         # Fill the per-head KV cache with the prompt's (post-RoPE) K/V so decode
         # continues from position S. Only when caches are allocated (stateful path).
@@ -209,6 +225,7 @@ class TPAttention:
         ttnn.deallocate(q8)
         ttnn.deallocate(k8)
         ttnn.deallocate(v8)
+        _cap("prefill", "attn_out", attn, self.mesh)
 
         gated = ttnn.multiply(attn, ttnn.sigmoid(gate))  # [1,NH,S,HD]
         ttnn.deallocate(attn)
@@ -239,7 +256,7 @@ class TPAttention:
         # Fused QKV: one matmul then split into [q|gate], k, v (branch's fused-QKV attn()).
         qsz, ksz = NH * HD * 2, NKV * HD
         qkv = ttnn.linear(
-            x, tw["wqkv_all"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            x, tw["wqkv_all"], compute_kernel_config=self.compute_cfg_dec, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         qg = ttnn.slice(qkv, (0, 0, 0, 0), (1, 1, B, qsz))
         kp = ttnn.slice(qkv, (0, 0, 0, qsz), (1, 1, B, qsz + ksz))
@@ -258,12 +275,15 @@ class TPAttention:
 
         # QK RMSNorm — raw (no-+1) at DECODE only (hybrid scaling): sharp +1 prefill retrieves the
         # long context; flat decode averages over keys so the per-step decode noise cannot flip
-        # retrieval (the loop/junk failure mode).
-        q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6), tw["q_norm_flat"])
-        k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6), tw["k_norm_flat"])
+        # retrieval (the loop/junk failure mode). QWEN_ATTN_SHARP_DECODE=1 uses the HF-correct sharp
+        # (+1) norm at decode too (root-cause probe: flat decode weakens retrieval → reasoning fails).
+        _qn, _kn = ("q_norm", "k_norm") if os.environ.get("QWEN_ATTN_SHARP_DECODE") == "1" else ("q_norm_flat", "k_norm_flat")
+        q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6), tw[_qn])
+        k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6), tw[_kn])
 
         q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
         k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
+        _cap("decode", "q_rope", q, self.mesh)
 
         # Cap the SDPA-decode grid to 64 cores (tree-reduction limit); auto-grid
         # grabs all 110 P150 cores for a single user (B=1) and overflows.
@@ -273,6 +293,23 @@ class TPAttention:
         if use_paged:
             # External paged KV cache (vLLM/contract path): update at cur_pos via the
             # page_table, then paged SDPA-decode
+            # Paged SDPA-decode correctness fix: the ttnn op's CROSS-CORE tree reduction produces
+            # garbage once the valid KV (cur_pos) spans more than one k_chunk — teacher-forced paged
+            # vs internal-cache decode collapses at cur_pos≈128 (test_paged_vs_internal), which is the
+            # serving multilingual-garbage decode failure. max_cores_per_head_batch=1 runs all chunks
+            # of a head on ONE core via the within-core lazy-softmax (shared with the correct non-paged
+            # path), avoiding the buggy cross-core reduction, for ANY context length. k_chunk=128 keeps
+            # each chunk L1-safe. Validated: paged-vs-internal PCC ≥0.99 for all positions, and serving
+            # decode stays coherent past cur_pos=128. See qwen36_paged_sdpa_decode_bug.md. Env overrides
+            # (QWEN_PAGED_MAXCORES=0, QWEN_PAGED_KCHUNK=0) restore the stock config for perf experiments
+            # or once the kernel's tree reduction is fixed upstream. Trade-off: 1 core/head is slower.
+            _pmc = int(os.environ.get("QWEN_PAGED_MAXCORES", "1"))
+            _pkc = int(os.environ.get("QWEN_PAGED_KCHUNK", "128"))
+            _kw = dict(compute_with_storage_grid_size=(8, 8), exp_approx_mode=False,
+                       q_chunk_size=_pkc, k_chunk_size=_pkc)
+            if _pmc > 0:
+                _kw["max_cores_per_head_batch"] = _pmc
+            sdpa_dec_cfg = ttnn.SDPAProgramConfig(**_kw)
             keys, values = self.paged_k, self.paged_v
             k_p = ttnn.pad(k, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
             v_p = ttnn.pad(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
@@ -294,6 +331,7 @@ class TPAttention:
                 cur_pos_tensor=cur_pos_tt,
                 scale=self.scale,
                 program_config=sdpa_dec_cfg,
+                compute_kernel_config=self.compute_cfg_dec,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             ttnn.deallocate(q)
@@ -331,10 +369,12 @@ class TPAttention:
                 cur_pos_tensor=cur_pos_tt,
                 scale=self.scale,
                 program_config=sdpa_dec_cfg,
+                compute_kernel_config=self.compute_cfg_dec,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             ttnn.deallocate(q)
 
+        _cap("decode", "attn_out", attn_out, self.mesh)
         gated = ttnn.multiply(attn_out, ttnn.sigmoid(gate))
         ttnn.deallocate(attn_out)
         ttnn.deallocate(gate)
@@ -342,7 +382,7 @@ class TPAttention:
         gated_flat = ttnn.reshape(gated, (1, B, NH * HD))
         ttnn.deallocate(gated)
         wo_partial = ttnn.linear(
-            gated_flat, tw["wo"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            gated_flat, tw["wo"], compute_kernel_config=self.compute_cfg_dec, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         ttnn.deallocate(gated_flat)
         wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
