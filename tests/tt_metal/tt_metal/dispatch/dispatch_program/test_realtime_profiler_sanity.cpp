@@ -320,6 +320,7 @@ TEST(RealtimeProfilerSanity, LastProgramRecordDeliveredOnFinish) {
     }
 
     distributed::Finish(mesh_device->mesh_command_queue());
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
     UnregisterProgramRealtimeProfilerCallback(handle);
 
     constexpr uint32_t last_runtime_id = kNumPrograms;
