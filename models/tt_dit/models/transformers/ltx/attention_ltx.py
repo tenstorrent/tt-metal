@@ -28,10 +28,17 @@ def gate_merge_enabled() -> bool:
     bf16 while the projections drop to bf8 — merging would silently demote it. So the quant path
     keeps its standalone gate; the bf16 path merges.
 
-    OPT-IN (LTX_GATE_MERGE=1) while the merge is unproven: it is equivalent to the standalone gate
-    for a single attention forward, but the full pipeline decodes to NOISE (frame-PCC ~0 against the
-    same-build standalone gate). Until that is fixed, defaulting it on would hand every caller a
-    corrupt video that runs 6% faster.
+    OPT-IN (LTX_GATE_MERGE=1). The merge used to decode to NOISE; that was NOT the fold. Widening
+    to_qkv to [4096, 4096] made it spec-identical to ffn.ff1, and all_gather_minimal_matmul_async
+    left `chunks` out of its program-cache key, so the FFN reused the QKV program. Fixed in the op
+    (see its attribute_names) and guarded by
+    test_ltx_merged_mm_configs.py::test_same_shape_different_chunks_do_not_alias.
+
+    It still defaults OFF on the numbers: merged-vs-standalone is exact per block (frame-PCC 1.0000
+    on a whole gated block) but the merged gate logits come out of a differently-blocked matmul, and
+    six denoise steps amplify that bf16 rounding to a warm-gen frame-PCC of min 0.868 / mean 0.923 —
+    short of the >0.99 equivalence bar. It buys ~0.2s of an 8.4s gen (8.2s vs 8.4s), which does not
+    pay for a visible change in output.
 
     LTX_NO_GATE_MERGE still forces it off. The transformer cache is keyed on the result (the merge
     widens the Q/QKV weights), so either flag also selects the matching cache — which makes this a
