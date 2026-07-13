@@ -59,6 +59,15 @@ def _gqa_late_expand():
     return _os.environ.get("QWEN_GDN_GQA_LATE", "1") != "0"
 
 
+def _create_heads():
+    """Default-ON switch for the fused `nlp_create_qkv_heads_gdn` op: one kernel reads the fused
+    token-major conv output and emits head-major q/k/v, replacing the conv head-split + `_to_bhtd`
+    permute with address arithmetic (~-0.87 ms, bit-identical). Requires bf16 payload + full-chunk
+    (valid_len None); the caller (gdn/tp.py) gates on those so the masked/fp32 paths stay legacy.
+    Set ``QWEN_GDN_CREATE_HEADS=0`` to fall back to the host-side head-split + `_to_bhtd` permute."""
+    return _os.environ.get("QWEN_GDN_CREATE_HEADS", "1") != "0"
+
+
 def _ck(name, t):
     if not _DBG:
         return
@@ -123,11 +132,11 @@ def _l2norm_qk(t, cached_masks):
 
 
 def chunk_gated_delta_rule_seq_adapter(
-    q,  # [B, T, H, K]
-    k,  # [B, T, H, K]
-    v,  # [B, T, H, V]
-    beta,  # [B, T, H]
-    g,  # [B, T, H]
+    q=None,  # [B, T, H, K] (None when fused_qkv is given)
+    k=None,  # [B, T, H, K]
+    v=None,  # [B, T, H, V]
+    beta=None,  # [B, T, H]
+    g=None,  # [B, T, H]
     chunk_size=128,
     scale=None,
     initial_state=None,  # [B, H, K, V] (any dtype) or None
@@ -135,6 +144,8 @@ def chunk_gated_delta_rule_seq_adapter(
     cached_masks=None,
     valid_len=None,
     token_major=False,  # opt in to the token-major writer output ([B,T,H*V]); caller must handle that shape
+    fused_qkv=None,  # [B, T, (Nq+Nk+Nv)*D] token-major conv output; when set, nlp_create_qkv_heads_gdn
+    fused_hc=None,  # (num_q, num_k, num_v, head_dim) — required with fused_qkv; replaces the _to_bhtd permute
 ):
     """Drop-in replacement for chunk_gated_delta_rule_ttnn that runs the C++
     chunk-parallel `gated_delta_attn_seq` kernel.
@@ -149,14 +160,25 @@ def chunk_gated_delta_rule_seq_adapter(
     and final state back. final_state is returned as bfloat16 to match the
     decode recurrent_state dtype.
     """
-    B = q.shape[0]
-    T = q.shape[1]
-    H = v.shape[2]  # value-head count (Nv): beta/g/v/output/state all use this
-    Hq = q.shape[2]  # q/k head count — may be < H (GQA late-expand). When < H, q/k are L2-normed +
-    # permuted at Hq heads (~rf x less work) then block-repeated to H AFTER, via a cheap dim-0
-    # repeat_interleave (no untilize). No-op when Hq == H (pre-expanded path) -> backward-compatible.
-    K = q.shape[3]
-    V = v.shape[3]
+    _use_fork = fused_qkv is not None
+    if _use_fork:
+        # create_gdn_heads path: shapes come from the head counts + the fused conv, not q/k/v.
+        _nq, _nk, _nv, _dh = fused_hc
+        B = fused_qkv.shape[0]
+        T = fused_qkv.shape[1]
+        H = _nv  # value-head count (Nv)
+        Hq = _nq  # q/k head count (Nk)
+        K = _dh
+        V = _dh
+    else:
+        B = q.shape[0]
+        T = q.shape[1]
+        H = v.shape[2]  # value-head count (Nv): beta/g/v/output/state all use this
+        Hq = q.shape[2]  # q/k head count — may be < H (GQA late-expand). When < H, q/k are L2-normed +
+        # permuted at Hq heads (~rf x less work) then block-repeated to H AFTER, via a cheap dim-0
+        # repeat_interleave (no untilize). No-op when Hq == H (pre-expanded path) -> backward-compatible.
+        K = q.shape[3]
+        V = v.shape[3]
     BH = B * H
 
     # Stage A (QWEN_GDN_PREPROC_BF16): payload q/k/v tilize to _pdt (bf16 when on);
@@ -182,9 +204,23 @@ def chunk_gated_delta_rule_seq_adapter(
         return _tilize(t, ttnn.float32)
 
     _spc("core.prep")  # layout transforms (_to_bhtd/_to_bht) + l2_norm
-    q_bh = _to_bhtd(q, K, Hq)
-    k_bh = _to_bhtd(k, K, Hq)
-    v_bh = _to_bhtd(v, V, H)
+    if _use_fork:
+        # One fused op: token-major conv [B,T,(Nq+Nk+Nv)*D] -> head-major q/k/v (replaces the 3x
+        # _to_bhtd permute chains with address arithmetic). Outputs [B,Hh,T,D] -> free-reshape to
+        # [B*Hh,T,D]. bf16 in/out (gated to bf16 preproc so dtype matches _pdt); l2_norm + late-expand
+        # below are unchanged.
+        _fused4 = ttnn.reshape(fused_qkv, [B, 1, T, (_nq + _nk + _nv) * _dh], memory_config=_DRAM)
+        q_h, k_h, v_h = ttnn.experimental.nlp_create_qkv_heads_gdn(
+            _fused4, num_q_heads=_nq, num_k_heads=_nk, num_v_heads=_nv
+        )
+        ttnn.deallocate(fused_qkv)
+        q_bh = ttnn.reshape(q_h, [B * _nq, T, _dh])
+        k_bh = ttnn.reshape(k_h, [B * _nk, T, _dh])
+        v_bh = ttnn.reshape(v_h, [B * _nv, T, _dh])
+    else:
+        q_bh = _to_bhtd(q, K, Hq)
+        k_bh = _to_bhtd(k, K, Hq)
+        v_bh = _to_bhtd(v, V, H)
 
     q_bh = _l2norm_qk(q_bh, cached_masks)
     k_bh = _l2norm_qk(k_bh, cached_masks)

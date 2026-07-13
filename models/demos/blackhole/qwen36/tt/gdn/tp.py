@@ -21,7 +21,9 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops i
     recurrent_gated_delta_rule_decode_ttnn,
 )
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq import (
+    _create_heads,
     _gqa_late_expand,
+    _preproc_dtype,
     _token_major_out,
     chunk_gated_delta_rule_seq_adapter,
     create_chunk_masks_seq,
@@ -433,18 +435,27 @@ class TPGatedDeltaNet:
 
         kd = self.key_dim_tp
         rf = Nv // Nk
-        # Head-split in ROW_MAJOR, so that the reshapes are free
-        conv = ttnn.to_layout(conv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        q = ttnn.reshape(ttnn.slice(conv, (0, 0, 0), (1, T, kd)), (1, T, Nk, Dk))
-        k = ttnn.reshape(ttnn.slice(conv, (0, 0, kd), (1, T, 2 * kd)), (1, T, Nk, Dk))
-        v = ttnn.reshape(ttnn.slice(conv, (0, 0, 2 * kd), (1, T, self.qkv_dim_tp)), (1, T, Nv, Dv))
-        ttnn.deallocate(conv)
-        if not _gqa_late_expand():
-            # Legacy: pre-expand q/k to Nv here (Nk->Nv), so core.prep permutes+L2-norms Nv heads.
-            q = ttnn.repeat_interleave(q, rf, dim=2)
-            k = ttnn.repeat_interleave(k, rf, dim=2)
-        # else (default): leave q/k at Nk heads; the adapter permutes + L2-norms at Nk and block-
-        # repeats to Nv AFTER (~rf x less q/k prep across the token->head seam). Bit-identical.
+        # create_gdn_heads (P1): feed the fused TILE conv straight to nlp_create_qkv_heads_gdn inside
+        # the adapter (no host-side head-split). Gated to bf16 payload + full-chunk (valid_len None) so
+        # the fork's bf16 output matches _pdt and the masked path stays legacy. See _create_heads.
+        _ch = _create_heads() and valid_len is None and _preproc_dtype() == ttnn.bfloat16
+        if _ch:
+            q = k = v = None
+            fused_qkv, fused_hc = conv, (Nk, Nk, Nv, Dk)  # conv is TILE bf16 (pre-RM); the fork reads it
+        else:
+            fused_qkv, fused_hc = None, None
+            # Head-split in ROW_MAJOR, so that the reshapes are free
+            conv = ttnn.to_layout(conv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            q = ttnn.reshape(ttnn.slice(conv, (0, 0, 0), (1, T, kd)), (1, T, Nk, Dk))
+            k = ttnn.reshape(ttnn.slice(conv, (0, 0, kd), (1, T, 2 * kd)), (1, T, Nk, Dk))
+            v = ttnn.reshape(ttnn.slice(conv, (0, 0, 2 * kd), (1, T, self.qkv_dim_tp)), (1, T, Nv, Dv))
+            ttnn.deallocate(conv)
+            if not _gqa_late_expand():
+                # Legacy: pre-expand q/k to Nv here (Nk->Nv), so core.prep permutes+L2-norms Nv heads.
+                q = ttnn.repeat_interleave(q, rf, dim=2)
+                k = ttnn.repeat_interleave(k, rf, dim=2)
+            # else (default): leave q/k at Nk heads; the adapter permutes + L2-norms at Nk and block-
+            # repeats to Nv AFTER (~rf x less q/k prep across the token->head seam). Bit-identical.
 
         beta = ttnn.reshape(ttnn.sigmoid(b), (1, T, Nv))
         ttnn.deallocate(b)
@@ -469,6 +480,8 @@ class TPGatedDeltaNet:
             cached_masks=self.chunk_seq_masks,
             valid_len=valid_len,
             token_major=tm,
+            fused_qkv=fused_qkv,
+            fused_hc=fused_hc,
         )
         _sp("state_carry")
         B, D = 1, self.qkv_dim_tp
