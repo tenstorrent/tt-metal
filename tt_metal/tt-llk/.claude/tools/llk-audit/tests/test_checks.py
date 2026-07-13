@@ -1837,11 +1837,20 @@ def test_kernel_surface_filter():
         "tt_metal/hw/inc/api/dataflow/dataflow_api.h",
         "runtime/sfpi/include/sfpi.h",
         "tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_A.h",
+        # HOST Semaphore — must be excluded so it can't be conflated with the
+        # device Semaphore (name-only recv_type match); the tool is device-only.
+        "tt_metal/impl/buffers/semaphore.hpp",
     ]
     for p in keep:
         assert capture.in_kernel_surface(p), ("KEEP", p)
     for p in drop:
         assert not capture.in_kernel_surface(p), ("DROP", p)
+    # HOST trees are recognized as host (the device-only tripwire in the merge loop):
+    # a host-tree fact that ever leaked past the scope filter is dropped + flagged.
+    assert capture.is_host_path("tt_metal/impl/buffers/semaphore.hpp"), "host impl"
+    assert not capture.is_host_path(
+        "ttnn/cpp/ttnn/operations/ccl/reduce_to_root/device/kernels/root.cpp"
+    ), "device kernel is not host"
 
 
 @case

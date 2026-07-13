@@ -126,6 +126,26 @@ def in_kernel_surface(path: str, keep=KERNEL_SURFACE_KEEP, drop=KERNEL_SURFACE_D
     return any(k in path for k in keep)
 
 
+# HOST implementation / public-API trees. A fact from one of these must NEVER enter
+# the analyzed (device-only) base — e.g. the HOST `tt::tt_metal::Semaphore`
+# (tt_metal/impl/buffers/semaphore.hpp) shares the bare name of the DEVICE `Semaphore`
+# (tt_metal/hw/inc/api/dataflow/noc_semaphore.h), and the checkers match by name only,
+# so a host fact would be conflated with a device one. Normally unreachable (a kernel
+# TU can't include host impl headers, and the kernels/ + in_kernel_surface filters
+# exclude them); is_host_path is a LOUD tripwire so a future scope change can't
+# silently let host code in. Markers are the SPECIFIC host roots (no bare 'impl', so a
+# device kernel dir that happens to contain 'impl' isn't misflagged; not
+# 'tt_metal/hw/inc/api', which is the DEVICE api) and carry no leading slash so they
+# match both relative and absolute fact paths.
+HOST_SURFACE_MARKERS = ("tt_metal/impl/", "tt_metal/api/")
+
+
+def is_host_path(path: str) -> bool:
+    """True iff `path` is in a HOST implementation / public-API tree (must not enter
+    the device-only base). Tight enough that a device kernel path never matches."""
+    return any(h in path for h in HOST_SURFACE_MARKERS)
+
+
 def _parse_cmd(cmd: str):
     """From a `cd <dir> && <gpp> ...` command, return (cwd, src, [-I..], [-D..])."""
     cwd = None
@@ -265,6 +285,23 @@ def main(argv=None) -> int:
             all_facts = obj.get("facts", [])
             kept = [f for f in all_facts if in_kernel_surface(f.get("file", ""))]
             dropped = len(all_facts) - len(kept)
+            # Device-only integrity tripwire: a HOST-tree fact reaching the extractor
+            # output means the scope filter has been loosened (e.g. the host
+            # `Semaphore` would be conflated with the device one). Drop any such fact
+            # from the base AND flag it LOUDLY — the tool is device-only; never
+            # silently analyze host code. Checks all_facts (the earliest signal, before
+            # in_kernel_surface). Normally impossible under the kernels/ filter.
+            host_leak = [f for f in all_facts if is_host_path(f.get("file", ""))]
+            if host_leak:
+                kept = [f for f in kept if not is_host_path(f.get("file", ""))]
+                dropped = len(all_facts) - len(kept)
+                print(
+                    f"llk-audit capture: WARNING {len(host_leak)} HOST-tree fact(s) "
+                    f"leaked into the kernel base (e.g. {host_leak[0].get('file','?')}) "
+                    f"— dropped; the tool is DEVICE-ONLY. Check the scope filter.",
+                    file=sys.stderr,
+                )
+                ledger.append((label, f"HOST-LEAK:{len(host_leak)}", 0, pe))
             obj["facts"] = kept
             nf = len(kept)
             status = "ok" if pe == 0 else "ok(parse_errors)"
