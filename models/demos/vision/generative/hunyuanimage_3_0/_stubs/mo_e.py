@@ -48,6 +48,24 @@ from models.demos.vision.generative.hunyuanimage_3_0._stubs import top_k_gate as
 
 HF_MODEL_ID = "tencent/HunyuanImage-3.0"
 
+# Expert (SwiGLU) weight dtype. bf16 puts 32 layers at ~23 GB/chip — the eager
+# forward fits (~73 MB free) but the trace/2CQ perf path (a 2nd resident
+# pipeline) OOMs. bf8_b halves the dominant expert weights (~19 -> ~9.6 GB/chip)
+# for headroom, and is PCC-neutral (bf8 4L PCC 0.9967 == bf16 0.9961; the depth
+# behavior is identical since it's intrinsic bf16 activation sensitivity, not
+# expert-weight precision). Flip to ttnn.bfloat16 to A/B.
+_EXPERT_DTYPE = ttnn.bfloat8_b
+
+# Expert-matmul compute config: default HiFi4 (4-pass) is the slowest; LoFi is a
+# large step-time win for the (bf8) expert SwiGLU matmuls that dominate decode.
+# Shared with prefill; PCC/token-gated.
+_EXPERT_MM_CFG = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.LoFi,
+    math_approx_mode=True,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=True,
+)
+
 
 def _to_ttnn(t, device, *, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
     return ttnn.from_torch(
@@ -169,8 +187,8 @@ class _TtMoE:
         gu_stack = torch.stack([e.gate_and_up_proj.weight.t().contiguous() for e in torch_module.experts], dim=0)
         down_stack = torch.stack([e.down_proj.weight.t().contiguous() for e in torch_module.experts], dim=0)
         self.expert_inter = int(torch_module.experts[0].gate_and_up_proj.weight.shape[0] // 2)
-        self.exp_gu = self._shard(gu_stack, dim=0)  # [epd, hidden, 2*inter] per TP device
-        self.exp_down = self._shard(down_stack, dim=0)  # [epd, inter, hidden] per TP device
+        self.exp_gu = self._shard(gu_stack, dim=0, dtype=_EXPERT_DTYPE)  # [epd, hidden, 2*inter] per TP device
+        self.exp_down = self._shard(down_stack, dim=0, dtype=_EXPERT_DTYPE)  # [epd, inter, hidden] per TP device
 
         # per-TP-device one-hot selection matrix (sel[d] picks expert columns
         # [d*epd : (d+1)*epd] out of the replicated router).
@@ -182,8 +200,12 @@ class _TtMoE:
 
         # shared expert REPLICATED (added once, after the routed all-reduce)
         if self.use_shared:
-            self.shared_gu = self._repl(torch_module.shared_mlp.gate_and_up_proj.weight.t().contiguous())
-            self.shared_down = self._repl(torch_module.shared_mlp.down_proj.weight.t().contiguous())
+            self.shared_gu = self._repl(
+                torch_module.shared_mlp.gate_and_up_proj.weight.t().contiguous(), dtype=_EXPERT_DTYPE
+            )
+            self.shared_down = self._repl(
+                torch_module.shared_mlp.down_proj.weight.t().contiguous(), dtype=_EXPERT_DTYPE
+            )
             self.shared_inter = int(torch_module.shared_mlp.gate_and_up_proj.weight.shape[0] // 2)
 
     # ------------------------------------------------------------------
@@ -195,14 +217,14 @@ class _TtMoE:
         return r
 
     def _swiglu(self, x, gu_w, down_w, inter):
-        gu = ttnn.linear(x, gu_w)
+        gu = ttnn.linear(x, gu_w, compute_kernel_config=_EXPERT_MM_CFG)
         x1 = ttnn.slice(gu, [0, 0, 0], [gu.shape[0], gu.shape[1], inter])
         x2 = ttnn.slice(gu, [0, 0, inter], [gu.shape[0], gu.shape[1], 2 * inter])
         ttnn.deallocate(gu)
         act = ttnn.multiply(x1, ttnn.silu(x2))
         ttnn.deallocate(x1)
         ttnn.deallocate(x2)
-        out = ttnn.linear(act, down_w)
+        out = ttnn.linear(act, down_w, compute_kernel_config=_EXPERT_MM_CFG)
         ttnn.deallocate(act)
         return out
 

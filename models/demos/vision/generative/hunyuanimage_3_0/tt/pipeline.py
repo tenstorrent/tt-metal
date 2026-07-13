@@ -449,6 +449,264 @@ class HunyuanImage3Pipeline:
         }
 
     # ====================================================================
+    # DECODE — real autoregressive incremental-KV decode (Option B).
+    # prefill-via-decode: feed prompt tokens one-by-one through the per-layer
+    # forward_decode (populating the causal KV cache), then generate greedily.
+    # Correctness phase: host ln_f+lm_head+argmax (simplest). Timed t/s/u uses
+    # an on-device head (separate path).
+    # ====================================================================
+    def _decode_pos_tensor(self, pos: int):
+        """INT32 ROW_MAJOR [B] device tensor of the current write/attend index."""
+        t = torch.full((self.batch_size_decode,), int(pos), dtype=torch.int32)
+        return ttnn.from_torch(
+            t,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **self._mesh_kw(),
+        )
+
+    def _decode_rope_at(self, cos_full, sin_full, pos: int):
+        """cos/sin at a single position, HEIGHT-SHARDED [1,B,1,head_dim] (padded to
+        TILE) on B cores — the layout ttnn.rotary_embedding_hf(is_decode_mode=True)
+        requires (must match nlp_create_qkv_heads_decode's Q/K sharding). Uses the
+        port's CUSTOM 2D-rope values (not standard rope)."""
+        B = self.batch_size_decode
+        hd = self.head_dim
+        grid = self.device.compute_with_storage_grid_size()
+        cr = ttnn.num_cores_to_corerangeset(B, grid, row_wise=True)
+        mem = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, hd),
+            core_grid=cr,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        def up(tbl):
+            v = tbl[:, pos, :].reshape(1, 1, 1, hd)  # [1,1,1,hd] (values at this position)
+            if B > 1:
+                v = v.expand(1, B, 1, hd).contiguous()
+            t = ttnn.from_torch(
+                v.to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                **self._mesh_kw(),
+            )
+            return ttnn.interleaved_to_sharded(t, mem)
+
+        return up(cos_full), up(sin_full)
+
+    def _decode_head_argmax(self, hidden_tt):
+        """Host ln_f + lm_head + argmax on the last position. Returns (next_id, logits[1,S,vocab])."""
+        h = _mesh_to_torch(hidden_tt, self.device).to(torch.float32)
+        if h.dim() == 4:
+            h = h.reshape(h.shape[0], h.shape[-2], h.shape[-1])
+        with torch.no_grad():
+            hb = self.model.model.ln_f(h.to(torch.bfloat16))
+            logits = self.model.lm_head(hb).to(torch.float32)
+        return int(logits[0, -1].argmax().item()), logits
+
+    def _decode_layers(self, hidden, cos_p, sin_p, cpos):
+        """Run all layers' single-token decode forward on a [1,B,hidden] input."""
+        for layer in self.layers:
+            hidden, l_aux = layer.forward_decode(hidden, cos_p, sin_p, cpos, return_l_aux=True)
+            if l_aux is not None:
+                ttnn.deallocate(l_aux)
+        return hidden
+
+    def run_decode(self, prompt: str, n_new_tokens: int = 32):
+        """Prefill the prompt via the decode path (populating KV caches), then
+        greedy-decode n_new_tokens. Returns prompt ids, generated ids, per-step
+        wall times (transformer decode step only; host head excluded)."""
+        import time
+
+        self.batch_size_decode = getattr(self, "batch_size_decode", 1)
+        max_seq = int(getattr(_decoder_stub, "_DECODE_MAX_SEQ", 512))
+        cos_full, sin_full = build_2d_rope_text(self.model, max_seq, self.head_dim)  # [1, max_seq, hd]
+        ids = build_input_ids(prompt, self.seq_len, model=self.model)[0].tolist()
+        # strip trailing pad so prefill length = real prompt length
+        pad_id = int(getattr(self.model.config, "pad_token_id", 0))
+        while len(ids) > 1 and ids[-1] == pad_id:
+            ids.pop()
+
+        pos = 0
+        last_hidden = None
+        for tid in ids:  # prefill-via-decode (causal, populates cache)
+            tok_tt = self._input_ids_to_device(torch.tensor([[tid]], dtype=torch.long))
+            hidden = self.embed(tok_tt)
+            ttnn.deallocate(tok_tt)
+            cos_p, sin_p = self._decode_rope_at(cos_full, sin_full, pos)
+            cpos = self._decode_pos_tensor(pos)
+            hidden = self._decode_layers(hidden, cos_p, sin_p, cpos)
+            for t in (cos_p, sin_p, cpos):
+                ttnn.deallocate(t)
+            if last_hidden is not None:
+                ttnn.deallocate(last_hidden)
+            last_hidden = hidden
+            pos += 1
+
+        next_id, _ = self._decode_head_argmax(last_hidden)
+        ttnn.deallocate(last_hidden)
+
+        generated, step_times = [], []
+        for _ in range(n_new_tokens):
+            generated.append(next_id)
+            tok_tt = self._input_ids_to_device(torch.tensor([[next_id]], dtype=torch.long))
+            hidden = self.embed(tok_tt)
+            ttnn.deallocate(tok_tt)
+            cos_p, sin_p = self._decode_rope_at(cos_full, sin_full, pos)
+            cpos = self._decode_pos_tensor(pos)
+            t0 = time.monotonic()
+            hidden = self._decode_layers(hidden, cos_p, sin_p, cpos)
+            try:
+                ttnn.synchronize_device(self.device)
+            except Exception:
+                pass
+            step_times.append(time.monotonic() - t0)
+            for t in (cos_p, sin_p, cpos):
+                ttnn.deallocate(t)
+            next_id, _ = self._decode_head_argmax(hidden)
+            ttnn.deallocate(hidden)
+            pos += 1
+
+        return {"prompt_ids": ids, "generated": generated, "step_times": step_times}
+
+    # -- TRACED decode: host-free per-token step captured once, replayed -------
+    def _decode_rope_shard_mem(self):
+        """Height-sharded mem config for the decode rope cos/sin ([TILE, hd] on B cores)."""
+        return ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, self.head_dim),
+            core_grid=ttnn.num_cores_to_corerangeset(
+                self.batch_size_decode, self.device.compute_with_storage_grid_size(), row_wise=True
+            ),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+    def _rope_host_tile(self, tbl, pos):
+        """Host bf16 TILE tensor [1,B,1,hd] of the custom-2D-rope row at `pos`."""
+        B, hd = self.batch_size_decode, self.head_dim
+        v = tbl[:, pos, :].reshape(1, 1, 1, hd)
+        if B > 1:
+            v = v.expand(1, B, 1, hd).contiguous()
+        return ttnn.from_torch(v.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    def run_decode_traced(self, prompt: str, n_new_tokens: int = 16):
+        """Trace-captured decode. The per-token transformer step (embed -> N decode
+        layers -> plus_one) is captured ONCE and replayed via execute_trace,
+        eliminating the host per-op dispatch that dominates batch=1 decode.
+        current_pos advances on-device (ttnn.plus_one); rope cos/sin live in a
+        persistent interleaved buffer host-copied per step (CQ1) and resharded
+        in-trace; head/argmax stay on host OUTSIDE the timed trace."""
+        import time
+
+        dev = self.device
+        self.batch_size_decode = getattr(self, "batch_size_decode", 1)
+        hd = self.head_dim
+        max_seq = int(getattr(_decoder_stub, "_DECODE_MAX_SEQ", 512))
+        cos_full, sin_full = build_2d_rope_text(self.model, max_seq, hd)
+        ids = build_input_ids(prompt, self.seq_len, model=self.model)[0].tolist()
+        pad_id = int(getattr(self.model.config, "pad_token_id", 0))
+        while len(ids) > 1 and ids[-1] == pad_id:
+            ids.pop()
+        P = len(ids)
+        rope_mem = self._decode_rope_shard_mem()
+
+        # persistent device buffers (created once, mutated in place)
+        tok_buf = self._input_ids_to_device(torch.tensor([[ids[0]]], dtype=torch.long))
+        cpos = self._decode_pos_tensor(0)
+        _rb = lambda tbl: ttnn.from_torch(
+            tbl[:, 0, :].reshape(1, 1, 1, hd).to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=dev,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **self._mesh_kw(),
+        )
+        cos_buf, sin_buf = _rb(cos_full), _rb(sin_full)
+
+        def _cp(host_t, dev_t):
+            try:
+                ttnn.copy_host_to_device_tensor(host_t, dev_t, cq_id=1)
+            except Exception:
+                ttnn.copy_host_to_device_tensor(host_t, dev_t)
+
+        def write_tok(t):
+            _cp(
+                ttnn.from_torch(
+                    torch.tensor([[int(t)]], dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+                ),
+                tok_buf,
+            )
+
+        def write_rope(pos):
+            _cp(self._rope_host_tile(cos_full, pos), cos_buf)
+            _cp(self._rope_host_tile(sin_full, pos), sin_buf)
+
+        def set_pos(pos):
+            _cp(
+                ttnn.from_torch(
+                    torch.full((self.batch_size_decode,), int(pos), dtype=torch.int32),
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                ),
+                cpos,
+            )
+
+        def step_body():
+            cos_s = ttnn.interleaved_to_sharded(cos_buf, rope_mem)
+            sin_s = ttnn.interleaved_to_sharded(sin_buf, rope_mem)
+            h = self.embed(tok_buf)
+            h = self._decode_layers(h, cos_s, sin_s, cpos)
+            ttnn.plus_one(cpos)
+            return h
+
+        # eager prefill-via-decode (populate cache); cpos: 0 -> P
+        last = None
+        for p in range(P):
+            write_tok(ids[p])
+            write_rope(p)
+            set_pos(p)
+            if last is not None:
+                ttnn.deallocate(last)
+            last = step_body()
+        t0 = self._decode_head_argmax(last)[0]
+        ttnn.deallocate(last)
+
+        # warm run at pos=P (compile), then capture the step
+        write_tok(t0)
+        write_rope(P)
+        set_pos(P)
+        _w = step_body()
+        ttnn.deallocate(_w)
+        set_pos(P)
+        write_rope(P)  # reset (warm did plus_one)
+        tid = ttnn.begin_trace_capture(dev, cq_id=0)
+        out_hidden = step_body()
+        ttnn.end_trace_capture(dev, tid, cq_id=0)  # executed step @P -> out_hidden; cpos -> P+1
+
+        generated = [t0]
+        step_times = []
+        cur = self._decode_head_argmax(out_hidden)[0]  # t1
+        pos = P
+        for _ in range(n_new_tokens - 1):
+            generated.append(cur)
+            pos += 1
+            write_tok(cur)
+            write_rope(pos)  # cpos auto-advanced in-trace
+            ts = time.monotonic()
+            ttnn.execute_trace(dev, tid, cq_id=0, blocking=True)
+            step_times.append(time.monotonic() - ts)
+            cur = self._decode_head_argmax(out_hidden)[0]
+        ttnn.release_trace(dev, tid)
+        return {"prompt_ids": ids, "generated": generated, "step_times": step_times}
+
+    # ====================================================================
     # COMMAND 3 — trace+2CQ contract (host-free per stage).
     #
     # Stages derived from the config architecture `HunyuanImage3ForCausalMM`

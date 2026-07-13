@@ -58,6 +58,20 @@ from models.demos.vision.generative.hunyuanimage_3_0._stubs import mo_e as _mo_e
 
 HF_MODEL_ID = "tencent/HunyuanImage-3.0"
 
+# Max sequence the decode KV cache is allocated for (prefill_len + generated).
+# Tile-aligned. Tiny on device (per-chip [B, 1_kv_head, max_seq, 128] bf16).
+_DECODE_MAX_SEQ = 512
+
+# Decode matmul compute config. Decode is overhead/latency-bound at batch=1, and
+# the default (HiFi4, 4-pass) is the slowest; LoFi (1-pass) is a large step-time
+# win (tt_transformers runs decode matmuls at reduced fidelity). PCC/token-gated.
+_DECODE_MM_CFG = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.LoFi,
+    math_approx_mode=True,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=True,
+)
+
 
 def _to_ttnn(t: torch.Tensor, device, *, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
     return ttnn.from_torch(
@@ -264,6 +278,16 @@ class _TtDecoderLayer:
         # of the transposed weight lines up exactly.
         self.o_w = self._shard_linear(cfg.o_proj.weight, dim=0)  # row-parallel (input feats)
 
+        # --- decode KV cache (incremental single-token decode) ---
+        # Full [B, num_kv_heads, max_seq, head_dim] sharded on the head dim across
+        # the TP axis -> each chip owns its 1 local KV head: local [B,1,max_seq,hd].
+        # Matches how the QKV weights are head-sharded, so the decode SDPA runs
+        # purely on local shards. Allocated once; None until a decode run seeds it.
+        self.kv_batch = 1  # single-user decode (batch=1)
+        k0 = torch.zeros(self.kv_batch, self.num_kv_heads, _DECODE_MAX_SEQ, hd)
+        self.k_cache = self._shard(k0, dim=1, dtype=ttnn.bfloat16)
+        self.v_cache = self._shard(k0.clone(), dim=1, dtype=ttnn.bfloat16)
+
         # --- MoE: composed graduated HunyuanMoE port (expert-parallel) ---
         # Exactly as the single-device path: HunyuanImage3DecoderLayer.mlp ==
         # HunyuanMoE. Delegate the whole MoE to the graduated `mo_e` stub, which
@@ -385,6 +409,80 @@ class _TtDecoderLayer:
         return out
 
     # ------------------------------------------------------------------
+    def _attention_decode(self, x, cos, sin, current_pos):
+        """Single-token (S=1) incremental-KV decode attention on the mesh.
+        x: [1, B, hidden]; cos/sin: [1,1,B,hd] position-indexed (replicated);
+        current_pos: INT32 [B] device tensor (write index, shared with SDPA).
+        Runs on local shards: q=[1,B,tp_num_heads,hd], k/v=[1,B,1,hd], KV cache
+        local [B,1,max_seq,hd]. GQA (4 q : 1 kv) handled inside sdpa_decode."""
+        B = x.shape[-2]
+        qkv = ttnn.linear(x, self.qkv_w, compute_kernel_config=_DECODE_MM_CFG)  # [1, B, tp_qkv]
+        qkv = ttnn.reshape(qkv, [1, 1, B, qkv.shape[-1]])  # decode create-heads layout
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+            qkv,
+            num_heads=self.tp_num_heads,
+            num_kv_heads=self.tp_num_kv_heads,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # q [1,B,tp_num_heads,hd], k/v [1,B,1,hd] (height-sharded)
+        ttnn.deallocate(qkv)
+        # rope, KV-write and sdpa_decode all want HEIGHT-SHARDED inputs; only
+        # rms_norm needs interleaved. Capture the create_heads sharded configs so
+        # we can deshard for the norm then re-shard back. v needs neither rope nor
+        # norm -> stays sharded for the write.
+        q_cfg, k_cfg = q.memory_config(), k.memory_config()
+
+        # rope (decode-mode, sharded) THEN qk-norm (HunyuanImage3 order)
+        if self.use_rope and cos is not None:
+            q = ttnn.experimental.rotary_embedding_hf(q, cos, sin, is_decode_mode=True)
+            k = ttnn.experimental.rotary_embedding_hf(k, cos, sin, is_decode_mode=True)
+        if self.use_qk_norm:
+            q = ttnn.rms_norm(
+                ttnn.sharded_to_interleaved(q, ttnn.DRAM_MEMORY_CONFIG), epsilon=self.eps, weight=self.q_norm_w
+            )
+            k = ttnn.rms_norm(
+                ttnn.sharded_to_interleaved(k, ttnn.DRAM_MEMORY_CONFIG), epsilon=self.eps, weight=self.k_norm_w
+            )
+            q = ttnn.interleaved_to_sharded(q, q_cfg)
+            k = ttnn.interleaved_to_sharded(k, k_cfg)
+
+        # write new K/V at current_pos into the resident cache (sharded input).
+        # non-fused (separate K,V): the fused op requires K,V on non-overlapping
+        # cores, which fails at batch=1 (both on a single core).
+        ttnn.experimental.paged_update_cache(self.k_cache, k, update_idxs_tensor=current_pos)
+        ttnn.experimental.paged_update_cache(self.v_cache, v, update_idxs_tensor=current_pos)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
+
+        # single-token attention over cache[0..cur_pos]. Bounded 8x8=64-core grid:
+        # the default (full 120-core) grid exceeds the SDPA tree-reduction limit
+        # (max 64 cores/head).
+        attn = ttnn.transformer.scaled_dot_product_attention_decode(
+            q,
+            self.k_cache,
+            self.v_cache,
+            cur_pos_tensor=current_pos,
+            scale=self.scale,
+            program_config=ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+                q_chunk_size=32,
+                k_chunk_size=128,
+                exp_approx_mode=False,
+            ),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [1, B, tp_num_heads, hd]
+        ttnn.deallocate(q)
+
+        # concat heads: sdpa output is [1,B,tp_num_heads,hd] DRAM (GQA requires DRAM
+        # output; nlp_concat_heads_decode wants sharded input) -> plain reshape merges
+        # the head dim head-major, matching the row-parallel o-proj input order.
+        attn = ttnn.reshape(attn, [1, B, self.tp_num_heads * self.head_dim])
+        out_partial = ttnn.linear(attn, self.o_w, compute_kernel_config=_DECODE_MM_CFG)
+        ttnn.deallocate(attn)
+        out = self._mesh_reduce(out_partial)
+        ttnn.deallocate(out_partial)
+        return out
+
+    # ------------------------------------------------------------------
     def __call__(self, hidden_states, custom_pos_emb=None, return_l_aux=False, **kwargs):
         self.num_calls += 1
         if self.is_mesh:
@@ -421,6 +519,29 @@ class _TtDecoderLayer:
         residual2 = hidden
         x2 = ttnn.rms_norm(hidden, epsilon=self.eps, weight=self.post_ln_w)
         # Composed graduated MoE (which composes the graduated gate), sharded.
+        moe, l_aux = self.moe(x2, return_l_aux=True)
+        ttnn.deallocate(x2)
+        out = ttnn.add(residual2, moe)
+        ttnn.deallocate(moe)
+        if return_l_aux:
+            return out, l_aux
+        if l_aux is not None:
+            ttnn.deallocate(l_aux)
+        return out
+
+    # ------------------------------------------------------------------
+    def forward_decode(self, hidden_states, cos, sin, current_pos, return_l_aux=False):
+        """Single-token decode forward (same pre-norm/residual structure as
+        _forward_sharded, but incremental-KV attention). hidden_states: [1,B,hidden]."""
+        residual = hidden_states
+        x = ttnn.rms_norm(hidden_states, epsilon=self.eps, weight=self.input_ln_w)
+        attn = self._attention_decode(x, cos, sin, current_pos)
+        ttnn.deallocate(x)
+        hidden = ttnn.add(residual, attn)
+        ttnn.deallocate(attn)
+
+        residual2 = hidden
+        x2 = ttnn.rms_norm(hidden, epsilon=self.eps, weight=self.post_ln_w)
         moe, l_aux = self.moe(x2, return_l_aux=True)
         ttnn.deallocate(x2)
         out = ttnn.add(residual2, moe)
