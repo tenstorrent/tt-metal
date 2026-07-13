@@ -141,6 +141,9 @@ jobs:
       publish-package: true
       tracy: true
       skip-tt-train: false
+      # Treeless clone: skip the trees/blobs that dominate the tag fetch, but keep commits + tags
+      # so git describe still yields a real version. Depth stays at the default.
+      checkout-filter: tree:0
       # Use the merge commit (github.sha) — see build-docker-images job for rationale.
       # Pass pre-built docker images to avoid duplicate builds
       ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
