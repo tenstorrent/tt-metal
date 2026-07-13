@@ -158,8 +158,6 @@ class HunyuanTtAttention(LightweightModule):
         # RMSNorm. bf8 attention weight upload can hang once device DRAM fills during
         # the multi-layer resident load; experts are the dominant memory lever.
         attn_dtype = weight_dtype
-        if attn_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
-            attn_dtype = ttnn.bfloat16
 
         # ------------------------------------------------------------------
         # QKV projection weight (column-parallel for TP).
