@@ -128,6 +128,36 @@ tt::tt_metal::ProgramDescriptor ConcatS2STiledProgramFactory::create_descriptor(
         .buffer = output.buffer(),
     });
 
+    // Tiny tiles (all width-32 tiles with height < TILE_HEIGHT) have a single row of faces
+    // (face_height == tile_height), so a column slice that is a multiple of the face width is
+    // contiguous in L1. The 32x32 transpose-based concat is therefore both unnecessary and
+    // incorrect for them (transposing a tiny tile would change its width to < TILE_WIDTH). Instead
+    // the grouped width-concat is just an interleaved sequence of contiguous copies straight from
+    // the resident input shards to the resident output shard, done by a single data-movement kernel.
+    const bool single_face_row = tile.get_face_shape()[0] == tile.get_height();
+    if (single_face_row) {
+        KernelDescriptor::CompileTimeArgs tiny_compile_time_args = {
+            0,                                         // input0_cb_id
+            1,                                         // input1_cb_id
+            cb_output_id,                              // output_cb_id
+            num_tiles_for_each_input_shard[0].first,   // input0_num_tiles_height
+            num_tiles_for_each_input_shard[0].second,  // input0_num_tiles_width
+            num_tiles_for_each_input_shard[1].second,  // input1_num_tiles_width
+            tile_size,
+            groups,
+        };
+        KernelDescriptor tiny_reader_desc;
+        tiny_reader_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
+            "reader_height_sharded_width_concat_two_tensors_tiled_no_transpose.cpp";
+        tiny_reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        tiny_reader_desc.core_ranges = all_cores;
+        tiny_reader_desc.compile_time_args = std::move(tiny_compile_time_args);
+        tiny_reader_desc.config = ReaderConfigDescriptor{};
+        desc.kernels.push_back(std::move(tiny_reader_desc));
+        return desc;
+    }
+
     tt::DataFormat cb_data_format = data_format;
     uint32_t cb_tile_size = tile_size;
     const bool is_bf8 = input_tensors[0].dtype() == DataType::BFLOAT8_B;
