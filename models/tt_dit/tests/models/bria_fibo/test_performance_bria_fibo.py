@@ -35,7 +35,12 @@ required (buffer size, mid-run dump, timeout) -- without them the post-process a
     models/tt_dit/tests/models/bria_fibo/test_performance_bria_fibo.py::test_fibo_pipeline_device_profile \\
     --timeout=1800
   pip install tt-perf-report
-  tt-perf-report generated/profiler/reports/.../ops_perf_results_*.csv   # auto-focuses the "fibo profile" signpost region
+  tt-perf-report generated/profiler/reports/.../ops_perf_results_*.csv --ignore-signposts   # WHOLE run (see below)
+
+WARNING: this whole-pipeline report is NOT focused on the measured pass. The test emits a "fibo profile"
+signpost, but at full-pipeline trace volume the host tracy-capture drops it (it never lands in the CSV), so
+tt-perf-report analyzes the entire file -- pipe __init__ allocation run + warmup + measured, mixed together.
+For focused per-stage reports (signpost survives, region bracketed exactly), use the per-component profiles.
 
 Per-component device-op profiles (``test_fibo_{encode,denoise,decode}_device_profile``) live at the bottom
 of this file. Each builds ONLY one component (encoder / transformer / VAE decoder) with synthetic inputs at
@@ -253,6 +258,7 @@ def test_fibo_pipeline_perf_breakdown(*, mesh_device, height, width, num_inferen
         pipe,
         label="text",
         prompt="a luxury sports car",
+        negative_prompt="white background",
         guidance_scale=5.0,
         seed=0,
         height=height,
@@ -308,7 +314,17 @@ def test_fibo_pipeline_device_profile(*, mesh_device, height, width, num_inferen
         models/tt_dit/tests/models/bria_fibo/test_performance_bria_fibo.py::test_fibo_pipeline_device_profile \\
         --timeout=1800
       pip install tt-perf-report
-      tt-perf-report generated/profiler/reports/.../ops_perf_results_*.csv   # auto-focuses the "fibo profile" signpost region
+      tt-perf-report generated/profiler/reports/.../ops_perf_results_*.csv --ignore-signposts
+
+    IMPORTANT -- this is a WHOLE-RUN report, NOT a focused measured region. This test emits a "fibo profile"
+    signpost around the measured pass, but at full-pipeline trace volume (~66k CSV rows / ~40 GB device log)
+    the host tracy-capture DROPS the signpost message -- it never lands in the CSV, so tt-perf-report reports
+    "No signposts found" and analyzes the entire file: the pipe ``__init__`` allocation generation + the
+    warmup pass + the measured pass, all mixed (~16.7k merged ops). Verified 2026-07-10. For FOCUSED
+    per-stage reports -- where the signpost DOES survive (small capture) and tt-perf-report brackets exactly
+    the measured forward -- use the per-component profiles at the bottom of this file
+    (``test_fibo_{encode,denoise,decode}_device_profile``). Keep this test as a whole-pipeline op-mix
+    overview only.
 
     Why each non-obvious flag is REQUIRED (a full pipeline emits far more markers than one op, so the
     profiler defaults are too small; without these the run drops markers and the post-process aborts with
@@ -327,10 +343,10 @@ def test_fibo_pipeline_device_profile(*, mesh_device, height, width, num_inferen
         (this profile is untraced), freeing DRAM for the enlarged marker buffer.
 
     Untraced on purpose: the device profiler + ttnn metal-trace only compose for a single trace-execution
-    step (more steps -> "Device data mismatch"). The one warmup pass compiles every op (its one-time cost
-    is excluded from the CSV by the signpost); the single measured step then captures each unique op once
-    per branch (encode -> prepare -> denoise -> decode) at production gs=5.0 (CFG on -> cond + uncond). The
-    signpost ("fibo profile") bounds the region tt-perf-report focuses on to that measured step.
+    step (more steps -> "Device data mismatch"). The one warmup pass compiles every op and the single
+    measured step captures each unique op once per branch (encode -> prepare -> denoise -> decode) at
+    production gs=5.0 (CFG on -> cond + uncond). NOTE: since the signpost does not survive (see IMPORTANT
+    above), the warmup pass's ops are NOT excluded -- they appear in the report alongside the measured ones.
 
     NOTE on interpreting the mix: at 1 step the one-time stages dominate (VAE decode ``Conv3d`` ~52%);
     at production step counts the denoise transformer dominates instead. For the per-forward denoise cost,
@@ -454,7 +470,7 @@ def test_fibo_encode_device_profile(*, mesh_device):
     from models.tt_dit.pipelines.bria_fibo.text_encoder import SmolLM3TextEncoderWrapper
 
     ckpt = _fibo_local()
-    ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    ccl = CCLManager(mesh_device, num_links=4, topology=ttnn.Topology.Linear)
     # tp factor 1 -> fully replicated across the mesh (matches the pipeline's encoder_parallel_config).
     encoder = SmolLM3TextEncoderWrapper(
         ckpt, device=mesh_device, ccl_manager=ccl, parallel_config=EncoderParallelConfig.from_tuple((1, 1))
@@ -491,7 +507,7 @@ def test_fibo_denoise_device_profile(*, mesh_device, height, width):
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     tp_factor = tuple(mesh_device.shape)[tp_axis]
 
-    ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    ccl = CCLManager(mesh_device, num_links=4, topology=ttnn.Topology.Linear)
     parallel_config = DiTParallelConfig.from_tuples(cfg=(1, 0), sp=(sp_factor, sp_axis), tp=(tp_factor, tp_axis))
 
     checkpoint = BriaFiboCheckpoint(_fibo_local())
@@ -564,7 +580,7 @@ def test_fibo_decode_device_profile(*, mesh_device, height, width):
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     tp_factor = tuple(mesh_device.shape)[tp_axis]
 
-    ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    ccl = CCLManager(mesh_device, num_links=4, topology=ttnn.Topology.Linear)
     # Height on the tp axis, width on the sp axis (matches the pipeline's vae_parallel_config).
     parallel_config = VaeHWParallelConfig.from_tuples(height=(tp_factor, tp_axis), width=(sp_factor, sp_axis))
     vae = WanVAEDecoderAdapter(
