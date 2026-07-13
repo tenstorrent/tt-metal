@@ -80,3 +80,63 @@ def test_sa10_setupowner_caller_reconfig_illegal(device, expect_error):
     """SA-10: SetupOwner::Caller with a live (non-None) reconfig knob — under Caller the chain emits
     no reconfig, so the knob is inert/deceptive; must not compile (force the caller to declare None)."""
     _expect_build_failure(device, expect_error, "setupowner_caller_reconfig.cpp", "non-None reconfig knob")
+
+
+def test_sa11_l1_accumulation_wrong_lifecycle_illegal(device, expect_error):
+    """SA-11: L1 accumulation cannot use a general-purpose output lifecycle."""
+    _expect_build_failure(
+        device,
+        expect_error,
+        "l1_accumulation_wrong_lifecycle.cpp",
+        "L1 accumulation requires OutputLifecycle::L1Accumulation",
+    )
+
+
+def test_sa12_l1_lifecycle_without_accumulation_illegal(device, expect_error):
+    """SA-12: L1-purpose output lifecycles require an accumulating PackTile."""
+    _expect_build_failure(
+        device,
+        expect_error,
+        "l1_lifecycle_without_accumulation.cpp",
+        "those lifecycles require L1 accumulation",
+    )
+
+
+def test_sa13_l1_accumulation_multiple_output_cbs_illegal(device, expect_error):
+    """SA-13: The packer-global accumulation region may target only one output CB."""
+    _expect_build_failure(
+        device,
+        expect_error,
+        "l1_accumulation_multiple_output_cbs.cpp",
+        "L1 accumulation supports only one output CB",
+    )
+
+
+def test_sa14_l1_accumulation_mixed_pack_modes_illegal(device, expect_error):
+    """SA-14: Ordinary packs cannot inherit chain-wide L1 accumulation mode."""
+    _expect_build_failure(
+        device,
+        expect_error,
+        "l1_accumulation_mixed_pack_modes.cpp",
+        "cannot mix accumulating and ordinary PackTile elements",
+    )
+
+
+def test_sa15_l1_accumulation_mixed_accumulation_modes_illegal(device, expect_error):
+    """SA-15: Preloaded and seed-first writers cannot share one accumulation region."""
+    _expect_build_failure(
+        device,
+        expect_error,
+        "l1_accumulation_mixed_accumulation_modes.cpp",
+        "must all use the same L1 accumulation mode",
+    )
+
+
+def test_sa16_l1_accumulation_multiple_lifecycle_owners_illegal(device, expect_error):
+    """SA-16: Only one writer may reserve and publish the shared accumulator tile."""
+    _expect_build_failure(
+        device,
+        expect_error,
+        "l1_accumulation_multiple_lifecycle_owners.cpp",
+        "only one PackTile may own the L1-accumulation",
+    )
