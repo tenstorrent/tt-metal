@@ -115,3 +115,31 @@ Working copies at `/localdev/divanovic/report/{gen_csv.py, gen_html.py}`; commit
 - **Timing is value-independent**, so synthetic weights + `BLAZE_SKIP_LAYER_ASSERTS=1` give valid op-times but do NOT verify numerical correctness (PCC). To verify correctness at a given position, run WITHOUT skip-asserts and with `GPTOSS_WEIGHTS=real`.
 - Standalone single-layer profiling misses cross-stage fabric contention present in a live pipeline ring; absolute times could shift. Structural conclusions (which op is biggest, serial vs parallel, context scaling) hold.
 - At num_it=1 the two context-independent comm ops (broadcast, ATTN_O reduce) can be undersampled on the reduce-root single instance — substitute their context-independent value from a num_it=5 run.
+
+## 8. Head & tail: embedding + lm_head (same recipe, other stages)
+
+Profile the model **head** (embedding) and **tail** (lm_head+sampling) with the same device-profiler
+approach. No new tests needed — existing model-parametrized op tests have `gpt_oss_120b` entries:
+- **Embedding:** `tests/blaze/fused_ops/embedding/test_embedding_layer.py` (prefix `EMBEDDING_LAYER__`)
+- **LM-head:** `tests/blaze/fused_ops/lm_head/test_lm_head_sampling_layer.py` (prefix `LM_HEAD_SAMPLING_LAYER__`)
+
+**Node IDs:** embedding `[...gpt_oss_120b-...-synthetic-socket_logic_oneshot-100-1337-fabric_2d]`;
+lm_head `[...device_params0-1337-5-no_sockets-argmax_op-gpt_oss_120b]`.
+
+**Recipe:** same env (`TT_METAL_SLOW_DISPATCH_MODE=1`, `TT_METAL_PROFILER_ZONE_NAME_ONLY=1`) +
+`python -m tracy -r -p -o $D -m pytest <nodeid>`, then `scripts/perf_report/gen_perop.py $CSV <PREFIX>`
+(prefix-generalized; `gen_csv.py` is GPTOSS-decoder-only).
+
+**Stage-specific gotchas (fixes on PR #2068):**
+- **lm_head needs `BLAZE_PROFILE_READ=1`** — its harness bypasses ttnn op-dispatch and now does a gated
+  `ttnn.ReadDeviceProfiler(mesh)`; without it tracy's auto-read finds no device logs.
+- **lm_head `sampling_defaults` overflows the Tensix kernel-config buffer** with full per-op zones
+  (`Program size 78880 > 70656`) → use `argmax_op` (same dominant vocab matmul) **or**
+  `BLAZE_PROFILE_MINIMAL_ZONES=1` (only `STAGE_CHECKPOINT`).
+- **Head/tail run on few cores** → median-over-all-cores ≈ 15 ns zone-overhead; use **busy-instance**
+  stats (median/max over instances > 0.5 µs), which `gen_perop.py` reports.
+
+**Findings (busy-core median µs):** embedding ≈ lightweight — `EMBEDDING` lookup **~6.5**,
+`CROSS_DEVICE_SEND` **~6.2**, sockets ~0.9 (~1/10 of a decoder layer). lm_head+sampling — vocab
+`MATMUL` **~5.3**, `ARGMAX` **~10**, final `RMSNORM`/`CCL_BROADCAST` **~22** (mostly fabric wait)
+(~1/4–1/3 of a decoder layer). See `~/embedding_lm_head_profiling.md` for the full writeup.
