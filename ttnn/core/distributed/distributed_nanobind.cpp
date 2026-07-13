@@ -516,17 +516,59 @@ void py_module(nb::module_& mod) {
                     >>> logical_core = ttnn.CoreCoord(0, 0)
                     >>> worker_core = device.worker_core_from_logical_core(logical_core)
                     >>> print(f"Worker core: x={worker_core.x}, y={worker_core.y}")
-            )doc")
-        .def(
-            "get_optimal_dram_bank_to_logical_worker_assignment",
-            &MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment,
-            nb::arg("noc"),
-            R"doc(
-                Returns the optimal DRAM bank to logical worker assignment based on the NOC.
+            )doc");
 
-                This function returns a list of logical worker coordinates that are optimally
-                mapped to DRAM banks for the specified NOC. The mapping is optimized for
-                minimizing NOC hops when reading/writing to DRAM.
+    // Per-device optimal DRAM-bank-to-logical-worker assignment. Bound as an overload of the same
+    // Python name; dispatched by argument count (coord present -> this overload).
+    nb_mesh_device.def(
+        "get_optimal_dram_bank_to_logical_worker_assignment",
+        [](MeshDevice& self, NOC noc, const MeshCoordinate& coord) {
+            return self.get_optimal_dram_bank_to_logical_worker_assignment(noc, coord);
+        },
+        nb::arg("noc"),
+        nb::arg("coord"),
+        R"doc(
+                Returns the optimal DRAM bank to logical worker assignment for the device at ``coord``.
+
+                The assignment is a device-local physical property (it depends on that device's
+                harvesting and DRAM configuration), so it may differ per device on a heterogeneous
+                mesh. If ``coord`` maps to a remote device, this falls back to an arbitrary local
+                device's assignment (best-effort, exact only on homogeneous meshes); it raises only
+                when the mesh has no local device to fall back to.
+
+                Args:
+                    noc (NOC): The NOC to use for optimal assignment (ttnn.NOC.NOC_0 or ttnn.NOC.NOC_1).
+                    coord (MeshCoordinate): The mesh coordinate of the device to query.
+
+                Returns:
+                    List[CoreCoord]: List of logical worker coordinates optimally mapped to DRAM banks.
+
+                Example:
+                    >>> mesh_device = ttnn.open_mesh_device(...)
+                    >>> coord = ttnn.MeshCoordinate(0, 0)
+                    >>> worker_cores = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(
+                    ...     ttnn.NOC.NOC_0, coord)
+                    >>> for i, core in enumerate(worker_cores):
+                    ...     print(f"DRAM bank {i} -> worker core ({core.x}, {core.y})")
+            )doc");
+
+    // Deprecated overload: returns only the mesh's reference (front) device assignment, which is
+    // incorrect on heterogeneously-harvested meshes. Kept for backwards compatibility; prefer the
+    // (noc, coord) overload above. The lambda calls a [[deprecated]] method, so suppress the warning.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+    nb_mesh_device.def(
+        "get_optimal_dram_bank_to_logical_worker_assignment",
+        [](MeshDevice& self, NOC noc) { return self.get_optimal_dram_bank_to_logical_worker_assignment(noc); },
+        nb::arg("noc"),
+        R"doc(
+                Deprecated: prefer ``get_optimal_dram_bank_to_logical_worker_assignment(noc, coord)``.
+
+                Returns the optimal DRAM bank to logical worker assignment for the mesh's reference
+                (front) device only. On a mesh with heterogeneous harvesting the optimal placement
+                differs per device, so this returns the correct cores only for the reference device.
+
+                The mapping is optimized for minimizing NOC hops when reading/writing to DRAM.
 
                 Args:
                     noc (NOC): The NOC to use for optimal assignment (ttnn.NOC.NOC_0 or ttnn.NOC.NOC_1).
@@ -542,6 +584,7 @@ void py_module(nb::module_& mod) {
                     >>> for i, core in enumerate(worker_cores):
                     ...     print(f"DRAM bank {i} -> worker core ({core.x}, {core.y})")
             )doc");
+#pragma GCC diagnostic pop
     auto py_mesh_device_view = static_cast<nb::class_<MeshDeviceView>>(mod.attr("MeshDeviceView"));
     py_mesh_device_view.def("shape", &MeshDeviceView::shape, nb::rv_policy::reference_internal)
         .def("num_devices", &MeshDeviceView::num_devices)

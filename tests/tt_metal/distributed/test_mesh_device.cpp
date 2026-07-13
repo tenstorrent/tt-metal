@@ -136,9 +136,29 @@ TEST(GetOptimalDramBankToLogicalWorkerAssignmentAPI, UnitMeshes) {
     auto device_ids_set = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
     std::vector<int> device_ids(device_ids_set.begin(), device_ids_set.end());
     auto devs = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(device_ids);
+    const MeshCoordinate coord(0, 0);
     for (auto& [_, dev] : devs) {
-        EXPECT_NO_THROW(dev->get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_0));
-        EXPECT_NO_THROW(dev->get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_1));
+        for (auto noc : {NOC::NOC_0, NOC::NOC_1}) {
+            std::vector<CoreCoord> per_device;
+            EXPECT_NO_THROW(per_device = dev->get_optimal_dram_bank_to_logical_worker_assignment(noc, coord));
+            // On a 1x1 mesh the single local device is the queried device, so the per-coordinate overload
+            // must match querying that device directly.
+            EXPECT_EQ(
+                per_device, dev->impl().get_device(coord)->get_optimal_dram_bank_to_logical_worker_assignment(noc));
+        }
+    }
+}
+
+TEST_F(MeshDevice2x4Test, GetOptimalDramBankToLogicalWorkerAssignmentPerDevice) {
+    for (auto noc : {NOC::NOC_0, NOC::NOC_1}) {
+        for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+            std::vector<CoreCoord> per_device;
+            EXPECT_NO_THROW(per_device = mesh_device_->get_optimal_dram_bank_to_logical_worker_assignment(noc, coord));
+            // The per-coordinate result must match querying that specific device directly.
+            auto* device = mesh_device_->impl().get_device(coord);
+            ASSERT_NE(device, nullptr);
+            EXPECT_EQ(per_device, device->get_optimal_dram_bank_to_logical_worker_assignment(noc));
+        }
     }
 }
 
