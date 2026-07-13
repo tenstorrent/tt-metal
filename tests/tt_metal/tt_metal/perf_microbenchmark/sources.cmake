@@ -31,6 +31,16 @@ set(PERF_MICROBENCH_TESTS_SRCS
     9_dram_adjacent_read_remote_l1_write/test_dram_read_l1_write.cpp
     10_dram_read_remote_cb_sync/test_dram_read_remote_cb.cpp
     11_remote_cb_sync_matmul_single_core/test_remote_cb_sync_matmul.cpp
+    sp5_interleaved_read/test_interleaved_read.cpp
+    sp2_compute_only/test_compute_only.cpp
+    regime_a_mm/test_regime_a_mm.cpp
+    sp_bankread/test_bank_read.cpp
+    sp_forward/test_mcast_egress.cpp
+    sp_forward/test_forward_readthrough.cpp
+    sp_forward/test_egress_concurrency.cpp
+    sp_forward/test_worker_pull.cpp
+    sp_forward/test_multireader.cpp
+    sp_forward/test_in0_concurrent.cpp
 )
 
 set(X86_64_ONLY_TESTS
