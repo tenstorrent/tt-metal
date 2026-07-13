@@ -92,11 +92,13 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
     const uint32_t H = qs[1];
     const uint32_t S = qs[2];
     const uint32_t K_DIM = qs[3];  // head dim, taken from the tensor (not hardcoded)
-    // H heads map to H/TILE_HEIGHT query tile-rows (compute processes them in DST-sized groups, so DST
-    // doesn't cap H). The upper bound is the per-core L1 budget — the flash state (out/max/sum) and Q both
-    // scale with H — so a too-large H simply fails CB allocation at program creation rather than here.
-    constexpr uint32_t tile_h = tt::constants::TILE_HEIGHT;
-    TT_FATAL(H % tile_h == 0 && H >= tile_h, "sparse_sdpa: H must be a multiple of {} (got {})", tile_h, H);
+    // H query heads map to ceil(H/TILE_HEIGHT) query tile-rows. A thin per-chip shard (H not a multiple of
+    // 32, e.g. GLM's 16) is padded up to a full tile-row inside the op — the reader zero-fills the pad rows,
+    // compute processes the padded tile, and the writer drains only the real H — so no host-side head->seq
+    // reshard is needed. Attention is per-head-row independent, so the zero-pad rows can't contaminate the
+    // real rows. Any H >= 1 is accepted; the only real upper bound is the per-core L1 budget (flash state +
+    // Q scale with the padded H), which fails CB allocation at program creation rather than here.
+    TT_FATAL(H >= 1, "sparse_sdpa: H must be >= 1 (got {})", H);
     // All non-hashed invariants (q/indices/kv layout+memory+padding, kv shape, cache_batch_idx, same-device).
     // kv may be oversized: a persistent max-size cache whose logical T far exceeds the keys any query attends
     // to. No valid-length bound is needed — reads are index-driven (indices < populated length, sentinels mark

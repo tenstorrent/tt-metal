@@ -48,7 +48,13 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     const SparseSDPAParams& attrs, const SparseSDPAInputs& t, Tensor& output) {
     tt::tt_metal::ProgramDescriptor desc;
 
-    const uint32_t H = t.q.logical_shape()[1];  // head count, from the tensor (any multiple of TILE_HEIGHT)
+    // Thin per-chip head shards (H_logical not a multiple of TILE_HEIGHT, e.g. GLM's 16) are padded up to a
+    // full 32-row query tile-row internally: the reader zero-fills the pad rows, compute processes the padded
+    // tile, and the writer drains only the real H_logical rows. Every tiling/CB quantity below uses the padded
+    // H; only the reader's q read-count and the writer's output row-count use H_logical.
+    const uint32_t H_logical = t.q.logical_shape()[1];  // real heads/chip (from the tensor; any >= 1)
+    const uint32_t H = ((H_logical + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT) *
+                       tt::constants::TILE_HEIGHT;  // padded up to a full TILE_HEIGHT tile-row
     const uint32_t S = t.q.logical_shape()[2];
     const uint32_t topk = t.indices.logical_shape()[3];
     const uint32_t k_dim = t.q.logical_shape()[3];  // head dim, from the tensor (e.g. 576)
@@ -138,7 +144,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     // Keep each block's order in sync with the kernel's reads. Layout: scalars, then CB ids, then the
     // element-size args, then the TensorAccessorArgs (which must chain last). The element sizes sit after
     // the CB ids so adding them leaves every CB-id index unchanged (only the accessor offset shifts).
-    std::vector<uint32_t> reader_ct = {H, S, topk, k_chunk, k_dim};
+    std::vector<uint32_t> reader_ct = {H_logical, H, S, topk, k_chunk, k_dim};
     for (uint32_t id : {cb_q_rm, cb_k_rm, cb_mask_part, cb_idx, cb_ctrl}) {
         reader_ct.push_back(id);
     }
@@ -156,7 +162,8 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     tt::tt_metal::TensorAccessorArgs(t.indices.buffer()).append_to(reader_ct, reader_crt);
 
     // The writer is the lighter dataflow kernel, so it builds the three persistent compute-input tiles.
-    std::vector<uint32_t> writer_ct = {H, S, vDHt, cb_out_rm, cb_scale, cb_col_identity, cb_neginf, out_elem_bytes};
+    std::vector<uint32_t> writer_ct = {
+        H_logical, H, S, vDHt, cb_out_rm, cb_scale, cb_col_identity, cb_neginf, out_elem_bytes};
     std::vector<uint32_t> writer_crt;
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct, writer_crt);
     tt::tt_metal::TensorAccessorArgs(t.kv.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)

@@ -20,17 +20,18 @@ constexpr uint32_t one_bf16_packed = 0x3F803F80u;  // bf16(1.0) double-packed; g
 constexpr uint16_t neg_inf_bf16 = 0xFF80u;
 
 void kernel_main() {
-    constexpr uint32_t H = get_compile_time_arg_val(0);
-    constexpr uint32_t S = get_compile_time_arg_val(1);
-    constexpr uint32_t vDHt = get_compile_time_arg_val(2);
+    constexpr uint32_t H_logical = get_compile_time_arg_val(0);  // real heads/chip (written back)
+    constexpr uint32_t H = get_compile_time_arg_val(1);          // padded to a full TILE_HEIGHT tile-row
+    constexpr uint32_t S = get_compile_time_arg_val(2);
+    constexpr uint32_t vDHt = get_compile_time_arg_val(3);
     // CB ids — passed by the factory (the SparseCB enum is the single source); order must match the
-    // factory's writer CB-arg block (compile args 3..6).
-    constexpr uint32_t cb_out_rm = get_compile_time_arg_val(3);
-    constexpr uint32_t cb_scale = get_compile_time_arg_val(4);
-    constexpr uint32_t cb_col_identity = get_compile_time_arg_val(5);
-    constexpr uint32_t cb_neginf = get_compile_time_arg_val(6);
-    constexpr uint32_t out_elem_bytes = get_compile_time_arg_val(7);  // bf16 (from the output tensor's dtype)
-    constexpr auto out_args = TensorAccessorArgs<8, 0>();
+    // factory's writer CB-arg block (compile args 4..7).
+    constexpr uint32_t cb_out_rm = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_scale = get_compile_time_arg_val(5);
+    constexpr uint32_t cb_col_identity = get_compile_time_arg_val(6);
+    constexpr uint32_t cb_neginf = get_compile_time_arg_val(7);
+    constexpr uint32_t out_elem_bytes = get_compile_time_arg_val(8);  // bf16 (from the output tensor's dtype)
+    constexpr auto out_args = TensorAccessorArgs<9, 0>();
     // kv carries a RUNTIME tensor shape (T dim in common runtime args), so its accessor spans both arg streams.
     constexpr auto kv_args =
         TensorAccessorArgs<out_args.next_compile_time_args_offset(), out_args.next_common_runtime_args_offset()>();
@@ -104,9 +105,10 @@ void kernel_main() {
             kack_cb.reserve_back(1);
             kack_cb.push_back(1);
         }
-        out_cb.wait_front(block_tiles);  // one untilized [H, V_DIM] block
-        for (uint32_t h = 0; h < H; ++h) {
-            // row h (head h) at CB read-ptr byte offset h*row_bytes; DRAM page = h*S + tok.
+        out_cb.wait_front(block_tiles);  // one untilized [H (padded), V_DIM] block
+        for (uint32_t h = 0; h < H_logical; ++h) {
+            // real head h at CB read-ptr byte offset h*row_bytes; DRAM page = h*S + tok. The padded tail rows
+            // [H_logical, H) are computed (from zero-filled Q) but never written back.
             noc.async_write(out_cb, out, row_bytes, {.offset_bytes = h * row_bytes}, {.page_id = h * S + tok});
         }
         noc.async_write_barrier();

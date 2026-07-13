@@ -22,28 +22,29 @@ constexpr uint32_t sentinel = 0xFFFFFFFFu;
 constexpr uint16_t neg_inf_bf16 = 0xFF80u;
 
 void kernel_main() {
-    constexpr uint32_t H = get_compile_time_arg_val(0);
-    constexpr uint32_t S = get_compile_time_arg_val(1);
-    constexpr uint32_t topk = get_compile_time_arg_val(2);
-    constexpr uint32_t k_chunk = get_compile_time_arg_val(3);
-    constexpr uint32_t k_dim = get_compile_time_arg_val(4);  // q/kv head dim (from the tensor)
+    constexpr uint32_t H_logical = get_compile_time_arg_val(0);  // real heads/chip actually read
+    constexpr uint32_t H = get_compile_time_arg_val(1);          // padded up to a full TILE_HEIGHT tile-row
+    constexpr uint32_t S = get_compile_time_arg_val(2);
+    constexpr uint32_t topk = get_compile_time_arg_val(3);
+    constexpr uint32_t k_chunk = get_compile_time_arg_val(4);
+    constexpr uint32_t k_dim = get_compile_time_arg_val(5);  // q/kv head dim (from the tensor)
 
     // CB ids — passed by the factory (the SparseCB enum is the single source); order must match the
-    // factory's reader CB-arg block (compile args 5..9). cb_kreq/cb_kack come as defines (CB_KREQ/CB_KACK).
-    constexpr uint32_t cb_q_rm = get_compile_time_arg_val(5);
-    constexpr uint32_t cb_k_rm = get_compile_time_arg_val(6);
-    constexpr uint32_t cb_mask_part = get_compile_time_arg_val(7);
-    constexpr uint32_t cb_idx = get_compile_time_arg_val(8);
-    constexpr uint32_t cb_ctrl = get_compile_time_arg_val(9);
+    // factory's reader CB-arg block (compile args 6..10). cb_kreq/cb_kack come as defines (CB_KREQ/CB_KACK).
+    constexpr uint32_t cb_q_rm = get_compile_time_arg_val(6);
+    constexpr uint32_t cb_k_rm = get_compile_time_arg_val(7);
+    constexpr uint32_t cb_mask_part = get_compile_time_arg_val(8);
+    constexpr uint32_t cb_idx = get_compile_time_arg_val(9);
+    constexpr uint32_t cb_ctrl = get_compile_time_arg_val(10);
 
     // Element sizes (from the tensors' dtypes; passed after the CB ids so their indices stay fixed).
-    constexpr uint32_t q_elem_bytes = get_compile_time_arg_val(10);    // bf16
-    constexpr uint32_t kv_elem_bytes = get_compile_time_arg_val(11);   // bf16 or fp8_e4m3
-    constexpr uint32_t idx_elem_bytes = get_compile_time_arg_val(12);  // uint32
+    constexpr uint32_t q_elem_bytes = get_compile_time_arg_val(11);    // bf16
+    constexpr uint32_t kv_elem_bytes = get_compile_time_arg_val(12);   // bf16 or fp8_e4m3
+    constexpr uint32_t idx_elem_bytes = get_compile_time_arg_val(13);  // uint32
 
     // kv carries a RUNTIME tensor shape (its T dim is common runtime args, not compile-time), so its accessor
     // spans both the compile-time AND common-runtime arg streams. Thread both offsets through all three.
-    constexpr auto q_args = TensorAccessorArgs<13, 0>();
+    constexpr auto q_args = TensorAccessorArgs<14, 0>();
     constexpr auto kv_args =
         TensorAccessorArgs<q_args.next_compile_time_args_offset(), q_args.next_common_runtime_args_offset()>();
     constexpr auto idx_args =
@@ -76,12 +77,17 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1);
 
     for (uint32_t tok = tok_start; tok < tok_start + tok_count; ++tok) {
-        // Q: H head-rows -> cb_q_rm.  Q is [1,H,S,576] row-major: row (h,tok) = page h*S+tok.
+        // Q: H_logical head-rows -> cb_q_rm, then zero-fill the (H - H_logical) padded rows so compute always
+        // sees a full TILE_HEIGHT tile-row. Q is [1,H_logical,S,576] row-major: row (h,tok) = page h*S+tok.
         q_cb.reserve_back(H);
-        for (uint32_t h = 0; h < H; ++h) {
+        for (uint32_t h = 0; h < H_logical; ++h) {
             noc.async_read(q, q_cb, q_row_bytes, {.page_id = h * S + tok}, {.offset_bytes = h * q_row_bytes});
         }
         noc.async_read_barrier();
+        if constexpr (H_logical < H) {
+            noc.async_write_zeros(q_cb, (H - H_logical) * q_row_bytes, {.offset_bytes = H_logical * q_row_bytes});
+            noc.write_zeros_l1_barrier();
+        }
         q_cb.push_back(H);
 
         // indices row for this token (page = tok) -> idx_cb scratch

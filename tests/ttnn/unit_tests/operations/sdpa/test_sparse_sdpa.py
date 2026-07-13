@@ -40,6 +40,25 @@ def test_sparse_sdpa_runs(device):
     assert tuple(out.shape) == (1, H, S, V_DIM), f"got {tuple(out.shape)}"
 
 
+# ---- thin / non-tile-aligned head shard: the op pads heads up to a full 32-row query tile internally
+# ---- (reader zero-fills, writer drains only the real H), so output keeps the real H and stays correct.
+# ---- H=16 is GLM's per-chip shard (64 heads / tp=4); H=48 exercises a non-multiple-of-32 > 32. ----
+@run_for_blackhole()
+@pytest.mark.parametrize("H", [16, 48], ids=["H16", "H48_nonmult32"])
+@pytest.mark.parametrize(
+    "nv_fn,nv_id",
+    [(lambda s: 10**9, "all_valid"), (lambda s: 1 + (s * 3) % 20, "boundary")],
+    ids=lambda x: x if isinstance(x, str) else "",
+)
+def test_sparse_sdpa_thin_heads(device, H, nv_fn, nv_id):
+    S, T, TOPK, kc = 64, 256, 64, 32
+    q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, nv_fn)
+    out, scale = run_op(q, kv, indices, device, kc, V_DIM)
+    assert tuple(out.shape) == (1, H, S, V_DIM), f"got {tuple(out.shape)}"  # real H, not padded
+    p = pcc(out, golden(q, kv, indices, scale, V_DIM))
+    assert p >= 0.99, f"PCC {p:.5f} (H={H}, {nv_id})"
+
+
 # ---- output dtype matches q (bf16 q -> bf16 out, fp8 q -> fp8 out) ----
 @run_for_blackhole()
 @pytest.mark.parametrize("q_dtype", [ttnn.bfloat16, ttnn.fp8_e4m3], ids=["q_bf16", "q_fp8"])
