@@ -61,8 +61,8 @@
  *
  * Not supported: per-iteration (mid-loop) dtype swaps — each element's dtype reconfig point is
  * resolved per element at compile time (fold-driven, emitted once at element entry), so there is
- * no per-loop-iteration reconfig path; L1 pack accumulation / pack-relu; and the legacy
- * `acquire_dst/release_dst` macros (modern dst-sync only).
+ * no per-loop-iteration dtype reconfig path; pack-relu; and the legacy `acquire_dst/release_dst`
+ * macros (modern dst-sync only).
  */
 
 #include <cstdint>
@@ -168,11 +168,13 @@ enum class SetupOwner {
 #endif
 
 // =============================================================================
-// 1c. Taxonomy: Lifecycle as a two-axis struct
+// 1c. Taxonomy: Lifecycle as reserve/push axes plus a purpose tag
 // =============================================================================
 //
-// Each input's lifecycle is a `(WaitPolicy, PopPolicy)` pair and each output's a
-// `(ReservePolicy, PushPolicy)` pair. The named constants below are the legal set:
+// Each input's lifecycle is a `(WaitPolicy, PopPolicy)` pair and each output's core behavior is a
+// `(ReservePolicy, PushPolicy)` pair. OutputLifecycle also carries a purpose tag so the no-op
+// L1-accumulation lifecycle remains distinguishable from general CallerManaged synchronization.
+// The named constants below are the legal set:
 // `is_legal_input_lifecycle` / `is_legal_output_lifecycle` are whitelists of exactly
 // those constants. A custom struct literal is accepted only when it equals one of the
 // named constants (e.g. `InputLifecycle{WaitPolicy::Upfront, PopPolicy::PerTile}` is just
@@ -269,6 +271,7 @@ enum class ReservePolicy : uint8_t {
     PerChunk,
     PerOuter,  // reserve 1 at each OUTER (ht/row) iteration entry — one output tile per row
     Upfront,
+    OneUpfront,  // reserve one accumulator tile once at chain entry
 };
 
 enum class PushPolicy : uint8_t {
@@ -277,20 +280,27 @@ enum class PushPolicy : uint8_t {
     PerChunk,
     PerOuter,  // push 1 at each OUTER (ht/row) iteration exit — one output tile per row
     AtEnd,
+    OneAtEnd,  // push one accumulator tile once at chain exit
+};
+
+enum class OutputLifecyclePurpose : uint8_t {
+    General,
+    L1Accumulation,
 };
 
 struct OutputLifecycle {
     ReservePolicy reserve;
     PushPolicy push;
+    OutputLifecyclePurpose purpose = OutputLifecyclePurpose::General;
 
     constexpr bool operator==(OutputLifecycle other) const noexcept {
-        return reserve == other.reserve && push == other.push;
+        return reserve == other.reserve && push == other.push && purpose == other.purpose;
     }
     constexpr bool operator!=(OutputLifecycle other) const noexcept { return !(*this == other); }
 
     // Named cells — written type-qualified (e.g. `OutputLifecycle::Bulk`). Defined out-of-line below.
     static const OutputLifecycle Streaming, Chunked, Bulk, BulkReservePerTile, BulkReservePerChunk, CallerManaged,
-        HeldReserve, DeferredReserve, OuterStream;
+        HeldReserve, DeferredReserve, OuterStream, L1Accumulation, L1AccumulationCallerManaged;
 };
 
 // Default: reserve and push 1 output tile each step.
@@ -313,12 +323,25 @@ inline constexpr OutputLifecycle OutputLifecycle::DeferredReserve = {ReservePoli
 // Reserve and push 1 output tile per row (one per outer/ht step). Use for chains that produce one output tile per row
 // instead of one per tile.
 inline constexpr OutputLifecycle OutputLifecycle::OuterStream = {ReservePolicy::PerOuter, PushPolicy::PerOuter};
+// L1 accumulation owns one persistent output tile for the whole chain: reserve it once, repeatedly
+// accumulate into it, then publish exactly that one tile at chain exit.
+inline constexpr OutputLifecycle OutputLifecycle::L1Accumulation = {
+    ReservePolicy::OneUpfront, PushPolicy::OneAtEnd, OutputLifecyclePurpose::L1Accumulation};
+// L1 accumulation with both synchronization edges owned by the caller. The chain only writes the
+// caller's already-reserved accumulator tile; the caller decides when to publish it.
+inline constexpr OutputLifecycle OutputLifecycle::L1AccumulationCallerManaged = {
+    ReservePolicy::None, PushPolicy::None, OutputLifecyclePurpose::L1Accumulation};
 
 constexpr bool is_legal_output_lifecycle(OutputLifecycle lc) noexcept {
     return lc == OutputLifecycle::Streaming || lc == OutputLifecycle::Chunked || lc == OutputLifecycle::Bulk ||
            lc == OutputLifecycle::BulkReservePerTile || lc == OutputLifecycle::BulkReservePerChunk ||
            lc == OutputLifecycle::CallerManaged || lc == OutputLifecycle::HeldReserve ||
-           lc == OutputLifecycle::DeferredReserve || lc == OutputLifecycle::OuterStream;
+           lc == OutputLifecycle::DeferredReserve || lc == OutputLifecycle::OuterStream ||
+           lc == OutputLifecycle::L1Accumulation || lc == OutputLifecycle::L1AccumulationCallerManaged;
+}
+
+constexpr bool is_l1_accumulation_output_lifecycle(OutputLifecycle lc) noexcept {
+    return lc == OutputLifecycle::L1Accumulation || lc == OutputLifecycle::L1AccumulationCallerManaged;
 }
 
 /// Which tile of an input operand to read at each step of the (Ht x Wt) walk.
@@ -403,7 +426,8 @@ constexpr bool is_legal_input_lifecycle_with_base(InputLifecycle lc) noexcept {
 /// Lifecycle compatibility check for `TileBase != None` on output elements.
 constexpr bool is_legal_output_lifecycle_with_base(OutputLifecycle lc) noexcept {
     return lc == OutputLifecycle::Bulk || lc == OutputLifecycle::DeferredReserve ||
-           lc == OutputLifecycle::HeldReserve || lc == OutputLifecycle::CallerManaged;
+           lc == OutputLifecycle::HeldReserve || lc == OutputLifecycle::CallerManaged ||
+           lc == OutputLifecycle::L1AccumulationCallerManaged;
 }
 
 // =============================================================================
@@ -549,6 +573,16 @@ enum class PackTileReconfig : uint8_t {
     Output,  // fold emits pack_reconfig_data_format(prev_p, curr_p) when prev_p known, else (curr_p)
 };
 
+/// How this PackTile accumulates DEST into its pinned L1 output tile.
+/// `Enabled` expects that tile to be preloaded and accumulates every logical input tile.
+/// `SeedFirst` overwrites it with the first logical input tile, then enables accumulation for
+/// every remaining tile. In both modes the chain restores the packer to overwrite mode at exit.
+enum class PackTileL1Accumulation : uint8_t {
+    Disabled,
+    Enabled,
+    SeedFirst,
+};
+
 // (The CRTP op bases — UnaryOp / BinaryOp / TernaryOp, from which SFPU/FPU op-helper
 //  headers derive their concrete ops — are defined in eltwise_chain.inl. They are not
 //  part of the kernel-author surface; only op-helper headers (eltwise_math.hpp, …)
@@ -620,7 +654,8 @@ template <
     OutputLifecycle Policy = OutputLifecycle::Streaming,
     PackTileReconfig Reconfig = PackTileReconfig::Output,
     Dst DstSlot = Dst::D0,
-    TileOffset Offset = TileOffset::Unset>
+    TileOffset Offset = TileOffset::Unset,
+    PackTileL1Accumulation L1Accumulation = PackTileL1Accumulation::Disabled>
 struct PackTile;
 
 // Fill / Rand forward declarations — implementations live in eltwise_fill.hpp / eltwise_rand.hpp.
