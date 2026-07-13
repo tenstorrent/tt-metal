@@ -1239,10 +1239,8 @@ public:
         uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
 
         auto cb_config_coreranges = program.circular_buffers_unique_coreranges();
-        CoreRangeSet covered_cb_cores;
-        for (const auto& core_range : cb_config_coreranges) {
-            covered_cb_cores = covered_cb_cores.merge(CoreRangeSet(core_range));
-        }
+        // circular_buffers_unique_coreranges() returns non-overlapping ranges, so this is a single build.
+        CoreRangeSet covered_cb_cores(cb_config_coreranges);
         const auto& kernel_groups = program.get_kernel_groups(index);
         for (const auto& kernel_group : kernel_groups) {
             const auto kernel_config = kernel_group->launch_msg.view().kernel_config();
@@ -1264,7 +1262,6 @@ public:
         if (num_multicast_cb_sub_cmds > 0) {
             uint32_t i = 0;
             uint32_t remote_offset_index = program.get_program_config(index).local_cb_size / sizeof(uint32_t);
-            auto index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
             for (const CoreRange& core_range : cb_config_coreranges) {
                 const CoreCoord& virtual_start =
                     device->virtual_core_from_logical_core(core_range.start_coord, CoreType::WORKER);

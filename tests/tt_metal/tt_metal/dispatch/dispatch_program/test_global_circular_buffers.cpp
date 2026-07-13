@@ -199,7 +199,7 @@ TEST_F(MeshDispatchFixture, TensixProgramClearsStaleRemoteCircularBufferConfig) 
     this->RunProgram(mesh_device, sparse_workload);
 
     const uint32_t selected_kernel_config_base =
-        this->IsSlowDispatch() ? sparse_program_in_workload.impl().get_cb_base_addr(device, idle_core, CoreType::WORKER)
+        this->IsSlowDispatch() ? poison_base
                                : sparse_workload.get_cb_base_addr(mesh_device, idle_core, CoreType::WORKER);
     const uint32_t remote_config_address =
         selected_kernel_config_base +
