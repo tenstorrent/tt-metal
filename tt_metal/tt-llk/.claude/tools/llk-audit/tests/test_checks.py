@@ -2100,6 +2100,36 @@ def test_cfg_word_explicit_mask_operand_overrides_field_mask():
     assert len(shared2) == 1 and shared2[0].safety == "SAFE_BY_MASKING", shared2
 
 
+@case
+def test_dedup_merge_prefers_resolved_duplicate():
+    # One object-API call site captured by 2 TUs: one resolved recv_type/argc, the
+    # other (dependent parse) did not. from_objects must MERGE to keep the RESOLVED
+    # values regardless of order — first-win would drop them and silently disable
+    # cb_classify / noc_signal_is_atomic on the surviving empty copy.
+    K = "ttnn/cpp/x/w.cpp"
+    empty = {
+        "family": "call",
+        "file": K,
+        "off": 20,
+        "line": 20,
+        "function": "m",
+        "name": "push_back",
+        "text": "cb.push_back",
+        "arg0": "1",
+        "recv": "cb",
+        "recv_type": "",
+        "argc": -1,
+    }
+    resolved = {**empty, "recv_type": "CircularBuffer", "argc": 1}
+    for order in ([empty, resolved], [resolved, empty]):
+        fb = FactBase.from_objects(
+            "wormhole", [{"arch": "wormhole", "parse_errors": 0, "facts": order}]
+        )
+        s = [x for x in fb.facts if x.get("name") == "push_back"]
+        assert len(s) == 1, (order, s)
+        assert s[0]["recv_type"] == "CircularBuffer" and s[0]["argc"] == 1, (order, s)
+
+
 def main():
     failed = 0
     for c in CASES:
