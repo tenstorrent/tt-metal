@@ -116,6 +116,11 @@ class NativeLayerProxy(nn.Module):
         # (old ttnn tensors fall out of scope and Python GC deallocates them).
         object.__setattr__(self, "_rotary_cache_key", None)
         object.__setattr__(self, "_rotary_cache_value", None)
+        # und_seq (text embedding) is invariant across all denoise steps within a
+        # generation — the same host tensor object is reused from static_pre_cache.
+        # Caching by object identity avoids re-uploading it every step.
+        object.__setattr__(self, "_und_cache_key", None)
+        object.__setattr__(self, "_und_cache_value", None)
 
     @staticmethod
     def _to_tile_ttnn(x: torch.Tensor, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
@@ -214,7 +219,13 @@ class NativeLayerProxy(nn.Module):
         und_shape = tuple(und_seq.shape)
         gen_shape = tuple(gen_seq.shape)
 
-        und_tt = self._to_tile_ttnn(und_seq, mesh_device)
+        und_key = id(und_seq)
+        if self._und_cache_key != und_key:
+            und_tt = self._to_tile_ttnn(und_seq, mesh_device)
+            object.__setattr__(self, "_und_cache_key", und_key)
+            object.__setattr__(self, "_und_cache_value", und_tt)
+        else:
+            und_tt = self._und_cache_value
 
         sp_factor = self._sp_factor
         sp_axis = self._sp_axis
