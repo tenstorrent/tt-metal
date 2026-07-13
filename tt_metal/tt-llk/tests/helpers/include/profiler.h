@@ -124,15 +124,17 @@ __attribute__((always_inline)) inline void sync_threads()
 
 // Cross-thread actor-release rendezvous used at each zone: all announce arrival, the actor waits for
 // all, runs action() then bumps epoch to release. Actor spins only before action(), so it never lands
-// inside the measured window.
+// inside the measured window. Compiler fences at entry/exit keep surrounding work from reordering
+// across the rendezvous.
 template <typename Action>
 __attribute__((always_inline)) inline void sync_point(bool is_actor, Action action)
 {
-    auto& barrier                 = *barrier_ptr;
-    volatile std::uint32_t* epoch = epoch_ptr;
+    ckernel::fence_compiler();
+
+    auto& barrier = *barrier_ptr;
 
     // Read epoch BEFORE announcing arrival (else the actor could bump it first and a waiter deadlocks).
-    const std::uint32_t my_epoch = *epoch;
+    const std::uint32_t my_epoch = *epoch_ptr;
 
     const std::uint32_t gen = barrier[TRISC_ID] + 1;
     barrier[TRISC_ID]       = gen;
@@ -146,21 +148,25 @@ __attribute__((always_inline)) inline void sync_point(bool is_actor, Action acti
             {
                 continue;
             }
-            while (barrier[i] < gen)
+            // Lock-step: a peer cannot advance past this generation before the actor releases it, so
+            // wait for exact equality — also wrap-safe if the 32-bit generation ever rolls over.
+            while (barrier[i] != gen)
             {
                 ckernel::invalidate_data_cache();
             }
         }
-        action();              // arm / freeze / no-op — actor never spins AFTER this
-        *epoch = my_epoch + 1; // single-writer release
+        action();                  // arm / freeze / no-op — actor never spins AFTER this
+        *epoch_ptr = my_epoch + 1; // single-writer release
     }
     else
     {
-        while (*epoch == my_epoch)
+        while (*epoch_ptr == my_epoch)
         {
             ckernel::invalidate_data_cache();
         }
     }
+
+    ckernel::fence_compiler();
 }
 
 __attribute__((always_inline)) inline void reset()

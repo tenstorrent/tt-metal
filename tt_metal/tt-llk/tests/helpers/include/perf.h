@@ -23,8 +23,8 @@ constexpr std::uint32_t PERF_INPUT_C = PERF_INPUT_B + 16 * 4096;
 constexpr std::uint32_t PERF_OUTPUT  = PERF_INPUT_C + 16 * 4096;
 
 #ifdef PERF_COUNTERS_COMPILED
-// Perf-counter shared config + per-zone data. Region ends at 0x16AFF4 (profiler boundary,
-// asserted in counters.h). Must not overlap the stimuli buffers above.
+// Perf-counter shared config + per-zone data. Must stay below the profiler epoch word at 0x16AFF0
+// (asserted in counters.h) and must not overlap the stimuli buffers above.
 #define PERF_COUNTERS_BASE_ADDR         0x169000
 #define PERF_COUNTERS_CONFIG_WORDS      200
 #define PERF_COUNTERS_DATA_WORDS        200
