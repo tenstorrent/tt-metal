@@ -478,8 +478,8 @@ ProgramDescriptor NlpCreateHeadsBoltzDeviceOperation::Sharded::create_descriptor
         .buffer = std::get<1>(output).buffer(),
     });
 
-    auto v_shard_spec = std::get<0>(output).shard_spec().value();
-    auto v_cores = q_shard_spec.grid;
+    auto v_shard_spec = std::get<2>(output).shard_spec().value();
+    auto v_cores = v_shard_spec.grid;
     auto v_num_tiles = v_shard_spec.shape[0] * v_shard_spec.shape[1] / TILE_HW;
 
     uint32_t v_output_cb_index = CBIndex::c_18;
