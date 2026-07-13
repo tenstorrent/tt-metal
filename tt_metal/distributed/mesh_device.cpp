@@ -884,7 +884,7 @@ bool MeshDeviceImpl::close() {
 }
 
 bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
-    ZoneScoped;
+    TTZoneScopedD(MISC);
 
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
 
@@ -1355,7 +1355,7 @@ void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) 
 }
 
 void MeshDeviceImpl::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking) {
-    ZoneScoped;
+    TTZoneScopedD(DISPATCH);
     TracyTTMetalReplayMeshTrace(this->get_device_ids(), *trace_id);
     auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
     const auto& trace_buffer = active_sub_device_manager->get_trace(trace_id);

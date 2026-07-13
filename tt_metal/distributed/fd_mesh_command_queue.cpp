@@ -566,7 +566,7 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
     uint32_t size_bytes,
     bool blocking,
     ttsl::Span<const SubDeviceId> sub_device_ids) {
-    ZoneScoped;
+    TTZoneScopedD(DISPATCH);
 
     auto lock = lock_api_function_();
     if (!mesh_device_->impl().is_local(address.device_coord)) {
@@ -601,7 +601,7 @@ void FDMeshCommandQueue::enqueue_write_dram_core_counter(
     uint32_t value,
     bool blocking,
     ttsl::Span<const SubDeviceId> sub_device_ids) {
-    ZoneScoped;
+    TTZoneScopedD(DISPATCH);
 
     // No lock_api_function_() here: the caller (TensorPrefetcherManager) already holds
     // the MeshDevice api lock across the counter bump + WAIT_CQ enqueue, and that lock is
@@ -648,7 +648,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
     uint32_t size_bytes,
     bool blocking,
     ttsl::Span<const SubDeviceId> sub_device_ids) {
-    ZoneScoped;
+    TTZoneScopedD(DISPATCH);
     auto lock = lock_api_function_();
 
     if (this->get_target_device_type() == tt::TargetDevice::Mock ||
@@ -734,7 +734,7 @@ void FDMeshCommandQueue::finish(ttsl::Span<const SubDeviceId> sub_device_ids) {
     this->finish_nolock(sub_device_ids);
 
     {
-        ZoneScopedN("RealtimeProfilerSyncCheck");
+        TTZoneScopedDN(RT_PROFILER, "RealtimeProfilerSyncCheck");
         mesh_device_->impl().trigger_realtime_profiler_sync_check();
     }
 
