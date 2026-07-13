@@ -1099,24 +1099,29 @@ def test_linear_bias_broadcast_with_optional_shape(device, a_shape, b_shape, bia
                 assert result.shape == expected.shape
 
 
-def test_linear_bias_rejected_on_multicore_reuse_program_config(device, expect_error):
-    """Bias is not supported for MatmulMultiCoreReuseProgramConfig — validate-time check."""
+def test_linear_bias_multi_n_block_rejected_on_multicore_reuse_program_config(device, expect_error):
+    """The fused bias on MatmulMultiCoreReuseProgramConfig requires a single N block.
+
+    The whole per-batch [M, N] bias is loaded once and reused, so N must fit one block
+    (N == per_core_N). This config already requires N == per_core_N for the matmul itself, so a
+    linear with fused bias and N spanning two blocks is rejected at validation.
+    """
     torch.manual_seed(0)
-    m, k, n = 64, 64, 64
-    in0 = ttnn.from_torch(torch.randn(1, 1, m, k, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-    in1 = ttnn.from_torch(torch.randn(1, 1, k, n, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-    bias = ttnn.from_torch(torch.randn(1, 1, 32, n, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    batch, m, k, n = 8, 32, 64, 64  # N == 2 tiles, per_core_N == 1 below -> N spans two blocks
+    in0 = ttnn.from_torch(torch.randn(batch, 1, m, k, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    in1 = ttnn.from_torch(torch.randn(batch, 1, k, n, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch.randn(1, 1, m, n, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
 
     program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
-        compute_with_storage_grid_size=(1, 1),
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         in0_block_w=k // 32,
         out_subblock_h=1,
         out_subblock_w=1,
         per_core_M=m // 32,
-        per_core_N=n // 32,
+        per_core_N=1,  # < N/32 == 2
     )
 
-    with expect_error(RuntimeError, "Bias is not supported for this matmul program config:"):
+    with expect_error(RuntimeError, r"N \(2\) must equal per_core_N \(1\)"):
         ttnn.linear(in0, in1, bias=bias, program_config=program_config)
 
 
@@ -1414,3 +1419,111 @@ def test_linear_with_batched(device, a_shape, b_shape, bias_shape):
         frobenius_threshold=0.002,
         pcc_threshold=0.99,
     )
+
+
+def _reuse_program_config(device, m, k, n):
+    """MatmulMultiCoreReuseProgramConfig
+
+    Each batch element's matrix is a single program block
+    (per_core_M/per_core_N is the whole [M, N]).
+    It's the requirement for the fused-bias path: the full [M, N] bias is loaded once and reused across the batch.
+    """
+    tile = 32
+    return ttnn.MatmulMultiCoreReuseProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        in0_block_w=k // tile,
+        out_subblock_h=1,
+        out_subblock_w=n // tile,
+        per_core_M=m // tile,
+        per_core_N=n // tile,
+    )
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("batch", [8, 24])
+@pytest.mark.parametrize(
+    "m, k, n",
+    [
+        (32, 32, 32),  # GDN shape: square single tile, per_core_M == per_core_N == 1
+        (32, 128, 32),  # larger K
+        (32, 32, 64),  # per_core_N == 2 within one N block, single M tile-row
+        (64, 64, 64),  # M == 2 tiles: genuine full [M, N] bias, varies per M-row
+        (128, 128, 128),  # M == N == 4 tiles: multi-tile block in both M and N
+    ],
+)
+def test_linear_batched_reuse_fused_elementwise_bias(device, dtype, batch, m, k, n):
+    """Fused full-tile (elementwise) bias on the batched MatmulMultiCoreReuseProgramConfig path."""
+    torch.manual_seed(0)
+    torch_a = torch_random((batch, 1, m, k), -0.1, 0.1, dtype=torch.float32)
+    torch_b = torch_random((batch, 1, k, n), -0.1, 0.1, dtype=torch.float32)
+    torch_bias = torch_random((1, 1, m, n), -0.1, 0.1, dtype=torch.float32)  # full-tile, broadcast over batch
+    torch_output = torch.matmul(torch_a, torch_b) + torch_bias
+
+    a = ttnn.from_torch(torch_a, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch_b, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch_bias, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.linear(a, b, bias=bias, program_config=_reuse_program_config(device, m, k, n))
+    output = ttnn.to_torch(output)
+
+    pcc = 0.9997 if dtype == ttnn.float32 else 0.99
+    assert_with_pcc(torch_output, output, pcc)
+
+
+def _captured_device_op_names(fn):
+    """Device-op names recorded while running `fn` under graph capture (no device dispatch)."""
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
+    try:
+        fn()
+    finally:
+        captured = ttnn.graph.end_graph_capture()
+    return [
+        node["params"]["name"]
+        for node in captured
+        if node.get("node_type") == "function_start" and "name" in node.get("params", {})
+    ]
+
+
+@pytest.mark.parametrize(
+    "m, k, n, bias_shape, expect_fused",
+    [
+        (64, 64, 64, (1, 1, 64, 64), True),  # full [M, N] bias -> fused into the matmul
+        (128, 128, 128, (1, 1, 128, 128), True),  # full [M, N], M = N = 4 tiles -> fused
+        (64, 64, 64, (1, 64), False),  # row-vector bias -> post-processed via add()
+    ],
+)
+def test_linear_batched_reuse_bias_routing(device, m, k, n, bias_shape, expect_fused):
+    """A full [M, N] bias fuses into the matmul; other biases fall back to post-processed add."""
+    torch.manual_seed(0)
+    a = ttnn.from_torch(torch.randn(8, 1, m, k) * 0.1, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.randn(8, 1, k, n) * 0.1, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch.randn(*bias_shape) * 0.1, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    pc = _reuse_program_config(device, m, k, n)
+
+    names = _captured_device_op_names(lambda: ttnn.linear(a, b, bias=bias, program_config=pc))
+
+    assert any("Matmul" in nm for nm in names), f"no matmul op captured: {names}"
+    has_binary = any("Binary" in nm for nm in names)
+    if expect_fused:
+        assert not has_binary, f"expected fused bias (no post-process add), captured: {names}"
+    else:
+        assert has_binary, f"expected a post-process add, captured: {names}"
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+def test_linear_batched_reuse_row_vector_bias_post_processed_correct(device, dtype):
+    """A row-vector bias on the batched reuse config is post-processed (not fused) and stays correct."""
+    batch, m, k, n = 8, 64, 64, 64  # M = 2 tiles; row-vector bias does not cover it
+    torch.manual_seed(0)
+    torch_a = torch_random((batch, 1, m, k), -0.1, 0.1, dtype=torch.float32)
+    torch_b = torch_random((batch, 1, k, n), -0.1, 0.1, dtype=torch.float32)
+    torch_bias = torch_random((n,), -0.1, 0.1, dtype=torch.float32)
+    torch_output = torch.matmul(torch_a, torch_b) + torch_bias
+
+    a = ttnn.from_torch(torch_a, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch_b, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch_bias.reshape(1, n), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.to_torch(ttnn.linear(a, b, bias=bias, program_config=_reuse_program_config(device, m, k, n)))
+    pcc = 0.9997 if dtype == ttnn.float32 else 0.99
+    assert_with_pcc(torch_output, output, pcc)
