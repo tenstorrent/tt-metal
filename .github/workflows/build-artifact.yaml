@@ -718,6 +718,18 @@ jobs:
           compression-level: 0
           if-no-files-found: error
 
+      - name: 🗜️ Stage + strip ttnn-import libs
+        if: ${{ inputs.build-ttnn-import-artifact }}
+        run: |
+          # Lean TT_FROM_PRECOMPILED_DIR tree (build/lib + runtime). strip --strip-debug
+          # drops ASan debug bloat but keeps the dynamic symbols needed to import ttnn.
+          mkdir -p /work/ttnn-import/build/lib
+          cp -a /work/build/lib/*.so* /work/ttnn-import/build/lib/
+          rm -f /work/ttnn-import/build/lib/libbenchmark*   # test-only, not needed to import
+          find /work/ttnn-import/build/lib -type f -name '*.so*' -exec strip --strip-debug {} +
+          cp -a /work/runtime /work/ttnn-import/runtime
+          echo "Lean ttnn-import tree size:"; du -sh /work/ttnn-import /work/ttnn-import/build/lib
+
       - name: Set ttnn-import artifact name
         id: set_ttnn_import_name
         if: ${{ inputs.build-ttnn-import-artifact }}
@@ -730,10 +742,7 @@ jobs:
         timeout-minutes: 10
         with:
           name: ${{ steps.set_ttnn_import_name.outputs.name }}
-          path: |
-            /work/build/lib/*.so
-            /work/build/lib/*.so.*
-            /work/runtime/**
+          path: /work/ttnn-import
           compression-level: 0
           if-no-files-found: error
 

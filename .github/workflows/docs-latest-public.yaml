@@ -10,9 +10,8 @@ on:
       docker-image:
         required: true
         type: string
-      # Provide exactly one of the two below to make ttnn importable:
-      #   wheel-artifact-name        → install a prebuilt wheel (release/main docs)
-      #   ttnn-import-artifact-name  → import in-place from a precompiled tree (PR gate, no recompile)
+      # Provide exactly one: wheel-artifact-name (install a wheel) or
+      # ttnn-import-artifact-name (import in-place from a precompiled tree).
       wheel-artifact-name:
         required: false
         type: string
