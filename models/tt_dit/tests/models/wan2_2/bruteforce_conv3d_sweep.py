@@ -1056,6 +1056,13 @@ _SWEEP_LAYERS_H2W2_1024_T1 = [
     ("up0_spatial_128", 1024, 1024, (1, 3, 3), (1, 1, 1), (0, 0, 0), 1, 130, 130, 2, 2),  # x1  H_out=128
     ("up1_spatial_256", 1024, 1024, (1, 3, 3), (1, 1, 1), (0, 0, 0), 1, 258, 258, 2, 2),  # x1  H_out=256
     ("up2_spatial_512", 512, 512, (1, 3, 3), (1, 1, 1), (0, 0, 0), 1, 514, 514, 2, 2),  # x1  H_out=512
+    # Temporal-upsample tconvs (kernel (3,1,1), 1x1 spatial). In the pipeline these are causal-T-padded
+    # (external_padding[0]=2, internal_padding[0]=0), so the _BLOCKINGS key T=2 is BELOW kT=3 and a valid
+    # (padding=0) conv would emit 0 frames. Sweep at T_in=3 (-> T_out=1) so the conv is valid; kH=kW=1 so
+    # the C/H/W blocking (the only lever) is T-independent. Register the winner with T_out_block=1 under
+    # the real key (h,w,1024,2048,(3,1,1),2,H_out,W_out).
+    ("up0_tconv_64", 1024, 2048, (3, 1, 1), (1, 1, 1), (0, 0, 0), 3, 64, 64, 2, 2),  # x1  key T=2, H_out=64
+    ("up1_tconv_128", 1024, 2048, (3, 1, 1), (1, 1, 1), (0, 0, 0), 3, 128, 128, 2, 2),  # x1  key T=2, H_out=128
 ]
 
 

@@ -466,6 +466,12 @@ _BLOCKINGS = {
     (2, 2, 1024, 1024, (1, 3, 3), 1, 128, 128): (256, 128, 1, 4, 8),  # up0 spatial — 183709us -> 2273us (80.8x)
     (2, 2, 1024, 1024, (1, 3, 3), 1, 256, 256): (256, 128, 1, 4, 8),  # up1 spatial — 743060us -> 8626us (86.1x)
     (2, 2, 512, 512, (1, 3, 3), 1, 512, 512): (256, 128, 1, 8, 4),  # up2 spatial — 501869us -> 7323us (68.5x)
+    # Temporal-upsample convs (3,1,1): 1x1 spatial patch, so the generic fallback (256,32,1,1,1)
+    # processes one output pixel per core (H_out_block=W_out_block=1) -> pathologically slow.
+    # Runtime key T=2 (causal-padded); swept at T_in=3 (T=2<kT=3 gives a 0-frame valid conv).
+    # T_out_block=1 in the winner is valid for any output T. Swept 2026-07-13, same run as above.
+    (2, 2, 1024, 2048, (3, 1, 1), 2, 64, 64): (256, 512, 1, 2, 16),  # up0 tconv — 39184us -> 637us (61.6x)
+    (2, 2, 1024, 2048, (3, 1, 1), 2, 128, 128): (256, 512, 1, 4, 8),  # up1 tconv — 156624us -> 1964us (79.8x)
 }
 
 # Fallback table: (C_in, C_out, kernel) -> blocking.
