@@ -44,7 +44,7 @@ in `registry.py`; you rarely touch a checker and never the C++.**
 | `mailbox-sync` | in-tree RISC↔RISC mailbox FIFO endpoints + writer↔reader pairing by directed channel | `PAIRED_CHANNEL` / `UNPAIRED_ENDPOINT` / `UNRESOLVED_ENDPOINT` |
 | `cb-sync` † | circular-buffer reserve/push & wait/pop credit balance per CB (within a function) | `CB_RESERVE_PUSH_IMBALANCE` / `CB_WAIT_POP_IMBALANCE` |
 | `noc-sync` † | NoC credit signal (`noc_semaphore_inc/set/mcast`) with no preceding write flush/barrier | `NOC_SIGNAL_NO_FLUSH` |
-| `noc-atomic-exit` † | non-posted NoC atomic (`noc_semaphore_inc` / remote `up`) left in flight at kernel exit (no following `noc_async_atomic_barrier`) | `NO_ATOMIC_BARRIER_AT_EXIT` |
+| `noc-atomic-exit` † | non-posted NoC atomic (`noc_semaphore_inc` / remote `up`) left in flight at kernel exit (no following `noc_async_atomic_barrier` / `noc_async_full_barrier`) | `NO_ATOMIC_BARRIER_AT_EXIT` |
 | `noc-read-barrier` † | inbound `noc_async_read` consumed (`cb_push_back` / `tt_memmove`) before its `noc_async_read_barrier` | `READ_CONSUMED_BEFORE_BARRIER` |
 | `noc-l1-invalidate` † | (Blackhole) hand-rolled volatile-L1 poll of a remote flag with no `invalidate_l1_cache` | `MISSING_L1_INVALIDATE` |
 
@@ -145,6 +145,7 @@ Open `registry.py` — it is organized by concept with an `EDIT HERE` banner:
 - new NoC posted-flush → `NOC_POSTED_FLUSH_CALLS` / `NOC_METHOD_POSTED_FLUSH` (drains only the posted counter — never clears a non-posted write/atomic credit)
 - new non-posted atomic credit or its drain (noc-atomic-exit) → `NOC_ATOMIC_SIGNALS` (+ method `NOC_METHOD_SIGNAL_MCAST` / `NOC_METHOD_SIGNAL_WRITE`) / `NOC_ATOMIC_BARRIERS` / `NOC_METHOD_ATOMIC_BARRIER`; the write-ack barrier is `NOC_WRITE_BARRIERS`
 - new NoC read barrier or read-consume form (noc-read-barrier) → `NOC_METHOD_READ_BARRIER` / `READ_FORWARD_CALLS`
+- new all-draining full barrier → `NOC_FULL_BARRIERS` / `NOC_METHOD_FULL_BARRIER` (drains read+write+atomic — satisfies the flush/barrier, atomic-barrier, AND read-barrier predicates)
 - noc-l1-invalidate has no per-signature table — it keys on the `pointer_read` fact (a volatile L1 poll in a loop) scoped to NoC context (`noc_op_of`) / `get_semaphore` provenance; widen the `pointer_read` capture, not a name list
 
 Then `python3 tests/test_checks.py` to confirm nothing regressed.
