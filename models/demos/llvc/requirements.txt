@@ -2,5 +2,5 @@
 # torch / ttnn are provided by the tt-metal environment.
 # Audio file I/O uses soundfile (libsndfile); resampling is done with torch,
 # so torchaudio is not required.
-soundfile
-numpy
+soundfile==0.12.1
+numpy==1.26.4
