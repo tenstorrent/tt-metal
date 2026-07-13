@@ -172,4 +172,5 @@ enum class SfpuType {
     digamma,
     identity,
     sqrt_custom,
+    tanh_derivative_lut,
 };

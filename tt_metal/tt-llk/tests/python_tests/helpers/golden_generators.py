@@ -2182,6 +2182,7 @@ class UnarySFPUGolden:
             MathOperation.Sign: self._sign,
             MathOperation.Signbit: self._signbit,
             MathOperation.TanhDerivative: self._tanh_derivative,
+            MathOperation.TanhDerivativeLut: self._tanh_derivative_lut,
             MathOperation.Hardmish: self._hardmish,
             MathOperation.Lgamma: self._lgamma,
             MathOperation.Digamma: self._digamma,
@@ -2205,6 +2206,11 @@ class UnarySFPUGolden:
             MathOperation.SqrtCustom: self._sqrt,
             MathOperation.Add1: self._add1,
             MathOperation.CastFp32ToFp16a: self._cast_fp32_to_fp16a,
+            MathOperation.Isinf: self._isinf,
+            MathOperation.Isposinf: self._isposinf,
+            MathOperation.Isneginf: self._isneginf,
+            MathOperation.Isnan: self._isnan,
+            MathOperation.Isfinite: self._isfinite,
             MathOperation.ReduceColumn: self._reduce_columns,
             MathOperation.ReduceRow: self._reduce_rows,
             MathOperation.Typecast: self._typecast,
@@ -2407,6 +2413,24 @@ class UnarySFPUGolden:
     def _add1(self, x):
         # add1(x) = x + 1
         return x + 1.0
+
+    # Predicate ops: return 1.0 where the test holds, else 0.0. Each x is a
+    # python float, so math.isinf/isnan give the same verdict the SFPU does on
+    # the corresponding inf/nan dest bits.
+    def _isinf(self, x):
+        return 1.0 if math.isinf(x) else 0.0
+
+    def _isposinf(self, x):
+        return 1.0 if (math.isinf(x) and x > 0) else 0.0
+
+    def _isneginf(self, x):
+        return 1.0 if (math.isinf(x) and x < 0) else 0.0
+
+    def _isnan(self, x):
+        return 1.0 if math.isnan(x) else 0.0
+
+    def _isfinite(self, x):
+        return 1.0 if math.isfinite(x) else 0.0
 
     def _cast_fp32_to_fp16a(self, x):
         # cast_fp32_to_fp16a rounds the value to IEEE half-precision (fp16a,
@@ -2722,6 +2746,26 @@ class UnarySFPUGolden:
     def _tanh_derivative(self, x):
         # tanh'(x) = 1 - tanh(x)^2 = sech^2(x).
         t = math.tanh(x)
+        return 1.0 - t * t
+
+    def _tanh_derivative_lut(self, x):
+        # Legacy tt-llk _calculate_tanh_derivative_ computes 1 - tanh(x)^2 where
+        # tanh comes from the raw 3-region SFPLUT (same LUT as the tanh kernel),
+        # NOT an accurate tanh. So the faithful golden models that piecewise-linear
+        # LUT, gated by |x| into exponent buckets (breakpoints at 1.0 and 2.0):
+        #   |x| < 1 : 0.90625*|x|
+        #   |x| < 2 : 0.09375*|x| + 0.8125
+        #   else    : 1.0            (saturates, so tanh' -> 0)
+        # The LUT is odd, but 1 - t^2 squares away the sign. This is the kernel's
+        # true contract; validating it against accurate tanh would fail by design
+        # (the header documents catastrophic cancellation for |x| > ~3.4).
+        a = abs(x)
+        if a < 1.0:
+            t = 0.90625 * a
+        elif a < 2.0:
+            t = 0.09375 * a + 0.8125
+        else:
+            t = 1.0
         return 1.0 - t * t
 
     def _hardmish(self, x):

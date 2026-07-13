@@ -144,6 +144,9 @@ class MathOperation(Enum):
     Sign = OpSpec("sign", MathOpType.SFPU_UNARY)
     Signbit = OpSpec("signbit", MathOpType.SFPU_UNARY)
     TanhDerivative = OpSpec("tanh_derivative", MathOpType.SFPU_UNARY)
+    # Legacy LUT variant of tanh'(x): 1 - tanh(x)^2 with tanh from the piecewise
+    # LUT (distinct kernel path from the accurate sech2 TanhDerivative above).
+    TanhDerivativeLut = OpSpec("tanh_derivative_lut", MathOpType.SFPU_UNARY)
     Hardmish = OpSpec("hardmish", MathOpType.SFPU_UNARY)
     Lgamma = OpSpec("lgamma", MathOpType.SFPU_UNARY)
     Digamma = OpSpec("digamma", MathOpType.SFPU_UNARY)
@@ -167,6 +170,13 @@ class MathOperation(Enum):
     SqrtCustom = OpSpec("sqrt_custom", MathOpType.SFPU_UNARY)
     Add1 = OpSpec("add1", MathOpType.SFPU_UNARY)
     CastFp32ToFp16a = OpSpec("cast_fp32_to_fp16a", MathOpType.SFPU_UNARY)
+    # isinf/isnan family: cpp_enum_value must match the SfpuType enumerator name
+    # so SFPU_UNARY_OPERATION = SfpuType::{value} resolves.
+    Isinf = OpSpec("isinf", MathOpType.SFPU_UNARY)
+    Isposinf = OpSpec("isposinf", MathOpType.SFPU_UNARY)
+    Isneginf = OpSpec("isneginf", MathOpType.SFPU_UNARY)
+    Isnan = OpSpec("isnan", MathOpType.SFPU_UNARY)
+    Isfinite = OpSpec("isfinite", MathOpType.SFPU_UNARY)
     AddInt32 = OpSpec("add_int32", MathOpType.SFPU_UNARY)
     SubInt32 = OpSpec("sub_int32", MathOpType.SFPU_UNARY)
     TopKLocalSort = OpSpec("topk_local_sort", MathOpType.SFPU_UNARY)

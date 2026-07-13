@@ -286,6 +286,12 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.TanhDerivative: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
+    # legacy LUT tanh_derivative: same math but tanh comes from a coarse piecewise
+    # LUT that suffers catastrophic cancellation in 1 - tanh^2 for |x| > ~3.4, so
+    # keep the domain inside the LUT's accurate region.
+    MathOperation.TanhDerivativeLut: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-3.0, high=3.0)
+    ),
     # hardmish: piecewise on [-2, 0]; span past both clamp knees
     MathOperation.Hardmish: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-4.0, high=4.0)
