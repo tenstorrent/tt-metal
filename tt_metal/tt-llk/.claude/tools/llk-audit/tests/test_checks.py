@@ -2305,6 +2305,52 @@ def test_factbase_reattributes_facts_after_extent_repair():
         ],
     )
     assert ok.facts[-1]["function"] == "good", ok.facts[-1]
+    # REGRESSION (B): the repair loop has no nesting model — a collapsed NESTED lambda
+    # that is last-by-begin gets an OPEN_ENDED extent that swallows the rest of its
+    # enclosing kernel_main, so enclosing(max begin_off) would return the lambda for a
+    # fact that is really in kernel_main. A fact the C++ attributed to kernel_main
+    # (non-empty) must NOT be re-stamped onto the lambda — else a name-gated checker
+    # (noc-atomic-exit's is_kernel_entry) lets the atomic escape (a false-all-clear).
+    nested = FactBase(
+        "wormhole",
+        [
+            {
+                "family": "function",
+                "file": "k.cpp",
+                "off": 0,
+                "end_off": 1000,
+                "name": "kernel_main",
+            },
+            {
+                "family": "function",
+                "file": "k.cpp",
+                "off": 40,
+                "end_off": 40,
+                "name": "operator()",
+            },  # collapsed lambda
+            {
+                "family": "call",
+                "file": "k.cpp",
+                "off": 500,
+                "function": "kernel_main",
+                "name": "noc_semaphore_inc",
+            },
+            {
+                "family": "call",
+                "file": "k.cpp",
+                "off": 45,
+                "function": "",
+                "name": "noc_semaphore_inc",
+            },  # truly in the lambda
+        ],
+    )
+    byoff = {f["off"]: f["function"] for f in nested.facts if f["family"] == "call"}
+    assert (
+        byoff[500] == "kernel_main"
+    ), byoff  # non-empty C++ owner preserved (not clobbered to operator())
+    assert (
+        byoff[45] == "operator()"
+    ), byoff  # the genuinely-empty lambda-body fact is still filled
 
 
 @case
