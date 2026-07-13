@@ -54,13 +54,13 @@ _SDPA_DECODE_CFG = ttnn.SDPAProgramConfig(
 )
 
 # Decode-only program config for the wo 1536x1536 output projection (single-token
-# step, Mt=1).  (wq now goes through the fused wqkv path.)  Sweep winner: 1D
-# mcast_in0, 8x3=24 cores, in0_block_w=4, per_core_N=2, out_subblock 1x2,
-# width-sharded output -> 12.25us vs 25.4us auto baseline (2.08x).  per_core_M=1
-# makes it valid ONLY for S==1 decode; prefill (S>1, Mt>1) keeps the auto config.
+# step, Mt=1).  (wq now goes through the fused wqkv path.)  In-model profile sweep:
+# 1D mcast_in0, 8x3=24 cores, per_core_N=2, out_subblock 1x2; in0_block_w=8 (was 4)
+# -> 13us / 74% DRAM BW vs 14us / 66% at bw4.  per_core_M=1 makes it valid ONLY for
+# S==1 decode; prefill (S>1, Mt>1) keeps the auto config.
 _QO_DECODE_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     compute_with_storage_grid_size=ttnn.CoreCoord(8, 3),
-    in0_block_w=4,
+    in0_block_w=8,
     out_subblock_h=1,
     out_subblock_w=2,
     per_core_M=1,
@@ -75,21 +75,23 @@ _QO_DECODE_OUT_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED,
 
 # Decode-only program config for the fused QKV projection (1536x2048, single-token
 # step).  Fusing wq/wk/wv into one matmul + one bias collapses 7 ops (3 linear + 3
-# bias + concat) to 2 and feeds nlp_create_qkv_heads directly.  Sweep winner: 1D
-# mcast_in0, 8x8=64 cores, in0_block_w=4, per_core_N=1 -> ~3.96x on the QKV block,
-# PCC 0.999998 (~bit-exact).  DRAM output (nlp_create_qkv_heads reads interleaved).
-# per_core_M=1 makes it valid ONLY for S==1 decode; prefill keeps the auto config.
+# bias + concat) to 2 and feeds nlp_create_qkv_heads directly.  In-model profile sweep
+# winner: 1D mcast_in0, 8x4=32 cores, in0_block_w=8, per_core_N=2 (out_subblock 1x2)
+# -> 17us / 76.8% DRAM BW vs 21us / 60% for the 64-core per_core_N=1 config (the small
+# 1x1 output subblock was the bottleneck).  DRAM output (nlp_create_qkv_heads reads
+# interleaved).  per_core_M=1 makes it valid ONLY for S==1 decode; prefill keeps auto.
 _QKV_DECODE_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-    compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
-    in0_block_w=4,
+    compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
+    in0_block_w=8,
     out_subblock_h=1,
-    out_subblock_w=1,
+    out_subblock_w=2,
     per_core_M=1,
-    per_core_N=1,
+    per_core_N=2,
     fuse_batch=True,
     fused_activation=None,
     mcast_in0=True,
 )
+
 
 # Decode-only program config for the FFN down projection w2 (32x8960x1536, single-
 # token step).  Sweep winner: same 8x3=24-core / per_core_N=2 / out_subblock 1x2
@@ -109,6 +111,18 @@ _W2_DECODE_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     fused_activation=None,
     mcast_in0=True,
 )
+
+
+def _matmul_in_l1(x: ttnn.Tensor, decode: bool) -> ttnn.Tensor:
+    """L1 interleaved activation for decode matmul inputs (S==1). No-op on prefill."""
+    if not decode:
+        return x
+    mc = x.memory_config()
+    if mc.buffer_type == ttnn.BufferType.L1 and mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
+        return x
+    if mc.buffer_type == ttnn.BufferType.L1:
+        return ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG, x.dtype)
+    return ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG, dtype=x.dtype)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -552,13 +566,14 @@ class TTVibeVoiceLM:
         head_dim = cfg.head_dim
         n_heads = cfg.num_attention_heads
         n_kv = cfg.num_key_value_heads
+        decode = S == 1
 
         # Fused QKV projection [B, 1, S, (n_heads+2*n_kv)*hd].  One matmul + one bias
         # replaces three wq/wk/wv linears + three bias adds + concat (7 ops -> 2),
         # feeding nlp_create_qkv_heads directly.  Decode (S==1) uses the swept 1D
         # config (~3.96x on this block); prefill (S>1) keeps the auto config.
         qkv = ttnn.linear(
-            x,
+            _matmul_in_l1(x, decode),
             layer_w.wqkv,
             compute_kernel_config=_HIFI4,
             program_config=_QKV_DECODE_PROGCFG if S == 1 else None,
@@ -747,28 +762,31 @@ class TTVibeVoiceLM:
                 # untilize→reshape→tilize).  Bit-exact; ~4x faster.
                 out = ttnn.experimental.nlp_concat_heads(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # Output projection (1536x1536; same decode fast-path as wq).
+        # Output projection (1536x1536; swept decode config, see _QO_DECODE_PROGCFG).
         out = ttnn.linear(
-            out,
+            _matmul_in_l1(out, decode),
             layer_w.wo,
             compute_kernel_config=_HIFI4,
-            program_config=_QO_DECODE_PROGCFG if S == 1 else None,
-            memory_config=_QO_DECODE_OUT_MEMCFG if S == 1 else ttnn.DRAM_MEMORY_CONFIG,
+            program_config=_QO_DECODE_PROGCFG if decode else None,
+            memory_config=_QO_DECODE_OUT_MEMCFG if decode else ttnn.DRAM_MEMORY_CONFIG,
         )
         return out
 
     def _ffn_layer(self, x: ttnn.Tensor, layer_w: LayerWeights) -> ttnn.Tensor:
         """SwiGLU FFN: gate_proj(x) * silu(gate_proj(x)) → down_proj."""
         S = x.shape[2]
+        decode = S == 1
+        act_mc = ttnn.L1_MEMORY_CONFIG if decode else ttnn.DRAM_MEMORY_CONFIG
+        x_mm = _matmul_in_l1(x, decode)
         # gate/up use bfp8_b weights → HiFi2 (see _HIFI2); w2 stays HiFi4 (bf16 weight).
-        gate = ttnn.linear(x, layer_w.w1, compute_kernel_config=_HIFI2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        up = ttnn.linear(x, layer_w.w3, compute_kernel_config=_HIFI2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        gate = ttnn.silu(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        hidden = ttnn.mul(gate, up, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        gate = ttnn.linear(x_mm, layer_w.w1, compute_kernel_config=_HIFI2, memory_config=act_mc)
+        up = ttnn.linear(x_mm, layer_w.w3, compute_kernel_config=_HIFI2, memory_config=act_mc)
+        gate = ttnn.silu(gate, memory_config=act_mc)
+        hidden = ttnn.mul(gate, up, memory_config=act_mc)
         # Down proj: on a single-token decode step use the swept fast config (2.15x);
         # prefill (S>1) keeps the auto config.
         out = ttnn.linear(
-            hidden,
+            _matmul_in_l1(hidden, decode),
             layer_w.w2,
             compute_kernel_config=_HIFI4,
             program_config=_W2_DECODE_PROGCFG if S == 1 else None,
@@ -854,7 +872,7 @@ class TTVibeVoiceLM:
 
         # LM head projection → logits
         logits = ttnn.linear(
-            x,
+            _matmul_in_l1(x, S == 1),
             self.w.lm_head_w,
             compute_kernel_config=_HIFI4,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -884,15 +902,16 @@ class TTVibeVoiceLM:
         n_heads = cfg.num_attention_heads
         n_kv = cfg.num_key_value_heads
 
+        x_mm = _matmul_in_l1(x, True)
         q = ttnn.linear(
-            x,
+            x_mm,
             layer_w.wq,
             compute_kernel_config=_HIFI4,
             program_config=_QO_DECODE_PROGCFG,
             memory_config=_QO_DECODE_OUT_MEMCFG,
         )
-        k = ttnn.linear(x, layer_w.wk, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        v = ttnn.linear(x, layer_w.wv, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        k = ttnn.linear(x_mm, layer_w.wk, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        v = ttnn.linear(x_mm, layer_w.wv, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if layer_w.q_bias is not None:
             q = ttnn.add(q, layer_w.q_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if layer_w.k_bias is not None:
@@ -931,7 +950,7 @@ class TTVibeVoiceLM:
         )  # [1, B, n_heads, hd]
         out = _reshape_tt(attn, [B, 1, S, n_heads * head_dim])
         out = ttnn.linear(
-            out,
+            _matmul_in_l1(out, True),
             layer_w.wo,
             compute_kernel_config=_HIFI4,
             program_config=_QO_DECODE_PROGCFG,
@@ -993,7 +1012,12 @@ class TTVibeVoiceLM:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         last_hidden = ttnn.typecast(x, ttnn.float32) if return_last_hidden else None
-        logits = ttnn.linear(x, self.w.lm_head_w, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        logits = ttnn.linear(
+            _matmul_in_l1(x, True),
+            self.w.lm_head_w,
+            compute_kernel_config=_HIFI4,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         return logits, last_hidden
 
     def _rope_rows_from_pos(self, cur_pos: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
