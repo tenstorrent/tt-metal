@@ -1,0 +1,21 @@
+{
+  "hf_model_id": "meta-llama/Llama-3.1-8B-Instruct",
+  "hf_advertised_context": 131072,
+  "current_supported_context": 64,
+  "validated_prefill_contexts": [16, 17, 64],
+  "validated_decode_cache_len": 128,
+  "decode_status": "translated_from_emit",
+  "limiting_reason": "device_dram",
+  "capacity_evidence": {
+    "emitted_batch": 32,
+    "dtype": "bfloat16",
+    "estimate": "A single hidden-state tensor at batch 32, context 131072, hidden 4096 is 32 GiB before QKV, MLP intermediates, KV/cache, and op workspaces. That already exceeds the local single-chip Wormhole-class device used by the functional tests, so this correctness-first single-device stage does not claim the HF-advertised context.",
+    "largest_validated_prefill_context": 64,
+    "validation_command": "pytest -q models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_functional_decoder.py --tb=short"
+  },
+  "notes": [
+    "FunctionalDecoder rebuilds RoPE tables at setup and accepts caller-provided RoPE/masks; the default prefill path uses SDPA causal mode and does not build a full causal mask.",
+    "This functional-decoder stage validated prefill up to seq_len 64 and decode against the emitted cache length 128; larger-context expansion is deferred to later stages.",
+    "The forge emit is a batch-32 single-token decode graph with KV-cache append at cache_position, SDPA decode, and nlp_concat_heads_decode."
+  ]
+}
