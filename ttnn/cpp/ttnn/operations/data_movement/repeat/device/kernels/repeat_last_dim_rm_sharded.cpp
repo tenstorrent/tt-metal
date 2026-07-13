@@ -7,7 +7,9 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 using namespace tt::data_movement::common;
 
@@ -41,10 +43,10 @@ void kernel_main() {
 
     for (uint32_t i = page_start; i < page_end; i++) {
         noc_async_read_sharded(noc, cb_slot, s, i, 0, original_page_size_bytes);
-        noc_async_read_barrier();
+        noc.async_read_barrier();
         for (uint32_t k = 0; k < num_repeats; k++) {
             noc_async_write_sharded(noc, cb_slot, d, i, k * original_page_size_bytes, original_page_size_bytes);
         }
-        noc_async_write_barrier();
+        noc.async_write_barrier();
     }
 }
