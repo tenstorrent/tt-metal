@@ -167,14 +167,22 @@ class BgeM3Attention(LightweightModule):
         # Stage 2: split Q/K/V heads.
         # B1/S512 + B32/S512: head-split kernels for higher core utilization.
         # Other shapes: stock ttnn ops.
-        if self.config.max_batch_size in (1, 8, 16, 32) and self.config.max_seq_len == 512:
+        if (self.config.max_batch_size in (1, 8, 16, 32) and self.config.max_seq_len == 512) or (
+            self.config.max_seq_len == 8192
+        ):
             from models.demos.wormhole.bge_m3.tt.custom_ops.fused_qkv_heads.op import bge_qkv_heads_headsplit
 
             # Batch 32 already has 32×16 = 512 (batch × seq_tile) work units, so we
             # don't need to further split heads to get good core utilization.
             # B8 has 8×16 = 128 units -> also plenty, use groups=4 like B32 (swept
             # head_groups {1,2,4,8,16}: 4 is the min, tied with 8).
-            head_groups = 4 if self.config.max_batch_size in (8, 16, 32) else self.config.num_heads
+            # S8192: retest fused head-split under current LoFi config (exp13 was
+            # pre-LoFi noise); groups=4 like B32.
+            head_groups = (
+                4
+                if self.config.max_batch_size in (8, 16, 32) or self.config.max_seq_len == 8192
+                else self.config.num_heads
+            )
             q, k, v = bge_qkv_heads_headsplit(
                 qkv_fused,
                 num_heads=self.config.num_heads,
