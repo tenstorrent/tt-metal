@@ -17,6 +17,7 @@
 #include "ttnn/operations/data_movement/expand/expand_nanobind.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad_nanobind.hpp"
 #include "ttnn/operations/data_movement/fill_rm/fill_rm_nanobind.hpp"
+#include "ttnn/operations/data_movement/flip/flip_nanobind.hpp"
 #include "ttnn/operations/data_movement/fold/fold_nanobind.hpp"
 #include "ttnn/operations/data_movement/indexed_fill/indexed_fill_nanobind.hpp"
 #include "ttnn/operations/data_movement/moe_expert_token_remap/moe_expert_token_remap_nanobind.hpp"
@@ -59,6 +60,7 @@ void py_module(nb::module_& mod) {
     bind_non_zero_indices(mod);
     clone::bind_clone_operation(mod);
     detail::bind_concat(mod);
+    detail::bind_flip(mod);
     detail::bind_indexed_fill(mod);
     detail::bind_pad(mod);
     detail::bind_permute(mod);

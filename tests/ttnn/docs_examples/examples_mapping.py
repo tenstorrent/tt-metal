@@ -373,6 +373,7 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.manual_seed": reduction.test_manual_seed,
     # Data movement
     "ttnn.concat": data_movement.test_concat,
+    "ttnn.flip": data_movement.test_flip,
     "ttnn.nonzero": data_movement.test_nonzero,
     "ttnn.pad": data_movement.test_pad,
     "ttnn.permute": data_movement.test_permute,
