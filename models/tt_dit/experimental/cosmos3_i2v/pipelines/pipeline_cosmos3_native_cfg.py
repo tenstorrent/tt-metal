@@ -304,6 +304,8 @@ def build_cosmos3_i2v_native_cfg_pipeline(
     cfg_parallel: bool = True,
     serial_dispatch: bool = False,
     cache_namespace: str = "cosmos3-i2v",
+    enable_device_proj_out: bool = True,
+    enable_device_proj_in: bool = False,
 ):
     """Build the cfg-parallel native-trunk Cosmos3-I2V pipeline.
 
