@@ -890,9 +890,15 @@ def noc_signal_is_atomic(fact: dict) -> bool:
 # commit. Whether a same-NoC/VC UNICAST atomic is nonetheless safe with just a flush
 # (in-issue-order delivery landing the payload first) is a doc-grounded VERDICT —
 # the /noc-sync skill decides it against <arch>/NoC/Ordering.md + posted_writes.md,
-# the tool does NOT assume it. A MULTICAST credit, or writes crossing separate
-# command-buffer FIFOs / different NoCs / a different VC, definitely need the barrier.
-# So the tool keeps flagging a flush-but-no-barrier atomic (never miss a real race)
+# the tool does NOT assume it. An ATOMIC MULTICAST (inc_multicast), or ANY credit that
+# crosses separate command-buffer FIFOs / different NoCs / a different VC, needs the
+# barrier. NOTE a same-VC WRITE multicast (set_multicast) is NOT special here: per
+# Ordering.md's same-VC route rule it is transit-ordered PER-RECEIVER exactly like a
+# unicast write, so the checker clears it on a flush like a unicast write — it is NOT
+# forced to a barrier. (Whether the recipient's NON-overlapping write->write commit
+# order holds — not in Ordering.md's guaranteed list — is a /noc-sync skill verdict,
+# same as for a unicast write; the checker asserts neither way.)
+# So the tool keeps flagging a flush-but-no-barrier ATOMIC (never miss a real race)
 # and TAGS it FLUSH_NOT_BARRIER for the skill to confirm, rather than clearing it.
 NOC_WRITE_BARRIERS = (
     "noc_async_write_barrier",
