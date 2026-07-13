@@ -937,6 +937,13 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
             }
         }
 
+        for (auto* device : view_->get_devices()) {
+            if (auto* physical_device = dynamic_cast<Device*>(device)) {
+                // Ensure slow dispatch is disabled regardless of current state
+                physical_device->set_smc_dispatch_telemetry_slow_dispatch_enabled(false);
+            }
+        }
+
         mesh_command_queues_.clear();
     }
 
@@ -1441,6 +1448,11 @@ bool MeshDeviceImpl::initialize_impl(
                 active_distributed_context_));
         }
     } else {
+        for (auto* device : this->get_devices()) {
+            if (auto* physical_device = dynamic_cast<Device*>(device)) {
+                physical_device->set_smc_dispatch_telemetry_slow_dispatch_enabled(true);
+            }
+        }
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
             mesh_command_queues_.push_back(std::make_unique<SDMeshCommandQueue>(
                 pimpl_wrapper, cq_id, std::bind(&MeshDeviceImpl::lock_api, this), active_distributed_context_));

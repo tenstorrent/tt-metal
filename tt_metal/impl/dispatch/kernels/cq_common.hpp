@@ -705,7 +705,8 @@ FORCE_INLINE uint32_t set_sub_device_worker_counts(
         uint32_t worker_count = *(data_ptr++);
         workers_per_sub_device[i] = worker_count;
         if constexpr (telemetry_enabled) {
-            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base)
+            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchCoreTelemetry*>(
+                dispatch_telemetry_base)
                 ->workers_per_sub_device[i] = worker_count;
         }
 #if DEVICE_PRINT_DISPATCH_ENABLED
@@ -715,7 +716,8 @@ FORCE_INLINE uint32_t set_sub_device_worker_counts(
     for (uint32_t i = num_sub_devices; i < max_num_worker_sems; ++i) {
         workers_per_sub_device[i] = 0;
         if constexpr (telemetry_enabled) {
-            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base)
+            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchCoreTelemetry*>(
+                dispatch_telemetry_base)
                 ->workers_per_sub_device[i] = 0;
         }
     }
