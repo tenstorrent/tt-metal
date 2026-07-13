@@ -206,9 +206,12 @@ Then `python3 tests/test_checks.py` to confirm nothing regressed.
   reserve/push & wait/pop imbalance, signal-without-preceding-flush) — they report
   0 over tt-llk (no cb/noc sites) and are end-to-end validated on real kernels only
   once the JIT capture (kernel fact base) is built.
-- **Quasar**: all 122 `cfg_rmw` writes resolve and are each single-thread-owned
-  (12 PACK-only, 7 UNPACK-only words) → 0 cross-thread shared words, matching the
-  skill's per-engine-ownership conclusion; mmio-race's 169 unguarded writes are
+- **Quasar**: the ALU config words are cross-thread-clean (MATH-owned, per-engine
+  register namespacing) — matching the skill's per-engine-ownership conclusion. The tool
+  surfaces **1 `UNRESOLVED_COWRITER`** candidate: `RISC_DEST_ACCESS_CTRL` (word 3), a
+  template `set_dest_fmt<t>` writing `SEC0/1/2_fmt` whose thread(s) it cannot statically
+  resolve — HW-safe by disjoint masked SEC fields, surfaced for the LLM to confirm, not a
+  confirmed race; mmio-race's 169 unguarded writes are
   correctly `AUTOTTSYNC_ORDERED`; reconfig recall works via `cfg_rmw`.
 
 The HW claims the checkers encode are grounded in the tt-isa-docs
