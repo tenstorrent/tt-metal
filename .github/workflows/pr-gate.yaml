@@ -232,7 +232,7 @@ jobs:
       # build-docs runs on ubuntu-latest (external runner) — no harbor access.
       # Use raw GHCR tag from build-docker-images, not the harbor-prefixed ref from asan-build.
       docker-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
-      ttnn-import-artifact-name: ${{ needs.asan-build.outputs.ttnn-import-artifact-name }}
+      ttnn-import-artifact-id: ${{ needs.asan-build.outputs.ttnn-import-artifact-id }}
       build-type: 'ASan'
 
   metalium-examples:
