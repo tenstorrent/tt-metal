@@ -24,7 +24,6 @@ from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
@@ -583,42 +582,15 @@ class TtMoe(LightweightModule):
         # Routed expert expects (experts_per_chip, max_tokens, emb_dim)
         # Squeeze the first two dimensions
 
+        # TtRoutedExpert.forward owns the per-arch layout/dtype prep: Blackhole
+        # consumes the ROW_MAJOR bf16 buffer and returns a fresh output; Wormhole
+        # tiles it internally for the extract loop. Either way the ROW_MAJOR input
+        # is independent of the result and can be freed here, unless the PCC check
+        # needs it to compare against the bfloat16 torch reference.
         squeezed_dispatch = ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0)
-        if is_blackhole():
-            # Blackhole fused path: hand the routed expert the ROW_MAJOR bf16 buffer
-            # directly. The op tilizes x and packs bf8 internally and allocates its
-            # own TILE bf8 output, so there is no up-front to_layout and no in-place
-            # aliasing — expert_outputs is a fresh buffer independent of the input.
-            expert_outputs = self.routed_expert(squeezed_dispatch, tt_expert_token_counts, tt_expert_region_offsets)
-            # The ROW_MAJOR input is fully consumed by the op; free it unless the PCC
-            # check needs it to compare against the bfloat16 torch reference.
-            if not return_intermediates:
-                dispatched_buffer = ttnn.deallocate(dispatched_buffer)
-        else:
-            # Wormhole fallback: tilize to bf8 up front for the per-expert extract
-            # loop (extract → routed_expert_ffn → insert).
-            dispatched_buffer_tiled = ttnn.to_layout(
-                squeezed_dispatch,
-                ttnn.TILE_LAYOUT,
-                dtype=self.routed_expert.activations_dtype,
-            )
-            # Free the original ROW_MAJOR DRAM buffer before entering routed_expert
-            # for clear state. When return_intermediates=True, keep it so the PCC
-            # check can compare against the bfloat16 torch reference (the tiled
-            # buffer may be bfloat8_b).
-            if not return_intermediates:
-                dispatched_buffer = ttnn.deallocate(dispatched_buffer)
-
-            logger.debug(f"[TtMoe.forward] dispatched_buffer_tiled shape: {dispatched_buffer_tiled.shape}")
-
-            # expert_outputs aliases dispatched_buffer_tiled — TtRoutedExpert.forward
-            # sets expert_outputs = dispatched_buffer and writes per-expert FFN
-            # results back in-place via deepseek_prefill.insert. Must NOT deallocate
-            # dispatched_buffer_tiled here; downstream ttnn.unsqueeze / combine still
-            # depend on that storage.
-            expert_outputs = self.routed_expert(
-                dispatched_buffer_tiled, tt_expert_token_counts, tt_expert_region_offsets
-            )
+        expert_outputs = self.routed_expert(squeezed_dispatch, tt_expert_token_counts, tt_expert_region_offsets)
+        if not return_intermediates:
+            dispatched_buffer = ttnn.deallocate(dispatched_buffer)
         logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape}")
 
         # Add back the batch dimensions for combine
