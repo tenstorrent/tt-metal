@@ -63,9 +63,16 @@ Same surface as checks 1–5, but distinct mechanisms — each has its own commi
 1. Enumerate (scope reaches beyond tt-llk):
    ```bash
    # from the repo root (ttnn/ and models/ are siblings of tt_metal/, NOT under it)
-   grep -rInE '\bnoc_semaphore_(wait(_min)?|set|inc|set_multicast(_loopback_src)?|inc_multicast|set_remote)\b|\bnoc_(async_write_barrier|async_writes_flushed|async_write_flushed_with_trid|async_write_barrier_with_trid|async_posted_writes_flushed|async_atomic_barrier|async_full_barrier|inline_dw_write)\b|\bnoc_async_read[a-z_]*\b|\bnoc_(fast_)?atomic_increment\b|\btt_memmove\b|\.(up|set_multicast|set_multicast_loopback_src|relay_multicast|relay_unicast|inc_multicast|async_read|async_write_barrier|async_write_barrier_with_trid|async_writes_flushed|async_write_flushed_with_trid|async_read_barrier|async_read_barrier_with_trid|async_atomic_barrier|async_full_barrier|async_posted_writes_flushed)[[:space:]]*\(' \
+   grep -rInE '\bnoc_semaphore_(wait(_min)?|set|inc|set_multicast(_loopback_src)?|inc_multicast|set_remote)\b|\bnoc_(async_write_barrier|async_writes_flushed|async_write_flushed_with_trid|async_write_barrier_with_trid|async_posted_writes_flushed|async_atomic_barrier|async_full_barrier|inline_dw_write)\b|\bnoc_async_read[a-z_]*\b|\bnoc_(fast_)?atomic_increment\b|\btt_memmove\b|\bcb_push_back(_hold_wr_ptr)?\b|\bremote_cb_push_back_and_write_pages\b|\.(up|set_multicast|set_multicast_loopback_src|relay_multicast|relay_unicast|inc_multicast|async_read|async_write_barrier|async_write_barrier_with_trid|async_writes_flushed|async_write_flushed_with_trid|async_read_barrier|async_read_barrier_with_trid|async_atomic_barrier|async_full_barrier|async_posted_writes_flushed)[[:space:]]*\(' \
      tt_metal/hw/inc/api ttnn/cpp models --include=*.h --include=*.cpp | grep -v '/tests/'
    ```
+   > **Read-consumers (check 6).** The grep lists the free-function CB-push forms
+   > (`cb_push_back`/`cb_push_back_hold_wr_ptr`/`remote_cb_push_back_and_write_pages`)
+   > and `tt_memmove`, mirroring the tool's `is_read_consumer`. The object-method form
+   > `cb.push_back()` is DELIBERATELY not grepped here (a bare `.push_back(` floods on
+   > `std::vector`; the tool gates it on the CB receiver type, which a grep can't) — it
+   > is enumerated by the `dataflow-cb-sync` grep, so pair the two for the method form.
+
    **Both API forms.** Modern ttnn kernels signal via the OBJECT form on a
    `Semaphore` — remote `sem.up(noc, x, y, v)` / `sem.set_multicast(...)` /
    `relay_multicast` / `inc_multicast` — and flush via the `Noc` object
