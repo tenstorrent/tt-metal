@@ -27,10 +27,10 @@ Forward contract:
     forward(und_seq, gen_seq, cos_und, sin_und, cos_gen, sin_gen)
         -> (und_out, gen_out)
 where the inputs are replicated `[1, 1, N, hidden_size]` TILE ttnn
-tensors. Internally the trunk fractures them to `[1, 1, N, hidden_size / tp]`
-before the decoder stack when tp>1 and gathers back to replicated before
-returning, so the external contract is unchanged: outputs are replicated
-`[1, 1, N_*, hidden_size]` ready for the host wrapper.
+tensors (matching the decoder-layer contract we validated for PCC),
+the rotary cos/sin are replicated `[1, 1, N_*, head_dim]` TILE ttnn
+tensors, and the outputs are replicated `[1, 1, N_*, hidden_size]`
+ready for the host wrapper to concat, index, and run proj_out on.
 
 PCC validation (Stage D): build the trunk + a truncated `max_layers`
 config, load weights via `load_torch_state_dict` from the HF
@@ -44,7 +44,7 @@ import ttnn
 
 from ....layers.linear import Linear
 from ....layers.module import Module, ModuleList
-from ....layers.normalization import DistributedRMSNorm, RMSNorm
+from ....layers.normalization import RMSNorm
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from .attention import sp_ring_enabled
 from .decoder_layer import Cosmos3VLTextMoTDecoderLayer
@@ -117,22 +117,8 @@ class Cosmos3OmniTransformer(Module):
             "mesh_device": mesh_device,
             "dtype": dtype,
         }
-        tp_factor = parallel_config.tensor_parallel.factor
-        tp_axis = parallel_config.tensor_parallel.mesh_axis
-        if tp_factor > 1:
-            dist_norm_kw = {
-                "norm_eps": rms_norm_eps,
-                "norm_elementwise_affine": True,
-                "bias": False,
-                "mesh_axis": tp_axis,
-                "mesh_device": mesh_device,
-                "ccl_manager": ccl_manager,
-            }
-            self.norm = DistributedRMSNorm(hidden_size, **dist_norm_kw)
-            self.norm_moe_gen = DistributedRMSNorm(hidden_size, **dist_norm_kw)
-        else:
-            self.norm = RMSNorm(hidden_size, **norm_kw)
-            self.norm_moe_gen = RMSNorm(hidden_size, **norm_kw)
+        self.norm = RMSNorm(hidden_size, **norm_kw)
+        self.norm_moe_gen = RMSNorm(hidden_size, **norm_kw)
 
         # Vision proj_in/proj_out on device. Replicated weights (no TP) — both are
         # tiny (5120 x 192). proj_in shrinks the gen upload 26x; proj_out shrinks the
@@ -176,36 +162,6 @@ class Cosmos3OmniTransformer(Module):
             full = ttnn.to_torch(devs[0])
         _torch.save(full.detach().cpu(), path)
 
-    def _fracture_hidden(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """Split replicated `[1, 1, N, H]` to per-chip `[1, 1, N, H/tp]` — no CCL.
-
-        Each chip already holds the full H; this slices the portion matching
-        its TP index so subsequent DistributedRMSNorm and residual-add ops
-        operate on the correct shard without any data movement.
-        """
-        tp_factor = self.parallel_config.tensor_parallel.factor
-        if tp_factor <= 1:
-            return x
-        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
-        mesh_shape = tuple(self.mesh_device.shape)
-        H = x.shape[-1]
-        H_per = H // tp_factor
-        fractured = []
-        for flat_idx, t in enumerate(ttnn.get_device_tensors(x)):
-            tp_idx = flat_idx // mesh_shape[1] if tp_axis == 0 else flat_idx % mesh_shape[1]
-            start = tp_idx * H_per
-            N = t.shape[2]
-            fractured.append(ttnn.slice(t, [0, 0, 0, start], [1, 1, N, start + H_per]))
-        return ttnn.combine_device_tensors(tensors=fractured)
-
-    def _gather_hidden(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """All-gather TP-fractured `[1, 1, N, H/tp]` → replicated `[1, 1, N, H]`."""
-        tp_factor = self.parallel_config.tensor_parallel.factor
-        if tp_factor <= 1:
-            return x
-        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
-        return self.ccl_manager.all_gather_persistent_buffer(x, dim=3, mesh_axis=tp_axis)
-
     def forward(
         self,
         und_seq: ttnn.Tensor,
@@ -248,28 +204,17 @@ class Cosmos3OmniTransformer(Module):
         do_dump = per_layer_dir is not None and per_layer_call == 0
         if per_layer_dir is not None:
             object.__setattr__(self, "_per_layer_call_idx", per_layer_call + 1)
-
-        # Dump before fracture so the file captures the full replicated layout.
         if do_dump:
             _os.makedirs(per_layer_dir, exist_ok=True)
             trunk_tag = f"trunk{id(self) & 0xFFFFFF:06x}"
             self._dump_layer_tensor(gen_seq, f"{per_layer_dir}/{trunk_tag}_layer_pre.pt")
-
-        # At tp>1, split replicated [1,1,N,H] → per-chip [1,1,N,H/tp] with no CCL so
-        # DistributedRMSNorm and residual-add ops inside each layer see the correct shard.
-        tp_factor = self.parallel_config.tensor_parallel.factor
-        if tp_factor > 1:
-            und_seq = self._fracture_hidden(und_seq)
-            gen_seq = self._fracture_hidden(gen_seq)
 
         _profile_flush_every = int(_os.environ.get("TT_COSMOS3_PROFILE_FLUSH_EVERY", "0"))
 
         for i, layer in enumerate(self.layers):
             und_seq, gen_seq = layer(und_seq, gen_seq, cos_und, sin_und, cos_gen, sin_gen, logical_n_gen=logical_n_gen)
             if do_dump:
-                # gen_seq is fractured at tp>1; gather hidden dim before dumping.
-                gen_dump = self._gather_hidden(gen_seq) if tp_factor > 1 else gen_seq
-                self._dump_layer_tensor(gen_dump, f"{per_layer_dir}/{trunk_tag}_layer_{i:02d}.pt")
+                self._dump_layer_tensor(gen_seq, f"{per_layer_dir}/{trunk_tag}_layer_{i:02d}.pt")
             # drain device profiler ring mid-trunk to prevent overflow on long captures;
             # each drain adds a host sync — no-op in production (env unset → 0)
             if _profile_flush_every and (i + 1) % _profile_flush_every == 0:
@@ -280,17 +225,10 @@ class Cosmos3OmniTransformer(Module):
         und_out = self.norm(und_seq)
         gen_out = self.norm_moe_gen(gen_seq)
 
-        # SP AG collapses the sequence-sharded gen; at tp>1 gen_out is still hidden-fractured.
         if self.parallel_config.sequence_parallel.factor > 1 and sp_ring_enabled():
             gen_out = self.ccl_manager.all_gather_persistent_buffer(
                 gen_out, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
             )
-
-        # Restore replicated layout before returning — the host wrapper and proj_out expect full H.
-        if tp_factor > 1:
-            und_out = self._gather_hidden(und_out)
-            gen_out = self._gather_hidden(gen_out)
-
         if self.proj_out is not None:
             gen_out = self.proj_out(gen_out)
         return und_out, gen_out

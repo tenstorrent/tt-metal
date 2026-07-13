@@ -409,22 +409,28 @@ class Cosmos3JointAttention(Module):
         attn_BHNE: ttnn.Tensor,
         proj: RowParallelLinear,
     ) -> ttnn.Tensor:
-        """Concat heads → row-parallel matmul → fractured `[1, 1, N, hidden_size / tp]`.
-
-        At tp=1 the full `[1, 1, N, hidden_size]` tensor is returned unchanged.
-        At tp>1 the RS output is returned directly; callers must treat it as a
-        ccl_manager ping-pong buffer and must NOT call `ttnn.deallocate` on it.
-        """
+        """Concat heads → row-parallel matmul → all-gather → replicated `[1, 1, N, hidden_size]`."""
         heads = ttnn.transformer.concatenate_heads(attn_BHNE)
         ttnn.deallocate(attn_BHNE)
         heads_11NF = ttnn.unsqueeze(heads, 0)
         ttnn.deallocate(heads)
 
-        # RowParallelLinear: col-fractured heads → partial-sum matmul → RS → [1, 1, N, hidden/tp].
-        # NOTE: at tp>1 the result is a ccl_manager-owned ping-pong buffer — do NOT deallocate it.
+        # RowParallelLinear: input is col-fractured (local heads × head_dim per chip), produces
+        # partial-sum matmul → reduce-scatter on TP axis → output [1, 1, N, hidden_size / tp].
         out_fractured = proj(heads_11NF)
         ttnn.deallocate(heads_11NF)
-        return out_fractured
+
+        if self._tp_factor() <= 1:
+            return out_fractured
+
+        # All-gather on TP axis to replicate so the tt-symbiote-wrapped caller (host PyTorch
+        # residual + RMSNorm + MLP) sees the same replicated layout it gave us as input.
+        # NOTE: `out_fractured` is a persistent ping-pong buffer owned by ccl_manager — do NOT
+        # `ttnn.deallocate` it. Freeing it corrupts the cache and a later `reduce_scatter` for
+        # the same shape (e.g. the MLP's `down_proj` in the same decoder-layer forward) crashes
+        # with "Tensor is not allocated". The buffer is managed by the ping-pong cache.
+        out_replicated = self.ccl_manager.all_gather_persistent_buffer(out_fractured, dim=3, mesh_axis=self._tp_axis())
+        return out_replicated
 
     def forward(
         self,
