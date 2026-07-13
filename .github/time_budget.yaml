@@ -320,20 +320,20 @@ models:
   # key is used for the non-tiered pipelines (galaxy-unit, t3000-unit).
   unit_tier1:
     wh_llmbox: 61
-    wh_n150: 110
+    wh_n150: 190
     wh_galaxy: 45
     wh_galaxy_perf: 45
     bh_p150: 20
-    bh_quietbox_2: 245  # +8: GPT-OSS-120B bh_quietbox_2 22->30 (watcher slowdown)
+    bh_quietbox_2: 409  # +8: GPT-OSS-120B bh_quietbox_2 22->30 (watcher slowdown)
     bh_galaxy: 90  # +20: GPT-OSS-120B bh_galaxy 10->30 (watcher slowdown)
   unit_tier2:
     wh_llmbox: 114
-    wh_llmbox_perf: 172
+    wh_llmbox_perf: 198
     wh_n150: 55
     bh_p150: 20
     bh_quietbox_2: 60  # +10: GPT-OSS-20B bh_quietbox_2 5->15 (watcher slowdown)
   unit_tier3:
-    wh_llmbox_perf: 58
+    wh_llmbox_perf: 60
     wh_n150: 33
     wh_n300: 15
     bh_p150: 20
