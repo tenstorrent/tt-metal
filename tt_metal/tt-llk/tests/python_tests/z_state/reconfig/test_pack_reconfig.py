@@ -12,8 +12,6 @@ from helpers.tensix import TensixState
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import CONFIGURE_TEST_RUN_IDX
 
-# exp_section_size is only required in a reconfig when the next dest is BFP, INT8, or FP8.
-# set_packer_config writes it for all dest formats, so reconfig leaves it stale and that leak is expected.
 _BFP_FORMATS = {
     DataFormat.Bfp8,
     DataFormat.Bfp8_b,
@@ -25,18 +23,14 @@ _FP8_FORMATS = {
     for f in (getattr(DataFormat, "Fp8_e4m3", None), getattr(DataFormat, "Lf8", None))
     if f is not None
 }
-_EXP_SECTION_SIZE_KEY = "exp_section_size"
+_INT8_FORMATS = {DataFormat.Int8, DataFormat.UInt8}
 
 # These may vary run to run. Excluded so that tests don't fail spuriously.
 _IGNORED_GROUPS = ("address_counters", "register_window_counters")
 
 
 def _exp_section_size_required(dst: DataFormat) -> bool:
-    return (
-        dst in _BFP_FORMATS
-        or dst in {DataFormat.Int8, DataFormat.UInt8}
-        or dst in _FP8_FORMATS
-    )
+    return dst in _BFP_FORMATS or dst in _INT8_FORMATS or dst in _FP8_FORMATS
 
 
 def _drop_key(state, key):
@@ -123,7 +117,7 @@ def test_pack_reconfig(
         actual.pop(group, None)
 
     if not _exp_section_size_required(next_dst):
-        expected = _drop_key(expected, _EXP_SECTION_SIZE_KEY)
-        actual = _drop_key(actual, _EXP_SECTION_SIZE_KEY)
+        expected = _drop_key(expected, "exp_section_size")
+        actual = _drop_key(actual, "exp_section_size")
 
     TensixState.assert_equal(expected, actual)

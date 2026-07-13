@@ -52,6 +52,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, TO_FROM_INT8>(
             next_src, next_dst, NEXT_SIZE, FACE_R_DIM, num_faces);
     }
+
+    ckernel::unpacker::are_unpackers_AB_configured_correctly(next_src, next_dst, next_src, next_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
 }
 
 #endif

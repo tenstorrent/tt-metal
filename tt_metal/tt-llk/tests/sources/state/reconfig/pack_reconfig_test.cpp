@@ -62,6 +62,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(prev_src, prev_dst, PREV_SIZE);
         _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(next_src, next_dst, NEXT_SIZE);
     }
+
+    ckernel::packer::are_packers_configured_correctly(next_src, next_dst);
 }
 
 #endif
