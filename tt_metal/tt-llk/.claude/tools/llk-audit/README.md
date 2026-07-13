@@ -189,7 +189,7 @@ Then `python3 tests/test_checks.py` to confirm nothing regressed.
   unchanged by these — they only widen the LLM-must-verify (`UNRESOLVED`) list.
 - `reconfig-stall` flags `set_packer_strides` etc. and correctly allowlists the
   latched `program_packer_destination` (`L1_Dest_addr`); exercises `THCON_ONLY` on BH.
-- `semaphore-handshake` sees all ops (17 post / 20 get / 4 init / balanced mutexes
+- `semaphore-handshake` sees all ops (17 post / 21 get / 2 init / balanced mutexes
   on WH) and correctly reports no mutex imbalance — after excluding wrapper defs +
   RAII. It emits the in-tree waits (e.g. `FPU_SFPU`, `UNPACK_TO_DEST`) as
   `WAIT_WITHOUT_INIT` candidates tagged `LOW_CONFIDENCE` (the generic
