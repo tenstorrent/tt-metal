@@ -61,17 +61,19 @@ DRY_RUN=1 ~/.sdpa-watch/watch.sh
 # 6. Real post
 ~/.sdpa-watch/watch.sh
 
-# 7. Install cron (hourly; adjust schedule + PATH if `claude` lives elsewhere)
-( crontab -l 2>/dev/null | grep -vE 'sdpa-watch|^PATH='; cat <<CRON_EOF
-PATH=$(dirname "$(which claude)"):/usr/local/bin:/usr/bin:/bin
-0 * * * * $HOME/.sdpa-watch/watch.sh >> $HOME/.sdpa-watch/watch.log 2>&1
-CRON_EOF
-) | crontab -
+# 7. Install cron (hourly). Plain line — no PATH= prefix — because config.sh
+#    resolves `claude` itself (self-heals PATH for cron's bare environment).
+sudo apt install -y cron
+( crontab -l 2>/dev/null | grep -vF '.sdpa-watch/watch.sh'; \
+  echo '0 * * * * $HOME/.sdpa-watch/watch.sh >> $HOME/.sdpa-watch/watch.log 2>&1' ) | crontab -
 sudo service cron start
 
-# 8. (Optional) shell aliases — append to ~/.bashrc
+# 8. Shell aliases + reboot-durability hook — append to ~/.bashrc.
+#    ensure-cron.sh reinstalls/restarts cron after a reboot wipes it (no systemd
+#    here, so the login shell is the only boot hook). See SETUP.md.
 echo "alias sdpa='~/.sdpa-watch/watch.sh'"            >> ~/.bashrc
 echo "alias sdpa-dry='DRY_RUN=1 ~/.sdpa-watch/watch.sh'" >> ~/.bashrc
+echo '[ -x "$HOME/.sdpa-watch/ensure-cron.sh" ] && "$HOME/.sdpa-watch/ensure-cron.sh" >/dev/null 2>&1' >> ~/.bashrc
 ```
 
 For host-specific tweaks (POSIX time zone string, copying from an existing machine via rsync, file-by-file porting reference), see [`SETUP.md`](SETUP.md) → "Port to another machine".
