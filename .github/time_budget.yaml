@@ -252,6 +252,11 @@ runtime:
     # measured, budgeted at 10 min in runtime_perf_tests.yaml).
     wh_n300_civ2: 65
     bh_p150_perf: 50
+  profiler:
+    wh_n150_civ2: 5
+    wh_n300_civ2: 5
+    bh_p100a_civ2_viommu: 5
+    bh_p150b_civ2_viommu: 5
 
 triage:
   merge_gate:
