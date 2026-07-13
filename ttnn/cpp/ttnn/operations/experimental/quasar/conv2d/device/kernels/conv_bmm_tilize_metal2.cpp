@@ -411,66 +411,10 @@ void kernel_main() {
 #endif
     DataflowBuffer cb_untilize_mode_out(untilize_mode_out_cb_id);
 
-    // DEBUG (CB L1-layout locator): printed at kernel START — before any pack — so it FLUSHES before the
-    // PACR0_TILE_INC fault (mid-loop DPRINTs like ACTFILL/TILIZEPACK/MMPACK do not flush once the core
-    // faults). Prints base addr + byte capacity of the reader-dest ACT (in0), the tilize-pack target
-    // ACT_TILIZED (tilized_in0), MATMUL_PARTIALS, and OUT. Map the fault addr (e.g. 0x37600) to one of these
-    // ranges: if it lands at/after ACT_TILIZED's [base, base+cap) the tilize pack over-ran ACT_TILIZED; also
-    // check whether ACT's [base, base+cap) abuts/overlaps ACT_TILIZED (the reader's full-window fill would
-    // then stomp it, which the old 1/Kh fill never reached). Remove after diagnosis.
-    PACK(DPRINT(
-        "CBLAYOUT act={} acap={} tilized={} tcap={} part={} pcap={} out={} ocap={}\n",
-        (uint32_t)cb_in0.get_write_ptr(),
-        (uint32_t)(cb_in0.get_total_num_entries() * cb_in0.get_entry_size()),
-        (uint32_t)cb_tilized_in0.get_write_ptr(),
-        (uint32_t)(cb_tilized_in0.get_total_num_entries() * cb_tilized_in0.get_entry_size()),
-        (uint32_t)cb_matmul_partials.get_write_ptr(),
-        (uint32_t)(cb_matmul_partials.get_total_num_entries() * cb_matmul_partials.get_entry_size()),
-        (uint32_t)cb_out.get_write_ptr(),
-        (uint32_t)(cb_out.get_total_num_entries() * cb_out.get_entry_size())));
-    // DEBUG (pack tile GEOMETRY — the decisive read; MMPACK never flushes at the fault). Print the pack
-    // face_r_dim/num_faces the host generated for the tilize target (ACT_TILIZED, the WORKING reference),
-    // MATMUL_PARTIALS, and OUT. The physical per-tile pack stride = f(frdim, nf): a symmetric 32x32 tile is
-    // frdim=16/nf=4 -> stride 128 units (=esz). arch-lookup proved the residual sub-tile misalignment can only
-    // come from the borrowed OUT/partials BD geometry disagreeing with the 2048B entry. If partials/out frdim
-    // or nf differ from the (working) tilize's -> host-side Tile-spec fix. Remove after diagnosis.
-    PACK(DPRINT(
-        "PACKGEO tilized[frdim={} nf={}] part[frdim={} nf={}] out[frdim={} nf={}]\n",
-        (uint32_t)get_output_face_r_dim(tilized_in0_cb_id),
-        (uint32_t)get_output_num_faces(tilized_in0_cb_id),
-        (uint32_t)get_output_face_r_dim(matmul_partials_cb),
-        (uint32_t)get_output_num_faces(matmul_partials_cb),
-        (uint32_t)get_output_face_r_dim(out_cb_id),
-        (uint32_t)get_output_num_faces(out_cb_id)));
-    // DEBUG (tilize geometry): the height-sharded tilize packs (inbw * nsub) tiles into ACT_TILIZED across
-    // nsub reserve/push iterations. If (inbw * nsub) > tpages the tilize over-runs ACT_TILIZED (count OOB);
-    // static analysis says they are equal (inbw=act_block_w_ntiles, nsub=act_block_h_ntiles,
-    // tpages=act_block_h_ntiles*act_block_w_ntiles), so a mismatch here would be the smoking gun. Remove after.
-    PACK(DPRINT(
-        "TGEO inbw={} nsub={} in0bnt={} tpages={}\n",
-        (uint32_t)in0_block_w,
-        (uint32_t)in0_num_subblocks_read,
-        (uint32_t)in0_block_num_tiles,
-        (uint32_t)cb_tilized_in0.get_total_num_entries()));
-    // DEBUG (matmul-pack geometry): the matmul packs out_block_num_tiles (=obnt) tiles into OUT/partials per
-    // in0_block_h_i, across in0nbh iterations, out_subblock_num_tiles (=osnt) per pack. Intended pack extent
-    // per height-block = obnt; total = obnt*in0nbh must == OUT capacity (CBLAYOUT ocap/esz). If obnt > ocap/esz
-    // the matmul over-runs OUT. The fault at out_base+11636 is NOT tile-aligned (esz=128 -> 90*128+116), so also
-    // check osnt*esz and the per-subblock stride. Remove after diagnosis.
-    PACK(DPRINT(
-        "MMGEO obnt={} osnt={} osh={} osw={} in0ns={} in1ns={} in1bw={} in0nbw={} in0nbh={} fb={} pcuo={} pl1a={}\n",
-        (uint32_t)out_block_num_tiles,
-        (uint32_t)out_subblock_num_tiles,
-        (uint32_t)out_subblock_h,
-        (uint32_t)out_subblock_w,
-        (uint32_t)in0_num_subblocks,
-        (uint32_t)in1_num_subblocks,
-        (uint32_t)in1_block_w,
-        (uint32_t)in0_num_blocks_w,
-        (uint32_t)in0_num_blocks_h,
-        (uint32_t)fuse_bias,
-        (uint32_t)partials_cb_uses_output,
-        (uint32_t)packer_l1_acc));
+    // DEBUG: the kernel-start CBLAYOUT/PACKGEO/TGEO/MMGEO probes were removed — they confirmed the
+    // writer-copy workaround is active (pcuo=0, part/out in the low working region, geometry 16/4). They ate
+    // DPRINT-ring slots; removed so the tilize TZBLK/TZPK localizers (below) have room to show the true
+    // faulting tile before the ring stops draining at the fault.
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(mm_in0_cb_id, in1_cb_id, out_cb_id);
     matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
@@ -548,55 +492,9 @@ void kernel_main() {
                     PACK((llk_pack_hw_configure(tilized_in0_cb_id)));
                     PACK((llk_pack_init(tilized_in0_cb_id)));
                     PACK((llk_pack_dest_init()));
-                    // DEBUG (build-freshness + effectiveness probe): this line exists ONLY in the version with
-                    // the llk_pack_hw_configure fix above. If TZHWCFG prints, the build is fresh and the fix
-                    // ran -> if the fault persists at the OUT base, the tilize pack does NOT route through
-                    // buf_desc[tilized] and the buf_desc theory is wrong. If TZHWCFG is ABSENT, the build is
-                    // stale (rebuild). Remove after diagnosis.
-                    PACK(DPRINT("TZHWCFG applied cb={}\n", (uint32_t)tilized_in0_cb_id));
-                    // DEBUG (buf_desc source probe): llk_pack_hw_configure programs buf_desc[i].l1_addr from
-                    // get_local_dfb_interface(i).tc_slots[0].base_addr, but get_write_ptr() (TILIZEPACK showed
-                    // 91552) reads tc_slots[tc_idx]. If tc0base != 91552 (e.g. == out's 215692) or tcidx != 0,
-                    // then hw_configure programs the WRONG base into buf_desc[tilized] -> tilize writes at that
-                    // base -> OOB. This prints the exact slot state the fix depends on. Remove after diagnosis.
-                    PACK(([&] {
-                        LocalDFBInterface& _ti = get_local_dfb_interface(tilized_in0_cb_id);
-                        DPRINT(
-                            "TZBD tc0base={} tcidx={} ntcs={} activebase={}\n",
-                            (uint32_t)_ti.tc_slots[0].base_addr,
-                            (uint32_t)_ti.tc_idx,
-                            (uint32_t)_ti.num_tcs_to_rr,
-                            (uint32_t)_ti.tc_slots[_ti.tc_idx].base_addr);
-                    }()));
-                    // DEBUG (HW descriptor-table ground truth): read the ACTUAL bd_table entries the PACR0
-                    // packer reads, AFTER llk_pack_hw_configure ran. bd_table is indexed directly by
-                    // buf_desc_id == logical CB id (no offset). If bdtil != 91552 -> _configure_buf_desc_table_
-                    // did NOT land 91552 at index tilized on the sim; if bdtil == 91552 yet the tilize still
-                    // faults at the out base -> the tilize pack MOP is using a buf_desc_id other than tilized.
-                    // bdout/bdpart printed for comparison (expect out/partials base 215692). Remove after.
-                    PACK(([&] {
-                        DPRINT(
-                            "TZBDTAB bdtil={} bdout={} bdpart={}\n",
-                            (uint32_t)bd_table[tilized_in0_cb_id].f.l1_addr_16B,
-                            (uint32_t)bd_table[out_cb_id].f.l1_addr_16B,
-                            (uint32_t)bd_table[matmul_partials_cb].f.l1_addr_16B);
-                    }()));
 #endif
-
-                    // DEBUG (tilize-pack OOB locator): mirrors MMPACK (~line 636, at the matmul pack). Prints
-                    // the tilize pack target (ACT_TILIZED) write ptr + capacity + tile geometry BEFORE the
-                    // tilize runs. If this line prints but MMPACK does not, the PACR0_TILE_INC OOB is the
-                    // TILIZE pack (ACT_TILIZED self-loop); if MMPACK also prints, the OOB is the matmul pack.
-                    // Compare (nsub*inbw) against nent to see if the tilize packs more tiles than ACT_TILIZED
-                    // holds. Remove after diagnosis.
-                    PACK(DPRINT(
-                        "TILIZEPACK cb={} wptr={} nent={} esz={} inbw={} nsub={}\n",
-                        (uint32_t)tilized_in0_cb_id,
-                        (uint32_t)cb_tilized_in0.get_write_ptr(),
-                        (uint32_t)cb_tilized_in0.get_total_num_entries(),
-                        (uint32_t)cb_tilized_in0.get_entry_size(),
-                        (uint32_t)in0_block_w,
-                        (uint32_t)in0_num_subblocks_read));
+                    // (TZHWCFG/TZBD/TZBDTAB/TILIZEPACK probes removed — they confirmed the tilize pack BD is
+                    //  correctly at tilized's base; freed DPRINT-ring slots for the TZBLK/TZPK localizer.)
 
                     if constexpr (!activation_reuse) {
                         tilize_in<in0_block_w, in0_cb_id, tilized_in0_cb_id, true, !split_reader>(
