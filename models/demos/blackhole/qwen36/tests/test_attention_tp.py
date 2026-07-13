@@ -277,6 +277,8 @@ def test_attention_tp_qknorm_offset(mesh_device):
     class _Args:
         n_local_heads = NH // nd
         n_local_kv_heads = max(1, NKV // nd)
+        n_kv_heads = NKV
+        num_devices = nd
         head_dim = HD
         rope_head_dim = 64
         max_batch_size = 1
