@@ -3259,6 +3259,8 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuLcm: self._lcm,
                 MathOperation.SfpuRsubInt32: self._rsub_int32,
                 MathOperation.SfpuMask: self._mask,
+                MathOperation.SfpuAtan2: self._atan2,
+                MathOperation.SfpuMulInt32: self._mul_int32,
             }
         )
 
@@ -3490,6 +3492,19 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         # mask: data (t1) is zeroed wherever the mask (t2) is zero, else passed
         # through. Matches calculate_mask (v_if(is_fp16_zero(mask)) data = 0).
         return t1 if float(t2) != 0.0 else t1 * 0
+
+    def _atan2(self, t1, t2):
+        # calculate_sfpu_atan2 computes atan2(in0, in1) = atan2(y, x) with y=t1
+        # (src1) and x=t2 (src2). Evaluated in fp32 to mirror the SFPU minimax path;
+        # the kernel is an approximation, so the match relies on the PCC tolerance.
+        return torch.atan2(t1.to(torch.float32), t2.to(torch.float32))
+
+    def _mul_int32(self, t1, t2):
+        # int32 multiply, low 32 bits. The kernel stores two's-complement bits via
+        # plain INT32, so only non-negative products round-trip through the harness'
+        # sign-magnitude packer; the test keeps operands positive with product < 2^31.
+        # Widen to int64 for the multiply so the intermediate can't overflow.
+        return (t1.to(torch.int64) * t2.to(torch.int64)).to(torch.int32)
 
     def _add_top_row(
         self,
