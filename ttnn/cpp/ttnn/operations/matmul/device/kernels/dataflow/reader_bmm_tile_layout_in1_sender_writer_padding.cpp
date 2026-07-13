@@ -13,6 +13,57 @@
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+
+#ifdef WRITER_SCALE
+// WRITER_SCALE (DiffusionGemma fused-MoE increment 1): fold a per-batch route-weight scale into the
+// output write. The scale rides in the existing per-batch `cb_sparsity` page (the sparse matmul op
+// uses ONLY the `== 0` gate today, so the nonzero magnitude is free to carry the combine's route
+// weight; the nonzero pattern -- hence count_nonzero == nnz -- is unchanged). Gated by the
+// WRITER_SCALE compile define, which the sparse matmul factory emits only when the env var
+// TTNN_SPARSE_MATMUL_WRITER_SCALE is set; unset -> none of this is compiled and the write path is
+// byte-identical. Adds no compile-time / runtime args and no CB, so the kernel arg layout is
+// unchanged. See models/experimental/diffusion_gemma/doc/optimize_perf/fused_moe_kernel.md.
+inline float writer_scale_bf16_to_f32(uint16_t bits) {
+    union {
+        uint32_t u;
+        float f;
+    } c;
+    c.u = static_cast<uint32_t>(bits) << 16;
+    return c.f;
+}
+
+inline uint16_t writer_scale_f32_to_bf16(float value) {
+    union {
+        uint32_t u;
+        float f;
+    } c;
+    c.f = value;
+    // round-to-nearest-even
+    const uint32_t rounding_bias = 0x7FFFu + ((c.u >> 16) & 1u);
+    return static_cast<uint16_t>((c.u + rounding_bias) >> 16);
+}
+
+// Scale `num_tiles` contiguous output tiles in place at L1 `base_addr` by `scale`. `elems_per_tile`
+// = tile height*width; `bytes_per_elem` is 2 (bf16) or 4 (fp32). Block-float (bfp8) outputs are
+// left unscaled -- shared-exponent read-modify-write is out of increment-1 scope, and the
+// DiffusionGemma down-proj output is bf16.
+inline void writer_scale_tiles_in_place(
+    uint32_t base_addr, uint32_t num_tiles, uint32_t elems_per_tile, uint32_t bytes_per_elem, float scale) {
+    const uint32_t num_elems = num_tiles * elems_per_tile;
+    if (bytes_per_elem == 2) {
+        volatile tt_l1_ptr uint16_t* p = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(base_addr);
+        for (uint32_t i = 0; i < num_elems; ++i) {
+            p[i] = writer_scale_f32_to_bf16(writer_scale_bf16_to_f32(p[i]) * scale);
+        }
+    } else if (bytes_per_elem == 4) {
+        volatile tt_l1_ptr float* p = reinterpret_cast<volatile tt_l1_ptr float*>(base_addr);
+        for (uint32_t i = 0; i < num_elems; ++i) {
+            p[i] = p[i] * scale;
+        }
+    }
+}
+#endif  // WRITER_SCALE
+
 void kernel_main() {
     // READER
     uint32_t rt_args_idx = 0;
@@ -273,6 +324,15 @@ void kernel_main() {
                     continue;
                 }
             }
+
+#ifdef WRITER_SCALE
+            // Per-batch route-weight for this active batch (carried in the cb_sparsity page).
+            float writer_scale = 1.0f;
+            if constexpr (batchB > 0) {
+                writer_scale = writer_scale_bf16_to_f32(
+                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity)[bB]);
+            }
+#endif  // WRITER_SCALE
 
             uint32_t in1_tensor_current_h_dim_block_tile_id = in1_batch_tile_id;
             uint32_t out_tensor_current_h_dim_block_tile_id = out_tensor_start_tile_id;
@@ -620,6 +680,18 @@ void kernel_main() {
                             }
 
                             cb_out.wait_front(out_subblock_tile_count);
+#ifdef WRITER_SCALE
+                            // Fold the per-batch route-weight into the down-proj output in place
+                            // before the NoC write (a real step toward fusing the combine's
+                            // route-weight multiply). Scales the whole reserved subblock; padded
+                            // tiles that are popped without a write are harmlessly scaled too.
+                            writer_scale_tiles_in_place(
+                                cb_out.get_read_ptr(),
+                                out_subblock_tile_count,
+                                output_tile_hw,
+                                output_single_tile_size_bytes / output_tile_hw,
+                                writer_scale);
+#endif  // WRITER_SCALE
                             uint32_t out_read_offset = 0;
 
                             for (uint32_t h = 0; h < out_subblock_h_; ++h) {

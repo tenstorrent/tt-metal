@@ -4,6 +4,7 @@
 
 import itertools
 import math
+import os
 
 from loguru import logger
 import pytest
@@ -990,3 +991,113 @@ def test_sparse_matmul_compact_optional_output(device):
     assert tuple(output.shape) == (1, num_blocks, m, n)
     assert not torch.any(output_torch == 99)
     torch.testing.assert_close(output_torch, reference, rtol=0.1, atol=1.5)
+
+
+# DiffusionGemma fused-MoE increment 1: WRITER_SCALE.
+#
+# The sparse writer kernel, when TTNN_SPARSE_MATMUL_WRITER_SCALE is set, folds the per-batch value
+# carried in the cb_sparsity page into the output write (a real step toward fusing the MoE
+# combine's route-weight multiply -- see
+# models/experimental/diffusion_gemma/doc/optimize_perf/fused_moe_kernel.md). Today the op uses only
+# the sparsity `== 0` gate; the nonzero magnitude is ignored. This test asserts the OPPOSITE
+# behavior under the flag: each active output batch is scaled by its (nonzero) sparsity value.
+#
+# Requires a Tenstorrent device (the writer kernel is JIT-compiled on device). The env var is read
+# inside the program factory and is NOT part of the program hash, so this test uses a distinct
+# num_experts and sets the flag via monkeypatch before the first op -- do not run it in the same
+# process after a same-shape sparse_matmul that built the program with the flag off.
+@pytest.mark.parametrize("mkn", [(16, 128, 512)])
+@pytest.mark.parametrize("num_experts", [4])
+@pytest.mark.parametrize("num_batches", [(1, 4)])
+@pytest.mark.parametrize("tile_h", [16])
+@pytest.mark.parametrize("tile_w", [32])
+@pytest.mark.parametrize("core_grid", [(4, 4)])
+def test_sparse_matmul_writer_scale(monkeypatch, device, mkn, num_experts, num_batches, tile_h, tile_w, core_grid):
+    monkeypatch.setenv("TTNN_SPARSE_MATMUL_WRITER_SCALE", "1")
+    assert os.environ.get("TTNN_SPARSE_MATMUL_WRITER_SCALE") == "1"
+
+    torch.manual_seed(0)
+    m, k, n = mkn
+    b, s = num_batches
+    in0 = torch.randn((b, s, m, k), dtype=torch.bfloat16)
+    in1 = torch.randn((1, num_experts, k, n), dtype=torch.bfloat16)
+
+    # Per-batch route-weights carried in the sparsity tensor: nonzero values are the scale, some
+    # entries are zeroed (dropped/inactive) exactly as in the other sparse_matmul tests.
+    sparsity_shape = (b, s, 1, num_experts)
+    sparsity = torch.rand(sparsity_shape) * 0.9 + 0.1  # nonzero scales in [0.1, 1.0)
+    number_of_zeros = random.randint(0, sparsity.numel() - 1)
+    zero_indices = torch.randperm(sparsity.numel())[:number_of_zeros]
+    sparsity.view(-1)[zero_indices] = 0.0
+    sparsity = sparsity.to(dtype=torch.bfloat16)
+
+    nnz = int((sparsity != 0).sum().item())
+    logger.info(f"writer_scale nnz: {nnz}")
+
+    in0_t = ttnn.from_torch(
+        in0,
+        tile=ttnn.Tile((tile_h, 32)),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    in1_t = ttnn.from_torch(
+        in1,
+        tile=ttnn.Tile((32, tile_w)),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    sparsity_t = ttnn.from_torch(
+        sparsity,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    core_x, core_y = core_grid
+    output_tile = ttnn.Tile([tile_h, tile_w])
+    output_t = ttnn.sparse_matmul(
+        in0_t,
+        in1_t,
+        sparsity=sparsity_t,
+        nnz=nnz,
+        is_input_a_sparse=False,
+        is_input_b_sparse=True,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        output_tile=output_tile,
+        dtype=ttnn.bfloat16,  # bf16 output -> exercises the bf16 in-place scale path
+        program_config=ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            out_block_h=1,
+            out_block_w=1,
+            per_core_M=m // tile_h,
+            per_core_N=int(math.ceil(n / tile_w)) // (core_x * core_y),
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=True,
+        ),
+    )
+
+    output_tensor = ttnn.to_torch(output_t)
+
+    # Reference: matmul scaled by the per-batch route-weight (the WRITER_SCALE contract).
+    for b_i, s_i, e_i in itertools.product(range(b), range(s), range(num_experts)):
+        scale = float(sparsity[b_i, s_i, 0, e_i])
+        if scale == 0.0:
+            continue
+        pt_out = torch.matmul(in0[b_i, s_i, :, :].float(), in1[0, e_i, :, :].float()) * scale
+        assert_numeric_metrics(
+            pt_out,
+            output_tensor[b_i, s_i, 0, e_i, :, :],
+            atol=0.02 * k,
+            rtol=10.188 * k,
+            frobenius_threshold=0.002 * k,
+            pcc_threshold=0.999,
+        )

@@ -13,6 +13,7 @@
 #include "tt-metalium/tensor_accessor_args.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <cstdlib>
 
 namespace ttnn::prim::qsr {
 
@@ -432,6 +433,17 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
 
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
     mm_kernel_in1_sender_writer_defines["SPARSE_OUTPUT"] = "1";
+
+    // WRITER_SCALE (DiffusionGemma fused-MoE increment 1, opt-in): when TTNN_SPARSE_MATMUL_WRITER_SCALE
+    // is set, the writer kernel folds the per-batch route-weight carried in the cb_sparsity page into
+    // the output write. Off by default -> the define is not emitted and the write path is byte-identical.
+    // The scale rides in the existing sparsity page, so no new op input / CB / kernel arg is needed.
+    // Caveat: this env-gate is not part of the program hash; do not reuse a cached program built with the
+    // flag in the opposite state for the same shapes. See
+    // models/experimental/diffusion_gemma/doc/optimize_perf/fused_moe_kernel.md.
+    if (std::getenv("TTNN_SPARSE_MATMUL_WRITER_SCALE") != nullptr) {
+        mm_kernel_in1_sender_writer_defines["WRITER_SCALE"] = "1";
+    }
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
