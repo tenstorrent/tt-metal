@@ -27,7 +27,7 @@ __all__ = [
 
 
 class Qwen3RMSNorm(AbstractModuleBase):
-    """RMSNorm using the fused ``ttml.ops.rmsnorm.rmsnorm`` device op (same one Llama uses)."""
+    """RMSNorm using the fused ``ttml.ops.rmsnorm.rmsnorm`` device op."""
 
     def __init__(self, hidden_size: int, eps: float = 1e-6):
         super().__init__()
