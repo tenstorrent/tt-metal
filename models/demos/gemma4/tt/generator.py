@@ -15,6 +15,7 @@ from models.demos.gemma4.tt.generator_trace import (
     patch_gemma4_trace_model_args,
     resolve_gemma4_prefill_chunk_size,
     resolve_gemma4_prefill_trace_enable,
+    should_auto_enable_chunked_bounded,
     warmup_gemma4_model_prefill,
 )
 from models.tt_transformers.tt.common import get_block_size, get_padded_prefill_len, num_blocks_in_seq
@@ -93,26 +94,31 @@ def _patch_model_args(
     model_args.max_batch_size = max_batch_size
     model_args.max_seq_len = max_seq_len
     model_args.max_context_len = max_seq_len
-    # Prefill chunking: with bounded sliding (64k+), use generator-level chunks
-    # (4096 on QB2 / GEMMA4_GEN_PREFILL_CHUNK) so 128k/256k fit in DRAM — a
-    # single full-length chunk OOMs at 256k (~5.6GB scratch). Short-context /
-    # unbounded demos keep a single power-of-2 chunk. Multi-chunk long-context
-    # output is only partially coherent today ("la la..." fragments); that is a
-    # known correctness gap, separate from the DRAM fit requirement.
-    # GEMMA4_DEMO_SINGLE_CHUNK=1 forces the old single-chunk path under bounded.
+    # Prefill chunking — DEMO defaults to a SINGLE power-of-2 chunk (correctness
+    # path). Multi-chunk auto-enables only when the per-(model, device) policy
+    # says so (GEMMA4_LONG_CONTEXT_POLICY): on QB2/31B that is bounded + ISL >=
+    # 256k. Overrides: GEMMA4_GEN_PREFILL_CHUNK=<n>, GEMMA4_DEMO_SINGLE_CHUNK=1.
+    _chunk_override = int(os.environ.get("GEMMA4_GEN_PREFILL_CHUNK", "0"))
     _force_single = os.environ.get("GEMMA4_DEMO_SINGLE_CHUNK", "0") != "0"
-    if bounded_sliding and not _force_single:
+    _needs_chunk_for_dram = (not _force_single) and should_auto_enable_chunked_bounded(
+        max_seq_len,
+        mesh_device,
+        model_path,
+        bounded_sliding=bounded_sliding,
+    )
+    if _chunk_override > 0:
+        model_args.max_prefill_chunk_size = _chunk_override
+    elif _needs_chunk_for_dram:
         model_args.max_prefill_chunk_size = resolve_gemma4_prefill_chunk_size(
-            max_seq_len, mesh_device=mesh_device, non_qb2_default=4096
+            max_seq_len, mesh_device=mesh_device, non_qb2_default=4096, model_name_or_path=model_path
         )
-        logger.info(
-            f"Bounded sliding + chunked prefill: max_prefill_chunk_size=" f"{model_args.max_prefill_chunk_size}"
+        logger.warning(
+            f"Bounded long-context (model={Path(model_path).name}, max_seq_len={max_seq_len}): "
+            f"multi-chunk prefill (chunk={model_args.max_prefill_chunk_size}) per policy to "
+            f"avoid single-chunk DRAM OOM. Output quality is not fully validated."
         )
     else:
-        _chunk_override = int(os.environ.get("GEMMA4_GEN_PREFILL_CHUNK", "0"))
-        model_args.max_prefill_chunk_size = (
-            _chunk_override if _chunk_override > 0 else 1 << max(int(max_seq_len - 1).bit_length(), 11)
-        )
+        model_args.max_prefill_chunk_size = 1 << max(int(max_seq_len - 1).bit_length(), 11)
     model_args.mesh_device = mesh_device
     model_args.device_name = determine_device_name(mesh_device)
     model_args.model_name = model_path
@@ -218,9 +224,10 @@ class ChunkedPrefillPageTableGuardMixin:
             return
         if last_token_idx is None:
             return
-        # Batched traced prefill passes a per-slot list; the shared fill-cap
-        # tensor is single-element, so only the single-user (scalar) path is
-        # supported here. Batched+bounded is not a current serving shape.
+        # Batched traced prefill passes a per-slot list, but the fill-cap tensor
+        # is a single scalar. Trace is disabled for batched+bounded upstream; for
+        # eager batched+bounded the host-side K/V slice carries the real length,
+        # so skip the scalar refresh instead of failing the request.
         if isinstance(last_token_idx, (list, tuple)):
             return
         valid_len = int(last_token_idx) - int(num_cached_tokens) + 1

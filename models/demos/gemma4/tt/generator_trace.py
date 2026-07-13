@@ -46,8 +46,8 @@ GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN = 4096
 GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS = 32 * 1024
 
 # Default generator-level prefill chunk when GEMMA4_GEN_PREFILL_CHUNK is unset,
-# applied on QB2 ONLY (P150x4 = 1x4 Blackhole / P300X2, the board this was
-# validated on).
+# applied on QB2 ONLY (P150x4 or P300x2 = 1x4 Blackhole / 2x P300, the board
+# this was validated on).
 #
 # Every other model bounds its prefill chunk: the shared tt_transformers/Qwen
 # generator defaults max_prefill_chunk_size to a per-(model,device) value (4096
@@ -66,24 +66,197 @@ GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS = 32 * 1024
 # caller's prior default (see resolve_gemma4_prefill_chunk_size).
 GEMMA4_DEFAULT_PREFILL_CHUNK = 4096
 
-# Device name (models.tt_transformers.tt.model_config.determine_device_name) of
-# the QB2 board the bounded default is validated for: 4-chip Blackhole mesh.
-_QB2_DEVICE_NAME = "P150x4"
+# Per-(model, device) long-context policy.
+#
+# Keys: model_key from ``normalize_gemma4_model_key`` × ``determine_device_name()``.
+#
+#   unbounded_isl_max:        largest max_seq_len that fits with FULL/unbounded
+#                             sliding KV (DRAM). Informational + sweep target.
+#   bounded_isl_min:          max_seq_len >= this → auto-enable bounded sliding.
+#                             Set above ``unbounded_isl_max`` when the model still
+#                             fits unbounded at that ISL (e.g. 12B @ 128k).
+#   chunked_bounded_isl_min:  bounded AND max_seq_len >= this → auto multi-chunk
+#                             (single-chunk scratch OOM). Between bounded_isl_min
+#                             and this: bounded + single-chunk.
+#   prefill_chunk:            generator chunk size on the chunked path.
+#   source:                   "measured" | "inferred" | "placeholder"
+#
+# Env overrides still win: GEMMA4_BOUNDED_SLIDING, GEMMA4_GEN_PREFILL_CHUNK,
+# GEMMA4_DEMO_SINGLE_CHUNK.
+#
+# QB2 (P150x4 / P300x2) sweeps: ``isl_sweep_logs/model_policy_sweep_v2`` (64k/128k)
+# and follow-on 256k runs via ``run_long_context_sweeps.sh``.
+# ``determine_device_name`` returns P150x4 for 4 BH dies; MESH_DEVICE / docs also
+# use P300x2 (2x P300 = 4 dies). Treat both as the same QB2 policy entry.
+_QB2 = "P150x4"
+_QB2_ALIASES = frozenset({"P150x4", "P300x2", "P300X2"})
+_CHUNK = GEMMA4_DEFAULT_PREFILL_CHUNK
+
+GEMMA4_LONG_CONTEXT_POLICY = {
+    # Dense 31B — measured on QB2 (isl_sweep_logs + llm.yaml max_context=49152 serve).
+    "31B": {
+        _QB2: {
+            "unbounded_isl_max": 65536,  # demo ran ~65k unbounded; vLLM serve ~49k
+            "bounded_isl_min": 65536,  # auto bounded at 64k+
+            "chunked_bounded_isl_min": 262144,  # single-chunk ~5.6GB OOM at 256k
+            "prefill_chunk": _CHUNK,
+            "source": "measured",
+        },
+        "P150x8": {
+            "unbounded_isl_max": 65536,
+            "bounded_isl_min": 65536,
+            "chunked_bounded_isl_min": 262144,
+            "prefill_chunk": _CHUNK,
+            "source": "placeholder",
+        },
+        "T3K": {
+            "unbounded_isl_max": 65536,
+            "bounded_isl_min": 65536,
+            "chunked_bounded_isl_min": 262144,
+            "prefill_chunk": _CHUNK,
+            "source": "placeholder",
+        },
+    },
+    # Dense 12B — HF max_pos=256k. QB2: unbounded 64k+128k PASSED; unbounded 256k OOM.
+    "12B": {
+        _QB2: {
+            "unbounded_isl_max": 131072,
+            "bounded_isl_min": 262144,  # auto bounded at 256k (unbounded OOM)
+            "chunked_bounded_isl_min": 262144,
+            "prefill_chunk": _CHUNK,
+            "source": "measured",
+        },
+    },
+    # MoE 26B-A4B — HF max_pos=256k. QB2: unbounded 64k PASSED (after instruct-clip
+    # trim fix); 128k allocated/ran (no OOM, prior 1800s timeout); unbounded 256k OOM.
+    # Bounded+chunked 256k PASSED (~72m prefill / TTFT~4345s at chunk=4096; needs
+    # TIMEOUT_256K>=7200 — 3600s timed out mid-prefill).
+    "26B-A4B": {
+        _QB2: {
+            "unbounded_isl_max": 131072,
+            "bounded_isl_min": 262144,  # auto bounded at 256k (unbounded OOM)
+            "chunked_bounded_isl_min": 262144,
+            "prefill_chunk": _CHUNK,
+            "source": "measured",
+        },
+    },
+    # MatFormer E4B — HF max_pos=128k native; demo can force higher. QB2: unbounded
+    # 64k+128k+256k PASSED.
+    "E4B": {
+        _QB2: {
+            "unbounded_isl_max": 262144,
+            "bounded_isl_min": 524288,  # beyond measured 256k
+            "chunked_bounded_isl_min": 524288,
+            "prefill_chunk": _CHUNK,
+            "source": "measured",
+        },
+    },
+    # MatFormer E2B — HF max_pos=128k native; demo can force higher. QB2: unbounded
+    # 64k+128k+256k PASSED.
+    "E2B": {
+        _QB2: {
+            "unbounded_isl_max": 262144,
+            "bounded_isl_min": 524288,  # beyond measured 256k
+            "chunked_bounded_isl_min": 524288,
+            "prefill_chunk": _CHUNK,
+            "source": "measured",
+        },
+    },
+}
+
+# Unknown model: do not force 31B's aggressive bounded cutover.
+_DEFAULT_LONG_CONTEXT_POLICY = {
+    "unbounded_isl_max": 131072,
+    "bounded_isl_min": 262144,
+    "chunked_bounded_isl_min": 262144,
+    "prefill_chunk": _CHUNK,
+    "source": "default_unknown_model",
+}
 
 
-def _is_qb2(mesh_device) -> bool:
-    """True only for the QB2 board (P150x4 / P300X2, 1x4 Blackhole)."""
+def normalize_gemma4_model_key(model_name_or_path) -> str:
+    """Map HF id / path / base name → policy key (31B, 12B, 26B-A4B, E4B, E2B)."""
+    name = str(model_name_or_path or "").lower().replace("_", "-")
+    base = name.rsplit("/", 1)[-1]
+    if "31b" in base:
+        return "31B"
+    if "12b" in base:
+        return "12B"
+    if "26b" in base or "a4b" in base:
+        return "26B-A4B"
+    if "e4b" in base:
+        return "E4B"
+    if "e2b" in base:
+        return "E2B"
+    return "unknown"
+
+
+def _device_name(mesh_device) -> str | None:
     if mesh_device is None:
-        return False
+        return None
     try:
         from models.tt_transformers.tt.model_config import determine_device_name
 
-        return determine_device_name(mesh_device) == _QB2_DEVICE_NAME
+        return determine_device_name(mesh_device)
     except Exception:
+        return None
+
+
+def _canonical_device_name(device: str | None) -> str | None:
+    """Map QB2 aliases (P150x4 / P300x2) onto the canonical policy key."""
+    if device is None:
+        return None
+    if device in _QB2_ALIASES:
+        return _QB2
+    return device
+
+
+def get_gemma4_long_context_policy(mesh_device=None, model_name_or_path=None) -> dict:
+    """Return long-context policy for ``(model_key, device)``."""
+    model_key = normalize_gemma4_model_key(model_name_or_path)
+    device = _canonical_device_name(_device_name(mesh_device)) or _QB2
+    by_model = GEMMA4_LONG_CONTEXT_POLICY.get(model_key)
+    if by_model is not None:
+        if device in by_model:
+            return dict(by_model[device])
+        # Fall back to QB2 entry for this model if present.
+        if _QB2 in by_model:
+            policy = dict(by_model[_QB2])
+            policy["source"] = f"{policy.get('source', 'inferred')}_device_fallback"
+            return policy
+    policy = dict(_DEFAULT_LONG_CONTEXT_POLICY)
+    if model_key == "unknown":
+        logger.warning(
+            f"No Gemma4 long-context policy for model={model_name_or_path!r}; "
+            f"using unbounded-friendly defaults (bounded_isl_min={policy['bounded_isl_min']})."
+        )
+    return policy
+
+
+def should_auto_enable_bounded_sliding(max_seq_len: int, mesh_device=None, model_name_or_path=None) -> bool:
+    """True when demo/generator should auto-enable bounded sliding for this ISL."""
+    policy = get_gemma4_long_context_policy(mesh_device, model_name_or_path)
+    return max_seq_len >= int(policy["bounded_isl_min"])
+
+
+def should_auto_enable_chunked_bounded(
+    max_seq_len: int, mesh_device=None, model_name_or_path=None, *, bounded_sliding: bool = False
+) -> bool:
+    """True when bounded long-context should auto multi-chunk for DRAM fit."""
+    if not bounded_sliding:
         return False
+    policy = get_gemma4_long_context_policy(mesh_device, model_name_or_path)
+    return max_seq_len >= int(policy["chunked_bounded_isl_min"])
 
 
-def resolve_gemma4_prefill_chunk_size(max_seq_len: int, mesh_device=None, non_qb2_default=None) -> int:
+def _is_qb2(mesh_device) -> bool:
+    """True only for the QB2 board (P150x4 or P300x2, 1x4 Blackhole)."""
+    return _device_name(mesh_device) in _QB2_ALIASES
+
+
+def resolve_gemma4_prefill_chunk_size(
+    max_seq_len: int, mesh_device=None, non_qb2_default=None, model_name_or_path=None
+) -> int:
     """Generator-level prefill chunk size for the vLLM serving generator.
 
     (The demo generator forces a single chunk instead — Gemma4's multi-chunk
@@ -92,18 +265,16 @@ def resolve_gemma4_prefill_chunk_size(max_seq_len: int, mesh_device=None, non_qb
     #49083 serving-path wedge.)
 
     ``GEMMA4_GEN_PREFILL_CHUNK`` (a 2048-multiple) overrides on any board.
-    Otherwise the bounded QB2 default (``GEMMA4_DEFAULT_PREFILL_CHUNK``, clamped
-    to ``max_seq_len``) applies ONLY on QB2 (P150x4), where an 8192+ prompt then
-    runs as 4096-token chunks instead of one full-length op. On every other board
-    the QB2-tuned number is not applied — the caller's ``non_qb2_default`` (the
-    prior vLLM default, ``max_seq_len``) is used so unvalidated boards keep their
-    existing behavior.
+    Otherwise the per-(model, device) ``prefill_chunk`` applies on QB2. On every
+    other board the caller's ``non_qb2_default`` (prior vLLM default, often
+    ``max_seq_len``) is used so unvalidated boards keep existing behavior.
     """
     override = int(os.environ.get("GEMMA4_GEN_PREFILL_CHUNK", "0"))
     if override > 0:
         return override
+    policy = get_gemma4_long_context_policy(mesh_device, model_name_or_path)
     if _is_qb2(mesh_device):
-        return min(GEMMA4_DEFAULT_PREFILL_CHUNK, max_seq_len)
+        return min(int(policy["prefill_chunk"]), max_seq_len)
     return non_qb2_default if non_qb2_default is not None else max_seq_len
 
 
@@ -179,6 +350,16 @@ def resolve_gemma4_prefill_trace_enable(
     can_batch_prefill: bool,
 ) -> bool:
     """Resolve whether prefill trace stays enabled for this batch/prefill shape."""
+    # Batched + bounded: the fill-cap device tensor is a single scalar, so a
+    # captured trace cannot refresh per-user real lengths. Eager batched+bounded
+    # still works via the host-side K/V slice — only disable TRACE here.
+    if can_batch_prefill and batch_size > 1 and getattr(model, "bounded_sliding_kv_cache", False):
+        if enable_trace:
+            logger.info(
+                "Disabling prefill trace for batched+bounded "
+                "(scalar valid_seq_len cap; eager host-slice path remains)."
+            )
+        return False
     trace_batch_size = batch_size
     if can_batch_prefill:
         trace_batch_size = next(

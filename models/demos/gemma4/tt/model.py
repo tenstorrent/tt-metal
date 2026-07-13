@@ -898,15 +898,18 @@ class Gemma4Model:
 
         # Batched prefill (batch_size > 1) returns hidden states; Generator applies
         # norm + lm_head per user. Single-user intermediate generator-level chunks
-        # (get_last_token=-1, not in prefill-trace mode) only need the KV fill from
-        # the layer loop above — their logits are discarded by the chunk loop, so
-        # skip the expensive full-sequence lm_head.
+        # (get_last_token=-1 with a chunk_page_table, not in prefill-trace mode)
+        # only need the KV fill from the layer loop above — their logits are
+        # discarded by the chunk loop, so skip the expensive full-sequence lm_head.
+        # Gate on chunk_page_table: get_last_token defaults to -1 for all direct
+        # ttnn_prefill_forward callers (unit tests, demos), which still need logits.
         if not is_decode and get_last_token == -1 and batch_size > 1:
             return hidden_states
         if (
             not is_decode
             and get_last_token == -1
             and batch_size == 1
+            and chunk_page_table is not None
             and not getattr(self, "_prefill_trace_mode", False)
         ):
             return None
