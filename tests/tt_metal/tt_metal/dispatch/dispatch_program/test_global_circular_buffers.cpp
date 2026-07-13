@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 #include <cstdint>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -140,13 +141,15 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffers) {
 }
 
 TEST_F(MeshDispatchFixture, TensixProgramClearsStaleRemoteCircularBufferConfig) {
+    if (this->IsSlowDispatch()) {
+        GTEST_SKIP() << "This test exercises fast-dispatch CB configuration commands.";
+    }
+
     const CoreCoord sender_core(0, 0);
     const CoreCoord receiver_core(1, 0);
     const CoreCoord idle_core(1, 1);
-    const CoreRangeSet sender_cores{CoreRange(sender_core)};
     const CoreRangeSet receiver_cores{CoreRange(receiver_core)};
     const CoreRangeSet all_cores(CoreRange({0, 0}, {1, 1}));
-    const CoreRangeSet all_receiver_cores = all_cores.subtract(sender_cores);
     constexpr uint32_t cb_page_size = 32;
     constexpr uint32_t remote_cb_index = 31;
     constexpr uint32_t local_cb_index = 0;
@@ -163,18 +166,6 @@ TEST_F(MeshDispatchFixture, TensixProgramClearsStaleRemoteCircularBufferConfig) 
         config.index(local_cb_index).set_page_size(cb_page_size).set_data_format(tile_format);
         return config;
     };
-    auto remote_config_address = [&](Program& program) {
-        const auto& hal = MetalContext::instance().hal();
-        const uint32_t programmable_core_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-        return program.impl().get_cb_base_addr(device, idle_core, CoreType::WORKER) +
-               program.impl().get_program_config(programmable_core_index).local_cb_size;
-    };
-
-    // Create a valid config block that can be used as stale remote-CB state on idle_core.
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> full_mapping = {{sender_core, all_receiver_cores}};
-    auto full_global_cb =
-        experimental::CreateGlobalCircularBuffer(mesh_device.get(), full_mapping, 3200, BufferType::L1);
-
     // Run a rectangular kernel grid with a remote CB on only one receiver. Fast dispatch must overwrite stale config
     // on idle_core with the zero sentinel that setup_remote_cb_interfaces() skips.
     std::vector<std::pair<CoreCoord, CoreRangeSet>> sparse_mapping = {{sender_core, receiver_cores}};
@@ -190,28 +181,27 @@ TEST_F(MeshDispatchFixture, TensixProgramClearsStaleRemoteCircularBufferConfig) 
         ReaderDataMovementConfig{});
     sparse_workload.add_program(device_range, std::move(sparse_program));
     auto& sparse_program_in_workload = sparse_workload.get_programs().at(device_range);
-    detail::CompileProgram(mesh_device.get(), sparse_program_in_workload);
-    sparse_program_in_workload.impl().finalize_offsets(mesh_device.get());
 
-    const uint32_t stale_remote_config_address = remote_config_address(sparse_program_in_workload);
-    std::vector<uint32_t> stale_remote_config = {full_global_cb.config_address(), cb_page_size};
-    detail::WriteToDeviceL1(device, idle_core, stale_remote_config_address, stale_remote_config);
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t kernel_config_base =
+        hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
+    const uint32_t kernel_config_end = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    ASSERT_GT(kernel_config_end, kernel_config_base);
+    ASSERT_EQ((kernel_config_end - kernel_config_base) % sizeof(uint32_t), 0);
+    std::vector<uint32_t> poison((kernel_config_end - kernel_config_base) / sizeof(uint32_t), 0xffffffff);
+    detail::WriteToDeviceL1(device, idle_core, kernel_config_base, poison);
+
+    this->RunProgram(mesh_device, sparse_workload);
+
+    const uint32_t programmable_core_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    const uint32_t remote_config_address =
+        sparse_workload.get_cb_base_addr(mesh_device, idle_core, CoreType::WORKER) +
+        sparse_program_in_workload.impl().get_program_config(programmable_core_index).local_cb_size;
     std::vector<uint32_t> remote_config;
     detail::ReadFromDeviceL1(
         device,
         idle_core,
-        stale_remote_config_address,
-        UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t),
-        remote_config);
-    ASSERT_EQ(remote_config, stale_remote_config);
-
-    this->RunProgram(mesh_device, sparse_workload);
-
-    remote_config.clear();
-    detail::ReadFromDeviceL1(
-        device,
-        idle_core,
-        remote_config_address(sparse_program_in_workload),
+        remote_config_address,
         UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t),
         remote_config);
     EXPECT_EQ(remote_config, std::vector<uint32_t>(UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG, 0));
