@@ -48,10 +48,10 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
 @pytest.mark.parametrize(
     "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}),
     ],
     indirect=["device_params"],
-    ids=["fabric"],
+    ids=["ring"],
 )
 @pytest.mark.parametrize(
     "cluster_axis",
@@ -60,9 +60,6 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
     ],
     ids=["row"],
 )
-@pytest.mark.parametrize("chunks_per_sync", [20])
-@pytest.mark.parametrize("num_workers_per_link", [2])
-@pytest.mark.parametrize("num_buffers_per_channel", [2])
 def test_ccl_ddr_smoke_test(
     bh_2d_mesh_device,
     num_devices,
@@ -75,9 +72,6 @@ def test_ccl_ddr_smoke_test(
     mem_config_ag,
     enable_trace,
     num_iters,
-    chunks_per_sync,
-    num_workers_per_link,
-    num_buffers_per_channel,
 ):
     if ttnn.get_num_devices() != 4 and ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_1D_RING:
         pytest.skip("This test is only for the quietbox")
@@ -98,9 +92,6 @@ def test_ccl_ddr_smoke_test(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        chunks_per_sync=chunks_per_sync,
-        num_workers_per_link=num_workers_per_link,
-        num_buffers_per_channel=num_buffers_per_channel,
         allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
@@ -111,10 +102,9 @@ def test_ccl_ddr_smoke_test(
     "num_devices, ag_output_shape, dim, layout",
     [
         (4, [1, 1, 6016, 4096], 3, ttnn.TILE_LAYOUT),
-        (4, [1, 1, 6016, 4096], 3, ttnn.TILE_LAYOUT),
         (2, [1, 1, 6016, 2048], 3, ttnn.TILE_LAYOUT),
     ],
-    ids=["4 device line", "4_device_ring", "2_device_line"],
+    ids=["4 device line", "2_device_line"],
 )
 @pytest.mark.parametrize(
     "ag_input_dtype",
@@ -165,7 +155,7 @@ def test_ccl_ddr_smoke_test(
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}),
     ],
     indirect=["device_params"],
-    ids=["fabric"],
+    ids=["line"],
 )
 @pytest.mark.parametrize(
     "cluster_axis",
@@ -175,9 +165,6 @@ def test_ccl_ddr_smoke_test(
     ],
     ids=["row", "column"],
 )
-@pytest.mark.parametrize("chunks_per_sync", [20])
-@pytest.mark.parametrize("num_workers_per_link", [2])
-@pytest.mark.parametrize("num_buffers_per_channel", [2])
 def test_ccl_other_smoke_test(
     bh_2d_mesh_device,
     num_devices,
@@ -190,9 +177,6 @@ def test_ccl_other_smoke_test(
     mem_config_ag,
     enable_trace,
     num_iters,
-    chunks_per_sync,
-    num_workers_per_link,
-    num_buffers_per_channel,
 ):
     if ttnn.get_num_devices() != 4 and ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_1D_RING:
         pytest.skip("Skipping unsupported case Ring on 2D mesh with no wraparound rings")
@@ -217,9 +201,6 @@ def test_ccl_other_smoke_test(
             enable_trace=enable_trace,
             num_iters=num_iters,
             cluster_axis=cluster_axis,
-            chunks_per_sync=chunks_per_sync,
-            num_workers_per_link=num_workers_per_link,
-            num_buffers_per_channel=num_buffers_per_channel,
             allowed_pcc=0.9999,
             num_l1_banks=120,
         )

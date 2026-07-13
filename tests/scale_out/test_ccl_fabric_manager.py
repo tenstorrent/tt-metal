@@ -202,12 +202,11 @@ def test_all_to_all_dispatch_fabric_manager_8x4(
 
 
 # ===========================
-# All-Gather Async Tests
+# All-Gather Tests
 # ===========================
 
 
 @skip_for_blackhole("This test is for wormhole")
-@pytest.mark.parametrize("num_links", [3], ids=["3links"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters",
     [
@@ -238,27 +237,20 @@ def test_all_to_all_dispatch_fabric_manager_8x4(
     indirect=True,
     ids=["fabric_manager_enabled_linear"],
 )
-@pytest.mark.parametrize("chunks_per_sync", [20])
-@pytest.mark.parametrize("num_workers_per_link", [2])
-@pytest.mark.parametrize("num_buffers_per_channel", [2])
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
-def test_all_gather_async_fabric_manager(
+def test_all_gather_fabric_manager(
     mesh_device,
     num_devices,
     ag_output_shape,
     dim,
-    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
     mem_config_ag,
     enable_trace,
     num_iters,
-    chunks_per_sync,
-    num_workers_per_link,
-    num_buffers_per_channel,
 ):
-    """Test all-gather async with fabric manager enabled."""
+    """Test all-gather with fabric manager enabled."""
     if num_devices < 8:
         submesh_shape = (1, num_devices)
         cluster_axis = 1
@@ -274,13 +266,9 @@ def test_all_gather_async_fabric_manager(
         layout,
         mem_config_input,
         mem_config_ag,
-        num_links=num_links,
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        chunks_per_sync=chunks_per_sync,
-        num_workers_per_link=num_workers_per_link,
-        num_buffers_per_channel=num_buffers_per_channel,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
 
