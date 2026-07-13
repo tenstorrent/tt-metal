@@ -304,7 +304,6 @@ bool is_1d_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
 
 bool is_2d_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
 
-// Routing planes usable for workload traffic
-size_t get_num_usable_routing_planes(FabricNodeId fabric_node_id, RoutingDirection routing_direction);
+size_t get_num_available_routing_planes_in_direction(FabricNodeId fabric_node_id, RoutingDirection routing_direction);
 
 }  // namespace tt::tt_fabric
