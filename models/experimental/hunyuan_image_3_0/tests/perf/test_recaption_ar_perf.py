@@ -63,7 +63,7 @@ from models.experimental.hunyuan_image_3_0.ref.tokenizer.gen_image_inputs import
 from models.experimental.hunyuan_image_3_0.tests.pcc import i2i_helpers as h
 from models.experimental.hunyuan_image_3_0.tt.generate import make_backbone_logits_fn
 from models.experimental.hunyuan_image_3_0.tt.lm_head import HunyuanTtLMHead
-from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel, default_bf16_layers
+from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel
 
 PROMPT = "a cat on a mat"
 BOT_TASK = "recaption"
@@ -131,7 +131,7 @@ def _build_workload(mesh_device):
         tp_factor=2,
         sp_axis=0,
         sp_factor=SP_FACTOR,
-        bf16_layers=default_bf16_layers(num_layers),
+        bf16_layers=[],
         model_cache_name="hunyuan-image-3.0",
     )
     lm_head = HunyuanTtLMHead(mesh_device, {"lm_head.weight": h.load_tensor("lm_head.weight")})
