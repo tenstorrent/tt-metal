@@ -9,7 +9,7 @@ import torch
 import ttnn
 import random
 from math import pi
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
 
 
@@ -54,20 +54,15 @@ def run_math_binary_test_atan2(device, h, w, a1, a2, b1, b2, ttnn_function, pcc=
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    # bf16 linspace can quantize atan2 golden to a single value; use ULP instead of PCC in that case.
-    is_constant_golden = (
-        torch_output_tensor.numel() > 0 and (torch_output_tensor.max() == torch_output_tensor.min()).item()
-    )
-    if is_constant_golden:
-        assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
-    else:
-        assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_atan2_a(device, h, w):
-    run_math_binary_test_atan2(device, h, w, 20, 40, 40, 80, ttnn.atan2)
+    # Non-parallel ranges: parallel linspace (e.g. 20→40 / 40→80) quantizes a/b to one
+    # ratio in bf16, producing a constant golden where PCC is undefined.
+    run_math_binary_test_atan2(device, h, w, -10, 10, 20, 40, ttnn.atan2)
 
 
 @pytest.mark.parametrize("h", [64])
