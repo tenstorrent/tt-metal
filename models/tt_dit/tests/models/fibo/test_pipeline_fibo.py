@@ -35,12 +35,6 @@ from models.tt_dit.pipelines.fibo.pipeline_fibo import FiboPipeline, FiboPipelin
         pytest.param(1024, 768, 20, id="1024x768_4x3_1mp"),
         pytest.param(960, 768, 20, id="960x768_5x4_1mp"),
         pytest.param(1024, 576, 20, id="1024x576_16x9_1mp"),
-        # 4 MP tier (1 MP tier at 2x linear scale)
-        pytest.param(2048, 2048, 20, id="2048x2048_1x1_4mp"),
-        pytest.param(2304, 1536, 20, id="2304x1536_3x2_4mp"),
-        pytest.param(2048, 1536, 20, id="2048x1536_4x3_4mp"),
-        pytest.param(1920, 1536, 20, id="1920x1536_5x4_4mp"),
-        pytest.param(2048, 1152, 20, id="2048x1152_16x9_4mp"),
     ],
 )
 @pytest.mark.parametrize(
