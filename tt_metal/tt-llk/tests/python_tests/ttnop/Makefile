@@ -1,9 +1,10 @@
 CXX      ?= g++
-CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra
+# -fopenmp: the `batch` sub-command generates the perturbed ELF sets in parallel.
+CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra -fopenmp
 PREFIX   ?= $(HOME)/.local
 
-ttnop: ttnop.cpp
-	$(CXX) $(CXXFLAGS) -o $@ $<
+ttnop: ttnop.cpp include/util.h
+	$(CXX) $(CXXFLAGS) -o $@ ttnop.cpp
 
 .PHONY: test clean install
 test: ttnop
