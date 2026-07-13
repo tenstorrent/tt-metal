@@ -77,6 +77,11 @@ LIBRISPEECH_DATASET = "hf-internal-testing/librispeech_asr_dummy"
 # S2ST WER refs: mel <= this use the preamble (its <1 s opening translates cleanly, so short refs
 # aren't degenerate); longer mel use LibriSpeech (coherent, non-repeating, long enough to be stable).
 S2ST_PREAMBLE_MAX_MEL = 128
+# T2ST WER refs: contiguous Dickens from the opening translates cleanly up through 512 tokens.
+# At 1024+ the same contiguous span can push HF Spanish speech toward short/repetitive Whisper
+# refs; longer WER lengths use interleaved story windows instead (same idea as S2ST switching
+# to LibriSpeech past the preamble).
+T2ST_WER_CONTIGUOUS_MAX = 512
 
 SRC_LANG = "eng"
 TGT_TRANSLATE = "hin"
@@ -248,6 +253,34 @@ def text_inputs_for_len(
     single non-repeating span (no degenerate looping).
     """
     return source_text_for_enc_len(processor, target_tokens, src_lang=src_lang, unit=_story_prose_body(story))
+
+
+def _story_mixed_windows_for_wer(story: str, *, window_chars: int = 2000, stride_chars: int = 2500) -> str:
+    """Interleave short prose windows so long T2ST WER inputs stay translation-stable.
+
+    A single contiguous 2048-token Dickens span makes HF Spanish ``generate(speech=True)`` collapse
+    into a repetitive loop; stitching windows from different offsets keeps encoder length while
+    yielding a longer, non-degenerate Whisper reference (measured: ~47 → ~116 whisper words at 2048).
+    """
+    body = _story_prose_body(story)
+    limit = min(len(body), 20000)
+    chunks = [body[off : off + window_chars] for off in range(0, limit, stride_chars)]
+    return " \n\n ".join(chunks) if chunks else body
+
+
+def text_inputs_for_wer_len(
+    processor: AutoProcessor,
+    story: str,
+    target_tokens: int,
+    *,
+    src_lang: str = SRC_LANG,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """T2ST inputs for WER ref generation — contiguous prose ≤512, mixed windows above that."""
+    if target_tokens <= T2ST_WER_CONTIGUOUS_MAX:
+        return text_inputs_for_len(processor, story, target_tokens, src_lang=src_lang)
+    return source_text_for_enc_len(
+        processor, target_tokens, src_lang=src_lang, unit=_story_mixed_windows_for_wer(story)
+    )
 
 
 def speech_inputs_for_len(

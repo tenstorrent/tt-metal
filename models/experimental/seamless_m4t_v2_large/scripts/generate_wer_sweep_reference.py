@@ -29,7 +29,7 @@ from models.experimental.seamless_m4t_v2_large.scripts.demo_perf_sweep import (
     ensure_long_story,
     sequence_lengths,
     speech_inputs_for_len,
-    text_inputs_for_len,
+    text_inputs_for_wer_len,
 )
 from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
 from models.experimental.seamless_m4t_v2_large.tests.pcc.decoder_pcc_fixtures import load_hf_model_and_processor
@@ -107,7 +107,9 @@ def generate_text_wer_sweep_reference(
         raise ValueError(f"generate_text_wer_sweep_reference expects t2st, got {task!r}")
     model, processor, tokenizer = load_hf_model_and_processor(weights_dir, dtype=torch.bfloat16)
     story_text = story if story is not None else ensure_long_story()
-    src_ids, src_mask = text_inputs_for_len(processor, story_text, seq_len, src_lang=src_lang)
+    # Long T2ST: mixed story windows (not one contiguous Dickens span) so HF Spanish speech stays
+    # non-degenerate for the whisper round-trip — see ``text_inputs_for_wer_len``.
+    src_ids, src_mask = text_inputs_for_wer_len(processor, story_text, seq_len, src_lang=src_lang)
     tgt_lang = WER_TASK_TGT_LANG[task]
     gen_kwargs = hf_aligned_generation_kwargs(model.generation_config)
 

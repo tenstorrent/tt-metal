@@ -13,7 +13,9 @@ stable WER/token gate (HF EOS early; refs can be a single word). See README
 
 T2ST text inputs use *A Tale of Two Cities* from
 ``models/tt_transformers/tests/tale-of-two-cities.txt.bz2`` (via ``demo_perf_sweep.ensure_long_story``,
-same corpus as tt-transformers). S2ST/ASR audio is length-dependent: mel
+same corpus as tt-transformers). For WER refs, lengths ≤512 use a contiguous prose span; longer
+lengths use interleaved story windows (``text_inputs_for_wer_len``) so HF Spanish speech does not
+collapse into a short repetitive loop. S2ST/ASR audio is length-dependent: mel
 ``<= S2ST_PREAMBLE_MAX_MEL`` (128) uses the demo preamble (its short opening translates cleanly);
 longer mel uses distinct *LibriSpeech* utterances (coherent, non-repeating) so references are long
 enough for a stable WER rather than a degenerate repeated loop.

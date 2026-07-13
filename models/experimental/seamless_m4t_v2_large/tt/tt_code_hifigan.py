@@ -1694,11 +1694,16 @@ class TTSeamlessM4Tv2CodeHifiGan:
         dur_bf = ttnn.maximum(r, 1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [B, T_units] bf16
         ttnn.deallocate(r)
 
-        # Use float32 internally so integer comparisons are exact for any plausible t_audio.
-        dur_f32 = ttnn.typecast(dur_bf, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        cumsum_inc = ttnn.cumsum(dur_f32, dim=-1, dtype=ttnn.float32)  # [B, T_units] inclusive
-        ttnn.deallocate(dur_f32)
+        # ``ttnn.cumsum`` accumulates in bf16 internally even for a float32 output dtype, so cumulative
+        # sums past 2048 snap to even values (bf16 spacing in [2048, 4096)) -> off-by-one frame->unit
+        # indices from frame 2048 that corrupt the last ~12% of long S2ST/T2ST audio. Durations are
+        # integers, so sum in int32 (exact), then cast to float32 (exact to 2**24) for the searchsorted ``le``.
+        dur_i32 = ttnn.typecast(dur_bf, ttnn.int32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(dur_bf)
+        cumsum_i32 = ttnn.cumsum(dur_i32, dim=-1, dtype=ttnn.int32)  # [B, T_units] inclusive, exact
+        ttnn.deallocate(dur_i32)
+        cumsum_inc = ttnn.typecast(cumsum_i32, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(cumsum_i32)
 
         cumsum_inc_bt = _as_batch_time_2d(cumsum_inc, batch=batch, seq=seq)
 
