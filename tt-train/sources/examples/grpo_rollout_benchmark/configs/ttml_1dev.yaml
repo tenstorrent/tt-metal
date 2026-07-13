@@ -1,0 +1,38 @@
+# GRPO rollout benchmark — ttml backend, 1 chip (no DDP).
+#
+# benchmark_common.load_balanced_config() OVERRIDES the generation-shaping
+# grpo_config fields at runtime (per_device_train_batch_size,
+# gradient_accumulation_steps, num_generations, max_completion_length,
+# temperature, prompts_to_train, checkpointing). Only device_config, optimizer,
+# and model_config below are authoritative for a benchmark run.
+
+training_config:
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/llama3_2_1B.yaml"
+
+  optimizer:
+    type: MorehAdamW
+    lr: 5.0e-6
+    beta1: 0.9
+    beta2: 0.99
+    epsilon: 1.0e-8
+    weight_decay: 0.01
+    amsgrad: false
+    kahan_summation: false
+
+  grpo_config:
+    epsilon: 0.2
+    per_device_train_batch_size: 8
+    num_iterations: 1
+    gradient_accumulation_steps: 1
+    logging_steps: 1
+    checkpointing: false
+    checkpoint_interval: 0
+    prompts_to_train: 8
+    temperature: 1.0
+    max_completion_length: 256
+    num_generations: 4
+    warmup_steps: 0
+
+device_config:
+  enable_ddp: false
+  mesh_shape: [1, 1]
