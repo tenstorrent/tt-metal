@@ -94,6 +94,33 @@ def _run_output_dir() -> str:
     )
 
 
+class WeightSyncCallback:
+    """Push fresh policy weights to the TTT generation worker every ``every``
+    steps. The caller does the initial push before ``trainer.train()``."""
+
+    def __init__(self, completer: Any, every: int = 1) -> None:
+        if every < 1:
+            raise ValueError(f"WeightSyncCallback: 'every' must be >= 1 (got {every})")
+        self.completer = completer
+        self.every = every
+
+    def on_train_begin(self, trainer: Any) -> None:
+        pass
+
+    def on_step_end(self, trainer: Any, step: int, *args: Any, **kwargs: Any) -> None:
+        if (step + 1) % self.every == 0:
+            self.completer.push_weights()
+
+    def on_before_optimizer_step(self, trainer: Any) -> None:
+        pass
+
+    def on_save(self, trainer: Any, step: int, path: str) -> None:
+        pass
+
+    def on_train_end(self, trainer: Any) -> None:
+        pass
+
+
 class GRPOMonitor:
     """on_step_end CSV/stdout monitor."""
 
@@ -170,7 +197,6 @@ def _ttml_main() -> None:
     from utils.llama_grpo_completer import (
         LlamaCompletionCtx,
         LlamaCompleterRemoteRollout,
-        WeightSyncCallback,
     )
     from utils.mpi_rollout import MPIRolloutClient
     from utils.weight_bridge import HostWeightBridge
