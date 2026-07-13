@@ -137,8 +137,10 @@ std::vector<uint32_t> get_multi_dim_per_core_factor(
     // block large and shrinking in0_block_w first — this matches hand-tuned configs
     // that stream K in smaller chunks rather than chopping out_block.
     // Otherwise keep k in the outer loop to preserve in0_block_w when possible.
+    // factors is keyed by per_core_factor_m * per_core_factor_n, so reverse iteration
+    // visits larger output blocks first for maximizing L1 utilization.
     uint32_t min_per_core_factor_k = adjust_in0_block_w ? 1 : in0_block_w;
-    auto try_config = [&](uint32_t per_core_factor_m, uint32_t per_core_factor_n, uint32_t per_core_factor_k) {
+    auto fits_in_l1 = [&](uint32_t per_core_factor_m, uint32_t per_core_factor_n, uint32_t per_core_factor_k) {
         return utilities::get_estimated_size_of_cbs(
                    per_core_factor_m,
                    per_core_factor_n,
@@ -160,7 +162,7 @@ std::vector<uint32_t> get_multi_dim_per_core_factor(
                 if (in0_block_w % per_core_factor_k != 0) {
                     continue;
                 }
-                if (try_config(per_core_factor_m, per_core_factor_n, per_core_factor_k)) {
+                if (fits_in_l1(per_core_factor_m, per_core_factor_n, per_core_factor_k)) {
                     return {per_core_factor_m, per_core_factor_n, per_core_factor_k};
                 }
             }
@@ -174,7 +176,7 @@ std::vector<uint32_t> get_multi_dim_per_core_factor(
             for (const auto& factor : std::ranges::reverse_view(factors)) {
                 uint32_t per_core_factor_m = std::get<0>(factor.second);
                 uint32_t per_core_factor_n = std::get<1>(factor.second);
-                if (try_config(per_core_factor_m, per_core_factor_n, per_core_factor_k)) {
+                if (fits_in_l1(per_core_factor_m, per_core_factor_n, per_core_factor_k)) {
                     return {per_core_factor_m, per_core_factor_n, per_core_factor_k};
                 }
             }
