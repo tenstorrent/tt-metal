@@ -122,40 +122,17 @@ struct ProgramRunArgs {
     Group<DFBRunOverrides> dfb_run_overrides;
 };
 
+//-----------------------------------------------------
 // Convenience aliases
+//-----------------------------------------------------
+
 using KernelRunArgs = ProgramRunArgs::KernelRunArgs;
 using DFBRunOverrides = ProgramRunArgs::DFBRunOverrides;
 using TensorArgument = ProgramRunArgs::TensorArgument;
 
-// Set several named RTAs for a single node.
-//
-//   AddRuntimeArgsForNode(rtas, node, {
-//       {"mcast_dest_noc_start_x", mcast[0]},
-//       {"mcast_dest_noc_start_y", mcast[1]},
-//       ...
-//   });
-inline void AddRuntimeArgsForNode(
-    KernelRunArgs::RuntimeArgValues& runtime_arg_values,
-    const NodeCoord& node,
-    std::initializer_list<std::pair<std::string, uint32_t>> named_values) {
-    for (const auto& [name, value] : named_values) {
-        runtime_arg_values[name][node] = value;
-    }
-}
-
-// Build RuntimeArgValues for a single node from a flat name→value list.
-//
-//   .runtime_arg_values = MakeRuntimeArgsForNode(node, {
-//       {"src0_addr", addr},
-//       {"num_tiles", 1u},
-//       ...
-//   }),
-inline KernelRunArgs::RuntimeArgValues MakeRuntimeArgsForNode(
-    const NodeCoord& node, std::initializer_list<std::pair<std::string, uint32_t>> named_values) {
-    KernelRunArgs::RuntimeArgValues runtime_arg_values;
-    AddRuntimeArgsForNode(runtime_arg_values, node, named_values);
-    return runtime_arg_values;
-}
+//-----------------------------------------------------
+// Helper functions
+//-----------------------------------------------------
 
 // Resolve a TensorArgument to its MeshTensor.
 // (Switch to std::visit once MeshTensorView is added as a second variant alternative.)
@@ -168,5 +145,53 @@ inline const MeshTensor& mesh_tensor_of(const TensorArgument& arg) {
 ProgramRunArgs MergeProgramRunArgs(
     ProgramRunArgs base, std::span<const ProgramRunArgs> rest, bool skip_validation = false);
 // Invocation: auto full = MergeProgramRunArgs(std::move(base_run_args), {appended_run_args});
+
+//-----------------------------------------------------
+// Helper function for per-node runtime argument values
+//-----------------------------------------------------
+
+// Runtime argument (RTA) values must be provided for every node the kernel runs on.
+// In ProgramRunArgs, runtime arguments (RTAs) are expressed first by name, then by
+// node (name -> node -> value). However, legacy use sites usually produce RTA values
+// in a node-first style (node -> name -> value).
+//
+// These helper functions bridge the gap between the legacy style and ProgramRunArgs.
+// It is much better to refactor legacy code to express RTA values in name-first style.
+// But, these helpers are provided for convenience and backward compatibility.
+
+// Two shapes for the two call patterns:
+//
+//   Multi-node kernel — accumulate across the core loop:
+//     KernelRunArgs kra{.kernel = ...};
+//     for (const auto& core : cores) {
+//         AddRuntimeArgsForNode(kra.runtime_arg_values, core, {{"num_tiles", num_tiles[core]}, ...});
+//     }
+//
+//   Special case for a single-node kernel — build the table inline:
+//     KernelRunArgs{
+//         .kernel = ...,
+//         .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+//              node, {{"var", a}, {"num_tiles", n}}),
+//     };
+
+// Append RTAs for a single node to an existing RuntimeArgValues table.
+inline void AddRuntimeArgsForNode(
+    KernelRunArgs::RuntimeArgValues& runtime_arg_values,                  // existing RTA table
+    const NodeCoord& node,                                                // node
+    std::initializer_list<std::pair<std::string, uint32_t>> named_values  // name -> value list
+) {
+    for (const auto& [name, value] : named_values) {
+        const bool inserted = runtime_arg_values[name].emplace(node, value).second;
+        TT_FATAL(inserted, "AddRuntimeArgsForNode: runtime arg '{}' set more than once for node {}.", name, node.str());
+    }
+}
+
+// Build a fresh table for a single node
+inline KernelRunArgs::RuntimeArgValues MakeRuntimeArgsForNode(
+    const NodeCoord& node, std::initializer_list<std::pair<std::string, uint32_t>> named_values) {
+    KernelRunArgs::RuntimeArgValues runtime_arg_values;
+    AddRuntimeArgsForNode(runtime_arg_values, node, named_values);
+    return runtime_arg_values;
+}
 
 }  // namespace tt::tt_metal::experimental
