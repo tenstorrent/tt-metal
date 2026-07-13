@@ -118,11 +118,14 @@ AllToAllAsyncGenericProgram::create_at(
     const uint32_t packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
 
     const uint32_t number_pages_per_packet = 2;
-    const uint32_t cb_size = (packet_size / page_size) * page_size * number_pages_per_packet;  // round_down
+    const uint32_t packet_payload_size = number_pages_per_packet * page_size;
+    TT_FATAL(packet_payload_size <= packet_size, "A2A packet payload exceeds the fabric channel buffer");
+    const uint32_t num_packet_buffers = 32;
+    const uint32_t cb_size = packet_payload_size * num_packet_buffers;
     const tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
 
     auto cb_src0_config = tt::tt_metal::CircularBufferConfig(cb_size, {{tt::CB::c_in0, data_format}})
-                              .set_page_size(tt::CB::c_in0, number_pages_per_packet * page_size);
+                              .set_page_size(tt::CB::c_in0, packet_payload_size);
 
     CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
 
@@ -215,7 +218,9 @@ AllToAllAsyncGenericProgram::create_at(
     } else {
         // Permutation phases avoid the many-to-one bursts that can exhaust FABRIC_2D credits.
         for (uint32_t phase = 0; phase < operation_attributes.num_devices; ++phase) {
-            const int32_t target_device = (device_index + phase) % operation_attributes.num_devices;
+            // Start fabric injection immediately and defer the local NOC copy until remote traffic is in flight.
+            const uint32_t target_phase = (phase + 1) % operation_attributes.num_devices;
+            const int32_t target_device = (device_index + target_phase) % operation_attributes.num_devices;
             device_offsets[0].push_back(target_device - static_cast<int32_t>(device_index));
         }
     }
