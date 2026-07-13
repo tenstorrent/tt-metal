@@ -371,13 +371,22 @@ def _t2u_scaled_dot_product_attention(
         )
 
     attn_mc = ttnn.DRAM_MEMORY_CONFIG if seq > TILE else ttnn.L1_MEMORY_CONFIG
+    sdpa_scale = scale
+    if attn_mask is not None and scale != 1.0:
+        # ttnn SDPA re-multiplies the mask by 1/scale on every call (sdpa.cpp), re-materializing the
+        # dense [S,S] mask per layer. Fold scale into Q and pass scale=1.0 to skip it — bit-exact since
+        # scale=1/sqrt(64)=0.125 is a power of two (Q*scale only shifts the bf16 exponent).
+        q_scaled = ttnn.multiply(q, scale, memory_config=attn_mc)
+        ttnn.deallocate(q)
+        q = q_scaled
+        sdpa_scale = 1.0
     attn_out = ttnn.transformer.scaled_dot_product_attention(
         q,
         k,
         v,
         attn_mask=attn_mask,
         is_causal=False,
-        scale=scale,
+        scale=sdpa_scale,
         program_config=sdpa_cfg,
         compute_kernel_config=sdpa_compute_cfg,
         memory_config=attn_mc,
@@ -892,6 +901,18 @@ def _mask_row_valid_prefix(device: ttnn.Device, width: int, valid_len: int) -> t
     return out
 
 
+def _additive_mask_is_noop(mask: ttnn.Tensor) -> bool:
+    """True when an additive mask masks nothing (all ~0) so it can be dropped (pass ``attn_mask=None``).
+
+    One ``max(abs)`` reduce + a host readback — call **only outside trace capture** (readback is illegal
+    during ``begin_trace_capture``).
+    """
+    absmax = ttnn.max(ttnn.abs(mask, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+    val = to_torch_replicated_first_shard(absmax).to(torch.float32).reshape(-1)
+    ttnn.deallocate(absmax)
+    return float(val[0]) == 0.0
+
+
 def _expand_4d_padding_additive_b1(
     device: ttnn.Device, mask_2d_tile: ttnn.Tensor, seq_len: int, width: int
 ) -> ttnn.Tensor:
@@ -899,43 +920,50 @@ def _expand_4d_padding_additive_b1(
     HF ``AttentionMaskConverter._expand_mask`` for a 2D padding mask (1 = keep), batch 1.
 
     Returns additive mask ``[1, 1, seq_len, width]`` (tile bf16): 0 keep, ``_BF16_MASK_FLOOR`` masked.
+
+    Every query row is identical (pure key-position mask), so build the ``[1, width]`` additive row once
+    and broadcast it over ``seq_len`` with an outer-product multiply (``[seq_len, 1]`` ones column) — one
+    ``[seq_len, width]`` write, no ``repeat_interleave``/full-size ``where``. Bit-identical to the old build.
     """
     if mask_2d_tile.get_layout() != ttnn.TILE_LAYOUT:
         m = ttnn.to_layout(mask_2d_tile, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     else:
         m = mask_2d_tile
-    row = ttnn.reshape(m, (1, 1, 1, width))
-    expanded = ttnn.repeat_interleave(row, seq_len, dim=2)
-    ones = ttnn.full(
-        (1, 1, seq_len, width),
-        1.0,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    inverted = ttnn.add(
-        ones,
-        ttnn.multiply(expanded, -1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    floor = ttnn.full(
-        (1, 1, seq_len, width),
+    floor_row = ttnn.full(
+        (1, width),
         _BF16_MASK_FLOOR,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    zeros = ttnn.full(
-        (1, 1, seq_len, width),
+    zero_row = ttnn.full(
+        (1, width),
         0.0,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    out = ttnn.where(ttnn.gt(inverted, 0.5), floor, zeros, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    # add_row[c] = 0 where kept (m>0.5), _BF16_MASK_FLOOR where padded — the single additive row.
+    add_row = ttnn.where(ttnn.gt(m, 0.5), zero_row, floor_row, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if m is not mask_2d_tile:
+        ttnn.deallocate(m)
+    ttnn.deallocate(floor_row)
+    ttnn.deallocate(zero_row)
+    row4 = ttnn.reshape(add_row, (1, 1, 1, width))
+    ones_col = ttnn.full(
+        (1, 1, seq_len, 1),
+        1.0,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    # Outer-product broadcast: out[r, c] = 1 * add_row[c] — one [seq_len, width] write, no concat.
+    out = ttnn.multiply(ones_col, row4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(ones_col)
+    ttnn.deallocate(row4)
     return out
 
 
@@ -2776,7 +2804,12 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             and tb.pad_unit_3d_tt is not None
         )
 
-        enc_out = self.encoder.forward(inputs_embeds, encoder_attention_mask_4d)
+        # Drop an all-zero encoder mask (full-length batch-1) so SDPA skips streaming a dense zero mask.
+        # Detection reads back to host, so skip it during trace capture (keep the mask as passed).
+        enc_mask = encoder_attention_mask_4d
+        if not trace_no_profiler and enc_mask is not None and _additive_mask_is_noop(enc_mask):
+            enc_mask = None
+        enc_out = self.encoder.forward(inputs_embeds, enc_mask)
 
         char_w = int(char_input_ids.shape[1])
         char_seq_total = int(sum(cc_list))
