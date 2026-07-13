@@ -75,7 +75,7 @@ can be an ownership smell), with a `safety` sub-annotation, never a filter:
 bits — provably not a data race), `POTENTIAL_CLOBBER` (a full-word write, a
 non-atomic software `cfg_rmw`, or overlapping bits — the LLM must check
 value-invariance/ordering), `UNKNOWN` (a field mask wasn't in cfg_defines), or
-`UNRESOLVED_COWRITER` (one known thread + an unattributable co-writer — a
+`UNRESOLVED_COWRITER` (fewer than 2 KNOWN threads — a lone known thread OR all-unknown writers — plus an unattributable co-writer — a
 low-confidence widen, surfaced rather than dropped). The per-thread bit masks are
 in the detail so you can judge ownership.
 

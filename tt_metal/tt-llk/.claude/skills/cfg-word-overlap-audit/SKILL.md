@@ -29,7 +29,7 @@ the thread):
 a race. The tool PRE-COMPUTES the bit-disjoint-masking check into the finding's
 `safety` field (`SAFE_BY_MASKING` = all cross-thread writers are byte-atomic RMW
 on disjoint bits; `POTENTIAL_CLOBBER` = a full-word/non-atomic/overlapping writer;
-`UNKNOWN` = a mask didn't resolve; `UNRESOLVED_COWRITER` = one known thread + an
+`UNKNOWN` = a mask didn't resolve; `UNRESOLVED_COWRITER` = fewer than 2 known threads (a lone known thread OR all-unknown writers) + an
 unattributable co-writer, a low-confidence widen) — READ `.findings[].safety` rather than redoing
 the mask analysis; you still verify semaphore/mutex ordering and value-invariance.
 `UNRESOLVED` = a field that didn't

@@ -7,7 +7,7 @@ config word, written by more than one Tensix thread.
 Recall: resolve every config write to its 32-bit word via cfg_defines.h,
 attribute the writing thread by file, and report words written by >= 2 distinct
 threads. The tool ANNOTATES masking safety (SAFE_BY_MASKING / POTENTIAL_CLOBBER /
-UNKNOWN — see _safety; plus UNRESOLVED_COWRITER for a 1-known-thread word with an
+UNKNOWN — see _safety; plus UNRESOLVED_COWRITER for a fewer-than-2-known-threads word with an
 unattributable co-writer, a low-confidence widen); semaphore/mutex ordering and
 value-invariance remain the
 LLM's call.
@@ -288,7 +288,8 @@ class CfgWordOverlap(Check):
                               or overlapping bits across threads.
           UNKNOWN           – a writer's field mask isn't in cfg_defines.
         A 4th value, UNRESOLVED_COWRITER, is set by run() (NOT here) for a word with
-        exactly one KNOWN thread plus an unattributable co-writer — a low-confidence
+        FEWER THAN 2 KNOWN threads — a lone known thread, OR all-unknown writers — plus
+        an unattributable co-writer — a low-confidence
         widen (the co-writer's thread couldn't be resolved, so a cross-thread share
         can be neither confirmed nor dismissed).
         The word is reported as CROSS_THREAD_SHARED_WORD regardless of the label;
