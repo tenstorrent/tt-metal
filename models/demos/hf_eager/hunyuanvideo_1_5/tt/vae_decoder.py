@@ -447,6 +447,15 @@ class TTVAEDecodeAdapter:
         from diffusers.models.autoencoders.vae import DecoderOutput
 
         rv = self.__dict__["_real"]
+        # Optional smaller tiles (HY_VAE_TILE_PX): shrink the per-tile spatial extent
+        # so the upsample intermediate fits when the VAE time-shares chips with a
+        # resident DiT (e.g. sp=4 on all 32 chips leaves little free DRAM). Smaller
+        # tiles => lower peak but more tiles (slower). Default 256px = full speed.
+        _px = int(os.environ.get("HY_VAE_TILE_PX", "0"))
+        if _px:
+            sc = int(rv.config.spatial_compression_ratio)
+            rv.tile_sample_min_height = rv.tile_sample_min_width = _px
+            rv.tile_latent_min_height = rv.tile_latent_min_width = max(1, _px // sc)
         # Spatial tiling avoids the full-res OOM at high frame counts. Trigger it
         # like the reference (latent H or W beyond a tile) but only when opted in
         # (HY_VAE_TILE=1 or vae.enable_tiling()), so the small-frame path stays fast.
