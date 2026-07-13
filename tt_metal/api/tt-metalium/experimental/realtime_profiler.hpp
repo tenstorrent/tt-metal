@@ -39,7 +39,8 @@ using ProgramRealtimeProfilerCallbackHandle = uint64_t;
 // clang-format off
 /**
  * Register a callback to be invoked when real-time profiler data arrives from a device.
- * Multiple callbacks can be registered; each callback is called from its own thread.
+ * Multiple callbacks can be registered; they are invoked concurrently. If a callback shares a resource
+ * with other callbacks or across multiple MeshDevices, access it in a thread-safe way (e.g. with a lock).
  * Callbacks that are too slow to keep up with incoming profiler data may miss records; this
  * is tracked by ProgramRealtimeRecordBatch::dropped.
  *
