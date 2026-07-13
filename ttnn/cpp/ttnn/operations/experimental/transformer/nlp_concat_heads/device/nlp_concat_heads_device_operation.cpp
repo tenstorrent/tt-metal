@@ -67,7 +67,7 @@ NLPConcatHeadsDeviceOperation::spec_return_value_t NLPConcatHeadsDeviceOperation
     auto head_dim = input_shape[3];
 
     auto hidden_dim = num_heads * head_dim;
-
+    auto input_tile = input_tensor.tensor_spec().tile();
     Shape output_shape({input_shape[0], 1, sequence_length, hidden_dim});
 
     if (args.output_mem_config.is_sharded()) {
@@ -79,13 +79,15 @@ NLPConcatHeadsDeviceOperation::spec_return_value_t NLPConcatHeadsDeviceOperation
         return TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
-                input_tensor.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), mem_config));
+                input_tensor.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE, input_tile), mem_config));
     }
 
     return TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
-            input_tensor.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), args.output_mem_config));
+            input_tensor.dtype(),
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE, input_tile),
+            args.output_mem_config));
 }
 
 NLPConcatHeadsDeviceOperation::tensor_return_value_t NLPConcatHeadsDeviceOperation::create_output_tensors(

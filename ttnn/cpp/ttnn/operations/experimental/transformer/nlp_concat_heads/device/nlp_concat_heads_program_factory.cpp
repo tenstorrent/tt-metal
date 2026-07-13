@@ -22,8 +22,12 @@ ProgramDescriptor NLPConcatHeadsProgramFactory::create_descriptor(
     const auto& ashape = a.padded_shape();
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    const auto& input_tile = a.tensor_spec().tile();
+    const uint32_t input_tile_height = input_tile.get_height();
+    const uint32_t input_tile_width = input_tile.get_width();
+    const uint32_t input_tile_hw = input_tile.get_tile_hw();
+    uint32_t single_tile_size = input_tile.get_tile_size(cb_data_format);
 
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
     tt_metal::Buffer* in0_buffer = a.buffer();
     bool in_sharded = a.is_sharded();
     bool out_sharded = output.is_sharded();
@@ -33,12 +37,12 @@ ProgramDescriptor NLPConcatHeadsProgramFactory::create_descriptor(
     ////////////////////////////////////////////////////////////////////////////
     //                      TM Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    uint32_t per_tensor_tiles = ashape[1] * ashape[3] / TILE_WIDTH;  // 142
+    uint32_t per_tensor_tiles = ashape[1] * ashape[3] / input_tile_width;  // 142
 
     // Per output tensor args
     // Output shape is: [B, 1, s, 4544]
-    uint32_t in0_h_tiles = ashape[2] / TILE_HEIGHT;
-    uint32_t in0_w_tiles = ashape[3] / TILE_WIDTH;    // head_dim
+    uint32_t in0_h_tiles = ashape[2] / input_tile_height;
+    uint32_t in0_w_tiles = ashape[3] / input_tile_width;  // head_dim
     uint32_t in0_c = per_tensor_tiles / in0_w_tiles;  // num_heads
     uint32_t in0_HtWt = in0_h_tiles * in0_w_tiles;
     uint32_t in0_CHtWt = in0_c * in0_HtWt;
@@ -46,7 +50,7 @@ ProgramDescriptor NLPConcatHeadsProgramFactory::create_descriptor(
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     // Block is a unit of work; ie. num of per_tensor_tiles per core
-    uint32_t num_blocks = ashape[0] * ashape[2] / TILE_HEIGHT;
+    uint32_t num_blocks = ashape[0] * ashape[2] / input_tile_height;
     uint32_t num_cores = 0, num_blocks_per_core_group_1 = 0, num_blocks_per_core_group_2 = 0;
     CoreRangeSet all_cores = CoreRangeSet(), core_group_1 = CoreRangeSet(), core_group_2 = CoreRangeSet();
     bool row_major = false;
@@ -55,7 +59,7 @@ ProgramDescriptor NLPConcatHeadsProgramFactory::create_descriptor(
         num_cores = all_cores.num_cores();
         core_group_1 = all_cores;
         num_blocks_per_core_group_1 = a.shard_spec().value().shape[0] / a.padded_shape()[-2];
-        per_tensor_tiles = a.shard_spec().value().shape[0] * a.shard_spec().value().shape[1] / TILE_HW;
+        per_tensor_tiles = a.shard_spec().value().shape[0] * a.shard_spec().value().shape[1] / input_tile_hw;
         row_major = a.shard_spec().value().orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR;
     } else {
         std::tie(
@@ -146,7 +150,7 @@ ProgramDescriptor NLPConcatHeadsProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
             .data_format = cb_data_format,
             .page_size = single_tile_size,
-        }}},
+            .tile = input_tile}}},
         .buffer = in_sharded ? in0_buffer : nullptr,
     });
 
@@ -159,7 +163,7 @@ ProgramDescriptor NLPConcatHeadsProgramFactory::create_descriptor(
                 .buffer_index = static_cast<uint8_t>(out_cb_index),
                 .data_format = cb_data_format,
                 .page_size = single_tile_size,
-            }}},
+                .tile = input_tile}}},
             .buffer = out_buffer,
         });
     }
