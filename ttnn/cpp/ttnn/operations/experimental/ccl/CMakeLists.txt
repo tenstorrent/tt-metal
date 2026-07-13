@@ -32,6 +32,8 @@ file(
     rms_allgather/device/kernels/*.hpp
     dit_fused_distributed_rmsnorm/device/kernels/*.cpp
     dit_fused_distributed_rmsnorm/device/kernels/*.hpp
+    dit_fused_distributed_groupnorm/device/kernels/*.cpp
+    dit_fused_distributed_groupnorm/device/kernels/*.hpp
     send_recv_async/send_async/device/kernels/*.cpp
     send_recv_async/recv_async/device/kernels/*.cpp
     send_recv_async/recv_async_h2d/device/kernels/*.cpp
