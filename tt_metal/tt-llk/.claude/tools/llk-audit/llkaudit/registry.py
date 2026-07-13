@@ -587,8 +587,9 @@ RECONFIG_FN_SUBSTR = (
 # STALLWAIT condition tokens that actually DRAIN an execution unit (not THCON,
 # which only orders the GPR->cfg write). Keyed by the writing thread. These are the
 # per-sub-unit p_stall bits from ckernel_instr_params.h: the unpacker (WH/BH
-# UNPACK0|UNPACK1, Quasar adds UNPACK2) and the packer (WH PACK0..PACK3; BH/Quasar
-# only PACK0) are DISTINCT drainable bits. This checker does NOT resolve which
+# UNPACK0|UNPACK1, Quasar adds UNPACK2) and the packer (WH PACK0..PACK3; Quasar
+# PACK0|PACK1; BH only PACK0 — on Quasar/BH the `PACK` alias is just PACK0) are
+# DISTINCT drainable bits. This checker does NOT resolve which
 # sub-unit a given reconfig targets, so ANY sub-unit drain token counts as a full
 # drain of that thread's unit — a stall on the WRONG sub-unit (e.g. draining
 # unpacker 0 before an unpacker-1 reconfig) is a semantic miss deliberately left to

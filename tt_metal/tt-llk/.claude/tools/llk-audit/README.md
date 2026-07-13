@@ -53,7 +53,10 @@ are committed and deterministic, but their surface is JIT-compiled kernels OUTSI
 tt-llk — they only emit findings when fed a **kernel fact base** (the on-request JIT
 capture; see *kernel tier* below). Over the tt-llk fact base they are trivially empty
 (there are no cb/noc kernel sites there). The last three are additional checkers of
-the **NoC synchronization class** (adjudicated by the `noc-sync-audit` skill).
+the **NoC synchronization class** (adjudicated by the `noc-sync-audit` skill). The
+kernel tier ALSO runs `mailbox-sync` (so it runs **6** checkers in total); `mailbox-sync`
+is omitted from this footnote only because — unlike these five — it is NOT empty over
+tt-llk (it has in-tree sites too), so it isn't a "surface-outside-tt-llk" checker.
 
 Every finding is a **recall bucket, not a verdict**, and every check declares its
 `blind_spots` in the output. `srcreg-bank` and `mailbox-sync` are deliberately
