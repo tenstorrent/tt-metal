@@ -31,9 +31,20 @@ uint32_t max_linearized_rank(const Tensor& q, std::optional<uint32_t> cluster_ax
     return max_rank;
 }
 
-// Largest per-device chunk_start = base + max_rank*Sq. Used by the worst-case window check.
+// Fullest device's chunk_start (= its causal-window end - Sq). Used by the worst-case window check.
+//   * block-cyclic: the devices collectively cover the whole global chunk [chunk_start, +sp*chunk_local),
+//     so the fullest window reaches chunk_start + sp*chunk_local no matter how SP×TP slices it. (For the
+//     SP-only case Sq == chunk_local, so this equals the old chunk_start + (sp-1)*chunk_local.)
+//   * contiguous (incl. a size-1 SP axis, stored as no block-cyclic): each device's row 0 sits at
+//     chunk_start + rank*Sq, where rank is the SP rank PLUS the TP sub-shard rank. The two are
+//     mutually-exclusive-nonzero here (a TP sub-shard needs block_cyclic_sp_axis with sp==1, which forces
+//     SP rank 0; no sub-shard -> TP rank 0), mirroring device_causal_geometry's no-block-cyclic branch.
 uint32_t max_chunk_start(const operation_attributes_t& attrs, const Tensor& q, uint32_t Sq) {
-    return attrs.chunk_start_idx + max_linearized_rank(q, attrs.cluster_axis) * Sq;
+    if (attrs.block_cyclic.has_value()) {
+        return attrs.chunk_start_idx + attrs.block_cyclic->sp * attrs.block_cyclic->chunk_local - Sq;
+    }
+    const uint32_t tp_rank = attrs.seq_subshard_axis.has_value() ? max_linearized_rank(q, attrs.seq_subshard_axis) : 0u;
+    return attrs.chunk_start_idx + (max_linearized_rank(q, attrs.cluster_axis) + tp_rank) * Sq;
 }
 
 // Miss-only checks: hash-pinned (placement, non-indexed k batch shape) so they can't differ on a hit. The

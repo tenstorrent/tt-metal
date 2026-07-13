@@ -1974,6 +1974,32 @@ def test_indexer_score_sp1_tp4_seq_subshard(mesh_device):
     assert_indexer_match(out_t, ref, chunk, t, check_neg=True)
 
 
+@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["sp1xtp4"], indirect=True)
+def test_indexer_score_sp1_tp4_rejects_undersized_causal_window(mesh_device, expect_error):
+    """Validation must include every TP sub-shard when the named SP axis has size one."""
+    heads, chunk, t, chunk_start = 8, 256, 256, 32
+    q_g, k_g, w_g = _global_inputs(heads, chunk, t, seed=42)
+    mesh_shape = tuple(mesh_device.shape)
+    shard_tp_seq = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(None, 2))
+    q_dev = _to_mesh(mesh_device, q_g, ttnn.bfloat16, shard_tp_seq)
+    w_dev = _to_mesh(mesh_device, w_g, ttnn.bfloat16, shard_tp_seq)
+    k_dev = _to_mesh(mesh_device, k_g, ttnn.bfloat16, ttnn.ReplicateTensorToMesh(mesh_device))
+
+    # Rank 3 owns [chunk_start + 3*Sq, chunk_start + 4*Sq) = [224, 288), which exceeds T=256.
+    with expect_error(RuntimeError, "exceeds T"):
+        ttnn.experimental.indexer_score_dsa(
+            q_dev,
+            k_dev,
+            w_dev,
+            chunk_start_idx=chunk_start,
+            cluster_axis=0,
+            seq_subshard_axis=1,
+            block_cyclic_sp_axis=0,
+            block_cyclic_chunk_local=chunk,
+            program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0),
+        )
+
+
 @pytest.mark.parametrize("mesh_device", [(2, 2)], ids=["sp2xtp2"], indirect=True)
 def test_indexer_score_sp2_tp2_seq_subshard_rotated(mesh_device):
     """Named SP + TP seq-subshard must reproduce the prefill writer's mapping for a rotated chunk."""
