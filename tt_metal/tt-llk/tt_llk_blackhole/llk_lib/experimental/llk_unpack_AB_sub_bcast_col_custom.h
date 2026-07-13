@@ -74,8 +74,6 @@ inline void _llk_unpack_AB_sub_bcast_col_custom_(const std::uint32_t address_a, 
 
 inline void _llk_unpack_AB_sub_bcast_col_uninit_custom_()
 {
-    // Restore the default single-face unpack X span used by the generic unpack
-    // helpers. The custom blocked path forces both unpackers to a multi-face span
-    // (num_faces * 16 * 16 datums) in the init.
-    TTI_SETADCXX(p_setadc::UNP_AB, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
+    // No state to restore: the multi-face unpack X span set in the custom init is transient — every
+    // generic unpack op re-establishes its own X span (config_unpacker_x_end / SETADCXX) in its init.
 }
