@@ -76,6 +76,9 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
         ),
     ),
 )
+@pytest.mark.parametrize(
+    "all_gather_function", [None, ttnn.experimental.all_gather_async], ids=["production", "experimental"]
+)
 def test_all_gather_subcore_grid(
     bh_2d_mesh_device,
     num_devices,
@@ -88,6 +91,7 @@ def test_all_gather_subcore_grid(
     enable_trace,
     num_iters,
     sub_core_grids,
+    all_gather_function,
 ):
     validate_test(num_devices, None, bh_2d_mesh_device.shape, 0)
 
@@ -106,6 +110,7 @@ def test_all_gather_subcore_grid(
         cluster_axis=cluster_axis,
         allowed_pcc=0.9999,
         sub_core_grids=sub_core_grids,
+        all_gather_function=all_gather_function,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
 
@@ -160,6 +165,9 @@ def test_all_gather_subcore_grid(
     ],
     indirect=True,
 )
+@pytest.mark.parametrize(
+    "all_gather_function", [None, ttnn.experimental.all_gather_async], ids=["production", "experimental"]
+)
 def test_all_gather_2D_line(
     bh_2d_mesh_device,
     num_devices,
@@ -171,6 +179,7 @@ def test_all_gather_2D_line(
     mem_config_ag,
     enable_trace,
     num_iters,
+    all_gather_function,
 ):
     validate_test(num_devices, None, bh_2d_mesh_device.shape, 0)
 
@@ -188,6 +197,7 @@ def test_all_gather_2D_line(
         num_iters=num_iters,
         cluster_axis=cluster_axis,
         allowed_pcc=0.9999,
+        all_gather_function=all_gather_function,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
 
@@ -235,6 +245,9 @@ def test_all_gather_2D_line(
     indirect=True,
     ids=["fabric_1d_linear"],
 )
+@pytest.mark.parametrize(
+    "all_gather_function", [None, ttnn.experimental.all_gather_async], ids=["production", "experimental"]
+)
 def test_all_gather_4D_line(
     bh_2d_mesh_device,
     num_devices,
@@ -246,6 +259,7 @@ def test_all_gather_4D_line(
     mem_config_ag,
     enable_trace,
     num_iters,
+    all_gather_function,
 ):
     validate_test(num_devices, None, bh_2d_mesh_device.shape, 0)
     submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
@@ -262,6 +276,7 @@ def test_all_gather_4D_line(
         num_iters=num_iters,
         cluster_axis=cluster_axis,
         allowed_pcc=0.9999,
+        all_gather_function=all_gather_function,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
 
@@ -308,6 +323,9 @@ def test_all_gather_4D_line(
     ],
     indirect=True,
 )
+@pytest.mark.parametrize(
+    "all_gather_function", [None, ttnn.experimental.all_gather_async], ids=["production", "experimental"]
+)
 def test_all_gather_ring(
     bh_1d_mesh_device,
     ag_output_shape,
@@ -318,6 +336,7 @@ def test_all_gather_ring(
     mem_config_ag,
     enable_trace,
     num_iters,
+    all_gather_function,
 ):
     num_devices = bh_1d_mesh_device.shape[0]
     validate_test(num_devices, None, bh_1d_mesh_device.shape, 0)
@@ -336,6 +355,7 @@ def test_all_gather_ring(
         num_iters=num_iters,
         cluster_axis=cluster_axis,
         allowed_pcc=0.9999,
+        all_gather_function=all_gather_function,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
 
@@ -381,6 +401,9 @@ def test_all_gather_ring(
     ],
     indirect=True,
 )
+@pytest.mark.parametrize(
+    "all_gather_function", [None, ttnn.experimental.all_gather_async], ids=["production", "experimental"]
+)
 def test_all_gather_8D_vertical(
     bh_2d_mesh_device,
     num_devices,
@@ -392,6 +415,7 @@ def test_all_gather_8D_vertical(
     mem_config_ag,
     enable_trace,
     num_iters,
+    all_gather_function,
 ):
     validate_test(num_devices, None, bh_2d_mesh_device.shape, 1)
     submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
@@ -408,6 +432,7 @@ def test_all_gather_8D_vertical(
         num_iters=num_iters,
         cluster_axis=cluster_axis,
         allowed_pcc=0.9999,
+        all_gather_function=all_gather_function,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
 
@@ -464,6 +489,9 @@ def test_all_gather_8D_vertical(
     indirect=True,
     ids=["fabric_linear"],
 )
+@pytest.mark.parametrize(
+    "all_gather_function", [None, ttnn.experimental.all_gather_async], ids=["production", "experimental"]
+)
 def test_all_gather_failing_shapes(
     bh_1d_mesh_device,
     num_devices,
@@ -475,6 +503,7 @@ def test_all_gather_failing_shapes(
     mem_config_ag,
     enable_trace,
     num_iters,
+    all_gather_function,
 ):
     validate_test(num_devices, None, bh_1d_mesh_device.shape, 0)
     submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
@@ -491,5 +520,6 @@ def test_all_gather_failing_shapes(
         num_iters=num_iters,
         cluster_axis=cluster_axis,
         allowed_pcc=0.9999,
+        all_gather_function=all_gather_function,
     )
     ttnn.ReadDeviceProfiler(submesh_device)

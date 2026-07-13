@@ -46,19 +46,13 @@ def test_all_gather_2d_fabric(
     num_iters,
     function_level_defaults,
 ):
-    # On bh-llmbox (4,1 mesh), use 2 devices to avoid fabric routing issues
-    # On other machines, use all devices in first dimension
+    # On bh-quietbox (4,1 mesh), reshape mesh_device to match its default Mesh Graph Descriptor device_topology
+    # to prevent hang
     if bh_2d_mesh_device.shape == ttnn.MeshShape(4, 1):
-        num_devices = 2
-    else:
-        num_devices = bh_2d_mesh_device.shape[0]
-    cluster_axis = 0
-
-    validate_test(num_devices, ttnn.Topology.Linear, bh_2d_mesh_device.shape, cluster_axis)
-    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+        bh_2d_mesh_device.reshape(ttnn.MeshShape(2, 2))
 
     run_all_gather_impl(
-        submesh_device,
+        bh_2d_mesh_device,
         ag_output_shape,
         dim,
         ag_input_dtype,
@@ -67,6 +61,5 @@ def test_all_gather_2d_fabric(
         mem_config_ag,
         enable_trace=enable_trace,
         num_iters=num_iters,
-        cluster_axis=cluster_axis,
         allowed_pcc=0.9999,
     )

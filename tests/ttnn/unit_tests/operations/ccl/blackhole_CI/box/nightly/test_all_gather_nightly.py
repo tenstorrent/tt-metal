@@ -383,5 +383,11 @@ def test_all_gather_broken(
         num_iters=num_iters,
         cluster_axis=cluster_axis,
         allowed_pcc=0.9999,
+        all_gather_function=ttnn.experimental.all_gather_async,
+        use_barrier=True,
+        all_gather_topology=ttnn.Topology.Linear,
+        chunks_per_sync=20,
+        num_workers_per_link=2,
+        num_buffers_per_channel=2,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
