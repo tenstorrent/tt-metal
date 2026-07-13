@@ -545,10 +545,21 @@ no gate does not ship.** Measure on the block harness (`test_ltx_transformer_blo
       Also flagged (not a collective issue): `ff2` (mm+RS, 645 µs) + `ff1` (438 µs) = 1.08 ms/block = **52 ms/step
       at S1 — ~15% of the step in TWO ops.**
 - [~] **W1 — CUT 1b: dedup the duplicate gate/qkv gather** (math-identical: one explicit AG + two plain matmuls,
-      vs today's two fused AG-mms that gather the same tensor twice). Predicted **−83.9 µs/video attn**. IN FLIGHT.
-- [~] **W2 — WHY doesn't `all_gather_minimal_matmul_async` overlap?** Highest ceiling (≈−1.0 s E2E). Determine
-      mechanically (cite kernel code) whether the gathered dim is the matmul's contraction dim (⇒ overlap IS
-      possible via partial-product accumulation) or a dim needed whole (⇒ impossible, close the lever). IN FLIGHT.
+      vs today's two fused AG-mms that gather the same tensor twice). Predicted **−83.9 µs/video attn**. IN FLIGHT
+      (live-driver `LTX_DEDUP_GATE_GATHER` WIP, uncommitted). ⚠ **W2 (above) refutes the stated premise:** the fused
+      AG-mm ALREADY overlaps its gather with compute, so the second fused gather is NOT pure exposed waste — the
+      dedup trades two *overlapped* gathers for one *standalone* (fully-exposed, no matmul to hide it) gather. The
+      remaining win is the halved fabric *bandwidth* (activation crosses once, not twice), real only if this attn is
+      bandwidth-bound; if latency-bound the exposed standalone gather can make it a WASH or a LOSS. −83.9µs is a
+      compute-model estimate that omits the exposed-latency term — **measure the A/B, don't assume the sign.**
+- [x] **W2 — the fused AG-matmul ALREADY overlaps → DEAD (no ≈−1.0s ceiling; it's already banked).** Off-device
+      kernel-source read (2026-07-13 22:30Z), citations independently re-verified in-tree. The gathered dim IS the
+      matmul contraction (K) dim (`linear.py:207,212-214`; `..._program_factory.cpp:245-246`), K is ring-sharded, and
+      the compute kernel streams gather→matmul per K-shard: local shard matmul'd with zero wait, each remote shard
+      gated by its own `noc_semaphore_wait_min` (`matmul_dataflow_common.hpp:122,167`), partials L1-accumulated
+      (`compute.cpp:329,404,405,440`), sender pushes each K-block to compute BEFORE mcasting ("frees sender to start
+      next read earlier", `dm_in0_sender.cpp:403-404`). No full-tensor barrier. **⇒ overlap already exploited; W2
+      lever DEAD.** ⚠ **REFUTES the W1 premise** ("the fused gather barely overlaps its matmul") — see W1 note.
 - [ ] **W3 — the ~90 µs per-op fixed SETUP cost.** The single largest unexplained term. Where does it go — program
       binary/CB config, semaphore setup, runtime-arg writes? Attack the biggest offenders (`to_qkv` 89.9 µs).
 - [ ] **W4 — the audio branch's one-tile pathology.** Half the block's programs push ONE TILE across 32 devices.
