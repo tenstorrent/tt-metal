@@ -91,3 +91,49 @@ def test_descriptor_interleaved_add_program_cache_hit(device, mem_config):
     # The hit dispatches genuinely ran on reallocated buffers: distinct input and output addresses.
     assert len(input_addrs) == 2 * _NUM_DISPATCHES, f"inputs reused addresses: {sorted(input_addrs)}"
     assert len(output_addrs) == _NUM_DISPATCHES, f"outputs reused addresses: {sorted(output_addrs)}"
+
+
+# Two interleaved shapes with the SAME volume but a DIFFERENT H/W tile split. `operation_attributes_t`
+# carries no shape and `get_shard_volumes` is nullopt for interleaved tensors, so before the hash fix
+# BOTH shapes hashed identically -> the second landed on the first's cached program and re-used its
+# frozen shape-dependent reader/writer scalars (wrong tile range / OOB). Equal volume specifically
+# defeats a volume-only fix, forcing the hash to distinguish the actual dims.
+_SHAPE_S1 = (2 * 32, 4 * 32)  # 8 tiles, 1x4 tile grid
+_SHAPE_S2 = (4 * 32, 2 * 32)  # 8 tiles, 4x2 tile grid -- same volume, different Ht/Wt
+
+
+@pytest.mark.parametrize(
+    "mem_config",
+    [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+    ids=["dram_interleaved", "l1_interleaved"],
+)
+def test_descriptor_cross_shape_distinct_cache_entries(device, mem_config):
+    torch.manual_seed(0)
+
+    def dispatch(shape):
+        a_pt = torch.randn(shape, dtype=torch.bfloat16)
+        b_pt = torch.randn(shape, dtype=torch.bfloat16)
+        a_tt = ttnn.from_torch(
+            a_pt, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mem_config
+        )
+        b_tt = ttnn.from_torch(
+            b_pt, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mem_config
+        )
+        out_tt = ttnn.experimental.quasar.add(a_tt, b_tt, memory_config=mem_config)
+        assert_with_pcc(ttnn.to_torch(out_tt), torch.add(a_pt, b_pt), _PCC)
+
+    num_before = device.num_program_cache_entries()
+
+    # Prime the cache with shape S1 (descriptor path, interleaved -> ProgramFactory).
+    dispatch(_SHAPE_S1)
+    num_after_s1 = device.num_program_cache_entries()
+    assert num_after_s1 - num_before == 1, f"S1 should add exactly 1 cache entry, got {num_after_s1 - num_before}"
+
+    # Same op, DIFFERENT logical shape S2. With the shape folded into the descriptor-path hash this must
+    # allocate a SECOND, distinct cache entry (and produce a correct S2 result). Without the fix the
+    # equal-volume S2 collides onto S1's entry: no new entry and/or a wrong output.
+    dispatch(_SHAPE_S2)
+    num_after_s2 = device.num_program_cache_entries()
+    assert (
+        num_after_s2 - num_after_s1 == 1
+    ), f"S2 (different shape) must create a distinct cache entry, got {num_after_s2 - num_after_s1} new"
