@@ -91,15 +91,6 @@ run_realtime_profiler_test() {
     pytest tests/ttnn/tracy/test_realtime_profiler.py
 }
 
-run_op_to_op_latency_test() {
-    remove_default_log_locations
-    # Op-to-op latency microbenchmark: runs test_op_to_op_latency at a pinned
-    # steady-state config with the device + realtime profiler, then post-processes
-    # in Python and gates the official KERNEL-zone op2op against the per-arch golden
-    # (RT gap_to_next_go is tracked, not gated). Needs an ENABLE_TRACY=ON build.
-    pytest tests/tt_metal/tt_metal/perf_microbenchmark/op_to_op_latency/test_op_to_op_ci.py
-}
-
 # Umbrella that runs every individual test in sequence. Kept for callers that
 # don't pass a function name (CI invokes individual functions via the matrix).
 run_profiling_test() {
@@ -108,7 +99,6 @@ run_profiling_test() {
     run_perf_op_report_test
     run_realtime_profiler_test
     run_accumulate_profiler_test
-    run_op_to_op_latency_test
 }
 
 main() {

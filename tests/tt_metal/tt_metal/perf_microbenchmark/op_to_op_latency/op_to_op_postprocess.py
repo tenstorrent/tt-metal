@@ -242,6 +242,24 @@ def main() -> int:
         help="drop transitions from program ids below this (skip cold trace transitions)",
     )
     ap.add_argument("--out-json", type=Path, default=None, help="write metrics JSON to this path")
+    ap.add_argument(
+        "--golden",
+        type=Path,
+        default=None,
+        help="golden JSON to gate against. If its gated value is null the run is in "
+        "record mode (prints the measured value and passes without gating).",
+    )
+    ap.add_argument(
+        "--gate-metric",
+        default="official_op2op_us",
+        help="metric key to gate on (default official_op2op_us)",
+    )
+    ap.add_argument(
+        "--tolerance-pct",
+        type=float,
+        default=None,
+        help="regression tolerance in percent (overrides golden's tolerance_pct)",
+    )
     args = ap.parse_args()
 
     home = os.environ.get("TT_METAL_HOME", ".")
@@ -264,7 +282,54 @@ def main() -> int:
         args.out_json.write_text(json.dumps(metrics, indent=2))
         print(f"wrote {args.out_json}")
 
+    if args.golden is not None:
+        return gate_against_golden(metrics, args.golden, args.gate_metric, args.tolerance_pct)
+
     return 0
+
+
+def gate_against_golden(metrics: dict, golden_path: Path, gate_metric: str, tolerance_override) -> int:
+    """Compare one measured metric against a golden JSON, mirroring the runtime-perf
+    compare_*.py convention. Returns a process exit code:
+
+      0  pass (within tolerance) OR record mode (golden value is null)
+      1  regression (outside tolerance) OR measurement/golden problem
+    """
+    if not golden_path.exists():
+        print(f"ERROR: golden file not found: {golden_path}", file=sys.stderr)
+        return 1
+
+    measured = metrics.get(gate_metric)
+    if measured is None or measured != measured:  # None or NaN
+        print(f"ERROR: measured {gate_metric} is missing/NaN (no samples extracted)", file=sys.stderr)
+        return 1
+
+    golden = json.loads(golden_path.read_text())
+    golden_block = golden.get("golden", {})
+    golden_value = golden_block.get(gate_metric)
+    tol = tolerance_override if tolerance_override is not None else golden_block.get("tolerance_pct", 15.0)
+
+    if golden_value is None:
+        print(
+            f"[record mode] golden '{gate_metric}' not populated in {golden_path.name}; "
+            f"measured={measured:.4f}. Populate it from this run to enable the gate. Passing."
+        )
+        return 0
+
+    lo = golden_value * (1.0 - tol / 100.0)
+    hi = golden_value * (1.0 + tol / 100.0)
+    print(
+        f"gate: {gate_metric} measured={measured:.4f} golden={golden_value:.4f} allowed=[{lo:.4f}, {hi:.4f}] (+/-{tol}%)"
+    )
+    if lo <= measured <= hi:
+        print("gate: PASS")
+        return 0
+    print(
+        f"gate: FAIL — {gate_metric} regression: measured {measured:.4f} outside "
+        f"[{lo:.4f}, {hi:.4f}] (golden {golden_value:.4f} +/-{tol}%)",
+        file=sys.stderr,
+    )
+    return 1
 
 
 if __name__ == "__main__":
