@@ -1223,7 +1223,8 @@ class Qwen36Model:
         return x
 
     # Fixed buckets for masked tail/short prefill. Lengths round up here -> bounded compile set.
-    # All 128-multiples (GDN sub-chunk). Masked GDN in DRAM avoids L1 clash at bucket 512.
+    # All 128-multiples (GDN sub-chunk). GDN prefill uses DRAM so the scan kernel owns the
+    # L1 space reserved for its static circular buffers.
     # Diverges from get_padded_prefill_len: 256/512 for short TTFT; GDN needs exact valid_len mask.
     _PREFILL_MASK_BUCKETS = (128, 256, 512, 1024, 2048)
 
