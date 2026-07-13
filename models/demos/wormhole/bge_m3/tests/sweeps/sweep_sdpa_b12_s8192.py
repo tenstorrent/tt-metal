@@ -108,9 +108,13 @@ def test_sdpa_sweep(mesh_device):
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    # Match the model's S8192 SDPA kernel (exp22: LoFi). exp_approx_mode=True is
+    # set per-combo below to match the model. NOTE: standalone SDPA timings are
+    # documented to NOT transfer in-model (grid especially) - use this only for
+    # coarse relative screening, always confirm the winner with one e2e run.
     ck = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
@@ -124,7 +128,7 @@ def test_sdpa_sweep(mesh_device):
             compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
             q_chunk_size=qc,
             k_chunk_size=kc,
-            exp_approx_mode=False,
+            exp_approx_mode=True,
             max_cores_per_head_batch=mc,
         )
         out = ttnn.transformer.scaled_dot_product_attention(
