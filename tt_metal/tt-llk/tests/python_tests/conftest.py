@@ -292,10 +292,11 @@ def pytest_addoption(parser):
     parser.addoption(
         "--mode",
         action="store",
-        default=None,
+        default="accuracy",
         choices=["accuracy", "perf", "both"],
         help="SFPU sweep selector (accuracy | perf | both): keeps only that sweep "
-        "test and deselects the other two. Exact-match shorthand for -k.",
+        "test and deselects the other two. Defaults to 'accuracy'. "
+        "Exact-match shorthand for -k.",
     )
 
 

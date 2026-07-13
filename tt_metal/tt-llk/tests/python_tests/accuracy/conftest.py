@@ -29,6 +29,7 @@ _SWEEP_FUNCS = set(_MODE_TO_FUNC.values())
 
 
 def pytest_collection_modifyitems(config, items):
+    # --mode defaults to "accuracy"
     mode = config.getoption("--mode", default=None)
     if not mode:
         return
