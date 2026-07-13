@@ -186,8 +186,7 @@ class FiboPipeline(PipelineAPIMixin):
             )
             self._vae.reload_weights()
 
-        for d in self._devices:
-            ttnn.synchronize_device(d)
+        self._synchronize_devices()
 
         logger.info("pipeline allocation run...")
         self(prompts=[""], num_inference_steps=2, traced=False, cfg_scale=2 if config.cfg_enabled else 1)
@@ -250,6 +249,7 @@ class FiboPipeline(PipelineAPIMixin):
                 traced=encoder_traced,
                 on_event=on_event,
             )
+        self._synchronize_devices()  # for time profiling
         on_event(SectionEnd("encoder"))
 
         # Pad/trim SmolLM3's per-layer hidden states to the transformer's block count. Diffusers'
@@ -332,10 +332,7 @@ class FiboPipeline(PipelineAPIMixin):
                 for idx, solver in enumerate(self._solvers)
             ]
 
-            # Helps with accurate time profiling.
-            for device in self._devices:
-                ttnn.synchronize_device(device)
-
+            self._synchronize_devices()  # for time profiling
             on_event(SectionEnd(f"denoising_step_{step}"))
 
         on_event(SectionEnd("denoising"))
@@ -430,6 +427,10 @@ class FiboPipeline(PipelineAPIMixin):
         assert isinstance(image, torch.Tensor)
 
         return self._image_processor.numpy_to_pil(self._image_processor.pt_to_numpy(image))
+
+    def _synchronize_devices(self) -> None:
+        for d in self._devices:
+            ttnn.synchronize_device(d)
 
 
 def _calculate_shift(image_seq_len: int, scheduler: FlowMatchEulerDiscreteScheduler) -> float:
