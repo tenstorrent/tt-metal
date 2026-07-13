@@ -491,7 +491,13 @@ void kernel_main() {
                     // tilize_init. See ~/QuasarProgrammingQuirks.md quirk #1.
                     PACK((llk_pack_hw_configure(tilized_in0_cb_id)));
                     PACK((llk_pack_init(tilized_in0_cb_id)));
-                    PACK((llk_pack_dest_init()));
+                    // A/B (tilize PACR0_TILE_INC at tile t=4 = first DEST-bank rotation): llk_pack_dest_init()
+                    // resets the packer's DEST section base. The tilize's per-tile loop (tilize_block) does its
+                    // own math/pack DEST handshake + dest_section_done bank rotation; re-initing the DEST
+                    // section here may desync that rotation so the 5th tile (t=4, bank-0 reuse) faults.
+                    // Disabled to test. If the tilize now completes past t=4 -> dest_init was the culprit
+                    // (leave it off). If it still faults at t=4 -> the tilize's own Quasar DEST sync is the bug.
+                    // PACK((llk_pack_dest_init()));
 #endif
                     // (TZHWCFG/TZBD/TZBDTAB/TILIZEPACK probes removed — they confirmed the tilize pack BD is
                     //  correctly at tilized's base; freed DPRINT-ring slots for the TZBLK/TZPK localizer.)
