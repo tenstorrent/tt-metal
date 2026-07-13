@@ -71,7 +71,7 @@ FACTS="$(PYTHONPATH="$TOOL" python3 "$HERE/capture.py" --arch "$ARCH" --log "$LO
 # all-errored kernel set would defeat a `-s` check and give a false all-clear.
 if [ ! -s "$FACTS" ] || ! grep -q '"family"' "$FACTS"; then
   echo "kernel-tier: no kernel facts extracted — no kernel TUs yielded facts (see the ledger)." >&2
-  echo "             Not emitting a false all-clear for cb/noc/read/atomic/mailbox." >&2
+  echo "             Not emitting a false all-clear for cb/noc/read/atomic/l1/mailbox." >&2
   exit 1
 fi
 
