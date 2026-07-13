@@ -27,7 +27,7 @@ Before doing analysis or spawning agents, make sure these choices are known. Ask
    - `local` means `.claude/scripts/run_test.sh` decides the normal local backend for each arch.
    - `ttsim` means the tester uses an in-process `libttsim_*.so`.
    - If `TEST_BACKEND=ttsim`, ask only: `Path to the libttsim .so for <arch>?` for each missing target arch.
-   - Accept common paths such as `~/sim/wh/libttsim_wh.so` and `~/sim/bh/libttsim_bh.so`; the tester validates the file and companion `soc_descriptor.yaml`.
+   - Accept common paths such as `~/sim/wh/libttsim_wh.so`, `~/sim/bh/libttsim_bh.so`, and `~/sim/qsr/libttsim_qsr.so`; the tester validates the file and auto-stages the companion `soc_descriptor.yaml` (from `tt_metal/soc_descriptors/`) when it is missing and the `.so` directory is writable.
 2. `CREATE_LOCAL_BRANCH`: `yes` or `no`.
    - Branch/worktree creation is owned by the caller/top-level orchestrator.
    - If `yes` and `WORKTREE_DIR` or `WORKTREE_BRANCH` is missing, stop and ask the caller to create a branch from latest `origin/main`.

@@ -204,8 +204,8 @@ validate_ttsim_so() {
     return 1
   fi
   base=$(basename "$p")
-  if [ "$base" != "$expected_so" ] && [ "$base" != "libttsim.so" ]; then
-    echo "ENV_ERROR: TTSIM_SO_PATH points to $base, but TARGET_ARCH=$arch_full expects $expected_so." | tee -a "$LOG_DIR/run.log"
+  if [ "$base" != "$expected_so" ] && [ "$base" != "libttsim_${arch_full}.so" ] && [ "$base" != "libttsim.so" ]; then
+    echo "ENV_ERROR: TTSIM_SO_PATH points to $base, but TARGET_ARCH=$arch_full expects $expected_so (or libttsim_${arch_full}.so / libttsim.so)." | tee -a "$LOG_DIR/run.log"
     return 1
   fi
   echo "$p"
@@ -245,6 +245,9 @@ fi
 
 cd "$TEST_DIR"
 PYTEST_TARGET="${TEST_ID:-$TEST_FILE}"
+# Quasar ttsim is heavier and slower than the BH/WH models; give it more headroom
+# by default. An explicit TIMEOUT from the plan always wins.
+if [ -z "${TIMEOUT:-}" ] && [ "$arch_full" = quasar ]; then TIMEOUT=1200; fi
 pytest_args=(-x --run-simulator "--timeout=${TIMEOUT:-600}")
 if [ -n "${K_FILTER:-}" ] && [ -z "${TEST_ID:-}" ]; then
   pytest_args+=(-k "$K_FILTER")
