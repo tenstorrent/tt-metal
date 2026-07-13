@@ -141,10 +141,6 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffers) {
 }
 
 TEST_F(MeshDispatchFixture, TensixProgramClearsStaleRemoteCircularBufferConfig) {
-    if (this->IsSlowDispatch()) {
-        GTEST_SKIP() << "This test exercises fast-dispatch CB configuration commands.";
-    }
-
     const CoreCoord sender_core(0, 0);
     const CoreCoord receiver_core(1, 0);
     const CoreCoord idle_core(1, 1);
@@ -183,19 +179,30 @@ TEST_F(MeshDispatchFixture, TensixProgramClearsStaleRemoteCircularBufferConfig) 
     auto& sparse_program_in_workload = sparse_workload.get_programs().at(device_range);
 
     const auto& hal = MetalContext::instance().hal();
-    const uint32_t kernel_config_base =
-        hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
-    const uint32_t kernel_config_end = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    ASSERT_GT(kernel_config_end, kernel_config_base);
-    ASSERT_EQ((kernel_config_end - kernel_config_base) % sizeof(uint32_t), 0);
-    std::vector<uint32_t> poison((kernel_config_end - kernel_config_base) / sizeof(uint32_t), 0xffffffff);
-    detail::WriteToDeviceL1(device, idle_core, kernel_config_base, poison);
+    const uint32_t programmable_core_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    uint32_t poison_base;
+    uint32_t poison_size;
+    if (this->IsSlowDispatch()) {
+        detail::CompileProgram(mesh_device.get(), sparse_program_in_workload);
+        sparse_program_in_workload.impl().finalize_offsets(mesh_device.get());
+        poison_base = sparse_program_in_workload.impl().get_cb_base_addr(device, idle_core, CoreType::WORKER);
+        poison_size = sparse_program_in_workload.impl().get_cb_size(device, idle_core, CoreType::WORKER);
+    } else {
+        poison_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
+        poison_size = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1) - poison_base;
+    }
+    ASSERT_GT(poison_size, 0);
+    ASSERT_EQ(poison_size % sizeof(uint32_t), 0);
+    std::vector<uint32_t> poison(poison_size / sizeof(uint32_t), 0xffffffff);
+    detail::WriteToDeviceL1(device, idle_core, poison_base, poison);
 
     this->RunProgram(mesh_device, sparse_workload);
 
-    const uint32_t programmable_core_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    const uint32_t selected_kernel_config_base =
+        this->IsSlowDispatch() ? sparse_program_in_workload.impl().get_cb_base_addr(device, idle_core, CoreType::WORKER)
+                               : sparse_workload.get_cb_base_addr(mesh_device, idle_core, CoreType::WORKER);
     const uint32_t remote_config_address =
-        sparse_workload.get_cb_base_addr(mesh_device, idle_core, CoreType::WORKER) +
+        selected_kernel_config_base +
         sparse_program_in_workload.impl().get_program_config(programmable_core_index).local_cb_size;
     std::vector<uint32_t> remote_config;
     detail::ReadFromDeviceL1(
