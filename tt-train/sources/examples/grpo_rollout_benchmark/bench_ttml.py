@@ -8,6 +8,11 @@
 Single OS process. The completer (`LlamaGRPOCompleter`) opens its own AutoContext
 mesh from the device YAML and generates with a ttml KvCache (WORKER dispatch, no
 trace). Launched once per repeat by runner.sh; device count comes from the YAML.
+
+Multi-chip runs enable fabric, which requires the visible system to equal the
+opened mesh (fabric-on-a-subset is fatal). runner.sh scopes TT_VISIBLE_DEVICES to
+exactly the N300 boards the mesh uses; invoking this script directly on a host with
+more chips than the mesh needs the same TT_VISIBLE_DEVICES set by hand.
 """
 
 from __future__ import annotations

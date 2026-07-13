@@ -77,13 +77,20 @@ differ; each subpackage is a self-contained copy of the files its completer impo
 
 ## Caveats
 
+- **ttml multi-chip runs carve the visible system via `TT_VISIBLE_DEVICES`.** Enabling
+  fabric requires the visible cluster to equal the opened mesh — otherwise the extra
+  chips are inactive and `open_device` fatals ("Fabric is being used but Device N is not
+  active"). `runner.sh` exports `TT_VISIBLE_DEVICES` (echoed before each run) covering
+  exactly `ceil(devices/2)` N300 boards (board = 2 chips): 2→`0`, 4→`0,1`, 8→`0,1,2,3`.
+  These are **PCIe board indices, hardware-specific** — override by pre-setting
+  `TT_VISIBLE_DEVICES`. After masking, chips renumber to UMD ids `0..N-1` (MMIO chips
+  first, then their remote halves), which is why the YAML `device_ids` start at 0; if the
+  logical mesh ordering matters for DDP correctness, verify the physical mapping.
 - **`ttt` 4+4 (`local8`) is known to hang** in the cross-rank handshake on this host
   (inherited from `grpo_remote_rollout`). 2+2 is the reliable ttt path today.
 - **`ttml_8dev.yaml` is new**: validate on-device that `enable_fabric(8)` resolves to a
   valid mesh-graph descriptor on the 4×N300 host before trusting its numbers. Its
-  `device_ids` are UMD chip ids `0..7` (not the PCIe indices `TT_VISIBLE_DEVICES` uses
-  in the two-rank configs).
+  `device_ids` are UMD chip ids `0..7` (not the PCIe indices `TT_VISIBLE_DEVICES` uses).
 - The two-rank rank bindings (`configurations/*/rank_bindings.yaml`) pin whole N300
   boards via `TT_VISIBLE_DEVICES` and are **hardware-specific** — adjust for your host.
 - Fabric is pinned `FABRIC_2D` once at import in `bench_ttt.py` and must never be re-set.
-```

@@ -64,6 +64,19 @@ case "${BACKEND}" in
         esac
         CONFIG="configs/ttml_${TTML_DEVICES}dev.yaml"
         [[ -f "${CONFIG}" ]] || { echo "missing ${CONFIG}" >&2; exit 1; }
+
+        # Carve the visible system down to exactly the N300 boards the mesh uses
+        # (board = 1 PCIe device = 2 chips). Fabric-on-a-subset is fatal, so the
+        # visible cluster must equal the opened mesh. PCIe board indices are
+        # hardware-specific -- override by pre-setting TT_VISIBLE_DEVICES. 1 chip
+        # skips fabric entirely, so it needs no carving.
+        if [[ "${TTML_DEVICES}" -gt 1 && -z "${TT_VISIBLE_DEVICES:-}" ]]; then
+            boards=$(( (TTML_DEVICES + 1) / 2 ))
+            vis="0"; for ((b=1; b<boards; b++)); do vis="${vis},${b}"; done
+            export TT_VISIBLE_DEVICES="${vis}"
+        fi
+        echo "[runner] TT_VISIBLE_DEVICES=${TT_VISIBLE_DEVICES:-<unset>}  (ttml backend, ${TTML_DEVICES} chip(s))"
+
         for i in $(seq 1 "${REPEATS}"); do
             echo "=== [ttml ${TTML_DEVICES}dev] repeat ${i}/${REPEATS} (steps=${STEPS}) ==="
             python3 bench_ttml.py --config "${CONFIG}" --steps "${STEPS}" --run-index "${i}"
@@ -80,6 +93,11 @@ case "${BACKEND}" in
         RANK_BINDINGS="configurations/${CONFIG_DIR}/rank_bindings.yaml"
         HOST_FILE="configurations/${CONFIG_DIR}/hosts.txt"
         [[ -f "${RANK_BINDINGS}" && -f "${HOST_FILE}" ]] || { echo "missing ${CONFIG_DIR} rank bindings" >&2; exit 1; }
+
+        # ttt sets TT_VISIBLE_DEVICES per rank via rank_bindings.yaml (ttrun injects
+        # it). Echo the per-rank values so the carving is visible before launch.
+        echo "[runner] per-rank TT_VISIBLE_DEVICES from ${RANK_BINDINGS}:"
+        grep -E "^[[:space:]]*(-[[:space:]]*rank:|TT_VISIBLE_DEVICES:)" "${RANK_BINDINGS}" | sed 's/^/    /'
 
         export GRPO_BENCH_TTML_DEVICES="${TTML_DEVICES}"
         export GRPO_BENCH_TTT_DEVICES="${TTT_DEVICES}"
