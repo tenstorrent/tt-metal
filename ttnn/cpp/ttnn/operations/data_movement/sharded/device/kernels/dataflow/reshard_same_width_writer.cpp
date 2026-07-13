@@ -35,14 +35,36 @@ void kernel_main() {
     AllocatorBank<bank_type> bank;
 
     uint32_t l1_read_addr = shard_cb.get_read_ptr() + read_offset;
-    for (uint32_t i = 0; i < num_writes; ++i) {
-        uint32_t bank_id = args[args_idx++];
-        uint32_t addr = dst_addr + args[args_idx++];
-        uint32_t units_to_transfer = args[args_idx++];
-        uint32_t write_size = units_to_transfer * unit_size;
-        CoreLocalMem<uint32_t> src(l1_read_addr);
-        noc.async_write(src, bank, write_size, {.offset_bytes = 0}, {.bank_id = bank_id, .addr = addr});
-        l1_read_addr += write_size;
+    if constexpr (unaligned) {
+        // The local (input) shard stores each row at local_unit_size_padded stride and the remote
+        // (output) shard at remote_unit_size_padded stride, and unit_size < either padded stride.
+        // A single contiguous write per transfer would pack padding bytes as data and mis-stride
+        // rows, so write each row on its own: advance the local source by its padded stride and the
+        // remote destination by its padded stride, copying only the unit_size real bytes. Both
+        // strides are aligned, so every per-row NOC write hits an aligned address. No scratch is
+        // needed here (unlike the reader): the local source is read directly with its L1 address.
+        for (uint32_t i = 0; i < num_writes; ++i) {
+            uint32_t bank_id = args[args_idx++];
+            uint32_t addr = dst_addr + args[args_idx++];
+            uint32_t units_to_transfer = args[args_idx++];
+            for (uint32_t j = 0; j < units_to_transfer; ++j) {
+                CoreLocalMem<uint32_t> src(l1_read_addr);
+                noc.async_write(src, bank, unit_size, {.offset_bytes = 0}, {.bank_id = bank_id, .addr = addr});
+                l1_read_addr += local_unit_size_padded;
+                addr += remote_unit_size_padded;
+            }
+        }
+        noc.async_write_barrier();
+    } else {
+        for (uint32_t i = 0; i < num_writes; ++i) {
+            uint32_t bank_id = args[args_idx++];
+            uint32_t addr = dst_addr + args[args_idx++];
+            uint32_t units_to_transfer = args[args_idx++];
+            uint32_t write_size = units_to_transfer * unit_size;
+            CoreLocalMem<uint32_t> src(l1_read_addr);
+            noc.async_write(src, bank, write_size, {.offset_bytes = 0}, {.bank_id = bank_id, .addr = addr});
+            l1_read_addr += write_size;
+        }
+        noc.async_write_barrier();
     }
-    noc.async_write_barrier();
 }

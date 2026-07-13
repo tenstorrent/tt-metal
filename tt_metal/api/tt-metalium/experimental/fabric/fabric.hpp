@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,6 +12,8 @@
 #include <tt-metalium/device_types.hpp>
 // UMD: re-exports CoreType (used in append_fabric_connection/FabricHandle default params).
 #include <umd/device/types/core_coordinates.hpp>
+#include <string>
+#include <unordered_map>
 #include <vector>
 #include <optional>
 #include <hostdevcommon/fabric_common.h>
@@ -295,6 +297,108 @@ private:
 
     size_t memory_map_end_address_;
 };
+
+/*
+ * Transient dual-RISC fabric mux (forwarder on RISCV_0, manager on RISCV_1).
+ * Auto-terminates after all clients disconnect. Supports up to 64 logical
+ * channels. Uses the full WH/BH NOC transaction-ID pool for the shared TRID
+ * ring (kTridRingCapacity).
+ *
+ * Host surface is intentionally narrow so callers wire through
+ * append_client_connection_rt_args + add_fabric_mux_v2_to_program and the
+ * device-side FabricMuxV2Sender, rather than reconstructing V1-style per-field
+ * address getters. get_memory_map_end_address() is for L1 budgeting only.
+ */
+class FabricMuxV2Config {
+public:
+    // Fixed to the full WH/BH NOC transaction ID pool (NOC_MAX_TRANSACTION_ID + 1).
+    static constexpr uint32_t kTridRingCapacity = 16;
+
+    struct ClientSemaphores {
+        uint32_t flow_control_sem_id = 0;
+        uint32_t teardown_sem_id = 0;
+    };
+
+    FabricMuxV2Config(
+        uint8_t num_channels,
+        uint8_t num_buffers_per_channel,
+        size_t channel_buffer_size_bytes,
+        size_t base_l1_address);
+
+    void append_client_connection_rt_args(
+        const CoreCoord& mux_virtual_core,
+        uint8_t logical_channel_id,
+        const ClientSemaphores& client_semaphores,
+        std::vector<uint32_t>& worker_args) const;
+
+    // Exclusive end of the mux L1 map (for host-side L1 budgeting / placement).
+    size_t get_memory_map_end_address() const;
+
+private:
+    friend void add_fabric_mux_v2_to_program(
+        tt::tt_metal::Program& program,
+        const FabricMuxV2Config& config,
+        const CoreCoord& mux_logical_core,
+        const std::vector<uint32_t>& downstream_sender_rt_args,
+        tt::tt_metal::NOC forwarder_noc);
+    friend void add_fabric_mux_v2_to_program(
+        tt::tt_metal::Program& program,
+        const FabricMuxV2Config& config,
+        const CoreCoord& mux_logical_core,
+        const FabricNodeId& src_fabric_node_id,
+        const FabricNodeId& dst_fabric_node_id,
+        uint32_t link_idx,
+        tt::tt_metal::NOC forwarder_noc);
+
+    std::unordered_map<std::string, uint32_t> get_fabric_mux_v2_named_compile_time_args() const;
+    void validate_logical_channel_id(uint8_t logical_channel_id) const;
+
+    struct MemoryRegion {
+        size_t base_address = 0;
+        size_t unit_size = 0;
+        size_t num_units = 0;
+
+        MemoryRegion() = default;
+        MemoryRegion(size_t base, size_t unit_sz, size_t count);
+
+        size_t get_address(size_t offset = 0) const;
+        size_t get_end_address() const;
+    };
+
+    size_t noc_aligned_address_size_bytes_ = 0;
+    uint8_t num_channels_ = 0;
+    uint8_t num_buffers_per_channel_ = 0;
+    size_t channel_buffer_size_bytes_ = 0;
+    size_t per_channel_scalar_region_stride_bytes_ = 0;
+    uint32_t forwarder_service_burst_size_ = 0;
+    uint32_t trid_ring_capacity_ = 0;
+
+    MemoryRegion status_region_{};
+    MemoryRegion connection_info_region_{};
+    MemoryRegion connection_handshake_region_{};
+    MemoryRegion shared_ring_region_{};
+    MemoryRegion channel_region_{};
+    MemoryRegion shared_control_region_{};
+    MemoryRegion credit_notify_scratch_region_{};
+
+    size_t memory_map_end_address_ = 0;
+};
+
+void add_fabric_mux_v2_to_program(
+    tt::tt_metal::Program& program,
+    const FabricMuxV2Config& config,
+    const CoreCoord& mux_logical_core,
+    const std::vector<uint32_t>& downstream_sender_rt_args,
+    tt::tt_metal::NOC forwarder_noc = tt::tt_metal::NOC::RISCV_0_default);
+
+void add_fabric_mux_v2_to_program(
+    tt::tt_metal::Program& program,
+    const FabricMuxV2Config& config,
+    const CoreCoord& mux_logical_core,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
+    uint32_t link_idx,
+    tt::tt_metal::NOC forwarder_noc = tt::tt_metal::NOC::RISCV_0_default);
 
 // Returns the eth direction in which the data should be forwarded from the src to reach the dest
 std::optional<eth_chan_directions> get_eth_forwarding_direction(
