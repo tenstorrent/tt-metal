@@ -102,12 +102,9 @@ inline void llk_math_set_dvalid() {
  */
 inline void llk_math_wait_for_dest_available() {
     _llk_math_wait_for_dest_available_();
-
-    if constexpr (UnpackToDestEn) {
-        _llk_sync_wait_<p_stall::STALL_MATH | p_stall::STALL_SFPU | p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(
-            semaphore::UNPACK_MATH);
-        _llk_sync_get_(semaphore::UNPACK_MATH);
-    }
+    // Start each section owned by math; the per-op datacopy forwarder
+    // flips this true if the unpacker fills DEST.
+    ckernel::trisc::dest_filled_by_unpack = false;
 }
 
 /**
@@ -120,8 +117,16 @@ inline void llk_math_dest_section_done() {
     // Always post MATH_PACK, the math thread is in the chain for every op, including the
     // no-real-work unpack-to-dest forwarder.
     _llk_sync_post_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::MATH_PACK);
-    if constexpr (DST_SYNC_MODE == DstSync::SyncHalf && !UnpackToDestEn) {
-        _llk_sync_advance_dest_section_<ckernel::math::TRISC_ID, EN_32BIT_DEST, p_stall::WAIT_SFPU, p_stall::MATH>();
+    // Advance math's own bank only when math produced DEST. In an unpack-to-dest section the unpacker
+    // owns the bank flip, so math must not advance.
+    if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
+        if (!ckernel::trisc::dest_filled_by_unpack) {
+            _llk_sync_advance_dest_section_<
+                ckernel::math::TRISC_ID,
+                EN_32BIT_DEST,
+                p_stall::WAIT_SFPU,
+                p_stall::MATH>();
+        }
     }
 }
 
@@ -132,10 +137,10 @@ inline void llk_math_dest_section_done() {
 inline void llk_math_pack_sync_init() {
     _llk_math_pack_sync_init_<DST_SYNC_MODE>();
 
-    if constexpr (UnpackToDestEn) {
-        constexpr std::uint32_t N = (DST_SYNC_MODE == DstSync::SyncFull) ? 1 : 2;
-        _llk_sync_init_(semaphore::UNPACK_MATH, N, 0);
-    }
+    // Routing is per-operand, so seed the unpack->math semaphore unconditionally; it is
+    // only exercised for operands the unpacker routes to DEST.
+    constexpr std::uint32_t N = (DST_SYNC_MODE == DstSync::SyncFull) ? 1 : 2;
+    _llk_sync_init_(semaphore::UNPACK_MATH, N, 0);
 }
 
 // Math has no per-tile data-format state on Quasar; format reconfig is unpack-only.

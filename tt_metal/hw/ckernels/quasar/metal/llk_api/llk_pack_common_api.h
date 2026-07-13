@@ -114,7 +114,12 @@ inline void llk_packer_wait_for_math_done() { _llk_packer_wait_for_math_done_();
  */
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_dest_section_done() {
-    if constexpr (UnpackToDestEn) {
+    // Per-section routing: copy_tile's PACK() sets dest_filled_by_unpack on
+    // packer from the input operand's format, the same per-operand decision
+    // unpack and math make independently.
+    if (ckernel::trisc::dest_filled_by_unpack) {
+        // Unpack-to-dest: the unpacker owns the dest bank, so pack
+        // follows its flip via MATH_PACK; no ZEROACC/THCON.
         _llk_sync_get_<p_stall::PACK0>(semaphore::MATH_PACK);
         if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
             _llk_sync_advance_dest_section_<ckernel::pack::TRISC_ID, true /*EN_32BIT_DEST*/, p_stall::PACK0>();
@@ -123,6 +128,27 @@ inline void llk_pack_dest_section_done() {
         _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, DST_SYNC_MODE, is_fp32_dest_acc_en>();
     }
 }
+
+/**
+ * @brief Set the dest_filled_by_unpack flag, packer flags that pipeline mode is unpack-to-dest.
+ * Called from copy_tile so the pack thread derives whether the unpacker filled DEST
+ * (32-bit operand -> UNP_DEST). In sync with the same format decision unpack and math make independently.
+ * Read in llk_pack_dest_section_done to pick the section-done path.
+ */
+inline void llk_pack_set_dest_filled_by_unpack(const std::uint32_t operand) {
+    // unpack_dst_format is emitted into the pack descriptors (genfiles) precisely so pack can make this
+    // per-operand decision; on Quasar the dfb id indexes it directly.
+    ckernel::trisc::dest_filled_by_unpack =
+        ckernel::trisc::_is_input_32bit_(static_cast<DataFormat>(unpack_dst_format[operand]));
+}
+
+/**
+ * @brief Clear the pack thread's dest_filled_by_unpack flag (mark this section FPU/math-produced).
+ * Reset at tile_regs_acquire (each section starts FPU-owned by default), so a later FPU write overrides an earlier
+ * copy_tile in the same section. Thus final DEST writer wins. SFPU in-place ops (transpose_dest, unary sfpu)
+ * do NOT call this, so a copy_tile (to dest) stays flagged udest_filled_by_unpack = true.
+ */
+inline void llk_pack_clear_dest_filled_by_unpack() { ckernel::trisc::dest_filled_by_unpack = false; }
 
 /**
  * @brief Reset packer dest-bank parity to bank 0 at program start (pack-side mirror of llk_math_pack_sync_init).

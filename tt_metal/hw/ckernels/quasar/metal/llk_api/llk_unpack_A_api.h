@@ -59,9 +59,12 @@ inline void llk_unpack_A_init(
                 transpose_of_faces == within_face_16x16_transpose,
                 "Quasar unpack unary supports only full transpose (transpose_of_faces and within_face_16x16_transpose "
                 "must match)");
-            // Route to UNP_DEST purely on the op-writer flag (no format inspection). A 16-bit
-            // operand is unpacked to DEST here too when the op writer requested it.
-            if constexpr (unpack_to_dest) {
+            // Format-inferred routing (WH/BH legacy semantics): a 32-bit operand (Float32/Int32) is unpacked
+            // straight to DEST via UNP_DEST; 16-bit goes through SrcA. The op-writer `unpack_to_dest`
+            // flag no longer gates this, routing is decided per operand from unpack_dst_format same as in WH/BH.
+            const bool to_dest =
+                ckernel::trisc::_is_input_32bit_(static_cast<DataFormat>(unpack_dst_format[operand_id]));
+            if (to_dest) {
                 _llk_unpack_unary_operand_init_<
                     p_unpacr::UNP_DEST,
                     false /*transpose*/,
@@ -113,7 +116,9 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
         local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx + tile_index;
     if constexpr (BType == BroadcastType::NONE) {
         const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
-        if constexpr (unpack_to_dest) {
+        // Format-inferred routing (see llk_unpack_A_init): 32-bit operand -> UNP_DEST, else SrcA/B.
+        const bool to_dest = ckernel::trisc::_is_input_32bit_(static_cast<DataFormat>(unpack_dst_format[operand_id]));
+        if (to_dest) {
             _llk_unpack_unary_operand_<p_unpacr::UNP_DEST, binary_reuse_dest, true, DST_SYNC_MODE>(
                 l1_tile_idx, tensor_shape);
         } else {
@@ -150,10 +155,12 @@ inline void llk_unpack_A_block(
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(operand_id);
     const std::uint32_t rd_entry_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx;
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
+    // Format-inferred routing (see llk_unpack_A_init): 32-bit operand -> UNP_DEST, else SrcA.
+    const bool to_dest = ckernel::trisc::_is_input_32bit_(static_cast<DataFormat>(unpack_dst_format[operand_id]));
     for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         WAYPOINT("UPAW");
         if constexpr (BType == BroadcastType::NONE) {
-            if constexpr (unpack_to_dest) {
+            if (to_dest) {
                 _llk_unpack_unary_operand_<p_unpacr::UNP_DEST, binary_reuse_dest, true, DST_SYNC_MODE>(
                     rd_entry_idx + tile_index, tensor_shape);
             } else {

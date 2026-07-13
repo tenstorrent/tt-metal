@@ -128,12 +128,9 @@ enum class MathFidelity : std::uint8_t
     HiFi4 = 4
 };
 
-// Quasar: UnpackToDestEn is the explicit op-writer unpack-to-dest flag (default false). It is NOT
-// defined here, it is emitted as a `constexpr bool` into the JIT-generated chlkc_descriptors.h
-// (from ComputeHardwareConfig::unpack_to_dest_en), like DST_ACCUM_MODE. Defining it here would bake
-// the wrong value: llk_defs.h is pulled in (via ckernel.h) before any generated header is available.
-// (WH/BH keep UnpackToDestEn hardcoded here and infer routing from 32-bit format).
-// Quasar: UnpackToDestDis entirely unused, removed as well.
+// Quasar: UnpackToDestEn is hardcoded true and unpack-to-dest routing is inferred per operand from
+// the 32-bit format (Float32/Int32 -> UNP_DEST), matching WH/BH.
+constexpr bool UnpackToDestEn = true;
 
 enum class StochRndType : std::uint8_t
 {

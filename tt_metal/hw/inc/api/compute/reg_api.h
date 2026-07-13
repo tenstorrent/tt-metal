@@ -44,6 +44,11 @@ ALWI void acquire_dst() {
  */
 ALWI void tile_regs_acquire() {
     MATH((llk_math_wait_for_dest_available()));
+#ifdef ARCH_QUASAR
+    // Each section starts FPU/math-owned on packer; copy_tile re-flags it unpack-to-dest per
+    // operand, and FPU-combine ops (matmul/eltwise-binary/reduce) clear it again, final DEST writer wins.
+    PACK((llk_pack_clear_dest_filled_by_unpack()));
+#endif
 }
 
 /**

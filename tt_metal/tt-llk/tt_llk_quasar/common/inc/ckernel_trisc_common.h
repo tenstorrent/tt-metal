@@ -86,6 +86,15 @@ static std::uint32_t dest_register_offset = 0;
 extern thread_local std::uint32_t dest_register_offset;
 #endif
 
+// Runtime flag (math + packer): set by the datacopy forwarder and packer when the current dest
+// section was filled by the unpacker (UNP_DEST). Reset each section at tile_regs_acquire, read at
+// math section-done to (a) skip math's own bank advance and (b) drive the math->pack mode token.
+#ifdef ENV_LLK_INFRA
+static bool dest_filled_by_unpack = false;
+#else
+extern thread_local bool dest_filled_by_unpack;
+#endif
+
 /**
 * @brief Check divisibility by power of 2
 * @param value: input value to check divisibility
@@ -358,6 +367,11 @@ struct srcs_dims
 inline constexpr bool _is_srcs_32bit_mode_(const DataFormat unpack_S_dst_format)
 {
     return unpack_S_dst_format == DataFormat::Float32 || unpack_S_dst_format == DataFormat::Int32;
+}
+
+inline constexpr bool _is_input_32bit_(const DataFormat unpack_dst_format)
+{
+    return unpack_dst_format == DataFormat::Float32 || unpack_dst_format == DataFormat::Int32;
 }
 
 /**

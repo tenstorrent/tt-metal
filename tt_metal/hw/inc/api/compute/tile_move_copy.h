@@ -16,6 +16,11 @@
 #ifdef TRISC_UNPACK
 #include "llk_unpack_A_api.h"
 #endif
+
+#if defined(TRISC_PACK) && defined(ARCH_QUASAR)
+// copy_tile sets the packer per-section dest_filled_by_unpack flag from the operand format (Quasar).
+#include "llk_pack_common_api.h"
+#endif
 namespace ckernel {
 
 // clang-format off
@@ -113,6 +118,11 @@ ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile
         in_cb_id, in_tile_index)));
     MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
         dst_tile_index, in_cb_id)));
+#ifdef ARCH_QUASAR
+    // (Quasar) Pack derives this section's unpack-to-dest mode from the input operand's format, the
+    // same per-operand decision unpack and math make. Read back in llk_pack_dest_section_done.
+    PACK((llk_pack_set_dest_filled_by_unpack(in_cb_id)));
+#endif
 }
 
 ALWI void copy_block_matmul_partials(

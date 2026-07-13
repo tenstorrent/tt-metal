@@ -755,21 +755,13 @@ void emit_pack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t ma
     emit_formats_array(out, "constexpr uint8_t", "pack_num_faces_c_dim", max_cbs, c_dims);
 }
 
-void emit_compute_scalar_descriptors(std::ostream& out, const JitBuildOptions& options, tt::ARCH arch) {
+void emit_compute_scalar_descriptors(std::ostream& out, const JitBuildOptions& options) {
     fmt::format_to(
         std::ostreambuf_iterator<char>(out),
         "constexpr bool DST_ACCUM_MODE = {};\n"
         "#define DST_SYNC_MODE DstSync::Sync{}\n",
         options.fp32_dest_acc_en,
         options.dst_full_sync_en ? "Full" : "Half");
-    // (Quasar only) Explicit op-writer unpack-to-dest flag, baked here like DST_ACCUM_MODE so it is
-    // visible to the compute/LLK headers that consume it (all included after this descriptor file).
-    // WH/BH keep UnpackToDestEn hardcoded in their llk_defs.h (format-inferred routing), so we do not emit it
-    // for them doing so would redefine their constexpr.
-    if (arch == tt::ARCH::QUASAR) {
-        fmt::format_to(
-            std::ostreambuf_iterator<char>(out), "constexpr bool UnpackToDestEn = {};\n", options.unpack_to_dest_en);
-    }
 }
 
 void emit_math_scalar_descriptors(std::ostream& out, const tt_hlk_desc& desc) {
@@ -815,9 +807,12 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     emit_pack_tile_dims(out, desc, max_cbs);
     // For Blackhole tilize workaround, PACK needs access to unpack_src_format to determine
     // if the original input format is 8-bit (Int8, UInt8, Fp8_e4m3, Lf8) since those formats
-    // do not require the tilize workaround. This is needed to determine whether to skip the workaround in llk_pack_init.
+    // do not require the tilize workaround. This is needed to determine whether to skip the workaround in
+    // llk_pack_init. Quasar: PACK also needs unpack_dst_format so it can derive, per input operand,
+    // if unpacker routed to DEST (32-bit -> UNP_DEST) and pick its section-done path.
     out << "#if defined(UCK_CHLKC_PACK)\n";
     emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_cbs, fmts.unpack_src);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_dst_format", max_cbs, fmts.unpack_dst);
     out << "#endif\n";   // if pack
     out << "#endif\n\n"; // if not math and not unpack
 
