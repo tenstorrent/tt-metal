@@ -19,7 +19,7 @@ from helpers.llk_params import BroadcastType as LlkBroadcastType
 from helpers.llk_params import DestAccumulation, MathOperation, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator import DistributionKind, StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
@@ -366,6 +366,113 @@ def test_sfpu_binary_int_shift_int32_min_unsupported(
     formats=input_output_formats(
         [
             DataFormat.Float32,
+            DataFormat.Float16,
+            DataFormat.Float16_b,
+            DataFormat.Bfp8_b,
+        ]
+    ),
+    mathop=[
+        MathOperation.SfpuBinaryMax,
+        MathOperation.SfpuBinaryMin,
+        MathOperation.SfpuBinaryFmod,
+        MathOperation.SfpuBinaryRemainder,
+    ],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_sfpu_binary_float_extended(formats, dest_acc, mathop):
+    # max/min (SFPSWAP) and fmod/remainder (fp32 reciprocal) binary kernels that
+    # have no dedicated production BinaryOp. Driven through the same in-DST binary
+    # harness as add/sub/mul, with bcast=None.
+    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
+        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+
+    if (
+        TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+        and formats.input_format == DataFormat.Float16
+        and dest_acc == DestAccumulation.No
+    ):
+        pytest.skip(
+            "Float16_a isn't supported for SFPU on Blackhole without being converted to 32-bit intermediate format in dest register"
+        )
+
+    # fmod/remainder divide by b via a reciprocal; Bfp8_b's coarse quantization
+    # pushes small divisors to values that blow up the quotient (mirrors the
+    # pow/xlogy Bfp8_b skip in test_sfpu_binary_float).
+    if formats.input_format == DataFormat.Bfp8_b and mathop in (
+        MathOperation.SfpuBinaryFmod,
+        MathOperation.SfpuBinaryRemainder,
+    ):
+        pytest.skip("Bfp8_b is not supported for fmod/remainder coverage")
+
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        broadcast_type=LlkBroadcastType.None_,
+    )
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=[
+        MathOperation.SfpuBitwiseAnd,
+        MathOperation.SfpuBitwiseOr,
+        MathOperation.SfpuBitwiseXor,
+    ],
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_sfpu_binary_bitwise(formats, dest_acc, mathop):
+    # int32 bitwise AND/OR/XOR: exact on the full default int range.
+    sfpu_binary(formats, dest_acc, mathop)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=[MathOperation.SfpuDivInt32Floor],
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_sfpu_binary_div_int32_floor(formats, dest_acc, mathop):
+    # int32 floor-division writing an int32 quotient. The in-DST binary harness feeds
+    # both operands from the two tiles of src_A, so one spec drives dividend and
+    # divisor alike. The quotient is formed via an fp32 reciprocal, so operands must
+    # stay below 2**24 for the int->fp32 conversion to be exact. Stimuli are kept
+    # strictly positive: the harness' int32 pack path is sign-magnitude (matching the
+    # add/sub kernels), whereas these divide kernels emit two's-complement, so a
+    # negative quotient would be mis-packed. With positive operands floor- and
+    # trunc-division coincide and every value round-trips faithfully.
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=1.0, high=8_000_000.0
+        ),
+    )
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=[MathOperation.SfpuGcd],
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_sfpu_binary_gcd(formats, dest_acc, mathop):
+    # Both operands come from src_A's two tiles. gcd runs the binary-GCD algorithm
+    # directly on the int32 bit patterns (no float conversion), so it is exact; keep
+    # a moderate strictly-positive range (well within the kernel's 31-bit budget).
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=1.0, high=100_000.0
+        ),
+    )
+
+
+@parametrize(
+    formats=input_output_formats(
+        [
+            DataFormat.Float32,
             DataFormat.Int32,
             DataFormat.UInt32,
         ],
@@ -451,6 +558,8 @@ def sfpu_binary(
     mathop,
     broadcast_type=None,
     src_A_override=None,
+    spec_A=None,
+    spec_B=None,
 ):
 
     input_dimensions = [64, 32]
@@ -460,6 +569,8 @@ def sfpu_binary(
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
+        spec_A=spec_A,
+        spec_B=spec_B,
     )
 
     # The math kernel only consumes buffer_A (operand 0 = tile 0, operand 1 = tile 1),

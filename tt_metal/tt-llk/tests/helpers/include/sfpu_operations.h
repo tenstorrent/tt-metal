@@ -23,14 +23,21 @@
 #include "llk_sfpu/ckernel_sfpu_addcdiv.h"
 #include "llk_sfpu/ckernel_sfpu_addcmul.h"
 #include "llk_sfpu/ckernel_sfpu_binary.h"
+#include "llk_sfpu/ckernel_sfpu_binary_bitwise.h"
 #include "llk_sfpu/ckernel_sfpu_binary_comp.h"
+#include "llk_sfpu/ckernel_sfpu_binary_fmod.h"
+#include "llk_sfpu/ckernel_sfpu_binary_max_min.h"
+#include "llk_sfpu/ckernel_sfpu_binary_remainder.h"
 #include "llk_sfpu/ckernel_sfpu_cast_fp32_to_fp16a.h"
 #include "llk_sfpu/ckernel_sfpu_cbrt.h"
 #include "llk_sfpu/ckernel_sfpu_digamma.h"
+#include "llk_sfpu/ckernel_sfpu_div_int32.h"
+#include "llk_sfpu/ckernel_sfpu_div_int32_floor.h"
 #include "llk_sfpu/ckernel_sfpu_erf.h"
 #include "llk_sfpu/ckernel_sfpu_erfc.h"
 #include "llk_sfpu/ckernel_sfpu_expm1.h"
 #include "llk_sfpu/ckernel_sfpu_fmod.h"
+#include "llk_sfpu/ckernel_sfpu_gcd.h"
 #include "llk_sfpu/ckernel_sfpu_hardmish.h"
 #include "llk_sfpu/ckernel_sfpu_hardshrink.h"
 #include "llk_sfpu/ckernel_sfpu_i1.h"
@@ -1251,9 +1258,40 @@ void call_binary_sfpu_operation_init()
     {
         SFPU_BINARY_INIT(lt);
     }
+    else if constexpr (BINOP == BinaryOp::MAX || BINOP == BinaryOp::MIN)
+    {
+        // binary_max_min uses SFPLOADMACRO templates programmed by its init.
+        constexpr bool IS_MAX = (BINOP == BinaryOp::MAX);
+        SFPU_BINARY_INIT_FN(add1, binary_max_min_init, (IS_MAX));
+    }
+    else if constexpr (BINOP == BinaryOp::FMOD)
+    {
+        // fmod uses the reciprocal path; init loads the reciprocal polynomial.
+        SFPU_BINARY_INIT_FN(add1, fmod_binary_init, (APPROXIMATION_MODE));
+    }
+    else if constexpr (BINOP == BinaryOp::REMAINDER)
+    {
+        // is_fp32_dest_acc_en only selects the (inert) legacy_compat=false branch of
+        // recip_init, so pass false here; both paths just load the reciprocal polynomial.
+        SFPU_BINARY_INIT_FN(add1, remainder_binary_init, (APPROXIMATION_MODE, false));
+    }
+    else if constexpr (BINOP == BinaryOp::DIV_INT32)
+    {
+        SFPU_BINARY_INIT_FN(add1, div_init, (APPROXIMATION_MODE));
+    }
+    else if constexpr (BINOP == BinaryOp::DIV_INT32_FLOOR)
+    {
+        SFPU_BINARY_INIT_FN(add1, div_floor_init, (APPROXIMATION_MODE));
+    }
+    else if constexpr (BINOP == BinaryOp::GCD)
+    {
+        // gcd_init records the per-iteration REPLAY buffer used by the binary-GCD loop.
+        SFPU_BINARY_INIT_FN_NO_ARGS(add1, sfpu::calculate_sfpu_gcd_init);
+    }
     else
     {
         // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
+        // BITWISE_AND/OR/XOR land here: the bitwise kernel needs no per-op init.
         SFPU_BINARY_INIT(add1);
     }
 }
@@ -1459,6 +1497,86 @@ void call_binary_sfpu_operation(
                 dst_index_out,
                 vector_mode);
         }
+    }
+    else if constexpr (BINOP == BinaryOp::MAX || BINOP == BinaryOp::MIN)
+    {
+        // float elementwise max/min (SFPSWAP min/max). Operands read from two dst tiles.
+        constexpr bool IS_MAX = (BINOP == BinaryOp::MAX);
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_binary_max_min, (IS_MAX, PER_FACE_ITERATIONS), dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::FMOD)
+    {
+        // float fmod (result sign follows dividend a); DST_ACCUM_MODE selects fp32 vs bf16 store.
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_sfpu_binary_fmod,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, DST_ACCUM_MODE),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::REMAINDER)
+    {
+        // float remainder (result sign follows divisor b); DST_ACCUM_MODE selects fp32 vs bf16 store.
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_sfpu_binary_remainder,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, DST_ACCUM_MODE),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::BITWISE_AND || BINOP == BinaryOp::BITWISE_OR || BINOP == BinaryOp::BITWISE_XOR)
+    {
+        // int32 bitwise AND/OR/XOR (raw two's-complement bit patterns in dest).
+        constexpr BinaryBitwiseOp BW = (BINOP == BinaryOp::BITWISE_AND)  ? BinaryBitwiseOp::AND
+                                       : (BINOP == BinaryOp::BITWISE_OR) ? BinaryBitwiseOp::OR
+                                                                         : BinaryBitwiseOp::XOR;
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_sfpu_binary_bitwise,
+            (APPROXIMATION_MODE, BW, ckernel::InstrModLoadStore::INT32, PER_FACE_ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::DIV_INT32)
+    {
+        // int32 truncating division (rounds toward zero).
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_div_int32,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::DIV_INT32_FLOOR)
+    {
+        // int32 floor division (rounds toward -inf).
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_div_int32_floor,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::GCD)
+    {
+        // int32 gcd via the binary-GCD REPLAY loop recorded in gcd_init.
+        SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sfpu_gcd, (PER_FACE_ITERATIONS), dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     }
     else
     {
