@@ -19,6 +19,7 @@ using namespace tt::tt_metal::experimental;
 namespace ttnn::prim::qsr {
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 // DFB / kernel / tensor names for the CN factory's ProgramSpec.
 const DFBSpecName CN_CB{"cn_cb"};
@@ -27,10 +28,12 @@ const KernelSpecName CN_WRITER{"cn_writer"};
 const TensorParamName INPUT{"input"};
 const TensorParamName OUTPUT{"output"};
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_program_artifacts(
     const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;  // resolve the file-local ids/helpers below
     const auto& input_tensor = tensor_args.input;
     const auto& input_mesh_tensor = input_tensor.mesh_tensor();
     const auto& output_mesh_tensor = output_tensor.mesh_tensor();

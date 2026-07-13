@@ -1071,7 +1071,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
                 mm_in1_sender_writer_args.push_back(0);
             }
 
-            mm_in1_sender_writer_args.push_back(bias_tensor.has_value() ? (std::uint32_t)bias_tensor->address() : 0);
+            mm_in1_sender_writer_args.push_back(
+                bias_tensor.has_value() ? (std::uint32_t)bias_tensor->address() : 0);  // smuggled-rta-ok
             mm_in1_sender_writer_args.push_back(
                 bias_tensor.has_value() ? (std::uint32_t)per_core_N * output_idx_x : 0);  // in3_tensor_start_tile_id
             if (!output_is_sharded) {
@@ -1845,7 +1846,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
                 (std::uint32_t)0};
 
             if (bias_tensor.has_value()) {
-                mm_in1_sender_writer_args.push_back((std::uint32_t)bias_tensor->address());
+                mm_in1_sender_writer_args.push_back((std::uint32_t)bias_tensor->address());  // smuggled-rta-ok
                 mm_in1_sender_writer_args.push_back(
                     (std::uint32_t)per_core_N * output_idx_x);  // in3_tensor_start_tile_id
             } else {
@@ -3887,7 +3888,8 @@ void override_program_parameters(
                 mm_in1_sender_writer_args.push_back(0);
             }
 
-            mm_in1_sender_writer_args.push_back(bias_tensor.has_value() ? (std::uint32_t)bias_tensor->address() : 0);
+            mm_in1_sender_writer_args.push_back(
+                bias_tensor.has_value() ? (std::uint32_t)bias_tensor->address() : 0);  // smuggled-rta-ok
             mm_in1_sender_writer_args.push_back(
                 bias_tensor.has_value() ? (std::uint32_t)per_core_N * output_idx_x : 0);  // in3_tensor_start_tile_id
             if (!output_is_sharded) {
@@ -5123,6 +5125,7 @@ void MatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
 }
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 // ===========================================================================================
 // Metal 2.0 (ProgramArtifacts) port of the resnet50 mcast_1d paths.
@@ -7263,6 +7266,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     };
 }
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast1DProgramFactory::create_program_artifacts(
@@ -7380,7 +7384,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast1DProgramFacto
     }
 
     if (mcast_in0) {
-        return create_program_mcast_in0_artifacts(
+        return CMAKE_UNIQUE_NAMESPACE::create_program_mcast_in0_artifacts(
             a,
             device,
             math_fidelity,
@@ -7425,7 +7429,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast1DProgramFacto
             fused_matmul_bias_row_broadcastable(bias),
             sub_device_start_core);
     }
-    return create_program_mcast_in1_artifacts(
+    return CMAKE_UNIQUE_NAMESPACE::create_program_mcast_in1_artifacts(
         a,
         device,
         math_fidelity,
