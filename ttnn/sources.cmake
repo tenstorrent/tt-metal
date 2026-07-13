@@ -74,6 +74,9 @@ set(TTNNCPP_SRCS
     cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/dit_fused_distributed_rmsnorm.cpp
     cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation.cpp
     cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+    cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_groupnorm/dit_fused_distributed_groupnorm.cpp
+    cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_groupnorm/device/dit_fused_distributed_groupnorm_device_operation.cpp
+    cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_groupnorm/device/dit_fused_distributed_groupnorm_program_factory.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/combine/combine.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_common.cpp
