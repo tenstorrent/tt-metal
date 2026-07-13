@@ -20,6 +20,10 @@ using ChipId = int;
 namespace tt::tt_metal {
 
 class Buffer;
+class MetalContext;
+
+// True when the host can't pin D2H memory (no 64-bit PCIe addressing and no IOMMU).
+bool d2h_uses_hugepage_fallback(const MetalContext& ctx);
 
 class SystemMemoryManager {
 public:
