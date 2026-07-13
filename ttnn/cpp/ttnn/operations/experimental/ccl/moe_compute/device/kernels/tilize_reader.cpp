@@ -368,7 +368,6 @@ void kernel_main() {
     // Device 2.0 migration: legacy primitives retained: these raw L1 semaphore addresses are
     // used as bases for multicast destinations (set_multicast / get_safe_multicast_noc_addr /
     // get_noc_addr) and for inter-core semaphore inc with precomposed uint64_t addresses.
-    uint32_t metadata_ready_semaphore_addr = get_semaphore(metadata_ready_semaphore_id);
     const uint32_t combine_sync_addr = get_semaphore(combine_sync_semaphore_id);
 
     // Noc typed wrapper (reader uses default noc_index)
@@ -860,23 +859,29 @@ void kernel_main() {
             // First, set the local semaphore to 1 - this is the value that will be multicast
             metadata_ready_sem.set(1);
 
-            uint64_t semaphore_mcast_addr = get_safe_multicast_noc_addr(
-                tilize_mcast_start_x,
-                tilize_mcast_start_y,
-                tilize_mcast_end_x,
-                tilize_mcast_end_y,
-                metadata_ready_semaphore_addr);
-
             // Flush writes since we change the local value of metadata_ready_semaphore when signalling
             // to the matmul cores (vs here where we signal to the non-drain-sync tilize cores )
             noc_obj.async_writes_flushed();
 
             // Multicast the value 1 to all non-drain tilize cores
-            // Device 2.0 migration: legacy primitive retained: multicast loopback semaphore set with
-            // precomposed uint64_t multicast destination (get_safe_multicast_noc_addr) and raw local
-            // sem address as source
-            noc_semaphore_set_multicast(
-                metadata_ready_semaphore_addr, semaphore_mcast_addr, tilize_bounding_box_num_cores - 1);
+            // NOC1 needs the multicast rectangle corners swapped; see get_safe_multicast_noc_addr
+            if constexpr (noc_index == 0) {
+                metadata_ready_sem.set_multicast(
+                    noc_obj,
+                    tilize_mcast_start_x,
+                    tilize_mcast_start_y,
+                    tilize_mcast_end_x,
+                    tilize_mcast_end_y,
+                    tilize_bounding_box_num_cores - 1);
+            } else {
+                metadata_ready_sem.set_multicast(
+                    noc_obj,
+                    tilize_mcast_end_x,
+                    tilize_mcast_end_y,
+                    tilize_mcast_start_x,
+                    tilize_mcast_start_y,
+                    tilize_bounding_box_num_cores - 1);
+            }
         }
 
         volatile tt_l1_ptr uint32_t* num_tokens_per_expert =
@@ -905,19 +910,24 @@ void kernel_main() {
         // Signal readiness via semaphore
         metadata_ready_sem.set(1);
 
-        // get mcast address for semaphore
-        uint64_t matmul_metadata_ready_semaphore_mcast_addr = get_safe_multicast_noc_addr(
-            matmul_mcast_start_x,
-            matmul_mcast_start_y,
-            matmul_mcast_end_x,
-            matmul_mcast_end_y,
-            metadata_ready_semaphore_addr);
-
-        // multicast semaphore
-        // Device 2.0 migration: legacy primitive retained: multicast loopback semaphore set with
-        // precomposed uint64_t multicast destination
-        noc_semaphore_set_multicast(
-            metadata_ready_semaphore_addr, matmul_metadata_ready_semaphore_mcast_addr, matmul_bounding_box_num_cores);
+        // multicast semaphore (NOC1 needs corners swapped; see get_safe_multicast_noc_addr)
+        if constexpr (noc_index == 0) {
+            metadata_ready_sem.set_multicast(
+                noc_obj,
+                matmul_mcast_start_x,
+                matmul_mcast_start_y,
+                matmul_mcast_end_x,
+                matmul_mcast_end_y,
+                matmul_bounding_box_num_cores);
+        } else {
+            metadata_ready_sem.set_multicast(
+                noc_obj,
+                matmul_mcast_end_x,
+                matmul_mcast_end_y,
+                matmul_mcast_start_x,
+                matmul_mcast_start_y,
+                matmul_bounding_box_num_cores);
+        }
     }  // End of is_drain_tilize_core block
     else {
         // ========== NON-DRAIN tilize CORE: Step 4 - Send counts to drain ==========
