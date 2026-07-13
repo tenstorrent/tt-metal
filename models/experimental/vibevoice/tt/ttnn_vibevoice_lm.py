@@ -53,8 +53,8 @@ _SDPA_DECODE_CFG = ttnn.SDPAProgramConfig(
     exp_approx_mode=False,
 )
 
-# Decode-only program config for the wq/wo 1536x1536 projections (single-token
-# step, Mt=1).  Sweep winner (matmul/test_matmul_32x1536x1536_sweep.py): 1D
+# Decode-only program config for the wo 1536x1536 output projection (single-token
+# step, Mt=1).  (wq now goes through the fused wqkv path.)  Sweep winner: 1D
 # mcast_in0, 8x3=24 cores, in0_block_w=4, per_core_N=2, out_subblock 1x2,
 # width-sharded output -> 12.25us vs 25.4us auto baseline (2.08x).  per_core_M=1
 # makes it valid ONLY for S==1 decode; prefill (S>1, Mt>1) keeps the auto config.
@@ -72,6 +72,24 @@ _QO_DECODE_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
 # Width-sharded L1 output (the winning layout); the shard spec is derived from the
 # program config.  Downstream ops that need interleaved input reshard automatically.
 _QO_DECODE_OUT_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
+
+# Decode-only program config for the fused QKV projection (1536x2048, single-token
+# step).  Fusing wq/wk/wv into one matmul + one bias collapses 7 ops (3 linear + 3
+# bias + concat) to 2 and feeds nlp_create_qkv_heads directly.  Sweep winner: 1D
+# mcast_in0, 8x8=64 cores, in0_block_w=4, per_core_N=1 -> ~3.96x on the QKV block,
+# PCC 0.999998 (~bit-exact).  DRAM output (nlp_create_qkv_heads reads interleaved).
+# per_core_M=1 makes it valid ONLY for S==1 decode; prefill keeps the auto config.
+_QKV_DECODE_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+    in0_block_w=4,
+    out_subblock_h=1,
+    out_subblock_w=1,
+    per_core_M=1,
+    per_core_N=1,
+    fuse_batch=True,
+    fused_activation=None,
+    mcast_in0=True,
+)
 
 # Decode-only program config for the FFN down projection w2 (32x8960x1536, single-
 # token step).  Sweep winner: same 8x3=24-core / per_core_N=2 / out_subblock 1x2
@@ -127,6 +145,12 @@ class LayerWeights:
     w3: ttnn.Tensor  # [ffn_dim, hidden]  up
     attn_norm_w: ttnn.Tensor  # [1,1,1,hidden]
     ffn_norm_w: ttnn.Tensor  # [1,1,1,hidden]
+    # Fused QKV projection used by the model forward: [hidden, (n_heads+2*n_kv)*hd].
+    # One matmul + one bias replaces the three wq/wk/wv linears + concat (~3.96x on
+    # the QKV block).  wq/wk/wv/*_bias are retained as the independent reference the
+    # PCC test helpers reconstruct attention from.
+    wqkv: ttnn.Tensor = None
+    qkv_bias: Optional[ttnn.Tensor] = None
     # Qwen2 qkv biases
     q_bias: Optional[ttnn.Tensor] = None
     k_bias: Optional[ttnn.Tensor] = None
@@ -222,6 +246,24 @@ def preprocess_lm_weights(
                 )
             return None
 
+        def _wqkv() -> ttnn.Tensor:
+            # Concat wq|wk|wv along the output dim ([out, in]); _tile transposes to [in, out].
+            parts = [state_dict[f"{prefix}.attention.{n}.weight"] for n in ("wq", "wk", "wv")]
+            return _tile(torch.cat(parts, dim=0), device)
+
+        def _qkv_bias() -> Optional[ttnn.Tensor]:
+            keys = [f"{prefix}.attention.{n}.bias" for n in ("wq", "wk", "wv")]
+            if not all(k in state_dict for k in keys):
+                return None
+            b = torch.cat([state_dict[k] for k in keys], dim=0).to(torch.bfloat16)
+            return ttnn.as_tensor(
+                b.view(1, 1, 1, -1),
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
         lw = LayerWeights(
             wq=_w("attention.wq"),
             wk=_w("attention.wk"),
@@ -235,6 +277,8 @@ def preprocess_lm_weights(
             w3=_w("feed_forward.w3", dtype=ttnn.bfloat8_b),
             attn_norm_w=_norm_weight(state_dict[f"{prefix}.attention_norm.weight"], device),
             ffn_norm_w=_norm_weight(state_dict[f"{prefix}.ffn_norm.weight"], device),
+            wqkv=_wqkv(),
+            qkv_bias=_qkv_bias(),
             q_bias=_b("attention.wq"),
             k_bias=_b("attention.wk"),
             v_bias=_b("attention.wv"),
@@ -509,32 +553,22 @@ class TTVibeVoiceLM:
         n_heads = cfg.num_attention_heads
         n_kv = cfg.num_key_value_heads
 
-        # QKV projections [B, 1, S, n*hd]
-        # wq is 1536x1536; on a single-token decode step (S==1) use the swept fast
-        # config (2.08x), else the auto config for prefill chunks.
-        q = ttnn.linear(
+        # Fused QKV projection [B, 1, S, (n_heads+2*n_kv)*hd].  One matmul + one bias
+        # replaces three wq/wk/wv linears + three bias adds + concat (7 ops -> 2),
+        # feeding nlp_create_qkv_heads directly.  Decode (S==1) uses the swept 1D
+        # config (~3.96x on this block); prefill (S>1) keeps the auto config.
+        qkv = ttnn.linear(
             x,
-            layer_w.wq,
+            layer_w.wqkv,
             compute_kernel_config=_HIFI4,
-            program_config=_QO_DECODE_PROGCFG if S == 1 else None,
-            memory_config=_QO_DECODE_OUT_MEMCFG if S == 1 else ttnn.DRAM_MEMORY_CONFIG,
+            program_config=_QKV_DECODE_PROGCFG if S == 1 else None,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        k = ttnn.linear(x, layer_w.wk, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        v = ttnn.linear(x, layer_w.wv, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if layer_w.qkv_bias is not None:
+            qkv = ttnn.add(qkv, layer_w.qkv_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        if layer_w.q_bias is not None:
-            q = ttnn.add(q, layer_w.q_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if layer_w.k_bias is not None:
-            k = ttnn.add(k, layer_w.k_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if layer_w.v_bias is not None:
-            v = ttnn.add(v, layer_w.v_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        # Split into per-head tensors: [B, 1, S, n*hd] → [B, n, S, hd], matching
-        # PyTorch view(B, S, n, hd).transpose(1, 2).  One fused data-movement op
-        # (concat + nlp_create_qkv_heads) replaces the per-tensor untilize→reshape→
-        # tilize→permute round-trip.  Bit-exact vs the old path (pure shuffle, PCC 1.0);
-        # ~4-5x faster on this split.
-        qkv = ttnn.concat([q, k, v], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Split into per-head tensors: [B, 1, S, *] → [B, n, S, hd] in one data-movement
+        # op (matches PyTorch view(B, S, n, hd).transpose(1, 2)).
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv,
             num_heads=n_heads,
