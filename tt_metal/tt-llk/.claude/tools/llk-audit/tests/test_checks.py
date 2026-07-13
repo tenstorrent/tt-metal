@@ -549,6 +549,48 @@ def test_reconfig_pack_not_drained_by_unpack_condition():
     assert ReconfigStall().run(FactBase("wormhole", facts)) == []
 
 
+@case
+def test_reconfig_drain_tokens_cover_all_packer_subunits():
+    # DRAIN_UNIT_TOKENS must recognize every real per-sub-unit p_stall bit from
+    # ckernel_instr_params.h: WH has PACK0..PACK3 and Quasar a third unpacker
+    # (UNPACK2). A STALLWAIT on a bare sub-unit token (e.g. p_stall::PACK2) is a
+    # genuine packer drain and must clear a PACK reconfig, not be misread THCON_ONLY.
+    from llkaudit import registry
+
+    for tok in ("PACK", "PACK0", "PACK1", "PACK2", "PACK3"):
+        assert registry.unit_drain_state(f"p_stall::{tok}", "PACK") == (True, True), tok
+    for tok in ("UNPACK", "UNPACK0", "UNPACK1", "UNPACK2"):
+        assert registry.unit_drain_state(f"p_stall::{tok}", "UNPACK") == (
+            True,
+            True,
+        ), tok
+    # boundary preserved: an unpacker drain is NOT a packer drain (word-boundary), and
+    # MATH keeps its FPU/SFPU partial-drain model (one engine != full).
+    assert registry.unit_drain_state("p_stall::UNPACK", "PACK") == (False, False)
+    assert registry.unit_drain_state("p_stall::MATH", "MATH") == (True, False)
+    assert registry.unit_drain_state("p_stall::WAIT_SFPU", "MATH") == (True, False)
+    # end-to-end: a PACK reconfig drained by p_stall::PACK2 is cleared, not flagged.
+    F = "tt_llk_wormhole_b0/common/inc/cpack_common.h"
+    facts = [
+        fn("set_packer_config", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK2)",
+            func="set_packer_config",
+        ),
+        macro(
+            F,
+            120,
+            "TTI_WRCFG",
+            "TTI_WRCFG(TMP, WRCFG_32b, SOME_ADDR32)",
+            func="set_packer_config",
+        ),
+    ]
+    assert ReconfigStall().run(FactBase("wormhole", facts)) == []
+
+
 # --- Quasar validation regressions ----------------------------------------
 
 

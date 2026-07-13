@@ -585,16 +585,27 @@ RECONFIG_FN_SUBSTR = (
     "set_unpack_config",
 )
 # STALLWAIT condition tokens that actually DRAIN an execution unit (not THCON,
-# which only orders the GPR->cfg write). Keyed by the writing thread.
+# which only orders the GPR->cfg write). Keyed by the writing thread. These are the
+# per-sub-unit p_stall bits from ckernel_instr_params.h: the unpacker (WH/BH
+# UNPACK0|UNPACK1, Quasar adds UNPACK2) and the packer (WH PACK0..PACK3; BH/Quasar
+# only PACK0) are DISTINCT drainable bits. This checker does NOT resolve which
+# sub-unit a given reconfig targets, so ANY sub-unit drain token counts as a full
+# drain of that thread's unit — a stall on the WRONG sub-unit (e.g. draining
+# unpacker 0 before an unpacker-1 reconfig) is a semantic miss deliberately left to
+# the LLM (see the ReconfigStall blind_spots), NOT a partial-drain state. PACK1..
+# PACK3 / UNPACK2 are unused by today's LLK but listed so a future STALLWAIT on a
+# bare sub-unit token is still recognized; word-boundary matched (see
+# condition_drains_unit), so a listed token can never over-match.
 DRAIN_UNIT_TOKENS = {
-    "UNPACK": ("UNPACK", "UNPACK0", "UNPACK1"),
+    "UNPACK": ("UNPACK", "UNPACK0", "UNPACK1", "UNPACK2"),
     "MATH": ("MATH", "WAIT_SFPU"),
-    "PACK": ("PACK", "PACK0", "PACK1"),  # PACK0/PACK1 are Quasar's per-packer tokens
+    "PACK": ("PACK", "PACK0", "PACK1", "PACK2", "PACK3"),
 }
 # The MATH thread drives TWO independent engines: the FPU (matrix, `p_stall::MATH`)
 # and the SFPU (vector, `p_stall::WAIT_SFPU` == `SFPU1`; other archs add `SFPU0`/…).
 # Draining one does NOT drain the other, so a math reconfig fully drains only when it
-# waits on BOTH. UNPACK/PACK tokens are aliases of a single unit (any one = full).
+# waits on BOTH — this is the ONE thread with a modeled partial-drain state. For
+# UNPACK/PACK any sub-unit token counts as a full drain (see DRAIN_UNIT_TOKENS above).
 MATH_FPU_TOKENS = ("MATH",)
 
 
@@ -602,7 +613,10 @@ def unit_drain_state(operand: str, thread: str):
     """(drains_any, drains_full) for a STALLWAIT wait-condition wrt `thread`'s unit.
     For MATH: FPU + SFPU are separate engines (SFPU matched by the 'SFPU' substring so
     WAIT_SFPU/SFPU1/SFPU0/... all count) — full drain needs BOTH, partial drains one.
-    For UNPACK/PACK the tokens alias one unit, so any drain is a full drain."""
+    For UNPACK/PACK any sub-unit drain token counts as a full drain: the sub-units are
+    distinct bits but the reconfig's target sub-unit is not resolved (see
+    DRAIN_UNIT_TOKENS), so there is no partial state — a wrong-sub-unit stall is a
+    semantic miss left to the LLM, not a partial drain."""
     if thread == "MATH":
         fpu = any(re.search(rf"\b{re.escape(t)}\b", operand) for t in MATH_FPU_TOKENS)
         sfpu = "SFPU" in operand.upper()
