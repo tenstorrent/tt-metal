@@ -43,21 +43,6 @@ def _on_quasar():
     return any("quasar" in os.environ.get(v, "").lower() for v in ("ARCH_NAME", "CHIP_ARCH"))
 
 
-pytestmark = pytest.mark.skipif(
-    _on_quasar(),
-    reason=(
-        "Quasar sim: LLK/hw foundation regression from a tt_metal/tt-llk/tt_llk_quasar + "
-        "tt_metal/hw/ckernels/quasar bump. Confirmed symptoms: multiply/divide (SFPU) abort mid-kernel "
-        "with 'UnimplementedFunctionality: t_tile_mmio_rd32'; bf16 FPU add/subtract on the interleaved "
-        "(DRAM) path drifts below PCC threshold; activation-fused (lhs/post) cases also abort. Reverting "
-        "that LLK/hw layer to its pre-bump state fixes all of the above, so this is not an op bug, but "
-        "the blast radius across cells is wide enough that a whole-file skip is safer than per-cell "
-        "skips until root cause is isolated. Not a WH/BH issue -- real-hardware runs of this file are "
-        "unaffected. test_binary_ng_resnet_add.py (Quasar sim, sharded ADD only) still passes."
-    ),
-)
-
-
 def _height_sharded_config(shard_shape, core_grid):
     return ttnn.create_sharded_memory_config(
         shard_shape,
