@@ -550,6 +550,35 @@ def test_reconfig_pack_not_drained_by_unpack_condition():
 
 
 @case
+def test_reconfig_math_thcon_only_lists_sfpu1_alias():
+    # The THCON_ONLY "needs one of ..." hint for a MATH reconfig must list the full
+    # MATH drain vocabulary, including the Quasar SFPU alias SFPU1 — the drain
+    # DECISION already accepts it (MATH_SFPU_TOKENS), so the advisory list must not
+    # under-report it (DRAIN_UNIT_TOKENS["MATH"] is a coarser display tuple).
+    F = "tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_datacopy.h"
+    facts = [
+        fn("reconfig_data_format", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK)",  # drains neither MATH engine
+            func="reconfig_data_format",
+        ),
+        macro(
+            F,
+            120,
+            "TTI_WRCFG",
+            "TTI_WRCFG(TMP, WRCFG_32b, SOME_ADDR32)",
+            func="reconfig_data_format",
+        ),
+    ]
+    out = ReconfigStall().run(FactBase("wormhole", facts))
+    assert len(out) == 1 and out[0].hint == "THCON_ONLY", out
+    assert "SFPU1" in out[0].detail, out[0].detail
+
+
+@case
 def test_reconfig_drain_tokens_cover_all_packer_subunits():
     # DRAIN_UNIT_TOKENS must recognize every real per-sub-unit p_stall bit from
     # ckernel_instr_params.h: WH has PACK0..PACK3 and Quasar a third unpacker
