@@ -95,7 +95,7 @@ void print_tile_rows(
 // 3. Parallel dispatch remaining copies at max efficiency
 // 4. Handle remainder rows
 //
-// Caller must call noc_async_read_barrier() before using the buffer.
+// Caller must call noc.async_read_barrier() before using the buffer.
 template <uint32_t selected_experts_k, uint32_t tokens, uint32_t experts_per_device, uint32_t l1_alignment>
 FORCE_INLINE void init_expert_activation_buffer_async(Noc& noc, CircularBuffer& cb) {
     constexpr uint32_t row_elements = 2 * experts_per_device + 1;

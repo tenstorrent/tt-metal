@@ -42,6 +42,6 @@ void kernel_main() {
         onetile * page_bytes,
         {.noc_x = core_noc_x, .noc_y = core_noc_y, .addr = src_addr_m},
         {});
-    noc_async_read_barrier();
+    noc.async_read_barrier();
     cb_push_back(packet_cb_id, 1);
 }

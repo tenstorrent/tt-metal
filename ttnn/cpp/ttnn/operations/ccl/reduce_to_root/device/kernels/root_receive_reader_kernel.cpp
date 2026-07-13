@@ -68,7 +68,7 @@ inline void read_from_local(
         onetile * page_bytes,
         {.noc_x = core_noc_x, .noc_y = core_noc_y, .addr = src_addr_m},
         {});
-    noc_async_read_barrier();
+    noc.async_read_barrier();
     cb_push_back(cb_id_in_m, onetile);
 }
 
@@ -239,7 +239,7 @@ void kernel_main() {
 
     cb_push_back(packet_cb_id, 1);
 
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 
     // now the similar behaviour when device 2 is sending data to device 1
     // will be waiting on another semaphore, and fabric is for the other 2 muxes
@@ -350,5 +350,5 @@ void kernel_main() {
     cb_push_back(receiver_cb_id_m, 1);
     cb_push_back(packet_cb_id, 1);
 
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 }

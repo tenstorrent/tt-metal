@@ -67,7 +67,7 @@ inline void read_from_local(
         onetile * page_bytes,
         {.noc_x = core_noc_x, .noc_y = core_noc_y, .addr = src_addr_m},
         {});
-    noc_async_read_barrier();
+    noc.async_read_barrier();
     cb_push_back(cb_id_in_m, onetile);
 }
 
@@ -209,7 +209,7 @@ void kernel_main() {
         new_packet_size_bytes,
         {.noc_x = core_noc_x, .noc_y = core_noc_y, .addr = intermediate_base_addr},
         {});
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 
     tt_memmove<true, false, false, 0>(noc, dest_page_base_addr, packet_l1_addr, packet_size_bytes);
     cb_push_back(receiver_cb_id_l, input_num_tiles);
