@@ -279,21 +279,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     const auto& force_split_reader = operation_attributes.force_split_reader;
 
     distributed::MeshDevice* device = a.device();
-    // The OUT/PARTIALS writer-copy workaround exists ONLY for the Quasar packer's off-grid PACR0 bug on
-    // output-region packs (escalated). WH/BH have no such bug — the original borrowed-OUTPUT / in-place pack
-    // works there. Gate the whole workaround (un-borrow OUT+PARTIALS, writer OUT-consumer + out_dest bindings,
-    // compute OUT-consumer removal, and the writer-kernel copy under ARCH_QUASAR) on Quasar so non-Quasar
-    // keeps the working original path (and avoids the sender producer/consumer self-deadlock the workaround
-    // introduces when the writer both mcasts weights/coordinates the reader AND waits on OUT).
-    const bool qsr_writer_copy = device->arch() == tt::ARCH::QUASAR;
-    // DEBUG (gate confirmation): shows whether the writer-copy workaround activated and the runtime arch the
-    // gate saw. arch enum: Invalid=0, GRAYSKULL=1, WORMHOLE_B0=2, BLACKHOLE=3, QUASAR=4. If qsr_writer_copy=0
-    // on the emulator, device->arch() did NOT resolve to QUASAR and the gate needs a different signal.
-    log_debug(
-        tt::LogOp,
-        "QSR conv writer-copy gate: qsr_writer_copy={} device->arch()={}",
-        qsr_writer_copy,
-        static_cast<int>(device->arch()));
     TT_FATAL(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_FATAL(a.memory_config().is_sharded(), "Conv activation must be sharded.");
     TT_FATAL(output_channels <= b.padded_shape()[3], "Invalid weight shape. Incorrect weight tensor.");
@@ -815,26 +800,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // subsumed by the split-reader deferral above (enable_split_reader is forced false), so it can never
     // arise here.
 
-    // QSR WRITER-COPY workaround for the LLK off-grid PACR0 bug (escalated): the compute packer FAULTS
-    // (PACR0_TILE_INC, off-grid) whenever it packs into the OUTPUT-tensor L1 region, but packs into the
-    // working CB region are fine (verified: tilize, un-borrowed partials). Proven not alignment (a tile-
-    // aligned output base still faults) and not the bias pack (a bias-less conv still faults) — any pack into
-    // the output region faults. WORKAROUND: make MATMUL_PARTIALS and OUT own WORKING-region CBs (NOT borrowed
-    // from OUTPUT) so the compute packs there without faulting; the writer then NOC-copies OUT (working) into
-    // the OUTPUT tensor shard per height block (see writer kernel + build_writer_* bindings + TP_OUTPUT). Size
-    // each to ONE output block (out_block_tiles) — borrowing the full per_core_out_ntiles overflowed the L1
-    // bank; single-block rings work because the compute's relative pack indices wrap per block and the writer
-    // drains OUT each block. Revert this whole block once the LLK packer bug is fixed (then re-borrow OUTPUT).
-    const uint32_t out_block_tiles = act_block_h_ntiles * per_core_out_matrix_width_ntiles;
-    if (qsr_writer_copy && !is_conv_1d_depthwise_conv) {
-        for (auto& info : cb_info) {
-            if (info.name == Conv2dCb::MATMUL_PARTIALS || info.name == Conv2dCb::OUT) {
-                info.is_globally_allocated = false;
-                info.num_pages = out_block_tiles;
-            }
-        }
-    }
-
     // 1D depthwise compute uses dest-reuse for accumulation — no MATMUL_PARTIALS CB is allocated.
     const bool partials_cb_uses_output =
         !is_conv_1d_depthwise_conv && get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated;
@@ -1043,16 +1008,10 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         spec.dataflow_buffers.push_back(std::move(dfb));
     }
 
-    // OUT: WRITER-COPY workaround — OUT is now an own WORKING-region CB (NOT borrowed; see the un-borrow
-    // block after get_cb_info), sized one output block. Producer = compute (bias pack); CONSUMER = the writer
-    // kernel, which NOC-copies each block into the real OUTPUT tensor shard (bound via TP_OUTPUT). This
-    // sidesteps the LLK off-grid PACR0 fault on output-region packs. (Re-add dfb.borrowed_from = TP_OUTPUT
-    // once the LLK packer bug is fixed.)
+    // OUT: borrowed from the OUTPUT tensor — compute packs the conv result directly into the output shard.
     {
         auto dfb = make_dfb(DFB_OUT, Conv2dCb::OUT);
-        if (!qsr_writer_copy) {
-            dfb.borrowed_from = TP_OUTPUT;  // non-Quasar: original in-place path (compute packs OUTPUT shard).
-        }
+        dfb.borrowed_from = TP_OUTPUT;
         spec.dataflow_buffers.push_back(std::move(dfb));
     }
 
@@ -1397,13 +1356,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             bindings.push_back(m2::DFBBinding{
                 .dfb_spec_name = DFB_BIAS, .accessor_name = "bias", .endpoint_type = m2::DFBEndpointType::PRODUCER});
         }
-        // WRITER-COPY (Quasar only): the writer CONSUMES OUT (the compute-produced working-region CB) and
-        // NOC-copies each block into the OUTPUT tensor shard (bound as tensor::out_dest below). On non-Quasar
-        // OUT is borrowed (compute packs it in place) and the writer never touches it.
-        if (qsr_writer_copy) {
-            bindings.push_back(m2::DFBBinding{
-                .dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER});
-        }
         return bindings;
     };
     auto build_writer_tensor_bindings = [&]() {
@@ -1412,10 +1364,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         };
         if (has_bias) {
             bindings.push_back(m2::TensorBinding{.tensor_parameter_name = TP_BIAS, .accessor_name = "bias"});
-        }
-        // WRITER-COPY (Quasar only): bind the real OUTPUT tensor as the NOC-copy destination for the writer.
-        if (qsr_writer_copy) {
-            bindings.push_back(m2::TensorBinding{.tensor_parameter_name = TP_OUTPUT, .accessor_name = "out_dest"});
         }
         return bindings;
     };
@@ -1590,12 +1538,9 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             m2::DFBBinding{
                 .dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER},
         };
-        // OUT consumer: on Quasar (writer-copy) the WRITER consumes OUT, so compute is producer-only. On
-        // non-Quasar keep the original degenerate compute self-consumer (borrowed in-place OUT).
-        if (!qsr_writer_copy) {
-            compute_dfb_bindings.push_back(m2::DFBBinding{
-                .dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER});
-        }
+        // OUT: compute packs the borrowed OUTPUT shard in place (degenerate self-consumer).
+        compute_dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER});
         if (block_sharded) {
             // 2D path: compute consumes ACT_ROW_MAJOR (tilize input) and PRODUCES ACT_TILIZED; the READER
             // consumes ACT_TILIZED (mcast source).  So ACT_TILIZED is producer-only on compute here (the
