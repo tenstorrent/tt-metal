@@ -13,7 +13,7 @@
 #include "dev_mem_map.h"
 
 #if defined(COMPILE_FOR_AERISC)
-// For WATCHER_RING_BUFFER_PUSH(), used by fabric_dbg_ringbuf_push_tx_count(). The macro is a no-op
+// For WATCHER_RING_BUFFER_PUSH(), used by fabric_dbg_ringbuf_push_txrx_counts(). The macro is a no-op
 // unless the watcher is enabled (TT_METAL_WATCHER), so this costs nothing in production. Guarded to device builds
 // because host translation units (e.g. the HAL) also include this header and lack the ring-buffer
 // include path / build flags.
@@ -369,7 +369,7 @@ static void update_boot_results_eth_link_status_check() {
 
 // NOTE: the recovery / link-status ring-buffer marker codes (formerly 0xD09D/0x600D/0xCA11ED/0xDEAD)
 // were removed. The watcher ring buffer is now used to log the live TX packet count on every context
-// switch instead (see fabric_dbg_ringbuf_push_tx_count below), so we can watch TX advance during a run.
+// switch instead (see fabric_dbg_ringbuf_push_txrx_counts below), so we can watch TX/RX during a run.
 
 // ---- Resume-phase debug word ----------------------------------------------------------------------
 // A single uint32 in a reserved L1 slot (MEM_AERISC_RESUME_PHASE_BASE) that active ERISC0 stamps as it
@@ -444,9 +444,48 @@ inline void fabric_dbg_inc_rx_pkt_count() {
 // per-core ring buffer becomes a time series of the counter -- if the values keep changing across
 // dumps, TX is advancing; if they flatline, TX has stalled. Replaces the old recovery/link-status
 // marker pushes. No-op unless the watcher is enabled.
-inline void fabric_dbg_ringbuf_push_tx_count() {
+// Push BOTH the TX and RX packet counts into the watcher ring buffer on every context switch, so the
+// per-core ring buffer becomes an interleaved time series of both -- letting us watch TX and RX advance
+// (or freeze) live in the watcher log, without a post-mortem L1 read (which would require bringing the
+// links up and can itself heal the stall we want to observe).
+//
+// Both are pushed by ERISC0: it owns the TX counter and can read the RX counter that ERISC1 writes
+// (shared core L1), so there is a SINGLE writer to the ring buffer -> no cross-ERISC race on the ring
+// pointer. Each entry self-identifies by its top nibble so TX/RX can be told apart regardless of where
+// the ring wrapped: 0xA = TX, 0xB = RX; the low 28 bits hold the count. Valid while counts < 2^28
+// (268M); the 100M-packet test is well within range (a 4G-packet budget would overflow the tag).
+constexpr uint32_t FABRIC_DBG_RINGBUF_TX_TAG = 0xA0000000;
+constexpr uint32_t FABRIC_DBG_RINGBUF_RX_TAG = 0xB0000000;
+constexpr uint32_t FABRIC_DBG_RINGBUF_VALUE_MASK = 0x0FFFFFFF;
+inline void fabric_dbg_ringbuf_push_txrx_counts() {
 #if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
-    WATCHER_RING_BUFFER_PUSH(*reinterpret_cast<volatile uint32_t*>(MEM_AERISC_TX_PKT_COUNT_ADDR));
+    const uint32_t tx = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_TX_PKT_COUNT_ADDR);
+    const uint32_t rx = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RX_PKT_COUNT_ADDR);
+    WATCHER_RING_BUFFER_PUSH(FABRIC_DBG_RINGBUF_TX_TAG | (tx & FABRIC_DBG_RINGBUF_VALUE_MASK));
+    WATCHER_RING_BUFFER_PUSH(FABRIC_DBG_RINGBUF_RX_TAG | (rx & FABRIC_DBG_RINGBUF_VALUE_MASK));
+#endif
+}
+
+// [PKTMODE-PROBE] Snapshot of the eth queue packet-mode config, pushed to the watcher ring buffer once
+// per successful retrain (on the link down->up edge, from recover_eth_link_if_down) -- edge-triggered,
+// so exactly one 3-word entry per retrain. Purpose: check whether a retrain clears packet-resend mode
+// (TXQ_CTRL[0]) / rxq packet mode (RXQ_CTRL[1]) -- which the router only sets once at init and never
+// re-arms in recovery -- since that would explain silent in-flight drops on an otherwise-UP link.
+// Register addresses per fabric_txq_setup.h. Read via a direct volatile load (same as PCS_STATUS above)
+// to avoid pulling in the eth_txq API headers here.
+//   entry[0] = codeword 0x5E5EDA00
+//   entry[1] = TX: low16 = TXQ0_CTRL, high16 = TXQ1_CTRL   (packet_resend_mode = bit 0 of each)
+//   entry[2] = RX: low16 = RXQ0_CTRL, high16 = RXQ1_CTRL   (packet_mode          = bit 1 of each)
+constexpr uint32_t FABRIC_DBG_PKTMODE_CODEWORD = 0x5E5EDA00;
+inline void fabric_dbg_ringbuf_push_pktmode_snapshot() {
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+    const uint32_t txq0 = *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(0xFFB90000);  // ETH_TXQ0 CTRL
+    const uint32_t txq1 = *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(0xFFB91000);  // ETH_TXQ1 CTRL
+    const uint32_t rxq0 = *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(0xFFB94000);  // ETH_RXQ0 CTRL
+    const uint32_t rxq1 = *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(0xFFB95000);  // ETH_RXQ1 CTRL
+    WATCHER_RING_BUFFER_PUSH(FABRIC_DBG_PKTMODE_CODEWORD);
+    WATCHER_RING_BUFFER_PUSH((txq0 & 0xFFFF) | ((txq1 & 0xFFFF) << 16));
+    WATCHER_RING_BUFFER_PUSH((rxq0 & 0xFFFF) | ((rxq1 & 0xFFFF) << 16));
 #endif
 }
 
@@ -491,6 +530,8 @@ static void recover_eth_link_if_down() {
             if (was_retrained == 0) {
                 was_retrained = 1;  // edge-triggered: retrain succeeded
             }
+            // [PKTMODE-PROBE] One packet-mode snapshot per retrain-complete (down->up) edge.
+            fabric_dbg_ringbuf_push_pktmode_snapshot();
         }
     }
     // if (!is_link_up()) {
