@@ -39,6 +39,17 @@ def _preproc_dtype():
     return ttnn.bfloat16 if _os.environ.get("QWEN_GDN_PREPROC_BF16") == "1" else ttnn.float32
 
 
+def _token_major_out():
+    """Default-ON switch for the token-major GDN output path: the C++ scan writer scatters its
+    per-head output directly into a token-major ``[B, T, H*V]`` tensor (folding the ``core.out``
+    head->token permute into the writer's page-ids), and the consumer runs a composed per-head RMS
+    on that layout (no tile-crossing reshape) — together ~-2.2 ms. Set ``QWEN_GDN_TOKEN_MAJOR_OUT=0``
+    to fall back to the legacy head-major output + relayout chain. Read per-call for A/B. NOTE: only
+    callers that handle a ``[B,T,H*V]`` return (e.g. ``gdn/tp.py``) should opt in via the adapter's
+    ``token_major`` arg; the adapter itself defaults to legacy so other callers are unaffected."""
+    return _os.environ.get("QWEN_GDN_TOKEN_MAJOR_OUT", "1") != "0"
+
+
 def _ck(name, t):
     if not _DBG:
         return
@@ -114,9 +125,14 @@ def chunk_gated_delta_rule_seq_adapter(
     device=None,
     cached_masks=None,
     valid_len=None,
+    token_major=False,  # opt in to the token-major writer output ([B,T,H*V]); caller must handle that shape
 ):
     """Drop-in replacement for chunk_gated_delta_rule_ttnn that runs the C++
     chunk-parallel `gated_delta_attn_seq` kernel.
+
+    When ``token_major`` (opt-in per caller — see ``_token_major_out``), the scan writer emits a
+    token-major ``[B,T,H*V]`` output and this returns it AS-IS (no head->token permute); the caller
+    is then responsible for the per-head RMS on that layout. Default (legacy) returns ``[B,T,H,V]``.
 
     Same interface ([B,T,H,*] inputs, returns (o [B,T,H,V], new_state [B,H,K,V])).
     Internally L2-norms q/k (matching the bf16 chunk path), converts to the seq
@@ -180,13 +196,21 @@ def chunk_gated_delta_rule_seq_adapter(
         mesh_device=device,
         cached_masks=cached_masks,
         valid_len=valid_len,
+        num_v_heads=H if token_major else None,
+        token_major=token_major,
     )
 
-    # o [BH,T,V] -> [B,T,H,V]
-    o = ttnn.to_layout(o_bh, ttnn.ROW_MAJOR_LAYOUT, memory_config=_DRAM)
-    o = ttnn.reshape(o, [B, H, T, V])
-    o = ttnn.permute(o, (0, 2, 1, 3))  # [B,T,H,V]
-    o = ttnn.to_layout(o, ttnn.TILE_LAYOUT, memory_config=_DRAM)
+    if token_major:
+        # Token-major writer already produced [B, T, H*V]. Hand it back AS-IS — the consumer
+        # (gdn/tp.py gate_norm) runs a composed per-head RMS directly on this layout, so there is
+        # no [B,T,H,V] reshape at all (that reshape is a costly tile-crossing relayout, see §G).
+        o = o_bh
+    else:
+        # o [BH,T,V] -> [B,T,H,V]
+        o = ttnn.to_layout(o_bh, ttnn.ROW_MAJOR_LAYOUT, memory_config=_DRAM)
+        o = ttnn.reshape(o, [B, H, T, V])
+        o = ttnn.permute(o, (0, 2, 1, 3))  # [B,T,H,V]
+        o = ttnn.to_layout(o, ttnn.TILE_LAYOUT, memory_config=_DRAM)
 
     # final_state [BH,K,V] -> [B,H,K,V] bf16 (matches recurrent_state)
     new_state = ttnn.reshape(final_state, [B, H, K, V])
@@ -464,6 +488,8 @@ def chunk_gated_delta_rule_seq(
     mesh_device=None,
     cached_masks=None,
     valid_len=None,
+    num_v_heads=None,  # H (v-heads per batch); required for the token-major writer
+    token_major=False,  # emit token-major [B,T,H*V] from the writer (caller handles the per-head RMS)
 ):
     """Chunked gated delta rule using the C++ sequential scan kernel (Path A).
 
@@ -791,6 +817,10 @@ def chunk_gated_delta_rule_seq(
 
     _spc("core.scan")  # the C++ gated_delta_attn_seq sequential scan kernel
     # ---- C++ sequential scan kernel (Path A) ----
+    # Token-major output: when enabled (and H known), the writer scatters heads straight into a
+    # token-major [B, T, H*V] tensor (folds the core.out permute). Requires num_v_heads (H) and
+    # seq_len (T). Off -> legacy head-major [BH, NC, C, Dv] + the relayout chain below.
+    _tm = bool(token_major and num_v_heads)
     out_4d, final_state = ttnn.transformer.gated_delta_attn_seq(
         L_unit_4d,
         v_beta_sc_4d,
@@ -801,10 +831,18 @@ def chunk_gated_delta_rule_seq(
         dl_exp_4d,
         L_inv_4d,
         initial_state=S0_tt,
+        token_major_output=_tm,
+        num_v_heads=int(num_v_heads) if _tm else 0,
+        seq_len=int(T) if _tm else 0,
     )
     ttnn.deallocate(L_inv_4d)
 
     _spc("core.out")  # output untilize/reshape/slice (+ adapter's o permute back to [B,T,H,V])
+    if _tm:
+        # Writer already emitted token-major [B, T, H*V] (sliced to T, no padding tail). Hand the
+        # raw tensor back; the adapter does the free [B,T,H*V]->[B,T,H,V] reshape. No relayout here.
+        return out_4d, final_state
+
     out_4d = ttnn.to_layout(
         ttnn.typecast(out_4d, ttnn.float32, memory_config=None) if out_4d.dtype != ttnn.float32 else out_4d,
         ttnn.TILE_LAYOUT,

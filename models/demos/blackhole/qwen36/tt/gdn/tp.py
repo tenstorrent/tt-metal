@@ -21,6 +21,7 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops i
     recurrent_gated_delta_rule_decode_ttnn,
 )
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq import (
+    _token_major_out,
     chunk_gated_delta_rule_seq_adapter,
     create_chunk_masks_seq,
 )
@@ -312,6 +313,58 @@ class TPGatedDeltaNet:
         out = ttnn.reshape(out, (1, T, C))
         return ttnn.silu(out, memory_config=DR), new_state
 
+    def _gn_mats(self):
+        """Lazily build + cache the constant matrices for the token-major composed per-head RMSNorm:
+        G [H*V, H] block-average (1/V) -> per-head mean-square; E [H, H*V] block-expand -> broadcast
+        inv back to H*V; w_rep [1,1,H*V] = norm_w tiled per head; plus a HiFi4/fp32 matmul config."""
+        if getattr(self, "_gn_G", None) is None:
+            H, V, HV = self.Nv, self.Dv, self.value_dim_tp
+            Gt = torch.zeros(HV, H, dtype=torch.float32)
+            Et = torch.zeros(H, HV, dtype=torch.float32)
+            for h in range(H):
+                Gt[h * V : (h + 1) * V, h] = 1.0 / V
+                Et[h, h * V : (h + 1) * V] = 1.0
+            mk = lambda t: ttnn.from_torch(
+                t,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._gn_G = mk(Gt)
+            self._gn_E = mk(Et)
+            self._gn_wrep = ttnn.concat([ttnn.reshape(self.tw["norm_w"], [1, 1, V])] * H, dim=-1)
+            self._gn_cfg = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            )
+        return self._gn_G, self._gn_E, self._gn_wrep, self._gn_cfg
+
+    def _gated_rmsnorm_tm(self, o, z, eps=1e-6):
+        """Per-head RMSNorm over Dv on token-major o [1,T,H*V], then SiLU(z) gate — equivalent to
+        rms_norm(o[.,H,V]) + reshape([.,H*V]) + *silu(z), but with NO tile-crossing reshape. The
+        grouped reduction (per-head mean-square) and the per-head broadcast are constant-matrix
+        matmuls, so the whole op stays in the token-major [.,H*V] tile layout. Deallocates o, z."""
+        G, E, wrep, cfg = self._gn_mats()
+        DR = ttnn.DRAM_MEMORY_CONFIG
+        sq = ttnn.multiply(o, o)
+        ms = ttnn.matmul(sq, G, compute_kernel_config=cfg, memory_config=DR)  # [1,T,H] per-head mean-square
+        ttnn.deallocate(sq)
+        inv = ttnn.rsqrt(ttnn.add(ms, eps))
+        ttnn.deallocate(ms)
+        scale = ttnn.matmul(inv, E, compute_kernel_config=cfg, memory_config=DR)  # [1,T,H*V] broadcast
+        ttnn.deallocate(inv)
+        o_n = ttnn.multiply(ttnn.multiply(o, scale), wrep)
+        ttnn.deallocate(o)
+        ttnn.deallocate(scale)
+        gated = ttnn.multiply(o_n, ttnn.silu(z))
+        ttnn.deallocate(o_n)
+        ttnn.deallocate(z)
+        return gated
+
     def forward_prefill(self, x, chunk_size=128, valid_len=None, capture_state=False):
         """Causal chunk-prefill over a sequence (from scratch, zero init state).
 
@@ -394,6 +447,10 @@ class TPGatedDeltaNet:
         ttnn.deallocate(a)
 
         _sp("gdn_core")
+        # Token-major output path (default on; QWEN_GDN_TOKEN_MAJOR_OUT=0 to disable): the scan writer
+        # emits [1,T,H*V] directly and gate_norm runs a composed per-head RMS on it — no head->token
+        # permute, no tile-crossing reshape (~-2.2 ms). One decision drives the adapter + gate_norm.
+        tm = _token_major_out()
         o, final_state = chunk_gated_delta_rule_seq_adapter(
             q,
             k,
@@ -406,6 +463,7 @@ class TPGatedDeltaNet:
             device=self.mesh,
             cached_masks=self.chunk_seq_masks,
             valid_len=valid_len,
+            token_major=tm,
         )
         _sp("state_carry")
         B, D = 1, self.qkv_dim_tp
@@ -442,13 +500,19 @@ class TPGatedDeltaNet:
         ttnn.deallocate(conv_new_state)
         # o: [1, T, Nv, Dv] -> gated RMSNorm over Dv + SiLU(z) gate
         _sp("gate_norm")
-        out_n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6)
-        ttnn.deallocate(o)
-        out_f = ttnn.reshape(out_n, (1, T, self.value_dim_tp))
-        ttnn.deallocate(out_n)
-        gated = ttnn.multiply(out_f, ttnn.silu(z))
-        ttnn.deallocate(out_f)
-        ttnn.deallocate(z)
+        if tm:
+            # o is token-major [1,T,H*V] straight from the strided writer. Do per-head RMS on this
+            # layout via constant-matrix matmuls (no [.,H,V] reshape), so the whole tail stays
+            # token-major and out_proj consumes it directly. Kills core.out + the ~1.14 ms reshape.
+            gated = self._gated_rmsnorm_tm(o, z)
+        else:
+            out_n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6)
+            ttnn.deallocate(o)
+            out_f = ttnn.reshape(out_n, (1, T, self.value_dim_tp))
+            ttnn.deallocate(out_n)
+            gated = ttnn.multiply(out_f, ttnn.silu(z))
+            ttnn.deallocate(out_f)
+            ttnn.deallocate(z)
         _sp("out_proj")
         partial = ttnn.linear(gated, tw["out"], compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(gated)
