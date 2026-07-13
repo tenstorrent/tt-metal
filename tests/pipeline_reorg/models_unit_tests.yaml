@@ -732,6 +732,7 @@
 # host OOM (LoRA loads ~15GB per case). WH sets TT_MM_THROTTLE_PERF=5, BH runs without it.
 - name: Stable Diffusion XL LoRA unit tests (WH)
   cmd: |
+    export HF_HUB_OFFLINE=0
     export TT_MM_THROTTLE_PERF=5
     pytest --timeout 900 tests/nightly/single_card/stable_diffusion_xl_base/lora
   model: sdxl
@@ -747,6 +748,7 @@
 
 - name: Stable Diffusion XL refiner unit tests (WH)
   cmd: |
+    export HF_HUB_OFFLINE=0
     export TT_MM_THROTTLE_PERF=5
     pytest --timeout 600 tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner/test_unet_loop.py
   model: sdxl
@@ -762,6 +764,7 @@
 
 - name: Stable Diffusion XL VAE unit tests (WH)
   cmd: |
+    export HF_HUB_OFFLINE=0
     export TT_MM_THROTTLE_PERF=5
     pytest --timeout 600 tests/nightly/single_card/stable_diffusion_xl_base/vae
   model: sdxl
@@ -777,6 +780,7 @@
 
 - name: Stable Diffusion XL base unit tests (WH)
   cmd: |
+    export HF_HUB_OFFLINE=0
     export TT_MM_THROTTLE_PERF=5
     pytest --timeout 600 tests/nightly/single_card/stable_diffusion_xl_base --ignore=tests/nightly/single_card/stable_diffusion_xl_base/lora --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/vae --ignore=tests/nightly/single_card/stable_diffusion_xl_base/test_unet_loop.py
   model: sdxl
@@ -792,6 +796,7 @@
 
 - name: Stable Diffusion XL LoRA unit tests (BH)
   cmd: |
+    export HF_HUB_OFFLINE=0
     pytest --timeout 900 tests/nightly/single_card/stable_diffusion_xl_base/lora
   model: sdxl
   skus:
@@ -803,6 +808,7 @@
 
 - name: Stable Diffusion XL refiner unit tests (BH)
   cmd: |
+    export HF_HUB_OFFLINE=0
     pytest --timeout 600 tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner/test_unet_loop.py
   model: sdxl
   skus:
@@ -814,6 +820,7 @@
 
 - name: Stable Diffusion XL VAE unit tests (BH)
   cmd: |
+    export HF_HUB_OFFLINE=0
     pytest --timeout 600 tests/nightly/single_card/stable_diffusion_xl_base/vae
   model: sdxl
   skus:
@@ -825,6 +832,7 @@
 
 - name: Stable Diffusion XL base unit tests (BH)
   cmd: |
+    export HF_HUB_OFFLINE=0
     pytest --timeout 600 tests/nightly/single_card/stable_diffusion_xl_base --ignore=tests/nightly/single_card/stable_diffusion_xl_base/lora --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/vae --ignore=tests/nightly/single_card/stable_diffusion_xl_base/test_unet_loop.py
   model: sdxl
   skus:
