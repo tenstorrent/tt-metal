@@ -1216,7 +1216,7 @@ void py_module(nb::module_& mod) {
             nb::arg("tensor_args"))
         .def_static(
             "compute_program_hash",
-            &ttnn::prim::MatmulDeviceOperation::compute_program_hash,
+            &ttnn::prim::MatmulDeviceOperation::compute_descriptor_program_hash,
             nb::arg("operation_attributes"),
             nb::arg("tensor_args"));
 
