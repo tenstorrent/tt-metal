@@ -15,7 +15,7 @@ from models.tt_dit.layers.audio_ops import Conv1dViaConv3d, ConvTranspose1dViaCo
 from models.tt_dit.models.audio_vae.vocoder_ltx import AMPBlock1, Vocoder
 from models.tt_dit.parallel.config import AudioTCParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
-from models.tt_dit.tests.models.ltx.test_audio_components_ltx import (
+from models.tt_dit.tests.models.ltx.test_audio_ltx import (
     _MAIN_VOCODER_CFG,
     _build_torch_stage_b,
     _diffusers_vocoder_state_to_tt,
@@ -469,7 +469,7 @@ def test_full_forward_wall(mesh_device, mesh_shape, t_factor, t_axis, c_factor, 
 def test_vocoder_with_bwe_traced(mesh_device, mesh_shape, t_factor, t_axis, c_factor, c_axis, device_params):
     # Validate both generators traced (main + BWE) == fully eager, on the replayed graph (the
     # production path): warm -> capture -> replay, compare replay to eager.
-    from models.tt_dit.tests.models.ltx.test_audio_components_ltx import _build_torch_stage_c, _build_tt_stage_c
+    from models.tt_dit.tests.models.ltx.test_audio_ltx import _build_torch_stage_c, _build_tt_stage_c
 
     parent = mesh_device
     mesh = parent.create_submesh(ttnn.MeshShape(*mesh_shape))
@@ -480,7 +480,7 @@ def test_vocoder_with_bwe_traced(mesh_device, mesh_shape, t_factor, t_axis, c_fa
     ccl = CCLManager(mesh, num_links=1, topology=ttnn.Topology.Linear)
     torch_full = _build_torch_stage_c(seed=42)
     tt_full = _build_tt_stage_c(mesh, parallel_config=pc, ccl_manager=ccl)
-    from models.tt_dit.tests.models.ltx.test_audio_components_ltx import _diffusers_vocoder_with_bwe_state_to_tt
+    from models.tt_dit.tests.models.ltx.test_audio_ltx import _diffusers_vocoder_with_bwe_state_to_tt
 
     tt_full.load_torch_state_dict(_diffusers_vocoder_with_bwe_state_to_tt(torch_full.state_dict()))
 
@@ -525,7 +525,7 @@ def test_vocoder_with_bwe_traced(mesh_device, mesh_shape, t_factor, t_axis, c_fa
 def test_bwe_traced_wall(mesh_device, mesh_shape, t_factor, t_axis, c_factor, c_axis, device_params):
     """Size the BWE-trace prize: full VocoderWithBWE (main+BWE) eager vs main-traced-only
     (current prod) vs both-traced. Gate: both-traced must match eager (max|Δ|<5e-3)."""
-    from models.tt_dit.tests.models.ltx.test_audio_components_ltx import (
+    from models.tt_dit.tests.models.ltx.test_audio_ltx import (
         _build_torch_stage_c,
         _build_tt_stage_c,
         _diffusers_vocoder_with_bwe_state_to_tt,
@@ -612,8 +612,9 @@ def test_eager_wall_singleaxis(mesh_device, device_params):
 )
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 def test_forward_traced_multishape(mesh_device, device_params):
-    # Two distinct input shapes both resident in the LRU trace cache; each replays bit-exact
-    # vs eager. Then max_traces=1 evicts the LRU shape.
+    # Two distinct input shapes both resident in the per-shape trace cache; each replays
+    # bit-exact vs eager. @traced_function keys one Tracer per input shape under
+    # _forward_device._tracers_keyed[self]; there is no manual _traces list / _max_traces LRU.
     parent = mesh_device
     mesh = parent.create_submesh(ttnn.MeshShape(2, 4))
     pc = AudioTCParallelConfig(
@@ -641,18 +642,13 @@ def test_forward_traced_multishape(mesh_device, device_params):
 
     _ = tt_voc.forward_traced(mel_a)  # capture A
     _ = tt_voc.forward_traced(mel_b)  # capture B (A stays resident)
-    assert len(tt_voc._traces) == 2, f"expected 2 resident traces, got {len(tt_voc._traces)}"
+    resident = type(tt_voc)._forward_device._tracers_keyed.get(tt_voc, {})
+    assert len(resident) == 2, f"expected 2 resident per-shape traces, got {len(resident)}"
     da = (ref_a - tt_voc.forward_traced(mel_a)).abs().max().item()  # replay A
     db = (ref_b - tt_voc.forward_traced(mel_b)).abs().max().item()  # replay B
-    print(f"\nMULTITRACE replay max|Δ| A={da:.3e} B={db:.3e} resident={len(tt_voc._traces)}", flush=True)
+    print(f"\nMULTITRACE replay max|Δ| A={da:.3e} B={db:.3e} resident={len(resident)}", flush=True)
     assert da < 5e-3 and db < 5e-3
 
-    tt_voc.release_trace()
-    tt_voc._max_traces = 1
-    _ = tt_voc.forward_traced(mel_a)
-    _ = tt_voc.forward_traced(mel_b)  # evicts A
-    assert len(tt_voc._traces) == 1, f"max_traces=1 should evict; got {len(tt_voc._traces)}"
-    print(f"MULTITRACE max_traces=1 -> resident={len(tt_voc._traces)} (A evicted)", flush=True)
     tt_voc.release_trace()
 
 
@@ -744,10 +740,10 @@ def _round32(c):
     indirect=["mesh_device"],
 )
 def test_audio_decoder_traced_wall(mesh_device, mesh_shape, device_params):
-    """Gate + size the mel-VAE (AudioDecoder) trace: eager vs forward_traced, bit-identical.
+    """Gate + size the mel-VAE (MelDecoder) trace: eager vs forward_traced, bit-identical.
     Validates the Conv2dViaConv3d _persistent_zeros fix makes the device graph capturable."""
-    from models.tt_dit.models.audio_vae.audio_decoder_ltx import AudioDecoder
-    from models.tt_dit.tests.models.ltx.test_audio_components_ltx import (
+    from models.tt_dit.models.audio_vae.mel_decoder_ltx import MelDecoder
+    from models.tt_dit.tests.models.ltx.test_audio_ltx import (
         _AUDIO_DECODER_CFG,
         _audio_decoder_state_from_diffusers,
         _require_diffusers,
@@ -776,7 +772,7 @@ def test_audio_decoder_traced_wall(mesh_device, mesh_shape, device_params):
     ).eval()
 
     z_times_f = _AUDIO_DECODER_CFG["z_channels"] * _AUDIO_DECODER_CFG["mel_bins"]
-    tt_decoder = AudioDecoder(mesh_device=mesh, **_AUDIO_DECODER_CFG)
+    tt_decoder = MelDecoder(mesh_device=mesh, **_AUDIO_DECODER_CFG)
     tt_decoder.load_torch_state_dict(
         _audio_decoder_state_from_diffusers(ref_vae, stats_std=torch.ones(z_times_f), stats_mean=torch.zeros(z_times_f))
     )
@@ -802,4 +798,4 @@ def test_audio_decoder_traced_wall(mesh_device, mesh_shape, device_params):
         f"speedup={ms_eager / ms_traced:.2f}x | max|Δ|={max_abs:.3e}",
         flush=True,
     )
-    assert max_abs < 5e-3, f"AudioDecoder traced diverged: {max_abs:.3e}"
+    assert max_abs < 5e-3, f"MelDecoder traced diverged: {max_abs:.3e}"

@@ -234,8 +234,8 @@ class VocoderWithBWE(Module):
 
         # When set, each generator runs via capture-once/replay (forward_traced), removing
         # per-op host dispatch (~5x on its device graph). use_trace_bwe is separate so the
-        # BWE generator (historically eager over a suspected channel-TP divergence) can be
-        # gated independently of the main vocoder and validated against eager.
+        # BWE generator can be trace-gated independently of the main vocoder and validated
+        # against eager.
         self.use_trace = False
         self.use_trace_bwe = False
 
