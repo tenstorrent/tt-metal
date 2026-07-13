@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tensor-parallel full-attention for Qwen3.5 (validated 64k+ on 27B).
 
-Hybrid Q/K-norm: prefill uses (1+weight) for retrieval; decode uses raw weights for robustness.
+Q/K-norm: HF-correct (1+weight) uniformly at prefill and decode.
 Keep Q bf16 into SDPA (bf8-Q causes long-context degeneration; QWEN_SDPA_BF8_Q=1 restores it).
 Weights interleaved per device; x replicated in, output reduce-scattered on dim=3.
 """
@@ -102,12 +102,9 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         cache_path=c("wo.dramshard" if wo_sharded else "wo"),
         dtype=ttnn.bfloat8_b,
     )
-    # QK norms: HF-correct (1+weight) for sharp prefill attention / retrieval
+    # QK norms: HF-correct (1+weight), used uniformly at prefill AND decode
     tw["q_norm"] = tpc.replicate(state_dict["q_norm.weight"].to(torch.float32) + 1.0, mesh, None)
     tw["k_norm"] = tpc.replicate(state_dict["k_norm.weight"].to(torch.float32) + 1.0, mesh, None)
-    # Raw-weight twins for flat decode attention (hybrid scaling)
-    tw["q_norm_flat"] = tpc.replicate(state_dict["q_norm.weight"].to(torch.float32), mesh, None)
-    tw["k_norm_flat"] = tpc.replicate(state_dict["k_norm.weight"].to(torch.float32), mesh, None)
     return tw
 
 
@@ -524,9 +521,9 @@ class TPAttention:
             v = ttnn.reshape(vp, (1, B, NKV, HD), memory_config=_L1)
             ttnn.deallocate(vp)
 
-        # Hybrid QK norm: raw weights at decode (flat attention, robust to per-step noise)
-        q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6, memory_config=_L1), tw["q_norm_flat"], memory_config=_L1)
-        k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6, memory_config=_L1), tw["k_norm_flat"], memory_config=_L1)
+        # QK norm — (1+w), matching prefill/HF (the prior "flat" no-+1 decode band-aided the reshape scramble).
+        q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6, memory_config=_L1), tw["q_norm"], memory_config=_L1)
+        k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6, memory_config=_L1), tw["k_norm"], memory_config=_L1)
 
         q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
         k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
