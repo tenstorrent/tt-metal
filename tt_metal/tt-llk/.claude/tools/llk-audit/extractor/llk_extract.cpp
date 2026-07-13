@@ -16,7 +16,8 @@
 //     kept in the Python registry so that when an LLK signature changes you edit
 //     one table, never this file.
 //
-// Facts emitted (all filtered to the configured --path-filter, default tt_llk_):
+// Facts emitted (filtered to the configured --path-filter [default tt_llk_]; paths
+// containing "/tests/" are ALWAYS additionally excluded — test sources are not facts):
 //   functions       every function definition + its source range
 //   pointer_writes  assignments through a subscript/deref lvalue, with the
 //                   PROVENANCE of the base pointer (the name of the function or
@@ -127,6 +128,9 @@ bool inScope(const State &S, SourceLocation L, std::string &file, unsigned &line
         return false;
     }
     llvm::StringRef f = S.SM->getFilename(Sp);
+    // Scope: keep only paths matching --path-filter, and NEVER a /tests/ path — test
+    // sources (fixtures/harnesses) are not part of the audited surface (the skills'
+    // enumeration greps apply the same `grep -v /tests/` exclusion).
     if (!f.contains(PathFilter) || f.contains("/tests/"))
     {
         return false;
