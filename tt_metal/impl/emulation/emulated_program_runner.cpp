@@ -2757,6 +2757,35 @@ static void __emule_fabric_deliver(
             std::atomic_thread_fence(std::memory_order_release);
             break;
         }
+        case 8: {  // NOC_FUSED_SCATTER_WRITE_ATOMIC_INC (emule): na[0]@0, na[1]@8, sem@16, chunk_size[0]@24, val@26
+            const uint64_t* na = reinterpret_cast<const uint64_t*>(h + 0);
+            uint64_t sem_addr = *reinterpret_cast<const uint64_t*>(h + 16);
+            uint16_t cs0 = *reinterpret_cast<const uint16_t*>(h + 24);
+            uint16_t val = *reinterpret_cast<const uint16_t*>(h + 26);
+            if (payload != nullptr && size > 0) {
+                uint32_t sz0 = (cs0 < size) ? cs0 : size;  // chunk 0
+                uint8_t* d0 = __emule_fabric_resolve_remote(dst_chip, na[0]);
+                if (d0 != nullptr && sz0 > 0) {
+                    std::memcpy(d0, payload, sz0);
+                    __emule_fiber_wake(d0);
+                }
+                uint32_t sz1 = size - sz0;  // chunk 1 (implicit last chunk size)
+                if (sz1 > 0) {
+                    uint8_t* d1 = __emule_fabric_resolve_remote(dst_chip, na[1]);
+                    if (d1 != nullptr) {
+                        std::memcpy(d1, static_cast<const uint8_t*>(payload) + sz0, sz1);
+                        __emule_fiber_wake(d1);
+                    }
+                }
+                std::atomic_thread_fence(std::memory_order_release);
+            }
+            uint8_t* s = __emule_fabric_resolve_remote(dst_chip, sem_addr);
+            if (s != nullptr) {
+                reinterpret_cast<std::atomic<uint32_t>*>(s)->fetch_add(val, std::memory_order_release);
+                __emule_fiber_wake(s);
+            }
+            break;
+        }
         default:
             break;  // 5/6 native multicast send-types: emule expresses multicast via the target list above
     }
