@@ -37,6 +37,9 @@ class Attention:
         weight_dtype=ttnn.bfloat8_b,
         tensor_cache_path=None,
         create_kv_cache=True,
+        use_prefill_kv_cache=False,
+        sp_axis: int = 0,
+        tp_axis: int = 1,
     ):
         """
         Initialize attention layer.
@@ -81,13 +84,24 @@ class Attention:
 
         # Initialize KV cache
         if create_kv_cache:
-            self.kv_cache = init_kv_cache(
-                mesh_device=mesh_device,
-                config=config,
-                mesh_config=mesh_config,
-                paged_attention_config=paged_attention_config,
-                tensor_cache_path=tensor_cache_path,
-            )
+            if use_prefill_kv_cache:
+                from .kv_cache_prefill_only import init_kv_cache as init_prefill_kv_cache
+
+                self.kv_cache = init_prefill_kv_cache(
+                    mesh_device=mesh_device,
+                    config=config,
+                    sp_axis=sp_axis,
+                    tp_axis=tp_axis,
+                    tensor_cache_path=tensor_cache_path,
+                )
+            else:
+                self.kv_cache = init_kv_cache(
+                    mesh_device=mesh_device,
+                    config=config,
+                    mesh_config=mesh_config,
+                    paged_attention_config=paged_attention_config,
+                    tensor_cache_path=tensor_cache_path,
+                )
             self.layer_past = self.kv_cache  # For tt-transformers compatibility
         else:
             self.kv_cache = None

@@ -48,6 +48,8 @@ class GptOssPrefillPipeline:
         mesh_config,
         sp_factor: int = 4,
         max_seq_len: int = 131072,
+        chunk_size: int | None = None,
+        num_users: int = 1,
     ):
         """
         Args:
@@ -67,44 +69,50 @@ class GptOssPrefillPipeline:
         self.mesh_config = mesh_config
         self.sp_factor = sp_factor
         self.max_seq_len = max_seq_len
+        self.chunk_size = chunk_size or max_seq_len
+        self.num_users = num_users
         self.compiled = False
         self.endpoint: MigrationEndpoint = NoOpMigrationEndpoint()
+        self._on_layer_complete = None
 
     def setup_migration(self, endpoint: MigrationEndpoint) -> None:
         """Bind a real migration endpoint (else stays NoOp)."""
         self.endpoint = endpoint
 
     def compile(self) -> None:
-        """Warm-up the model with a max-length dummy sequence to trigger JIT compilation."""
-        logger.info(f"GptOssPrefillPipeline.compile(): warming up with {self.max_seq_len} tokens")
+        """Warm-up with one chunk (request mode) or full max_seq_len (standalone)."""
+        warmup_len = self.chunk_size if self.chunk_size < self.max_seq_len else self.max_seq_len
+        logger.info(f"GptOssPrefillPipeline.compile(): warming up with {warmup_len} tokens")
         t0 = time.perf_counter()
-        dummy_ids = [0] * self.max_seq_len
-        tt_input = self._prepare_input_tensor(dummy_ids)
-        isl_per_row = self.max_seq_len // self.sp_factor
-        # last real token is the last token of the sequence — on the last SP row
+        dummy_ids = [0] * warmup_len
+        tt_input = self._prepare_input_tensor(dummy_ids, seq_len=warmup_len)
+        isl_per_row = warmup_len // self.sp_factor
         get_last_token = ((isl_per_row - 1) // 32) * 32
         self.model.ttnn_prefill_forward(
             x=tt_input,
             kv_cache=self.kv_cache,
             get_last_token=get_last_token,
+            skip_lm_head=True,
         )
+        ttnn.synchronize_device(self.mesh_device)
         warmup_ms = (time.perf_counter() - t0) * 1000.0
-        logger.info(f"[prefill timing] task_id=WARMUP num_tokens={self.max_seq_len} compile() = {warmup_ms:.2f} ms")
+        logger.info(f"[prefill timing] task_id=WARMUP num_tokens={warmup_len} compile() = {warmup_ms:.2f} ms")
         self.compiled = True
 
-    def _prepare_input_tensor(self, padded_token_ids: list) -> ttnn.Tensor:
+    def _prepare_input_tensor(self, padded_token_ids: list, *, seq_len: int | None = None) -> ttnn.Tensor:
         """Upload and embed token IDs, SP-sharded across mesh rows.
 
         Args:
-            padded_token_ids: List of ints of length max_seq_len (caller must pad).
+            padded_token_ids: List of ints of length `seq_len` (caller must pad).
+            seq_len: Token count for this forward (defaults to max_seq_len).
 
         Returns:
             SP-sharded embedded tensor ready for model.ttnn_prefill_forward(x=...).
-            Shape per SP row: [1, 1, max_seq_len // sp_factor, hidden_size].
+            Shape per SP row: [1, 1, seq_len // sp_factor, hidden_size].
         """
         sp = self.sp_factor
-        seq_len = len(padded_token_ids)
-        assert seq_len == self.max_seq_len, f"Expected {self.max_seq_len} tokens, got {seq_len}"
+        seq_len = seq_len or self.max_seq_len
+        assert len(padded_token_ids) == seq_len, f"Expected {seq_len} tokens, got {len(padded_token_ids)}"
         isl_per_row = seq_len // sp
 
         # Reshape to [SP, 1, 1, isl_per_row] for ShardTensor2dMesh(dims=(0, None)):
@@ -218,3 +226,85 @@ class GptOssPrefillPipeline:
             f"[prefill timing] isl={actual_isl} slot={slot_id} prefill={dt_ms:.2f} ms first_token={first_token}"
         )
         return first_token
+
+    def _embed_chunk_tokens(self, tt_tokens: ttnn.Tensor) -> ttnn.Tensor:
+        """Embed an H2D chunk (SP-sharded uint32 tokens) for one prefill_chunk call."""
+        tt_embeds = ttnn.embedding(
+            tt_tokens, self.model.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
+        )
+        if len(tt_embeds.shape) == 3:
+            tt_embeds = ttnn.unsqueeze_to_4D(tt_embeds)
+        return tt_embeds
+
+    def set_layer_ack_channel(self, layer_ack_channel) -> None:
+        """Register LayerAck: inject(1) once per layer after each chunk forward."""
+        assert self.compiled, "Call compile() before set_layer_ack_channel()"
+
+        def on_layer_complete(layer_idx: int) -> None:
+            layer_ack_channel.inject(1)
+
+        self._on_layer_complete = on_layer_complete
+
+    def build_kv_chunk_table(self, path: str) -> str:
+        """Serialize the GPT-OSS K/V chunk address table for the migration worker."""
+        from models.demos.common.prefill.runners.migration import serialize_prebuilt_kv_chunk_table
+        from models.demos.gpt_oss_d_p.utils.kv_cache_table import create_kv_chunk_address_table_gpt_oss_prefill
+
+        table = create_kv_chunk_address_table_gpt_oss_prefill(
+            mesh_device=self.mesh_device,
+            mesh_shape=tuple(self.mesh_device.shape),
+            sp_axis=0,
+            tp_axis=1,
+            kv_caches=self.kv_cache,
+            num_transformer_layers=len(self.kv_cache),
+            num_kv_heads=self.hf_config.num_key_value_heads,
+            head_dim=self.hf_config.head_dim,
+            max_seq_len=self.max_seq_len,
+            num_slots=self.num_users,
+        )
+        serialize_prebuilt_kv_chunk_table(table=table, path=path)
+        return path
+
+    def prefill_chunk(
+        self,
+        tt_tokens: ttnn.Tensor,
+        slot_id: int,
+        actual_start: int,
+        actual_end: int,
+    ) -> None:
+        """Prefill ONE H2D chunk into ``slot_id``'s KV cache slice.
+
+        ``tt_tokens`` is the SP-sharded uint32 chunk from inbound_socket_service_sync.
+        ``[actual_start, actual_end)`` is the absolute KV range of real (non-pad) tokens.
+        """
+        assert self.compiled, "Call compile() before prefill_chunk()"
+        assert 0 <= slot_id < self.num_users, f"slot_id {slot_id} out of range [0, {self.num_users})"
+        assert (
+            actual_start + self.chunk_size <= self.max_seq_len
+        ), f"chunk at actual_start={actual_start} exceeds max_seq_len={self.max_seq_len}"
+        assert (
+            actual_start <= actual_end <= actual_start + self.chunk_size
+        ), f"[actual_start={actual_start}, actual_end={actual_end}) invalid for chunk_size={self.chunk_size}"
+
+        actual_isl = actual_end - actual_start
+        logger.info(
+            f"GptOssPrefillPipeline.prefill_chunk: slot={slot_id} "
+            f"[{actual_start},{actual_end}) isl={actual_isl}"
+        )
+
+        tt_input = self._embed_chunk_tokens(tt_tokens)
+        ttnn.deallocate(tt_tokens)
+
+        t0 = time.perf_counter()
+        self.model.ttnn_prefill_forward(
+            x=tt_input,
+            kv_cache=self.kv_cache,
+            user_id=slot_id,
+            skip_lm_head=True,
+            on_layer_complete=self._on_layer_complete,
+        )
+        ttnn.deallocate(tt_input)
+        dt_ms = (time.perf_counter() - t0) * 1000.0
+        logger.info(
+            f"[prefill timing] slot={slot_id} [{actual_start},{actual_end}) prefill_chunk={dt_ms:.2f} ms"
+        )

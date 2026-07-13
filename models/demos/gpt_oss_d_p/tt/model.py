@@ -136,6 +136,9 @@ class Model:
         users_row_sharded=False,
         use_throughput_experts=False,
         max_seq_len=None,
+        use_prefill_kv_cache=False,
+        sp_axis: int = 0,
+        tp_axis: int = 1,
     ):
         """
         Initialize GPT-OSS model
@@ -216,6 +219,9 @@ class Model:
                 use_throughput_experts=use_throughput_experts,
                 tokens_per_device=max_local_batch_size,
                 max_seq_len=self.max_seq_len,
+                use_prefill_kv_cache=use_prefill_kv_cache,
+                sp_axis=sp_axis,
+                tp_axis=tp_axis,
             )
             for layer_idx in range(hf_config.num_hidden_layers)
         ]
@@ -323,6 +329,9 @@ class Model:
         create_kv_cache=True,
         users_row_sharded=False,
         use_throughput_experts=False,
+        use_prefill_kv_cache=False,
+        sp_axis: int = 0,
+        tp_axis: int = 1,
     ):
         """Constructor compatible with tt_transformers.Transformer interface"""
         from models.common.utility_functions import is_blackhole
@@ -347,6 +356,9 @@ class Model:
             users_row_sharded=users_row_sharded,
             use_throughput_experts=use_throughput_experts,
             max_seq_len=args.max_seq_len,
+            use_prefill_kv_cache=use_prefill_kv_cache,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
         )
 
         # Add tt_transformers compatible attributes

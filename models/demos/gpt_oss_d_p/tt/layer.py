@@ -30,6 +30,9 @@ class DecoderLayer:
         users_row_sharded=False,
         use_throughput_experts=False,
         tokens_per_device=32,
+        use_prefill_kv_cache=False,
+        sp_axis: int = 0,
+        tp_axis: int = 1,
     ):
         self.input_layernorm = RMSNorm(
             mesh_device,
@@ -86,6 +89,9 @@ class DecoderLayer:
             transformation_mats=transformation_mats,
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "self_attn"),
             create_kv_cache=create_kv_cache,
+            use_prefill_kv_cache=use_prefill_kv_cache,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
         )
         self.mesh_device = mesh_device
 

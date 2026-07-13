@@ -23,6 +23,9 @@ def create_tt_model(
     create_kv_cache=True,
     users_row_sharded=False,
     use_throughput_experts=False,
+    use_prefill_kv_cache=False,
+    sp_axis: int = 0,
+    tp_axis: int = 1,
 ):
     """
     GPT-OSS version of create_tt_model that matches tt_transformers interface
@@ -71,6 +74,9 @@ def create_tt_model(
         create_kv_cache=create_kv_cache,
         users_row_sharded=users_row_sharded,
         use_throughput_experts=use_throughput_experts,
+        use_prefill_kv_cache=use_prefill_kv_cache,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
     )
 
     # Extract tt_kv_cache like tt_transformers does
