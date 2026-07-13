@@ -1061,7 +1061,7 @@ class Qwen36Model:
 
         The direct fill warm replaces an older sweep that re-ran a whole all-layer forward once per
         fill width purely to reach paged_fill_cache — at block_size 64 that was ~67 forwards (the
-        16 at the 2048 bucket dominated capture).
+        33 at the 2048 bucket dominated capture).
 
         MUST run while the GDN is in serving state mode and BEFORE any trace is parked;
         capture_prefill_trace_chunked calls this just before begin_trace_capture. page_table must
