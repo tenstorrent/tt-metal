@@ -615,6 +615,10 @@ def _batched_experts(gathered, weights, compute_kernel_config, program_configs=N
 
 RAGGED_MAX_M_BLOCKS = 4
 
+# Default token-dim chunk length for long-prompt ragged prefill (see
+# ``chunked_ragged_sparse_prefill_forward``). Matches the QB2-validated single-call ceiling.
+RAGGED_PREFILL_CHUNK = 4096
+
 
 @dataclass
 class RaggedRouting:
@@ -1030,6 +1034,101 @@ def ragged_sparse_prefill_forward(
         tensor.deallocate(True)
     if mesh_config is not None and mesh_config.tp > 1:
         out = ccl_allreduce(out, mesh_config, ccl_manager)
+    return out
+
+
+def ragged_prefill_chunk_size():
+    """Token-dim chunk length for long-prompt ragged prefill (``DG_PREFILL_RAGGED_CHUNK``).
+
+    Defaults to ``RAGGED_PREFILL_CHUNK`` (4096), the largest single-call length the ragged path
+    has been exercised at. Must be a positive multiple of the tile height so every chunk (and the
+    32-multiple-padded tail) is a legal ragged prefill shape."""
+    raw = os.environ.get("DG_PREFILL_RAGGED_CHUNK")
+    if raw is None or not raw.strip():
+        return RAGGED_PREFILL_CHUNK
+    value = int(raw)
+    if value <= 0 or value % TILE != 0:
+        raise ValueError(f"DG_PREFILL_RAGGED_CHUNK must be a positive multiple of {TILE}, got {value}")
+    return value
+
+
+def chunked_ragged_sparse_prefill_forward(
+    hidden_states,
+    routing_weights,
+    weights,
+    config,
+    prefill_sparsity,
+    mesh_config=None,
+    mesh_device=None,
+    ccl_manager=None,
+):
+    """Ragged sparse prefill for prompts longer than one chunk.
+
+    MoE is per-token, so a long prefill is processed in ``ragged_prefill_chunk_size()``-token
+    slices along the sequence dim: the full-S ``RaggedRouting`` (computed once by the router hook)
+    and ``hidden_states`` are sliced by the same boundaries, each slice runs the QB2-validated
+    ``ragged_sparse_prefill_forward`` UNCHANGED (including its per-slice TP all-reduce), and the
+    per-chunk ``[1, 1, chunk, H]`` outputs are concatenated on the token dim. This is bit-identical
+    to a single full-S ragged call — the router (RMSNorm/softmax/top-k) is strictly per-token so a
+    sliced ``RaggedRouting`` equals per-token routing, the ragged FFN is per-token, and TP all-reduce
+    is per-element (grouping tokens into chunks cannot change any element). It also keeps every
+    intermediate bounded to the single-chunk footprint (the [top_k, S, H] combine reduction and the
+    ``top_k*S*H`` index volumes both scale with the chunk length, not the full context), which is
+    what lets prefill scale past the ~64K DRAM / ~128K int32-index limits of a single full-S call.
+
+    Drop-in for ``ragged_sparse_prefill_forward`` (identical signature). For ``S <= chunk`` — or a
+    non-``RaggedRouting`` argument — it delegates straight through, so the single-chunk path is
+    byte-for-byte the validated behavior.
+    """
+    S = hidden_states.shape[2]
+    chunk = ragged_prefill_chunk_size()
+    if S <= chunk or not isinstance(routing_weights, RaggedRouting):
+        return ragged_sparse_prefill_forward(
+            hidden_states,
+            routing_weights,
+            weights,
+            config,
+            prefill_sparsity,
+            mesh_config=mesh_config,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+        )
+
+    values = routing_weights.values  # [1, 1, S, top_k]
+    indices = routing_weights.indices  # [1, 1, S, top_k]
+    scale = routing_weights.per_expert_scale  # [1, 1, 1, E] — shared across chunks, NOT sliced
+    top_k = values.shape[-1]
+    H = hidden_states.shape[3]
+
+    chunk_outputs = []
+    for start in range(0, S, chunk):
+        end = min(start + chunk, S)  # start is chunk-aligned; S is a 32-multiple upstream
+        hidden_chunk = ttnn.slice(hidden_states, [0, 0, start, 0], [1, 1, end, H])
+        values_chunk = ttnn.slice(values, [0, 0, start, 0], [1, 1, end, top_k])
+        indices_chunk = ttnn.slice(indices, [0, 0, start, 0], [1, 1, end, top_k])
+        routing_chunk = RaggedRouting(values_chunk, indices_chunk, scale)
+        # ragged_sparse_prefill_forward deallocates values_chunk/indices_chunk (its RaggedRouting
+        # input) inside _ragged_metadata_host; it never touches hidden_chunk, so we free that here.
+        chunk_outputs.append(
+            ragged_sparse_prefill_forward(
+                hidden_chunk,
+                routing_chunk,
+                weights,
+                config,
+                prefill_sparsity,
+                mesh_config=mesh_config,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+            )
+        )
+        hidden_chunk.deallocate(True)
+
+    values.deallocate(True)
+    indices.deallocate(True)
+    out = chunk_outputs[0] if len(chunk_outputs) == 1 else ttnn.concat(chunk_outputs, dim=2)
+    if len(chunk_outputs) > 1:
+        for tensor in chunk_outputs:
+            tensor.deallocate(True)
     return out
 
 

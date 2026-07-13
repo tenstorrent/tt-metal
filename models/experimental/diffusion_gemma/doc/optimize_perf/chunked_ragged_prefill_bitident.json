@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "timestamp_utc": "2026-07-13T21:57:22.356477+00:00",
+  "git_commit": "ec5b64b4891d8babfa3829a886d53068c5b2d889",
+  "command": "models/experimental/diffusion_gemma/doc/optimize_perf/verify_chunked_ragged_prefill.py --seq-lens 4096,6144,8192 --num-layers 30 --max-seq-len 8192 --output-json models/experimental/diffusion_gemma/doc/optimize_perf/chunked_ragged_prefill_bitident.json",
+  "checkpoint": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+  "hardware": {
+    "architecture": "Blackhole",
+    "system": "P150x4 QB2",
+    "mesh_shape": [
+      1,
+      4
+    ],
+    "tensor_parallel": 4
+  },
+  "model": {
+    "name": "DiffusionGemma 26B-A4B-it",
+    "layers": 30
+  },
+  "baseline": "shared dense 128-expert prefill (DG_PREFILL_MOE_RAGGED=0)",
+  "candidate": "chunked ragged prefill (DG_PREFILL_MOE_RAGGED=1, DG_PREFILL_RAGGED_LONG=1)",
+  "rows": [
+    {
+      "seq_len": 4096,
+      "chunk_size": 4096,
+      "num_chunks": 1,
+      "dense_prefill_s": 10.400144552986603,
+      "chunked_prefill_s": 3.194267110025976,
+      "speedup": 3.2558781700951833,
+      "logits_exact": true,
+      "logits_max_abs": 0.0,
+      "kv_cache_exact_all_layers_all_devices": true,
+      "kv_cache_max_abs": 0.0
+    },
+    {
+      "seq_len": 6144,
+      "chunk_size": 4096,
+      "num_chunks": 2,
+      "dense_prefill_s": 15.534372592985164,
+      "chunked_prefill_s": 3.2795340059674345,
+      "speedup": 4.7367621633801775,
+      "logits_exact": true,
+      "logits_max_abs": 0.0,
+      "kv_cache_exact_all_layers_all_devices": true,
+      "kv_cache_max_abs": 0.0
+    },
+    {
+      "seq_len": 8192,
+      "chunk_size": 4096,
+      "num_chunks": 2,
+      "dense_prefill_s": 22.6994171399856,
+      "chunked_prefill_s": 4.823260952951387,
+      "speedup": 4.706238655011123,
+      "logits_exact": true,
+      "logits_max_abs": 0.0,
+      "kv_cache_exact_all_layers_all_devices": true,
+      "kv_cache_max_abs": 0.0
+    }
+  ],
+  "all_bit_identical": true
+}

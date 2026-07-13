@@ -201,6 +201,7 @@ def test_tuned_prefill_moe_does_not_leak_across_threads(monkeypatch, contextual_
 def test_ragged_dispatch_is_context_local(monkeypatch, fake_ttnn):
     monkeypatch.setenv(PM.FLAG, "0")
     monkeypatch.setenv(PM.RAGGED_FLAG, "1")
+    monkeypatch.setenv(PM.RAGGED_LONG_FLAG, "0")  # direct ragged path; long-on chunking covered separately
     monkeypatch.setattr(PM, "_original_prefill_forward", lambda *args, **kwargs: "dense")
     monkeypatch.setattr(PM, "ragged_sparse_prefill_forward", lambda *args, **kwargs: "ragged")
     hidden_states = SimpleNamespace(shape=(1, 1, 128, 2816))
@@ -376,3 +377,189 @@ def test_ragged_packer_single_expert_all_tokens():
     # 1-m-block segment (22 rows -> ceil(22/32) = 1 block).
     assert 0 in group_experts[3, : group_counts[3]].tolist()
     assert 0 in group_experts[0, : group_counts[0]].tolist()
+
+
+# ---------------------------------------------------------------------------------------------
+# Long-prompt chunked ragged prefill (DG_PREFILL_RAGGED_LONG, default off).
+# ---------------------------------------------------------------------------------------------
+
+
+def test_ragged_long_prefill_flag_defaults_on_and_can_be_disabled(monkeypatch):
+    monkeypatch.delenv(PM.RAGGED_LONG_FLAG, raising=False)
+    assert PM.ragged_long_prefill_enabled()
+    monkeypatch.setenv(PM.RAGGED_LONG_FLAG, "0")
+    assert not PM.ragged_long_prefill_enabled()
+    monkeypatch.setenv(PM.RAGGED_LONG_FLAG, "1")
+    assert PM.ragged_long_prefill_enabled()
+
+
+def test_use_ragged_for_window_follows_long_flag(monkeypatch):
+    monkeypatch.setenv(PM.RAGGED_LONG_FLAG, "0")
+    # Long off: original 1 < S <= RAGGED_PREFILL_CHUNK window.
+    assert not PM._use_ragged_for(1)
+    assert PM._use_ragged_for(2)
+    assert PM._use_ragged_for(PM.RAGGED_PREFILL_CHUNK)
+    assert not PM._use_ragged_for(PM.RAGGED_PREFILL_CHUNK + 32)
+
+    monkeypatch.setenv(PM.RAGGED_LONG_FLAG, "1")
+    # Long on: any multi-token prefill is ragged (chunked wrapper handles S beyond one chunk).
+    assert not PM._use_ragged_for(1)
+    assert PM._use_ragged_for(2)
+    assert PM._use_ragged_for(PM.RAGGED_PREFILL_CHUNK)
+    assert PM._use_ragged_for(PM.RAGGED_PREFILL_CHUNK * 4 + 32)
+
+
+def test_prefill_dispatch_routes_long_prompts_to_chunked(monkeypatch, fake_ttnn):
+    monkeypatch.setenv(PM.FLAG, "0")
+    monkeypatch.setenv(PM.RAGGED_FLAG, "1")
+    monkeypatch.setattr(PM, "_original_prefill_forward", lambda *a, **k: "dense")
+    monkeypatch.setattr(PM, "ragged_sparse_prefill_forward", lambda *a, **k: "ragged")
+    monkeypatch.setattr(PM, "chunked_ragged_sparse_prefill_forward", lambda *a, **k: "chunked")
+
+    def hidden(seq_len):
+        return SimpleNamespace(shape=(1, 1, seq_len, 2816))
+
+    over = PM.RAGGED_PREFILL_CHUNK * 4  # 16384 — the cliff case
+
+    monkeypatch.setenv(PM.RAGGED_LONG_FLAG, "0")
+    with PM.use_tuned_prefill_moe(_model()):
+        # Long off: <= chunk -> ragged, > chunk -> shared dense (the pre-extension behavior).
+        assert PM._contextual_prefill_forward(hidden_states=hidden(128)) == "ragged"
+        assert PM._contextual_prefill_forward(hidden_states=hidden(PM.RAGGED_PREFILL_CHUNK)) == "ragged"
+        assert PM._contextual_prefill_forward(hidden_states=hidden(over)) == "dense"
+        assert PM._contextual_prefill_forward(hidden_states=hidden(1)) == "dense"
+
+    monkeypatch.setenv(PM.RAGGED_LONG_FLAG, "1")
+    with PM.use_tuned_prefill_moe(_model()):
+        # Long on: every multi-token prefill flows through the chunked wrapper.
+        assert PM._contextual_prefill_forward(hidden_states=hidden(128)) == "chunked"
+        assert PM._contextual_prefill_forward(hidden_states=hidden(over)) == "chunked"
+        assert PM._contextual_prefill_forward(hidden_states=hidden(1)) == "dense"
+
+    # Context-local: outside the prefill context, always the shared dense path.
+    assert PM._contextual_prefill_forward(hidden_states=hidden(over)) == "dense"
+
+
+def test_router_dispatch_moves_with_prefill_gate(monkeypatch, fake_ttnn):
+    # The ragged router emits a RaggedRouting only the ragged prefill can consume, so the router
+    # and prefill gates MUST open on the same window.
+    monkeypatch.setenv(PM.RAGGED_FLAG, "1")
+    monkeypatch.setattr(PM, "_original_router_forward", lambda router, hs: "dense")
+    monkeypatch.setattr(PM, "ragged_router_forward", lambda router, hs: "ragged")
+    router = object()
+
+    def hidden(seq_len):
+        return SimpleNamespace(shape=(1, 1, seq_len, 2816))
+
+    over = PM.RAGGED_PREFILL_CHUNK * 4
+
+    monkeypatch.setenv(PM.RAGGED_LONG_FLAG, "0")
+    with PM.use_tuned_prefill_moe(_model()):
+        assert PM._contextual_router_forward(router, hidden(PM.RAGGED_PREFILL_CHUNK)) == "ragged"
+        assert PM._contextual_router_forward(router, hidden(over)) == "dense"
+
+    monkeypatch.setenv(PM.RAGGED_LONG_FLAG, "1")
+    with PM.use_tuned_prefill_moe(_model()):
+        assert PM._contextual_router_forward(router, hidden(over)) == "ragged"
+
+    assert PM._contextual_router_forward(router, hidden(PM.RAGGED_PREFILL_CHUNK)) == "dense"
+
+
+class _FakeTensor:
+    """Minimal stand-in that records shape and deallocation for the chunk-loop plumbing test."""
+
+    def __init__(self, shape, tag=""):
+        self.shape = tuple(shape)
+        self.tag = tag
+        self.deallocated = False
+
+    def deallocate(self, force=True):
+        self.deallocated = True
+
+
+def _install_fake_chunk_ops(monkeypatch):
+    slice_calls = []
+    concat_calls = []
+    ragged_calls = []
+
+    def fake_slice(tensor, start, end):
+        result = _FakeTensor(tuple(e - s for s, e in zip(start, end)), tag="slice")
+        slice_calls.append((start[2], end[2], result))
+        return result
+
+    def fake_concat(tensors, dim):
+        concat_calls.append((list(tensors), dim))
+        total = sum(t.shape[2] for t in tensors)
+        return _FakeTensor((1, 1, total, tensors[0].shape[3]), tag="concat")
+
+    def fake_ragged(hidden, routing, weights, config, sparsity, mesh_config=None, mesh_device=None, ccl_manager=None):
+        ragged_calls.append(SimpleNamespace(seq=hidden.shape[2], routing=routing, mesh_config=mesh_config))
+        return _FakeTensor((1, 1, hidden.shape[2], hidden.shape[3]), tag="out")
+
+    monkeypatch.setattr(SM, "ttnn", SimpleNamespace(slice=fake_slice, concat=fake_concat))
+    monkeypatch.setattr(SM, "ragged_sparse_prefill_forward", fake_ragged)
+    return slice_calls, concat_calls, ragged_calls
+
+
+def test_chunked_ragged_prefill_slices_tail_and_concats(monkeypatch):
+    monkeypatch.setenv("DG_PREFILL_RAGGED_CHUNK", "64")
+    slice_calls, concat_calls, ragged_calls = _install_fake_chunk_ops(monkeypatch)
+
+    seq_len, hidden_size, top_k = 160, 2816, 8  # 64 + 64 + 32 (tail) -> 3 chunks
+    hidden = _FakeTensor((1, 1, seq_len, hidden_size))
+    scale = object()
+    values = _FakeTensor((1, 1, seq_len, top_k))
+    indices = _FakeTensor((1, 1, seq_len, top_k))
+    routing = SM.RaggedRouting(values, indices, scale)
+    mesh_cfg = SimpleNamespace(tp=4)
+
+    out = SM.chunked_ragged_sparse_prefill_forward(
+        hidden, routing, "weights", "config", "sparsity", mesh_config=mesh_cfg, mesh_device="mesh"
+    )
+
+    # One ragged call per chunk, with the exact per-chunk sequence lengths.
+    assert [c.seq for c in ragged_calls] == [64, 64, 32]
+    # Each chunk gets its own RaggedRouting slice sharing the (unsliced) per-expert scale, and the
+    # per-chunk TP all-reduce is preserved (mesh_config threaded through unchanged).
+    for call, expected in zip(ragged_calls, [64, 64, 32]):
+        assert isinstance(call.routing, SM.RaggedRouting)
+        assert call.routing.per_expert_scale is scale
+        assert call.routing.values.shape[2] == expected
+        assert call.mesh_config is mesh_cfg
+    # Sequence sliced at chunk-aligned boundaries with a 32-row tail — for hidden + values + indices.
+    hidden_ranges = [(s, e) for (s, e, r) in slice_calls if r.shape[3] == hidden_size]
+    assert hidden_ranges == [(0, 64), (64, 128), (128, 160)]
+    # Concatenated once on the token dim back to the full length.
+    assert len(concat_calls) == 1 and concat_calls[0][1] == 2
+    assert out.shape[2] == seq_len
+    # Parent routing tensors are freed by the wrapper (their per-chunk slices are freed downstream).
+    assert values.deallocated and indices.deallocated
+
+
+def test_chunked_ragged_prefill_single_chunk_is_passthrough(monkeypatch):
+    monkeypatch.setenv("DG_PREFILL_RAGGED_CHUNK", "4096")
+    slice_calls, concat_calls, ragged_calls = _install_fake_chunk_ops(monkeypatch)
+
+    hidden = _FakeTensor((1, 1, 2048, 2816))  # <= chunk -> single direct call, no slice/concat
+    routing = SM.RaggedRouting(_FakeTensor((1, 1, 2048, 8)), _FakeTensor((1, 1, 2048, 8)), object())
+
+    out = SM.chunked_ragged_sparse_prefill_forward(hidden, routing, "w", "c", "s", mesh_config=None)
+
+    assert len(ragged_calls) == 1 and ragged_calls[0].seq == 2048
+    assert slice_calls == [] and concat_calls == []
+    assert out.shape[2] == 2048
+
+
+def test_chunked_ragged_prefill_passes_dense_routing_straight_through(monkeypatch):
+    # A non-RaggedRouting argument (e.g. a dense routing tensor) must delegate unchanged, never slice.
+    monkeypatch.setenv("DG_PREFILL_RAGGED_CHUNK", "64")
+    slice_calls, concat_calls, ragged_calls = _install_fake_chunk_ops(monkeypatch)
+
+    hidden = _FakeTensor((1, 1, 160, 2816))  # > chunk, but routing is not RaggedRouting
+    dense_routing = _FakeTensor((1, 1, 160, 128))
+
+    out = SM.chunked_ragged_sparse_prefill_forward(hidden, dense_routing, "w", "c", "s")
+
+    assert len(ragged_calls) == 1 and ragged_calls[0].seq == 160
+    assert slice_calls == [] and concat_calls == []
+    assert out.shape[2] == 160

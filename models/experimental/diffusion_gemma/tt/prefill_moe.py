@@ -10,6 +10,13 @@ on QB2 (26B-A4B, 30 layers, prompts up to 2048 incl. multi-segment expert
 packing: logits + KV cache max_abs=0), while cutting the 128-expert prefill down
 to only the routed experts (26-57x faster on device, scaling with prompt length).
 
+Prompts longer than ``RAGGED_PREFILL_CHUNK`` are processed in ``RAGGED_PREFILL_CHUNK``-token slices
+through the same validated ragged path (``chunked_ragged_sparse_prefill_forward``, default on via
+``DG_PREFILL_RAGGED_LONG``), removing the shared dense fallback that recomputed all 128 experts and
+was ~16x slower (the ">4096 cliff": 3213 -> 379 tok/s at 16K). Chunking also keeps the ``top_k*S*H``
+index volumes under the int32 limit that a single full-S call would hit past ~128K context. Verified
+bit-identical to the dense path on QB2 (logits + KV max_abs=0 at 4096/6144/8192, 30 layers).
+
 The shared Gemma4 source remains untouched. A context-local selector activates
 these paths only for the current DiffusionGemma prefill.
 """
@@ -26,12 +33,15 @@ import models.demos.gemma4.tt.experts as gemma4_experts
 import models.demos.gemma4.tt.experts.prefill as gemma4_prefill
 from models.demos.gemma4.tt.router import Gemma4Router
 from models.experimental.diffusion_gemma.tt.sparse_moe import (
+    RAGGED_PREFILL_CHUNK,
+    chunked_ragged_sparse_prefill_forward,
     ragged_router_forward,
     ragged_sparse_prefill_forward,
 )
 
 FLAG = "DG_PREFILL_MOE_TUNED"
 RAGGED_FLAG = "DG_PREFILL_MOE_RAGGED"
+RAGGED_LONG_FLAG = "DG_PREFILL_RAGGED_LONG"
 
 _HIDDEN_SIZE = 2816
 _INTERMEDIATE_PER_DEVICE = 192
@@ -59,6 +69,34 @@ def ragged_prefill_moe_enabled() -> bool:
     """Whether zero-drop compact sparse prefill is enabled (default ON; QB2-verified bit-identical to the shared path)."""
 
     return os.environ.get(RAGGED_FLAG, "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def ragged_long_prefill_enabled() -> bool:
+    """Whether the ragged path is extended past ``RAGGED_PREFILL_CHUNK`` via token-dim chunking.
+
+    Default ON: long prefill is processed in ``RAGGED_PREFILL_CHUNK``-token slices through the
+    validated ragged path (see ``chunked_ragged_sparse_prefill_forward``), eliminating the >4096
+    128-expert dense cliff (~4.7x faster at 8192, widening with context). QB2-verified bit-identical
+    to the shared dense prefill — logits + full KV cache max_abs=0 at 4096/6144/8192, 30 layers
+    (doc/optimize_perf/chunked_ragged_prefill_bitident.json). Set ``DG_PREFILL_RAGGED_LONG=0`` to
+    force the shared 128-expert dense fallback for prompts beyond one chunk."""
+
+    return os.environ.get(RAGGED_LONG_FLAG, "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def _use_ragged_for(seq_len: int) -> bool:
+    """Whether this prefill sequence length should take the ragged path (vs shared dense).
+
+    Both the router and prefill hooks MUST agree: the ragged router emits a ``RaggedRouting`` object
+    that only the ragged prefill can consume, so the two gates move together. With long-prefill
+    chunking off, this is the original ``1 < S <= RAGGED_PREFILL_CHUNK`` window; with it on, any
+    multi-token prefill is ragged (the chunked wrapper handles S beyond one chunk)."""
+
+    if seq_len <= 1:
+        return False
+    if ragged_long_prefill_enabled():
+        return True
+    return seq_len <= RAGGED_PREFILL_CHUNK
 
 
 def _find_supported_experts(model):
@@ -156,7 +194,9 @@ def _contextual_prefill_forward(*args, **kwargs):
     """Dispatch only the active DiffusionGemma call to the ragged path."""
 
     hidden_states = kwargs.get("hidden_states", args[0] if args else None)
-    if _ragged_prefill_active.get() and hidden_states is not None and 1 < hidden_states.shape[2] <= 4096:
+    if _ragged_prefill_active.get() and hidden_states is not None and _use_ragged_for(hidden_states.shape[2]):
+        if ragged_long_prefill_enabled():
+            return chunked_ragged_sparse_prefill_forward(*args, **kwargs)
         return ragged_sparse_prefill_forward(*args, **kwargs)
     return _original_prefill_forward(*args, **kwargs)
 
@@ -171,7 +211,7 @@ def _install_contextual_prefill_forward() -> None:
 
 
 def _contextual_router_forward(router, hidden_states):
-    if _ragged_prefill_active.get() and 1 < hidden_states.shape[2] <= 4096:
+    if _ragged_prefill_active.get() and _use_ragged_for(hidden_states.shape[2]):
         return ragged_router_forward(router, hidden_states)
     return _original_router_forward(router, hidden_states)
 
