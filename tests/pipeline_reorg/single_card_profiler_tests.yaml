@@ -80,3 +80,17 @@
       timeout: 6
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn
+
+- name: Op-to-op latency
+  cmd: run_op_to_op_latency_test
+  skus:
+    wh_n150_civ2:
+      timeout: 5
+    wh_n300_civ2:
+      timeout: 5
+    bh_p100a_civ2_viommu:
+      timeout: 5
+    bh_p150b_civ2_viommu:
+      timeout: 5
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
