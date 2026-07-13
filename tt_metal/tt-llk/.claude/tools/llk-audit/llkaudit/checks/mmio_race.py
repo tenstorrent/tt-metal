@@ -97,7 +97,13 @@ class MmioRace(Check):
                     if applicable and not local_ordering and consumer_after is None:
                         local_ordering = True
                         guard = (p.get("name") or "", p.get("line", 0))
-                    if registry.is_consumer(role) and consumer_after is None:
+                    # CFGSHIFTMASK is classified ordered_write but ALSO consumes config
+                    # (reads its target cfg word + SCRATCH_SEC then writes back), so it
+                    # marks the consumer boundary too — a guard after it can't un-race it.
+                    if (
+                        registry.is_consumer(role)
+                        or registry.is_mmio_config_rmw_consumer(p)
+                    ) and consumer_after is None:
                         consumer_after = p.get("line", 0)
 
             hint = "LOCALLY_ORDERED" if local_ordering else "NO_LOCAL_ORDERING"

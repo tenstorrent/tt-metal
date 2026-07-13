@@ -175,7 +175,7 @@ ORDERED_WRITE_MACRO_SUBSTR = (
     "RMWCIB",
     "SETADC",
     "SETDMAREG",
-    "CFGSHIFTMASK",  # Quasar: TTI_CFGSHIFTMASK(CfgRegAddr, ...) — a config RMW write
+    "CFGSHIFTMASK",  # BH/Quasar: TTI_CFGSHIFTMASK(CfgRegAddr, ...) — a config RMW write
 )
 # Calls that are ordered cfg writes.
 ORDERED_WRITE_CALLS = ("cfg_reg_rmw_tensix",)  # substring match on callee text
@@ -272,6 +272,28 @@ def classify_call(callee: str, callee_text: str):
 
 def is_consumer(role: str) -> bool:
     return role is not None and role.startswith("consumer")
+
+
+# CFGSHIFTMASK is classified `ordered_write` above (it writes a config word back), and
+# cfg-word-overlap + reconfig-stall RELY on that role — it must NOT change. But it is ALSO
+# a config-RMW CONSUMER: the ISA (BlackholeA0/.../CFGSHIFTMASK.md; also Quasar) shows it
+# READS the target config word (Config[StateID][CfgIndex]) AND a SCRATCH_SEC register as
+# sources, combines them via a masked/rotated ALU op, then writes the result back. For
+# mmio-race ONLY, treat it as a consumer so a guard placed AFTER it is not mis-credited
+# (a RISC MMIO write to SCRATCH_SEC / the config word that a later CFGSHIFTMASK consumes is
+# a real write->consume race). Deliberately NOT a classify_macro consumer role — scoping it
+# here keeps the shared ordered_write classification (and cfg-word/reconfig counts) intact.
+MMIO_ORDERED_WRITE_CONSUMERS = ("CFGSHIFTMASK",)  # instruction-macro substrings
+
+
+def is_mmio_config_rmw_consumer(fact: dict) -> bool:
+    """mmio-race-ONLY: True for an `ordered_write` macro that ALSO reads config state as a
+    source (CFGSHIFTMASK), so it consumes a prior RISC MMIO write. Used only to set the
+    consumer_after marker; does not affect classify_macro / cfg-word / reconfig."""
+    if fact.get("family") != "macro":
+        return False
+    name = fact.get("name", "")
+    return _instr(name) and any(s in name.upper() for s in MMIO_ORDERED_WRITE_CONSUMERS)
 
 
 # --- Semaphore / mutex protocol (semaphore-handshake checker) ------------------
