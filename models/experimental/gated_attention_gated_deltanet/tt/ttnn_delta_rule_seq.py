@@ -125,8 +125,8 @@ def chunk_gated_delta_rule_seq_adapter(
 
     # L2-norm q/k (kernel doesn't); deferred for flat inputs via _defer_l2.
     if not _defer_l2:
-        q = l2_norm_ttnn(q, dim=-1)
-        k = l2_norm_ttnn(k, dim=-1)
+        q = l2_norm_ttnn(q, dim=-1, memory_config=_DRAM)
+        k = l2_norm_ttnn(k, dim=-1, memory_config=_DRAM)
 
     # Relayout untilize/permute in L1; land kernel inputs in DRAM (CBs ~1.36MB/core clash with L1).
     _L1 = ttnn.L1_MEMORY_CONFIG
@@ -144,7 +144,7 @@ def chunk_gated_delta_rule_seq_adapter(
             # Per-head L2 on [BH,T,D] bf16 (before the fp32 cast) — bit-identical to pre-split norm,
             # so keep tilize/typecast separate here (fused f32 tilize would norm in fp32 instead).
             t = ttnn.to_layout(t, ttnn.TILE_LAYOUT, memory_config=_DRAM)  # kernel input in DRAM
-            t = l2_norm_ttnn(t, dim=-1)
+            t = l2_norm_ttnn(t, dim=-1, memory_config=_DRAM)
             if t.dtype != ttnn.float32:
                 t = ttnn.typecast(t, ttnn.float32, memory_config=_DRAM)
             return t
@@ -725,7 +725,7 @@ def chunk_gated_delta_rule_seq(
         dl_exp_4d,
         L_inv_4d,
         initial_state=S0_tt,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=_DRAM,
     )
     ttnn.deallocate(L_inv_4d)
 

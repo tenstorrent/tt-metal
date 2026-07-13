@@ -17,13 +17,6 @@ from .ttnn_delta_rule_ops import (
 )
 from .ttnn_delta_rule_seq import chunk_gated_delta_rule_seq_adapter
 
-_L1_SEQ_THRESHOLD = 512
-
-
-def _seq_memory_config(seq_len):
-    """L1 for short sequences (faster), DRAM for long (avoids OOM)."""
-    return ttnn.L1_MEMORY_CONFIG if seq_len <= _L1_SEQ_THRESHOLD else None
-
 
 def rms_norm_gated_ttnn(x, gate, weight, eps=1e-5, memory_config=None):
     """RMSNorm + SiLU gate (trace-compatible). Clips gate to avoid overflow at long T."""
@@ -394,8 +387,17 @@ def gated_deltanet_forward_ttnn(
 
     B = hidden_states.shape[0]
     T = hidden_states.shape[1]
-    # valid_len path forces DRAM (bucket 512 hits L1 CB clash on _seq_memory_config threshold)
-    mc = None if valid_len is not None else _seq_memory_config(T)
+    # Chunk prefill launches gated_delta_attn_seq, whose large static circular buffers need
+    # the per-core L1 address space. Keep the surrounding sequence activations in DRAM
+    # regardless of sequence length. Single-token recurrent decode retains L1 placement;
+    # the general recurrent path preserves its caller's placement.
+    uses_seq_scan = mode == "chunk" and T > 1
+    if uses_seq_scan:
+        mc = ttnn.DRAM_MEMORY_CONFIG
+    elif T == 1:
+        mc = ttnn.L1_MEMORY_CONFIG
+    else:
+        mc = hidden_states.memory_config()
 
     ckc = compute_kernel_config
 
@@ -685,7 +687,7 @@ def gated_deltanet_forward_ttnn(
         g = ttnn.multiply(A_neg, sp, memory_config=mc)
 
     # Gated delta rule: chunk prefill (fp32 seq kernel) vs decode (optimized T=1) vs recurrent fallback
-    if mode == "chunk" and T > 1:
+    if uses_seq_scan:
         o, new_state = chunk_gated_delta_rule_seq_adapter(
             q=q,
             k=k,
