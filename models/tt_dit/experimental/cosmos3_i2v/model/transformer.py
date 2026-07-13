@@ -177,26 +177,18 @@ class Cosmos3OmniTransformer(Module):
         _torch.save(full.detach().cpu(), path)
 
     def _fracture_hidden(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """Split replicated `[1, 1, N, H]` to per-chip `[1, 1, N, H/tp]` — no CCL.
+        """Split replicated `[1, 1, N, H]` to per-chip `[1, 1, N, H/tp]`.
 
-        Each chip already holds the full H; this slices the portion matching
-        its TP index so subsequent DistributedRMSNorm and residual-add ops
-        operate on the correct shard without any data movement.
+        RS on a replicated tensor sums tp identical copies so each chip gets
+        tp × its shard. Dividing by tp recovers the correct per-chip slice.
+        One RS per call (done twice per trunk forward, not per layer).
         """
         tp_factor = self.parallel_config.tensor_parallel.factor
         if tp_factor <= 1:
             return x
         tp_axis = self.parallel_config.tensor_parallel.mesh_axis
-        mesh_shape = tuple(self.mesh_device.shape)
-        H = x.shape[-1]
-        H_per = H // tp_factor
-        fractured = []
-        for flat_idx, t in enumerate(ttnn.get_device_tensors(x)):
-            tp_idx = flat_idx // mesh_shape[1] if tp_axis == 0 else flat_idx % mesh_shape[1]
-            start = tp_idx * H_per
-            N = t.shape[2]
-            fractured.append(ttnn.slice(t, [0, 0, 0, start], [1, 1, N, start + H_per]))
-        return ttnn.combine_device_tensors(tensors=fractured)
+        scattered = self.ccl_manager.reduce_scatter(x, dim=3, mesh_axis=tp_axis)
+        return ttnn.multiply(scattered, 1.0 / tp_factor)
 
     def _gather_hidden(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """All-gather TP-fractured `[1, 1, N, H/tp]` → replicated `[1, 1, N, H]`."""
