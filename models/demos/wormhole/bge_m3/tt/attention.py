@@ -64,6 +64,7 @@ class BgeM3AttentionConfig:
 
     max_seq_len: int | None = None
     max_batch_size: int | None = None
+    tensor_parallel_axis: int | None = None
 
     @property
     def qkv_out_dim(self) -> int:
@@ -120,7 +121,14 @@ class BgeM3Attention(LightweightModule):
         self.load_device_weights()
 
         batch_size, _, seq_len, _ = hidden_states.shape
+        tensor_parallel_size = (
+            int(self.config.mesh_device.shape[self.config.tensor_parallel_axis])
+            if self.config.tensor_parallel_axis is not None
+            else 1
+        )
+        local_num_heads = self.config.num_heads // tensor_parallel_size
 
+        assert self.config.num_heads % tensor_parallel_size == 0
         assert seq_len > 0, "seq_len must be positive"
         assert seq_len % 32 == 0, "seq_len must be divisible by 32 (tile height)"
         if seq_len > 128:
@@ -185,15 +193,15 @@ class BgeM3Attention(LightweightModule):
             )
             q, k, v = bge_qkv_heads_headsplit(
                 qkv_fused,
-                num_heads=self.config.num_heads,
-                head_groups=head_groups,
+                num_heads=local_num_heads,
+                head_groups=min(head_groups, local_num_heads),
                 out_memcfg=self.config.create_heads_memcfg,
             )
         else:
             q, k, v = ttnn.experimental.nlp_create_qkv_heads(
                 qkv_fused,
-                num_heads=self.config.num_heads,
-                num_kv_heads=self.config.num_heads,
+                num_heads=local_num_heads,
+                num_kv_heads=local_num_heads,
                 transpose_k_heads=False,
                 memory_config=self.config.create_heads_memcfg,
             )
@@ -280,12 +288,15 @@ class BgeM3Attention(LightweightModule):
                 context, [batch_size, seq_len // _MAX_WO_MM_CHUNK_SEQ_LEN, _MAX_WO_MM_CHUNK_SEQ_LEN, -1]
             )
 
-        # Stage 6: output projection
+        # Stage 6: row-parallel output projection. Each rank consumes its
+        # local heads; sum the partial hidden projections before adding bias.
+        tp_active = self.config.tensor_parallel_axis is not None
+        wo_bias = None if tp_active else self.wo_bias
         if self.config.output_minimal_config is not None and self.config.output_prg_config is None:
             output = ttnn.experimental.minimal_matmul(
                 input_tensor=context,
                 weight_tensor=self.wo_weight,
-                bias_tensor=self.wo_bias,
+                bias_tensor=wo_bias,
                 fused_activation=None,
                 config=self.config.output_minimal_config,
                 memory_config=self.config.output_memcfg,
@@ -298,12 +309,25 @@ class BgeM3Attention(LightweightModule):
                 self.wo_weight,
                 memory_config=self.config.output_memcfg,
                 dtype=self.config.output_dtype,
-                bias=self.wo_bias,
+                bias=wo_bias,
                 program_config=self.config.output_prg_config,
                 compute_kernel_config=self.config.output_compute_kernel_cfg,
                 core_grid=output_core_grid,
             )
         ttnn.deallocate(context)
+
+        if tp_active:
+            partial = output
+            output = ttnn.all_reduce(
+                partial,
+                cluster_axis=self.config.tensor_parallel_axis,
+                num_links=1,
+                topology=ttnn.Topology.Linear,
+                memory_config=self.config.output_memcfg,
+            )
+            ttnn.deallocate(partial)
+            if self.wo_bias is not None:
+                output = ttnn.add(output, self.wo_bias)
 
         if seq_len > _MAX_WO_MM_CHUNK_SEQ_LEN:
             output = ttnn.reshape(output, [batch_size, 1, seq_len, -1])
@@ -450,13 +474,24 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
     output_dtype = to_set.get("output_dtype", config.output_dtype)
     weight_mem = ttnn.DRAM_MEMORY_CONFIG
 
+    qkv_mapper = None
+    wo_mapper = None
+    if config.tensor_parallel_axis is not None:
+        placements = [ttnn.PlacementReplicate() for _ in range(len(tuple(mesh_device.shape)))]
+        qkv_placements = list(placements)
+        wo_placements = list(placements)
+        qkv_placements[config.tensor_parallel_axis] = ttnn.PlacementShard(-1)
+        wo_placements[config.tensor_parallel_axis] = ttnn.PlacementShard(-2)
+        qkv_mapper = ttnn.MeshMapperConfig(qkv_placements, mesh_device.shape)
+        wo_mapper = ttnn.MeshMapperConfig(wo_placements, mesh_device.shape)
+
     to_set["wqkv"] = resolve_lazy_weight(
         config.wqkv,
         device=mesh_device,
         dtype=qkv_dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=weight_mem,
-        mesh_mapper_config=None,
+        mesh_mapper_config=qkv_mapper,
     )
     to_set["wo_weight"] = resolve_lazy_weight(
         config.wo_weight,
@@ -464,7 +499,7 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
         dtype=output_dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=weight_mem,
-        mesh_mapper_config=None,
+        mesh_mapper_config=wo_mapper,
     )
     if config.bqkv is not None:
         to_set["bqkv"] = resolve_lazy_weight(
@@ -473,7 +508,7 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
             dtype=qkv_dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=weight_mem,
-            mesh_mapper_config=None,
+            mesh_mapper_config=qkv_mapper,
         )
     if config.wo_bias is not None:
         to_set["wo_bias"] = resolve_lazy_weight(

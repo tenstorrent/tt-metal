@@ -32,7 +32,19 @@ class BgeM3TransformerBlock(LightweightModule):
         if max_seq_len == 8192:
             head_dim = getattr(args, "head_dim", None) or (args.dim // args.n_heads)
             q_scale = head_dim**-0.5
-        attention_weights = build_attention_weights(state_dict, layer_num, dtype, ttnn.bfloat16, q_scale=q_scale)
+        tensor_parallel_size = (
+            2
+            if max_seq_len == 8192 and mesh_device.get_num_devices() == 2 and tuple(mesh_device.shape) == (2, 1)
+            else 1
+        )
+        attention_weights = build_attention_weights(
+            state_dict,
+            layer_num,
+            dtype,
+            ttnn.bfloat16,
+            q_scale=q_scale,
+            tensor_parallel_size=tensor_parallel_size,
+        )
         mlp_weights = build_mlp_weights(state_dict, layer_num, dtype, ttnn.bfloat16)
 
         self.attention = BgeM3Attention.from_config(
@@ -186,6 +198,11 @@ def _build_attention_config(args, attention_weights, mesh_device, dtype, max_seq
         output_dtype=dtype,
         max_seq_len=max_seq_len,
         max_batch_size=max_batch_size,
+        tensor_parallel_axis=(
+            0
+            if max_seq_len == 8192 and mesh_device.get_num_devices() == 2 and tuple(mesh_device.shape) == (2, 1)
+            else None
+        ),
     )
     if optimizations is not None and optimizations.attention is not None:
         attn_opts = optimizations.attention
@@ -222,6 +239,11 @@ def _build_mlp_config(args, mlp_weights, mesh_device, dtype, max_seq_len, max_ba
         activation_dtype=ttnn.bfloat16,
         max_seq_len=max_seq_len,
         max_batch_size=max_batch_size,
+        tensor_parallel_axis=(
+            0
+            if max_seq_len == 8192 and mesh_device.get_num_devices() == 2 and tuple(mesh_device.shape) == (2, 1)
+            else None
+        ),
     )
     if optimizations is not None and optimizations.mlp is not None:
         mlp_opts = optimizations.mlp

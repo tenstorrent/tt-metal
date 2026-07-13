@@ -44,6 +44,7 @@ class BgeM3MLPConfig:
     core_grid: ttnn.CoreGrid | None = None
     max_seq_len: int | None = None
     max_batch_size: int | None = None
+    tensor_parallel_axis: int | None = None
 
 
 class BgeM3MLP(LightweightModule):
@@ -126,11 +127,15 @@ class BgeM3MLP(LightweightModule):
             )
 
         wo_core_grid = None if self.config.wo_prg_config is not None else self.config.core_grid
+        # Row-parallel contraction: each TP rank owns half of wi's output and
+        # the matching rows of wo. Bias must be applied after summing partials.
+        tp_active = self.config.tensor_parallel_axis is not None
+        wo_bias = None if tp_active else self.wo_bias
         if self.config.wo_minimal_config is not None and self.config.wo_prg_config is None:
             output = ttnn.experimental.minimal_matmul(
                 input_tensor=activated,
                 weight_tensor=self.wo_weight,
-                bias_tensor=self.wo_bias,
+                bias_tensor=wo_bias,
                 fused_activation=None,
                 config=self.config.wo_minimal_config,
                 memory_config=self.config.wo_memcfg,
@@ -143,12 +148,25 @@ class BgeM3MLP(LightweightModule):
                 self.wo_weight,
                 memory_config=self.config.wo_memcfg,
                 dtype=self.config.wo_dtype,
-                bias=self.wo_bias,
+                bias=wo_bias,
                 program_config=self.config.wo_prg_config,
                 compute_kernel_config=self.config.wo_compute_kernel_cfg,
                 core_grid=wo_core_grid,
             )
         ttnn.deallocate(activated)
+
+        if tp_active:
+            partial = output
+            output = ttnn.all_reduce(
+                partial,
+                cluster_axis=self.config.tensor_parallel_axis,
+                num_links=1,
+                topology=ttnn.Topology.Linear,
+                memory_config=self.config.wo_memcfg,
+            )
+            ttnn.deallocate(partial)
+            if self.wo_bias is not None:
+                output = ttnn.add(output, self.wo_bias)
         return output
 
 
@@ -199,13 +217,24 @@ def _resolve_mlp_config(config: BgeM3MLPConfig) -> BgeM3MLPConfig:
     wo_dtype = to_set.get("wo_dtype", config.wo_dtype)
     weight_mem = ttnn.DRAM_MEMORY_CONFIG
 
+    wi_mapper = None
+    wo_mapper = None
+    if config.tensor_parallel_axis is not None:
+        placements = [ttnn.PlacementReplicate() for _ in range(len(tuple(mesh_device.shape)))]
+        wi_placements = list(placements)
+        wo_placements = list(placements)
+        wi_placements[config.tensor_parallel_axis] = ttnn.PlacementShard(-1)
+        wo_placements[config.tensor_parallel_axis] = ttnn.PlacementShard(-2)
+        wi_mapper = ttnn.MeshMapperConfig(wi_placements, mesh_device.shape)
+        wo_mapper = ttnn.MeshMapperConfig(wo_placements, mesh_device.shape)
+
     to_set["wi_weight"] = resolve_lazy_weight(
         config.wi_weight,
         device=mesh_device,
         dtype=wi_dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=weight_mem,
-        mesh_mapper_config=None,
+        mesh_mapper_config=wi_mapper,
     )
     to_set["wo_weight"] = resolve_lazy_weight(
         config.wo_weight,
@@ -213,7 +242,7 @@ def _resolve_mlp_config(config: BgeM3MLPConfig) -> BgeM3MLPConfig:
         dtype=wo_dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=weight_mem,
-        mesh_mapper_config=None,
+        mesh_mapper_config=wo_mapper,
     )
     if config.wi_bias is not None:
         to_set["wi_bias"] = resolve_lazy_weight(
@@ -222,7 +251,7 @@ def _resolve_mlp_config(config: BgeM3MLPConfig) -> BgeM3MLPConfig:
             dtype=wi_dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=weight_mem,
-            mesh_mapper_config=None,
+            mesh_mapper_config=wi_mapper,
         )
     if config.wo_bias is not None:
         to_set["wo_bias"] = resolve_lazy_weight(
