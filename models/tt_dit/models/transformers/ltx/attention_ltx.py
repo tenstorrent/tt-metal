@@ -21,6 +21,16 @@ from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 
 
+def gate_merge_enabled() -> bool:
+    """Whether the per-head gate is merged into the Q/QKV projection.
+
+    A merged weight carries a single dtype, and under LTX_QUANT the gate is deliberately kept at
+    bf16 while the projections drop to bf8 — merging would silently demote it. So the quant path
+    keeps its standalone gate; the bf16 path merges.
+    """
+    return not os.environ.get("LTX_QUANT")
+
+
 class LTXAttention(Module):
     # Map from (is_blackhole, sp_factor, tp_factor) -> (q_chunk_size, k_chunk_size)
     sdpa_chunk_size_map = {
@@ -107,10 +117,26 @@ class LTXAttention(Module):
 
         self.kv_input_dim = context_dim if (context_dim is not None and not is_self) else dim
 
+        # The gate's own TP all-gather re-gathers the very activation to_qkv/to_q gathers one op
+        # later, to emit num_heads/TP columns: ~100% of its cost is the gather. The all-gather is
+        # fused inside the matmul, so sharing it means sharing the matmul — the gate's columns ride
+        # the projection as one EXTRA CHUNK. A chunk (rather than a wider single output) keeps q/k/v
+        # as separate tensors with no DRAM re-copy; only the gate chunk, dim/TP wide with the gate in
+        # its first n_local_heads columns and a zero tail, needs narrowing.
+        self.apply_gated_attention = apply_gated_attention
+        self.merge_gate = apply_gated_attention and gate_merge_enabled()
+        self.base_chunks = 3 if is_self else 1
+        proj_chunks = self.base_chunks + (1 if self.merge_gate else 0)
+
         if is_self:
-            self.to_qkv = ColParallelLinear(dim, 3 * dim, chunks=3, **col_parallel_kwargs)
+            self.to_qkv = ColParallelLinear(dim, proj_chunks * dim, chunks=proj_chunks, **col_parallel_kwargs)
         else:
-            self.to_q = ColParallelLinear(self.query_input_dim, dim, **col_parallel_kwargs)
+            self.to_q = ColParallelLinear(
+                self.query_input_dim,
+                proj_chunks * dim,
+                chunks=proj_chunks if proj_chunks > 1 else None,
+                **col_parallel_kwargs,
+            )
             self.to_kv = ColParallelLinear(self.kv_input_dim, 2 * dim, chunks=2, **col_parallel_kwargs)
 
         self.to_out = ColParallelLinear(
@@ -123,12 +149,11 @@ class LTXAttention(Module):
             ccl_manager=ccl_manager,
         )
 
-        # Per-head gate, sharded on num_heads to match the SDPA-output head layout. bf16 matches the
-        # reference (which runs the gate in the model's working dtype). Sigmoid is a standalone op:
-        # fusing it into the matmul trips minimal_matmul's sigmoid VecMode assert (needs C/RC). The
-        # ×2 stays a separate multiply (2·sigmoid is nonlinear, can't fold).
-        self.apply_gated_attention = apply_gated_attention
-        if apply_gated_attention:
+        # Standalone per-head gate, sharded on num_heads to match the SDPA-output head layout. bf16
+        # matches the reference (which runs the gate in the model's working dtype). Sigmoid is a
+        # standalone op: fusing it into the matmul trips minimal_matmul's sigmoid VecMode assert
+        # (needs C/RC). The ×2 stays a separate multiply (2·sigmoid is nonlinear, can't fold).
+        if apply_gated_attention and not self.merge_gate:
             self.to_gate_logits = ColParallelLinear(
                 in_features=self.query_input_dim,
                 out_features=self.num_heads,
@@ -292,6 +317,48 @@ class LTXAttention(Module):
                 bias = _interleave_heads([k_state["bias"].unsqueeze(-1), v_state["bias"].unsqueeze(-1)])
                 state["to_kv.bias"] = bias.squeeze(-1)
 
+        if self.merge_gate:
+            self._fold_gate_into_projection(state, "to_qkv" if self.is_self else "to_q")
+
+    def _fold_gate_into_projection(self, state: dict[str, torch.Tensor], proj: str) -> None:
+        """Append the gate's columns to the Q/QKV projection as one extra chunk.
+
+        Both weights are device-major: device d owns a contiguous block of `base_chunks` chunks (of
+        `dim / TP` columns each) of the projection, and the `num_heads / TP` gate columns of the
+        heads it will run SDPA on. The merged block is those side by side, its gate chunk zero past
+        the gate's own columns, so `chunks = base_chunks + 1` hands the gate back as its own tensor.
+        """
+        gate = pop_substate(state, "to_gate_logits")
+        gate_weight = gate.get("weight")
+        gate_bias = gate.get("bias")
+
+        n_dev = self.parallel_config.tensor_parallel.factor
+        base = self.base_chunks
+        shard = self.dim // n_dev  # per-device width of one chunk
+        heads = self.n_local_heads
+
+        weight = state[f"{proj}.weight"]
+        assert weight.shape[0] == base * self.dim, f"{proj}.weight is not {base} chunks wide"
+        merged = weight.new_zeros(((base + 1) * self.dim, weight.shape[1]))
+        for d in range(n_dev):
+            dst, src = d * (base + 1) * shard, d * base * shard
+            merged[dst : dst + base * shard] = weight[src : src + base * shard]
+            if gate_weight is not None:
+                merged[dst + base * shard : dst + base * shard + heads] = gate_weight[d * heads : (d + 1) * heads]
+        state[f"{proj}.weight"] = merged
+
+        bias = state.get(f"{proj}.bias")
+        if bias is None and gate_bias is None:
+            return
+        merged_bias = (bias if bias is not None else gate_bias).new_zeros((base + 1) * self.dim)
+        for d in range(n_dev):
+            dst, src = d * (base + 1) * shard, d * base * shard
+            if bias is not None:
+                merged_bias[dst : dst + base * shard] = bias[src : src + base * shard]
+            if gate_bias is not None:
+                merged_bias[dst + base * shard : dst + base * shard + heads] = gate_bias[d * heads : (d + 1) * heads]
+        state[f"{proj}.bias"] = merged_bias
+
     def _to_out_fused_addcmul(
         self,
         x: ttnn.Tensor,
@@ -371,13 +438,21 @@ class LTXAttention(Module):
             return None
 
         gate_logits = self.to_gate_logits(spatial_1BND, parallel_config=qkv_parallel_config)
+        return self._gate_from_logits(gate_logits)
+
+    def _gate_from_logits(self, gate_logits: ttnn.Tensor) -> ttnn.Tensor:
+        """2 * sigmoid(logits) as (B, H_local, N, 1), narrowing a merged gate chunk to its heads."""
+        if gate_logits.shape[-1] != self.n_local_heads:
+            # Merged: drop the zero tail of the gate chunk. Tile-aligned begins keep this on the
+            # TILE path; the unaligned end only pads.
+            gate_logits = ttnn.slice(gate_logits, [0, 0, 0, 0], [*gate_logits.shape[:-1], self.n_local_heads])
+
         gate = ttnn.multiply(ttnn.sigmoid(gate_logits), 2.0)
 
         # (1, B, N, H_local) -> (B, H_local, N, 1) in one pass: the N<->H_local swap is the real
         # data movement, and the leading unit axis is parked into the trailing broadcast slot (over
         # E). Replaces squeeze+transpose+unsqueeze (the unsqueeze was a retile, not a free view).
-        gate = ttnn.permute(gate, (1, 3, 2, 0))
-        return gate
+        return ttnn.permute(gate, (1, 3, 2, 0))
 
     def forward(
         self,
@@ -413,15 +488,21 @@ class LTXAttention(Module):
 
         qkv_parallel_config = None if use_nonfused_agmm else self.parallel_config
 
-        # Per-head gate, computed before QKV consumes spatial_1BND.
-        gate_bhne = self._compute_gate(spatial_1BND, qkv_parallel_config)
+        # Standalone gate: computed before QKV consumes spatial_1BND. Merged: it falls out of the
+        # projection below, having cost no all-gather of its own.
+        gate_bhne = None if self.merge_gate else self._compute_gate(spatial_1BND, qkv_parallel_config)
 
         if self.is_self:
-            q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
+            qkv = self.to_qkv(
                 spatial_1BND,
                 compute_kernel_config=self.mm_compute_kernel_config,
                 parallel_config=qkv_parallel_config,
             )
+            if self.merge_gate:
+                q_1BNF, k_1BNF, v_1BNF, gate_logits = qkv
+                gate_bhne = self._gate_from_logits(gate_logits)
+            else:
+                q_1BNF, k_1BNF, v_1BNF = qkv
         else:
             kv_input = prompt_1BLP if prompt_1BLP is not None else spatial_1BND
             # Cross K/V: gather TP-sharded context for to_kv (replicated text prompt is already full).
@@ -436,11 +517,16 @@ class LTXAttention(Module):
                         )
                     else:
                         kv_parallel_config = self.parallel_config
-            q_1BNF = self.to_q(
+            q = self.to_q(
                 spatial_1BND,
                 compute_kernel_config=self.mm_compute_kernel_config,
                 parallel_config=qkv_parallel_config,
             )
+            if self.merge_gate:
+                q_1BNF, gate_logits = q
+                gate_bhne = self._gate_from_logits(gate_logits)
+            else:
+                q_1BNF = q
             k_1BNF, v_1BNF = self.to_kv(
                 kv_input,
                 compute_kernel_config=self.mm_compute_kernel_config,

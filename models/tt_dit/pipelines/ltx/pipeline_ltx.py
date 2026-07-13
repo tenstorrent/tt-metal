@@ -29,6 +29,7 @@ from safetensors.torch import load_file
 import ttnn
 
 from ...encoders.gemma.encoder_pair import GemmaTokenizerEncoderPair
+from ...models.transformers.ltx.attention_ltx import gate_merge_enabled
 from ...models.transformers.ltx.rope_ltx import prepare_audio_rope, prepare_av_cross_pe, prepare_video_rope
 from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel, build_audio_masks, build_video_pad_mask
 from ...models.upsampler.latent_upsampler_ltx import LTXLatentUpsampler
@@ -668,12 +669,14 @@ class LTXPipeline:
             sd = fuse_loras_into(sd, lora_specs)
         return sd
 
-    @staticmethod
-    def _build_transformer_cache_name(checkpoint_path: str, lora_specs: list[LoraSpec]) -> str:
+    def _build_transformer_cache_name(self, checkpoint_path: str, lora_specs: list[LoraSpec]) -> str:
         """Cache key for ``cache_module.load_model``. LoRA-tagged so fused and base
         weights don't alias in ``TT_DIT_CACHE_DIR``; quant-tagged because cached
         tensorbins carry their dtype — a bf8 quant run and the bf16 baseline must use
-        separate dirs or the loader dtype-clashes on a stale-precision cache hit."""
+        separate dirs or the loader dtype-clashes on a stale-precision cache hit.
+        Gate-merge-tagged because the merge widens the QKV/Q weights and drops the gate
+        ones: a cache hit is decided on the directory alone, so sharing a tag with the
+        unmerged build would load weights of the wrong shape."""
         base = os.path.basename(checkpoint_path).removesuffix(".safetensors")
         if lora_specs:
             tag = "+".join(f"{os.path.basename(s.path).removesuffix('.safetensors')}@{s.strength}" for s in lora_specs)
@@ -684,6 +687,8 @@ class LTXPipeline:
 
             if callable(getattr(QuantConfig, preset, None)):
                 base = f"{base}.q-{preset}"
+        if self._has_gate and gate_merge_enabled():
+            base = f"{base}.gm"
         return base
 
     def _new_transformer(self) -> LTXTransformerModel:
