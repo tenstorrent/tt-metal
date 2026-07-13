@@ -268,20 +268,32 @@ void populateZoneSrcLocations(
     static const std::string delimiter = "'#pragma message: ";
     while (std::getline(log_file_read, line)) {
         std::string zone_src_location;
-        auto pos = line.find(delimiter);
-        if (pos != std::string::npos) {
-            // Legacy "'#pragma message: ...'" line (e.g. persistent logs from older builds):
-            // take the payload between the delimiter and the trailing quote.
-            size_t delimiter_index = pos + delimiter.length();
-            zone_src_location = line.substr(delimiter_index, line.length() - delimiter_index - 1);
-        } else if (line.find(",KERNEL_PROFILER") != std::string::npos) {
-            // Bare "name,file,line,KERNEL_PROFILER" record read from the ELF .tt_zone_meta section.
-            zone_src_location = line;
+        uint16_t hash_16bit = 0;
+        auto tab = line.find('\t');
+        if (tab != std::string::npos) {
+            // Current format: "<id>\t<name,file,line,KERNEL_PROFILER>". The id is the device's
+            // resolved structural zone id, read straight from the ELF .tt_zone_meta section, so we
+            // use it directly rather than recomputing anything.
+            try {
+                hash_16bit = static_cast<uint16_t>(std::stoul(line.substr(0, tab)));
+            } catch (const std::exception&) {
+                continue;
+            }
+            zone_src_location = line.substr(tab + 1);
         } else {
-            continue;
+            // Legacy fallbacks (persistent logs from older builds): recompute the 16-bit hash.
+            auto pos = line.find(delimiter);
+            if (pos != std::string::npos) {
+                // "'#pragma message: ...'" line: payload between the delimiter and the trailing quote.
+                size_t delimiter_index = pos + delimiter.length();
+                zone_src_location = line.substr(delimiter_index, line.length() - delimiter_index - 1);
+            } else if (line.find(",KERNEL_PROFILER") != std::string::npos) {
+                zone_src_location = line;
+            } else {
+                continue;
+            }
+            hash_16bit = hash16CT(zone_src_location);
         }
-
-        uint16_t hash_16bit = hash16CT(zone_src_location);
 
         auto did_insert = zone_src_locations.insert(zone_src_location);
         if (did_insert.second && (hash_to_zone_src_locations.contains(hash_16bit))) {
@@ -316,9 +328,9 @@ void populateZoneSrcLocations(
 
         auto ret = hash_to_zone_src_locations.emplace(hash_16bit, details);
         if (ret.second && push_new) {
-            // Persist in the normalized bare-record form so re-reads take the fast path above.
+            // Persist in the normalized "<id>\t<string>" form so re-reads take the fast path above.
             std::ofstream log_file_write(log_name, std::ios::app);
-            log_file_write << zone_src_location << std::endl;
+            log_file_write << hash_16bit << '\t' << zone_src_location << std::endl;
             log_file_write.close();
         }
     }

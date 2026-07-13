@@ -13,6 +13,12 @@
 // full; residual read via DRAM_AND_L1.
 #define PROFILER_OPT_DO_ACCUMULATE (1 << 4)
 
+// Zone ids are structural, not hashed: the low KERNEL_PROFILER_LOCAL_BITS hold a per-translation-unit
+// zone index and the remaining high bits hold a host-assigned file id, so (file, local) pairs are
+// unique by construction across the whole 16-bit id space. Shared by device (kernel_profiler.hpp),
+// the JIT build (build.cpp), and the host parser (profiler.cpp). 7 -> 128 zones/TU, 512 TUs.
+#define KERNEL_PROFILER_LOCAL_BITS 7
+
 namespace kernel_profiler {
 
 static constexpr int SUM_COUNT = 2;

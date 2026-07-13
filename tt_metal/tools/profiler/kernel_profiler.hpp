@@ -31,25 +31,58 @@
 #define PROFILER_MSG __FILE__ "," $Line ",KERNEL_PROFILER"
 #define PROFILER_MSG_NAME(name) name "," PROFILER_MSG
 
-// Record the zone's source-location string in a file-only ELF section (.tt_zone_meta)
-// instead of emitting a #pragma message into the compiler log. The host reads this section
-// straight out of the kernel ELF (see JitBuildState::extract_zone_src_locations), which keeps
-// build logs clean. The section is non-loaded -- KEEP(...) (INFO) in the linker scripts strips
-// SHF_ALLOC -- so it costs zero device memory. The block gives each expansion its own scope so
-// the static never collides when multiple zones share a C++ scope; it emits no runtime code.
-#define RecordZoneSrcLocation(name)                                                                                 \
-    {                                                                                                               \
-        static const char zone_src_loc[] __attribute__((section(".tt_zone_meta"), used)) = PROFILER_MSG_NAME(name); \
-        (void)zone_src_loc;                                                                                         \
+// Fallback file id used when the host does not inject one (e.g. a non-JIT / host-tools compile).
+// The real per-translation-unit ids come from build.cpp's -DKERNEL_PROFILER_FILE_ID injection
+// (JitBuildState::compile_one); with the default, such TUs all share partition 0.
+#ifndef KERNEL_PROFILER_FILE_ID
+#define KERNEL_PROFILER_FILE_ID 0
+#endif
+
+// Emit one zone-metadata record -- the resolved 16-bit id followed by the
+// "name,file,line,KERNEL_PROFILER" source string -- as a packed struct in a file-only ELF section
+// (.tt_zone_meta), instead of a #pragma message in the compiler log. The host reads the id straight
+// from the section (JitBuildState::extract_zone_src_locations) and never recomputes it. The section
+// is non-loaded -- KEEP(...) (INFO) in the linker scripts strips SHF_ALLOC -- so it costs zero device
+// memory. The block scopes the static so it never collides when zones share a C++ scope.
+#define RecordZoneMeta(id, name)                                                                                     \
+    {                                                                                                                \
+        static const struct __attribute__((packed)) {                                                                \
+            uint16_t zid;                                                                                            \
+            char str[sizeof(PROFILER_MSG_NAME(name))];                                                               \
+        } zone_meta                                                                                                  \
+            __attribute__((section(".tt_zone_meta"), used, aligned(4))) = {(uint16_t)(id), PROFILER_MSG_NAME(name)}; \
+        (void)zone_meta;                                                                                             \
     }
 
-#define SrcLocNameToHash(name)   \
-    RecordZoneSrcLocation(name); \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));
+// Local (within-TU) zone index, dense from 0: the per-TU __COUNTER__ minus the base captured once the
+// profiler namespace opens (kernel_profiler::zone_counter_base, below).
+#define TT_ZONE_LOCAL(ctr) ((uint32_t)((ctr) - kernel_profiler::zone_counter_base - 1u))
+
+// Compute this zone's collision-free 16-bit id = (host file id << LOCAL_BITS) | local index, declare it
+// as `hash`, and emit its metadata record. The static_asserts turn any budget overflow into a build
+// error instead of a silent id collision. `ctr` must be a single __COUNTER__ value (passed once by the
+// caller) so the numeric id and the emitted record agree.
+#define TT_ZONE_META(name, ctr)                                                                               \
+    static_assert(                                                                                            \
+        TT_ZONE_LOCAL(ctr) <= ((1u << KERNEL_PROFILER_LOCAL_BITS) - 1u),                                      \
+        "too many KERNEL_PROFILER zones in one translation unit for KERNEL_PROFILER_LOCAL_BITS");             \
+    static_assert(                                                                                            \
+        (uint32_t)(KERNEL_PROFILER_FILE_ID) < (1u << (16 - KERNEL_PROFILER_LOCAL_BITS)),                      \
+        "KERNEL_PROFILER_FILE_ID exceeds the file-id budget for KERNEL_PROFILER_LOCAL_BITS");                 \
+    auto constexpr hash =                                                                                     \
+        (uint16_t)(((uint32_t)(KERNEL_PROFILER_FILE_ID) << KERNEL_PROFILER_LOCAL_BITS) | TT_ZONE_LOCAL(ctr)); \
+    RecordZoneMeta(hash, name)
+
+#define SrcLocNameToHash(name) TT_ZONE_META(name, __COUNTER__)
 
 #if defined(PROFILE_KERNEL) && \
     (!defined(DISPATCH_KERNEL) || (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_DISPATCH_CORES)))
 namespace kernel_profiler {
+
+// __COUNTER__ value captured once, right after this TU pulls in the profiler headers. TT_ZONE_LOCAL
+// subtracts it so per-TU zone indices count from ~0 regardless of how much __COUNTER__ the preceding
+// includes consumed, keeping them inside the LOCAL_BITS budget. Internal linkage: private per TU.
+constexpr uint32_t zone_counter_base = __COUNTER__;
 
 extern uint32_t wIndex;
 extern uint32_t stackSize;
@@ -891,16 +924,14 @@ __attribute__((noinline)) void trace_only_init() {
 // Not dispatch
 #if (!defined(DISPATCH_KERNEL))
 
-#define DeviceZoneScopedN(name)                                                \
-    RecordZoneSrcLocation(name);                                               \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
+#define DeviceZoneScopedN(name)      \
+    TT_ZONE_META(name, __COUNTER__); \
     kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
 
-#define DeviceTimestampedData(name, data)                                          \
-    {                                                                              \
-        RecordZoneSrcLocation(name);                                               \
-        auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
-        kernel_profiler::timeStampedData<hash>(data);                              \
+#define DeviceTimestampedData(name, data)             \
+    {                                                 \
+        TT_ZONE_META(name, __COUNTER__);              \
+        kernel_profiler::timeStampedData<hash>(data); \
     }
 
 #define DeviceRecordEvent(event_id) kernel_profiler::recordEvent(event_id);
@@ -909,15 +940,15 @@ __attribute__((noinline)) void trace_only_init() {
 #elif (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_DISPATCH_CORES))
 
 #define DeviceZoneScopedN(name)                                                          \
-    RecordZoneSrcLocation(name);                                                         \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));           \
+    TT_ZONE_META(name, __COUNTER__);                                                     \
+                                                                                         \
     kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH> zone = \
         kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH>();
 
 #define DeviceTimestampedData(name, data)                                                            \
     {                                                                                                \
-        RecordZoneSrcLocation(name);                                                                 \
-        auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));                   \
+        TT_ZONE_META(name, __COUNTER__);                                                             \
+                                                                                                     \
         kernel_profiler::timeStampedData<hash, kernel_profiler::DoingDispatch::DISPATCH_META>(data); \
     }
 
@@ -945,24 +976,20 @@ __attribute__((noinline)) void trace_only_init() {
 #define PROFILER_MAIN_SCOPE kernel_profiler::profileScopeGuaranteed
 #endif
 
-#define DeviceZoneScopedMainN(name)                                            \
-    RecordZoneSrcLocation(name);                                               \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
+#define DeviceZoneScopedMainN(name)  \
+    TT_ZONE_META(name, __COUNTER__); \
     PROFILER_MAIN_SCOPE<hash, 0> zone = PROFILER_MAIN_SCOPE<hash, 0>();
 
-#define DeviceZoneScopedMainChildN(name)                                       \
-    RecordZoneSrcLocation(name);                                               \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
+#define DeviceZoneScopedMainChildN(name) \
+    TT_ZONE_META(name, __COUNTER__);     \
     PROFILER_MAIN_SCOPE<hash, 1> zone = PROFILER_MAIN_SCOPE<hash, 1>();
 
-#define DeviceZoneScopedSumN1(name)                                            \
-    RecordZoneSrcLocation(name);                                               \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
+#define DeviceZoneScopedSumN1(name)  \
+    TT_ZONE_META(name, __COUNTER__); \
     kernel_profiler::profileScopeAccumulate<hash, 0> zone = kernel_profiler::profileScopeAccumulate<hash, 0>();
 
-#define DeviceZoneScopedSumN2(name)                                            \
-    RecordZoneSrcLocation(name);                                               \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
+#define DeviceZoneScopedSumN2(name)  \
+    TT_ZONE_META(name, __COUNTER__); \
     kernel_profiler::profileScopeAccumulate<hash, 1> zone = kernel_profiler::profileScopeAccumulate<hash, 1>();
 
 #define DeviceZoneSetCounter(counter)                  \

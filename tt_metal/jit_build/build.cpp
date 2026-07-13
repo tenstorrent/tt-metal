@@ -17,6 +17,11 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <unordered_map>
+
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
 #include <iostream>
 #include <iterator>
 #include <mutex>
@@ -83,6 +88,58 @@ void hard_link_or_copy(const std::filesystem::path& target, const std::filesyste
     if (ec) {
         std::filesystem::copy_file(target, link, fs::copy_options::overwrite_existing);
     }
+}
+
+// Persistent, process-shared registry mapping a stable per-translation-unit key to a dense integer
+// "file id" used to build collision-free KERNEL_PROFILER structural zone ids. Stability matters: a
+// cached kernel keeps the id baked into its binary, so a freshly compiled TU must never be handed a
+// file id already in use elsewhere. The registry lives next to the JIT cache and is guarded by an OS
+// file lock for the whole read-modify-write, so parallel builds -- even across processes sharing the
+// cache -- assign disjoint ids. Best-effort: on any I/O failure it falls back to partition 0.
+uint32_t get_or_assign_profiler_file_id(const std::string& registry_path, const std::string& key) {
+    static std::mutex mtx;
+    std::lock_guard<std::mutex> lk(mtx);
+
+    int fd = ::open(registry_path.c_str(), O_RDWR | O_CREAT, 0644);
+    if (fd < 0) {
+        return 0;
+    }
+    ::flock(fd, LOCK_EX);
+
+    std::unordered_map<std::string, uint32_t> table;
+    uint32_t next_id = 0;
+    {
+        std::ifstream in(registry_path);
+        std::string line;
+        while (std::getline(in, line)) {
+            auto tab = line.rfind('\t');
+            if (tab == std::string::npos) {
+                continue;
+            }
+            try {
+                uint32_t id = static_cast<uint32_t>(std::stoul(line.substr(tab + 1)));
+                table.emplace(line.substr(0, tab), id);
+                if (id + 1 > next_id) {
+                    next_id = id + 1;
+                }
+            } catch (const std::exception&) {
+                // ignore malformed lines
+            }
+        }
+    }
+
+    uint32_t id = next_id;
+    auto it = table.find(key);
+    if (it != table.end()) {
+        id = it->second;
+    } else {
+        std::ofstream out(registry_path, std::ios::app);
+        out << key << '\t' << id << '\n';
+    }
+
+    ::flock(fd, LOCK_UN);
+    ::close(fd);
+    return id;
 }
 
 }  // namespace
@@ -518,6 +575,15 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
     string defines = this->defines_;
 
+    // Give this translation unit a stable, globally-unique file id so KERNEL_PROFILER zone ids are
+    // (file_id << LOCAL_BITS) | local -- collision-free by construction (see kernel_profiler.hpp).
+    // Keyed on the config-specific object path so a cached kernel keeps the id baked into its binary.
+    if (env_.get_rtoptions().get_profiler_enabled()) {
+        const std::string registry_path = env_.get_out_root_path() + ".profiler_zone_file_ids";
+        const uint32_t file_id = get_or_assign_profiler_file_id(registry_path, out_dir + this->objs_[src_index]);
+        defines += fmt::format("-DKERNEL_PROFILER_FILE_ID={} ", file_id);
+    }
+
     if (env_.get_rtoptions().get_build_map_enabled()) {
         cmd += "-save-temps=obj -fdump-tree-all -fdump-rtl-all ";
     }
@@ -726,10 +792,12 @@ void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const
             tt::jit_build::utils::create_file(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG);
         }
 
-        // Read the zone source-location strings straight out of the linked ELF's .tt_zone_meta
-        // section (populated by RecordZoneSrcLocation in kernel_profiler.hpp) instead of grepping
-        // the compiler logs, which keeps build logs clean. The section is a sequence of
-        // NUL-terminated "name,file,line,KERNEL_PROFILER" strings and is not loaded to the device.
+        // Read the zone metadata straight out of the linked ELF's .tt_zone_meta section (populated by
+        // RecordZoneMeta in kernel_profiler.hpp) instead of grepping the compiler logs, which keeps build
+        // logs clean. The section is a sequence of packed records -- a little-endian uint16 zone id
+        // followed by a NUL-terminated "name,file,line,KERNEL_PROFILER" string -- and is not loaded to the
+        // device. Each record is written to the log as "<id>\t<string>" so the host uses the device's
+        // resolved id directly rather than recomputing anything.
         const std::string elf_path = out_dir + this->target_name_ + ".elf";
         if (!std::filesystem::exists(elf_path)) {
             return;
@@ -743,15 +811,22 @@ void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const
                 return;
             }
             std::ofstream zone_log(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, std::ios::app);
-            const char* cursor = reinterpret_cast<const char*>(zone_meta.data());
-            const char* end = cursor + zone_meta.size();
-            while (cursor < end) {
-                size_t len = ::strnlen(cursor, static_cast<size_t>(end - cursor));
-                if (len > 0) {
-                    zone_log.write(cursor, static_cast<std::streamsize>(len));
-                    zone_log << '\n';
+            const auto* cursor = reinterpret_cast<const unsigned char*>(zone_meta.data());
+            const auto* end = cursor + zone_meta.size();
+            while (end - cursor >= 3) {  // at least a 2-byte id + 1 string byte
+                uint16_t id = static_cast<uint16_t>(cursor[0] | (cursor[1] << 8));
+                const char* str = reinterpret_cast<const char*>(cursor + 2);
+                size_t len = ::strnlen(str, static_cast<size_t>(end - (cursor + 2)));
+                if (len == 0) {
+                    break;  // trailing ALIGN padding (zero bytes)
                 }
-                cursor += len + 1;  // skip the NUL terminator (ALIGN padding yields empty strings)
+                zone_log << id << '\t';
+                zone_log.write(str, static_cast<std::streamsize>(len));
+                zone_log << '\n';
+                // Each record is emitted 4-byte aligned (see RecordZoneMeta's aligned(4)); round the
+                // id(2) + string + NUL length up to the next 4-byte boundary to reach the next record.
+                size_t record_bytes = (2 + len + 1 + 3) & ~static_cast<size_t>(3);
+                cursor += record_bytes;
             }
         } catch (const std::exception& e) {
             log_warning(tt::LogBuildKernels, "Failed to read .tt_zone_meta from '{}': {}", elf_path, e.what());
