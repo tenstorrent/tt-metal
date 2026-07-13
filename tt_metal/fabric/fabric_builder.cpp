@@ -78,7 +78,15 @@ void FabricBuilder::discover_channels() {
                 num_dispatch_links++;
             }
         }
-        control_plane.reserve_routing_planes(local_node_, direction, num_dispatch_links);
+        // Only reserve when there are dispatch links to reserve. Inter-mesh (Z) directions carry no
+        // dispatch links and are not tracked in the routing-plane-count map (initialize_dynamic_routing_
+        // plane_counts only registers E/W/N/S in non-STRICT mode), so an unconditional call fatals with
+        // "plane not found" on connected multi-mesh MGDs (e.g. the D2D pipeline-prefill superpod).
+        // Partial revert of #45352 (fc0dfb638e1); full revert is unsafe (reintroduces the multi-host-
+        // unsafe is_mmio_capable hack in moe_utils::get_num_links).
+        if (num_dispatch_links > 0) {
+            control_plane.reserve_routing_planes(local_node_, direction, num_dispatch_links);
+        }
     }
 }
 
