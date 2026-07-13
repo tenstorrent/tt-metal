@@ -68,7 +68,7 @@ inline void read_from_local(
         onetile * page_bytes,
         {.noc_x = core_noc_x, .noc_y = core_noc_y, .addr = src_addr_m},
         {});
-    noc_async_read_barrier();
+    noc.async_read_barrier();
     cb_push_back(cb_id_in_m, onetile);
 }
 
@@ -219,7 +219,7 @@ void kernel_main() {
     // Drain the inbound read before the tt_memmove consumers below: each tt_memmove is itself a NoC
     // op whose SOURCE is packet_l1_addr, and on the weak NoC there is no read->read landing order, so
     // the memmove could forward stale/partial packet data. Mirrors root2_receive_reader_kernel.cpp.
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 
     // moving l tensor
     tt_memmove<true, false, false, 0>(noc, dest_page_base_addr, packet_l1_addr, packet_size_bytes);
@@ -333,7 +333,7 @@ void kernel_main() {
         {.noc_x = core_noc_x, .noc_y = core_noc_y, .addr = intermediate_base_addr},
         {});
     // Drain the inbound read before the tt_memmove consumers (see first occurrence above).
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 
     tt_memmove<true, false, false, 0>(noc, dest_page_base_addr, packet_l1_addr, packet_size_bytes);
     cb_push_back(receiver_cb_id_l, input_num_tiles);
