@@ -130,10 +130,11 @@ def in_kernel_surface(path: str, keep=KERNEL_SURFACE_KEEP, drop=KERNEL_SURFACE_D
 # the analyzed (device-only) base — e.g. the HOST `tt::tt_metal::Semaphore`
 # (tt_metal/impl/buffers/semaphore.hpp) shares the bare name of the DEVICE `Semaphore`
 # (tt_metal/hw/inc/api/dataflow/noc_semaphore.h), and the checkers match by name only,
-# so a host fact would be conflated with a device one. Normally unreachable (a kernel
-# TU can't include host impl headers, and the kernels/ + in_kernel_surface filters
-# exclude them); is_host_path is a LOUD tripwire so a future scope change can't
-# silently let host code in. Markers are the SPECIFIC host roots (no bare 'impl', so a
+# so a host fact would be conflated with a device one. Normally unreachable — the PRIMARY
+# guard is cmd_is_device_kernel (jit_build's compile-flag markers) gating TU admission at
+# capture, plus a kernel TU can't include host impl headers and the kernels/ +
+# in_kernel_surface filters exclude them; is_host_path is a SECONDARY loud tripwire so a
+# future scope change can't silently let host code in. Markers are the SPECIFIC host roots (no bare 'impl', so a
 # device kernel dir that happens to contain 'impl' isn't misflagged; not
 # 'tt_metal/hw/inc/api', which is the DEVICE api) and carry no leading slash so they
 # match both relative and absolute fact paths.
@@ -150,7 +151,10 @@ HOST_KERNEL_MGMT_MARKERS = ("tt_metal/impl/kernels/",)
 
 def is_host_path(path: str) -> bool:
     """True iff `path` is in a HOST implementation / public-API tree (must not enter
-    the device-only base). `in_kernel_surface` WINS in general: a path that is a kernel
+    the device-only base). SECONDARY, path-based cross-check: the PRIMARY device/host
+    decision is `cmd_is_device_kernel` (jit_build's own compile-flag markers) applied
+    per-TU at capture; this per-fact tripwire is defense-in-depth for a fact whose TU
+    slipped through. `in_kernel_surface` WINS in general: a path that is a kernel
     surface (contains `/kernels/`) is DEVICE code even under a host tree — e.g. the JIT
     dispatch/prefetch kernels at `tt_metal/impl/dispatch/kernels/`,
     `tt_metal/impl/buffers/kernels/` — and must NOT be dropped as host. The ONE
@@ -176,6 +180,30 @@ def _parse_cmd(cmd: str):
     defs = [t for t in toks if t.startswith("-D")]
     srcs = [t for t in toks if t.endswith((".cc", ".cpp"))]  # the .o is not .cc
     return cwd, (srcs[0] if srcs else None), incs, defs
+
+
+# The BUILD SYSTEM'S OWN device markers, set env-level by jit_build (build.cpp
+# JitBuildEnv::init, so present for EVERY device kernel — Tensix data-movement /
+# compute AND ethernet/erisc): the RISC-V toolchain (`riscv-tt-elf-g++`) and
+# `-DTENSIX_FIRMWARE`. Host code compiles x86 with NEITHER. Classifying a captured TU
+# by these is far more reliable than its file path (the path-based is_host_path
+# tripwire is only a fallback): it is jit_build's own record of what it compiled as a
+# device kernel, not a name heuristic.
+DEVICE_KERNEL_DEFINE = "TENSIX_FIRMWARE"
+DEVICE_TOOLCHAIN_MARK = "riscv-tt-elf"
+
+
+def cmd_is_device_kernel(cmd: str, defs: list) -> bool:
+    """True iff this compile command is a DEVICE kernel build. Keyed on EITHER the
+    RISC-V toolchain in the command OR `-DTENSIX_FIRMWARE` — both set env-level by
+    jit_build for all device kernels. Using EITHER is recall-safe: a real kernel is
+    never dropped even if one marker were absent (e.g. a ccache-wrapped command still
+    contains the toolchain path); only a command with NEITHER — host code that somehow
+    reached the kernel-compile log — is treated as non-kernel."""
+    if DEVICE_TOOLCHAIN_MARK in cmd:
+        return True
+    key = "-D" + DEVICE_KERNEL_DEFINE
+    return any(d == key or d.startswith(key + "=") for d in defs)
 
 
 def main(argv=None) -> int:
@@ -251,6 +279,16 @@ def main(argv=None) -> int:
             # with a non-zero exit — catch it here as a NAMED skip, not a clean ok.
             if not os.path.isfile(os.path.join(cwd, src)):
                 ledger.append((short, "SKIP-nosrc", 0, 0))
+                continue
+            # AUTHORITATIVE device/host classification — gate on jit_build's own device
+            # markers (RISC-V toolchain / -DTENSIX_FIRMWARE), NOT the file path. A logged
+            # command that is not a device-kernel build (host code that somehow reached
+            # the kernel-compile log) is skipped as a NAMED coverage hole, never extracted
+            # as a kernel. In practice the log holds only kernel builds, so this is a
+            # robust guard rather than a live filter; the path-based is_host_path stays as
+            # a SECONDARY per-fact cross-check below. Recall-safe (see cmd_is_device_kernel).
+            if not cmd_is_device_kernel(cmd, defs):
+                ledger.append((short, "NON-KERNEL-CMD", 0, 0))
                 continue
             label = (
                 os.path.relpath(cwd, os.path.join(args.repo_root))
