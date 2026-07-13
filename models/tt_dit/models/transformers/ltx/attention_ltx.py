@@ -121,8 +121,8 @@ class LTXAttention(Module):
         # later, to emit num_heads/TP columns: ~100% of its cost is the gather. The all-gather is
         # fused inside the matmul, so sharing it means sharing the matmul — the gate's columns ride
         # the projection as one EXTRA CHUNK. A chunk (rather than a wider single output) keeps q/k/v
-        # as separate tensors with no DRAM re-copy; only the gate chunk, dim/TP wide with the gate in
-        # its first n_local_heads columns and a zero tail, needs narrowing.
+        # as separate tensors with no DRAM re-copy, and the gate chunk carries each head's gate
+        # repeated over that head's channels, so it applies elementwise (see _fold_gate_into_projection).
         self.apply_gated_attention = apply_gated_attention
         self.merge_gate = apply_gated_attention and gate_merge_enabled()
         self.base_chunks = 3 if is_self else 1
@@ -325,8 +325,15 @@ class LTXAttention(Module):
 
         Both weights are device-major: device d owns a contiguous block of `base_chunks` chunks (of
         `dim / TP` columns each) of the projection, and the `num_heads / TP` gate columns of the
-        heads it will run SDPA on. The merged block is those side by side, its gate chunk zero past
-        the gate's own columns, so `chunks = base_chunks + 1` hands the gate back as its own tensor.
+        heads it will run SDPA on. `chunks = base_chunks + 1` then hands the gate back as its own
+        tensor.
+
+        Each head's gate column is REPEATED over that head's `head_dim` channels, filling the chunk.
+        The gate is constant across a head's channels, so this is the same value the per-head gate
+        would broadcast — but it lands already in `concatenate_heads` layout (column = h*head_dim+e),
+        so the gate applies as a plain elementwise multiply in 1BND space. Narrowing the chunk to
+        `n_local_heads` instead would need a slice and a permute to reach (B, H, N, 1), and the FLOPs
+        are identical either way: the chunk is `dim / TP` wide regardless of how much of it we use.
         """
         gate = pop_substate(state, "to_gate_logits")
         gate_weight = gate.get("weight")
@@ -337,14 +344,21 @@ class LTXAttention(Module):
         shard = self.dim // n_dev  # per-device width of one chunk
         heads = self.n_local_heads
 
+        def gate_block(t: torch.Tensor | None, width: int) -> torch.Tensor | None:
+            """This device's gate rows, each repeated over its head's head_dim channels."""
+            if t is None:
+                return None
+            return t.repeat_interleave(self.head_dim, dim=0)[:width]
+
         weight = state[f"{proj}.weight"]
         assert weight.shape[0] == base * self.dim, f"{proj}.weight is not {base} chunks wide"
         merged = weight.new_zeros(((base + 1) * self.dim, weight.shape[1]))
         for d in range(n_dev):
             dst, src = d * (base + 1) * shard, d * base * shard
             merged[dst : dst + base * shard] = weight[src : src + base * shard]
-            if gate_weight is not None:
-                merged[dst + base * shard : dst + base * shard + heads] = gate_weight[d * heads : (d + 1) * heads]
+            g = gate_block(gate_weight[d * heads : (d + 1) * heads] if gate_weight is not None else None, shard)
+            if g is not None:
+                merged[dst + base * shard : dst + (base + 1) * shard] = g
         state[f"{proj}.weight"] = merged
 
         bias = state.get(f"{proj}.bias")
@@ -355,8 +369,11 @@ class LTXAttention(Module):
             dst, src = d * (base + 1) * shard, d * base * shard
             if bias is not None:
                 merged_bias[dst : dst + base * shard] = bias[src : src + base * shard]
-            if gate_bias is not None:
-                merged_bias[dst + base * shard : dst + base * shard + heads] = gate_bias[d * heads : (d + 1) * heads]
+            g = gate_block(
+                gate_bias[d * heads : (d + 1) * heads].unsqueeze(-1) if gate_bias is not None else None, shard
+            )
+            if g is not None:
+                merged_bias[dst + base * shard : dst + (base + 1) * shard] = g.squeeze(-1)
         state[f"{proj}.bias"] = merged_bias
 
     def _to_out_fused_addcmul(
@@ -438,22 +455,16 @@ class LTXAttention(Module):
             return None
 
         gate_logits = self.to_gate_logits(spatial_1BND, parallel_config=qkv_parallel_config)
-        return self._gate_from_logits(gate_logits)
-
-    def _gate_from_logits(self, gate_logits: ttnn.Tensor) -> ttnn.Tensor:
-        """2 * sigmoid(logits) as (B, H_local, N, 1), narrowing a merged gate chunk to its heads."""
-        if gate_logits.shape[-1] != self.n_local_heads:
-            # Merged: drop the zero tail of the gate chunk. Tile-aligned begins keep this on the
-            # TILE path; the unaligned end only pads.
-            shape = list(gate_logits.shape)
-            gate_logits = ttnn.slice(gate_logits, [0] * len(shape), [*shape[:-1], self.n_local_heads])
-
         gate = ttnn.multiply(ttnn.sigmoid(gate_logits), 2.0)
 
         # (1, B, N, H_local) -> (B, H_local, N, 1) in one pass: the N<->H_local swap is the real
         # data movement, and the leading unit axis is parked into the trailing broadcast slot (over
         # E). Replaces squeeze+transpose+unsqueeze (the unsqueeze was a retile, not a free view).
         return ttnn.permute(gate, (1, 3, 2, 0))
+
+    def _gate_from_logits(self, gate_logits: ttnn.Tensor) -> ttnn.Tensor:
+        """2 * sigmoid(logits) for a merged gate chunk: already in 1BND (concatenate_heads) layout."""
+        return ttnn.multiply(ttnn.sigmoid(gate_logits), 2.0)
 
     def forward(
         self,
@@ -489,9 +500,11 @@ class LTXAttention(Module):
 
         qkv_parallel_config = None if use_nonfused_agmm else self.parallel_config
 
-        # Standalone gate: computed before QKV consumes spatial_1BND. Merged: it falls out of the
-        # projection below, having cost no all-gather of its own.
+        # Standalone gate: its own projection, computed before QKV consumes spatial_1BND, applied
+        # per head in BHNE. Merged: it falls out of the projection below having cost no all-gather of
+        # its own, already laid out to apply in 1BND after the heads are concatenated.
         gate_bhne = None if self.merge_gate else self._compute_gate(spatial_1BND, qkv_parallel_config)
+        gate_1BND = None
 
         if self.is_self:
             qkv = self.to_qkv(
@@ -501,7 +514,7 @@ class LTXAttention(Module):
             )
             if self.merge_gate:
                 q_1BNF, k_1BNF, v_1BNF, gate_logits = qkv
-                gate_bhne = self._gate_from_logits(gate_logits)
+                gate_1BND = self._gate_from_logits(gate_logits)
             else:
                 q_1BNF, k_1BNF, v_1BNF = qkv
         else:
@@ -525,7 +538,7 @@ class LTXAttention(Module):
             )
             if self.merge_gate:
                 q_1BNF, gate_logits = q
-                gate_bhne = self._gate_from_logits(gate_logits)
+                gate_1BND = self._gate_from_logits(gate_logits)
             else:
                 q_1BNF = q
             k_1BNF, v_1BNF = self.to_kv(
@@ -678,12 +691,16 @@ class LTXAttention(Module):
                 compute_kernel_config=self.sdpa_compute_kernel_config,
             )
 
-        # Apply per-head gate in BHNE space.
+        # Apply the per-head gate: standalone broadcasts it over E in BHNE, merged multiplies it
+        # elementwise once the heads are concatenated (its columns already repeat over head_dim).
         if gate_bhne is not None:
             spatial_BHNE = ttnn.multiply(spatial_BHNE, gate_bhne)
 
         spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)
         spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
+
+        if gate_1BND is not None:
+            spatial_1BND = ttnn.multiply(spatial_1BND, gate_1BND)
 
         # Ring fuses the TP all-gather into the to_out matmul; only Linear needs explicit AG.
         addcmul_fused = addcmul_residual is not None and addcmul_gate is not None
