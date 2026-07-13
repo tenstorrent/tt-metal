@@ -2,19 +2,21 @@
 # SPDX-License-Identifier: Apache-2.0
 """
 reconfig-stall checker — a config rewrite that a running execution unit samples
-must be preceded by a STALLWAIT whose condition DRAINS that unit (packer->PACK,
-unpacker->UNPACK[01], math->MATH|WAIT_SFPU). A THCON-only stall orders the
-GPR->cfg write but does NOT drain the unit — the classic miss.
+must be preceded by a STALLWAIT whose condition DRAINS that unit (packer->PACK
+[PACK0..PACK3], unpacker->UNPACK[0-2], math->MATH|WAIT_SFPU). A THCON-only stall
+orders the GPR->cfg write but does NOT drain the unit — the classic miss.
 
 Recall: for each candidate reconfig/uninit/config-writer function, walk ALL its
 CONFIG writes in order (not just the first) and, for each, check that a
 unit-draining STALLWAIT precedes it AND the unit was not re-armed (by a
 UNPACR/PACR/matrix issue for this thread) between that drain and the write. Emit
 one candidate per function, at the first offending write:
-  NO_UNIT_DRAIN  — a cfg write with no preceding STALLWAIT at all
-  THCON_ONLY     — a STALLWAIT precedes it, but its condition drains no unit
-  DRAIN_REARMED  — a draining STALLWAIT precedes it, but the unit was re-issued
-                   between the drain and the write (the drain no longer holds)
+  NO_UNIT_DRAIN      — a cfg write with no preceding STALLWAIT at all
+  THCON_ONLY         — a STALLWAIT precedes it, but its condition drains no unit
+  DRAIN_REARMED      — a draining STALLWAIT precedes it, but the unit was re-issued
+                       between the drain and the write (the drain no longer holds)
+  PARTIAL_MATH_DRAIN — a MATH reconfig whose stall drains only ONE of the FPU/SFPU
+                       engines (insufficient if the other engine reads the field)
 Latched registers (L1_Dest_addr) are an expected THCON-only case: such a write
 is SKIPPED (not the whole function) so a later sampled write is still checked.
 """
