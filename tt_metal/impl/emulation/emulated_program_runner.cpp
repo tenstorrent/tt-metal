@@ -2837,48 +2837,6 @@ extern "C" void __emule_fabric_teleport(const void* packet_header, const void* p
     }
 }
 
-// DESIGN DIVERGENCE: see tt-emule/.claude/skills/workarounds (DM-1). Faithful mechanism, not a hack.
-// Remap a local-L1 host pointer (a cross-chip-shared object's absolute pointer, valid for only one chip's
-// MAP_32BIT mmap) to the CURRENT chip's copy of the same (core, offset). Single-chip runs short-circuit.
-// See tt-emule docs/fabric-ccl-emulation.md.
-extern "C" uint8_t* __emule_chip_relative_l1(uint8_t* p) {
-    emule_require_self(__func__);
-    std::lock_guard<std::mutex> lock(g_core_map_mutex);
-    if (g_core_map_cache.size() <= 1) {
-        return p;  // single chip: the pointer is already this chip's
-    }
-    const uint32_t cur = __emule_self->chip_id;
-    auto cur_it = g_core_map_cache.find(cur);
-    for (auto& [chip, mapp] : g_core_map_cache) {
-        if (!mapp) {
-            continue;
-        }
-        for (auto& [key, core] : *mapp) {
-            uint8_t* base = core->l1_data();
-            if (base != nullptr && p >= base && p < base + core->l1_size()) {
-                if (chip == cur) {
-                    return p;  // already on the current chip
-                }
-                uint64_t off = static_cast<uint64_t>(p - base);
-                if (cur_it != g_core_map_cache.end() && cur_it->second) {
-                    auto cc = cur_it->second->find(key);
-                    if (cc != cur_it->second->end()) {
-                        uint8_t* rp = cc->second->l1_ptr(off);
-                        if (std::getenv("EMULE_FABRIC_DEBUG") != nullptr) {
-                            fprintf(stderr,
-                                "[EMULE_FABRIC]   chip_relative cur=%u: %p (chip%u core[0x%llx]+0x%llx) -> %p\n",
-                                cur, (void*)p, chip, (unsigned long long)key, (unsigned long long)off, (void*)rp);
-                        }
-                        return rp;  // same core+offset on the current chip
-                    }
-                }
-                return p;
-            }
-        }
-    }
-    return p;  // not a known L1 pointer (firmware offset etc.) — leave unchanged
-}
-
 // ---------------------------------------------------------------------------
 // setup_core_state: Configure CBs and semaphores per core, build CoreSetup list.
 // ---------------------------------------------------------------------------
