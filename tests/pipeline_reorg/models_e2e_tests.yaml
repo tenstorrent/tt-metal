@@ -711,7 +711,7 @@
     pytest --timeout 1800 tests/nightly/single_card/stable_diffusion_xl_base/test_unet_loop.py || exit_code=$?
     pytest --timeout 1800 tests/nightly/single_card/stable_diffusion_xl_base/refiner/test_unet_loop.py || exit_code=$?
     exit $exit_code
-  model: sdxl-wh
+  model: sdxl-nightly
   skus:
     wh_n150:
       timeout: 40
@@ -728,7 +728,7 @@
     pytest --timeout 1800 tests/nightly/single_card/stable_diffusion_xl_base/test_unet_loop.py || exit_code=$?
     pytest --timeout 1800 tests/nightly/single_card/stable_diffusion_xl_base/refiner/test_unet_loop.py || exit_code=$?
     exit $exit_code
-  model: sdxl-bh
+  model: sdxl-nightly
   skus:
     bh_p150:
       timeout: 30
@@ -742,7 +742,7 @@
   cmd: |
     export TT_MM_THROTTLE_PERF=5
     pytest models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600
-  model: sdxl-nightly-wh
+  model: sdxl-nightly
   skus:
     wh_n150:
       timeout: 40
@@ -760,7 +760,7 @@
     pytest models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600 || exit_code=$?
     pytest models/demos/stable_diffusion_xl_base/lora/tests/test_lora_rollback.py -v -m "not disable_fast_runtime_mode" --timeout=600 || exit_code=$?
     exit $exit_code
-  model: sdxl-nightly-wh
+  model: sdxl-nightly
   skus:
     wh_n150:
       timeout: 40
@@ -775,7 +775,7 @@
   cmd: |
     export TT_MM_THROTTLE_PERF=0
     pytest models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600
-  model: sdxl-nightly-bh
+  model: sdxl-nightly
   skus:
     bh_p150:
       timeout: 40
@@ -787,7 +787,7 @@
   cmd: |
     export TT_MM_THROTTLE_PERF=0
     pytest models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600
-  model: sdxl-nightly-bh
+  model: sdxl-nightly
   skus:
     bh_p150:
       timeout: 40
@@ -806,7 +806,7 @@
     pytest models/demos/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
     pytest models/demos/stable_diffusion_xl_base/demo/demo_lora.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
     exit $exit_code
-  model: sdxl-nightly-wh
+  model: sdxl-demo
   skus:
     wh_n150:
       timeout: 35
@@ -818,7 +818,7 @@
   cmd: |
     export TT_MM_THROTTLE_PERF=5
     pytest models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and use_cfg_parallel" --timeout=600
-  model: sdxl-nightly-wh
+  model: sdxl-demo
   skus:
     wh_n300:
       timeout: 15
@@ -835,7 +835,7 @@
     pytest models/demos/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
     pytest models/demos/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
     exit $exit_code
-  model: sdxl-nightly-bh
+  model: sdxl-demo
   skus:
     bh_p150:
       timeout: 30
@@ -851,7 +851,7 @@
     pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal || exit_code=$?
     pytest models/demos/stable_diffusion_xl_base/lora/tests/test_lora_perf.py -m models_device_performance_bare_metal || exit_code=$?
     exit $exit_code
-  model: sdxl-nightly-wh
+  model: sdxl-perf
   skus:
     wh_n300:
       timeout: 35
@@ -863,7 +863,7 @@
   cmd: |
     export TRACY_NO_INVARIANT_CHECK=1
     pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal
-  model: sdxl-nightly-bh
+  model: sdxl-perf
   skus:
     bh_p150:
       timeout: 30
