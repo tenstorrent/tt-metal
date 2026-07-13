@@ -491,3 +491,47 @@ in-context block env hook.
 - **FSDP weight-sharding @ prod-4x8 S2 video block (job 024854-127, drift-immune same-session A/B): is_fsdp=True 18.56ms vs prod is_fsdp=False 16.79ms = +10.5% SLOWER, PCC identical 99.9658%.** FSDP adds per-layer weight all-gathers ⇒ MORE collectives ⇒ slower on the dispatch-bound block. Prod is_fsdp=False optimal; last no-edit collective-pattern axis closed. Adding collectives HURTS as much as removing link/compute helped little ⇒ only cutting collective COUNT (fewer steps = out-of-repo distill) moves the wall. Key finding: **fp32-dest-acc RECOVERS the SDPA-LoFi PCC** Batch J lost (98.57% FAIL → 99.93% PASS), correcting J's "can't recover" reasoning — but speed is null-with-favorable-noise (under 5% gate; increment vs all_bf8_lofi contradicts the isolated-SDPA physics). No preset clears the gate at passing quality ⇒ denoise block stays dispatch-bound.
 - **S1 FSDP weight-sharding @ prod-4x8 S1 video block (job 093451-9, drift-immune same-reservation A/B): is_fsdp=True 14.37ms vs prod is_fsdp=False 11.64ms = +23.5% SLOWER, PCC identical 99.9937%.** The S1 mirror of Q0 (S2 +10.5%): FSDP's per-layer weight all-gathers cost ~2× more on S1 because S1 is more dispatch-bound (I2 zero link-BW-sensitivity vs S2's F2 +16%). Prod is_fsdp=False optimal on both stages. Closes the last empty cell in the S1×collective-pattern matrix ⇒ every runtime/env-selectable no-edit axis across S1/S2/VAE now has a receipt. (The one remaining hole-*looking* candidate, S1-SDPA-chunk, is structurally NOT a per-stage lever: SDPA chunk is a construction-time `SDPAProgramConfig` on the attention block — attention.py:45-46/transformer_block.py:43-44 — shared across both stages, already tuned on the dominant S2 bucket by Batch A; a per-stage chunk needs a source edit, not a no-edit run.)
 - **VAE-decode num_links @ prod-4x8 (job 042140-129, drift-immune same-reservation A/B): NP_LINKS=2 551.85ms vs NP_LINKS=1 643.11ms = +16.5% (2nd link saves 91ms).** The VAE halo/interconnect IS link-BW-sensitive (unlike S1 denoise's 0%, like S2's +16%), decomposing Batch O's data-movement-bound 552ms into halo-interconnect (link-sensitive, HW-capped at 2) + conv/permute (fidelity-insensitive). No win — num_links=2 is prod AND the BH HW cap (A2). Closes the last un-swept no-edit axis (VAE interconnect); every axis on both regimes now has a receipt.
+
+## Batch W — COLLECTIVE-COUNT reduction (source edit): the residual floor that program-launch does NOT explain
+
+**Why this batch exists — the premise of Batches A–V was wrong.** Every prior batch ranked levers from an
+**eager** profile. Eager is host-dispatch-bound (eager S1 2113ms ≈ eager S2 2136ms despite 4× the work) — a
+different machine from the traced one that ships. The profiler had recorded **zero** traced ops the whole time:
+`DEFAULT_PROFILER_PROGRAM_SUPPORT_COUNT = 1000` (profiler_state_manager.cpp:19) caps the profiler DRAM buffer at
+1000 programs/RISC and LTX's eager prologue exhausts it, silently dropping 100% of every traced capture. That is
+why attacking the "bottleneck" kept returning zero: it was never the bottleneck.
+
+**Measured, traced (the real machine):** S1 (N=9,690) STEP_MS 348.3 (σ=0.1); S2 (N=38,760 = 4×N1) 1092.5 (σ=0.25).
+Fit `t(N)=a+b·N+c·N²` ⇒ **work-independent floor a ∈ [100,299] ms/step = 1.1–3.3s of the 6.62s denoise.**
+An A/B removing 144 programs/step (the gated-residual fold, a4173c3) moved it a real −1.32ms (S1) / −2.37ms (S2),
+killing the pure-FLOPs AND pure-fixed-CCL explanations. Netting out the work-dependent memory pass (0.35ms @ S1)
+leaves **0.97ms work-independent per 144 programs ⇒ ≤6.7 µs/program launch ⇒ all ~9,360 programs/step ≤ ~63 ms.**
+**⇒ 37–236 ms/step of the floor is work-independent and is NOT program launch.** Prime suspect: **fixed collective
+latency** (~87 collectives/block × 48 blocks; a collective's cost is largely payload-independent).
+
+**This batch was NOT ruled out — it was never tried.** Batch Q/T concluded "only cutting collective COUNT moves the
+wall" and then jumped straight to "= fewer steps = out-of-repo distill", skipping the obvious in-repo lever: **fewer
+collectives PER BLOCK.** Q/T are in fact the strongest evidence FOR this batch — *adding* collectives (FSDP per-layer
+weight all-gathers) cost **+10.5% (S2) / +23.5% (S1)**, the mirror image of the prediction here.
+
+Rules: no-edit axes are exhausted, so these are SOURCE edits and each MUST carry a PCC gate (precedent:
+`test_ltx_fold_gated_residual`, 7eda38e — in-process fused-vs-unfused A/B on real 22B weights with a bit-exact
+noise-floor control, and a deliberately-wrong-gate mutant proving the gate bites at 99.85/6.0%). **A source edit with
+no gate does not ship.** Measure on the block harness (`test_ltx_transformer_block -k 'ring_bh_4x8sp1tp0 and av'`,
+`LTX_PROFILE_ITERS>1` for warm laps), not the raw pipeline.
+
+- [ ] **W0 — CENSUS + measured per-collective cost.** Exact table of every collective in one AV block (type /
+      file:line / mesh axis / payload shape / count), split **stat-sized** (RMSNorm stats — tiny payload, pure
+      latency) vs **activation-sized** (bandwidth-bound). Then the MEASURED fixed latency per collective from
+      `cpp_device_perf_report.csv` (`OP TO OP LATENCY` + `DEVICE FW DURATION`). **ACID TEST: rows with a non-empty
+      `METAL TRACE ID` must be > 0** — it was 0 in every pre-2026-07-13 CSV, which means no traced data; if it is 0
+      the numbers are worthless and must NOT be reported. Deliverable gates the rest of the batch.
+- [ ] **W1 — merge the tiny RMSNorm stat all-gathers.** `DistributedRMSNorm.forward` (layers/normalization.py) =
+      pre_allgather → `all_gather_persistent_buffer(stats, dim=-1)` → post_allgather = 3 programs, 1 collective,
+      EACH. Many norms per block. Can several norms' stats ride ONE collective? **⚠️ A naive version of this was
+      already measured SLOWER:** the Q/K-norm "merge" cost 8 programs vs 6 — it ADDED programs. Understand exactly
+      why before proposing a variant; a merge that raises program count is dead on arrival.
+- [ ] **W2 — redundant all-gathers.** Find any tensor all-gathered twice on the same axis within a block, or gathered
+      then immediately re-sharded. Each is a free cut.
+- [ ] **W3 — fuse a collective into an adjacent op's epilogue** (same trick as the gated-residual fold, applied to a
+      collective rather than an elementwise op).

@@ -19,7 +19,37 @@ Do exactly ONE lap, print a 2-line summary, then EXIT. Never loop forever.
 6. Source-edit discipline: before editing source Read `/home/smarton/src/tt-buddy/skills/buddy/code-comments.md`; before any commit Read `/home/smarton/src/tt-buddy/skills/buddy/commit-messages.md`.
 
 ## The goal (north star)
-1080p-high E2E 8.2s → 6.0s at high quality. **Established (verified):** no-finetune floor ≈ 7.9s;
-6.0s needs out-of-repo step-distillation (a user resourcing decision). So the loop's real remaining
-job is: finish any in-flight no-finetune experiment cleanly with receipts, then heartbeat-and-hold
-(step 4 last bullet) until the user gives a new direction. Do not thrash.
+1080p-high E2E 8.2s → 6.0s at high quality.
+
+**The "no-finetune floor ≈ 7.9s / 6.0s needs step-distillation" verdict is VOID.** It rested on a
+per-op ranking taken from the EAGER regime, which is host-dispatch-bound (eager S1 2113ms ≈ eager S2
+2136ms despite 4× the work) — a different machine from the traced one that actually ships. The
+profiler had recorded **zero** traced ops: `DEFAULT_PROFILER_PROGRAM_SUPPORT_COUNT = 1000`
+(tt_metal/impl/profiler/profiler_state_manager.cpp:19) caps the profiler's DRAM buffer at 1000
+programs/RISC, and LTX's eager prologue exhausts it, so every traced capture was silently dropped.
+That is why every lever aimed at the "bottleneck" returned nothing: the bottleneck was never measured.
+
+**What is actually true (measured, traced steady-state):** S1 (N=9,690) STEP_MS = 348.3 (σ=0.1);
+S2 (N=38,760 = exactly 4×N1) = 1092.5 (σ=0.25). Fitting `t(N) = a + b·N + c·N²` across the two token
+counts ⇒ a **work-independent floor a ∈ [100, 299] ms/step = 1.1–3.3s of the 6.62s denoise**. It does
+not scale with tokens, so it is not FLOPs, and no lever has ever attacked it.
+
+**Decomposition of that floor (measured, not guessed):** an A/B removing 144 programs/step gave a real
+delta (S1 −1.32ms, S2 −2.37ms), which kills both the pure-FLOPs and the pure-fixed-CCL explanations.
+Separating the work-dependent memory pass (0.35ms @ S1) leaves **0.97ms work-independent for 144
+programs ⇒ ≤ 6.7 µs per program launch**. All ~9,360 programs/step therefore account for at most
+**~63 ms/step** — so **37–236 ms/step of the floor is work-independent and NOT program launch.**
+
+**That residual is the target. Prime suspect: fixed collective latency** (~87 collectives/block × 48
+blocks; a collective's cost has a large payload-independent component). **Attack collective COUNT,
+not elementwise fusion.** Program-count fusion is now a measured, nearly-exhausted lever (≤6.7 µs each);
+do not spend laps on it.
+
+Profiling that actually works (everything else is a trap): `ttnn.ReadDeviceProfiler(mesh_device)` +
+`TT_METAL_PROFILER_CPP_POST_PROCESS=1` + `TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=3000` →
+`generated/profiler/.logs/cpp_device_perf_report.csv`. **ACID TEST: rows with a non-empty
+`METAL TRACE ID` must be > 0** — in every pre-2026-07-13 CSV it was 0, meaning nothing traced was
+recorded and the data was worthless. `PROGRAM CACHE HIT` is a structurally-broken always-False column
+(ttnn/cpp/tools/profiler/op_profiler_json.cpp:171-178) — use `METAL TRACE REPLAY SESSION ID` as the
+warm/traced witness instead. `--device-trace-profiler` and `TT_METAL_KERNEL_CAPTURE_ONLY=1` are traps
+(the latter skips dispatch entirely — zero device ops execute).
