@@ -1,6 +1,6 @@
 ---
 name: forge-functional-decoder
-description: Bring up a functionally correct TTNN decoder layer for the model-specific autoport directory by TRANSLATING a tt-forge / tt-torch codegen-emitted TTNN model into the functional-decoder output shape. Use this instead of $functional-decoder when a forge emit already exists and you must adapt it (not author from scratch). Scope for this pass is PREFILL only; decode is a documented stub until an emitted decode version is provided.
+description: Bring up a functionally correct TTNN decoder layer for the model-specific autoport directory by TRANSLATING a tt-forge / tt-torch codegen-emitted TTNN model into the functional-decoder output shape. Use this instead of $functional-decoder when a forge emit already exists and you must adapt it (not author from scratch). Scope is emit-driven: always translate prefill, and translate a correctness-first decode path too when the emit ships a decode graph (SDPA-decode / paged_update_cache); when it does not, decode is an honest stub that defers to the optimize stage.
 ---
 
 # Forge → Functional Decoder Bringup
@@ -15,12 +15,25 @@ that shape. The emit is a *starting point*; downstream stages (optimized, multic
 datatype-sweep, vLLM, release) build on what you leave here, exactly as they would after a normal
 functional-decoder stage.
 
-**Scope for this pass is PREFILL only.** The forge emit provided is a static-shape prefill graph with
-no decode / no incremental-KV path. Deliver a correct, tested `prefill_forward`. Implement
-`decode_forward` as an explicit, documented `NotImplementedError` stub that points at the pending
-emitted-decode version — do **not** fabricate a decode/paged path. Record decode as a known limitation
-in the README and the context contract. A future emitted-decode version will be dropped in and tested
-in a later pass.
+**Scope is emit-driven: translate whatever the emit actually contains.** Always deliver a correct,
+tested `prefill_forward`. For decode, do not assume — **detect** whether this emit ships a decode
+graph by grepping it for `scaled_dot_product_attention_decode`, `nlp_concat_heads_decode`, or
+`paged_update_cache`. Different emits differ: the Qwen3-4B emit is a static prefill graph with no
+incremental-KV path, while the Llama-3.1-8B emit *does* ship a batch-32 single-token decode graph
+(KV-cache append at `cache_position` + SDPA-decode). Branch on what you find:
+
+- **Emit has a decode graph:** translate it into a correct, tested `decode_forward`, exactly as you
+  do for prefill. It is semantic ground truth — capturing it here is the whole point of a
+  forge-seeded bringup. Do **not** leave it on the floor for the optimize stage to rediscover blind
+  (that is the same anti-pattern this skill warns about for sharding). Keep the runtime on
+  correctness-first defaults and push the emit's paged/traced layout glue into the recommendations
+  record (below), not into the runtime forward.
+- **Emit has no decode graph:** implement `decode_forward` as an explicit, documented
+  `NotImplementedError` stub whose message states the emit is prefill-only and decode is delivered by
+  the optimize stage. Do **not** fabricate a decode/paged path, and do **not** claim a decode emit is
+  "pending" — none is coming from forge for this model.
+
+Either way, record which branch you took (and the grep evidence) in the README and context contract.
 
 ## Your Part
 
@@ -43,7 +56,7 @@ class FunctionalDecoder(LightweightModule):
     def from_state_dict(cls, state_dict, *, hf_config, layer_idx, mesh_device, **kwargs): ...
 
     def prefill_forward(self, ...): ...   # real, tested
-    def decode_forward(self, ...): ...    # documented NotImplementedError stub for now
+    def decode_forward(self, ...): ...    # real+tested if the emit has a decode graph; else honest stub
 ```
 
 Also produce the full artifact set (same as the functional-decoder stage):
@@ -54,7 +67,6 @@ models/autoports/<model>/tests/__init__.py
 models/autoports/<model>/tests/test_functional_decoder.py     # prefill PCC vs HF, incl. >=1 real-weight test
 models/autoports/<model>/doc/functional_decoder/README.md
 models/autoports/<model>/doc/functional_decoder/work_log.md
-models/autoports/<model>/doc/functional_decoder/forge_sharding_recommendations.json  # emitted per-op layout, for the optimize stage to seed from
 models/autoports/<model>/doc/context_contract.json
 ```
 
@@ -82,12 +94,6 @@ refinement: the emit's compute-kernel precision (`math_fidelity`, `fp32_dest_acc
 seq-independent, so keep the runtime on defaults but adopt the emit's setting for a numerically sensitive
 op (norms, etc.) when prefill PCC is at or below the bar — a correctness fix, not an optimization.
 
-**But do not throw the layout knowledge away.** The emit's layouts, shard widths, program configs,
-fusions, and precision are the best seed the downstream `optimize` stage has; discarding them makes it
-rediscover sharding blind and re-lose wins the emit already had. Record them verbatim into
-`doc/functional_decoder/forge_sharding_recommendations.json` (schema below) — provenance, not runtime
-code, so it does not affect arbitrary-`seq_len` correctness.
-
 **Preserve the emitted workload batch size.** The emit is generated for a specific batch (read it
 from `model_pt.BATCH_SIZE`, e.g. **32** for Llama-3.1-8B). That batch is part of the workload the
 downstream stages (optimize, full-model, release) are expected to serve, so **do not silently
@@ -97,45 +103,6 @@ not the batch. Parameterize the layer by `batch` (defaulting to the emitted `BAT
 `seq_len`, so it accepts arbitrary values of both. If you have a documented reason to also support
 batch-1 (single-user latency), add it as an *additional* supported value — do not make it the sole
 target and do not lose the emitted batch.
-
-### Forge sharding recommendations (`forge_sharding_recommendations.json`)
-
-Capture, per emitted op, what *your* emit did, so `optimize` can seed from it instead of a blank DRAM
-slate. Record as much as the emit specifies — completeness is the goal; `optimize` decides how much to
-use. The skeleton below is the field set with placeholder `<...>` values, not real data: fill every
-field from your own emit rather than copying the example.
-
-```json
-{
-  "provenance": {
-    "emit": "<path to the model_ttnn.py you translated>",
-    "emitted_batch": "<emitted BATCH_SIZE>",
-    "emitted_seq_len": "<emitted seq_len>",
-    "emitted_grid": "<the emit's program grid, copied raw>",
-    "note": "Grids/shard-core counts are verbatim from the emit's authoring device and MUST be legalized to the optimize target's real compute grid; only the intent (layout class, shard-width fraction, weights layout, fused activation, compute-kernel precision) ports as-is."
-  },
-  "ops": {
-    "<op_role>": {
-      "memory_layout": "<L1_WIDTH_SHARDED | L1_HEIGHT_SHARDED | L1_INTERLEAVED | DRAM>",
-      "shard_shape": "<[rows, cols] from the emit, or null>",
-      "shard_orientation": "<ROW_MAJOR | COL_MAJOR, or null>",
-      "core_count": "<int from the emit, or null>",
-      "output_dtype": "<the emit's output dtype for this op, e.g. BFLOAT16>",
-      "program_config": "<the ENTIRE emitted program config, all fields, serialized verbatim; keep the class name; null if the emit passes none>",
-      "weights_layout": "<interleaved | dram_width_sharded (matmuls only)>",
-      "fused_activation": "<activation fused into this op, or null>",
-      "compute_kernel": "<the ENTIRE emitted compute-kernel config, all fields verbatim, or null>"
-    }
-  }
-}
-```
-
-One entry per op the emit lays out, using this model's actual op set; use `null` for defaults, and record
-ops the emit deliberately ran in DRAM as `DRAM` rather than omitting them. Do not invent ops or values.
-For `program_config` and `compute_kernel`, serialize the complete emitted object — every field of
-whatever class it is (matmul, DRAM-sharded, SDPA, compute-kernel, etc.) — via the helpers in
-`models/common/tensor_utils.py`, not a hand-picked subset. Copy grids and shard specs verbatim too;
-legalizing them to the target device is `optimize`'s job, not yours.
 
 ### Per-layer semantics (extracted from `Qwen3DecoderLayer` / `Qwen3Attention` / `Qwen3MLP`)
 
@@ -205,7 +172,10 @@ correctness), and RoPE-table / mask construction. Keep the runtime `prefill_forw
 1. Load `AutoConfig` for `HF_MODEL`; confirm the shapes/config above from the real config, not memory.
 2. Read `FORGE_DIR/model/graph_0/model_ttnn.py` + `consteval.py` + `params.py` to lock the exact math
    (eps, slice order `[V,Q,K]`, per-head QK-norm, RoPE, SDPA scale, o_proj transpose, SwiGLU) **and
-   the emitted batch** (`model_pt.BATCH_SIZE`).
+   the emitted batch** (`model_pt.BATCH_SIZE`). **Also grep the emit for
+   `scaled_dot_product_attention_decode` / `nlp_concat_heads_decode` / `paged_update_cache`** to decide
+   whether a decode graph is present; if it is, read its math too (KV-cache append at `cache_position`,
+   SDPA-decode, RoPE-at-position, emitted decode batch).
 3. Write `FunctionalDecoder` for a single decoder layer on a 1x1 mesh, bf16 / TILE / DRAM defaults,
    parameterized by `seq_len` **and `batch` (default = emitted `BATCH_SIZE`)**.
    `from_state_dict(state_dict, *, hf_config, layer_idx, mesh_device, batch=<emitted>)`
@@ -214,40 +184,44 @@ correctness), and RoPE-table / mask construction. Keep the runtime `prefill_forw
    **emitted batch** (match the example autoports' prefill shape convention; document whatever you pick).
 4. Build an HF single-layer reference (`Qwen3DecoderLayer` from `transformers`, or slice layer
    `layer_idx` out of the full model) **at the same batch** and compare prefill PCC.
-5. `decode_forward` raises `NotImplementedError("decode path pending emitted-decode forge version")`.
+5. Decode is emit-conditional (per Mission Context): if the emit has a decode graph, translate a
+   correctness-first `decode_forward` on simple defaults and PCC-test it vs a single HF decode step at
+   the emitted batch; if it does not, `decode_forward` raises `NotImplementedError` stating the emit is
+   prefill-only and decode is delivered by the optimize stage.
 
 ## Evidence To Leave (done criteria — "works for now" bar)
 
 Done means all of these are true and recorded:
 
 - `tt/functional_decoder.py` with `FunctionalDecoder(LightweightModule)`, `from_state_dict`,
-  `prefill_forward`, and a documented `decode_forward` stub. `forward(mode=...)` dispatcher optional.
+  `prefill_forward`, and a `decode_forward` that is translated-and-tested when the emit has a decode
+  graph, or a documented stub when it does not. `forward(mode=...)` dispatcher optional.
 - `tests/test_functional_decoder.py`: at least one **real-weight** single-layer prefill test **at the
   emitted batch** that passes **PCC ≥ 0.99** vs the HF reference layer (the emit itself captures ~0.977
   full-model bf16, so a single bf16 layer should comfortably clear 0.99; aim for ≥ 0.995 if
   achievable). Include a synthetic-weight prefill test at real shapes, and a couple of non-trivial
-  `seq_len` values (a small smoke length and one larger length), all at the emitted batch. A
-  `decode_forward` test may `pytest.xfail`/`skip` with the pending-decode reason. Include a static
-  runtime-fallback audit (grep the runtime method source for `torch`/`from_torch`/`to_torch`).
+  `seq_len` values (a small smoke length and one larger length), all at the emitted batch. If the emit
+  has a decode graph, add a **real decode PCC test** vs a single HF decode step at the emitted batch;
+  otherwise a `decode_forward` test may `pytest.xfail`/`skip` with the prefill-only reason. Include a
+  static runtime-fallback audit (grep the runtime method source for `torch`/`from_torch`/`to_torch`).
 - `doc/context_contract.json`: records `hf_advertised_context` (= HF `max_position_embeddings`) and
   `current_supported_context` (the largest prefill seq you validated). Because this is a
   forge-seeded prefill-only starting point, `current_supported_context` will be below advertised;
   set `limiting_reason` and evidence honestly (this is a functional starting point, not a DRAM limit —
   state that plainly in a `notes` field; downstream stages extend context). Also record a
-  `decode_status: "pending_emitted_decode_version"` field. Keep the JSON parseable by
-  `.agents/scripts/check_context_contract.py`.
+  `decode_status` field that reflects the branch you took: `"translated_from_emit"` when the emit had a
+  decode graph you translated and tested, or `"emit_prefill_only_decode_deferred_to_optimize"` when it
+  did not. Keep the JSON parseable by `.agents/scripts/check_context_contract.py`.
 - `doc/functional_decoder/README.md` + `work_log.md`: the runtime contract (prefill/decode
   signatures + shapes), a validation summary table (PCC per test, real-weight PCC), the forge-emit
-  provenance (which files you translated), and an explicit **Limitations** section (prefill-only,
-  static-shape origin, decode pending, no paged KV yet, context below advertised).
+  provenance (which files you translated, and the decode-graph grep result), and an explicit
+  **Limitations** section (static-shape origin, context below advertised, and — when the emit was
+  prefill-only — that decode is deferred to the optimize stage).
 - A short note that the runtime `prefill_forward` has no torch/host fallback.
-- `doc/functional_decoder/forge_sharding_recommendations.json`: the emit's per-op layout captured
-  verbatim per the schema above, every emitted op present (including DRAM ones), referenced from the
-  README as the seed input for `optimize`.
 
 Watcher / tracy / long-context / paged-KV evidence from the full `functional-decoder` skill is
-**not required** for this pass (the emit does not support those yet) — but do not claim them either.
-If a quick warmed-prefill timing is easy, include it; otherwise record it as not-yet-measured.
+**not required** for this pass — but do not claim it either. If a quick warmed-prefill timing is easy,
+include it; otherwise record it as not-yet-measured.
 
 ## Reuse Pointers
 
@@ -264,7 +238,7 @@ If a quick warmed-prefill timing is easy, include it; otherwise record it as not
 
 - Prefer explicit model contracts over permissive fallback logic.
 - Do not silently infer or patch invalid config values; fail directly.
-- Keep the seq-specialized forge layout glue out of the *runtime*, but capture it in
-  `forge_sharding_recommendations.json` for the optimize stage — drop it from the code, not from the record.
+- Keep the seq-specialized forge layout glue out of the *runtime* entirely; reimplement the math on
+  simple `bf16` / `TILE` / `DRAM` defaults.
 - **Preserve the emitted workload batch** (`model_pt.BATCH_SIZE`); drop layout glue, not batch.
 - Be honest in the docs and contract about what is and isn't supported this pass.
