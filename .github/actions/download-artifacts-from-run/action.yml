@@ -12,7 +12,32 @@ inputs:
   tracy:
     required: false
     default: "true"
-    description: "Whether to look for profiler-enabled artifacts"
+    description: >
+      Whether to look for profiler-enabled artifacts. Only used by the
+      pattern-matching fallback path (when exact names are NOT provided).
+  build-artifact-name:
+    required: false
+    default: ""
+    description: >
+      EXACT name of the C++ build artifact to download. When set, the action
+      downloads precisely this artifact instead of grepping the run's artifact
+      list and taking the first match. This is the trusted path used by the
+      automated SHA matcher (find-build-for-sha), which already knows the exact
+      name. Leave empty for the manual-override path (see workflow_run_id docs).
+  wheel-artifact-name:
+    required: false
+    default: ""
+    description: >
+      EXACT name of the wheel artifact to download. Only honored when
+      build-artifact-name is also set (exact-name mode). Empty means "no wheel
+      expected" in exact-name mode.
+  packages-artifact-name:
+    required: false
+    default: ""
+    description: >
+      EXACT name of the packages (.deb) artifact to download. Only honored when
+      build-artifact-name is also set (exact-name mode). Empty means "no
+      packages expected" in exact-name mode.
 
 outputs:
   build-artifact-name:
@@ -67,6 +92,10 @@ runs:
 
     - name: List available artifacts
       id: list-artifacts
+      # Only needed for the pattern-matching fallback (manual-override path with
+      # no exact build-artifact-name). In exact-name mode we download by name and
+      # never list+grep, so skip this entirely.
+      if: ${{ inputs.build-artifact-name == '' }}
       shell: bash
       run: |
         WORKFLOW_RUN_ID="${{ inputs.workflow_run_id }}"
@@ -92,47 +121,72 @@ runs:
         WORK_DIR="${{ inputs.working-directory }}"
         TRACY_ENABLED="${{ inputs.tracy }}"
 
+        # Exact-name inputs from the automated SHA matcher (trusted, precise).
+        EXACT_BUILD="${{ inputs.build-artifact-name }}"
+        EXACT_WHEEL="${{ inputs.wheel-artifact-name }}"
+        EXACT_PACKAGES="${{ inputs.packages-artifact-name }}"
+
         mkdir -p "$WORK_DIR"
         cd "$WORK_DIR"
 
-        # Parse artifact names from previous step
-        ARTIFACTS="${{ steps.list-artifacts.outputs.artifacts }}"
-
-        # Find build artifact (ttm_any.tar.zst)
-        BUILD_ARTIFACT=""
-        if [ "$TRACY_ENABLED" = "true" ]; then
-          BUILD_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "TTMetal_build_any.*_profiler_" | head -1 || true)
+        if [ -n "$EXACT_BUILD" ]; then
+          # -------------------------------------------------------------------
+          # EXACT-NAME MODE (automated matcher path).
+          # find-build-for-sha already resolved the precise artifact names for
+          # this SHA + full config. Download exactly those — no list+grep+head-1
+          # that could pick the wrong same-run artifact (CRITICAL 1 fix).
+          # -------------------------------------------------------------------
+          echo "Exact-name mode: names supplied by find-build-for-sha."
+          BUILD_ARTIFACT="$EXACT_BUILD"
+          WHEEL_ARTIFACT="$EXACT_WHEEL"
+          PACKAGES_ARTIFACT="$EXACT_PACKAGES"
         else
-          BUILD_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "TTMetal_build_any" | grep -v "_profiler_" | head -1 || true)
-        fi
+          # -------------------------------------------------------------------
+          # PATTERN-MATCHING FALLBACK (trusted human/manual-override path).
+          # Reached only via inputs.use-artifacts-from-run, where a human named
+          # a specific run to reuse from and no exact artifact name is known
+          # ahead of time. We infer the artifact by pattern here; the operator
+          # is responsible for pointing at a compatible run.
+          # -------------------------------------------------------------------
+          echo "Fallback mode: no exact build-artifact-name given; matching by pattern."
+          ARTIFACTS="${{ steps.list-artifacts.outputs.artifacts }}"
 
-        # Find wheel artifact
-        WHEEL_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "ttnn-dist|ttnn" | head -1 || true)
-
-        # Find packages artifact (optional)
-        PACKAGES_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "packages-" | head -1 || true)
-
-        if [ -z "$BUILD_ARTIFACT" ]; then
-          echo "ERROR: Could not find build artifact matching expected pattern"
-          echo "TRACY_ENABLED (requested): $TRACY_ENABLED"
-
-          # Check if only the opposite tracy variant exists to give a clear hint
-          PROFILER_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "TTMetal_build_any.*_profiler_" | head -1 || true)
-          NON_PROFILER_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "TTMetal_build_any" | grep -v "_profiler_" | head -1 || true)
-
-          if [ "$TRACY_ENABLED" = "true" ] && [ -n "$NON_PROFILER_ARTIFACT" ]; then
-            echo "HINT: Found non-profiler build artifact: $NON_PROFILER_ARTIFACT"
-            echo "      But tracy=true was requested, so a profiler-enabled artifact was expected."
-            echo "      You may have triggered this workflow with tracy=true while reusing a run built without tracy."
-          elif [ "$TRACY_ENABLED" != "true" ] && [ -n "$PROFILER_ARTIFACT" ]; then
-            echo "HINT: Found profiler-enabled build artifact: $PROFILER_ARTIFACT"
-            echo "      But tracy=false was requested, so a non-profiler artifact was expected."
-            echo "      You may have triggered this workflow with tracy=false while reusing a run built with tracy enabled."
+          # Find build artifact (ttm_any.tar.zst)
+          BUILD_ARTIFACT=""
+          if [ "$TRACY_ENABLED" = "true" ]; then
+            BUILD_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "TTMetal_build_any.*_profiler_" | head -1 || true)
+          else
+            BUILD_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "TTMetal_build_any" | grep -v "_profiler_" | head -1 || true)
           fi
 
-          echo "Available artifacts:"
-          echo "$ARTIFACTS"
-          exit 1
+          # Find wheel artifact
+          WHEEL_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "ttnn-dist|ttnn" | head -1 || true)
+
+          # Find packages artifact (optional)
+          PACKAGES_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "packages-" | head -1 || true)
+
+          if [ -z "$BUILD_ARTIFACT" ]; then
+            echo "ERROR: Could not find build artifact matching expected pattern"
+            echo "TRACY_ENABLED (requested): $TRACY_ENABLED"
+
+            # Check if only the opposite tracy variant exists to give a clear hint
+            PROFILER_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "TTMetal_build_any.*_profiler_" | head -1 || true)
+            NON_PROFILER_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "TTMetal_build_any" | grep -v "_profiler_" | head -1 || true)
+
+            if [ "$TRACY_ENABLED" = "true" ] && [ -n "$NON_PROFILER_ARTIFACT" ]; then
+              echo "HINT: Found non-profiler build artifact: $NON_PROFILER_ARTIFACT"
+              echo "      But tracy=true was requested, so a profiler-enabled artifact was expected."
+              echo "      You may have triggered this workflow with tracy=true while reusing a run built without tracy."
+            elif [ "$TRACY_ENABLED" != "true" ] && [ -n "$PROFILER_ARTIFACT" ]; then
+              echo "HINT: Found profiler-enabled build artifact: $PROFILER_ARTIFACT"
+              echo "      But tracy=false was requested, so a non-profiler artifact was expected."
+              echo "      You may have triggered this workflow with tracy=false while reusing a run built with tracy enabled."
+            fi
+
+            echo "Available artifacts:"
+            echo "$ARTIFACTS"
+            exit 1
+          fi
         fi
 
         echo "Found build artifact: $BUILD_ARTIFACT"

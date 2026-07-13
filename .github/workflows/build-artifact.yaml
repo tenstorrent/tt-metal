@@ -311,6 +311,9 @@ jobs:
     outputs:
       run-id: ${{ steps.find.outputs.run-id }}
       found: ${{ steps.find.outputs.found }}
+      build-artifact-name: ${{ steps.find.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ steps.find.outputs.wheel-artifact-name }}
+      packages-artifact-name: ${{ steps.find.outputs.packages-artifact-name }}
     steps:
       - name: ⬇️ Checkout (actions only)
         uses: actions/checkout@v4
@@ -326,6 +329,8 @@ jobs:
           tracy: ${{ inputs.tracy }}
           distributed: ${{ inputs.distributed }}
           enable-lto: ${{ inputs.enable-lto || false }}
+          skip-tt-train: ${{ inputs.skip-tt-train }}
+          build-umd-tests: ${{ inputs.build-umd-tests }}
           check-wheel: ${{ inputs.build-wheel }}
           python-version: ${{ needs.parse-platform.outputs.python-version }}
           architecture: ${{ inputs.architecture }}
@@ -385,6 +390,12 @@ jobs:
                 needs.find-existing-build.outputs.run-id }}
           working-directory: ${{ github.workspace }}/artifacts
           tracy: ${{ inputs.tracy }}
+          # Exact names from the automated SHA matcher. Empty on the manual
+          # override path (use-artifacts-from-run), where find-existing-build is
+          # skipped — the action then falls back to trusted pattern matching.
+          build-artifact-name: ${{ needs.find-existing-build.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.find-existing-build.outputs.wheel-artifact-name }}
+          packages-artifact-name: ${{ needs.find-existing-build.outputs.packages-artifact-name }}
       - name: Upload build artifact for downstream jobs
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -557,6 +568,13 @@ jobs:
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
           TRACY_SUFFIX="${{ (inputs.tracy && '-profiler') || '' }}"
           DIST_SUFFIX="${{ (inputs.distributed == false && '-no-distributed') || '' }}"
+          # Keep the packages name disambiguated on the same content-affecting
+          # dimensions as the build tarball (lto / tt-train / umd-tests). Two jobs
+          # for the same SHA that differ only in these dimensions would otherwise
+          # collide on the packages artifact name.
+          LTO_SUFFIX="${{ (inputs.enable-lto && '-lto') || '' }}"
+          TT_TRAIN_SUFFIX="${{ (inputs.skip-tt-train != true && '-with-tt-train') || '' }}"
+          UMD_TESTS_SUFFIX="${{ (inputs.build-umd-tests && '-umd-tests') || '' }}"
           DISTRO="${{ env.DISTRO }}"
           VERSION="${{ env.VERSION }}"
           ARCH="${{ inputs.architecture }}"
@@ -568,7 +586,7 @@ jobs:
             "${VERSION}"
             "${ARCH}"
             "${BUILD_TYPE}"
-            "${TOOLCHAIN_CLEANED}${TRACY_SUFFIX}${DIST_SUFFIX}"
+            "${TOOLCHAIN_CLEANED}${TRACY_SUFFIX}${DIST_SUFFIX}${LTO_SUFFIX}${TT_TRAIN_SUFFIX}${UMD_TESTS_SUFFIX}"
             "${SANITIZED_REF}"
             "${RUN_ID}"
           )
@@ -768,6 +786,15 @@ jobs:
           TRACY_SUFFIX="${{ (inputs.tracy && '_profiler') || '' }}"
           DIST_SUFFIX="${{ (inputs.distributed == false && '_no_distributed') || '' }}"
           LTO_SUFFIX="${{ (inputs.enable-lto && '_lto') || '' }}"
+          # skip-tt-train and build-umd-tests both change what ends up in the
+          # tarball (see the "Tar files" step, which conditionally adds
+          # build/tt-train + data, and the CMake configure, which conditionally
+          # builds UMD tests). They MUST be encoded in the name so the matcher
+          # never reuses a tarball built with a different set of contents.
+          # Condition mirrors the build's own rule: tt-train is included (tag
+          # stamped) whenever skip-tt-train is not literally true.
+          TT_TRAIN_SUFFIX="${{ (inputs.skip-tt-train != true && '_with_tt_train') || '' }}"
+          UMD_TESTS_SUFFIX="${{ (inputs.build-umd-tests && '_umd_tests') || '' }}"
           VERSION="${{ env.VERSION }}"
           ARCH="${{ inputs.architecture }}"
           BUILD_TYPE="${{ inputs.build-type }}"
@@ -776,7 +803,7 @@ jobs:
             "TTMetal_build_any"
             "${VERSION}"
             "${ARCH}"
-            "${TOOLCHAIN_CLEANED}${TRACY_SUFFIX}${DIST_SUFFIX}${LTO_SUFFIX}"
+            "${TOOLCHAIN_CLEANED}${TRACY_SUFFIX}${DIST_SUFFIX}${LTO_SUFFIX}${TT_TRAIN_SUFFIX}${UMD_TESTS_SUFFIX}"
             "${BUILD_TYPE}"
             "${SANITIZED_REF}"
             "${RUN_ID}"

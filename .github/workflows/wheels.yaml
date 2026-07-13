@@ -210,7 +210,12 @@ jobs:
           RAW_REF="${{ inputs.ref || github.sha }}"
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
           TRACY_SUFFIX="${{ (inputs.tracy && '-profiler') || '' }}"
-          ARTIFACT_NAME="ttnn-dist-cp${{ steps.format_python_version.outputs.python_version_nodot }}-${{ inputs.build-type }}${TRACY_SUFFIX}-${SANITIZED_REF}-${{ github.run_id }}"
+          # LTO changes the wheel's compiled contents, so it must be part of the
+          # artifact name. Without it, an lto=true wheel and an lto=false wheel for
+          # the same SHA/build-type/python collide and the matcher could reuse the
+          # wrong binaries. (The C++ build-artifact name already encodes LTO.)
+          LTO_SUFFIX="${{ (inputs.enable-lto && '-lto') || '' }}"
+          ARTIFACT_NAME="ttnn-dist-cp${{ steps.format_python_version.outputs.python_version_nodot }}-${{ inputs.build-type }}${TRACY_SUFFIX}${LTO_SUFFIX}-${SANITIZED_REF}-${{ github.run_id }}"
           echo "artifact_name=${ARTIFACT_NAME}" >> $GITHUB_OUTPUT
           echo "artifact_name=${ARTIFACT_NAME}" >> "$GITHUB_ENV"
 

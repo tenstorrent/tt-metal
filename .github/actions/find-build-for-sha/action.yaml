@@ -49,6 +49,21 @@ inputs:
       Must match the calling workflow's enable-lto input.
     required: false
     default: 'false'
+  skip-tt-train:
+    description: >
+      Whether the prior build skipped tt-train. When skip-tt-train=false the
+      C++ build tarball additionally contains build/tt-train + data, so its
+      name carries a '_with_tt_train' tag. Must match the calling workflow's
+      skip-tt-train input or a tarball with different contents could be reused.
+    required: false
+    default: 'true'
+  build-umd-tests:
+    description: >
+      Whether the prior build included UMD tests. When build-umd-tests=true the
+      C++ build additionally compiles UMD tests, so its name carries a
+      '_umd_tests' tag. Must match the calling workflow's build-umd-tests input.
+    required: false
+    default: 'false'
   architecture:
     description: >
       Target architecture to match (e.g., 'amd64'). Must match the architecture
@@ -79,6 +94,24 @@ outputs:
       AND a matching wheel in the same run. Callers only need to check this
       single output — no separate wheel-found output exists.
     value: ${{ steps.find.outputs.found }}
+  build-artifact-name:
+    description: >
+      The EXACT name of the matched C++ build artifact. Empty when not found.
+      Downstream download must fetch by this exact name (not a grep/head-1
+      pattern) so a run that happens to contain several build artifacts can
+      never hand back the wrong one.
+    value: ${{ steps.find.outputs.build-artifact-name }}
+  wheel-artifact-name:
+    description: >
+      The EXACT name of the matched wheel artifact, or empty string when no
+      wheel was matched (check-wheel=false, or none present).
+    value: ${{ steps.find.outputs.wheel-artifact-name }}
+  packages-artifact-name:
+    description: >
+      The EXACT name of the matched packages (.deb) artifact from the same
+      run, or empty string when none was present. Packages are optional, so a
+      missing packages artifact never blocks reuse (found can still be true).
+    value: ${{ steps.find.outputs.packages-artifact-name }}
 
 runs:
   using: composite
@@ -94,6 +127,14 @@ runs:
           const tracy = '${{ inputs.tracy }}' === 'true';
           const distributed = '${{ inputs.distributed }}' === 'true';
           const lto = '${{ inputs.enable-lto }}' === 'true';
+          // The build includes tt-train (and stamps '_with_tt_train') whenever
+          // skip-tt-train is NOT the literal string 'true' — this mirrors the
+          // build's own condition exactly (see build-artifact.yaml CMake
+          // configure + "Tar files"), so an empty/unset value (e.g. a
+          // workflow_dispatch run) is treated as "tt-train included", matching
+          // what that build actually produced.
+          const expectTtTrain = '${{ inputs.skip-tt-train }}' !== 'true';
+          const buildUmdTests = '${{ inputs.build-umd-tests }}' === 'true';
           const checkWheel = '${{ inputs.check-wheel }}' === 'true';
           const pythonVersion = '${{ inputs.python-version }}';
           const arch = '${{ inputs.architecture }}' || 'amd64';
@@ -102,6 +143,7 @@ runs:
 
           console.log(`Searching for existing build artifacts for SHA: ${sha}`);
           console.log(`Config: build-type=${buildType}, tracy=${tracy}, distributed=${distributed}, lto=${lto}, check-wheel=${checkWheel}`);
+          console.log(`Config: expect-tt-train=${expectTtTrain}, build-umd-tests=${buildUmdTests}`);
           console.log(`Config: arch=${arch}, toolchain=${toolchainCleaned}, python-version=${pythonVersion}`);
 
           // Strategy: find all workflow runs for this commit SHA, then check
@@ -117,13 +159,15 @@ runs:
           // A run is skipped (not accepted) if it has C++ but no wheel when
           // check-wheel=true — the search continues to the next run.
           //
-          // Artifact name patterns (underscores for build, hyphens for wheel):
-          //   TTMetal_build_any_{VERSION}_{ARCH}_{TOOLCHAIN}[_profiler][_no_distributed][_lto]_{BUILD_TYPE}_{SHA}_{RUN_ID}
-          //   ttnn-dist-cp{PYVER}-{BUILD_TYPE}[-profiler]-{SHA}-{RUN_ID}
+          // Artifact name patterns (underscores for build, hyphens for wheel/packages):
+          //   TTMetal_build_any_{VERSION}_{ARCH}_{TOOLCHAIN}[_profiler][_no_distributed][_lto][_with_tt_train][_umd_tests]_{BUILD_TYPE}_{SHA}_{RUN_ID}
+          //   ttnn-dist-cp{PYVER}-{BUILD_TYPE}[-profiler][-lto]-{SHA}-{RUN_ID}
+          //   packages-{DISTRO}-{VERSION}-{ARCH}-{BUILD_TYPE}-{TOOLCHAIN}[-profiler][-no-distributed][-lto][-with-tt-train][-umd-tests]-{SHA}-{RUN_ID}
 
           let foundRunId = null;
           let foundBuildName = null;
           let foundWheelName = null;
+          let foundPackagesName = null;
 
           function matchBuild(artifact) {
             if (!artifact.name.startsWith('TTMetal_build_any')) return false;
@@ -143,6 +187,13 @@ runs:
             if (distributed === hasNoDistributed) return false;
             const hasLto = artifact.name.includes('_lto');
             if (lto !== hasLto) return false;
+            // tt-train contents: name carries '_with_tt_train' only when the
+            // build did NOT skip tt-train.
+            const hasTtTrain = artifact.name.includes('_with_tt_train');
+            if (expectTtTrain !== hasTtTrain) return false;
+            // UMD tests: name carries '_umd_tests' only when built.
+            const hasUmdTests = artifact.name.includes('_umd_tests');
+            if (buildUmdTests !== hasUmdTests) return false;
             return true;
           }
 
@@ -162,6 +213,31 @@ runs:
             if (!artifact.name.includes(`-${buildType}-`)) return false;
             const wheelHasProfiler = artifact.name.includes('-profiler-');
             if (tracy !== wheelHasProfiler) return false;
+            // LTO changes the wheel binary; the wheel name now carries '-lto'.
+            const wheelHasLto = artifact.name.includes('-lto');
+            if (lto !== wheelHasLto) return false;
+            return true;
+          }
+
+          // Packages (.deb) are optional and only reused when a matching set
+          // happens to be in the same run. Matching mirrors the build tarball's
+          // content-affecting dimensions (hyphen-separated in the packages name).
+          function matchPackages(artifact) {
+            if (!artifact.name.startsWith('packages-')) return false;
+            if (!artifact.name.includes(`-${sha}-`)) return false;
+            if (!artifact.name.includes(`-${arch}-`)) return false;
+            if (!artifact.name.includes(`-${toolchainCleaned}`)) return false;
+            if (!artifact.name.includes(`-${buildType}-`)) return false;
+            const hasProfiler = artifact.name.includes('-profiler');
+            if (tracy !== hasProfiler) return false;
+            const hasNoDistributed = artifact.name.includes('-no-distributed');
+            if (distributed === hasNoDistributed) return false;
+            const hasLto = artifact.name.includes('-lto');
+            if (lto !== hasLto) return false;
+            const hasTtTrain = artifact.name.includes('-with-tt-train');
+            if (expectTtTrain !== hasTtTrain) return false;
+            const hasUmdTests = artifact.name.includes('-umd-tests');
+            if (buildUmdTests !== hasUmdTests) return false;
             return true;
           }
 
@@ -194,6 +270,7 @@ runs:
             for (const run of runs) {
               let candidateBuild = null;
               let candidateWheel = null;
+              let candidatePackages = null;
 
               // List artifacts for this run (paginate in case of many test_report artifacts)
               let page = 1;
@@ -218,11 +295,21 @@ runs:
                   if (checkWheel && !candidateWheel && matchWheel(artifact)) {
                     candidateWheel = artifact;
                   }
-                  // Early exit once all requested artifacts found in this run
-                  if (candidateBuild && (!checkWheel || candidateWheel)) break;
+                  // Packages are a best-effort bonus: capture a match if we see
+                  // one, but never require it to accept a run.
+                  if (!candidatePackages && matchPackages(artifact)) {
+                    candidatePackages = artifact;
+                  }
+                  // NOTE: do NOT early-exit here. Packages often appear after
+                  // the build/wheel artifacts in the listing, so we must scan
+                  // the whole page (and remaining pages) to capture packages
+                  // even after the required artifacts are already found.
                 }
 
-                if (candidateBuild && (!checkWheel || candidateWheel)) break;
+                // Stop paginating only when the required artifacts are present
+                // AND either packages are found or this was the last page.
+                const requiredFound = candidateBuild && (!checkWheel || candidateWheel);
+                if (requiredFound && (candidatePackages || artifacts.length < 100)) break;
                 if (artifacts.length < 100) break;
                 page++;
               }
@@ -234,6 +321,7 @@ runs:
                 foundRunId = run.id;
                 foundBuildName = candidateBuild.name;
                 if (candidateWheel) foundWheelName = candidateWheel.name;
+                if (candidatePackages) foundPackagesName = candidatePackages.name;
                 break;
               }
             }
@@ -242,6 +330,9 @@ runs:
             console.log('Hint: ensure the calling job has "actions: read" permission');
             core.setOutput('run-id', '');
             core.setOutput('found', 'false');
+            core.setOutput('build-artifact-name', '');
+            core.setOutput('wheel-artifact-name', '');
+            core.setOutput('packages-artifact-name', '');
             return;
           }
 
@@ -250,8 +341,17 @@ runs:
             if (foundWheelName) {
               console.log(`✅ Found reusable wheel artifact "${foundWheelName}" from same run ${foundRunId}`);
             }
+            if (foundPackagesName) {
+              console.log(`✅ Found reusable packages artifact "${foundPackagesName}" from same run ${foundRunId}`);
+            }
             core.setOutput('run-id', foundRunId.toString());
             core.setOutput('found', 'true');
+            // Emit EXACT matched names so the download step fetches precisely
+            // these artifacts (see download-artifacts-from-run), rather than
+            // grep+head-1 over whatever the run happens to contain.
+            core.setOutput('build-artifact-name', foundBuildName);
+            core.setOutput('wheel-artifact-name', foundWheelName || '');
+            core.setOutput('packages-artifact-name', foundPackagesName || '');
           } else {
             if (checkWheel) {
               console.log('No prior run found with both C++ build and wheel artifacts — will build fresh');
@@ -260,4 +360,7 @@ runs:
             }
             core.setOutput('run-id', '');
             core.setOutput('found', 'false');
+            core.setOutput('build-artifact-name', '');
+            core.setOutput('wheel-artifact-name', '');
+            core.setOutput('packages-artifact-name', '');
           }
