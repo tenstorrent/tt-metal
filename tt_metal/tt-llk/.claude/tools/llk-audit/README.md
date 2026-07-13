@@ -12,7 +12,7 @@ hunt for novel hazards.
 
 ```
 ┌─ extractor/  (C++ / Clang libTooling) ─ parse once, emit a semantics-free FACT BASE
-│     llk_extract.cpp     functions · pointer-writes (+provenance) · calls · macro expansions
+│     llk_extract.cpp     functions · pointer-writes (+provenance) · pointer-reads · calls · macro expansions
 │
 ├─ llkaudit/   (Python) ─ classify the fact base into recall candidates
 │     registry.py         ← THE table that maps LLK names/signatures to meaning (edit this)
