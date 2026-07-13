@@ -31,8 +31,20 @@
 #define PROFILER_MSG __FILE__ "," $Line ",KERNEL_PROFILER"
 #define PROFILER_MSG_NAME(name) name "," PROFILER_MSG
 
-#define SrcLocNameToHash(name)                   \
-    DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+// Record the zone's source-location string in a file-only ELF section (.tt_zone_meta)
+// instead of emitting a #pragma message into the compiler log. The host reads this section
+// straight out of the kernel ELF (see JitBuildState::extract_zone_src_locations), which keeps
+// build logs clean. The section is non-loaded -- KEEP(...) (INFO) in the linker scripts strips
+// SHF_ALLOC -- so it costs zero device memory. The block gives each expansion its own scope so
+// the static never collides when multiple zones share a C++ scope; it emits no runtime code.
+#define RecordZoneSrcLocation(name)                                                                                 \
+    {                                                                                                               \
+        static const char zone_src_loc[] __attribute__((section(".tt_zone_meta"), used)) = PROFILER_MSG_NAME(name); \
+        (void)zone_src_loc;                                                                                         \
+    }
+
+#define SrcLocNameToHash(name)   \
+    RecordZoneSrcLocation(name); \
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));
 
 #if defined(PROFILE_KERNEL) && \
@@ -880,13 +892,13 @@ __attribute__((noinline)) void trace_only_init() {
 #if (!defined(DISPATCH_KERNEL))
 
 #define DeviceZoneScopedN(name)                                                \
-    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+    RecordZoneSrcLocation(name);                                               \
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
     kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
 
 #define DeviceTimestampedData(name, data)                                          \
     {                                                                              \
-        DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+        RecordZoneSrcLocation(name);                                               \
         auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
         kernel_profiler::timeStampedData<hash>(data);                              \
     }
@@ -897,14 +909,14 @@ __attribute__((noinline)) void trace_only_init() {
 #elif (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_DISPATCH_CORES))
 
 #define DeviceZoneScopedN(name)                                                          \
-    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                         \
+    RecordZoneSrcLocation(name);                                                         \
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));           \
     kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH> zone = \
         kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH>();
 
 #define DeviceTimestampedData(name, data)                                                            \
     {                                                                                                \
-        DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                                 \
+        RecordZoneSrcLocation(name);                                                                 \
         auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));                   \
         kernel_profiler::timeStampedData<hash, kernel_profiler::DoingDispatch::DISPATCH_META>(data); \
     }
@@ -934,22 +946,22 @@ __attribute__((noinline)) void trace_only_init() {
 #endif
 
 #define DeviceZoneScopedMainN(name)                                            \
-    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+    RecordZoneSrcLocation(name);                                               \
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
     PROFILER_MAIN_SCOPE<hash, 0> zone = PROFILER_MAIN_SCOPE<hash, 0>();
 
 #define DeviceZoneScopedMainChildN(name)                                       \
-    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+    RecordZoneSrcLocation(name);                                               \
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
     PROFILER_MAIN_SCOPE<hash, 1> zone = PROFILER_MAIN_SCOPE<hash, 1>();
 
 #define DeviceZoneScopedSumN1(name)                                            \
-    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+    RecordZoneSrcLocation(name);                                               \
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
     kernel_profiler::profileScopeAccumulate<hash, 0> zone = kernel_profiler::profileScopeAccumulate<hash, 0>();
 
 #define DeviceZoneScopedSumN2(name)                                            \
-    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+    RecordZoneSrcLocation(name);                                               \
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
     kernel_profiler::profileScopeAccumulate<hash, 1> zone = kernel_profiler::profileScopeAccumulate<hash, 1>();
 

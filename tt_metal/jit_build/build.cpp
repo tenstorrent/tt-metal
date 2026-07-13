@@ -726,9 +726,36 @@ void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const
             tt::jit_build::utils::create_file(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG);
         }
 
-        auto cmd = fmt::format("grep KERNEL_PROFILER {}*.o.log", out_dir);
-        tt::jit_build::utils::run_command(
-            cmd, tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, env_.get_rtoptions().get_dump_build_commands());
+        // Read the zone source-location strings straight out of the linked ELF's .tt_zone_meta
+        // section (populated by RecordZoneSrcLocation in kernel_profiler.hpp) instead of grepping
+        // the compiler logs, which keeps build logs clean. The section is a sequence of
+        // NUL-terminated "name,file,line,KERNEL_PROFILER" strings and is not loaded to the device.
+        const std::string elf_path = out_dir + this->target_name_ + ".elf";
+        if (!std::filesystem::exists(elf_path)) {
+            return;
+        }
+        try {
+            ll_api::ElfFile elf;
+            elf.ReadImage(elf_path);
+            uint64_t section_vaddr = 0;
+            auto zone_meta = elf.GetSectionContents(".tt_zone_meta", section_vaddr);
+            if (zone_meta.empty()) {
+                return;
+            }
+            std::ofstream zone_log(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, std::ios::app);
+            const char* cursor = reinterpret_cast<const char*>(zone_meta.data());
+            const char* end = cursor + zone_meta.size();
+            while (cursor < end) {
+                size_t len = ::strnlen(cursor, static_cast<size_t>(end - cursor));
+                if (len > 0) {
+                    zone_log.write(cursor, static_cast<std::streamsize>(len));
+                    zone_log << '\n';
+                }
+                cursor += len + 1;  // skip the NUL terminator (ALIGN padding yields empty strings)
+            }
+        } catch (const std::exception& e) {
+            log_warning(tt::LogBuildKernels, "Failed to read .tt_zone_meta from '{}': {}", elf_path, e.what());
+        }
     }
 }
 

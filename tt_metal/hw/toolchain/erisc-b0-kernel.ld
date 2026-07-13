@@ -49,6 +49,17 @@ SECTIONS
     . = ALIGN(4);
   }
 
+  /* KERNEL_PROFILER zone source-location table – file-only section, VMA = 0x6600000.
+     (INFO) keeps the data in the ELF for the host to read via section headers while
+     stripping SHF_ALLOC, so it is never loaded to the device. */
+  .tt_zone_meta 0x6600000 (INFO) :
+  {
+    __tt_zone_meta_start = .;
+    KEEP(*(.tt_zone_meta))
+    __tt_zone_meta_end = .;
+    . = ALIGN(4);
+  }
+
   .text __firmware_start :
   {
     *(.start)
