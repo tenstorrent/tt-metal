@@ -89,8 +89,6 @@ def test_e2e(mesh_device, dummy_weights, reset_seeds, ensure_gc):
     input_ids_padded[:, :real_len] = input_ids
 
     state_dict = model_args.load_state_dict()
-    if dummy_weights:
-        model_args.prepare_for_tt_weight_upload()
     tt_model = TtJanusProModel(
         args=model_args,
         dtype=dtype,

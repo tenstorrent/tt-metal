@@ -43,33 +43,6 @@ class ModelArgs(TTModelArgs):
             optimizations=optimizations,
             cache_hf=cache_hf,
         )
-        self._use_dummy_weight_cache = False
-
-    def prepare_for_tt_weight_upload(self):
-        """Enable on-disk tilized-weight cache for TT module construction.
-
-        Dummy runs keep HF/random weights in state_dict but must not leave
-        ``dummy_weights=True`` while building tt_transformers modules: they skip
-        cache whenever that flag is set, forcing a live tilize of the 7B QKV
-        tensor that overflows P150 L1.  Call this after the reference model and
-        state_dict are captured; ``weight_cache_path`` keeps routing to the
-        dummy cache namespace so real-weight tilized files are never loaded.
-        """
-        if self.dummy_weights:
-            self._use_dummy_weight_cache = True
-            self.dummy_weights = False
-
-    def weight_cache_path(self, dtype):
-        # Separate on-disk namespace for dummy tilized weights (see prepare_for_tt_weight_upload).
-        if self.dummy_weights or self._use_dummy_weight_cache:
-            return (
-                self.model_cache_path
-                / {
-                    ttnn.bfloat16: "tensor_cache_dummy_bf16",
-                    ttnn.bfloat8_b: "tensor_cache_dummy_bfp8",
-                }[dtype]
-            )
-        return super().weight_cache_path(dtype)
 
     def get_attn_qkv_program_config(self, mode, seq_len=1, prefetcher=None):
         # Prefill QKV: defer to the base config for all devices. The former P150-specific
@@ -238,16 +211,6 @@ class ModelArgs(TTModelArgs):
         if getattr(config, "text_config", None) is not None:
             config.text_config.num_hidden_layers = self.n_layers
             config.text_config.num_layers = self.n_layers
-
-        # DEBUG (temporary, JANUS_DEBUG_INIT_SCALE): scale up the random-init std. Larger weights
-        # -> wider attention-score spread -> clear softmax winners that survive bf8, testing the
-        # "unstructured attention is precision-unstable" root cause. Affects both reference and TT
-        # (same model), so still a valid parity test. Requires clearing tensor_cache_dummy_bfp8.
-        _init_scale = float(os.environ.get("JANUS_DEBUG_INIT_SCALE", "1"))
-        if _init_scale != 1.0 and getattr(config, "text_config", None) is not None:
-            base = getattr(config.text_config, "initializer_range", 0.02)
-            config.text_config.initializer_range = base * _init_scale
-            logger.info(f"[JanusPro][DEBUG] text initializer_range {base} -> {base * _init_scale}")
 
         build_from_config = getattr(
             JanusForConditionalGeneration, "from_config", JanusForConditionalGeneration._from_config

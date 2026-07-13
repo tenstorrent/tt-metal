@@ -150,11 +150,6 @@ def test_decoder_inference(
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
-    # Dummy runs must clear dummy_weights before TT construction so tt_transformers caches the
-    # tilized 7B QKV on host instead of live-tiling it on device (which overflows N150 L1).
-    if dummy_weights:
-        model_args.prepare_for_tt_weight_upload()
-
     # Initialize TT model
     tt_ccl = TT_CCL(mesh_device)
     tt_model = TransformerBlock(
