@@ -83,14 +83,6 @@ from typing import Sequence
 import ttnn
 
 
-# Supported BH matmul ring sizes. Default is 12. With ring-aware auto width dim, N=8/16
-# also work for GPT-OSS (width falls back from 3 to 2). N=8 maps 1:1 to BH's 8 DRAM
-# banks; N=12/16 cross banks via the bank-run loop in dm0.cpp. WH always uses N=12
-# (12 DRAM banks, 1:1 with ring). Must stay in sync with C++ supported set enforced
-# in get_cores() (moe_compute_program_factory.cpp).
-_BH_SUPPORTED_RING_SIZES = (8, 12, 16)
-
-
 def cluster_distance(d0: int, d1: int, mesh_shape: tuple[int, int], cluster_axis: int) -> int | None:
     """Calculate Manhattan distance between two devices along the cluster axis.
 
@@ -386,19 +378,19 @@ def _w2_shard_tiles(Ht: int, core_id: int, Nt: int, n_cores: int) -> int:
 
 
 def effective_matmul_ring_size(mesh_device, bh_ring_size: int = 8) -> int:
-    """Matmul ring N used by ``moe_compute`` on this device (12 on WH; ``bh_ring_size`` on BH).
+    """Matmul ring N used by ``moe_compute`` on this device.
 
-    ``ttnn.experimental.moe_compute`` auto-detects the ring from the arch (8 on BH, 12 on WH)
-    and no longer exposes a ``bh_ring_size`` knob, so the default here matches that auto-detection.
-    Call with no ``bh_ring_size`` to get the ring the public op will actually use, and pass the
-    result to the ``prepare_*`` / ``get_weight_*`` helpers so host weight layout matches the op.
+    One matmul core is used per DRAM-bank-adjacent worker. On Blackhole up to one DRAM bank
+    can be fused off, so the live bank count is 7 or 8. On Wormhole DRAM banks are never
+    harvested, so the ring is always 12.
+
+    The public ``ttnn.experimental.moe_compute`` op auto-detects the ring from the device and
+    no longer exposes a ``bh_ring_size`` knob, so the returned value is the ring the op will
+    actually use. Pass the result to the ``prepare_*`` / ``get_weight_*`` helpers so host weight
+    layout matches the op.
     """
     if mesh_device.arch() == ttnn.Arch.BLACKHOLE:
-        if bh_ring_size not in _BH_SUPPORTED_RING_SIZES:
-            raise ValueError(
-                f"bh_ring_size={bh_ring_size} is not supported (must be one of {_BH_SUPPORTED_RING_SIZES})"
-            )
-        return bh_ring_size
+        return len(ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(mesh_device, 0))
     return 12
 
 
@@ -830,14 +822,14 @@ def get_weight_core_shard_maps(mesh_device, hidden_size: int, intermediate_size:
     (complementary when Nt%n_cores + Ht%n_cores == n_cores) for W2.
     Ring ordering: DRAM bank logical coords sorted by (y, x) descending.
 
-    The matmul ring size is the DRAM-bank count, which auto-detects the ring per arch
-    (8 on Blackhole, 12 on Wormhole) to match ``ttnn.experimental.moe_compute``, so the
-    packed weights always line up with the op. dram_core_range_set has exactly that many
-    entries.
+    The matmul ring size is auto-detected from the device via ``effective_matmul_ring_size``
+    (12 on Wormhole, 7/8 on Blackhole) so the packed weights always line up with the op. The
+    weights are still HEIGHT_SHARDED across the live DRAM banks, so ``dram_core_range_set``
+    has exactly ``n_dram_banks`` entries while the shard maps have ``target_ring_size`` entries.
     """
     in0_core_coords = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(mesh_device, 0)
     n_dram_banks = len(in0_core_coords)
-    target_ring_size = n_dram_banks
+    target_ring_size = effective_matmul_ring_size(mesh_device)
 
     core2dram = {cc: dram_bank_id for dram_bank_id, cc in enumerate(in0_core_coords)}
     in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
@@ -892,12 +884,10 @@ def get_weight_mem_configs(
     - W0/W1: K dimension grows by 1 tile (for bias) and is padded to transaction boundary
     - W2: N dimension grows by 1 tile (for bias) and is padded to align with 7-tile reads
 
-    Memory layout: always HEIGHT_SHARDED with leading dim = num_banks. On WH (12 banks)
-    the ring is N=12 so num_cores == num_banks (1:1). On BH
-    (8 banks) num_cores can be 8/12/16; when num_cores != 8 the prepare functions reshape
-    the leading dim from num_cores → 8 (byte-equivalent regrouping). The kernel then walks
-    each ring core's contiguous slice across the 1-or-more banks it covers via the
-    "bank-run" loop in dm0.cpp.
+    Memory layout: always HEIGHT_SHARDED with leading dim = num_banks. The ring size equals
+    the live DRAM-bank count (12 on Wormhole, 7/8 on Blackhole), so num_cores == num_banks
+    (1:1). Each ring core's slice therefore covers exactly one bank; the "bank-run" loop in
+    dm0.cpp is retained for correctness with direct prim callers that may use a different ring size.
 
     `dram_core_range_set` is constructed by `get_weight_core_shard_maps` and has exactly
     num_banks entries (placement target).

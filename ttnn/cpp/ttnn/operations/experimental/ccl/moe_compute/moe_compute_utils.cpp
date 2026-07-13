@@ -282,8 +282,8 @@ WeightCoreShardMaps get_weight_core_shard_maps(
     ttnn::MeshDevice* mesh_device, uint32_t hidden_size, uint32_t intermediate_size) {
     const auto in0_core_coords =
         mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
-    // Matmul ring size = the DRAM-bank count, which auto-detects the ring per arch (8 on
-    // Blackhole, 12 on Wormhole) to match ttnn.experimental.moe_compute.
+    // Matmul ring size = the live DRAM-bank count (12 on Wormhole, 7/8 on Blackhole) to match
+    // ttnn.experimental.moe_compute.
     const uint32_t n_dram_banks = static_cast<uint32_t>(in0_core_coords.size());
     const uint32_t target_ring_size = n_dram_banks;
 

@@ -38,10 +38,10 @@ void kernel_main() {
     using Cfg = moe_ring::MoeRingConfig<Ht, Nt, num_cores, has_bias, shared_expert_tp_factor>;
 
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
-    // Number of physical DRAM banks the HEIGHT_SHARDED weight tensor lives on. WH=12 (1:1
-    // with ring N=12). BH=8 always; ring N can be 8, 12, or 16. When N exceeds num_banks
-    // each ring core's slice is smaller than a bank, but may straddle one bank boundary;
-    // the bank-run loop below handles up to two banks per slice.
+    // Number of physical DRAM banks the HEIGHT_SHARDED weight tensor lives on. The public
+    // API requires ring N to equal the live bank count (12 on WH, 7/8 on BH), so each ring
+    // core's slice is exactly one bank. The bank-run loop is retained for correctness when
+    // direct prim callers pass a different ring size.
     constexpr uint32_t num_banks = get_named_compile_time_arg_val("num_banks");
     // Per-ring-core total tile-page count (across ALL layers and ALL experts). Derived from
     // the HEIGHT_SHARDED weight tensor's total page count divided by num_cores (the prepare

@@ -13,12 +13,18 @@
 namespace ttnn::experimental {
 
 namespace {
-// Matmul ring size the public moe_compute API uses, auto-detected from the architecture:
-// 8 on Blackhole, 12 on Wormhole (one per DRAM bank). bh_ring_size is intentionally not
+// Matmul ring size the public moe_compute API uses, auto-detected from the device.
+// On Blackhole up to one DRAM bank can be fused off, so the live bank count is 7 or 8.
+// On Wormhole harvesting does not affect DRAM banks, so the ring is always 12.
+// One matmul core is used per DRAM-bank-adjacent worker. bh_ring_size is intentionally not
 // exposed on the public API. Single source of truth so the op and its mcast-bbox helper
 // can never disagree about the ring the kernel actually runs.
 uint32_t effective_matmul_ring_size(ttnn::MeshDevice* mesh_device) {
-    return (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? 8u : 12u;
+    if (mesh_device->arch() == tt::ARCH::BLACKHOLE) {
+        return mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default)
+            .size();
+    }
+    return 12u;
 }
 }  // namespace
 

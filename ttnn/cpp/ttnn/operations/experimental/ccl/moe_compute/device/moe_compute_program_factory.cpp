@@ -349,10 +349,10 @@ MoEComputeMeshWorkloadFactory::create_at(
     const uint32_t matmul_num_cores = matmul_core_range_set.num_cores();
 
     // a2a_cb_pages = IN2_TILES_PER_STEP = ceil(intermediate_tiles / matmul_num_cores), even-rounded
-    // (formula-driven, replaces the pre-#43932 per-config table). WH always has matmul_num_cores=12.
-    // BH supports 8/12/16; the kernel's bank-run loop walks each ring core's slice across multiple
-    // banks when N != bank count.
-    const uint32_t expected_matmul_n = (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? args.bh_ring_size : 12u;
+    // (formula-driven, replaces the pre-#43932 per-config table). The ring size is the live
+    // DRAM-bank count, so each ring core maps 1:1 to a DRAM bank and no cross-bank walk is needed.
+    const uint32_t expected_matmul_n =
+        mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default).size();
     TT_FATAL(
         matmul_num_cores == expected_matmul_n,
         "moe_compute: expected matmul_num_cores={}, got {}",
@@ -1170,9 +1170,8 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     const uint32_t output_shard_width_tiles = hidden_size / tile_width / combine_data_parallel_cores;
     // num_banks: number of physical DRAM banks the HEIGHT_SHARDED weight tensor lives on.
-    // WH=12 (one bank per ring core, 1:1). BH=8 always; ring N may be 8/12/16, so on
-    // BH N=12/16 each ring core's slice may straddle one bank boundary → kernel walks via the
-    // bank-run loop in dm0.cpp.
+    // Ring size equals the live bank count: 12 on WH (no DRAM-bank harvesting), 7/8 on BH.
+    // Ring cores and banks are 1:1, so no cross-bank walk is needed.
     const uint32_t num_dram_banks = mesh_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
     // pages_per_ring_core_total / w2_pages_per_ring_core_total: number of tile-pages each
     // ring core "owns" in the FLAT layout of the HEIGHT_SHARDED weight tensor. The flat
@@ -1325,8 +1324,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     // shard-index → bank-id correspondence. ttnn's `all_cores` list holds CoreCoords of
     // the form `(bank_id, 0)` for DRAM-sharded buffers; the i-th entry is the chip bank
     // holding shard `i`. Using the page mapping directly avoids depending on the C++
-    // `ring_pos2bank_id` ordering (which differs from the Python `sorted_dram_core_coords`
-    // when matmul_cores has padded extras for ring sizes > num_banks, e.g. BH N=12/16).
+    // `ring_pos2bank_id` ordering, which may differ from the Python `sorted_dram_core_coords`.
     {
         const auto& mapping = matmul_w0_w1_tensor.buffer()->get_buffer_page_mapping();
         TT_FATAL(
@@ -1357,8 +1355,8 @@ MoEComputeMeshWorkloadFactory::create_at(
     //
     // The kernel's bank-run loop computes `shard_idx = gp / pages_per_bank_total`. To find
     // the actual chip bank, it needs `bank = shard_to_bank[shard_idx]`. We pass this table
-    // as runtime args (one entry per bank, after the 9 standard args). The same shape
-    // applies on WH (num_banks=12) and BH (num_banks=8); only the values differ.
+    // as runtime args (one entry per bank, after the 9 standard args). Ring size equals the
+    // live bank count, so shard_idx and ring_pos are the same (12 on WH, 7/8 on BH).
     //
     // Sanity-check the divisibility invariants the bank-run kernel relies on. The Python
     // helper `get_weight_mem_configs` enforces matching invariants when constructing the
@@ -1467,6 +1465,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         // compute_cores_per_combine_core = matmul_num_cores / combine_data_parallel_cores
         // is variable across shipped models (e.g., 3 for output_width_shard_dim=4 with
         // matmul_num_cores=12; 4 for output_width_shard_dim=3 with matmul_num_cores=12).
+        // With ring size = live bank count, matmul_num_cores is 12 on WH and 7/8 on BH.
         const uint32_t compute_cores_per_combine_core = matmul_core_range_set.num_cores() / combine_data_parallel_cores;
         auto selective_reduce_combine_artifacts = build_selective_reduce_combine_program_artifacts(
             program,

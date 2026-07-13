@@ -119,10 +119,11 @@ void bind_moe_compute(nb::module_& mod) {
           matmul output is the final output, slot 4) instead of 6, and all combine-path
           arguments below must be left unset (notably ``cluster_axis`` must be ``None``).
 
-        The matmul ring size is **auto-detected** from the architecture — 8 on Blackhole,
-        12 on Wormhole (one per DRAM bank) — and is not exposed on this API. The
-        ``prepare_*`` / ``get_weight_mem_configs`` helpers that pack the weights must be
-        called with the matching ring size (see ``effective_matmul_ring_size``).
+        The matmul ring size is **auto-detected** from the live DRAM-bank count — 12 on
+        Wormhole (no DRAM-bank harvesting), 7/8 on Blackhole (up to one bank may be fused
+        off) — and is not exposed on this API. The ``prepare_*`` / ``get_weight_mem_configs``
+        helpers that pack the weights must be called with the matching ring size (see
+        ``effective_matmul_ring_size``).
 
         **Core placement**
 
@@ -133,7 +134,7 @@ void bind_moe_compute(nb::module_& mod) {
         matmul_ring_size=effective_matmul_ring_size(mesh_device)), hidden_size)``
         to query combine cores for memory-config setup before running the op.
         Passing ``matmul_ring_size`` is required so the width shard dim accounts for
-        the ring-divisibility constraint (e.g. BH ring_n=8 with hidden_tiles=90
+        the ring-divisibility constraint (e.g. unharvested BH ring_n=8 with hidden_tiles=90
         picks d=2 not d=3 because 8%3≠0).
 
         Shard expert indices/scores to the drain tilize core returned by
@@ -326,9 +327,9 @@ void bind_moe_compute_utils(nb::module_& mod) {
         (complementary when ``Nt%n_cores + Ht%n_cores == n_cores``) for W2. Ring
         ordering: DRAM bank logical coords sorted by ``(y, x)`` descending.
 
-        The matmul ring size is auto-detected from the architecture — 8 on Blackhole,
-        12 on Wormhole (the DRAM-bank count) — matching ``ttnn.experimental.moe_compute``,
-        so the packed weights always line up with the op.
+        The matmul ring size is the live DRAM-bank count (12 on Wormhole, 7/8 on
+        Blackhole), matching ``ttnn.experimental.moe_compute``, so the packed weights always
+        line up with the op.
 
         Returns an object with ``w0_w1_shard_map``, ``w2_shard_map``, and
         ``dram_core_range_set`` attributes.
@@ -382,8 +383,9 @@ void bind_moe_compute_utils(nb::module_& mod) {
         dim) so real columns stay paired with their real W2 rows. This keeps the
         downstream prep + DRAM layout uniform (full-Nt per-expert stride) while
         letting the kernel walk only the per-core prefixes as a balanced TpNt ring.
-        The shard-map generator auto-detects the ring size from the arch (8 on Blackhole,
-        12 on Wormhole), matching ``prepare_*`` / ``get_weight_mem_configs`` and the op.
+        The shard-map generator auto-detects the ring size from the live DRAM-bank count
+        (12 on Wormhole, 7/8 on Blackhole), matching ``prepare_*`` / ``get_weight_mem_configs``
+        and the op.
 
         Returns ``(output_w0, output_w1, output_w2)``, each the result of
         concatenating routed + shared along dim 1.
