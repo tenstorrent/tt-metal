@@ -557,6 +557,10 @@ Spawn `metal-tester.md` once with:
   `CODEGEN_METAL_VERIFY_HOME`/`CODEGEN_METAL_VERIFY_BUILD_DIR`, if set)
 - `FIX_PATCH`: `${LOG_DIR}/generated.patch` if it exists yet, else the metal-tester derives
   the diff from `git -C "$WORKTREE_DIR" diff`
+- silicon (cardless): `HW_TEST_DISPATCH_CMD` + `HW_TEST_SESSION` reach the metal-tester
+  from the environment (the dashboard sets them for a silicon solve). When present with
+  `TEST_BACKEND=local`, the metal-tester offloads the build+run of each arch to the hw_test
+  queue (its Step 0) instead of using a local card — nothing extra to pass here.
 
 Metal-tester guard (mirror of the ttsim guard): every gtest command must set
 `TT_METAL_HOME`, a **fresh** `TT_METAL_CACHE`, and (when `dispatch=slow`)
