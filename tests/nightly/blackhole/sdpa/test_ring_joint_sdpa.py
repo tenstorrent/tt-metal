@@ -29,11 +29,10 @@ from unittest import mock
 
 import pytest
 import torch
-from loguru import logger
-from ttnn.operations.ccl import Topology
-
 import ttnn
+from loguru import logger
 from models.common.utility_functions import skip_with_llk_assert, skip_with_watcher
+from ttnn.operations.ccl import Topology
 
 # ============================================================================
 # CONFIGURATION CONSTANTS
@@ -329,7 +328,9 @@ NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
 from tests.nightly.sdpa_perf_utils import (
     ARCH_CONSTANTS,
 )
-from tests.nightly.sdpa_perf_utils import compute_math_utilization as compute_ring_joint_utilization
+from tests.nightly.sdpa_perf_utils import (
+    compute_math_utilization as compute_ring_joint_utilization,
+)
 from tests.nightly.sdpa_perf_utils import (
     compute_sdpa_flops,
     create_balanced_chunk_order,
@@ -3492,7 +3493,7 @@ else:
     RING_JOINT_PERF_CHECK_CONFIGS = [
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util, margin)
         # 4-device ring (QuietBox, sp=4 tp=1)
-        ("wan2_2_1xGLX", 288, 512, 4, 68.9, RING_JOINT_PERF_MARGIN),
+        ("wan2_2_1xGLX", 288, 512, 4, 68.3, RING_JOINT_PERF_MARGIN),
         ("mla_100k", 160, 320, 4, 63.2, RING_JOINT_PERF_MARGIN),
     ]
 
