@@ -28,13 +28,18 @@ def gate_merge_enabled() -> bool:
     bf16 while the projections drop to bf8 — merging would silently demote it. So the quant path
     keeps its standalone gate; the bf16 path merges.
 
-    LTX_NO_GATE_MERGE forces the standalone gate back on. The transformer cache is keyed on this
-    (the merge widens the Q/QKV weights), so the flag also selects the un-merged cache — which
-    makes it a SAME-BUILD A/B lever: the identical binary, one env var apart.
+    OPT-IN (LTX_GATE_MERGE=1) while the merge is unproven: it is equivalent to the standalone gate
+    for a single attention forward, but the full pipeline decodes to NOISE (frame-PCC ~0 against the
+    same-build standalone gate). Until that is fixed, defaulting it on would hand every caller a
+    corrupt video that runs 6% faster.
+
+    LTX_NO_GATE_MERGE still forces it off. The transformer cache is keyed on the result (the merge
+    widens the Q/QKV weights), so either flag also selects the matching cache — which makes this a
+    SAME-BUILD A/B lever: the identical binary, one env var apart.
     """
-    if os.environ.get("LTX_NO_GATE_MERGE"):
+    if os.environ.get("LTX_NO_GATE_MERGE") or os.environ.get("LTX_QUANT"):
         return False
-    return not os.environ.get("LTX_QUANT")
+    return bool(os.environ.get("LTX_GATE_MERGE"))
 
 
 class LTXAttention(Module):
