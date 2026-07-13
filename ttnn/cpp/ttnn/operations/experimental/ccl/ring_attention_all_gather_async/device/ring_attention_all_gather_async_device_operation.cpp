@@ -219,15 +219,13 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> RingAttentionAllGatherAsyncDeviceOp
     namespace dyn = ring_attention_all_gather_async_dynamic;
 
     const auto& semaphore = operation_attributes.semaphore;
-    // The factory dereferences semaphore.at(kForwardSemaphoreIdx / kBackwardSemaphoreIdx) unconditionally
-    // on the cache-miss build, so a cache hit implies both are present; guard defensively regardless.
-    const uint32_t max_semaphore_idx =
-        dyn::kForwardSemaphoreIdx > dyn::kBackwardSemaphoreIdx ? dyn::kForwardSemaphoreIdx : dyn::kBackwardSemaphoreIdx;
-    if (semaphore.size() <= max_semaphore_idx) {
-        return {};
-    }
-    const auto forward_sem_addr = static_cast<uint32_t>(semaphore[dyn::kForwardSemaphoreIdx].address());
-    const auto backward_sem_addr = static_cast<uint32_t>(semaphore[dyn::kBackwardSemaphoreIdx].address());
+    // Mirror the cache-miss build, which dereferences semaphore.at(kForwardSemaphoreIdx /
+    // kBackwardSemaphoreIdx) unconditionally: a cache hit is only reachable if that miss succeeded, so both
+    // indices must be present. Use .at() so a violated invariant is a hard bounds-check failure rather than
+    // a silent skip — returning {} here would re-freeze the stale semaphore address this hook exists to
+    // re-apply, reintroducing the exact frozen-runtime-arg bug on the cache-hit path.
+    const auto forward_sem_addr = static_cast<uint32_t>(semaphore.at(dyn::kForwardSemaphoreIdx).address());
+    const auto backward_sem_addr = static_cast<uint32_t>(semaphore.at(dyn::kBackwardSemaphoreIdx).address());
 
     // Re-derive the sender worker cores exactly as build_ring_attention_all_gather_program_descriptor()
     // does: it calls ring_attention_all_gather_async_multi_core_with_workers_helper without a
