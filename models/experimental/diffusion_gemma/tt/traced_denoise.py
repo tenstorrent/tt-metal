@@ -52,6 +52,7 @@ prefix). A long-lived multi-prompt server should call ``controller.release()`` o
 adapter before re-prefill to free its traces/buffers; the single-prompt serving_smoke path does not
 need it (the mesh close frees everything).
 """
+
 from __future__ import annotations
 
 import json
@@ -156,6 +157,9 @@ class TracedDenoiseController:
         adapter.prepare_canvas_rope_buffers(canvas_len=canvas_len)
         adapter.update_canvas_rope_buffers(start_pos)
         adapter.use_canvas_rope = True
+        # DG_TERMINAL_SHARDED context (None => replicated terminal). Prepared OUTSIDE capture by
+        # the caller's adapter.prepare_sharded_terminal; constant across steps, so derive once.
+        sharded_terminal = adapter.sharded_terminal_context()
         if self.consts is None:
             self.consts = make_denoise_constants(self.mesh, batch=1, canvas_len=canvas_len, budget=cfg.entropy_budget)
         # Persistent per-step noise buffers (BEFORE capture), from block 0's noise stream.
@@ -176,6 +180,7 @@ class TracedDenoiseController:
             gumbel_noise=None,
             noise_tokens=self.noise_bufs[0],
             constants=self.consts,
+            sharded_terminal=sharded_terminal,
         )
         _deallocate_logits_if_unowned(adapter, logits0)
         self.canvas_buf = ttnn.clone(nc0)
@@ -201,6 +206,7 @@ class TracedDenoiseController:
                 gumbel_noise=None,
                 noise_tokens=self.noise_bufs[step],
                 constants=self.consts,
+                sharded_terminal=sharded_terminal,
             )
             _deallocate_logits_if_unowned(adapter, logits)
             ttnn.copy(next_canvas, self.canvas_buf)
@@ -396,6 +402,8 @@ class MultiStepTracedDenoiseController(TracedDenoiseController):
         adapter.prepare_canvas_rope_buffers(canvas_len=canvas_len)
         adapter.update_canvas_rope_buffers(start_pos)
         adapter.use_canvas_rope = True
+        # DG_TERMINAL_SHARDED context (None => replicated terminal), constant across steps/windows.
+        sharded_terminal = adapter.sharded_terminal_context()
         if self.consts is None:
             self.consts = make_denoise_constants(self.mesh, batch=1, canvas_len=canvas_len, budget=cfg.entropy_budget)
         self._fill_noise_buffers_from(noise_tokens_fn)
@@ -417,6 +425,7 @@ class MultiStepTracedDenoiseController(TracedDenoiseController):
             gumbel_noise=None,
             noise_tokens=self.noise_bufs[0],
             constants=self.consts,
+            sharded_terminal=sharded_terminal,
         )
         _deallocate_logits_if_unowned(adapter, logits0)
         self.canvas_buf = ttnn.clone(nc0)  # step-0 input / cross-window carry (both [1,1,L,1] uint32)
@@ -450,6 +459,7 @@ class MultiStepTracedDenoiseController(TracedDenoiseController):
                     gumbel_noise=None,
                     noise_tokens=self.noise_bufs[step],
                     constants=self.consts,
+                    sharded_terminal=sharded_terminal,
                 )
                 _deallocate_logits_if_unowned(adapter, logits)
                 if committed is not None:
@@ -582,6 +592,8 @@ class EarlyHaltTracedDenoiseController(MultiStepTracedDenoiseController):
         adapter.prepare_canvas_rope_buffers(canvas_len=canvas_len)
         adapter.update_canvas_rope_buffers(start_pos)
         adapter.use_canvas_rope = True
+        # DG_TERMINAL_SHARDED context (None => replicated terminal), constant across steps/windows.
+        sharded_terminal = adapter.sharded_terminal_context()
         if self.consts is None:
             self.consts = make_denoise_constants(self.mesh, batch=1, canvas_len=canvas_len, budget=cfg.entropy_budget)
         self._fill_noise_buffers_from(noise_tokens_fn)
@@ -601,6 +613,7 @@ class EarlyHaltTracedDenoiseController(MultiStepTracedDenoiseController):
             gumbel_noise=None,
             noise_tokens=self.noise_bufs[0],
             constants=self.consts,
+            sharded_terminal=sharded_terminal,
         )
         _deallocate_logits_if_unowned(adapter, logits0)
         self.canvas_buf = ttnn.clone(res0.canvas)
@@ -648,6 +661,7 @@ class EarlyHaltTracedDenoiseController(MultiStepTracedDenoiseController):
                     halt_bufs=self.halt_bufs,
                     canvas_len=canvas_len,
                     constants=self.consts,
+                    sharded_terminal=sharded_terminal,
                 )
                 _deallocate_logits_if_unowned(adapter, logits)
                 if committed is not None:

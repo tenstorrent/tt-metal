@@ -1010,6 +1010,30 @@ class DenoiseLogitsAdapter:
             self._embedding_weight_sharded = None
         self.sharded_terminal = False
 
+    def sharded_terminal_context(self):
+        """Return the :class:`~...tt.denoise_loop.ShardedTerminalContext` for the sharded
+        argmax/gumbel/entropy reductions, or ``None`` for the replicated full-vocab terminal.
+
+        Non-``None`` only when the sharded terminal is prepared (``prepare_sharded_terminal``)
+        AND the trace-safe self-cond loop is active — i.e. exactly when :meth:`_trace_safe_call`
+        emits a per-device vocab SHARD (``denoise_logits_forward(return_sharded=True)``). Gating
+        on both keeps the reductions' input (shard vs full vocab) in lockstep with
+        :func:`~...tt.denoise_loop.denoise_step`'s routing, so the eager ``prev_logits`` path (which
+        never emits a shard) can't feed full-vocab logits to the sharded ops. The denoise loop /
+        trace controllers thread this into ``denoise_step`` (see
+        :func:`~...tt.denoise_loop._sharded_terminal_context`)."""
+        if not (self.sharded_terminal and self.trace_safe_self_conditioning):
+            return None
+        if self._vocab_offsets is None:
+            return None
+        from models.experimental.diffusion_gemma.tt.denoise_loop import ShardedTerminalContext
+
+        return ShardedTerminalContext(
+            offsets=self._vocab_offsets,
+            mesh_config=self._sharded_mesh_config,
+            ccl_manager=self._sharded_ccl_manager,
+        )
+
     def _trace_safe_call(self, canvas_tokens, step: int):
         tt_model = self.tt_model
         read_buf, write_buf = self._signal_read_write_bufs(step)
@@ -1020,6 +1044,11 @@ class DenoiseLogitsAdapter:
             # Uniform: forward over the persistent signal read buffer (zeroed for step 0).
             conditioned = self.self_conditioning.forward(canvas_hidden, read_buf)
             canvas_hidden.deallocate(True)
+        # DG_TERMINAL_SHARDED: return the per-device vocab shard (skip the ~128 MiB/step
+        # full-vocab all-gather); the loop's denoise_step routes its reductions through the
+        # sharded ops via sharded_terminal_context(). Default off returns the full replicated
+        # logits exactly as before.
+        return_sharded = self.sharded_terminal
         logits = denoise_logits_forward(
             tt_model,
             prompt_hidden_by_layer=self.prompt_hidden_by_layer,
@@ -1027,6 +1056,7 @@ class DenoiseLogitsAdapter:
             q_rope_offset=self.q_rope_offset,
             prompt_len=self.prompt_len,
             canvas_rope_provider=self._canvas_rope_provider if self.use_canvas_rope else None,
+            return_sharded=return_sharded,
         )
         if conditioned is not canvas_hidden:
             conditioned.deallocate(True)
@@ -1034,11 +1064,16 @@ class DenoiseLogitsAdapter:
             # Update the persistent signal buffer in-place for the next step (logits
             # is fully consumed within this step: soft_embedding here + the loop's
             # decision path). Across single-step trace replays the buffer persists.
-            new_signal = self.self_conditioning.soft_embedding(
-                logits,
-                self.self_conditioning_embedding_weight,
-                compute_kernel_config=self.self_conditioning_compute_kernel_config,
-            )
+            # On the sharded terminal the signal is the row-sharded soft-embedding of the
+            # logit SHARD (no full-vocab all-gather); otherwise the replicated soft-embedding.
+            if return_sharded:
+                new_signal = self.soft_embedding_signal_sharded(logits)
+            else:
+                new_signal = self.self_conditioning.soft_embedding(
+                    logits,
+                    self.self_conditioning_embedding_weight,
+                    compute_kernel_config=self.self_conditioning_compute_kernel_config,
+                )
             ttnn.copy(new_signal, write_buf)
             new_signal.deallocate(True)
         return logits
