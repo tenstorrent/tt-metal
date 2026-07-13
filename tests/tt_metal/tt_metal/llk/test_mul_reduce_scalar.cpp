@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -48,17 +49,15 @@ struct MulReduceScalarConfig {
     uint32_t seed = 12345;
 };
 
-constexpr uint32_t TILE_WIDTH = 32;
-
 bool run_mul_reduce_scalar_test(distributed::MeshDevice& mesh_device, const MulReduceScalarConfig& config) {
     IDevice* device = mesh_device.get_devices()[0];
     tt_metal::Program program = tt_metal::CreateProgram();
     CoreCoord core = {0, 0};
 
     // bfloat16: 2 bytes per element; a 16x32 tiny tile is half a full tile.
-    const uint32_t tile_byte_size = 2 * config.tile_height * TILE_WIDTH;
-    const tt::tt_metal::Tile cb_tile({config.tile_height, TILE_WIDTH});
-    const bool tiny_tile = (config.tile_height != 32);
+    const uint32_t tile_byte_size = 2 * config.tile_height * tt::constants::TILE_WIDTH;
+    const tt::tt_metal::Tile cb_tile({config.tile_height, tt::constants::TILE_WIDTH});
+    const bool tiny_tile = (config.tile_height != tt::constants::TILE_HEIGHT);
 
     uint32_t input_buffer_size = config.num_tiles * tile_byte_size;
     tt_metal::InterleavedBufferConfig dram_config = {

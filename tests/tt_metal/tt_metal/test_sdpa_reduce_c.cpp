@@ -31,8 +31,8 @@ static std::vector<bfloat16> make_prev_max_matrix(
     std::mt19937 rng(0);
     std::uniform_real_distribution<float> dist(min_val, max_val);
 
-    const uint32_t rows = q_chunk_size * 32;
-    const uint32_t cols = 32;
+    const uint32_t rows = q_chunk_size * tt::constants::TILE_HEIGHT;
+    const uint32_t cols = tt::constants::TILE_WIDTH;
     std::vector<bfloat16> mat(rows * cols);
     prev_max_first_col_out.resize(rows);
 
@@ -53,13 +53,13 @@ static std::vector<bfloat16> golden_reduce_c(
     uint32_t k_chunk_size,
     bool do_eltwise_max,
     uint32_t num_faces = 4) {
-    const uint32_t rows = q_chunk_size * 32;
-    const uint32_t cols = k_chunk_size * 32;
-    const uint32_t stats_cols = 32;
+    const uint32_t rows = q_chunk_size * tt::constants::TILE_HEIGHT;
+    const uint32_t cols = k_chunk_size * tt::constants::TILE_WIDTH;
+    const uint32_t stats_cols = tt::constants::TILE_WIDTH;
 
     // For a 16x32 tiny tile (num_faces=2) only the first face-row (rows 0-15 of each 32-row tile)
     // is reduced by MATH; rows 16-31 of every tile hold no valid reduced output.
-    const uint32_t face_rows = (num_faces == 2) ? 16 : 32;
+    const uint32_t face_rows = (num_faces == 2) ? tt::constants::FACE_HEIGHT : tt::constants::TILE_HEIGHT;
 
     bool prev_max_larger = false;
 
@@ -68,7 +68,7 @@ static std::vector<bfloat16> golden_reduce_c(
 
     for (uint32_t r = 0; r < rows; ++r) {
         // Skip rows in the second face-row of each tile when the operand is a 16x32 tiny tile.
-        if ((r % 32) >= face_rows) {
+        if ((r % tt::constants::TILE_HEIGHT) >= face_rows) {
             continue;
         }
         auto row_begin = qk_im_rm.begin() + r * cols;
@@ -90,7 +90,7 @@ static std::vector<bfloat16> golden_reduce_c(
     }
 
     // Expand to tiles (each row has a 32x32 tile). Fill only first column; others left as zero and not checked.
-    std::vector<bfloat16> tilized(rows * stats_cols * 32, static_cast<bfloat16>(0.0f));
+    std::vector<bfloat16> tilized(rows * stats_cols * tt::constants::TILE_WIDTH, static_cast<bfloat16>(0.0f));
     // However, for comparison we will only use untilized first column from device output; no need to mirror tile layout
     // here.
     log_info(LogTest, "prev_max_larger: {}", prev_max_larger);
@@ -102,16 +102,16 @@ static float compare_first_col_mse(
     // result_rm is rows x 32 row-major (from untilize); we compare only column 0 vs golden_first_col_rm (rows x 32,
     // only col0 set). For a 16x32 tiny tile (num_faces=2) only the first face-row (rows 0-15 of each
     // 32-row tile) carries valid output, so rows 16-31 of every tile are excluded from the comparison.
-    const uint32_t rows = golden_first_col_rm.size() / 32;
-    const uint32_t face_rows = (num_faces == 2) ? 16 : 32;
+    const uint32_t rows = golden_first_col_rm.size() / tt::constants::TILE_WIDTH;
+    const uint32_t face_rows = (num_faces == 2) ? tt::constants::FACE_HEIGHT : tt::constants::TILE_HEIGHT;
     float mse = 0.0f;
     uint32_t counted = 0;
     for (uint32_t r = 0; r < rows; ++r) {
-        if ((r % 32) >= face_rows) {
+        if ((r % tt::constants::TILE_HEIGHT) >= face_rows) {
             continue;
         }
-        float a = static_cast<float>(result_rm[(r * 32) + 0]);
-        float b = static_cast<float>(golden_first_col_rm[(r * 32) + 0]);
+        float a = static_cast<float>(result_rm[(r * tt::constants::TILE_WIDTH) + 0]);
+        float b = static_cast<float>(golden_first_col_rm[(r * tt::constants::TILE_WIDTH) + 0]);
         float d = a - b;
         mse += d * d;
         ++counted;
