@@ -54,7 +54,14 @@ def run_math_binary_test_atan2(device, h, w, a1, a2, b1, b2, ttnn_function, pcc=
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    # bf16 linspace can quantize atan2 golden to a single value; use ULP instead of PCC in that case.
+    is_constant_golden = (
+        torch_output_tensor.numel() > 0 and (torch_output_tensor.max() == torch_output_tensor.min()).item()
+    )
+    if is_constant_golden:
+        assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
+    else:
+        assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
 @pytest.mark.parametrize("h", [64])
