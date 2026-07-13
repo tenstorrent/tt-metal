@@ -17,6 +17,7 @@ disabled.
 
 from __future__ import annotations
 
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any
@@ -102,7 +103,10 @@ def _build_second_trunk(
     from models.tt_dit.utils import cache
 
     mesh_shape = tuple(submesh.shape)
-    tp_axis = max(range(len(mesh_shape)), key=lambda i: mesh_shape[i])
+    # TT_COSMOS3_SWAP_TP_SP=1 puts SP on the larger axis (cols) and TP on the smaller.
+    # On a 2x8 submesh: default is TP=8@axis1, SP=2@axis0; swapped is TP=2@axis0, SP=8@axis1.
+    _tp_key = min if os.getenv("TT_COSMOS3_SWAP_TP_SP", "0") == "1" else max
+    tp_axis = _tp_key(range(len(mesh_shape)), key=lambda i: mesh_shape[i])
     tp_factor = mesh_shape[tp_axis]
     sp_axis = 1 - tp_axis if len(mesh_shape) == 2 else 0
     sp_factor = mesh_shape[sp_axis] if len(mesh_shape) == 2 else 1

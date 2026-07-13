@@ -39,13 +39,14 @@ self.layers is just rebound), but they're no longer reachable through
 the proxy's forward path. We could `del` them to recover ~100 GB host
 RAM at the cost of preventing fallback; that's a separate optimization.
 
-Constraint: `tp_factor` (mesh's larger axis) must divide
-`num_key_value_heads=8` (so tp ∈ {1, 2, 4, 8}). LoudBox 1x8 ✓,
-BH Galaxy 4x8 with TP=8 on axis 1 ✓.
+Constraint: `tp_factor` must divide `num_key_value_heads=8` (so tp ∈ {1, 2, 4, 8}).
+Default assigns TP to the larger axis: LoudBox 1x8 → TP=8, Galaxy 4x8 → TP=8@axis1 ✓.
+TT_COSMOS3_SWAP_TP_SP=1 assigns TP to the smaller axis: Galaxy 2x8 submesh → TP=2, SP=8 ✓.
 """
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -484,7 +485,8 @@ def build_cosmos3_i2v_native_pipeline(
         from models.tt_dit.parallel.manager import CCLManager as _CCLManager
 
         mesh_shape_vae = tuple(device.shape)
-        tp_axis_vae = max(range(len(mesh_shape_vae)), key=lambda i: mesh_shape_vae[i])
+        _tp_key_vae = min if os.getenv("TT_COSMOS3_SWAP_TP_SP", "0") == "1" else max
+        tp_axis_vae = _tp_key_vae(range(len(mesh_shape_vae)), key=lambda i: mesh_shape_vae[i])
         tp_factor_vae = mesh_shape_vae[tp_axis_vae]
         sp_axis_vae = 1 - tp_axis_vae if len(mesh_shape_vae) == 2 else 0
         sp_factor_vae = mesh_shape_vae[sp_axis_vae] if len(mesh_shape_vae) == 2 else 1
