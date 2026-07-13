@@ -91,7 +91,7 @@ The three Tensix threads coordinate through **8 hardware semaphores** (`Semaphor
 1. **Enumerate** every site, tagged by thread via filename (`*unpack*`/`cunpack`=T0, `*math*`/`cmath`=T1, `*pack*`/`cpack`=T2):
    ```bash
    # in-tree ops — from the repo root
-   grep -rInE "t6_semaphore_(post|get|wait_on_max|wait_on_zero|init)|semaphore_(post|get)\(|TTI_SEM(POST|GET|WAIT|INIT)|t6_mutex_(acquire|release)|TTI_ATGETM|TTI_ATRELM" \
+   grep -rInE "t6_semaphore_(post|get|wait_on_max|wait_on_zero|init)|semaphore_(post|get|read)\(|TTI_SEM(POST|GET|WAIT|INIT)|t6_mutex_(acquire|release)|TTI_ATGETM|TTI_ATRELM" \
      tt_metal/tt-llk/tt_llk_* --include=*.h | grep -v /tests/
    # init sites, incl. ABOVE tt-llk (kernels/firmware do some SEMINIT — e.g.
    # brisc.cc initialize_tensix_semaphores()); ALSO from the repo root:
