@@ -18,6 +18,13 @@ struct GatedDeltaAttnSeqParams {
     uint32_t val_dim;     // Dv (e.g. 128)
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
+    // Token-major output (folds the core.out head→token permute into the writer).
+    // When true, output[0] is [B, seq_len, num_v_heads*Dv] token-major instead of the
+    // legacy [BH, NC, C, Dv] head-major. B = num_heads / num_v_heads. final_state is
+    // unchanged either way. Defaults keep the legacy layout so existing callers are inert.
+    bool token_major_output = false;
+    uint32_t num_v_heads = 0;  // H (value heads per batch); only used when token_major_output.
+    uint32_t seq_len = 0;      // T (logical seq length, pre-chunk-pad); only used when token_major_output.
 };
 
 // Input tensors for the sequential scan kernel (Path A — Python pre-computes L_inv).
