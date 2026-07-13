@@ -20,7 +20,8 @@ namespace ckernel {
 
 // clang-format off
 /**
- * Perform the init short for copy tile. This does not reconfigure the unpacker data types.
+ * Perform the copy-tile init: configures the unpacker and the math datacopy unit for an A2D copy
+ * from the given input CB into DST. Does not reconfigure the unpacker data formats.
  * Return value: None
  *
  * | Argument    | Description                                       | Type     | Valid Range                                        | Required |
@@ -30,7 +31,7 @@ namespace ckernel {
  * | transpose_within_16x16_face | Flag to perform transpose within 16x16 face | uint32_t | Any positive value will indicate transpose within 16x16 face is set        | False    |
  */
 // clang-format on
-ALWI void copy_tile_to_dst_init_short(
+ALWI void copy_tile_init(
     uint32_t cbid,
     uint32_t transpose = 0,
     uint32_t transpose_within_16x16_face = false,
@@ -53,13 +54,27 @@ ALWI void copy_tile_to_dst_init_short(
         cbid)));
 #endif
 }
+
+// clang-format off
 /**
- * Perform a init for the copy tile operation. This calls the short init function and initializes packer dst offset
- * registers.
+ * Backward-compatible alias of copy_tile_init retained for existing callers; forwards all arguments
+ * unchanged. New code should prefer copy_tile_init.
+ * Return value: None
+ *
+ * | Argument    | Description                                       | Type     | Valid Range                                        | Required |
+ * |-------------|---------------------------------------------------|----------|----------------------------------------------------|----------|
+ * | cbid        | The identifier of the input circular buffer (CB)  | uint32_t | 0 to 31                                            | False    |
+ * | transpose   | Flag to perform transpose on SrcA                 | uint32_t | Any positive value will indicate transpose is set  | False    |
+ * | transpose_within_16x16_face | Flag to perform transpose within 16x16 face | uint32_t | Any positive value will indicate transpose within 16x16 face is set        | False    |
  */
-ALWI void copy_tile_init(uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
+// clang-format on
+ALWI void copy_tile_to_dst_init_short(
+    uint32_t cbid,
+    uint32_t transpose = 0,
+    uint32_t transpose_within_16x16_face = false,
+    uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
-    copy_tile_to_dst_init_short(cbid, 0, false, call_line);
+    copy_tile_init(cbid, transpose, transpose_within_16x16_face, call_line);
 }
 
 // clang-format off
@@ -115,6 +130,24 @@ ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile
         dst_tile_index, in_cb_id)));
 }
 
+// clang-format off
+/**
+ * Copies ntiles consecutive tiles from the input CB into consecutive DST register slots
+ * (block datacopy for matmul partials). The unpacker unpacks the tiles into SRC and the math
+ * unit moves them into DST, starting at the given DST index. The DST register buffer must be in
+ * acquired state via an acquire_dst call. This call is blocking and is only available on the
+ * compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument             | Description                                            | Type     | Valid Range                                         | Required |
+ * |----------------------|--------------------------------------------------------|----------|-----------------------------------------------------|----------|
+ * | in_cb_id             | The identifier of the source circular buffer (CB)      | uint32_t | 0 to 31                                             | True     |
+ * | start_in_tile_index  | The index of the first tile to copy from the input CB  | uint32_t | Must be less than the size of the CB                | True     |
+ * | start_dst_tile_index | The index of the first DST slot to copy into           | uint32_t | Must be less than the size of the DST register (16) | True     |
+ * | ntiles               | The number of consecutive tiles to copy                | uint32_t | 1 to the DST register size                          | True     |
+ */
+// clang-format on
 ALWI void copy_block_matmul_partials(
     uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t start_dst_tile_index, uint32_t ntiles) {
 #ifndef ARCH_QUASAR

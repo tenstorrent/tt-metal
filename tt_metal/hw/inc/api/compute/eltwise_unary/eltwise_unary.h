@@ -15,6 +15,23 @@
 
 namespace ckernel {
 
+// clang-format off
+/**
+ * Performs the common hardware and op init for eltwise-unary / SFPU kernels: configures the
+ * unpacker, the packer, and the math unit for an A2D datacopy pipeline from the input CB to the
+ * output CB. Call once before issuing eltwise-unary / SFPU tile ops.
+ *
+ * Note: the hardware-configuration portion of this init is a candidate to move into
+ * compute_kernel_hw_startup in a future pass, leaving this as a slimmer op-only init.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                       | Type     | Valid Range | Required |
+ * |----------|---------------------------------------------------|----------|-------------|----------|
+ * | icb      | The identifier of the input circular buffer (CB)  | uint32_t | 0 to 31     | True     |
+ * | ocb      | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31     | True     |
+ */
+// clang-format on
 ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
@@ -50,6 +67,18 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = 
 #endif
 }
 
+// clang-format off
+/**
+ * Alias of unary_op_init_common, kept for SFPU-kernel readability. Performs the common hardware
+ * and op init for SFPU kernels; see unary_op_init_common for details.
+ * Return value: None
+ *
+ * | Argument | Description                                       | Type     | Valid Range | Required |
+ * |----------|---------------------------------------------------|----------|-------------|----------|
+ * | icb      | The identifier of the input circular buffer (CB)  | uint32_t | 0 to 31     | True     |
+ * | ocb      | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31     | True     |
+ */
+// clang-format on
 ALWI void init_sfpu(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     unary_op_init_common(icb, ocb, call_line);
 }
