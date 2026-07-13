@@ -24,6 +24,28 @@ bool exec_command(const std::vector<std::string>& args, const std::string& worki
 // Split a whitespace-delimited string into tokens (no shell quoting support).
 std::vector<std::string> tokenize_flags(const std::string& flags);
 
+// What a gpp invocation should do with its source.
+enum class GppAction {
+    Compile,     // -c -o <out_obj> <src> -MF <dep>   (produces an object + .d depfile)
+    Preprocess,  // -E -o <out>        <src>          (self-contained .ii; keeps line markers)
+};
+// Build the argv for a single gpp invocation from recipe fields. The argv is for
+// exec_command() (posix_spawn, NO shell), so defines/flags containing shell metacharacters
+// (e.g. -DKERNEL_COMPILE_TIME_ARG_MAP={"cb_in0",1},...) are passed verbatim — each define is
+// its own argv element and is never re-quoted or shell-split. `opt_level` is the bare level
+// without the leading dash (e.g. "O3"). `dep_path` is used only for Compile.
+// One argv builder shared by the local compile, the remote compile server, and preprocess-and-ship.
+std::vector<std::string> build_gpp_argv(
+    const std::string& gpp,
+    const std::string& opt_level,
+    const std::string& cflags,
+    const std::string& includes,
+    const std::vector<std::string>& defines,
+    const std::string& src,
+    GppAction action,
+    const std::string& out_path,
+    const std::string& dep_path = "");
+
 void create_file(const std::string& file_path_str);
 
 // Read the entire contents of a binary file into a byte vector.

@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <functional>
 #include <future>
 #include <initializer_list>
@@ -53,6 +54,7 @@
 #include "tt-metalium/mesh_device.hpp"
 #include <unistd.h>
 #include "jit_build/build.hpp"
+#include "jit_build/depend.hpp"
 #include <tt_stl/enum.hpp>
 #include "jit_build/jit_build_options.hpp"
 #include "kernel_types.hpp"
@@ -164,6 +166,27 @@ void generate_kernel_source_files(
     }
 }
 
+// Returns true if every expected ELF for this kernel is already present locally and still valid, so
+// the client can skip the remote round-trip (preprocess + RPC + ELF transfer) entirely and let
+// read_binaries() load the cached ELF.
+bool remote_kernel_cached(IDevice* device, const std::shared_ptr<Kernel>& kernel) {
+    uint32_t core_type =
+        MetalContext::instance().hal().get_programmable_core_type_index(kernel->get_kernel_programmable_core_type());
+    uint32_t proc_class = enchantum::to_underlying(kernel->get_kernel_processor_class());
+    int num_binaries = kernel->expected_num_binaries();
+    if (num_binaries <= 0) {
+        return false;
+    }
+    for (int i = 0; i < num_binaries; ++i) {
+        const JitBuildState& bs = BuildEnvManager::get_instance().get_kernel_build_state(
+            device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
+        if (!bs.warmed_elf_reusable(kernel->get_full_kernel_name())) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // Build a KernelCompileDescriptor to be submitted to RemoteCompileCoordinator.
 KernelCompileDescriptor build_kernel_descriptor(
     IDevice* device,
@@ -190,6 +213,103 @@ KernelCompileDescriptor build_kernel_descriptor(
             device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
         desc.request.targets.push_back(bs.export_target_recipe(kernel.get()));
         desc.expected_elf_paths.push_back(bs.get_target_out_path(kernel->get_full_kernel_name()));
+    }
+
+    // Preprocess-and-ship (TT_METAL_JIT_PREPROCESS=1): run each source through the preprocessor (-E)
+    // on the client and ship the self-contained .ii (headers/defines inlined). The server then
+    // compiles the .ii with no include tree, no defines, and no source file on its filesystem --
+    // only the toolchain. Reuses the generated_files content channel (written into the per-kernel
+    // cache dir on the server), so no RPC/server change is required: the .ii is referenced as a
+    // sibling of the target output dir ("../<name>").
+    static const bool preprocess_and_ship = std::getenv("TT_METAL_JIT_PREPROCESS") != nullptr;
+    if (preprocess_and_ship) {
+        for (std::size_t t = 0; t < desc.request.targets.size(); ++t) {
+            auto& target = desc.request.targets[t];
+            const std::string client_out_dir = std::filesystem::path(desc.expected_elf_paths[t]).parent_path().string();
+            std::filesystem::create_directories(client_out_dir);
+            const JitBuildState& bs = BuildEnvManager::get_instance().get_kernel_build_state(
+                device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(static_cast<int>(t)));
+            // Real source+header dependencies across every source, accumulated so the ELF's sidecar
+            // describes the whole linked unit rather than a single object.
+            std::vector<std::string> elf_deps;
+            for (std::size_t i = 0; i < target.srcs.size(); ++i) {
+                const std::string ii_name =
+                    target.target_name + "__" + std::filesystem::path(target.objs[i]).filename().string() + ".ii";
+                const std::string ii_path = client_out_dir + "/" + ii_name;
+                // Preprocess with the EXACT compile flags via the shared argv builder + exec_command
+                // (posix_spawn, NO shell). A shell command string would mangle map-valued defines
+                // like -DKERNEL_COMPILE_TIME_ARG_MAP={"cb_in0",1},... (braces/quotes/commas/spaces)
+                // and drop named compile-time args. cwd = client_out_dir so -I. / -I.. resolve to
+                // the target + generated-files dirs, identical to the real compile env.
+                const auto args = tt::jit_build::utils::build_gpp_argv(
+                    desc.request.gpp,
+                    target.compiler_opt_level,
+                    target.cflags,
+                    target.includes,
+                    target.defines,
+                    target.srcs[i],
+                    tt::jit_build::utils::GppAction::Preprocess,
+                    ii_path);
+                if (!tt::jit_build::utils::exec_command(args, client_out_dir, ii_path + ".log")) {
+                    TT_THROW("preprocess-and-ship: -E failed for {} (log: {})", target.srcs[i], ii_path + ".log");
+                }
+                const auto bytes = tt::jit_build::utils::read_file_bytes(ii_path);
+                tt::jit_build::GeneratedFile gf;
+                gf.name = ii_name;
+                gf.content.assign(bytes.begin(), bytes.end());
+                desc.request.generated_files.push_back(std::move(gf));
+                // Server compiles this self-contained unit instead of the original source path.
+                target.srcs[i] = "../" + ii_name;
+                // -MMD (in cflags) emitted a .d next to the .ii listing this source + every header.
+                // Accumulate its deps into the per-ELF set; the .d's internal target key is irrelevant.
+                const std::filesystem::path d_path =
+                    std::filesystem::path(client_out_dir) / std::filesystem::path(ii_name).replace_extension(".d");
+                std::ifstream d_file(d_path);
+                if (d_file.is_open()) {
+                    tt::jit_build::ParsedDependencies deps = tt::jit_build::parse_dependency_file(d_file);
+                    for (auto& [key, dep_list] : deps) {
+                        for (auto& dep : dep_list) {
+                            elf_deps.push_back(std::move(dep));
+                        }
+                    }
+                }
+            }
+            // Link inputs also gate reuse: a changed linker script or firmware must invalidate the
+            // cached ELF even when no source changed. The recipe carries only the bare firmware
+            // filename (the server resolves it from its uploaded-firmware cache), so hash the real
+            // on-disk path from the build state instead. If an input is genuinely missing, the link
+            // fails and no ELF exists to reuse; write_dependency_hashes then drops the sidecar, which
+            // correctly forces a recompile.
+            if (!target.linker_script.empty()) {
+                elf_deps.push_back(target.linker_script);
+            }
+            const std::string& weakened_fw_path = bs.get_weakened_firmware_name();
+            if (!weakened_fw_path.empty()) {
+                elf_deps.push_back(weakened_fw_path);
+            }
+            // Source-complete sidecar next to the expected ELF (client is the only party with the real
+            // sources + headers). A later run -- with or without a compile server -- validates it and
+            // reuses the ELF with no intermediate object present.
+            if (!elf_deps.empty()) {
+                std::sort(elf_deps.begin(), elf_deps.end());
+                elf_deps.erase(std::unique(elf_deps.begin(), elf_deps.end()), elf_deps.end());
+                const std::string& elf_path = desc.expected_elf_paths[t];
+                const std::string full_dephash_path = elf_path + std::string(tt::jit_build::FULL_DEPHASH_SUFFIX);
+                tt::jit_build::ParsedDependencies elf_deps_map{{elf_path, std::move(elf_deps)}};
+                std::ofstream hash_file(full_dephash_path);
+                tt::jit_build::write_dependency_hashes(elf_deps_map, client_out_dir + "/", elf_path, hash_file);
+                hash_file.close();
+                if (hash_file.fail()) {
+                    std::filesystem::remove(full_dephash_path);
+                }
+            }
+            // Stamp .build_state with the real recipe hash; the server sees only the mangled .ii recipe
+            // and cannot. A later local build reuses the ELF only if this still matches.
+            bs.write_build_state_hash(client_out_dir + "/");
+            // The .ii has includes + defines baked in; the server must not need the tree.
+            target.includes.clear();
+            target.defines.clear();
+        }
     }
 
     return desc;
@@ -2225,10 +2345,14 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
             for (auto& [id, kernel] : kernels) {
                 validate_kernel_placement(force_slow_dispatch, kernel);
                 auto [build_options, kernel_hash] = prep_kernel(kernel);
-                coordinator.submit(kernel_hash, [&]() {
-                    generate_kernel_source_files(device, build_options, kernel);
-                    return build_kernel_descriptor(device, kernel, build_options, kernel_hash);
-                });
+                // Skip the remote round-trip when the ELF is already validly cached locally.
+                if (!remote_kernel_cached(device, kernel)) {
+                    coordinator.submit(kernel_hash, [&]() {
+                        generate_kernel_source_files(device, build_options, kernel);
+                        return build_kernel_descriptor(device, kernel, build_options, kernel_hash);
+                    });
+                }
+                // Always recorded: cached kernels still need read_binaries() to load the on-disk ELF.
                 submitted_kernels.emplace_back(kernel, std::move(build_options));
             }
         }

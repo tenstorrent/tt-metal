@@ -287,6 +287,14 @@ bool dependencies_up_to_date(const std::string& out_dir, const std::string& obj)
     return up_to_date;
 }
 
+bool dependencies_up_to_date_file(const std::string& hash_file_path) {
+    std::ifstream hash_file(hash_file_path);
+    if (!hash_file.is_open()) {
+        return false;
+    }
+    return dependencies_up_to_date(hash_file);
+}
+
 void clear_file_hash_cache() { FileHashCache::instance().clear(); }
 
 }  // namespace tt::jit_build
