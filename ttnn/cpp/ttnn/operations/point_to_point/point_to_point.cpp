@@ -11,7 +11,7 @@ ttnn::Tensor point_to_point(
     const ttnn::Tensor& input_tensor,
     const MeshCoordinate& receiver_coord,
     const MeshCoordinate& sender_coord,
-    const ccl::Topology topology,
+    const ::ttnn::ccl::Topology topology,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const std::optional<ttnn::Tensor>& optional_intermediate_tensor) {
     // Same-device transfer whose output aliases the input is a pure no-op — return the output
@@ -53,7 +53,7 @@ ttnn::TensorSpec p2p_compute_intermediate_tensor_spec(
     const ttnn::Tensor& input_tensor,
     const MeshCoordinate& receiver_coord,
     const MeshCoordinate& sender_coord,
-    const ccl::Topology topology) {
+    const ::ttnn::ccl::Topology topology) {
     PointToPointOp::operation_attributes_t attrs{receiver_coord, sender_coord, topology, input_tensor.tensor_spec()};
     PointToPointOp::tensor_args_t tensors{input_tensor, std::nullopt, std::nullopt};
 
