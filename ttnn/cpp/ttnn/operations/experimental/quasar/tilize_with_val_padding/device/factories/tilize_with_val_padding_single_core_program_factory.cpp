@@ -177,10 +177,13 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingSingleCoreFactory::
     };
 
     // ---- Compute (Metal 2.0 fork of tilize) ----
-    ttnn::ComputeKernelConfig compute_hw{
+    ttnn::ComputeKernelConfig compute_config{
         .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_llk_acc};
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(a.device()->arch(), compute_config);
     if (fp32_llk_acc) {
-        compute_hw.unpack_to_dest_mode.emplace(IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+        std::visit(
+            [&](auto& c) { c.unpack_to_dest_mode.emplace(IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32); },
+            compute_hw);
     }
     KernelSpec compute{
         .unique_id = COMPUTE,
@@ -193,7 +196,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingSingleCoreFactory::
         .compile_time_args =
             {{"per_core_block_cnt", static_cast<uint32_t>(num_tiles / num_tiles_per_block)},
              {"per_core_block_tile_cnt", static_cast<uint32_t>(num_tiles_per_block)}},
-        .hw_config = ttnn::to_compute_hardware_config(a.device()->arch(), compute_hw),
+        .hw_config = compute_hw,
     };
 
     Group<KernelSpec> kernels = {reader, writer, compute};

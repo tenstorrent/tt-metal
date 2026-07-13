@@ -139,10 +139,13 @@ ttnn::device_operation::ProgramArtifacts TilizeSingleCoreProgramFactory::create_
     };
 
     // -- Compute kernel --
-    ttnn::ComputeKernelConfig compute_hw{
+    ttnn::ComputeKernelConfig compute_config{
         .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_llk_acc};
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(a.device()->arch(), compute_config);
     if (fp32_llk_acc) {
-        compute_hw.unpack_to_dest_mode = {{SC_INPUT_DFB, UnpackToDestMode::UnpackToDestFp32}};
+        std::visit(
+            [&](auto& c) { c.unpack_to_dest_mode.emplace(SC_INPUT_DFB, UnpackToDestMode::UnpackToDestFp32); },
+            compute_hw);
     }
     KernelSpec compute{
         .unique_id = SC_COMPUTE_KERNEL,
@@ -160,7 +163,7 @@ ttnn::device_operation::ProgramArtifacts TilizeSingleCoreProgramFactory::create_
              }},
         .compile_time_args =
             {{"per_core_block_cnt", num_tiles / num_tiles_per_block}, {"per_core_block_tile_cnt", num_tiles_per_block}},
-        .hw_config = ttnn::to_compute_hardware_config(a.device()->arch(), compute_hw),
+        .hw_config = compute_hw,
     };
 
     spec.kernels = {reader, writer, compute};
