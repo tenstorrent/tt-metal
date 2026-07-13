@@ -21,8 +21,7 @@ namespace ttnn::prim {
 // args in create_descriptor) and get_dynamic_runtime_args (which RE-APPLIES the indexed-cache page offset to
 // the cached program). kv_batch_page_offset sits at the fixed index below and is the only re-applied arg. If
 // the order before kv_batch_page_offset changes in the factory, update these indices here, or the dynamic
-// re-apply silently writes the wrong slot. (The block-cyclic remap constants are all compile-time defines, with
-// the cache length T folded into the program hash, so there is no block-cyclic runtime arg to track.)
+// re-apply silently writes the wrong slot. Block-cyclic remap configuration is compile-time.
 namespace sparse_sdpa_rt {
 inline constexpr uint32_t kReaderKernelIdx = 0;
 inline constexpr uint32_t kWriterKernelIdx = 1;
