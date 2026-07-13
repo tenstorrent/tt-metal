@@ -138,11 +138,8 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(true);
 
         const auto detected_arch = tt::tt_metal::MetalContext::instance().get_cluster().arch();
-        // Watcher NOC sanitization currently only works on Quasar in slow dispatch.
-        // TODO: Remove the slow dispatch check once NOC sanitization is supported on Quasar in fast dispatch (#45878)
-        const bool slow_dispatch = !tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch();
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noc_sanitize_linked_transaction(
-            detected_arch == tt::ARCH::BLACKHOLE || (detected_arch == tt::ARCH::QUASAR && slow_dispatch));
+            detected_arch == tt::ARCH::BLACKHOLE || (detected_arch == tt::ARCH::QUASAR));
 
         // Parent class initializes devices and any necessary flags
         DebugToolsMeshFixture::SetUp();

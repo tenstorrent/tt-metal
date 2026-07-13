@@ -112,10 +112,10 @@ void RunTestOnCore(
         GTEST_SKIP();
     }
 
-    // IDLE_ETH cores only support SD (FD not yet implemented)
-    // TENSIX/ACTIVE_ETH cores: SD only used for Quasar watcher tests (TODO: Remove once FD enabled on Quasar)
-    if (fixture->IsSlowDispatch() && !is_idle_eth_core && !is_quasar) {
-        GTEST_SKIP() << "Slow Dispatch tests only run on Quasar or IDLE_ETH cores";
+    // IDLE_ETH cores only support slow dispatch (FD not yet implemented for them).
+    // All other cores (TENSIX/ACTIVE_ETH, including Quasar) run under fast dispatch.
+    if (fixture->IsSlowDispatch() && !is_idle_eth_core) {
+        GTEST_SKIP() << "Slow Dispatch only runs IDLE_ETH core tests";
     }
     if (multi_dm_race && !is_quasar) {
         GTEST_SKIP() << "Multi-DM race test only runs on Quasar";
@@ -453,16 +453,16 @@ void RunTestOnCore(
     }
     workload.add_program(device_range, std::move(program));
 
-    // Run the kernel, expect an exception here
+    // Run the kernel; its illegal NoC transaction trips watcher test mode. Whether that reaches the
+    // host as an exception here is a race with the watcher poll (fires on the slow Quasar sim via
+    // #48842's fast-dispatch rethrow; usually not on fast HW), so this catch is best-effort. The
+    // watcher-log check below always runs (regardless of this catch) and is the real verification.
     try {
         fixture->RunProgram(mesh_device, workload);
     } catch (std::runtime_error& e) {
-        std::string expected =
-            "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.\n";
-        expected += MetalContext::instance().watcher_server()->log_file_name();
         const std::string error = std::string(e.what());
         log_info(tt::LogTest, "Caught exception (one is expected in this test)");
-        EXPECT_TRUE(error.find(expected) != std::string::npos);
+        EXPECT_TRUE(error.find("Aborting wait due to watcher error") != std::string::npos) << error;
     }
 
     // We should be able to find the expected watcher error in the log as well.
