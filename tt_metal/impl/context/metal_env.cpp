@@ -179,9 +179,6 @@ void MetalEnvImpl::initialize_base_objects() {
                 "Enabling DRAM-backed command queues for Quasar simulator because host hugepages are not available");
             this->rtoptions_->set_dram_backed_cq(true);
         }
-        // Watcher NOC sanitization currently only works on Quasar in slow dispatch.
-        // TODO: Remove this once NOC sanitization is supported on Quasar in fast dispatch (#45878)
-        this->rtoptions_->disable_watcher_noc_sanitize();
     }
 
     // Get is_base_routing_fw_enabled from the already-constructed Cluster instead of running
