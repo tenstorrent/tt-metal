@@ -34,10 +34,11 @@ void bind_moe_compute(nb::module_& mod) {
 
         This operation performs the expert matmuls (gate/up projection via W0/W1, down
         projection via W2) and activation (SILU, SwiGLU, or GELU) in a fused compute kernel.
-        Tile distribution across the matmul ring (12 cores on Wormhole; 8 cores on
-        Blackhole — auto-detected from the architecture) is derived at compile time from
-        ``hidden_size`` and ``intermediate_size`` using Euclidean-rhythm (Bresenham) shard
-        formulas — no model-specific configuration tables are needed.
+        Tile distribution across the matmul ring (12 cores on Wormhole; 7 or 8 cores on
+        Blackhole depending on whether one DRAM bank is fused off — auto-detected from the
+        live DRAM-bank count) is derived at compile time from ``hidden_size`` and
+        ``intermediate_size`` using Euclidean-rhythm (Bresenham) shard formulas — no
+        model-specific configuration tables are needed.
 
         Note: This is the **compute** portion of the MoE pipeline. The A2A dispatch
         (producing the sparse buffer consumed by this op) and the A2A combine (reducing
@@ -225,7 +226,7 @@ void bind_moe_compute(nb::module_& mod) {
         // cluster_axis is required when compute_only=False; pass None for compute_only=True paths.
         // (Two breaking changes vs prior versions: (1) intermediate_size is now required positional
         // from PR #43932; (2) cluster_axis became optional, new compute_only knob. The matmul ring
-        // size is auto-detected from the arch (8 BH / 12 WH); bh_ring_size remains only on prim.)
+        // size is auto-detected from the live DRAM-bank count (7/8 BH / 12 WH); bh_ring_size remains only on prim.)
         nb::arg("cluster_axis") = nb::none(),
         nb::arg("topology") = nb::none(),
         nb::arg("num_links") = nb::none(),
