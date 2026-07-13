@@ -75,9 +75,12 @@ def test_matmul_sweep(mesh_device):
     if os.environ.get("TT_METAL_DEVICE_PROFILER", "0") != "1":
         pytest.fail("Set TT_METAL_DEVICE_PROFILER=1 and run under python -m tracy.")
 
+    # LoFi + fp32_dest_acc_en=False to MATCH the model's S8192 matmul kernel
+    # (exp23 moved all 4 matmuls to LoFi). Sweeping under a different fidelity
+    # gives winners that don't transfer in-model.
     ck = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
