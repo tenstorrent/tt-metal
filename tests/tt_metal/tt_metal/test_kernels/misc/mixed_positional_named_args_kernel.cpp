@@ -8,6 +8,7 @@
 // at WRITE_ADDRESS so the host can verify the index mapping is correct.
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/named_args.h"
 
 void kernel_main() {
     volatile uint32_t tt_l1_ptr* l1_ptr = (volatile uint32_t tt_l1_ptr*)WRITE_ADDRESS;

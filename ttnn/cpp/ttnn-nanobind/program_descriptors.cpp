@@ -435,21 +435,6 @@ void py_module_types(nb::module_& mod) {
             &tt::tt_metal::CBDescriptor::address_offset,
             "Byte offset from buffer base address for CB placement (default 0)")
         .def(
-            "add_format_descriptor",
-            [](tt::tt_metal::CBDescriptor& self, const tt::tt_metal::CBFormatDescriptor& fmt) {
-                self.format_descriptors.push_back(fmt);
-            },
-            nb::arg("fmt"),
-            R"pbdoc(
-                Add a format descriptor to this CB descriptor.
-
-                Used for CB aliasing: multiple format descriptors share the same
-                L1 allocation but have different CB IDs and tile formats.
-
-                Args:
-                    fmt: A CBFormatDescriptor to add to this descriptor's alias group
-            )pbdoc")
-        .def(
             "has_buffer",
             [](const tt::tt_metal::CBDescriptor& self) { return self.buffer != nullptr; },
             R"pbdoc(
@@ -744,12 +729,13 @@ void py_module_types(nb::module_& mod) {
                std::optional<tt::tt_metal::KernelBuildOptLevel> opt_level,
                tt::tt_metal::KernelDescriptor::ConfigDescriptor config,
                tt::tt_metal::KernelDescriptor::IncludePaths compiler_include_paths) {
-                tt::tt_metal::KernelDescriptor::NamedCommonRuntimeArgs ncra;
+                using namespace tt::tt_metal::experimental;
+                NamedCommonRuntimeArgs ncra;
                 for (auto item : named_common_runtime_args) {
                     auto tup = nb::cast<nb::tuple>(item);
                     ncra.push_back({nb::cast<std::string>(tup[0]), nb::cast<uint32_t>(tup[1])});
                 }
-                tt::tt_metal::KernelDescriptor::NamedPerCoreRuntimeArgs npcra;
+                NamedPerCoreRuntimeArgs npcra;
                 for (auto item : named_per_core_runtime_args) {
                     auto tup = nb::cast<nb::tuple>(item);
                     auto name = nb::cast<std::string>(tup[0]);
@@ -761,7 +747,7 @@ void py_module_types(nb::module_& mod) {
                     npcra.push_back({std::move(name), std::move(core_values)});
                 }
                 // Array variant: (name, [val0, val1, ...])
-                tt::tt_metal::KernelDescriptor::NamedCommonRuntimeArgArrays ncraa;
+                NamedCommonRuntimeArgArrays ncraa;
                 for (auto item : named_common_runtime_arg_arrays) {
                     auto tup = nb::cast<nb::tuple>(item);
                     auto name = nb::cast<std::string>(tup[0]);
@@ -773,7 +759,7 @@ void py_module_types(nb::module_& mod) {
                     ncraa.push_back({std::move(name), std::move(values)});
                 }
                 // Per-core array variant: (name, {CoreCoord: [val0, val1, ...]})
-                tt::tt_metal::KernelDescriptor::NamedPerCoreRuntimeArgArrays npcraa;
+                NamedPerCoreRuntimeArgArrays npcraa;
                 for (auto item : named_per_core_runtime_arg_arrays) {
                     auto tup = nb::cast<nb::tuple>(item);
                     auto name = nb::cast<std::string>(tup[0]);
@@ -798,10 +784,7 @@ void py_module_types(nb::module_& mod) {
                     std::move(defines),
                     std::move(runtime_args),
                     std::move(common_runtime_args),
-                    std::move(ncra),
-                    std::move(npcra),
-                    std::move(ncraa),
-                    std::move(npcraa),
+                    NamedKernelArgs{std::move(ncra), std::move(npcra), std::move(ncraa), std::move(npcraa)},
                     opt_level,
                     std::move(config),
                     std::move(compiler_include_paths),
@@ -896,20 +879,21 @@ void py_module_types(nb::module_& mod) {
             "common_runtime_args",
             &tt::tt_metal::KernelDescriptor::common_runtime_args,
             "Common runtime arguments shared across all cores")
+        // EXPERIMENTAL: named kernel args
         .def_prop_rw(
             "named_common_runtime_args",
             [](const tt::tt_metal::KernelDescriptor& self) {
                 nb::list result;
-                for (const auto& arg : self.named_common_runtime_args) {
+                for (const auto& arg : self.named_args.named_common_runtime_args) {
                     result.append(nb::make_tuple(arg.name, arg.value));
                 }
                 return result;
             },
             [](tt::tt_metal::KernelDescriptor& self, const nb::list& args) {
-                self.named_common_runtime_args.clear();
+                self.named_args.named_common_runtime_args.clear();
                 for (auto item : args) {
                     auto tup = nb::cast<nb::tuple>(item);
-                    self.named_common_runtime_args.push_back(
+                    self.named_args.named_common_runtime_args.push_back(
                         {nb::cast<std::string>(tup[0]), nb::cast<uint32_t>(tup[1])});
                 }
             },
@@ -918,7 +902,7 @@ void py_module_types(nb::module_& mod) {
             "named_per_core_runtime_args",
             [](const tt::tt_metal::KernelDescriptor& self) {
                 nb::list result;
-                for (const auto& arg : self.named_per_core_runtime_args) {
+                for (const auto& arg : self.named_args.named_per_core_runtime_args) {
                     nb::dict core_values;
                     for (const auto& [core, value] : arg.core_values) {
                         core_values[nb::cast(core)] = nb::cast(value);
@@ -928,7 +912,7 @@ void py_module_types(nb::module_& mod) {
                 return result;
             },
             [](tt::tt_metal::KernelDescriptor& self, const nb::list& args) {
-                self.named_per_core_runtime_args.clear();
+                self.named_args.named_per_core_runtime_args.clear();
                 for (auto item : args) {
                     auto tup = nb::cast<nb::tuple>(item);
                     auto name = nb::cast<std::string>(tup[0]);
@@ -937,7 +921,7 @@ void py_module_types(nb::module_& mod) {
                     for (const auto& [k, v] : dict) {
                         core_values.emplace_back(nb::cast<CoreCoord>(k), nb::cast<uint32_t>(v));
                     }
-                    self.named_per_core_runtime_args.push_back({std::move(name), std::move(core_values)});
+                    self.named_args.named_per_core_runtime_args.push_back({std::move(name), std::move(core_values)});
                 }
             },
             "Named per-core runtime args: list of (name, {CoreCoord: value}) pairs")
@@ -945,7 +929,7 @@ void py_module_types(nb::module_& mod) {
             "named_common_runtime_arg_arrays",
             [](const tt::tt_metal::KernelDescriptor& self) {
                 nb::list result;
-                for (const auto& arg : self.named_common_runtime_arg_arrays) {
+                for (const auto& arg : self.named_args.named_common_runtime_arg_arrays) {
                     nb::list values;
                     for (auto v : arg.values) {
                         values.append(v);
@@ -955,7 +939,7 @@ void py_module_types(nb::module_& mod) {
                 return result;
             },
             [](tt::tt_metal::KernelDescriptor& self, const nb::list& args) {
-                self.named_common_runtime_arg_arrays.clear();
+                self.named_args.named_common_runtime_arg_arrays.clear();
                 for (auto item : args) {
                     auto tup = nb::cast<nb::tuple>(item);
                     auto name = nb::cast<std::string>(tup[0]);
@@ -964,7 +948,7 @@ void py_module_types(nb::module_& mod) {
                     for (auto v : values_list) {
                         values.push_back(nb::cast<uint32_t>(v));
                     }
-                    self.named_common_runtime_arg_arrays.push_back({std::move(name), std::move(values)});
+                    self.named_args.named_common_runtime_arg_arrays.push_back({std::move(name), std::move(values)});
                 }
             },
             "Named common runtime arg arrays: list of (name, [values]) pairs")
@@ -972,7 +956,7 @@ void py_module_types(nb::module_& mod) {
             "named_per_core_runtime_arg_arrays",
             [](const tt::tt_metal::KernelDescriptor& self) {
                 nb::list result;
-                for (const auto& arg : self.named_per_core_runtime_arg_arrays) {
+                for (const auto& arg : self.named_args.named_per_core_runtime_arg_arrays) {
                     nb::dict core_values;
                     for (const auto& [core, values] : arg.core_values) {
                         nb::list val_list;
@@ -986,7 +970,7 @@ void py_module_types(nb::module_& mod) {
                 return result;
             },
             [](tt::tt_metal::KernelDescriptor& self, const nb::list& args) {
-                self.named_per_core_runtime_arg_arrays.clear();
+                self.named_args.named_per_core_runtime_arg_arrays.clear();
                 for (auto item : args) {
                     auto tup = nb::cast<nb::tuple>(item);
                     auto name = nb::cast<std::string>(tup[0]);
@@ -1000,7 +984,8 @@ void py_module_types(nb::module_& mod) {
                         }
                         core_values.emplace_back(nb::cast<CoreCoord>(k), std::move(values));
                     }
-                    self.named_per_core_runtime_arg_arrays.push_back({std::move(name), std::move(core_values)});
+                    self.named_args.named_per_core_runtime_arg_arrays.push_back(
+                        {std::move(name), std::move(core_values)});
                 }
             },
             "Named per-core runtime arg arrays: list of (name, {CoreCoord: [values]}) pairs")

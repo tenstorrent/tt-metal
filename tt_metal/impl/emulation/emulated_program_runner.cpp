@@ -71,6 +71,12 @@
 #error "TT_EMULE_INCLUDE_DIR must be defined by CMake (path to tt-emule's include/)"
 #endif
 
+// EXPERIMENTAL: named kernel args
+namespace tt::tt_metal::experimental {
+bool emit_named_args_header(
+    const std::string& dir, const NamedCTArgNamespaces& ct_namespaces, const NamedRuntimeArgNamespaces& rt_namespaces);
+}  // namespace tt::tt_metal::experimental
+
 // ---------------------------------------------------------------------------
 // Thread-local context for JIT kernels.
 // Exported via -rdynamic so dlopen'd .so files can resolve them at load time.
@@ -380,6 +386,7 @@ struct DeferredCompile {
     std::string src_path;
     std::vector<uint32_t> compile_args;
     std::unordered_map<std::string, uint32_t> named_compile_args;
+    // EXPERIMENTAL: named kernel args
     NamedCTArgNamespaces named_ct_arg_namespaces;
     NamedRuntimeArgNamespaces named_runtime_arg_namespaces;
     std::map<std::string, std::string> defines;
@@ -815,63 +822,11 @@ static std::function<void()> jit_compile_kernel(
     std::string patched_kernel_path = dir + "/patched_kernel.cpp";
     preprocess_kernel_source_for_x86(abs_kernel, patched_kernel_path);
 
-    // 2c. Emit named_args_generated.h with the kernel's ct_args:: namespaces
-    // (mirrors `write_named_args_generated_header` in jit_build/genfiles.cpp).
-    // Silicon's per-kernel build runs genfiles.cpp, which writes this header
-    // into the kernel out-dir; emule's JIT path bypasses genfiles entirely,
-    // so we replicate the emission here. The header is included from
-    // wrapper.cpp below when non-empty.
-    //
-    // Format matches genfiles.cpp byte-for-byte where practical so kernels
-    // see the same `ct_args::<prefix>` struct shape under emule as under
-    // silicon build.
-    bool has_named_args = false;
-    {
-        std::set<std::string> all_ns;
-        for (const auto& [ns, _] : named_ct_arg_namespaces) {
-            all_ns.insert(ns);
-        }
-        for (const auto& [ns, _] : named_runtime_arg_namespaces) {
-            if (!ns.empty()) {
-                all_ns.insert(ns);
-            }
-        }
-        std::ostringstream header_ct;
-        for (const auto& ns : all_ns) {
-            if (!ns.empty()) {
-                header_ct << "struct " << ns << " {\n";
-            }
-            if (auto it = named_ct_arg_namespaces.find(ns); it != named_ct_arg_namespaces.end()) {
-                for (const auto& [field, value] : it->second) {
-                    header_ct << "    static constexpr uint32_t " << field << " = " << value << ";\n";
-                }
-            }
-            if (auto it = named_runtime_arg_namespaces.find(ns); it != named_runtime_arg_namespaces.end()) {
-                for (const auto& entry : it->second) {
-                    const char* dispatch_str = entry.dispatch == RuntimeArgDispatch::COMMON
-                                                   ? "rt_args::Dispatch::COMMON"
-                                                   : "rt_args::Dispatch::PER_CORE";
-                    if (entry.length > 1) {
-                        header_ct << "    static constexpr rt_args::ArrayArg " << entry.field << " = {" << entry.index
-                                  << ", " << entry.length << ", " << dispatch_str << "};\n";
-                    } else {
-                        header_ct << "    static constexpr rt_args::Arg " << entry.field << " = {" << entry.index
-                                  << ", " << dispatch_str << "};\n";
-                    }
-                }
-            }
-            if (!ns.empty()) {
-                header_ct << "};\n";
-            }
-        }
-        auto ct_str = header_ct.str();
-        if (!ct_str.empty()) {
-            has_named_args = true;
-            std::ofstream f(dir + "/named_args_generated.h");
-            f << "#pragma once\n#include \"api/rt_arg.h\"\n\n";
-            f << "namespace ct_args {\n" << ct_str << "}\n";
-        }
-    }
+    // 2c. EXPERIMENTAL: named kernel args
+    // Emule's JIT path bypasses genfiles; call the experimental helper to
+    // emit named_args_generated.h. Included from wrapper.cpp when non-empty.
+    bool has_named_args =
+        experimental::emit_named_args_header(dir, named_ct_arg_namespaces, named_runtime_arg_namespaces);
 
     // 3. Write wrapper.cpp
     // Kernel defines are written as #define directives in the wrapper to avoid
@@ -1505,10 +1460,7 @@ static void collect_kernels(
 
             auto compile_args = kernel->compile_time_args();
             auto named_compile_args = kernel->named_compile_time_args();
-            // Capture the namespace-structured CT + RT args so we can emit
-            // `named_args_generated.h` into the JIT temp dir. Silicon's build
-            // emits this header via jit_build/genfiles.cpp; emule's JIT path
-            // bypasses that, so we mirror the emission inside jit_compile_kernel.
+            // EXPERIMENTAL: named kernel args
             NamedCTArgNamespaces named_ct_arg_namespaces;
             kernel->process_named_ct_arg_namespaces([&named_ct_arg_namespaces](const NamedCTArgNamespaces& namespaces) {
                 named_ct_arg_namespaces = namespaces;

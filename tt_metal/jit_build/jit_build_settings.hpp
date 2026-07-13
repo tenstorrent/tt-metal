@@ -39,6 +39,7 @@ struct KernelCrtaLayout {
     uint32_t vararg_section_offset = 0;
 };
 
+// EXPERIMENTAL: named kernel args
 // Dispatch type for named runtime args — determines which device-side accessor to use.
 enum class RuntimeArgDispatch : uint8_t {
     COMMON,   // get_common_arg_val (shared across all cores)
@@ -125,6 +126,7 @@ public:
     // which matches the legacy-kernel case where the buffer has only varargs.
     virtual KernelCrtaLayout get_crta_layout() const { return {}; }
 
+    // EXPERIMENTAL: named kernel args
     // Called to process named runtime arg namespaces for generated header (rt:: namespace).
     // Default no-op so Kernel subclasses that don't use named args compile unchanged.
     virtual void process_named_runtime_args(std::function<void(const NamedRuntimeArgNamespaces&)>) const {}

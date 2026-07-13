@@ -329,6 +329,7 @@ void Kernel::process_tensor_binding_handles(const std::function<void(
     }
 }
 
+// EXPERIMENTAL: named kernel args
 void Kernel::process_named_runtime_args(const std::function<void(const NamedRuntimeArgNamespaces&)> callback) const {
     callback(this->named_runtime_arg_namespaces());
 }

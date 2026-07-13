@@ -150,6 +150,7 @@ public:
     std::vector<uint32_t> compile_time_args() const { return compile_time_args_; }
     std::unordered_map<std::string, uint32_t> named_compile_time_args() const { return named_compile_time_args_; }
 
+    // EXPERIMENTAL: named kernel args
     const NamedRuntimeArgNamespaces& named_runtime_arg_namespaces() const { return named_runtime_arg_namespaces_; }
     void set_named_runtime_arg_namespaces(const NamedRuntimeArgNamespaces& namespaces) {
         named_runtime_arg_namespaces_ = namespaces;
@@ -196,6 +197,7 @@ public:
     const std::vector<std::string>& get_common_runtime_arg_names() const override { return common_runtime_arg_names_; }
     KernelCrtaLayout get_crta_layout() const override { return crta_layout_; }
     bool is_metal2_kernel() const override { return is_metal2_kernel_; }
+    // EXPERIMENTAL: named kernel args
     void process_named_runtime_args(std::function<void(const NamedRuntimeArgNamespaces&)>) const override;
     void process_named_ct_arg_namespaces(std::function<void(const NamedCTArgNamespaces&)>) const override;
     void process_include_paths(const std::function<void(const std::string& path)>&) const override;
@@ -286,6 +288,7 @@ protected:
     const std::vector<std::string> common_runtime_arg_names_;
     const std::vector<TensorBindingHandle> tensor_binding_handles_;
     const KernelCrtaLayout crta_layout_;
+    // EXPERIMENTAL: named kernel args
     NamedRuntimeArgNamespaces named_runtime_arg_namespaces_;
     NamedCTArgNamespaces named_ct_arg_namespaces_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
