@@ -2213,6 +2213,7 @@ class UnarySFPUGolden:
             MathOperation.Isneginf: self._isneginf,
             MathOperation.Isnan: self._isnan,
             MathOperation.Isfinite: self._isfinite,
+            MathOperation.LogicalNotUnary: self._logical_not,
             MathOperation.ReduceColumn: self._reduce_columns,
             MathOperation.ReduceRow: self._reduce_rows,
             MathOperation.Typecast: self._typecast,
@@ -2433,6 +2434,10 @@ class UnarySFPUGolden:
 
     def _isfinite(self, x):
         return 1.0 if math.isfinite(x) else 0.0
+
+    def _logical_not(self, x):
+        # logical_not(x) = (x == 0) ? 1 : 0. NaN != 0, so logical_not(nan) = 0.
+        return 1.0 if x == 0 else 0.0
 
     def _cast_fp32_to_fp16a(self, x):
         # cast_fp32_to_fp16a rounds the value to IEEE half-precision (fp16a,
@@ -3251,6 +3256,9 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuBitwiseXor: self._bitwise_xor,
                 MathOperation.SfpuDivInt32Floor: self._div_int32_floor,
                 MathOperation.SfpuGcd: self._gcd,
+                MathOperation.SfpuLcm: self._lcm,
+                MathOperation.SfpuRsubInt32: self._rsub_int32,
+                MathOperation.SfpuMask: self._mask,
             }
         )
 
@@ -3467,6 +3475,21 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
 
     def _gcd(self, t1, t2):
         return torch.gcd(t1.to(torch.int32), t2.to(torch.int32)).to(torch.int32)
+
+    def _lcm(self, t1, t2):
+        # lcm(a, b) = |a / gcd(a, b) * b|. The kernel takes abs() of both operands
+        # and assumes |a|, |b| < 2^15; goldens mirror torch.lcm (non-negative).
+        return torch.lcm(t1.to(torch.int32), t2.to(torch.int32)).to(torch.int32)
+
+    def _rsub_int32(self, t1, t2):
+        # rsub_int32 computes out = in1 - in0 = t2 - t1. Exact integer subtraction
+        # (widen to int64 so the intermediate can't overflow before the int32 cast).
+        return (t2.to(torch.int64) - t1.to(torch.int64)).to(torch.int32)
+
+    def _mask(self, t1, t2):
+        # mask: data (t1) is zeroed wherever the mask (t2) is zero, else passed
+        # through. Matches calculate_mask (v_if(is_fp16_zero(mask)) data = 0).
+        return t1 if float(t2) != 0.0 else t1 * 0
 
     def _add_top_row(
         self,

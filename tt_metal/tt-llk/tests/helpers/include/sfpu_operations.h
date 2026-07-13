@@ -42,11 +42,15 @@
 #include "llk_sfpu/ckernel_sfpu_hardshrink.h"
 #include "llk_sfpu/ckernel_sfpu_i1.h"
 #include "llk_sfpu/ckernel_sfpu_identity.h"
+#include "llk_sfpu/ckernel_sfpu_lcm.h"
 #include "llk_sfpu/ckernel_sfpu_lgamma.h"
+#include "llk_sfpu/ckernel_sfpu_logical_not.h"
+#include "llk_sfpu/ckernel_sfpu_mask.h"
 #include "llk_sfpu/ckernel_sfpu_polygamma.h"
 #include "llk_sfpu/ckernel_sfpu_prelu.h"
 #include "llk_sfpu/ckernel_sfpu_remainder.h"
 #include "llk_sfpu/ckernel_sfpu_rpow.h"
+#include "llk_sfpu/ckernel_sfpu_rsub_int32.h"
 #include "llk_sfpu/ckernel_sfpu_sigmoid_appx.h"
 #include "llk_sfpu/ckernel_sfpu_sign.h"
 #include "llk_sfpu/ckernel_sfpu_signbit.h"
@@ -132,6 +136,18 @@ inline void calculate_expm1_cw()
         sfpi::dst_reg[0] = expm1_cw_clamped(sfpi::dst_reg[0]);
         sfpi::dst_reg++;
     }
+}
+
+// Test-only (dst_index_in0, dst_index_in1, dst_index_out) adapter so the float
+// mask kernel can be driven through the 2-tile binary SFPU harness. calculate_mask
+// hard-codes its operands (data at dst_reg[0], mask at dst_reg[mask_val_idx=32],
+// result written in place at dst_reg[0]); those fixed offsets line up with the
+// binary harness' tile0/tile1 layout, so the forwarded indices are unused and the
+// call only makes sense for the default in0=0/in1=1/out=0 placement.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+inline void calculate_mask_binary(const std::uint32_t /*dst_index_in0*/, const std::uint32_t /*dst_index_in1*/, const std::uint32_t /*dst_index_out*/)
+{
+    calculate_mask<APPROXIMATION_MODE, ITERATIONS>();
 }
 } // namespace ckernel::sfpu
 
@@ -1026,6 +1042,13 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
         // test holds, else 0.0f. The concrete predicate is selected by OPERATION.
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_sfpu_isinf_isnan_, (OPERATION, APPROX_MODE, ITERATIONS), dst_index, vector_mode);
     }
+    else if constexpr (OPERATION == SfpuType::logical_not_unary)
+    {
+        // logical_not(x) = (x == 0) ? 1 : 0. DEFAULT selects the native float
+        // layout (the LO16 / INT32 layouts are the int paths, tested elsewhere).
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_logical_not, (APPROX_MODE, ckernel::InstrModLoadStore::DEFAULT, ITERATIONS), dst_index, vector_mode);
+    }
     else if constexpr (OPERATION == SfpuType::erfinv)
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfinv, (APPROX_MODE), dst_index, VectorMode::RC);
@@ -1288,10 +1311,17 @@ void call_binary_sfpu_operation_init()
         // gcd_init records the per-iteration REPLAY buffer used by the binary-GCD loop.
         SFPU_BINARY_INIT_FN_NO_ARGS(add1, sfpu::calculate_sfpu_gcd_init);
     }
+    else if constexpr (BINOP == BinaryOp::LCM)
+    {
+        // lcm_init records the binary-GCD REPLAY buffer (shared with gcd) and loads
+        // the reciprocal-polynomial constants used to divide by gcd(a, b).
+        SFPU_BINARY_INIT_FN_NO_ARGS(lcm, sfpu::calculate_sfpu_lcm_init);
+    }
     else
     {
         // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
-        // BITWISE_AND/OR/XOR land here: the bitwise kernel needs no per-op init.
+        // BITWISE_AND/OR/XOR, RSUB_INT32 and MASK land here: those kernels need no
+        // per-op init beyond the standard binary addrmod configuration.
         SFPU_BINARY_INIT(add1);
     }
 }
@@ -1577,6 +1607,42 @@ void call_binary_sfpu_operation(
     {
         // int32 gcd via the binary-GCD REPLAY loop recorded in gcd_init.
         SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sfpu_gcd, (PER_FACE_ITERATIONS), dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::LCM)
+    {
+        // int32 lcm = a/gcd(a,b) * b (binary-GCD + reciprocal); operands assumed < 2^15.
+        SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sfpu_lcm, (PER_FACE_ITERATIONS), dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::RSUB_INT32)
+    {
+        // int32 reverse subtract: out = in1 - in0. INT32_2S_COMP selects the SM32
+        // (sign-magnitude) load/store DataLayout, which matches the harness' int32
+        // pack path, so signed results round-trip. (Plain INT32/I32 leaves the dest
+        // in two's-complement, which the sign-magnitude packer then mis-reads.)
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_rsub_int,
+            (APPROXIMATION_MODE, ckernel::InstrModLoadStore::INT32_2S_COMP, PER_FACE_ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::MASK)
+    {
+        // float mask: out = (mask != 0) ? data : 0, with data at in0 and mask at in1.
+        // Driven through the test-only adapter since calculate_mask uses fixed dst
+        // offsets rather than the forwarded indices.
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_mask_binary,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
     }
     else
     {
