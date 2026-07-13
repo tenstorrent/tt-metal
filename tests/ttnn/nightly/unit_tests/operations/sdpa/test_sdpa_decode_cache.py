@@ -9,6 +9,7 @@ import ttnn
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
     comp_pcc,
     fa_rand,
+    flash_decode_sdpa,
     get_chunk_size,
     nearest_n,
     nearest_pow_2,
@@ -959,4 +960,139 @@ def test_page_table_realloc_reused_program_cache_hit(device_with_program_cache):
             f"Iteration {it}: output vs PyTorch PCC failed ({pcc}). The logical K/V are unchanged, so the "
             "result must match every iteration; a frozen (stale) page_table address on the cache-hit path "
             "would index the freshly-shuffled cache through an earlier permutation and corrupt the output."
+        )
+
+
+def test_attention_sink_realloc_reused_program_cache_hit(device_with_program_cache):
+    """Causal decode: re-dispatch the cached program with a freshly-allocated
+    attention_sink (distinct DRAM address, distinct per-head sink values) each
+    iteration, keeping Q/K/V fixed.
+
+    The attention sink adds one extra logit per head into the softmax denominator
+    (it never contributes to the output value), so its per-head value directly
+    scales that head's output. Each iteration rotates which half of the heads get a
+    dominant (+) sink -- suppressing those heads' output toward zero -- and which
+    get a negligible (-) sink. The correct output therefore has a different set of
+    near-zero heads every iteration. If the attention_sink buffer address froze on
+    the cache-hit fast path (which skips create_descriptor()), iterations 1+ would
+    read iteration 0's sink, suppress the wrong heads, and fail PCC against their
+    own reference.
+    """
+    device = device_with_program_cache
+
+    b, nh, nkv, s, d = 2, 8, 1, 256, 64
+    grid_size = (8, 4)
+    grid = device.compute_with_storage_grid_size()
+    if grid_size[0] > grid.x or grid_size[1] > grid.y:
+        pytest.skip(f"Need compute grid at least {grid_size}, got {grid}")
+
+    torch.manual_seed(20250711)
+
+    padded_heads = nearest_pow_2(nearest_n(nh, n=32))
+    dram = ttnn.DRAM_MEMORY_CONFIG
+    q_dtype = ttnn.bfloat16
+    kv_dtype = ttnn.bfloat16
+    scale = d**-0.5
+    # cur_pos == s - 1: the (single) query at the last position attends to every key,
+    # so the reference (which processes the whole K/V cache) matches the device.
+    cur_pos = s - 1
+    k_chunk_size = get_chunk_size(cur_pos + 1, s)
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        q_chunk_size=padded_heads,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    # Fixed Q/K/V across all iterations so only the (optional) attention_sink changes.
+    q = fa_rand(b, nh, s, d)  # (B, nh, S, D)
+    k = fa_rand(b, nkv, s, d)
+    v = fa_rand(b, nkv, s, d)
+
+    # Reference layout (see flash_decode_sdpa): heads split as (nkv, q_mult).
+    ref_q = q.permute(0, 2, 1, 3).view(b, s, nkv, nh // nkv, d)
+    ref_k = k.permute(0, 2, 1, 3)
+    ref_v = v.permute(0, 2, 1, 3)
+
+    # Device Q is the single last-position token, packed as (1, B, nh, D).
+    tt_q_in = q[:, :, -1:, :].permute(2, 0, 1, 3)
+    tt_q = ttnn.from_torch(tt_q_in, device=device, dtype=q_dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram)
+    tt_k = ttnn.from_torch(k, device=device, dtype=kv_dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram)
+    tt_v = ttnn.from_torch(v, device=device, dtype=kv_dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram)
+
+    # Fixed cur_pos tensor (reused every iteration, so its address never moves and the
+    # position is read on-device): every dispatch stays a genuine cache hit.
+    tt_pos = ttnn.from_torch(torch.tensor([cur_pos] * b, dtype=torch.int32), device=device, dtype=ttnn.int32)
+
+    n_iters = 4
+    min_pcc = 0.99
+    # A dominant (+) sink drives a head's output toward zero (the sink logit swamps the
+    # softmax denominator); a very negative sink is a no-op (normal attention). Large,
+    # finite magnitudes keep the online-softmax numerically stable.
+    hi, lo = 15.0, -15.0
+
+    # Keep every sink tensor alive so the allocator hands out a distinct DRAM address
+    # for each fresh sink (a live buffer's address is never reused).
+    live_sinks = []
+    seen_addrs = []
+
+    for it in range(n_iters):
+        # Rotate which half of the heads are suppressed so the set of near-zero heads
+        # differs every iteration -- a frozen sink would suppress the wrong heads.
+        sink_per_head = torch.full((nh,), lo)
+        for j in range(nh // 2):
+            sink_per_head[(it + j) % nh] = hi
+
+        # Reference sink: [b, 1, nh, 1, 1], raw (unscaled) per-head logits.
+        sink_ref = sink_per_head.reshape(1, 1, nh, 1, 1).repeat(b, 1, 1, 1, 1)
+
+        # Device sink: [nh, 1] padded to a single tile [nh, TILE_SIZE], divided by scale
+        # because the kernel re-applies scale inside the exp path (GPT-OSS convention).
+        tt_sink_in = sink_per_head.reshape(nh, 1)
+        tt_sink_in = torch.nn.functional.pad(tt_sink_in, (0, ttnn.TILE_SIZE - 1), "constant", 0)
+        tt_sink_in = tt_sink_in / scale
+        tt_sink = ttnn.from_torch(
+            tt_sink_in, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=dram
+        )
+        live_sinks.append(tt_sink)
+
+        addr = tt_sink.buffer_address()
+        assert addr not in seen_addrs, (
+            f"Iteration {it}: fresh attention_sink reused a prior DRAM address ({addr}); "
+            "cannot prove the cache-hit path re-patched a NEW optional-buffer address."
+        )
+        seen_addrs.append(addr)
+
+        out = ttnn.transformer.scaled_dot_product_attention_decode(
+            tt_q,
+            tt_k,
+            tt_v,
+            cur_pos_tensor=tt_pos,
+            attention_sink=tt_sink,
+            scale=scale,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=dram,
+        )
+        out_torch = ttnn.to_torch(out)[..., :nh, :]
+
+        ref = flash_decode_sdpa(ref_q[:, -1:, ...], ref_k, ref_v, sink_ref, scale, sliding_window=0)
+
+        assert device.num_program_cache_entries() == 1, (
+            f"Iteration {it}: expected exactly 1 program-cache entry (miss on iter 0, hit after), "
+            f"got {device.num_program_cache_entries()}. Only the optional attention_sink address changed "
+            "with fixed Q/K/V/cur_pos, so every dispatch after the first must be a genuine cache hit."
+        )
+
+        ok, pcc = comp_pcc(ref, out_torch, min_pcc)
+        assert ok, (
+            f"Iteration {it}: output vs PyTorch PCC failed ({pcc}). On a cache HIT the attention_sink buffer "
+            "address must be re-patched from its live Buffer*; a frozen (stale) address would read an earlier "
+            "iteration's sink (a different set of suppressed heads) and produce the wrong result here."
         )
