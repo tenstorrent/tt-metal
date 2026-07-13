@@ -89,6 +89,13 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 constexpr uint32_t tail_elems = (num_tilized_rows - total_elems_to_reduce) * row_stride_elems;
                 fill_with_val(
                     in_cb.get_write_ptr() + tail_offset_bytes, tail_elems, static_cast<uint16_t>(bf16_init_value));
+#ifdef ARCH_QUASAR
+                // Quasar sim coherency: write back the CPU-store tail fill so compute's TL1 read of in_cb's
+                // pad rows sees the init value (not stale L1). Same reason as the window-copy write-back.
+                flush_l2_cache_range(
+                    reinterpret_cast<uintptr_t>(in_cb.get_write_ptr() + tail_offset_bytes),
+                    static_cast<size_t>(tail_elems) * 2);
+#endif
             }
         }
         for (uint32_t h = 0; h < kernel_h; ++h) {
@@ -345,6 +352,14 @@ void kernel_main() {
         // for the remaining faces will be reused from the first one. This is safe here because there’s no difference
         // between the first and second face.
         fill_with_val(in_scalar_cb.get_write_ptr(), FACE_WIDTH, bf16_scalar >> 16);
+#ifdef ARCH_QUASAR
+        // Quasar sim coherency: the reduce scalar is a CPU-store fill through the DM L1/L2 cache, but the
+        // compute reduce reads it directly from TL1. Without write-back compute multiplies by a STALE scalar
+        // -> wrong reduce magnitude (the /TILE_HEIGHT scale on the const-channel test) and, if the stale value
+        // varies per reduce, decorrelated output (low PCC). Mirrors the in_cb / scratch->out write-backs.
+        flush_l2_cache_range(
+            reinterpret_cast<uintptr_t>(in_scalar_cb.get_write_ptr()), static_cast<size_t>(FACE_WIDTH) * 2);
+#endif
         in_scalar_cb.push_back(1);
     }
     const uint32_t core_nhw_index = get_arg(args::core_nhw_index);
