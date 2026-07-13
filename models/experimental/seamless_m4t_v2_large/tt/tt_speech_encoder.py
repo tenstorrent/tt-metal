@@ -1527,8 +1527,21 @@ class TTSeamlessM4Tv2SpeechEncoder:
         return attn_out
 
     def _f32_softmax_query_chunk(self, seq_len: int) -> int:
+        """Query-block size for the f32 QK/softmax path.
+
+        Query re-blocking is softmax-over-the-full-key-set, so the block size is numerically ~free on a
+        given mesh (the per-row result is chunk-invariant). Two mesh-specific values at S>=3072:
+
+        * BH-QB (TP>1): 256. Measured mel 4096 — the old 128 over-chunked (32 blocks); 256 halves it to
+          16 and cuts device time ~24% (909 -> 695 ms), fits L1, PCC unchanged. Validated in the full
+          S2TT/S2ST/ASR demo (0 OOMs, correct output). 512 also passes the isolated test but threw 8
+          L1-OOMs in the demo (co-resident decode KV / trace), so 256 is the demo-safe ceiling.
+        * P150 (1x1): 128, matching the BH-QB long-audio softmax path — on 1x1, chunk 256 + f32 softmax
+          regressed e2e S2TT/ASR prefill PCC to ~0.92; 128 + bf16 softmax (see ``f32_softmax_fits``)
+          restores ~0.997.
+        """
         if seq_len >= _ATTN_QUERY_CHUNK_MATMUL_THRESHOLD:
-            return 128
+            return 256 if self._tp > 1 else 128
         return 256
 
     def _chunked_relative_attention_matmul_f32_softmax(
