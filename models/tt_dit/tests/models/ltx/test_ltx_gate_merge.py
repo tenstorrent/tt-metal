@@ -19,7 +19,7 @@ from models.tt_dit.models.transformers.ltx.attention_ltx import LTXAttention
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
-from models.tt_dit.utils.tensor import from_torch, to_torch
+from models.tt_dit.utils.tensor import bf16_tensor_2dshard, from_torch, to_torch
 from models.tt_dit.utils.test import ring_params
 
 # (id, is_self, dim, num_heads, query_input_dim, M) — every gated projection the AV model runs, at
@@ -134,3 +134,92 @@ def test_gate_merge_matches_standalone_gate(
         pcc=0.9999,
         relative_rmse=0.01,
     )
+
+
+# (id, is_self, dim, num_heads, N) — the projection test above proves Q/K/V/gate come out of the
+# merged weight correctly; this covers what it cannot: the whole forward, i.e. that the gate chunk
+# still means the same thing once SDPA has run and `concatenate_heads` has laid the heads back out.
+FORWARD_CASES = [
+    ("video_self", True, 4096, 32, 9728),
+    ("video_cross", False, 4096, 32, 9728),
+    ("audio_self", True, 2048, 32, 256),
+    ("audio_cross", False, 2048, 32, 256),
+]
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology"),
+    [pytest.param((4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, id="ring_bh_4x8sp1tp0")],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(("case", "is_self", "dim", "num_heads", "N"), FORWARD_CASES, ids=[c[0] for c in FORWARD_CASES])
+def test_gate_merge_forward_matches_standalone_gate(
+    mesh_device, sp_axis, tp_axis, num_links, topology, case, is_self, dim, num_heads, N
+):
+    """Full LTXAttention.forward(), merged gate vs standalone gate, from identical weights."""
+    torch.manual_seed(0)
+    parallel_config = DiTParallelConfig(
+        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
+        sequence_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[sp_axis], mesh_axis=sp_axis),
+        tensor_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[tp_axis], mesh_axis=tp_axis),
+    )
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+
+    kwargs = dict(
+        dim=dim,
+        num_heads=num_heads,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        is_self=is_self,
+        context_dim=None if is_self else dim,
+        apply_gated_attention=True,
+    )
+    merged = _build(True, **kwargs)
+    plain = _build(False, **kwargs)
+    assert merged.merge_gate and not plain.merge_gate
+
+    state = {
+        "q_norm.weight": torch.randn(dim),
+        "k_norm.weight": torch.randn(dim),
+        "to_q.weight": torch.randn(dim, dim) * 0.05,
+        "to_q.bias": torch.randn(dim) * 0.05,
+        "to_k.weight": torch.randn(dim, dim) * 0.05,
+        "to_k.bias": torch.randn(dim) * 0.05,
+        "to_v.weight": torch.randn(dim, dim) * 0.05,
+        "to_v.bias": torch.randn(dim) * 0.05,
+        "to_out.0.weight": torch.randn(dim, dim) * 0.05,
+        "to_out.0.bias": torch.randn(dim) * 0.05,
+        "to_gate_logits.weight": torch.randn(num_heads, dim) * 0.05,
+        "to_gate_logits.bias": torch.randn(num_heads) * 0.05,
+    }
+    merged.load_torch_state_dict({k: v.clone() for k, v in state.items()})
+    plain.load_torch_state_dict({k: v.clone() for k, v in state.items()})
+
+    # spatial is SP- and TP-fractured, exactly as the block feeds it.
+    spatial = torch.randn(1, 1, N, dim)
+    tt_spatial = bf16_tensor_2dshard(spatial, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3})
+
+    fwd = dict(N=N)
+    if not is_self:
+        # Text cross-attn: replicated prompt over SP, TP-fractured on the feature dim (kv_replicated).
+        prompt = torch.randn(1, 1, 32, dim)
+        fwd["prompt_1BLP"] = from_torch(
+            prompt,
+            device=mesh_device,
+            layout=ttnn.Layout.TILE,
+            dtype=ttnn.bfloat16,
+            mesh_axes=[None, None, None, tp_axis],
+        )
+        fwd["kv_replicated"] = True
+
+    out_m = merged(spatial_1BND=tt_spatial, **fwd)
+    out_p = plain(spatial_1BND=tt_spatial, **fwd)
+
+    concat = [None, None]
+    concat[sp_axis] = 2
+    concat[tp_axis] = 3
+    to_t = lambda t: ttnn.to_torch(  # noqa: E731
+        t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat, mesh_shape=tuple(mesh_device.shape))
+    )
+    assert_quality(to_t(out_p), to_t(out_m), pcc=0.999, relative_rmse=0.02)
