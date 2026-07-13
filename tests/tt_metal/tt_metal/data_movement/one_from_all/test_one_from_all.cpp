@@ -107,21 +107,22 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
 
     const uint32_t num_coord_varargs = (uint32_t)(total_subordinate_cores * 2);
 
+    DataMovementHardwareConfig gatherer_hw_config;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        gatherer_hw_config = DataMovementGen2Config{};
+    } else {
+        gatherer_hw_config = DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = test_config.noc_id,
+        };
+    }
     KernelSpec gatherer_spec{
         .unique_id = KernelSpecName{"gatherer"},
         .source = "tests/tt_metal/tt_metal/data_movement/one_from_all/kernels/gatherer_2_0.cpp",
         .num_threads = 1,
         .compile_time_args = cta_bindings,
         .runtime_arg_schema = {.runtime_arg_names = {"num_of_transactions", "transaction_size_bytes"}},
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config =
-                    DataMovementHardwareConfig::Gen1Config{
-                        .processor = DataMovementProcessor::RISCV_1,
-                        .noc = test_config.noc_id,
-                    },
-                .gen2_config = DataMovementHardwareConfig::Gen2Config{},
-            },
+        .hw_config = gatherer_hw_config,
         .advanced_options = {.num_runtime_varargs = num_coord_varargs},
     };
 

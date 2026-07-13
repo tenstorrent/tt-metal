@@ -241,21 +241,22 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToA
 
         const uint32_t num_coord_varargs = test_config.is_multicast ? 0u : (uint32_t)sub_worker_coordinates.size();
 
+        DataMovementHardwareConfig sender_hw_config;
+        if (device->arch() == tt::ARCH::QUASAR) {
+            sender_hw_config = DataMovementGen2Config{};
+        } else {
+            sender_hw_config = DataMovementGen1Config{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = test_config.noc_id,
+            };
+        }
         KernelSpec sender_spec{
             .unique_id = KernelSpecName{"sender"},
             .source = sender_kernel_path,
             .num_threads = 1,
             .compile_time_args = cta_bindings,
             .runtime_arg_schema = {.runtime_arg_names = {"num_of_transactions", "pages_per_transaction"}},
-            .hw_config =
-                DataMovementHardwareConfig{
-                    .gen1_config =
-                        DataMovementHardwareConfig::Gen1Config{
-                            .processor = DataMovementProcessor::RISCV_0,
-                            .noc = test_config.noc_id,
-                        },
-                    .gen2_config = DataMovementHardwareConfig::Gen2Config{},
-                },
+            .hw_config = sender_hw_config,
             .advanced_options = {.num_runtime_varargs = num_coord_varargs},
         };
 

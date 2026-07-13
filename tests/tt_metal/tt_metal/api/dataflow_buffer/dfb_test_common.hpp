@@ -95,11 +95,9 @@ inline m2::KernelSpec make_dm_kernel(
         .source = std::filesystem::path{source_path},
         .num_threads = num_threads,
         .hw_config =
-            m2::DataMovementHardwareConfig{
-                .gen2_config =
-                    m2::DataMovementHardwareConfig::Gen2Config{
-                        .disable_dfb_implicit_sync_for = std::move(disable_implicit_sync_for),
-                    }},
+            m2::DataMovementGen2Config{
+                .disable_dfb_implicit_sync_for = std::move(disable_implicit_sync_for),
+            },
     };
 }
 
@@ -109,16 +107,15 @@ inline m2::KernelSpec make_compute_kernel(
         .unique_id = unique_id,
         .source = std::filesystem::path{source_path},
         .num_threads = num_threads,
-        .hw_config = m2::ComputeHardwareConfig{},
+        .hw_config = m2::ComputeGen2Config{},
     };
 }
 
 inline void disable_implicit_sync_for(m2::KernelSpec& kernel, m2::DFBSpecName dfb_name) {
     auto& dm_cfg = std::get<m2::DataMovementHardwareConfig>(kernel.hw_config);
-    if (!dm_cfg.gen2_config) {
-        dm_cfg.gen2_config = m2::DataMovementHardwareConfig::Gen2Config{};
-    }
-    dm_cfg.gen2_config->disable_dfb_implicit_sync_for.push_back(std::move(dfb_name));
+    TT_FATAL(std::holds_alternative<m2::DataMovementGen2Config>(dm_cfg), "Can only set implicit sync for Gen2 Kernel");
+    auto& gen2_cfg = std::get<m2::DataMovementGen2Config>(dm_cfg);
+    gen2_cfg.disable_dfb_implicit_sync_for.push_back(std::move(dfb_name));
 }
 
 inline void maybe_disable_implicit_sync(m2::KernelSpec& kernel, bool implicit_sync, m2::DFBSpecName dfb_name) {
@@ -193,9 +190,9 @@ inline uint32_t default_num_entries(uint32_t num_p, uint32_t num_c) {
 }
 
 // ---- shared skip macros + ring-size helper (used by base + overrides) ----
-#define DFB_SKIP_IF_UNSUPPORTED(num_p, num_c)                                                           \
-    if (devices_.at(0)->arch() != ARCH::QUASAR && (GetParam() || (num_p) > 1 || (num_c) > 1)) {        \
-        GTEST_SKIP();                                                                                   \
+#define DFB_SKIP_IF_UNSUPPORTED(num_p, num_c)                                                   \
+    if (devices_.at(0)->arch() != ARCH::QUASAR && (GetParam() || (num_p) > 1 || (num_c) > 1)) { \
+        GTEST_SKIP();                                                                           \
     }
 
 // DM -> ALL DM is unsupported with implicit_sync today.
@@ -216,13 +213,11 @@ inline void run_single_dfb_program(
     DFBPorCType consumer_type,
     const CoreRangeSet& core_range_set = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0))),
     std::optional<uint32_t> num_entries_in_buffer = std::nullopt) {
-
     TT_FATAL(
         !(producer_type == DFBPorCType::TENSIX && consumer_type == DFBPorCType::TENSIX),
         "Both producer and consumer cannot be Tensix. At least one must be a DM kernel for NOC transfers.");
     TT_FATAL(
-        core_range_set.num_cores() == 1 ||
-            (producer_type == DFBPorCType::DM && consumer_type == DFBPorCType::DM),
+        core_range_set.num_cores() == 1 || (producer_type == DFBPorCType::DM && consumer_type == DFBPorCType::DM),
         "Multi-core DFB programs only support DM producer and consumer.");
 
     const auto arch = mesh_device->get_devices()[0]->arch();
@@ -242,7 +237,8 @@ inline void run_single_dfb_program(
     }
 
     const uint32_t num_cores = core_range_set.num_cores();
-    const uint32_t entries_per_core = num_entries_in_buffer.has_value() ? num_entries_in_buffer.value() : dfb_config.num_entries;
+    const uint32_t entries_per_core =
+        num_entries_in_buffer.has_value() ? num_entries_in_buffer.value() : dfb_config.num_entries;
     const uint32_t entry_size = dfb_config.entry_size;
     // page_size = entry_size makes every entry independently addressable by page_id.
     const uint32_t total_buffer_size = num_cores * entries_per_core * entry_size;
@@ -315,20 +311,21 @@ inline void run_single_dfb_program(
         .data_format_metadata = dfb_config.data_format,
     };
 
-    // DM kernel configs supply both Gen1 (BRISC for producer / NCRISC for consumer) and
-    // Gen2 (auto-assigned) variants so the same KernelSpec runs on WH/BH and Quasar.
-    const experimental::DataMovementHardwareConfig dm_producer_cfg{
-        .gen1_config =
-            experimental::DataMovementHardwareConfig::Gen1Config{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0},
-        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
-    };
-    const experimental::DataMovementHardwareConfig dm_consumer_cfg{
-        .gen1_config =
-            experimental::DataMovementHardwareConfig::Gen1Config{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::NOC_1},
-        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
-    };
+    // DM kernel configs: Gen1 (BRISC producer / NCRISC consumer) or Gen2 (auto-assigned).
+    experimental::DataMovementHardwareConfig dm_producer_cfg;
+    experimental::DataMovementHardwareConfig dm_consumer_cfg;
+    experimental::ComputeHardwareConfig compute_cfg;
+    if (arch == ARCH::QUASAR) {
+        dm_producer_cfg = experimental::DataMovementGen2Config{};
+        dm_consumer_cfg = experimental::DataMovementGen2Config{};
+        compute_cfg = experimental::ComputeGen2Config{};
+    } else {
+        dm_producer_cfg =
+            experimental::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0};
+        dm_consumer_cfg = experimental::DataMovementGen1Config{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::NOC_1};
+        compute_cfg = experimental::ComputeGen1Config{};
+    }
 
     experimental::KernelSpec producer_spec;
     if (producer_type == DFBPorCType::DM) {
@@ -361,7 +358,7 @@ inline void run_single_dfb_program(
             .num_threads = dfb_config.num_producers,
             .dfb_bindings = {experimental::ProducerOf(DFB_NAME, "out")},
             .compile_time_args = {{"num_entries_per_producer", num_entries_per_producer}},
-            .hw_config = experimental::ComputeHardwareConfig{},
+            .hw_config = compute_cfg,
         };
     }
 
@@ -407,19 +404,24 @@ inline void run_single_dfb_program(
                 .access_pattern = consumer_pattern,
             }},
             .compile_time_args = {{"num_entries_per_consumer", num_entries_per_consumer}},
-            .hw_config = experimental::ComputeHardwareConfig{},
+            .hw_config = compute_cfg,
         };
     }
 
     // Each DM endpoint votes on opting out of implicit sync (for the single DFB it binds).
+    // Gen2-only field; WH/BH carry DataMovementGen1Config (disable_isync is forced true there).
     const bool disable_isync = !dfb_config.enable_producer_implicit_sync;
-    if (producer_type == DFBPorCType::DM && disable_isync) {
-        std::get<experimental::DataMovementHardwareConfig>(producer_spec.hw_config)
-            .gen2_config->disable_dfb_implicit_sync_for_all = true;
-    }
-    if (consumer_type == DFBPorCType::DM && disable_isync) {
-        std::get<experimental::DataMovementHardwareConfig>(consumer_spec.hw_config)
-            .gen2_config->disable_dfb_implicit_sync_for_all = true;
+    if (arch == ARCH::QUASAR && disable_isync) {
+        if (producer_type == DFBPorCType::DM) {
+            auto& producer_hw_config = std::get<experimental::DataMovementGen2Config>(
+                std::get<experimental::DataMovementHardwareConfig>(producer_spec.hw_config));
+            producer_hw_config.disable_dfb_implicit_sync_for_all = true;
+        }
+        if (consumer_type == DFBPorCType::DM) {
+            auto& consumer_hw_config = std::get<experimental::DataMovementGen2Config>(
+                std::get<experimental::DataMovementHardwareConfig>(consumer_spec.hw_config));
+            consumer_hw_config.disable_dfb_implicit_sync_for_all = true;
+        }
     }
 
     experimental::WorkUnitSpec wu{
@@ -853,17 +855,14 @@ inline void run_single_dfb_program_2_0(
                 if (page_id >= entries_per_core) {
                     break;
                 }
-                const uint32_t dst_slot =
-                    is_all ? (prod * num_entries_per_producer + e) : (e * p.num_producers + prod);
+                const uint32_t dst_slot = is_all ? (prod * num_entries_per_producer + e) : (e * p.num_producers + prod);
                 // Ring-pressure: stop once the physical ring is full; later pages alias
                 // back onto already-filled slots (the producer cycles them).
                 if (dst_slot >= p.num_entries) {
                     break;
                 }
                 std::copy(
-                    input.begin() + page_id * wpe,
-                    input.begin() + (page_id + 1) * wpe,
-                    slice.begin() + dst_slot * wpe);
+                    input.begin() + page_id * wpe, input.begin() + (page_id + 1) * wpe, slice.begin() + dst_slot * wpe);
             }
         }
         detail::WriteToDeviceL1(device, CoreCoord(0, 0), dfb_l1_addr, slice);

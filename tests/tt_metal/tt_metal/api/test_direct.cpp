@@ -31,6 +31,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "experimental/metal2_host_api/compute_hardware_config.hpp"
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
@@ -238,18 +239,17 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
 
     // Both gen1 and gen2 configs are populated; the runtime picks the one
     // matching the active arch.
-    experimental::DataMovementHardwareConfig reader_dm_cfg{
-        .gen1_config =
-            experimental::DataMovementHardwareConfig::Gen1Config{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
-    };
-    experimental::DataMovementHardwareConfig writer_dm_cfg{
-        .gen1_config =
-            experimental::DataMovementHardwareConfig::Gen1Config{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
-    };
+    experimental::DataMovementHardwareConfig reader_dm_cfg;
+    experimental::DataMovementHardwareConfig writer_dm_cfg;
+    if (is_quasar) {
+        reader_dm_cfg = experimental::DataMovementGen2Config{};
+        writer_dm_cfg = experimental::DataMovementGen2Config{};
+    } else {
+        reader_dm_cfg = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+        writer_dm_cfg = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+    }
 
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
@@ -421,18 +421,17 @@ bool reader_datacopy_writer(
 
     // Both gen1 and gen2 configs are populated; the runtime picks the one
     // matching the active arch.
-    experimental::DataMovementHardwareConfig reader_dm_cfg{
-        .gen1_config =
-            experimental::DataMovementHardwareConfig::Gen1Config{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
-    };
-    experimental::DataMovementHardwareConfig writer_dm_cfg{
-        .gen1_config =
-            experimental::DataMovementHardwareConfig::Gen1Config{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
-    };
+    experimental::DataMovementHardwareConfig reader_dm_cfg;
+    experimental::DataMovementHardwareConfig writer_dm_cfg;
+    if (is_quasar) {
+        reader_dm_cfg = experimental::DataMovementGen2Config{};
+        writer_dm_cfg = experimental::DataMovementGen2Config{};
+    } else {
+        reader_dm_cfg = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+        writer_dm_cfg = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+    }
 
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
@@ -461,6 +460,25 @@ bool reader_datacopy_writer(
     const bool fp32_dest_acc_en = (test_config.l1_input_data_format == tt::DataFormat::Float32) ||
                                   (test_config.l1_input_data_format == tt::DataFormat::Int32) ||
                                   (test_config.l1_input_data_format == tt::DataFormat::UInt32);
+    experimental::ComputeHardwareConfig compute_hw_config;
+    experimental::ComputeUnpackToDestModes unpack_modes{};
+    if (test_config.l1_input_data_format == tt::DataFormat::Float32) {
+        unpack_modes = {{INPUT_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
+    }
+    if (is_quasar) {
+        compute_hw_config = experimental::ComputeGen2Config{
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = test_config.dst_full_sync_en,
+            .unpack_to_dest_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_modes,
+        };
+    } else {
+        compute_hw_config = experimental::ComputeGen1Config{
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = test_config.dst_full_sync_en,
+            .unpack_to_dest_mode = unpack_modes,
+        };
+    }
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
@@ -481,17 +499,7 @@ bool reader_datacopy_writer(
                  .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"per_core_tile_cnt", per_core_tile_cnt}},
-        .hw_config =
-            experimental::ComputeHardwareConfig{
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .dst_full_sync_en = test_config.dst_full_sync_en,
-                .unpack_to_dest_en = fp32_dest_acc_en,
-                .unpack_to_dest_mode =
-                    (test_config.l1_input_data_format == tt::DataFormat::Float32)
-                        ? experimental::ComputeHardwareConfig::
-                              UnpackToDestModes{{INPUT_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}}
-                        : experimental::ComputeHardwareConfig::UnpackToDestModes{},
-            },
+        .hw_config = compute_hw_config,
     };
 
     experimental::WorkUnitSpec wu{

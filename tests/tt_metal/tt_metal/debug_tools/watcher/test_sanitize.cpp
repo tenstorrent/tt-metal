@@ -231,16 +231,16 @@ void RunTestOnCore(
         }
         // (gen1 path: no CTA bindings needed; the kernel runs on exactly one DM processor.)
 
-        // Provide both gen1 and gen2 DM configs so the same KernelSpec runs on either arch; the
-        // runtime selects the one matching the current architecture.
+        // Select the DM config variant matching the current architecture (Gen2 on Quasar, Gen1 otherwise).
         auto gen1_processor =
             use_ncrisc ? tt::tt_metal::DataMovementProcessor::RISCV_1 : tt::tt_metal::DataMovementProcessor::RISCV_0;
         auto gen1_noc = use_ncrisc ? tt_metal::NOC::RISCV_1_default : tt_metal::NOC::RISCV_0_default;
-        experimental::DataMovementHardwareConfig dm_cfg{
-            .gen1_config =
-                experimental::DataMovementHardwareConfig::Gen1Config{.processor = gen1_processor, .noc = gen1_noc},
-            .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
-        };
+        experimental::DataMovementHardwareConfig dm_cfg;
+        if (is_quasar) {
+            dm_cfg = experimental::DataMovementGen2Config{};
+        } else {
+            dm_cfg = experimental::DataMovementGen1Config{.processor = gen1_processor, .noc = gen1_noc};
+        }
         uint32_t num_threads = is_quasar ? 6u : 1u;
         if (!is_quasar) {
             noc = static_cast<int>(gen1_noc);

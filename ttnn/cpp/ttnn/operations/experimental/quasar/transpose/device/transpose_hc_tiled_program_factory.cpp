@@ -13,6 +13,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include <vector>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -155,7 +156,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledProgramFactory::create_
                   "ct",
                   "ctoffs",
                   "wt"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
 
     // ------------------------------------------------------------------------
@@ -169,7 +170,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledProgramFactory::create_
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}},
         .compile_time_args = {{"page_size", single_tile_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
 
     // ------------------------------------------------------------------------

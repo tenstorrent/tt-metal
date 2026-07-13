@@ -110,6 +110,15 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Transa
         {"sub0_coords", packed_sub0_core_coordinates},
         {"sub1_coords", packed_sub1_core_coordinates}};
 
+    DataMovementHardwareConfig sender_hw_config;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        sender_hw_config = DataMovementGen2Config{};
+    } else {
+        sender_hw_config = DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = test_config.noc_id,
+        };
+    }
     KernelSpec sender_spec{
         .unique_id = KernelSpecName{"trid_sender"},
         .source = kernel_path,
@@ -119,15 +128,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Transa
             {
                 .runtime_arg_names = {"num_transactions", "bytes_per_transaction"},
             },
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config =
-                    DataMovementHardwareConfig::Gen1Config{
-                        .processor = DataMovementProcessor::RISCV_0,
-                        .noc = test_config.noc_id,
-                    },
-                .gen2_config = DataMovementHardwareConfig::Gen2Config{},
-            },
+        .hw_config = sender_hw_config,
     };
 
     ProgramSpec spec{

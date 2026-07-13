@@ -14,6 +14,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
@@ -326,7 +327,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
              {"row_major_min_bytes", row_major_min_bytes},
              {"num_sticks_padded_read", static_cast<uint32_t>(stick_size_padded / row_major_min_bytes)}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_cores_read"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
     };
 
     // ------------------------------------------------------------------------
@@ -356,7 +357,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
                   "start_dim_h",
                   "start_dim_c",
                   "start_dim_n"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
     };
 
     // ------------------------------------------------------------------------

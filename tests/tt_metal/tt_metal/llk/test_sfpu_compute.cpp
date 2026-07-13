@@ -679,6 +679,14 @@ std::vector<uint32_t> run_sfpu_pipeline(
     const experimental::DataflowBufferSpec out_dfb_spec =
         make_dfb_spec(OUT_DFB, test_config, test_config.l1_output_data_format);
 
+    experimental::DataMovementHardwareConfig reader_hw_config;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+    } else {
+        reader_hw_config = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+    }
+
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_2_0.cpp",
@@ -690,14 +698,16 @@ std::vector<uint32_t> run_sfpu_pipeline(
             .access_pattern = experimental::DFBAccessPattern::STRIDED,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "bank_id", "num_tiles"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
+        .hw_config = reader_hw_config,
     };
+
+    experimental::DataMovementHardwareConfig writer_hw_config;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+    } else {
+        writer_hw_config = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+    }
 
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
@@ -710,14 +720,31 @@ std::vector<uint32_t> run_sfpu_pipeline(
             .access_pattern = experimental::DFBAccessPattern::STRIDED,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
+        .hw_config = writer_hw_config,
     };
+
+    experimental::ComputeHardwareConfig compute_hw_config;
+    experimental::ComputeUnpackToDestModes unpack_modes{};
+    if (test_config.unpack_to_dest_fp32) {
+        unpack_modes = {{IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
+    }
+    const bool fp32_dest_acc_en = test_config.en_32bit_dest || test_config.unpack_to_dest_fp32;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        compute_hw_config = experimental::ComputeGen2Config{
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = test_config.dst_full_sync_en,
+            .math_approx_mode = test_config.approx_mode,
+            .unpack_to_dest_en = test_config.unpack_to_dest_fp32 || test_config.unpack_to_dest_en,
+            .unpack_to_dest_mode = unpack_modes,
+        };
+    } else {
+        compute_hw_config = experimental::ComputeGen1Config{
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = test_config.dst_full_sync_en,
+            .math_approx_mode = test_config.approx_mode,
+            .unpack_to_dest_mode = unpack_modes,
+        };
+    }
 
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
@@ -739,18 +766,7 @@ std::vector<uint32_t> run_sfpu_pipeline(
              }},
         .compile_time_args =
             {{"per_core_block_cnt", static_cast<uint32_t>(test_config.num_tiles)}, {"per_core_block_size", 1u}},
-        .hw_config =
-            experimental::ComputeHardwareConfig{
-                .fp32_dest_acc_en = test_config.en_32bit_dest || test_config.unpack_to_dest_fp32,
-                .dst_full_sync_en = test_config.dst_full_sync_en,
-                .unpack_to_dest_en = test_config.unpack_to_dest_fp32 || test_config.unpack_to_dest_en,
-                .math_approx_mode = test_config.approx_mode,
-                .unpack_to_dest_mode =
-                    test_config.unpack_to_dest_fp32
-                        ? experimental::ComputeHardwareConfig::
-                              UnpackToDestModes{{IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}}
-                        : experimental::ComputeHardwareConfig::UnpackToDestModes{},
-            },
+        .hw_config = compute_hw_config,
     };
 
     experimental::WorkUnitSpec wu{
@@ -890,10 +906,7 @@ experimental::KernelSpec make_writer_unary_quasar_spec(
             .access_pattern = experimental::DFBAccessPattern::STRIDED,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
+        .hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true},
     };
 }
 
@@ -1024,11 +1037,21 @@ bool run_sfpu_binary_two_input_buffer(
              }},
         .runtime_arg_schema =
             {.runtime_arg_names = {"src0_addr", "src0_bank_id", "src1_addr", "src1_bank_id", "num_tiles"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
+        .hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true},
     };
+
+    experimental::ComputeHardwareConfig compute_hw_config;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        compute_hw_config = experimental::ComputeGen2Config{
+            .fp32_dest_acc_en = is_int8_op,
+            .math_approx_mode = test_config.approx_mode,
+        };
+    } else {
+        compute_hw_config = experimental::ComputeGen1Config{
+            .fp32_dest_acc_en = is_int8_op,
+            .math_approx_mode = test_config.approx_mode,
+        };
+    }
 
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
@@ -1056,11 +1079,7 @@ bool run_sfpu_binary_two_input_buffer(
              }},
         .compile_time_args =
             {{"per_core_block_cnt", 1u}, {"per_core_block_size", static_cast<uint32_t>(test_config.num_tiles)}},
-        .hw_config =
-            experimental::ComputeHardwareConfig{
-                .fp32_dest_acc_en = is_int8_op,
-                .math_approx_mode = test_config.approx_mode,
-            },
+        .hw_config = compute_hw_config,
     };
 
     experimental::ProgramSpec spec{
@@ -1193,12 +1212,19 @@ bool run_sfpu_ternary_three_input_buffer(
                       "num_tiles",
                       "src2_addr",
                       "src2_bank_id"}},
-            .hw_config =
-                experimental::DataMovementHardwareConfig{
-                    .gen2_config =
-                        experimental::DataMovementHardwareConfig::Gen2Config{
-                            .disable_dfb_implicit_sync_for_all = true}},
+            .hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true},
         };
+
+        experimental::ComputeHardwareConfig compute_hw_config;
+        if (mesh_device->arch() == tt::ARCH::QUASAR) {
+            compute_hw_config = experimental::ComputeGen2Config{
+                .math_approx_mode = test_config.approx_mode,
+            };
+        } else {
+            compute_hw_config = experimental::ComputeGen1Config{
+                .math_approx_mode = test_config.approx_mode,
+            };
+        }
 
         experimental::KernelSpec compute_spec{
             .unique_id = COMPUTE,
@@ -1232,10 +1258,7 @@ bool run_sfpu_ternary_three_input_buffer(
                  }},
             .compile_time_args =
                 {{"per_core_block_cnt", 1u}, {"per_core_block_size", static_cast<uint32_t>(test_config.num_tiles)}},
-            .hw_config =
-                experimental::ComputeHardwareConfig{
-                    .math_approx_mode = test_config.approx_mode,
-                },
+            .hw_config = compute_hw_config,
         };
 
         experimental::ProgramSpec spec{

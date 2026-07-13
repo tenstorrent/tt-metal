@@ -107,21 +107,22 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
 
     std::vector<std::string> named_rtas = {"src_addr", "l1_addr"};
 
+    DataMovementHardwareConfig reader_hw_config;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        reader_hw_config = DataMovementGen2Config{};
+    } else {
+        reader_hw_config = DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+        };
+    }
     KernelSpec reader_spec{
         .unique_id = KernelSpecName{"reader"},
         .source = kernel_path,
         .num_threads = 1,
         .compile_time_args = cta_bindings,
         .runtime_arg_schema = {.runtime_arg_names = named_rtas},
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config =
-                    DataMovementHardwareConfig::Gen1Config{
-                        .processor = DataMovementProcessor::RISCV_0,
-                        .noc = NOC::RISCV_0_default,
-                    },
-                .gen2_config = DataMovementHardwareConfig::Gen2Config{},
-            },
+        .hw_config = reader_hw_config,
     };
 
     ProgramSpec spec{

@@ -92,6 +92,15 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
         {"vc", (uint32_t)test_config.virtual_channel},
     };
 
+    DataMovementHardwareConfig reader_hw_config;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        reader_hw_config = DataMovementGen2Config{};
+    } else {
+        reader_hw_config = DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+        };
+    }
     KernelSpec reader_spec{
         .unique_id = KernelSpecName{"reader"},
         .source = reader_kernel_path,
@@ -103,17 +112,18 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
             {
                 .runtime_arg_names = {"num_of_transactions", "pages_per_transaction"},
             },
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config =
-                    DataMovementHardwareConfig::Gen1Config{
-                        .processor = DataMovementProcessor::RISCV_1,
-                        .noc = NOC::RISCV_1_default,
-                    },
-                .gen2_config = DataMovementHardwareConfig::Gen2Config{},
-            },
+        .hw_config = reader_hw_config,
     };
 
+    DataMovementHardwareConfig writer_hw_config;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        writer_hw_config = DataMovementGen2Config{};
+    } else {
+        writer_hw_config = DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+        };
+    }
     KernelSpec writer_spec{
         .unique_id = KernelSpecName{"writer"},
         .source = writer_kernel_path,
@@ -125,15 +135,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
             {
                 .runtime_arg_names = {"num_of_transactions", "pages_per_transaction", "dram_addr"},
             },
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config =
-                    DataMovementHardwareConfig::Gen1Config{
-                        .processor = DataMovementProcessor::RISCV_0,
-                        .noc = NOC::RISCV_0_default,
-                    },
-                .gen2_config = DataMovementHardwareConfig::Gen2Config{},
-            },
+        .hw_config = writer_hw_config,
     };
 
     ProgramSpec spec{

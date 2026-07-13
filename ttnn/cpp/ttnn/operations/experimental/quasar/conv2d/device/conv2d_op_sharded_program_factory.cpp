@@ -50,6 +50,7 @@
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::prim::qsr {
 
@@ -263,7 +264,8 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     const auto& block_config = operation_attributes.block_config;
     const auto transpose_mcast = a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
     auto& output = output_tensor;
-    const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
+    // Copies the config because dst_full_sync_en maybe overwritten
+    auto compute_kernel_config = operation_attributes.compute_kernel_config;
     const auto enable_act_double_buffer = operation_attributes.enable_act_double_buffer;
     const auto enable_weights_double_buffer = operation_attributes.enable_weights_double_buffer;
     const auto full_inner_dim = operation_attributes.full_inner_dim;
@@ -298,8 +300,9 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
 
     const tt::DataFormat tilized_act_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    const auto& fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
+    const auto& packer_l1_acc = compute_kernel_config.packer_l1_acc;
+    auto& dst_full_sync_en = compute_kernel_config.dst_full_sync_en;
 
     TT_FATAL(
         out_block_h_ntiles >= act_block_h_ntiles,
@@ -1094,18 +1097,20 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             .endpoint_type = m2::DFBEndpointType::CONSUMER});
     }
 
+    m2::DataMovementHardwareConfig reader_hw;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        reader_hw = m2::DataMovementGen2Config{};
+    } else {
+        reader_hw =
+            m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = reader_noc};
+    }
     m2::KernelSpec reader_kernel_spec{
         .unique_id = KERNEL_READER,
         .source = std::filesystem::path(reader_kernel),
         .dfb_bindings = std::move(reader_dfb_bindings),
         .semaphore_bindings = std::move(reader_sem_bindings),
         .tensor_bindings = std::move(reader_tensor_bindings),
-        .hw_config =
-            m2::DataMovementHardwareConfig{
-                .gen1_config =
-                    m2::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = reader_noc},
-            },
+        .hw_config = std::move(reader_hw),
     };
 
     // Reader compile-time args (per sub-layout).
@@ -1332,6 +1337,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     };
 
     // ---- writer mcast SENDER ----
+    m2::DataMovementHardwareConfig writer_sender_hw;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        writer_sender_hw = m2::DataMovementGen2Config{};
+    } else {
+        writer_sender_hw = m2::DataMovementGen1Config{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc};
+    }
     m2::KernelSpec writer_sender_spec{
         .unique_id = KERNEL_WRITER_SENDER,
         .source = std::filesystem::path(writer_sender_kernel),
@@ -1339,12 +1351,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         .semaphore_bindings = {},
         .tensor_bindings = build_writer_tensor_bindings(),
         .compile_time_args = build_writer_ctas(/*is_sender=*/true),
-        .hw_config =
-            m2::DataMovementHardwareConfig{
-                .gen1_config =
-                    m2::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc},
-            },
+        .hw_config = std::move(writer_sender_hw),
     };
     // The sender always builds the weights-mcast Semaphore objects (even under SKIP_MCAST), so always bind.
     writer_sender_spec.semaphore_bindings = {
@@ -1386,6 +1393,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     }
 
     // ---- writer mcast RECEIVER ----
+    m2::DataMovementHardwareConfig writer_receiver_hw;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        writer_receiver_hw = m2::DataMovementGen2Config{};
+    } else {
+        writer_receiver_hw = m2::DataMovementGen1Config{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc};
+    }
     m2::KernelSpec writer_receiver_spec{
         .unique_id = KERNEL_WRITER_RECEIVER,
         .source = std::filesystem::path(writer_receiver_kernel),
@@ -1393,12 +1407,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         .semaphore_bindings = {},
         .tensor_bindings = build_writer_tensor_bindings(),
         .compile_time_args = build_writer_ctas(/*is_sender=*/false),
-        .hw_config =
-            m2::DataMovementHardwareConfig{
-                .gen1_config =
-                    m2::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc},
-            },
+        .hw_config = std::move(writer_receiver_hw),
     };
     if (create_writer_mcast_receiver) {
         writer_receiver_spec.semaphore_bindings = {
@@ -1521,13 +1530,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         .source = std::filesystem::path(compute_kernel),
         .compiler_options = {.defines = m2::KernelSpec::CompilerOptions::Defines(compute_defines)},
         .dfb_bindings = std::move(compute_dfb_bindings),
-        .hw_config =
-            m2::ComputeHardwareConfig{
-                .math_fidelity = math_fidelity,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .dst_full_sync_en = dst_full_sync_en,
-                .math_approx_mode = math_approx_mode,
-            },
+        .hw_config = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config),
     };
 
     if (is_conv_1d_depthwise_conv) {

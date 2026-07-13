@@ -13,6 +13,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -105,30 +106,35 @@ ttnn::device_operation::ProgramArtifacts ReshardSameHeightFactory<local_is_outpu
     // Two data-movement workers run the same kernel source on every local core; they split the
     // shard height across the two RISCs. The local sharded DFB is bound producer on k0 / consumer
     // on k1 to satisfy the DFB endpoint invariant (the CB is used only as an address source).
-    const auto make_worker = [&](const char* name, DataMovementRoleHint role, DFBEndpointType endpoint) {
-        KernelSpec k{
+    const auto make_worker = [&](const char* name, DataMovementHardwareConfig hw_config, DFBEndpointType endpoint) {
+        return KernelSpec{
             .unique_id = KernelSpecName{name},
             .source = std::filesystem::path(kernel_path),
-            .hw_config = DataMovementHardwareConfig{.role = role},
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = DFBSpecName{kSHDfbName},
+                .accessor_name = kSHDfbName,
+                .endpoint_type = endpoint,
+            }},
+            .tensor_bindings =
+                {TensorBinding{
+                     .tensor_parameter_name = TensorParamName{kSHRemoteTensorParam},
+                     .accessor_name = kSHRemoteTensorParam},
+                 TensorBinding{
+                     .tensor_parameter_name = TensorParamName{kSHLocalTensorParam},
+                     .accessor_name = kSHLocalTensorParam}},
+            .compile_time_args = compile_time_args,
+            .runtime_arg_schema =
+                {.runtime_arg_names =
+                     {"total_num_sticks", "local_stride_bytes", "remote_stride_bytes", "num_segments"}},
+            .hw_config = std::move(hw_config),
+            .advanced_options = {.num_runtime_varargs = num_varargs},
         };
-        k.tensor_bindings.push_back(TensorBinding{
-            .tensor_parameter_name = TensorParamName{kSHRemoteTensorParam}, .accessor_name = kSHRemoteTensorParam});
-        k.tensor_bindings.push_back(TensorBinding{
-            .tensor_parameter_name = TensorParamName{kSHLocalTensorParam}, .accessor_name = kSHLocalTensorParam});
-        k.dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = DFBSpecName{kSHDfbName},
-            .accessor_name = kSHDfbName,
-            .endpoint_type = endpoint,
-        });
-        k.compile_time_args = compile_time_args;
-        k.runtime_arg_schema.runtime_arg_names = {
-            "total_num_sticks", "local_stride_bytes", "remote_stride_bytes", "num_segments"};
-        k.advanced_options.num_runtime_varargs = num_varargs;
-        return k;
     };
 
-    KernelSpec k0 = make_worker("reader", DataMovementRoleHint::READER, DFBEndpointType::PRODUCER);
-    KernelSpec k1 = make_worker("writer", DataMovementRoleHint::WRITER, DFBEndpointType::CONSUMER);
+    KernelSpec k0 =
+        make_worker("reader", ttnn::create_reader_datamovement_config(device->arch()), DFBEndpointType::PRODUCER);
+    KernelSpec k1 =
+        make_worker("writer", ttnn::create_writer_datamovement_config(device->arch()), DFBEndpointType::CONSUMER);
 
     DataflowBufferSpec shard_dfb{
         .unique_id = DFBSpecName{kSHDfbName},
