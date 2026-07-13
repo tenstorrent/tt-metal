@@ -11,9 +11,11 @@ The fact-base input is the concatenated per-file JSON the extractor prints
 
   { tool, arch, authority: "advisory", parse_errors, scoped_to_changed,
     changed_files? (diff-scoped only),
-    degraded? (list of input-degradation notes — empty fact base / unreadable
-               cfg_defines; present ONLY when the run is degraded, so a degraded
-               result can never read as a clean audit),
+    degraded? (list of degradation notes — e.g. empty fact base, unreadable
+               cfg_defines, a diff-scoped changed file that parsed to 0 facts, an
+               external coverage-hole note (--degraded-note), or uncertain
+               attribution under partial parse; present ONLY when the run is
+               degraded, so a degraded result can never read as a clean audit),
     checks: { <name>: { description, blind_spots, count,
       findings: [ { file, line, function, kind, hint, detail, evidence,
                     safety? (a sub-annotation like SAFE_BY_MASKING /

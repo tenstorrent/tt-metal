@@ -202,8 +202,9 @@ print(f'\n=== llk-audit [{d["arch"]}]  (authority: {d["authority"]}, parse_error
 for name,c in d["checks"].items():
     hb=collections.Counter(f["hint"] for f in c["findings"])
     print(f'\n{name}: {c["count"]} findings  {dict(hb)}')
-# Surface DEGRADED prominently: a degraded run (empty fact base, unreadable cfg
-# defines, or a --changed file that parsed to 0 facts) produces "0 findings" that
+# Surface DEGRADED prominently: a degraded run (e.g. empty fact base, unreadable cfg
+# defines, a --changed file that parsed to 0 facts, an external coverage-hole note, or
+# uncertain attribution under partial parse) produces "0 findings" that
 # must NOT read as a clean all-clear. cli.py records these in the JSON envelope;
 # echo them here so the human-facing summary can't hide a non-analyzed run.
 deg = d.get("degraded") or []
