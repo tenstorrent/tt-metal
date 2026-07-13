@@ -87,6 +87,34 @@
     export TT_METAL_ALLOCATOR_MODE_HYBRID=1
 
     mpirun --pernode --tag-output bash -lc '
+      echo "=== KV cache table worker probe: host=$(hostname) rank=${OMPI_COMM_WORLD_RANK:-?} ==="
+      echo "DEEPSEEK_V3_HF_MODEL=${DEEPSEEK_V3_HF_MODEL:-unset}"
+      echo "DEEPSEEK_V3_CACHE=${DEEPSEEK_V3_CACHE:-unset}"
+      echo "TT_DS_PREFILL_TTNN_CACHE=${TT_DS_PREFILL_TTNN_CACHE:-unset}"
+      echo "TT_DS_PREFILL_HOST_REF_CACHE=${TT_DS_PREFILL_HOST_REF_CACHE:-unset}"
+      for path in /mnt/models "$DEEPSEEK_V3_HF_MODEL" "$DEEPSEEK_V3_CACHE" "$TT_DS_PREFILL_TTNN_CACHE"; do
+        if [ -z "$path" ]; then
+          continue
+        fi
+        if [ -e "$path" ]; then
+          echo "OK path exists: $path"
+          ls -la "$path" 2>&1 | head -5
+        else
+          echo "MISSING path: $path"
+        fi
+      done
+      hf_index="${DEEPSEEK_V3_HF_MODEL}/model.safetensors.index.json"
+      if [ -f "$hf_index" ]; then
+        echo "OK HF weight index: $hf_index"
+      else
+        echo "MISSING HF weight index: $hf_index (conftest needs this for pretrained; TTNN cache alone is not enough)"
+        if [ -d "${DEEPSEEK_V3_HF_MODEL}/snapshots" ]; then
+          echo "HF hub snapshots under ${DEEPSEEK_V3_HF_MODEL}:"
+          ls -la "${DEEPSEEK_V3_HF_MODEL}/snapshots" 2>&1 | head -5
+        fi
+      fi
+      echo "=== end worker probe ==="
+
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kv_cache_table -k "line and pretrained" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kimi_kv_cache_mock -k "line" -vvv --tb=short
