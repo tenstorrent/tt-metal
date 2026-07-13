@@ -17,8 +17,8 @@ EXTRACT="$HERE/extractor/llk_extract"
 LLK_ROOT="$(cd ../../.. && pwd)"            # tt_metal/tt-llk
 METAL_DIR="$(cd "$LLK_ROOT"/../.. && pwd)"  # repo root (also used for git in --changed)
 
-# --- Kernel-tier (JIT: cb-sync / noc-sync / noc-atomic-exit / noc-read-barrier / mailbox-sync) capability probe ------
-# The kernel-tier module (cb-sync + noc-sync + mailbox-sync checkers over the
+# --- Kernel-tier (JIT: cb-sync / noc-sync / noc-atomic-exit / noc-read-barrier / noc-l1-invalidate / mailbox-sync) capability probe ------
+# The kernel-tier module (cb-sync + noc-sync + noc-atomic-exit + noc-read-barrier + noc-l1-invalidate + mailbox-sync checkers over the
 # captured kernels + capture.py, which scrapes JIT compile commands from a build
 # log) reaches the JIT-compiled kernel surface that lives OUTSIDE tt-llk. It is
 # committed IN-TREE under kernel_tier/ (a kernel_tier/MANIFEST marks it present),
@@ -81,7 +81,7 @@ while [ $# -gt 0 ]; do
                   git -C "$METAL_DIR" rev-parse --verify --quiet "$1^{commit}" >/dev/null 2>&1; then
                  CHANGED_BASE="$1"; shift
                fi;;
-    --full-jit) FULLJIT=1; shift;;   # also run the opt-in kernel tier (cb/noc/read/atomic/mailbox), if built
+    --full-jit) FULLJIT=1; shift;;   # also run the opt-in kernel tier (cb/noc/read/atomic/l1/mailbox), if built
     --*) echo "run.sh: unknown option '$1'" >&2; exit 2;;
     *) OUT="$1"; shift;;
   esac
@@ -215,29 +215,29 @@ print(f'\nfact base -> {facts}')
 print(f'findings  -> {audit}')
 PY
 
-# --- Opt-in kernel tier (cb-sync / noc-sync / noc-atomic-exit / noc-read-barrier / mailbox-sync over JIT kernels) ----
+# --- Opt-in kernel tier (cb-sync / noc-sync / noc-atomic-exit / noc-read-barrier / noc-l1-invalidate / mailbox-sync over JIT kernels) ----
 # The in-tree audit above always runs. --full-jit additionally RUNS the committed
 # kernel tier (kernel_tier/bootstrap.sh); it never captures automatically — the
 # capture needs a build log or a runtime, supplied via bootstrap.sh's env controls.
 # If the module is missing (partial checkout) it DEGRADES HONESTLY: it says so and
 # names the classes left uncovered — a clean result must never read as
-# "cb/noc/read/atomic/mailbox covered". See kernel_tier/README.md + the race-audit-all runbook.
+# "cb/noc/read/atomic/l1/mailbox covered". See kernel_tier/README.md + the race-audit-all runbook.
 if [ "$FULLJIT" -eq 1 ]; then
   echo "" >&2
-  echo "=== kernel tier (JIT: cb-sync / noc-sync / noc-atomic-exit / noc-read-barrier / mailbox-sync) ===" >&2
+  echo "=== kernel tier (JIT: cb-sync / noc-sync / noc-atomic-exit / noc-read-barrier / noc-l1-invalidate / mailbox-sync) ===" >&2
   if kernel_tier_available; then
     echo "kernel-tier module present — running capture + kernel checks ..." >&2
     if ! "$KERNEL_TIER_DIR/bootstrap.sh" "$ARCH" "$OUT" >&2; then
-      echo "kernel-tier run FAILED — cb-sync / noc-sync / noc-atomic-exit / noc-read-barrier / mailbox-sync NOT covered this run." >&2
+      echo "kernel-tier run FAILED — cb-sync / noc-sync / noc-atomic-exit / noc-read-barrier / noc-l1-invalidate / mailbox-sync NOT covered this run." >&2
       # Propagate the failure to the EXIT CODE. bootstrap.sh refuses an empty/failed
       # capture (exit non-zero); if run.sh swallowed that and exited 0, a caller doing
-      # `run.sh --full-jit && ...` would read cb/noc/read/atomic/mailbox as covered — a false
+      # `run.sh --full-jit && ...` would read cb/noc/read/atomic/l1/mailbox as covered — a false
       # all-clear at the exit-code level. Match every other failure path (exit 1).
       exit 1
     fi
   else
-    echo "kernel-tier module is MISSING (no kernel_tier/), so cb-sync / noc-sync /" >&2
-    echo "mailbox-sync were NOT TOOL-RECALLED here (their kernel surface is JIT-" >&2
+    echo "kernel-tier module is MISSING (no kernel_tier/), so cb-sync / noc-sync / noc-atomic-exit / noc-read-barrier /" >&2
+    echo "noc-l1-invalidate / mailbox-sync were NOT TOOL-RECALLED here (their kernel surface is JIT-" >&2
     echo "compiled kernels outside tt-llk). This is NOT 'not audited': the" >&2
     echo "race-audit-all skill still audits them LLM-driven (each skill's ttnn-" >&2
     echo "widened grep + reasoning + ISA docs) — you only forgo the extra" >&2

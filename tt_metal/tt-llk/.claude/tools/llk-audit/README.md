@@ -44,11 +44,16 @@ in `registry.py`; you rarely touch a checker and never the C++.**
 | `mailbox-sync` | in-tree RISC↔RISC mailbox FIFO endpoints + writer↔reader pairing by directed channel | `PAIRED_CHANNEL` / `UNPAIRED_ENDPOINT` / `UNRESOLVED_ENDPOINT` |
 | `cb-sync` † | circular-buffer reserve/push & wait/pop credit balance per CB (within a function) | `CB_RESERVE_PUSH_IMBALANCE` / `CB_WAIT_POP_IMBALANCE` |
 | `noc-sync` † | NoC credit signal (`noc_semaphore_inc/set/mcast`) with no preceding write flush/barrier | `NOC_SIGNAL_NO_FLUSH` |
+| `noc-atomic-exit` † | non-posted NoC atomic (`noc_semaphore_inc` / remote `up`) left in flight at kernel exit (no following `noc_async_atomic_barrier`) | `NO_ATOMIC_BARRIER_AT_EXIT` |
+| `noc-read-barrier` † | inbound `noc_async_read` consumed (`cb_push_back` / `tt_memmove`) before its `noc_async_read_barrier` | `READ_CONSUMED_BEFORE_BARRIER` |
+| `noc-l1-invalidate` † | (Blackhole) hand-rolled volatile-L1 poll of a remote flag with no `invalidate_l1_cache` | `MISSING_L1_INVALIDATE` |
 
-† `cb-sync` / `noc-sync` are committed and deterministic, but their surface is
-JIT-compiled kernels OUTSIDE tt-llk — they only emit findings when fed a **kernel
-fact base** (the on-request JIT capture; see *kernel tier* below). Over the tt-llk
-fact base they are trivially empty (there are no cb/noc sites there).
+† `cb-sync` / `noc-sync` / `noc-atomic-exit` / `noc-read-barrier` / `noc-l1-invalidate`
+are committed and deterministic, but their surface is JIT-compiled kernels OUTSIDE
+tt-llk — they only emit findings when fed a **kernel fact base** (the on-request JIT
+capture; see *kernel tier* below). Over the tt-llk fact base they are trivially empty
+(there are no cb/noc kernel sites there). The last three are additional checkers of
+the **NoC synchronization class** (adjudicated by the `noc-sync-audit` skill).
 
 Every finding is a **recall bucket, not a verdict**, and every check declares its
 `blind_spots` in the output. `srcreg-bank` and `mailbox-sync` are deliberately
@@ -77,7 +82,7 @@ evidence line (so a shared word whose partner writer is in a changed file still
 surfaces). The whole tree is still parsed for cross-file context; only output is
 scoped. Use it for a PR-scoped audit.
 
-### Coverage: 8 of 9 classes have a committed checker
+### Coverage: 8 of 9 classes have a committed checker (11 checkers — the NoC class has 4)
 Only `instruction-latency` has no committed checker (its surface is the SFPU files
 that don't parse under clang, and its verdict needs an out-of-tree version-pinned
 `sfpi-gcc` table → stays fully LLM-driven). The split of the other 8 by *where
@@ -87,9 +92,11 @@ their surface lives*:
   `srcreg-bank`/`mailbox-sync` are narrow recallers (control-point/endpoint
   inventory + the one mechanical ISA flag); their kernel-layer surface stays with
   the skills' ttnn-widened grep.
-- **In JIT-compiled kernels outside tt-llk (`cb-sync` / `noc-sync`):** the checkers
-  are committed and deterministic, but need a **kernel fact base** to yield
-  findings. Producing that (the JIT capture) is the only fragile, off-main,
+- **In JIT-compiled kernels outside tt-llk (`cb-sync` / `noc-sync` / `noc-atomic-exit`
+  / `noc-read-barrier` / `noc-l1-invalidate`):** the checkers are committed and
+  deterministic, but need a **kernel fact base** to yield findings. (The last three
+  are additional NoC-class checkers — read-before-barrier, atomic-left-at-exit, and
+  Blackhole L1-poll-coherency — adjudicated by the `noc-sync-audit` skill.) Producing that (the JIT capture) is the only fragile, off-main,
   **on-request** step — the checkers themselves are permanent and cost nothing to
   keep. `run.sh --full-jit` *runs* the capture if built; it never builds it, and
   degrades honestly when absent (each class's skill still LLM-audits the kernel

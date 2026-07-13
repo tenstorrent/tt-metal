@@ -3,7 +3,7 @@
 
 # llk-audit kernel tier (opt-in, on-request)
 
-The `cb-sync`, `noc-sync` and `mailbox-sync` checkers live in the committed tool
+The `cb-sync`, `noc-sync`, `noc-atomic-exit`, `noc-read-barrier`, `noc-l1-invalidate` and `mailbox-sync` checkers live in the committed tool
 and are unit-tested — but most of the code they audit (circular-buffer / NoC /
 mailbox handshakes) lives in **JIT-compiled kernels outside tt-llk** (ttnn ops, the
 compute API, models), not in the tt-llk headers. Over the tt-llk tree `cb-sync` and
@@ -68,7 +68,7 @@ kernels emit no compile command, so without it the ledger may show 0 op kernels.
      together cover the JIT/op kernel dirs + `<prefix>_kernels/` model trees while the
      `ckernels/` defs are trimmed. Dropped-fact counts are reported per-TU in the
      coverage ledger (`:drop=N`), never silently swallowed.
-4. `bootstrap.sh` runs `cb-sync,noc-sync,mailbox-sync` over the merged facts.
+4. `bootstrap.sh` runs `cb-sync,noc-sync,noc-atomic-exit,noc-read-barrier,noc-l1-invalidate,mailbox-sync` over the merged facts.
 
 ## Coverage is honest, not silent
 

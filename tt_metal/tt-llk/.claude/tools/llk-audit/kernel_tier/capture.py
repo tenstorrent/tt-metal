@@ -10,7 +10,7 @@ to a clang invocation `llk_extract` can parse (drop the sfpi-gcc-only flags, add
 clang's --target + the sfpi -isystem paths + the SFPU shim, keep the kernel's own
 -I/-D), run the extractor per kernel (from the kernel's build dir so its relative
 includes + generated kernel_includes.hpp resolve), and merge into ONE fact base
-the committed cb-sync / noc-sync / mailbox-sync checkers run over.
+the committed cb-sync / noc-sync / noc-atomic-exit / noc-read-barrier / noc-l1-invalidate / mailbox-sync checkers run over.
 
 Fragility is localized here (per recall-tool-review-lessons): the GCC->clang
 translation. Kernels that don't parse are COUNTED and LISTED (a coverage hole is

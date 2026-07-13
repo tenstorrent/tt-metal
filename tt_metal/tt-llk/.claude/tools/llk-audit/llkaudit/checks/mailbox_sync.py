@@ -14,7 +14,7 @@ parses: the compute-API sites (hw/inc/api) and the hand-written
 `ckernel::mailbox_write(...)` in ttnn/models KERNELS (one-to-one messages and
 fan-outs alike; the CB tile-address/value broadcast is just one pattern). That
 kernel surface is covered by `run.sh --full-jit` when the kernel tier is run with a
-capture (bootstrap.sh runs `--checks cb-sync,noc-sync,mailbox-sync`); without a
+capture (bootstrap.sh runs `--checks cb-sync,noc-sync,noc-atomic-exit,noc-read-barrier,noc-l1-invalidate,mailbox-sync`); without a
 capture it is audited by the /mailbox-sync-audit skill's widened grep (which reaches
 ttnn/models). Either way this checker recalls every directed channel it sees in the
 fact base — not just the broadcast.
@@ -36,6 +36,7 @@ Hints:
                         ckernel_debug.h), so the channel can't be resolved; hand
                         to the skill.
 """
+
 from __future__ import annotations
 
 from .. import registry

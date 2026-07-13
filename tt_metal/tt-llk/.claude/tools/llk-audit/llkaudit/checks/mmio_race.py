@@ -46,7 +46,12 @@ class MmioRace(Check):
         "replayed/looped in another), and only recognizes a RAW TTI_REPLAY / "
         "mop_run — a WRAPPED replay-execute call (e.g. _execute_*_replay_buffer_) "
         "is not flagged as a consumer. The LLM must trace replay record->execute "
-        "and per-iteration re-runs."
+        "and per-iteration re-runs. The matrix/FPU CONSUMER set "
+        "(registry.CONSUMER_MATH_SUBSTR) is a CURATED PARTIAL — SFPU vector ops and "
+        "less-common matrix issues are not all recognized; an unrecognized consumer "
+        "sitting between a write and a later guard lets that guard be mis-credited, "
+        "so a genuinely-raced write can read LOCALLY_ORDERED (a false negative — the "
+        "LLM must check for consuming ops the tool didn't recognize)."
     )
 
     def run(self, fb: FactBase) -> list[Finding]:

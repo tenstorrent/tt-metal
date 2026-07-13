@@ -40,7 +40,11 @@ class ReconfigStall(Check):
         "re-arm detection covers UNPACR/PACR and the curated matrix consumer set "
         "(see registry.CONSUMER_MATH_SUBSTR); a re-issue via an unmodeled macro "
         "would not invalidate an earlier drain. Only the FIRST offending write in "
-        "a function is emitted (one candidate/function)."
+        "a function is emitted (one candidate/function). SCOPE GATE: only functions "
+        "whose NAME matches registry.RECONFIG_FN_SUBSTR are scanned at all — a "
+        "mid-stream config rewrite in a function named OUTSIDE that list (e.g. a "
+        "bespoke hw_configure / tile-dims setter) is never checked, a false negative "
+        "the LLM must widen for (widen the fn-name list, not the per-write scan)."
     )
 
     def run(self, fb: FactBase) -> list[Finding]:
