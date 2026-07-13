@@ -62,7 +62,7 @@ void kernel_main() {
 
     DeviceTimestampedData("Test id", test_id);
     DeviceTimestampedData("NoC Index", noc.get_noc_id());
-    DeviceTimestampedData("Number of transactions", num_of_transactions);
+    DeviceTimestampedData("Number of transactions", num_of_transactions * num_subordinates);
     DeviceTimestampedData("Transaction size in bytes", bytes_per_transaction_per_master);
     DeviceTimestampedData("Number of Virtual Channels", num_virtual_channels);
     DeviceTimestampedData("Master Grid Size X", get_arg(args::mst_grid_size_x));

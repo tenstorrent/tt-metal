@@ -60,7 +60,7 @@ void kernel_main() {
     }
 
     DeviceTimestampedData("Test id", test_id);
-    DeviceTimestampedData("Number of transactions", num_of_transactions);
+    DeviceTimestampedData("Number of transactions", num_of_transactions * num_subordinates);
     DeviceTimestampedData("Transaction size in bytes", bytes_per_transaction_per_subordinate);
     DeviceTimestampedData("NoC Index", noc.get_noc_id());
     DeviceTimestampedData("Number of Virtual Channels", num_virtual_channels);
