@@ -256,6 +256,99 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.I0: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-3.75, high=3.75)
     ),
+    # i1: modified Bessel I1; poly path valid on |x| <= ~3.75 (asymptotic beyond)
+    MathOperation.I1: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-3.75, high=3.75)
+    ),
+    # erf / erfc: span both tails and the transition through 0
+    MathOperation.Erf: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-3.0, high=3.0)
+    ),
+    MathOperation.Erfc: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-3.0, high=3.0)
+    ),
+    # expm1: exp(x)-1; keep within a range that avoids fp overflow
+    MathOperation.Expm1: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # cbrt: defined for all reals; span both signs to exercise the sign path
+    MathOperation.Cbrt: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-27.0, high=27.0)
+    ),
+    # sign / signbit: span both signs and near-zero
+    MathOperation.Sign: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    MathOperation.Signbit: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    # tanh_derivative = sech^2(x); cover the saturating tails
+    MathOperation.TanhDerivative: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # hardmish: piecewise on [-2, 0]; span past both clamp knees
+    MathOperation.Hardmish: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-4.0, high=4.0)
+    ),
+    # lgamma: single-tile Stirling kernel is accurate for x >= ~0.5; avoid the poles at x<=0
+    MathOperation.Lgamma: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=1.0, high=15.0)
+    ),
+    # digamma: LUT fit on [0.01, 102]; keep positive to avoid the poles at x<=0
+    MathOperation.Digamma: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.1, high=50.0)
+    ),
+    # identity: pass-through; any range is valid
+    MathOperation.Identity: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
+    ),
+    # prelu: leaky slope on the negative side; span both signs
+    MathOperation.Prelu: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # rpow: 2**x; keep exponent bounded to avoid fp overflow
+    MathOperation.Rpow: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-4.0, high=4.0)
+    ),
+    # power: x**2 (fixed integer exponent); span both signs
+    MathOperation.UnaryPower: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-4.0, high=4.0)
+    ),
+    # fmod / remainder: divisor fixed to 2.0; span both signs
+    MathOperation.Fmod: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    MathOperation.Remainder: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # unary comparisons against threshold 0.5; span it for a mix of 0/1 outputs
+    MathOperation.UnaryGt: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    MathOperation.UnaryLt: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    MathOperation.UnaryGe: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    MathOperation.UnaryLe: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    # unary max/min against value 0.0; span both signs
+    MathOperation.UnaryMax: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    MathOperation.UnaryMin: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # polygamma (order 1, trigamma): poles at x<=0, so keep positive
+    MathOperation.Polygamma: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.5, high=10.0)
+    ),
+    # xielu: piecewise activation; span both signs across the knee at 0
+    MathOperation.Xielu: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
     # comparison-to-zero: span both signs so the </<=/>/>= branches are exercised
     MathOperation.EqualZero: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)

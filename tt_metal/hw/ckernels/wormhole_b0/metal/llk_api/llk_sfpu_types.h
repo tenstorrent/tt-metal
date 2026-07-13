@@ -169,4 +169,6 @@ enum class SfpuType {
     polygamma,
     mish,
     ne,
+    digamma,
+    identity,
 };

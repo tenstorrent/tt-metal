@@ -23,6 +23,27 @@
 #include "llk_sfpu/ckernel_sfpu_addcmul.h"
 #include "llk_sfpu/ckernel_sfpu_binary.h"
 #include "llk_sfpu/ckernel_sfpu_binary_comp.h"
+#include "llk_sfpu/ckernel_sfpu_cbrt.h"
+#include "llk_sfpu/ckernel_sfpu_digamma.h"
+#include "llk_sfpu/ckernel_sfpu_erf.h"
+#include "llk_sfpu/ckernel_sfpu_erfc.h"
+#include "llk_sfpu/ckernel_sfpu_expm1.h"
+#include "llk_sfpu/ckernel_sfpu_fmod.h"
+#include "llk_sfpu/ckernel_sfpu_hardmish.h"
+#include "llk_sfpu/ckernel_sfpu_i1.h"
+#include "llk_sfpu/ckernel_sfpu_identity.h"
+#include "llk_sfpu/ckernel_sfpu_lgamma.h"
+#include "llk_sfpu/ckernel_sfpu_polygamma.h"
+#include "llk_sfpu/ckernel_sfpu_prelu.h"
+#include "llk_sfpu/ckernel_sfpu_remainder.h"
+#include "llk_sfpu/ckernel_sfpu_rpow.h"
+#include "llk_sfpu/ckernel_sfpu_sign.h"
+#include "llk_sfpu/ckernel_sfpu_signbit.h"
+#include "llk_sfpu/ckernel_sfpu_tanh_derivative.h"
+#include "llk_sfpu/ckernel_sfpu_unary_comp.h"
+#include "llk_sfpu/ckernel_sfpu_unary_max_min.h"
+#include "llk_sfpu/ckernel_sfpu_unary_power.h"
+#include "llk_sfpu/ckernel_sfpu_xielu.h"
 // This header expects a DST_ACCUM_MODE macro; scope it to the include so it
 // doesn't clash with the DST_ACCUM_MODE template param used below.
 #define DST_ACCUM_MODE 0
@@ -369,6 +390,71 @@ void call_unary_sfpu_operation_init()
     else if constexpr (OPERATION == SfpuType::erfinv)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(erfinv_init<APPROX_MODE>);
+    }
+    else if constexpr (OPERATION == SfpuType::erf)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(erf_init<APPROX_MODE>);
+    }
+    else if constexpr (OPERATION == SfpuType::erfc)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(erfc_init<APPROX_MODE>);
+    }
+    else if constexpr (OPERATION == SfpuType::expm1)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(expm1_init<APPROX_MODE, is_fp32_dest_acc_en>);
+    }
+    else if constexpr (OPERATION == SfpuType::cbrt)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(cube_root_init<APPROX_MODE>);
+    }
+    else if constexpr (OPERATION == SfpuType::i1)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(i1_init<APPROX_MODE>);
+    }
+    else if constexpr (OPERATION == SfpuType::signbit)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(signbit_init);
+    }
+    else if constexpr (OPERATION == SfpuType::lgamma)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(lgamma_stirling_init<APPROX_MODE, is_fp32_dest_acc_en>);
+    }
+    else if constexpr (OPERATION == SfpuType::digamma)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(digamma_init<APPROX_MODE>);
+    }
+    else if constexpr (OPERATION == SfpuType::fmod)
+    {
+        // divisor = 2.0f, 1/divisor = 0.5f (fixed dispatch constants).
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(init_fmod<APPROX_MODE>, 0x40000000u /* 2.0f */, 0x3f000000u /* 0.5f */);
+    }
+    else if constexpr (OPERATION == SfpuType::remainder)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(init_remainder<APPROX_MODE>, 0x40000000u /* 2.0f */, 0x3f000000u /* 0.5f */);
+    }
+    else if constexpr (OPERATION == SfpuType::rpow)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(sfpu_binary_pow_init<APPROX_MODE>);
+    }
+    else if constexpr (OPERATION == SfpuType::power)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(sfpu_unary_pow_init);
+    }
+    else if constexpr (OPERATION == SfpuType::unary_max)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(unary_max_min_init<true>);
+    }
+    else if constexpr (OPERATION == SfpuType::unary_min)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(unary_max_min_init<false>);
+    }
+    else if constexpr (OPERATION == SfpuType::polygamma)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(polygamma_init<APPROX_MODE, is_fp32_dest_acc_en>);
+    }
+    else if constexpr (OPERATION == SfpuType::xielu)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(xielu_init<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::sigmoid)
     {
@@ -872,6 +958,138 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     else if constexpr (OPERATION == SfpuType::erfinv)
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfinv, (APPROX_MODE), dst_index, VectorMode::RC);
+    }
+    else if constexpr (OPERATION == SfpuType::erf)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erf, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::erfc)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfc, (ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::expm1)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_expm1, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::cbrt)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_cube_root, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::i1)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_i1, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::sign)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sign, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0u /* exponent_size_8 */);
+    }
+    else if constexpr (OPERATION == SfpuType::signbit)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_signbit, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::tanh_derivative)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_tanh_derivative_sech2, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::hardmish)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, hardmish, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::lgamma)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_lgamma_stirling, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::digamma)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_digamma, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::identity)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_identity, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::prelu)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_prelu, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0x3e800000u /* slope = 0.25f */);
+    }
+    else if constexpr (OPERATION == SfpuType::rpow)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_rpow,
+            (APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en),
+            dst_index,
+            vector_mode,
+            0x40000000u /* base = 2.0f */);
+    }
+    else if constexpr (OPERATION == SfpuType::power)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_unary_power,
+            (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS),
+            dst_index,
+            vector_mode,
+            0x40000000u /* exponent = 2.0f */);
+    }
+    else if constexpr (OPERATION == SfpuType::fmod)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_fmod, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::remainder)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_remainder, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::unary_gt)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_gt, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0x3f000000u /* 0.5f */);
+    }
+    else if constexpr (OPERATION == SfpuType::unary_lt)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_lt, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0x3f000000u /* 0.5f */);
+    }
+    else if constexpr (OPERATION == SfpuType::unary_ge)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_ge, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0x3f000000u /* 0.5f */);
+    }
+    else if constexpr (OPERATION == SfpuType::unary_le)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_le, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0x3f000000u /* 0.5f */);
+    }
+    else if constexpr (OPERATION == SfpuType::unary_max)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_max_min, (true, APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0u /* value = 0.0f */);
+    }
+    else if constexpr (OPERATION == SfpuType::unary_min)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_max_min, (false, APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0u /* value = 0.0f */);
+    }
+    else if constexpr (OPERATION == SfpuType::polygamma)
+    {
+        // order n = 1 (trigamma); scale = (-1)^(n+1) * n! = 1.0f.
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_polygamma,
+            (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS),
+            dst_index,
+            vector_mode,
+            0x3f800000u /* n = 1.0f */,
+            0x3f800000u /* scale = 1.0f */);
+    }
+    else if constexpr (OPERATION == SfpuType::xielu)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_xielu,
+            (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS),
+            dst_index,
+            vector_mode,
+            0x3f800000u /* alpha_p = 1.0f */,
+            0x3f800000u /* alpha_n = 1.0f */);
     }
     else if constexpr (OPERATION == SfpuType::typecast)
     {
