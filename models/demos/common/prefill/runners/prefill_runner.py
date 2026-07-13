@@ -542,7 +542,7 @@ def run_standalone_loop(runtime, kv_caches, rank: int, num_ranks: int, *, d2d_in
         else:
             inp, meta, metadata_device = _d2d_recv(d2d_in)
             slot_id = meta["slot_id"]
-        t = _compute_and_send(runtime, kv_cache, rank, c, inp, meta, d2d_out, record_dev=metadata_device)
+        t = _compute_and_send(runtime, kv_caches, rank, c, inp, meta, d2d_out, record_dev=metadata_device)
         if first is None:
             first = t
     # Every rank must finish receiving + forwarding the final chunk before any rank reclaims its
