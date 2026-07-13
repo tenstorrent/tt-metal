@@ -208,6 +208,29 @@ TopologyMappingResult map_mesh_to_physical(
                     "Failed to add required trait constraint for pinned ASIC positions in mesh {}", mesh_id.get());
                 return result;
             }
+
+            // Log pinnings
+            std::string pinnings_str;
+            bool first = true;
+            for (const auto& [fabric_node, pos] : fabric_node_to_position) {
+                if (!first) {
+                    pinnings_str += ", ";
+                }
+                first = false;
+                pinnings_str += fmt::format(
+                    "fabric_node={} (mesh_id={}, chip_id={}) -> ASIC position (tray={}, loc={})",
+                    fabric_node,
+                    fabric_node.mesh_id.get(),
+                    fabric_node.chip_id,
+                    *pos.first,
+                    *pos.second);
+            }
+            log_info(
+                tt::LogFabric,
+                "TopologyMapper: Using {} pinning(s) for mesh {}: [{}]",
+                fabric_node_to_position.size(),
+                mesh_id.get(),
+                pinnings_str);
         }
     }
 
@@ -611,22 +634,16 @@ PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
 // ============================================================================
 namespace {
 
-std::pair<
-    std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>>,
-    std::map<MeshId, std::map<LogicalChipId, tt::tt_metal::ASICPosition>>>
-mesh_groupings_and_pinnings_from_psd_placements(const std::vector<::tt::tt_fabric::PsdPlacement>& placements) {
-    std::pair<
-        std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>>,
-        std::map<MeshId, std::map<LogicalChipId, tt::tt_metal::ASICPosition>>>
-        out;
+std::map<MeshId, MeshPhysicalLayout> mesh_physical_layouts_from_psd_placements(
+    const std::vector<::tt::tt_fabric::PsdPlacement>& placements) {
+    std::map<MeshId, MeshPhysicalLayout> layouts;
     for (std::size_t i = 0; i < placements.size(); ++i) {
         const MeshId mesh_id{static_cast<std::uint32_t>(i)};
-        out.first[mesh_id] = placements[i].asics;
-        if (!placements[i].mesh_node_to_asic_position.empty()) {
-            out.second[mesh_id] = placements[i].mesh_node_to_asic_position;
-        }
+        MeshPhysicalLayout& layout = layouts[mesh_id];
+        layout.asics = placements[i].asics;
+        layout.mesh_node_to_asic_position = placements[i].mesh_node_to_asic_position;
     }
-    return out;
+    return layouts;
 }
 
 }  // namespace
@@ -716,9 +733,8 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
             }
         }
         // Build the shape graph from placements: ASIC footprints and PGD pinning both come from each PsdPlacement.
-        const auto [mesh_groupings, mesh_pgd_pinnings] = mesh_groupings_and_pinnings_from_psd_placements(placements);
-        mesh_physical_graphs[mesh_name] =
-            build_hierarchical_from_flat_graph(flat_graph, mesh_groupings, mesh_pgd_pinnings);
+        const auto mesh_layouts = mesh_physical_layouts_from_psd_placements(placements);
+        mesh_physical_graphs[mesh_name] = build_hierarchical_from_flat_graph(flat_graph, mesh_layouts);
 
         // Pre-compute one bitmask per candidate placement for this shape, straight from each placement's footprint.
         auto& gbits = group_bits_by_name[mesh_name];
@@ -1460,18 +1476,31 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
 PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
     const AdjacencyGraph<tt::tt_metal::AsicID>& flat_adjacency_graph,
     const std::vector<::tt::tt_fabric::PsdPlacement>& placements) {
-    const auto [mesh_groupings, mesh_pgd_pinnings] = mesh_groupings_and_pinnings_from_psd_placements(placements);
-    return build_hierarchical_from_flat_graph(flat_adjacency_graph, mesh_groupings, mesh_pgd_pinnings);
+    return build_hierarchical_from_flat_graph(
+        flat_adjacency_graph, mesh_physical_layouts_from_psd_placements(placements));
 }
 
 PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
     const AdjacencyGraph<tt::tt_metal::AsicID>& flat_adjacency_graph,
     const std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>>& mesh_groupings,
     const std::map<MeshId, std::map<LogicalChipId, tt::tt_metal::ASICPosition>>& mesh_pgd_pinnings) {
-    // Build asic_id_to_mesh_rank map from mesh groupings using the caller's MeshIds as-is.
-    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    std::map<MeshId, MeshPhysicalLayout> mesh_layouts;
     for (const auto& [mesh_id, asics] : mesh_groupings) {
-        for (const auto& asic_id : asics) {
+        mesh_layouts[mesh_id].asics = asics;
+    }
+    for (const auto& [mesh_id, pinning] : mesh_pgd_pinnings) {
+        mesh_layouts[mesh_id].mesh_node_to_asic_position = pinning;
+    }
+    return build_hierarchical_from_flat_graph(flat_adjacency_graph, mesh_layouts);
+}
+
+PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
+    const AdjacencyGraph<tt::tt_metal::AsicID>& flat_adjacency_graph,
+    const std::map<MeshId, MeshPhysicalLayout>& mesh_layouts) {
+    // Build asic_id_to_mesh_rank map from mesh layouts using the caller's MeshIds as-is.
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    for (const auto& [mesh_id, layout] : mesh_layouts) {
+        for (const auto& asic_id : layout.asics) {
             // Default to rank 0 - proper rank assignment would come from hostname_to_asics or other config
             asic_id_to_mesh_rank[mesh_id][asic_id] = MeshHostRankId{0};
         }
@@ -1564,9 +1593,9 @@ PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
     // Build mesh-level graph from adjacency map
     physical_multi_mesh_graph.mesh_level_graph_ = ::tt::tt_fabric::AdjacencyGraph<MeshId>(mesh_level_adjacency_map);
 
-    for (const auto& [mesh_id, pinning] : mesh_pgd_pinnings) {
-        if (!pinning.empty()) {
-            physical_multi_mesh_graph.mesh_pgd_pinnings_[mesh_id] = pinning;
+    for (const auto& [mesh_id, layout] : mesh_layouts) {
+        if (!layout.mesh_node_to_asic_position.empty()) {
+            physical_multi_mesh_graph.mesh_pgd_pinnings_[mesh_id] = layout.mesh_node_to_asic_position;
         }
     }
 
@@ -1714,6 +1743,7 @@ std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
             }
         }
     }
+    // Make sure to restrict so that MGD and other pinnings can be respected always, and shrinks search space
     for (const auto& [mesh_id, physical_meshes] : mesh_level_pinnings) {
         if (!physical_meshes.empty()) {
             inter_mesh_constraints.add_required_constraint(mesh_id, physical_meshes);
@@ -2480,6 +2510,11 @@ TopologyMappingResult map_multi_mesh_to_physical(
 
     TopologyMappingResult result;
 
+    // Incremental inter-mesh enumeration: encode hard CNF once, then append blocking clauses for each
+    // rejected full mesh-level assignment (intra-mesh failure) instead of re-solving from scratch.
+    TopologyMappingEnumerationSession<MeshId, MeshId> inter_mesh_session;
+    std::vector<std::map<MeshId, MeshId>> excluded_inter_mesh_mappings;
+
     // Maximum retry attempts to prevent infinite loops
     // This should be sufficient for most cases: if we have N logical meshes and M physical meshes,
     // worst case is N*M attempts (trying each logical mesh with each physical mesh)
@@ -2520,9 +2555,15 @@ TopologyMappingResult map_multi_mesh_to_physical(
             log_debug(tt::LogFabric, "Failed mesh pairs from previous attempts: {}", failed_mesh_pairs.size());
         }
 
-        // Perform inter-mesh mapping
-        auto solver_result = ::tt::tt_fabric::solve_topology_mapping(
-            mesh_logical_graph, mesh_physical_graph, inter_mesh_constraints, inter_mesh_validation_mode, quiet_mode);
+        // Perform inter-mesh mapping (incremental: reuses prior SAT encoding across retries)
+        auto solver_result = inter_mesh_session.next(
+            mesh_logical_graph,
+            mesh_physical_graph,
+            inter_mesh_constraints,
+            excluded_inter_mesh_mappings,
+            inter_mesh_validation_mode,
+            quiet_mode,
+            TopologyMappingSolverEngine::Sat);
 
         // If the solver fails, return error results for all meshes with detailed information
         if (!solver_result.success) {

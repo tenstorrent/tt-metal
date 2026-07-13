@@ -379,6 +379,16 @@ struct PhysicalMultiMeshGraph {
 };
 
 /**
+ * Per-mesh ASIC footprint plus optional PGD-derived chip-id -> ASIC-position pinning.
+ * Keyed by MeshId when building a PhysicalMultiMeshGraph from PSD placements.
+ */
+struct MeshPhysicalLayout {
+    std::unordered_set<tt::tt_metal::AsicID> asics;
+    // Empty when the placement did not carry a PGD<->MGD pinning (callers assume row-major identity).
+    std::map<LogicalChipId, AsicPosition> mesh_node_to_asic_position;
+};
+
+/**
  * @brief Build a physical multi-mesh adjacency graph from physical system descriptor
  *
  * Creates a PhysicalMultiMeshGraph with:
@@ -447,17 +457,32 @@ PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
  * @brief Build hierarchical multi-mesh graph from a flattened adjacency graph
  *
  * Takes a flat adjacency graph (all ASICs and their neighbors) and splits it into a multi-mesh graph
- * based on mesh groupings. This is useful when you have a pre-built adjacency graph and need to
+ * based on mesh layouts. This is useful when you have a pre-built adjacency graph and need to
  * organize it by mesh.
  *
  * The function:
  * - Splits the flat adjacency graph into per-mesh adjacency graphs (only intra-mesh connections)
  * - Builds the mesh-level graph based on intermesh connections
  * - Builds exit node graphs for each mesh
+ * - Stores non-empty PGD pinnings under PhysicalMultiMeshGraph::mesh_pgd_pinnings_
  *
  * @param flat_adjacency_graph Flat adjacency graph containing all ASICs and their neighbors
- * @param mesh_groupings Map from MeshId to the set of ASIC IDs belonging to that mesh. MeshIds are used
- *                       as-is in the resulting PhysicalMultiMeshGraph (no index remapping).
+ * @param mesh_layouts Map from MeshId to per-mesh ASIC footprint and optional PGD pinning. MeshIds are used
+ *                     as-is in the resulting PhysicalMultiMeshGraph (no index remapping).
+ * @return PhysicalMultiMeshGraph containing mesh-level graph, per-mesh adjacency graphs, and exit node graphs
+ */
+PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
+    const AdjacencyGraph<tt::tt_metal::AsicID>& flat_adjacency_graph,
+    const std::map<MeshId, MeshPhysicalLayout>& mesh_layouts);
+
+/**
+ * @brief Build hierarchical multi-mesh graph from ASIC groupings (and optional PGD pinnings)
+ *
+ * Convenience overload: MeshIds are used as-is. Prefer std::map<MeshId, MeshPhysicalLayout> when both footprint and
+ * pinning are available together.
+ *
+ * @param flat_adjacency_graph Flat adjacency graph containing all ASICs and their neighbors
+ * @param mesh_groupings Map from MeshId to the set of ASIC IDs belonging to that mesh
  * @param mesh_pgd_pinnings Optional per-mesh logical-chip-id -> ASIC position layouts, keyed by the same MeshId
  *                          as mesh_groupings. Non-empty entries are stored under that MeshId.
  * @return PhysicalMultiMeshGraph containing mesh-level graph, per-mesh adjacency graphs, and exit node graphs

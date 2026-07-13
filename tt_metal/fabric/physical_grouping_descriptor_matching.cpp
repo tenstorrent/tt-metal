@@ -878,78 +878,6 @@ std::size_t add_mgd_to_pgd_asic_position_pinning_constraints(
     return constraints_added;
 }
 
-std::optional<tt::tt_metal::ASICPosition> get_pgd_node_asic_position(
-    const GroupingInfo& pgd_grouping, uint32_t pgd_node) {
-    if (pgd_node >= pgd_grouping.items.size()) {
-        return std::nullopt;
-    }
-    const GroupingItemInfo& item = pgd_grouping.items[pgd_node];
-    if (item.type != GroupingItemInfo::ItemType::ASIC_LOCATION) {
-        return std::nullopt;
-    }
-    return tt::tt_metal::ASICPosition{item.tray_id, item.asic_location};
-}
-
-void log_mgd_pgd_pinning_fulfillment(
-    const std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>& pinnings,
-    const GroupingInfo& pgd_grouping,
-    const MappingResult<uint32_t, uint32_t>& mapping_result,
-    const std::string& mgd_name,
-    const std::string& pgd_name) {
-    std::map<uint32_t, std::set<tt::tt_metal::ASICPosition>> allowed_positions_by_chip_id;
-    for (const auto& [position, fabric_node] : pinnings) {
-        allowed_positions_by_chip_id[fabric_node.chip_id].insert(position);
-    }
-
-    for (const auto& [chip_id, allowed_positions] : allowed_positions_by_chip_id) {
-        const auto mapping_it = mapping_result.target_to_global.find(chip_id);
-        if (mapping_it == mapping_result.target_to_global.end()) {
-            log_warning(
-                tt::LogFabric,
-                "PGD<->MGD pinning not fulfilled: MGD '{}' vs PGD '{}', mesh chip_id={} has no mapped PGD node",
-                mgd_name,
-                pgd_name,
-                chip_id);
-            continue;
-        }
-
-        const uint32_t mapped_pgd_node = mapping_it->second;
-        const auto actual_position = get_pgd_node_asic_position(pgd_grouping, mapped_pgd_node);
-        if (!actual_position.has_value()) {
-            log_warning(
-                tt::LogFabric,
-                "PGD<->MGD pinning not fulfilled: MGD '{}' vs PGD '{}', mesh chip_id={} mapped to PGD node {} "
-                "with unknown ASIC position",
-                mgd_name,
-                pgd_name,
-                chip_id,
-                mapped_pgd_node);
-            continue;
-        }
-
-        if (!allowed_positions.contains(*actual_position)) {
-            std::string allowed_str;
-            for (const auto& allowed : allowed_positions) {
-                if (!allowed_str.empty()) {
-                    allowed_str += ", ";
-                }
-                allowed_str += fmt::format("(tray={}, asic_location={})", allowed.first.get(), allowed.second.get());
-            }
-            log_warning(
-                tt::LogFabric,
-                "PGD<->MGD pinning not fulfilled: MGD '{}' vs PGD '{}', mesh chip_id={} mapped to PGD node {} at "
-                "(tray={}, asic_location={}); allowed: [{}]",
-                mgd_name,
-                pgd_name,
-                chip_id,
-                mapped_pgd_node,
-                actual_position->first.get(),
-                actual_position->second.get(),
-                allowed_str);
-        }
-    }
-}
-
 }  // namespace
 
 namespace tt::tt_fabric {
@@ -1096,12 +1024,8 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                 if (applicable_pinnings.has_value()) {
                     const std::size_t pinning_constraints_added = add_mgd_to_pgd_asic_position_pinning_constraints(
                         constraints, grouping_info, *applicable_pinnings);
+                    // Ok if no pinning constraints were added, means this grouping might not be best fit
                     if (pinning_constraints_added == 0) {
-                        log_debug(
-                            tt::LogFabric,
-                            "Skipping {} for {}: pinning constraints could not be applied to this PGD variant",
-                            name,
-                            mgd_grouping_info.name);
                         continue;
                     }
                 } else {
@@ -1116,10 +1040,6 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                     ConnectionValidationMode::STRICT,
                     true);
                 if (mapping_result.success) {
-                    if (applicable_pinnings.has_value()) {
-                        log_mgd_pgd_pinning_fulfillment(
-                            *applicable_pinnings, grouping_info, mapping_result, mgd_grouping_info.name, name);
-                    }
                     best_matches_topology.push_back({name, idx, std::move(mapping_result)});
                 } else {
                     log_debug(
@@ -1216,6 +1136,21 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                     }
                 }
                 committed_pgd_matches = true;
+                std::string committed_summary;
+                for (size_t i = 0; i < best_matches_psd_placed.size(); ++i) {
+                    const auto& match = best_matches_psd_placed[i];
+                    const auto& grouping = mesh_flat_groupings.at(match.name)[match.idx];
+                    if (i > 0) {
+                        committed_summary += ", ";
+                    }
+                    committed_summary += fmt::format("{} ({})", grouping.name, grouping.type);
+                }
+                log_info(
+                    tt::LogFabric,
+                    "Physical groupings: Mesh graph descriptor '{}': {} topology match(es), committed: {}",
+                    mgd_grouping_info.name,
+                    best_matches_topology.size(),
+                    committed_summary);
                 break;
             }
         }
