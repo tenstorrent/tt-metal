@@ -240,6 +240,10 @@ class LTXDistilledPipeline(LTXPipeline):
         # and keep only the prealloc trace-io + stage statics that gen#0 reuses. When prep_run is off
         # (CI / quality runs), keep the mini-denoise so the prep_run=False capture finds warm kernels.
         iter_fast = (not capture_all) and os.environ.get("LTX_ITER_FAST", "0") in ("1", "true", "True")
+        # Profiling-only: the denoise is the measurement target, and the VAE/audio decode warmups cost
+        # ~200s of eager compile + vocoder trace capture that blows the device reservation before the
+        # traced denoise is ever reached. Skipping them leaves encode → S1 → upsample → S2 untouched.
+        denoise_only = os.environ.get("LTX_PROFILE_DENOISE_ONLY", "0") in ("1", "true", "True")
         warmup_steps = 1 if iter_fast else num_inference_steps
         skip_dit_warmup = LTX_DIT_PREP_RUN and not capture_all
 
@@ -327,7 +331,7 @@ class LTXDistilledPipeline(LTXPipeline):
                     )
 
             # Compile VAE decode at full-res (only s2 feeds decode in generate).
-            if not iter_fast:
+            if not iter_fast and not denoise_only:
                 self._warmup_decode(num_frames, height, width)
 
             # Build + JIT-compile the on-device audio decode on the exact latent
@@ -336,7 +340,9 @@ class LTXDistilledPipeline(LTXPipeline):
             # The single-generate eager decode is bit-identical to the replay, so the AV mp4 is
             # unchanged; multi-gen runs keep the warmup capture so every real decode replays (else
             # gen#1 would decode into the garbage-emitting capture pass).
-            if in_capture_pass:
+            if denoise_only:
+                logger.info("LTX_PROFILE_DENOISE_ONLY=1: skipping VAE + audio decode warmup")
+            elif in_capture_pass:
                 logger.info("capture pass: skipping audio decode (vocoder prep_run=False; real warmup inits it)")
             elif iter_fast:
                 logger.info("LTX_ITER_FAST=1: skipping warmup audio decode (gen#0 decodes eagerly)")
@@ -672,6 +678,7 @@ class LTXDistilledPipeline(LTXPipeline):
                 video_ts_pair_tt = state.tt_video_ts_pair
                 video_pin_mask_tt = state.tt_video_pin_mask
             # video_N_real is the logical (unpadded) count so ring SDPA masks padded K positions.
+            _t_step = time.perf_counter()
             v_out, a_out = self.transformer.inner_step(
                 video_1BNI=state.tt_video_lat,
                 timestep=state.tt_timestep,
@@ -723,7 +730,10 @@ class LTXDistilledPipeline(LTXPipeline):
             ttnn.multiply_(a_vel, dt)
             ttnn.add_(state.tt_audio_lat, a_vel)
             ttnn.multiply_(state.tt_audio_lat, state.tt_audio_pad_mask)
-            logger.info(f"  Step {step_idx + 1}/{num_steps}: σ {sigma:.4f} → {sigma_next:.4f}")
+            # STEP_MS covers the step body only. The profiler drain below is host work, so an
+            # inter-log-line delta would fold it into the step wall and corrupt the measurement.
+            _step_ms = (time.perf_counter() - _t_step) * 1000.0
+            logger.info(f"  Step {step_idx + 1}/{num_steps}: σ {sigma:.4f} → {sigma_next:.4f} STEP_MS={_step_ms:.1f}")
             # Under LTX_PROFILE_FLUSH, drain the device profiler each step so an untraced render
             # (~18k ops) doesn't overflow the 12k-marker DRAM buffer, which drops markers and
             # breaks the ops report. Profiling only; no effect on the normal traced path.
@@ -926,6 +936,15 @@ class LTXDistilledPipeline(LTXPipeline):
         t_stage2 = time.time() - t0
         timings.append(("Stage 2 denoise", t_stage2))
         logger.info(f"Stage 2 denoise: {t_stage2:.1f}s")
+
+        if os.environ.get("LTX_PROFILE_DENOISE_ONLY", "0") in ("1", "true", "True"):
+            # Profiling-only: stop before VAE/audio so the reservation is spent on the traced denoise.
+            self.last_timings = list(timings)
+            for _label, _secs in timings:
+                if "denoise" in _label.lower():
+                    walltime.record("gen", _label, _secs)
+            logger.info(f"LTX_PROFILE_DENOISE_ONLY=1: denoise-only total {sum(s for _, s in timings):.1f}s")
+            return None, None
 
         t0 = time.time()
         self._prepare_vae()
