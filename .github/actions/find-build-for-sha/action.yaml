@@ -1,0 +1,263 @@
+name: Find existing build for SHA
+description: >
+  Searches for a prior build artifact matching the current commit SHA and
+  requested configuration (tracy, distributed). Works across ALL workflow
+  types by finding runs for the same head_sha and checking their artifacts.
+
+inputs:
+  build-type:
+    description: >
+      The CMake build type to match (e.g., 'Release', 'ASan', 'TSan', 'Debug',
+      'RelWithDebInfo'). Artifacts encode the build type in their name so
+      that e.g. a Release artifact is never reused for an ASan build.
+    required: false
+    default: 'Release'
+  tracy:
+    description: >
+      Whether to look for a profiler-enabled build artifact.
+      Must match the 'true'/'false' string value of the calling workflow's
+      tracy input so the correct artifact variant is selected.
+    required: false
+    default: 'false'
+  distributed:
+    description: >
+      Whether to look for a distributed-enabled build artifact.
+      Artifacts built with distributed=false have '_no_distributed' in their
+      name. Must match the calling workflow's distributed input.
+    required: false
+    default: 'true'
+  check-wheel:
+    description: >
+      Also require a matching wheel artifact in the prior run.
+      When 'true', found=true only if the same run contains BOTH a matching
+      C++ build artifact AND a matching wheel artifact. This ensures callers
+      never need to inspect more than one output — found=true means all
+      requested artifacts are available for reuse.
+    required: false
+    default: 'false'
+  python-version:
+    description: >
+      Python version to match when check-wheel is true (e.g., '3.10', '3.12').
+      The wheel artifact name embeds cpXYZ (e.g., cp310). Required when
+      check-wheel is true to avoid matching the wrong Python version.
+    required: false
+    default: ''
+  enable-lto:
+    description: >
+      Whether to look for an LTO-enabled build artifact.
+      Artifacts built with enable-lto=true have '_lto' in their name.
+      Must match the calling workflow's enable-lto input.
+    required: false
+    default: 'false'
+  architecture:
+    description: >
+      Target architecture to match (e.g., 'amd64'). Must match the architecture
+      encoded in the build artifact name to prevent cross-architecture reuse.
+    required: false
+    default: 'amd64'
+  toolchain:
+    description: >
+      Toolchain file path to match (e.g., 'cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake').
+      The cmake/ prefix and -toolchain.cmake suffix are stripped for matching
+      against the artifact name.
+    required: false
+    default: 'cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake'
+  github-token:
+    description: GitHub token for API access (needs actions:read)
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  run-id:
+    description: The run ID of the prior build, or empty string if not found
+    value: ${{ steps.find.outputs.run-id }}
+  found:
+    description: >
+      'true' if all requested artifacts were found in a single prior run for
+      this SHA and config. When check-wheel=false, requires only a matching
+      C++ build. When check-wheel=true, requires both a matching C++ build
+      AND a matching wheel in the same run. Callers only need to check this
+      single output — no separate wheel-found output exists.
+    value: ${{ steps.find.outputs.found }}
+
+runs:
+  using: composite
+  steps:
+    - name: Search for prior build artifacts by SHA
+      id: find
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const sha = context.sha;
+          const buildType = '${{ inputs.build-type }}' || 'Release';
+          const tracy = '${{ inputs.tracy }}' === 'true';
+          const distributed = '${{ inputs.distributed }}' === 'true';
+          const lto = '${{ inputs.enable-lto }}' === 'true';
+          const checkWheel = '${{ inputs.check-wheel }}' === 'true';
+          const pythonVersion = '${{ inputs.python-version }}';
+          const arch = '${{ inputs.architecture }}' || 'amd64';
+          const toolchainCleaned = ('${{ inputs.toolchain }}' || 'cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake')
+            .replace(/^cmake\//, '').replace(/-toolchain\.cmake$/, '');
+
+          console.log(`Searching for existing build artifacts for SHA: ${sha}`);
+          console.log(`Config: build-type=${buildType}, tracy=${tracy}, distributed=${distributed}, lto=${lto}, check-wheel=${checkWheel}`);
+          console.log(`Config: arch=${arch}, toolchain=${toolchainCleaned}, python-version=${pythonVersion}`);
+
+          // Strategy: find all workflow runs for this commit SHA, then check
+          // each run's artifacts. This is O(runs * artifacts_per_run) instead
+          // of scanning ALL repo artifacts (5M+) which can't be paginated
+          // deep enough.
+          //
+          // found=true iff ALL requested artifacts exist in a single prior run:
+          //   check-wheel=false: found=true when a matching C++ build exists.
+          //   check-wheel=true:  found=true when a matching C++ build AND a
+          //                      matching wheel exist in the SAME run.
+          //
+          // A run is skipped (not accepted) if it has C++ but no wheel when
+          // check-wheel=true — the search continues to the next run.
+          //
+          // Artifact name patterns (underscores for build, hyphens for wheel):
+          //   TTMetal_build_any_{VERSION}_{ARCH}_{TOOLCHAIN}[_profiler][_no_distributed][_lto]_{BUILD_TYPE}_{SHA}_{RUN_ID}
+          //   ttnn-dist-cp{PYVER}-{BUILD_TYPE}[-profiler]-{SHA}-{RUN_ID}
+
+          let foundRunId = null;
+          let foundBuildName = null;
+          let foundWheelName = null;
+
+          function matchBuild(artifact) {
+            if (!artifact.name.startsWith('TTMetal_build_any')) return false;
+            // Boundary-safe SHA match: build names use underscores as separators
+            if (!artifact.name.includes(`_${sha}_`)) return false;
+            // Check architecture (e.g. '_amd64_')
+            if (!artifact.name.includes(`_${arch}_`)) return false;
+            // Check toolchain (e.g. '_x86_64-linux-clang-20-libstdcpp_' or with suffixes)
+            if (!artifact.name.includes(`_${toolchainCleaned}`)) return false;
+            // Check build type — must match exactly to prevent e.g. Release/ASan cross-contamination.
+            // The build type is encoded as '_Release_', '_ASan_', '_TSan_', etc. before the SHA.
+            const buildTypeTag = `_${buildType}_`;
+            if (!artifact.name.includes(buildTypeTag)) return false;
+            const hasProfiler = artifact.name.includes('_profiler');
+            if (tracy !== hasProfiler) return false;
+            const hasNoDistributed = artifact.name.includes('_no_distributed');
+            if (distributed === hasNoDistributed) return false;
+            const hasLto = artifact.name.includes('_lto');
+            if (lto !== hasLto) return false;
+            return true;
+          }
+
+          function matchWheel(artifact) {
+            if (!artifact.name.startsWith('ttnn-dist-cp')) return false;
+            // Check Python version (e.g. 'cp310', 'cp312')
+            if (pythonVersion) {
+              const pythonTag = `cp${pythonVersion.replace('.', '')}`;
+              if (!artifact.name.includes(pythonTag)) return false;
+            }
+            // Boundary-safe SHA match: wheel names use hyphens as separators
+            if (!artifact.name.includes(`-${sha}-`)) return false;
+            // Check build type — wheel names encode it as '-{BUILD_TYPE}-' (e.g. '-Release-')
+            // This works for both profiler and non-profiler variants:
+            //   ttnn-dist-cp310-Release-{sha}-...  contains  -Release-
+            //   ttnn-dist-cp310-Release-profiler-{sha}-...  contains  -Release-
+            if (!artifact.name.includes(`-${buildType}-`)) return false;
+            const wheelHasProfiler = artifact.name.includes('-profiler-');
+            if (tracy !== wheelHasProfiler) return false;
+            return true;
+          }
+
+          try {
+            // Step 1: Find all workflow runs for this SHA
+            const runsResp = await github.rest.actions.listWorkflowRunsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head_sha: sha,
+              per_page: 100
+            });
+
+            const runs = runsResp.data.workflow_runs.filter(r =>
+              r.id !== context.runId
+              // No status/conclusion filter: if an artifact exists and is not
+              // expired, the build step succeeded — that's the only signal we
+              // need. Filtering on run status causes false misses (e.g. a run
+              // whose build is done but tests are still running shows as
+              // in_progress or even queued due to API caching). A failed run
+              // can still have a perfectly valid build artifact (build passed,
+              // tests failed). The artifact.expired check below is the gate.
+            );
+
+            console.log(`Found ${runsResp.data.workflow_runs.length} runs for SHA, ${runs.length} candidate(s) (excluding current run)`);
+
+            // Step 2: For each completed run, scan artifacts until we find a
+            // run that satisfies ALL requirements. When check-wheel=true, a
+            // run with only a C++ build (no wheel) is skipped and the search
+            // continues to the next run.
+            for (const run of runs) {
+              let candidateBuild = null;
+              let candidateWheel = null;
+
+              // List artifacts for this run (paginate in case of many test_report artifacts)
+              let page = 1;
+              while (true) {
+                const artResp = await github.rest.actions.listWorkflowRunArtifacts({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: run.id,
+                  per_page: 100,
+                  page
+                });
+
+                const artifacts = artResp.data.artifacts;
+                if (artifacts.length === 0) break;
+
+                for (const artifact of artifacts) {
+                  if (artifact.expired) continue;
+
+                  if (!candidateBuild && matchBuild(artifact)) {
+                    candidateBuild = artifact;
+                  }
+                  if (checkWheel && !candidateWheel && matchWheel(artifact)) {
+                    candidateWheel = artifact;
+                  }
+                  // Early exit once all requested artifacts found in this run
+                  if (candidateBuild && (!checkWheel || candidateWheel)) break;
+                }
+
+                if (candidateBuild && (!checkWheel || candidateWheel)) break;
+                if (artifacts.length < 100) break;
+                page++;
+              }
+
+              // Accept this run only if ALL requested artifacts are present.
+              // When check-wheel=true: both C++ AND wheel must exist in this run.
+              // When check-wheel=false: only C++ build required.
+              if (candidateBuild && (!checkWheel || candidateWheel)) {
+                foundRunId = run.id;
+                foundBuildName = candidateBuild.name;
+                if (candidateWheel) foundWheelName = candidateWheel.name;
+                break;
+              }
+            }
+          } catch (err) {
+            console.log(`⚠️ Could not search artifacts (${err.status || err.message}) — will build fresh`);
+            console.log('Hint: ensure the calling job has "actions: read" permission');
+            core.setOutput('run-id', '');
+            core.setOutput('found', 'false');
+            return;
+          }
+
+          if (foundRunId) {
+            console.log(`✅ Found reusable build artifact "${foundBuildName}" from run ${foundRunId}`);
+            if (foundWheelName) {
+              console.log(`✅ Found reusable wheel artifact "${foundWheelName}" from same run ${foundRunId}`);
+            }
+            core.setOutput('run-id', foundRunId.toString());
+            core.setOutput('found', 'true');
+          } else {
+            if (checkWheel) {
+              console.log('No prior run found with both C++ build and wheel artifacts — will build fresh');
+            } else {
+              console.log('No reusable C++ build artifacts found — will build fresh');
+            }
+            core.setOutput('run-id', '');
+            core.setOutput('found', 'false');
+          }

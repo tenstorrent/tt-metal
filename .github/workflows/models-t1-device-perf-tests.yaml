@@ -54,6 +54,7 @@ on:
         description: "Enable Link Time Optimization (LTO)"
 
 permissions:
+  actions: read
   packages: write
   contents: write
 
@@ -82,6 +83,7 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
+      actions: read
       packages: write
     secrets: inherit
     with:

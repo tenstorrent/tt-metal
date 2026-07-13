@@ -73,6 +73,7 @@ on:
         description: "Enable read-write access to /mnt/MLPerf (e.g. to regenerate tensor cache). Default is read-only."
 
 permissions:
+  actions: read
   packages: write
   contents: write
 
@@ -111,6 +112,7 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
+      actions: read
       packages: write
     secrets: inherit
     with:

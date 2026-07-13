@@ -43,6 +43,7 @@ on:
         default: false
 
 permissions:
+  actions: read
   contents: read
   packages: write
 jobs:
@@ -53,6 +54,7 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
+      actions: read
       packages: write
     secrets: inherit
     with:

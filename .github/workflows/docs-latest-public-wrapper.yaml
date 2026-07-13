@@ -4,7 +4,9 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   id-token: write
+  packages: write
   pages: write
   contents: write
 
@@ -35,6 +37,7 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
+      actions: read
       packages: write
     secrets: inherit
     with:

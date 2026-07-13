@@ -73,6 +73,7 @@ jobs:
     needs: compute-skus
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      actions: read
       packages: write
     secrets: inherit
     with:

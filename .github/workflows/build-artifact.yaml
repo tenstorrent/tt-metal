@@ -1,6 +1,7 @@
 name: "Build tt-metal artifacts"
 permissions:
   contents: read
+  actions: read
   packages: write
 on:
   workflow_call:
@@ -291,6 +292,46 @@ jobs:
           platform: ${{ inputs.platform }}
           enable-lto: ${{ inputs.enable-lto || false }}
   # =============================================================================
+  # ARCHITECTURE NOTE: Artifact Reuse by Commit SHA
+  # =============================================================================
+  # Before running the expensive C++ build, check if a prior successful run of
+  # this workflow already produced artifacts for the same commit SHA. If so,
+  # skip the build and reuse those artifacts via the existing download-artifacts
+  # job. This saves ~100 runner-minutes per duplicate pipeline invocation.
+  #
+  # This job is skipped when use-artifacts-from-run is explicitly provided
+  # (the caller already knows which run to reuse).
+  # =============================================================================
+
+  find-existing-build:
+    if: ${{ inputs.use-artifacts-from-run == '' }}
+    needs: [parse-platform]
+    name: "🔍 Find existing build for this SHA"
+    runs-on: ubuntu-latest
+    outputs:
+      run-id: ${{ steps.find.outputs.run-id }}
+      found: ${{ steps.find.outputs.found }}
+    steps:
+      - name: ⬇️ Checkout (actions only)
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: true
+
+      - name: Find prior build artifacts
+        id: find
+        uses: ./.github/actions/find-build-for-sha
+        with:
+          build-type: ${{ inputs.build-type }}
+          tracy: ${{ inputs.tracy }}
+          distributed: ${{ inputs.distributed }}
+          enable-lto: ${{ inputs.enable-lto || false }}
+          check-wheel: ${{ inputs.build-wheel }}
+          python-version: ${{ needs.parse-platform.outputs.python-version }}
+          architecture: ${{ inputs.architecture }}
+          toolchain: ${{ inputs.toolchain || needs.parse-platform.outputs.toolchain }}
+
+  # =============================================================================
   # ARCHITECTURE NOTE: Docker Image Caching
   # =============================================================================
   # Docker images can be provided in two ways:
@@ -315,7 +356,12 @@ jobs:
       ref: ${{ inputs.ref }}
       harbor-prefix: ${{ inputs.harbor-prefix }}
   download-artifacts:
-    if: ${{ inputs.use-artifacts-from-run != '' }}
+    needs: find-existing-build
+    # Use always() so this runs even when find-existing-build is skipped (explicit run ID provided)
+    if: >-
+      ${{ always() && !failure() && !cancelled() &&
+          (inputs.use-artifacts-from-run != '' ||
+           needs.find-existing-build.outputs.found == 'true') }}
     runs-on: ubuntu-latest
     outputs:
       build_artifact_name: ${{ steps.download.outputs.build-artifact-name }}
@@ -334,7 +380,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         uses: ./.github/actions/download-artifacts-from-run
         with:
-          workflow_run_id: ${{ inputs.use-artifacts-from-run }}
+          workflow_run_id: >-
+            ${{ inputs.use-artifacts-from-run ||
+                needs.find-existing-build.outputs.run-id }}
           working-directory: ${{ github.workspace }}/artifacts
           tracy: ${{ inputs.tracy }}
       - name: Upload build artifact for downstream jobs
@@ -362,12 +410,16 @@ jobs:
           retention-days: 1
   build-artifact:
     # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
-    if: ${{ always() && !failure() && !cancelled() && inputs.use-artifacts-from-run == '' }}
+    # Skip when artifacts are available from a prior run (explicit input or auto-detected by find-existing-build)
+    if: >-
+      ${{ always() && !failure() && !cancelled() &&
+          inputs.use-artifacts-from-run == '' &&
+          needs.find-existing-build.outputs.found != 'true' }}
     name: >-
       🛠️ Build ${{ inputs.build-type }}
       ${{ needs.parse-platform.outputs.distro }}
       ${{ needs.parse-platform.outputs.version }}
-    needs: [parse-platform, build-docker-image]
+    needs: [parse-platform, build-docker-image, find-existing-build]
     # Cross-workflow compile mutex: if two workflows (e.g. pr-gate + merge-gate) trigger
     # builds for the same commit + config simultaneously, queue them so the second run
     # gets a fully warm ccache instead of both racing with cold caches.
@@ -715,15 +767,17 @@ jobs:
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
           TRACY_SUFFIX="${{ (inputs.tracy && '_profiler') || '' }}"
           DIST_SUFFIX="${{ (inputs.distributed == false && '_no_distributed') || '' }}"
-          BUILD_TYPE="${{ inputs.build-type || 'Release' }}"
+          LTO_SUFFIX="${{ (inputs.enable-lto && '_lto') || '' }}"
           VERSION="${{ env.VERSION }}"
           ARCH="${{ inputs.architecture }}"
+          BUILD_TYPE="${{ inputs.build-type }}"
           RUN_ID="${{ github.run_id }}"
           BUILD_ARTIFACT_PARTS=(
             "TTMetal_build_any"
             "${VERSION}"
             "${ARCH}"
-            "${TOOLCHAIN_CLEANED}${TRACY_SUFFIX}${DIST_SUFFIX}_${BUILD_TYPE}"
+            "${TOOLCHAIN_CLEANED}${TRACY_SUFFIX}${DIST_SUFFIX}${LTO_SUFFIX}"
+            "${BUILD_TYPE}"
             "${SANITIZED_REF}"
             "${RUN_ID}"
           )
@@ -743,10 +797,15 @@ jobs:
 
   build-wheel:
     # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
-    if: ${{ always() && !failure() && !cancelled() && inputs.build-wheel && inputs.use-artifacts-from-run == '' }}
+    # Skip when a prior run with BOTH C++ and wheel artifacts was found (found=true with check-wheel=true).
+    # found=true guarantees the wheel is present in the same run as the C++ build.
+    if: >-
+      ${{ always() && !failure() && !cancelled() && inputs.build-wheel &&
+          inputs.use-artifacts-from-run == '' &&
+          needs.find-existing-build.outputs.found != 'true' }}
     name: 🐍 Build wheel (Python ${{ needs.parse-platform.outputs.python-version }})
     uses: ./.github/workflows/wheels.yaml
-    needs: [parse-platform, build-docker-image]
+    needs: [parse-platform, build-docker-image, find-existing-build]
     secrets: inherit
     with:
       python-version: ${{ needs.parse-platform.outputs.python-version }}
