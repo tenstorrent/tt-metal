@@ -47,11 +47,11 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t reduction_semaphore_send_id = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t reduction_semaphore_send_addr = get_semaphore(reduction_semaphore_send_id);
     const uint32_t num_mcast_ranges = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t link = get_arg_val<uint32_t>(arg_idx++);
 
     // Set up for mcasting to reduction workers
+    Noc noc_obj;
     Semaphore<> reduction_semaphore_send(reduction_semaphore_send_id);
     reduction_semaphore_send.set(VALID);
 
@@ -167,18 +167,14 @@ void kernel_main() {
     // loop over mcast ranges
     for (uint32_t i = 0; i < num_mcast_ranges; i++) {
         // Signal the reduction workers
-        const uint64_t reduction_semaphore_recv_noc_addr = get_noc_multicast_addr(
+        reduction_semaphore_send.set_multicast(
+            noc_obj,
             mcast_dest_noc_start_x[i],
             mcast_dest_noc_start_y[i],
             mcast_dest_noc_end_x[i],
             mcast_dest_noc_end_y[i],
-            reduction_semaphore_send_addr);
-
-        noc_semaphore_set_multicast(
-            reduction_semaphore_send_addr,
-            reduction_semaphore_recv_noc_addr,
             i == 0 ? num_mcast_cores : 0,
-            false);  // linked = false
+            /*linked=*/false);
     }
 
     // 4. global semaphore reset

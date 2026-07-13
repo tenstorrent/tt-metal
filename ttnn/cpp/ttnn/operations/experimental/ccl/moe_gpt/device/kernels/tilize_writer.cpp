@@ -155,9 +155,7 @@ void kernel_main() {
     Semaphore<> previous_chunk_sent_sem(previous_chunk_sent_semaphore_id);
     Semaphore<> initial_gather_sem(initial_gather_semaphore_id);
 
-    uint32_t matmul_chunk_available_semaphore_addr = get_semaphore(matmul_chunk_available_semaphore_id);
     uint32_t tilize_chunk_ready_semaphore_addr = get_semaphore(tilize_chunk_ready_semaphore_id);
-    uint32_t matmul_chunk_ready_semaphore_addr = get_semaphore(matmul_chunk_ready_semaphore_id);
     uint32_t previous_chunk_sent_semaphore_addr = get_semaphore(previous_chunk_sent_semaphore_id);
     uint32_t initial_gather_semaphore_addr = get_semaphore(initial_gather_semaphore_id);
 
@@ -406,22 +404,8 @@ void kernel_main() {
     /************************************************************************/
 
     uint32_t matmul_chunk_available_semaphore_wait_value = num_matmul_cores;
-    uint64_t matmul_chunk_available_semaphore_tilize_mcast_addr = get_safe_multicast_noc_addr(
-        tilize_mcast_start_x,
-        tilize_mcast_start_y,
-        tilize_mcast_end_x,
-        tilize_mcast_end_y,
-        matmul_chunk_available_semaphore_addr,
-        noc_index);
 
     uint32_t matmul_chunk_ready_semaphore_set_value = 1;
-    uint64_t matmul_chunk_ready_semaphore_mcast_addr = get_safe_multicast_noc_addr(
-        matmul_mcast_start_x,
-        matmul_mcast_start_y,
-        matmul_mcast_end_x,
-        matmul_mcast_end_y,
-        matmul_chunk_ready_semaphore_addr,
-        noc_index);
 
     uint32_t num_chunks_sent = 0;
 
@@ -436,13 +420,6 @@ void kernel_main() {
     // core target for semaphore increment)
     uint64_t tilize_chunk_ready_drain_semaphore_noc_addr =
         get_noc_addr(drain_core_noc_x, drain_core_noc_y, tilize_chunk_ready_semaphore_addr, noc_index);
-    uint64_t tilize_chunk_ready_mcast_addr = get_safe_multicast_noc_addr(
-        tilize_mcast_start_x,
-        tilize_mcast_start_y,
-        tilize_mcast_end_x,
-        tilize_mcast_end_y,
-        tilize_chunk_ready_semaphore_addr,
-        noc_index);
 
     uint64_t first_half_buffer_matmul_chunk_input_mcast_addr = get_safe_multicast_noc_addr(
         matmul_mcast_start_x,
@@ -522,14 +499,26 @@ void kernel_main() {
                 if (is_drain_tilize_core && num_tilize_cores > 1) {
                     // use the local value of the semaphore, which is the value we just waited on (no need to set local
                     // value)
-                    // Device 2.0 migration: legacy primitive retained: noc_semaphore_set_multicast targets a
-                    // precomposed multicast uint64_t NoC address with raw local sem address as source.
-                    noc_semaphore_set_multicast(
-                        matmul_chunk_available_semaphore_addr,
-                        matmul_chunk_available_semaphore_tilize_mcast_addr,
-                        tilize_bounding_box_num_cores - 1,
-                        false,
-                        noc_index);
+                    // NOC1 needs the multicast rectangle corners swapped; see get_safe_multicast_noc_addr
+                    if constexpr (noc_index == 0) {
+                        matmul_chunk_available_sem.set_multicast(
+                            noc_obj,
+                            tilize_mcast_start_x,
+                            tilize_mcast_start_y,
+                            tilize_mcast_end_x,
+                            tilize_mcast_end_y,
+                            tilize_bounding_box_num_cores - 1,
+                            /*linked=*/false);
+                    } else {
+                        matmul_chunk_available_sem.set_multicast(
+                            noc_obj,
+                            tilize_mcast_end_x,
+                            tilize_mcast_end_y,
+                            tilize_mcast_start_x,
+                            tilize_mcast_start_y,
+                            tilize_bounding_box_num_cores - 1,
+                            /*linked=*/false);
+                    }
                 }
             }
             // ALL SUBSEQUENT ITERATIONS
@@ -584,29 +573,52 @@ void kernel_main() {
                 matmul_chunk_ready_sem.set(matmul_chunk_ready_semaphore_set_value);
                 matmul_chunk_ready_semaphore_set_value++;
 
-                // mcast sem set
-                // Device 2.0 migration: legacy primitive retained: noc_semaphore_set_multicast targets a
-                // precomposed multicast uint64_t NoC address with raw local sem address as source.
-                noc_semaphore_set_multicast(
-                    matmul_chunk_ready_semaphore_addr,
-                    matmul_chunk_ready_semaphore_mcast_addr,
-                    matmul_bounding_box_num_cores,
-                    false,
-                    noc_index);
+                // mcast sem set (NOC1 needs corners swapped; see get_safe_multicast_noc_addr)
+                if constexpr (noc_index == 0) {
+                    matmul_chunk_ready_sem.set_multicast(
+                        noc_obj,
+                        matmul_mcast_start_x,
+                        matmul_mcast_start_y,
+                        matmul_mcast_end_x,
+                        matmul_mcast_end_y,
+                        matmul_bounding_box_num_cores,
+                        /*linked=*/false);
+                } else {
+                    matmul_chunk_ready_sem.set_multicast(
+                        noc_obj,
+                        matmul_mcast_end_x,
+                        matmul_mcast_end_y,
+                        matmul_mcast_start_x,
+                        matmul_mcast_start_y,
+                        matmul_bounding_box_num_cores,
+                        /*linked=*/false);
+                }
 
                 // == 10 ==
                 if (num_tilize_cores > 1) {
                     // Signal to non-drain-sync cores that they can start sending the next chunk
                     // Use local semaphore value (no need to explicitly set it)
                     // Local value is from when drain-sync waits until gather process is done (8a and 5b)
-                    // Device 2.0 migration: legacy primitive retained: noc_semaphore_set_multicast targets a
-                    // precomposed multicast uint64_t NoC address with raw local sem address as source.
-                    noc_semaphore_set_multicast(
-                        tilize_chunk_ready_semaphore_addr,
-                        tilize_chunk_ready_mcast_addr,
-                        tilize_bounding_box_num_cores - 1,
-                        false,
-                        noc_index);
+                    // NOC1 needs corners swapped; see get_safe_multicast_noc_addr
+                    if constexpr (noc_index == 0) {
+                        tilize_chunk_ready_sem.set_multicast(
+                            noc_obj,
+                            tilize_mcast_start_x,
+                            tilize_mcast_start_y,
+                            tilize_mcast_end_x,
+                            tilize_mcast_end_y,
+                            tilize_bounding_box_num_cores - 1,
+                            /*linked=*/false);
+                    } else {
+                        tilize_chunk_ready_sem.set_multicast(
+                            noc_obj,
+                            tilize_mcast_end_x,
+                            tilize_mcast_end_y,
+                            tilize_mcast_start_x,
+                            tilize_mcast_start_y,
+                            tilize_bounding_box_num_cores - 1,
+                            /*linked=*/false);
+                    }
                 }
             } else {
                 // == 11 ==
