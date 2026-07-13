@@ -547,11 +547,15 @@ struct OutputStream {
     ALWI void reserve_upfront(uint32_t Ht, uint32_t Wt) const {
         if constexpr (is_one_of_v<Policy, OutputLifecycle::Bulk, OutputLifecycle::BulkReservePerTile, OutputLifecycle::BulkReservePerChunk>) {
             DataflowBuffer(Cb).reserve_back((Ht * Wt) + tile_base_value<Offset>(tile_base));
+        } else if constexpr (Policy == OutputLifecycle::L1Accumulation) {
+            DataflowBuffer(Cb).reserve_back(1);
         }
     }
     ALWI void push_at_end(uint32_t Ht, uint32_t Wt) const {
         if constexpr (is_one_of_v<Policy, OutputLifecycle::DeferredReserve, OutputLifecycle::Bulk>) {
             DataflowBuffer(Cb).push_back((walk ? (Ht * Wt) : 1u) + tile_base_value<Offset>(tile_base));
+        } else if constexpr (Policy == OutputLifecycle::L1Accumulation) {
+            DataflowBuffer(Cb).push_back(1);
         }
     }
     ALWI void push_per_tile(uint32_t /*i*/) const {
@@ -649,7 +653,8 @@ template <uint32_t Cb,
           OutputLifecycle Policy,
           PackTileReconfig Reconfig,
           Dst DstSlot,
-          TileOffset Offset>
+          TileOffset Offset,
+          PackTileL1Accumulation L1Accumulation>
 struct PackTile : OutputStream<Cb, Policy, Offset>, PackTileTag {
     using Base = OutputStream<Cb, Policy, Offset>;
     using Base::tile_base;
@@ -657,17 +662,30 @@ struct PackTile : OutputStream<Cb, Policy, Offset>, PackTileTag {
 
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "PackTile: DEST slot exceeds DEST_AUTO_LIMIT");
+    static_assert(is_legal_output_lifecycle(Policy),
+                  "PackTile: output lifecycle is not one of the named legal OutputLifecycle values");
+    static_assert(
+        (L1Accumulation != PackTileL1Accumulation::Disabled) == is_l1_accumulation_output_lifecycle(Policy),
+        "PackTile: L1 accumulation requires OutputLifecycle::L1Accumulation or "
+        "OutputLifecycle::L1AccumulationCallerManaged, and those lifecycles require L1 accumulation");
     // TileBase != None on pack side requires caller-managed-style lifecycle on the
     // output CB (caller pre-reserved a window large enough for base + kind window).
     // InputLifecycle::Streaming / InputLifecycle::Chunked reserve+push counts can't be inflated by a runtime base
     // without per-iter bookkeeping the chain doesn't own.
     static_assert(Offset == TileOffset::Unset || is_legal_output_lifecycle_with_base(Policy),
-                  "PackTile: TileOffset::Set requires InputLifecycle::Bulk-family or OutputLifecycle::CallerManaged lifecycle "
-                  "(OutputLifecycle::Bulk / OutputLifecycle::DeferredReserve / OutputLifecycle::HeldReserve / OutputLifecycle::CallerManaged)");
+                  "PackTile: TileOffset::Set requires an upfront or caller-managed output lifecycle "
+                  "(OutputLifecycle::Bulk / OutputLifecycle::DeferredReserve / OutputLifecycle::HeldReserve / "
+                  "OutputLifecycle::CallerManaged / OutputLifecycle::L1AccumulationCallerManaged)");
 
     static constexpr uint32_t  dfb                 = Cb;
     static constexpr uint32_t          pack_dfb_id()        { return Cb; }
     static constexpr Dst               pack_dst_slot       = DstSlot;
+    static constexpr bool              uses_l1_accumulation =
+        (L1Accumulation != PackTileL1Accumulation::Disabled);
+    static constexpr bool              seeds_l1_accumulation =
+        (L1Accumulation == PackTileL1Accumulation::SeedFirst);
+    static constexpr bool              manages_l1_accumulation_lifecycle =
+        (Policy == OutputLifecycle::L1Accumulation);
     static constexpr bool              is_upfront          = (Policy == OutputLifecycle::Bulk);
     static constexpr bool              uses_per_block_pack = (Policy == OutputLifecycle::Chunked);
     // `walk` (walk vs pinned output addressing) is derived from the OutputLifecycle and
@@ -698,14 +716,17 @@ struct PackTile : OutputStream<Cb, Policy, Offset>, PackTileTag {
     // correct only when the intended index coincides with the sequential counter — i.e. when there
     // is no base offset (walk: 0,1,2,…; pinned: 0). The moment `Offset == Set`, `out_idx` carries a
     // non-coincident base that the sequential path would silently drop (data lands at index 0, not
-    // base). So we switch to `pack_tile<true>` for `TileOffset::Set`, which honors `out_idx`
+    // base). L1 accumulation likewise has to keep every pack pinned to the same output tile. So we
+    // switch to `pack_tile<true>` for `TileOffset::Set` or L1 accumulation, which honors `out_idx`
     // (addr = fifo_wr_ptr + page_size*out_idx - 1) without advancing the internal counter — exactly
     // matching the explicit `base + i_flat` we pass each iteration. Unset keeps the proven
     // sequential path with zero behavior change.
     ALWI void exec(uint32_t i_flat, uint32_t /*ht*/, uint32_t /*wt*/, uint32_t slot_offset) const {
         const uint32_t base = tile_base_value<Offset>(tile_base);
         const uint32_t out_idx = walk ? (base + i_flat) : base;
-        pack_tile</*out_of_order_output=*/Offset == TileOffset::Set>(to_u32(DstSlot) + slot_offset, Cb, out_idx);
+        pack_tile</*out_of_order_output=*/Offset == TileOffset::Set ||
+                  L1Accumulation != PackTileL1Accumulation::Disabled>(
+            to_u32(DstSlot) + slot_offset, Cb, out_idx);
     }
 
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
@@ -1242,10 +1263,40 @@ struct ElemDesc {
     uint32_t dfb_b;         // dfb_b_of (INVALID_DFB when n/a)
     uint32_t pack_dfb;      // pack_dfb_of (INVALID_DFB when n/a) — writer-collision input
     Dst pack_dst_slot;
+    bool uses_l1_accumulation;
+    bool seeds_l1_accumulation;
+    bool manages_l1_accumulation_lifecycle;
     bool is_upfront;
     uint32_t lane_width;
     bool supports_block;
 };
+
+template <class E>
+constexpr bool uses_l1_accumulation_of() {
+    if constexpr (is_pack_tile_op_v<E>) {
+        return E::uses_l1_accumulation;
+    } else {
+        return false;
+    }
+}
+
+template <class E>
+constexpr bool seeds_l1_accumulation_of() {
+    if constexpr (is_pack_tile_op_v<E>) {
+        return E::seeds_l1_accumulation;
+    } else {
+        return false;
+    }
+}
+
+template <class E>
+constexpr bool manages_l1_accumulation_lifecycle_of() {
+    if constexpr (is_pack_tile_op_v<E>) {
+        return E::manages_l1_accumulation_lifecycle;
+    } else {
+        return false;
+    }
+}
 
 template <class E>
 constexpr ElemDesc describe() {
@@ -1259,6 +1310,9 @@ constexpr ElemDesc describe() {
         dfb_b_of<E>(),
         pack_dfb_of<E>(),
         pack_dst_slot_of<E>(),
+        uses_l1_accumulation_of<E>(),
+        seeds_l1_accumulation_of<E>(),
+        manages_l1_accumulation_lifecycle_of<E>(),
         is_upfront_of<E>(),
         elem_lane_width_v<E>,
         element_supports_block<E>(),
@@ -1306,6 +1360,50 @@ constexpr bool ct_writer_collide(const ElemDesc* d, int n) {
                 d[i].pack_dst_slot == d[j].pack_dst_slot)
                 return true;
     return false;
+}
+constexpr bool ct_any_l1_accumulation(const ElemDesc* d, int n) {
+    for (int i = 0; i < n; ++i)
+        if (d[i].uses_l1_accumulation) return true;
+    return false;
+}
+constexpr bool ct_all_writers_l1_accumulation(const ElemDesc* d, int n) {
+    for (int i = 0; i < n; ++i)
+        if (d[i].is_pack && !d[i].uses_l1_accumulation) return false;
+    return true;
+}
+constexpr bool ct_l1_accumulation_modes_consistent(const ElemDesc* d, int n) {
+    bool found = false;
+    bool seed_first = false;
+    for (int i = 0; i < n; ++i) {
+        if (!d[i].is_pack || !d[i].uses_l1_accumulation) continue;
+        if (!found) {
+            found = true;
+            seed_first = d[i].seeds_l1_accumulation;
+        } else if (seed_first != d[i].seeds_l1_accumulation) {
+            return false;
+        }
+    }
+    return true;
+}
+constexpr bool ct_any_seed_first_l1_accumulation(const ElemDesc* d, int n) {
+    for (int i = 0; i < n; ++i)
+        if (d[i].seeds_l1_accumulation) return true;
+    return false;
+}
+constexpr bool ct_pack_dfbs_consistent(const ElemDesc* d, int n) {
+    uint32_t seen = INVALID_DFB;
+    for (int i = 0; i < n; ++i) {
+        if (!d[i].is_pack) continue;
+        if (seen == INVALID_DFB) seen = d[i].pack_dfb;
+        else if (seen != d[i].pack_dfb) return false;
+    }
+    return true;
+}
+constexpr uint32_t ct_managed_l1_accumulation_lifecycles(const ElemDesc* d, int n) {
+    uint32_t count = 0;
+    for (int i = 0; i < n; ++i)
+        if (d[i].manages_l1_accumulation_lifecycle) ++count;
+    return count;
 }
 
 // Per-side "previous programmed CB at each index" tables, built in ONE forward sweep:
@@ -1361,6 +1459,13 @@ struct ChainTraits {
     static constexpr bool srcb_consistent = ct_side_consistent(d, N, &ElemDesc::srcb_cb);
     static constexpr bool reader_collide = ct_reader_collide(d, N);
     static constexpr bool writer_collide = ct_writer_collide(d, N);
+    static constexpr bool any_l1_accumulation = ct_any_l1_accumulation(d, N);
+    static constexpr bool any_seed_first_l1_accumulation = ct_any_seed_first_l1_accumulation(d, N);
+    static constexpr bool all_writers_l1_accumulation = ct_all_writers_l1_accumulation(d, N);
+    static constexpr bool l1_accumulation_modes_consistent = ct_l1_accumulation_modes_consistent(d, N);
+    static constexpr bool pack_dfbs_consistent = ct_pack_dfbs_consistent(d, N);
+    static constexpr uint32_t managed_l1_accumulation_lifecycles =
+        ct_managed_l1_accumulation_lifecycles(d, N);
 
     // Per-side prev-CB history (one sweep), + pack-side metadata.
     static constexpr PrevTable<N ? N : 1> prev = ct_build_prev<N ? N : 1>(d, N);
@@ -1931,6 +2036,58 @@ ALWI void apply_pack_phase(
     (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
 }
 
+// Seed-first L1 accumulation needs tile-major pack ordering. A chain may produce several
+// accumulator tiles in the same output CB: every writer must overwrite its slot for logical tile
+// zero before the packer's global accumulation mode is enabled. The L1-specific lifecycles have no
+// per-tile/per-block reserve or push, and the chain assertions require one pack CB, so only the
+// pack exec fold is needed here.
+template <std::size_t I, class ElemT, class... Es>
+ALWI void elem_apply_seed_first_l1_pack_one(
+    const ElemT& elem,
+    uint32_t i_flat,
+    uint32_t ht,
+    uint32_t wt,
+    uint32_t j,
+    uint32_t chain_lane_width) {
+    if constexpr (is_pack_tile_op_v<ElemT>) {
+        constexpr bool use_local_idx = element_uses_per_block_index_v<ElemT>;
+        const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
+        elem.exec(i_arg, ht, wt + j, j * chain_lane_width);
+    } else {
+        (void)elem;
+        (void)i_flat;
+        (void)ht;
+        (void)wt;
+        (void)j;
+        (void)chain_lane_width;
+    }
+}
+
+template <std::size_t... Is, class... Es>
+ALWI void apply_seed_first_l1_pack_phase(
+    std::index_sequence<Is...>,
+    uint32_t i_flat,
+    uint32_t ht,
+    uint32_t wt,
+    uint32_t inner_count,
+    uint32_t chain_lane_width,
+    Es&... elts) {
+    for (uint32_t j = 0; j < inner_count; ++j) {
+        auto run_one = [&](auto idx_const, auto& elem) {
+            constexpr std::size_t II = decltype(idx_const)::value;
+            using ElemT = std::remove_reference_t<decltype(elem)>;
+            elem_apply_seed_first_l1_pack_one<II, ElemT, Es...>(
+                elem, i_flat, ht, wt, j, chain_lane_width);
+        };
+        (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
+
+        // Mode changes only after every accumulator slot has received logical tile zero.
+        if (i_flat == 0 && j == 0) {
+            pack_reconfig_l1_acc(1);
+        }
+    }
+}
+
 template <class E>
 ALWI void elem_wait_upfront(const E& e, uint32_t Ht, uint32_t Wt) {
     if constexpr (is_cb_reader_op_v<E>) e.wait_upfront(Ht, Wt);
@@ -2005,6 +2162,13 @@ ALWI void chain_run_loop(EltwiseShape shape, Es... elts) {
     (detail::elem_wait_upfront(elts, Ht, Wt), ...);
     (detail::elem_reserve_upfront(elts, Ht, Wt), ...);
 
+    // L1 accumulation is a packer-global mode. A preloaded accumulator enables it before the walk;
+    // seed-first starts in overwrite mode and enables it only after all output slots have packed
+    // logical tile zero. Skip-compute leaves the packer untouched along with all other reconfig.
+    if constexpr (detail::ChainTraits<Es...>::any_l1_accumulation && !SkipCompute) {
+        pack_reconfig_l1_acc(detail::ChainTraits<Es...>::any_seed_first_l1_accumulation ? 0 : 1);
+    }
+
     // Outer 2D loop. `flat_base = ht * Wt + wt_base` is computed once per (ht, wt_base) pair.
     // Block-mode elements consume `flat_base + j`; bcast-mode read `ht` / `wt = wt_base + j`.
     for (uint32_t ht = 0; ht < Ht; ++ht) {
@@ -2023,12 +2187,22 @@ ALWI void chain_run_loop(EltwiseShape shape, Es... elts) {
                 IdxSeq{}, i_flat, ht, wt_base, inner_count, chain_lane_w, Ht, Wt, elts...);
             tile_regs_commit();
             tile_regs_wait();
-            detail::apply_pack_phase<SkipCompute>(
-                IdxSeq{}, i_flat, ht, wt_base, inner_count, chain_lane_w, Ht, Wt, elts...);
+            if constexpr (detail::ChainTraits<Es...>::any_seed_first_l1_accumulation && !SkipCompute) {
+                detail::apply_seed_first_l1_pack_phase(
+                    IdxSeq{}, i_flat, ht, wt_base, inner_count, chain_lane_w, elts...);
+            } else {
+                detail::apply_pack_phase<SkipCompute>(
+                    IdxSeq{}, i_flat, ht, wt_base, inner_count, chain_lane_w, Ht, Wt, elts...);
+            }
             tile_regs_release();
         }
         (detail::elem_pop_per_row(elts), ...);
         (detail::elem_push_per_row(elts), ...);
+    }
+
+    // Reset before any accumulated output is published, so later pack work cannot inherit mode.
+    if constexpr (detail::ChainTraits<Es...>::any_l1_accumulation && !SkipCompute) {
+        pack_reconfig_l1_acc(0);
     }
 
     // End-of-chain upfront-policy lifecycle.
@@ -2049,6 +2223,20 @@ ALWI void eltwise_chain_impl(EltwiseShape shape, Es... elts) {
     // the CKL_ELTWISE_CHAIN_SKIP_COMPUTE doc in eltwise_chain.hpp). The CB wait/pop/reserve/push
     // counts are unchanged, so the pipeline still handshakes — no hang.
     constexpr bool skip_compute = (CKL_ELTWISE_CHAIN_SKIP_COMPUTE != 0);
+    static_assert(
+        !detail::ChainTraits<Es...>::any_l1_accumulation ||
+            detail::ChainTraits<Es...>::pack_dfbs_consistent,
+        "eltwise_chain: L1 accumulation supports only one output CB per chain");
+    static_assert(
+        !detail::ChainTraits<Es...>::any_l1_accumulation ||
+            detail::ChainTraits<Es...>::all_writers_l1_accumulation,
+        "eltwise_chain: a chain using L1 accumulation cannot mix accumulating and ordinary PackTile elements");
+    static_assert(
+        detail::ChainTraits<Es...>::l1_accumulation_modes_consistent,
+        "eltwise_chain: accumulating PackTile elements must all use the same L1 accumulation mode");
+    static_assert(
+        detail::ChainTraits<Es...>::managed_l1_accumulation_lifecycles <= 1,
+        "eltwise_chain: only one PackTile may own the L1-accumulation reserve-one/push-one lifecycle");
     static_assert(!chain_has_duplicate_upfront_cbs_v<Chain>,
                   "eltwise_chain: two CB-reader elements share a CB on upfront-wait policy.");
     static_assert(!chain_pack_writes_collide_v<Chain>,
