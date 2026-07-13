@@ -48,7 +48,7 @@ Especially dangerous when a MOP/replay runs, an MMIO write changes a register it
 - `cfg[...] = ...` via `get_cfg_pointer()` / `get_cfg16_pointer()`
 - `reg_write(addr, data)`
 - `cfg_rmw(...)` / `cfg_rmw_gpr(...)`  (do `cfg_regs[addr] = ...` internally)
-- `regfile[idx] = ...`  (raw GPR MMIO store — **easy to miss in greps**)
+- `regfile[idx] = ...` via `get_regfile_pointer()`  (raw GPR MMIO store — **easy to miss in greps**)
 - `addr_mod_*::set(...)` / `rv_wrcfg` when implemented as a raw `volatile cfg[...] =` (true on **Quasar**; on WH/BH `addr_mod_t::set` uses the ordered `TTI_SETC16` and is SAFE)
 - any raw `volatile T* p = reinterpret_cast<...>(BASE); p[i] = ...` to cfg/GPR/MOP-cfg/TDMA register space (`cfg_write()`, `xmov_*`, `mop_cfg[]=`)
 
@@ -67,7 +67,7 @@ Especially dangerous when a MOP/replay runs, an MMIO write changes a register it
 1. **Enumerate** every MMIO write (across all three arches), including the easy-to-miss classes:
    ```bash
    cd tt_metal/tt-llk
-   grep -rInE "\b(mop_)?cfg[0-9_]*\[[^]]+\]\s*=[^=]|reg_write\(|\bcfg_rmw(_gpr)?\(|\bregfile\s*\[[^]]+\]\s*=[^=]|get_cfg_pointer|get_cfg16_pointer|rv_wrcfg|\.set\(ADDR_MOD|cfg_write\(|XMOV_(L1_BASE|CMD)\s*\[" \
+   grep -rInE "\b(mop_)?cfg[0-9_]*\[[^]]+\]\s*=[^=]|reg_write\(|\bcfg_rmw(_gpr)?\(|\bregfile\s*\[[^]]+\]\s*=[^=]|get_cfg_pointer|get_cfg16_pointer|get_regfile_pointer|rv_wrcfg|\.set\(ADDR_MOD|cfg_write\(|XMOV_(L1_BASE|CMD)\s*\[" \
      tt_llk_* --include=*.h | grep -v /tests/
    ```
    Exclude non-bug-class targets: `pc_buf_base[]=`, `mailbox_base[]=` (semaphore/mailbox, not a register a Tensix instruction reads). **But** the `pc_buf_base[1]`/`pc_buf_base[2]` *read-backs* inside `tensix_sync()`/`mop_sync()` ARE ordering primitives — enumerate them too, both as guards (SAFE list) and as perf targets (below): `grep -rInE "\b(tensix_sync|mop_sync)\s*\(" tt_llk_* --include=*.h | grep -v /tests/`.
