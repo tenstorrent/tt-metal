@@ -61,6 +61,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
 #include "api/dataflow/circular_buffer.h"
+#include "tools/profiler/kernel_profiler.hpp"
 #include "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_fused_activation.hpp"
 
 #ifdef SWIGLU_OAI
@@ -282,6 +283,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
 
     for (uint32_t block = 0; block < num_blocks; ++block) {
         if constexpr (tilize_x) {
+            DeviceZoneScopedN("TILIZE");  // TEMP profiling: in-kernel row-major tilize cost
             // Row-major x: tilize this K-block's cb_x_rm strips (bf16) -> x_cb
             // (cb_in0_x, bf8_b) before the matmul consumes it. Packer recipe
             // mirrors conv's conv_bmm_tilize.cpp: reconfig packer to the tilize

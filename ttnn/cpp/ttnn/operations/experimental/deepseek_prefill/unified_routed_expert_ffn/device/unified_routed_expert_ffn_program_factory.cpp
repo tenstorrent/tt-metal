@@ -164,7 +164,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         const uint32_t pcN_d = (N_down_tiles_full + gx - 1) / gx;
         const uint32_t ibw_d = pcN_gu;
         uint64_t b = 0;
-        b += 2ull * pcM * ibw_gu * in0_x_ts;  // CB_IN0_X (double-buffered)
+        b += (op.x_is_row_major ? 1ull : 2ull) * pcM * ibw_gu * in0_x_ts;  // CB_IN0_X (single-buf on RM)
         if (op.x_is_row_major) {
             b += 2ull * pcM * ibw_gu * p_ts;  // CB_X_RM bf16 staging (row-major only)
         }
@@ -310,7 +310,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // in the "circular buffers" section below; keep the two in sync.
     const auto cb_footprint_bytes = [&](uint32_t M, uint32_t w_gu) -> uint64_t {
         uint64_t total = 0;
-        total += static_cast<uint64_t>(M * w_gu * 2) * in0_x_tile_size;  // cb_in0_x
+        total += static_cast<uint64_t>(M * w_gu * (op.x_is_row_major ? 1 : 2)) *
+                 in0_x_tile_size;  // cb_in0_x (RM: single-buf)
         if (op.x_is_row_major) {
             total += static_cast<uint64_t>(M * w_gu * 2) * partials_gu_tile_size;  // cb_x_rm (bf16 staging)
         }
@@ -513,7 +514,12 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // while compute consumes K-block N. PM FPU util = 0 today says we're
     // memory-bound; bigger input CBs let the kernel pipeline DRAM I/O with
     // compute instead of serialising.
-    make_cb(CB_IN0_X, in0_x_df, /*tiles=*/gu_in0_block_num_tiles * 2, in0_x_tile_size);
+    // Row-major path: cb_in0_x is compute-internal (tilize output -> matmul input,
+    // both on the compute threads sharing DST -> serial), so a second slot buys no
+    // pipelining. Single-buffer it to free L1 for a wider in0_block_w_gu. TILE path
+    // keeps double-buffering: the reader fills it and compute consumes it (cross-RISC
+    // overlap).
+    make_cb(CB_IN0_X, in0_x_df, /*tiles=*/gu_in0_block_num_tiles * (op.x_is_row_major ? 1u : 2u), in0_x_tile_size);
     // Row-major bf16 x staging (x_is_row_major only). Double-buffered like
     // cb_in0_x: it is a MULTICAST SOURCE, so the sender must fill K-block N+1
     // while N's posted mcast still drains — single-buffering reuses the slot
