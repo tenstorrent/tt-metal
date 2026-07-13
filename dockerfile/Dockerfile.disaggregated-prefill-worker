@@ -32,10 +32,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Clone the engine at the requested ref WITH submodules so its own tt-metal
 # source is present for headers (build_migration_layer.sh --synthetic-only needs
 # submodule source, not a built libtt_metal.so). Token via git `insteadOf`; this
-# stage is discarded, so the token never reaches `final`.
+# stage is discarded so the token never reaches `final`, and the token-bearing
+# /root/.gitconfig is scrubbed in-layer (trap) so it can't leak via a build-cache
+# export either.
 WORKDIR /src
 RUN --mount=type=secret,id=gh_token \
     set -e; \
+    trap 'rm -f /root/.gitconfig' EXIT; \
     TOKEN="$(cat /run/secrets/gh_token)"; \
     git config --global --add url."https://x-access-token:${TOKEN}@github.com/".insteadOf "git@github.com:"; \
     git config --global --add url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"; \
@@ -72,17 +75,19 @@ ENV TT_METAL_HOME=${TT_METAL_HOME} \
 USER user
 WORKDIR /home/user
 
-# Local tt-metal working tree -> ${TT_METAL_HOME}. .git IS included (the
-# dockerignore keeps it): the submodules are empty gitlinks here and are fetched
-# fresh below, and tt-metal derives its version from git-describe. Build outputs
-# and caches are excluded by the dockerignore. COPY lands root-owned; chowned next.
-COPY . ${TT_METAL_HOME}
-
-# Fetch submodules at the SHAs the commit pins, build tt-metal from scratch, and
-# create the venv. Token via git `insteadOf` (covers any private/nested submodule)
-# and scrubbed in the SAME layer (rm .gitconfig) so it never persists in the image.
-RUN --mount=type=secret,id=gh_token,mode=0444 \
+# Bring the local tt-metal working tree into the image via a bind mount + copy
+# INSIDE the build RUN — deliberately NOT a `COPY . ${TT_METAL_HOME}` instruction.
+# Why: the build needs .git present (submodule fetch + git-describe version), but a
+# plain `COPY .` bakes the ~2 GB .git — including any CI-checkout credentials in
+# .git/config — permanently into a runtime layer that no later `rm` can remove.
+# Copying then deleting .git within this single RUN keeps .git out of every
+# committed layer while the build still sees it. Build outputs and caches are
+# excluded by the dockerignore; the bind-mounted context honours it too.
+RUN --mount=type=bind,target=/context \
+    --mount=type=secret,id=gh_token,mode=0444 \
     set -e; \
+    sudo mkdir -p ${TT_METAL_HOME}; \
+    sudo cp -a /context/. ${TT_METAL_HOME}/; \
     sudo chown -R user:user ${TT_METAL_HOME}; \
     git config --global --add safe.directory '*'; \
     TOKEN="$(cat /run/secrets/gh_token)"; \
@@ -96,8 +101,11 @@ RUN --mount=type=secret,id=gh_token,mode=0444 \
     sudo rm -rf /opt/venv; \
     sudo chown user:user /opt; \
     ./create_venv.sh --env-dir /opt/venv; \
-    # Drop build/token caches so they don't bloat or leak into the image.
-    rm -rf ${TT_METAL_HOME}/.cpmcache /home/user/.cache/ccache /home/user/.gitconfig; \
+    # Scrub VCS metadata + build/token caches before the layer commits: .git holds
+    # ~2 GB of history plus any CI checkout creds and is not needed at runtime (the
+    # version is already compiled in); the token config must not persist either.
+    rm -rf ${TT_METAL_HOME}/.git ${TT_METAL_HOME}/.cpmcache \
+           /home/user/.cache/ccache /home/user/.gitconfig; \
     sudo chmod -R 777 /home/user
 
 # Bake in _migration_client at PREFILL_MIGRATION_CLIENT_DIR. Must equal the path
