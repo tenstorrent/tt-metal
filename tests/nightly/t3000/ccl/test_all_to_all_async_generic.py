@@ -363,3 +363,66 @@ def test_all_to_all_fabric_2d_glm_head_to_sequence(mesh_device):
         reuse_inputs=True,
         cluster_axis=1,
     )
+
+
+# These global tensors produce the exact per-device inputs observed in the GLM sparse-MLA profiler
+# on a 2x4 SPxTP mesh. Run this node through run_safe_pytest.sh --profile; its device-kernel rows are
+# directly comparable to GLM's 0.667669 ms head->sequence and 0.604350 ms sequence->head calls.
+GLM_A2A_PERF_CASES = [
+    pytest.param(
+        [1, 64, 1280, 576],
+        1,
+        2,
+        [1, 16, 640, 576],
+        id="head_to_sequence",
+    ),
+    pytest.param(
+        [1, 128, 640, 512],
+        2,
+        1,
+        [1, 64, 160, 512],
+        id="sequence_to_head",
+    ),
+]
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"trace_region_size": 100000, "fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "logical_shape,in_dim,out_dim,per_device_input_shape",
+    GLM_A2A_PERF_CASES,
+)
+def test_all_to_all_fabric_2d_glm_perf(
+    mesh_device,
+    logical_shape,
+    in_dim,
+    out_dim,
+    per_device_input_shape,
+):
+    """Profile and exactly check the two A2As used around GLM SparseSDPA."""
+    num_links = 2  # GLM uses both trained Blackhole fabric routing planes; FABRIC_2D one-link hangs.
+    logger.info(
+        "GLM A2A perf shape: per-device input={}, in_dim={}, out_dim={}", per_device_input_shape, in_dim, out_dim
+    )
+    run_all_to_all_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        logical_shape=logical_shape,
+        in_dim=in_dim,
+        out_dim=out_dim,
+        num_links=num_links,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        topology=ttnn.Topology.Linear,
+        num_iters=2,
+        input_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        do_check=True,
+        trace_mode=False,
+        reuse_inputs=True,
+        cluster_axis=1,
+    )
