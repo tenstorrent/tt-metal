@@ -52,6 +52,7 @@ from helpers.utils import passed_test
         MathOperation.SfpuElwadd,
         MathOperation.SfpuElwsub,
         MathOperation.SfpuElwmul,
+        MathOperation.SfpuElwrsub,
         # Disabled: failing due to very small differences in generated stimuli
         # MathOperation.SfpuElwLt,
         # MathOperation.SfpuElwGt,
@@ -136,11 +137,123 @@ def test_sfpu_binary_div(formats, dest_acc):
 @parametrize(
     formats=input_output_formats(
         [
+            DataFormat.Float32,
+            DataFormat.Float16,
+            DataFormat.Float16_b,
+        ]
+    ),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_sfpu_binary_pow(formats, dest_acc):
+    # POW routes through calculate_sfpu_binary (BinaryOp::POW), which evaluates
+    # base**exp via exp(exp * log(base)). Split out from test_sfpu_binary_float
+    # because it is a polynomial approximation whose precision warrants its own
+    # coverage; the default positive stimuli ([0.1, 1.1]) keep base>0 so no
+    # NaN/negative-base edge cases are exercised here.
+    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
+        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+
+    if (
+        TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+        and formats.input_format == DataFormat.Float16
+        and dest_acc == DestAccumulation.No
+    ):
+        pytest.skip(
+            "Float16_a isn't supported for SFPU on Blackhole without being converted to 32-bit intermediate format in dest register"
+        )
+
+    sfpu_binary(
+        formats,
+        dest_acc,
+        MathOperation.SfpuElwpow,
+        broadcast_type=LlkBroadcastType.None_,
+    )
+
+
+@parametrize(
+    formats=input_output_formats(
+        [
+            DataFormat.Float32,
+            DataFormat.Float16,
+            DataFormat.Float16_b,
+        ]
+    ),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_sfpu_binary_xlogy(formats, dest_acc):
+    # xlogy(x, y) = x * log(y), routed through calculate_sfpu_binary
+    # (BinaryOp::XLOGY). Uses the default strictly-positive stimuli
+    # ([0.1, 1.1]) so log(y) is finite; the kernel's NaN branches (y < 0)
+    # are intentionally not exercised here (see BinarySFPUGolden._xlogy).
+    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
+        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+
+    if (
+        TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+        and formats.input_format == DataFormat.Float16
+        and dest_acc == DestAccumulation.No
+    ):
+        pytest.skip(
+            "Float16_a isn't supported for SFPU on Blackhole without being converted to 32-bit intermediate format in dest register"
+        )
+
+    sfpu_binary(
+        formats,
+        dest_acc,
+        MathOperation.SfpuXlogy,
+        broadcast_type=LlkBroadcastType.None_,
+    )
+
+
+@parametrize(
+    formats=input_output_formats(
+        [
+            DataFormat.Float32,
+            DataFormat.Float16,
+            DataFormat.Float16_b,
+        ]
+    ),
+    mathop=[
+        MathOperation.SfpuElwEq,
+        MathOperation.SfpuElwNe,
+    ],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_sfpu_binary_eq_ne(formats, dest_acc, mathop):
+    # Float equality / inequality via calculate_binary_comp_fp32. The golden
+    # compares the dest-format-quantized operands (matching what the SFPU sees
+    # in the dest register), so continuous random stimuli that round to distinct
+    # values agree on both sides. Split from test_sfpu_binary_float because the
+    # comparison ops emit exact 0.0/1.0 and warrant their own coverage.
+    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
+        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+
+    if (
+        TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+        and formats.input_format == DataFormat.Float16
+        and dest_acc == DestAccumulation.No
+    ):
+        pytest.skip(
+            "Float16_a isn't supported for SFPU on Blackhole without being converted to 32-bit intermediate format in dest register"
+        )
+
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        broadcast_type=LlkBroadcastType.None_,
+    )
+
+
+@parametrize(
+    formats=input_output_formats(
+        [
             DataFormat.Int32,
         ]
     ),
     mathop=[
         MathOperation.SfpuElwadd,
+        MathOperation.SfpuElwsub,
         MathOperation.SfpuElwRightShift,
         MathOperation.SfpuElwLeftShift,
         MathOperation.SfpuElwLogicalRightShift,

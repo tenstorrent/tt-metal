@@ -3004,6 +3004,8 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuLeInt: self._le_int,
                 MathOperation.SfpuGeInt: self._ge_int,
                 MathOperation.SfpuXlogy: self._xlogy,
+                MathOperation.SfpuElwrsub: self._rsub,
+                MathOperation.SfpuElwpow: self._pow,
                 MathOperation.SfpuElwRightShift: self._right_shift,
                 MathOperation.SfpuElwLeftShift: self._left_shift,
                 MathOperation.SfpuElwLogicalRightShift: self._logical_right_shift,
@@ -3124,13 +3126,34 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
 
     # Operation methods are covered by Eltwise Binary Golden
     def _xlogy(self, x, y):
-        # Unable to model edge cases for Tensix behavior in golden.
-        # Tensix shows inconsistent patterns in handling non-finite results for xlogy, depending on the input,
-        # data format (both input and output), and destination accumulation (dest_acc).
-        # We need to work with the Tensix team to understand when and why certain results are returned,
-        # what configuration dependencies exist, and how to handle them appropriately.
-        # Without this understanding, discrepancies will occur between golden and Tensix results due to differing edge case handling.
-        pass
+        # xlogy(x, y) = x * log(y). The kernel returns NaN for y < 0 (and for
+        # y == NaN); y == 0 yields x * -inf. Non-finite edge cases across
+        # formats/dest_acc are not consistently modelled, so xlogy is exercised
+        # with strictly-positive stimuli (default [0.1, 1.1]) where the result
+        # is always finite. Computed in fp32 to mirror the SFPU log path.
+        xf = (
+            x.to(torch.float32)
+            if isinstance(x, torch.Tensor)
+            else torch.tensor(float(x))
+        )
+        yf = (
+            y.to(torch.float32)
+            if isinstance(y, torch.Tensor)
+            else torch.tensor(float(y))
+        )
+        res = xf * torch.log(yf)
+        return res.to(x.dtype) if isinstance(x, torch.Tensor) else res.item()
+
+    def _rsub(self, t1, t2):
+        # rsub(a, b) = b - a. The kernel computes in1 - in0, i.e. src2 - src1.
+        wide = self._wide_dtype(t1)
+        return (t2.to(wide) - t1.to(wide)).to(t1.dtype)
+
+    def _pow(self, t1, t2):
+        # pow(a, b) = a ** b, computed in fp32 to mirror the SFPU exp(b*log(a))
+        # path. Default stimuli are positive ([0.1, 1.1]), so no NaN handling is
+        # required for the base here.
+        return (t1.to(torch.float32) ** t2.to(torch.float32)).to(t1.dtype)
 
     def _right_shift(self, t1, t2):
         # The kernel defines shift amounts outside [0, 31] as producing 0 (see
