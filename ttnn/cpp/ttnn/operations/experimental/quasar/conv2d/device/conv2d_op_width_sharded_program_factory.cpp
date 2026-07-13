@@ -618,10 +618,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
                 .math_approx_mode = math_approx_mode,
             },
     };
-    // Intra-thread self-loop scope for the two compute self-loop DFBs (single-threaded on Gen1).
-    compute_kernel.advanced_options.dfb_self_loop_connectivities.insert(
-        {DFB_MATMUL_PARTIALS, m2::DFBSelfLoopConnectivity::INTRA});
-    compute_kernel.advanced_options.dfb_self_loop_connectivities.insert({DFB_OUT, m2::DFBSelfLoopConnectivity::INTRA});
 
     // ---- Activation reader kernel ----
     // DFB bindings: produces ACT_ROW_MAJOR + ACT (mcast), consumes ACT_TILIZED (mcast source);

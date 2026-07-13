@@ -45,29 +45,33 @@ def _tile_align(shard_shape, layout):
     return (h, w)
 
 
-def _height_shard_config(shape, device, num_cores=4, layout=ttnn.TILE_LAYOUT):
+def _height_shard_config(
+    shape, device, num_cores=4, layout=ttnn.TILE_LAYOUT, orientation=ttnn.ShardOrientation.ROW_MAJOR
+):
     """Height-sharded MemoryConfig."""
     compute_grid = device.compute_with_storage_grid_size()
     num_cores = min(num_cores, compute_grid.x * compute_grid.y)
     shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, True)
     total_h, w = _padded_hw(shape, layout)
     shard_shape = _tile_align(((total_h + num_cores - 1) // num_cores, w), layout)
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, orientation)
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
 
-def _width_shard_config(shape, device, num_cores=4, layout=ttnn.TILE_LAYOUT):
+def _width_shard_config(
+    shape, device, num_cores=4, layout=ttnn.TILE_LAYOUT, orientation=ttnn.ShardOrientation.ROW_MAJOR
+):
     """Width-sharded MemoryConfig."""
     compute_grid = device.compute_with_storage_grid_size()
     num_cores = min(num_cores, compute_grid.x * compute_grid.y)
     shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, True)
     total_h, w = _padded_hw(shape, layout)
     shard_shape = _tile_align((total_h, (w + num_cores - 1) // num_cores), layout)
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, orientation)
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
 
 
-def _block_shard_config(shape, device, layout=ttnn.TILE_LAYOUT):
+def _block_shard_config(shape, device, layout=ttnn.TILE_LAYOUT, orientation=ttnn.ShardOrientation.ROW_MAJOR):
     """Block-sharded MemoryConfig (2x2 grid)."""
     compute_grid = device.compute_with_storage_grid_size()
     grid_x = min(2, compute_grid.x)
@@ -80,7 +84,7 @@ def _block_shard_config(shape, device, layout=ttnn.TILE_LAYOUT):
     shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))}),
         shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
+        orientation,
     )
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
 
@@ -146,6 +150,7 @@ def run_repeat_test(
     output_mem_config=None,
     dtype=ttnn.bfloat16,
     pcc=0.9999,
+    expected_shard_orientation=None,
 ):
     """Run repeat and assert PCC + output memory_layout."""
     torch.manual_seed(12345)
@@ -171,6 +176,11 @@ def run_repeat_test(
             assert (
                 actual.shard_spec is not None
             ), "Sharded output requested but result has no shard_spec (silent fallback?)"
+            if expected_shard_orientation is not None:
+                assert actual.shard_spec.orientation == expected_shard_orientation, (
+                    f"Expected output shard orientation {expected_shard_orientation}, "
+                    f"got {actual.shard_spec.orientation}"
+                )
     elif input_mem_config.is_sharded():
         # Sharded input → inherit layout or fallback to interleaved (non-alignable shapes).
         assert actual.memory_layout in (
@@ -766,7 +776,7 @@ def test_repeat_default_memory_config(shape, repeat_shape, input_factory, device
     )
 
 
-# Sharded input → sharded output without shard_spec (native + composite paths).
+# Sharded input → sharded output without shard_spec; col_major_* cases cover orientation propagation.
 @pytest.mark.parametrize(
     "shape, repeat_shape, input_factory, output_layout",
     [
@@ -791,17 +801,48 @@ def test_repeat_default_memory_config(shape, repeat_shape, input_factory, device
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             id="uneven_block_in_height_out_nospec",
         ),
+        pytest.param(
+            (1, 1, 64, 64),
+            (1, 1, 1, 2),
+            lambda d: _block_shard_config((1, 1, 64, 64), d, orientation=ttnn.ShardOrientation.COL_MAJOR),
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            id="col_major_block_in_block_out_nospec",
+        ),
+        pytest.param(
+            (1, 1, 64, 64),
+            (1, 1, 1, 2),
+            lambda d: _block_shard_config((1, 1, 64, 64), d, orientation=ttnn.ShardOrientation.COL_MAJOR),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            id="col_major_block_in_height_out_nospec",
+        ),
     ],
 )
 def test_repeat_sharded_in_sharded_out_nospec(shape, repeat_shape, input_factory, output_layout, device):
+    in_mc = input_factory(device)
     out_mc = ttnn.MemoryConfig(output_layout, ttnn.BufferType.L1)
+    # The output should preserve the input's shard orientation through the synthesis path.
+    expected_orientation = in_mc.shard_spec.orientation if in_mc.is_sharded() and in_mc.shard_spec else None
     run_repeat_test(
         shape,
         repeat_shape,
         device,
         input_layout=ttnn.TILE_LAYOUT,
-        input_mem_config=input_factory(device),
+        input_mem_config=in_mc,
         output_mem_config=out_mc,
+        expected_shard_orientation=expected_orientation,
+    )
+
+
+def test_repeat_native_col_major_height_sharded_to_sharded_nospec(device):
+    shape = (1, 1, 128, 128)
+    run_repeat_test(
+        shape,
+        (1, 1, 1, 2),
+        device,
+        input_layout=ttnn.TILE_LAYOUT,
+        input_mem_config=_height_shard_config(shape, device, orientation=ttnn.ShardOrientation.COL_MAJOR),
+        output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1),
+        expected_shard_orientation=ttnn.ShardOrientation.COL_MAJOR,
     )
 
 

@@ -199,9 +199,28 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     reader_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
     // Dual-NoC K gather: reader + writer each gather half the rows on their own NoC. The new CB ids are
     // passed as defines (kept off the positional compile-arg blocks, which the kernels index tightly).
+    // Gate the natural->block-cyclic page-id remap (see sparse_sdpa_gather.hpp). The reader and writer take the
+    // SAME defines, so one helper populates both to keep them in lockstep. ALL constants are compile-time (the
+    // cache length T is folded into the program hash for this path), so the remap is one mul+shift divide +
+    // shift/mask. Stride gaps: BC_SHARD_STRIDE_GAP = T/sp - chunk_local (= shard_len - chunk_local);
+    // BC_SLAB_STRIDE_GAP = chunk_local*(sp-1).
+    const auto add_bc_defines = [&attrs, &t](std::map<std::string, std::string>& defs) {
+        if (!attrs.has_block_cyclic()) {
+            return;
+        }
+        const uint32_t bc_sp = attrs.block_cyclic->sp;
+        const uint32_t bc_chunk_local = attrs.block_cyclic->chunk_local;
+        const uint32_t bc_seq_len_local = t.kv.logical_shape()[2] / bc_sp;
+        defs["BC_ENABLE"] = "1";
+        defs["BC_CHUNK_LOCAL"] = std::to_string(bc_chunk_local);
+        defs["BC_SP"] = std::to_string(bc_sp);
+        defs["BC_SLAB_STRIDE_GAP"] = std::to_string(bc_chunk_local * (bc_sp - 1));
+        defs["BC_SHARD_STRIDE_GAP"] = std::to_string(bc_seq_len_local - bc_chunk_local);
+    };
     {
         std::map<std::string, std::string> rdefs{
             {"CB_KREQ", std::to_string(cb_kreq)}, {"CB_KACK", std::to_string(cb_kack)}};
+        add_bc_defines(rdefs);
         reader_desc.defines = tt::tt_metal::KernelDescriptor::Defines(rdefs.begin(), rdefs.end());
     }
 
@@ -220,6 +239,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
             {"CB_IDX", std::to_string(cb_idx)},
             {"K_DIM", std::to_string(k_dim)},
             {"KV_ELEM_BYTES", std::to_string(kv_elem_bytes)}};
+        add_bc_defines(wdefs);  // same block-cyclic remap defines as the reader
         writer_desc.defines = tt::tt_metal::KernelDescriptor::Defines(wdefs.begin(), wdefs.end());
     }
 
@@ -279,13 +299,15 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     // (so changing the slot doesn't recompile). 0 when not indexed (kv is a single [1,1,T,K_DIM] cache).
     const uint32_t kv_T = t.kv.logical_shape()[2];
     const uint32_t kv_batch_page_offset = attrs.cache_batch_idx.value_or(0) * kv_T;
+    // Block-cyclic remap needs NO runtime arg: all its constants are compile-time defines (the cache length T
+    // is hashed for the block-cyclic path; see the define blocks above).
     for (uint32_t i = 0; i < num_cores; ++i) {
         tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
         uint32_t tok_start = i * base + std::min(i, extra);
         uint32_t tok_count = base + (i < extra ? 1u : 0u);
-        // kv_batch_page_offset is the LAST positional arg of each list; its index is encoded once in
-        // sparse_sdpa_rt::k{Reader,Writer}BatchOffsetArg (used by get_dynamic_runtime_args to re-apply it on a
-        // cache hit). If you reorder these lists, update those constants or the re-apply targets the wrong slot.
+        // kv_batch_page_offset sits at a fixed index (sparse_sdpa_rt::k{Reader,Writer}BatchOffsetArg), re-applied
+        // on a cache hit by get_dynamic_runtime_args (the slot changes per dispatch). If you reorder the args
+        // before it, update those constants or the re-apply targets the wrong slot.
         reader_desc.emplace_runtime_args(core, {q_buf, kv_buf, idx_buf, tok_start, tok_count, kv_batch_page_offset});
         writer_desc.emplace_runtime_args(
             core, {out_buf, tok_start, tok_count, kv_buf, kv_batch_page_offset});  // kv_buf: writer K-half gather

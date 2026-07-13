@@ -87,6 +87,22 @@ ALWI void quant_tile_init(const uint32_t zero_point) {
 
 // clang-format off
 /**
+ * Initialize the sfpu with the zero point argument of the quantization Op, rounding into the
+ * unsigned uint8 range [0, 255]. To be called once at beginning of a kernel.
+ *
+ * Return value: None
+ *
+ * | Argument   | Description                           | Data type | Valid range | Required |
+ * |------------|---------------------------------------|-----------|-------------|----------|
+ * | zero_point | The zero point of the quantization Op | uint32_t  | Any number  | Yes      |
+ * */
+// clang-format on
+ALWI void quant_uint8_tile_init(const uint32_t zero_point) {
+    MATH((SFPU_BINARY_INIT_FN_ARGS(quant_int32, sfpu::quant_init, (APPROX, false, DataFormat::UInt8), zero_point)));
+}
+
+// clang-format off
+/**
  * Initialize the sfpu with the zero point argument of the re-quantization Op.
  * To be called once at beginning of a kernel.
  *
@@ -99,6 +115,22 @@ ALWI void quant_tile_init(const uint32_t zero_point) {
 // clang-format on
 ALWI void requant_tile_init(const uint32_t zero_point) {
     MATH((SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROX), zero_point)));
+}
+
+// clang-format off
+/**
+ * Initialize the sfpu with the zero point argument of the re-quantization Op, rounding into the
+ * unsigned uint8 range [0, 255]. To be called once at beginning of a kernel.
+ *
+ * Return value: None
+ *
+ * | Argument   | Description                              | Data type | Valid range | Required |
+ * |------------|------------------------------------------|-----------|-------------|----------|
+ * | zero_point | The zero point of the re-quantization Op | uint32_t  | Any number  | Yes      |
+ * */
+// clang-format on
+ALWI void requant_uint8_tile_init(const uint32_t zero_point) {
+    MATH((SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::UInt8), zero_point)));
 }
 
 // clang-format off

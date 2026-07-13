@@ -77,18 +77,6 @@ inline void _typecast_store_(TYPE value) {
     __builtin_rvtt_sfpstore(value.get(), 0 /* dest_reg */, _sfpu_sfpmem_type_<FMT>(), ADDR_MOD_6);
 }
 
-// fp32 -> sign-magnitude int32 (SFPCAST, round-nearest-even). The HW-valid FP32->SM32 mode (0x4)
-// is rejected by the current Quasar toolchain's sfpcast intrinsic immediate checker, so emit the
-// raw instruction: pin the value to a fixed lreg for the TTI op, then adopt the result back into
-// the sfpi value model. sfpreadlreg/sfpwritelreg are register bindings, not data moves, so this
-// lowers to a single SFPCAST — identical to the hand-written TTI baseline.
-inline sfpi::vSMag _typecast_fp32_to_smag_(sfpi::vFloat value) {
-    constexpr std::uint32_t SFPCAST_FP32_TO_INT32_RNE = 0x4;
-    sfpi::l_reg[sfpi::LRegs::LReg1] = value;
-    TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, SFPCAST_FP32_TO_INT32_RNE);
-    return sfpi::l_reg[sfpi::LRegs::LReg1];
-}
-
 // fp32 -> fp16 narrow, picking the fp16a/fp16b variant from the destination format. Round-nearest-
 // even matches the validated TTI encoding (the immediate-descale path is int-only and unused here).
 template <DataFormat DST_FMT>
@@ -134,7 +122,9 @@ inline void _calculate_typecast_arith_sfp_rows_() {
         if constexpr (_typecast_is_unsigned_int_<DST_FMT>()) {
             value = sfpi::rectified_linear_unit(value);
         }
-        sfpi::vSMag int_value = _typecast_fp32_to_smag_(value);
+
+        // fp32 -> sign-magnitude int32 (SFPCAST, round-nearest-even)
+        sfpi::vSMag int_value = sfpi::convert<sfpi::vSMag>(value, sfpi::RoundMode::NearestEven);
         if constexpr (_typecast_is_int8_<DST_FMT>()) {
             _typecast_store_<DST_FMT>(_typecast_narrow_to_int8_<DST_FMT>(sfpi::as<sfpi::vInt>(int_value)));
         } else {

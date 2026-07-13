@@ -1196,13 +1196,6 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         .hw_config = compute_hw,
     };
     compute.compiler_options.defines = std::move(compute_defines);
-    if (return_indices) {
-        compute.advanced_options.dfb_self_loop_connectivities.insert(
-            {DFB_COMPUTE_TMP_IDX, DFBSelfLoopConnectivity::INTRA});
-    } else if (cb_sizes.has_pre_tilize) {
-        compute.advanced_options.dfb_self_loop_connectivities.insert({DFB_PRE_TILIZE, DFBSelfLoopConnectivity::INTRA});
-        compute.advanced_options.dfb_self_loop_connectivities.insert({DFB_FAST_TILIZE, DFBSelfLoopConnectivity::INTRA});
-    }
 
     spec.kernels = {reader0};
     if (reader1.has_value()) {

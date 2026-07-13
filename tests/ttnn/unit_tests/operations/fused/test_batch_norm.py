@@ -576,7 +576,7 @@ def test_batch_norm_compute_config(input_shapes, training, weight, bias, input_d
     # Execute low-accuracy groupnorm
     config_low = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
     )

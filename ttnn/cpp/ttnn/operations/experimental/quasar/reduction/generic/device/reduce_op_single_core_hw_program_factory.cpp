@@ -192,10 +192,6 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
         .compile_time_args = {{"Ht", Ht}, {"Wt", Wt}, {"NC", NC}, {"post_mul_scaler_bits", post_mul_scaler_bits}},
         .hw_config = ComputeHardwareConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en},
     };
-    if (operation_attributes.negate) {
-        compute.advanced_options.dfb_self_loop_connectivities.insert({ACC, DFBSelfLoopConnectivity::INTRA});
-        compute.advanced_options.dfb_self_loop_connectivities.insert({INEG, DFBSelfLoopConnectivity::INTRA});
-    }
 
     Group<KernelSpec> kernels = {reader, writer, compute};
     Group<WorkUnitSpec> work_units = {

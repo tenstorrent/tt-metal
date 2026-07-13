@@ -7,22 +7,20 @@ golden and the Kimi vllm row-sharded layout into one [seq, 576] tensor.
 
 Device-level chunked correctness (full transformer, both variants) is covered by the standalone
 runner's KV-cache PCC; this only guards the trace-format handling so a layout change is caught in CI."""
+
 from pathlib import Path
 
 import pytest
 
-from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import (
-    _load_golden_kv_post,
-    get_variant,
-    load_trace_token_ids,
-    resolve_trace_dir,
-)
+from models.demos.common.prefill.adapter import get_adapter
+from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids, resolve_trace_dir
+from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import _load_golden_kv_post
 
 KVPE_DIM = 576  # kv_lora_rank (512) + qk_rope_head_dim (64)
 
 
 def _trace_or_skip(variant_name):
-    trace = get_variant(variant_name).prefill_trace_default
+    trace = get_adapter(variant_name).prefill_trace_default
     if not Path(trace).exists():
         pytest.skip(f"golden trace not staged: {trace}")
     return resolve_trace_dir(trace)

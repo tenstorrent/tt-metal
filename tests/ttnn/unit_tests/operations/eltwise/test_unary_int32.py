@@ -192,10 +192,31 @@ def test_unary_square_int32(input_shapes, low_a, high_a, device):
     assert torch.equal(output_tensor, torch_output_tensor)
 
 
-def test_abs_int32(device):
-    torch.manual_seed(0)
-
-    torch_input_tensor_a = torch.randint(low=-1000, high=100, size=(1, 1, 320, 384), dtype=torch.int32)
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 3, 320, 384])),
+    ],
+)
+@pytest.mark.parametrize(
+    "low_a, high_a",
+    [
+        (-1000, 100),
+        (-2147483647, 0),  # max negative to zero
+        (0, 2147483647),  # zero to max positive
+        (-2147483647, 2147483647),  # full representable range
+    ],
+)
+def test_abs_int32(input_shapes, low_a, high_a, device):
+    # Note: abs(-2147483648) is not representable in int32, so the range stops at -2147483647.
+    num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
+    torch_input_tensor_a = torch.linspace(low_a, high_a, num_elements, dtype=torch.int32)
+    torch_input_tensor_a[::5] = 0  # ensure the zero / sign-clear path is exercised
+    torch_input_tensor_a = torch_input_tensor_a[:num_elements].reshape(input_shapes)
+    # Guard the documented INT_MIN avoidance: abs(-2147483648) overflows int32 and would
+    # silently corrupt both golden and device results (a green-but-meaningless test).
+    assert torch_input_tensor_a.min().item() != -2147483648, "INT_MIN leaked into abs test input"
 
     golden_function = ttnn.get_golden_function(ttnn.abs)
     torch_output_tensor = golden_function(torch_input_tensor_a)

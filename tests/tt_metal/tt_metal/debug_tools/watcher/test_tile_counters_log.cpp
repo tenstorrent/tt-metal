@@ -86,8 +86,7 @@ void RunTest(
         .hw_config =
             experimental::DataMovementHardwareConfig{
                 .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{
-                        .disable_implicit_sync_for = {TILE_COUNTER_DFB}}},
+                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     // NEO compute consumer kernel (4 threads = 4 Neo clusters)
@@ -185,11 +184,7 @@ void RunTest(
 }
 
 // Test bypass mode (strided consumer access pattern)
-TEST_F(MeshWatcherDumpAllFixture, TestWatcherTileCounterLogBypass) {
-    const auto& hal = MetalContext::instance().hal();
-    if (!hal.has_tile_counter_registers()) {
-        GTEST_SKIP() << "Tile counters are only used on Quasar";
-    }
+TEST_F(MeshWatcherTileCounterFixture, TestWatcherTileCounterLogBypass) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
             [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
@@ -200,11 +195,7 @@ TEST_F(MeshWatcherDumpAllFixture, TestWatcherTileCounterLogBypass) {
 }
 
 // Test remapper mode (blocked consumer access pattern)
-TEST_F(MeshWatcherDumpAllFixture, TestWatcherTileCounterLogRemapper) {
-    const auto& hal = MetalContext::instance().hal();
-    if (!hal.has_tile_counter_registers()) {
-        GTEST_SKIP() << "Tile counters are only used on Quasar";
-    }
+TEST_F(MeshWatcherTileCounterFixture, TestWatcherTileCounterLogRemapper) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
             [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {

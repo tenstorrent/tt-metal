@@ -14,9 +14,9 @@ namespace {
 // copies source stick to destination stick (first phase of scatter)
 template <typename number_type>
 FORCE_INLINE void copy_input_to_output(
-    const uint32_t& input_cb, const uint32_t& output_cb, const uint32_t& input_chunk_size) {
-    const uint32_t input_l1_read_addr = get_read_ptr(input_cb);
-    const uint32_t output_l1_write_addr = get_write_ptr(output_cb);
+    const CircularBuffer& input_cb, const CircularBuffer& output_cb, const uint32_t& input_chunk_size) {
+    const uint32_t input_l1_read_addr = input_cb.get_read_ptr();
+    const uint32_t output_l1_write_addr = output_cb.get_write_ptr();
     volatile tt_l1_ptr number_type* input_l1_read_ptr =
         reinterpret_cast<volatile tt_l1_ptr number_type*>(input_l1_read_addr);
     volatile tt_l1_ptr number_type* output_l1_write_ptr =
@@ -54,19 +54,19 @@ FORCE_INLINE number_type perform_reduction(
 // performs scatter on data loaded to cb with load_to_cb
 template <typename number_type, typename index_type>
 FORCE_INLINE void scatter_along_chunk(
-    const uint32_t& input_cb,
-    const uint32_t& index_cb,
-    const uint32_t& source_cb,
-    const uint32_t& output_cb,
+    const CircularBuffer& input_cb,
+    const CircularBuffer& index_cb,
+    const CircularBuffer& source_cb,
+    const CircularBuffer& output_cb,
     const uint32_t& input_stick_size,
     const uint32_t& input_offset,
     const uint32_t& input_chunk_size,
     const uint32_t& index_chunk_size,
     const ScatterReductionType& scatter_reduction_type = ScatterReductionType::INVALID) {
-    const uint32_t input_l1_read_addr = get_read_ptr(input_cb);
-    const uint32_t index_l1_read_addr = get_read_ptr(index_cb);
-    const uint32_t source_l1_read_addr = get_read_ptr(source_cb);
-    const uint32_t output_l1_write_addr = get_write_ptr(output_cb);
+    const uint32_t input_l1_read_addr = input_cb.get_read_ptr();
+    const uint32_t index_l1_read_addr = index_cb.get_read_ptr();
+    const uint32_t source_l1_read_addr = source_cb.get_read_ptr();
+    const uint32_t output_l1_write_addr = output_cb.get_write_ptr();
     volatile tt_l1_ptr number_type* input_l1_read_ptr =
         reinterpret_cast<volatile tt_l1_ptr number_type*>(input_l1_read_addr);
     volatile tt_l1_ptr index_type* index_l1_read_ptr =
@@ -90,7 +90,7 @@ FORCE_INLINE void scatter_along_chunk(
         volatile number_type& source_value = source_l1_read_ptr[index_in_index_chunk];
         const uint32_t& output_index = index_value - input_offset;
         output_l1_write_ptr[output_index] = perform_reduction<number_type>(
-            output_l1_write_ptr[output_index], source_value, scatter_reduction_type, get_dataformat(input_cb));
+            output_l1_write_ptr[output_index], source_value, scatter_reduction_type, input_cb.get_dataformat());
     }
 }
 
@@ -153,7 +153,7 @@ void kernel_main() {
             input_cb.wait_front(ONE_PAGE);
             output_cb.reserve_back(ONE_PAGE);
 
-            copy_input_to_output<input_std_type>(ctas.input_cb, ctas.output_cb, input_chunk_length);
+            copy_input_to_output<input_std_type>(input_cb, output_cb, input_chunk_length);
 
             if (in_bounds<N>(coord, index_dims)) {
                 const uint32_t index_stick_id = to_id<N>(coord, index_strides);
@@ -185,10 +185,10 @@ void kernel_main() {
                     index_cb.wait_front(ONE_PAGE);
                     source_cb.wait_front(ONE_PAGE);
                     scatter_along_chunk<input_std_type, index_std_type>(
-                        ctas.input_cb,
-                        ctas.index_cb,
-                        ctas.source_cb,
-                        ctas.output_cb,
+                        input_cb,
+                        index_cb,
+                        source_cb,
+                        output_cb,
                         ctas.input_stick_size,
                         input_offset,
                         input_chunk_length,

@@ -59,7 +59,8 @@ void loop_and_wait_with_timeout(
     const FuncWait& wait_condition,
     const OnTimeout& on_timeout,
     std::chrono::duration<float> timeout_duration,
-    const GetProgress& get_progress) {
+    const GetProgress& get_progress,
+    std::atomic<bool>* exit_condition = nullptr) {
     if (timeout_duration.count() > 0.0f) {
         auto last_progress_time = std::chrono::high_resolution_clock::now();
         uint32_t last_progress_value = 0;
@@ -70,6 +71,10 @@ void loop_and_wait_with_timeout(
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_progress_update_ms());
 
         while (true) {
+            if (exit_condition != nullptr && exit_condition->load(std::memory_order_acquire)) {
+                break;
+            }
+
             func_body();
 
             // Check if operation is finished
@@ -101,6 +106,9 @@ void loop_and_wait_with_timeout(
         }
     } else {
         do {
+            if (exit_condition != nullptr && exit_condition->load(std::memory_order_acquire)) {
+                break;
+            }
             func_body();
         } while (wait_condition());
     }
@@ -767,7 +775,8 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
         wait_condition,
         on_timeout,
         tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations(),
-        get_dispatch_progress);
+        get_dispatch_progress,
+        &exit_condition);
 
     return write_ptr_and_toggle;
 }

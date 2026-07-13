@@ -127,7 +127,7 @@ public:
         // Convert vectors of CoreCoords to CoreRangeSets
         std::unordered_map<uint32_t, tt::tt_metal::CoreRangeSet> result;
         for (const auto& [grid_id, core_coords] : grid_to_core_coords) {
-            result[grid_id] = tt::tt_metal::CoreRangeSet(tt::stl::Span<const tt::tt_metal::CoreCoord>(core_coords));
+            result[grid_id] = tt::tt_metal::CoreRangeSet(ttsl::Span<const tt::tt_metal::CoreCoord>(core_coords));
         }
 
         return result;
@@ -493,7 +493,7 @@ private:
         }
 
         return tt::tt_metal::distributed::MeshCoordinate(
-            tt::stl::Span<const uint32_t>(global_coord_vals.data(), global_coord_vals.size()));
+            ttsl::Span<const uint32_t>(global_coord_vals.data(), global_coord_vals.size()));
     }
 
     tt::tt_metal::distributed::MeshCoordinate compute_local_coord_from_global_coord(
@@ -509,7 +509,7 @@ private:
         }
 
         return tt::tt_metal::distributed::MeshCoordinate(
-            tt::stl::Span<const uint32_t>(local_coord_vals.data(), local_coord_vals.size()));
+            ttsl::Span<const uint32_t>(local_coord_vals.data(), local_coord_vals.size()));
     }
 
     uint32_t compute_local_gcore_id_from_local_coord(
@@ -555,7 +555,7 @@ private:
         }
 
         auto grid_coord = tt::tt_metal::distributed::MeshCoordinate(
-            tt::stl::Span<const uint32_t>(grid_coord_vals.data(), grid_coord_vals.size()));
+            ttsl::Span<const uint32_t>(grid_coord_vals.data(), grid_coord_vals.size()));
 
         for (const auto& grid : grids_) {
             if (grid.coord == grid_coord) {
