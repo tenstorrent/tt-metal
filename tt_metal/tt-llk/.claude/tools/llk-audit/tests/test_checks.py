@@ -1907,6 +1907,47 @@ def test_noc_sync_posted_flush_only():
 
 
 @case
+def test_capture_tu_ledger_one_row_per_tu():
+    # capture.tu_ledger_status must emit EXACTLY ONE ledger row per TU: a host leak is
+    # FOLDED into the single status (never a second row -> no coverage-denominator
+    # double-count), and the marker must LEAD the status so bootstrap.sh's HOLE grep
+    # (anchored at the '[') still trips AND the tripwire TU is not counted as clean "ok".
+    import re
+
+    kt_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "kernel_tier"
+    )
+    sys.path.insert(0, kt_dir)
+    import capture
+
+    dev = {"file": "ttnn/cpp/x/kernels/reader.cpp"}  # device kernel surface
+    host = {"file": "tt_metal/impl/buffers/semaphore.hpp"}  # host tree
+    HOLE = re.compile(
+        r"\[(PARSE-FAIL|EMPTY-OUT|EXEC-FAIL|SKIP-noparse|SKIP-nosrc|HOST-LEAK|NON-KERNEL-CMD)"
+    )
+
+    # clean TU: one "ok" row, all facts kept.
+    kept, status, nf, hl = capture.tu_ledger_status([dev, dev], 0)
+    assert status == "ok" and nf == 2 and hl == [], (status, nf, hl)
+    assert status.startswith("ok") and not HOLE.search(f"[{status:16}]")
+
+    # host leak WITH surviving device facts: ONE row, marker LEADS, device fact KEPT
+    # (the bare-`continue` trap: those facts must not be dropped), NOT counted as "ok",
+    # and the bootstrap HOLE grep still matches.
+    kept, status, nf, hl = capture.tu_ledger_status([dev, host], 0)
+    assert len(hl) == 1, hl
+    assert nf == 1 and kept == [dev], (nf, kept)  # device fact survived
+    assert status.startswith("HOST-LEAK="), status  # leads so the grep + non-ok
+    assert not status.startswith("ok")
+    assert HOLE.search(f"[{status:16}]"), status  # bootstrap still detects the hole
+
+    # host leak with NO surviving device fact: still ONE row, still hole-detected.
+    kept, status, nf, hl = capture.tu_ledger_status([host], 0)
+    assert nf == 0 and status.startswith("HOST-LEAK=") and ":nonkernel" in status
+    assert HOLE.search(f"[{status:16}]"), status
+
+
+@case
 def test_kernel_surface_filter():
     # capture.in_kernel_surface: JIT/op kernels + '<prefix>_kernels/' trees are KEPT;
     # LLK 'ckernels/' primitive defs, hw/inc/api, sfpi STL, tt-llk are DROPPED. This

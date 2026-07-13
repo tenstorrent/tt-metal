@@ -169,6 +169,33 @@ def is_host_path(path: str) -> bool:
     return any(h in path for h in HOST_SURFACE_MARKERS)
 
 
+def tu_ledger_status(all_facts: list, pe: int):
+    """The SINGLE per-TU coverage-ledger entry: fold the kernel-surface trim, host-leak
+    tripwire, and empty-fact ('nonkernel') conditions into ONE status string + the kept
+    facts. Returns (kept, status, nf, host_leak).
+
+    Exactly one row per TU — a host leak must NOT emit a *second* ledger row (that
+    double-counts the coverage denominator). A HOST-LEAK is PREPENDED so it LEADS the
+    status because (a) bootstrap.sh's HOLE grep is anchored at the '[' (`\\[(...|HOST-LEAK
+    |...)`) so the marker must come first to be detected, and (b) a scope tripwire must
+    NOT read as a clean 'ok' parse in the `ok/N` headline. The surviving non-host device
+    facts are still returned in `kept` so the caller writes them (dropping them would be
+    a real recall loss)."""
+    kept = [f for f in all_facts if in_kernel_surface(f.get("file", ""))]
+    host_leak = [f for f in all_facts if is_host_path(f.get("file", ""))]
+    kept = [f for f in kept if not is_host_path(f.get("file", ""))]
+    dropped = len(all_facts) - len(kept)
+    nf = len(kept)
+    status = "ok" if pe == 0 else "ok(parse_errors)"
+    if dropped:
+        status += f":drop={dropped}"
+    if nf == 0:
+        status += ":nonkernel"
+    if host_leak:
+        status = f"HOST-LEAK={len(host_leak)}:{status}"
+    return kept, status, nf, host_leak
+
+
 def _parse_cmd(cmd: str):
     """From a `cd <dir> && <gpp> ...` command, return (cwd, src, [-I..], [-D..])."""
     cwd = None
@@ -334,41 +361,32 @@ def main(argv=None) -> int:
                 ledger.append((label, "PARSE-FAIL", 0, 0))
                 continue
             pe = obj.get("parse_errors", 0)
-            # PRECISE kernel-surface trim: the coarse extractor filter admits the LLK
-            # `ckernels/` primitive defs; keep only true kernel-source facts so the
-            # checkers never flag a primitive DEFINITION as a kernel race. Re-serialize
-            # the (same-envelope) trimmed object; the dropped count is reported in the
-            # ledger, never silently swallowed.
+            # PRECISE kernel-surface trim + device-only host-leak tripwire + nonkernel
+            # (empty-fact) handling, folded into EXACTLY ONE ledger row per TU (see
+            # tu_ledger_status — a second HOST-LEAK row would double-count the coverage
+            # denominator). The coarse extractor filter admits the LLK `ckernels/`
+            # primitive defs; the trim keeps only true kernel-source facts so a primitive
+            # DEFINITION is never flagged as a kernel race, and its dropped count is
+            # reported in the status, never silently swallowed.
             all_facts = obj.get("facts", [])
-            kept = [f for f in all_facts if in_kernel_surface(f.get("file", ""))]
-            dropped = len(all_facts) - len(kept)
-            # Device-only integrity tripwire: a HOST-tree fact reaching the extractor
-            # output means the scope filter has been loosened (e.g. the host
-            # `Semaphore` would be conflated with the device one). Drop any such fact
-            # from the base AND flag it LOUDLY — the tool is device-only; never
-            # silently analyze host code. Checks all_facts (the earliest signal, before
-            # in_kernel_surface). Normally impossible under the kernels/ filter.
-            host_leak = [f for f in all_facts if is_host_path(f.get("file", ""))]
+            kept, status, nf, host_leak = tu_ledger_status(all_facts, pe)
             if host_leak:
-                kept = [f for f in kept if not is_host_path(f.get("file", ""))]
-                dropped = len(all_facts) - len(kept)
+                # A HOST-tree fact reaching the extractor output means the scope filter
+                # has been loosened (e.g. the host `Semaphore` conflated with the device
+                # one). Flag it LOUDLY — the tool is device-only. (Normally impossible
+                # under the kernels/ filter; the surviving non-host facts are kept below.)
                 print(
                     f"llk-audit capture: WARNING {len(host_leak)} HOST-tree fact(s) "
                     f"leaked into the kernel base (e.g. {host_leak[0].get('file','?')}) "
                     f"— dropped; the tool is DEVICE-ONLY. Check the scope filter.",
                     file=sys.stderr,
                 )
-                ledger.append((label, f"HOST-LEAK:{len(host_leak)}", 0, pe))
             obj["facts"] = kept
-            nf = len(kept)
-            status = "ok" if pe == 0 else "ok(parse_errors)"
-            if dropped:
-                status += f":drop={dropped}"
-            # A TU that parsed cleanly but contributed NO kernel-surface facts (e.g. a
-            # pure-library TU) is still "ok" (counted as parsed — NOT a coverage hole),
-            # but we don't write its empty-fact envelope (it would only dilute the base).
+            # A TU that contributed NO kernel-surface facts (e.g. a pure-library TU) is
+            # still counted as parsed (status leads with "ok" unless host-leaked), but we
+            # don't write its empty-fact envelope (it would only dilute the base).
             if nf == 0:
-                ledger.append((label, status + ":nonkernel", 0, pe))
+                ledger.append((label, status, 0, pe))
                 continue
             merged.write(json.dumps(obj) + "\n")
             ledger.append((label, status, nf, pe))
