@@ -93,7 +93,7 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 // Quasar sim coherency: write back the CPU-store tail fill so compute's TL1 read of in_cb's
                 // pad rows sees the init value (not stale L1). Same reason as the window-copy write-back.
                 flush_l2_cache_range(
-                    reinterpret_cast<uintptr_t>(in_cb.get_write_ptr() + tail_offset_bytes),
+                    static_cast<uintptr_t>(in_cb.get_write_ptr() + tail_offset_bytes),
                     static_cast<size_t>(tail_elems) * 2);
 #endif
             }
@@ -357,8 +357,7 @@ void kernel_main() {
         // compute reduce reads it directly from TL1. Without write-back compute multiplies by a STALE scalar
         // -> wrong reduce magnitude (the /TILE_HEIGHT scale on the const-channel test) and, if the stale value
         // varies per reduce, decorrelated output (low PCC). Mirrors the in_cb / scratch->out write-backs.
-        flush_l2_cache_range(
-            reinterpret_cast<uintptr_t>(in_scalar_cb.get_write_ptr()), static_cast<size_t>(FACE_WIDTH) * 2);
+        flush_l2_cache_range(static_cast<uintptr_t>(in_scalar_cb.get_write_ptr()), static_cast<size_t>(FACE_WIDTH) * 2);
 #endif
         in_scalar_cb.push_back(1);
     }
