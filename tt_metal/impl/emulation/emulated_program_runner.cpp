@@ -265,8 +265,8 @@ extern "C" void __emule_fiber_note_publish(unsigned pages) {
     efib::FiberScheduler::instance().note_publish(pages);
 }
 
-// Worker L1 slot size + mask: a worker's L1 offset is a 2 MB-aligned truncated host pointer, so the masked
-// low bits recover the in-slot offset. Applied ONLY for WORKER cores (DRAM banks are GB-scale — see the
+// Worker L1 slot size + mask: a worker's L1 field is a 0-based in-slot offset (< 2 MB), so masking the low
+// bits is an idempotent guard. Applied ONLY for WORKER cores (DRAM banks are GB-scale — see the
 // per-resolver comments). Used by every NOC-address resolver.
 static constexpr uint32_t L1_SLOT_SIZE = 2u * 1024 * 1024;  // 2 MB per worker L1 slot
 static constexpr uint32_t L1_SLOT_MASK = L1_SLOT_SIZE - 1;  // 0x1FFFFF
@@ -275,10 +275,8 @@ static constexpr uint32_t L1_SLOT_MASK = L1_SLOT_SIZE - 1;  // 0x1FFFFF
 // Real firmware encoding: y in bits [47:42], x in bits [41:36], addr in bits [35:0]
 //
 // The L1_SLOT_MASK is applied ONLY for WORKER cores. Two reasons:
-//  1. The mask handles a worker-kernel pattern where the L1 offset is a
-//     truncated host pointer (from `get_write_ptr()`) rather than a
-//     firmware-style L1 offset. Worker L1 slots are 2 MB-aligned, so the
-//     masked low bits recover the in-slot offset.
+//  1. Worker L1 fields are 0-based in-slot offsets (from `get_write_ptr()` etc.),
+//     always < 2 MB, so the mask is an idempotent guard on the local field.
 //  2. DRAM banks are GB-scale (2 GB on Wormhole views, 4 GB on Blackhole)
 //     and the kernel-side per-bank addrgen helper produces an `addr` field
 //     that is the true in-bank offset (already includes
@@ -335,10 +333,8 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
     uint32_t y_start = (mcast_addr >> (NOC_LOCAL_BITS + 3 * NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
     uint64_t l1_offset = mcast_addr & NOC_LOCAL_MASK;
 
-    // The L1 offset may be a truncated host pointer (from get_write_ptr()) rather
-    // than a firmware-style L1 offset.  Worker L1 slots are 2 MB-aligned, so
-    // masking with SLOT_MASK extracts the true within-slot offset.  For
-    // firmware-style offsets (< 2 MB) this is a no-op.
+    // The L1 offset is a 0-based in-slot offset (< 2 MB, from get_write_ptr() etc.), so masking
+    // with SLOT_MASK is an idempotent guard on the local field.
     // Multicast targets only WORKER cores (DRAM cores are skipped by the role
     // check in the delivery loop below), so the mask is L1-correct here.
     l1_offset &= L1_SLOT_MASK;
@@ -1367,8 +1363,9 @@ static std::function<void()> jit_compile_kernel(
     std::ostringstream cmd;
     // -fms-extensions: fabric/CCL kernels collapse 32-bit-device L1 pointers to uint32_t (e.g.
     // `(uint32_t)pkt_hdr`); on the 64-bit host clang treats pointer→smaller-int as a hard error, but
-    // -fms-extensions downgrades it to a warning. emule's MAP_32BIT window keeps those addresses in the
-    // low 2 GB, so the truncation is value-preserving. (opt_flags = -O2, + ASAN debug info when enabled.)
+    // -fms-extensions downgrades it to a warning. The JIT patch pass rewrites those header narrowings to
+    // bridge_l1-relative offsets (A-rule), so they stay correct when worker L1 is mapped above 4 GB.
+    // (opt_flags = -O2, + ASAN debug info when enabled.)
     cmd << TT_EMULE_CXX_COMPILER << " -std=c++" << TT_EMULE_CXX_STANDARD << " -fPIC -shared" << opt_flags
         << " -Wno-c++11-narrowing -fms-extensions"
         // out_dir first: patched copies of shared kernel headers (written under
