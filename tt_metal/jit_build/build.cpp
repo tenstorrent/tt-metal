@@ -145,6 +145,18 @@ void JitBuildEnv::init(
         "-flto=auto -ffast-math "
         "-fno-exceptions -fno-rtti -fno-use-cxa-atexit ";
 
+    // Strip the absolute repo-root prefix from __FILE__ so kernel/firmware zone
+    // source-location strings (and their compile-time 16-bit profiler hashes,
+    // kernel_profiler::Hash16_CT) are build-path-independent. The device emits a
+    // 16-bit zone hash and the host re-derives it from the same __FILE__-containing
+    // string, so an absolute path can fold two distinct firmware zones to the same
+    // hash and hard-throw in populateZoneSrcLocations() ("Source location hashes are
+    // colliding"). Observed at this build path: BRISC-FW (brisc.cc:433) and
+    // ERISC-KERNEL (erisck.cc:29) both hashed to 0xa8d8, which broke Tracy device-op
+    // profiling. Mapping root_ -> "" makes __FILE__ relative (e.g.
+    // tt_metal/hw/firmware/src/tt-1xx/brisc.cc), which is collision-free.
+    common_flags += "-ffile-prefix-map=" + this->root_ + "= ";
+
     if (rtoptions.get_jit_analytics_enabled()) {
         common_flags += "-fdump-rtl-all -fdump-tree-original ";
     }
