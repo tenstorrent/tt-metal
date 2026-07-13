@@ -36,13 +36,9 @@ class GLM52Adapter(MLAPrefillAdapter):
     # --- identity & runner defaults ---
     name = "glm_5_2"
     model_config = GLM52Config
-    # Config is hand-built (see load_hf_config); this stays empty so an accidental AutoConfig read
-    # yields an obvious empty path. Real weights come from the TTNN cache.
-    hf_model_default = ""
-    # GLM-5.2 staged TTNN weight cache. PLACEHOLDER — confirm/override with PREFILL_TTNN_CACHE /
-    # TT_GLM52_PREFILL_TTNN_CACHE. (5.2 weights differ from 5.1, so this is NOT glm_5_1's cache.)
-    ttnn_cache_default = "/data/nmilicevic/glm52_tp4_cache"
-    default_gate_mode = "DEVICE_FP32"  # GLM: single expert group
+    hf_model_default = "/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8"
+    ttnn_cache_default = "/mnt/models/deepseek-prefill-cache/glm52_ttnn_cache"
+    default_gate_mode = "DEVICE_FP32"
     prefill_trace_default = "/mnt/models/deepseek-prefill-cache/golden/structured_traces/glm_52_55k_vllm"
 
     # Single expert group + device gate: route routing-all-gather semaphores to L1_SMALL.

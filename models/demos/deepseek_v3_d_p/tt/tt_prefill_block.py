@@ -479,9 +479,7 @@ class TtPrefillBlock(LightweightModule):
             assert actual_end is not None, "actual_end required when on_layer_complete is set"
             # zero_padded_kv_cache is a DENSE (TILE) kvpe-cache op. A DSA-sparse model's kvpe cache is
             # bf16/fp8 ROW_MAJOR (sparse_sdpa reads it natively) and the op asserts TILE, so skip it for
-            # sparse. Consequence: the tile-pad window past actual_end keeps stale data — harmless without
-            # migration (never read), but sparse migration needs a ROW_MAJOR pad-zero (P1). The per-layer
-            # ack still fires below.
+            # sparse.
             if kvpe_cache.layout == ttnn.TILE_LAYOUT:
                 ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
                     kvpe_cache,
