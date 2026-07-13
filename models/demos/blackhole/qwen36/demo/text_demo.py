@@ -34,9 +34,12 @@ from models.tt_transformers.tt.model_config import determine_device_name
 
 # Multi-device (TP) is selected via MESH_DEVICE. The 27B (default) runs on a P150x4
 # (1,4) Blackhole mesh; the 9B can run on a single P150 (1,1) via MESH_DEVICE=P150.
+# P150x8 is a (1,8) LINE of 8 P150s (BH LoudBox) for TP=8 — the 4 KV heads are replicated
+# 2x across the mesh (see attention/tp.py). The mesh MUST be a 1-D line (1,8), not (2,4):
+# the TP collectives take the reduce_scatter-over-line path only when an axis is 1.
 # On a single device the model runs its validated single-device path, on a multi-device
 # mesh it needs FABRIC_1D for the TP collectives (see tp_common notes).
-_MESH_SHAPE = {"P150": (1, 1), "P150x4": (1, 4)}.get(os.environ.get("MESH_DEVICE"), (1, 4))
+_MESH_SHAPE = {"P150": (1, 1), "P150x4": (1, 4), "P150x8": (1, 8)}.get(os.environ.get("MESH_DEVICE"), (1, 4))
 _MULTI = _MESH_SHAPE != (1, 1)
 # Multi-device (TP) long-context prefill replays a captured per-chunk trace, so the mesh
 # needs a trace region (ttnn's DEFAULT_TRACE_REGION_SIZE is 0). 256 MiB matches the validated

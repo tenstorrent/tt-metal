@@ -49,8 +49,16 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         cache_path=c("wqkv"),
         dtype=ttnn.bfloat8_b,
     )
+    # KV projections. When TP exceeds the KV-head count (8 devices, 4 KV heads),
+    # replicate each KV head across the tp // n_kv_heads devices that share it, so every
+    # device holds one whole head (n_local_kv_heads == 1) and the column-parallel shard
+    # never splits a head. The device→KV-head map (d * n_kv_heads // tp) matches the
+    # contiguous query-head sharding, so each device's query heads see their own KV group.
+    # No-op when tp <= n_kv_heads (the validated TP=4 path: 4 heads / 4 devices).
+    wk = tpc.replicate_kv_weight(state_dict["k_proj.weight"], args.n_kv_heads, args.num_devices, args.head_dim)
+    wv = tpc.replicate_kv_weight(state_dict["v_proj.weight"], args.n_kv_heads, args.num_devices, args.head_dim)
     tw["wk"] = tpc.shard_w(
-        state_dict["k_proj.weight"],
+        wk,
         mesh,
         dim=-1,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -58,7 +66,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         dtype=ttnn.bfloat8_b,
     )
     tw["wv"] = tpc.shard_w(
-        state_dict["v_proj.weight"],
+        wv,
         mesh,
         dim=-1,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
