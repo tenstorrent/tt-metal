@@ -2199,6 +2199,10 @@ class UnarySFPUGolden:
             MathOperation.UnaryMin: self._unary_min,
             MathOperation.Polygamma: self._polygamma,
             MathOperation.Xielu: self._xielu,
+            MathOperation.Hardshrink: self._hardshrink,
+            MathOperation.Softplus: self._softplus,
+            MathOperation.SigmoidAppx: self._sigmoid_appx,
+            MathOperation.SqrtCustom: self._sqrt,
             MathOperation.ReduceColumn: self._reduce_columns,
             MathOperation.ReduceRow: self._reduce_rows,
             MathOperation.Typecast: self._typecast,
@@ -2725,6 +2729,9 @@ class UnarySFPUGolden:
     _XIELU_ALPHA_P = 1.0
     _XIELU_ALPHA_N = 1.0
     _XIELU_BETA = 0.5
+    _HARDSHRINK_LAMBDA = 0.5
+    _SOFTPLUS_BETA = 1.0
+    _SOFTPLUS_THRESHOLD = 20.0
 
     def _prelu(self, x):
         return x if x >= 0.0 else self._PRELU_SLOPE * x
@@ -2774,6 +2781,23 @@ class UnarySFPUGolden:
         if x > 0.0:
             return self._XIELU_ALPHA_P * x * x + beta_mul_x
         return self._XIELU_ALPHA_N * (math.expm1(x) - x) + beta_mul_x
+
+    def _hardshrink(self, x):
+        # hardshrink(x) = x when |x| > lambda, else 0.
+        return x if abs(x) > self._HARDSHRINK_LAMBDA else 0.0
+
+    def _softplus(self, x):
+        # softplus(x) = (1/beta) * ln(1 + exp(beta*x)); linear above threshold.
+        return self._torch_unary(
+            x,
+            lambda t: torch.nn.functional.softplus(
+                t, beta=self._SOFTPLUS_BETA, threshold=self._SOFTPLUS_THRESHOLD
+            ),
+        )
+
+    def _sigmoid_appx(self, x):
+        # Golden is the exact sigmoid; the kernel is a LUT approximation of it.
+        return self._torch_unary(x, torch.sigmoid)
 
     def _reduce_columns(self, x, reduce_pool: ReducePool):
         """Reduce columns across tiles, computing sum, average, or max."""

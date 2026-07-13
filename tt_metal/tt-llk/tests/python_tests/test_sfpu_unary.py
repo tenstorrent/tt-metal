@@ -432,7 +432,22 @@ DOMAIN_MATHOPS = [
     MathOperation.UnaryMin,
     MathOperation.Polygamma,
     MathOperation.Xielu,
+    MathOperation.Hardshrink,
+    MathOperation.Softplus,
+    MathOperation.SigmoidAppx,
+    MathOperation.SqrtCustom,
 ]
+
+# Per-op tolerance overrides for the domain suite. Ops whose kernel is a coarse
+# LUT/polynomial approximation need looser bounds than the default 0.05/0.05.
+# (atol, rtol); anything not listed uses the per-format default in passed_test.
+DOMAIN_CUSTOM_TOLERANCES = {
+    # sigmoid_appx is a coarse 3-segment LUT approximation of sigmoid: it tracks
+    # the true curve well (PCC ~0.997) but saturates hard to 0/1 near the knees,
+    # so per-element abs error peaks at ~0.12 over [-5, 5]. Gate correctness on
+    # PCC (default 0.99) with an atol that covers the LUT's designed error band.
+    MathOperation.SigmoidAppx: (0.13, 0.05),
+}
 
 
 @parametrize(
@@ -462,6 +477,8 @@ def test_eltwise_unary_sfpu_domain(
     specs = for_op(mathop, formats.input_format)
     spec_A = exclude_undefined(mathop, specs.spec_A)
 
+    custom_atol, custom_rtol = DOMAIN_CUSTOM_TOLERANCES.get(mathop, (None, None))
+
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
         formats,
@@ -471,6 +488,8 @@ def test_eltwise_unary_sfpu_domain(
         FastMode.No,
         input_dimensions,
         spec_A=spec_A,
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
     )
 
 
@@ -519,6 +538,8 @@ def eltwise_unary_sfpu(
     fast_mode: FastMode,
     input_dimensions: list[int],
     spec_A=None,
+    custom_atol=None,
+    custom_rtol=None,
 ):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
@@ -594,7 +615,11 @@ def eltwise_unary_sfpu(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
     ), "Assert against golden failed"
 
 
