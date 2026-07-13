@@ -73,7 +73,7 @@
         (uint16_t)(((uint32_t)(KERNEL_PROFILER_FILE_ID) << KERNEL_PROFILER_LOCAL_BITS) | TT_ZONE_LOCAL(ctr)); \
     RecordZoneMeta(hash, name)
 
-#define SrcLocNameToHash(name) TT_ZONE_META(name, __COUNTER__)
+#define RecordDeviceZoneId(name) TT_ZONE_META(name, __COUNTER__)
 
 #if defined(PROFILE_KERNEL) && \
     (!defined(DISPATCH_KERNEL) || (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_DISPATCH_CORES)))
@@ -155,16 +155,6 @@ constexpr uint32_t DRAM_PROFILER_ADDRESS = DRAM_PROFILER_ADDRESS_DEFAULT;
 #endif
 
 constexpr uint32_t HOST_BUFFER_END_INDEX = HOST_BUFFER_END_INDEX_BR_ER + myRiscID;
-
-constexpr uint32_t Hash32_CT(const char* str, size_t n, uint32_t basis = UINT32_C(2166136261)) {
-    return n == 0 ? basis : Hash32_CT(str + 1, n - 1, (basis ^ str[0]) * UINT32_C(16777619));
-}
-
-template <size_t N>
-constexpr uint32_t Hash16_CT(const char (&s)[N]) {
-    auto res = Hash32_CT(s, N - 1);
-    return ((res & 0xFFFF) ^ ((res & 0xFFFF0000) >> 16)) & 0xFFFF;
-}
 
 enum class DoingDispatch { DISPATCH, DISPATCH_META, NOT_DISPATCH };
 
@@ -459,7 +449,7 @@ __attribute__((noinline)) void finish_profiler(bool do_accumulate = DO_ACCUMULAT
             // Host pairs guaranteed markers by timestamp, so inner NOC-FLUSH end must be strictly before outer
             // DRAM-PUSH end: emit flush first, sample push_end after.
             {
-                SrcLocNameToHash("PROFILER-NOC-FLUSH");
+                RecordDeviceZoneId("PROFILER-NOC-FLUSH");
                 mark_time_at_index_with_stamp(
                     GUARANTEED_MARKER_3_H, get_const_id(hash, ZONE_START), flush_start_h, flush_start_l);
                 mark_time_at_index_with_stamp(
@@ -468,7 +458,7 @@ __attribute__((noinline)) void finish_profiler(bool do_accumulate = DO_ACCUMULAT
             uint32_t push_end_h = push_clk[WALL_CLOCK_HIGH_INDEX];
             uint32_t push_end_l = push_clk[WALL_CLOCK_LOW_INDEX];
             {
-                SrcLocNameToHash("PROFILER-DRAM-PUSH");
+                RecordDeviceZoneId("PROFILER-DRAM-PUSH");
                 mark_time_at_index_with_stamp(
                     GUARANTEED_MARKER_1_H, get_const_id(hash, ZONE_START), push_start_h, push_start_l);
                 mark_time_at_index_with_stamp(
@@ -591,7 +581,7 @@ __attribute__((noinline)) void quick_push() {
         return;
     }
 
-    SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+    RecordDeviceZoneId("PROFILER-NOC-QUICK-PUSH");
     mark_time_at_index_inlined(wIndex, hash);
     wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
 

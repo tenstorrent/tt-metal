@@ -248,56 +248,34 @@ tracy::TTDeviceMarkerType get_marker_type_from_packet_type(kernel_profiler::Pack
     }
 }
 
-uint32_t hash32CT(const char* str, size_t n, uint32_t basis) {
-    return n == 0 ? basis : hash32CT(str + 1, n - 1, (basis ^ str[0]) * UINT32_C(16777619));
-}
-
-uint16_t hash16CT(const std::string& str) {
-    uint32_t res = hash32CT(str.c_str(), str.length(), UINT32_C(2166136261));
-    return ((res & 0xFFFF) ^ ((res & 0xFFFF0000) >> 16)) & 0xFFFF;
-}
-
 void populateZoneSrcLocations(
     const std::string& new_log_name,
-    const std::string& log_name,
-    const bool push_new,
     std::unordered_map<uint16_t, tracy::MarkerDetails>& hash_to_zone_src_locations,
     std::unordered_set<std::string>& zone_src_locations) {
     std::ifstream log_file_read(new_log_name);
     std::string line;
-    static const std::string delimiter = "'#pragma message: ";
     while (std::getline(log_file_read, line)) {
-        std::string zone_src_location;
-        uint16_t hash_16bit = 0;
+        // Each line is "<id>\t<name,file,line,KERNEL_PROFILER>": the id is the device's resolved
+        // structural zone id, read straight from the ELF .tt_zone_meta section (see
+        // JitBuildState::extract_zone_src_locations), so it is used directly.
         auto tab = line.find('\t');
-        if (tab != std::string::npos) {
-            // Current format: "<id>\t<name,file,line,KERNEL_PROFILER>". The id is the device's
-            // resolved structural zone id, read straight from the ELF .tt_zone_meta section, so we
-            // use it directly rather than recomputing anything.
-            try {
-                hash_16bit = static_cast<uint16_t>(std::stoul(line.substr(0, tab)));
-            } catch (const std::exception&) {
-                continue;
-            }
-            zone_src_location = line.substr(tab + 1);
-        } else {
-            // Legacy fallbacks (persistent logs from older builds): recompute the 16-bit hash.
-            auto pos = line.find(delimiter);
-            if (pos != std::string::npos) {
-                // "'#pragma message: ...'" line: payload between the delimiter and the trailing quote.
-                size_t delimiter_index = pos + delimiter.length();
-                zone_src_location = line.substr(delimiter_index, line.length() - delimiter_index - 1);
-            } else if (line.find(",KERNEL_PROFILER") != std::string::npos) {
-                zone_src_location = line;
-            } else {
-                continue;
-            }
-            hash_16bit = hash16CT(zone_src_location);
+        if (tab == std::string::npos) {
+            continue;
         }
+        uint16_t hash_16bit = 0;
+        try {
+            hash_16bit = static_cast<uint16_t>(std::stoul(line.substr(0, tab)));
+        } catch (const std::exception&) {
+            continue;
+        }
+        std::string zone_src_location = line.substr(tab + 1);
 
         auto did_insert = zone_src_locations.insert(zone_src_location);
         if (did_insert.second && (hash_to_zone_src_locations.contains(hash_16bit))) {
-            TT_THROW("Source location hashes are colliding, two different locations are having the same hash");
+            TT_THROW(
+                "Profiler zone ids collide: two different source locations map to id {}. This should be "
+                "impossible with structural ids -- check KERNEL_PROFILER_FILE_ID assignment.",
+                hash_16bit);
         }
 
         std::stringstream ss(zone_src_location);
@@ -326,13 +304,7 @@ void populateZoneSrcLocations(
         }
         tracy::MarkerDetails details(zone_name, source_file, line_num);
 
-        auto ret = hash_to_zone_src_locations.emplace(hash_16bit, details);
-        if (ret.second && push_new) {
-            // Persist in the normalized "<id>\t<string>" form so re-reads take the fast path above.
-            std::ofstream log_file_write(log_name, std::ios::app);
-            log_file_write << hash_16bit << '\t' << zone_src_location << std::endl;
-            log_file_write.close();
-        }
+        hash_to_zone_src_locations.emplace(hash_16bit, details);
     }
     log_file_read.close();
 }
@@ -341,17 +313,11 @@ std::unordered_map<uint16_t, tracy::MarkerDetails> generateZoneSourceLocationsHa
     std::unordered_map<uint16_t, tracy::MarkerDetails> hash_to_zone_src_locations;
     std::unordered_set<std::string> zone_src_locations;
 
-    // Load existing zones from previous runs
-    populateZoneSrcLocations(
-        PROFILER_ZONE_SRC_LOCATIONS_LOG, "", false, hash_to_zone_src_locations, zone_src_locations);
-
-    // Load new zones from the current run
-    populateZoneSrcLocations(
-        NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG,
-        PROFILER_ZONE_SRC_LOCATIONS_LOG,
-        true,
-        hash_to_zone_src_locations,
-        zone_src_locations);
+    // The JIT build extracts every used kernel's zones fresh into the NEW log on each run (see
+    // JitBuildState::extract_zone_src_locations), so it is complete on its own. There is deliberately
+    // no cross-run accumulation: structural zone ids legitimately change across builds (source line
+    // shifts, file-id reassignment), so a persisted log would mix stale ids and spuriously collide.
+    populateZoneSrcLocations(NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, hash_to_zone_src_locations, zone_src_locations);
 
     return hash_to_zone_src_locations;
 }
