@@ -31,6 +31,7 @@
 #include "impl/dispatch/dispatch_core_manager.hpp"
 #include <core_descriptor.hpp>
 #include <llrt/tt_cluster.hpp>
+#include <variant>
 
 namespace tt::tt_metal::experimental {
 
@@ -161,31 +162,6 @@ inline bool is_gen2_arch() { return get_arch() == tt::ARCH::QUASAR; }
 inline bool is_gen1_arch() {
     tt::ARCH arch = get_arch();
     return arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE;
-}
-
-// Resolve the effective Gen1 hardware knobs (processor, NOC, NOC mode) for a DM kernel.
-// When the user supplies a READER/WRITER role hint, the runtime fills in the conventional
-// triple, mirroring the legacy ReaderDataMovementConfig / WriterDataMovementConfig
-// convention (see kernel_types.cpp):
-//   READER -> NCRISC (RISCV_1) on NOC_0
-//   WRITER -> BRISC  (RISCV_0) on NOC_1
-// NOC mode is always DM_DEDICATED_NOC; DM_DYNAMIC_NOC is a power-user knob reached only
-// via RoleHint::UNSPECIFIED + an explicit gen1_config, which is returned verbatim.
-//
-// Precondition (guaranteed by validation on Gen1): exactly one of {a READER/WRITER role,
-// an explicit gen1_config} is present.
-DataMovementHardwareConfig::Gen1Config ResolveGen1Config(const DataMovementHardwareConfig& dm_config) {
-    using Gen1Config = DataMovementHardwareConfig::Gen1Config;
-    switch (dm_config.role) {
-        case DataMovementRoleHint::READER:
-            return Gen1Config{
-                .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_0, .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
-        case DataMovementRoleHint::WRITER:
-            return Gen1Config{
-                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_1, .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
-        case DataMovementRoleHint::UNSPECIFIED: return dm_config.gen1_config.value();
-    }
-    TT_THROW("Unhandled RoleHint in ResolveGen1Config");
 }
 
 NodeRangeSet to_node_range_set(const Nodes& nodes) {
@@ -698,8 +674,7 @@ void ValidateNodeBounds(const ProgramSpec& spec) {
 //   - disable_dfb_implicit_sync_for_all: the per-kernel hammer, covering every DFB the kernel binds.
 //   - disable_dfb_implicit_sync_for: an explicit per-DFB list.
 // Precondition: the caller has already established this is a DM kernel with a gen2_config.
-bool DmKernelDisablesImplicitSync(
-    const DataMovementHardwareConfig::Gen2Config& gen2_config, const DFBSpecName& dfb_name) {
+bool DmKernelDisablesImplicitSync(const DataMovementGen2Config& gen2_config, const DFBSpecName& dfb_name) {
     if (gen2_config.disable_dfb_implicit_sync_for_all) {
         return true;
     }
@@ -840,44 +815,56 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
     }
 
-    // Validate DM configs
+    // Validate hardware configs: a kernel's config generation must match the target platform. There
+    // is no implicit cross-generation substitution — supplying the wrong alternative results in direct error.
     for (const auto& kernel : spec.kernels) {
         if (kernel.is_data_movement_kernel()) {
             const auto& data_movement_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
 
-            // A role hint and an explicit Gen1 config are mutually exclusive: a READER/WRITER
-            // hint already fills in the Gen1 config, so also supplying one is contradictory.
-            TT_FATAL(
-                data_movement_config.role == DataMovementRoleHint::UNSPECIFIED ||
-                    !data_movement_config.gen1_config.has_value(),
-                "KernelSpec '{}' sets both a READER/WRITER role hint and an explicit Gen1 config. "
-                "A role hint fills the Gen1 config for you; either drop the explicit config, or use "
-                "RoleHint::UNSPECIFIED to take manual control.",
-                kernel.unique_id);
-
-            // On Gen1 (WH/BH), the kernel must declare its placement: either a READER/WRITER role
-            // hint (the runtime fills in processor/NOC/NOC-mode), or an explicit Gen1 config. There
-            // is no safe default for reader-vs-writer — it is op-specific. Gen2 is fully optional:
-            // absence is treated as "use defaults" (implicit sync left on for all bound DFBs).
             if (is_gen1_arch()) {
                 TT_FATAL(
-                    data_movement_config.role != DataMovementRoleHint::UNSPECIFIED ||
-                        data_movement_config.gen1_config.has_value(),
-                    "KernelSpec '{}' targets Gen1 (WH/BH) but specifies neither a role hint "
-                    "(READER/WRITER) nor an explicit Gen1 config. One is required.",
+                    std::holds_alternative<DataMovementGen1Config>(data_movement_config),
+                    "KernelSpec '{}' targets Gen1 (WH/BH) but its DataMovementHardwareConfig holds a "
+                    "DataMovementGen2Config. Supply a Gen1 config (e.g. "
+                    "CreateReader1xxDataMovementConfig()/CreateWriter1xxDataMovementConfig()).",
                     kernel.unique_id);
 
                 // Gen1 has exactly two DM processors: RISCV_0 (BRISC) and RISCV_1 (NCRISC).
                 // RISCV_2..RISCV_7 exist only on Gen2/Quasar. Reject them here, mirroring the legacy
                 // CreateDataMovementKernel "DM0 or DM1 only" guard. Resolving is safe now: the check
                 // above guarantees a role hint or an explicit Gen1 config is present.
-                const DataMovementProcessor processor = ResolveGen1Config(data_movement_config).processor;
+                const DataMovementProcessor processor =
+                    std::get<DataMovementGen1Config>(data_movement_config).processor;
                 TT_FATAL(
                     processor == DataMovementProcessor::RISCV_0 || processor == DataMovementProcessor::RISCV_1,
                     "KernelSpec '{}' targets Gen1 (WH/BH) but requests DM processor RISCV_{}. Gen1 has only "
                     "RISCV_0 and RISCV_1; RISCV_2..RISCV_7 exist only on Gen2/Quasar.",
                     kernel.unique_id,
                     static_cast<int>(processor));
+            } else if (is_gen2_arch()) {
+                TT_FATAL(
+                    std::holds_alternative<DataMovementGen2Config>(data_movement_config),
+                    "KernelSpec '{}' targets Gen2 (Quasar) but its DataMovementHardwareConfig holds a "
+                    "DataMovementGen1Config. Supply a Gen2 config (DataMovementGen2Config{{}}).",
+                    kernel.unique_id);
+            }
+        }
+
+        if (kernel.is_compute_kernel()) {
+            const auto& compute_config = std::get<ComputeHardwareConfig>(kernel.hw_config);
+
+            if (is_gen1_arch()) {
+                TT_FATAL(
+                    std::holds_alternative<ComputeGen1Config>(compute_config),
+                    "KernelSpec '{}' targets Gen1 (WH/BH) but its ComputeHardwareConfig holds a "
+                    "ComputeGen2Config. Supply a Gen1 config (ComputeGen1Config).",
+                    kernel.unique_id);
+            } else if (is_gen2_arch()) {
+                TT_FATAL(
+                    std::holds_alternative<ComputeGen2Config>(compute_config),
+                    "KernelSpec '{}' targets Gen2 (Quasar) but its ComputeHardwareConfig holds a "
+                    "ComputeGen1Config. Supply a Gen2 config (ComputeGen2Config).",
+                    kernel.unique_id);
             }
         }
     }
@@ -910,8 +897,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             if (!kernel.is_data_movement_kernel()) {
                 continue;
             }
-            const auto& dm_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
-            const auto gen1 = ResolveGen1Config(dm_config);
+            const auto& gen1 = std::get<DataMovementGen1Config>(std::get<DataMovementHardwareConfig>(kernel.hw_config));
             const NodeRangeSet& nodes = collected.kernel_node_set.at(kernel.unique_id);
             for (const auto& range : nodes.ranges()) {
                 for (const auto& node : range) {
@@ -988,6 +974,12 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
         const auto& compute_config = std::get<ComputeHardwareConfig>(kernel.hw_config);
 
+        const auto& unpack_to_dest_mode =
+            std::visit([](const auto& config) { return config.unpack_to_dest_mode; }, compute_config);
+
+        const bool fp32_dest_acc_en =
+            std::visit([](const auto& config) { return config.fp32_dest_acc_en; }, compute_config);
+
         // Index the kernel's DFB bindings: which DFBs it binds.
         std::unordered_set<DFBSpecName> bound_dfbs;
         for (const auto& binding : kernel.dfb_bindings) {
@@ -999,7 +991,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         // Duplicate DFB entries are impossible now that unpack_to_dest_mode is a
         // Table with unique keys: a repeated DFB overwrites the prior value.
         std::unordered_set<DFBSpecName> entries_seen;
-        for (const auto& [dfb_name, mode] : compute_config.unpack_to_dest_mode) {
+        for (const auto& [dfb_name, mode] : unpack_to_dest_mode) {
             entries_seen.insert(dfb_name);
             TT_FATAL(
                 bound_dfbs.contains(dfb_name),
@@ -1015,7 +1007,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             // unconditionally). Reject only the incoherent case: full-precision FP32 in Dest is
             // impossible without fp32_dest_acc_en (otherwise Dest is 16-bit).
             TT_FATAL(
-                compute_config.fp32_dest_acc_en,
+                fp32_dest_acc_en,
                 "Kernel '{}' unpack_to_dest_mode entry for DFB '{}' specifies UnpackToDestFp32, "
                 "but fp32_dest_acc_en is false. Full-precision FP32 in the Dest register requires "
                 "fp32_dest_acc_en=true (otherwise Dest is 16-bit and the mode is incoherent).",
@@ -1025,7 +1017,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
 
         // Require an explicit entry where the choice is real:
         // CONSUMER binding + FP32 data format + fp32_dest_acc_en=true.
-        if (!compute_config.fp32_dest_acc_en) {
+        if (!fp32_dest_acc_en) {
             continue;
         }
         for (const auto& binding : kernel.dfb_bindings) {
@@ -1082,14 +1074,14 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 continue;
             }
             const auto& dm_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
-            if (!dm_config.gen2_config.has_value()) {
+            if (!std::holds_alternative<DataMovementGen2Config>(dm_config)) {
                 continue;
             }
             std::unordered_set<DFBSpecName> bound_dfbs;
             for (const auto& binding : kernel.dfb_bindings) {
                 bound_dfbs.insert(binding.dfb_spec_name);
             }
-            for (const auto& dfb_name : dm_config.gen2_config->disable_dfb_implicit_sync_for) {
+            for (const auto& dfb_name : std::get<DataMovementGen2Config>(dm_config).disable_dfb_implicit_sync_for) {
                 TT_FATAL(
                     bound_dfbs.contains(dfb_name),
                     "Kernel '{}' disable_dfb_implicit_sync_for entry references DFB '{}', which the kernel does not "
@@ -1114,11 +1106,12 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                         continue;
                     }
                     const auto& dm_config = std::get<DataMovementHardwareConfig>(ep.kernel->hw_config);
-                    if (!dm_config.gen2_config.has_value()) {
+                    if (!std::holds_alternative<DataMovementGen2Config>(dm_config)) {
                         // Gen1-only DM kernel — can't physically participate in Gen2 implicit sync; abstains.
                         continue;
                     }
-                    const bool disables = DmKernelDisablesImplicitSync(*dm_config.gen2_config, dfb_name);
+                    const bool disables =
+                        DmKernelDisablesImplicitSync(std::get<DataMovementGen2Config>(dm_config), dfb_name);
                     if (canonical == nullptr) {
                         canonical = ep.kernel;
                         canonical_disables = disables;
@@ -2113,9 +2106,8 @@ KernelRiscMaskMap SolveGen2KernelRiscMasks(const ProgramSpec& spec, const Collec
     return result;
 }
 
-// Gen1 (WH/BH) processor assignment: read the effective processor (explicit, or derived
-// from the role hint via ResolveGen1Config) and return a KernelRiscMaskMap using the Gen1
-// bit encoding (RISCV_0: bit 0, RISCV_1: bit 1, compute: bit 2).
+// Gen1 (WH/BH) processor assignment: read the kernel's gen1_config processor and return a
+// KernelRiscMaskMap using the Gen1 bit encoding (RISCV_0: bit 0, RISCV_1: bit 1, compute: bit 2).
 KernelRiscMaskMap BuildGen1KernelRiscMasks(const ProgramSpec& spec) {
     static constexpr uint8_t GEN1_COMPUTE_RISC_BIT = 2;
 
@@ -2123,7 +2115,7 @@ KernelRiscMaskMap BuildGen1KernelRiscMasks(const ProgramSpec& spec) {
     for (const KernelSpec& kernel : spec.kernels) {
         if (kernel.is_data_movement_kernel()) {
             const auto& dm_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
-            const auto gen1 = ResolveGen1Config(dm_config);
+            const auto gen1 = std::get<DataMovementGen1Config>(dm_config);
             result[&kernel] = static_cast<uint16_t>(1u << static_cast<uint8_t>(gen1.processor));
         } else {
             result[&kernel] = static_cast<uint16_t>(1u << GEN1_COMPUTE_RISC_BIT);
@@ -2514,10 +2506,10 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
             }
             any_dm = true;
             const auto& dm_config = std::get<DataMovementHardwareConfig>(ep.kernel->hw_config);
-            if (!dm_config.gen2_config.has_value()) {
+            if (!std::holds_alternative<DataMovementGen2Config>(dm_config)) {
                 continue;
             }
-            if (DmKernelDisablesImplicitSync(*dm_config.gen2_config, dfb_spec->unique_id)) {
+            if (DmKernelDisablesImplicitSync(std::get<DataMovementGen2Config>(dm_config), dfb_spec->unique_id)) {
                 disabled = true;
             }
         }
@@ -2584,7 +2576,7 @@ std::map<std::string, std::string> to_defines_map(const KernelSpec::CompilerOpti
 DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
     TT_FATAL(kernel_spec.is_data_movement_kernel(), "Expected a DM kernel");
     const auto& dm_config = std::get<DataMovementHardwareConfig>(kernel_spec.hw_config);
-    const auto gen1 = ResolveGen1Config(dm_config);
+    const auto gen1 = std::get<DataMovementGen1Config>(dm_config);
 
     return DataMovementConfig{
         .processor = gen1.processor,
@@ -2620,7 +2612,7 @@ DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
 // ----------------------------------------------------------------------------
 
 std::vector<UnpackToDestMode> BuildUnpackToDestModeVector(
-    const ComputeHardwareConfig::UnpackToDestModes& user_modes, const DFBNameToIdMap& dfb_name_to_id) {
+    const ComputeUnpackToDestModes& user_modes, const DFBNameToIdMap& dfb_name_to_id) {
     const uint32_t max_cbs = tt::tt_metal::hal::get_arch_num_circular_buffers();
     std::vector<UnpackToDestMode> unpack_modes(max_cbs, UnpackToDestMode::Default);
     for (const auto& [dfb_name, mode] : user_modes) {
@@ -2646,16 +2638,21 @@ ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBName
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
     const auto& compute_config = std::get<ComputeHardwareConfig>(kernel_spec.hw_config);
 
-    std::vector<UnpackToDestMode> unpack_modes =
-        BuildUnpackToDestModeVector(compute_config.unpack_to_dest_mode, dfb_name_to_id);
+    TT_FATAL(
+        std::holds_alternative<ComputeGen1Config>(compute_config),
+        "Trying to construct a Gen1 compute config but the kernel's ComputeHardwareConfig does not hold a "
+        "ComputeGen1Config, generation mismatch, please provide the correctly typed hardware config.");
+    const auto& gen1 = std::get<ComputeGen1Config>(compute_config);
+
+    std::vector<UnpackToDestMode> unpack_modes = BuildUnpackToDestModeVector(gen1.unpack_to_dest_mode, dfb_name_to_id);
 
     return ComputeConfig{
-        .math_fidelity = compute_config.math_fidelity,
-        .fp32_dest_acc_en = compute_config.fp32_dest_acc_en,
-        .dst_full_sync_en = compute_config.dst_full_sync_en,
+        .math_fidelity = gen1.math_fidelity,
+        .fp32_dest_acc_en = gen1.fp32_dest_acc_en,
+        .dst_full_sync_en = gen1.dst_full_sync_en,
         .unpack_to_dest_mode = unpack_modes,
-        .bfp8_pack_precise = compute_config.bfp8_pack_precise,
-        .math_approx_mode = compute_config.math_approx_mode,
+        .bfp8_pack_precise = gen1.bfp8_pack_precise,
+        .math_approx_mode = gen1.math_approx_mode,
         .compile_args = {},  // only named_compile_args is used
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),
@@ -2690,20 +2687,23 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
     const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
     const auto& compute_config = std::get<ComputeHardwareConfig>(kernel_spec.hw_config);
+    TT_FATAL(
+        std::holds_alternative<ComputeGen2Config>(compute_config),
+        "Trying to construct a Gen2 compute config but the kernel's ComputeHardwareConfig does not hold a "
+        "ComputeGen2Config, generation mismatch, please provide the correctly typed hardware config.");
+    const auto& gen2 = std::get<ComputeGen2Config>(compute_config);
 
-    std::vector<UnpackToDestMode> unpack_modes =
-        BuildUnpackToDestModeVector(compute_config.unpack_to_dest_mode, dfb_name_to_id);
+    std::vector<UnpackToDestMode> unpack_modes = BuildUnpackToDestModeVector(gen2.unpack_to_dest_mode, dfb_name_to_id);
 
     return experimental::quasar::QuasarComputeConfig{
         .num_threads_per_cluster = kernel_spec.num_threads,
-        .math_fidelity = compute_config.math_fidelity,
-        .fp32_dest_acc_en = compute_config.fp32_dest_acc_en,
-        .dst_full_sync_en = compute_config.dst_full_sync_en,
+        .math_fidelity = gen2.math_fidelity,
+        .fp32_dest_acc_en = gen2.fp32_dest_acc_en,
+        .dst_full_sync_en = gen2.dst_full_sync_en,
         .unpack_to_dest_mode = unpack_modes,
-        .bfp8_pack_precise = compute_config.bfp8_pack_precise,
-        .math_approx_mode = compute_config.math_approx_mode,
-        .enable_2x_src_format = compute_config.enable_2x_src_format,
-        .unpack_to_dest_en = compute_config.unpack_to_dest_en,
+        .math_approx_mode = gen2.math_approx_mode,
+        .enable_2x_src_format = gen2.enable_2x_src_format,
+        .unpack_to_dest_en = gen2.unpack_to_dest_en,
         .compile_args = {},  // Compile args are passed via named_compile_args
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),

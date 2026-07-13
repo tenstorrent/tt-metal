@@ -45,6 +45,8 @@
 #include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
 #include <tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::tt_metal;
 namespace m2 = tt::tt_metal::experimental;
@@ -234,7 +236,7 @@ ProgramArtifacts create_sharded_artifacts(
         .num_threads = 1,
         .dfb_bindings = {m2::ProducerOf(IN0, "in0"), m2::ProducerOf(IN1, "in1")},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
-        .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
     };
 
     m2::KernelSpec writer_spec{
@@ -243,7 +245,7 @@ ProgramArtifacts create_sharded_artifacts(
         .num_threads = 1,
         .dfb_bindings = {m2::ConsumerOf(OUT, "out")},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
-        .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::WRITER},
+        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
     };
 
     // bf8/bf16 outputs do not need fp32 dest accumulation (matches descriptor factory: false unless
@@ -258,11 +260,13 @@ ProgramArtifacts create_sharded_artifacts(
         .dfb_bindings = {m2::ConsumerOf(IN0, "in0"), m2::ConsumerOf(IN1, "in1"), m2::ProducerOf(OUT, "out")},
         .compile_time_args = {{"num_tiles_per_cycle", num_tiles_per_cycle}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
-        .hw_config =
-            m2::ComputeHardwareConfig{
+        .hw_config = ttnn::to_compute_hardware_config(
+            a.device()->arch(),
+            ttnn::ComputeKernelConfig{
                 .math_fidelity = MathFidelity::HiFi4,
+                .math_approx_mode = false,
                 .fp32_dest_acc_en = fp32_dest_acc_en,
-            },
+            }),
     };
 
     // -----------------------------------------------------------------------------------------
