@@ -77,6 +77,21 @@ class FactBase:
                         if i + 1 < len(ordered)
                         else fn.begin_off + OPEN_ENDED_EXTENT
                     )
+        # Re-attribute each fact's `function` from the now-REPAIRED extents. The C++
+        # side stamped `function` using the raw (pre-repair) ranges, so a macro-wrapped
+        # / partial-parse function whose end_off collapsed to its begin left its body
+        # facts with function="" (or an outer fn). The function-keyed grouping checkers
+        # (cb-sync, noc-sync, noc-atomic-exit, noc-read-barrier, noc-l1-invalidate,
+        # semaphore-handshake) read this field DIRECTLY, so a stale "" lumps distinct
+        # functions into one "?" bucket and can cancel a real imbalance (a false
+        # negative under partial parse). Recompute from enclosing() so they see the
+        # repaired owner; leave a genuine file-scope fact (no enclosing fn) untouched.
+        for f in clean:
+            if f["family"] == "function":
+                continue
+            owner = self.enclosing(f["file"], f["off"])
+            if owner is not None:
+                f["function"] = owner.name
 
     # -- construction ---------------------------------------------------------
     @staticmethod

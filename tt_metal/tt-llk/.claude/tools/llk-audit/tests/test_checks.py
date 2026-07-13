@@ -2145,6 +2145,85 @@ def test_dedup_merge_prefers_resolved_duplicate():
 
 
 @case
+def test_factbase_reattributes_facts_after_extent_repair():
+    # A partial parse can drop a function's end location so its end_off collapses to
+    # its begin; the C++ then stamps the body facts' `function` from the un-repaired
+    # (zero-width) range, leaving them with "" — and the function-keyed grouping
+    # checkers (cb/noc*/semaphore) lump every such fact into one "?" bucket where a
+    # real per-function imbalance cancels (a false negative). The constructor repairs
+    # each collapsed extent to the next function's start, then RE-ATTRIBUTES every
+    # fact from the repaired enclosing() so those checkers see the true owner.
+    facts = [
+        {
+            "family": "function",
+            "file": "f.h",
+            "off": 100,
+            "end_off": 100,
+            "name": "writer_A",
+        },
+        {
+            "family": "function",
+            "file": "f.h",
+            "off": 200,
+            "end_off": 200,
+            "name": "writer_B",
+        },
+        {
+            "family": "pointer_write",
+            "file": "f.h",
+            "off": 150,
+            "function": "",
+            "name": "cfg",
+        },
+        {
+            "family": "pointer_write",
+            "file": "f.h",
+            "off": 250,
+            "function": "",
+            "name": "cfg",
+        },
+    ]
+    fb = FactBase("wormhole", facts)
+    got = {f["off"]: f["function"] for f in fb.facts if f["family"] == "pointer_write"}
+    assert got == {150: "writer_A", 250: "writer_B"}, got
+    # A genuine file-scope fact (no enclosing function) must be left untouched, and a
+    # fact the C++ already attributed correctly must not change.
+    fs = FactBase(
+        "wormhole",
+        [
+            {
+                "family": "pointer_write",
+                "file": "g.h",
+                "off": 5,
+                "function": "",
+                "name": "x",
+            }
+        ],
+    )
+    assert fs.facts[0]["function"] == "", fs.facts[0]
+    ok = FactBase(
+        "wormhole",
+        [
+            {
+                "family": "function",
+                "file": "h.h",
+                "off": 10,
+                "end_off": 90,
+                "name": "good",
+            },
+            {
+                "family": "pointer_write",
+                "file": "h.h",
+                "off": 50,
+                "function": "good",
+                "name": "c",
+            },
+        ],
+    )
+    assert ok.facts[-1]["function"] == "good", ok.facts[-1]
+
+
+@case
 def test_cli_degraded_note_appended():
     # --degraded-note surfaces an EXTERNAL coverage hole (e.g. bootstrap reporting
     # failed kernel captures) into the envelope's `degraded`, so a coverage-holed run
