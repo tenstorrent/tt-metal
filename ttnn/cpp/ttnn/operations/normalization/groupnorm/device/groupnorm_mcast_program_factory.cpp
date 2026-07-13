@@ -192,7 +192,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     uint32_t block_ht_group_1 = per_core_Mt_group_1 / num_batches_per_core_group_1;
     uint32_t subblock_wt = get_max_subblock(block_wt, 8);
     uint32_t num_subblocks_w = block_wt / subblock_wt;
-    bool block_wt_last = (per_core_Nt + num_groups_per_core - 1) / num_groups_per_core;
+    uint32_t block_wt_last = (per_core_Nt + num_groups_per_core - 1) / num_groups_per_core;
 
     TT_FATAL(
         block_ht_group_1 > 0,
@@ -228,7 +228,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     // ROW_MAJOR output with tile-straddling groups (block_w_last != block_w) requires out_block_h == 1;
     // cross-group untilize corrupts mt > 0 tile-rows otherwise.
     if (!use_welford && untilize_out && block_wt_last != block_wt) {
-        log_debug(
+        log_warning(
             tt::LogOp,
             "group_norm: ROW_MAJOR output with tile-straddling groups requires out_block_h==1; overriding "
             "requested num_out_blocks={} with {}.",

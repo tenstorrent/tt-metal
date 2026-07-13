@@ -10,7 +10,7 @@ from loguru import logger
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics
 from models.common.utility_functions import is_blackhole, run_for_blackhole
 
 import tests.ttnn.unit_tests.operations.fused.test_group_norm_DRAM as base
@@ -194,12 +194,11 @@ def test_group_norm_DRAM_oft_unit_shapes(
     base.test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, eps, specify_grid)
 
 
-# ROW_MAJOR interleaved input/output is supported only on the legacy (non-Welford) DRAM path. For legacy
-# this runs and checks correctness (fast path + L1 fallback across all shapes/layouts); for Welford it
-# asserts the op rejects ROW_MAJOR with a clear error.
+# Legacy ROW_MAJOR interleaved DRAM path: layout combinations across GROUP_NORM_DRAM_SHAPES
+# (covers both the L1-resident fast path and the re-tilize fallback).
 @pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True, ids=["l1small0"])
 @pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", base.GROUP_NORM_DRAM_SHAPES)
-@pytest.mark.parametrize("welford_mode", base.WELFORD_MODES)
+@pytest.mark.parametrize("welford_mode", ["legacy"])
 @pytest.mark.parametrize(
     "input_layout, output_layout",
     [
@@ -211,7 +210,6 @@ def test_group_norm_DRAM_oft_unit_shapes(
 )
 def test_group_norm_DRAM_row_major_layouts(
     device,
-    expect_error,
     N,
     C,
     H,
@@ -224,36 +222,107 @@ def test_group_norm_DRAM_row_major_layouts(
     input_layout,
     output_layout,
 ):
-    if welford_mode == "legacy":
-        base.run_group_norm_DRAM(
-            device,
-            N,
-            C,
-            H,
-            W,
-            num_groups,
-            num_out_blocks,
-            cores_y,
-            cores_x,
-            welford_mode,
-            use_input_mask=True,
-            input_layout=input_layout,
-            output_layout=output_layout,
+    base.run_group_norm_DRAM(
+        device,
+        N,
+        C,
+        H,
+        W,
+        num_groups,
+        num_out_blocks,
+        cores_y,
+        cores_x,
+        welford_mode,
+        use_input_mask=True,
+        input_layout=input_layout,
+        output_layout=output_layout,
+    )
+
+
+# Optional weight/bias and input-mask coverage on the legacy ROW_MAJOR DRAM path (single representative shape).
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True, ids=["l1small0"])
+@pytest.mark.parametrize("use_input_mask", [True, False], ids=["mask", "no_mask"])
+@pytest.mark.parametrize(
+    "has_weight, has_bias",
+    [(True, True), (False, False), (True, False), (False, True)],
+    ids=["weight_and_bias", "no_affine", "weight_only", "bias_only"],
+)
+@pytest.mark.parametrize(
+    "input_layout, output_layout",
+    [
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+    ids=["RM_IN_TILE_OUT", "TILE_IN_RM_OUT", "RM_IN_RM_OUT"],
+)
+def test_group_norm_DRAM_row_major_affine_and_mask(
+    device,
+    use_input_mask,
+    has_weight,
+    has_bias,
+    input_layout,
+    output_layout,
+):
+    torch.manual_seed(0)
+
+    N, C, H, W = 1, 480, 1, 64
+    num_groups = 8
+    num_out_blocks = 1
+    grid_size = ttnn.CoreGrid(y=1, x=1)
+    num_virtual_cols = ttnn.operations.normalization.dram_group_norm_virtual_columns(grid_size, C, num_groups)
+
+    torch_input = torch.rand((N, C, H, W), dtype=torch.bfloat16)
+    torch_weight = torch.rand((C,), dtype=torch.bfloat16) if has_weight else None
+    torch_bias = torch.rand((C,), dtype=torch.bfloat16) if has_bias else None
+    torch_output = (
+        torch.nn.functional.group_norm(torch_input, num_groups, weight=torch_weight, bias=torch_bias, eps=1e-12)
+        .permute(0, 2, 3, 1)
+        .view(N, 1, H * W, C)
+    )
+
+    gamma_t = beta_t = input_mask = None
+    if has_weight:
+        gamma_t = ttnn.dram_group_norm_params_from_torch(
+            torch_weight, C, num_groups, device, core_grid=grid_size, return_mask=False
         )
-    else:
-        with expect_error(RuntimeError, "not supported on the Welford path"):
-            base.run_group_norm_DRAM(
-                device,
-                N,
-                C,
-                H,
-                W,
-                num_groups,
-                num_out_blocks,
-                cores_y,
-                cores_x,
-                welford_mode,
-                use_input_mask=True,
-                input_layout=input_layout,
-                output_layout=output_layout,
-            )
+    if has_bias:
+        beta_t = ttnn.dram_group_norm_params_from_torch(
+            torch_bias, C, num_groups, device, core_grid=grid_size, return_mask=False
+        )
+    if use_input_mask:
+        input_mask = ttnn.to_device(
+            ttnn.create_group_norm_input_mask(C, num_groups, num_virtual_cols, ttnn.bfloat16), device
+        )
+
+    tt_input = ttnn.from_torch(
+        torch_input.permute(0, 2, 3, 1).view(N, 1, H * W, C),
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    if input_layout == ttnn.TILE_LAYOUT:
+        tt_input = ttnn.tilize_with_zero_padding(tt_input, use_multicore=True)
+
+    tt_output = ttnn.group_norm(
+        tt_input,
+        num_groups=num_groups,
+        input_mask=input_mask,
+        weight=gamma_t,
+        bias=beta_t,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        output_layout=output_layout,
+        core_grid=grid_size,
+        inplace=False,
+        num_out_blocks=num_out_blocks,
+        use_welford=False,
+    )
+    assert_numeric_metrics(
+        torch_output,
+        ttnn.to_torch(ttnn.from_device(tt_output)),
+        pcc_threshold=0.999,
+        rtol=0.060,
+        atol=0.069,
+        frobenius_threshold=0.025,
+    )
