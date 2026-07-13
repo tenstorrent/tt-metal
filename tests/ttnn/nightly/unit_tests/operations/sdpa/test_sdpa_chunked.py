@@ -433,3 +433,124 @@ def test_sdpa_chunked_iterate_batch(
     ), "Program cache should have {} entry/entries but has {}".format(
         expected_entries, device.num_program_cache_entries()
     )
+
+
+@pytest.mark.timeout(60)
+def test_chunked_sdpa_geometry_override_hma_shared_buffer(device):
+    """HMA-shared cache: declared (nkv, block, head_dim) differs from the call view.
+
+    Cache allocated as nkv=2 / block=64 / head_dim=128; call view is nkv=1 /
+    block=64 / head_dim=256 (same elems/block). Overrides must address the buffer
+    correctly so chunked SDPA matches the torch reference for the view geometry.
+    """
+    torch.manual_seed(7)
+    b, nh, nkv_view, s, d_view = 1, 4, 1, 512, 256
+    nkv_cache, block_size, d_cache = 2, 64, 128
+    assert nkv_view * block_size * d_view == nkv_cache * block_size * d_cache
+    q_chunk_size = 128
+    prefill_chunk_size = 256
+    assert s % prefill_chunk_size == 0
+
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=128,
+        exp_approx_mode=True,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    Q = fa_rand(b, nh, s, d_view)
+    K = fa_rand(b, nkv_view, s, d_view)
+    V = fa_rand(b, nkv_view, s, d_view)
+    K_rep = K.repeat_interleave(nh // nkv_view, dim=1)
+    V_rep = V.repeat_interleave(nh // nkv_view, dim=1)
+    gt = torch.nn.functional.scaled_dot_product_attention(Q, K_rep, V_rep, is_causal=True)
+
+    num_pages = s // block_size
+    page_table = torch.arange(num_pages, dtype=torch.int32).reshape(b, num_pages)
+
+    def to_declared(cache_view):
+        # [b, nkv_view, s, d_view] -> [num_pages, nkv_cache, block_size, d_cache]
+        return cache_view.reshape(b, nkv_view, num_pages, block_size * d_view).reshape(
+            b * num_pages, nkv_cache, block_size, d_cache
+        )
+
+    tt_k = ttnn.from_torch(to_declared(K), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_v = ttnn.from_torch(to_declared(V), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
+
+    for chunk_idx in range(s // prefill_chunk_size):
+        start = chunk_idx * prefill_chunk_size
+        end = start + prefill_chunk_size
+        tt_q = ttnn.from_torch(Q[:, :, start:end], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_out = ttnn.transformer.chunked_scaled_dot_product_attention(
+            tt_q,
+            tt_k,
+            tt_v,
+            page_table_tt,
+            start,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            block_size=block_size,
+            num_kv_heads=nkv_view,
+        )
+        out = tt_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+        ok, msg = comp_pcc(gt[:, :, start:end], out, 0.998)
+        assert ok, f"HMA geometry override chunk {chunk_idx} PCC fail: {msg}"
+
+
+@pytest.mark.timeout(30)
+def test_chunked_sdpa_geometry_override_rejects_elems_per_block_mismatch(device, expect_error):
+    """Overrides that break the elems/block invariant must fail validation."""
+    b, nh, nkv_cache, block_size, d_cache = 1, 4, 2, 64, 128
+    num_pages = 4
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=128,
+        k_chunk_size=128,
+        exp_approx_mode=True,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+    tt_q = ttnn.from_torch(
+        torch.randn(b, nh, 128, 256),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    tt_k = ttnn.from_torch(
+        torch.randn(num_pages, nkv_cache, block_size, d_cache),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    tt_v = ttnn.from_torch(
+        torch.randn(num_pages, nkv_cache, block_size, d_cache),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    page_table = ttnn.Tensor(torch.arange(num_pages, dtype=torch.int32).reshape(b, num_pages), ttnn.int32).to(device)
+
+    with expect_error(RuntimeError, "geometry mismatch|elems/block"):
+        ttnn.transformer.chunked_scaled_dot_product_attention(
+            tt_q,
+            tt_k,
+            tt_v,
+            page_table,
+            0,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            # 1*32*256 != 2*64*128
+            block_size=32,
+            num_kv_heads=1,
+        )

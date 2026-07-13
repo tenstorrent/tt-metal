@@ -153,6 +153,10 @@ void PagedFillCacheDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             tensor.dtype() == DataType::UINT32 || tensor.dtype() == DataType::INT32,
             "valid_seq_len tensor must be an integer type");
+        TT_FATAL(
+            tensor.logical_volume() == 1,
+            "valid_seq_len tensor must contain exactly 1 element, got logical_volume={}",
+            tensor.logical_volume());
         TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "valid_seq_len tensor must be in ROW_MAJOR layout");
         TT_FATAL(
             tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,

@@ -48,6 +48,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.gemma4.tt.generator import Gemma4Generator
+from models.demos.gemma4.tt.generator_trace import should_auto_enable_bounded_sliding
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
@@ -216,13 +217,28 @@ def _device_params():
             False,
             True,
         ),
-        # NOTE on long-context-64k/128k/256k (bounded sliding + chunked prefill):
-        #   Bounded sliding fits 128k/256k on QB2; generator chunks at 4096 so
-        #   prefill scratch fits (single-chunk 256k OOMs ~5.6GB). Output is only
-        #   partially coherent at these lengths — known multi-chunk gap.
-        #   >=64k auto-enables bounded (override with GEMMA4_BOUNDED_SLIDING=0/1).
+        # NOTE on long-context-32k/64k/128k/256k (see GEMMA4_LONG_CONTEXT_POLICY):
+        #   Per-(model, device) cutovers on QB2 (P150x4 / P300x2):
+        #     31B: bounded @ 64k, chunked @ 256k
+        #     12B/26B-A4B: unbounded through 128k; bounded(+chunked) @ 256k
+        #     E2B/E4B: unbounded through 256k (HF native max_pos is 128k)
+        #   Override: GEMMA4_BOUNDED_SLIDING, GEMMA4_GEN_PREFILL_CHUNK,
+        #   GEMMA4_DEMO_SINGLE_CHUNK.
+        (  # long-context-32k
+            "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",
+            True,
+            32 * 1024,
+            1,
+            200,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 512},
+            {"temperature": 0, "top_p": 0.08},
+            True,
+            False,
+            True,
+        ),
         (  # long-context-64k
-            "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",
+            "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",
             True,
             64 * 1024,
             1,
@@ -247,7 +263,7 @@ def _device_params():
             False,
             True,
         ),
-        (  # long-context-256k — 31B native ctx; needs chunked prefill to avoid OOM
+        (  # long-context-256k — 31B policy auto multi-chunk (DRAM)
             "models/tt_transformers/demo/sample_prompts/input_data_long_256k.json",
             True,
             256 * 1024,
@@ -279,6 +295,7 @@ def _device_params():
         "batch-8",
         "batch-32",
         "long-context-4k",
+        "long-context-32k",
         "long-context-64k",
         "long-context-128k",
         "long-context-256k",
@@ -295,6 +312,8 @@ def _device_params():
             "P150": (1, 1),
             "P300": (1, 2),
             "P150x4": (1, 4),
+            "P300x2": (1, 4),
+            "P300X2": (1, 4),
             "P150x8": (1, 8),
             "T3K": (1, 8),
         }.get(os.environ.get("MESH_DEVICE"), (1, 4))
@@ -388,21 +407,30 @@ def test_demo_text(
     prompts = load_inputs(input_prompts, batch_size, instruct)
     profiler.end("loading_inputs")
 
-    # Right-size the paged KV pool to the actual context. The configs carried a
-    # fixed page_max_num_blocks (e.g. 2048 = 131072 tokens) that over-allocates
-    # KV ~16x vs max_seq_len and OOMs on long contexts; size it to exactly the
-    # blocks needed (batch * ceil(max_seq_len / block_size)).
+    # Right-size the paged KV pool.
+    #   * batch=1 long-context: configs sometimes over-allocate (e.g. 2048 blocks
+    #     for a 64k run); shrink to exactly batch * ceil(max_seq_len / block).
+    #   * batch>1 throughput: the row's page_max_num_blocks is the tuned shared
+    #     pool (short prompts). Using B*max_seq_len here over-provisions and OOMs
+    #     (batch-32 @ 4096 → 4096 blocks vs config 1024).
     block_size = page_params["page_block_size"]
-    page_max_num_blocks = batch_size * math.ceil(max_seq_len / block_size)
+    needed_blocks = batch_size * math.ceil(max_seq_len / block_size)
+    configured_blocks = page_params.get("page_max_num_blocks")
+    if batch_size <= 1 or configured_blocks is None:
+        page_max_num_blocks = needed_blocks
+    else:
+        page_max_num_blocks = configured_blocks
     paged_attention_config = (
         PagedAttentionConfig(block_size=block_size, max_num_blocks=page_max_num_blocks) if paged_attention else None
     )
 
-    # Sliding-cache mode. Default: FULL (unbounded) for short context (~fits to
-    # 64k on QB2). At max_seq_len >= 64k auto-enable bounded sliding + chunked
-    # prefill (4096) so 128k/256k fit. Override with GEMMA4_BOUNDED_SLIDING=0/1.
+    # Sliding-cache mode from GEMMA4_LONG_CONTEXT_POLICY (per model × device).
+    # Override bounded with GEMMA4_BOUNDED_SLIDING=0/1.
     _bs_env = os.environ.get("GEMMA4_BOUNDED_SLIDING")
-    bounded_sliding = (max_seq_len >= 65536) if _bs_env is None else _bs_env.lower() in ("1", "true", "yes")
+    if _bs_env is None:
+        bounded_sliding = should_auto_enable_bounded_sliding(max_seq_len, mesh_device, model_path)
+    else:
+        bounded_sliding = _bs_env.lower() in ("1", "true", "yes")
     bounded_sliding = bounded_sliding and paged_attention
 
     # ── Model (all optimizations applied inside create_tt_model) ───────────
@@ -979,6 +1007,8 @@ def _run_spec_decode_batched(
             "P150": (1, 1),
             "P300": (1, 2),
             "P150x4": (1, 4),
+            "P300x2": (1, 4),
+            "P300X2": (1, 4),
             "P150x8": (1, 8),
             "T3K": (1, 8),
         }.get(os.environ.get("MESH_DEVICE"), (1, 4))
