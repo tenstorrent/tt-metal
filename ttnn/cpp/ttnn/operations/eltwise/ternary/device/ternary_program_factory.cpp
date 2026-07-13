@@ -1408,6 +1408,8 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> TernaryDeviceOperation::get_dynamic
     //     all-zero compute args and do no work, so they are left untouched.
     // The packed value and the (cores, work-group) partition both come from the same helpers used
     // by populate_runtime_arguments(), so this stays a by-construction exact mirror.
+    constexpr uint32_t kReaderKernelIdx = 0;
+    constexpr uint32_t kWriterKernelIdx = 1;
     constexpr uint32_t kComputeKernelIdx = 2;
     constexpr uint32_t kScalarArgIdx = 3;
 
@@ -1415,14 +1417,43 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> TernaryDeviceOperation::get_dynamic
 
     auto partition = CMAKE_UNIQUE_NAMESPACE::compute_core_partition(operation_attributes, tensor_args, output);
 
+    // Re-patch the reader operand addresses (reader slots 0/1/2) and the writer output address
+    // (writer slot 0) on every cache hit. They are registered as Buffer* bindings at create, but
+    // the fast cache-hit path does NOT re-patch them for this op, so a ternary op (e.g. addcmul /
+    // where) invoked with a differently-allocated operand of the SAME shape hits the cached program
+    // and reads/writes a STALE address -> silent garbage. This is program-cache-order-dependent
+    // (the first invocation is correct; later same-shaped ones with a different-buffer operand are
+    // wrong -- e.g. two ttnn.chunk slices of the same parent). Mirror the scalar mechanism.
+    const auto variant = operation_attributes.ternary_variant;
+    const uint32_t a_addr = tensor_args.input_tensor_a.buffer()->address();
+    const uint32_t out_addr = output.buffer()->address();
+    uint32_t r1_addr = 0;  // reader slot 1 (true tensor for TTT/TTS, absent for TST-scalar)
+    uint32_t r2_addr = 0;  // reader slot 2 (false tensor for TTT)
+    if (variant == TernaryVariant::TTT) {
+        r1_addr = tensor_args.input_tensor_b->buffer()->address();
+        r2_addr = tensor_args.input_tensor_c->buffer()->address();
+    } else if (variant == TernaryVariant::TTS) {
+        r1_addr = tensor_args.input_tensor_b->buffer()->address();
+    } else {  // TST: the tensor operand is input_c, placed at reader slot 1
+        r1_addr = tensor_args.input_tensor_c->buffer()->address();
+    }
+
     std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
-    dynamic_args.reserve(partition.cores.size());
+    dynamic_args.reserve(partition.cores.size() * 5);
     for (uint32_t i = 0; i < partition.num_cores_total; ++i) {
         const auto& core = partition.cores[i];
         const bool is_work_core = partition.core_group_1.contains(core) || partition.core_group_2.contains(core);
         if (!is_work_core) {
             continue;  // noop core: compute arg[3] stays 0, mirrors create_descriptor()
         }
+        dynamic_args.push_back({kReaderKernelIdx, core, 0, a_addr});
+        if (variant == TernaryVariant::TTT) {
+            dynamic_args.push_back({kReaderKernelIdx, core, 1, r1_addr});
+            dynamic_args.push_back({kReaderKernelIdx, core, 2, r2_addr});
+        } else {
+            dynamic_args.push_back({kReaderKernelIdx, core, 1, r1_addr});
+        }
+        dynamic_args.push_back({kWriterKernelIdx, core, 0, out_addr});
         dynamic_args.push_back({kComputeKernelIdx, core, kScalarArgIdx, scalar_arg});
     }
     return dynamic_args;
