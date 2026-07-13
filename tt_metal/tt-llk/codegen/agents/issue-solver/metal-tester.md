@@ -45,6 +45,10 @@ Two facts this relies on (verified on-machine):
   - `METAL_VERIFY_HOME` — `TT_METAL_HOME` of a tree with `unit_tests_llk` already built
     (warm). Defaults to `WORKTREE_DIR` (self-contained, but a cold build).
   - `METAL_VERIFY_BUILD_DIR` — its build dir (default `${METAL_VERIFY_HOME}/build`).
+- `HW_TEST_DISPATCH_CMD` (env, silicon only) — when set **and** `TEST_BACKEND=local`, this
+  solve is running **cardless**: do not build/run locally, offload each arch's build+run to
+  the hw_test queue instead (Step 0). Unset ⇒ build+run locally (ttsim, or a runner that
+  owns a card).
 
 ## Mandatory Pre-Flight
 
@@ -56,11 +60,51 @@ mkdir -p "$LOG_DIR"
 1. If `METAL_VERIFICATION.target` is `none`, do not run anything: this change has no metal
    test. Return `UNVERIFIABLE_IN_LLK_SUITE` for every arch with that reason (the fix still
    ships to tt-metal CI).
-2. Resolve the build tree: `METAL_VERIFY_HOME` (warm, preferred) or `WORKTREE_DIR`
-   (self-contained). Resolve `BIN="${METAL_VERIFY_BUILD_DIR:-$METAL_VERIFY_HOME/build}/test/tt_metal/unit_tests_llk"`.
-3. Read the fix plan's `## Test Strategy` and the `metal_verification` block.
+2. Decide **where** you run (`local` + `HW_TEST_DISPATCH_CMD` set ⇒ the hw_test queue,
+   Step 0; otherwise build+run locally, Steps A+B).
+3. For a local build: resolve the build tree — `METAL_VERIFY_HOME` (warm, preferred) or
+   `WORKTREE_DIR` (self-contained). Resolve
+   `BIN="${METAL_VERIFY_BUILD_DIR:-$METAL_VERIFY_HOME/build}/test/tt_metal/unit_tests_llk"`.
+4. Read the fix plan's `## Test Strategy` and the `metal_verification` block.
+
+## Step 0 — Silicon (cardless): offload to the hw_test queue
+
+Run this **only** when `TEST_BACKEND=local` **and** `HW_TEST_DISPATCH_CMD` is set — the
+solve is cardless, so a local card build+run (Steps A+B) is impossible. Ship each arch's
+change to the hw_test queue: a card box builds `unit_tests_llk` off the worktree's diff and
+runs the mapped gtest on that arch's real card, then returns the verdict. Skip Steps A+B
+entirely; ttsim never dispatches (it needs no card — use Steps A+B).
+
+```bash
+for arch in $TARGET_ARCHES; do
+  # The dispatch CLI captures the worktree diff (vs origin/main), submits a kind=metal
+  # job (test = the gtest_filter, dispatch = slow|fast), waits, and prints a final line:
+  #   HW_TEST_RESULT ok=<bool> ran=<bool> passed=<bool> job=<id> summary="..."
+  set +e
+  OUT=$($HW_TEST_DISPATCH_CMD --kind metal --arch "$arch" \
+        --test "$GTEST_FILTER" --dispatch "${DISPATCH:-fast}" \
+        --worktree "$WORKTREE_DIR" --session "${HW_TEST_SESSION:-issue-${ISSUE_NUMBER}}" \
+        --timeout "${TIMEOUT:-1800}" 2>&1 | tee -a "$LOG_DIR/metal_run_${arch}.log")
+  rc=$?
+  set -e
+  # rc: 0 => ran+passed (SUCCESS); 1 => ran+failed (TESTS_FAILED); 3 => infra (ENV_ERROR).
+  case "$rc" in
+    0) verdict=SUCCESS ;;
+    1) verdict=TESTS_FAILED ;;
+    *) verdict=ENV_ERROR ;;
+  esac
+  # Patch arch_results.<arch> exactly as the local path does (see Multi-Arch Dashboard
+  # Updates); parse counts from the HW_TEST_RESULT summary when present.
+done
+```
+
+Do **not** set `TT_METAL_SIMULATOR`, `flock`, or a local `TT_METAL_CACHE` here — the queue's
+executor owns the card, the fresh cache, and the slow-dispatch flag. This is a real on-card
+run, so a Quasar `SIM_ISA_GAP` cannot occur; treat a genuine infra failure as `ENV_ERROR`.
 
 ## Step A — Ensure a `unit_tests_llk` binary that includes the fix
+
+Run Steps A+B only when Step 0 did **not** apply (ttsim, or a local-card runner).
 
 Pick the strategy that matches what the environment provides.
 
@@ -125,7 +169,8 @@ if [ "$TEST_BACKEND" = ttsim ]; then
   [ -f "$(dirname "$SIM_SO")/soc_descriptor.yaml" ] || { echo "ENV_ERROR: no soc_descriptor.yaml beside $SIM_SO"; exit 3; }
   env_args+=( TT_METAL_SIMULATOR="$SIM_SO" )
 fi
-# local backend: no TT_METAL_SIMULATOR; the run targets the local card for $arch.
+# local backend (only reached when HW_TEST_DISPATCH_CMD is unset — a runner that owns the
+# card; cardless silicon went to Step 0): no TT_METAL_SIMULATOR; targets the local card.
 
 set +e
 env "${env_args[@]}" timeout "${TIMEOUT:-1200}" \
