@@ -64,7 +64,7 @@ A reconfig/uninit/config-writer that writes config registers with **no preceding
 1. **Enumerate** candidates across `tt_llk_wormhole_b0`, `tt_llk_blackhole`, `tt_llk_quasar`:
    ```bash
    cd tt_metal/tt-llk
-   grep -rInE "reconfig|reconfigure|_uninit_|set_packer_strides|set_packer_l1_offset|configure_(pack|unpack)|reconfigure_exp_threshold|reconfigure_packer_l1_acc" \
+   grep -rInE "reconfig|reconfigure|_uninit_|set_packer_strides|set_packer_l1_offset|set_(packer|unpack)_config|program_packer_destination|configure_(pack|unpack)|reconfigure_exp_threshold|reconfigure_packer_l1_acc" \
      tt_llk_* --include=*.h | grep -v /tests/
    ```
 2. **For each**, read the function body. Identify config-register writes: `cfg_reg_rmw_tensix<>`, `TTI_WRCFG`/`TT_WRCFG`, `TTI_REG2FLOP`, `TTI_SETC16`, `TTI_RMWCIB*`, `TTI_SETADC*` to packer/unpacker/ADDR_MOD regs, `regfile[]=`+`REG2FLOP`, and helper calls (`set_packer_strides`, `set_packer_l1_offset`, `addr_mod_*::set`).
