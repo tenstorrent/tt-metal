@@ -179,9 +179,6 @@ void MetalEnvImpl::initialize_base_objects() {
                 "Enabling DRAM-backed command queues for Quasar simulator because host hugepages are not available");
             this->rtoptions_->set_dram_backed_cq(true);
         }
-        // Watcher NOC sanitization currently only works on Quasar in slow dispatch.
-        // TODO: Remove this once NOC sanitization is supported on Quasar in fast dispatch (#45878)
-        this->rtoptions_->disable_watcher_noc_sanitize();
     }
 
     // Get is_base_routing_fw_enabled from the already-constructed Cluster instead of running
@@ -625,7 +622,7 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
     size_t trace_region_size,
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    ttsl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
     // Associate a context ID for the mesh device's dependencies to easily access the MetalContext::instance(contextId)
     // TODO: Remove this and directly pass in the MetalEnv reference
@@ -649,7 +646,7 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_unit_mesh_device(
     size_t trace_region_size,
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    ttsl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
     ContextId context_id = MetalContext::create_instance(*this);
     auto mesh_device = distributed::MeshDeviceImpl::create_unit_mesh(
@@ -671,7 +668,7 @@ std::map<int, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_me
     size_t trace_region_size,
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    ttsl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
     ContextId context_id = MetalContext::create_instance(*this);
     auto result = distributed::MeshDeviceImpl::create_unit_meshes(
@@ -692,7 +689,7 @@ std::map<int, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_me
     return result;
 }
 
-SubDevice MetalEnv::create_sub_device(tt::stl::Span<const CoreRangeSet> cores) {
+SubDevice MetalEnv::create_sub_device(ttsl::Span<const CoreRangeSet> cores) {
     // Use SubDevice constructor marked as internal
     return SubDevice(SubDeviceImpl(&MetalEnvAccessor(*this).impl(), cores));
 }

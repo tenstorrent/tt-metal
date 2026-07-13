@@ -47,7 +47,7 @@ jobs:
       CCACHE_S3_BUCKET: ccache
       CCACHE_S3_PREFIX: tt-metal
       CCACHE_S3_READONLY: "false"
-      CCACHE_S3_DEBUG: "true"
+      CCACHE_S3_DEBUG: "false"
     container:
       image: ${{ inputs.ci-build-docker-image }}
       env:
@@ -227,6 +227,8 @@ jobs:
 
       - name: 🔧 CMake configure
         run: |
+          # --warnings-as-errors=* turns each clang-tidy diagnostic into a failing
+          # compile edge; the build preset's -k0 keeps going so all fixes still export.
           cmake --preset clang-tidy-fix-parallel \
             -DCMAKE_CXX_CLANG_TIDY="$(pwd)/cmake/clang-tidy-export-fixes-wrapper.sh;$(pwd)/.build/clang-tidy/fixes;--warnings-as-errors=*" \
             -DCMAKE_C_CLANG_TIDY="$(pwd)/cmake/clang-tidy-export-fixes-wrapper.sh;$(pwd)/.build/clang-tidy/fixes;--warnings-as-errors=*"
@@ -259,24 +261,35 @@ jobs:
       - name: 🔍 Analyze code with clang-tidy
         timeout-minutes: 120
         run: |
-          # For PR suggestion jobs: allow clang-tidy violations (they become inline comments).
-          # For all other jobs: violations fail the build.
-          _ALLOW_VIOLATIONS="${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' }}"
-          if [ -n "${{ inputs.scan-targets }}" ]; then
-            echo "Scanning specific targets: ${{ inputs.scan-targets }}"
-            for target in ${{ inputs.scan-targets }}; do
-              echo "Scanning target: $target"
-              cmake --build --preset clang-tidy-fix-parallel --target "$target" \
-                || [ "$_ALLOW_VIOLATIONS" = "true" ]
-            done
-          else
-            echo "Scanning all targets"
-            cmake --build --preset clang-tidy-fix-parallel \
-              || [ "$_ALLOW_VIOLATIONS" = "true" ]
-          fi
+          # Record the exit code rather than failing here: violations fail compile
+          # edges but still export, so the gate below decides pass/fail from counts.
+          targets=()
+          for target in ${{ inputs.scan-targets }}; do
+            targets+=(--target "$target")
+          done
+          echo "Scanning ${{ inputs.scan-targets || 'all targets' }}"
+          build_exit=0
+          cmake --build --preset clang-tidy-fix-parallel "${targets[@]}" || build_exit=$?
+          echo "cmake --build exited with code ${build_exit}"
+          echo "CLANG_TIDY_BUILD_EXIT=${build_exit}" >> "$GITHUB_ENV"
+
+      - name: Count clang-tidy violations
+        run: |
+          FIXES_DIR=".build/clang-tidy/fixes"
+          # Each diagnostic is one "- DiagnosticName:" list item; nested notes are not.
+          VIOLATIONS=$(cat "$FIXES_DIR"/*.yaml 2>/dev/null \
+            | grep -cE '^[[:space:]]*-[[:space:]]+DiagnosticName:' || true)
+          VIOLATIONS=${VIOLATIONS:-0}
+          echo "CLANG_TIDY_VIOLATIONS=${VIOLATIONS}" >> "$GITHUB_ENV"
+          echo "clang-tidy found ${VIOLATIONS} violation(s)"
+          {
+            echo '## Clang-Tidy Violations'
+            echo "Found **${VIOLATIONS}** violation(s)."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Apply clang-tidy fixes to working tree
-        if: ${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' && !cancelled() }}
+        # success() so a genuine build failure (partial YAMLs) doesn't post misleading fixes.
+        if: ${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' && success() }}
         run: |
           FIXES_DIR=".build/clang-tidy/fixes"
           if ls "$FIXES_DIR"/*.yaml 2>/dev/null | grep -q .; then
@@ -290,7 +303,7 @@ jobs:
           fi
 
       - name: Post inline clang-tidy suggestions on PR
-        if: ${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false && !cancelled() }}
+        if: ${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false && success() }}
         env:
           REVIEWDOG_GITHUB_API_TOKEN: ${{ github.token }}
         run: |
@@ -305,6 +318,23 @@ jobs:
             -level warning \
             -fail-level none \
             -fail-on-error false
+
+      - name: Fail on clang-tidy violations
+        # !cancelled() so it still gates when posting steps are skipped (non-PR runs).
+        if: ${{ !cancelled() }}
+        run: |
+          VIOLATIONS="${CLANG_TIDY_VIOLATIONS:-0}"
+          BUILD_EXIT="${CLANG_TIDY_BUILD_EXIT:-0}"
+          if [ "$VIOLATIONS" -gt 0 ]; then
+            echo "::error::clang-tidy found ${VIOLATIONS} violation(s)"
+            exit 1
+          fi
+          # No violations but the build failed: a real compile/link error, not a diagnostic.
+          if [ "$BUILD_EXIT" -ne 0 ]; then
+            echo "::error::clang-tidy build failed (exit ${BUILD_EXIT}) with no violations"
+            exit 1
+          fi
+          echo "clang-tidy found no violations"
 
       - name: Publish Ccache summary
         if: always()

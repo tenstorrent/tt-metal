@@ -124,8 +124,7 @@ jobs:
 
           # Skip scan entirely if no code/cmake changes and not a full scan
           if [[ "$do_full_scan" == "true" ]] || \
-             [[ "${{ steps.find-changes.outputs.any-code-changed }}" == "true" ]] || \
-             [[ "${{ steps.find-changes.outputs.cmake-changed }}" == "true" ]]; then
+             [[ "${{ steps.find-changes.outputs.any-code-changed }}" == "true" ]]; then
             do_scan="true"
           else
             do_scan="false"

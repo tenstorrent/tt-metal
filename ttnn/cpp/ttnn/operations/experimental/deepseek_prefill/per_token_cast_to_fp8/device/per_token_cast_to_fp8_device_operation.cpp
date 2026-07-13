@@ -149,7 +149,7 @@ PerTokenCastToFp8DeviceOperation::tensor_return_value_t PerTokenCastToFp8DeviceO
     return {create_device_tensor(output_e4m3_spec, device), create_device_tensor(scale_spec, device)};
 }
 
-tt::stl::hash::hash_t PerTokenCastToFp8DeviceOperation::compute_program_hash(
+ttsl::hash::hash_t PerTokenCastToFp8DeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input_tensor;
     const auto tile_shape = input.tensor_spec().tile().get_tile_shape();
