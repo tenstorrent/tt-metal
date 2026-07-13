@@ -102,6 +102,14 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         )
 
     @classmethod
+    def get_placeholder_str(cls, modality: str, i: int) -> str | None:
+        if modality.startswith("image"):
+            return "<|vision_start|><|image_pad|><|vision_end|>"
+        if modality.startswith("video"):
+            return "<|vision_start|><|video_pad|><|vision_end|>"
+        raise ValueError("Only image or video modality is supported")
+
+    @classmethod
     def initialize_vllm_model(
         cls,
         hf_config,
