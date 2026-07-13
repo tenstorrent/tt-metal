@@ -133,6 +133,11 @@ class Module(ABC):
         for name in state_dict:
             unexpected_keys.append(f"{module_key_prefix}{name}")
 
+        # Mark every module loaded, matching the recursive load() cache path. Without
+        # this, children report not-loaded after a torch load and residency-gated
+        # logic (e.g. LoRAMixin.bind_active) silently skips them.
+        self._is_loaded = True
+
     def load_torch_state_dict(self, state_dict: Mapping[str, torch.Tensor], *, strict: bool = True) -> IncompatibleKeys:
         """Load PyTorch state dict into module parameters.
 

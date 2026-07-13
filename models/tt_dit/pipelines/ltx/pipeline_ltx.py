@@ -28,6 +28,7 @@ from safetensors.torch import load_file
 import ttnn
 
 from ...encoders.gemma.encoder_pair import GemmaTokenizerEncoderPair
+from ...experimental.lora.ltx_adapter_loader import LTXAdapterHandle, iter_lora_modules, load_ltx_adapter_into
 from ...models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis, reshape_interleaved_to_bhnd
 from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel
 from ...models.upsampler.latent_upsampler_ltx import LTXLatentUpsampler
@@ -208,6 +209,7 @@ class LTXPipeline:
         run_warmup: bool = False,
         traced: bool = False,
         extra_transformer_variants: list[tuple[str, list[LoraSpec]]] | None = None,
+        lora_enabled: bool = False,
     ):
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
@@ -244,6 +246,11 @@ class LTXPipeline:
             )
         self.vae_parallel_config = vae_parallel_config
         self.mode = mode
+        # On-device fuse-mode LoRA: swap via bind_active on the transformer's LoRA
+        # Linears (weight.data += A@B), not the host-fuse+reload path used by
+        # extra_transformer_variants.
+        self.lora_enabled = lora_enabled
+        self._active_lora: LTXAdapterHandle | None = None
 
         self.num_attention_heads = num_attention_heads
         self.attention_head_dim = attention_head_dim
@@ -514,6 +521,7 @@ class LTXPipeline:
             has_audio=self.mode == "av",
             apply_gated_attention=self._has_gate,
             cross_attention_adaln=self._cross_attention_adaln,
+            lora_enabled=self.lora_enabled,
         )
 
     def _new_upsampler(self) -> LTXLatentUpsampler:
@@ -640,6 +648,49 @@ class LTXPipeline:
             get_torch_state_dict=state.state_dict_provider,
         )
         self.transformer = state.model
+        # dynamic_load restores the cached (LoRA-free) base weights on every
+        # page-in, so re-merge the active adapter's delta onto the fresh weights.
+        if self.lora_enabled:
+            for _, mod in iter_lora_modules(state.model):
+                mod.reapply_after_load()
+
+    def register_lora_adapter(self, path: str, *, scale: float = 1.0, name: str = "") -> LTXAdapterHandle:
+        """Host-register a LoRA safetensors into the transformer's LoRA bank.
+        No device weights change until ``set_active_lora(handle)``."""
+        if not self.lora_enabled:
+            raise RuntimeError("pipeline was built with lora_enabled=False; on-device LoRA swap is unavailable")
+        if self.transformer is None:
+            raise RuntimeError("transformer not instantiated; call the pipeline's build/prime path first")
+        return load_ltx_adapter_into(self.transformer, path, scale=scale, name=name)
+
+    def set_active_lora(self, handle: LTXAdapterHandle | None) -> None:
+        """Bind ``handle`` (or unbind, if None) on device: ``weight.data += scale*A@B``
+        per LoRA Linear. No host fuse, no weight reload."""
+        if not self.lora_enabled:
+            raise RuntimeError("pipeline was built with lora_enabled=False; on-device LoRA swap is unavailable")
+        mods = dict(iter_lora_modules(self.transformer))
+        if handle is None:
+            for mod in mods.values():
+                mod.unbind_active()
+            self._active_lora = None
+            return
+        for module_path, idx in handle.target_indices.items():
+            mod = mods.get(module_path)
+            if mod is None:
+                logger.warning(f"set_active_lora: {module_path} not found on transformer — skipping.")
+                continue
+            mod.bind_active(idx)
+        self._active_lora = handle
+
+    def load_lora_weights(self, path: str, *, strength: float = 1.0, name: str = "") -> LTXAdapterHandle:
+        """Register + activate a LoRA in one call. Returns the handle for later swaps."""
+        handle = self.register_lora_adapter(path, scale=strength, name=name)
+        self.set_active_lora(handle)
+        return handle
+
+    def unload_lora_weights(self) -> None:
+        """Unbind the active LoRA, restoring the base weights on device."""
+        self.set_active_lora(None)
 
     def _device_embed_cache_path(self, prompts: list[str]) -> str:
         """Disk-cache path for on-device prompt embeddings. Separate namespace from the
