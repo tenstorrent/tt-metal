@@ -602,24 +602,31 @@ DRAIN_UNIT_TOKENS = {
     "PACK": ("PACK", "PACK0", "PACK1", "PACK2", "PACK3"),
 }
 # The MATH thread drives TWO independent engines: the FPU (matrix, `p_stall::MATH`)
-# and the SFPU (vector, `p_stall::WAIT_SFPU` == `SFPU1`; other archs add `SFPU0`/…).
-# Draining one does NOT drain the other, so a math reconfig fully drains only when it
-# waits on BOTH — this is the ONE thread with a modeled partial-drain state. For
-# UNPACK/PACK any sub-unit token counts as a full drain (see DRAIN_UNIT_TOKENS above).
+# and the SFPU (vector, `p_stall::WAIT_SFPU` == `SFPU1`). Draining one does NOT drain
+# the other, so a math reconfig fully drains only when it waits on BOTH — this is the
+# ONE thread with a modeled partial-drain state. For UNPACK/PACK any sub-unit token
+# counts as a full drain (see DRAIN_UNIT_TOKENS above).
 MATH_FPU_TOKENS = ("MATH",)
+# The SFPU (vector) DRAIN tokens, across all arches: WAIT_SFPU and its alias SFPU1 (WH
+# 0x4000, BH 0x800, Quasar 22). Deliberately EXCLUDES Quasar's SFPU_SRCS_RDY (=19) —
+# that is a SOURCES-READY wait (SFPU inputs valid), NOT a drain of the SFPU pipeline, so
+# it must not clear a reconfig the SFPU samples. Matched at word boundaries (see
+# condition_drains_unit): a bare `"SFPU" in operand` substring would wrongly count
+# SFPU_SRCS_RDY (and the STALL_SFPU block-res mask) as a drain. No arch defines SFPU0.
+MATH_SFPU_TOKENS = ("WAIT_SFPU", "SFPU1")
 
 
 def unit_drain_state(operand: str, thread: str):
     """(drains_any, drains_full) for a STALLWAIT wait-condition wrt `thread`'s unit.
-    For MATH: FPU + SFPU are separate engines (SFPU matched by the 'SFPU' substring so
-    WAIT_SFPU/SFPU1/SFPU0/... all count) — full drain needs BOTH, partial drains one.
+    For MATH: FPU + SFPU are separate engines (each matched at word boundaries via
+    MATH_FPU_TOKENS / MATH_SFPU_TOKENS) — full drain needs BOTH, partial drains one.
     For UNPACK/PACK any sub-unit drain token counts as a full drain: the sub-units are
     distinct bits but the reconfig's target sub-unit is not resolved (see
     DRAIN_UNIT_TOKENS), so there is no partial state — a wrong-sub-unit stall is a
     semantic miss left to the LLM, not a partial drain."""
     if thread == "MATH":
-        fpu = any(re.search(rf"\b{re.escape(t)}\b", operand) for t in MATH_FPU_TOKENS)
-        sfpu = "SFPU" in operand.upper()
+        fpu = condition_drains_unit(operand, MATH_FPU_TOKENS)
+        sfpu = condition_drains_unit(operand, MATH_SFPU_TOKENS)
         return (fpu or sfpu, fpu and sfpu)
     d = condition_drains_unit(operand, DRAIN_UNIT_TOKENS.get(thread, ()))
     return (d, d)
@@ -771,6 +778,12 @@ NOC_SIGNAL_CALLS = {
     "noc_semaphore_set_remote": "set",
     "noc_semaphore_set_multicast": "mcast",
     "noc_semaphore_set_multicast_loopback_src": "mcast",
+    # Raw remote atomic increments — the low-level form `noc_semaphore_inc` itself
+    # lowers to. A kernel that calls these DIRECTLY (dispatch/prefetch fast paths)
+    # posts the same remote credit and must land its data first, so they are signals
+    # too. Kept unicast ("inc"); they are ATOMIC (see NOC_ATOMIC_SIGNALS).
+    "noc_atomic_increment": "inc",
+    "noc_fast_atomic_increment": "inc",
 }
 NOC_WAIT_CALLS = ("noc_semaphore_wait", "noc_semaphore_wait_min")
 # A write is "landed" (safe to credit) only after one of these drains the NoC.
@@ -875,6 +888,8 @@ NOC_ATOMIC_SIGNALS = (
     "noc_semaphore_inc",
     "noc_semaphore_inc_multicast",
     "inc_multicast",  # Semaphore-object form
+    "noc_atomic_increment",  # raw remote-atomic form (see NOC_SIGNAL_CALLS)
+    "noc_fast_atomic_increment",
 )
 
 
