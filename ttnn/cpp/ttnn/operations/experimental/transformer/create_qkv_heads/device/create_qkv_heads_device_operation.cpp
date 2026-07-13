@@ -127,22 +127,6 @@ CreateQKVHeadsResult CreateQKVHeadsDeviceOperation::create_output_tensors(
     };
 }
 
-ttsl::hash::hash_t CreateQKVHeadsDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-
-    operation::Hash hash = operation::hash_operation<CreateQKVHeadsDeviceOperation>(
-        args.num_q_heads,
-        args.num_kv_heads,
-        args.head_dim,
-        args.transpose_k_heads,
-        args.output_mem_config,
-        input_tensor,
-        input_tensor.device()->compute_with_storage_grid_size());
-
-    return hash;
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
