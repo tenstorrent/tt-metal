@@ -24,6 +24,12 @@ void kernel_main() {
     const uint32_t out_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t out_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
 
+#ifdef FUSE_BIAS
+    // bias tensor args (appended by the factory after the out tensor args)
+    const uint32_t in3_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in3_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
+#endif
+
     // COMPILE TIME ARGS
     // READER
     // in1 tensor args
@@ -60,10 +66,39 @@ void kernel_main() {
 
     constexpr auto in1_args = TensorAccessorArgs<19>();
     constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
+#ifdef FUSE_BIAS
+    // bias accessor CT args follow the output accessor (see the factory)
+    constexpr auto bias_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    constexpr uint32_t cb_id_in3 = get_named_compile_time_arg_val("cb_bias");
+#endif
 
     Noc noc;
     CircularBuffer cb_in1(cb_id_in1);
     CircularBuffer cb_out(cb_id_out0);
+
+#ifdef FUSE_BIAS
+    // Load the bias once: a single row of in1_block_w (== per_core_N) tiles, reused across all
+    // output blocks on this core. The compute kernel waits on it once and holds it resident
+    // (single-N-block; the factory enforces N == per_core_N).
+    const uint32_t bias_single_tile_size_bytes = get_tile_size(cb_id_in3);
+    CircularBuffer cb_in3(cb_id_in3);
+    const auto s3 = TensorAccessor(bias_args, in3_tensor_addr);
+    cb_in3.reserve_back(in1_block_w);
+    uint32_t in3_write_offset = 0;
+    uint32_t in3_tensor_tile_id = in3_tensor_start_tile_id;
+    for (uint32_t w = 0; w < in1_block_w; ++w) {
+        noc.async_read(
+            s3,
+            cb_in3,
+            bias_single_tile_size_bytes,
+            {.page_id = in3_tensor_tile_id},
+            {.offset_bytes = in3_write_offset});
+        in3_write_offset += bias_single_tile_size_bytes;
+        in3_tensor_tile_id += 1;  // bias is contiguous along N (stride 1)
+    }
+    noc.async_read_barrier();
+    cb_in3.push_back(in1_block_w);
+#endif
 
 #ifdef IN1_SHARDED
     const uint32_t in1_num_tiles = batch * num_blocks * in1_block_h * in1_block_w;

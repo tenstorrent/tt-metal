@@ -108,8 +108,13 @@ static bool get_post_process_bias(
     // MatmulMultiCoreProgramConfig doesn't support bias fusion, so we need to apply it as a post-process
     bool post_process_bias = false;
     if (bias.has_value()) {
-        // Fused matmul+bias does not support batched weights; apply bias via add().
-        if (detail::is_input_batched(input_tensor_b_adjusted.logical_shape())) {
+        // Fused matmul+bias does not support batched weights, except MatmulMultiCoreReuseProgramConfig
+        // (matmul_multicore_reuse_optimized) which now fuses an elementwise full-tile bias for the
+        // batched per-chunk bmm. Other batched matmuls still apply bias via add().
+        const bool reuse_cfg_batched_bias =
+            program_config.has_value() &&
+            std::holds_alternative<MatmulMultiCoreReuseProgramConfig>(program_config.value());
+        if (detail::is_input_batched(input_tensor_b_adjusted.logical_shape()) && !reuse_cfg_batched_bias) {
             return true;
         }
         const auto& bias_tensor = bias.value();

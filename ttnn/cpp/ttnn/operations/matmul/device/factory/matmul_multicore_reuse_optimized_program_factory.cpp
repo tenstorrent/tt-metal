@@ -163,6 +163,26 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     uint32_t out_CB_size = out_CB_tiles * output_single_tile_size;
     uint32_t interm0_CB_size = out_CB_tiles * interm0_single_tile_size;
 
+    // Optional fused (elementwise / full-tile) bias. Loaded once as a single per_core_N row of
+    // tiles and reused across the core's output blocks; correct only for a single N block
+    // (N == per_core_N), which is the LINV 32x32 (N=32, per_core_N=1) use case.
+    const auto bias = tt::tt_metal::as_optional_mesh_tensor(tensor_args.optional_input_tensors.at(0));
+    tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b;
+    tt::tt_metal::Tile bias_tile = output_tile;
+    uint32_t bias_single_tile_size = 0;
+    if (bias.has_value()) {
+        TT_FATAL(
+            N == per_core_N,
+            "Fused bias in matmul_multicore_reuse requires N ({}) == per_core_N ({}) (single N block).",
+            N,
+            per_core_N);
+        bias_data_format = tt_metal::datatype_to_dataformat_converter(bias->dtype());
+        bias_tile = bias->tensor_spec().tile();
+        bias_single_tile_size = bias_tile.get_tile_size(bias_data_format);
+    }
+    uint32_t in3_block_tiles = per_core_N;
+    uint32_t in3_CB_size = in3_block_tiles * bias_single_tile_size;
+
     // Compute kernel args
     uint32_t in0_num_subblocks = (per_core_M_per_batch / out_subblock_h);
     uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
@@ -286,6 +306,10 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     };
     tt::tt_metal::TensorAccessorArgs(in1_buffer).append_to(reader_writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(output).append_to(reader_writer_compile_time_args);
+    if (bias.has_value()) {
+        // Bias accessor CT args follow the output accessor (kernel reads them at the next offset).
+        tt::tt_metal::TensorAccessorArgs(bias.value()).append_to(reader_writer_compile_time_args);
+    }
 
     // Reader defines
     KernelDescriptor::Defines reader_defines;
@@ -299,6 +323,9 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     if (output_is_sharded) {
         reader_writer_defines.emplace_back("OUT_SHARDED", "1");
     }
+    if (bias.has_value()) {
+        reader_writer_defines.emplace_back("FUSE_BIAS", "1");
+    }
 
     // Named compile-time args for CB indices (enables fusion/chaining)
     KernelDescriptor::NamedCompileTimeArgs cb_named_args = {
@@ -309,6 +336,12 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         {"cb_intermed0", tt::CBIndex::c_5},
         {"cb_in0_transposed", tt::CBIndex::c_10},
     };
+
+    // Compute kernel additionally needs bias_ntiles (read only under FUSE_BIAS).
+    KernelDescriptor::NamedCompileTimeArgs compute_named_args = cb_named_args;
+    if (bias.has_value()) {
+        compute_named_args.push_back({"bias_ntiles", per_core_N});
+    }
 
     // Compute kernel compile time args (group 1)
     std::vector<uint32_t> compute_kernel_args_group_1 = {
@@ -331,6 +364,9 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         false,  // get_batch_from_reader
         in0_transpose_tile,
     };
+    if (bias.has_value()) {
+        compute_kernel_args_group_1.push_back(0u);  // arg 18: row_broadcast_bias=false (elementwise full-tile)
+    }
 
     // Compute defines
     std::map<std::string, std::string> mm_kernel_defines;
@@ -342,6 +378,9 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     }
     if (in1_transpose_tile) {
         mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
+    }
+    if (bias.has_value()) {
+        mm_kernel_defines["FUSE_BIAS"] = "1";
     }
     const auto throttle_level = ttnn::get_throttle_level(operation_attributes.compute_kernel_config);
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
@@ -414,8 +453,17 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
 
         uint32_t out_start_tile_id =
             (start_batch * M * N) + (start_m_block * per_core_M_per_batch * N) + (start_n_block * per_core_N);
-        reader_writer_kernel_desc.emplace_runtime_args(
-            core, {in1_buffer, in1_start_tile_id, num_output_blocks_per_core, output, out_start_tile_id});
+        KernelDescriptor::RTArgList rw_args;
+        rw_args.push_back(in1_buffer);
+        rw_args.push_back(in1_start_tile_id);
+        rw_args.push_back(num_output_blocks_per_core);
+        rw_args.push_back(output);
+        rw_args.push_back(out_start_tile_id);
+        if (bias.has_value()) {
+            rw_args.push_back(*bias);
+            rw_args.push_back(start_n_block * per_core_N);  // bias_start_tile_id
+        }
+        reader_writer_kernel_desc.emplace_runtime_args(core, rw_args);
 
         // Compute kernels have no per-core runtime args
         if (i < g1_numcores) {
@@ -437,7 +485,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = core_group_1;
     compute_kernel_desc.compile_time_args = compute_kernel_args_group_1;
-    compute_kernel_desc.named_compile_time_args = cb_named_args;
+    compute_kernel_desc.named_compile_time_args = compute_named_args;
     compute_kernel_desc.defines = compute_defines;
     compute_kernel_desc.runtime_args = std::move(compute_runtime_args_g1);
     compute_kernel_desc.config = ComputeConfigDescriptor{
@@ -469,6 +517,9 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
             false,  // get_batch_from_reader
             in0_transpose_tile,
         };
+        if (bias.has_value()) {
+            compute_kernel_args_group_2.push_back(0u);  // arg 18: row_broadcast_bias=false
+        }
 
         KernelDescriptor compute_kernel_desc_g2;
         compute_kernel_desc_g2.kernel_source =
@@ -477,7 +528,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         compute_kernel_desc_g2.source_type = KernelDescriptor::SourceType::FILE_PATH;
         compute_kernel_desc_g2.core_ranges = core_group_2;
         compute_kernel_desc_g2.compile_time_args = compute_kernel_args_group_2;
-        compute_kernel_desc_g2.named_compile_time_args = cb_named_args;
+        compute_kernel_desc_g2.named_compile_time_args = compute_named_args;
         compute_kernel_desc_g2.defines = compute_defines;
         compute_kernel_desc_g2.runtime_args = std::move(compute_runtime_args_g2);
         compute_kernel_desc_g2.config = ComputeConfigDescriptor{
@@ -525,6 +576,12 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         in1_aligned_tile_size,
         in1_tile,
         in1_is_sharded ? &in1_buffer : nullptr));
+
+    // CB 3: Bias (fused elementwise, optional)
+    if (bias.has_value()) {
+        program_descriptor.cbs.push_back(
+            make_cb_descriptor(in3_CB_size, tt::CBIndex::c_3, bias_data_format, bias_single_tile_size, bias_tile));
+    }
 
     // CB 4 and CB 5: Output and intermediate accumulator
     if ((interm0_data_format != output_data_format) || (untilize_out && (in1_num_subblocks > 1))) {

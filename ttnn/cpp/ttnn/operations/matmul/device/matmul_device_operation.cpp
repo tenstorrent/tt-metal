@@ -485,14 +485,13 @@ void validate_matmul_bias(
     // Determine which program configs support bias.
     bool config_supports_bias = false;
     std::visit(
-        [&config_supports_bias](const auto& program_config) {
-            using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            // MatmulMultiCoreReuseProgramConfig has no bias kernel path and the wrapper
-            // does not post-process bias for it. All other configs either support bias in
-            // the kernel or have it handled by get_post_process_bias() in matmul.cpp.
-            // gather_in0 on 1D multicast rejects bias separately in its dedicated check.
-            config_supports_bias =
-                !std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig>;
+        [&config_supports_bias]([[maybe_unused]] const auto& program_config) {
+            // MatmulMultiCoreReuseProgramConfig now supports a fused (elementwise/full-tile)
+            // bias in matmul_multicore_reuse_optimized (bmm_large_block_zm_fused_bias_activation).
+            // All configs either support bias in the kernel or have it handled by
+            // get_post_process_bias() in matmul.cpp. gather_in0 on 1D multicast rejects bias
+            // separately in its dedicated check.
+            config_supports_bias = true;
         },
         chosen_program_config);
 
