@@ -318,6 +318,8 @@ enum class BinaryOp : std::uint8_t
     LCM             = 27,
     RSUB_INT32      = 28,
     MASK            = 29,
+    ATAN2           = 30,
+    MUL_INT32       = 31,
 };
 
 enum class PackMode : std::uint8_t

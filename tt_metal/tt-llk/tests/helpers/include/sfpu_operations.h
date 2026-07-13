@@ -23,6 +23,7 @@
 #include "llk_sfpu/ckernel_sfpu_add1.h"
 #include "llk_sfpu/ckernel_sfpu_addcdiv.h"
 #include "llk_sfpu/ckernel_sfpu_addcmul.h"
+#include "llk_sfpu/ckernel_sfpu_atan2.h"
 #include "llk_sfpu/ckernel_sfpu_binary.h"
 #include "llk_sfpu/ckernel_sfpu_binary_bitwise.h"
 #include "llk_sfpu/ckernel_sfpu_binary_comp.h"
@@ -48,6 +49,7 @@
 #include "llk_sfpu/ckernel_sfpu_lgamma.h"
 #include "llk_sfpu/ckernel_sfpu_logical_not.h"
 #include "llk_sfpu/ckernel_sfpu_mask.h"
+#include "llk_sfpu/ckernel_sfpu_mul_int32.h"
 #include "llk_sfpu/ckernel_sfpu_polygamma.h"
 #include "llk_sfpu/ckernel_sfpu_prelu.h"
 #include "llk_sfpu/ckernel_sfpu_remainder.h"
@@ -1333,6 +1335,20 @@ void call_binary_sfpu_operation_init()
         // the reciprocal-polynomial constants used to divide by gcd(a, b).
         SFPU_BINARY_INIT_FN_NO_ARGS(lcm, sfpu::calculate_sfpu_lcm_init);
     }
+    else if constexpr (BINOP == BinaryOp::ATAN2)
+    {
+        // atan2 has no dedicated SfpuType, so use the baseline add1 addrmod. Its init
+        // just loads the reciprocal polynomial; the is_fp32_dest_acc_en variant selects
+        // the fp32 vs bf16 reciprocal (matching the minimax branch in the kernel).
+        SFPU_BINARY_INIT_FN(add1, sfpu::calculate_sfpu_atan2_init, (APPROXIMATION_MODE, is_fp32_dest_acc_en));
+    }
+    else if constexpr (BINOP == BinaryOp::MUL_INT32)
+    {
+        // mul_int32 is on the LLK init's ADDR_MOD_6 dest+=2 allow-list, so drive its
+        // addrmod through SfpuType::mul_int32; the init loads the 11-bit chunk masks
+        // and the 2**23 fp32-to-int bias constants into vConst registers.
+        SFPU_BINARY_INIT_FN(mul_int32, sfpu::mul_int32_init, (APPROXIMATION_MODE));
+    }
     else
     {
         // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
@@ -1659,6 +1675,31 @@ void call_binary_sfpu_operation(
             dst_index_in1,
             dst_index_out,
             vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::ATAN2)
+    {
+        // atan2(y, x): in0 = y, in1 = x (calculate_sfpu_atan2 forwards them as
+        // _sfpu_atan2_(in0, in1)). DST_ACCUM_MODE is is_fp32_dest_acc_en and selects
+        // the higher-order fp32 minimax polynomial (vs the bf16 one) plus the final
+        // convert-to-bf16 rounding, so it must match the init's variant.
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_sfpu_atan2,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, DST_ACCUM_MODE),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::MUL_INT32)
+    {
+        // int32 multiply: out = in0 * in1 (low 32 bits). The kernel loads/stores via
+        // plain INT32 (two's-complement dest bits), so the sign-magnitude packer only
+        // round-trips non-negative results; the test keeps operands positive with a
+        // product < 2^31 (see test_sfpu_binary_mul_int32).
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, mul_int32, (APPROXIMATION_MODE, PER_FACE_ITERATIONS), dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     }
     else
     {

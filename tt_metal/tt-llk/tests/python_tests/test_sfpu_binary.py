@@ -539,6 +539,48 @@ def test_sfpu_binary_mask(formats, dest_acc, mathop):
 
 
 @parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    mathop=[MathOperation.SfpuAtan2],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_sfpu_binary_atan2(formats, dest_acc, mathop):
+    # atan2(y, x): y = tile0 (in0), x = tile1 (in1), both from src_A. Signed [-5, 5]
+    # stimuli give both operands mixed signs so all four quadrants (and the |y|>=|x|
+    # / x<0 branches) are exercised. The kernel is a minimax approximation, so the
+    # match relies on the PCC tolerance rather than being bit-exact.
+    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
+        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0),
+    )
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=[MathOperation.SfpuMulInt32],
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_sfpu_binary_mul_int32(formats, dest_acc, mathop):
+    # int32 multiply: out = tile0 * tile1 (low 32 bits), both operands from src_A.
+    # The kernel stores plain INT32 (two's-complement dest bits), so only non-negative
+    # products round-trip through the harness' sign-magnitude packer. Keep a strictly-
+    # positive range < 2**15.5 (~46340) so the product stays < 2**31 (always positive)
+    # and the int32 result is exact.
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=1.0, high=40_000.0
+        ),
+    )
+
+
+@parametrize(
     formats=input_output_formats(
         [
             DataFormat.Float32,
