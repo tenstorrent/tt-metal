@@ -2128,7 +2128,15 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             .set_page_size(in1_block_size_bytes)
             .set_data_format(in1_data_format);
         remote_cb_config.index(src1_cb_index).set_page_size(in1_single_tile_size).set_data_format(in1_data_format);
-        cb_src1 = tt_metal::experimental::CreateCircularBuffer(program, all_cores, remote_cb_config, *global_cb);
+        // Keep the rectangular kernel/CB placement used for efficient dispatch, but associate the remote CB only
+        // with cores backed by the GCB. Fast dispatch explicitly clears that remote slot on the remaining cores.
+        const auto global_cb_cores = all_cores.intersection(global_cb->all_cores());
+        TT_FATAL(
+            global_cb_cores.contains(all_worker_cores),
+            "GlobalCircularBuffer cores {} do not contain all gather-in0 worker cores {}",
+            global_cb->all_cores(),
+            all_worker_cores);
+        cb_src1 = tt_metal::experimental::CreateCircularBuffer(program, global_cb_cores, remote_cb_config, *global_cb);
     } else {
         tt_metal::CircularBufferConfig src1_cb_config =
             tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
@@ -2871,10 +2879,10 @@ inline void override_gather_in0_program_parameters(
     if (src0_sharded) {
         UpdateDynamicCircularBufferAddress(program, override_variables.cbs[0], src_a_tensor);
     }
-    if (src1_sharded) {
-        if (!global_cb.has_value() && !src_b_tensor.memory_config().is_dram()) {
-            UpdateDynamicCircularBufferAddress(program, override_variables.cbs[1], src_b_tensor);
-        }
+    if (global_cb.has_value()) {
+        tt::tt_metal::experimental::UpdateDynamicCircularBufferAddress(program, override_variables.cbs[1], *global_cb);
+    } else if (src1_sharded && !src_b_tensor.memory_config().is_dram()) {
+        UpdateDynamicCircularBufferAddress(program, override_variables.cbs[1], src_b_tensor);
     }
     if (out_sharded) {
         for (uint32_t i = 0; i < override_variables.cbs.size() - 2; ++i) {

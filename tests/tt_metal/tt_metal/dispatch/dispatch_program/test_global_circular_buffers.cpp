@@ -23,6 +23,9 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
+#include "impl/program/program_impl.hpp"
+#include "tt_metal/impl/context/metal_context.hpp"
+
 namespace tt::tt_metal {
 
 TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffers) {
@@ -134,6 +137,84 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffers) {
         tt::tt_metal::SetRuntimeArgs(program_, compute_receiver_kernel, receiver_cores, receiver_runtime_args);
     }
     this->RunProgram(mesh_device, workload);
+}
+
+TEST_F(MeshDispatchFixture, TensixProgramClearsStaleRemoteCircularBufferConfig) {
+    const CoreCoord sender_core(0, 0);
+    const CoreCoord receiver_core(1, 0);
+    const CoreCoord idle_core(1, 1);
+    const CoreRangeSet sender_cores{CoreRange(sender_core)};
+    const CoreRangeSet receiver_cores{CoreRange(receiver_core)};
+    const CoreRangeSet all_cores(CoreRange({0, 0}, {1, 1}));
+    const CoreRangeSet all_receiver_cores = all_cores.subtract(sender_cores);
+    constexpr uint32_t cb_page_size = 32;
+    constexpr uint32_t remote_cb_index = 31;
+    constexpr uint32_t local_cb_index = 0;
+    constexpr tt::DataFormat tile_format = tt::DataFormat::Float16_b;
+
+    auto mesh_device = devices_[0];
+    auto* device = mesh_device->get_devices()[0];
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+
+    auto make_cb_config = [&]() {
+        CircularBufferConfig config(cb_page_size);
+        config.remote_index(remote_cb_index).set_page_size(cb_page_size).set_data_format(tile_format);
+        config.index(local_cb_index).set_page_size(cb_page_size).set_data_format(tile_format);
+        return config;
+    };
+    auto remote_config_address = [&](Program& program) {
+        const auto& hal = MetalContext::instance().hal();
+        const uint32_t programmable_core_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        return program.impl().get_cb_base_addr(device, idle_core, CoreType::WORKER) +
+               program.impl().get_program_config(programmable_core_index).local_cb_size;
+    };
+
+    // Create a valid config block that can be used as stale remote-CB state on idle_core.
+    std::vector<std::pair<CoreCoord, CoreRangeSet>> full_mapping = {{sender_core, all_receiver_cores}};
+    auto full_global_cb =
+        experimental::CreateGlobalCircularBuffer(mesh_device.get(), full_mapping, 3200, BufferType::L1);
+
+    // Run a rectangular kernel grid with a remote CB on only one receiver. Fast dispatch must overwrite stale config
+    // on idle_core with the zero sentinel that setup_remote_cb_interfaces() skips.
+    std::vector<std::pair<CoreCoord, CoreRangeSet>> sparse_mapping = {{sender_core, receiver_cores}};
+    auto sparse_global_cb =
+        experimental::CreateGlobalCircularBuffer(mesh_device.get(), sparse_mapping, 3200, BufferType::L1);
+    distributed::MeshWorkload sparse_workload;
+    Program sparse_program = CreateProgram();
+    experimental::CreateCircularBuffer(sparse_program, receiver_cores, make_cb_config(), sparse_global_cb);
+    CreateKernel(
+        sparse_program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+        all_cores,
+        ReaderDataMovementConfig{});
+    sparse_workload.add_program(device_range, std::move(sparse_program));
+    auto& sparse_program_in_workload = sparse_workload.get_programs().at(device_range);
+    detail::CompileProgram(mesh_device.get(), sparse_program_in_workload);
+    sparse_program_in_workload.impl().finalize_offsets(mesh_device.get());
+
+    const uint32_t stale_remote_config_address = remote_config_address(sparse_program_in_workload);
+    std::vector<uint32_t> stale_remote_config = {full_global_cb.config_address(), cb_page_size};
+    detail::WriteToDeviceL1(device, idle_core, stale_remote_config_address, stale_remote_config);
+    std::vector<uint32_t> remote_config;
+    detail::ReadFromDeviceL1(
+        device,
+        idle_core,
+        stale_remote_config_address,
+        UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t),
+        remote_config);
+    ASSERT_EQ(remote_config, stale_remote_config);
+
+    this->RunProgram(mesh_device, sparse_workload);
+
+    remote_config.clear();
+    detail::ReadFromDeviceL1(
+        device,
+        idle_core,
+        remote_config_address(sparse_program_in_workload),
+        UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t),
+        remote_config);
+    EXPECT_EQ(remote_config, std::vector<uint32_t>(UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG, 0));
 }
 
 }  // namespace tt::tt_metal
