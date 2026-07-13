@@ -33,6 +33,7 @@ dashboard folder shape is preserved in every case.
 
 `SIM_PORT` is only populated for Quasar (the lone sim carve-out). Blackhole and Wormhole run on the locally-attached card — no simulator, no `--run-simulator`. Hosts without a matching BH/WH card finalize the run as `failed` with `ENV_ERROR`. Quasar has no silicon, so it always runs on `emu-quasar-1x3` with port 5556. On every arch, `.claude/scripts/run_test.sh` serialises the consumer step internally via the per-arch lock `/tmp/tt-llk-test-<arch>.lock` — agents never flock manually.
 
+
 ## How the orchestrators consume this
 
 **Single-arch** (`orchestrator.md`): set `TARGET_ARCH` from the top-level router, look up each field by name, substitute into agent prompts and bash commands. No other file hardcodes arch-specific values.
