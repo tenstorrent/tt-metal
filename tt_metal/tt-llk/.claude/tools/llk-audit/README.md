@@ -216,10 +216,12 @@ Then `python3 tests/test_checks.py` to confirm nothing regressed.
 - `mailbox-sync` (WH/BH) pairs the `MATH→UNPACK` dst_index channel (cmath write ↔
   cunpack read → `PAIRED_CHANNEL`) and marks the thread-agnostic `ckernel_debug.h`
   halt/unhalt endpoints `UNRESOLVED_ENDPOINT`; Quasar has no in-tree FIFO → 0.
-- `cb-sync` / `noc-sync` are **unit-validated only** (synthetic fact bases:
-  reserve/push & wait/pop imbalance, signal-without-preceding-flush) — they report
-  0 over tt-llk (no cb/noc sites) and are end-to-end validated on real kernels only
-  once the JIT capture (kernel fact base) is built.
+- `cb-sync` / `noc-sync` / `noc-atomic-exit` / `noc-read-barrier` / `noc-l1-invalidate`
+  are **unit-validated only** (synthetic fact bases: reserve/push & wait/pop imbalance,
+  signal-without-preceding-flush, atomic-in-flight-at-exit, read-consumed-before-barrier,
+  BH L1-poll-without-invalidate) — they report 0 over tt-llk (no cb/noc kernel sites)
+  and are end-to-end validated on real kernels only once the JIT capture (kernel fact
+  base) is built.
 - **Quasar**: the ALU config words are cross-thread-clean (MATH-owned, per-engine
   register namespacing) — matching the skill's per-engine-ownership conclusion. The tool
   surfaces **1 `UNRESOLVED_COWRITER`** candidate: `RISC_DEST_ACCESS_CTRL` (word 3), a
