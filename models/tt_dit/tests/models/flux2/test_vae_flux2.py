@@ -9,7 +9,7 @@ import torch
 
 import ttnn
 
-from ....models.vae.vae_flux2_opt import Flux2VaeDecoder
+from ....models.vae.vae_flux2 import Flux2VaeDecoder
 from ....parallel.config import Flux2VaeParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils import tensor
