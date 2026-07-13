@@ -153,6 +153,7 @@ class LTXDistilledPipeline(LTXPipeline):
     """Distilled 2-stage AV pipeline: half-res denoise → upsample → full-res refine."""
 
     HAS_UPSAMPLER = True
+    SUPPORTS_IMAGE_CONDITIONING = True
 
     @staticmethod
     def _post_process_latent_tt(
@@ -398,6 +399,13 @@ class LTXDistilledPipeline(LTXPipeline):
             else:
                 logger.info("warmup audio decode (on-device, eager)")
                 self._warmup_audio_decode(torch.zeros(1, als.frames, self.in_channels), num_frames)
+                if self._traced:
+                    # Capture the audio trace HERE, while the video traces' held inputs are still the
+                    # only thing pinned below the activation regions. Deferring the capture to the
+                    # first real generate lays its activations over those baked video inputs and
+                    # clobbers them — every video replay then decodes to blank frames.
+                    logger.info("warmup audio decode (capture pass)")
+                    self.decode_audio(torch.zeros(1, als.frames, self.in_channels), num_frames, fps=24.0)
 
         # Warm the encoders last: they coresident-evict the VAE decoder (which already evicted the
         # DiT), so they never disturb the denoise/decode kernels compiled above.
