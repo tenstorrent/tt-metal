@@ -14,6 +14,7 @@ import os
 
 import pytest
 import torch
+from loguru import logger
 from safetensors import safe_open
 
 import models.tt_dit.models.transformers.ltx.attention_ltx as attention_ltx
@@ -446,9 +447,6 @@ def test_gate_merge_block_matches_standalone_gate(
     )
     tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
 
-    v_m, a_m = merged(**forward_kwargs())
-    v_p, a_p = plain(**forward_kwargs())
-
     concat = [None, None]
     concat[sp_axis] = 2
     concat[tp_axis] = 3
@@ -456,5 +454,30 @@ def test_gate_merge_block_matches_standalone_gate(
         t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat, mesh_shape=tuple(mesh_device.shape))
     ).squeeze(0)
 
-    assert_quality(to_t(v_p)[:, :video_N_real, :], to_t(v_m)[:, :video_N_real, :], pcc=0.99, relative_rmse=0.05)
-    assert_quality(to_t(a_p)[:, :audio_N_real, :], to_t(a_m)[:, :audio_N_real, :], pcc=0.99, relative_rmse=0.05)
+    def run(block, tag):
+        """Forward, sync, and gather to host before anything else touches the device."""
+        v, a = block(**forward_kwargs())
+        ttnn.synchronize_device(mesh_device)
+        v_t = to_t(v)[:, :video_N_real, :]
+        a_t = to_t(a)[:, :audio_N_real, :]
+        for name, t in ((f"{tag} video", v_t), (f"{tag} audio", a_t)):
+            fin = torch.isfinite(t)
+            logger.info(
+                f"{name}: finite {fin.sum().item()}/{t.numel()}"
+                + (f" range=[{t[fin].min().item():.3g}, {t[fin].max().item():.3g}]" if fin.any() else " ALL non-finite")
+            )
+        return v_t, a_t
+
+    # The standalone block runs twice, before and after the merged one. That is the harness's own
+    # control: it pins down that a block's output does not depend on what ran before it on this mesh,
+    # so a difference in the middle run is the merge and not the position.
+    v_p1, a_p1 = run(plain, "plain#1")
+    v_m, a_m = run(merged, "merged")
+    v_p2, a_p2 = run(plain, "plain#2")
+
+    assert torch.isfinite(v_p1).all() and torch.isfinite(a_p1).all(), "standalone output not finite — harness bug"
+    assert_quality(v_p1, v_p2, pcc=0.9999, relative_rmse=0.01)  # control: position does not matter
+    assert_quality(a_p1, a_p2, pcc=0.9999, relative_rmse=0.01)
+
+    assert_quality(v_p1, v_m, pcc=0.99, relative_rmse=0.05)
+    assert_quality(a_p1, a_m, pcc=0.99, relative_rmse=0.05)

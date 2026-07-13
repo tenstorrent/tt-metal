@@ -92,16 +92,31 @@ struct AllGatherMinimalMatmulAsyncParams {
         fsdp_topology(fsdp_topology) {}
 
     // Structural fields that affect program-cache key.
+    //
+    // EVERY field the program factory bakes into the kernels must be listed here: two calls whose
+    // attributes and tensor specs hash equal reuse the SAME cached program and only re-write its
+    // runtime args. chunks/dim/fused_activation/fused_ternary_scalar/output_dtype are all
+    // compile-time (chunks is an N_chunks compile arg that sets the output count and the runtime-arg
+    // count, fused_activation sets the compute defines, fused_ternary_scalar is baked as a literal,
+    // output_dtype picks the CB formats) — omitting them silently aliased ops that differ only in
+    // those. That is not hypothetical: with the LTX gate merged into the QKV projection, attn1.to_qkv
+    // (4096x4096 local weight, chunks=4, no activation) becomes spec-identical to ffn.ff1
+    // (4096x4096, chunks=1, gelu_tanh), so the FFN ran the QKV program — deterministic garbage.
     static constexpr auto attribute_names = std::make_tuple(
         "num_links",
         "ring_size",
         "output_mem_config",
+        "output_dtype",
         "topology",
         "cluster_axis",
         "force_transpose",
         "num_workers_per_link",
         "num_buffers_per_channel",
         "config",
+        "fused_activation",
+        "fused_ternary_scalar",
+        "chunks",
+        "dim",
         "fsdp_cluster_axis",
         "fsdp_ring_size",
         "using_persistent_weight_buffer");
@@ -111,12 +126,17 @@ struct AllGatherMinimalMatmulAsyncParams {
             this->num_links,
             this->ring_size,
             this->output_mem_config,
+            this->output_dtype,
             this->topology,
             this->cluster_axis,
             this->force_transpose,
             this->num_workers_per_link,
             this->num_buffers_per_channel,
             this->config,
+            this->fused_activation,
+            this->fused_ternary_scalar,
+            this->chunks,
+            this->dim,
             this->fsdp_cluster_axis,
             this->fsdp_ring_size,
             this->using_persistent_weight_buffer);
