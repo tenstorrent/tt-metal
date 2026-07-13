@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 void kernel_main() {
@@ -20,10 +21,12 @@ void kernel_main() {
     const uint32_t core_noc_y = get_arg_val<uint32_t>(4);
     constexpr uint32_t onetile = 1;
 
+    CircularBuffer packet_cb(packet_cb_id);
+
     Noc noc;
 
-    cb_reserve_back(packet_cb_id, 1);
-    uint32_t l1_write_addr = get_write_ptr(packet_cb_id);
+    packet_cb.reserve_back(1);
+    uint32_t l1_write_addr = packet_cb.get_write_ptr();
     noc.async_read(
         UnicastEndpoint{},
         CoreLocalMem<uint32_t>(l1_write_addr),
@@ -43,5 +46,5 @@ void kernel_main() {
         {.noc_x = core_noc_x, .noc_y = core_noc_y, .addr = src_addr_m},
         {});
     noc.async_read_barrier();
-    cb_push_back(packet_cb_id, 1);
+    packet_cb.push_back(1);
 }
