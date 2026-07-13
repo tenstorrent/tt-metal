@@ -213,11 +213,11 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramF
     run_args.kernel_run_args = {
         KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values =
-                MakeRuntimeArgsForNode(core_0, {{"num_pages", static_cast<uint32_t>(num_tiles)}, {"start_id", 0u}})},
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+                core_0, {{"num_pages", static_cast<uint32_t>(num_tiles)}, {"start_id", 0u}})},
         KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = MakeRuntimeArgsForNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 core_0,
                 {{"num_unpadded_W", static_cast<uint32_t>(output_w)},
                  {"padded_W_diff_blocks", padded_W_diff_blocks},

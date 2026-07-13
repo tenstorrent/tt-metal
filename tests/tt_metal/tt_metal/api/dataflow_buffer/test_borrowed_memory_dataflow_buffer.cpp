@@ -220,7 +220,7 @@ void run_borrowed_memory_dfb_program(
     // Build and apply run params
     // -----------------------------------------------------------------------
     const KernelRunArgs::RuntimeArgValues dm_rtas =
-        MakeRuntimeArgsForNode(node, {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}});
+        MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}});
 
     ProgramRunArgs params;
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
@@ -384,7 +384,7 @@ void run_update_address_test(
         << "Test pre-condition: two separate L1 allocations must have distinct addresses";
 
     const KernelRunArgs::RuntimeArgValues dm_rtas =
-        MakeRuntimeArgsForNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}});
+        MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}});
 
     // --- Run 1: ring at ring_tensor_a ---
     std::vector<uint32_t> input_a(total_words);
@@ -432,7 +432,7 @@ void run_update_address_test(
         // L1 tensor AND override num_entries together (the sharded program-cache-hit analog). The
         // per-bank fit check in AttachBorrowedDFBBuffers validates the new size against ring_tensor_b.
         const KernelRunArgs::RuntimeArgValues dm_rtas2 =
-            MakeRuntimeArgsForNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}});
+            MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}});
         ProgramRunArgs params2;
         params2.kernel_run_args = {
             {.kernel = experimental::KernelSpecName{"producer"}, .runtime_arg_values = dm_rtas2},

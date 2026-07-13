@@ -206,7 +206,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingSingleCoreFactory::
     // ---- Per-core runtime args (single core) ----
     KernelRunArgs reader_args{
         .kernel = READER,
-        .runtime_arg_values = MakeRuntimeArgsForNode(
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(
             core.start_coord,
             {{"num_unpadded_W", static_cast<uint32_t>(input_w)},
              {"padded_W_diff_blocks", padded_W_diff_blocks},
@@ -226,7 +226,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingSingleCoreFactory::
 
     KernelRunArgs writer_args{
         .kernel = WRITER,
-        .runtime_arg_values = MakeRuntimeArgsForNode(
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(
             core.start_coord, {{"num_pages", static_cast<uint32_t>(num_tiles)}, {"start_id", 0u}})};
 
     ProgramSpec spec{

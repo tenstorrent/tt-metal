@@ -803,8 +803,8 @@ inline void run_single_dfb_program_2_0(
     if (p.producer_type == M2PorCType::DM) {
         params.kernel_run_args.push_back({
             .kernel = PRODUCER,
-            .runtime_arg_values =
-                experimental::MakeRuntimeArgsForNode(node, {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}),
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}),
         });
     } else {
         params.kernel_run_args.push_back({.kernel = PRODUCER});
@@ -812,8 +812,8 @@ inline void run_single_dfb_program_2_0(
     if (p.consumer_type == M2PorCType::DM) {
         params.kernel_run_args.push_back({
             .kernel = CONSUMER,
-            .runtime_arg_values =
-                experimental::MakeRuntimeArgsForNode(node, {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}),
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}),
         });
     } else {
         params.kernel_run_args.push_back({.kernel = CONSUMER});

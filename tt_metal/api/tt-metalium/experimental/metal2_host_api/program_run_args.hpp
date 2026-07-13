@@ -181,13 +181,12 @@ inline void AddRuntimeArgsForNode(
     std::initializer_list<std::pair<std::string, uint32_t>> named_values  // name -> value list
 ) {
     for (const auto& [name, value] : named_values) {
-        const bool inserted = runtime_arg_values[name].emplace(node, value).second;
-        TT_FATAL(inserted, "AddRuntimeArgsForNode: runtime arg '{}' set more than once for node {}.", name, node.str());
+        runtime_arg_values[name][node] = value;
     }
 }
 
 // Build a fresh table for a single node
-inline KernelRunArgs::RuntimeArgValues MakeRuntimeArgsForNode(
+inline KernelRunArgs::RuntimeArgValues MakeRuntimeArgsForSingleNode(
     const NodeCoord& node, std::initializer_list<std::pair<std::string, uint32_t>> named_values) {
     KernelRunArgs::RuntimeArgValues runtime_arg_values;
     AddRuntimeArgsForNode(runtime_arg_values, node, named_values);

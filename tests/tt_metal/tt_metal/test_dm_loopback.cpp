@@ -128,7 +128,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
     for (uint32_t i = 0; i < num_loopback_stages; i++) {
         params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = dram_to_l1_names[i],
-            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
                 node,
                 {{"dram_addr", dram_address},
                  {"l1_addr", l1_address},
@@ -140,7 +140,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
 
         params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = l1_to_dram_names[i],
-            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
                 node,
                 {{"dram_addr", dram_address},
                  {"l1_addr", l1_address},

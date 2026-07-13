@@ -428,7 +428,7 @@ bool single_core_binary(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
                 node,
                 {{"src0_addr", input0_dram_buffer->address()},
                  {"src0_bank_id", 0u},
@@ -440,12 +440,12 @@ bool single_core_binary(
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
                 node, {{"dst_addr", output_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", num_tiles_u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = COMPUTE,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
                 node, {{"per_core_block_cnt", num_tiles_u}, {"per_core_block_size", 1u}, {"acc_to_dst", 0u}}),
         },
     };

@@ -833,7 +833,7 @@ TEST_F(ProgramRunArgsTestQuasar, NamedRTAsAndCRTAsSucceed) {
     ProgramRunArgs params;
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
         .kernel = KernelSpecName{"dm_kernel"},
-        .runtime_arg_values = MakeRuntimeArgsForNode(node, {{"input_ptr", 0x1000}, {"output_ptr", 0x2000}}),
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"input_ptr", 0x1000}, {"output_ptr", 0x2000}}),
         .common_runtime_arg_values = {{"tile_count", 64}},
     });
     params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
@@ -868,7 +868,7 @@ TEST_F(ProgramRunArgsTestQuasar, MissingDeclaredNamedRTANameFails) {
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
         .kernel = KernelSpecName{"dm_kernel"},
         // Only one name provided — output_ptr missing.
-        .runtime_arg_values = MakeRuntimeArgsForNode(node, {{"input_ptr", 0x1000}}),
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"input_ptr", 0x1000}}),
     });
     params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
 
@@ -886,7 +886,7 @@ TEST_F(ProgramRunArgsTestQuasar, UndeclaredNamedRTAFails) {
     ProgramRunArgs params;
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
         .kernel = KernelSpecName{"dm_kernel"},
-        .runtime_arg_values = MakeRuntimeArgsForNode(node, {{"input_ptr", 0x1000}, {"not_in_schema", 0}}),
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"input_ptr", 0x1000}, {"not_in_schema", 0}}),
     });
     params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
 
@@ -1150,7 +1150,7 @@ TEST_F(ProgramRunArgsTestQuasar, NamedAndVarargRTAsCoexistSucceeds) {
     ProgramRunArgs params;
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
         .kernel = KernelSpecName{"dm_kernel"},
-        .runtime_arg_values = MakeRuntimeArgsForNode(node, {{"input_ptr", 0x1000}}),
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"input_ptr", 0x1000}}),
         .advanced_options =
             AdvancedKernelRunArgs{
                 .runtime_varargs = {{node, {7, 8, 9}}},
@@ -1502,7 +1502,7 @@ TEST_F(ProgramRunArgsTestGen1, SetRunArgs_NamedPerNodeRTAs_ScatterToDeclarationS
     ProgramRunArgs params;
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
         .kernel = KernelSpecName{"dm_kernel"},
-        .runtime_arg_values = MakeRuntimeArgsForNode(node, {{"c", 30}, {"a", 10}, {"b", 20}}),
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"c", 30}, {"a", 10}, {"b", 20}}),
     });
     params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
     SetProgramRunArgs(program, params);
@@ -1520,7 +1520,7 @@ TEST_F(ProgramRunArgsTestGen1, SetRunArgs_NamedPerNodeRTAs_ScatterToDeclarationS
     ProgramRunArgs params2;
     params2.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
         .kernel = KernelSpecName{"dm_kernel"},
-        .runtime_arg_values = MakeRuntimeArgsForNode(node, {{"b", 201}, {"c", 301}, {"a", 101}}),
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"b", 201}, {"c", 301}, {"a", 101}}),
     });
     params2.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
     SetProgramRunArgs(program, params2);
@@ -1550,7 +1550,7 @@ TEST_F(ProgramRunArgsTestGen1, SetRunArgs_NamedPlusVarargs_FastPathLayout) {
         p.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
             .kernel = KernelSpecName{"dm_kernel"},
             .runtime_arg_values =
-                MakeRuntimeArgsForNode(node, {{"b", b}, {"a", a}}),  // supplied out of declaration order
+                MakeRuntimeArgsForSingleNode(node, {{"b", b}, {"a", a}}),  // supplied out of declaration order
             .advanced_options = AdvancedKernelRunArgs{.runtime_varargs = {{node, std::move(varargs)}}},
         });
         p.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
@@ -2324,7 +2324,7 @@ TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_RetainsInvariantPerNodeRTA
     ProgramRunArgs params;
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
         .kernel = KernelSpecName{"dm_kernel"},
-        .runtime_arg_values = MakeRuntimeArgsForNode(node, {{"keep", 1}, {"change", 2}}),
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"keep", 1}, {"change", 2}}),
     });
     params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
     SetProgramRunArgs(program, params);
@@ -2332,7 +2332,7 @@ TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_RetainsInvariantPerNodeRTA
     ProgramRunArgs upd;
     upd.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
         .kernel = KernelSpecName{"dm_kernel"},
-        .runtime_arg_values = MakeRuntimeArgsForNode(node, {{"change", 99}}),
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"change", 99}}),
     });
     EXPECT_NO_THROW(UpdateProgramRunArgs(program, upd));
 

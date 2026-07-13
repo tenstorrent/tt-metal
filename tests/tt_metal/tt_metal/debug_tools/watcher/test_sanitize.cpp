@@ -428,7 +428,7 @@ void RunTestOnCore(
         experimental::ProgramRunArgs params;
         params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DRAM_COPY_KERNEL_NAME,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
                 node,
                 {{"local_buffer_addr", buffer_addr},
                  {"buffer_src_addr", input_buffer_addr},

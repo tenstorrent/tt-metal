@@ -229,7 +229,7 @@ void run_single_core_copy_block_matmul_partials(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
                 node,
                 {{"src_addr", src_dram_buffer->address()},
                  {"src_dram_bank_id", 0u},
@@ -239,7 +239,7 @@ void run_single_core_copy_block_matmul_partials(
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
                 node,
                 {{"dst_addr", dst_dram_buffer->address()},
                  {"dst_dram_bank_id", 0u},

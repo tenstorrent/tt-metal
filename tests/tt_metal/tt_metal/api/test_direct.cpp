@@ -292,7 +292,7 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
                 test_config.node,
                 {{"src_addr", input_dram_byte_address},
                  {"src_bank_id", 0u},
@@ -301,7 +301,7 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
                 test_config.node,
                 {{"dst_addr", output_dram_byte_address},
                  {"dst_bank_id", 0u},
@@ -523,7 +523,7 @@ bool reader_datacopy_writer(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
                 test_config.node,
                 {{"src_addr", ctx.input_dram_byte_address},
                  {"src_bank_id", 0u},
@@ -532,7 +532,7 @@ bool reader_datacopy_writer(
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForNode(
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
                 test_config.node,
                 {{"dst_addr", ctx.output_dram_byte_address},
                  {"dst_bank_id", 0u},

@@ -138,9 +138,11 @@ static void run_dfb_size_override_test(
 
         experimental::ProgramRunArgs run_params;
         experimental::ProgramRunArgs::KernelRunArgs producer_params{.kernel = PRODUCER};
-        producer_params.runtime_arg_values = experimental::MakeRuntimeArgsForNode(node, {{"chunk_offset", 0u}, {"entries_per_core", workload}});
+        producer_params.runtime_arg_values =
+            experimental::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", workload}});
         experimental::ProgramRunArgs::KernelRunArgs consumer_params{.kernel = CONSUMER};
-        consumer_params.runtime_arg_values = experimental::MakeRuntimeArgsForNode(node, {{"chunk_offset", 0u}, {"entries_per_core", workload}});
+        consumer_params.runtime_arg_values =
+            experimental::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", workload}});
         run_params.kernel_run_args = {producer_params, consumer_params};
         run_params.tensor_args = {
             {IN_TENSOR, experimental::TensorArgument{in_tensor}},
