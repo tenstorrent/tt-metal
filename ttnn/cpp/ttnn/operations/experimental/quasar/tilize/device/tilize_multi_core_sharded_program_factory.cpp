@@ -16,6 +16,7 @@ using namespace tt::tt_metal::experimental;
 namespace ttnn::prim::qsr {
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 const TensorParamName INPUT_TENSOR{"input"};
 const TensorParamName OUTPUT_TENSOR{"output"};
 const DFBSpecName INPUT_DFB{"in"};
@@ -23,10 +24,12 @@ const DFBSpecName OUTPUT_DFB{"out"};
 const KernelSpecName READER_KERNEL{"reader"};
 const KernelSpecName WRITER_KERNEL{"writer"};
 const KernelSpecName COMPUTE_KERNEL{"compute"};
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedProgramFactory::create_program_artifacts(
     const TilizeParams& /*operation_attributes*/, const TilizeInputs& tensor_args, Tensor& tensor_return_value) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;  // resolve the file-local ids below
     const Tensor& input = tensor_args.input_tensor;
     const Tensor& output = tensor_return_value;
 
