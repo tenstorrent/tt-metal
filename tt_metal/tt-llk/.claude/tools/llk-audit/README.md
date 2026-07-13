@@ -142,6 +142,10 @@ Open `registry.py` — it is organized by concept with an `EDIT HERE` banner:
 - new mailbox primitive → `MAILBOX_FIFO_CALLS`
 - new/renamed CB credit call → `CB_CALLS` (free function) / `CB_METHOD_CALLS` (object/method form, e.g. `cb.reserve_back()`; gated on the `_CB_RECV_TYPES` receiver type)
 - new NoC semaphore/flush call → `NOC_SIGNAL_CALLS` / `NOC_WAIT_CALLS` / `NOC_FLUSH_CALLS` (free function) / `NOC_METHOD_FLUSH` (Noc-method flush)
+- new NoC posted-flush → `NOC_POSTED_FLUSH_CALLS` / `NOC_METHOD_POSTED_FLUSH` (drains only the posted counter — never clears a non-posted write/atomic credit)
+- new non-posted atomic credit or its drain (noc-atomic-exit) → `NOC_ATOMIC_SIGNALS` (+ method `NOC_METHOD_SIGNAL_MCAST` / `NOC_METHOD_SIGNAL_WRITE`) / `NOC_ATOMIC_BARRIERS` / `NOC_METHOD_ATOMIC_BARRIER`; the write-ack barrier is `NOC_WRITE_BARRIERS`
+- new NoC read barrier or read-consume form (noc-read-barrier) → `NOC_METHOD_READ_BARRIER` / `READ_FORWARD_CALLS`
+- noc-l1-invalidate has no per-signature table — it keys on the `pointer_read` fact (a volatile L1 poll in a loop) scoped to NoC context (`noc_op_of`) / `get_semaphore` provenance; widen the `pointer_read` capture, not a name list
 
 Then `python3 tests/test_checks.py` to confirm nothing regressed.
 
