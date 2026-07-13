@@ -429,25 +429,15 @@ class TtIndexer:
         ttnn.deallocate(nope)
         return out
 
-    def _gather_index_kbuf(self, index_kbuf: ttnn.Tensor, cache_batch_idx: int) -> ttnn.Tensor:
-        """Read the block-cyclic ND-sharded key cache back to a replicated full-T [1,1,T,D_idx]
-        (block-cyclic order preserved, bf16 TILE) for indexer_score_dsa's block-cyclic reader — the
-        analogue of ttMLA._gather_kvpe_prefix, and it uses the same fix.
-
-        SLOT SELECT BEFORE THE GATHER: index_kbuf is user-major [num_users*layer_num, 1, T, D_idx]
-        (same layout as the MLA KVPE cache). Slice the active (user, layer) slot out of dim 0 FIRST, then
-        SP all-gather only that single [1,1,T,D_idx] slot — NOT the whole B-slot cache. Gathering all
-        slots materializes a full-T copy of every user/layer (OOMs at high num_layers, exactly like the
-        MLA kvpe gather did). The gathered kv is then batch-1, so indexer_score needs NO cache_batch_idx
-        (the op requires kB==1 when cache_batch_idx is unset). The unwritten suffix is never scored
-        (future positions are causally masked).
-
-        PERF TODO: this SP all-gather is currently a blocking barrier — it materializes the whole full-T
-        key cache before indexer_score_dsa runs. It should instead be FUSED INTO the score op (ring-joint
-        style, like ring_mla / ring-joint SDPA fuse the KV all-gather with the attention compute): pipeline
-        the per-slab gather with the score matmul so each SP key slab is gathered and scored as it arrives,
-        overlapping the CCL with the op's own compute instead of paying a full gather up front. Op-level
-        change (ring indexer_score), not a host-side reorder."""
+    def _slice_active_slot(self, index_kbuf: ttnn.Tensor, cache_batch_idx: int) -> ttnn.Tensor:
+        """ND_SHARDED → INTERLEAVED read-back of the key cache, then slice the active (user, layer) slot
+        out of the user-major [num_users*layer_num, 1, S, D_idx] cache (same layout as the MLA KVPE cache)
+        down to a batch-1 [1, 1, S, D_idx] — BEFORE any SP gather. Slicing FIRST is the OOM fix: it keeps
+        the gather/all-gather from materializing a full-S copy of every user/layer slot (OOMs at high
+        layer_num, exactly like the MLA kvpe gather did). The result is batch-1, so indexer_score runs with
+        cache_batch_idx=None (the op requires kB==1 when cache_batch_idx is unset). Single-slot cache (B==1)
+        → no slice. Shared by the unfused gather (_gather_index_kbuf) and the fused ring AG input
+        (_score_blockcyclic_fused) so the slot-select logic lives in exactly one place."""
         cache_i = ttnn.to_memory_config(index_kbuf, ttnn.DRAM_MEMORY_CONFIG)  # ND_SHARDED → INTERLEAVED
         if cache_i.shape[0] > 1:  # user-major slot select BEFORE the gather (single-slot cache → skip)
             sel = ttnn.slice(
@@ -457,10 +447,72 @@ class TtIndexer:
             )
             ttnn.deallocate(cache_i)
             cache_i = sel
+        return cache_i
+
+    def _gather_index_kbuf(self, index_kbuf: ttnn.Tensor, cache_batch_idx: int) -> ttnn.Tensor:
+        """Read the block-cyclic ND-sharded key cache back to a replicated full-T [1,1,T,D_idx]
+        (block-cyclic order preserved, bf16 TILE) for indexer_score_dsa's block-cyclic reader — the
+        analogue of ttMLA._gather_kvpe_prefix. Slices the active (user, layer) slot to batch-1 BEFORE the
+        SP all-gather (see _slice_active_slot's OOM note), so the gathered kv is batch-1 and the score op
+        needs NO cache_batch_idx. The unwritten suffix is never scored (future positions are causally masked).
+
+        This blocking-barrier gather (materialize the whole full-T key slot before the standalone
+        indexer_score_dsa) is now the UNFUSED FALLBACK only. The SP>1 fast path fuses this all-gather into
+        the score op (ring_indexer_score_dsa, ring-joint style — see _score_blockcyclic_fused), pipelining
+        the per-slab gather with the scoring so the CCL is hidden behind the op's own compute. This path
+        still runs for SP==1 (nothing to gather) and any head-streaming config the fused op rejects."""
+        cache_i = self._slice_active_slot(index_kbuf, cache_batch_idx)  # INTERLEAVED batch-1 [1,1,T,D_idx]
         full = self._sp_all_gather(cache_i, dim=2)  # [1,1,T,D_idx] replicated, block-cyclic
         if self.sp_factor > 1:
             ttnn.deallocate(cache_i)
         return full
+
+    def _score_blockcyclic_fused(
+        self, q_dev, weights, index_kv_cache, cfg, start_pos, end_pos, cache_batch_idx, seq_len
+    ):
+        """Ring-fused block-cyclic score: overlap the SP all-gather of the key cache with the scoring, in
+        place of the blocking _gather_index_kbuf barrier + standalone indexer_score_dsa. Passes this chip's
+        LOCAL block-cyclic shard (the ND-sharded cache read back to interleaved [B,1,S/sp,D_idx]) as the
+        all-gather INPUT and a persistent full-T [1,1,T,D_idx] buffer as the gather OUTPUT; the fused op
+        gathers each remote SP slab and scores it as it arrives, dual-sourcing the local slab from k_local.
+
+        SLOT SELECT BEFORE THE RING AG (mirrors _gather_index_kbuf's OOM fix): _slice_active_slot slices this
+        (user,layer) slot out of the user-major [num_users*layer_num,1,S/sp,D_idx] shard to batch-1 FIRST, so
+        the ring reconstructs a batch-1 [1,1,T,D_idx] instead of a full-T copy of EVERY slot (which OOMs at
+        high layer_num). The gathered kv is then batch-1 → the fused op runs with cache_batch_idx=None (validate
+        requires kB==1 when it is unset), and the persistent gather buffer is a single [1,1,T,D_idx].
+
+        Ring axis = SP (cluster_axis == block_cyclic_sp_axis == sp_axis); reuses the model's ring-attention
+        CCL semaphores + topology + num_links (same fabric infra as the layer's ring_joint SDPA). All score
+        semantics (per-device causal offset, block-cyclic invP, straddle, kv_len bound) are identical to the
+        unfused indexer_score_dsa path in forward()."""
+        k_local = self._slice_active_slot(index_kv_cache, cache_batch_idx)  # INTERLEAVED batch-1 [1,1,sll,D_idx]
+        k_gathered = self.tt_ccl.get_indexer_gathered_buffer(
+            # Every shape is derived from the real AG input shard so the gather OUTPUT can never silently
+            # mismatch the INPUT (batch-1 after the slot slice; T = sp * per-chip slab, exact).
+            cache_batch=k_local.shape[0],
+            seq_len_full=k_local.shape[2] * self.sp_factor,
+            head_dim=k_local.shape[3],
+            dtype=k_local.dtype,  # to_memory_config preserves dtype; fused op requires k_local.dtype == k_gathered.dtype
+        )
+        logits = ttnn.experimental.ring_indexer_score_dsa(
+            q_dev,
+            k_gathered,
+            weights,
+            k_local,
+            self.tt_ccl.indexer_ag_semaphore_handles,  # dedicated pair (fwd/backward ring directions)
+            cluster_axis=self.sp_axis,
+            topology=self.ccl_topology,
+            num_links=self.ccl_num_links,
+            chunk_start_idx=start_pos,
+            program_config=cfg,
+            cache_batch_idx=None,  # k_local is already sliced to this slot (batch-1) → no in-kernel select
+            block_cyclic_sp_axis=self.sp_axis,
+            block_cyclic_chunk_local=seq_len,  # per-chip chunk == chunk_size_global / sp == Sq
+            kv_len=end_pos,
+        )
+        ttnn.deallocate(k_local)  # AG input; the persistent gather buffer is owned by tt_ccl (not freed)
+        return logits
 
     def write_k(
         self, hidden_states, seq_len, start_pos, rope_tensors=None, cache_user_id=0, cache_layer_idx=0, index_kbuf=None
@@ -651,36 +703,51 @@ class TtIndexer:
         # + r*Sq, Sq=S/sp=seq_len). All H_idx heads on-chip -> the logit is COMPLETE (no partial-logit
         # all-reduce). topk stays SP-sharded ([1,1,S/sp,k]) -> fed straight to sparse_mla.
         if self._blockcyclic:
-            # _gather_index_kbuf slices this (user, layer) slot then gathers it to replicated full-T; the op
-            # reads it back in logical order via invP (batch-1, so cache_batch_idx=None) and applies the
-            # straddle for a non-slab-aligned start_pos (padded chunk). Scores the FULL preallocated width T:
-            # positions past each query are causally -inf, and top-k below drops those (-inf -> sentinel).
+            # This slot is sliced to batch-1 before the gather (cache_batch_idx=None below); the op reads the
+            # cache back in logical order via invP, applies the straddle for a non-slab-aligned start_pos
+            # (padded chunk), and derives each SP chip's causal offset from the mesh coordinate. Scores the FULL
+            # preallocated width T (future/pad columns causally -inf, dropped by top-k), but kv_len=end_pos
+            # bounds the write to the real prefix: end_pos = start_pos + chunk_global is the tightest legal
+            # value (pad query rows push the fullest-device causal window to end_pos; the op TT_FATALs on
+            # kv_len < that), leaving [end_pos, T) STALE — never ranked (top-k is passed valid_length=end_pos).
             #
-            # Bound the score to the real written prefix (kv_len=end_pos) rather than the full preallocated
-            # width T: end_pos = start_pos + chunk_global is the tightest legal value (the pad query rows
-            # push the fullest-device causal window to end_pos; the op TT_FATALs on kv_len < that). kv_len
-            # only WRITES logits[:, :, :, :end_pos] and leaves the tail [end_pos, T) STALE (not -inf); the
-            # top-k below is told the valid length (valid_length=end_pos) so it never reads or ranks that
-            # stale tail — which is the future top-k would drop anyway (causally -inf), so the selection is
-            # unchanged.
-            k_full = self._gather_index_kbuf(index_kv_cache, cache_batch_idx)  # [1,1,T,D_idx] bf16 TILE, block-cyclic
-            logits = ttnn.experimental.indexer_score_dsa(
-                q_dev,
-                k_full,
-                weights,
-                chunk_start_idx=start_pos,
-                program_config=cfg,
-                cluster_axis=self.sp_axis,
-                # TP×SP: name the TP axis the query was sub-sharded over so the score adds each device's
-                # tp_rank*Sq' block-cyclic sub-offset — rotation-EXACT (vs the flat cluster_axis=None path,
-                # which is linear-approximate under a mid-slab start). None when the query stays SP-only.
-                seq_subshard_axis=self.tp_axis if tpsp else None,
-                cache_batch_idx=None,  # k_full is already sliced to this slot (batch-1) → no in-kernel select
-                block_cyclic_sp_axis=self.sp_axis,
-                block_cyclic_chunk_local=seq_len,  # cache slab == chunk_size_global / sp (== Sq'·tp when TP-split)
-                kv_len=end_pos,
-            )
-            ttnn.deallocate(k_full)
+            # kv_len=end_pos bounds the score to the real written prefix rather than the full preallocated
+            # width T: end_pos = start_pos + chunk_global is the tightest legal value (the pad query rows push
+            # the fullest-device causal window to end_pos; the op TT_FATALs on kv_len < that). kv_len only
+            # WRITES logits[:, :, :, :end_pos] and leaves the tail [end_pos, T) STALE (not -inf); the top-k
+            # below is told the valid length (valid_length=end_pos) so it never reads or ranks that stale tail
+            # — which is the future top-k would drop anyway (causally -inf), so the selection is unchanged.
+            #
+            # SP>1 with all heads resident and NO TP sub-shard FUSES the SP all-gather into the score
+            # (ring_indexer_score_dsa, ring-joint style: the per-slab gather overlaps the scoring). Otherwise
+            # the blocking gather + standalone indexer_score_dsa: SP==1 has nothing to gather; head-streaming
+            # configs the fused op rejects; and the TP×SP sub-shard (tpsp) needs seq_subshard_axis, which the
+            # SP-only fused ring path does not carry (it hard-codes tp_index=0). head_group_size 0, or ==
+            # heads_local, means all heads resident.
+            heads_local = self.index_args.index_n_heads // self.tp_factor
+            if self.sp_factor > 1 and cfg.head_group_size in (0, heads_local) and not tpsp:
+                logits = self._score_blockcyclic_fused(
+                    q_dev, weights, index_kv_cache, cfg, start_pos, end_pos, cache_batch_idx, seq_len
+                )
+            else:
+                k_full = self._gather_index_kbuf(index_kv_cache, cache_batch_idx)  # [1,1,T,D_idx] TILE, block-cyclic
+                logits = ttnn.experimental.indexer_score_dsa(
+                    q_dev,
+                    k_full,
+                    weights,
+                    chunk_start_idx=start_pos,
+                    program_config=cfg,
+                    cluster_axis=self.sp_axis,
+                    # TP×SP: name the TP axis the query was sub-sharded over so the score adds each device's
+                    # tp_rank*Sq' block-cyclic sub-offset — rotation-EXACT (vs the flat cluster_axis=None path,
+                    # which is linear-approximate under a mid-slab start). None when the query stays SP-only.
+                    seq_subshard_axis=self.tp_axis if tpsp else None,
+                    cache_batch_idx=None,  # k_full is already sliced to this slot (batch-1) → no in-kernel select
+                    block_cyclic_sp_axis=self.sp_axis,
+                    block_cyclic_chunk_local=seq_len,  # cache slab == chunk_size_global / sp (== Sq'·tp when TP-split)
+                    kv_len=end_pos,
+                )
+                ttnn.deallocate(k_full)
         else:
             logits = ttnn.experimental.indexer_score_dsa(
                 q_dev,

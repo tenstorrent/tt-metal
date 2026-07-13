@@ -13,6 +13,7 @@
 #include <tt-metalium/mesh_device.hpp>  // q.device()->get_view().shape() for block-cyclic sp derivation
 
 #include "kernels/indexer_score_work_split.hpp"  // banded grid mapping (banded_core_count)
+#include "indexer_score_host_common.hpp"         // program::ring_size_for (shared with the fused factory)
 #include "ttnn/operations/ccl/ccl_common.hpp"    // get_linearized_index_from_physical_coord
 
 namespace ttnn::operations::experimental::indexer_score {
@@ -180,7 +181,10 @@ void validate_block_cyclic(const operation_attributes_t& attrs, const tensor_arg
 }  // namespace
 
 IndexerScoreDeviceOperation::program_factory_t IndexerScoreDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
+    const operation_attributes_t& attrs, const tensor_args_t&) {
+    if (attrs.has_fused_ring()) {
+        return program::RingIndexerScoreDsaMeshWorkloadFactory{};
+    }
     return program::IndexerScoreProgramFactory{};
 }
 
@@ -209,6 +213,9 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         attrs.has_block_cyclic(),
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->sp : 0u,
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
+        // Fused ring selects a different program factory + the reader's FUSED_RING binary, so it MUST be hashed
+        // (else a fused and an unfused dispatch with otherwise-identical shapes would collide on one program).
+        attrs.has_fused_ring(),
         tensor_args);
 }
 
@@ -248,6 +255,63 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
     validate_static(attrs, tensor_args);
     validate_runtime_values(attrs, tensor_args);
     validate_block_cyclic(attrs, tensor_args);
+
+    // Fused ring: k is the [B,1,T,D] gathered buffer (validated above); additionally require the per-chip LOCAL
+    // K shard k_local [B,1,sll,D] (the all-gather INPUT), single-head, matching head dim, tile-aligned.
+    if (attrs.has_fused_ring()) {
+        const auto& fused = *attrs.fused_ring;
+        TT_FATAL(tensor_args.k_local.has_value(), "indexer_score fused: k_local (all-gather input) is required");
+        const auto& kl = *tensor_args.k_local;
+        TT_FATAL(
+            kl.storage_type() == StorageType::DEVICE && kl.buffer() != nullptr,
+            "indexer_score fused: k_local must be allocated on device");
+        const auto& kls = kl.logical_shape();
+        const auto& ks = k.logical_shape();
+        TT_FATAL(ks.rank() == 4, "indexer_score fused: gathered k must be rank 4");  // guard before indexing ks below
+        TT_FATAL(kls.rank() == 4 && kls[1] == 1, "indexer_score fused: k_local must be [B,1,sll,D]");
+        // k_local and the gathered k must share the batch dim: the reader offsets the LOCAL shard read by
+        // cache_batch_idx * (Tt/ring_size) tiles, bounded only against k's batch (validate_runtime_values).
+        // A smaller k_local batch would read OOB on the local shard for a cache_batch_idx valid for k.
+        TT_FATAL(
+            kls[0] == ks[0], "indexer_score fused: k_local batch {} must equal gathered k batch {}", kls[0], ks[0]);
+        TT_FATAL(kls[3] == ks[3], "indexer_score fused: k_local head dim {} != k head dim {}", kls[3], ks[3]);
+        TT_FATAL(
+            kl.dtype() == k.dtype(),
+            "indexer_score fused: k_local dtype {} must match gathered k dtype {} (the reader reads local + "
+            "remote shards as one format)",
+            kl.dtype(),
+            k.dtype());
+        TT_FATAL(kl.layout() == Layout::TILE, "indexer_score fused: k_local must be TILE layout");
+        // The all-gather writes exactly ring_size slabs of the local shard, and the reader partitions the
+        // gathered T into ring_size shards (sll_t = Tt / ring_size), so T must equal ring_size * sll EXACTLY --
+        // a mere divisibility check would let producer and consumer disagree on shard boundaries.
+        TT_FATAL(
+            kls[2] % tt::constants::TILE_WIDTH == 0,
+            "indexer_score fused: k_local seq {} must be tile-aligned",
+            kls[2]);
+        const uint32_t ring_size = program::ring_size_for(attrs, q);  // shared with the fused factory
+        TT_FATAL(
+            ks[2] == ring_size * kls[2],
+            "indexer_score fused: gathered k seq {} must equal ring_size ({}) * k_local seq ({})",
+            ks[2],
+            ring_size,
+            kls[2]);
+        // The all-gather helper reads two direction semaphores (forward/backward); require both present.
+        TT_FATAL(
+            fused.ag_semaphore.size() >= 2,
+            "indexer_score fused: ag_multi_device_global_semaphore needs >= 2 global semaphores (got {})",
+            fused.ag_semaphore.size());
+        // Only Linear/Ring assign non-zero gather targets; other topologies would leave the reader's per-band
+        // gate waiting on semaphores that never advance (hang).
+        TT_FATAL(
+            fused.topology == ttnn::ccl::Topology::Linear || fused.topology == ttnn::ccl::Topology::Ring,
+            "indexer_score fused: topology must be Linear or Ring");
+        // Step-E band reorder assumes all heads resident (see the factory); reject head streaming here too so
+        // the error surfaces at validate with the other shape checks, not deep in program construction.
+        TT_FATAL(
+            resolve_head_group(attrs.program_config, q_shape[1]) == q_shape[1],
+            "indexer_score fused: head_group_size must be 0 or Hi (no head streaming)");
+    }
 
     // Shapes: q [B, Hi, Sq, D], k [B, 1, T, D] (single shared head), weights [B, Hi, Sq, 1].
     TT_FATAL(q_shape.rank() == 4 && k_shape.rank() == 4, "q, k must be rank 4");
@@ -501,7 +565,11 @@ ttnn::Tensor launch_indexer_score(
     std::optional<uint32_t> cluster_axis,
     std::optional<uint32_t> seq_subshard_axis,
     std::optional<uint32_t> block_cyclic_sp_axis,
-    std::optional<uint32_t> block_cyclic_chunk_local) {
+    std::optional<uint32_t> block_cyclic_chunk_local,
+    // Fused ring (all-gather subsumed): k is the gathered [B,1,T,D] persistent output buffer, k_local is this
+    // chip's SP shard = the all-gather INPUT, fused_ring carries the AG config. Both nullopt = the classic path.
+    std::optional<ttnn::Tensor> k_local = std::nullopt,
+    std::optional<ttnn::operations::experimental::indexer_score::FusedRingConfig> fused_ring = std::nullopt) {
     using OperationType = ttnn::operations::experimental::indexer_score::IndexerScoreDeviceOperation;
     using ttnn::operations::experimental::indexer_score::BlockCyclicLayout;
 
@@ -522,6 +590,15 @@ ttnn::Tensor launch_indexer_score(
     TT_FATAL(
         !seq_subshard_axis.has_value() || block_cyclic_sp_axis.has_value(),
         "indexer_score: seq_subshard_axis requires a block-cyclic layout (block_cyclic_sp_axis/chunk_local)");
+    // Fused ring gathers along cluster_axis while the block-cyclic shard mapping derives sp from
+    // block_cyclic_sp_axis; the reader's shard math assumes sp == ring_size, so the two must be the SAME mesh
+    // axis (production always passes both = the SP axis).
+    if (fused_ring.has_value() && block_cyclic_sp_axis.has_value()) {
+        TT_FATAL(
+            cluster_axis.has_value() && *cluster_axis == *block_cyclic_sp_axis,
+            "indexer_score fused: block_cyclic_sp_axis ({}) must equal cluster_axis (the ring axis)",
+            *block_cyclic_sp_axis);
+    }
     std::optional<BlockCyclicLayout> block_cyclic = std::nullopt;
     if (block_cyclic_sp_axis.has_value()) {
         const auto mesh_shape = q.device()->get_view().shape();
@@ -643,6 +720,9 @@ ttnn::Tensor launch_indexer_score(
         cluster_axis,
         seq_subshard_axis,
         block_cyclic);
+    // Attach the fused-ring config + local shard (both nullopt on the classic path -> byte-identical behavior).
+    operation_attributes.fused_ring = std::move(fused_ring);
+    tensor_args.k_local = std::move(k_local);
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
@@ -721,6 +801,51 @@ ttnn::Tensor indexer_score_msa(
         /*seq_subshard_axis=*/std::nullopt,
         block_cyclic_sp_axis,
         block_cyclic_chunk_local);
+}
+
+ttnn::Tensor ring_indexer_score_dsa(
+    const ttnn::Tensor& q,
+    const ttnn::Tensor& k,
+    const ttnn::Tensor& weights,
+    const ttnn::Tensor& k_local,
+    const std::vector<tt::tt_metal::GlobalSemaphore>& ag_multi_device_global_semaphore,
+    uint32_t cluster_axis,
+    ttnn::ccl::Topology topology,
+    uint32_t num_links,
+    std::optional<tt::tt_metal::SubDeviceId> ag_sub_device_id,
+    std::optional<uint32_t> chunk_start_idx,
+    const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    std::optional<uint32_t> cache_batch_idx,
+    std::optional<uint32_t> kv_len,
+    std::optional<uint32_t> block_cyclic_sp_axis,
+    std::optional<uint32_t> block_cyclic_chunk_local) {
+    // Fused DSA: same knobs as indexer_score_dsa (relu, one plane, no pool, real weights) + the all-gather it
+    // subsumes. The factory auto-reserves the AG worker column(s) off the compute rectangle.
+    ttnn::operations::experimental::indexer_score::FusedRingConfig fused_ring;
+    fused_ring.num_links = num_links;
+    fused_ring.topology = topology;
+    fused_ring.ag_semaphore = ag_multi_device_global_semaphore;
+    fused_ring.ag_sub_device_id = ag_sub_device_id;
+    return launch_indexer_score(
+        q,
+        k,
+        weights,
+        chunk_start_idx,
+        /*apply_relu=*/true,
+        /*num_groups=*/1,
+        /*block_size=*/0,
+        /*synthesize_gate=*/false,
+        /*gate_scale=*/1.0f,
+        program_config,
+        compute_kernel_config,
+        cache_batch_idx,
+        kv_len,
+        cluster_axis,
+        block_cyclic_sp_axis,
+        block_cyclic_chunk_local,
+        k_local,
+        fused_ring);
 }
 
 }  // namespace ttnn::experimental

@@ -78,6 +78,11 @@ class TT_CCL:
 
         # create global semaphore handles
         self.ring_attention_ccl_semaphore_handles = create_global_semaphores(mesh_device, self.sub_device_crs, 0)
+        # Dedicated pair for the ring-fused indexer_score all-gather (ring_indexer_score_dsa). Kept SEPARATE
+        # from ring_attention_ccl_semaphore_handles so the indexer AG cannot interleave semaphore state with
+        # the MLA ring_mla / ring_joint SDPA that share ring_attention_ccl_semaphore_handles later in the same
+        # forward (same reuse-without-reset lifecycle those ops use across layers).
+        self.indexer_ag_semaphore_handles = create_global_semaphores(mesh_device, self.sub_device_crs, 0)
 
         self.barrier_semaphore_idx = [0, 0, 0]
         self.barrier_semaphore_handles = [[], [], []]
@@ -120,6 +125,10 @@ class TT_CCL:
         # Persistent chunked-prefill (ring_mla) gathered-KV scratch buffers shared by every layer's
         # MLA, keyed by shape signature. See get_mla_chunked_kv_buffer.
         self.mla_chunked_kv_buffers: dict[tuple, "ttnn.Tensor"] = {}
+
+        # Persistent all-gather OUTPUT buffers for the ring-fused indexer_score op, shared by every
+        # layer's DSA indexer, keyed by shape signature. See get_indexer_gathered_buffer.
+        self.indexer_gathered_buffers: dict[tuple, "ttnn.Tensor"] = {}
 
     def get_mla_ring_attention_buffers(
         self,
@@ -206,6 +215,31 @@ class TT_CCL:
                 ),
             )
         return self.mla_chunked_kv_buffers[key]
+
+    def get_indexer_gathered_buffer(self, *, cache_batch, seq_len_full, head_dim, dtype):
+        """Lazily allocate (once per mesh) and return the persistent gathered-K scratch buffer used by
+        the ring-fused indexer scorer (ring_indexer_score_dsa's all-gather OUTPUT buffer `k`). Like the
+        ring_mla chunked-KV scratch (get_mla_chunked_kv_buffer): each layer's fused gather overwrites it,
+        it holds no per-layer state, and it is uniform across layers (cache_batch/seq/dim/mesh are all
+        model-fixed), so one buffer is shared by every layer's indexer instead of re-allocating per layer.
+        Holds the full gathered seq (seq_len_full = sp * per-chip slab) on EVERY device -- the fused op's
+        ring all-gather fills the remote SP bands in place while the local band is dual-sourced from
+        k_local -- so it is replicated across the whole mesh. The stale contents between calls are never
+        read (remote bands are overwritten by the gather; the local band comes from k_local), so it is not
+        re-zeroed. Cached by (cache_batch, seq_len_full, head_dim, dtype)."""
+        import torch
+
+        key = (cache_batch, seq_len_full, head_dim, dtype)
+        if key not in self.indexer_gathered_buffers:
+            self.indexer_gathered_buffers[key] = ttnn.from_torch(
+                torch.zeros(cache_batch, 1, seq_len_full, head_dim),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        return self.indexer_gathered_buffers[key]
 
     def get_shared_rs_intermediate(self, input_tensor):
         """Lazily allocate (once per mesh) and return the shared reduce_scatter intermediate

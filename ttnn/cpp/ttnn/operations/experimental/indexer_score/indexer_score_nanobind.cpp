@@ -4,6 +4,9 @@
 
 #include "indexer_score_nanobind.hpp"
 
+#include <nanobind/stl/optional.h>
+#include <nanobind/stl/vector.h>
+
 #include "ttnn-nanobind/bind_function.hpp"
 #include "indexer_score.hpp"
 
@@ -181,6 +184,64 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("cache_batch_idx") = std::nullopt,
         nb::arg("kv_len") = std::nullopt,
         nb::arg("cluster_axis") = std::nullopt,
+        nb::arg("block_cyclic_sp_axis") = std::nullopt,
+        nb::arg("block_cyclic_chunk_local") = std::nullopt);
+
+    ttnn::bind_function<"ring_indexer_score_dsa", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Ring-fused DeepSeek-V3.2 DSA / GLM-5 lightning-indexer scorer.
+
+        Identical score semantics to ``indexer_score_dsa`` but SUBSUMES the SP all-gather: rather than the
+        caller pre-gathering K, it takes this chip's LOCAL K shard ``k_local`` [B,1,sll,D] (the all-gather
+        input) plus a pre-allocated ``k`` [B,1,T,D] persistent buffer (the gather output). One program
+        co-schedules the ring_attention all-gather with the indexer compute so fabric transport overlaps
+        scoring; the reader gates each K band on ONLY the SP shards that band touches, so it scores already-
+        arrived shards while farther slabs are still in flight. DSA only -- there is no fused MSA variant.
+
+        Args:
+            q: [B, Hi, Sq, D] bf16/bfp8_b tiled (post non-interleaved RoPE); see indexer_score_dsa
+            k: [B, 1, T, D] bf16/bfp8_b tiled PERSISTENT all-gather OUTPUT buffer, T = sp*sll; the gather fills
+                the remote SP shards in place (the local slab is read from k_local, not k)
+            weights: [B, Hi, Sq, 1] bf16 tiled learned per-head gates (scale pre-folded)
+            k_local: [B, 1, sll, D] bf16/bfp8_b tiled -- this chip's SP shard and the all-gather INPUT,
+                sll = T/sp; must match k's dtype
+            ag_multi_device_global_semaphore: list of the all-gather's out-ready global semaphores; requires
+                >= 2 (the forward and backward ring directions)
+            cluster_axis: mesh axis that is the SP ring -- both the gather axis and the causality axis.
+                REQUIRED here (optional in indexer_score_dsa)
+            topology: ttnn.Topology -- ttnn.Topology.Linear (non-torus grid) or ttnn.Topology.Ring
+            num_links: int, fabric links for the gather (default 1)
+            ag_sub_device_id: optional ttnn.SubDeviceId scoping the AG worker cores (kept disjoint from the
+                compute grid so transport and compute cores do not collide)
+            chunk_start_idx: optional int, rank 0's global query start; see indexer_score_dsa
+            program_config: IndexerScoreProgramConfig work-unit knobs; see indexer_score_dsa.
+                head_group_size must be 0 (all Hi resident) or Hi -- head streaming is not supported here
+            compute_kernel_config: optional DeviceComputeKernelConfig (only math_fidelity honored)
+            cache_batch_idx: optional int, batch slot of a shared K cache; see indexer_score_dsa
+            kv_len: optional int, valid tile-aligned key prefix in (0, T]; see indexer_score_dsa
+            block_cyclic_sp_axis: optional int, mesh axis the cache was striped over; MUST equal cluster_axis;
+                see indexer_score_dsa
+            block_cyclic_chunk_local: optional int, per-shard chunk length; required with block_cyclic_sp_axis
+
+        Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
+        )doc",
+        &ttnn::experimental::ring_indexer_score_dsa,
+        nb::arg("q"),
+        nb::arg("k"),
+        nb::arg("weights"),
+        nb::arg("k_local"),
+        nb::arg("ag_multi_device_global_semaphore"),
+        nb::kw_only(),
+        nb::arg("cluster_axis"),
+        nb::arg("topology"),
+        nb::arg("num_links") = 1,
+        nb::arg("ag_sub_device_id") = std::nullopt,
+        nb::arg("chunk_start_idx") = std::nullopt,
+        nb::arg("program_config") = IndexerScoreProgramConfig{},
+        nb::arg("compute_kernel_config") = std::nullopt,
+        nb::arg("cache_batch_idx") = std::nullopt,
+        nb::arg("kv_len") = std::nullopt,
         nb::arg("block_cyclic_sp_axis") = std::nullopt,
         nb::arg("block_cyclic_chunk_local") = std::nullopt);
 }

@@ -12,6 +12,7 @@
 #include "ttnn/operation.hpp"
 #include "indexer_score_device_operation_types.hpp"
 #include "indexer_score_program_factory.hpp"
+#include "ring_indexer_score_dsa_program_factory.hpp"
 
 namespace ttnn::operations::experimental::indexer_score {
 
@@ -20,7 +21,10 @@ struct IndexerScoreDeviceOperation {
     using tensor_args_t = indexer_score::tensor_args_t;
     using spec_return_value_t = indexer_score::spec_return_value_t;
     using tensor_return_value_t = indexer_score::tensor_return_value_t;
-    using program_factory_t = std::variant<program::IndexerScoreProgramFactory>;
+    // Classic factory for the unfused path (caller pre-gathers K); descriptor-based fused factory when the
+    // op subsumes the SP all-gather (attrs.fused_ring set). select_program_factory picks by has_fused_ring().
+    using program_factory_t =
+        std::variant<program::IndexerScoreProgramFactory, program::RingIndexerScoreDsaMeshWorkloadFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -118,6 +122,33 @@ ttnn::Tensor indexer_score_msa(
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
     std::optional<uint32_t> kv_len = std::nullopt,
     std::optional<uint32_t> cluster_axis = std::nullopt,
+    std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
+    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);
+
+// FUSED DSA (ttnn.experimental.ring_indexer_score_dsa): subsumes the SP all-gather. Instead of pre-gathering
+// K, the caller hands this chip's LOCAL K shard `k_local` [B,1,sll,D] (the all-gather input) plus a
+// pre-allocated `k` [B,1,T,D] persistent buffer (the gather output, seeded with the local slab). One program
+// co-schedules the ring_attention all-gather + the indexer compute, overlapping fabric transport with scoring:
+// the reader gates each K band on only the SP shards its tiles land in (per-band overlap, not a coarse whole-
+// gather barrier), then scores exactly as indexer_score_dsa. Same score semantics +
+// block-cyclic remap as indexer_score_dsa. Ring runs over `cluster_axis` (the SP mesh axis) on `topology`
+// (Linear on a non-torus grid). `ag_multi_device_global_semaphore` are the all-gather's own out-ready
+// semaphores; `ag_sub_device_id` scopes the AG worker cores (kept disjoint from the compute rectangle).
+ttnn::Tensor ring_indexer_score_dsa(
+    const ttnn::Tensor& q,
+    const ttnn::Tensor& k,
+    const ttnn::Tensor& weights,
+    const ttnn::Tensor& k_local,
+    const std::vector<tt::tt_metal::GlobalSemaphore>& ag_multi_device_global_semaphore,
+    uint32_t cluster_axis,
+    ttnn::ccl::Topology topology,
+    uint32_t num_links = 1,
+    std::optional<tt::tt_metal::SubDeviceId> ag_sub_device_id = std::nullopt,
+    std::optional<uint32_t> chunk_start_idx = std::nullopt,
+    const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config = {},
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    std::optional<uint32_t> cache_batch_idx = std::nullopt,
+    std::optional<uint32_t> kv_len = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
     std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);
 

@@ -464,7 +464,14 @@ void kernel_main() {
     const uint32_t band_iters = stream_heads ? max_bands : num_bands;
     for (uint32_t phase = 0; phase < num_groups; ++phase) {
         const uint32_t group = row_group0 + phase * group_stride;
-        for (uint32_t band = 0; band < band_iters; ++band) {
+        for (uint32_t band_i = 0; band_i < band_iters; ++band_i) {
+#ifdef FUSED_RING
+            // Reordered band-visit order (local-first, then remote by ring arrival), IDENTICAL to reader/writer
+            // so the cb_k / cb_out FIFOs stay in lockstep. Permutation offsets at rt slots 10.. (see factory).
+            const uint32_t band = get_arg_val<uint32_t>(10 + band_i);
+#else
+            const uint32_t band = band_i;
+#endif
             if constexpr (stream_heads) {
                 if (band >= num_bands) {
                     drain_phantom_band_q();  // q-mcast rendezvous only; no compute/output
