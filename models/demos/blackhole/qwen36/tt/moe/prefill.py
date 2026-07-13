@@ -2,10 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """On-device expert prefill forward using sparse_matmul (seq_len > 1).
 
-Mirrors the gemma4 experts prefill path (all-ones sparsity computes every expert; the
+Mirrors the gpt_oss experts prefill path (all-ones sparsity computes every expert; the
 dense routing weights zero out the inactive ones after down_proj) with SwiGLU and the
-qwen reduce-scatter. The sequence is chunked to 32 tokens so the sparse_matmul group
-dimension (seq_len/32) stays 1 and never overflows the core grid.
+qwen reduce-scatter. The sequence is processed in chunks of PREFILL_CHUNK_SIZE tokens;
+within a chunk gate/up run as ONE grouped sparse_matmul (group_size = chunk/32 folded into
+the sparse batch dim, per_core_M stays 1 tile), so gate/up dispatch once per chunk instead
+of once per 32-token sub-chunk. The down projection's M *is* the chunk length, so its
+program config is sized from the real chunk_len (per_core_M = chunk_len/32); PREFILL_CHUNK_SIZE
+bounds that so the down grid/L1 never overflows.
 """
 
 import torch
@@ -18,7 +22,10 @@ from .operations import apply_swiglu
 from .weights import ExpertWeights
 
 TILE_SIZE = 32
-PREFILL_CHUNK_SIZE = 32
+# Tokens processed per grouped sparse_matmul. Larger = fewer, bigger matmuls (fewer dispatches),
+# bounded so the down projection's per_core_M (= chunk/32) fits the core grid / L1. 512 → group_size
+# 16, ~16x fewer gate/up/down dispatches than the legacy 32 while staying PCC-clean.
+PREFILL_CHUNK_SIZE = 512
 
 
 def create_prefill_sparsity(mesh_device, num_experts):
@@ -47,8 +54,11 @@ def _process_prefill_chunk(hidden_states, routing_weights, weights: ExpertWeight
 
     output_tile = ttnn.Tile([32, 32])
     intermediate_size = weights.intermediate_size_per_device
+    # gate/up: M is one 32-row tile per group (group_size folded into the sparse batch dim),
+    # so per_core_M stays 1 regardless of chunk_len. down: M is the full chunk_len, so its
+    # per_core_M must reflect the real M (= chunk_len/32) or the kernel's M-block count mismatches.
     gate_up_config = _build_sparse_matmul_config(TILE_SIZE, intermediate_size)
-    down_config = _build_sparse_matmul_config(TILE_SIZE, hidden_size)
+    down_config = _build_sparse_matmul_config(chunk_len, hidden_size)
 
     gate = ttnn.sparse_matmul(
         hidden_grouped,
