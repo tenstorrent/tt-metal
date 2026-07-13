@@ -1033,6 +1033,69 @@ def test_bruteforce_sweep_h4w32_480p_full_t(
 
 
 # ---------------------------------------------------------------------------
+# BH 2x2, FIBO image decode (1024x1024, latent T=1, full-T uncached). h_factor=2, w_factor=2.
+# ---------------------------------------------------------------------------
+# FIBO is an image model (num_frames=1). compute_decoder_dims(1024,1024,2,2,1,uncached):
+#   lat_h = ceil(1024/8/2) = 64  ->  per-device output (H,W): stage0(64) 1(128) 2(256) 3(512)
+#   T (table convention, = key T): residual (3,3,3) T=3 (cur_T+2, T_out=1); spatial (1,3,3) T=1.
+# All 13 of these convs currently MISS the _BLOCKINGS table and fall back to the generic
+# (256,32,1,1,1) default (H_block=W_block=1 — one spatial elem/core), so any tuned blocking
+# wins big. Input dims to run_sweep = per-device output + (kernel-1); ordered by total decode
+# compute (count x per-conv FLOPs). The (3,1,1) tconv layers are omitted (T_out=0 under the
+# sweeper's T convention; negligible compute, kH=kW=1).
+_SWEEP_LAYERS_H2W2_1024_T1 = [
+    # (name,          C_in, C_out, kernel,   stride,   padding,   T, H_in, W_in, h, w)
+    ("up1_res_1024", 1024, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 3, 130, 130, 2, 2),  # x6  H_out=128
+    ("up2_res_256", 256, 256, (3, 3, 3), (1, 1, 1), (0, 0, 0), 3, 514, 514, 2, 2),  # x5  H_out=512
+    ("up1_res_512", 512, 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 3, 258, 258, 2, 2),  # x5  H_out=256
+    ("mid_res_1024", 1024, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 3, 66, 66, 2, 2),  # x10 H_out=64
+    ("up0_first_64", 64, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 3, 66, 66, 2, 2),  # x1  H_out=64
+    ("up1_first_1024", 1024, 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 3, 258, 258, 2, 2),  # x1  H_out=256
+    ("up2_first_512", 512, 256, (3, 3, 3), (1, 1, 1), (0, 0, 0), 3, 514, 514, 2, 2),  # x1  H_out=512
+    ("conv_out_256", 256, 12, (3, 3, 3), (1, 1, 1), (0, 0, 0), 3, 514, 514, 2, 2),  # x1  H_out=512
+    ("up0_spatial_128", 1024, 1024, (1, 3, 3), (1, 1, 1), (0, 0, 0), 1, 130, 130, 2, 2),  # x1  H_out=128
+    ("up1_spatial_256", 1024, 1024, (1, 3, 3), (1, 1, 1), (0, 0, 0), 1, 258, 258, 2, 2),  # x1  H_out=256
+    ("up2_spatial_512", 512, 512, (1, 3, 3), (1, 1, 1), (0, 0, 0), 1, 514, 514, 2, 2),  # x1  H_out=512
+]
+
+
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, device_params",
+    [[(2, 2), (2, 2), {**line_params, "trace_region_size": TRACE_REGION_SIZE}]],
+    ids=["bh_2x2"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor",
+    _SWEEP_LAYERS_H2W2_1024_T1,
+    ids=[l[0] for l in _SWEEP_LAYERS_H2W2_1024_T1],
+)
+def test_bruteforce_sweep_h2w2_1024_t1(
+    mesh_device, mesh_shape, layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor
+):
+    parent_mesh = mesh_device
+    device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+    output = f"sweep_results_h2w2_1024_t1/{layer_name}_{C_in}x{C_out}.json"
+    run_sweep(
+        device,
+        C_in,
+        C_out,
+        kernel,
+        T,
+        H,
+        W,
+        output,
+        stride=stride,
+        padding=padding,
+        h_factor=h_factor,
+        w_factor=w_factor,
+        max_combos=_env_opt("CONV3D_SWEEP_MAX_COMBOS", 300),
+        max_t_block=_env_opt("CONV3D_SWEEP_MAX_T_BLOCK", 8),
+        hw_product=_env_opt("CONV3D_SWEEP_HW_PRODUCT", 32),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Table-driven generic sweep — every shape in models/tt_dit/utils/conv3d.py
 # ---------------------------------------------------------------------------
 # Each _BLOCKINGS key is (h_factor, w_factor, C_in, C_out, kernel, T, H_out, W_out)
