@@ -217,7 +217,7 @@ Some values in the source files are tied to the *previous* host. Update them on 
 
 1. **`~/.sdpa-watch/config.sh` → `TT_METAL_DIR`** — point at the new clone's path.
 2. **`~/.sdpa-watch/watch.sh` → `ts_human` POSIX TZ string** — update if you're not in CEST/CET (`CET-1CEST,M3.5.0,M10.5.0/3`). For a list of POSIX TZ strings, see e.g. https://www.gnu.org/software/libc/manual/html_node/TZ-Variable.html. Or install `tzdata` and use `TZ='Region/City'` instead.
-3. **Cron PATH** — the `PATH=...` line in the crontab below must include the dir where `claude` lives on the new host. Find it with `dirname "$(which claude)"`.
+3. **Cron PATH** — no action needed. `config.sh` now self-heals `PATH`: if `claude` isn't already resolvable it splices in the newest nvm node bin dir that has it. (Historically the crontab carried a hardcoded `PATH=` line; that broke after a reboot because the daemon came up with a bare `/usr/bin:/bin` PATH and the plain crontab line — see README — omitted it. Resolving in `config.sh` is host- and node-version-agnostic.)
 
 ### Verify and install cron
 
@@ -236,30 +236,54 @@ DRY_RUN=1 ~/.sdpa-watch/watch.sh
 # 3. Real run (posts to Slack)
 ~/.sdpa-watch/watch.sh
 
-# 4. Install cron (replace PATH first line with `dirname "$(which claude)"`-prefixed value if needed)
-( crontab -l 2>/dev/null | grep -vE 'sdpa-watch|^PATH='; cat <<CRON_EOF
-PATH=$(dirname "$(which claude)"):/usr/local/bin:/usr/bin:/bin
-0 * * * * $HOME/.sdpa-watch/watch.sh >> $HOME/.sdpa-watch/watch.log 2>&1
-CRON_EOF
-) | crontab -
+# 4. Install cron. The crontab line is plain — no PATH= prefix — because
+#    config.sh resolves `claude` itself (see "Cron PATH" above).
+sudo apt install -y cron
+( crontab -l 2>/dev/null | grep -vF '.sdpa-watch/watch.sh'; \
+  echo '0 * * * * $HOME/.sdpa-watch/watch.sh >> $HOME/.sdpa-watch/watch.log 2>&1' ) | crontab -
 sudo service cron start
 crontab -l   # verify
 
-# 5. (Optional) Shell aliases
+# 5. Shell aliases + reboot-durability hook (see "Reboot durability" below)
 cat >> ~/.bashrc <<'ALIASES'
 
 # sdpa-watch shortcuts
 alias sdpa='~/.sdpa-watch/watch.sh'
 alias sdpa-dry='DRY_RUN=1 ~/.sdpa-watch/watch.sh'
+# Reboot-durability: this container wipes the cron package on reboot (only $HOME
+# persists) and has no systemd, so the login shell is the only boot hook. Fast
+# no-op when the scheduler is healthy; self-repairs in the background otherwise.
+[ -x "$HOME/.sdpa-watch/ensure-cron.sh" ] && "$HOME/.sdpa-watch/ensure-cron.sh" >/dev/null 2>&1
 ALIASES
 ```
+
+### Reboot durability
+
+This host is a container: a reboot wipes installed OS packages (`cron` among
+them) while `$HOME` and the clone under `/localdev` persist, and there is no
+systemd — so nothing auto-starts at boot. The **login shell is the only hook
+that always fires**, so `~/.bashrc` calls `~/.sdpa-watch/ensure-cron.sh`, which:
+
+1. fast-path exits (two cheap checks) when the cron daemon is up **and** the
+   watcher's crontab line is present — the normal case, adds ~nothing to shell
+   startup;
+2. otherwise self-repairs, **detached and `flock`-single-flighted** (so a burst
+   of logins right after a reboot can't race on the dpkg lock): `apt install`s
+   cron if the package is gone, `service cron start`s the daemon, and reinstalls
+   the crontab line (dedup-safe). Needs passwordless `sudo` + network. Progress
+   is logged to `~/.sdpa-watch/bootstrap.log`.
+
+So after a reboot the watcher self-restores the first time you log in. To force
+it without waiting for a login: `~/.sdpa-watch/ensure-cron.sh`. There is no
+boot-time mechanism that avoids the login trigger on this host.
 
 ### File-by-file purpose (porting reference)
 
 | File | Required? | Notes |
 |---|---|---|
 | `~/.sdpa-watch/watch.sh` | **Required** | The driver. Must be executable. |
-| `~/.sdpa-watch/config.sh` | **Required** | Pipelines + model + `TT_METAL_DIR`. Edit `TT_METAL_DIR` per host. |
+| `~/.sdpa-watch/config.sh` | **Required** | Pipelines + model + `TT_METAL_DIR`. Edit `TT_METAL_DIR` per host. Also self-heals `PATH` so cron can find `claude`. |
+| `~/.sdpa-watch/ensure-cron.sh` | **Required** | Reboot-durability hook (must be executable); called from `~/.bashrc`. See "Reboot durability". |
 | `~/.sdpa-watch/agent_prompt.txt` | **Required** | LLM policy. Edit only if changing behavior. |
 | `~/.sdpa-watch/oauth_token` | **Required** | Long-lived `claude setup-token` (chmod 600); exported as `CLAUDE_CODE_OAUTH_TOKEN`. Re-mint on revoke/expiry. |
 | `~/.sdpa-watch/slack_webhook` | **Required** | Slack URL (chmod 600). Reusable across hosts if you want all of them posting to one channel. |
