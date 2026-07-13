@@ -77,7 +77,7 @@ class BriaFiboPipelineConfig:
         height: int = 1024,
         width: int = 1024,
         topology: ttnn.Topology = ttnn.Topology.Linear,
-        num_links: int = 1,
+        num_links: int = 4,
     ) -> BriaFiboPipelineConfig:
         mesh = tuple(mesh_shape)
         if len(mesh) != 2:
