@@ -712,7 +712,6 @@ class HunyuanVideo15Pipeline:
         self._resident = dict(
             cos=ctx["cos"],
             sin=ctx["sin"],
-            hidden=ctx["hidden"],  # resident raw latent -- re-embedded fresh each step
             timestep=ctx["timestep"],  # resident raw timestep -- re-embedded fresh each step
             enc=enc0,
             attn_bias=ctx["attn_bias"],
@@ -721,6 +720,13 @@ class HunyuanVideo15Pipeline:
             _hidden_host=inputs["hidden_states"],
             _timestep_host=inputs["timestep"],
         )
+        if self.sp > 1:
+            # Seq-parallel resident latent is the sequence-sharded BNC buffer + the
+            # (cached) logical seq length; re-embedded (patch matmul) fresh each step.
+            self._resident["hidden_sp"] = ctx["hidden_sp"]
+            self._resident["logical_n"] = ctx["logical_n"]
+        else:
+            self._resident["hidden"] = ctx["hidden"]  # resident raw latent
         self._write_event = None
         self._op_event = ttnn.record_event(self.device, 0)  # "nothing pending" -- safe to write immediately
         return self._resident
@@ -736,10 +742,15 @@ class HunyuanVideo15Pipeline:
             raise RuntimeError("call denoise_trace_setup(inputs) before denoise_trace_step()")
         cc = self.cc
         temb = self.s_time(r["timestep"])
-        x = self.s_patch(r["hidden"])
+        if self.sp > 1:
+            x = _linear(r["hidden_sp"], self.patch_w, self.patch_b, cc)  # patch-embed the seq-sharded latent
+            logical_n = r["logical_n"]
+        else:
+            x = self.s_patch(r["hidden"])
+            logical_n = None
         enc, freqs, bias = r["enc"], (r["cos"], r["sin"]), r["attn_bias"]
         for blk in self.s_blocks:
-            x, enc = blk(x, enc, temb, freqs_cis=freqs, attn_bias=bias)
+            x, enc = blk(x, enc, temb, freqs_cis=freqs, attn_bias=bias, logical_n=logical_n)
         x = self.s_norm_out(x, temb)
         x = _linear(x, self.proj_out_w, self.proj_out_b, cc)
         return x
@@ -767,11 +778,38 @@ class HunyuanVideo15Pipeline:
         timestep_t = new_timestep if new_timestep is not None else r["_timestep_host"]
         r["_hidden_host"], r["_timestep_host"] = hidden_t, timestep_t
 
-        host_hidden = ttnn.from_torch(hidden_t.contiguous().float(), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        if self.sp > 1:
+            # Seq-parallel: reshape the new latent to BNC, pad the sequence, and build
+            # a host tensor sharded to match the resident hidden_sp buffer so the CQ1
+            # copy writes each device's shard in place (addresses stay valid for trace).
+            import torch
+
+            from models.tt_dit.utils.padding import get_padded_vision_seq_len
+
+            B, C, F, H, W = hidden_t.shape
+            N = F * H * W
+            padded_N = get_padded_vision_seq_len(N, self.sp)
+            h_bnc = hidden_t.reshape(B, C, N).permute(0, 2, 1).contiguous().float()
+            if padded_N > N:
+                h_bnc = torch.nn.functional.pad(h_bnc, (0, 0, 0, padded_N - N))
+            sdims = [None, None]
+            sdims[self.sp_axis] = 1
+            host_hidden = ttnn.from_torch(
+                h_bnc,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(d, mesh_shape=tuple(d.shape), dims=sdims),
+            )
+            resident_hidden = r["hidden_sp"]
+        else:
+            host_hidden = ttnn.from_torch(
+                hidden_t.contiguous().float(), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT
+            )
+            resident_hidden = r["hidden"]
         host_timestep = ttnn.from_torch(timestep_t.contiguous().float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
 
         ttnn.wait_for_event(1, self._op_event)
-        ttnn.copy_host_to_device_tensor(host_hidden, r["hidden"], cq_id=1)
+        ttnn.copy_host_to_device_tensor(host_hidden, resident_hidden, cq_id=1)
         ttnn.copy_host_to_device_tensor(host_timestep, r["timestep"], cq_id=1)
         self._write_event = ttnn.record_event(d, 1)
         return self._write_event
