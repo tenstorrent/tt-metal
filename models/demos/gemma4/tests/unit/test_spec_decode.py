@@ -221,6 +221,11 @@ def test_verify_batched_matches_sequential(mesh_device, reset_seeds):
         draft_len=4,
     )
 
+    # Host-readback / deallocate path: keep verify buffers non-persistent.
+    # Default _use_trace=True returns a capture buffer that callers must not
+    # deallocate; these tests deallocate and then re-verify/seed.
+    spec._use_trace = False
+
     L = 4
     # Use the LAST L prompt tokens at their own positions. Their KV is already
     # correctly filled by prefill, so a batched re-verify only RE-WRITES the same
@@ -694,6 +699,11 @@ def test_assistant_first_step_vs_hf_realistic(mesh_device, reset_seeds):
         stop_tokens=tokenizer.stop_tokens,
         draft_len=4,
     )
+
+    # Host-readback / deallocate path: keep verify buffers non-persistent.
+    # Default _use_trace=True returns a capture buffer that callers must not
+    # deallocate; these tests deallocate and then re-verify/seed.
+    spec._use_trace = False
     generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
 
     # Target greedy first token (acceptance target).
@@ -993,6 +1003,11 @@ def test_assistant_recurrent_vs_hf_realistic(mesh_device, reset_seeds):
         stop_tokens=tokenizer.stop_tokens,
         draft_len=K,
     )
+
+    # Host-readback / deallocate path: keep verify buffers non-persistent.
+    # Default _use_trace=True returns a capture buffer that callers must not
+    # deallocate; these tests deallocate and then re-verify/seed.
+    spec._use_trace = False
     generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
 
     mapper = target._replicate_to_mesh_mapper()
@@ -1380,6 +1395,11 @@ def test_drafter_per_position_tt_vs_hf(mesh_device, reset_seeds):
         stop_tokens=tokenizer.stop_tokens,
         draft_len=K,
     )
+
+    # Host-readback / deallocate path: keep verify buffers non-persistent.
+    # Default _use_trace=True returns a capture buffer that callers must not
+    # deallocate; these tests deallocate and then re-verify/seed.
+    spec._use_trace = False
     generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
     backbone = assistant.backbone_hidden_size
 
@@ -1522,6 +1542,11 @@ def test_tt_drafter_greedychain_acceptance(mesh_device, reset_seeds):
         stop_tokens=tokenizer.stop_tokens,
         draft_len=K,
     )
+
+    # Host-readback / deallocate path: keep verify buffers non-persistent.
+    # Default _use_trace=True returns a capture buffer that callers must not
+    # deallocate; these tests deallocate and then re-verify/seed.
+    spec._use_trace = False
     generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
 
     greedy_chain, draft_records = [], []
@@ -1624,12 +1649,34 @@ def test_spec_decode_matches_greedy(mesh_device, reset_seeds):
         draft_len=int(os.environ.get("GEMMA4_SPEC_DRAFT_LEN", 4)),
     )
 
+    # Host-readback / deallocate path: keep verify buffers non-persistent.
+    # Default _use_trace=True returns a capture buffer that callers must not
+    # deallocate; these tests deallocate and then re-verify/seed.
+    spec._use_trace = False
+
+    # Match text_demo_v2 / serve_fastapi: greedy spec uses host readback, not
+    # on-device sampling. Default prefill warmup sweeps non-greedy sampling params
+    # when the model exposes SamplingGenerator and hits a vocab-shard shape bug
+    # in tt_penalties (logits [32, vocab] vs presence [32, vocab/tp]).
+    generator.warmup_model_prefill(
+        kv_cache=tt_kv_cache,
+        enable_trace=True,
+        can_sample_on_device=False,
+        greedy_only=True,
+    )
+    prefill_kw = dict(
+        page_table=page_table,
+        kv_cache=tt_kv_cache,
+        prompt_lens=decoding_pos,
+        warmup_prefill=False,
+    )
+
     # Reference: prefill, then plain greedy decode.
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, **prefill_kw)
     ref = _plain_greedy(spec, anchor_token, anchor_pos, n_new)
 
     # Spec decode: re-prefill (resets the prompt KV), then greedy spec decode.
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, **prefill_kw)
     gen, accepts = spec.generate(anchor_token, anchor_pos, max_new_tokens=len(ref), temperature=0.0)
 
     mean_accept = (sum(accepts) / len(accepts)) if accepts else 0.0
@@ -1644,7 +1691,7 @@ def test_spec_decode_matches_greedy(mesh_device, reset_seeds):
 
     # Divergence allowed only at a target near-tie. Re-verify (batch=1) the
     # plain-greedy prefix up to the divergence and inspect the top-2 logit gap.
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, **prefill_kw)
     tok, pos = anchor_token, anchor_pos
     for _ in range(first_div):
         lg, hd = spec._verify([tok], [pos])
@@ -1730,12 +1777,30 @@ def test_verify_batchsize_invariance(mesh_device, reset_seeds):
         tt_kv_cache=tt_kv_cache,
         page_table_torch=page_table,
         stop_tokens=tokenizer.stop_tokens,
-        draft_len=4,
+        draft_len=pad,
     )
 
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    # Host-readback / deallocate path: keep verify buffers non-persistent.
+    # Default _use_trace=True returns a capture buffer that callers must not
+    # deallocate; these tests deallocate and then re-verify/seed.
+    spec._use_trace = False
+
+    generator.warmup_model_prefill(
+        kv_cache=tt_kv_cache,
+        enable_trace=True,
+        can_sample_on_device=False,
+        greedy_only=True,
+    )
+    prefill_kw = dict(
+        page_table=page_table,
+        kv_cache=tt_kv_cache,
+        prompt_lens=decoding_pos,
+        warmup_prefill=False,
+    )
+
+    generator.prefill_forward_text(in_pt, **prefill_kw)
     g1 = _plain_greedy(spec, anchor_token, anchor_pos, n_new)
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, **prefill_kw)
     gN = _plain_greedy_bN(spec, anchor_token, anchor_pos, n_new, pad)
 
     first_div = next((i for i in range(min(len(g1), len(gN))) if g1[i] != gN[i]), None)
@@ -1745,7 +1810,7 @@ def test_verify_batchsize_invariance(mesh_device, reset_seeds):
         logger.info("[batch-inv] batch=1 and batched verify are TOKEN-IDENTICAL")
     else:
         # Inspect the target's batch=1 logit gap at the divergence position.
-        generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+        generator.prefill_forward_text(in_pt, **prefill_kw)
         tok, pos = anchor_token, anchor_pos
         for _ in range(first_div):
             lg, hd = spec._verify([tok], [pos])
@@ -1972,6 +2037,11 @@ def test_spec_decode_sampling_acceptance(mesh_device, reset_seeds):
         draft_len=4,
     )
 
+    # Host-readback / deallocate path: keep verify buffers non-persistent.
+    # Default _use_trace=True returns a capture buffer that callers must not
+    # deallocate; these tests deallocate and then re-verify/seed.
+    spec._use_trace = False
+
     generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
     torch.manual_seed(0)
     gen, accepts = spec.generate(
@@ -2052,17 +2122,30 @@ def test_spec_decode_traced(mesh_device, reset_seeds):
         tt_kv_cache=tt_kv_cache,
         page_table_torch=page_table,
         stop_tokens=tokenizer.stop_tokens,
-        draft_len=4,
+        draft_len=int(os.environ.get("GEMMA4_SPEC_DRAFT_LEN", 4)),
+    )
+
+    generator.warmup_model_prefill(
+        kv_cache=tt_kv_cache,
+        enable_trace=True,
+        can_sample_on_device=False,
+        greedy_only=True,
+    )
+    prefill_kw = dict(
+        page_table=page_table,
+        kv_cache=tt_kv_cache,
+        prompt_lens=decoding_pos,
+        warmup_prefill=False,
     )
 
     # Untraced greedy reference.
     spec._use_trace = False
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, **prefill_kw)
     ref = _plain_greedy(spec, anchor_token, anchor_pos, n_new)
 
     # Traced greedy spec-decode.
     spec._use_trace = True
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, **prefill_kw)
     t0 = time.perf_counter()
     gen, accepts = spec.generate(anchor_token, anchor_pos, max_new_tokens=n_new, temperature=0.0)
     ttnn.synchronize_device(mesh_device)
@@ -2079,7 +2162,7 @@ def test_spec_decode_traced(mesh_device, reset_seeds):
         logger.info("[traced] spec-decode TOKEN-IDENTICAL to untraced plain greedy")
         return
     spec._use_trace = False
-    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    generator.prefill_forward_text(in_pt, **prefill_kw)
     tok, pos = anchor_token, anchor_pos
     for _ in range(first_div):
         lg, hd = spec._verify([tok], [pos])

@@ -40,16 +40,43 @@ PREFILL_CHUNK_SIZE = int(os.environ.get("GEMMA4_PREFILL_CHUNK_SIZE", "8192"))
 PREFILL_SLIDING_CHUNK_SIZE = int(os.environ.get("GEMMA4_PREFILL_SLIDING_CHUNK_SIZE", "30720"))
 
 
-def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None):
+def apply_qkv_projection(
+    hidden_states, weights: AttentionWeights, memory_config=None, sub_device_id=None, prefetcher=None
+):
     """Fused QKV matmul (no bias for Gemma4).
 
     ``memory_config`` lets the packed-verify decode keep the projection output
     resident on L1; ``None`` keeps the op default (DRAM) for existing callers.
     """
-    return ttnn.linear(hidden_states, weights.wqkv, memory_config=memory_config)
+    # Decode: peak-BW DRAM-sharded weight read when enabled (returns DRAM-interleaved,
+    # so the downstream head split is unchanged). Prefill keeps the plain matmul.
+    if weights.wqkv_ds is not None and hidden_states.shape[-2] <= 32:
+        try:
+            kwargs = {"sub_device_id": sub_device_id} if sub_device_id is not None else {}
+            return weights.wqkv_ds(hidden_states, **kwargs) if kwargs else weights.wqkv_ds(hidden_states)
+        except TypeError:
+            return weights.wqkv_ds(hidden_states)
+    # Prefetcher: rectangular worker program_config (no sub_device_id) — plain 1D
+    # + non-rect worker sub-device fatals otherwise.
+    if prefetcher is not None:
+        from models.demos.gemma4.tt.prefetcher_utils import pf_plain_1d_program_config
+
+        k = hidden_states.shape[-1]
+        n = weights.wqkv.shape[-1]
+        pc = pf_plain_1d_program_config(hidden_states.shape[-2], k, n, prefetcher)
+        if pc is not None:
+            return ttnn.linear(hidden_states, weights.wqkv, program_config=pc)
+    kwargs = {}
+    if sub_device_id is not None:
+        kwargs["sub_device_id"] = sub_device_id
+    if memory_config is not None:
+        kwargs["memory_config"] = memory_config
+    return ttnn.linear(hidden_states, weights.wqkv, **kwargs)
 
 
-def split_qkv_heads_decode(xqkv_fused, config, is_global: bool, tp: int = 1, kv_replicated: bool = False):
+def split_qkv_heads_decode(
+    xqkv_fused, config, is_global: bool, tp: int = 1, kv_replicated: bool = False, prefetcher=None
+):
     """
     Split fused QKV into separate head tensors for decode mode.
     When TP > 1, uses local head counts (global / tp).
@@ -64,7 +91,26 @@ def split_qkv_heads_decode(xqkv_fused, config, is_global: bool, tp: int = 1, kv_
     # different code path that's not affected. No-op on Wormhole (correctness
     # preserved; small extra L1 copy in exchange for arch-portable behavior).
     if xqkv_fused.memory_config().buffer_type == ttnn.BufferType.DRAM:
-        xqkv_fused = ttnn.to_memory_config(xqkv_fused, ttnn.L1_MEMORY_CONFIG)
+        if prefetcher is not None:
+            # Interleaved L1_MEMORY_CONFIG copies on the full grid and spans
+            # Prefetcher sender+worker sub-devices. Width-shard onto a
+            # rectangular worker subset instead.
+            from models.demos.gemma4.tt.prefetcher_utils import pf_rect_worker_range_set
+
+            workers = pf_rect_worker_range_set(prefetcher, 16)
+            width = xqkv_fused.shape[-1]
+            num_cores = 16
+            assert width % num_cores == 0, f"QKV width {width} not divisible by {num_cores}"
+            l1_mem = ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, width // num_cores),
+                core_grid=workers,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            xqkv_fused = ttnn.to_memory_config(xqkv_fused, l1_mem)
+        else:
+            xqkv_fused = ttnn.to_memory_config(xqkv_fused, ttnn.L1_MEMORY_CONFIG)
     return ttnn.experimental.nlp_create_qkv_heads_decode(
         xqkv_fused,
         num_heads=num_local_heads,
@@ -105,9 +151,9 @@ def apply_per_head_norm(tensor, weight, eps, with_scale=True, memory_config=None
     Input: [1, num_heads, S, head_dim] or batched prefill [B, num_heads, S, head_dim]
     Process: reshape to [1, 1, num_heads*S, head_dim] (or B*num_heads*S for batch) -> rms_norm -> reshape back
 
-    ``memory_config`` is forwarded to ``rms_norm``; pass L1 to keep the normed
-    activation resident on L1 (packed-verify decode path). ``None`` keeps the
-    op's default (follows the input's layout).
+    memory_config: optional output memory config for the rms_norm. Decode passes
+    ttnn.L1_MEMORY_CONFIG to keep the norm result in L1 (avoids a DRAM round-trip);
+    prefill / callers passing None keep the op default.
     """
     orig_shape = tensor.shape
     head_dim = orig_shape[-1]
@@ -118,10 +164,12 @@ def apply_per_head_norm(tensor, weight, eps, with_scale=True, memory_config=None
         num_heads = orig_shape[1]
         seq_or_batch = orig_shape[2]
         flat = ttnn.reshape(tensor, (1, 1, num_heads * seq_or_batch, head_dim))
+    norm_kwargs = {"epsilon": eps}
     if with_scale and weight is not None:
-        normed = ttnn.rms_norm(flat, weight=weight, epsilon=eps, memory_config=memory_config)
-    else:
-        normed = ttnn.rms_norm(flat, epsilon=eps, memory_config=memory_config)
+        norm_kwargs["weight"] = weight
+    if memory_config is not None:
+        norm_kwargs["memory_config"] = memory_config
+    normed = ttnn.rms_norm(flat, **norm_kwargs)
 
     return ttnn.reshape(normed, orig_shape)
 
@@ -424,7 +472,9 @@ def chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, head_dim, sca
     return out
 
 
-def concat_heads(tensor, is_decode_mode: bool, num_heads: int = None, head_dim: int = None, mesh_device=None):
+def concat_heads(
+    tensor, is_decode_mode: bool, num_heads: int = None, head_dim: int = None, mesh_device=None, prefetcher=None
+):
     """Concatenate attention heads back to hidden dimension.
 
     Decode uses ``nlp_concat_heads_decode`` (multi-core, width-sharded output)
@@ -440,55 +490,140 @@ def concat_heads(tensor, is_decode_mode: bool, num_heads: int = None, head_dim: 
         if num_heads is None or head_dim is None:
             raise ValueError("decode concat_heads requires num_heads and head_dim")
         batch = tensor.shape[1]
-        # One core per user (batch), arranged as a contiguous rectangle. A plain
-        # num_cores_to_corerangeset spills into a non-rectangular set once
-        # batch > grid width, which the height-sharded mem config rejects
-        # ("bad optional access"); num_to_corerange forces a grid-width-aligned
-        # rectangle (e.g. batch=8→8x1, 16→8x2, 32→8x4 on an 8-wide grid) that
-        # the kernel accepts.
-        from models.tt_transformers.tt.model_config import num_to_corerange
+        orig_batch = batch
+        pf_grids = prefetcher.all_worker_cores_range_set if prefetcher is not None else None
 
-        compute_grid = mesh_device.compute_with_storage_grid_size() if mesh_device is not None else None
-        physical_grid_x = compute_grid.x if compute_grid is not None else 8
-        grid_y = compute_grid.y if compute_grid is not None else 8
-        grid_x = min(batch, physical_grid_x)
-        if batch >= grid_x and batch % grid_x != 0:
-            grid_x = max(x for x in range(grid_x, 0, -1) if batch % x == 0 and batch // x <= grid_y)
-        core_grid = ttnn.CoreRangeSet({num_to_corerange(batch, grid_x=grid_x, grid_y=grid_y)})
-        shard_cfg = ttnn.create_sharded_memory_config(
-            shape=(ttnn.TILE_SIZE, head_dim),
-            core_grid=core_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-        tensor_sh = ttnn.to_memory_config(tensor, shard_cfg)
-        # Output is [1, 1, B(padded to 32), num_heads*head_dim] width-sharded.
-        out = ttnn.experimental.nlp_concat_heads_decode(tensor_sh, num_heads=num_heads)
+        if pf_grids is not None:
+            # Prefetcher: height-shard onto worker cores and pass sub_core_grids
+            # so nlp_concat_heads_decode never touches sender cores.
+            core_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                ttnn.CoreCoord(1, 0), batch, pf_grids, row_wise=True
+            )
+            shard_cfg = ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, head_dim),
+                core_grid=core_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            tensor_sh = ttnn.to_memory_config(tensor, shard_cfg)
+            out = ttnn.experimental.nlp_concat_heads_decode(tensor_sh, num_heads=num_heads, sub_core_grids=pf_grids)
+        else:
+            # One core per user (batch), arranged as a contiguous rectangle. A plain
+            # num_cores_to_corerangeset spills into a non-rectangular set once
+            # batch > grid width, which the height-sharded mem config rejects
+            # ("bad optional access"); num_to_corerange forces a grid-width-aligned
+            # rectangle (e.g. batch=8→8x1, 16→8x2, 32→8x4 on an 8-wide grid) that
+            # the kernel accepts.
+            from models.tt_transformers.tt.model_config import num_to_corerange
+
+            compute_grid = mesh_device.compute_with_storage_grid_size() if mesh_device is not None else None
+            physical_grid_x = compute_grid.x if compute_grid is not None else 8
+            grid_y = compute_grid.y if compute_grid is not None else 8
+
+            def _shardable_grid_x(b):
+                gx = min(b, physical_grid_x)
+                if b % gx != 0:
+                    candidates = [x for x in range(gx, 0, -1) if b % x == 0 and b // x <= grid_y]
+                    if not candidates:
+                        return None
+                    gx = max(candidates)
+                elif b // gx > grid_y:
+                    return None
+                return gx
+
+            if _shardable_grid_x(batch) is None:
+                padded = None
+                for candidate in range(batch + 1, batch + 33):
+                    if _shardable_grid_x(candidate) is not None:
+                        padded = candidate
+                        break
+                if padded is None:
+                    raise ValueError(
+                        f"decode concat_heads: cannot shard batch={orig_batch} on {physical_grid_x}x{grid_y} grid"
+                    )
+                pad_rows = padded - batch
+                last_row = ttnn.slice(
+                    tensor,
+                    (0, batch - 1, 0, 0),
+                    (1, batch, tensor.shape[2], tensor.shape[3]),
+                )
+                tensor = ttnn.concat([tensor] + [last_row] * pad_rows, dim=1)
+                batch = padded
+
+            grid_x = _shardable_grid_x(batch)
+            core_grid = ttnn.CoreRangeSet({num_to_corerange(batch, grid_x=grid_x, grid_y=grid_y)})
+            shard_cfg = ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, head_dim),
+                core_grid=core_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            tensor_sh = ttnn.to_memory_config(tensor, shard_cfg)
+            # Output is [1, 1, B(padded to 32), num_heads*head_dim] width-sharded.
+            out = ttnn.experimental.nlp_concat_heads_decode(tensor_sh, num_heads=num_heads)
+
         tensor_sh.deallocate(True)
+        if pf_grids is not None:
+            # Keep width-sharded on workers — sharded_to_interleaved uses the full
+            # grid and spans Prefetcher sender+worker sub-devices. Peer feeds the
+            # sharded concat output straight into o_proj.
+            if out.shape[2] != orig_batch:
+                out_padded = out
+                try:
+                    out = ttnn.slice(
+                        out_padded,
+                        [0, 0, 0, 0],
+                        [1, 1, orig_batch, out_padded.shape[-1]],
+                        sub_core_grids=pf_grids,
+                    )
+                except TypeError:
+                    out = out_padded[:, :, :orig_batch, :]
+                out_padded.deallocate(True)
+            return out
         out_sh = out
         out = ttnn.sharded_to_interleaved(out_sh, ttnn.DRAM_MEMORY_CONFIG)
         out_sh.deallocate(True)
         # Drop the batch padding (B is padded to 32 by the op) so downstream sees
         # [1, 1, batch, hidden_local] just like the old transpose+concat path.
-        if out.shape[2] != batch:
+        if out.shape[2] != orig_batch:
             out_padded = out
-            out = out_padded[:, :, :batch, :]
+            out = out_padded[:, :, :orig_batch, :]
             out_padded.deallocate(True)
         return out
     return ttnn.experimental.nlp_concat_heads(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
-def apply_output_projection(tensor, weights: AttentionWeights):
+def apply_output_projection(tensor, weights: AttentionWeights, sub_device_id=None, prefetcher=None):
     """Apply output projection (no bias for Gemma4)."""
-    out = ttnn.linear(tensor, weights.o_proj)
+    if weights.o_proj_ds is not None and tensor.shape[-2] <= 32:
+        try:
+            kwargs = {"sub_device_id": sub_device_id} if sub_device_id is not None else {}
+            out = weights.o_proj_ds(tensor, **kwargs) if kwargs else weights.o_proj_ds(tensor)
+        except TypeError:
+            out = weights.o_proj_ds(tensor)
+    elif prefetcher is not None:
+        from models.demos.gemma4.tt.prefetcher_utils import pf_plain_1d_program_config
+
+        k = tensor.shape[-1]
+        n = weights.o_proj.shape[-1]
+        pc = pf_plain_1d_program_config(tensor.shape[-2], k, n, prefetcher)
+        out = (
+            ttnn.linear(tensor, weights.o_proj, program_config=pc)
+            if pc is not None
+            else ttnn.linear(tensor, weights.o_proj)
+        )
+    else:
+        kwargs = {"sub_device_id": sub_device_id} if sub_device_id is not None else {}
+        out = ttnn.linear(tensor, weights.o_proj, **kwargs)
     tensor.deallocate(True)
     return out
 
 
-def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
+def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int, subdevice_id=None):
     """Apply tensor-parallel allreduce if TP > 1."""
-    return ccl_allreduce(tensor, mesh_config, ccl_manager)
+    return ccl_allreduce(tensor, mesh_config, ccl_manager, subdevice_id=subdevice_id)
 
 
 def effective_block_size(k_cache, head_dim: int, num_kv_heads: int) -> int:

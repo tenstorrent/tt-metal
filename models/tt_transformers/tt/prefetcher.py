@@ -35,6 +35,11 @@ VERIFIED_MODEL_CONFIGS = {
     "Qwen3-VL-72B": {"dim": 8192, "hidden_dim": 28672, "n_heads": 64, "n_kv_heads": 8},
     "Gemma3-4B": {"dim": 2560, "hidden_dim": 14336, "n_heads": 20, "n_kv_heads": 20},
     "Gemma3-27B": {"dim": 4608, "hidden_dim": 24576, "n_heads": 32, "n_kv_heads": 8},
+    # Gemma4 31B (dense): size check passes at ring_size=64 on P150x4 (tp=4).
+    # Substring match: HF_MODEL path / id must contain "gemma-4-31B".
+    # Prefetcher wiring in models/demos/gemma4 is gated by GEMMA4_PREFETCHER=1
+    # and requires ring-padded MLP weights (5376→6144); see Legacy_Gemma4_performance.md.
+    "gemma-4-31B": {"dim": 5376, "hidden_dim": 21504, "n_heads": 32, "n_kv_heads": 16},
 }
 
 

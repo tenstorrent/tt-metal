@@ -11,7 +11,9 @@ import ttnn
 
 
 def apply_geglu(gate, up):
-    """GeGLU activation: gelu(gate) * up. Gemma4 uses gelu_pytorch_tanh."""
-    activated = ttnn.gelu(gate, fast_and_approximate_mode=True)
-    result = ttnn.mul(activated, up)
-    return result
+    """GeGLU activation: gelu(gate) * up.
+
+    ``gate`` must already carry GELU (fused into the gate sparse_matmul / linear
+    epilogue). This helper only performs the elementwise multiply with ``up``.
+    """
+    return ttnn.mul(gate, up)

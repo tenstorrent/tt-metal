@@ -287,7 +287,9 @@ def preprocess_inputs_prefill(
             # 2. Calculate overhead = length of instruct tokenization - length of non-instruct tokenization
             # 3. Shorten the tokenized clipped prompt by the overhead and convert back to text
             # 4. Tokenize the result with instruct tokenization
-            # 5. Assert that the length of this is equal to the max_prefill_len
+            # 5. Re-encode; if BPE decode/encode misses the exact budget, fall back to
+            #    token-level left clip on the original instruct encoding.
+            original_encoded = encoded_prompts
             raw_prompts = [
                 model_args[idx % len(model_args)].encode_prompt(prompt, instruct=False)
                 for idx, prompt in enumerate(input_prompts)
@@ -308,13 +310,20 @@ def preprocess_inputs_prefill(
             ]
             # Instruct re-tokenization can drift by a few tokens vs the overhead
             # estimate (seen on Gemma4-26B-A4B: 65337 vs 65336). Re-trim / accept
-            # slightly-short prompts rather than hard-failing the demo.
-            trimmed = []
-            for e in encoded_prompts:
-                if len(e) > max_prefill_len:
-                    e = e[-max_prefill_len:]
-                trimmed.append(e)
-            encoded_prompts = trimmed
+            # slightly-short prompts rather than hard-failing the demo; fall back to
+            # token-level left clip on the original instruct encoding when needed.
+            clipped = []
+            for idx, enc in enumerate(encoded_prompts):
+                if len(enc) > max_prefill_len:
+                    enc = enc[-max_prefill_len:]
+                elif len(enc) != max_prefill_len:
+                    logger.warning(
+                        f"Instruct clip roundtrip length {len(enc)} != {max_prefill_len}; "
+                        "using token-level left clip"
+                    )
+                    enc = original_encoded[idx][-max_prefill_len:]
+                clipped.append(enc)
+            encoded_prompts = clipped
             lens = [len(e) for e in encoded_prompts]
             assert all(
                 0 < n <= max_prefill_len for n in lens

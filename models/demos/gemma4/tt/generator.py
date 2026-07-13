@@ -8,8 +8,10 @@ import torch
 from loguru import logger
 from transformers import AutoTokenizer
 
+import ttnn
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.generator_trace import (
+    GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN,
     apply_gemma4_prefill_trace_policy,
     maybe_disable_pli_prefill_trace,
     patch_gemma4_trace_model_args,
@@ -50,6 +52,15 @@ def _load_text_tokenizer(model_path):
         return AutoTokenizer.from_pretrained(fallback, trust_remote_code=True, extra_special_tokens={})
 
 
+def _safe_release_trace(mesh_device, trace_id) -> None:
+    if trace_id is None:
+        return
+    try:
+        ttnn.release_trace(mesh_device, trace_id)
+    except Exception as exc:  # noqa: BLE001 — best-effort cleanup before re-capture
+        logger.debug(f"release_trace({trace_id}) ignored: {exc}")
+
+
 def _trace_prefill_supported_seq_lens(max_seq_len, has_per_layer_inputs, bounded_sliding=False):
     """Padded prefill buckets for which capturing a prefill trace is correct AND
     a net win for Gemma4.
@@ -79,6 +90,38 @@ def _trace_prefill_supported_seq_lens(max_seq_len, has_per_layer_inputs, bounded
     else:
         lens = [128, 1024, 4096, 8192, 16384, 32768, 65536]
     return [n for n in lens if n <= max_seq_len]
+
+
+def _augment_gemma4_stop_tokens(tokenizer):
+    """Ensure the assistant end-of-turn token is a stop token.
+
+    The generic tt_transformers tokenizer setup seeds ``stop_tokens`` with only
+    ``eos_token_id`` (``<eos>``). This model's chat turns instead terminate with
+    a distinct end-of-turn token (``<turn|>``), so greedy generation that ends an
+    assistant turn correctly would otherwise run past it and loop into a new
+    ``<|turn>model`` / ``<|channel>thought`` block. Add the end-of-turn id (and
+    eos) so generation halts at the end of the answer.
+    """
+    try:
+        stop_ids = set(getattr(tokenizer, "stop_tokens", None) or [])
+        if getattr(tokenizer, "eos_token_id", None) is not None:
+            stop_ids.add(int(tokenizer.eos_token_id))
+        unk = getattr(tokenizer, "unk_token_id", None)
+        # Known end-of-turn special-token spellings for this model family. Only a
+        # single-token match is accepted (convert_tokens_to_ids returns unk for a
+        # string that is not one atomic added token).
+        for tok_str in ("<turn|>", "<end_of_turn>"):
+            try:
+                tid = tokenizer.convert_tokens_to_ids(tok_str)
+            except Exception:
+                tid = None
+            if isinstance(tid, int) and tid >= 0 and tid != unk:
+                stop_ids.add(tid)
+        if stop_ids:
+            tokenizer.stop_tokens = sorted(stop_ids)
+    except Exception:
+        # Never block model load on stop-token augmentation.
+        pass
 
 
 def _patch_model_args(
@@ -125,6 +168,7 @@ def _patch_model_args(
     model_args.base_model_name = Path(model_path).name
     model_args.tokenizer = tokenizer
     model_args.processor = None
+    _augment_gemma4_stop_tokens(tokenizer)
     patch_gemma4_trace_model_args(model_args, prefill_trace_enabled=True)
     model_args.is_llama_vision = lambda: False
 
@@ -341,6 +385,67 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
             greedy_only=greedy_only,
         )
 
+    def release_captured_traces(self, *, decode: bool = True, prefill: bool = True) -> None:
+        """Release held metal traces so the next eager kernel allocation is safe.
+
+        Serving long Hermes prompts (tools catalog ~16k tokens → pad to 32k) runs
+        **eager** prefill while decode traces from the previous request are still
+        registered. Metal then warns ``Allocating device buffers is unsafe due to
+        the existence of an active trace`` and the second such request hangs
+        mid-prefill. Drop traces explicitly; decode / short-prefill will
+        re-capture on the next traced call.
+        """
+        released = 0
+        if prefill:
+            for store_name in ("trace_id_prefill", "trace_id_prefill_sampling"):
+                store = getattr(self, store_name, None)
+                if not store:
+                    continue
+                for key, trace_id in list(store.items()):
+                    if trace_id is None:
+                        continue
+                    parts = str(key).split("_")
+                    # Keys: "{seq}_{model_id}[_batch]" or "sampling_{seq}_{model_id}_{batch}"
+                    if parts and parts[0] == "sampling" and len(parts) >= 3:
+                        model_id = int(parts[2])
+                    elif len(parts) >= 2 and parts[1].isdigit():
+                        model_id = int(parts[1])
+                    else:
+                        model_id = 0
+                    mesh = self.model_args[model_id].mesh_device
+                    _safe_release_trace(mesh, trace_id)
+                    store[key] = None
+                    released += 1
+            # Clear so next capture doesn't treat a null entry as "already warmed".
+            if hasattr(self, "trace_id_prefill"):
+                self.trace_id_prefill.clear()
+            if hasattr(self, "trace_id_prefill_sampling"):
+                self.trace_id_prefill_sampling.clear()
+            self.prefill_traces_warmup = False
+
+        if decode:
+            store = getattr(self, "trace_ids_decode", None)
+            if store:
+                for sampling_key, trace_ids_dict in list(store.items()):
+                    if not trace_ids_dict:
+                        continue
+                    for model_id, trace_id in list(trace_ids_dict.items()):
+                        if trace_id is None:
+                            continue
+                        mesh = self.model_args[int(model_id)].mesh_device
+                        _safe_release_trace(mesh, trace_id)
+                        released += 1
+                    store[sampling_key] = None
+                self.trace_ids_decode.clear()
+            # Host-side decode trace input tensors are invalidated with the tid.
+            if hasattr(self, "trace_inputs_decode"):
+                self.trace_inputs_decode.clear()
+            if hasattr(self, "trace_output_decode"):
+                self.trace_output_decode.clear()
+
+        if released:
+            logger.info(f"Released {released} captured metal trace(s) before eager / multi-request prefill")
+
     def prefill_forward_text(
         self,
         tokens: torch.Tensor,
@@ -494,6 +599,14 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
             prefill_seq_lens=prefill_seq_lens,
             can_batch_prefill=can_batch_prefill,
         )
+
+        # Long prompts (Hermes tools catalog → pad 16k→32k) take the eager
+        # prefill path. Any live metal traces from a prior decode/short-prefill
+        # make buffer allocation unsafe and hang the device on the 2nd such
+        # request — release them first; short traced buckets re-capture later.
+        max_padded = max(prefill_seq_lens) if prefill_seq_lens else 0
+        if (not enable_trace) or max_padded > GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN:
+            self.release_captured_traces(decode=True, prefill=True)
 
         return super().prefill_forward_text(
             tokens=tokens,

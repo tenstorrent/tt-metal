@@ -16,6 +16,8 @@ Compatible with tt_transformers Generator interface.
 """
 
 
+import os
+
 import torch
 from loguru import logger
 from tracy import signpost
@@ -244,15 +246,29 @@ class Gemma4Model:
         create_kv_cache=True,
         precision=None,
         bounded_sliding_kv_cache: bool = False,
+        prefetcher=None,
         # Legacy parameters — ignored
         transformation_mats=None,
     ):
         self.mesh_device = mesh_device
         self.hf_config = hf_config
         self.mesh_config = mesh_config
+        self.prefetcher = prefetcher
         self.hidden_size = hf_config.hidden_size
         self.vocab_size = hf_config.vocab_size
         self.final_logit_softcapping = hf_config.final_logit_softcapping
+        # tanh softcapping is monotonic, so it never changes the argmax — it only
+        # rescales the distribution for temperature/top-p sampling and logprobs.
+        # For greedy serving it's pure overhead (the softcap mul over the full
+        # vocab was ~2% of decode device time in profiling). Opt in to skipping it
+        # via env; default OFF so sampling / spec-decode / logprob paths that DO
+        # depend on the capped values stay bit-for-bit correct.
+        self.skip_logit_softcapping = os.environ.get("GEMMA4_SKIP_LOGIT_SOFTCAP", "0") == "1"
+        if self.skip_logit_softcapping and self.final_logit_softcapping:
+            logger.info(
+                "GEMMA4_SKIP_LOGIT_SOFTCAP=1: skipping final logit softcapping "
+                "(valid for greedy/argmax decode only, NOT temperature sampling)"
+            )
         self.embed_scale = hf_config.hidden_size**0.5
         self.ccl_manager = ccl_manager
         self.max_seq_len = max_seq_len
@@ -270,6 +286,9 @@ class Gemma4Model:
         if precision is None:
             precision = Gemma4Precision()
         shared_mlp_dtype = precision.get("shared_mlp", dtype)
+        # down_proj may keep a higher precision than gate/up (it's the most
+        # bfp4-sensitive MLP weight); defaults to the shared_mlp dtype.
+        shared_mlp_down_dtype = precision.get("shared_mlp_down", shared_mlp_dtype)
         attention_dtype = precision.get("attention", dtype)
         experts_dtype = precision.get("experts", dtype)
         router_dtype = precision.get("router", dtype)
@@ -360,9 +379,39 @@ class Gemma4Model:
                 cache_file_name=get_cache_file_name(tensor_cache_path, f"lm_head.weight{tp_suffix}{lm_head_suffix}"),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+
+            # Phase 2a / multi-split: optional DRAM-width-sharded decode path for
+            # the fat tied lm_head. Interleaved weight above is kept for prefill.
+            # Single-shard DramShardedMatmul auto-fails (gcd→8 cores, L1 overflow);
+            # prefer multi-split (K-grid 56 cores) when GEMMA4_LM_HEAD_MULTI_SPLIT=1.
+            self._lm_head_ds = None
+            from models.demos.gemma4.tt.dram_sharded import DramShardedMatmul, MultiSplitDramShardedMatmul, env_flag
+
+            k_lm = embed_weight.shape[1]  # hidden
+            n_lm = embed_weight.shape[0] // tp  # vocab per TP device
+            if env_flag("GEMMA4_LM_HEAD_MULTI_SPLIT"):
+                # Slice the validated mesh-sharded lm_head (host re-shard was wrong
+                # under ShardTensor2dMesh TP). Prefill still uses full weight.
+                self._lm_head_ds = MultiSplitDramShardedMatmul.try_build(
+                    mesh_device,
+                    self.lm_head_weight,
+                    k=k_lm,
+                    n=n_lm,
+                    name="lm_head",
+                )
+            elif env_flag("GEMMA4_DRAM_SHARDED_LMHEAD", "GEMMA4_DRAM_SHARDED"):
+                # Legacy single-shard attempt (expected to fall back on 31B).
+                self._lm_head_ds = DramShardedMatmul.try_build(
+                    mesh_device,
+                    self.lm_head_weight,
+                    k=k_lm,
+                    n=n_lm,
+                    name="lm_head",
+                )
         else:
             self.embedding_weight = None
             self.lm_head_weight = None
+            self._lm_head_ds = None
 
         # Per-layer input embeddings (E2B/E4B) — kept as CPU torch tensors for computation
         # Also store embedding weight reference for decode per-layer input
@@ -420,6 +469,7 @@ class Gemma4Model:
                 ccl_manager=ccl_manager,
                 dtype=dtype,
                 shared_mlp_dtype=shared_mlp_dtype,
+                shared_mlp_down_dtype=shared_mlp_down_dtype,
                 attention_dtype=attention_dtype,
                 experts_dtype=experts_dtype,
                 router_dtype=router_dtype,
@@ -428,6 +478,7 @@ class Gemma4Model:
                 max_seq_len=max_seq_len,
                 max_local_batch_size=max_local_batch_size,
                 bounded_sliding_kv_cache=bounded_sliding_kv_cache,
+                prefetcher=prefetcher,
             )
             # Create KV cache for non-shared layers only
             # Shared layers will use their source layer's KV cache
@@ -780,6 +831,11 @@ class Gemma4Model:
                 cos_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, cos_2d, layout=ttnn.TILE_LAYOUT))
                 sin_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, sin_2d, layout=ttnn.TILE_LAYOUT))
                 decode_rope_presliced[lt] = (cos_pos, sin_pos)
+        # Prefetcher: start async DRAM→L1 weight stream for this decode step.
+        # Pair with stop() after the layer loop (before norm/lm_head), matching
+        # tt_transformers.Transformer.forward.
+        if is_decode and self.prefetcher is not None:
+            self.prefetcher.run()
 
         for i, layer in enumerate(self.layers):
             # Per-layer RoPE: sliding and global layers have different cos/sin
@@ -889,6 +945,8 @@ class Gemma4Model:
         for cos_pos, sin_pos in decode_rope_presliced.values():
             cos_pos.deallocate(True)
             sin_pos.deallocate(True)
+        if is_decode and self.prefetcher is not None:
+            self.prefetcher.stop()
 
         # Deallocate any stored shared K/V tensors
         for kv_pair in shared_kv_store.values():
@@ -915,7 +973,7 @@ class Gemma4Model:
             return None
 
         # Final norm
-        hidden_states = self.norm.forward(hidden_states)
+        hidden_states = self.norm.forward(hidden_states, prefetcher=self.prefetcher if is_decode else None)
 
         # Speculative decoding seed: the it-assistant drafter's recurrent hidden
         # is HF's ``model_outputs.hidden_states[-1]``. For the gemma4_unified text
@@ -990,22 +1048,51 @@ class Gemma4Model:
         if is_decode:
             signpost(header=LM_HEAD_SIGNPOST)
         if self.lm_head_weight is not None:
-            lm_head_pc = _get_lm_head_program_config(
-                self.mesh_device,
-                m=hidden_states.shape[2],
-                k=self.hidden_size,
-                n=self.lm_head_weight.shape[-1],
-            )
-            logits = ttnn.linear(hidden_states, self.lm_head_weight, program_config=lm_head_pc)
+            from models.demos.gemma4.tt.prefetcher_utils import pf_kwargs, pf_sub_device_id
+
+            pf = self.prefetcher if is_decode else None
+            pf_sd = pf_kwargs(pf)
+            if self._lm_head_ds is not None and hidden_states.shape[-2] <= 32:
+                try:
+                    logits = self._lm_head_ds(hidden_states, **pf_sd) if pf_sd else self._lm_head_ds(hidden_states)
+                except TypeError:
+                    logits = self._lm_head_ds(hidden_states)
+            elif pf is not None:
+                from models.demos.gemma4.tt.prefetcher_utils import pf_lm_head_linear
+
+                # Full vocab OOMs L1 on the 16-core rectangle plain 1D needs;
+                # column-split interleaved matmuls stay on the worker SD.
+                logits = pf_lm_head_linear(hidden_states, self.lm_head_weight, pf)
+            else:
+                lm_head_pc = _get_lm_head_program_config(
+                    self.mesh_device,
+                    m=hidden_states.shape[2],
+                    k=self.hidden_size,
+                    n=self.lm_head_weight.shape[-1],
+                )
+                logits = ttnn.linear(hidden_states, self.lm_head_weight, program_config=lm_head_pc, **pf_sd)
             hidden_states.deallocate(True)
         else:
+            from models.demos.gemma4.tt.prefetcher_utils import pf_kwargs, pf_sub_device_id
+
+            pf = self.prefetcher if is_decode else None
+            pf_sd = pf_kwargs(pf)
             logits = hidden_states
 
-        if self.final_logit_softcapping and self.final_logit_softcapping > 0:
+        if self.final_logit_softcapping and self.final_logit_softcapping > 0 and not self.skip_logit_softcapping:
             cap = self.final_logit_softcapping
-            logits = ttnn.mul(logits, 1.0 / cap)
-            logits = ttnn.tanh(logits)
-            logits = ttnn.mul(logits, cap)
+            if pf is not None:
+                logits = ttnn.mul(logits, 1.0 / cap, **pf_sd)
+                tanh_kwargs = pf_kwargs(pf, use_sub_device=False, use_sub_core_grids=True)
+                try:
+                    logits = ttnn.tanh(logits, **tanh_kwargs) if tanh_kwargs else ttnn.tanh(logits)
+                except TypeError:
+                    logits = ttnn.tanh(logits)
+                logits = ttnn.mul(logits, cap, **pf_sd)
+            else:
+                logits = ttnn.mul(logits, 1.0 / cap)
+                logits = ttnn.tanh(logits)
+                logits = ttnn.mul(logits, cap)
         if is_decode:
             signpost(header=LM_HEAD_SIGNPOST)
 
@@ -1015,7 +1102,12 @@ class Gemma4Model:
             else:
                 from models.demos.gemma4.tt.ccl import ccl_allgather
 
-                logits = ccl_allgather(logits, self.mesh_config, self.ccl_manager)
+                logits = ccl_allgather(
+                    logits,
+                    self.mesh_config,
+                    self.ccl_manager,
+                    subdevice_id=pf_sub_device_id(pf),
+                )
 
         return logits
 
@@ -1024,18 +1116,37 @@ class Gemma4Model:
 
         Embedding is column-parallel (hidden dim sharded across TP devices).
         All-gather reconstructs full hidden dim after lookup.
+
+        When Prefetcher is active, pass worker ``sub_device_id`` on mul/all-gather
+        so programs stay on a single sub-device (embedding itself has no SD arg;
+        it ran fine on the default path — only mul hit the dual-sub-device fatal).
         """
         if self.embedding_weight is None:
             raise RuntimeError("Embedding weights not loaded")
+        from models.demos.gemma4.tt.prefetcher_utils import pf_kwargs, pf_sub_device_id
+
         embeds = ttnn.embedding(tokens, self.embedding_weight, dtype=ttnn.bfloat16)
-        embeds = ttnn.mul(embeds, self.embed_scale)
+        embeds = ttnn.mul(embeds, self.embed_scale, **pf_kwargs(self.prefetcher))
+        # Tilize after scale when Prefetcher carved senders — embedding's
+        # layout=TILE path runs tilize on the full grid and hits both sub-devices.
+        if self.prefetcher is not None and embeds.layout != ttnn.TILE_LAYOUT:
+            grids = pf_kwargs(self.prefetcher, use_sub_device=False, use_sub_core_grids=True)
+            try:
+                embeds = ttnn.to_layout(embeds, ttnn.TILE_LAYOUT, **grids)
+            except TypeError:
+                embeds = ttnn.to_layout(embeds, ttnn.TILE_LAYOUT)
 
         # All-gather sharded hidden dim back to full hidden
         if self.mesh_config is not None and self.mesh_config.tp > 1:
             embeds = ttnn.unsqueeze_to_4D(embeds)
             from models.demos.gemma4.tt.ccl import ccl_allgather
 
-            embeds = ccl_allgather(embeds, self.mesh_config, self.ccl_manager)
+            embeds = ccl_allgather(
+                embeds,
+                self.mesh_config,
+                self.ccl_manager,
+                subdevice_id=pf_sub_device_id(self.prefetcher),
+            )
         return embeds
 
     def raw_embed(self, tokens):
@@ -1567,7 +1678,82 @@ class Gemma4Model:
         return sliced
 
     def switch_mode(self, mode):
-        """Generator compatibility — no prefetcher to reinitialize."""
+        """Prefetcher sub-device init + weight registration (Generator calls this)."""
+        if self.prefetcher is None:
+            return
+        from models.tt_transformers.tt.common import Mode
+
+        # Generator passes Mode.DECODE / Mode.PREFILL enums from tt_transformers.
+        pf_mode = mode if isinstance(mode, Mode) else Mode.DECODE
+        self.prefetcher.init(pf_mode)
+        self.prefetcher.prefetch()
+        # Prefetcher.init builds worker sub-device as (full_grid - senders). That
+        # set is non-rectangular; gather_in0 ring matmul then bbox-fills holes
+        # that are not in the Global CB receiver set →
+        # "Specified cores are not contained in associated GlobalCircularBuffer".
+        # Rebuild with sender + *receiver-only* worker sub-devices so ring
+        # matmul cores stay inside the GCB. Attention already targets receivers
+        # / rectangular worker subsets under Prefetcher.
+        if pf_mode == Mode.DECODE:
+            self._reload_prefetcher_receiver_subdevices()
+
+    def _reload_prefetcher_receiver_subdevices(self):
+        """Replace Prefetcher worker sub-device with receiver cores only.
+
+        gather_in0 ring matmul intersects activation cores with the worker
+        sub-device and, for rectangular sub-device ranges, takes
+        ``intersection.bounding_box()`` when creating the Global-CB local CB.
+        Peer's worker SD is ``full_grid - senders`` (large rects with holes) so
+        that bbox pulls in non-GCB cores. Restricting the worker SD to the
+        exact GCB receiver set keeps the CB cores ⊆ Global CB.
+
+        Idempotent: a second call is a no-op. Reloading after decode-trace
+        capture would create a new sub-device manager and invalidate the
+        captured trace ("Trace instance must exist on ... active sub-device
+        manager").
+        """
+        pf = self.prefetcher
+        if pf is None or not getattr(pf, "init_decode_done", False):
+            return
+        if getattr(self, "_pf_receiver_sd_reloaded", False):
+            return
+        # After Prefetcher.init(), sender_cores / receiver_cores are still the
+        # PrefetcherCoreConfig *methods* (not CoreRangeSets).
+        receivers = pf.to_core_range_set(pf.receiver_cores(sender_active=True, receiver_active=True))
+        senders = pf.to_core_range_set(pf.sender_cores(active=True))
+        from models.tt_transformers.tt.prefetcher import PrefetcherSubDevice
+
+        # Drop the manager created by Prefetcher.init so we can reload.
+        if hasattr(self.mesh_device, "clear_loaded_sub_device_manager"):
+            try:
+                self.mesh_device.clear_loaded_sub_device_manager()
+            except Exception:
+                pass
+
+        pf.prefetcher_sub_device = PrefetcherSubDevice(self.mesh_device)
+        pf.prefetcher_sub_device.add_sub_device(senders)
+        pf.prefetcher_sub_device.add_sub_device(receivers)
+        pf.prefetcher_sub_device.init_sub_device_manager()
+        pf.worker_sub_device_id = pf.prefetcher_sub_device.sub_devices_id[-1]
+        pf.all_worker_cores_range_set = receivers
+
+        # Peer's dynamic_worker_core_grid(cols 1-6, rows 0-7) includes cores
+        # that are *not* GCB receivers (e.g. row 5). With a receivers-only
+        # worker SD those cores are illegal — override to a solid rectangle
+        # that is entirely inside the receiver set: (1,0)-(4,3) = 16 cores.
+        def _receiver_safe_worker_grid(num_cores: int):
+            n = 16 if num_cores >= 16 else 8
+            if n == 16:
+                return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 3))])
+            return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 3))])
+
+        pf.dynamic_worker_core_grid = _receiver_safe_worker_grid
+        self.mesh_device.set_sub_device_stall_group([pf.worker_sub_device_id])
+        self._pf_receiver_sd_reloaded = True
+        logger.info(
+            f"[Gemma4 Prefetcher] Reloaded sub-devices: worker=receivers-only "
+            f"({receivers.num_cores()} cores) to match Global CB"
+        )
 
     def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
         """Create host tensors for one decode step (token IDs + optional PLI).

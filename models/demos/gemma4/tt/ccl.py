@@ -72,21 +72,34 @@ class CCLManager:
         return sem
 
 
-def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
-    """All-reduce across TP devices."""
+def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None, subdevice_id=None):
+    """All-reduce across TP devices.
+
+    ``subdevice_id`` is forwarded when set (prefetcher decode path stalls the
+    worker sub-device; CCL must join that stall group).
+    """
     if mesh_config is None or mesh_config.tp <= 1:
         return tensor
 
     memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
     tp_axis = mesh_config.tp_axis
 
-    result = ttnn.all_reduce(
-        tensor,
+    kwargs = dict(
         cluster_axis=tp_axis,
         num_links=ccl_manager.num_links,
         topology=ttnn.Topology.Linear,
         memory_config=memory_config,
     )
+    if subdevice_id is not None:
+        # Prefetcher worker stall group — best-effort (simple all_reduce may ignore).
+        kwargs["subdevice_id"] = subdevice_id
+        try:
+            result = ttnn.all_reduce(tensor, **kwargs)
+        except TypeError:
+            kwargs.pop("subdevice_id", None)
+            result = ttnn.all_reduce(tensor, **kwargs)
+    else:
+        result = ttnn.all_reduce(tensor, **kwargs)
     tensor.deallocate(True)
     return result
 
@@ -120,22 +133,33 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
     # return gathered
 
 
-def ccl_allgather(tensor, mesh_config, ccl_manager, dim=3, memory_config=None):
-    """All-gather across TP devices."""
+def ccl_allgather(tensor, mesh_config, ccl_manager, dim=3, memory_config=None, subdevice_id=None):
+    """All-gather across TP devices.
+
+    ``subdevice_id`` is forwarded when set (prefetcher decode path).
+    """
     if mesh_config is None or mesh_config.tp <= 1:
         return tensor
 
     memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
     tp_axis = mesh_config.tp_axis
 
-    gathered = ttnn.all_gather(
-        tensor,
+    kwargs = dict(
         dim=dim,
         cluster_axis=tp_axis,
         num_links=ccl_manager.num_links,
         topology=ttnn.Topology.Linear,
         memory_config=memory_config,
     )
+    if subdevice_id is not None:
+        kwargs["subdevice_id"] = subdevice_id
+        try:
+            gathered = ttnn.all_gather(tensor, **kwargs)
+        except TypeError:
+            kwargs.pop("subdevice_id", None)
+            gathered = ttnn.all_gather(tensor, **kwargs)
+    else:
+        gathered = ttnn.all_gather(tensor, **kwargs)
     tensor.deallocate(True)
     return gathered
 

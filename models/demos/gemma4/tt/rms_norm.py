@@ -49,13 +49,55 @@ class RMSNorm(nn.Module):
         self._sharded_cfg = None  # (input_memcfg, program_config) or None if unavailable
         self._sharded_dim = None
 
-    def _build_sharded_cfg(self, dim):
+    def _build_sharded_cfg(self, dim, prefetcher=None):
         """Pick the largest core grid whose core count divides dim/32 and build
         the width-sharded input memcfg + LayerNorm program config. Returns None
-        if no usable grid divides the tile-width evenly (falls back to plain)."""
+        if no usable grid divides the tile-width evenly (falls back to plain).
+
+        When ``prefetcher`` is set, use its worker-only ``dynamic_worker_core_grid``
+        so the sharded rms_norm stays on the worker sub-device.
+        """
         if dim % ttnn.TILE_SIZE != 0:
             return None
         tiles = dim // ttnn.TILE_SIZE
+        if prefetcher is not None:
+            # Prefer 16/8: receivers-only worker SD uses solid (1,0)-(4,3).
+            num_cores = None
+            for n in (16, 8, 24):
+                if tiles % n == 0:
+                    num_cores = n
+                    break
+            if num_cores is None:
+                return None
+            worker_grid = prefetcher.dynamic_worker_core_grid(num_cores)
+            block_w = tiles // num_cores
+            subblock_w = 4
+            while subblock_w > 1 and block_w % subblock_w != 0:
+                subblock_w -= 1
+            input_memcfg = ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, dim // num_cores),
+                core_grid=worker_grid,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            # LayerNormShardedMultiCoreProgramConfig wants [x, y] bounding box.
+            # Receiver-safe 16-core grid is (1,0)-(4,3) → 4x4.
+            if num_cores == 16:
+                grid_xy = [4, 4]
+            elif num_cores == 8:
+                grid_xy = [2, 4]
+            else:
+                grid_xy = [num_cores // 8, 8]
+            program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=grid_xy,
+                subblock_w=subblock_w,
+                block_h=1,
+                block_w=block_w,
+                inplace=False,
+            )
+            return (input_memcfg, program_config)
+
         grid = self.mesh_device.compute_with_storage_grid_size()
         best = None  # (num_cores, gx, gy)
         for gy in range(1, grid.y + 1):
@@ -100,7 +142,7 @@ class RMSNorm(nn.Module):
         out.deallocate(True)
         return out_interleaved
 
-    def forward(self, x):
+    def forward(self, x, prefetcher=None):
         if self.is_distributed:
             activation_grid_bounding_box_size = x.memory_config().shard_spec.grid.bounding_box().grid_size()
             shard_height, shard_width = x.memory_config().shard_spec.shape
@@ -156,9 +198,17 @@ class RMSNorm(nn.Module):
                 and not x.is_sharded()
             ):
                 dim = x.shape[-1]
-                if self._sharded_cfg is None or self._sharded_dim != dim:
+                # Rebuild when dim changes or when prefetcher presence flips
+                # (worker grid vs full-device grid).
+                pf_key = id(prefetcher) if prefetcher is not None else None
+                if (
+                    self._sharded_cfg is None
+                    or self._sharded_dim != dim
+                    or getattr(self, "_sharded_pf", None) != pf_key
+                ):
                     self._sharded_dim = dim
-                    self._sharded_cfg = self._build_sharded_cfg(dim)
+                    self._sharded_pf = pf_key
+                    self._sharded_cfg = self._build_sharded_cfg(dim, prefetcher=prefetcher)
                 if self._sharded_cfg:
                     return self._forward_sharded(x)
 

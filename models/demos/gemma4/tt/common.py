@@ -85,6 +85,45 @@ def create_tt_model(
     mesh_shape = tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
     precision = Gemma4Precision.load(model_path, mesh_shape)
 
+    # Phase 2b: MLP weight prefetcher (opt-in). Mutually exclusive with
+    # GEMMA4_DRAM_SHARDED on the same matmul — force the DRAM-sharded flags off
+    # so SharedMLP takes the ring path instead.
+    prefetcher = None
+    use_prefetcher = os.environ.get("GEMMA4_PREFETCHER", "").strip().lower() in ("1", "true", "yes", "on")
+    if use_prefetcher:
+        from loguru import logger
+
+        from models.common.utility_functions import is_blackhole
+        from models.tt_transformers.tt.prefetcher import Prefetcher, is_prefetcher_supported
+
+        hf_model = os.getenv("HF_MODEL", "") or model_path
+        n_layers = num_layers or model_args.num_hidden_layers
+        # P150 has 8 DRAM banks; Prefetcher auto-picks 8 receivers → ring_size=64.
+        # Default is_prefetcher_supported(ring_size=16) fails Gemma4's L1 check —
+        # must probe with the BH ring size the constructor will actually use.
+        ring_size_probe = 64
+        if not is_blackhole():
+            logger.warning("GEMMA4_PREFETCHER=1 ignored (Blackhole only)")
+        elif not is_prefetcher_supported(hf_model, num_devices, ring_size=ring_size_probe):
+            logger.warning(
+                f"GEMMA4_PREFETCHER=1 ignored (model/device not supported at ring_size={ring_size_probe}: "
+                f"HF_MODEL={hf_model!r}, num_devices={num_devices})"
+            )
+        else:
+            # Ensure Prefetcher sees a model id that matches VERIFIED_MODEL_CONFIGS.
+            if "gemma-4-31B" not in os.getenv("HF_MODEL", ""):
+                os.environ["HF_MODEL"] = hf_model if "gemma-4-31B" in hf_model else model_path
+            for flag in ("GEMMA4_DRAM_SHARDED", "GEMMA4_DRAM_SHARDED_MLP", "GEMMA4_DRAM_SHARDED_ATTN"):
+                if os.environ.get(flag, "").strip().lower() in ("1", "true", "yes", "on"):
+                    logger.warning(f"{flag} forced off (incompatible with GEMMA4_PREFETCHER)")
+                    os.environ[flag] = "0"
+            prefetcher = Prefetcher(mesh_device, num_tensors=3, num_layers=n_layers)
+            logger.info(
+                f"Gemma4 MLP Prefetcher enabled "
+                f"(ring_size={prefetcher.ring_size}, receivers={prefetcher.num_receiver_cores}, "
+                f"layers={n_layers})"
+            )
+
     model = Gemma4Model(
         mesh_device=mesh_device,
         hf_config=model_args,
@@ -100,9 +139,35 @@ def create_tt_model(
         create_kv_cache=create_kv_cache,
         precision=precision,
         bounded_sliding_kv_cache=bounded_sliding_kv_cache,
+        prefetcher=prefetcher,
     )
 
     return model_args, model, model.tt_kv_cache, state_dict
+
+
+def default_assistant_model_path(model_path: str) -> str:
+    """Derive the it-assistant drafter path from the target checkpoint path.
+
+    Hub repo ids use ``<target>-assistant``. Local HF cache dirs use
+    ``models--org--name-it/snapshots/rev`` -> ``models--org--name-it-assistant/snapshots/rev``.
+    """
+    env = os.getenv("GEMMA4_ASSISTANT_MODEL")
+    if env:
+        return env
+
+    model_path = model_path.rstrip("/")
+    parts = model_path.split("/")
+    try:
+        snap_idx = parts.index("snapshots")
+        slug = parts[snap_idx - 1]
+        if slug.startswith("models--") and slug.endswith("-it"):
+            candidate = "/".join([*parts[: snap_idx - 1], f"{slug}-assistant", *parts[snap_idx:]])
+            if os.path.isdir(candidate):
+                return candidate
+    except ValueError:
+        pass
+
+    return f"{model_path}-assistant"
 
 
 def create_assistant_model(
