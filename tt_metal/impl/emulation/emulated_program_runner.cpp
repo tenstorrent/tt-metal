@@ -2632,10 +2632,13 @@ static void __emule_fabric_deliver(
         }
         case 4: {  // NOC_UNICAST_SCATTER_WRITE: noc_address[4]@0, chunk_size[3]@32, chunk_count@38, chunk_encoding@39
             // Also carries the fused scatter-write + atomic-inc: chunk_encoding holds a 2-bit code per chunk
-            // (silicon NocScatterWriteChunkEncoding: 1 = unicast write, 2/3 = semaphore increment). A plain
-            // scatter write leaves chunk_encoding 0, so every chunk is a write (legacy behavior preserved);
-            // a fused packet marks its trailing chunk as a seminc — fetch_add the value stored in that chunk's
-            // size slot instead of copying payload (the seminc chunk carries no payload bytes).
+            // (silicon NocScatterWriteChunkEncoding: 0 = NOP, 1 = unicast write, 2/3 = semaphore increment).
+            // On silicon a scatter write is NOT left at 0 — to_noc_unicast_scatter_write fills every chunk with
+            // encoding 1, and a fused packet marks its trailing chunk as a seminc (2/3) with the writes at 1.
+            // Encoding 0 is CHUNK_ENCODING_NOP on the wire, so the write branch below handling enc 0 the same
+            // as enc 1 is an emulator compatibility fallback only: emule's own NocUnicastScatterCommandHeader
+            // defaults chunk_encoding to 0 for a plain scatter write. For a seminc chunk, fetch_add the value
+            // stored in that chunk's size slot instead of copying payload (the seminc chunk carries no bytes).
             const uint64_t* na = reinterpret_cast<const uint64_t*>(h + 0);
             const uint16_t* cs = reinterpret_cast<const uint16_t*>(h + 32);
             uint8_t chunk_count = *(h + 38);
