@@ -135,8 +135,14 @@ class ReconfigStall(Check):
             for w in facts:
                 if emitted or not is_cfg_write(w):
                     continue
-                # latched-register exception: skip THIS write, keep scanning.
-                idx = w.get("index_text", "") + w.get("text", "")
+                # latched-register exception: skip THIS write, keep scanning. The
+                # field lives in `index_text`/`text` for a pointer_write / macro /
+                # template cfg_reg_rmw_tensix<FIELD_RMW>, but the cfg_rmw / cfg_rmw_gpr
+                # CALL form (Quasar idiom) carries it in ARG0 — include arg0 so a latched
+                # cfg_rmw_gpr(L1_Dest_addr, ...) is skipped too (else a spurious
+                # THCON_ONLY/NO_UNIT_DRAIN FP). Scoped to LATCHED_FIELDS so it can never
+                # suppress a genuine sampled-field write.
+                idx = w.get("index_text", "") + w.get("text", "") + w.get("arg0", "")
                 if any(lf in idx for lf in registry.LATCHED_FIELDS):
                     continue
 

@@ -550,6 +550,39 @@ def test_reconfig_pack_not_drained_by_unpack_condition():
 
 
 @case
+def test_reconfig_latched_skip_covers_cfg_rmw_arg0_form():
+    # The latched-register skip (L1_Dest_addr) fires for the template TEXT form
+    # cfg_reg_rmw_tensix<L1_Dest_addr_RMW> via `text`; it must ALSO fire for the
+    # cfg_rmw/cfg_rmw_gpr CALL form, which carries the field in ARG0 (Quasar idiom) —
+    # else a latched-addr reconfig write is a spurious THCON_ONLY/NO_UNIT_DRAIN FP.
+    F = "tt_llk_quasar/common/inc/cpack_common.h"  # PACK-thread reconfig fn
+    latched = [
+        fn("_llk_pack_reconfig_data_format_", F, 100, 200),
+        call(
+            F,
+            120,
+            "cfg_rmw_gpr",
+            func="_llk_pack_reconfig_data_format_",
+            arg0="THCON_SEC0_REG1_L1_Dest_addr",
+        ),
+    ]
+    assert ReconfigStall().run(FactBase("quasar", latched)) == []  # latched -> skipped
+    # boundary: a genuinely SAMPLED field via the SAME arg0 form is STILL flagged.
+    sampled = [
+        fn("_llk_pack_reconfig_data_format_", F, 100, 200),
+        call(
+            F,
+            120,
+            "cfg_rmw_gpr",
+            func="_llk_pack_reconfig_data_format_",
+            arg0="THCON_SEC0_REG5_Pack_fp32",
+        ),
+    ]
+    out = ReconfigStall().run(FactBase("quasar", sampled))
+    assert len(out) == 1 and out[0].hint == "NO_UNIT_DRAIN", out
+
+
+@case
 def test_reconfig_math_thcon_only_lists_sfpu1_alias():
     # The THCON_ONLY "needs one of ..." hint for a MATH reconfig must list the full
     # MATH drain vocabulary, including the Quasar SFPU alias SFPU1 — the drain
