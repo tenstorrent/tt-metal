@@ -670,8 +670,9 @@ struct PackTile : OutputStream<Cb, Policy, Offset>, PackTileTag {
     // InputLifecycle::Streaming / InputLifecycle::Chunked reserve+push counts can't be inflated by a runtime base
     // without per-iter bookkeeping the chain doesn't own.
     static_assert(Offset == TileOffset::Unset || is_legal_output_lifecycle_with_base(Policy),
-                  "PackTile: TileOffset::Set requires InputLifecycle::Bulk-family or OutputLifecycle::CallerManaged lifecycle "
-                  "(OutputLifecycle::Bulk / OutputLifecycle::ReserveNonePushEnd / OutputLifecycle::CallerManaged)");
+                  "PackTile: TileOffset::Set requires an upfront or caller-managed output lifecycle "
+                  "(OutputLifecycle::Bulk / OutputLifecycle::ReserveNonePushEnd / OutputLifecycle::CallerManaged / "
+                  "OutputLifecycle::L1AccumulationCallerManaged)");
 
     static constexpr uint32_t  dfb                 = Cb;
     static constexpr uint32_t          pack_dfb_id()        { return Cb; }

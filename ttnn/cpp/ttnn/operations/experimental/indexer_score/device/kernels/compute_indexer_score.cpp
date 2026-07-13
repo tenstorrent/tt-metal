@@ -22,8 +22,11 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"  // block-max-pool: compute_kernel_lib::reduce
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "indexer_score_common.hpp"  // shared CB indices, compile-time dims, work-unit walk
 #include "api/compute/experimental/indexer_mul_custom.h"
+
+namespace ckl = compute_kernel_lib;
 
 // qk subblock height (head rows per DEST pass).
 constexpr uint32_t heads_per_dest_pass = get_compile_time_arg_val(num_common_ct_args);
@@ -122,21 +125,53 @@ inline void set_mul_mode() {
         qk_cb, w_cb, 1 /*acc_to_dest*/)));
 }
 
+// The head loop is a kernel-specific DEST operation, while the chain owns the acquire/commit/pack
+// envelope and the accumulator packer's L1 mode.
+template <uint32_t qk_cb, uint32_t w_cb>
+struct MulAccumChunkCompute : ckl::DestOnlyTag {
+    uint32_t w_base;
+    uint32_t chunk_heads;
+
+    constexpr MulAccumChunkCompute(uint32_t w_base, uint32_t chunk_heads) : w_base(w_base), chunk_heads(chunk_heads) {}
+
+    static ALWI void init() {}
+
+    ALWI void exec(uint32_t /*tile_idx*/, uint32_t slot_offset) const {
+        for (uint32_t head = 0; head < chunk_heads; ++head) {
+            mul_tiles_bcast_cols(qk_cb, w_cb, head, w_base + head, slot_offset);
+        }
+    }
+};
+
 /** Mul+accumulate `chunk_heads` resident heads via hw MAC: dst0 += sum_h qk[h]*w[w_base+h], packed once
  *  to acc_cb[acc_slot]. `first` overwrites the slot (l1_acc off); later chunks L1-accumulate. */
 template <uint32_t qk_cb, uint32_t w_cb, uint32_t acc_cb>
 void mul_accum_chunk(uint32_t w_base, uint32_t chunk_heads, bool first, uint32_t acc_slot) {
     CircularBuffer qk(qk_cb);
     qk.wait_front(chunk_heads);
-    tile_regs_acquire();
-    for (uint32_t head = 0; head < chunk_heads; ++head) {
-        mul_tiles_bcast_cols(qk_cb, w_cb, head, w_base + head, 0);
+    const auto mul_chunk = MulAccumChunkCompute<qk_cb, w_cb>{w_base, chunk_heads};
+    if (first) {
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::single(),
+            mul_chunk,
+            ckl::PackTile<
+                acc_cb,
+                ckl::OutputLifecycle::CallerManaged,
+                ckl::PackTileReconfig::None,
+                ckl::Dst::D0,
+                ckl::TileOffset::Set>{acc_slot});
+    } else {
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::single(),
+            mul_chunk,
+            ckl::PackTile<
+                acc_cb,
+                ckl::OutputLifecycle::L1AccumulationCallerManaged,
+                ckl::PackTileReconfig::None,
+                ckl::Dst::D0,
+                ckl::TileOffset::Set,
+                ckl::PackTileL1Accumulation::Enabled>{acc_slot});
     }
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_reconfig_l1_acc(first ? 0 : 1);  // first chunk overwrites, later chunks accumulate
-    pack_tile<true>(0, acc_cb, acc_slot);
-    tile_regs_release();
     qk.pop_front(chunk_heads);
 }
 
@@ -195,7 +230,6 @@ inline void accumulate_heads(uint32_t q_row, uint32_t k_col, uint32_t acc_slot) 
             q.pop_front(q_group_tiles);
         }
     }
-    pack_reconfig_l1_acc(0);  // done accumulating; downstream packs (mask, untilize) overwrite
 }
 
 /** Stamp the causal mask for absolute column `k_tile` onto acc slot `slot` (in place, no repush):
@@ -206,15 +240,35 @@ template <uint32_t acc_cb, uint32_t mask_cb>
 inline void stamp_mask_tile(uint32_t slot, uint32_t k_tile, uint32_t diag_tile) {
     const bool is_diag = (k_tile == diag_tile);
     const uint32_t midx = is_diag ? 0u : 1u;  // 0 = diag strict-upper -inf, 1 = full -inf
-    copy_tile_to_dst_init_short(mask_cb);
-    pack_reconfig_l1_acc(is_diag ? 1 : 0);  // diag accumulates (keeps score); full -inf overwrites
-    tile_regs_acquire();
-    copy_tile(mask_cb, midx, 0);
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile<true>(0, acc_cb, slot);
-    tile_regs_release();
-    pack_reconfig_l1_acc(0);
+    const auto copy_mask = ckl::CopyTile<
+        mask_cb,
+        ckl::Dst::D0,
+        ckl::InputLifecycle::CallerManaged,
+        ckl::CopyTileReconfig::Input,
+        ckl::OperandKind::Scalar,
+        ckl::TileOffset::Set>{midx};
+    if (is_diag) {
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::single(),
+            copy_mask,
+            ckl::PackTile<
+                acc_cb,
+                ckl::OutputLifecycle::L1AccumulationCallerManaged,
+                ckl::PackTileReconfig::None,
+                ckl::Dst::D0,
+                ckl::TileOffset::Set,
+                ckl::PackTileL1Accumulation::Enabled>{slot});
+    } else {
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::single(),
+            copy_mask,
+            ckl::PackTile<
+                acc_cb,
+                ckl::OutputLifecycle::CallerManaged,
+                ckl::PackTileReconfig::None,
+                ckl::Dst::D0,
+                ckl::TileOffset::Set>{slot});
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------

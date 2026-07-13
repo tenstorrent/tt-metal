@@ -398,7 +398,7 @@ constexpr bool is_legal_input_lifecycle_with_base(InputLifecycle lc) noexcept {
 /// Lifecycle compatibility check for `TileBase != None` on output elements.
 constexpr bool is_legal_output_lifecycle_with_base(OutputLifecycle lc) noexcept {
     return lc == OutputLifecycle::Bulk || lc == OutputLifecycle::ReserveNonePushEnd ||
-           lc == OutputLifecycle::CallerManaged;
+           lc == OutputLifecycle::CallerManaged || lc == OutputLifecycle::L1AccumulationCallerManaged;
 }
 
 // =============================================================================
