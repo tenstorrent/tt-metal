@@ -592,12 +592,14 @@ def chunk_gated_delta_rule_seq(
 
     _spc("core.decay")  # cumulative decay + decay_exp + L_mask (decay spine)
     # ---- Decay preprocessing ----
-    g_c_3d = ttnn.reshape(g_c, [batch, 1, chunk_size], memory_config=None)
-    decay = ttnn.reshape(
-        ttnn.matmul(g_c_3d, triu_ones, memory_config=None, compute_kernel_config=_hifi_cfg),
-        [batch, chunk_size],
-        memory_config=None,
-    )
+    # decay = cumsum(g) along the chunk = g_c @ triu_ones. The old M=1 3D bmm ([batch,1,C]@[1,C,C])
+    # was pinned to ~4 cores; the 2D form ([batch,C]@[C,C]) spreads batch rows across ~24
+    # (~80x on the matmul, -0.75 ms core.decay). triu_ones is batch-broadcast, so this is the
+    # same prefix-sum. NOTE: not bit-identical vs the 3D path (PCC 0.99974, ttnn-vs-ttnn) — the
+    # matmul reduction order changes and decay is the exp/recurrence-sensitive spine; clears the
+    # model PCC bars (0.95/0.99) but warrants a real-weight gate. See PR #48861 / aac46950e.
+    triu_ones_2d = ttnn.reshape(triu_ones, [chunk_size, chunk_size], memory_config=None)
+    decay = ttnn.matmul(g_c, triu_ones_2d, memory_config=None, compute_kernel_config=_hifi_cfg)
     decay_offset = decay[:, 0:1]
     decay_raw = decay
     decay = ttnn.subtract(decay_raw, decay_offset, memory_config=None)
