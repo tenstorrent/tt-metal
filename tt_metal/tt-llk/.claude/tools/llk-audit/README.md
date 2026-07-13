@@ -152,8 +152,12 @@ Then `python3 tests/test_checks.py` to confirm nothing regressed.
 
 ## Coverage boundaries (explicit — no silent caps)
 
-1. **Augmentor only.** No gate, no "safe" claim, always exits 0. Green = "no new
-   *known-pattern* instance," never "no bug."
+1. **Augmentor only.** No gate, no "safe" claim: it never fails on FINDINGS — a
+   successful run exits 0 whether or not it found any. Green = "no new
+   *known-pattern* instance," never "no bug." (A DEGRADED/failed run — empty fact
+   base, toolchain/build failure, bad args, kernel-tier failure — deliberately
+   exits NON-zero so the calling `/*-audit` skill falls back to its manual method;
+   that is a run-health signal, not a gate on findings.)
 2. **Interprocedural linkage is the LLM's job.** `mmio-race` consumer/guard
    association is intra-function; a caller-supplied guard shows as
    `NO_LOCAL_ORDERING`.
