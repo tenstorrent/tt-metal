@@ -1,7 +1,7 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Qwen3.5-9B end-to-end multimodal (vision + text) generation demo on Blackhole P150.
+"""Qwen3.6-27B end-to-end multimodal (vision + text) generation demo on Blackhole P150.
 
 Mirrors the text-only ``text_demo.py`` flow, but routes images through the TT vision tower
 (``DropInVisionTransformer``) and splices the resulting image embeddings into the text

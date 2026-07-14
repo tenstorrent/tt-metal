@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import os
@@ -39,7 +39,7 @@ def test_vision_attention_inference(
     reset_seeds,
     ensure_gc,
 ):
-    dtype = ttnn.bfloat16  # NOCOMMIT
+    dtype = ttnn.bfloat16
     pcc = 0.99
     batch_size = 1  # For prefill we only support batch_size = 1
 

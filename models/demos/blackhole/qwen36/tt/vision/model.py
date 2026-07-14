@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -321,5 +321,6 @@ class DropInVisionTransformer(torch.nn.Module):
 
         # concatenate all the outputs
         tt_out = ttnn.concat(final_outputs, dim=1)
-        (ttnn.deallocate(final_outputs[i]) for i in range(len(final_outputs)))
+        for t in final_outputs:
+            ttnn.deallocate(t)
         return tt_out
