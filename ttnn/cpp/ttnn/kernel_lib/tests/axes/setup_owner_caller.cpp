@@ -2,13 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// SetupOwner::Caller functional test (positive).
-//
-// SetupOwner::Caller means the CALLER owns the chain's one-time setup and emits it itself, so the
-// chain emits none of it. That setup is raw LLK here in the caller — exactly what a SetupOwner::Chain
-// call would hoist for this chain: CopyTile's copy_tile_init + Exp's exp_tile_init. (PackTile::init is
-// empty and the CB-bound elements use reconfig None, so there's nothing else to emit.) The chain is
-// then written ONCE and walks all n tiles under Caller. If Caller wrongly re-emitted setup, or if the
+// SetupOwner::Caller functional test (positive): the caller owns the chain's one-time setup and
+// emits it as raw LLK (copy_tile_init + exp_tile_init) — exactly what SetupOwner::Chain would hoist.
+// The chain then walks all n tiles emitting none of it. If Caller wrongly re-emitted setup, or the
 // raw setup didn't match what the chain expects, exp(x) would be wrong.
 
 #include <cstdint>
@@ -22,7 +18,7 @@ void kernel_main() {
 
     using namespace compute_kernel_lib;
 
-    // Caller-owned setup, as raw LLK (mirrors the chain's hoistable init for CopyTile + Exp + PackTile):
+    // Caller-owned setup as raw LLK (mirrors the chain's hoistable init):
     compute_kernel_hw_startup(cb_in, cb_out);  // BIG hw init — always caller-owned
     copy_tile_init(cb_in);                     // == CopyTile::init()
     exp_tile_init();                           // == Exp<>::init()

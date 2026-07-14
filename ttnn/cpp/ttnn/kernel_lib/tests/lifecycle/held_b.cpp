@@ -2,23 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Lifecycle / CB-synchronization suite (G1).
+// Lifecycle / CB-synchronization suite.
 //
-// out[i] = A[i] + B[0] over n tiles: A streams (chain owns wait+pop), B is a single held tile
-// reused every iter on a selectable InputLifecycle. The chain emits exactly the CB edges its
-// lifecycle declares; the compute kernel supplies whatever edge the chain does NOT
-// (eltwise_chain.hpp:161-196). A miscount hangs (cb_wait_front / cb_pop_front never satisfied) or
-// reads a stale tile — so the test asserts BOTH no-hang and correct values.
+// out[i] = A[i] + B[0] over n tiles: A streams (chain owns wait+pop); B is a single held tile reused
+// every iter on a selectable InputLifecycle. The chain emits exactly the CB edges its lifecycle
+// declares; this kernel supplies the rest. A miscount hangs (wait/pop never satisfied) or reads a
+// stale tile, so each case asserts BOTH no-hang and correct values.
 //
-//   life  lifecycle        chain emits (for B)         caller (this kernel) supplies
+//   life  lifecycle        chain emits (for B)         caller supplies
 //   0     Bulk             wait 1 upfront + pop 1 end   nothing
 //   1     HeldBulk         wait 1 upfront, no pop       pop 1 after
 //   2     HeldStream       wait 1 / iter, no pop        pop 1 after
 //   3     CallerManaged    nothing                      wait 1 before, pop 1 after
 //   4     DeferredPop      no wait, pop 1 at end        wait 1 before
 //
-// This also covers the OperandKind::Scalar inter-tile reuse index (B read at relative tile 0 every
-// iter) — the held-operand pattern behind softmax / bcast_w / groupnorm gamma-beta.
+// B uses OperandKind::Scalar (re-read at relative tile 0 each iter) — the held-operand pattern.
 
 #include <cstdint>
 // eltwise_chain.hpp first: it pulls in the compute API (PACK/UNPACK macros + llk decls) that
