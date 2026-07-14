@@ -34,11 +34,24 @@ def gate_merge_enabled() -> bool:
     (see its attribute_names) and guarded by
     test_ltx_merged_mm_configs.py::test_same_shape_different_chunks_do_not_alias.
 
-    It still defaults OFF on the numbers: merged-vs-standalone is exact per block (frame-PCC 1.0000
-    on a whole gated block) but the merged gate logits come out of a differently-blocked matmul, and
-    six denoise steps amplify that bf16 rounding to a warm-gen frame-PCC of min 0.868 / mean 0.923 —
-    short of the >0.99 equivalence bar. It buys ~0.2s of an 8.4s gen (8.2s vs 8.4s), which does not
-    pay for a visible change in output.
+    It still defaults OFF, and NOT for the reason this docstring used to give. The old claim — that
+    the merged gate logits fall out of a differently-blocked matmul and the sampler merely amplifies
+    that bf16 rounding — was MEASURED AND REFUTED (2026-07-14):
+
+      * The gate's K-reduction order does not change. The merge moves S2 to_qkv from
+        (4864,4096,3072)->(10,4,12) to (4864,4096,4096)->(5,8,16), so the only K_block change in the
+        whole model is 4->8 on to_qkv, i.e. on Q/K/V — not on the gate (K_block=8 in both arms).
+      * That reblocking is nearly free. Held alone (TT_DIT_MM_REBLOCK forces the standalone-gate arm
+        onto the merged arm's exact to_qkv blocking: same math, same weights, different fp reduction
+        order) a full 11-step gen still lands at frame-PCC min 0.9978 / mean 0.9985 vs baseline.
+        These matmuls run fp32_dest_acc_en + packer_l1_acc, so reduction order costs ~nothing, and
+        the sampler does NOT amplify it. THAT is the precision noise floor.
+
+    So min 0.868 / mean 0.923 sits ~50x outside the noise floor: the merge injects a real, systematic
+    numerical deviation, not rounding. It also shows up as an absolute (reference-free) quality
+    signal — the merged decode loses 4.5% of its high-frequency detail (mean Laplacian variance 51.4
+    vs 53.9), where the same-math reblocking loses 0.0%. Root-cause that before turning this on; it
+    buys only ~0.2s of an 8.4s gen (2.4%), which does not pay for an unexplained change in output.
 
     LTX_NO_GATE_MERGE still forces it off. The transformer cache is keyed on the result (the merge
     widens the Q/QKV weights), so either flag also selects the matching cache — which makes this a
