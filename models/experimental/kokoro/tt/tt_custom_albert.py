@@ -93,9 +93,9 @@ def _t(t: torch.Tensor, *, device, dtype, layout=ttnn.TILE_LAYOUT) -> ttnn.Tenso
     )
 
 
-def _upload_linear(linear: nn.Linear, device, dtype) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+def _upload_linear(linear: nn.Linear, device, dtype, *, bias_dtype=None) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     w = _t(linear.weight, device=device, dtype=dtype)
-    b = _t(linear.bias.reshape(1, 1, 1, -1), device=device, dtype=dtype)
+    b = _t(linear.bias.reshape(1, 1, 1, -1), device=device, dtype=bias_dtype or dtype)
     return w, b
 
 
@@ -205,8 +205,12 @@ def _linear_tuned(
     compute_kernel_config,
     memory_config: ttnn.MemoryConfig = ttnn.L1_MEMORY_CONFIG,
     use_ws_output: bool,
+    dtype=None,
 ) -> ttnn.Tensor:
-    """Sweep-tuned linear: L1 width-sharded output when eligible, else L1 interleaved."""
+    """Sweep-tuned linear: L1 width-sharded output when eligible, else L1 interleaved.
+
+    ``dtype`` sets the output activation dtype (e.g. ``bfloat8_b``) so the next op reads less.
+    """
     if use_ws_output:
         out = ttnn.linear(
             x,
@@ -216,6 +220,7 @@ def _linear_tuned(
             program_config=program_config,
             memory_config=_ws_out_mem_config(),
             compute_kernel_config=compute_kernel_config,
+            dtype=dtype,
         )
         return maybe_reshard_to_caller(out, memory_config)
     out = ttnn.linear(
@@ -226,11 +231,12 @@ def _linear_tuned(
         program_config=program_config,
         memory_config=memory_config,
         compute_kernel_config=compute_kernel_config,
+        dtype=dtype,
     )
     return out
 
 
-def _upload_fused_qkv(attn, device, dtype, *, head_size: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+def _upload_fused_qkv(attn, device, dtype, *, head_size: int, bias_dtype=None) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Fuse ``query``/``key``/``value`` into one linear for a single device matmul.
 
     Bake ``1/sqrt(head_size)`` into Q weights so attention scores need no extra scale op.
@@ -245,7 +251,7 @@ def _upload_fused_qkv(attn, device, dtype, *, head_size: int) -> tuple[ttnn.Tens
         dim=0,
     )
     w = _t(qkv_weight, device=device, dtype=dtype)
-    b = _t(qkv_bias.reshape(1, 1, 1, -1), device=device, dtype=dtype)
+    b = _t(qkv_bias.reshape(1, 1, 1, -1), device=device, dtype=bias_dtype or dtype)
     return w, b
 
 
@@ -261,10 +267,15 @@ def preprocess_tt_custom_albert(
     *,
     weights_dtype=ttnn.bfloat16,
     embedding_dtype=ttnn.bfloat16,
+    matmul_weights_dtype=ttnn.bfloat8_b,
 ) -> TTCustomAlbertParams:
     """Upload a ``transformers.AlbertModel`` (or ``CustomAlbert``) to device.
 
     ``embedding_dtype`` must stay ``bfloat16``: ``ttnn.embedding`` requires BF16 weights on device.
+
+    ``matmul_weights_dtype`` sets the dtype of the matmul/linear weights (qkv, dense, ffn, ffn_output,
+    emb_map) — ``bfloat8_b`` halves their DRAM footprint and speeds the (bandwidth-sensitive) matmuls.
+    Biases, LayerNorm gamma/beta, and embeddings stay at ``weights_dtype`` (bf16).
 
     Embedding tables are stored ROW_MAJOR: ``ttnn.embedding`` row-gathers in row-major,
     so a TILE-layout table would be untilized on every forward (UntilizeWithUnpadding).
@@ -278,7 +289,9 @@ def preprocess_tt_custom_albert(
     token_type_emb = _t(emb.token_type_embeddings.weight, device=device, dtype=embedding_dtype, layout=rm)
     emb_ln_w, emb_ln_b = _upload_layernorm(emb.LayerNorm, device, weights_dtype)
 
-    emb_map_w, emb_map_b = _upload_linear(albert_model.encoder.embedding_hidden_mapping_in, device, weights_dtype)
+    emb_map_w, emb_map_b = _upload_linear(
+        albert_model.encoder.embedding_hidden_mapping_in, device, matmul_weights_dtype, bias_dtype=weights_dtype
+    )
 
     head_size = int(cfg.hidden_size) // int(cfg.num_attention_heads)
     layer_groups: list[tuple[TTAlbertLayerParams, ...]] = []
@@ -286,11 +299,15 @@ def preprocess_tt_custom_albert(
         inner: list[TTAlbertLayerParams] = []
         for layer in group.albert_layers:
             attn = layer.attention
-            qkv_w, qkv_b = _upload_fused_qkv(attn, device, weights_dtype, head_size=head_size)
-            dense_w, dense_b = _upload_linear(attn.dense, device, weights_dtype)
+            qkv_w, qkv_b = _upload_fused_qkv(
+                attn, device, matmul_weights_dtype, head_size=head_size, bias_dtype=weights_dtype
+            )
+            dense_w, dense_b = _upload_linear(attn.dense, device, matmul_weights_dtype, bias_dtype=weights_dtype)
             attn_ln_w, attn_ln_b = _upload_layernorm(attn.LayerNorm, device, weights_dtype)
-            ffn_w, ffn_b = _upload_linear(layer.ffn, device, weights_dtype)
-            ffn_out_w, ffn_out_b = _upload_linear(layer.ffn_output, device, weights_dtype)
+            ffn_w, ffn_b = _upload_linear(layer.ffn, device, matmul_weights_dtype, bias_dtype=weights_dtype)
+            ffn_out_w, ffn_out_b = _upload_linear(
+                layer.ffn_output, device, matmul_weights_dtype, bias_dtype=weights_dtype
+            )
             full_ln_w, full_ln_b = _upload_layernorm(layer.full_layer_layer_norm, device, weights_dtype)
             inner.append(
                 TTAlbertLayerParams(
@@ -514,6 +531,26 @@ def _tuned_1d_linear_program_config(
     )
 
 
+def _build_sdpa_program_config(device: ttnn.Device, *, seq_len: int) -> ttnn.SDPAProgramConfig:
+    """FlashAttention-2 config for a tiny bidirectional seq (Kokoro T=64).
+
+    SDPA parallelizes over ``b``, ``nqh`` and Q's ``s``; chunking Q into 32-tile
+    blocks spreads the 12 heads × 2 q-chunks across the grid instead of the
+    single-core batched QK/PV path.
+    """
+    tile = ttnn.TILE_SIZE
+    grid = device.compute_with_storage_grid_size()
+    padded = max(tile, ((seq_len + tile - 1) // tile) * tile)
+    q_chunk = tile if padded > tile else padded
+    k_chunk = padded
+    return ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=(int(grid.x), int(grid.y)),
+        q_chunk_size=q_chunk,
+        k_chunk_size=k_chunk,
+        exp_approx_mode=False,
+    )
+
+
 def _batched_attn_matmul_program_config(
     device: ttnn.Device,
     *,
@@ -563,7 +600,7 @@ def _batched_attn_matmul_program_config(
 
 @dataclass(frozen=True)
 class TTAlbertWidthShardedLnConfig:
-    """L1 WIDTH-sharded LayerNorm: full ``M=B×T`` rows, hidden dim split across cores."""
+    """L1 BLOCK-sharded LayerNorm: M rows and hidden dim both split across a 2D core grid."""
 
     input_mem_config: ttnn.MemoryConfig
     program_config: ttnn.LayerNormShardedMultiCoreProgramConfig
@@ -582,23 +619,33 @@ def _ln_uses_width_sharding(B: int, T: int, normalized_size: int) -> bool:
     return (B * T) % tile == 0 and normalized_size % tile == 0
 
 
-def _ln_width_num_cores(normalized_size: int, *, max_cores: int) -> int:
-    kt = normalized_size // ttnn.TILE_SIZE
-    for n in range(min(kt, max_cores), 0, -1):
-        if kt % n == 0:
-            return n
-    return 1
+def _pick_block_ln_grid(
+    m_tiles: int, n_tiles: int, *, gx_max: int, gy_max: int, target_block_w: int = 6
+) -> tuple[int, int]:
+    """BLOCK-sharded LN grid ``(gx, gy)``: split M rows across ``gy``, the N reduction across ``gx``.
 
-
-def _ln_core_grid(num_cores: int, device: ttnn.Device) -> ttnn.CoreGrid:
-    grid = device.compute_with_storage_grid_size()
-    max_x, max_y = int(grid.x), int(grid.y)
-    for y in range(max_y, 0, -1):
-        if num_cores % y == 0:
-            x = num_cores // y
-            if x <= max_x:
-                return ttnn.CoreGrid(x=x, y=y)
-    raise ValueError(f"cannot place {num_cores} LN cores on {max_x}x{max_y} grid")
+    Swept on the Kokoro PLBERT LayerNorm ([M=64, N=768] -> block_4x2 = 8 cores = 7.86us, 2.2x over
+    interleaved; see ``perf/test_layernorm_text_encoder_perf_sweep.py`` with ``KOKORO_LN_SHAPE=64x768``).
+    The winner splits all M-tiles (``gy = m_tiles``) and picks ``gx`` giving ``block_w ~= 6`` tiles.
+    """
+    gy = 1
+    for cand in range(min(m_tiles, gy_max), 0, -1):
+        if m_tiles % cand == 0:
+            gy = cand
+            break
+    target_gx = max(1, round(n_tiles / target_block_w))
+    gx, best_d = 1, None
+    for cand in range(1, min(n_tiles, gx_max) + 1):
+        if n_tiles % cand:
+            continue
+        d = abs(cand - target_gx)
+        if best_d is None or d < best_d:
+            best_d, gx = d, cand
+    if gx * gy <= 1:  # need >=2 cores for parallelism; fall back to splitting N
+        gx = min(n_tiles, gx_max)
+        while gx > 1 and n_tiles % gx:
+            gx -= 1
+    return gx, gy
 
 
 def _build_width_sharded_ln_config(
@@ -613,23 +660,23 @@ def _build_width_sharded_ln_config(
     if normalized_size % tile != 0:
         raise ValueError(f"normalized_size {normalized_size} must be divisible by TILE_SIZE {tile}")
 
+    m_tiles = batch_rows // tile
+    n_tiles = normalized_size // tile
     grid = device.compute_with_storage_grid_size()
-    num_cores = _ln_width_num_cores(normalized_size, max_cores=int(grid.x) * int(grid.y))
-    core_grid = _ln_core_grid(num_cores, device)
-    shard_width = normalized_size // num_cores
-    input_mem_config = ttnn.create_sharded_memory_config(
-        (batch_rows, shard_width),
-        core_grid,
-        ttnn.ShardStrategy.WIDTH,
-        ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-    block_h = batch_rows // tile
-    block_w = shard_width // tile
+    gx, gy = _pick_block_ln_grid(m_tiles, n_tiles, gx_max=int(grid.x), gy_max=int(grid.y))
+
+    block_h = m_tiles // gy
+    block_w = n_tiles // gx
     subblock_w = _largest_divisor(block_w, max_divisor=4)
-    device_grid = device.compute_with_storage_grid_size()
+    core_grid = ttnn.CoreGrid(x=gx, y=gy)
+    input_mem_config = ttnn.create_sharded_memory_config(
+        shape=[1, 1, batch_rows, normalized_size],
+        core_grid=core_grid,
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
     program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=(int(device_grid.x), int(device_grid.y)),
+        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
         subblock_w=subblock_w,
         block_h=block_h,
         block_w=block_w,
@@ -651,9 +698,12 @@ def _width_sharded_layer_norm(
     compute_kernel_config,
     output_mem_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
-    """Interleaved activations -> WIDTH-sharded LN -> interleaved output."""
+    """Interleaved activations -> BLOCK-sharded LN -> interleaved output.
+
+    LN has no output-dtype arg; output follows the input dtype (bf8 when fed a bf8 residual).
+    """
     mc = x.memory_config()
-    if mc.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED and mc.buffer_type == ttnn.BufferType.L1:
+    if mc.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED and mc.buffer_type == ttnn.BufferType.L1:
         sharded = x
     else:
         sharded = ttnn.to_memory_config(x, ln_cfg.input_mem_config)
@@ -724,6 +774,7 @@ class TTAlbertMatmulProgramConfigs:
     emb_map: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig
     attn_qk: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig
     attn_pv: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig
+    sdpa: ttnn.SDPAProgramConfig
 
 
 def _build_matmul_program_configs(
@@ -777,7 +828,7 @@ def _build_matmul_program_configs(
             n=hidden_size,
             kind="ffn_out",
             fp32_dest_acc_en=fp32_dest_acc_en,
-            width_sharded_out=False,
+            width_sharded_out=True,
         ),
         emb_map=_tuned_1d_linear_program_config(
             device,
@@ -803,49 +854,51 @@ def _build_matmul_program_configs(
             n_dim=head_size,
             fp32_dest_acc_en=fp32_dest_acc_en,
         ),
+        sdpa=_build_sdpa_program_config(device, seq_len=T),
     )
 
 
-def _build_extended_mask(
+def _build_sdpa_mask(
     attention_mask: torch.Tensor | None,
     *,
     B: int,
     T: int,
     device: ttnn.Device,
     dtype=ttnn.bfloat16,
-) -> ttnn.Tensor:
-    """``[B, T]`` (1=keep, 0=pad) -> additive mask ``[B, 1, 1, T]`` (TILE) with large neg on pad.
+) -> ttnn.Tensor | None:
+    """``[B, T]`` (1=keep, 0=pad) -> additive SDPA mask ``[B, 1, T, T]`` (TILE).
 
-    When ``attention_mask`` is ``None`` (no padding), returns an all-zeros mask directly
-    on device without any torch ops.
+    ``scaled_dot_product_attention`` wants ``[b, nqh, s, s]`` (batch/head broadcastable). The
+    padding mask depends only on the *key* position, so the per-key vector is broadcast across
+    all query rows. Returns ``None`` when there is no padding (all-ones / ``None``) so SDPA runs
+    maskless — this is the common Kokoro full-length case.
 
-    ``ttnn.zeros(device=...)`` / ``ttnn.from_torch(device=...)`` are host->device writes, illegal
-    inside trace capture. Under trace weight prep the mask (constant for a fixed input/length) is
-    built once and reused; the caller must then not free it (it guards the dealloc on the same flag).
+    ``ttnn.from_torch(device=...)`` is a host->device write, illegal inside trace capture. Under
+    trace weight prep the mask (constant for a fixed input/length) is built once and reused; the
+    caller must then not free it (it guards the dealloc on the same flag).
     """
     if attention_mask is None:
-        key = ("bert_extmask_none", id(device), B, T, str(dtype))
-    else:
-        key = ("bert_extmask", id(device), B, T, str(dtype), tuple(int(v) for v in attention_mask.reshape(-1).tolist()))
+        return None
+    m = attention_mask.to(torch.float32)
+    if bool(torch.all(m == 1.0)):
+        return None
+
+    key = ("bert_sdpa_mask", id(device), B, T, str(dtype), tuple(int(v) for v in m.reshape(-1).tolist()))
     if _trace_weight_prep_enabled():
         cached = _prep_cache_get(key)
         if cached is not None:
             return cached
 
-    if attention_mask is None:
-        mask = ttnn.zeros(
-            [B, 1, 1, T], dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-    else:
-        m = attention_mask.to(torch.float32)
-        extended = (1.0 - m).unsqueeze(1).unsqueeze(2) * -1.0e4
-        mask = ttnn.from_torch(
-            extended,
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+    # per-key additive mask [B, T] -> broadcast over query rows -> [B, 1, T, T]
+    key_mask = (1.0 - m) * -1.0e4  # [B, T]
+    extended = key_mask.unsqueeze(1).unsqueeze(2).expand(B, 1, T, T).contiguous()
+    mask = ttnn.from_torch(
+        extended,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
     if _trace_weight_prep_enabled():
         _prep_cache_set(key, mask)
     return mask
@@ -865,6 +918,8 @@ class TTAlbertLayer:
         "hidden_size",
         "layer_norm_eps",
         "compute_kernel_config",
+        "matmul_compute_kernel_config",
+        "activations_dtype",
     )
 
     def __init__(
@@ -875,6 +930,8 @@ class TTAlbertLayer:
         hidden_size: int,
         layer_norm_eps: float,
         compute_kernel_config,
+        matmul_compute_kernel_config,
+        activations_dtype,
         device: ttnn.Device,
     ) -> None:
         assert hidden_size % num_heads == 0, "hidden_size must be divisible by num_attention_heads"
@@ -885,6 +942,8 @@ class TTAlbertLayer:
         self.hidden_size = hidden_size
         self.layer_norm_eps = layer_norm_eps
         self.compute_kernel_config = compute_kernel_config
+        self.matmul_compute_kernel_config = matmul_compute_kernel_config
+        self.activations_dtype = activations_dtype
 
     def _attention(
         self,
@@ -912,9 +971,10 @@ class TTAlbertLayer:
             p.qkv_w,
             bias=p.qkv_b,
             program_config=matmul_pcs.qkv,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.matmul_compute_kernel_config,
             memory_config=memory_config,
             use_ws_output=_ws_output_eligible(B, T, device=self.device, out_features=3 * self.hidden_size, kind="qkv"),
+            dtype=self.activations_dtype,
         )
         xqkv = _fix_b1th_after_linear(xqkv, B=B, T=T, width=3 * self.hidden_size, memory_config=memory_config)
 
@@ -927,29 +987,22 @@ class TTAlbertLayer:
         )
         ttnn.deallocate(xqkv)
 
-        scores = ttnn.matmul(
+        # FlashAttention-2: fuses QK^T + mask + softmax + PV and parallelizes over
+        # (b, nqh, q-chunks) instead of the single-core batched matmul path. Q weights are
+        # pre-scaled by 1/sqrt(head_size) at preprocess, so pass scale=1.0 to avoid double scaling.
+        ctx_heads = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
-            transpose_b=True,
-            program_config=matmul_pcs.attn_qk,
+            v,
+            attn_mask=attention_mask,
+            is_causal=False,
+            scale=1.0,
+            program_config=matmul_pcs.sdpa,
+            compute_kernel_config=self.matmul_compute_kernel_config,
             memory_config=memory_config,
-            compute_kernel_config=self.compute_kernel_config,
         )
         ttnn.deallocate(q)
         ttnn.deallocate(k)
-        scores = ttnn.add(scores, attention_mask, memory_config=memory_config)
-
-        probs = ttnn.softmax(scores, dim=-1, memory_config=memory_config)
-        ttnn.deallocate(scores)
-
-        ctx_heads = ttnn.matmul(
-            probs,
-            v,
-            program_config=matmul_pcs.attn_pv,
-            memory_config=memory_config,
-            compute_kernel_config=self.compute_kernel_config,
-        )
-        ttnn.deallocate(probs)
         ttnn.deallocate(v)
 
         ctx_b1th = ttnn.experimental.nlp_concat_heads(ctx_heads, memory_config=memory_config)
@@ -960,9 +1013,10 @@ class TTAlbertLayer:
             p.dense_w,
             bias=p.dense_b,
             program_config=matmul_pcs.dense,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.matmul_compute_kernel_config,
             memory_config=memory_config,
             use_ws_output=_ws_output_eligible(B, T, device=self.device, out_features=self.hidden_size, kind="dense"),
+            dtype=self.activations_dtype,
         )
         ttnn.deallocate(ctx_b1th)
         projected_btH = _from_b1th(projected, B=B, T=T, hidden_size=self.hidden_size, memory_config=memory_config)
@@ -1006,20 +1060,24 @@ class TTAlbertLayer:
             p.ffn_w,
             bias=p.ffn_b,
             program_config=matmul_pcs.ffn_in,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.matmul_compute_kernel_config,
             memory_config=memory_config,
             use_ws_output=_ws_output_eligible(
                 B, T, device=self.device, out_features=int(p.ffn_w.shape[-2]), kind="ffn_in"
             ),
+            dtype=self.activations_dtype,
         )
-        h2 = ttnn.linear(
+        h2 = _linear_tuned(
             h_act,
             p.ffn_output_w,
             bias=p.ffn_output_b,
-            transpose_b=True,
             program_config=matmul_pcs.ffn_out,
+            compute_kernel_config=self.matmul_compute_kernel_config,
             memory_config=memory_config,
-            compute_kernel_config=self.compute_kernel_config,
+            use_ws_output=_ws_output_eligible(
+                B, T, device=self.device, out_features=int(p.ffn_output_w.shape[-2]), kind="ffn_out"
+            ),
+            dtype=self.activations_dtype,
         )
         ttnn.deallocate(h_act)
         residual = ttnn.add(h2, x_residual, memory_config=memory_config)
@@ -1064,6 +1122,15 @@ class TTCustomAlbert:
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
+        # Matmul/linear/SDPA run at HiFi2 (2 BF16 MAC passes vs HiFi3's 3); LayerNorm stays HiFi3.
+        self.matmul_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+        )
+        # bf8 activation stream: linears + LayerNorm emit bfloat8_b so each matmul reads less.
+        self.activations_dtype = ttnn.bfloat8_b
         self._intermediate_size = int(params.layer_groups[0][0].ffn_w.shape[-2])
         self._head_size = params.hidden_size // params.num_attention_heads
         self._matmul_pc_cache: dict[tuple[int, int], TTAlbertMatmulProgramConfigs] = {}
@@ -1076,6 +1143,8 @@ class TTCustomAlbert:
                     hidden_size=params.hidden_size,
                     layer_norm_eps=params.layer_norm_eps,
                     compute_kernel_config=self.compute_kernel_config,
+                    matmul_compute_kernel_config=self.matmul_compute_kernel_config,
+                    activations_dtype=self.activations_dtype,
                     device=device,
                 )
                 for lp in group
@@ -1211,16 +1280,17 @@ class TTCustomAlbert:
             self.params.emb_map_w,
             bias=self.params.emb_map_b,
             program_config=matmul_pcs.emb_map,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.matmul_compute_kernel_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             use_ws_output=_ws_output_eligible(
                 B, T, device=self.device, out_features=self.params.hidden_size, kind="emb_map"
             ),
+            dtype=self.activations_dtype,
         )
         ttnn.deallocate(emb)
 
-        # attention_mask=None means full-length (no padding): ext_mask is all-zeros (no-op add).
-        ext_mask = _build_extended_mask(attention_mask, B=B, T=T, device=self.device)
+        # attention_mask=None / all-ones means full-length (no padding): SDPA runs maskless.
+        ext_mask = _build_sdpa_mask(attention_mask, B=B, T=T, device=self.device)
 
         num_layers = self.params.num_hidden_layers
         num_groups = self.params.num_hidden_groups
@@ -1240,7 +1310,7 @@ class TTCustomAlbert:
             ttnn.deallocate(hidden)
             hidden = new_hidden
 
-        if not _trace_weight_prep_enabled():
+        if ext_mask is not None and not _trace_weight_prep_enabled():
             ttnn.deallocate(ext_mask)
 
         while len(hidden.shape) > 3:
