@@ -515,6 +515,11 @@ void kernel_main() {
                     // MATH-side partner of the llk_pack_init/llk_pack_dest_init re-issued just below; runs once
                     // per tilize group, NO per-block hw_configure. Same Quasar gap the pool hit --
                     // tilizeA_B_reduce_init_short adds llk_math_pack_sync_init for exactly this reason.
+                    // NB: the residual DEST-bank race is fixed in the LLK primitive llk_pack_common.h
+                    // (_llk_packer_set_math_semaphore_<p_stall::MATH>: drains the bank-clear ZEROACC on the
+                    // MATH/FPU unit before the SEMGET releases MATH). That header-only LLK change only takes
+                    // effect on a JIT recompile -- editing an included LLK header does NOT bump this kernel's
+                    // JIT cache key, so this note also bumps the kernel source hash to force the rebuild.
                     MATH((llk_math_pack_sync_init()));
                     PACK((llk_pack_init(tilized_in0_cb_id)));
                     // A/B RESULT: disabling this moved the tilize fault EARLIER (t=4 -> t=1), so dest_init
