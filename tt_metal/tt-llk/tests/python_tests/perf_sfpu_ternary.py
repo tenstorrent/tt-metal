@@ -47,7 +47,7 @@ from helpers.test_variant_parameters import (
 _SCALAR_VALUE_BITS = struct.unpack("<I", struct.pack("<f", 2.0))[0]
 
 
-def _run(formats, mathop, dest_acc, loop_factor, iterations, input_dimensions):
+def _run(formats, math_op, dest_acc, loop_factor, iterations, input_dimensions):
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
     )
@@ -64,7 +64,7 @@ def _run(formats, mathop, dest_acc, loop_factor, iterations, input_dimensions):
         # kernel has no runtime-parameter reads. These sweep values are single-valued,
         # so making them templates does not expand the build matrix.
         templates=[
-            SFPU_TERNARY_OP(mathop),
+            SFPU_TERNARY_OP(math_op),
             SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
             APPROX_MODE(ApproximationMode.No),
             ITERATIONS(iterations),
@@ -106,126 +106,37 @@ def _run(formats, mathop, dest_acc, loop_factor, iterations, input_dimensions):
         DestAccumulation.Yes,
         DestAccumulation.No,
     ],
-    loop_factor=[16],
-    iterations=[32],
-    input_dimensions=[[128, 64]],  # tile_cnt: 8
-)
-def test_perf_sfpu_addcmul(
-    perf_report,
-    formats,
-    dest_acc,
-    loop_factor,
-    iterations,
-    input_dimensions,
-):
-    _run(
-        formats,
+    math_op=[
         MathOperation.SfpuAddcmul,
-        dest_acc,
-        loop_factor,
-        iterations,
-        input_dimensions,
-    ).run(perf_report)
-
-
-@pytest.mark.perf
-@parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float32,
-        ],
-        same=True,
-    ),
-    dest_acc=[
-        DestAccumulation.Yes,
-        DestAccumulation.No,
-    ],
-    loop_factor=[16],
-    iterations=[32],
-    input_dimensions=[[128, 64]],  # tile_cnt: 8
-)
-def test_perf_sfpu_addcdiv(
-    perf_report,
-    formats,
-    dest_acc,
-    loop_factor,
-    iterations,
-    input_dimensions,
-):
-    _run(
-        formats,
         MathOperation.SfpuAddcdiv,
-        dest_acc,
-        loop_factor,
-        iterations,
-        input_dimensions,
-    ).run(perf_report)
-
-
-@pytest.mark.perf
-@parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float32,
-        ],
-        same=True,
-    ),
-    dest_acc=[
-        DestAccumulation.Yes,
-        DestAccumulation.No,
-    ],
-    loop_factor=[16],
-    iterations=[32],
-    input_dimensions=[[128, 64]],  # tile_cnt: 8
-)
-def test_perf_sfpu_lerp(
-    perf_report,
-    formats,
-    dest_acc,
-    loop_factor,
-    iterations,
-    input_dimensions,
-):
-    _run(
-        formats,
         MathOperation.SfpuLerp,
-        dest_acc,
-        loop_factor,
-        iterations,
-        input_dimensions,
-    ).run(perf_report)
-
-
-@pytest.mark.perf
-@parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float32,
-        ],
-        same=True,
-    ),
-    dest_acc=[
-        DestAccumulation.Yes,
-        DestAccumulation.No,
+        MathOperation.SfpuSnakeBeta,
     ],
     loop_factor=[16],
     iterations=[32],
     input_dimensions=[[128, 64]],  # tile_cnt: 8
 )
-def test_perf_sfpu_snake_beta(
+def test_perf_sfpu_ternary(
     perf_report,
     formats,
     dest_acc,
+    math_op,
     loop_factor,
     iterations,
     input_dimensions,
 ):
+    # Mirrors test_sfpu_ternary.py: Float32+dest_acc=No is not a supported ternary path.
+    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
+        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+    if (
+        formats.input_format == DataFormat.Bfp8_b
+        and math_op != MathOperation.SfpuAddcmul
+    ):
+        pytest.skip("Bfp8_b is only supported for addcmul")
+
     _run(
         formats,
-        MathOperation.SfpuSnakeBeta,
+        math_op,
         dest_acc,
         loop_factor,
         iterations,

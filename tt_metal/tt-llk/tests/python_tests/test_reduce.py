@@ -68,6 +68,22 @@ def _reduce_to_one_for_format(formats):
     return [False, True]
 
 
+def _dest_acc_for_format(formats):
+    # Float32 golden uses full FP32 accumulation; match that in HW whenever we
+    # pack Float32 from sub-32-bit float inputs (e.g. Float16_b), otherwise
+    # HiFi column/reduce-to-one cases can drift below PCC thresholds.
+    if (
+        formats.input_format.is_32_bit()
+        or is_dest_acc_needed(formats)
+        or (
+            formats.output_format == DataFormat.Float32
+            and not formats.input_format.is_32_bit()
+        )
+    ):
+        return [DestAccumulation.Yes]
+    return [DestAccumulation.No]
+
+
 @parametrize(
     formats=input_output_formats(
         [
@@ -76,6 +92,7 @@ def _reduce_to_one_for_format(formats):
             DataFormat.Bfp8_b,
         ]
     ),
+    dest_acc=_dest_acc_for_format,
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type=[ReducePool.Max, ReducePool.Average, ReducePool.Sum],
     math_fidelity=_fidelities_for_format,
@@ -84,6 +101,7 @@ def _reduce_to_one_for_format(formats):
 )
 def test_reduce(
     formats,
+    dest_acc,
     reduce_dim,
     pool_type,
     math_fidelity,
@@ -136,22 +154,6 @@ def test_reduce(
         reduce_to_one=is_reduce_to_one,
         tile_shape=tile_shape,
         input_format=formats.input_format,
-    )
-
-    # Float32 golden uses full FP32 accumulation; match that in HW whenever we
-    # pack Float32 from sub-32-bit float inputs (e.g. Float16_b), otherwise
-    # HiFi column/reduce-to-one cases can drift below PCC thresholds.
-    dest_acc = (
-        DestAccumulation.Yes
-        if (
-            formats.input_format.is_32_bit()
-            or is_dest_acc_needed(formats)
-            or (
-                formats.output_format == DataFormat.Float32
-                and not formats.input_format.is_32_bit()
-            )
-        )
-        else DestAccumulation.No
     )
 
     output_tile_count = 1 if is_reduce_to_one else tile_cnt_A
@@ -260,9 +262,11 @@ def test_reduce(
     ],
     is_reduce_to_one=[False, True],
     tile_dimensions=[[32, 32]],
+    dest_acc=_dest_acc_for_format,
 )
 def test_reduce_bfp4_b(
     formats,
+    dest_acc,
     reduce_dim,
     pool_type,
     math_fidelity,
@@ -316,22 +320,6 @@ def test_reduce_bfp4_b(
         reduce_to_one=is_reduce_to_one,
         tile_shape=tile_shape,
         input_format=formats.input_format,
-    )
-
-    # Float32 golden uses full FP32 accumulation; match that in HW whenever we
-    # pack Float32 from sub-32-bit float inputs (e.g. Float16_b), otherwise
-    # HiFi column/reduce-to-one cases can drift below PCC thresholds.
-    dest_acc = (
-        DestAccumulation.Yes
-        if (
-            formats.input_format.is_32_bit()
-            or is_dest_acc_needed(formats)
-            or (
-                formats.output_format == DataFormat.Float32
-                and not formats.input_format.is_32_bit()
-            )
-        )
-        else DestAccumulation.No
     )
 
     output_tile_count = 1 if is_reduce_to_one else tile_cnt_A

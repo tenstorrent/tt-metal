@@ -15,8 +15,15 @@ from helpers.golden_generators import (
     BroadcastGolden,
     get_golden_generator,
 )
+from helpers.llk_params import (
+    ApproximationMode,
+)
 from helpers.llk_params import BroadcastType as LlkBroadcastType
-from helpers.llk_params import DestAccumulation, MathOperation, format_dict
+from helpers.llk_params import (
+    DestAccumulation,
+    MathOperation,
+    format_dict,
+)
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -48,7 +55,7 @@ from helpers.utils import passed_test
         LlkBroadcastType.Column,
         LlkBroadcastType.Scalar,
     ],
-    mathop=[
+    math_op=[
         MathOperation.SfpuElwadd,
         MathOperation.SfpuElwsub,
         MathOperation.SfpuElwmul,
@@ -61,12 +68,16 @@ from helpers.utils import passed_test
         # MathOperation.SfpuElwNe,
     ],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    approx_mode=[ApproximationMode.No],
+    input_dimensions=[[64, 32]],
 )
 def test_sfpu_binary_float(
     formats,
     dest_acc,
-    mathop,
+    math_op,
     bcast_dim,
+    approx_mode,
+    input_dimensions,
 ):
     if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
         pytest.skip("Float32 inputs with dest_acc=No are not supported")
@@ -93,7 +104,9 @@ def test_sfpu_binary_float(
     sfpu_binary(
         formats,
         dest_acc,
-        mathop,
+        math_op,
+        input_dimensions=input_dimensions,
+        approx_mode=approx_mode,
         broadcast_type=bcast_dim,
     )
 
@@ -139,7 +152,7 @@ def test_sfpu_binary_div(formats, dest_acc):
             DataFormat.Int32,
         ]
     ),
-    mathop=[
+    math_op=[
         MathOperation.SfpuElwadd,
         MathOperation.SfpuElwRightShift,
         MathOperation.SfpuElwLeftShift,
@@ -149,17 +162,23 @@ def test_sfpu_binary_div(formats, dest_acc):
         MathOperation.SfpuElwLe,
         MathOperation.SfpuElwGe,
     ],
+    approx_mode=[ApproximationMode.No],
     dest_acc=[DestAccumulation.Yes],
+    input_dimensions=[[64, 32]],
 )
 def test_sfpu_binary_int(
     formats,
     dest_acc,
-    mathop,
+    math_op,
+    approx_mode,
+    input_dimensions,
 ):
     sfpu_binary(
         formats,
         dest_acc,
-        mathop,
+        math_op,
+        input_dimensions=input_dimensions,
+        approx_mode=approx_mode,
     )
 
 
@@ -355,16 +374,19 @@ def test_sfpu_binary_int_shift_int32_min_unsupported(
         ],
         same=True,
     ),
-    mathop=[MathOperation.SfpuAddTopRow],
+    math_op=[MathOperation.SfpuAddTopRow],
+    approx_mode=[ApproximationMode.No],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_dimensions=[[64, 32]],
 )
-def test_sfpu_binary_add_top_row(formats, dest_acc, mathop):
+def test_sfpu_binary_add_top_row(
+    formats, dest_acc, math_op, approx_mode, input_dimensions
+):
     if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
         pytest.skip(
             "32-bit integer formats require DestAccumulation.Yes (HW cannot unpack into SrcA/SrcB)"
         )
 
-    input_dimensions = [64, 32]
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
@@ -374,7 +396,7 @@ def test_sfpu_binary_add_top_row(formats, dest_acc, mathop):
 
     generate_golden = get_golden_generator(BinarySFPUGolden)
     golden_tensor = generate_golden(
-        mathop,
+        math_op,
         src_A,
         0,
         1,
@@ -395,8 +417,8 @@ def test_sfpu_binary_add_top_row(formats, dest_acc, mathop):
         formats,
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
-            MATH_OP(mathop=mathop),
-            APPROX_MODE(),
+            MATH_OP(mathop=math_op),
+            APPROX_MODE(approx_mode),
             BROADCAST_TYPE(LlkBroadcastType.None_),
         ],
         runtimes=[TILE_COUNT(tile_cnt_A)],
@@ -433,12 +455,11 @@ def sfpu_binary(
     formats,
     dest_acc,
     mathop,
+    input_dimensions,
+    approx_mode=ApproximationMode.No,
     broadcast_type=None,
     src_A_override=None,
 ):
-
-    input_dimensions = [64, 32]
-
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
@@ -497,7 +518,7 @@ def sfpu_binary(
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
             MATH_OP(mathop=mathop),
-            APPROX_MODE(),
+            APPROX_MODE(approx_mode),
             BROADCAST_TYPE(bcast),
         ],
         runtimes=[TILE_COUNT(tile_cnt_A)],

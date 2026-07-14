@@ -30,14 +30,25 @@ from helpers.test_variant_parameters import (
         same=True,
     ),
     dest_acc=[DestAccumulation.Yes],
-    mathop=[MathOperation.ReduceRow],
+    math_op=[MathOperation.ReduceRow],
     reduce_pool=[ReducePool.Max],
+    input_bounds=[[-1000, 1000]],
+    dimension_combinations=[[32, 32]],
+    reduced_extent=[32],
     loop_factor=list(range(10, 201, 10)),
 )
-def test_perf_sfpu_reduce_row_max(
-    perf_report, formats, dest_acc, mathop, reduce_pool, loop_factor
+def test_perf_sfpu_reduce(
+    perf_report,
+    formats,
+    dest_acc,
+    math_op,
+    reduce_pool,
+    input_bounds,
+    dimension_combinations,
+    reduced_extent,
+    loop_factor,
 ):
-    input_dimensions = [32, 32]
+    input_dimensions = dimension_combinations
     tile_count = 1
 
     configuration = PerfConfig(
@@ -47,7 +58,7 @@ def test_perf_sfpu_reduce_row_max(
             PerfRunType.MATH_ISOLATE,
         ],
         templates=[
-            MATH_OP(mathop=mathop, pool_type=reduce_pool),
+            MATH_OP(mathop=math_op, pool_type=reduce_pool),
             APPROX_MODE(ApproximationMode.No),
             generate_input_dim(input_dimensions, input_dimensions),
         ],

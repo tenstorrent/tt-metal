@@ -9,9 +9,25 @@ from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
+    NUM_FACES,
     TILE_COUNT,
     generate_input_dim,
 )
+from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
+
+# Element-space geometries: every rt x ct grid of 32x32 tiles. The tile count is
+# derived from input_dimensions in the body, so there is a single geometry axis
+# (input_dimensions) rather than a separate tile-grid axis.
+_UNPACK_TILIZE_FLOAT_INPUT_DIMENSIONS = [
+    [rt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM]
+    for rt in range(1, 9)
+    for ct in range(1, 9)
+]
+_UNPACK_TILIZE_INT_INPUT_DIMENSIONS = [
+    [rt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM]
+    for rt in range(1, 3)
+    for ct in range(1, 3)
+]
 
 
 @pytest.mark.perf
@@ -24,14 +40,14 @@ from helpers.test_variant_parameters import (
             DataFormat.Bfp8_b,
         ]
     ),
-    rt_dim=[1, 2, 3, 4, 5, 6, 7, 8],
-    ct_dim=[1, 2, 3, 4, 5, 6, 7, 8],
+    num_faces=[4],
+    input_dimensions=_UNPACK_TILIZE_FLOAT_INPUT_DIMENSIONS,
 )
 def test_perf_unpack_tilize_float(
     perf_report,
     formats,
-    rt_dim,
-    ct_dim,
+    num_faces,
+    input_dimensions,
 ):
     if formats.input_format == DataFormat.Bfp8_b:
         pytest.skip("Bfp8_b input not supported for unpack_tilize")
@@ -39,39 +55,44 @@ def test_perf_unpack_tilize_float(
     _perf_unpack_tilize(
         perf_report,
         formats,
-        rt_dim,
-        ct_dim,
+        num_faces,
+        input_dimensions,
     )
 
 
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats([DataFormat.Int32]),
-    rt_dim=[1, 2],
-    ct_dim=[1, 2],
+    num_faces=[4],
+    input_dimensions=_UNPACK_TILIZE_INT_INPUT_DIMENSIONS,
 )
 def test_perf_unpack_tilize_int(
     perf_report,
     formats,
-    rt_dim,
-    ct_dim,
+    num_faces,
+    input_dimensions,
 ):
     _perf_unpack_tilize(
         perf_report,
         formats,
-        rt_dim,
-        ct_dim,
+        num_faces,
+        input_dimensions,
     )
 
 
 def _perf_unpack_tilize(
     perf_report,
     formats,
-    rt_dim,
-    ct_dim,
+    num_faces,
+    input_dimensions,
 ):
-    tile_count = rt_dim * ct_dim
-    dimensions = [rt_dim * 32, ct_dim * 32]
+    assert (
+        input_dimensions[0] % DEFAULT_TILE_R_DIM == 0
+        and input_dimensions[1] % DEFAULT_TILE_C_DIM == 0
+    ), f"input_dimensions {input_dimensions} must be a whole number of 32x32 tiles"
+    tile_count = (input_dimensions[0] // DEFAULT_TILE_R_DIM) * (
+        input_dimensions[1] // DEFAULT_TILE_C_DIM
+    )
 
     configuration = PerfConfig(
         "sources/unpack_tilize_perf.cpp",
@@ -82,9 +103,12 @@ def _perf_unpack_tilize(
             PerfRunType.PACK_ISOLATE,
             PerfRunType.L1_CONGESTION,
         ],
-        templates=[],
+        templates=[
+            # Single-option axis -> compile-time template (also SPEED_OF_LIGHT-safe).
+            NUM_FACES(num_faces),
+        ],
         runtimes=[
-            generate_input_dim(dimensions, dimensions),
+            generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_count),
             LOOP_FACTOR(4),
         ],

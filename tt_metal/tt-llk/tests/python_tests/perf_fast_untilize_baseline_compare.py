@@ -4,20 +4,21 @@
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole
 from fast_untilize_common import (
-    FAST_UNTILIZE_CT_DIMS,
-    FAST_UNTILIZE_RT_DIMS,
+    FAST_UNTILIZE_DIMS,
     FAST_UNTILIZE_TILE_C,
     FAST_UNTILIZE_TILE_R,
     fast_untilize_dest_acc_modes,
     fast_untilize_formats,
 )
-from helpers.llk_params import DestAccumulation, PerfRunType
+from helpers.llk_params import DestAccumulation, DestSync, PerfRunType
 from helpers.param_config import parametrize
 from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
+    DEST_SYNC,
     LOOP_FACTOR,
     TILE_COUNT,
+    TILE_DST_CT_OFFSET,
     generate_input_dim,
 )
 
@@ -36,15 +37,22 @@ def baseline_pack_untilize_block_ct_dim(ct_dim, dest_acc):
 @parametrize(
     formats=fast_untilize_formats(),
     dest_acc=fast_untilize_dest_acc_modes,
-    rt_dim=FAST_UNTILIZE_RT_DIMS,
-    ct_dim=FAST_UNTILIZE_CT_DIMS,
+    dimensions=FAST_UNTILIZE_DIMS,
     loop_factor=[1, 4, 16],
 )
 def test_perf_fast_untilize_baseline_compare(
-    perf_report, formats, dest_acc, rt_dim, ct_dim, loop_factor
+    perf_report, formats, dest_acc, dimensions, loop_factor
 ):
+    """Pack-untilize baseline on the same geometry/formats as test_fast_untilize."""
+    input_height_tiles, input_width_tiles = dimensions
+    if input_width_tiles < 2:
+        pytest.skip(
+            "BH fast_untilize supports ct>=2; ct=1 uses the standard fallback path"
+        )
+
+    rt_dim, ct_dim = input_height_tiles, input_width_tiles
     tile_count = rt_dim * ct_dim
-    dimensions = (rt_dim * FAST_UNTILIZE_TILE_R, ct_dim * FAST_UNTILIZE_TILE_C)
+    pixel_dimensions = (rt_dim * FAST_UNTILIZE_TILE_R, ct_dim * FAST_UNTILIZE_TILE_C)
     block_ct_dim = baseline_pack_untilize_block_ct_dim(ct_dim, dest_acc)
 
     configuration = PerfConfig(
@@ -54,7 +62,11 @@ def test_perf_fast_untilize_baseline_compare(
             PerfRunType.L1_TO_L1,
             PerfRunType.PACK_ISOLATE,
         ],
-        templates=[generate_input_dim(dimensions, dimensions, block_ct_dim)],
+        templates=[
+            generate_input_dim(pixel_dimensions, pixel_dimensions, block_ct_dim),
+            DEST_SYNC(DestSync.Half),
+            TILE_DST_CT_OFFSET(0),
+        ],
         runtimes=[
             TILE_COUNT(tile_count),
             LOOP_FACTOR(loop_factor),

@@ -22,6 +22,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     TILIZE,
 )
+from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 
 
 def get_valid_tilize_datacopy(formats):
@@ -76,6 +77,12 @@ def get_valid_num_faces_datacopy(tilize):
     num_faces=4,
     tilize=[Tilize.No],
     dest_index=0,
+    input_dimensions=lambda num_blocks, num_tiles_in_block: [
+        [
+            DEFAULT_TILE_R_DIM,
+            num_blocks * num_tiles_in_block * DEFAULT_TILE_C_DIM,
+        ]
+    ],
     num_blocks=[1, 2],
     num_tiles_in_block=[4, 8],
     loop_factor=[1, 16, 64],
@@ -88,6 +95,7 @@ def test_perf_pack_dest_bank(
     num_faces,
     tilize,
     dest_index,
+    input_dimensions,
     num_blocks,
     num_tiles_in_block,
     loop_factor,
@@ -98,6 +106,10 @@ def test_perf_pack_dest_bank(
         )
 
     tile_cnt = num_blocks * num_tiles_in_block
+    assert input_dimensions == [
+        DEFAULT_TILE_R_DIM,
+        tile_cnt * DEFAULT_TILE_C_DIM,
+    ]
 
     src_A = torch.ones(tile_cnt * 1024, dtype=torch.bfloat16)
 

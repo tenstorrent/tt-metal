@@ -55,7 +55,7 @@ def matmul_combos(
 
 @pytest.mark.perf
 @parametrize(
-    combos=matmul_combos(
+    format_dest_acc_and_dims=matmul_combos(
         formats=input_output_formats(
             [
                 DataFormat.Float16_b,
@@ -75,11 +75,11 @@ def matmul_combos(
 )
 def test_perf_matmul(
     perf_report,
-    combos,
+    format_dest_acc_and_dims,
     math_fidelity,
 ):
 
-    formats, dest_acc, (matrix_a, matrix_b) = combos
+    formats, dest_acc, (matrix_a, matrix_b) = format_dest_acc_and_dims
 
     if is_dest_acc_needed(formats) and dest_acc == DestAccumulation.No:
         pytest.skip("Dest accumulation must be enabled for this format")

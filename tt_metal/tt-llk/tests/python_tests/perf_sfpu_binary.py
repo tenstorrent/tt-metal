@@ -7,6 +7,7 @@ from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
+    BroadcastType,
     DestAccumulation,
     MathOperation,
     PerfRunType,
@@ -48,7 +49,7 @@ def get_dest_accum_modes(formats):
         ApproximationMode.Yes,
         ApproximationMode.No,
     ],
-    mathop=[
+    math_op=[
         MathOperation.SfpuElwadd,
         MathOperation.SfpuElwsub,
         MathOperation.SfpuElwmul,
@@ -56,6 +57,7 @@ def get_dest_accum_modes(formats):
         MathOperation.SfpuElwrsub,
         MathOperation.SfpuElwpow,
     ],
+    bcast_dim=[BroadcastType.None_],
     dest_acc=[
         DestAccumulation.Yes,
         DestAccumulation.No,
@@ -70,11 +72,12 @@ def get_dest_accum_modes(formats):
         [128, 64],  # tile_cnt: 8
     ],  # Specifying different input sizes to cover different tile counts
 )
-def test_perf_eltwise_binary_sfpu_float(
+def test_perf_sfpu_binary_float(
     perf_report,
     formats,
-    mathop,
+    math_op,
     approx_mode,
+    bcast_dim,
     dest_acc,
     loop_factor,
     iterations,
@@ -99,7 +102,7 @@ def test_perf_eltwise_binary_sfpu_float(
             PerfRunType.L1_CONGESTION,
         ],
         templates=[
-            MATH_OP(mathop=mathop),
+            MATH_OP(mathop=math_op),
             APPROX_MODE(approx_mode),
             ITERATIONS(iterations),
         ],
@@ -138,7 +141,7 @@ def test_perf_eltwise_binary_sfpu_float(
         ApproximationMode.Yes,
         ApproximationMode.No,
     ],
-    mathop=[
+    math_op=[
         MathOperation.SfpuElwRightShift,
         MathOperation.SfpuElwLeftShift,
         MathOperation.SfpuElwLogicalRightShift,
@@ -155,10 +158,10 @@ def test_perf_eltwise_binary_sfpu_float(
         [128, 64],  # tile_cnt: 8
     ],
 )
-def test_perf_eltwise_binary_sfpu_int(
+def test_perf_sfpu_binary_int(
     perf_report,
     formats,
-    mathop,
+    math_op,
     approx_mode,
     dest_acc,
     loop_factor,
@@ -184,7 +187,7 @@ def test_perf_eltwise_binary_sfpu_int(
             PerfRunType.L1_CONGESTION,
         ],
         templates=[
-            MATH_OP(mathop=mathop),
+            MATH_OP(mathop=math_op),
             APPROX_MODE(approx_mode),
             ITERATIONS(iterations),
         ],
@@ -226,7 +229,7 @@ def test_perf_eltwise_binary_sfpu_int(
         ApproximationMode.Yes,
         ApproximationMode.No,
     ],
-    mathop=[
+    math_op=[
         MathOperation.SfpuAddTopRow,
     ],
     dest_acc=lambda formats: get_dest_accum_modes(formats),
@@ -240,10 +243,10 @@ def test_perf_eltwise_binary_sfpu_int(
         [128, 64],  # tile_cnt: 8
     ],
 )
-def test_perf_eltwise_binary_sfpu_add_top_row(
+def test_perf_sfpu_binary_add_top_row(
     perf_report,
     formats,
-    mathop,
+    math_op,
     approx_mode,
     dest_acc,
     loop_factor,
@@ -280,7 +283,7 @@ def test_perf_eltwise_binary_sfpu_add_top_row(
             PerfRunType.L1_CONGESTION,
         ],
         templates=[
-            MATH_OP(mathop=mathop),
+            MATH_OP(mathop=math_op),
             APPROX_MODE(approx_mode),
             ITERATIONS(iterations),
         ],

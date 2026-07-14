@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-
 import pytest
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
@@ -46,7 +45,7 @@ _INT32_UNARY_OPS = [
 ]
 
 
-def _run_math_isolate(formats, mathop, input_dimensions):
+def _run_math_isolate(formats, math_op, approx_mode, fast_mode, input_dimensions):
     tile_count_A, tile_count_B, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
     )
@@ -57,10 +56,10 @@ def _run_math_isolate(formats, mathop, input_dimensions):
         formats,
         run_types=[PerfRunType.MATH_ISOLATE],
         templates=[
-            MATH_OP(mathop=mathop),
-            APPROX_MODE(ApproximationMode.No),
+            MATH_OP(mathop=math_op),
+            APPROX_MODE(approx_mode),
             ITERATIONS(32),
-            FAST_MODE(FastMode.No),
+            FAST_MODE(fast_mode),
             STABLE_SORT(StableSort.No),
         ],
         runtimes=[
@@ -88,8 +87,19 @@ def _run_math_isolate(formats, mathop, input_dimensions):
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats([DataFormat.Int32], same=True),
-    mathop=_INT32_UNARY_OPS,
+    approx_mode=[ApproximationMode.No],
+    math_op=_INT32_UNARY_OPS,
+    fast_mode=[FastMode.No],
     input_dimensions=[[128, 64]],
 )
-def test_perf_eltwise_unary_sfpu_int32(perf_report, formats, mathop, input_dimensions):
-    _run_math_isolate(formats, mathop, input_dimensions).run(perf_report)
+def test_perf_eltwise_unary_sfpu_int(
+    perf_report,
+    formats,
+    approx_mode,
+    math_op,
+    fast_mode,
+    input_dimensions,
+):
+    _run_math_isolate(formats, math_op, approx_mode, fast_mode, input_dimensions).run(
+        perf_report
+    )

@@ -41,10 +41,12 @@ from helpers.utils import passed_test
         ]
     ),
     num_faces=[2, 4],
+    input_dimensions=[[64, 64]],
 )
 def test_unpack_tilize_float(
     formats,
     num_faces,
+    input_dimensions,
 ):
     if (
         formats.input_format == DataFormat.Fp8_e4m3
@@ -60,7 +62,11 @@ def test_unpack_tilize_float(
     if formats.output_format == DataFormat.Bfp8_b and num_faces != FACES_PER_TILE:
         pytest.skip("Bfp8_b output format only works with num_faces=4")
 
-    unpack_tilize(formats, num_faces=num_faces)
+    unpack_tilize(
+        formats,
+        num_faces=num_faces,
+        input_dimensions=input_dimensions,
+    )
 
 
 @parametrize(
@@ -85,12 +91,19 @@ def test_unpack_tilize_float32_lossless(
 @parametrize(
     formats=input_output_formats([DataFormat.Int32]),
     num_faces=[2, 4],
+    input_dimensions=[[64, 64]],
 )
 def test_unpack_tilize_int(
     formats,
     num_faces,
+    input_dimensions,
 ):
-    unpack_tilize(formats, unpack_to_dest=True, num_faces=num_faces)
+    unpack_tilize(
+        formats,
+        unpack_to_dest=True,
+        num_faces=num_faces,
+        input_dimensions=input_dimensions,
+    )
 
 
 @parametrize(
@@ -115,8 +128,10 @@ def unpack_tilize(
     validate_lossless=False,
     dest_acc=None,
     num_faces=4,
+    input_dimensions=None,
 ):
-    input_dimensions = [64, 64]
+    if input_dimensions is None:
+        input_dimensions = [64, 64]
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,

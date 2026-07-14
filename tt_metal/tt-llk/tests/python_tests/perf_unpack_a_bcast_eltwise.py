@@ -37,7 +37,7 @@ from helpers.test_variant_parameters import (
         [64, 128],
     ],
 )
-def test_perf_col_tile_sdpa(
+def test_perf_unp_bcast_sub_sdpa(
     perf_report,
     formats,
     mathop,

@@ -20,6 +20,7 @@ from helpers.llk_params import (
     DestAccumulation,
     FastMode,
     MathOperation,
+    StableSort,
     format_dict,
 )
 from helpers.param_config import (
@@ -38,6 +39,7 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
+    STABLE_SORT,
     TILE_COUNT,
     DestSync,
     generate_input_dim,
@@ -161,22 +163,27 @@ FLOAT_TEST_PARAMS = list(
 @skip_for_coverage
 @pytest.mark.nightly
 @pytest.mark.parametrize(
-    "formats,approx_mode,mathop,fast_mode,dest_acc",
+    "formats,approx_mode,math_op,fast_mode,dest_acc",
     FLOAT_TEST_PARAMS,
 )
 @pytest.mark.parametrize(
     "input_dimensions",
     [[64, 64], [128, 256]],
 )
+@pytest.mark.parametrize(
+    "stable_sort",
+    [StableSort.No],
+)
 def test_eltwise_unary_sfpu_float(
     formats: list[InputOutputFormat],
     approx_mode: ApproximationMode,
-    mathop: MathOperation,
+    math_op: MathOperation,
     fast_mode: FastMode,
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
+    stable_sort: StableSort,
 ):
-    if TestConfig.WITH_COVERAGE and mathop in [
+    if TestConfig.WITH_COVERAGE and math_op in [
         MathOperation.Acosh,
         MathOperation.Log,
         MathOperation.Log1p,
@@ -200,13 +207,13 @@ def test_eltwise_unary_sfpu_float(
             reason="When these SFPU ops get compiled with coverage, `#pragma GCC unroll X` marked loops get compiled to invalid assembly"
         )
 
-    if mathop == MathOperation.ReluMin:
+    if math_op == MathOperation.ReluMin:
         pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1120")
 
-    if mathop == MathOperation.Tanh and approx_mode == ApproximationMode.Yes:
+    if math_op == MathOperation.Tanh and approx_mode == ApproximationMode.Yes:
         pytest.skip(reason="Metal tanh does not support approximation mode")
 
-    if TestConfig.WITH_COVERAGE and mathop == MathOperation.Gelu:
+    if TestConfig.WITH_COVERAGE and math_op == MathOperation.Gelu:
         # Issue link: https://github.com/tenstorrent/tt-llk/issues/883
         pytest.skip(
             reason="Compilation error when this mathop gets compiled with coverage"
@@ -223,7 +230,7 @@ def test_eltwise_unary_sfpu_float(
 
     if (
         approx_mode == ApproximationMode.Yes
-        and mathop in [MathOperation.Exp, MathOperation.Exp2, MathOperation.Elu]
+        and math_op in [MathOperation.Exp, MathOperation.Exp2, MathOperation.Elu]
         and (
             formats.input_format == DataFormat.Bfp8_b
             or formats.output_format == DataFormat.Bfp8_b
@@ -238,9 +245,10 @@ def test_eltwise_unary_sfpu_float(
         formats,
         dest_acc,
         approx_mode,
-        mathop,
+        math_op,
         fast_mode,
         input_dimensions,
+        stable_sort=stable_sort,
     )
 
 
@@ -357,7 +365,7 @@ def test_eltwise_unary_sfpu_float_bfp4_b(
 @parametrize(
     formats=input_output_formats([DataFormat.Int32]),
     approx_mode=[ApproximationMode.No, ApproximationMode.Yes],
-    mathop=[
+    math_op=[
         MathOperation.Neg,
         MathOperation.Fill,
     ],
@@ -368,7 +376,7 @@ def test_eltwise_unary_sfpu_float_bfp4_b(
 def test_eltwise_unary_sfpu_int(
     formats: list[InputOutputFormat],
     approx_mode: ApproximationMode,
-    mathop: MathOperation,
+    math_op: MathOperation,
     fast_mode: FastMode,
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
@@ -381,7 +389,7 @@ def test_eltwise_unary_sfpu_int(
         formats,
         dest_acc,
         approx_mode,
-        mathop,
+        math_op,
         fast_mode,
         input_dimensions,
     )
@@ -494,6 +502,7 @@ def eltwise_unary_sfpu(
     fast_mode: FastMode,
     input_dimensions: list[int],
     spec_A=None,
+    stable_sort: StableSort = StableSort.No,
 ):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
@@ -532,6 +541,7 @@ def eltwise_unary_sfpu(
             generate_input_dim(input_dimensions, input_dimensions),
             APPROX_MODE(approx_mode),
             FAST_MODE(fast_mode),
+            STABLE_SORT(stable_sort),
             CLAMP_NEGATIVE(True),
             MATH_OP(mathop=mathop),
         ],
@@ -621,6 +631,7 @@ def test_exponential_clamp_negative(clamp_negative: bool):
             generate_input_dim(input_dimensions, input_dimensions),
             APPROX_MODE(ApproximationMode.Yes),
             FAST_MODE(FastMode.Yes),
+            STABLE_SORT(StableSort.No),
             CLAMP_NEGATIVE(clamp_negative),
             MATH_OP(mathop=MathOperation.Exp),
         ],

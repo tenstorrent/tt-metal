@@ -8,45 +8,61 @@ from helpers.constraints import (
 )
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
+    BroadcastType,
     MathFidelity,
     MathOperation,
     PerfRunType,
+    Transpose,
 )
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
+    BROADCAST_TYPE,
     MATH_FIDELITY,
     MATH_OP,
     TILE_COUNT,
+    UNPACK_TRANS_FACES,
+    UNPACK_TRANS_WITHIN_FACE,
 )
 
 
 @pytest.mark.perf
 @parametrize(
+    cpp_source=["sources/eltwise_binary_fpu_perf.cpp"],
     formats=input_output_formats(
         [DataFormat.Bfp8_b, DataFormat.Float16, DataFormat.Float16_b]
     ),
-    mathop=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
-    tile_count=16,
-    math_fidelity=lambda formats, mathop: get_valid_math_fidelities(
-        formats, mathop, PERF_RUN=True
+    math_op=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
+    broadcast_type=[BroadcastType.None_],
+    transpose_srca=[Transpose.No],
+    input_dimensions=[[512, 32]],
+    tile_dimensions=[[32, 32]],
+    math_fidelity=lambda formats, math_op: get_valid_math_fidelities(
+        formats, math_op, PERF_RUN=True
     ),
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
 )
-def test_perf_eltwise_binary_fpu(
+def test_perf_eltwise_binary(
     perf_report,
+    cpp_source,
     formats,
-    mathop,
-    tile_count,
+    math_op,
+    broadcast_type,
+    transpose_srca,
+    input_dimensions,
+    tile_dimensions,
     math_fidelity,
     dest_acc,
 ):
-    if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
+    if math_op != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
         pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
 
+    tile_rows, tile_cols = tile_dimensions
+    tile_count = (input_dimensions[0] // tile_rows) * (input_dimensions[1] // tile_cols)
+
     configuration = PerfConfig(
-        "sources/eltwise_binary_fpu_perf.cpp",
+        cpp_source,
         formats,
         run_types=[
             PerfRunType.L1_TO_L1,
@@ -55,7 +71,14 @@ def test_perf_eltwise_binary_fpu(
             PerfRunType.PACK_ISOLATE,
             PerfRunType.L1_CONGESTION,
         ],
-        templates=[MATH_FIDELITY(math_fidelity), MATH_OP(mathop=mathop)],
+        templates=[
+            BROADCAST_TYPE(broadcast_type),
+            MATH_FIDELITY(math_fidelity),
+            MATH_OP(mathop=math_op),
+            # Single-option axes -> compile-time templates (also SPEED_OF_LIGHT-safe).
+            UNPACK_TRANS_FACES(transpose_srca),
+            UNPACK_TRANS_WITHIN_FACE(transpose_srca),
+        ],
         runtimes=[TILE_COUNT(tile_count)],
         variant_stimuli=StimuliConfig(
             None,

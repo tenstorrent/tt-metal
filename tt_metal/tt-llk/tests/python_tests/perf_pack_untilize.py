@@ -4,6 +4,8 @@
 import pytest
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
+    DestAccumulation,
+    DestSync,
     PerfRunType,
 )
 from helpers.param_config import (
@@ -13,10 +15,19 @@ from helpers.param_config import (
 from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
+    DEST_SYNC,
     LOOP_FACTOR,
     TILE_COUNT,
+    TILE_DST_CT_OFFSET,
     generate_input_dim,
 )
+from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
+
+_PACK_UNTILIZE_INPUT_DIMENSIONS = [
+    [rt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM]
+    for rt in range(1, 9)
+    for ct in range(1, 9)
+]
 
 
 @pytest.mark.perf
@@ -30,14 +41,18 @@ from helpers.test_variant_parameters import (
             DataFormat.Bfp8_b,
         ]
     ),
-    full_rt_dim=[1, 2, 3, 4, 5, 6, 7, 8],
-    full_ct_dim=[1, 2, 3, 4, 5, 6, 7, 8],
+    dest_acc=[DestAccumulation.No],
+    input_dimensions=_PACK_UNTILIZE_INPUT_DIMENSIONS,
+    dest_sync=[DestSync.Half],
+    tile_dst_ct_offset=[0],  # Non-zero offsets are tracked in #1449
 )
 def test_perf_pack_untilize(
     perf_report,
     formats,
-    full_rt_dim,
-    full_ct_dim,
+    dest_acc,
+    input_dimensions,
+    dest_sync,
+    tile_dst_ct_offset,
 ):
     if formats.output_format == DataFormat.Bfp8_b:
         pytest.skip("Pack Untilize does not support Bfp8_b output")
@@ -46,6 +61,9 @@ def test_perf_pack_untilize(
         formats.output_format == DataFormat.Int32
     ):
         pytest.skip("Pack Untilize does not support mixing Int32 with other formats")
+
+    full_rt_dim = input_dimensions[0] // DEFAULT_TILE_R_DIM
+    full_ct_dim = input_dimensions[1] // DEFAULT_TILE_C_DIM
 
     max_block_dim = 4 if formats.input_format.is_32_bit() else 8
 
@@ -64,7 +82,6 @@ def test_perf_pack_untilize(
             break
 
     tile_count = full_rt_dim * full_ct_dim
-    dimensions = [full_rt_dim * 32, full_ct_dim * 32]
 
     configuration = PerfConfig(
         "sources/pack_untilize_perf.cpp",
@@ -74,7 +91,11 @@ def test_perf_pack_untilize(
             PerfRunType.PACK_ISOLATE,
             PerfRunType.L1_CONGESTION,
         ],
-        templates=[generate_input_dim(dimensions, dimensions, block_ct_dim)],
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions, block_ct_dim),
+            DEST_SYNC(dest_sync),
+            TILE_DST_CT_OFFSET(tile_dst_ct_offset),
+        ],
         runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR()],
         variant_stimuli=StimuliConfig(
             None,
@@ -87,6 +108,7 @@ def test_perf_pack_untilize(
             tile_count_res=tile_count,
         ),
         unpack_to_dest=formats.input_format.is_32_bit(),
+        dest_acc=dest_acc,
     )
 
     configuration.run(perf_report)

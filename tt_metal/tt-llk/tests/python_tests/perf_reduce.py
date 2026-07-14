@@ -5,6 +5,7 @@ import pytest
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     DestAccumulation,
+    MathFidelity,
     MathOperation,
     PerfRunType,
     ReduceDimension,
@@ -17,6 +18,7 @@ from helpers.param_config import (
 from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
+    MATH_FIDELITY,
     MATH_OP,
     REDUCE_POOL_TYPE,
     TILE_COUNT,
@@ -42,6 +44,8 @@ REDUCE_MATHOP = {
     dest_acc=[DestAccumulation.No],
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type=[ReducePool.Max, ReducePool.Average, ReducePool.Sum],
+    math_fidelity=[MathFidelity.HiFi4],
+    is_reduce_to_one=[False],
 )
 def test_perf_reduce(
     perf_report,
@@ -49,7 +53,13 @@ def test_perf_reduce(
     dest_acc,
     reduce_dim,
     pool_type,
+    math_fidelity,
+    is_reduce_to_one,
 ):
+    # Perf covers only the non-reduce-to-one path; reduce_perf.cpp derives its
+    # behavior from REDUCE_DIM and never consumes an IS_REDUCE_TO_ONE flag, so
+    # there is no runtime to wire here (passing REDUCE_TO_ONE would be a no-op).
+    assert is_reduce_to_one is False
 
     tile_count = 16
     configuration = PerfConfig(
@@ -65,6 +75,7 @@ def test_perf_reduce(
         templates=[
             MATH_OP(mathop=REDUCE_MATHOP[reduce_dim]),
             REDUCE_POOL_TYPE(pool_type),
+            MATH_FIDELITY(math_fidelity),
         ],
         runtimes=[TILE_COUNT(tile_count)],
         variant_stimuli=StimuliConfig(

@@ -67,6 +67,35 @@ def get_valid_num_faces_datacopy(tilize):
     return [1, 2, 4]
 
 
+def _pack_dest_bank_block_config(formats, dest_acc, tilize, input_dimensions):
+    return get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        (
+            BlocksCalculationAlgorithm.Standard
+            if tilize == Tilize.No
+            else BlocksCalculationAlgorithm.Tilize
+        ),
+    )
+
+
+def _pack_dest_bank_num_blocks(formats, dest_acc, tilize, input_dimensions):
+    num_blocks, _ = _pack_dest_bank_block_config(
+        formats, dest_acc, tilize, input_dimensions
+    )
+    return [num_blocks]
+
+
+def _pack_dest_bank_num_tiles_in_block(formats, dest_acc, tilize, input_dimensions):
+    _, num_tiles_in_block = _pack_dest_bank_block_config(
+        formats, dest_acc, tilize, input_dimensions
+    )
+    return [num_tiles_in_block]
+
+
 @parametrize(
     formats=input_output_formats(
         [
@@ -82,9 +111,19 @@ def get_valid_num_faces_datacopy(tilize):
     tilize=[Tilize.No],
     dest_index=0,
     input_dimensions=[[32, 32], [32, 64], [128, 32], [128, 64], [128, 256]],
+    num_blocks=_pack_dest_bank_num_blocks,
+    num_tiles_in_block=_pack_dest_bank_num_tiles_in_block,
 )
 def test_pack_dest_bank(
-    formats, dest_acc, l1_acc, num_faces, tilize, dest_index, input_dimensions
+    formats,
+    dest_acc,
+    l1_acc,
+    num_faces,
+    tilize,
+    dest_index,
+    input_dimensions,
+    num_blocks,
+    num_tiles_in_block,
 ):
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -101,19 +140,6 @@ def test_pack_dest_bank(
         False
         if tilize == Tilize.Yes and formats.input_format == DataFormat.Float32
         else formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
-
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        (
-            BlocksCalculationAlgorithm.Standard
-            if tilize == Tilize.No
-            else BlocksCalculationAlgorithm.Tilize
-        ),
     )
 
     configuration = TestConfig(

@@ -31,7 +31,7 @@ from helpers.utils import passed_test
         same=True,
     ),
     dest_acc=[DestAccumulation.No],
-    mathop=[MathOperation.ReduceColumn],
+    math_op=[MathOperation.ReduceColumn],
     reduce_pool=[ReducePool.Max],  # Only MAX is supported for SDPA reduce
     input_dimensions=[
         [128, 64],  # 4x2 subblock
@@ -40,7 +40,7 @@ from helpers.utils import passed_test
 def test_sfpu_reduce_sdpa(
     formats,
     dest_acc,
-    mathop,
+    math_op,
     reduce_pool,
     input_dimensions,
 ):
@@ -74,7 +74,7 @@ def test_sfpu_reduce_sdpa(
         formats,
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
-            MATH_OP(mathop=mathop, pool_type=reduce_pool),
+            MATH_OP(mathop=math_op, pool_type=reduce_pool),
         ],
         runtimes=[TILE_COUNT(tile_cnt_A)],
         variant_stimuli=StimuliConfig(
