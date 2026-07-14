@@ -99,7 +99,8 @@ raw `facts.<arch>.jsonl` inspection (L4's writes ARE emitted, just unrouted).
 - **Risk:** CAP-REDUCTION — a silent miss (no fact, no finding).
 - **Live today:** QSR-only recall ASYMMETRY, not a live race. QSR `ckernel_template::program` /
   `program_bank0_sw_cntl` / `program_bank1_sw_cntl` program the MOP via
-  `reinterpret_cast<mop_config_regs_t*>(MOP_CFG_BASE); mop_cfg->FIELD = …` (32 member-write sites) —
+  `reinterpret_cast<mop_config_regs_t*>(MOP_CFG_BASE); mop_cfg->FIELD = …` (30 active member-write sites;
+  2 further `mop_cfg->` lines are commented-out dead code) —
   all dropped. (`ckernel_unpack_template::program` uses the array form `mop_cfg[i]=` but is `#if 0`
   on QSR, so it contributes nothing either way.) WH/BH use the `mop_cfg[i]=` array form and ARE
   captured (17 mmio-race NO_LOCAL_ORDERING each; 0 on QSR). Those QSR writes are ordered by the **MOP-config-bank HW
