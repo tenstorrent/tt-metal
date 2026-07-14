@@ -1,0 +1,7 @@
+interface:
+  display_name: "Forge Functional Decoder (from IR)"
+  short_description: "Translate a TTNN IR (.mlir) graph into a functional-decoder (prefill/decode)"
+  default_prompt: "Use $forge-functional-decoder-from-ir to translate the TTNN IR graphs under IR_DIR into models/autoports/<model>/tt/functional_decoder.py, translating each forward path the IR ships (prefill and/or single-token decode), validating single-layer PCC against the HF reference, writing honest NotImplementedError stubs for absent paths, and leaving a work log, README, and context_contract.json."
+
+policy:
+  allow_implicit_invocation: true
