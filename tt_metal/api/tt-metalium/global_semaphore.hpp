@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <optional>
 #include <tuple>
 
 #include <tt-metalium/buffer_types.hpp>
@@ -19,15 +18,6 @@ namespace tt::tt_metal {
 class IDevice;
 class GlobalSemaphore;
 class GlobalSemaphoreImpl;
-
-namespace experimental {
-GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device,
-    const CoreRangeSet& cores,
-    std::optional<uint32_t> initial_value,
-    BufferType buffer_type,
-    uint64_t address);
-}  // namespace experimental
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
@@ -39,6 +29,9 @@ public:
 
     GlobalSemaphore(
         IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
+
+    // Internal constructor (internal use only)
+    GlobalSemaphore(GlobalSemaphoreImpl&& impl);
 
     GlobalSemaphore(const GlobalSemaphore& other);
     GlobalSemaphore& operator=(const GlobalSemaphore& other);
@@ -58,22 +51,7 @@ public:
     std::tuple<CoreRangeSet, BufferType> attribute_values() const;
 
 private:
-    // private constructor used by experimental API
-    GlobalSemaphore(
-        IDevice* device,
-        const CoreRangeSet& cores,
-        std::optional<uint32_t> initial_value,
-        BufferType buffer_type,
-        uint64_t address);
-
     std::unique_ptr<GlobalSemaphoreImpl> pimpl_;
-
-    friend GlobalSemaphore experimental::CreateGlobalSemaphore(
-        IDevice* device,
-        const CoreRangeSet& cores,
-        std::optional<uint32_t> initial_value,
-        BufferType buffer_type,
-        uint64_t address);
 };
 
 }  // namespace tt::tt_metal

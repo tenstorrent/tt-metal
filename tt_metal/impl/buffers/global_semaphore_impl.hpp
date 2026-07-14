@@ -15,6 +15,7 @@
 namespace tt::tt_metal {
 
 class IDevice;
+class GlobalSemaphore;
 
 // GlobalSemaphoreImpl is implemented as a wrapper around a sharded buffer
 // This can be updated in the future to be its own container with optimized dispatch functions
@@ -58,5 +59,14 @@ private:
     IDevice* device_;
     CoreRangeSet cores_;
 };
+
+namespace experimental {
+GlobalSemaphore CreateGlobalSemaphore(
+    IDevice* device,
+    const CoreRangeSet& cores,
+    std::optional<uint32_t> initial_value,
+    BufferType buffer_type,
+    uint64_t address);
+}  // namespace experimental
 
 }  // namespace tt::tt_metal

@@ -101,24 +101,29 @@ void GlobalSemaphoreImpl::setup_buffer(
     }
 }
 
-// GlobalSemaphore implementation
-
-GlobalSemaphore::GlobalSemaphore(
-    IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) :
-    pimpl_(std::make_unique<GlobalSemaphoreImpl>(device, cores, initial_value, buffer_type, std::nullopt)) {}
-
-GlobalSemaphore::GlobalSemaphore(
-    IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) :
-    pimpl_(std::make_unique<GlobalSemaphoreImpl>(device, std::move(cores), initial_value, buffer_type, std::nullopt)) {
-}
-
-GlobalSemaphore::GlobalSemaphore(
+namespace experimental {
+GlobalSemaphore CreateGlobalSemaphore(
     IDevice* device,
     const CoreRangeSet& cores,
     std::optional<uint32_t> initial_value,
     BufferType buffer_type,
-    uint64_t address) :
-    pimpl_(std::make_unique<GlobalSemaphoreImpl>(device, cores, initial_value, buffer_type, address)) {}
+    uint64_t address) {
+    return GlobalSemaphore(GlobalSemaphoreImpl(device, cores, initial_value, buffer_type, address));
+}
+}  // namespace experimental
+
+// GlobalSemaphore implementation
+
+GlobalSemaphore::GlobalSemaphore(
+    IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) :
+    GlobalSemaphore(GlobalSemaphoreImpl(device, cores, initial_value, buffer_type, std::nullopt)) {}
+
+GlobalSemaphore::GlobalSemaphore(
+    IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) :
+    GlobalSemaphore(GlobalSemaphoreImpl(device, std::move(cores), initial_value, buffer_type, std::nullopt)) {}
+
+GlobalSemaphore::GlobalSemaphore(GlobalSemaphoreImpl&& impl) :
+    pimpl_(std::make_unique<GlobalSemaphoreImpl>(std::move(impl))) {}
 
 GlobalSemaphore::GlobalSemaphore(const GlobalSemaphore& other) :
     pimpl_(other.pimpl_ ? std::make_unique<GlobalSemaphoreImpl>(*other.pimpl_) : nullptr) {}
