@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Negative compile test (G2 / SA-04): a Row/Col broadcast index requires a non-streaming policy
+// Negative compile test: a Row/Col broadcast index requires a non-streaming policy
 // (the caller must stage all broadcast tiles upfront; a streaming front-advance breaks the re-read).
 // MUST fail to compile with "non-streaming policy".
 

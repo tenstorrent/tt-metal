@@ -2,14 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Block-capable Exp via a CHUNKED reader, so the tile count can scale arbitrarily.
+// Block-capable exp(in) via a CHUNKED reader: waits/pops block_size tiles per chunk, so the CB
+// holds only ~block_size pages regardless of n. Unlike block_exp.cpp (Bulk+Block), this lets the
+// perf sweep run very large n without exhausting L1 while still exercising the block path.
 //
-// Unlike the Bulk+Block variant (block_exp.cpp), a Chunked reader waits/pops block_size tiles per
-// chunk, so the CB only needs ~block_size pages resident regardless of total n. That lets the perf
-// sweep run very large n (thousands of tiles) without exhausting L1, while still exercising the
-// block path (block_size tiles per inner iter across DEST lanes). out = exp(in).
-//
-// CT args: [n, block_size]. The host sizes cb_in/cb_out to a small multiple of block_size.
+// CT args: [n, block_size]. Host sizes cb_in/cb_out to a small multiple of block_size.
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"

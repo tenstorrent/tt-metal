@@ -2,11 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Ternary element coverage (untested element family): y = where(cond, a, b).
-//
-// Three CopyTile loads (cond->D0, a->D1, b->D2), then the chain-family Where ternary selects
-// per element (cond != 0 ? a : b) -> D0, packed out. Exercises a 3-input DEST-only SFPU element,
-// distinct from the unary/binary ops the other suites use.
+// Ternary element coverage: y = where(cond, a, b). Three CopyTile loads (cond->D0, a->D1, b->D2),
+// then Where selects per element (cond != 0 ? a : b) -> D0, packed out. Exercises a 3-input
+// DEST-only SFPU element.
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"

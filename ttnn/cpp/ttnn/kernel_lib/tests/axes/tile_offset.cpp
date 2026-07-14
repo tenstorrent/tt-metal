@@ -2,13 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Tile-offset index test (G3 / OK-08, the TileOffset axis).
-//
-// Identity copy with a Block walker whose tile index is `base + i` (TileOffset::Set). The chain
-// inflates its wait/pop counts by `base` and reads tiles [base, base+n) (eltwise_chain.hpp:294-326).
-// `base` is a runtime constructor arg. Output[i] must equal input[base + i] -> a dropped base add
-// reads from tile 0 and the golden mismatch is exact. TileOffset::Set requires a Bulk-family
-// lifecycle (the static_assert in CopyTile), so this uses Bulk.
+// Tile-offset index test (the TileOffset axis): identity copy with a Block walker at tile `base + i`
+// (TileOffset::Set); the chain inflates its wait/pop counts by `base` and reads tiles [base, base+n).
+// `base` is a runtime ctor arg. output[i] must equal input[base+i] — a dropped base add reads tile 0
+// and mismatches. TileOffset::Set requires a Bulk-family lifecycle (CopyTile static_assert), so uses Bulk.
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"

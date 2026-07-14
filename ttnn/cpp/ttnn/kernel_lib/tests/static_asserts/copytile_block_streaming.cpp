@@ -2,12 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Negative compile test (G2 / SA-03): Block index mode with a Streaming lifecycle is illegal.
-//
-// A Block walker reads the absolute CB-front index `base + i`; Streaming pops per tile, so the
-// front shifts every iter and absolute indexing reads the wrong tile. is_legal_kind_lifecycle
-// (eltwise_chain.hpp:266-289) rejects (Block, Streaming) and CopyTile static_asserts on it.
-// This kernel MUST fail to compile with "CopyTile: (IndexMode, Policy) is illegal for Block".
+// Negative compile test: Block index mode with a Streaming lifecycle is illegal — a Block walker
+// reads an absolute CB-front index, but Streaming pops per tile so the front shifts and the index
+// reads the wrong tile. is_legal_kind_lifecycle rejects (Block, Streaming).
+// MUST fail to compile with "CopyTile: (IndexMode, Policy) is illegal for Block".
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
