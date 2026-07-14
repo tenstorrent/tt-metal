@@ -676,6 +676,12 @@ no gate does not ship.** Measure on the block harness (`test_ltx_transformer_blo
       driver's uncommitted W1 WIP in these files):** add `LTX_A2V_RING_CROSS` env toggle, slope-price the A→V attention
       body both ways at S1 (q=1216) + S2 (q=4864) via the census harness, confirm STEP_MS delta. Revert unless slope drop
       beats the added ring-PC fixed cost. LOW priority — a ~1/28-collective crumb against a 2.2s gap.
+      **MEASURED envelope (2026-07-14 14:45Z, job 408 skip-cross ablation, S2/nl2, ms/block):** cross-modal
+      (a2v+v2a) = full-AV 41.24 − skip-cross 28.29 = **12.95ms** (31% of AV block); audio-self = 28.29 −
+      video 16.77 = 11.52ms. But per W4 the 2 A↔V cross-attns are VIDEO-SCALE ⇒ the 12.95ms is dominated by
+      cross-attn SDPA on the long video Q (SDPA already chunk-/fidelity-/exp-kernel-DEAD), NOT the one small
+      audio-KV gather W5 folds (~0.1–0.18ms of 12.95). **W5 stays LEAN-LOSS — confirmed a crumb.** Open finer
+      split (needs a harness edit, not a cron tail): a2v/v2a collectives vs cross-attn SDPA within the 12.95ms.
 
 ### DEAD, with evidence — do not retry
 - **Merging the RMSNorm stat all-gathers: DEAD, quantitatively.** 2 AGs = 30.7 µs; 1 merged (2× width) = 22.7 µs
