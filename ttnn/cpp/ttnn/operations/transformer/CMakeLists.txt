@@ -18,6 +18,7 @@ file(
     sdpa/device/kernels/*
     sdpa_decode/device/kernels/*
     gated_delta_attn/device/kernels/*
+    chunk_gated_delta_rule/device/kernels/*
 )
 target_sources(
     ttnn_op_transformer

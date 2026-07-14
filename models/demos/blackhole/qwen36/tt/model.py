@@ -6,6 +6,7 @@ tok_embeddings -> 32 x Qwen36DecoderLayer -> RMSNorm -> LM Head.
 Hybrid state: KV cache (8 attn layers) + recurrent state (24 DeltaNet layers).
 """
 import math
+import os
 
 import torch
 from loguru import logger
@@ -1169,8 +1170,19 @@ class Qwen36Model:
         )
         ttnn.copy_host_to_device_tensor(pt_host, self._chunk_full_page_table_buf)
 
-        # Replay trace per full chunk. Per-chunk sync required at long context (queue overrun otherwise).
+        # Replay trace per full chunk. Host input-prep (from_torch tilize of cos/sin + DMA copies) and
+        # device trace exec share cq_id=0, so the queue already ORDERS each chunk's copies AFTER the
+        # prior chunk's trace reads them (no double-buffering needed). The old code did a full
+        # synchronize_device every chunk, which forced the host to wait and serialized chunk N+1's CPU
+        # prep behind chunk N's device exec. Instead we hold host-tensor refs alive (so their in-flight
+        # DMAs aren't GC'd) and sync only every _SYNC_EVERY chunks — the host software-pipelines chunk
+        # N+1's from_torch/tilize over chunk N's device exec. Periodic (not fully removed) sync bounds
+        # in-flight queue depth so very long context (e.g. traced_128k = 64 chunks) can't overrun the
+        # command queue. QWEN36_PREFILL_OVERLAP=0 restores the per-chunk sync.
         _log_every = max(1, num_full // 4)
+        _overlap = os.environ.get("QWEN36_PREFILL_OVERLAP", "1") != "0"
+        _SYNC_EVERY = 8 if _overlap else 1
+        _host_refs = []  # keep host tensors alive until the next sync frees their DMAs
         for c in range(num_full):
             cs = c * chunk_size
             tok_host = ttnn.from_torch(
@@ -1210,11 +1222,14 @@ class Qwen36Model:
             )
             ttnn.copy_host_to_device_tensor(cos_host, self._chunk_cos_buf)
             ttnn.copy_host_to_device_tensor(sin_host, self._chunk_sin_buf)
+            _host_refs += [tok_host, csi_host, cpt_host, cos_host, sin_host]
 
             ttnn.execute_trace(self.device, self._chunked_trace_id, cq_id=0, blocking=False)
 
-            # Per-chunk sync: bounds in-flight depth to one chunk.
-            ttnn.synchronize_device(self.device)
+            # Bound in-flight depth; after a sync the completed DMAs' host tensors can be released.
+            if (c + 1) % _SYNC_EVERY == 0:
+                ttnn.synchronize_device(self.device)
+                _host_refs.clear()
             if (c + 1) % _log_every == 0:
                 logger.info(f"[TP chunk-replay] {c + 1}/{num_full} chunks")
 
