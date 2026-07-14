@@ -481,3 +481,174 @@ def test_gate_merge_block_matches_standalone_gate(
 
     assert_quality(v_p1, v_m, pcc=0.99, relative_rmse=0.05)
     assert_quality(a_p1, a_m, pcc=0.99, relative_rmse=0.05)
+
+
+# ---------------------------------------------------------------------------
+# Full-precision gate-logit diagnostic
+# ---------------------------------------------------------------------------
+# Every test above gates on assert_quality, which reports PCC and RMSE/sigma. Neither can see the
+# error that matters here:
+#
+#   * PCC IS SCALE- AND SHIFT-INVARIANT. A gate that is systematically 1.005x the standalone gate
+#     scores PCC = 1.0000 exactly, forever. The block output is then 1.005x too — and the pipeline
+#     applies the gate SIX times per block, 48 blocks, 11 steps. A per-application gain of 1+e
+#     compounds; PCC never sees it.
+#   * RMSE/sigma is logged at ONE decimal place as a percent, so anything under 0.05% prints "0.0 %",
+#     and it is asserted at 5% (block) / 1% (projection) — bounds a systematic gain sails through.
+#
+# So "the merged block matches to 4 decimals" is not evidence of equivalence. This measures the gate
+# LOGITS themselves (pre-sigmoid, the merge's actual output) against the standalone gate's logits,
+# on REAL block-0 weights, and reports max-abs / max-rel / RMS-rel error AND the least-squares GAIN
+# (<m,p>/<p,p>; 1.0 means no systematic scaling). It also bisects math_approx_mode in the same pass:
+# the standalone gate rides ColParallelLinear.compute_config (approx=False) while the merged gate
+# rides the projection's mm_compute_kernel_config (approx=True), and that is the only config that
+# differs between the arms.
+#
+# Run: pytest test_ltx_gate_merge.py -k gate_logit_precision -s
+
+# (checkpoint name, is_self, dim, query_input_dim, context_dim, output_dim, M) — the six real gated
+# attentions of block 0, at their production per-device sequence lengths (stage 2).
+_REAL_ATTNS = [
+    ("attn1", True, 4096, None, None, None, 4864),
+    ("attn2", False, 4096, None, 4096, None, 4864),
+    ("audio_attn1", True, 2048, None, None, None, 32),
+    ("audio_attn2", False, 2048, None, 2048, None, 32),
+    ("audio_to_video_attn", False, 2048, 4096, 2048, 4096, 4864),
+    ("video_to_audio_attn", False, 2048, None, 4096, None, 32),
+]
+
+
+def _err_stats(p: torch.Tensor, m: torch.Tensor) -> dict:
+    """Error of m (merged) against p (standalone), in the terms PCC cannot express."""
+    p = p.detach().to(torch.float64).flatten()
+    m = m.detach().to(torch.float64).flatten()
+    d = m - p
+    denom = p.abs().clamp_min(1e-9)
+    return {
+        "max_abs": d.abs().max().item(),
+        "max_rel": (d.abs() / denom).max().item(),
+        "rms_rel": (d.norm() / p.norm().clamp_min(1e-12)).item(),
+        # Least-squares slope of m on p. 1.0 == no systematic gain. This is the number PCC hides.
+        "gain": ((m * p).sum() / (p * p).sum().clamp_min(1e-12)).item(),
+        "bias": (m.mean() - p.mean()).item(),
+        "p_absmax": p.abs().max().item(),
+    }
+
+
+def _fmt(tag: str, s: dict) -> str:
+    return (
+        f"{tag:34s} max_abs={s['max_abs']:.3e}  max_rel={s['max_rel']:.3e}  "
+        f"rms_rel={s['rms_rel']:.3e}  GAIN={s['gain']:.9f}  bias={s['bias']:+.3e}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology"),
+    [pytest.param((4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, id="ring_bh_4x8sp1tp0")],
+    indirect=["mesh_device", "device_params"],
+)
+def test_gate_logit_precision(mesh_device, sp_axis, tp_axis, num_links, topology):
+    """Merged gate logits vs standalone gate logits, real weights, at full precision."""
+    checkpoint = _resolve_checkpoint_22b("fast")
+    if not os.path.exists(checkpoint):
+        pytest.skip(f"22B checkpoint not found at {checkpoint}")
+
+    parallel_config = DiTParallelConfig(
+        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
+        sequence_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[sp_axis], mesh_axis=sp_axis),
+        tensor_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[tp_axis], mesh_axis=tp_axis),
+    )
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+    block0 = _block0_state_dict(checkpoint)
+
+    failures = []
+    for name, is_self, dim, q_in, ctx, out_dim, M in _REAL_ATTNS:
+        torch.manual_seed(0)
+        sub = {k[len(name) + 1 :]: v for k, v in block0.items() if k.startswith(name + ".")}
+        assert "to_gate_logits.weight" in sub, f"{name} has no gate in the checkpoint"
+
+        kwargs = dict(
+            dim=dim,
+            num_heads=NUM_HEADS,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            is_self=is_self,
+            context_dim=ctx,
+            query_input_dim=q_in,
+            output_dim=out_dim,
+            apply_gated_attention=True,
+        )
+        merged = _build(True, **kwargs)
+        plain = _build(False, **kwargs)
+        merged.load_torch_state_dict({k: v.clone() for k, v in sub.items()}, strict=False)
+        plain.load_torch_state_dict({k: v.clone() for k, v in sub.items()}, strict=False)
+
+        in_dim = q_in or dim
+        x = torch.randn(1, 1, M, in_dim)
+        x_tt = from_torch(
+            x, device=mesh_device, layout=ttnn.Layout.TILE, dtype=ttnn.bfloat16, mesh_axes=[None, None, None, tp_axis]
+        )
+
+        proj_m = merged.to_qkv if is_self else merged.to_q
+        head_dim = dim // NUM_HEADS
+
+        # Merged gate, as production runs it: the projection's config (math_approx_mode=True).
+        out_approx = proj_m(
+            x_tt, compute_kernel_config=merged.mm_compute_kernel_config, parallel_config=parallel_config
+        )
+        # Merged gate, forced onto the STANDALONE gate's config (math_approx_mode=False). Same weights,
+        # same blocking, same op — this isolates math_approx_mode and nothing else.
+        out_noapprox = proj_m(x_tt, compute_kernel_config=proj_m.compute_config, parallel_config=parallel_config)
+        # Standalone gate: its own ColParallelLinear (math_approx_mode=False), raw logits, no sigmoid.
+        p_logits = plain.to_gate_logits(x_tt, parallel_config=parallel_config)
+
+        gather_w = lambda t: to_torch(t, mesh_axes=[None, None, None, tp_axis])  # noqa: E731
+        p_l = gather_w(p_logits)  # (1, 1, M, num_heads)
+        m_l_approx = gather_w(out_approx[-1])  # (1, 1, M, dim) — gate repeated over head_dim
+        m_l_noapprox = gather_w(out_noapprox[-1])
+
+        # The merged chunk must repeat each head's logit across that head's head_dim channels.
+        spread = (
+            (
+                m_l_approx.reshape(*m_l_approx.shape[:-1], NUM_HEADS, head_dim)
+                - m_l_approx[..., ::head_dim].unsqueeze(-1)
+            )
+            .abs()
+            .max()
+            .item()
+        )
+        m_ph_approx = m_l_approx[..., ::head_dim]  # (1, 1, M, num_heads)
+        m_ph_noapprox = m_l_noapprox[..., ::head_dim]
+
+        s_approx = _err_stats(p_l, m_ph_approx)
+        s_noapprox = _err_stats(p_l, m_ph_noapprox)
+        s_approx_vs_noapprox = _err_stats(m_ph_noapprox, m_ph_approx)
+
+        logger.info(f"===== {name}  (dim={dim}, in={in_dim}, M={M}, head_dim={head_dim}) =====")
+        logger.info(f"  gate chunk intra-head spread (must be 0): {spread:.3e}")
+        logger.info("  " + _fmt("LOGITS merged(approx=T) vs standalone", s_approx))
+        logger.info("  " + _fmt("LOGITS merged(approx=F) vs standalone", s_noapprox))
+        logger.info("  " + _fmt("LOGITS approx=T vs approx=F", s_approx_vs_noapprox))
+
+        # 2*sigmoid epilogue, the value that actually multiplies the attention output.
+        gate_p = ttnn.multiply(ttnn.sigmoid(p_logits), 2.0)
+        gate_m = merged._gate_from_logits(out_approx[-1])
+        gp = gather_w(gate_p)
+        gm = gather_w(gate_m)[..., ::head_dim]
+        s_gate = _err_stats(gp, gm)
+        logger.info("  " + _fmt("GATE 2*sigmoid merged vs standalone", s_gate))
+
+        # Q/K/V must be untouched by the merge (modulo the to_qkv reblocking).
+        for i, qkv_name in enumerate(("q", "k", "v")[: merged.base_chunks]):
+            pq = plain.to_qkv if is_self else plain.to_q
+            p_out = pq(x_tt, compute_kernel_config=plain.mm_compute_kernel_config, parallel_config=parallel_config)
+            p_chunk = (p_out if isinstance(p_out, list) else [p_out])[i]
+            s_qkv = _err_stats(gather_w(p_chunk), gather_w(out_approx[i]))
+            logger.info("  " + _fmt(f"{qkv_name.upper()} merged vs standalone", s_qkv))
+
+        if spread > 0:
+            failures.append(f"{name}: gate chunk is not a clean per-head repeat (spread={spread:.3e})")
+
+    logger.info("\n".join(["", "=" * 90, "GATE-LOGIT PRECISION SUMMARY complete", "=" * 90]))
+    assert not failures, "\n".join(failures)
