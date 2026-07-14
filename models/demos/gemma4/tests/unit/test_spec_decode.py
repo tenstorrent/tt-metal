@@ -1654,7 +1654,7 @@ def test_spec_decode_matches_greedy(mesh_device, reset_seeds):
     # deallocate; these tests deallocate and then re-verify/seed.
     spec._use_trace = False
 
-    # Match text_demo_v2 / serve_fastapi: greedy spec uses host readback, not
+    # Match text_demo_v2: greedy spec uses host readback, not
     # on-device sampling. Default prefill warmup sweeps non-greedy sampling params
     # when the model exposes SamplingGenerator and hits a vocab-shard shape bug
     # in tt_penalties (logits [32, vocab] vs presence [32, vocab/tp]).

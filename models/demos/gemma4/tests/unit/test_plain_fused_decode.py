@@ -4,7 +4,7 @@
 """Host-only unit tests for plain fused greedy decode helpers.
 
 Device parity (token-identical vs host greedy) is covered by the demo A/B on QB2
-— see Legacy_Gemma4_performance.md Phase B.
+— Phase B fused-greedy host checks.
 """
 
 from __future__ import annotations

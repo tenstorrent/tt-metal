@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-side sampling helpers for Gemma4 demos and the FastAPI server."""
+"""Host-side sampling helpers for Gemma4 decode paths."""
 
 from __future__ import annotations
 

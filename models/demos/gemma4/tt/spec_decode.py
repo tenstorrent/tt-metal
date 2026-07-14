@@ -200,7 +200,7 @@ class SpeculativeDecoder:
         return True
 
     def _begin_generation_guard(self, repetition_max_streak: int) -> None:
-        from models.demos.gemma4.demo.sampling_utils import RepetitionStreakGuard
+        from models.demos.gemma4.tt.sampling_utils import RepetitionStreakGuard
 
         self._streak_guard = RepetitionStreakGuard(repetition_max_streak)
 

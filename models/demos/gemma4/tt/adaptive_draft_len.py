@@ -8,7 +8,7 @@ High K helps when the drafter matches the target (structured / long-context /
 code); low K wastes less draft+verify work when acceptance collapses (creative /
 open-ended).
 
-Measured QB2 (P150x4, K=16) anchors from ``Legacy_Gemma4_performance.md``:
+Measured QB2 (P150x4, K=16) anchors:
 
 | Workload                         | mean accept / K | tok/s |
 |----------------------------------|-----------------|-------|

@@ -38,7 +38,7 @@ VERIFIED_MODEL_CONFIGS = {
     # Gemma4 31B (dense): size check passes at ring_size=64 on P150x4 (tp=4).
     # Substring match: HF_MODEL path / id must contain "gemma-4-31B".
     # Prefetcher wiring in models/demos/gemma4 is gated by GEMMA4_PREFETCHER=1
-    # and requires ring-padded MLP weights (5376→6144); see Legacy_Gemma4_performance.md.
+    # and requires ring-padded MLP weights (5376→6144).
     "gemma-4-31B": {"dim": 5376, "hidden_dim": 21504, "n_heads": 32, "n_kv_heads": 16},
 }
 
