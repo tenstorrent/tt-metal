@@ -146,6 +146,8 @@ def _build_second_trunk(
         _subfolder = "transformer-native-proj-in-out"
     elif enable_device_proj_out:
         _subfolder = "transformer-native-proj-out"
+    elif enable_device_proj_in:
+        _subfolder = "transformer-native-proj-in"
     else:
         _subfolder = "transformer-native"
     cache.load_model(
