@@ -497,11 +497,15 @@ void kernel_main() {
                     // tilize packs tilized_in0's tiles into the OUT L1 region -> PACR0_TILE_INC / ERROR_TRISC1
                     // OOB (fires BEFORE the matmul pack). A prior workaround called only llk_pack_init here
                     // (sets the MOP buf_desc_id) but NOT llk_pack_hw_configure (which programs the BD BASE),
-                    // so the BD base stayed stale. Program BOTH, mirroring the reduce-variant Quasar branch.
-                    // Covers the main + split-reader tilize_in calls below (both target tilized_in0_cb_id;
-                    // nothing else repoints the pack BD between them). Proper fix belongs in tilize.h's Quasar
-                    // tilize_init. See ~/QuasarProgrammingQuirks.md quirk #1.
-                    PACK((llk_pack_hw_configure(tilized_in0_cb_id)));
+                    // so the BD base stayed stale. UPDATE (pool cross-check 2026-07-14): re-running
+                    // llk_pack_hw_configure PER K-block is the "hw_configure is one-time" corruption that caused
+                    // an UNPACKER fault in the Quasar pool -- and is the likely cause of the residual t=4
+                    // DEST-bank fault here (state corruption surfacing after a bank rotation, NOT an LLK bug).
+                    // The one-time pack hw_configure already ran pre-loop at compute_kernel_hw_startup. Drop the
+                    // per-block hw_configure; llk_pack_init repoints the pack BD (the per-use-safe call the pool
+                    // relies on per c-block). If this regresses to the earlier t=1 tilize OOB (stale BD base),
+                    // the proper fix is to set the pack BD base ONCE in tilize.h's Quasar tilize_init.
+                    // See ~/QuasarProgrammingQuirks.md quirk #1.
                     PACK((llk_pack_init(tilized_in0_cb_id)));
                     // A/B RESULT: disabling this moved the tilize fault EARLIER (t=4 -> t=1), so dest_init
                     // HELPS (sets up the packer DEST section Quasar tilize_init omits) — keep it. The residual
