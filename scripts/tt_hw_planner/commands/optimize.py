@@ -418,6 +418,7 @@ def cmd_optimize(args) -> int:
             catalog_branch=getattr(args, "catalog_branch", "perf-catalog"),
             max_rounds=getattr(args, "max_rounds", 3),
             model_id_hint=(None if model_dir else args.target),
+            hitl=getattr(args, "hitl", False),
         )
         if result is None:
             print("  [optimize/cc] run failed (see messages above)")

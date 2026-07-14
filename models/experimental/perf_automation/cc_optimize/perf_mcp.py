@@ -1030,6 +1030,60 @@ def check_full_pipeline_latency() -> dict:
     )
 
 
+_HITL_STEP = {"n": 0}
+
+
+@mcp.tool()
+def hitl_gate(
+    tried_op: str,
+    tried_lever: str,
+    why_tried: str,
+    is_win: bool,
+    why_not: str = "",
+    next_target: str = "",
+    next_why: str = "",
+    before_ms: float = 0.0,
+    after_ms: float = 0.0,
+    stages_json: str = "",
+) -> dict:
+    """HUMAN-IN-THE-LOOP gate (--hitl only). After applying ONE lever and measuring it, call this
+    INSTEAD of git_commit/git_revert. It shows the operator a block-level timing + rationale pause
+    screen and returns their decision {action: 'commit'|'revert'|'try', note, knob}: on 'commit'/'revert'
+    the orchestrator performs the git action for you; on 'try' apply the operator's `knob` next. Pass
+    what you tried + why, the win flag + why_not, the next planned target + why, the before/after
+    full-pipeline ms, and stages_json = the per-stage trace timings you just measured as a JSON list of
+    {"name","ms"} (and optional "dominant"). Blocks until the operator answers."""
+    import importlib.util as _ilu
+
+    _spec = _ilu.spec_from_file_location("cc_hitl", str(Path(__file__).parent / "hitl.py"))
+    hitl = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(hitl)
+    hdir = os.environ.get("PERF_MCP_HITL_DIR")
+    if not hdir:
+        return {"action": "commit", "note": "hitl not wired (no PERF_MCP_HITL_DIR) — proceeding without gate"}
+    try:
+        stages = json.loads(stages_json) if stages_json else []
+    except ValueError:
+        stages = []
+    _HITL_STEP["n"] += 1
+    proposal = {
+        "model": Path(_MODEL_ROOT).name,
+        "step": _HITL_STEP["n"],
+        "stages": stages,
+        "tried": {"op": tried_op, "lever": tried_lever, "why": why_tried},
+        "result": {
+            "win": bool(is_win),
+            "before_ms": before_ms or None,
+            "after_ms": after_ms or None,
+            "why_not": why_not,
+        },
+        "next": {"target": next_target, "why": next_why},
+    }
+    hitl.post_proposal(hdir, proposal)
+    _to = float(os.environ.get("PERF_MCP_HITL_TIMEOUT", "0") or "0") or None
+    return hitl.await_decision(hdir, timeout=_to)
+
+
 @mcp.tool()
 def git_head() -> dict:
     """Return the current git HEAD sha of the model repo (your clean checkpoint / revert target)."""

@@ -11341,6 +11341,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     popt.add_argument("-k", "--case", dest="case", help="pytest -k case id override (e.g. device_params0)")
     popt.add_argument(
+        "--hitl",
+        action="store_true",
+        dest="hitl",
+        help="human-in-the-loop: the agent applies ONE lever at a time, then PAUSES at a block-level "
+        "timing + rationale screen for your commit/revert/try decision before continuing (cc engine only). "
+        "Interactive — needs a live terminal; slower per lever but you steer every step.",
+    )
+    popt.add_argument(
         "--in-place",
         action="store_true",
         dest="in_place",

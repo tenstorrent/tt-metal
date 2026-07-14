@@ -19,6 +19,7 @@ import shutil
 import signal
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -70,6 +71,14 @@ LOOP:
   Re-run termination_check. Repeat. NEVER stop while can_stop=false. NEVER reason a lever "won't help" — prove it by measuring + recording the attempt.
 
 LEAVE CLEAN (commit wins, revert in-progress edits); end with git_head. Report start->final {metric}, committed wins, and per blocking op which rungs were done + measured ms."""
+
+
+_HITL_PROMPT = (
+    _PROMPT
+    + """
+
+HITL MODE (human-in-the-loop): you do NOT have git_commit / git_revert. After you apply ONE lever and measure it (check_pcc; measure_candidate; check_full_pipeline_latency; check_lever_coverage for a dtype/kernel lever), call hitl_gate(tried_op, tried_lever, why_tried, is_win, why_not, next_target, next_why, before_ms, after_ms, stages_json) INSTEAD of committing. stages_json = the per-stage trace timings you just measured, a JSON list of {"name","ms"} (add "dominant" if known). hitl_gate returns {action}: on 'commit' or 'revert' the operator's git action is ALREADY DONE for you — move to the next target; on 'try', apply the operator's returned knob next. Exactly ONE lever per hitl_gate call; never batch. record_kernel_attempt as usual so RUN_REPORT stays live."""
+)
 
 
 def _visible_devices(devices: str) -> str | None:
@@ -628,6 +637,42 @@ def _emit_summary(
             pass
 
 
+def _hitl_watch(repo_root, hitl_dir, stop_event):
+    """Orchestrator-side HITL loop (own thread): watch for the agent's lever proposal, render the pause
+    screen, read the operator's commit/revert/try, perform the git action, and answer the blocked agent."""
+    import importlib.util as _ilu
+
+    _spec = _ilu.spec_from_file_location("cc_hitl", str(Path(__file__).parent / "hitl.py"))
+    _h = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_h)
+
+    while not stop_event.is_set():
+        prop = _h.read_proposal(hitl_dir)
+        if prop is None:
+            stop_event.wait(0.4)
+            continue
+        print("\n" + _h.render_pause_screen(prop) + "\n", flush=True)
+        try:
+            ans = input("  choice [c=commit / r=revert / t=try other]: ").strip().lower()
+        except (EOFError, OSError):
+            ans = "r"
+        if ans.startswith("t"):
+            try:
+                knob = input("  knob / instruction to try next: ").strip()
+            except (EOFError, OSError):
+                knob = ""
+            _h.post_decision(hitl_dir, "try", knob=knob)
+        elif ans.startswith("c"):
+            _git(repo_root, "add", "-A")
+            _git(repo_root, "commit", "-m", "hitl: %s" % (prop.get("tried", {}).get("lever", "lever")))
+            _h.post_decision(hitl_dir, "commit")
+            print("  [hitl] committed.", flush=True)
+        else:
+            _git(repo_root, "checkout", "--", ".")
+            _h.post_decision(hitl_dir, "revert")
+            print("  [hitl] reverted.", flush=True)
+
+
 def optimize_pipeline(
     repo_root: Path,
     manifest_path: str,
@@ -636,8 +681,11 @@ def optimize_pipeline(
     metric: str,
     model_name: str,
     max_rounds: int = DEFAULT_MAX_ROUNDS,
+    hitl: bool = False,
 ) -> dict:
-    """Drive one pipeline: claude -p re-invoked until the gate's can_stop, bounded by max_rounds."""
+    """Drive one pipeline: claude -p re-invoked until the gate's can_stop, bounded by max_rounds.
+    hitl=True runs the human-in-the-loop gate: the agent proposes one lever at a time via hitl_gate and
+    a watcher thread renders the pause screen + performs the operator's commit/revert."""
     task = pipe["task"]
     kernel_log = f"/tmp/cc_kernlog_{model_name}_{task}.json"
     try:
@@ -650,9 +698,16 @@ def optimize_pipeline(
     if _cov:
         _cov_env["TT_PERF_LAYERS"] = str(_cov)
         print(f"  [optimize/cc] coverage-sized profiling window: TT_PERF_LAYERS={_cov} (covers all block types)")
+    tools = list(_ALLOWED_TOOLS)
+    hitl_dir = None
+    if hitl:
+        hitl_dir = tempfile.mkdtemp(prefix=f"hitl_{model_name}_{task}_")
+        _cov_env["PERF_MCP_HITL_DIR"] = hitl_dir
+        tools = [t for t in _ALLOWED_TOOLS if not (t.endswith("git_commit") or t.endswith("git_revert"))]
+        tools.append("mcp__perf-mcp__hitl_gate")
     cfg_path = repo_root / CC_DIR / f".mcp_config_{model_name}_{task}.json"
     cfg_path.write_text(json.dumps(cfg, indent=2))
-    prompt = _PROMPT.format(model=model_name, task=task, metric=metric)
+    prompt = (_HITL_PROMPT if hitl else _PROMPT).format(model=model_name, task=task, metric=metric)
     start_sha = _git(repo_root, "rev-parse", "HEAD")
     mcp_env = cfg["mcpServers"]["perf-mcp"]["env"]
     try:
@@ -672,11 +727,17 @@ def optimize_pipeline(
         str(cfg_path),
         "--strict-mcp-config",
         "--allowedTools",
-        *_ALLOWED_TOOLS,
+        *tools,
         "--output-format",
         "stream-json",
         "--verbose",
     ]
+    _stop_watcher = threading.Event()
+    _wt = None
+    if hitl:
+        _wt = threading.Thread(target=_hitl_watch, args=(repo_root, hitl_dir, _stop_watcher), daemon=True)
+        _wt.start()
+        print(f"  [optimize/cc] HITL on — pausing at each lever for your commit/revert/try (handshake {hitl_dir})")
     while rounds < max_rounds:
         st = _gate_status(repo_root, mcp_env, devices)
         if st.get("halt"):
@@ -698,6 +759,7 @@ def optimize_pipeline(
         else:
             wedge_strikes = 0
         rounds += 1
+    _stop_watcher.set()
     after_ms = _fullpipe_e2e(repo_root, mcp_env, devices, "AFTER")
     if before_ms and after_ms:
         d = (before_ms - after_ms) / before_ms * 100.0
@@ -1024,6 +1086,7 @@ def run_cc_optimize(
     catalog_remote: str = "origin",
     catalog_branch: str = "perf-catalog",
     model_id_hint=None,
+    hitl: bool = False,
 ) -> dict | None:
     """Top-level cc engine: discover pipeline(s), then optimize EVERY one to the gate's can_stop.
 
@@ -1071,7 +1134,9 @@ def run_cc_optimize(
     for pipe in pipes:
         print(f"  [optimize/cc] === optimizing pipeline: {pipe['task']} ===")
         try:
-            results.append(optimize_pipeline(repo_root, manifest_path, pipe, devices, metric, model_name, max_rounds))
+            results.append(
+                optimize_pipeline(repo_root, manifest_path, pipe, devices, metric, model_name, max_rounds, hitl=hitl)
+            )
         except Exception as exc:  # noqa: BLE001 — never let one pipeline's crash kill the whole run silently
             _print_optimize_stop(pipe, exc)
             results.append(None)

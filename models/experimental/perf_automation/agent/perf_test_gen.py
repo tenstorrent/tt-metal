@@ -617,7 +617,13 @@ def generate_perf_test(
         if verdict in ("ok_2cq", "ok_marker", "skip"):
             return node
         stall += 1
-        print(f"[perf_test_gen] draft rejected (correcting, stall {stall}/{_STALL_LIMIT}): {failure[:200]}", flush=True)
+        if "WEDGE" in failure:
+            _why = "device wedged on a non-capturable step — reset + regenerating"
+        elif "degraded to 1cq" in failure:
+            _why = "held only trace+1cq — regenerating to reach trace+2cq"
+        else:
+            _why = ((_extract_error(failure).splitlines() or [""])[0] or "did not run the full pipeline").strip()[:80]
+        print(f"      · perf-test regen {stall}/{_STALL_LIMIT}: {_why}", file=sys.stderr, flush=True)
         reason = (
             "the test ran but never held trace+2cq (it degraded to 1cq); the 2-CQ input overlap must "
             "engage so the optimize bookend doesn't silently downgrade"
