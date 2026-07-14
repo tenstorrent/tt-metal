@@ -10,6 +10,7 @@
 #ifdef COMPILE_FOR_TRISC
 #include "api/compute/common_globals.h"  // defines PACK/UNPACK/MATH macros
 #include "internal/circular_buffer_interface.h"
+#include <type_traits>
 #ifdef TRISC_PACK
 #include "llk_io_pack.h"
 #endif
@@ -107,6 +108,7 @@ inline uint32_t DataflowBuffer::get_read_ptr_impl() const {
 }
 
 #ifdef COMPILE_FOR_TRISC
+
 inline uint32_t DataflowBuffer::get_tile_address(uint32_t tile_index) {
     uint32_t address = 0;
 
@@ -125,22 +127,28 @@ inline uint32_t DataflowBuffer::get_tile_address(uint32_t tile_index) {
     return address;
 }
 
-inline uint32_t DataflowBuffer::read_tile_value(uint32_t tile_index, uint32_t element_offset) {
-    uint32_t value = 0;
+template <typename T>
+T DataflowBuffer::read_tile_value(uint32_t tile_index, uint32_t element_offset) {
+    static_assert(sizeof(T) == 1 || sizeof(T) == 2 || sizeof(T) == 4, "read_tile_value: T must be 1, 2, or 4 bytes");
+    static_assert(
+        (std::is_integral_v<T> && std::is_unsigned_v<T> && !std::is_same_v<T, bool>),
+        "read_tile_value: T must be an unsigned integral type");
+
+    T value = T{};
 
     UNPACK({
-        uint32_t base_address = local_dfb_interface_.fifo_rd_ptr;
-        uint32_t offset_address = local_dfb_interface_.fifo_page_size * tile_index;
-        uint32_t byte_address = (base_address + offset_address) << 4;  // Convert to byte address
+        const uint32_t base_address = local_dfb_interface_.fifo_rd_ptr;
+        const uint32_t offset_address = local_dfb_interface_.fifo_page_size * tile_index;
+        const uint32_t byte_address = (base_address + offset_address) << 4;
 
-        value = reinterpret_cast<volatile uint32_t*>(byte_address)[element_offset];
+        value = reinterpret_cast<volatile T*>(byte_address)[element_offset];
 
-        mailbox_write(ckernel::ThreadId::MathThreadId, value);
-        mailbox_write(ckernel::ThreadId::PackThreadId, value);
+        mailbox_write(ckernel::ThreadId::MathThreadId, static_cast<uint32_t>(value));
+        mailbox_write(ckernel::ThreadId::PackThreadId, static_cast<uint32_t>(value));
     })
 
-    MATH(value = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
-    PACK(value = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+    MATH(value = static_cast<T>(mailbox_read(ckernel::ThreadId::UnpackThreadId));)
+    PACK(value = static_cast<T>(mailbox_read(ckernel::ThreadId::UnpackThreadId));)
 
     return value;
 }
