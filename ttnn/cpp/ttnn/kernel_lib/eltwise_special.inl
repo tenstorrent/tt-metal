@@ -47,7 +47,7 @@ ELTWISE_DECLARE_UNARY(Digamma, digamma)
 #undef ELTWISE_DECLARE_UNARY
 
 // Where — ternary y = where(cond, a, b). DEST-only chain element with compile-time
-// slot binding. Skips TernaryOp CRTP's distinctness assert (out may equal a/b).
+// slot binding. Out may alias an input (a/b) — TernaryOp does not enforce slot-distinctness.
 template <DataFormat DF, Dst Cond, Dst A, Dst B, Dst Out>
 struct Where : DestOnlyTag {
     static constexpr uint32_t lane_width = []() {

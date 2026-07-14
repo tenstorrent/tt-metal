@@ -2,21 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Operand broadcast suite (G3 / OK-03, OK-04, OK-05).
-//
-// A + B with a hardware broadcast on the B operand. BroadcastDim controls the INTRA-tile
-// replication (mirrors ckernel::BroadcastType: COL=1, ROW=2, SCALAR=3):
-//   ROW    -> replicate B's row 0 down all rows   -> out[r][c] = A[r][c] + B[0][c]
-//   COL    -> replicate B's col 0 across all cols -> out[r][c] = A[r][c] + B[r][0]
-//   SCALAR -> replicate B's element [0][0]        -> out[r][c] = A[r][c] + B[0][0]
-//
-// The caller owns the big init (init_bcast), exactly like the migrated bcast_h / bcast_w
-// kernels — the chain owns only per-element work. dim is a compile-time arg so init_bcast
-// and BinaryFpu stay in lockstep. A random B makes ROW vs COL produce different results, so
-// a broadcast-axis swap fails PCC instead of accidentally matching.
+// Operand broadcast suite: A + B with a hardware broadcast on B. BroadcastDim controls the
+// INTRA-tile replication (mirrors ckernel::BroadcastType: COL=1, ROW=2, SCALAR=3):
+//   ROW    -> B row 0 down all rows   -> out[r][c] = A[r][c] + B[0][c]
+//   COL    -> B col 0 across all cols -> out[r][c] = A[r][c] + B[r][0]
+//   SCALAR -> B element [0][0]        -> out[r][c] = A[r][c] + B[0][0]
+// The caller does only the dim-agnostic hw init (compute_kernel_hw_startup); the chain emits the
+// broadcast init AND compute itself from BroadcastDim. A random B makes ROW vs COL differ, so an
+// axis swap fails PCC.
 
 #include <cstdint>
-#include "api/compute/bcast.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
 void kernel_main() {
@@ -29,8 +25,9 @@ void kernel_main() {
 
     using namespace compute_kernel_lib;
 
+    compute_kernel_hw_startup(cb_a, cb_b, cb_out);
+
     if constexpr (dim == 2) {
-        init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(cb_a, cb_b, cb_out);
         eltwise_chain(
             EltwiseShape::tiles(n),
             BinaryFpu<
@@ -43,7 +40,6 @@ void kernel_main() {
                 BinaryDataFormatReconfig::None>{},
             PackTile<cb_out, OutputLifecycle::Streaming, PackTileReconfig::None>{});
     } else if constexpr (dim == 1) {
-        init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::COL>(cb_a, cb_b, cb_out);
         eltwise_chain(
             EltwiseShape::tiles(n),
             BinaryFpu<
@@ -56,7 +52,6 @@ void kernel_main() {
                 BinaryDataFormatReconfig::None>{},
             PackTile<cb_out, OutputLifecycle::Streaming, PackTileReconfig::None>{});
     } else {  // dim == 3 -> Scalar
-        init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::SCALAR>(cb_a, cb_b, cb_out);
         eltwise_chain(
             EltwiseShape::tiles(n),
             BinaryFpu<

@@ -5,8 +5,8 @@
 
 /**
  * @file eltwise_scalar.hpp
- * @brief Scalar-parameter SFPU op structs — Threshold, Clamp, AddScalar, MulScalar,
- *        DivScalar, RsubScalar, RdivScalar, BitwiseAnd/Or/Xor/Not (param), Shifts.
+ * @brief Scalar-parameter SFPU op structs — Threshold, Clamp, AddUnary, SubUnary, MulUnary,
+ *        DivUnary, RsubUnary, RdivUnary, Dropout.
  */
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"

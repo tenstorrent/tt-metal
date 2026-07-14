@@ -3,21 +3,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-G3 (indexing axis) — inter-tile index selection for eltwise_chain.
+Inter-tile index selection for eltwise_chain: WHICH TILE an operand reads each iter.
+(Distinct from test_chain_operand_kind.py, which tests intra-tile BroadcastDim replication.)
 
-Coverage spec: ttnn/cpp/ttnn/kernel_lib/docs/eltwise_helper_test_coverage.html (group G3, the
-OperandKind *index* contract + TileOffset). Distinct from test_chain_operand_kind.py, which tests
-the BroadcastDim *intra-tile* replication. Here the variable is WHICH TILE an operand reads:
-
-    OperandKind   per-iter tile index   (eltwise_chain.inl:1855)
+    OperandKind   per-iter tile index
     Scalar        0
     Block         ht*Wt + wt
     Row           wt          (one tile per column)
     Col           ht          (one tile per row)
     TileOffset    base + index
 
-Each test makes the tile index the only thing that can be wrong, with a golden that changes if the
-wrong tile is read. A Row<->Col index swap, or a dropped TileOffset base, fails PCC.
+Golden changes if the wrong tile is read: a Row<->Col swap or dropped TileOffset base fails PCC.
 """
 
 import torch
@@ -104,7 +100,7 @@ def _run_index_2d(device, axis, Ht=2, Wt=4):
 def test_index_2d_axis(device, axis):
     golden, out = _run_index_2d(device, axis)
     pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([ttnn.bfloat16]))
-    logger.info(f"G3 index axis={axis} | {msg}")
+    logger.info(f"index axis={axis} | {msg}")
     assert pcc_ok, msg
 
 
@@ -116,5 +112,5 @@ def test_index_2d_axes_are_distinct(device):
     ok_match, _ = comp_pcc(row_golden, row_out, lib.pcc_threshold([ttnn.bfloat16]))
     assert ok_match, "ROW-index output should match ROW golden"
     ok_cross, msg = comp_pcc(col_golden, row_out, 0.99)
-    logger.info(f"G3 index cross-check: ROW-out vs COL-golden (expect low) | {msg}")
+    logger.info(f"index cross-check: ROW-out vs COL-golden (expect low) | {msg}")
     assert not ok_cross, "ROW-index output matched COL golden — a Row<->Col index swap would slip through."

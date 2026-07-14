@@ -2,10 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Negative compile test (G2 / SA-02): two PackTile elements writing the same (CB, DEST slot).
-//
-// Two pack writes to the same output CB from the same DEST slot would race / overwrite. The
-// chain static_asserts on the collision (eltwise_chain.inl writer_pair_collide). This kernel
+// Negative compile test: two PackTile elements writing the same (CB, DEST slot) would race. The
+// chain static_asserts on the collision (chain_pack_writes_collide).
 // MUST fail to compile with "eltwise_chain: two PackTile elements collide on (dfb, dst_slot)".
 
 #include <cstdint>
