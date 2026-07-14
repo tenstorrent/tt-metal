@@ -749,6 +749,21 @@ class LTXDistilledPipeline(LTXPipeline):
             ttnn.multiply_(state.tt_audio_lat, state.tt_audio_pad_mask)
             logger.info(f"  Step {step_idx + 1}/{num_steps}: σ {sigma:.4f} → {sigma_next:.4f}")
 
+            # LTX_STEP_FP=1 (untraced only): fingerprint the latent after every step, so a
+            # divergence between two arms can be pinned to the exact step it first appears in —
+            # step 1 means a SINGLE transformer forward already differs.
+            if os.environ.get("LTX_STEP_FP") and not traced:
+                _latent_fp(
+                    f"{trace_key}_step{step_idx + 1}",
+                    LTXTransformerModel.device_to_host(
+                        state.tt_video_lat,
+                        ccl_manager=self.ccl_manager,
+                        parallel_config=self.parallel_config,
+                        sp_already_gathered=False,
+                        tp_already_gathered=True,
+                    ).squeeze(0),
+                )
+
         v_final = LTXTransformerModel.device_to_host(
             state.tt_video_lat,
             ccl_manager=self.ccl_manager,
