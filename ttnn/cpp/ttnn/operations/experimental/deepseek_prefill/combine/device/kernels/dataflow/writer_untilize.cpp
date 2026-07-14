@@ -85,12 +85,11 @@ void kernel_main() {
     noc.async_atomic_barrier();
 #endif
 
-#if MOCK_COMBINE_INTERNALS
-    // MOCK: writer_combine synthesizes its own tokens, so the untilized-data send path is bypassed.
-    // The INIT_ZEROS output-zeroing + sender signal above is KEPT so reader_combine's wait on the
-    // untilizer zero-done semaphore still completes (otherwise the init handshake deadlocks).
-    return;
-#endif
+    // MOCK note: under MOCK_COMBINE_INTERNALS the untilized-data send path is bypassed (writer_combine
+    // synthesizes its own tokens). The mock return is DEFERRED to just after the [cmb-place untilizer]
+    // placement log below, so mocked runs still report untilizer placement (matching sender/relay). The
+    // INIT_ZEROS output-zeroing + sender signal above is KEPT so reader_combine's wait on the untilizer
+    // zero-done semaphore still completes (otherwise the init handshake deadlocks).
 
     // ===== Untilized-data send path (runs for both TILE_LAYOUT and ROW_MAJOR) =====
     // cb_untilize_id (c_2) is filled by the compute kernel in TILE_LAYOUT or directly by
@@ -211,6 +210,13 @@ void kernel_main() {
         sender_noc_x,
         sender_noc_y,
         (uint32_t)noc_index);
+
+#if MOCK_COMBINE_INTERNALS
+    // MOCK: placement logged above; bypass the untilized-data send path (see note near the top). This
+    // runs after only cheap setup (arg reads + CircularBuffer address wrappers), before any CB/semaphore
+    // ops, so nothing blocks.
+    return;
+#endif
 
     Semaphore<> credits_sem(credits_semaphore_id);
     Semaphore<> counter_ready_sem(counter_ready_semaphore_id);
