@@ -55,3 +55,22 @@ set(TTNN_OP_REDUCTION_API_HEADERS
     generic/generic_reductions.hpp
     reduction_common/reduction_common.hpp
 )
+
+# Registered on the shared `ttnn` Python module target from
+# ttnn/cpp/ttnn/operations/reduction/CMakeLists.txt (see the `if(TARGET ttnn)` block there).
+# Listed here rather than inline in CMakeLists.txt so that
+# add/remove/rename doesn't touch a file with metalium-developers-infra
+# as a required co-owner.
+set(TTNN_OP_REDUCTION_NANOBIND_SRCS
+    reduction_nanobind.cpp
+    generic/std_var_reductions_nanobind.cpp
+    argmax/argmax_nanobind.cpp
+    accumulation/cumprod/cumprod_nanobind.cpp
+    accumulation/cumsum/cumsum_nanobind.cpp
+    accumulation/ema/ema_nanobind.cpp
+    moe/moe_nanobind.cpp
+    prod/prod_nanobind.cpp
+    sampling/sampling_nanobind.cpp
+    topk/topk_nanobind.cpp
+    manual_seed/manual_seed_nanobind.cpp
+)

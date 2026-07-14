@@ -21,6 +21,8 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::experimental::quasar {
 
@@ -117,7 +119,7 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
         .compile_time_args =
             {{"tiles_per_channel_dim", tiles_per_channel_dim}, {"tiles_per_width_dim", tiles_per_width_dim}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_block_id", "num_blocks"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
 
     // ---- Writer kernel (SRC1 -> DRAM) ----
@@ -140,7 +142,7 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
              {"element_size", datum_size(out_cb_data_format)}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"start_block_id", "num_blocks", "patch_height_offset", "output_offset"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
 
     // ---- Compute kernels (untilize SRC0 -> SRC1) ----
@@ -155,7 +157,12 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
                      .dfb_spec_name = SRC1, .accessor_name = "src1", .endpoint_type = DFBEndpointType::PRODUCER}},
             .compile_time_args =
                 {{"per_core_block_cnt", per_core_block_cnt}, {"per_core_block_tile_cnt", tiles_per_channel_dim}},
-            .hw_config = ComputeHardwareConfig{.fp32_dest_acc_en = fp32_dest_acc_en},
+            .hw_config = ttnn::to_compute_hardware_config(
+                device->arch(),
+                ttnn::ComputeKernelConfig{
+                    .math_fidelity = MathFidelity::HiFi4,
+                    .math_approx_mode = false,
+                    .fp32_dest_acc_en = fp32_dest_acc_en}),
         };
     };
     KernelSpec compute_main = make_compute(COMPUTE_MAIN, nblocks_per_core * tiles_per_width_dim);
@@ -354,7 +361,7 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}},
         .compile_time_args = std::move(reader_cta),
         .runtime_arg_schema = {.runtime_arg_names = {"src_index", "curr_src_row_index"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
 
     // ---- Writer kernel (SRC0 [+ SRC1 scratch] -> DRAM) ----
@@ -366,7 +373,7 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .compile_time_args = std::move(writer_cta),
         .runtime_arg_schema = {.runtime_arg_names = {"dst_index"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
     // SRC0 is consumed by the writer.
     writer.dfb_bindings.push_back(

@@ -93,6 +93,7 @@ class MathOperation(Enum):
     Sigmoid = OpSpec("sigmoid", MathOpType.SFPU_UNARY)
     Sin = OpSpec("sine", MathOpType.SFPU_UNARY)
     Silu = OpSpec("silu", MathOpType.SFPU_UNARY)
+    Signbit = OpSpec("signbit", MathOpType.SFPU_UNARY)
     Sqrt = OpSpec("sqrt", MathOpType.SFPU_UNARY)
     Square = OpSpec("square", MathOpType.SFPU_UNARY)
     Erfinv = OpSpec("erfinv", MathOpType.SFPU_UNARY)
@@ -105,6 +106,13 @@ class MathOperation(Enum):
     Rdiv = OpSpec("rdiv", MathOpType.SFPU_UNARY)
     Clamp = OpSpec("clamp", MathOpType.SFPU_UNARY)
     Hardtanh = OpSpec("hardtanh", MathOpType.SFPU_UNARY)
+    Tanhshrink = OpSpec("tanhshrink", MathOpType.SFPU_UNARY)
+    Floor = OpSpec("floor", MathOpType.SFPU_UNARY)
+    Ceil = OpSpec("ceil", MathOpType.SFPU_UNARY)
+    Trunc = OpSpec("trunc", MathOpType.SFPU_UNARY)
+    Frac = OpSpec("frac", MathOpType.SFPU_UNARY)
+    # Comparison-to-zero unary SFPU ops. cpp_enum_value must exactly match the
+    # SfpuType enumerator name so SFPU_UNARY_OPERATION = SfpuType::{value} resolves.
     EqualZero = OpSpec("equal_zero", MathOpType.SFPU_UNARY)
     NotEqualZero = OpSpec("not_equal_zero", MathOpType.SFPU_UNARY)
     LessThanZero = OpSpec("less_than_zero", MathOpType.SFPU_UNARY)
