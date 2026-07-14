@@ -10,7 +10,8 @@ from loguru import logger
 from tests.ttnn.utils_for_testing import assert_equal
 
 
-def test_untilize_with_padded_input(device):
+@pytest.mark.parametrize("mem_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+def test_untilize_with_padded_input(mem_config, device):
     """Regression test: untilize on a padded TILE tensor must discard padding.
 
     Issue #36765: untilize kept the padded values in the buffer (padded_shape
@@ -19,7 +20,7 @@ def test_untilize_with_padded_input(device):
     only the logical data (padded_shape == logical_shape).
     """
     torch_tensor = torch.randn(1, 1, 33, 33, dtype=torch.bfloat16)
-    tt_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, memory_config=mem_config, device=device)
 
     logger.debug(f"Input logical_shape: {tt_tensor.shape}")
     logger.debug(f"Input padded_shape:  {tt_tensor.padded_shape}")

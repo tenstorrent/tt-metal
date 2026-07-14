@@ -44,8 +44,9 @@ ttnn::Tensor untilize(
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    if (!input_tensor.is_sharded() && input_tensor.memory_config().buffer_type() == BufferType::DRAM &&
-        input_tensor.logical_shape() != input_tensor.padded_shape()) {
+    // If the input tensor is not sharded and logical shape != padded shape, then unpad the input tensor.
+    // conv op_slicing logic requires the padding information to be present in the input tensor.
+    if (!input_tensor.is_sharded() && input_tensor.logical_shape() != input_tensor.padded_shape()) {
         ttnn::Shape output_tensor_end(ttsl::SmallVector<uint32_t>(input_tensor.logical_shape().rank(), 0));
         int logical_rank = input_tensor.logical_shape().rank();
         for (int index = -1; index >= -logical_rank; --index) {
