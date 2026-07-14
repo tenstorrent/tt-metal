@@ -89,7 +89,7 @@ def test_device_proj_in_pcc(mesh_device: ttnn.MeshDevice, n_gen: int) -> None:
     )
 
     # Host reference components sharing the same random weights.
-    ref_proj_in = nn.Linear(_PATCH_LATENT_DIM, _HIDDEN, bias=False).to(torch.bfloat16)
+    ref_proj_in = nn.Linear(_PATCH_LATENT_DIM, _HIDDEN, bias=True).to(torch.bfloat16)
     ref_layer = (
         RefDecoderLayer(
             hidden_size=_HIDDEN,
@@ -110,6 +110,7 @@ def test_device_proj_in_pcc(mesh_device: ttnn.MeshDevice, n_gen: int) -> None:
     # Sync weights: TT trunk ← reference random weights.
     state = {
         "proj_in.weight": ref_proj_in.weight,
+        "proj_in.bias": ref_proj_in.bias,
         **{f"layers.0.{k}": v for k, v in ref_layer.state_dict().items()},
         "norm_moe_gen.weight": ref_norm.weight,
         "norm.weight": ref_norm.weight,  # und norm (output unused in I2V)
