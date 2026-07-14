@@ -340,7 +340,9 @@ def _scratch_cb(cb_id, data_format, num_tiles):
     return ttnn.CBDescriptor(total_size=tile_size * num_tiles, core_ranges=_single_core(), format_descriptors=[fmt])
 
 
-def create_program_descriptor(input_tensor, output_tensor, *, method, precision, width_tiles, kernel_iters=1):
+def create_program_descriptor(
+    input_tensor, output_tensor, *, method, precision, width_tiles, kernel_iters=1, math_fidelity=None
+):
     if method not in _METHOD_ID:
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
     input_dtype, accum_dtype = split_precision(precision)
@@ -384,9 +386,12 @@ def create_program_descriptor(input_tensor, output_tensor, *, method, precision,
         source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
         core_ranges=_single_core(),
         compile_time_args=[width_tiles, method_id, kernel_iters, int(fp32_dest), scaler_bits],
-        # HiFi4 fixes the reduce's scaler-multiply fidelity across every variant, so the measured
-        # accuracy gap is the input/accumulation dtype, not a fidelity difference.
-        config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=fp32_dest),
+        # HiFi4 (the default) fixes the reduce's scaler-multiply fidelity across every variant, so the
+        # measured accuracy gap is the input/accumulation dtype, not a fidelity difference. Pass an
+        # explicit `math_fidelity` to sweep that axis (LoFi/HiFi2/HiFi3/HiFi4) instead.
+        config=ttnn.ComputeConfigDescriptor(
+            math_fidelity=math_fidelity or ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=fp32_dest
+        ),
     )
     scaler = ttnn.KernelDescriptor(
         kernel_source=_SCALER_KERNEL,
@@ -411,7 +416,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, method, precision,
     return ttnn.ProgramDescriptor(kernels=[scaler, compute], semaphores=[], cbs=cbs)
 
 
-def run_op(input_tensor, *, method, precision, width_tiles, kernel_iters=1):
+def run_op(input_tensor, *, method, precision, width_tiles, kernel_iters=1, math_fidelity=None):
     """Allocate the fp32 single-tile output and run one (method, precision) over the resident row."""
     output = ttnn.allocate_tensor_on_device(
         ttnn.Shape([TILE, TILE]),
@@ -421,6 +426,12 @@ def run_op(input_tensor, *, method, precision, width_tiles, kernel_iters=1):
         create_sharded_memory_config(1),
     )
     descriptor = create_program_descriptor(
-        input_tensor, output, method=method, precision=precision, width_tiles=width_tiles, kernel_iters=kernel_iters
+        input_tensor,
+        output,
+        method=method,
+        precision=precision,
+        width_tiles=width_tiles,
+        kernel_iters=kernel_iters,
+        math_fidelity=math_fidelity,
     )
     return ttnn.generic_op([input_tensor, output], descriptor)
