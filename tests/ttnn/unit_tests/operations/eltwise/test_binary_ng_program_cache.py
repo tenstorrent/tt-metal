@@ -132,6 +132,33 @@ def test_ng_inplace_cache_reuse_different_shapes(device, isolate_program_cache, 
     assert device.cache_entries_counter.total == 1  # proves it was a hit, not a rebuild masking the bug
 
 
+def test_ng_inplace_cache_hit_sharded_readdresses(device, isolate_program_cache):
+    """binary_ng in-place add on SHARDED tensors — the sharding mode SDXL exercised (silu) — driven
+    through binary_ng's opt-in fast path. Repeated at the SAME shard config (sharded binary_ng keys
+    shard_volume into the hash, so a different shape would MISS, not hit) but with freshly-allocated
+    operands kept alive, so each cache HIT sees a DIFFERENT buffer address. binary_ng's tensor-backed
+    CB / rt-arg addresses must be re-patched on the hit (no rebuild) or the result is stale. Guards
+    the sharded in-place path that is now binary_ng's responsibility as the sole opt-in op."""
+    shape = [1, 1, 256, 256]
+    mem = ttnn.create_sharded_memory_config(
+        shape, core_grid=ttnn.CoreGrid(y=8, x=1), strategy=ttnn.ShardStrategy.HEIGHT
+    )
+    keep_alive = []  # hold refs so each iteration's tensors get fresh (different) addresses
+    for i in range(4):
+        torch.manual_seed(i)
+        a = torch.rand(shape, dtype=torch.bfloat16)
+        b = torch.rand(shape, dtype=torch.bfloat16)
+        tt_a = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
+        tt_b = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
+        with device.cache_entries_counter.measure():
+            tt_c = ttnn.add(tt_a, tt_b, output_tensor=tt_a, memory_config=mem)  # in-place, sharded
+        keep_alive += [tt_a, tt_b, tt_c]
+        assert_with_pcc(a + b, ttnn.to_torch(tt_c), 0.999)
+
+    # One shared program reused across all four differently-addressed in-place hits.
+    assert device.cache_entries_counter.total == 1
+
+
 def test_ng_cache_reuse_scalar_different_values(device, isolate_program_cache):
     """Different scalar values but same op -> 1 cache entry, different outputs."""
     shape = [1, 1, 32, 64]

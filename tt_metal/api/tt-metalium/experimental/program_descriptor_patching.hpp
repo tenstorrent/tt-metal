@@ -25,7 +25,10 @@
  *   args.push_back(num_tiles);    // uint32_t
  *   kernel_desc.emplace_runtime_args(core, std::move(args));
  *
- *   // In the adapter (cache miss): store resolved bindings
+ *   // In the adapter (cache miss): store resolved bindings.  Pass num_input_buffers and, for an op
+ *   // that re-applies every cache-hit-varying arg itself, allow_inplace_output_tensor_alias=true to
+ *   // keep the fast path when its output_tensor is carried in tensor_args and aliases an input
+ *   // (surfaced from the op via the ttnn trait allow_inplace_program_cache_alias; see below).
  *   auto tensor_buffers = collect_tensor_buffers(tensor_args, tensor_return_value);
  *   auto resolved = tt::tt_metal::resolve_bindings(program, desc, tensor_buffers);
  *
