@@ -11,6 +11,7 @@
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 #include "ttnn/operations/ccl/mesh_partition/mesh_partition_nanobind.hpp"
 #include "ttnn/operations/ccl/all_broadcast/all_broadcast_nanobind.hpp"
@@ -37,7 +38,14 @@ void bind_common(nb::module_& mod) {
 
     mod.def(
         "get_usable_topology",
-        &ttnn::ccl::get_usable_topology,
+        [](const Tensor& tensor,
+           const std::optional<tt::tt_fabric::Topology>& topology,
+           const std::optional<uint32_t>& cluster_axis) {
+            TT_FATAL(
+                tt::tt_metal::is_device_tensor(tensor),
+                "get_usable_topology requires a device tensor; got a host tensor whose mesh placement is unknown");
+            return ttnn::ccl::get_usable_topology(tensor, topology, cluster_axis);
+        },
         nb::arg("tensor"),
         nb::arg("topology") = nb::none(),
         nb::arg("cluster_axis") = nb::none(),
