@@ -12,6 +12,8 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -186,7 +188,8 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
         TensorParameter{.unique_id = BLK_OUTPUT_TENSOR, .spec = output.tensor_spec()},
     };
 
-    ComputeHardwareConfig compute_hw_template{.fp32_dest_acc_en = fp32_llk_acc};
+    ttnn::ComputeKernelConfig compute_config_template{
+        .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_llk_acc};
 
     uint32_t input_row_bytes = input_single_tile_size / TILE_HEIGHT;
     for (const auto& g : groups) {
@@ -241,7 +244,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
                       "single_block_size_col_arg",
                       "sub_block_width_size",
                       "single_sub_block_size_row_arg"}},
-            .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+            .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
         });
 
         // Writer: consumes c_16 (out); writes output tensor.
@@ -257,13 +260,14 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
                  {"total_tiles_per_row", total_tiles_per_row}},
             .runtime_arg_schema =
                 {.runtime_arg_names = {"start_id", "single_block_size_row_arg", "single_block_size_col_arg"}},
-            .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
         });
 
         // Compute: consumes c_0 (in), produces c_16 (out).
-        ComputeHardwareConfig compute_hw = compute_hw_template;
+        ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_config_template);
         if (fp32_llk_acc) {
-            compute_hw.unpack_to_dest_mode = {{g.in, UnpackToDestMode::UnpackToDestFp32}};
+            std::visit(
+                [&](auto& c) { c.unpack_to_dest_mode.emplace(g.in, UnpackToDestMode::UnpackToDestFp32); }, compute_hw);
         }
         spec.kernels.push_back(KernelSpec{
             .unique_id = g.compute,

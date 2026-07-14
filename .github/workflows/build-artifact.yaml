@@ -83,6 +83,13 @@ on:
         description: >-
           Git fetch depth for the checkout step. Must be large enough to
           include all tags and history needed for `git describe`.
+      checkout-filter:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Partial-clone filter for the checkout (e.g. 'tree:0' or 'blob:none').
+          Empty (default) means a normal, non-partial clone.
       ref:
         required: false
         type: string
@@ -246,6 +253,13 @@ on:
         description: >-
           Git fetch depth for the checkout step. Must be large enough to
           include all tags and history needed for `git describe`.
+      checkout-filter:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Partial-clone filter for the checkout (e.g. 'tree:0' or 'blob:none').
+          Empty (default) means a normal, non-partial clone.
       wheel-ref:
         required: false
         type: string
@@ -533,6 +547,7 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           fetch-depth: ${{ inputs.fetch-depth }}
           fetch-tags: true # Need tags for `git describe`
+          filter: ${{ inputs.checkout-filter }}
 
       - name: Create ccache tmpdir
         run: |
@@ -762,3 +777,4 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       build-type: ${{ inputs.build-type || 'Release' }}
       runs-on: ${{ inputs['runs-on'] }}
+      checkout-filter: ${{ inputs.checkout-filter }}
