@@ -243,6 +243,15 @@ Tensor group_norm(
         TT_FATAL(input_mask->buffer() != nullptr, "Input mask must be allocated in buffers on device!");
         TT_FATAL(input_tensor.device() == input_mask->device(), "Input and input mask tensors must be on same device");
     }
+
+    // Program factories require output dtype == input dtype.
+    const auto out_dtype = dtype.value_or(input_tensor.dtype());
+    TT_FATAL(
+        out_dtype == input_tensor.dtype(),
+        "group_norm output dtype must match input dtype ({}), got dtype={}",
+        input_tensor.dtype(),
+        out_dtype);
+
     const auto arch = input_tensor.device()->arch();
     const auto math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     const auto approx_mode = true;
@@ -377,7 +386,7 @@ Tensor group_norm(
             .im_data_format = (input_tensor.dtype() == DataType::FLOAT32 && (!use_welford || fp32_dest_acc_en))
                                   ? DataType::FLOAT32
                                   : DataType::BFLOAT16,
-            .out_data_format = dtype.value_or(input_tensor.dtype()),
+            .out_data_format = out_dtype,
             .inplace = inplace.value_or(false),
             .output_layout = output_layout.value_or(input_tensor.layout())};
         return ttnn::prim::group_norm(
@@ -404,7 +413,7 @@ Tensor group_norm(
         .im_data_format = (input_tensor.dtype() == DataType::FLOAT32 && (!use_welford || fp32_dest_acc_en))
                               ? DataType::FLOAT32
                               : DataType::BFLOAT16,
-        .out_data_format = dtype.value_or(input_tensor.dtype()),
+        .out_data_format = out_dtype,
         .inplace = inplace.value_or(false),
         .output_layout = output_layout.value_or(input_tensor.layout()),
         .num_out_blocks = core_grid_auto_selected ? -1 : num_out_blocks.value_or(1)};
