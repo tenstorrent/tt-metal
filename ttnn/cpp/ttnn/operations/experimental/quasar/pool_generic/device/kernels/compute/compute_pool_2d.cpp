@@ -270,6 +270,21 @@ void kernel_main() {
                 UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE12u));
                 UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)chunk));
                 curr_in_cb.wait_front(1);
+                // [DIAG] reduce-input geometry (Bug 1 straddle check): rd = strided-read base, esz = bytes
+                // per entry, t2r = tiles this reduce strides over. If the strided row walk for t2r tiles
+                // exceeds esz it reads into the next entry (wrong rows). First few sticks only (flood guard).
+                if (n < 4) {
+                    UNPACK(DPRINT(
+                        "POOLRED n={} chunk={} cb={} rd={} esz={} nent={} t2r={} intiles={}\n",
+                        (uint32_t)n,
+                        (uint32_t)chunk,
+                        (uint32_t)curr_in_cb_id,
+                        (uint32_t)curr_in_cb.get_read_ptr(),
+                        (uint32_t)curr_in_cb.get_entry_size(),
+                        (uint32_t)curr_in_cb.get_total_num_entries(),
+                        (uint32_t)tiles_to_reduce,
+                        (uint32_t)in_ntiles_c));
+                }
                 unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                     curr_in_cb_id,
                     curr_scalar_cb_id,
@@ -425,6 +440,22 @@ void kernel_main() {
                 // descriptor still bound to scratch_cb_0 -> the pack landed nowhere and reader1 read an
                 // all-zero tile. Re-init the pack_untilize for THIS stick's scratch CB before packing so
                 // both scratch_cb_0 (even) and scratch_cb_1 (odd) get a valid, CB-matched descriptor.
+                // [DIAG] pack bounds (Bug 2 PACR0_TILE_INC 0x19): ntiles = tiles this pack_untilize_dest
+                // writes; cap = scratch CB byte capacity; npages/esz = its entry geometry. If
+                // ntiles*esz > cap (or ntiles exceeds what the scratch descriptor addresses) the pack tile
+                // increment crosses L1_LIMIT_ADDR -> fault. Printed BEFORE the pack so it flushes pre-fault.
+                if (n < 4) {
+                    PACK(DPRINT(
+                        "POOLPACK n={} scr_cb={} wptr={} cap={} npages={} esz={} ntiles={} intiles={}\n",
+                        (uint32_t)n,
+                        (uint32_t)curr_scratch_cb_id,
+                        (uint32_t)curr_scratch_cb.get_write_ptr(),
+                        (uint32_t)(curr_scratch_cb.get_total_num_entries() * curr_scratch_cb.get_entry_size()),
+                        (uint32_t)scratch_npages,
+                        (uint32_t)curr_scratch_cb.get_entry_size(),
+                        (uint32_t)(last_c_block ? partial_iter_output_tiles : max_tiles_per_iter),
+                        (uint32_t)in_ntiles_c));
+                }
                 pack_untilize_dest_init<max_tiles_per_iter>(curr_scratch_cb_id);
                 if (last_c_block) {
                     pack_untilize_dest<partial_iter_output_tiles>(curr_scratch_cb_id, 1, 0);
