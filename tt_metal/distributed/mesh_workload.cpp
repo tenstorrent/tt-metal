@@ -104,49 +104,10 @@ void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Prog
 
 void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device) {
     auto& program = programs_.at(device_range);
-    program.impl().compile(mesh_device);
-    program.impl().allocate_circular_buffers(mesh_device);
-    program.impl().validate_circular_buffer_core_ranges(mesh_device);
-    program.impl().validate_circular_buffer_region(mesh_device);
-    program.impl().finalize_dataflow_buffer_configs();
-    program.impl().allocate_dataflow_buffers(mesh_device);
-    // Metal 2.0 scratchpads stack on the DFB allocations, so must allocate them AFTER the DFBs are placed.
-    // Their locations are passed as implicit CRTAs, so allocate them BEFORE generate_dispatch_commands snapshots.
-    program.impl().allocate_scratchpads(mesh_device);
-    program.impl().validate_dataflow_buffer_region(mesh_device);
-}
-
-void MeshWorkloadImpl::add_program_and_compile(
-    const MeshCoordinateRange& device_range, Program&& program, MeshDevice& mesh_device) {
-    if (!program_binary_status_.empty()) {
-        TT_FATAL(
-            program_binary_status_.contains(mesh_device.id()),
-            "Reusing MeshWorkloads across MeshDevices is currently not supported.");
-    }
-    auto& added_program = add_program_impl(device_range, std::move(program));
-
-    // Compile and validate ahead of time as much as possible
-    added_program.impl().compile(&mesh_device);
-    added_program.impl().allocate_circular_buffers(&mesh_device);
-    added_program.impl().validate_circular_buffer_core_ranges(&mesh_device);
-    added_program.impl().validate_circular_buffer_region(&mesh_device);
-    added_program.impl().finalize_dataflow_buffer_configs();
-    added_program.impl().allocate_dataflow_buffers(&mesh_device);
-    // Validates only the DFB without considering the scratchpad region, as that requires runtime
-    // args to be set and must be validated at enqueue time.
-    added_program.impl().validate_dataflow_buffer_region(&mesh_device);
-
-    // Bind the workload to this MeshDevice ahead of any binary load. NotSent is accurate: the
-    // binaries have not been written yet.
-    set_program_binary_status(mesh_device.id(), ProgramBinaryStatus::NotSent);
+    program.impl().compile_and_allocate(mesh_device, false);
 }
 
 void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
-    if (!program_binary_status_.empty()) {
-        TT_FATAL(
-            program_binary_status_.contains(mesh_device->id()),
-            "Reusing MeshWorkloads across MeshDevices is currently not supported.");
-    }
     // Multi-Step Compile:
     // 1. Compile Kernel Binaries
     // 2. Allocate and Validate CBs
@@ -174,10 +135,8 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
         TT_FATAL(
             program_binary_status_.contains(mesh_device->id()),
             "Reusing MeshWorkloads across MeshDevices is currently not supported.");
-    }
-    if (get_program_binary_status(mesh_device->id()) != ProgramBinaryStatus::NotSent) {
         TT_FATAL(
-            get_program_binary_status(mesh_device->id()) == ProgramBinaryStatus::Committed,
+            program_binary_status_.at(mesh_device->id()) == ProgramBinaryStatus::Committed,
             "Expected Program Binaries to be committed to DRAM.");
     } else {
         // Allocate kernel binary buffers of max size across all devices, to ensure we have lock step allocation.
@@ -483,11 +442,6 @@ std::unordered_map<MeshCoordinateRange, Program>& MeshWorkload::get_programs() {
 
 const std::unordered_map<MeshCoordinateRange, Program>& MeshWorkload::get_programs() const {
     return pimpl_->get_programs();
-}
-
-void MeshWorkload::add_program_and_compile(
-    const MeshCoordinateRange& device_range, Program&& program, MeshDevice& mesh_device) {
-    pimpl_->add_program_and_compile(device_range, std::move(program), mesh_device);
 }
 
 // For testing purposes only

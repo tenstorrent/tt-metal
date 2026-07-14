@@ -27,7 +27,7 @@ namespace tt::tt_metal::experimental {
 // INVARIANT: A successfully constructed Program is always valid.
 //
 Program MakeProgramFromSpec(
-    const distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation = false);
+    distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation = false);
 
 // Create a MeshWorkload object from a set of region-mapped ProgramSpecs
 // (This will become a constructor for the MeshWorkload class)

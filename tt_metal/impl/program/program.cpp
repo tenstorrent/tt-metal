@@ -556,6 +556,65 @@ std::vector<std::string> ProgramImpl::get_registered_kernel_names() const {
     return names;
 }
 
+void ProgramImpl::reserve_runtime_arg_buffers() {
+    if (!metal2_registry_) {
+        return;
+    }
+
+    for (const std::string& kernel_name : get_registered_kernel_names()) {
+        const KernelRTASchema* schema = get_kernel_rta_schema(kernel_name);
+        if (schema == nullptr) {
+            continue;
+        }
+
+        std::shared_ptr<Kernel> kernel = get_kernel_by_spec_name(kernel_name);
+        if (kernel == nullptr) {
+            continue;
+        }
+
+        // CRTA word count is fully determined by ProgramSpec resolution:
+        //   [ named | tensor bindings | scratchpads | common varargs ]
+        // vararg_section_offset == named + bindings + scratchpads.
+        const KernelCrtaLayout layout = kernel->get_crta_layout();
+        const size_t crta_words =
+            static_cast<size_t>(layout.vararg_section_offset) + schema->num_common_runtime_varargs;
+
+        // Per-node RTAs: named count + per-node vararg count from the schema.
+        const size_t named_rta_words = schema->runtime_arg_names.size();
+
+        // Reserve unique RTAs first so set_common_runtime_args can validate against
+        // max_runtime_args_per_core_ once CRTAs are installed.
+        for (const CoreCoord& core : kernel->logical_cores()) {
+            size_t vararg_words = 0;
+            if (auto it = schema->num_runtime_varargs_per_node.find(core);
+                it != schema->num_runtime_varargs_per_node.end()) {
+                vararg_words = it->second;
+            }
+            const size_t rta_words = named_rta_words + vararg_words;
+            if (rta_words == 0) {
+                continue;
+            }
+            // set_runtime_args may only allocate on the first call; skip if already sized
+            // (e.g. SetProgramRunArgs ran earlier on a non-factory path).
+            if (!kernel->runtime_args(core).empty()) {
+                continue;
+            }
+            std::vector<uint32_t> zeros(rta_words, 0u);
+            kernel->set_runtime_args(core, zeros);
+        }
+
+        if (crta_words == 0) {
+            continue;
+        }
+        // set_common_runtime_args may only be called once; SetProgramRunArgs overwrites in place after.
+        if (!kernel->common_runtime_args().empty()) {
+            continue;
+        }
+        std::vector<uint32_t> zeros(crta_words, 0u);
+        kernel->set_common_runtime_args(zeros);
+    }
+}
+
 void ProgramImpl::register_tensor_parameter(
     const std::string& name,
     const TensorSpec& spec,
@@ -1306,20 +1365,6 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
 
                 handle.allocated_address = static_cast<uint32_t>(addr);
 
-                // Patch the allocated address into the kernel's CRTA buffer. This runs at Program-compile
-                // time, upstream of where dispatch delivers runtime args to the device:
-                //  - FD: the fast/mesh path snapshots the CRTA buffer into the command stream
-                //  - SD: the slow-dispatch path writes it via WriteRuntimeArgsToDevice
-                //
-                // An implicit CRTA slot to hold the scratchpad address is reserved at Program creation.
-                // (The actual CRTA buffer itself is allocated when SetProgramRunArgs runs.)
-                // Now, we populate the scratchpad address.
-                //
-                TT_FATAL(
-                    !kernel->common_runtime_args().empty(),
-                    "CRTA buffer is not allocated; cannot populate scratchpad addresses for kernel {}. "
-                    "Ensure that SetProgramRunArgs is called before attempting to enqueue a Program.",
-                    kernel->name());
                 TT_FATAL(
                     handle.allocated_address != 0,
                     "Internal error: scratchpad '{}' on kernel '{}' "
@@ -1327,8 +1372,20 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
                     handle.accessor_name,
                     kernel->name());
 
-                RuntimeArgsData& crta = kernel->common_runtime_args_data();
-                crta.data()[handle.addr_crta_word] = handle.allocated_address;
+                // Patch the allocated address into the kernel's CRTA buffer if it exists.
+                // On the Metal 2.0 factory path, reserve_runtime_arg_buffers pre-sizes the CRTA
+                // buffer before this runs, so the address is updated here. If CRTA is not yet allocated
+                // (legacy order: SetProgramRunArgs first), SetProgramRunArgs copies
+                // handle.allocated_address into the scratchpad section when it builds the buffer.
+                // This allows for allocation of scratchpad and the CRTA buffer to be order agnostic.
+                //
+                // Usage of the CRTA buffer:
+                //  - FD: the fast/mesh path snapshots the CRTA buffer into the command stream
+                //  - SD: the slow-dispatch path writes it via WriteRuntimeArgsToDevice
+                if (!kernel->common_runtime_args().empty()) {
+                    RuntimeArgsData& crta = kernel->common_runtime_args_data();
+                    crta.data()[handle.addr_crta_word] = handle.allocated_address;
+                }
             }
         }
     }
@@ -2281,6 +2338,23 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     compiled_.insert(build_env.build_key());
 
     Inspector::program_compile_finished(this, device, build_env.build_key());
+}
+
+void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_dispatch) {
+    this->compile(device, force_slow_dispatch);
+    this->allocate_circular_buffers(device);
+    this->validate_circular_buffer_core_ranges(device);
+    this->validate_circular_buffer_region(device);
+    this->finalize_dataflow_buffer_configs();
+    this->allocate_dataflow_buffers(device);
+
+    // Pre-size Metal 2.0 RTA/CRTA host buffers from the registered schema before scratchpad allocation and
+    // finalize_offsets. This is a no-op for programs without a Metal 2.0 registry.
+    this->reserve_runtime_arg_buffers();
+
+    // Metal 2.0 scratchpads stack on the DFB allocations and their locations are passed as implicit CRTAs.
+    this->allocate_scratchpads(device);
+    this->validate_dataflow_buffer_region(device);
 }
 
 void detail::ProgramImpl::set_runtime_id(ProgramId id) { this->runtime_id = id; }

@@ -524,12 +524,13 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     };
 
     // Append a kernel's scratchpad CRTA section to `out`, in binding order: one word per scratchpad
-    // binding, holding the scratchpad's allocated L1 base address. The address is 0 here on the first
-    // SetProgramRunArgs (the scratchpad is allocated later, at program-compile time, and the slot is
-    // then patched in place — see ProgramImpl::allocate_scratchpads); on any later re-assembly the
-    // handle already carries the allocated address, so it is filled directly. The section is always
-    // present (sized by the kernel's scratchpad bindings), so the buffer's word count is stable across
-    // re-set calls (install_crtas asserts that).
+    // binding, holding the scratchpad's allocated L1 base address. On the factory path,
+    // reserve_runtime_arg_buffers + allocate_scratchpads may already have filled this; on the
+    // legacy order (SetProgramRunArgs before allocate_scratchpads) the address is 0 here and is
+    // patched later. On any re-assembly the handle already carries the allocated address, so it
+    // is filled directly. The section is always present (sized by the kernel's scratchpad
+    // bindings), so the buffer's word count is stable across re-set calls (install_crtas asserts
+    // that).
     auto append_scratchpad_crtas = [](const auto& scratchpad_handles, std::vector<uint32_t>& out) {
         for (const auto& handle : scratchpad_handles) {
             out.push_back(handle.allocated_address);
