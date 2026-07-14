@@ -42,7 +42,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 PCC = 0.97
 
 
-def _run(mesh_device, *, kernel, padding, full_inner_dim):
+def _run(mesh_device, *, kernel, padding, full_inner_dim, math_fidelity):
     device = mesh_device
     torch.manual_seed(0)
 
@@ -92,7 +92,7 @@ def _run(mesh_device, *, kernel, padding, full_inner_dim):
         reshard_if_not_optimal=True,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
-        device.arch(), math_fidelity=ttnn.MathFidelity.LoFi, packer_l1_acc=True
+        device.arch(), math_fidelity=math_fidelity, packer_l1_acc=True
     )
 
     out, [oh, ow], [tt_weight, tt_bias] = ttnn.experimental.quasar.conv2d(
@@ -126,13 +126,24 @@ def _run(mesh_device, *, kernel, padding, full_inner_dim):
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
-    "kernel, padding, full_inner_dim",
+    "math_fidelity",
     [
-        pytest.param((1, 1), 0, False, id="mm_1x1"),
-        pytest.param((3, 3), 0, False, id="conv_3x3_p0_fidF"),
-        pytest.param((3, 3), 0, True, id="conv_3x3_p0_fidT"),
-        pytest.param((3, 3), 1, False, id="conv_3x3_p1_fidF"),
+        pytest.param(ttnn.MathFidelity.LoFi, id="LoFi"),
+        pytest.param(ttnn.MathFidelity.HiFi4, id="HiFi4"),  # rules out bf16-LoFi precision as the cause
     ],
 )
-def test_conv2d_correctness_bisect(mesh_device, kernel, padding, full_inner_dim):
-    _run(mesh_device, kernel=kernel, padding=padding, full_inner_dim=full_inner_dim)
+@pytest.mark.parametrize(
+    "kernel, padding, full_inner_dim",
+    [
+        # mm_1x1: base matmul path (no halo/tilize) -- is the base conv even correct on Quasar?
+        pytest.param((1, 1), 0, False, id="mm_1x1"),
+        # conv_3x3_p0_fidF: halo gather + tilize path. (full_inner_dim True/False and p0/p1 were already
+        # shown identical/near-identical at ~0.85, so full_inner_dim and halo zero-pad are NOT the cause.)
+        pytest.param((3, 3), 0, False, id="conv_3x3_p0"),
+    ],
+)
+def test_conv2d_correctness_bisect(mesh_device, kernel, padding, full_inner_dim, math_fidelity):
+    # Prior Quasar run (LoFi): conv_3x3_p0 fidF==fidT==0.8547, p1==0.8552 -> full_inner_dim and halo
+    # zero-pad ruled out. Remaining questions: (1) mm_1x1 -- is the BASE matmul/output correct? (2) does
+    # HiFi4 lift 3x3 to ~0.99 (=> the ~0.85 was bf16-LoFi precision, NOT a logic bug)?
+    _run(mesh_device, kernel=kernel, padding=padding, full_inner_dim=full_inner_dim, math_fidelity=math_fidelity)
