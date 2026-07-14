@@ -139,7 +139,7 @@ FORCE_INLINE void shift_to_next_chunk(uint8_t& chunk_encodings) { chunk_encoding
 // Blackhole-only so Wormhole builds are untouched; this is the BH-LB profiling experiment.
 // ===========================================================================================
 #if defined(ARCH_BLACKHOLE)
-#define FABRIC_SKIP_LOCAL_DRAM_WRITE 1
+// #define FABRIC_SKIP_LOCAL_DRAM_WRITE 1
 #endif
 
 // Core implementation of unicast-to-local-chip dispatch.
