@@ -28,6 +28,7 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <chrono>
 #include <optional>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -841,8 +842,8 @@ TEST_F(ProgramRunArgsTestQuasar, MultiNode_MissingOneNodeFails) {
 inline ProgramSpec MakeSpecWithNamedArgs(
     const NodeCoord& node, const std::vector<std::string>& named_rtas, const std::vector<std::string>& named_crtas) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
-    spec.kernels[0].runtime_arg_schema.runtime_arg_names = named_rtas;
-    spec.kernels[0].runtime_arg_schema.common_runtime_arg_names = named_crtas;
+    spec.kernels[0].runtime_arg_schema.runtime_arg_names.assign(named_rtas.begin(), named_rtas.end());
+    spec.kernels[0].runtime_arg_schema.common_runtime_arg_names.assign(named_crtas.begin(), named_crtas.end());
     (void)node;  // node inherited from MakeMinimalValidProgramSpec (0,0)
     return spec;
 }
@@ -2562,6 +2563,125 @@ TEST(MergeProgramRunArgs, AppendsDistinctKernel) {
     ProgramRunArgs merged = MergeProgramRunArgs(std::move(a), rest);
     EXPECT_NE(FindKernel(merged, "dm_kernel"), nullptr);
     EXPECT_NE(FindKernel(merged, "compute_kernel"), nullptr);
+}
+
+// DISABLED micro-benchmark (not a correctness test): times the host-side ProgramRunArgs update entry
+// points on a deliberately fat spec; the signal is the relative before/after on the same Release binary.
+//   <test_binary> --gtest_also_run_disabled_tests --gtest_filter='*FastPathBench*'
+TEST_F(ProgramRunArgsTestGen1, DISABLED_FastPathBench_UpdateEntryPoints) {
+    // Env-configurable so a sweep can vary one knob at a time; unset => the standard fat spec.
+    // Knobs: TT_BENCH_{RTAS,CRTAS,BINDINGS,NODES,ITERS}.
+    auto env_size = [](const char* name, size_t dflt) -> size_t {
+        const char* v = std::getenv(name);
+        return (v != nullptr && *v != '\0') ? static_cast<size_t>(std::stoul(v)) : dflt;
+    };
+    const size_t kNumNamedRTAs = env_size("TT_BENCH_RTAS", 16);
+    const size_t kNumNamedCRTAs = env_size("TT_BENCH_CRTAS", 8);
+    const size_t kNumBindings = env_size("TT_BENCH_BINDINGS", 8);
+    const size_t kIters = env_size("TT_BENCH_ITERS", 20000);
+
+    const CoreCoord grid = mesh_device_->compute_with_storage_grid_size();
+    const size_t grid_count = static_cast<size_t>(grid.x) * static_cast<size_t>(grid.y);
+    const size_t num_nodes = std::min(env_size("TT_BENCH_NODES", grid_count), grid_count);
+    // First `num_nodes` device cores in row-major order, as a set of single-core ranges, so the
+    // node count can be swept independently of the (rectangular) device grid shape.
+    std::vector<NodeCoord> nodes;
+    std::set<NodeRange> node_ranges;
+    for (size_t i = 0; i < num_nodes; ++i) {
+        const NodeCoord c{i % grid.x, i / grid.x};
+        nodes.push_back(c);
+        node_ranges.insert(NodeRange{c, c});
+    }
+    const NodeRangeSet all_nodes(node_ranges);
+
+    // Gen1 (WH) spec: DM producer + compute consumer + DFB. All per-enqueue state lives on the DM
+    // kernel (kernels[0]) -- tensor bindings on a compute kernel are rejected by a temporary guard.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    auto& dm = spec.kernels[0];  // "dm_kernel"
+
+    std::vector<std::string> rta_names;
+    std::vector<std::string> crta_names;
+    for (size_t i = 0; i < kNumNamedRTAs; ++i) {
+        rta_names.push_back("rta_" + std::to_string(i));
+    }
+    for (size_t i = 0; i < kNumNamedCRTAs; ++i) {
+        crta_names.push_back("crta_" + std::to_string(i));
+    }
+    dm.runtime_arg_schema.runtime_arg_names.assign(rta_names.begin(), rta_names.end());
+    dm.runtime_arg_schema.common_runtime_arg_names.assign(crta_names.begin(), crta_names.end());
+
+    std::vector<TensorParameter> tparams;
+    for (size_t i = 0; i < kNumBindings; ++i) {
+        const auto name = "tensor_" + std::to_string(i);
+        tparams.push_back(MakeMinimalTensorParameter(name));
+        BindTensorParameterToKernel(dm, name, "acc_" + std::to_string(i));
+    }
+    spec.tensor_parameters = tparams;
+
+    // Place the work unit across the full device grid (per-node RTAs are the dominant cost).
+    spec.work_units = {MakeMinimalWorkUnit("wu", all_nodes, {"dm_kernel", "compute_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // ---- Allocate backing tensors (stable addresses; outlive the loop) ----
+    std::vector<MeshTensor> tensors;
+    tensors.reserve(tparams.size());
+    for (const auto& tp : tparams) {
+        tensors.push_back(AllocateTensorForBinding(*mesh_device_, tp));
+    }
+
+    // ---- Build full ProgramRunArgs (DM-kernel named args for every node) ----
+    ProgramRunArgs params;
+    ProgramRunArgs::KernelRunArgs dm_args;
+    dm_args.kernel = KernelSpecName{"dm_kernel"};
+    for (const auto& node : nodes) {
+        ProgramRunArgs::KernelRunArgs::RuntimeArgValues vals;
+        for (size_t i = 0; i < kNumNamedRTAs; ++i) {
+            vals[rta_names[i]] = static_cast<uint32_t>(i + 1);
+        }
+        dm_args.runtime_arg_values.push_back(
+            ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{node, std::move(vals)});
+    }
+    for (size_t i = 0; i < kNumNamedCRTAs; ++i) {
+        dm_args.common_runtime_arg_values[crta_names[i]] = static_cast<uint32_t>(i + 1);
+    }
+    params.kernel_run_args.push_back(std::move(dm_args));
+    // compute_kernel has an empty RTA/CRTA schema and is legitimately omitted from kernel_run_args.
+
+    for (size_t i = 0; i < tparams.size(); ++i) {
+        params.tensor_args.insert({tparams[i].unique_id, TensorArgument{tensors[i]}});
+    }
+
+    // Tensor-only args for the UpdateTensorArgs path.
+    Table<TensorParamName, TensorArgument> tensor_only_args;
+    for (size_t i = 0; i < tparams.size(); ++i) {
+        tensor_only_args.insert({tparams[i].unique_id, TensorArgument{tensors[i]}});
+    }
+
+    auto bench = [](const char* label, size_t iters, auto&& fn) {
+        fn();  // warm-up: first-invocation buffer allocation happens here, off the clock
+        const auto t0 = std::chrono::steady_clock::now();
+        for (size_t i = 0; i < iters; ++i) {
+            fn();
+        }
+        const auto t1 = std::chrono::steady_clock::now();
+        const double ns = std::chrono::duration<double, std::nano>(t1 - t0).count() / static_cast<double>(iters);
+        std::cout << "[FASTPATH_BENCH] " << label << ": " << ns << " ns/call" << std::endl;
+    };
+
+    std::cout << "[FASTPATH_BENCH] spec: " << num_nodes << " nodes, " << kNumNamedRTAs << " RTAs, " << kNumNamedCRTAs
+              << " CRTAs, " << tparams.size() << " tensor bindings, " << kIters << " iters" << std::endl;
+
+    bench("SetProgramRunArgs    (skip_validation=true) ", kIters, [&] {
+        SetProgramRunArgs(program, params, /*skip_validation=*/true);
+    });
+    bench("SetProgramRunArgs    (skip_validation=false)", kIters, [&] {
+        SetProgramRunArgs(program, params, /*skip_validation=*/false);
+    });
+    bench("UpdateProgramRunArgs (skip_validation=true) ", kIters, [&] {
+        UpdateProgramRunArgs(program, params, /*skip_validation=*/true);
+    });
+    bench("UpdateTensorArgs     (validation always on) ", kIters, [&] { UpdateTensorArgs(program, tensor_only_args); });
 }
 
 }  // namespace

@@ -359,7 +359,7 @@ void run_single_core_reduce_program(
     std::string reader_kernel_path;
     experimental::KernelSpec::CompileTimeArgs reader_cta_bindings;
     experimental::KernelSpec::CompilerOptions::Defines reader_defines;
-    std::vector<std::string> reader_runtime_arg_names;
+    std::vector<tt::tt_metal::experimental::RtaName> reader_runtime_arg_names;
     if (test_config.reduce_dim == ReduceDim::H) {
         reader_kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh_interleaved.cpp";
         bfloat16 bfloat_scaler_value = bfloat16(scaler);
