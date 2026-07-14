@@ -215,8 +215,9 @@ class HunyuanImage3SDPAAttention(nn.Module):
             query_states,
             key_states,
             value_states,
-            attn_mask=attention_mask,
+            attn_mask=attention_mask if not kwargs.get("is_causal") else None,
             dropout_p=0.0,
+            is_causal=bool(kwargs.get("is_causal")),
         )
 
         # ---- 6. Merge heads and output projection ----------------------------

@@ -86,7 +86,14 @@ from models.experimental.hunyuan_image_3_0.tt.recaption import run_recaption_on_
 from models.experimental.hunyuan_image_3_0.tt.scheduler import HunyuanTtScheduler
 from models.experimental.hunyuan_image_3_0.tt.wte import HunyuanTtWte, BackboneWteAdapter
 
-PROMPT = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("HY_PROMPT", "a photo of a cat, studio lighting")
+# Prompt precedence: HY_PROMPT_FILE (read whole file) > argv[1] > HY_PROMPT > default.
+# HY_PROMPT_FILE is handy for max-text-dimension tests (e.g. /tmp/long_prompt.txt).
+_PROMPT_FILE = os.environ.get("HY_PROMPT_FILE")
+if _PROMPT_FILE:
+    PROMPT = Path(_PROMPT_FILE).read_text()
+    print(f"[demo] prompt loaded from HY_PROMPT_FILE={_PROMPT_FILE} ({len(PROMPT)} chars)", flush=True)
+else:
+    PROMPT = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("HY_PROMPT", "a photo of a cat, studio lighting")
 STEPS = int(os.environ.get("HY_STEPS", "50"))
 NUM_LAYERS = int(os.environ.get("HY_NUM_LAYERS", "32"))
 GUIDANCE = float(os.environ.get("HY_GUIDANCE", "5.0"))
