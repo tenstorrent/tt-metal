@@ -272,7 +272,7 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                 const auto& shape = a.padded_shape();
                 uint32_t M = a.physical_volume() / shape[-1];
                 uint32_t K = shape[-1];
-                uint32_t Mt = M / tile_width;
+                uint32_t Mt = M / tile_height;
                 uint32_t Kt = K / tile_width;
                 // block
                 uint32_t block_h = program_config.block_h * tile_height;
@@ -393,7 +393,7 @@ TensorSpec LayerNormDeviceOperation::compute_output_specs(
     const auto& input_tensor = tensor_args.input;
     auto output_shape = input_tensor.logical_shape();
     auto output_padded_shape = input_tensor.padded_shape();
-
+    auto input_tile = input_tensor.tensor_spec().tile();
     if (operation_attributes.distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER) {
         const uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
         uint32_t num_tiles_w = operation_attributes.norm_type == LayerNormType::LAYERNORM ? 2 : 1;
@@ -415,7 +415,8 @@ TensorSpec LayerNormDeviceOperation::compute_output_specs(
                         operation_attributes.output_mem_config.buffer_type(),
                         shard_spec);
                     return TensorSpec(
-                        output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_config));
+                        output_shape,
+                        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE, input_tile), mem_config));
                 }
                 if (operation_attributes.distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
                     auto output_shard_spec = operation_attributes.output_mem_config.shard_spec().value();
@@ -439,7 +440,7 @@ TensorSpec LayerNormDeviceOperation::compute_output_specs(
                     output_shape,
                     TensorLayout::fromPaddedShape(
                         operation_attributes.dtype.value_or(input_tensor.dtype()),
-                        PageConfig(Layout::TILE),
+                        PageConfig(Layout::TILE, input_tile),
                         mem_config,
                         output_shape,
                         output_padded_shape));
@@ -448,7 +449,9 @@ TensorSpec LayerNormDeviceOperation::compute_output_specs(
                 return TensorSpec(
                     output_shape,
                     TensorLayout(
-                        input_tensor.dtype(), PageConfig(output_layout), operation_attributes.output_mem_config));
+                        input_tensor.dtype(),
+                        PageConfig(output_layout, input_tile),
+                        operation_attributes.output_mem_config));
             }
         },
         operation_attributes.program_config);
