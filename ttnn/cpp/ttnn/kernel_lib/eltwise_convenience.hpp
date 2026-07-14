@@ -15,7 +15,6 @@
  *
  *     mul<dfb_a, dfb_b, dfb_out>(EltwiseShape::tiles(n));         // streaming a * b
  *     sub<dfb_x, dfb_max, dfb_out, BroadcastDim::Col,             // softmax x - max
- *         BinaryDataFormatReconfig::Input, OperandKind::Scalar,
  *         InputLifecycle::Streaming, InputLifecycle::HeldStream>(shape);
  *     unary<Exp<>, dfb_in, dfb_out>(EltwiseShape::tiles(n));      // exp(x)
  *     binary_sfpu<DivBinary<>, dfb_a, dfb_b, dfb_out>(EltwiseShape::tiles(n)); // a / b (SFPU)

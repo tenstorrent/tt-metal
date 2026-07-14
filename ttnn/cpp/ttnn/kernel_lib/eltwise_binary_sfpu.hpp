@@ -350,9 +350,8 @@ _CKL_BIN_CMP_INT(GeIntBinary, ge_int_tile, ge_int_tile_init)
 
 #undef _CKL_BIN_CMP_INT
 
-// Quant / Requant / Dequant intentionally NOT included — their init() takes a
-// runtime zero_point argument, which does not fit the chain's `static E::init()`
-// dispatch. Supporting them would require the chain to thread a runtime argument
-// into element init.
+// Quant / Requant / Dequant are not currently included. (Their init() takes a runtime zero_point,
+// but that is NOT the blocker — the chain dispatches init on the element instance, so a
+// runtime-stateful init is already supported; Dropout does exactly this with its seed.)
 
 }  // namespace compute_kernel_lib

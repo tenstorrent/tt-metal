@@ -3,18 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-G1 (output side) — PackTile lifecycle / CB-synchronization. Run under --dev.
-
-Coverage spec: ttnn/cpp/ttnn/kernel_lib/docs/eltwise_helper_test_coverage.html (group G1 output).
+PackTile lifecycle / CB-synchronization (output side). Run under --dev.
 
 The output lifecycle decides whether the chain or the CALLER emits cb_reserve_back / cb_push_back.
 A miscount hangs the writer (BRISC) or overwrites an unpushed tile. out_lifecycle.cpp does an
 identity copy with a selectable OutputLifecycle and supplies the caller-side edge where needed.
 
-Limited to the 4 well-defined cells with documented real usage (Streaming, Bulk,
-BulkReservePerTile = SDPA reduce_c, CallerManaged = tt-train L1 accumulator). HeldReserve /
-DeferredReserve / Chunked are skipped — their n>1 reserve-without-push semantics are ambiguous
-(see TEST_DECISION_LOG.md).
+Covers the 4 well-defined cells (Streaming, Bulk, ReserveAllPushPerTile, CallerManaged);
+ReserveNonePushEnd / Chunked are skipped (ambiguous n>1 reserve-without-push semantics).
 """
 
 import torch
@@ -29,7 +25,7 @@ KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/lifecycle/out_lifecycle.cpp"
 OUT_LIFECYCLES = {
     0: "Streaming",
     1: "Bulk",
-    2: "BulkReservePerTile",
+    2: "ReserveAllPushPerTile",
     3: "CallerManaged",
 }
 
@@ -55,5 +51,5 @@ def test_output_lifecycle(device, life, name):
     golden = torch_in.to(torch.float32)
     out = ttnn.to_torch(output).to(torch.float32)
     pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([dt]))
-    logger.info(f"G1 output lifecycle={name} | no-hang + {msg}")
+    logger.info(f"output lifecycle={name} | no-hang + {msg}")
     assert pcc_ok, f"output lifecycle {name}: {msg}"
