@@ -65,6 +65,23 @@ INDEX, e.g. `cfg[runtime_var]=`, which DOES emit a `hint=UNRESOLVED` Finding.)
   separately routed through a recognized `TTI_WRCFG`/`REG2FLOP`.
 - **Fix:** extractor template-instantiation visiting to resolve the base word; deferred as risky.
 
+### L5 — diff-scope and the degrade-guard match changed files by BASENAME
+`--changed` mode only. `cli.py`'s `scope_to_changed` and guard-3 ("changed file(s) contributed NO
+facts") both key on `os.path.basename(...)` — because every evidence line is formatted
+`basename:line …` and scope matching must anchor on that prefix. If a changed `dirA/foo.h` fails to
+parse while a *different* `dirB/foo.h` yields facts, the shared basename `foo.h` makes the
+degraded-note suppressed AND can let a `dirB/foo.h` finding surface in a scope meant for
+`dirA/foo.h` — a not-analyzed changed file reads as analyzed.
+- **Risk:** CAP-REDUCTION — a false-all-clear-adjacent path: a not-analyzed changed file reads clean.
+- **Live today:** none — 0 duplicate `.h` basenames within either arch's audited set (`llk_lib` +
+  `common/inc`, incl. `common/inc/sfpu/`) on WH/BH/QSR, and `run.sh` restricts `--changed` to the
+  *current* arch tree, so a cross-arch basename collision cannot occur in one run.
+- **Fix:** key scoping on the full repo-relative path — which requires re-encoding every checker's
+  evidence line from `basename:line` to `path:line` (scope_to_changed anchors on that prefix).
+  Deferred: broad churn across all checkers + their tests for a dormant case.
+- **Fix hazard:** none of substance — a path-keyed rewrite is behavior-preserving wherever basenames
+  are unique (today, everywhere), so there is no live divergence to regression-test it against.
+
 ### X1 — object-method `async_read_with_state` not recalled by `noc_is_read`
 `noc_is_read` recalls the whole free-function `noc_async_read*` family by prefix, but its
 object-method branch matches only the exact name `async_read` — so the object form
