@@ -120,7 +120,7 @@ class CfgWordOverlap(Check):
             word, field = registry.resolve_word(idx, fb.addr32)
             if word is not None:
                 add("CONFIG", word, field, pw, f"mmio:{kind}")
-                # A runtime/loop additive offset (cfg[FIELD_ADDR32 + i]) resolves only
+                # A runtime/loop signed offset (cfg[FIELD_ADDR32 +/- i]) resolves only
                 # the BASE word; the write may span base+1..+N and that span is
                 # unknowable — surface it UNRESOLVED so it isn't silently reduced to
                 # the base word (the base write is still recorded above).

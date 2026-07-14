@@ -539,36 +539,37 @@ def write_is_full_word(how: str) -> bool:
 
 
 _WORD_OFFSET_RE = re.compile(
-    r"([A-Za-z_][A-Za-z0-9_]*_ADDR32)\s*(?:\+\s*(0[xX][0-9a-fA-F]+|\d+))?"
+    r"([A-Za-z_][A-Za-z0-9_]*_ADDR32)\s*(?:([+\-])\s*(0[xX][0-9a-fA-F]+|\d+))?"
 )
 # cfg_rmw / cfg_reg_rmw_tensix take a FIELD_RMW composite alias; the sibling
 # word-address macro is FIELD_ADDR32.
 _RMW_ALIAS_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)_RMW\b")
-# An *_ADDR32 word index carrying a NON-LITERAL additive offset, e.g.
+# An *_ADDR32 word index carrying a NON-LITERAL signed offset, e.g.
 # `cfg[FIELD_ADDR32 + i]` in a loop (with a runtime stride). resolve_word resolves
 # only the base word (its offset group is a literal), so the span base+1..+N is
 # silently lost — has_runtime_word_offset lets the checker surface that as UNRESOLVED
 # instead of reducing the write to the base word. The offset must START with an
 # IDENTIFIER char (`[A-Za-z_]`) — an unambiguous non-literal (a variable / another
-# field), distinguishing `+ i` (runtime) from `+ 0x18` / `+ 2` (literal, handled by
-# resolve_word). A leading-`(?![0-9])` form is wrong: `\s*` can match zero and let the
-# lookahead pass on the space before a literal.
+# field), distinguishing `+ i` / `- i` (runtime) from `+ 0x18` / `- 2` (SIGNED
+# literal, resolved by resolve_word). A leading-`(?![0-9])` form is wrong: `\s*` can
+# match zero and let the lookahead pass on the space before a literal.
 _RUNTIME_WORD_OFFSET_RE = re.compile(
     r"[A-Za-z_][A-Za-z0-9_]*_ADDR32\s*[+\-]\s*[A-Za-z_]"
 )
 
 
 def has_runtime_word_offset(text: str) -> bool:
-    """True if an *_ADDR32 index has a non-literal additive offset (runtime/loop
+    """True if an *_ADDR32 index has a non-literal signed offset (runtime/loop
     stride), so the write may span words beyond the resolved base — unknowable."""
     return bool(_RUNTIME_WORD_OFFSET_RE.search(text or ""))
 
 
 def resolve_word(text: str, addr32: dict):
     """Resolve the 32-bit CONFIG word an expression writes: find the first
-    *_ADDR32 token (+ optional literal offset) and look it up. Falls back to a
-    *_RMW alias (FIELD_RMW -> FIELD_ADDR32). Returns
-    (word:int, field:str) or (None, field_or_None)."""
+    *_ADDR32 token (+ optional SIGNED literal offset) and look it up. Falls back to
+    a *_RMW alias (FIELD_RMW -> FIELD_ADDR32). Returns
+    (word:int, field:str) or (None, field_or_None). A non-literal signed offset
+    (`+ i` / `- i`) is left for has_runtime_word_offset to surface as UNRESOLVED."""
     m = _WORD_OFFSET_RE.search(text or "")
     if m:
         field = m.group(1)
@@ -576,9 +577,11 @@ def resolve_word(text: str, addr32: dict):
         if base is None:
             return None, field
         try:  # a malformed offset (e.g. leading-zero '+ 08') must not abort the
-            off = int(m.group(2), 0) if m.group(2) else 0  # whole audit (cli.py
+            off = int(m.group(3), 0) if m.group(3) else 0  # whole audit (cli.py
         except ValueError:  # doesn't wrap chk.run) — treat as unresolved instead.
             return None, field
+        if m.group(2) == "-":  # signed literal: `FIELD_ADDR32 - 2` -> base-2, not base
+            off = -off
         return base + off, field
     a = _RMW_ALIAS_RE.search(text or "")
     if a:
