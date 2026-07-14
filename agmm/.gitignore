@@ -1,3 +1,9 @@
 # Raw multi-device op-perf dumps (large; supply out-of-band)
 transformer_stage1_ops_perf_results.csv
 transformer_stage2_ops_perf_results.csv
+
+# Per-run per-combo sweep archive (bulky, local drill-down only).
+# sweep_history.csv / sweep_latest.csv are intentionally NOT ignored — they are
+# the tracking record; commit them if you want the perf history versioned.
+sweeps/
+.valid_combos_*.json

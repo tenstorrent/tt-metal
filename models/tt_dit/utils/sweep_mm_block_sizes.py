@@ -471,7 +471,9 @@ def parse_ops_log(subdir, expected_ops=None):
 # ============================================================================
 
 
-def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_grid):
+def _build_op_runner(
+    cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_grid, math_fidelity=ttnn.MathFidelity.HiFi2
+):
     """Allocate tensors + return a run_op(m_blk, k_blk, n_blk, sb_h, sb_w, sync=True) closure.
 
     AGMM path: sharded input, dummy bias/addcmul (when use_addcmul), CCL semaphores,
@@ -481,7 +483,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
     """
     compute_config = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=math_fidelity,
         math_approx_mode=uc_cfg.get("math_approx_mode", False),
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
@@ -713,26 +715,47 @@ def _quiet_loguru():
     logger.add(sys.stderr, level="ERROR")
 
 
-@pytest.mark.timeout(7200)  # 2h — one worker now covers the full (M, K, N) grid
-@pytest.mark.parametrize("device_config", list(DEVICE_CONFIGS.keys()))
-@pytest.mark.parametrize("shape", SHAPES, ids=SHAPE_IDS)
-def test_mm_sweep_worker(device_config, shape):
-    """Run ALL (M_block, K_block, N_block) combos for a (device_config, shape).
+# String -> ttnn enum maps for the external (spec-file-driven) worker path. The
+# fusion knobs and dtype/fidelity in agmm/sweep_shapes.json are plain strings so
+# the spec file stays tool-agnostic; they're resolved to ttnn enums here.
+_FUSED_ACTIVATION_MAP = {
+    "gelu": (ttnn.UnaryOpType.GELU, False),  # exact
+    "gelu_approx": (ttnn.UnaryOpType.GELU, True),  # fast approx
+    "silu": (ttnn.UnaryOpType.SILU, False),
+    "relu": (ttnn.UnaryOpType.RELU, False),
+}
+_DTYPE_MAP = {
+    "bfloat16": ttnn.bfloat16,
+    "bfloat8_b": ttnn.bfloat8_b,
+    "float32": ttnn.float32,
+}
+_MATH_FIDELITY_MAP = {
+    "LoFi": ttnn.MathFidelity.LoFi,
+    "HiFi2": ttnn.MathFidelity.HiFi2,
+    "HiFi3": ttnn.MathFidelity.HiFi3,
+    "HiFi4": ttnn.MathFidelity.HiFi4,
+}
 
-    Designed to be invoked via run_device_profiler with TT_METAL_PROFILER_MID_RUN_DUMP=1.
-    Opens the mesh device once, sweeps every candidate, and periodically flushes
-    the device profiler buffer to avoid overflow.
+# Label under which a spec-file shape's fusion config is registered in
+# USE_CASE_CONFIGS so the L1 estimator (which looks up use_addcmul by use_case)
+# sees it. One shape per worker subprocess, so a fixed label is safe.
+EXTERNAL_USE_CASE = "__external__"
+
+
+def _run_shape_sweep(device_config, M, K, N, cgx, cgy, is_agmm, use_case, uc_cfg, dtype, math_fidelity):
+    """Sweep ALL (M_block, K_block, N_block) combos for one (device_config, shape).
+
+    Shared by the parametrized worker (SHAPES table) and the external worker
+    (spec-file / env-driven). Opens the mesh once, sweeps every candidate, and
+    periodically flushes the device profiler buffer to avoid overflow.
 
     Reads optional MM_SWEEP_EXPLICIT_COMBOS env var (JSON list of [m, k, n, sb_h, sb_w])
     to test a specific set of combos instead of the auto-generated grid.
-    Writes the list of combos that survived warmup to MM_SWEEP_VALID_COMBOS_FILE
-    if set, so the orchestrator can line CSV rows up with combos.
+    Writes the combos that survived warmup to MM_SWEEP_VALID_COMBOS_FILE if set,
+    so the orchestrator/runner can line CSV rows up with combos.
     """
-    _quiet_loguru()
-
     cfg = resolve_config(device_config)
-    M, K, N, cgx, cgy, is_agmm, use_case = shape
-    uc_cfg = USE_CASE_CONFIGS[use_case]
+    shape = (M, K, N, cgx, cgy, is_agmm, use_case)
 
     cluster_size = cfg["mesh_shape"][cfg["cluster_axis"]]
     M_per_core, K_per_device, N_per_core = get_per_core_dims(shape, cluster_size)
@@ -772,7 +795,9 @@ def test_mm_sweep_worker(device_config, shape):
 
     parent_mesh, mesh_device = open_mesh(cfg, trace_region_size=4194304)  # 4MB trace region (one trace at a time)
     try:
-        run_op = _build_op_runner(cfg, mesh_device, M, K, N, ttnn.bfloat16, is_agmm, uc_cfg, ttnn.CoreCoord(cgx, cgy))
+        run_op = _build_op_runner(
+            cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, ttnn.CoreCoord(cgx, cgy), math_fidelity=math_fidelity
+        )
 
         valid_combos, skipped = _execute_sweep(mesh_device, run_op, combos)
 
@@ -789,6 +814,69 @@ def test_mm_sweep_worker(device_config, shape):
 
     finally:
         close_mesh(parent_mesh)
+
+
+def _uc_cfg_from_fusion(fusion):
+    """Translate a spec-file `fusion` dict (plain JSON) into a USE_CASE_CONFIGS-style dict."""
+    fusion = fusion or {}
+    uc_cfg = {}
+    if fusion.get("chunks", 1) > 1:
+        uc_cfg["chunks"] = fusion["chunks"]
+    if fusion.get("math_approx_mode"):
+        uc_cfg["math_approx_mode"] = True
+    if fusion.get("use_addcmul"):
+        uc_cfg["use_addcmul"] = True
+    if fusion.get("scalar") is not None:
+        uc_cfg["scalar"] = fusion["scalar"]
+    if fusion.get("use_matmul_split"):
+        uc_cfg["use_matmul_split"] = True
+    fa = fusion.get("fused_activation")
+    if fa:
+        if fa not in _FUSED_ACTIVATION_MAP:
+            raise ValueError(f"Unknown fused_activation '{fa}'. Known: {sorted(_FUSED_ACTIVATION_MAP)}")
+        uc_cfg["fused_activation"] = _FUSED_ACTIVATION_MAP[fa]
+    return uc_cfg
+
+
+@pytest.mark.timeout(7200)  # 2h — one worker now covers the full (M, K, N) grid
+@pytest.mark.parametrize("device_config", list(DEVICE_CONFIGS.keys()))
+@pytest.mark.parametrize("shape", SHAPES, ids=SHAPE_IDS)
+def test_mm_sweep_worker(device_config, shape):
+    """Sweep every block-size combo for a (device_config, shape) from the SHAPES table.
+
+    Designed to be invoked via run_device_profiler with TT_METAL_PROFILER_MID_RUN_DUMP=1.
+    """
+    _quiet_loguru()
+    M, K, N, cgx, cgy, is_agmm, use_case = shape
+    uc_cfg = USE_CASE_CONFIGS[use_case]
+    _run_shape_sweep(
+        device_config, M, K, N, cgx, cgy, is_agmm, use_case, uc_cfg, ttnn.bfloat16, ttnn.MathFidelity.HiFi2
+    )
+
+
+@pytest.mark.timeout(7200)
+def test_mm_sweep_worker_external():
+    """Sweep every block-size combo for ONE shape supplied via MM_SWEEP_SHAPE_JSON.
+
+    The env var holds a single spec-file record (see agmm/sweep_shapes.json):
+        {"id", "op_type", "device_config", "M", "K", "N", "grid": [cgx, cgy],
+         "dtype", "math_fidelity", "fusion": {...}}
+    Driven by agmm/run_sweeps.py; keeps arbitrary shapes out of the SHAPES table.
+    """
+    _quiet_loguru()
+    spec = json.loads(os.environ["MM_SWEEP_SHAPE_JSON"])
+
+    device_config = spec.get("device_config", DEFAULT_DEVICE_CONFIG)
+    M, K, N = spec["M"], spec["K"], spec["N"]
+    cgx, cgy = spec["grid"]
+    is_agmm = spec["op_type"] == "agmm"
+    dtype = _DTYPE_MAP.get(spec.get("dtype", "bfloat16"), ttnn.bfloat16)
+    math_fidelity = _MATH_FIDELITY_MAP.get(spec.get("math_fidelity", "HiFi2"), ttnn.MathFidelity.HiFi2)
+
+    uc_cfg = _uc_cfg_from_fusion(spec.get("fusion"))
+    # Register so estimate_l1_kb() (keyed by use_case) sees use_addcmul for this shape.
+    USE_CASE_CONFIGS[EXTERNAL_USE_CASE] = uc_cfg
+    _run_shape_sweep(device_config, M, K, N, cgx, cgy, is_agmm, EXTERNAL_USE_CASE, uc_cfg, dtype, math_fidelity)
 
 
 # ============================================================================

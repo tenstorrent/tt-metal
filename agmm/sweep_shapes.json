@@ -1,0 +1,86 @@
+[
+  {
+    "id": "s2_fabric_n512",
+    "op_type": "agmm",
+    "device_config": "bh_4x8",
+    "M": 4864, "K": 4096, "N": 512,
+    "grid": [12, 9],
+    "dtype": "bfloat16",
+    "math_fidelity": "HiFi2",
+    "fusion": {},
+    "tags": ["stage2", "fabric-limited"],
+    "notes": "large-M small-N; runtime dominated by all-gather (roofline ~2.7x)"
+  },
+  {
+    "id": "s2_compute_n1024",
+    "op_type": "agmm",
+    "device_config": "bh_4x8",
+    "M": 4864, "K": 4096, "N": 1024,
+    "grid": [12, 9],
+    "dtype": "bfloat16",
+    "math_fidelity": "HiFi2",
+    "fusion": {},
+    "tags": ["stage2", "compute-limited"],
+    "notes": "compute-limited mid-N plain matmul (roofline ~1.8x)"
+  },
+  {
+    "id": "s2_addcmul_n1024",
+    "op_type": "agmm",
+    "device_config": "bh_4x8",
+    "M": 4864, "K": 4096, "N": 1024,
+    "grid": [12, 9],
+    "dtype": "bfloat16",
+    "math_fidelity": "HiFi2",
+    "fusion": {"use_addcmul": true, "scalar": 1.0, "math_approx_mode": true},
+    "tags": ["stage2", "compute-limited", "to_out"],
+    "notes": "attention to_out: fused addcmul, approx math"
+  },
+  {
+    "id": "s2_ff_chunks3_n3072",
+    "op_type": "agmm",
+    "device_config": "bh_4x8",
+    "M": 4864, "K": 4096, "N": 3072,
+    "grid": [12, 9],
+    "dtype": "bfloat16",
+    "math_fidelity": "HiFi2",
+    "fusion": {"chunks": 3, "math_approx_mode": true},
+    "tags": ["stage2", "near-ceiling"],
+    "notes": "large chunked matmul; measured FLOP util already high (roofline ~0.83x = at ceiling)"
+  },
+  {
+    "id": "s2_compute_n4096",
+    "op_type": "agmm",
+    "device_config": "bh_4x8",
+    "M": 4864, "K": 4096, "N": 4096,
+    "grid": [12, 9],
+    "dtype": "bfloat16",
+    "math_fidelity": "HiFi2",
+    "fusion": {},
+    "tags": ["stage2", "compute-limited", "largest"],
+    "notes": "biggest single matmul in the workload (roofline ~1.44x)"
+  },
+  {
+    "id": "kv_m256_chunks2_n1024",
+    "op_type": "agmm",
+    "device_config": "bh_4x8",
+    "M": 256, "K": 2048, "N": 1024,
+    "grid": [12, 9],
+    "dtype": "bfloat16",
+    "math_fidelity": "HiFi2",
+    "fusion": {"chunks": 2, "math_approx_mode": true},
+    "tags": ["cross-attn-kv", "dram-limited"],
+    "notes": "cross-attention KV, chunks=2 (roofline ~4.2x)"
+  },
+  {
+    "id": "small_m32_n512",
+    "op_type": "agmm",
+    "device_config": "bh_4x8",
+    "M": 32, "K": 2048, "N": 512,
+    "grid": [12, 9],
+    "dtype": "bfloat16",
+    "math_fidelity": "HiFi2",
+    "fusion": {},
+    "tags": ["small-m", "dispatch-bound"],
+    "notes": "tiny-M; pinned to ~37us dispatch floor, huge relative headroom (roofline ~7.8x)"
+  }
+]
