@@ -54,7 +54,10 @@
 // SLOTS_PER_UNTILIZER in the factory.
 #define OVERLAP_ROUTE_INFO_CB_SLOTS (2 * OVERLAP_POOL_DEPTH)
 
-#define MOCK_COMBINE_INTERNALS 1
+// MOCK_COMBINE_INTERNALS: 0 = real dram->untilizer->reader_combine producer chain feeds c_3 (unmocked);
+// 1 = writers self-generate synthetic tokens (perf/liveness only). With USE_RELAY, the relay is agnostic
+// to this — it just drains its c_24 ring; only the SENDER's token source differs (real c_3 vs synthetic).
+#define MOCK_COMBINE_INTERNALS 0
 #define MOCK_COMBINE_TOKENS_PER_DEST 200
 
 // ============================================================================

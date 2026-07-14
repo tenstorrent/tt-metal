@@ -31,15 +31,13 @@
 //   4. tears the connections down.
 // writer_combine (the sender) now opens no connection and sends nothing (see its USE_RELAY early exit).
 //
-// This stage ports ONLY the MOCK, FABRIC_1D send path (matching MOCK_COMBINE_INTERNALS' constraints):
-// the relay fabricates synthetic tokens (garbage payload from its own c_24 buffer scratch) and pushes
-// them through the trid+header overlap pool. Later stages feed real tokens from the sender over the
-// sender->relay CB. The token PAYLOAD is synthetic here (perf/liveness parity with today's mock).
-#if !MOCK_COMBINE_INTERNALS
-#error "writer_relay currently implements only the MOCK send path (MOCK_COMBINE_INTERNALS=1)."
-#endif
+// FABRIC_1D send path. The relay is the fabric endpoint: it consumes tokens (route_info + payload) from
+// its c_24 ring (fed by the sender over the sender->relay CB) and forwards them to fabric, terminating on
+// a ROUTE_INFO_SENTINEL slot. It is agnostic to MOCK_COMBINE_INTERNALS — only the sender's token SOURCE
+// differs (mock: synthetic tokens; real: the dram->untilizer->reader_combine chain fills c_3). The relay
+// just drains its CB, so it works either way.
 #ifdef FABRIC_2D
-#error "writer_relay is FABRIC_1D only for now (uses get_route/manhattan_distance + the 1D handshake)."
+#error "writer_relay is FABRIC_1D only for now (1D init/exit handshake + line-unicast route info)."
 #endif
 #ifndef DEST_CHIP_ID
 #error "writer_relay requires a multi-chip build (DEST_CHIP_ID)."
@@ -51,6 +49,9 @@
 #else
 #define DPRINT_COMBINE(...)
 #endif
+
+// Matches writer_combine / reader_combine: a slot whose route_info[0] == this marks end-of-stream.
+constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
 
 void kernel_main() {
     using namespace ttnn::operations::ccl::common;
@@ -231,11 +232,12 @@ void kernel_main() {
     uint32_t overlap_slot = 0;
 
     // ===== CB consumer: read sender-produced tokens from c_24 and forward to fabric =====
-    // The sender (writer_combine) mock-produces route_info + payload into our c_24 ring, credit-flow-
-    // controlled. We read each slot's route_info (route dir, distance, page idx) into registers, then
-    // fabric-send its payload, then return the slot's credit. No-tear guarantee: RELAY_SLOTS (ring depth)
-    // must exceed OVERLAP_POOL_DEPTH (max in-flight sends) so a slot's non-blocking payload read always
-    // completes long before the sender can wrap around and reuse that slot.
+    // The sender (writer_combine) produces route_info + payload into our c_24 ring (credit-flow-controlled)
+    // and terminates the stream with a ROUTE_INFO_SENTINEL slot. We read each slot's route_info (route dir,
+    // distance, page idx) into registers, fabric-send its payload, and return the slot's credit; a sentinel
+    // breaks the loop. No-tear guarantee: RELAY_SLOTS (ring depth) must exceed OVERLAP_POOL_DEPTH (max
+    // in-flight sends) so a slot's non-blocking payload read always completes long before the sender wraps
+    // back to reuse it. (This is agnostic to MOCK_COMBINE_INTERNALS — only the sender's token SOURCE differs.)
     static_assert(
         RELAY_SLOTS > OVERLAP_POOL_DEPTH, "RELAY_SLOTS must exceed OVERLAP_POOL_DEPTH to avoid torn payloads");
     {
@@ -246,17 +248,8 @@ void kernel_main() {
         const uint64_t sender_credits_noc_addr =
             get_noc_addr(sender_noc_x, sender_noc_y, get_semaphore(relay_credits_sem_id));
 
-        // Token count must match what the sender produces: (#peers) * MOCK_COMBINE_TOKENS_PER_DEST.
-        uint32_t num_peers = 0;
-        for (uint32_t dst = 0; dst < total_mesh_devices; dst++) {
-            if (dst != linearized_mesh_coord) {
-                num_peers++;
-            }
-        }
-        const uint32_t total_tokens = num_peers * MOCK_COMBINE_TOKENS_PER_DEST;
-
         uint32_t consumed = 0;
-        for (uint32_t i = 0; i < total_tokens; i++) {
+        while (true) {
             // Wait until slot `consumed` is filled: the producer monotonically ++ data_ready per token.
             while (true) {
                 invalidate_l1_cache();
@@ -268,6 +261,14 @@ void kernel_main() {
             const uint32_t slot_base = relay_buf_base_c + r * relay_slot_size;
             volatile tt_l1_ptr uint32_t* ri = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_base);
             const uint32_t route = ri[0];  // captured into a register before the send
+
+            if (route == ROUTE_INFO_SENTINEL) {
+                // Sender signalled end-of-stream. Free the sentinel slot and stop.
+                noc_semaphore_inc<true>(sender_credits_noc_addr, 1);
+                consumed++;
+                break;
+            }
+
             const uint32_t distance = ri[1];
             const uint32_t output_page_idx = ri[2];
             const uint32_t payload_addr = slot_base + l1_alignment;
