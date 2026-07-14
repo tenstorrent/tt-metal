@@ -569,6 +569,29 @@ jobs:
             export TT_MM_THROTTLE_PERF="${{ matrix.test-group.tt_mm_throttle_perf }}"
           fi
 
+          # Gemma4 trace-region tuning for this benchmark (random-input-len 100,
+          # single-stream max_num_seqs=1). These are load-bearing, not just a
+          # startup speedup: dropping them makes WH-T3K 31B capture the full
+          # prefill-bucket sweep at warmup and OOM DRAM (a ~0.5 GB trace buffer
+          # with only ~20 MB free), so the server never comes up. They are
+          # benchmark-shape tuning (a 100-token prompt only ever replays the 128
+          # bucket, and the default-sampling benchmark uses no penalties/logprobs
+          # permutations), so they belong with the benchmark config, not the
+          # model code.
+          #   * GEMMA4_TRACE_PREFILL_SEQ_LENS=128: capture only the 128 prefill
+          #     bucket instead of the 128..4096 sweep (the 4096 bucket alone is
+          #     ~0.5 GB on 26B-A4B).
+          #   * TT_LEAN_DECODE_WARMUP=1: warm only plain/greedy/None decode
+          #     traces instead of the full penalties×logprobs sweep.
+          # Both shrink the required trace_region_size (validated to fit <200 MB
+          # on 26B-A4B P150x4, vs >1 GB unbounded).
+          case "$HF_MODEL" in
+            google/gemma-4-*)
+              export TT_LEAN_DECODE_WARMUP=1
+              export GEMMA4_TRACE_PREFILL_SEQ_LENS=128
+              ;;
+          esac
+
           # Build the VLLM server arguments array
           declare -a VLLM_SERVER_ARGS
           VLLM_SERVER_ARGS+=(--model "$HF_MODEL")
