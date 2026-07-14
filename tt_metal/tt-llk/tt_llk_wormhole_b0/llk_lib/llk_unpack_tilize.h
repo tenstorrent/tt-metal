@@ -548,16 +548,17 @@ inline void _llk_unpack_tilizeA_B_(
  */
 inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    const std::uint32_t num_faces  = tensor_shape.total_num_faces();
     const std::uint32_t face_r_dim = tensor_shape.face_r_dim;
 
     // Stalling SETDMAREG done by THCON until UNPACK finishes
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
 
-    // Restore tile-descriptor Y/Z dim to the canonical operand baseline programmed by
-    // configure_unpack_AB. Y-dim is always 1, Z-dim equals the operand's num_faces.
-    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, TILE_DESC_UPPER_HALFWORD_MASK>(num_faces);
-    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, 0x0000ffff>(CANONICAL_UNPA_TILE_Y_DIM);
+    // The tile-descriptor Y/Z dim (word 1) is intentionally NOT written here: WH tilize init
+    // (_llk_unpack_tilize_init_) never modifies it, so per the operation-restorable contract there
+    // is nothing to revert. Forcing a value corrupts a following consumer that needs a different
+    // z-dim - notably a compressed (Bfp8_b) matmul, which sizes its per-tile exponent arrays from
+    // z-dim and now programs its own z-dim in _llk_unpack_AB_matmul_init_ (see tt-metal#47016).
+    // (Blackhole differs: its tilize init sets z-dim=1, so the BH uninit must and does restore it.)
 
     // The unpack-config[0] write below also clears tileize_mode, haloize_mode, and the
     // other word-0 fields back to 0, mirroring what the zero-initialised config struct

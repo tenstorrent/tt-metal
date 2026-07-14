@@ -5,11 +5,17 @@
 // Cross-op unpacker-state restore test for `_llk_unpack_tilize_uninit_`.
 //
 // Goal: prove that after a `unpack_tilize` op, `_llk_unpack_tilize_uninit_`
-// restores the SrcA tile-descriptor (num_faces / Y-dim), the unpack config
-// word-0 (tilize_mode etc.), and `Tile_x_dim_cntx0` back to the canonical
-// operand baseline programmed by `configure_unpack_AB` — so that a *following*
-// op that uses the SAME operand baseline (and therefore performs NO data-format
-// reconfig) reads correct data.
+// restores every operand-baseline register that tilize's *init* mutated — the
+// unpack config word-0 (tilize_mode etc.) and `Tile_x_dim_cntx0` on both archs,
+// plus the tile-descriptor X/Z-dim on Blackhole (whose tilize init sets
+// z-dim=1 and the word-0 X-dim) — back to the canonical baseline programmed by
+// `configure_unpack_AB`, so that a *following* op that uses the SAME operand
+// baseline (and therefore performs NO data-format reconfig) reads correct data.
+//
+// Wormhole tilize init leaves the tile-descriptor word-1 (y/z-dim) untouched, so
+// per the operation-restorable contract the WH uninit must NOT rewrite that
+// shared field; the compressed-matmul consumer owns its own z-dim instead (see
+// tt-metal#47016). Hence the y/z-dim restore below is Blackhole-specific.
 //
 // To isolate the uninit restore as the *only* state reset between the two ops,
 // this test deliberately:
@@ -23,13 +29,14 @@
 // Run 1: plain `_llk_unpack_A_` datacopy of that tilized tile -> packed to the
 //         result buffer. On a correct build this is an identity copy of the
 //         tilized tile, so the result equals `TilizeGolden(src_A, num_faces)`.
-//         If uninit fails to restore the operand baseline (e.g. leaves the
-//         tile-descriptor Z-dim at a tilize-specific value, or leaves
-//         tilize_mode set), this datacopy is corrupted and the test fails.
+//         If uninit fails to restore the operand baseline (e.g. leaves
+//         tilize_mode set, or on Blackhole leaves the tile-descriptor X/Z-dim
+//         at a tilize-specific value), this datacopy is corrupted and the test
+//         fails.
 //
-// The `num_faces ∈ {1, 2}` cases specifically exercise the tile-descriptor
-// Z-dim restore (`_llk_unpack_tilize_uninit_` line restoring num_faces) that no
-// existing tilize test covers — every other uninit call site uses num_faces=4.
+// The `num_faces ∈ {1, 2}` cases specifically exercise the Blackhole
+// tile-descriptor Z-dim restore that no existing tilize test covers — every
+// other uninit call site uses num_faces=4.
 
 #include <algorithm>
 #include <cstdint>
