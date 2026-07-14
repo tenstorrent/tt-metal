@@ -2135,6 +2135,8 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
     EmuleRoute r;
     {
         std::lock_guard<std::mutex> lk(g_route_meta_mu);
+        // Round-trip h -> offset -> bridge_l1+offset via emule_route_key so the read key is derived
+        // by the same helper as the set-side key (one source of truth for the key formula).
         auto it = g_route_meta.find(emule_route_key(static_cast<uint32_t>(
             reinterpret_cast<uintptr_t>(h) - reinterpret_cast<uintptr_t>(__emule_self->bridge_l1))));
         if (it == g_route_meta.end()) {
