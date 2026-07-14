@@ -95,7 +95,9 @@ def run_demo(args: argparse.Namespace, *, device: ttnn.Device) -> None:
             rtfs.append(rtf)
             latencies.append(latency)
     if rtfs:
-        logger.info("Mean RTF: {:.3f}  Mean chunk latency: {:.2f} ms", sum(rtfs) / len(rtfs), sum(latencies) / len(latencies))
+        logger.info(
+            "Mean RTF: {:.3f}  Mean chunk latency: {:.2f} ms", sum(rtfs) / len(rtfs), sum(latencies) / len(latencies)
+        )
 
 
 def _run_one(model, audio, sr, args, *, out_name):

@@ -16,15 +16,13 @@ buffers the reference threads through ``forward``) is held in ``LLVCState``.
 
 from __future__ import annotations
 
-import math
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 import torch
 
 import ttnn
-
 from models.demos.llvc.reference.llvc_reference import Net, build_reference_model
 from models.demos.llvc.tt import ops
 from models.demos.llvc.tt.config import LLVCConfig, get_math_fidelity, get_ttnn_dtype
@@ -82,8 +80,7 @@ class LLVCModel:
         """Split a depthwise ``[C, 1, K]`` conv weight into ``K`` per-channel vectors ``[1, 1, C]``."""
         k = conv_weight.shape[-1]
         return [
-            _to_device(conv_weight[:, 0, j].reshape(1, 1, -1), device=self.device, dtype=self.dtype)
-            for j in range(k)
+            _to_device(conv_weight[:, 0, j].reshape(1, 1, -1), device=self.device, dtype=self.dtype) for j in range(k)
         ]
 
     def _depthwise_bias(self, bias: Optional[torch.Tensor]) -> Optional[ttnn.Tensor]:

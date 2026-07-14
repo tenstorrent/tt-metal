@@ -108,9 +108,8 @@ class DilatedCausalConvEncoder(nn.Module):
         for i in range(num_layers):
             _dcc_layers.update(
                 {
-                    "dcc_%d" % i: DepthwiseSeparableConv(
-                        channels, channels, kernel_size=3, stride=1, padding=0, dilation=2**i
-                    )
+                    "dcc_%d"
+                    % i: DepthwiseSeparableConv(channels, channels, kernel_size=3, stride=1, padding=0, dilation=2**i)
                 }
             )
         self.dcc_layers = nn.Sequential(_dcc_layers)

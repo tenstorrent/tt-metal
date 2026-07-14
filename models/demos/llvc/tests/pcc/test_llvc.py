@@ -42,9 +42,7 @@ def _small_config() -> LLVCConfig:
         dec_chunk_size=13,
         out_buf_len=4,
         nhead=4,
-        convnet=ConvNetConfig(
-            out_channels=tuple([1] * 3), kernel_sizes=tuple([3] * 3), dilations=tuple([1] * 3)
-        ),
+        convnet=ConvNetConfig(out_channels=tuple([1] * 3), kernel_sizes=tuple([3] * 3), dilations=tuple([1] * 3)),
     )
 
 

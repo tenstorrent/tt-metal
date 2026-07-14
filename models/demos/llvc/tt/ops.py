@@ -24,8 +24,6 @@ import torch
 
 import ttnn
 
-from models.demos.llvc.tt.config import TILE_SIZE
-
 
 def to_torch(x: ttnn.Tensor) -> torch.Tensor:
     return ttnn.to_torch(x)
@@ -268,9 +266,7 @@ def apply_taps(
     out = None
     for j in range(len(taps)):
         offset = j * dilation
-        window = ttnn.slice(
-            x_ext_tile, [0, offset, 0], [x_ext_tile.shape[0], offset + seq_len, x_ext_tile.shape[2]]
-        )
+        window = ttnn.slice(x_ext_tile, [0, offset, 0], [x_ext_tile.shape[0], offset + seq_len, x_ext_tile.shape[2]])
         bias = biases[j] if biases is not None else None
         term = ttnn.linear(window, taps[j], bias=bias, transpose_b=True)
         out = term if out is None else ttnn.add(out, term)
