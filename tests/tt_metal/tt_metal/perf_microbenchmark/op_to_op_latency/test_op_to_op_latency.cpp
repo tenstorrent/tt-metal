@@ -45,6 +45,10 @@
 //   --trace-region-size N   trace buffer size, bytes (default 1 MiB)
 //   --device-id N           device under test (default 0)
 //   --output-cb-depth-tiles N  output CB depth in tiles (default 2)
+//   --profile-detail        research only: also emit the reader/writer GO/DONE/BARRIER
+//                           markers and per-tile compute TILE_IDX + MATH zone. Default
+//                           off (lean): only the markers the CI metrics consume are
+//                           emitted, minimizing profiler perturbation of the op2op number.
 
 #include <algorithm>
 #include <chrono>
@@ -152,10 +156,14 @@ struct BenchmarkConfig {
     // Read-only mode: writer pops from output CB but skips DRAM writes.
     // Isolates pure DRAM read BW through the reader pipeline.
     bool read_only = false;
-    // Lean compute: drop per-tile TILE_IDX / MATH profiler markers (keep tile 0) so the
-    // consumer drains at full speed and does not back-pressure the reader. Use when
-    // measuring read bandwidth; compute cost is then copy + NOPs only.
-    bool lean_compute = false;
+    // Detailed profiling (research only). Default OFF = lean: kernels emit only the
+    // markers the CI metrics consume -- compute PROG_ID / tile-0 TILE_IDX / FINISH_LAST_PUSH
+    // (for pack_to_unpack) plus the firmware {BRISC,NCRISC,TRISC}-KERNEL zones (for the gated
+    // op2op). When ON, the reader/writer also emit their GO/DONE/BARRIER markers and compute
+    // emits per-tile TILE_IDX + the MATH zone, for the research BW/gap-decomposition analysis.
+    // Every extra marker adds device cycles that perturb the op2op number, so detail is kept
+    // off the gated CI path.
+    bool profile_detail = false;
     // Skip the host output-data check. The BW reader writes dummy data to a fixed L1
     // address, so the written DRAM won't match the input; for latency/BW measurement
     // (which needs real DRAM writes, i.e. not --read-only) we don't care about data.
@@ -235,8 +243,8 @@ BenchmarkConfig parse_args(const std::vector<std::string>& args) {
     if (test_args::has_command_option(args, "--skip-output-validation")) {
         cfg.skip_output_validation = true;
     }
-    if (test_args::has_command_option(args, "--lean-compute")) {
-        cfg.lean_compute = true;
+    if (test_args::has_command_option(args, "--profile-detail")) {
+        cfg.profile_detail = true;
     }
     if (test_args::has_command_option(args, "--writer-flush-on-pressure")) {
         cfg.writer_flush_on_pressure = true;
@@ -676,10 +684,17 @@ BuiltProgram build_program(
     // Reader: NOC1 / RISCV1, pulls from interleaved DRAM via TensorAccessor.
     // Compile-time args order MUST match reader_interleaved.cpp:
     //   [0]=cb_in, [1]=READER_MODE, [2]=PUSH_TILE_COUNT, [3]=TILES_PER_PAGE,
-    //   [4]=TRID_IN_FLIGHT, [5]=CROSS_PROGRAM_OFFSET_TILES, then TensorAccessorArgs starting at index 6.
+    //   [4]=TRID_IN_FLIGHT, [5]=CROSS_PROGRAM_OFFSET_TILES, [6]=PROFILE_DETAIL,
+    //   then TensorAccessorArgs starting at index 7.
     const uint32_t cross_program_offset_tiles = cfg.cross_program_dram_offset ? total_num_tiles : 0u;
     std::vector<uint32_t> reader_compile_time_args = {
-        kInputCbId, cfg.reader_mode, push_tiles, page_size_tiles, trid_in_flight, cross_program_offset_tiles};
+        kInputCbId,
+        cfg.reader_mode,
+        push_tiles,
+        page_size_tiles,
+        trid_in_flight,
+        cross_program_offset_tiles,
+        cfg.profile_detail ? 1u : 0u};
     // Defaults: reader=NOC0, writer=NOC1 (measured best). --reader-noc/--writer-noc override.
     // HARD CONSTRAINT: the two data-movement kernels on a core must be on DIFFERENT NoCs.
     // Putting both on the same NoC hangs the device (requires a chip reset), so fail fast.
@@ -707,7 +722,7 @@ BuiltProgram build_program(
     // Compile-time args order MUST match writer_interleaved.cpp:
     //   [0]=cb_out, [1]=TILES_PER_PAGE, [2]=READ_ONLY, [3]=WRITER_FLUSH_MODE,
     //   [4]=OUTPUT_CB_DEPTH_TILES, [5]=CROSS_PROGRAM_OFFSET_TILES,
-    //   [6]=END_BARRIER_MODE, then TensorAccessorArgs starting at index 7.
+    //   [6]=END_BARRIER_MODE, [7]=PROFILE_DETAIL, then TensorAccessorArgs starting at index 8.
     std::vector<uint32_t> writer_compile_time_args = {
         kOutputCbId,
         page_size_tiles,
@@ -715,7 +730,8 @@ BuiltProgram build_program(
         cfg.writer_flush_on_pressure ? 1u : 0u,
         output_cb_depth,
         cross_program_offset_tiles,
-        cfg.writer_end_barrier_mode};
+        cfg.writer_end_barrier_mode,
+        cfg.profile_detail ? 1u : 0u};
     TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
     auto writer_kernel = CreateKernel(
         program,
@@ -726,7 +742,7 @@ BuiltProgram build_program(
 
     // Compute: copy_tile + tunable NOP spin.
     std::vector<uint32_t> compute_compile_time_args = {
-        kInputCbId, kOutputCbId, cfg.num_nops_per_tile, cfg.lean_compute ? 0u : 1u};
+        kInputCbId, kOutputCbId, cfg.num_nops_per_tile, cfg.profile_detail ? 1u : 0u};
     auto compute_kernel = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/op_to_op_latency/kernels/compute_copy_with_nops.cpp",

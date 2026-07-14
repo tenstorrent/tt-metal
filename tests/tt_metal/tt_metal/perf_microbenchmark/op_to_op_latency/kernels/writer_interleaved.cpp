@@ -21,7 +21,7 @@
 //   2: start_tile_id
 //   3: program_id
 //
-// Compile-time args (see TensorAccessorArgs<7> for dst accessor):
+// Compile-time args (see TensorAccessorArgs<8> for dst accessor):
 //   0: cb_out
 //   1: TILES_PER_PAGE
 //   2: READ_ONLY        (1 = skip DRAM writes, just pop from output CB)
@@ -29,16 +29,28 @@
 //   4: OUTPUT_CB_DEPTH_TILES
 //   5: CROSS_PROGRAM_OFFSET_TILES (0 = every program writes same slice; >0 = program k
 //                                  writes pages starting at start_tile_id + k*OFFSET)
-//   6: END_BARRIER_MODE   (Batch-8 latency experiment — 's HW-barrier proposal)
+//   6: END_BARRIER_MODE   (Batch-8 latency experiment — HW-barrier proposal)
 //                          0 = noc_async_write_barrier (DEFAULT; wait for DRAM ACK; current)
 //                          1 = noc_async_writes_flushed (just flush local L1; writes left
 //                              the source but next op may see in-flight committed-at-NoC)
 //                          2 = no barrier, no flush (UNSAFE for correctness in real
 //                              workloads; simulates "HW gives us this for free")
+//   7: PROFILE_DETAIL     (0 = lean CI path: emit no custom markers; 1 = research: emit
+//                          GO/DONE/BARRIER markers for BW/gap decomposition)
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
+
+// Research-only detail markers. Compiled out on the lean CI path (PROFILE_DETAIL == 0) so
+// they add zero device cycles to the gated op2op measurement. Expanded only inside
+// kernel_main, where PROFILE_DETAIL (a compile-time arg) is in scope.
+#define DETAIL_MARK(name, value)                \
+    do {                                        \
+        if constexpr (PROFILE_DETAIL) {         \
+            DeviceTimestampedData(name, value); \
+        }                                       \
+    } while (0)
 
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -53,16 +65,17 @@ void kernel_main() {
     constexpr uint32_t OUTPUT_CB_DEPTH_TILES = get_compile_time_arg_val(4);
     constexpr uint32_t CROSS_PROGRAM_OFFSET_TILES = get_compile_time_arg_val(5);
     constexpr uint32_t END_BARRIER_MODE = get_compile_time_arg_val(6);
+    constexpr uint32_t PROFILE_DETAIL = get_compile_time_arg_val(7);
     constexpr uint32_t tiles_per_page = TILES_PER_PAGE > 0 ? TILES_PER_PAGE : 1;
     constexpr uint32_t output_cb_depth_tiles = OUTPUT_CB_DEPTH_TILES > 0 ? OUTPUT_CB_DEPTH_TILES : tiles_per_page;
     constexpr uint32_t cb_page_slots = output_cb_depth_tiles / tiles_per_page;
     constexpr uint32_t max_writes_before_flush = cb_page_slots > 1 ? cb_page_slots - 1 : 1;
-    constexpr auto dst_args = TensorAccessorArgs<7>();
+    constexpr auto dst_args = TensorAccessorArgs<8>();
 
     const auto dst = TensorAccessor(dst_args, dst_addr);
 
-    DeviceTimestampedData("PROG_ID", program_id);
-    DeviceTimestampedData("BRISC_GO", program_id);
+    DETAIL_MARK("PROG_ID", program_id);
+    DETAIL_MARK("BRISC_GO", program_id);
 
     // When CROSS_PROGRAM_OFFSET_TILES > 0, each program writes a disjoint slice
     // (mirrors reader); host allocates a buffer large enough for all slices.
@@ -75,7 +88,7 @@ void kernel_main() {
     const uint32_t end_page_id = start_page_id + n_pages;
     const uint32_t last_page_id = (n_pages > 0) ? (end_page_id - 1) : start_page_id;
 
-    DeviceTimestampedData("WRITE_BEFORE_BARRIER", last_page_id);
+    DETAIL_MARK("WRITE_BEFORE_BARRIER", last_page_id);
 
     uint32_t writes_since_flush = 0;
     for (uint32_t page_id = start_page_id; page_id < end_page_id; ++page_id) {
@@ -114,7 +127,7 @@ void kernel_main() {
             noc_async_writes_flushed();
         }
     }
-    DeviceTimestampedData("WRITE_AFTER_BARRIER", last_page_id);
+    DETAIL_MARK("WRITE_AFTER_BARRIER", last_page_id);
 
-    DeviceTimestampedData("BRISC_DONE", program_id);
+    DETAIL_MARK("BRISC_DONE", program_id);
 }
