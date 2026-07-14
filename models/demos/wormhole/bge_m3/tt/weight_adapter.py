@@ -121,7 +121,6 @@ def build_attention_weights(
     dtype: object,
     norm_dtype: object,
     q_scale: float | None = None,
-    tensor_parallel_size: int = 1,
 ) -> AttentionWeights:
     """``q_scale`` (default None): if set, pre-multiply the Q projection weight and
     bias by this factor. Used at S8192 to fold the SDPA attention scale into Q at
@@ -140,23 +139,7 @@ def build_attention_weights(
     v_weight = _preprocess_linear_weight(_require_tensor(self_state, "value.weight", scope=f"{attention_scope}.self"))
     if q_scale is not None:
         q_weight = q_weight * q_scale
-    if tensor_parallel_size > 1:
-        # Pack each TP rank's Q/K/V slices contiguously before sharding the
-        # final dimension: [q0,k0,v0,q1,k1,v1,...]. A plain shard of the
-        # checkpoint's [Q_all,K_all,V_all] layout would mix projection types.
-        q_chunks = torch.chunk(q_weight, tensor_parallel_size, dim=-1)
-        k_chunks = torch.chunk(k_weight, tensor_parallel_size, dim=-1)
-        v_chunks = torch.chunk(v_weight, tensor_parallel_size, dim=-1)
-        wqkv = torch.cat(
-            [
-                chunk
-                for rank in range(tensor_parallel_size)
-                for chunk in (q_chunks[rank], k_chunks[rank], v_chunks[rank])
-            ],
-            dim=-1,
-        ).contiguous()
-    else:
-        wqkv = torch.cat((q_weight, k_weight, v_weight), dim=-1).contiguous()
+    wqkv = torch.cat((q_weight, k_weight, v_weight), dim=-1).contiguous()
 
     query_bias = self_state.get("query.bias")
     if q_scale is not None and query_bias is not None:
@@ -166,23 +149,14 @@ def build_attention_weights(
     all_qkv_biases_present = all(bias is not None for bias in (query_bias, key_bias, value_bias))
     any_qkv_bias_present = any(bias is not None for bias in (query_bias, key_bias, value_bias))
     if all_qkv_biases_present:
-        query_bias = _preprocess_linear_bias(query_bias)
-        key_bias = _preprocess_linear_bias(key_bias)
-        value_bias = _preprocess_linear_bias(value_bias)
-        if tensor_parallel_size > 1:
-            q_chunks = torch.chunk(query_bias, tensor_parallel_size, dim=-1)
-            k_chunks = torch.chunk(key_bias, tensor_parallel_size, dim=-1)
-            v_chunks = torch.chunk(value_bias, tensor_parallel_size, dim=-1)
-            bqkv = torch.cat(
-                [
-                    chunk
-                    for rank in range(tensor_parallel_size)
-                    for chunk in (q_chunks[rank], k_chunks[rank], v_chunks[rank])
-                ],
-                dim=-1,
-            ).contiguous()
-        else:
-            bqkv = torch.cat((query_bias, key_bias, value_bias), dim=-1).contiguous()
+        bqkv = torch.cat(
+            (
+                _preprocess_linear_bias(query_bias),
+                _preprocess_linear_bias(key_bias),
+                _preprocess_linear_bias(value_bias),
+            ),
+            dim=-1,
+        ).contiguous()
     elif any_qkv_bias_present:
         raise KeyError("Broken attention checkpoint subtree: query/key/value bias must be all present or all absent")
     else:

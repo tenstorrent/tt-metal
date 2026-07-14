@@ -64,7 +64,14 @@ class BgeM3AttentionConfig:
 
     max_seq_len: int | None = None
     max_batch_size: int | None = None
-    tensor_parallel_axis: int | None = None
+    # Sequence-parallel: mesh axis over which the sequence dim is sharded. When
+    # set, each chip holds S/tp local query rows; K/V are all-gathered to full S
+    # so local queries cross-attend to every key. Everything else in the encoder
+    # is token-local (zero comm). None disables (single-chip path).
+    sequence_parallel_axis: int | None = None
+    # True when the attention scale was folded into the Q projection weight at
+    # build time, so SDPA must run with scale=1.0 regardless of mask presence.
+    qkv_scale_prefolded: bool = False
 
     @property
     def qkv_out_dim(self) -> int:
@@ -121,14 +128,7 @@ class BgeM3Attention(LightweightModule):
         self.load_device_weights()
 
         batch_size, _, seq_len, _ = hidden_states.shape
-        tensor_parallel_size = (
-            int(self.config.mesh_device.shape[self.config.tensor_parallel_axis])
-            if self.config.tensor_parallel_axis is not None
-            else 1
-        )
-        local_num_heads = self.config.num_heads // tensor_parallel_size
 
-        assert self.config.num_heads % tensor_parallel_size == 0
         assert seq_len > 0, "seq_len must be positive"
         assert seq_len % 32 == 0, "seq_len must be divisible by 32 (tile height)"
         if seq_len > 128:
@@ -193,15 +193,15 @@ class BgeM3Attention(LightweightModule):
             )
             q, k, v = bge_qkv_heads_headsplit(
                 qkv_fused,
-                num_heads=local_num_heads,
-                head_groups=min(head_groups, local_num_heads),
+                num_heads=self.config.num_heads,
+                head_groups=head_groups,
                 out_memcfg=self.config.create_heads_memcfg,
             )
         else:
             q, k, v = ttnn.experimental.nlp_create_qkv_heads(
                 qkv_fused,
-                num_heads=local_num_heads,
-                num_kv_heads=local_num_heads,
+                num_heads=self.config.num_heads,
+                num_kv_heads=self.config.num_heads,
                 transpose_k_heads=False,
                 memory_config=self.config.create_heads_memcfg,
             )
@@ -220,6 +220,21 @@ class BgeM3Attention(LightweightModule):
             v_cast = ttnn.typecast(v, dtype=self.config.score_dtype)
             ttnn.deallocate(v)
             v = v_cast
+
+        # Stage 3c: sequence-parallel K/V all-gather. Each chip produced K/V for
+        # its local S/tp query rows; gather across the sequence mesh axis so the
+        # local queries attend to the full sequence. Q stays sharded (local rows).
+        if self.config.sequence_parallel_axis is not None:
+            k_full = ttnn.all_gather(
+                k, dim=2, cluster_axis=self.config.sequence_parallel_axis, num_links=1, topology=ttnn.Topology.Linear
+            )
+            ttnn.deallocate(k)
+            k = k_full
+            v_full = ttnn.all_gather(
+                v, dim=2, cluster_axis=self.config.sequence_parallel_axis, num_links=1, topology=ttnn.Topology.Linear
+            )
+            ttnn.deallocate(v)
+            v = v_full
 
         # Stage 3b: mask preparation
         sdpa_mask = attention_mask
@@ -250,9 +265,14 @@ class BgeM3Attention(LightweightModule):
         # identical: softmax(Q@K^T*s + m) == softmax(((Q*s)@K^T) + m), and folding
         # into the fp32 weight before bf8 quant is at least as accurate.
         sdpa_scale = self.config.attention_scale
-        if seq_len == 8192 and sdpa_mask is not None and sdpa_scale is not None:
+        if self.config.qkv_scale_prefolded:
             sdpa_scale = 1.0
-        sdpa_program_config = _sdpa_program_config(seq_len, self.config.mesh_device, batch_size=batch_size)
+        elif seq_len == 8192 and sdpa_mask is not None and sdpa_scale is not None:
+            sdpa_scale = 1.0
+        # SDPA chunk sizing keys off the full (key) sequence length. In
+        # sequence-parallel mode queries are local (S/tp) but keys span full S.
+        sdpa_seq_len = k.shape[2]
+        sdpa_program_config = _sdpa_program_config(sdpa_seq_len, self.config.mesh_device, batch_size=batch_size)
         context = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
@@ -288,15 +308,12 @@ class BgeM3Attention(LightweightModule):
                 context, [batch_size, seq_len // _MAX_WO_MM_CHUNK_SEQ_LEN, _MAX_WO_MM_CHUNK_SEQ_LEN, -1]
             )
 
-        # Stage 6: row-parallel output projection. Each rank consumes its
-        # local heads; sum the partial hidden projections before adding bias.
-        tp_active = self.config.tensor_parallel_axis is not None
-        wo_bias = None if tp_active else self.wo_bias
+        # Stage 6: output projection
         if self.config.output_minimal_config is not None and self.config.output_prg_config is None:
             output = ttnn.experimental.minimal_matmul(
                 input_tensor=context,
                 weight_tensor=self.wo_weight,
-                bias_tensor=wo_bias,
+                bias_tensor=self.wo_bias,
                 fused_activation=None,
                 config=self.config.output_minimal_config,
                 memory_config=self.config.output_memcfg,
@@ -309,25 +326,12 @@ class BgeM3Attention(LightweightModule):
                 self.wo_weight,
                 memory_config=self.config.output_memcfg,
                 dtype=self.config.output_dtype,
-                bias=wo_bias,
+                bias=self.wo_bias,
                 program_config=self.config.output_prg_config,
                 compute_kernel_config=self.config.output_compute_kernel_cfg,
                 core_grid=output_core_grid,
             )
         ttnn.deallocate(context)
-
-        if tp_active:
-            partial = output
-            output = ttnn.all_reduce(
-                partial,
-                cluster_axis=self.config.tensor_parallel_axis,
-                num_links=1,
-                topology=ttnn.Topology.Linear,
-                memory_config=self.config.output_memcfg,
-            )
-            ttnn.deallocate(partial)
-            if self.wo_bias is not None:
-                output = ttnn.add(output, self.wo_bias)
 
         if seq_len > _MAX_WO_MM_CHUNK_SEQ_LEN:
             output = ttnn.reshape(output, [batch_size, 1, seq_len, -1])
@@ -474,24 +478,13 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
     output_dtype = to_set.get("output_dtype", config.output_dtype)
     weight_mem = ttnn.DRAM_MEMORY_CONFIG
 
-    qkv_mapper = None
-    wo_mapper = None
-    if config.tensor_parallel_axis is not None:
-        placements = [ttnn.PlacementReplicate() for _ in range(len(tuple(mesh_device.shape)))]
-        qkv_placements = list(placements)
-        wo_placements = list(placements)
-        qkv_placements[config.tensor_parallel_axis] = ttnn.PlacementShard(-1)
-        wo_placements[config.tensor_parallel_axis] = ttnn.PlacementShard(-2)
-        qkv_mapper = ttnn.MeshMapperConfig(qkv_placements, mesh_device.shape)
-        wo_mapper = ttnn.MeshMapperConfig(wo_placements, mesh_device.shape)
-
     to_set["wqkv"] = resolve_lazy_weight(
         config.wqkv,
         device=mesh_device,
         dtype=qkv_dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=weight_mem,
-        mesh_mapper_config=qkv_mapper,
+        mesh_mapper_config=None,
     )
     to_set["wo_weight"] = resolve_lazy_weight(
         config.wo_weight,
@@ -499,7 +492,7 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
         dtype=output_dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=weight_mem,
-        mesh_mapper_config=wo_mapper,
+        mesh_mapper_config=None,
     )
     if config.bqkv is not None:
         to_set["bqkv"] = resolve_lazy_weight(
@@ -508,7 +501,7 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
             dtype=qkv_dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=weight_mem,
-            mesh_mapper_config=qkv_mapper,
+            mesh_mapper_config=None,
         )
     if config.wo_bias is not None:
         to_set["wo_bias"] = resolve_lazy_weight(

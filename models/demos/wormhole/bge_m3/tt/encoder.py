@@ -32,19 +32,7 @@ class BgeM3TransformerBlock(LightweightModule):
         if max_seq_len == 8192:
             head_dim = getattr(args, "head_dim", None) or (args.dim // args.n_heads)
             q_scale = head_dim**-0.5
-        tensor_parallel_size = (
-            2
-            if max_seq_len == 8192 and mesh_device.get_num_devices() == 2 and tuple(mesh_device.shape) == (2, 1)
-            else 1
-        )
-        attention_weights = build_attention_weights(
-            state_dict,
-            layer_num,
-            dtype,
-            ttnn.bfloat16,
-            q_scale=q_scale,
-            tensor_parallel_size=tensor_parallel_size,
-        )
+        attention_weights = build_attention_weights(state_dict, layer_num, dtype, ttnn.bfloat16, q_scale=q_scale)
         mlp_weights = build_mlp_weights(state_dict, layer_num, dtype, ttnn.bfloat16)
 
         self.attention = BgeM3Attention.from_config(
@@ -182,8 +170,22 @@ def _attention_qkv_dtype(dtype, max_seq_len, max_batch_size):
     return dtype
 
 
+def _sequence_parallel_axis(mesh_device, max_seq_len):
+    """Return the mesh axis to shard the sequence over, or None. Enabled for the
+    S8192 serving shape on a 1x2 N300 (mesh (2, 1))."""
+    if (
+        max_seq_len == 8192
+        and mesh_device is not None
+        and mesh_device.get_num_devices() == 2
+        and tuple(mesh_device.shape) == (2, 1)
+    ):
+        return 0
+    return None
+
+
 def _build_attention_config(args, attention_weights, mesh_device, dtype, max_seq_len, max_batch_size, optimizations):
     """Build BgeM3AttentionConfig, overlaying Optimizations.attention fields when provided."""
+    sp_axis = _sequence_parallel_axis(mesh_device, max_seq_len)
     config = BgeM3AttentionConfig(
         wqkv=attention_weights.wqkv,
         bqkv=attention_weights.bqkv,
@@ -198,11 +200,9 @@ def _build_attention_config(args, attention_weights, mesh_device, dtype, max_seq
         output_dtype=dtype,
         max_seq_len=max_seq_len,
         max_batch_size=max_batch_size,
-        tensor_parallel_axis=(
-            0
-            if max_seq_len == 8192 and mesh_device.get_num_devices() == 2 and tuple(mesh_device.shape) == (2, 1)
-            else None
-        ),
+        sequence_parallel_axis=sp_axis,
+        # S8192 folds the attention scale into the Q weight at build time.
+        qkv_scale_prefolded=(max_seq_len == 8192),
     )
     if optimizations is not None and optimizations.attention is not None:
         attn_opts = optimizations.attention
@@ -239,11 +239,6 @@ def _build_mlp_config(args, mlp_weights, mesh_device, dtype, max_seq_len, max_ba
         activation_dtype=ttnn.bfloat16,
         max_seq_len=max_seq_len,
         max_batch_size=max_batch_size,
-        tensor_parallel_axis=(
-            0
-            if max_seq_len == 8192 and mesh_device.get_num_devices() == 2 and tuple(mesh_device.shape) == (2, 1)
-            else None
-        ),
     )
     if optimizations is not None and optimizations.mlp is not None:
         mlp_opts = optimizations.mlp

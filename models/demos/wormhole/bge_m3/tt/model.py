@@ -35,6 +35,17 @@ class BgeM3Model(LightweightModule):
             raise ValueError(f"pooling must be one of {self._POOLING_MODES}, got {pooling!r}")
         self.pooling = pooling
         self._mask_dtype = _attention_mask_dtype(dtype, args.max_seq_len, args.max_batch_size)
+        # Sequence-parallel serving path: inputs are sharded on the sequence dim
+        # across a 1x2 N300 mesh. Embeddings/LN/MLP/output-proj are token-local;
+        # attention all-gathers K/V. The dense pad mask is skipped (the unpadded
+        # serving shape needs none) and position_ids must be supplied host-side
+        # (device cumsum over a sharded sequence would be wrong).
+        self._sequence_parallel = (
+            args.max_seq_len == 8192
+            and mesh_device is not None
+            and mesh_device.get_num_devices() == 2
+            and tuple(mesh_device.shape) == (2, 1)
+        )
         self._trace_id = None
         self._trace_device = None
         self._trace_cq_id = 0
@@ -210,13 +221,22 @@ class BgeM3Model(LightweightModule):
             self._require_rank2(token_type_ids, "token_type_ids")
 
         if position_ids is None:
+            if self._sequence_parallel:
+                raise ValueError(
+                    "sequence-parallel path requires host-computed position_ids "
+                    "(device cumsum over a sharded sequence is incorrect)"
+                )
             position_ids = self.create_position_ids_from_input_ids(
                 input_ids=input_ids,
                 padding_idx=self.pad_token_id,
                 past_key_values_length=0,
             )
 
-        prepared_attention_mask = self._prepare_attention_mask(input_ids=input_ids, attention_mask=attention_mask)
+        # Sequence-parallel serving skips the dense pad mask (unpadded shape).
+        if self._sequence_parallel:
+            prepared_attention_mask = None
+        else:
+            prepared_attention_mask = self._prepare_attention_mask(input_ids=input_ids, attention_mask=attention_mask)
 
         residual_sharded = None
         if self.embedding_norm is not None:

@@ -16,8 +16,12 @@ BATCH = 12
 SEQ_LEN = 8192
 
 
-def _to_replicated_tensors(inputs, mesh_device, *, device):
-    mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+def _to_seqsharded_tensors(inputs, mesh_device, *, device):
+    # Shard input_ids / token_type / position on the sequence dim (tensor dim 1)
+    # across the 2-chip mesh. attention_mask is dropped (seq-parallel serving
+    # applies no dense mask). position_ids are host-computed over the full seq
+    # then sharded, so each chip sees the correct absolute positions.
+    mapper = ttnn.ShardTensorToMesh(mesh_device, dim=1)
     kwargs = {"mesh_mapper": mapper}
     if device:
         kwargs.update(device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -27,7 +31,6 @@ def _to_replicated_tensors(inputs, mesh_device, *, device):
 
     return {
         "input_ids": convert(inputs["input_ids"].int(), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
-        "attention_mask": convert(inputs["attention_mask"], ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
         "token_type_ids": convert(inputs["token_type_ids"].int(), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
         "position_ids": convert(inputs["position_ids"].int(), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
     }
@@ -58,8 +61,8 @@ def test_embedding_perf_b12_s8192_tp2(mesh_device):
     logger.info(f"TP2 model built in {time.perf_counter() - t0:.1f}s")
 
     inputs = prepare_inputs(args.tokenizer, BATCH, SEQ_LEN, args.pad_token_id)
-    host_tensors = _to_replicated_tensors(inputs, mesh_device, device=False)
-    device_tensors = _to_replicated_tensors(inputs, mesh_device, device=True)
+    host_tensors = _to_seqsharded_tensors(inputs, mesh_device, device=False)
+    device_tensors = _to_seqsharded_tensors(inputs, mesh_device, device=True)
 
     logger.info("Compiling TP2 forward")
     out = model.forward(**device_tensors)
@@ -74,7 +77,7 @@ def test_embedding_perf_b12_s8192_tp2(mesh_device):
     times = []
     for _ in range(NUM_ITERATIONS):
         fresh = prepare_inputs(args.tokenizer, BATCH, SEQ_LEN, args.pad_token_id)
-        fresh_host = _to_replicated_tensors(fresh, mesh_device, device=False)
+        fresh_host = _to_seqsharded_tensors(fresh, mesh_device, device=False)
         _copy_inputs(fresh_host, device_tensors)
         t0 = time.perf_counter()
         model.execute_trace(blocking=True)
