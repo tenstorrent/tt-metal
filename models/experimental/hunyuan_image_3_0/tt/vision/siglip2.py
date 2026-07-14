@@ -81,6 +81,8 @@ from typing import Any
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
+from ..matmul_utils import l1_sharded_linear, l1_sharded_matmul, to_interleaved_if_sharded
+
 # Defaults from ref/tokenizer/assets/config.json -> "vit" + "vit_aligner"
 VIT_CONFIG = {
     "hidden_size": 1152,
@@ -210,9 +212,8 @@ def resize_positional_embeddings_tt(
                 r, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
             r_cache[r_key] = r_tt
-        o = ttnn.matmul(
-            r_tt, pos_grid_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=compute_kernel_config
-        )  # [max_length, hidden]
+        o = l1_sharded_matmul(r_tt, pos_grid_tt, compute_kernel_config=compute_kernel_config)  # [max_length, hidden]
+        o = to_interleaved_if_sharded(o)
         outs.append(ttnn.reshape(o, [1, max_length, o.shape[-1]]))
 
     if len(outs) == 1:
@@ -335,7 +336,8 @@ class HunyuanTtSiglip2VisionEmbeddings(LightweightModule):
         pos = self.position_embeddings(inputs.spatial_shapes_hw, seq_len)
 
         # patch projection: Linear(pixel_values) [B, S, patch_dim] -> [B, S, H].
-        patch = ttnn.linear(pixel_values, self._patch_weight, bias=self._patch_bias)
+        patch = l1_sharded_linear(pixel_values, self._patch_weight, bias=self._patch_bias)
+        patch = to_interleaved_if_sharded(patch)
         # patch_embeds + resized positional embeddings (pos is cache-owned).
         out = ttnn.add(patch, pos)
         ttnn.deallocate(patch)
@@ -477,30 +479,30 @@ class HunyuanTtSiglip2Attention(LightweightModule):
         seq_len = hidden_states.shape[1]
 
         # ---- 1. Q/K/V projections: [B, S, H] each ----
-        q = ttnn.linear(
+        q = l1_sharded_linear(
             hidden_states,
             self.q_proj_w,
             bias=self.q_proj_b,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
-        k = ttnn.linear(
+        k = l1_sharded_linear(
             hidden_states,
             self.k_proj_w,
             bias=self.k_proj_b,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
-        v = ttnn.linear(
+        v = l1_sharded_linear(
             hidden_states,
             self.v_proj_w,
             bias=self.v_proj_b,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
+        q = to_interleaved_if_sharded(q)
+        k = to_interleaved_if_sharded(k)
+        v = to_interleaved_if_sharded(v)
 
         # ---- 2. Split into heads: [B, num_heads, S, padded_head_dim] ----
         # Each proj already outputs num_heads*padded_head_dim (head-major, pad zeros),
@@ -539,14 +541,14 @@ class HunyuanTtSiglip2Attention(LightweightModule):
         attn = _ensure_bsh(attn)
 
         # ---- 5. Output projection ----
-        out = ttnn.linear(
+        out = l1_sharded_linear(
             attn,
             self.out_proj_w,
             bias=self.out_proj_b,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
+        out = to_interleaved_if_sharded(out)
         ttnn.deallocate(attn)
         return out
 
@@ -585,24 +587,24 @@ class HunyuanTtSiglip2MLP(LightweightModule):
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """[B, S, H] device -> [B, S, H] device. fc1 -> gelu_pytorch_tanh -> fc2."""
         x = _ensure_bsh(x)
-        h = ttnn.linear(
+        h = l1_sharded_linear(
             x,
             self.fc1_w,
             bias=self.fc1_b,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
+        h = to_interleaved_if_sharded(h)
         # gelu_pytorch_tanh == nn.GELU(approximate="tanh")
         h = ttnn.gelu(h, fast_and_approximate_mode=True)
-        out = ttnn.linear(
+        out = l1_sharded_linear(
             h,
             self.fc2_w,
             bias=self.fc2_b,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
+        out = to_interleaved_if_sharded(out)
         ttnn.deallocate(h)
         return out
 
@@ -791,24 +793,24 @@ class HunyuanTtLightProjector(LightweightModule):
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """[B, S, 1152] device -> [B, S, 4096] device. Linear -> GELU -> Linear."""
         x = _ensure_bsh(x)
-        h = ttnn.linear(
+        h = l1_sharded_linear(
             x,
             self.w0,
             bias=self.b0,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
+        h = to_interleaved_if_sharded(h)
         # Reference uses nn.GELU() (erf), not gelu_pytorch_tanh.
         h = ttnn.gelu(h, fast_and_approximate_mode=False)
-        out = ttnn.linear(
+        out = l1_sharded_linear(
             h,
             self.w2,
             bias=self.b2,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
+        out = to_interleaved_if_sharded(out)
         ttnn.deallocate(h)
         return out
 
