@@ -163,11 +163,10 @@ def preprocess_diffusion_head_weights(
     for i in range(num_layers):
         layer_adaLN_w.append(_w_tile(f"layers.{i}.adaLN_modulation.1.weight"))
         layer_norm_w.append(_norm_tile(w(f"layers.{i}.norm.weight")))
-        # gate/up-proj weights bf8_b (weight-bandwidth-bound at B=2, M=1); down_proj stays
-        # bf16 — it feeds the gated residual and this head runs iteratively (10 steps), so
-        # down bf8_b drops single-forward PCC 0.9953->0.9940 (too tight without an e2e gate).
-        layer_ffn_gate_w.append(_w_tile(f"layers.{i}.ffn.gate_proj.weight", dtype=ttnn.bfloat8_b))
-        layer_ffn_up_w.append(_w_tile(f"layers.{i}.ffn.up_proj.weight", dtype=ttnn.bfloat8_b))
+        # gate/up-proj kept bf16 (not bf8_b): the diffusion head runs 10 steps/frame inside the
+        # ~40k-step feedback loop; the bf8_b drop compounds into loud/clipping over a long render.
+        layer_ffn_gate_w.append(_w_tile(f"layers.{i}.ffn.gate_proj.weight"))
+        layer_ffn_up_w.append(_w_tile(f"layers.{i}.ffn.up_proj.weight"))
         layer_ffn_down_w.append(_w_tile(f"layers.{i}.ffn.down_proj.weight"))
 
     final_adaLN_w = _w_tile("final_layer.adaLN_modulation.1.weight")

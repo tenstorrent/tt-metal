@@ -34,16 +34,6 @@ _HIFI4 = ttnn.WormholeComputeKernelConfig(
     packer_l1_acc=False,
 )
 
-# HiFi2 (2 phases vs HiFi4's 4) pairs with bfp8_b weights: the weight already carries
-# only a 7-bit block-float mantissa, so the extra activation bits HiFi4 keeps are wasted.
-# Used for the FFN gate/up decode matmuls (~1.69x vs 1.53x on HiFi4).
-_HIFI2 = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi2,
-    math_approx_mode=False,
-    fp32_dest_acc_en=True,
-    packer_l1_acc=False,
-)
-
 # Without program_config, SDPA decode uses the full device grid; on Blackhole that
 # can exceed the 64-core/head tree-reduction cap (MAX_TREE_REDUCTION_ROUNDS=6).
 _SDPA_DECODE_CFG = ttnn.SDPAProgramConfig(
@@ -301,12 +291,11 @@ def preprocess_lm_weights(
             wk=_w("attention.wk"),
             wv=_w("attention.wv"),
             wo=_w("attention.wo"),
-            # FFN gate/up are the two largest decode matmuls and DRAM-BW-bound; bfp8_b
-            # weights halve their DRAM traffic (~1.5-1.7x) at ~0.99997 per-op PCC.  w2
-            # (down) stays bf16 — its swept 1D config already maxes BW, bfp8 gives nothing.
-            w1=_w("feed_forward.w1", dtype=ttnn.bfloat8_b),
+            # FFN gate/up kept bf16 (not bf8_b): they sit in the ~40k-step feedback loop and
+            # the bf8_b precision drop drives the long-form traced render into loud/clipping.
+            w1=_w("feed_forward.w1"),
             w2=_w("feed_forward.w2"),
-            w3=_w("feed_forward.w3", dtype=ttnn.bfloat8_b),
+            w3=_w("feed_forward.w3"),
             attn_norm_w=_norm_weight(state_dict[f"{prefix}.attention_norm.weight"], device),
             ffn_norm_w=_norm_weight(state_dict[f"{prefix}.ffn_norm.weight"], device),
             wqkv=_wqkv(),
@@ -835,10 +824,11 @@ class TTVibeVoiceLM:
         decode = S == 1
         act_mc = ttnn.L1_MEMORY_CONFIG if decode else ttnn.DRAM_MEMORY_CONFIG
         x_mm = _matmul_in_l1(x, decode)
-        # gate/up use bfp8_b weights → HiFi2 (see _HIFI2); w2 stays HiFi4 (bf16 weight).
+        # gate/up run at HiFi4 (bf16 weights restored — see preprocess_lm_weights); the bf8_b+HiFi2
+        # lever is a feedback-loop precision drop that collapses the long-form traced render.
         # Fuse silu into the gate matmul (drops a separate Unary op on decode).
-        gate = ttnn.linear(x_mm, layer_w.w1, activation="silu", compute_kernel_config=_HIFI2, memory_config=act_mc)
-        up = ttnn.linear(x_mm, layer_w.w3, compute_kernel_config=_HIFI2, memory_config=act_mc)
+        gate = ttnn.linear(x_mm, layer_w.w1, activation="silu", compute_kernel_config=_HIFI4, memory_config=act_mc)
+        up = ttnn.linear(x_mm, layer_w.w3, compute_kernel_config=_HIFI4, memory_config=act_mc)
         hidden = ttnn.mul(gate, up, memory_config=act_mc)
         # Down proj: on a single-token decode step use the swept fast config (2.15x);
         # prefill (S>1) keeps the auto config.
