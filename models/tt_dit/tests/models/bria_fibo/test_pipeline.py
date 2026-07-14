@@ -199,7 +199,7 @@ def test_fibo_pipeline_vae_decode_on_device(*, mesh_device):
     assert_quality(host_img.float(), dev_img.float(), pcc=0.99)
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=["mesh_device"])
+@pytest.mark.parametrize("mesh_device", [(2, 2), (4, 8)], indirect=["mesh_device"])
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}],
@@ -208,7 +208,8 @@ def test_fibo_pipeline_vae_decode_on_device(*, mesh_device):
 @pytest.mark.parametrize("guidance_scale", [5.0, 1.0])
 def test_fibo_pipeline_latent_pcc(*, mesh_device, guidance_scale):
     """Core end-to-end gate: the tt ``BriaFiboPipeline`` reproduces the diffusers reference
-    ``BriaFiboPipeline``'s pre-VAE latent trajectory (PCC-gated) on the 2x2 Blackhole mesh.
+    ``BriaFiboPipeline``'s pre-VAE latent trajectory (PCC-gated) on the mesh (2x2 sp=2/tp=2, or
+    4x8 Galaxy sp=4/tp=8).
 
     Both pipelines run the SAME prompt / negative_prompt / guidance_scale / steps / resolution and are
     fed IDENTICAL initial noise via latent INJECTION (a host-built tensor passed as ``latents=`` to
