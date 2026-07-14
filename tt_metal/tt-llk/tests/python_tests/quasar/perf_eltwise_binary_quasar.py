@@ -5,7 +5,6 @@ import pytest
 from helpers.format_config import DataFormat
 from helpers.llk_params import MathOperation, PERF_RUN_TYPES_QUASAR
 from helpers.param_config import parametrize
-from helpers.perf_hang_skips import filter_run_types
 from quasar.test_eltwise_binary_quasar import (
     ELTWISE_FORMATS,
     eltwise_binary_dest_sync_dest_acc,
@@ -14,7 +13,6 @@ from quasar.test_eltwise_binary_quasar import (
     eltwise_binary_math_fidelities,
 )
 from quasar.test_eltwise_binary_quasar import test_eltwise_binary as run_eltwise_binary
-
 
 @pytest.mark.perf
 @pytest.mark.quasar
@@ -53,7 +51,6 @@ def test_perf_eltwise_binary_quasar(
     loop_factor,
     is_perf,
 ):
-    run_types = filter_run_types(__file__, run_types)
     if formats.input_format == DataFormat.Int8:
         pytest.skip("Int8 eltwise binary perf not yet enabled on Quasar")
 

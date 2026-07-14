@@ -4,14 +4,12 @@
 import pytest
 from helpers.llk_params import PERF_RUN_TYPES_QUASAR
 from helpers.param_config import parametrize
-from helpers.perf_hang_skips import filter_run_types
 from quasar.test_unpack_tilize_quasar import (
     PERF_UNPACK_TILIZE_COMBINATIONS,
 )
 from quasar.test_unpack_tilize_quasar import (
     test_unpack_tilize_quasar as run_unpack_tilize,
 )
-
 
 @pytest.mark.perf
 @pytest.mark.quasar
@@ -28,7 +26,6 @@ def test_perf_unpack_tilize_quasar(
     loop_factor,
     is_perf,
 ):
-    run_types = filter_run_types(__file__, run_types)
     run_unpack_tilize(
         formats_dest_acc_sync_unpack_sel_dimensions,
         run_types=run_types,

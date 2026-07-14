@@ -4,10 +4,8 @@
 import pytest
 from helpers.llk_params import PERF_RUN_TYPES_QUASAR
 from helpers.param_config import parametrize
-from helpers.perf_hang_skips import filter_run_types
 from quasar.test_pack_quasar import PERF_PACK_COMBINATIONS
 from quasar.test_pack_quasar import test_pack_quasar as run_pack
-
 
 @pytest.mark.perf
 @pytest.mark.quasar
@@ -24,7 +22,6 @@ def test_perf_pack_quasar(
     loop_factor,
     is_perf,
 ):
-    run_types = filter_run_types(__file__, run_types)
     run_pack(
         formats_dest_acc_sync_dims_relu,
         run_types=run_types,

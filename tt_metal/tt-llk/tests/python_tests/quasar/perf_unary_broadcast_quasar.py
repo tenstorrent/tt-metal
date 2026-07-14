@@ -4,7 +4,6 @@
 import pytest
 from helpers.llk_params import BroadcastType, PERF_RUN_TYPES_QUASAR
 from helpers.param_config import parametrize, runtime
-from helpers.perf_hang_skips import filter_run_types
 from quasar.test_unary_broadcast_quasar import (
     INPUT_DIMENSIONS,
     UNARY_BROADCAST_FORMATS,
@@ -17,7 +16,6 @@ from quasar.test_unary_broadcast_quasar import (
     unary_broadcast_dest_sync_modes,
     unary_broadcast_implied_math_formats,
 )
-
 
 @pytest.mark.perf
 @pytest.mark.quasar
@@ -46,7 +44,6 @@ def test_perf_unary_broadcast_quasar(
     loop_factor,
     is_perf,
 ):
-    run_types = filter_run_types(__file__, run_types)
     run_unary_broadcast(
         formats,
         dest_acc,

@@ -5,7 +5,6 @@ import pytest
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.llk_params import BroadcastType, MathOperation, PERF_RUN_TYPES_QUASAR
 from helpers.param_config import parametrize
-from helpers.perf_hang_skips import filter_run_types
 from quasar.test_eltwise_binary_broadcast_quasar import (
     BINARY_BROADCAST_FORMATS,
     binary_broadcast_dest_sync_modes,
@@ -16,7 +15,6 @@ from quasar.test_eltwise_binary_broadcast_quasar import (
 from quasar.test_eltwise_binary_broadcast_quasar import (
     test_eltwise_binary_broadcast_quasar as run_eltwise_binary_broadcast,
 )
-
 
 @pytest.mark.perf
 @pytest.mark.quasar
@@ -53,7 +51,6 @@ def test_perf_eltwise_binary_broadcast_quasar(
     loop_factor,
     is_perf,
 ):
-    run_types = filter_run_types(__file__, run_types)
     run_eltwise_binary_broadcast(
         formats,
         dest_acc,
