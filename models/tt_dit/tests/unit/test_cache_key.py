@@ -145,6 +145,26 @@ def test_publish_is_all_or_nothing(checkpoint, monkeypatch, tmp_path, expect_err
     assert not list(cache_dir.parent.glob("*.staging-*")), "staging directory leaked"
 
 
+def test_the_superseded_directory_is_reclaimed(checkpoint, monkeypatch, tmp_path):
+    """Once a module keys on content, its content-blind directory is unreachable — and for the 22B
+    transformer that is 37GB. The migration has to free it, not ask the disk for room for both."""
+    monkeypatch.setenv("TT_DIT_CACHE_DIR", str(tmp_path / "cache"))
+    legacy = cache.model_cache_dir(
+        model_name="m",
+        subfolder="connector",
+        parallel_config=SimpleNamespace(_asdict=dict),
+        mesh_shape=(4, 8),
+        content=None,
+    )
+    _module().save(legacy)
+    assert legacy.is_dir()
+
+    cache._reclaim_superseded(legacy)
+
+    assert not legacy.exists()
+    assert legacy != _key(_module(), [checkpoint]), "the content-keyed cache must not be the one reclaimed"
+
+
 def test_a_cache_with_no_manifest_misses(checkpoint, monkeypatch, tmp_path):
     """Every artifact written before this manifest existed is unverifiable, so it must not be
     served — including the poisoned one. The empty `cache_dict.json` of the old format is exactly

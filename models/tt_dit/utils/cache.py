@@ -152,16 +152,15 @@ def load_model(
 
     key = content_key(tt_model, sources) if sources else None
 
-    cache_dir = model_cache_dir(
-        model_name=model_name,
-        subfolder=subfolder,
-        parallel_config=parallel_config,
-        mesh_shape=mesh_shape,
-        dtype=dtype,
-        is_fsdp=is_fsdp,
-        content=key,
-        required=get_torch_state_dict is None,
-    )
+    key_args = {
+        "model_name": model_name,
+        "subfolder": subfolder,
+        "parallel_config": parallel_config,
+        "mesh_shape": mesh_shape,
+        "dtype": dtype,
+        "is_fsdp": is_fsdp,
+    }
+    cache_dir = model_cache_dir(**key_args, content=key, required=get_torch_state_dict is None)
 
     if cache_dir is None:
         assert get_torch_state_dict is not None
@@ -201,6 +200,8 @@ def load_model(
     ttnn.distributed_context_barrier()
 
     if create_cache:
+        if key is not None:
+            _reclaim_superseded(model_cache_dir(**key_args, content=None, required=False))
         logger.info(f"Writing cache to '{cache_dir}'.")
         _publish_cache(tt_model, cache_dir, key)
 
@@ -287,6 +288,21 @@ def _structure(tt_model: Module) -> dict:
         name: {"shape": list(p.total_shape), "dtype": str(p.dtype), "layout": str(p.layout), "bytes": None}
         for name, p in _walk_parameters(tt_model)
     }
+
+
+def _reclaim_superseded(legacy_dir: Path | None) -> None:
+    """Drop the content-blind directory that a content key replaces, before rebuilding over it.
+
+    Once a module keys on content, nothing constructs its old path again, so whatever sits there
+    is unreachable — and for the 22B transformer it is 37GB. Freeing it first makes the one-time
+    migration disk-neutral; leaving it would need room for two copies of a checkpoint that only
+    just fits once. It is not a fallback: an unverifiable artifact is exactly what is being
+    retired, so there is nothing to keep.
+    """
+    if legacy_dir is None or not legacy_dir.is_dir():
+        return
+    logger.info(f"Reclaiming superseded content-blind cache at '{legacy_dir}'.")
+    shutil.rmtree(legacy_dir, ignore_errors=True)
 
 
 def _publish_cache(tt_model: Module, cache_dir: str | Path, key: str | None) -> None:
