@@ -142,6 +142,57 @@ ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint3
 
 // clang-format off
 /**
+ * Re-programs the per-source matmul tile descriptors and TILE_SIZE_A/B GPRs from the given input CBs
+ * *without* changing data formats. Call it immediately before matmul_init / matmul_block_init when the
+ * preceding op left SrcA/SrcB with asymmetric tile sizes (i.e. different data formats per source) and the
+ * following matmul reuses the same formats.
+ *
+ * Why it is needed: matmul_init only reprograms the transpose Haloize mode, the matmul x_end SETADC, the
+ * KT_DIM GPR, and the MOP; it never re-writes the THCON tile descriptors or the TILE_SIZE_A/B GPRs. A plain
+ * reconfig_data_format is inappropriate here because the data formats did not change. This helper re-asserts
+ * only the tile-dimension / tile-size state, in matmul's reversed operand order (in0 -> SrcB, in1 -> SrcA),
+ * so the matmul addresses each source correctly. The reversal is kept local to this helper, so callers pass
+ * (in0_cb_id, in1_cb_id) in natural order.
+ *
+ * This matters only for multi-tile / multi-block matmuls: the per-tile base offsets are computed at runtime
+ * from fifo_page_size (always correct), but the MOP base-address auto-increment and the K-walk stride are
+ * driven by the TILE_SIZE_A/B GPRs this helper reprograms.
+ *
+ * It is opt-in and costs a few CFG writes, so the common symmetric-tile case pays nothing (do not call it).
+ * It performs no data-format change; it only re-asserts tile-dim / tile-size state.
+ *
+ * NOTE(ARCH_QUASAR): No-op on Quasar. Buffer descriptors are programmed into the unpack MOP at op init, so a
+ * separate tile-dim reconfig is neither needed nor sufficient (the MOP is what matters). On Quasar, simply
+ * call matmul_init(in0_cb_id, in1_cb_id) next, which reprograms the descriptors via the MOP.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name      | Description                                          | Type     | Valid Range | Required |
+ * |------------|-----------|------------------------------------------------------|----------|-------------|----------|
+ * | Function   | in0_cb_id | First matmul input CB (feeds SrcB in matmul order)   | uint32_t | 0 to 31     | True     |
+ * | Function   | in1_cb_id | Second matmul input CB (feeds SrcA in matmul order)  | uint32_t | 0 to 31     | True     |
+ */
+// clang-format on
+ALWI void reconfig_matmul_tile_dims(const uint32_t in0_cb_id, const uint32_t in1_cb_id) {
+    LLK_SAN_FUNCTION();
+#ifdef ARCH_QUASAR
+    // NOTE(ARCH_QUASAR): intentional no-op. On Quasar the per-source tile descriptors live in the unpack MOP and
+    // are (re)programmed at op init, so re-asserting the descriptor / TILE_SIZE state here is neither needed nor
+    // sufficient. Call matmul_init(in0_cb_id, in1_cb_id) next to reprogram the descriptors via the MOP.
+    (void)in0_cb_id;
+    (void)in1_cb_id;
+#else
+    // Matmul maps in1 -> SrcA and in0 -> SrcB (the reverse of other ops), mirroring the swap in
+    // llk_unpack_AB_matmul_init. is_tile_dim_reconfig_en routes these single-operand wrappers to
+    // p_dim_stride_target::FACE_ROW_MAJOR, reprogramming the THCON tile descriptor + TILE_SIZE_A/B GPR +
+    // Z/Y-stride + x-end without changing the data format.
+    reconfig_data_format_srca<false /*to_from_int8*/, true /*is_tile_dim_reconfig_en*/>(in1_cb_id);  // in1 -> SrcA
+    reconfig_data_format_srcb<false /*to_from_int8*/, true /*is_tile_dim_reconfig_en*/>(in0_cb_id);  // in0 -> SrcB
+#endif
+}
+
+// clang-format off
+/**
  * Reconfigures the packer output data format by specifying the CB ID of the new operand. This function
  * call will always perform the reconfiguration, regardless of the data format of the old operand.
  * If the new CB ID is the same as the current one, reconfiguration will still occur.
