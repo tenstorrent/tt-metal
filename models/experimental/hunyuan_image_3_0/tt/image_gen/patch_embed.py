@@ -12,28 +12,23 @@
 # ResBlock runs the simple updown=False path and the token grid equals the
 # latent H x W. This port implements only that path.
 #
-# Layout: everything runs in channels-last NHWC, kept flat as [1, 1, B*H*W, C]
-# (ROW_MAJOR for conv2d, TILE for elementwise/groupnorm). The leading rearrange
-# `b c h w -> b (h w) c` of UNetDown is then a no-op reshape; UNetUp's inverse
-# `b (h w) c -> b c h w` is likewise a reshape because we stay channels-last.
+# conv2d auto-shards when optimal. Fused sharded ttnn.group_norm runs when the
+# activation is sharded, avoiding ShardedToInterleaved + manual TILE reduces.
 #
 # Timestep conditioning is adaptive group-norm: the (already-embedded) timestep
 # vector -> SiLU -> Linear(emb, 2*out) -> (scale, shift); after the second
 # GroupNorm,  h = norm(h) * (1 + scale) + shift.
-#
-# Weights (PyTorch checkpoint, NCHW / [out,in] linear):
-#   patch_embed.model.0.{weight,bias}                  conv0  [hid,lat,3,3]
-#   patch_embed.model.1.in_layers.0.{weight,bias}      GN(32,hid)
-#   patch_embed.model.1.in_layers.2.{weight,bias}      conv  [out,hid,3,3]
-#   patch_embed.model.1.emb_layers.1.{weight,bias}     Linear[2*out,emb]
-#   patch_embed.model.1.out_layers.0.{weight,bias}     GN(32,out)
-#   patch_embed.model.1.out_layers.3.{weight,bias}     conv  [out,out,3,3]
-#   patch_embed.model.1.skip_connection.{weight,bias}  conv1x1 [out,in] (if in!=out)
-# UNetUp (final_layer) mirrors this with an extra out-norm conv block at the end.
 
+import os
+
+import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
+from ..matmul_utils import act_width_sharded_linear
+
+# HEIGHT_SHARDED conv + sharded group_norm (set HY_PATCH_EMBED_SHARDED=0 for legacy interleaved GN).
+_PATCH_EMBED_SHARDED = os.environ.get("HY_PATCH_EMBED_SHARDED", "1") != "0"
 
 _COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -43,15 +38,33 @@ _COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
 )
 
 
+def _conv2d_config(dtype, *, sharded: bool) -> ttnn.Conv2dConfig:
+    # Keep conv2d defaults (auto shard when optimal). The win is sharded GN consuming
+    # sharded conv output without ShardedToInterleaved + manual TILE reduces.
+    return ttnn.Conv2dConfig(weights_dtype=dtype, shard_layout=None)
+
+
+def _to_row_major(x: ttnn.Tensor) -> ttnn.Tensor:
+    if x.layout == ttnn.ROW_MAJOR_LAYOUT:
+        return x
+    return ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+
+
+def _to_interleaved_tile(x: ttnn.Tensor, *, dtype=ttnn.bfloat16) -> ttnn.Tensor:
+    """Single boundary convert: sharded/interleaved RM -> interleaved TILE (backbone scatter)."""
+    if ttnn.is_sharded(x):
+        x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if x.layout != ttnn.TILE_LAYOUT:
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+    if x.dtype != dtype:
+        x = ttnn.typecast(x, dtype)
+    return x
+
+
 # ---------------------------------------------------------------------------
-# GroupNorm(32, C) on a flat NHWC tensor [1,1,B*H*W,C].
-#
-# Computed manually (group mean/var reductions) rather than via the sharded
-# ttnn.group_norm: the sharded path imposes a core-grid divisibility constraint
-# that depends on the spatial size (num_virtual_rows <= Ht), which is brittle
-# across the small test grid and the much larger real latent grids. The manual
-# path is layout-agnostic and exact. Channels are the last (contiguous) dim, so
-# group g owns the contiguous channel block [g*Cg : (g+1)*Cg].
+# GroupNorm(32, C) on flat NHWC [1,1,B*H*W,C].
+# Sharded path: fused ttnn.group_norm on HEIGHT_SHARDED ROW_MAJOR (conv output).
+# Legacy path: manual stats on interleaved TILE (HY_PATCH_EMBED_SHARDED=0).
 # ---------------------------------------------------------------------------
 class _TtGroupNorm:
     def __init__(self, device, num_channels, weight, bias, *, num_groups=32, eps=1e-5, dtype=ttnn.bfloat16):
@@ -61,43 +74,121 @@ class _TtGroupNorm:
         self.num_groups = num_groups
         self.cg = num_channels // num_groups
         self.eps = eps
-        # affine weight/bias as per-channel row vectors [1,1,1,C]
+        self.dtype = dtype
+        self._weight_host = weight.detach().float().reshape(-1)
+        self._bias_host = bias.detach().float().reshape(-1)
+        self._sharded_cache: dict[int, tuple] = {}
+        # Legacy interleaved TILE affine (manual path).
         self.weight = ttnn.from_torch(
-            weight.reshape(1, 1, 1, num_channels), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+            weight.reshape(1, 1, 1, num_channels), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
         )
         self.bias = ttnn.from_torch(
-            bias.reshape(1, 1, 1, num_channels), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+            bias.reshape(1, 1, 1, num_channels), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
         )
 
-    def __call__(self, x_flat, n_rows):
+    def _sharded_state(self, n_rows: int):
+        cached = self._sharded_cache.get(n_rows)
+        if cached is not None:
+            return cached
+        mem_config, grid_size = ttnn.determine_expected_group_norm_sharded_config_and_grid_size(
+            device=self.device,
+            num_channels=self.num_channels,
+            num_groups=self.num_groups,
+            input_nhw=n_rows,
+            is_height_sharded=True,
+            is_row_major=True,
+        )
+        num_cores = ttnn.get_group_norm_cores_across_channel(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            grid_size,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        mask = ttnn.to_device(
+            ttnn.create_group_norm_input_mask(
+                num_channel=self.num_channels,
+                num_groups=self.num_groups,
+                num_cores_across_channel=num_cores,
+                data_type=self.dtype,
+            ),
+            self.device,
+        )
+        w_rm = ttnn.create_group_norm_weight_bias_rm(
+            input_tensor=self._weight_host.to(torch.bfloat16),
+            num_channels=self.num_channels,
+            num_cores_x=num_cores,
+        )
+        b_rm = ttnn.create_group_norm_weight_bias_rm(
+            input_tensor=self._bias_host.to(torch.bfloat16),
+            num_channels=self.num_channels,
+            num_cores_x=num_cores,
+        )
+        gamma = ttnn.from_torch(
+            w_rm,
+            dtype=self.dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        beta = ttnn.from_torch(
+            b_rm,
+            dtype=self.dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        cached = (mask, gamma, beta, mem_config, grid_size)
+        self._sharded_cache[n_rows] = cached
+        return cached
+
+    def _forward_sharded(self, x_flat: ttnn.Tensor, n_rows: int) -> ttnn.Tensor:
+        mask, gamma, beta, mem_config, grid_size = self._sharded_state(n_rows)
+        return ttnn.group_norm(
+            x_flat,
+            num_groups=self.num_groups,
+            input_mask=mask,
+            weight=gamma,
+            bias=beta,
+            epsilon=self.eps,
+            memory_config=mem_config,
+            core_grid=grid_size,
+        )
+
+    def _forward_interleaved(self, x_flat: ttnn.Tensor, n_rows: int) -> ttnn.Tensor:
         C, G, Cg = self.num_channels, self.num_groups, self.cg
         x = ttnn.to_layout(x_flat, ttnn.TILE_LAYOUT)
-        x = ttnn.typecast(x, ttnn.float32)
-        xg = ttnn.reshape(x, [1, n_rows, G, Cg])  # group channels along last dim
+        if x.dtype != self.dtype:
+            x = ttnn.typecast(x, self.dtype)
+        xg = ttnn.reshape(x, [1, n_rows, G, Cg])
 
-        # per-group mean over (spatial rows, in-group channels): reduce dim3 then dim1
-        m = ttnn.mean(xg, dim=3, keepdim=True)  # [1,n,G,1]
-        mean = ttnn.mean(m, dim=1, keepdim=True)  # [1,1,G,1]
+        m = ttnn.mean(xg, dim=3, keepdim=True)
+        mean = ttnn.mean(m, dim=1, keepdim=True)
         ttnn.deallocate(m)
         sq = ttnn.multiply(xg, xg)
         s = ttnn.mean(sq, dim=3, keepdim=True)
         ttnn.deallocate(sq)
-        msq = ttnn.mean(s, dim=1, keepdim=True)  # [1,1,G,1]
+        msq = ttnn.mean(s, dim=1, keepdim=True)
         ttnn.deallocate(s)
-        var = ttnn.subtract(msq, ttnn.multiply(mean, mean))  # [1,1,G,1]
+        var = ttnn.subtract(msq, ttnn.multiply(mean, mean))
         ttnn.deallocate(msq)
-        inv = ttnn.rsqrt(ttnn.add(var, self.eps))  # [1,1,G,1]
+        inv = ttnn.rsqrt(ttnn.add(var, self.eps))
         ttnn.deallocate(var)
 
-        xn = ttnn.multiply(ttnn.subtract(xg, mean), inv)  # broadcast [1,1,G,1] over [1,n,G,Cg]
+        xn = ttnn.multiply(ttnn.subtract(xg, mean), inv)
         ttnn.deallocate(xg)
         ttnn.deallocate(mean)
         ttnn.deallocate(inv)
 
         xn = ttnn.reshape(xn, [1, 1, n_rows, C])
-        out = ttnn.add(ttnn.multiply(xn, self.weight), self.bias)  # per-channel affine
+        out = ttnn.add(ttnn.multiply(xn, self.weight), self.bias)
         ttnn.deallocate(xn)
         return out
+
+    def __call__(self, x_flat, n_rows):
+        # Conv outputs are ROW_MAJOR; use fused sharded GN whenever sharded mode is on.
+        # TILE inputs (e.g. UNetUp tokens from backbone) keep the interleaved manual path.
+        if _PATCH_EMBED_SHARDED and x_flat.layout == ttnn.ROW_MAJOR_LAYOUT:
+            return self._forward_sharded(x_flat, n_rows)
+        return self._forward_interleaved(x_flat, n_rows)
 
     def deallocate(self):
         ttnn.deallocate(self.weight)
@@ -105,7 +196,7 @@ class _TtGroupNorm:
 
 
 # ---------------------------------------------------------------------------
-# Conv2d on a flat NHWC tensor [1,1,B*H*W,Cin] -> [1,1,B*Hout*Wout,Cout]
+# Conv2d on flat NHWC [1,1,B*H*W,Cin] -> [1,1,B*Hout*Wout,Cout]
 # ---------------------------------------------------------------------------
 class _TtConv2d:
     def __init__(self, device, weight, bias, *, stride=1, padding=1, dtype=ttnn.bfloat16):
@@ -118,14 +209,11 @@ class _TtConv2d:
         self.bias = None
         if bias is not None:
             self.bias = ttnn.from_torch(bias.reshape(1, 1, 1, -1), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
-        self.conv_config = ttnn.Conv2dConfig(
-            weights_dtype=dtype,
-            shard_layout=None,
-        )
+        self.conv_config = _conv2d_config(dtype, sharded=_PATCH_EMBED_SHARDED)
         self._weights_prepared = False
 
     def __call__(self, x_flat, B, H, W):
-        x = ttnn.to_layout(x_flat, ttnn.ROW_MAJOR_LAYOUT)
+        x = _to_row_major(x_flat)
         if not self._weights_prepared:
             out, dim, wb = ttnn.conv2d(
                 input_tensor=x,
@@ -183,7 +271,7 @@ class _TtConv2d:
 
 
 # ---------------------------------------------------------------------------
-# ResBlock (updown=False) — the only path used at patch_size==1
+# ResBlock (updown=False)
 # ---------------------------------------------------------------------------
 class HunyuanTtResBlock(LightweightModule):
     def __init__(
@@ -197,27 +285,29 @@ class HunyuanTtResBlock(LightweightModule):
 
         g = lambda k: state_dict[f"{prefix}.{k}"]
 
-        # in_layers: GroupNorm(32,in) -> SiLU -> Conv(in->out, 3x3)
         self.in_norm = _TtGroupNorm(
             device, in_channels, g("in_layers.0.weight"), g("in_layers.0.bias"), eps=eps, dtype=dtype
         )
         self.in_conv = _TtConv2d(device, g("in_layers.2.weight"), g("in_layers.2.bias"), dtype=dtype)
 
-        # emb_layers: SiLU -> Linear(emb -> 2*out)
-        w = g("emb_layers.1.weight")  # [2*out, emb]
-        b = g("emb_layers.1.bias")  # [2*out]
+        w = g("emb_layers.1.weight")
+        b = g("emb_layers.1.bias")
         self.emb_w = ttnn.from_torch(
-            w.transpose(0, 1).contiguous(), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+            w.transpose(0, 1).contiguous(),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self.emb_b = ttnn.from_torch(b.reshape(1, -1).contiguous(), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        self.emb_b = ttnn.from_torch(
+            b.reshape(1, 1, 1, -1).contiguous(), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+        )
 
-        # out_layers: GroupNorm(32,out) -> SiLU -> Conv(out->out, 3x3)
         self.out_norm = _TtGroupNorm(
             device, out_channels, g("out_layers.0.weight"), g("out_layers.0.bias"), eps=eps, dtype=dtype
         )
         self.out_conv = _TtConv2d(device, g("out_layers.3.weight"), g("out_layers.3.bias"), dtype=dtype)
 
-        # skip: Identity if in==out else Conv1x1(in->out)
         self.skip_conv = None
         if in_channels != out_channels:
             self.skip_conv = _TtConv2d(
@@ -226,24 +316,29 @@ class HunyuanTtResBlock(LightweightModule):
 
     def __call__(self, x_flat, t_emb, B, H, W):
         n_rows = B * H * W
+        sharded_path = _PATCH_EMBED_SHARDED
 
-        # --- in_layers: norm -> silu -> conv ---
         h = self.in_norm(x_flat, n_rows)
         h = ttnn.silu(h)
-        h, H, W = self.in_conv(h, B, H, W)  # [1,1,n,out]
+        h, H, W = self.in_conv(h, B, H, W)
         n_rows = B * H * W
 
-        # --- timestep -> (scale, shift) ---
-        e = ttnn.silu(t_emb)  # [1,1,N,emb] (N==B)
-        e = ttnn.linear(e, self.emb_w, bias=self.emb_b, compute_kernel_config=_COMPUTE_KERNEL_CONFIG)  # [1,1,B,2*out]
+        e = ttnn.silu(t_emb)
+        batch_rows = int(list(t_emb.shape)[-2])
+        e = act_width_sharded_linear(
+            e,
+            self.emb_w,
+            bias=self.emb_b,
+            batch_rows=batch_rows,
+            compute_kernel_config=_COMPUTE_KERNEL_CONFIG,
+            device=self.device,
+        )
         scale = ttnn.slice(e, [0, 0, 0, 0], [1, 1, B, self.out_channels])
         shift = ttnn.slice(e, [0, 0, 0, self.out_channels], [1, 1, B, 2 * self.out_channels])
         ttnn.deallocate(e)
 
-        # --- out_norm then adaGN modulation: norm(h)*(1+scale)+shift ---
         hn = self.out_norm(h, n_rows)
         ttnn.deallocate(h)
-        # scale/shift broadcast over spatial: reshape to [1,1,1,out] (B==1) for bcast
         scale = ttnn.reshape(scale, [1, 1, B, self.out_channels])
         shift = ttnn.reshape(shift, [1, 1, B, self.out_channels])
         scale_p1 = ttnn.add(scale, 1.0)
@@ -253,26 +348,27 @@ class HunyuanTtResBlock(LightweightModule):
         hn = ttnn.add(hn, shift)
         ttnn.deallocate(shift)
 
-        # --- out_rest: silu -> conv ---
         hn = ttnn.silu(hn)
         hn, H, W = self.out_conv(hn, B, H, W)
 
-        # --- skip ---
         if self.skip_conv is not None:
             skip, _, _ = self.skip_conv(x_flat, B, H, W)
         else:
             skip = x_flat
-        skip = ttnn.to_layout(skip, ttnn.TILE_LAYOUT)
-        hn = ttnn.to_layout(hn, ttnn.TILE_LAYOUT)
-        out = ttnn.add(hn, skip)
+        if sharded_path and ttnn.is_sharded(hn) and ttnn.is_sharded(skip):
+            out = ttnn.add(hn, skip)
+        else:
+            skip = ttnn.to_layout(skip, ttnn.TILE_LAYOUT)
+            hn = ttnn.to_layout(hn, ttnn.TILE_LAYOUT)
+            out = ttnn.add(hn, skip)
         ttnn.deallocate(hn)
-        if self.skip_conv is not None:
+        if self.skip_conv is not None or skip is not x_flat:
             ttnn.deallocate(skip)
         return out, H, W
 
 
 # ---------------------------------------------------------------------------
-# UNetDown (patch_embed): Conv(lat->hid) -> ResBlock(hid->out) -> tokens
+# UNetDown (patch_embed)
 # ---------------------------------------------------------------------------
 class HunyuanTtUNetDown(LightweightModule):
     def __init__(
@@ -309,21 +405,20 @@ class HunyuanTtUNetDown(LightweightModule):
         )
 
     def __call__(self, x_bchw, t_emb):
-        """x_bchw: torch [B, in_ch, H, W] or ttnn NHWC flat [1,1,B*H*W,in_ch].
-        Returns (tokens [1,1,B*H*W,out], token_h, token_w)."""
         x_flat, B, H, W = _to_flat_nhwc(self.device, x_bchw, self.in_channels)
         return self.forward_latent(x_flat, t_emb, B, H, W)
 
     def forward_latent(self, x_flat, t_emb, B: int, H: int, W: int):
-        """Run conv+resblock from flat NHWC ``[1,1,B*H*W,C]`` (already on device)."""
         x_flat, H, W = self.conv0(x_flat, B, H, W)
         out, H, W = self.resblock(x_flat, t_emb, B, H, W)
         ttnn.deallocate(x_flat)
+        if _PATCH_EMBED_SHARDED:
+            out = _to_interleaved_tile(out)
         return out, H, W
 
 
 # ---------------------------------------------------------------------------
-# UNetUp (final_layer): tokens -> ResBlock(in->hid) -> out_norm conv -> latent
+# UNetUp (final_layer)
 # ---------------------------------------------------------------------------
 class HunyuanTtUNetUp(LightweightModule):
     def __init__(
@@ -357,7 +452,6 @@ class HunyuanTtUNetUp(LightweightModule):
             eps=eps,
             dtype=dtype,
         )
-        # model.1 = Sequential(GroupNorm(32,hid), SiLU, Conv(hid->out,3x3))
         self.tail_norm = _TtGroupNorm(
             device,
             hidden_channels,
@@ -371,8 +465,6 @@ class HunyuanTtUNetUp(LightweightModule):
         )
 
     def __call__(self, tokens, t_emb, token_h, token_w, B=1):
-        """tokens: ttnn [1,1,B*H*W,in] (== `b (h w) c`). Returns NHWC flat latent
-        [1,1,B*H*W,out] plus (H,W)."""
         H, W = token_h, token_w
         h, H, W = self.resblock(tokens, t_emb, B, H, W)
         n_rows = B * H * W
@@ -382,11 +474,8 @@ class HunyuanTtUNetUp(LightweightModule):
         return out, H, W
 
 
-# ---------------------------------------------------------------------------
 def _to_flat_nhwc(device, x, in_channels):
-    """Accept torch [B,C,H,W], ttnn BTHWC ``[B,1,H,W,C]``, or flat NHWC; return (flat, B,H,W)."""
-    import torch
-
+    """Accept torch [B,C,H,W], ttnn BTHWC, or flat NHWC; return (flat, B,H,W)."""
     if isinstance(x, torch.Tensor):
         B, C, H, W = x.shape
         assert C == in_channels

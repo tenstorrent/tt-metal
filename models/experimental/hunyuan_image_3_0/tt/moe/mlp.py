@@ -16,6 +16,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 
 from ..cache import cache_file
+from ..matmul_utils import l1_sharded_linear
 
 
 class HunyuanTtMLP(LightweightModule):
@@ -90,11 +91,10 @@ class HunyuanTtMLP(LightweightModule):
         Returns:
             [.., H] tensor.
         """
-        gu = ttnn.linear(
+        gu = l1_sharded_linear(
             x,
             self.w_gate_up,
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [.., 2I]
 
         # SwiGLU: split into gate (x1) and up (x2) halves along the last dim.
@@ -106,11 +106,10 @@ class HunyuanTtMLP(LightweightModule):
         ttnn.deallocate(x2)
         ttnn.deallocate(act)
 
-        out = ttnn.linear(
+        out = l1_sharded_linear(
             h,
             self.w_down,
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [.., H]
         ttnn.deallocate(h)
         return out
