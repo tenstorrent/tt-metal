@@ -5,13 +5,11 @@
 """
 Coverage for chain element types that the other suites don't exercise.
 
-Coverage spec: ttnn/cpp/ttnn/kernel_lib/docs/eltwise_helper_test_coverage.html (untested elements).
-
   - DestReuseBinary: feeds the DEST result back as an FPU operand (DEST->srcA/srcB) instead of a
     second CB read. out = (A + B) * C.
 
 Fill / Rand (no-CB-input elements with special init) and ternary/quaternary SFPU are tracked as
-follow-up in TEST_DECISION_LOG.md.
+follow-up.
 """
 
 import torch

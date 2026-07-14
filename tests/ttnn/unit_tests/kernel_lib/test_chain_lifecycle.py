@@ -3,18 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-G1 — lifecycle & CB-synchronization (the hang suite). Run under --dev.
+Lifecycle & CB-synchronization (the hang suite). Run under --dev.
 
-Coverage spec: ttnn/cpp/ttnn/kernel_lib/docs/eltwise_helper_test_coverage.html (group G1).
-
-A lifecycle is the (WaitPolicy, PopPolicy) pair an input declares — it decides whether the chain
-or the CALLER emits cb_wait_front / cb_pop_front. A miscount deadlocks the device (the failure mode
-behind every historical fleet hang: softmax_*_large, groupnorm gamma/beta, nll_loss_backward).
+A lifecycle is the (WaitPolicy, PopPolicy) pair an input declares — whether the chain or the CALLER
+emits cb_wait_front / cb_pop_front. A miscount deadlocks the device.
 
 held_b.cpp computes out[i] = A[i] + B[0]: A streams, B is one held tile reused each iter on a
-selectable lifecycle, and the kernel supplies whatever edge the chain doesn't. Each case asserts
-BOTH no-hang (it completes — dispatch timeout under --dev would fire triage) AND correct values
-(a miscounted edge reads a stale tile -> wrong output). Also covers Scalar inter-tile reuse indexing.
+selectable lifecycle, with the kernel supplying whatever edge the chain doesn't. Each case asserts
+BOTH no-hang (--dev timeout trips triage) AND correct values (a miscount reads a stale tile).
 """
 
 import torch
@@ -62,5 +58,5 @@ def test_held_b_lifecycle(device, life, name):
     golden = torch_a.to(torch.float32) + torch_b.to(torch.float32).repeat(1, 1, 1, n)
     out = ttnn.to_torch(output).to(torch.float32)
     pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([dt]))
-    logger.info(f"G1 lifecycle={name} | no-hang + {msg}")
+    logger.info(f"lifecycle={name} | no-hang + {msg}")
     assert pcc_ok, f"lifecycle {name}: {msg}"
