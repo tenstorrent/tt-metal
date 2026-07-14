@@ -23,6 +23,9 @@
 # Matmuls use act_width_sharded_linear: WIDTH_SHARDED L1 activations with
 # interleaved DRAM weights (resnet50-linear pattern) so Tracy shows
 # in0:width_sharded without the PCC loss seen on WIDTH_SHARDED weight upload.
+#
+# The final MLP output is left WIDTH_SHARDED with M padded to 32 so patch_embed /
+# final_layer ResBlocks can silu + emb-linear without repeating FillPad + I2S.
 
 import math
 
@@ -30,7 +33,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
-from ..matmul_utils import act_width_sharded_linear
+from ..matmul_utils import act_width_sharded_linear, reshard_width_act_for_next_linear
 
 
 class HunyuanTtTimestepEmbedder(LightweightModule):
@@ -140,14 +143,23 @@ class HunyuanTtTimestepEmbedder(LightweightModule):
         ttnn.deallocate(s)
         return freq
 
-    def forward(self, t) -> ttnn.Tensor:
+    def forward(self, t, *, keep_resident: bool = False, resident_next_n: int | None = None) -> ttnn.Tensor:
         """
         Args:
             t: timesteps. Either a torch 1-D tensor [N] (host scalars — uploaded
                here as raw data, no host math) or a TTNN tensor shaped [1,1,N,1]
                in float32 TILE_LAYOUT on device.
+            keep_resident: If True, return WIDTH_SHARDED L1 with the batch dim
+               padded to 32 so ResBlock emb_layers can skip FillPad + I2S.
+               Logical rows remain the leading ``N`` entries; denoise callers
+               must pass ``batch_rows=N`` / slice with real B. Default False
+               keeps interleaved DRAM ``[1,1,N,out]`` for I2I / scatter / PCC.
+            resident_next_n: When keeping resident, optionally reshard to the
+               activation layout expected by the next linear with weight
+               ``[out, resident_next_n]`` (ResBlock emb_layers uses ``2*C_out``).
         Returns:
-            TTNN tensor [1, 1, N, out] in TILE_LAYOUT on device.
+            TTNN tensor on device: interleaved ``[1,1,N,out]`` by default, or
+            resident WIDTH_SHARDED ``[1,1,32,out]`` when ``keep_resident``.
         """
         if isinstance(t, torch.Tensor):
             n = t.numel()
@@ -187,6 +199,7 @@ class HunyuanTtTimestepEmbedder(LightweightModule):
             bias=self.b_up,
             batch_rows=n,
             compute_kernel_config=self.compute_kernel_config,
+            device=self.device,
         )  # [1,1,N,hidden]
         ttnn.deallocate(x)
 
@@ -199,6 +212,10 @@ class HunyuanTtTimestepEmbedder(LightweightModule):
             bias=self.b_down,
             batch_rows=n,
             compute_kernel_config=self.compute_kernel_config,
-        )  # [1,1,N,out]
+            device=self.device,
+            keep_sharded_output=keep_resident,
+        )  # resident [1,1,32,out] WIDTH_SHARDED, or interleaved [1,1,N,out]
         ttnn.deallocate(act)
+        if keep_resident and resident_next_n is not None:
+            out = reshard_width_act_for_next_linear(out, next_n=resident_next_n, device=self.device)
         return out

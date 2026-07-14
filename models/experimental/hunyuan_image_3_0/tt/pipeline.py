@@ -37,6 +37,7 @@ import torch
 import ttnn
 
 from .denoise_dual_cq import DenoiseDualCQCoordinator, denoise_2cq_enabled, latent_tt_to_torch
+from .matmul_utils import spill_resident_emb_to_dram
 from .scheduler import classifier_free_guidance_tt
 from .vae_dual_cq import VaeDualCQCoordinator, vae_2cq_enabled
 
@@ -49,6 +50,7 @@ def _ttnn_embed_dtype(ref: ttnn.Tensor) -> ttnn.DataType:
             "upload host tensors via upload_denoise_cond_mesh / replicate_fn first"
         )
     return ref.dtype
+
 
 try:
     from tracy import signpost
@@ -419,8 +421,12 @@ def denoise_loop(
         # Timestep embedding: pass a (replicated) device tensor [1,1,B,1] so the
         # embedder doesn't host-upload internally (which ignores the mesh).
         tvec = _up(torch.tensor([float(t)] * B, dtype=torch.float32).reshape(1, 1, B, 1), ttnn.float32)
-        te1 = time_embed.forward(tvec)  # [1,1,B,H]
-        te2 = time_embed_2.forward(tvec)
+        # Pad t_emb to M=32 (skip FillPad in ResBlock). Spill off L1 before
+        # backbone — WIDTH_SHARDED emb conflicts with MoE l1_sharded_linear CBs.
+        te1 = time_embed.forward(tvec, keep_resident=True, resident_next_n=2 * step.patch_embed.resblock.out_channels)
+        te2 = time_embed_2.forward(tvec, keep_resident=True, resident_next_n=2 * step.final_layer.resblock.out_channels)
+        te1 = spill_resident_emb_to_dram(te1)
+        te2 = spill_resident_emb_to_dram(te2)
         ttnn.deallocate(tvec)
 
         def _one(c):
