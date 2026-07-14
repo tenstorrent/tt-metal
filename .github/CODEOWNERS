@@ -178,6 +178,8 @@ tt_metal/tools/profiler/event_metadata.hpp @sohaibnadeemTT @tenstorrent/codeowne
 tt_metal/tools/profiler/fabric_event_profiler.hpp @sohaibnadeemTT @tenstorrent/codeowner-bypass
 tt_metal/tools/profiler/noc_event_profiler.hpp @sohaibnadeemTT @tenstorrent/codeowner-bypass
 tt_metal/tools/profiler/noc_event_profiler_utils.hpp @sohaibnadeemTT @tenstorrent/codeowner-bypass
+tt_metal/tools/profiler/tracy_debug_categories.txt @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/codeowner-bypass
+tt_metal/tools/profiler/tracy_debug_zones.hpp @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/codeowner-bypass
 tt_metal/tools/precompile_fw/**/CMakeLists.txt @abhullar-tt @ruizhangTT @tenstorrent/metalium-developers-infra
 tt_metal/tools/jit_compile_server/**/CMakeLists.txt @abhullar-tt @ruizhangTT @tenstorrent/metalium-developers-infra
 tt_metal/tools/dispatch_telemetry_dump/**/CMakeLists.txt @anashTT @jbaumanTT @sidnadTT @tenstorrent/metalium-developers-infra
