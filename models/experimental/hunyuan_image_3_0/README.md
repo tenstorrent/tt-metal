@@ -118,6 +118,7 @@ Optional AR recaption (`HY_RECAPTION=1`) rewrites the prompt via the text-sampli
 | `HY_TRACE_REGION_MB` | auto | Trace region MiB (default scales with `HY_NUM_LAYERS`, 128–512 MiB) |
 | `HY_RECAPTION_KV` | `1` | `0` disables KV incremental decode on recaption path (required for recaption trace) |
 | `HY_RECAPTION_PREFILL_CHUNK` | `1024` | Chunk size for long-prefix KV prefill (`0` = one shot) |
+| `HY_KEEP_BACKBONE` | `1` | I2I: cache cond VAE/ViT tokens on host and **reuse** the resident backbone for denoise (skip ~140s reload). `0` = old free/rebuild sandwich |
 
 > **``HY_TRACE=1``** (default): recaption AR uses CQ0 ``execute_trace`` when recaption runs.
 > Denoise CFG ``execute_trace`` is **auto-enabled only when steps > 8** (default
