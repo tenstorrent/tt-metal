@@ -2,20 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Realistic fused chain for the Chunked-vs-Bulk perf comparison: out = exp(A + B) * C.
-//   D0 = A + B            (BinaryFpu, FPU add)
-//   D0 = exp(D0)          (Exp, SFPU unary)
-//   D0 = DEST(D0) * C     (DestReuseBinary Mul, DEST_TO_SRCA: C -> srcb, DEST -> srca)
-//   pack D0
+// Realistic fused chain for the Chunked-vs-Bulk perf comparison: out = exp(A + B) * C
+// (BinaryFpu add -> Exp -> DestReuseBinary mul, all in D0).
 //
-// CRUCIAL: neither lifecycle stages the whole N-tile window. Both keep a BOUNDED CB and process N
-// over multiple iterations:
-//   - Bulk (life=0): an OUTER LOOP over batches of `batch` tiles — each iter is a Bulk eltwise_chain
-//     over a `batch`-tile window (CB ~ batch pages), re-initialised per batch. This is how you'd
-//     actually run Bulk at large N (you cannot hold 1024 tiles in L1).
-//   - Chunked (life=1): a SINGLE eltwise_chain over all N, waiting/popping `block_size` per chunk
-//     (CB ~ block_size pages). No re-init, reader/compute overlap per chunk.
-// So CB footprint is bounded by `batch` / `block_size`, NOT by N — N scales to thousands.
+// Both lifecycles keep a BOUNDED CB (footprint set by `batch`/`block_size`, not N), so N scales to
+// thousands:
+//   - Bulk (life=0):    outer loop over `batch`-tile windows, a re-initialised Bulk chain per batch.
+//   - Chunked (life=1): one chain over all N, waiting/popping `block_size` per chunk (no re-init).
 //
 // CT args: [n, block_size, life, batch].
 
@@ -34,7 +27,7 @@ void kernel_main() {
     constexpr uint32_t life = get_compile_time_arg_val(2);   // 0 = Bulk (batched), 1 = Chunked
     constexpr uint32_t batch = get_compile_time_arg_val(3);  // Bulk batch window (tiles per chain call)
 
-    compute_kernel_hw_startup(cb_a, cb_b, cb_out);  // one boot covers every batch (moreh inner-loop pattern)
+    compute_kernel_hw_startup(cb_a, cb_b, cb_out);  // one boot covers every batch
 
     using namespace compute_kernel_lib;
     if constexpr (life == 0) {  // Bulk, batched over the whole N with a bounded `batch` window

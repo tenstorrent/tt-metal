@@ -2,15 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Functional validation for InputLifecycle::OuterStream — the streamed outer-axis broadcast.
+// Functional validation for InputLifecycle::OuterStream — streamed outer-axis broadcast.
 //
-// Chain: BinaryFpu(cb_a, cb_b) -> PackTile(cb_out) over grid(Ht, Wt).
-//   cb_a: InputLifecycle::Streaming + OperandKind::Scalar — full Ht*Wt walk, one tile per
-//         (ht, wt), read at the front, popped per tile.
-//   cb_b: InputLifecycle::OuterStream + OperandKind::Scalar — ONE tile per row: waited at row
-//         entry, re-read at the front across that row's Wt cols, popped at row exit. The
-//         producer feeds a shallow (2-deep) CB one tile per row — O(1) L1, vs the Ht-deep
-//         resident window a Bulk+Col operand would require.
+// BinaryFpu(cb_a, cb_b) -> PackTile(cb_out) over grid(Ht, Wt):
+//   cb_a: Streaming + Scalar — full Ht*Wt walk, one tile per (ht, wt), popped per tile.
+//   cb_b: OuterStream + Scalar — ONE tile per row: waited at row entry, re-read across the row's Wt
+//         cols, popped at row exit. Producer feeds a shallow 2-deep CB (O(1) L1) instead of the
+//         Ht-deep window a Bulk+Col operand needs.
 // Net: out[ht*Wt + wt] = cb_a[ht*Wt + wt] + cb_b[ht].
 
 #include <cstdint>

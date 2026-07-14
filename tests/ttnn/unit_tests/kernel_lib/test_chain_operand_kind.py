@@ -3,17 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-G3 — operand-kind & broadcast tests for eltwise_chain.
+Operand-kind & broadcast tests for eltwise_chain.
 
-Coverage spec: ttnn/cpp/ttnn/kernel_lib/docs/eltwise_helper_test_coverage.html (group G3).
-
-Broadcast picks which part of the B tile is replicated before A (op) B. A swapped axis produces
-plausible-but-wrong numbers — no crash, no hang — so it is a silent-corruption class. The defense
-is a RANDOM B: B[0][c] (a row), B[r][0] (a column) and B[0][0] (a scalar) are all different, so a
-ROW<->COL swap fails PCC instead of accidentally matching.
-
-Each case builds A + bcast(B) on a single 32x32 tile, exactly mirroring the verified migrated
-bcast_h / bcast_w kernels (caller owns init_bcast; chain owns per-element work).
+Broadcast picks which part of the B tile is replicated before A (op) B. A swapped axis silently
+corrupts (no crash/hang), so the defense is a RANDOM B: a row B[0][c], a column B[r][0] and a scalar
+B[0][0] are all different, so a ROW<->COL swap fails PCC instead of matching by accident.
+Each case builds A + bcast(B) on one 32x32 tile (caller owns init_bcast; chain owns per-element work).
 """
 
 import torch
@@ -66,13 +61,13 @@ def _run_bcast_add(device, axis):
 
 
 # =============================================================================
-# OK-03 / OK-04 / OK-05 — each broadcast axis produces its own golden.
+# Each broadcast axis produces its own golden.
 # =============================================================================
 @pytest.mark.parametrize("axis", ["row", "col", "scalar"])
 def test_bcast_add_axis(device, axis):
     golden, out = _run_bcast_add(device, axis)
     pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([ttnn.bfloat16]))
-    logger.info(f"G3 bcast add axis={axis} | {msg}")
+    logger.info(f"bcast add axis={axis} | {msg}")
     assert pcc_ok, msg
 
 
@@ -92,7 +87,7 @@ def test_bcast_axis_goldens_are_distinct(device):
 
     # ... but NOT the COL golden — confirming a swap would be caught.
     ok_cross, msg = comp_pcc(col_golden, row_out, 0.99)
-    logger.info(f"G3 cross-check: ROW-out vs COL-golden pcc (expect low) | {msg}")
+    logger.info(f"cross-check: ROW-out vs COL-golden pcc (expect low) | {msg}")
     assert not ok_cross, (
         "ROW output unexpectedly matched the COL golden — the test cannot tell the axes apart; "
         "a ROW<->COL swap would slip through."

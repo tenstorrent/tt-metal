@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Negative compile test (G2 / SA-08): when BinaryFpu reads the SAME CB for both operands, the two
-// operand indices must match. The chain dedups the B-side wait/pop against A; asymmetric indices
-// would under-wait. Scalar+Bulk and Block+Bulk are each individually legal, so ONLY the
-// same-CB-index guard fires. MUST fail to compile with "AIndex and BIndex must match".
+// Negative compile test: BinaryFpu reading the SAME CB for both operands must use matching operand
+// indices (the chain dedups the B-side wait/pop against A; asymmetric indices under-wait). Scalar
+// and Block are each individually legal, so only the same-CB-index guard fires.
+// MUST fail to compile with "AIndex and BIndex must match".
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
@@ -30,6 +30,6 @@ void kernel_main() {
             BinaryDataFormatReconfig::Input,
             Dst::D0,
             OperandKind::Scalar,
-            OperandKind::Block>{},  // same CB, mismatched indices
+            OperandKind::Block>{},
         PackTile<cb_out>{});
 }

@@ -2,15 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Inter-tile index test (G3 / OK-03, OK-04 — the OperandKind *index* axis, not broadcast).
-//
-// 2D grid(Ht, Wt) add: out tile (ht,wt) = A tile (ht,wt) + B tile selected by B's index mode.
-//   A: OperandKind::Block -> reads tile ht*Wt + wt (the full walk).
-//   B: OperandKind::Row   -> reads tile wt (one tile per COLUMN, B has Wt tiles), or
-//      OperandKind::Col   -> reads tile ht (one tile per ROW,    B has Ht tiles).
-// BroadcastDim::None: a plain element-wise tile add — the only variable is which B tile is read,
-// so this isolates inter-tile index selection. A Row<->Col index swap reads a different B tile and
-// fails PCC. Row/Col require a non-streaming lifecycle (Bulk).
+// Inter-tile index test (the OperandKind *index* axis, not broadcast).
+// 2D grid(Ht, Wt) add: out(ht,wt) = A(ht,wt) + B tile selected by B's index mode.
+//   A: Block -> tile ht*Wt + wt (full walk)
+//   B: Row   -> tile wt (one per COLUMN, Wt tiles)    Col -> tile ht (one per ROW, Ht tiles)
+// BroadcastDim::None (plain tile add), so the only variable is which B tile is read — a Row<->Col
+// swap reads a different tile and fails PCC. Row/Col need a non-streaming lifecycle (Bulk).
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"

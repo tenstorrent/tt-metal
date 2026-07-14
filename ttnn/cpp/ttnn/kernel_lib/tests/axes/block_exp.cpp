@@ -2,15 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Blocking workload (G4 / blocking perf + correctness).
+// Block-capable exp(x): a Bulk + Block reader stages the window upfront so the chain processes
+// block_size tiles per inner iter across DEST lanes. block_size is a compile-time arg.
 //
-// Block-capable exp(x): a Bulk + Block CB-reader stages the window upfront so the chain processes
-// block_size tiles per inner iter across DEST lanes (DEST[D0 + j*chain_lane_width], j in
-// [0, block_size)). block_size is a compile-time arg.
-//
-// Blocking is a loop-structure optimization: it changes how many outer iterations run and how many
-// DEST lanes are filled per iter, but NOT the per-tile result. So exp(x) must be identical across
-// block_size, and larger blocks should reduce loop/DEST-sync overhead (the perf signal).
+// Blocking is a loop-structure optimization — it must NOT change the per-tile result, so exp(x) is
+// identical across block_size; larger blocks should cut loop/DEST-sync overhead (the perf signal).
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
