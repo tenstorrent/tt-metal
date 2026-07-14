@@ -421,14 +421,20 @@ inline void reg_write(std::uint32_t addr, std::uint32_t data)
 
 inline void wait(std::uint32_t cycles)
 {
-    volatile std::uint32_t tt_reg_ptr *clock_lo = reinterpret_cast<volatile std::uint32_t tt_reg_ptr *>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    volatile std::uint32_t tt_reg_ptr *clock_hi = reinterpret_cast<volatile std::uint32_t tt_reg_ptr *>(RISCV_DEBUG_REG_WALL_CLOCK_H);
-    std::uint64_t wall_clock_timestamp          = clock_lo[0] | (static_cast<std::uint64_t>(clock_hi[0]) << 32);
-    std::uint64_t wall_clock                    = 0;
+    // Reading WALL_CLOCK_L latches the high word, which a subsequent read of WALL_CLOCK_H then returns.
+    // The two words must therefore be read L-then-H in sequenced statements. Building the 64-bit value
+    // from a single unsequenced expression lets the compiler read H first and return a stale/torn
+    // timestamp, so wait() could terminate early. Mirror read_wall_clock() and read L then H via reg_read().
+    const std::uint32_t start_lo         = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    const std::uint32_t start_hi         = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
+    const std::uint64_t wall_clock_start = (static_cast<std::uint64_t>(start_hi) << 32) | start_lo;
+    std::uint64_t wall_clock             = 0;
     do
     {
-        wall_clock = clock_lo[0] | (static_cast<std::uint64_t>(clock_hi[0]) << 32);
-    } while (wall_clock < (wall_clock_timestamp + cycles));
+        const std::uint32_t now_lo = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+        const std::uint32_t now_hi = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
+        wall_clock                 = (static_cast<std::uint64_t>(now_hi) << 32) | now_lo;
+    } while (wall_clock < (wall_clock_start + cycles));
 }
 
 // Clear dest
@@ -795,7 +801,9 @@ inline void init_prng_seed(const std::uint32_t seed)
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
     cfg[PRNG_SEED_Seed_Val_ADDR32]         = seed;
 
-    // TODO: ckernel::wait does not work properly. Use ckernel::wait when fixed.
+    // This SFPNOP loop is a required instruction-ordering barrier, not a timing delay: it keeps the seed
+    // CFG write above ordered ahead of the SFPU instructions that consume the PRNG. A wall-clock spin
+    // (ckernel::wait) issues no Tensix instructions and enforces no such ordering, so it cannot replace it.
     for (int i = 0; i < 600; i++)
     {
         TTI_SFPNOP;
