@@ -1,0 +1,30 @@
+inspector_data.py: FAIL -
+	Log directory /tmp/tt-metal/inspector does not exist.
+	Metal runtime is not running. Do not kill host process, but open triage in parallel.
+	If you have generated inspector logs, you can load them with --inspector-log-path
+	or defining TT_METAL_LOGS_PATH environment variable.
+dump_configuration.py: FAIL - Cannot run script due to failed dependencies.
+metal_device_id_mapping.py: FAIL - Cannot run script due to failed dependencies.
+run_checks.py: FAIL - Triage (with --dev=in_use) needs Inspector data or TT_METAL_VISIBLE_DEVICES set; pass --dev=<id> or --dev=all to override and use specific or all devices correspondingly.
+check_arc.py: FAIL - Cannot run script due to failed dependencies.
+check_cb_inactive.py: FAIL - Cannot run script due to failed dependencies.
+check_eth_status.py: FAIL - Cannot run script due to failed dependencies.
+check_noc_locations.py: FAIL - Cannot run script due to failed dependencies.
+device_info.py: FAIL - Cannot run script due to failed dependencies.
+device_telemetry.py: FAIL - Cannot run script due to failed dependencies.
+dispatcher_data.py: FAIL - Cannot run script due to failed dependencies.
+operation_provider.py: FAIL - Cannot run script due to failed dependencies.
+dump_op_mesh.py: FAIL - Cannot run script due to failed dependencies.
+dump_op_window.py: FAIL - Cannot run script due to failed dependencies.
+dump_running_operations.py: FAIL - Cannot run script due to failed dependencies.
+callstack_provider.py: FAIL - Cannot run script due to failed dependencies.
+check_binary_integrity.py: FAIL - Cannot run script due to failed dependencies.
+check_core_magic.py: FAIL - Cannot run script due to failed dependencies.
+check_noc_status.py: FAIL - Cannot run script due to failed dependencies.
+dump_callstacks.py: FAIL - Cannot run script due to failed dependencies.
+dump_fast_dispatch.py: FAIL - Cannot run script due to failed dependencies.
+dump_lightweight_asserts.py: FAIL - Cannot run script due to failed dependencies.
+dump_watcher_ringbuffer.py: FAIL - Cannot run script due to failed dependencies.
+firmware_versions.py: FAIL - Cannot run script due to failed dependencies.
+system_info.py: pass
+check_broken_components.py: FAIL - Cannot run script due to failed dependencies.

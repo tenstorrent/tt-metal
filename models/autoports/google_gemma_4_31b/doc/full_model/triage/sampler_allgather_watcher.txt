@@ -1,0 +1,4 @@
+
+system_info.py:
+OS,Version,Kernel,Machine,KMD,UMD,tt-exalens
+Linux,22.04,5.15.0-179-generic,x86_64,2.4.1,0.9.6,0.3.21

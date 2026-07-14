@@ -1,0 +1,14 @@
+Command:
+env TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 \
+  LD_LIBRARY_PATH=$PWD/build/lib:$LD_LIBRARY_PATH \
+  python -m models.common.readiness_check.run_prefill_check \
+    --model-dir models/autoports/google_gemma_4_31b \
+    --reference models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt \
+    --mesh-device P150_X4 \
+    --fabric-config FABRIC_1D
+
+Result (2026-07-14 UTC):
+entry[0]             top1=0.910 (91/100)  top5=1.000 (100/100)  top100=1.000 (100/100)
+AGGREGATE            top1=0.910 (91/100)  top5=1.000 (100/100)  top100=1.000 (100/100)
+
+Exit status: 0

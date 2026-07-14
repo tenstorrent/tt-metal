@@ -583,7 +583,7 @@ class TTSampling(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 num_links=self.num_gather_links,
                 buffer_key="SAMPLING_INDICES",
-                dtype=ttnn.uint16,
+                dtype=topk_indices.dtype,
             )
             ttnn.deallocate(topk_indices)
 

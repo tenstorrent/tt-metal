@@ -1,0 +1,68 @@
+{
+  "findings": [],
+  "measured": [
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/full_model/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[0] greedy_completion ('Write a haiku about machine learning.')",
+      "source": "words",
+      "num_tokens": 40,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.15
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/full_model/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[1] greedy_completion ('Explain the difference between supervised and unsupervised l')",
+      "source": "words",
+      "num_tokens": 53,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.3396
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/full_model/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[2] greedy_completion ('Complete this story: Once upon a time, in a faraway kingdom,')",
+      "source": "words",
+      "num_tokens": 55,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.1091
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/full_model/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[3] greedy_completion ('What are the three laws of thermodynamics?')",
+      "source": "words",
+      "num_tokens": 51,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.3529
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/full_model/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[4] greedy_completion ('Translate the following to French: \"Hello, how are you today')",
+      "source": "words",
+      "num_tokens": 51,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.2941
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/full_model/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[5] greedy_completion ('Write a Python function to calculate the Fibonacci sequence.')",
+      "source": "words",
+      "num_tokens": 39,
+      "adjacent_duplication": 0.0263,
+      "trigram_loop_fraction": 0.0769
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/full_model/autoregressive/autoregressive_meta.json",
+      "label": "tt free-running completion",
+      "source": "words",
+      "num_tokens": 83,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0361
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/full_model/autoregressive/autoregressive_meta.json",
+      "label": "hf/tt token agreement (informational)",
+      "matching_tokens": 8,
+      "compared_tokens": 100
+    }
+  ],
+  "exit_code": 0
+}

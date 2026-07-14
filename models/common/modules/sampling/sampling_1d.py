@@ -61,6 +61,11 @@ class Sampling1DConfig:
     sub_core_grid_topk: Any = None
     start_core: Optional[ttnn.CoreCoord] = None  # None → CoreCoord(0,0)
     num_gather_links: int = 1
+    sampling_cluster_axis: Optional[int] = None
+    # Opt-in workaround for platforms where the public all-gather cannot gather small TILE
+    # candidate tensors. Values may be promoted for the collective and are restored to BF16 after.
+    use_broadcast_all_gather: bool = False
+    gather_values_dtype: Any = None
     sampling_memory_config: Optional[ttnn.MemoryConfig] = None  # None → DRAM_MEMORY_CONFIG
     allow_force_argmax: bool = False
     num_argmax_gather_links: Optional[int] = None  # None → same as num_gather_links
@@ -75,7 +80,7 @@ class Sampling1DConfig:
     # Static index buffers (computed from vocab_size + num_devices, never mutated)
     index_offsets: LazyBuffer | ttnn.Tensor | None = None  # [1,1,32,max_top_k*num_devices], int32, TILE
     local_indices: LazyBuffer | ttnn.Tensor | None = (
-        None  # [1,1,32,W], uint16, TILE (W=vocab for 1x1, per_dev_vocab otherwise)
+        None  # [1,1,32,W], uint16/uint32, TILE (W=vocab for 1x1, per_dev_vocab otherwise)
     )
     # Seed/ID buffers (seeds mutable via LazyBuffer.update(), user_ids static)
     seeds: LazyBuffer | ttnn.Tensor | None = None  # [32], uint32, ROW_MAJOR
@@ -358,6 +363,8 @@ class Sampling1D(LightweightModule):
 
         # Convert indices to int32
         topk_indices_int32 = ttnn.typecast(topk_indices, dtype=ttnn.int32, sub_core_grids=cfg.sub_core_grids)
+        # topk always returns uint16/uint32 indices, so typecast owns a distinct int32 allocation.
+        ttnn.deallocate(topk_indices)
 
         topk_values, topk_indices_int32 = self._prepare_topk_memory(topk_values, topk_indices_int32)
 
@@ -465,8 +472,19 @@ class Sampling1D(LightweightModule):
             indices_tensor=self._local_indices,
         )
 
-        # For 1D meshes use cluster_axis=None
-        sampling_cluster_axis = None if 1 in cluster_shape else 0
+        if cfg.gather_values_dtype is not None and topk_values.dtype != cfg.gather_values_dtype:
+            promoted_values = ttnn.typecast(
+                topk_values,
+                dtype=cfg.gather_values_dtype,
+                sub_core_grids=cfg.sub_core_grids,
+            )
+            ttnn.deallocate(topk_values)
+            topk_values = promoted_values
+
+        sampling_cluster_axis = cfg.sampling_cluster_axis
+        if sampling_cluster_axis is None:
+            # Preserve the historical gather-all behavior unless a caller supplies its known TP axis.
+            sampling_cluster_axis = None if 1 in cluster_shape else 0
 
         # Gather values
         gathered_values = self._perform_all_gather(
@@ -478,6 +496,14 @@ class Sampling1D(LightweightModule):
             buffer_key="SAMPLING_VALUES",
         )
         ttnn.deallocate(topk_values)
+        if cfg.gather_values_dtype is not None and gathered_values.dtype != ttnn.bfloat16:
+            gathered_values_bf16 = ttnn.typecast(
+                gathered_values,
+                dtype=ttnn.bfloat16,
+                sub_core_grids=cfg.sub_core_grids,
+            )
+            ttnn.deallocate(gathered_values)
+            gathered_values = gathered_values_bf16
 
         # Gather indices
         gathered_indices = self._perform_all_gather(
@@ -487,7 +513,7 @@ class Sampling1D(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             num_links=cfg.num_gather_links,
             buffer_key="SAMPLING_INDICES",
-            dtype=ttnn.uint16,
+            dtype=topk_indices.dtype,
         )
         ttnn.deallocate(topk_indices)
 
@@ -500,6 +526,23 @@ class Sampling1D(LightweightModule):
 
         Port of TTSampling._perform_all_gather (tt_sampling.py:231-259).
         """
+        cfg = self.config
+        if cfg.use_broadcast_all_gather:
+            if cluster_axis is None:
+                raise ValueError("broadcast-backed sampling all-gather requires an explicit cluster axis")
+            return ttnn.experimental.all_gather_async(
+                tensor,
+                persistent_output_buffer=None,
+                dim=dim,
+                multi_device_global_semaphore=cfg.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+                num_links=num_links,
+                memory_config=memory_config,
+                topology=ttnn.Topology.Linear,
+                cluster_axis=cluster_axis,
+                use_broadcast=True,
+                barrier_semaphore=cfg.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+            )
+
         if callable(self._line_all_gather):
             kwargs = {
                 "dim": dim,
@@ -605,6 +648,8 @@ def _resolve_sampling1d_config(config: Sampling1DConfig) -> Sampling1DConfig:
         to_set["num_argmax_gather_links"] = config.num_gather_links
     if config.ag_topology is None:
         to_set["ag_topology"] = ttnn.Topology.Linear
+    if config.use_broadcast_all_gather and config.gather_values_dtype != ttnn.float32:
+        raise ValueError("broadcast-backed sampling all-gather requires FP32 candidate values")
 
     # Phase 3: Buffer specs
     B = config.max_batch_size
@@ -667,8 +712,12 @@ def _resolve_sampling1d_config(config: Sampling1DConfig) -> Sampling1DConfig:
             out = torch.nn.functional.pad(out, (0, padded_width - local_indices_width), mode="constant", value=-1)
         return out
 
+    # Promote at the exact 65,536-wide boundary. The TTTv1 sampler uses this
+    # rule, and keeping uint16 here makes semantic top-1 disagree with argmax
+    # for that shard width even though the final local index is representable.
+    local_indices_dtype = ttnn.uint32 if per_device_vocab > torch.iinfo(torch.uint16).max else ttnn.uint16
     local_idx_defaults = dict(
-        dtype=ttnn.uint16,
+        dtype=local_indices_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         mesh_mapper=replicate_mapper,

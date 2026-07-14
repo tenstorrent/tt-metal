@@ -1,0 +1,15 @@
+Command:
+python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/google_gemma_4_31b --reference models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt --mesh-device P150_X4 --fabric-config FABRIC_1D
+
+Exact HF revision: d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3
+Reference prompt length: 149
+Teacher-forced positions: 100
+
+entry[0] top1=0.910 (91/100) top5=1.000 (100/100) top100=1.000 (100/100)
+AGGREGATE top1=0.910 (91/100) top5=1.000 (100/100) top100=1.000 (100/100)
+
+TTFT: 1793.14 ms
+teacher-forced decode: 22.79 t/s/u
+end-to-end: 16.30 t/s/u
+
+This final run used the source-current 60-layer model. The subsequent short-prompt ownership fix changes only the prompt <=32 terminal-tile branch; this 149-token reference follows the unchanged partial-slice branch. The short branch was independently rerun normally and under watcher.

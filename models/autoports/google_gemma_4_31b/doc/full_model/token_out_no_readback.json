@@ -1,0 +1,20 @@
+{
+  "workload": {
+    "prompt_len": 149,
+    "gen_len": 100,
+    "batch": 1
+  },
+  "ttft_ms": 693.7001720070839,
+  "decode_t/s/u": 24.966835909189736,
+  "steady_decode_t/s/u": 33.866177970615425,
+  "trace_counters": {
+    "model_trace_replays": 99,
+    "token_host_refreshes": 0,
+    "position_host_refreshes": 2,
+    "rope_host_refreshes": 2,
+    "page_table_refreshes": 0,
+    "synchronizations": 3,
+    "sampled_token_readbacks": 1,
+    "full_logits_readbacks": 0
+  }
+}
