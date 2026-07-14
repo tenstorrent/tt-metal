@@ -338,6 +338,40 @@ def test_reconfig_no_unit_drain_flagged():
     assert len(out) == 1 and out[0].hint == "NO_UNIT_DRAIN", out
 
 
+@case
+def test_reconfig_pointer_write_cfg_flagged():
+    # The reconfig write may be a raw cfg[]= pointer_write (get_cfg_pointer -> cfg32),
+    # not only a TTI_WRCFG macro or a cfg_rmw call. Exercises reconfig_stall's
+    # pointer_write branch (is_cfg_write -> classify_write in CFG_WRITE_KINDS). No
+    # preceding drain -> NO_UNIT_DRAIN.
+    F = "tt_llk_wormhole_b0/common/inc/cpack_common.h"
+    facts = [
+        fn("set_packer_strides", F, 400, 440),
+        pw(
+            F,
+            418,
+            "get_cfg_pointer",
+            "PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32",
+            func="set_packer_strides",
+        ),
+    ]
+    out = ReconfigStall().run(FactBase("wormhole", facts))
+    assert len(out) == 1 and out[0].hint == "NO_UNIT_DRAIN", out
+    # positive control: a preceding unit-draining STALLWAIT clears the SAME
+    # pointer_write (it is a genuine sampled-config write, so the drain is honored).
+    facts.insert(
+        1,
+        macro(
+            F,
+            410,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK)",
+            func="set_packer_strides",
+        ),
+    )
+    assert ReconfigStall().run(FactBase("wormhole", facts)) == []
+
+
 # --- Copilot review regressions -------------------------------------------
 
 
