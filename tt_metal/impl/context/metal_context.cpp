@@ -58,44 +58,8 @@
 #include <dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <dispatch/dispatch_mem_map.hpp>
-#include <llrt/hal/generated/dev_msgs.hpp>
 
 namespace tt::tt_metal {
-
-namespace {
-
-bool device_has_tripped_watcher_assert(const Cluster& cluster, const Hal& hal, ChipId device_id) {
-    const auto& factory = hal.get_dev_msgs_factory(HalProgrammableCoreType::TENSIX);
-    auto assert_msg = factory.create<dev_msgs::debug_assert_msg_t>();
-    const uint64_t assert_addr =
-        hal.get_dev_noc_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::WATCHER) +
-        factory.offset_of<dev_msgs::watcher_msg_t>(dev_msgs::watcher_msg_t::Field::assert_status);
-
-    const CoreCoord grid_size = cluster.get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
-    for (uint32_t y = 0; y < grid_size.y; ++y) {
-        for (uint32_t x = 0; x < grid_size.x; ++x) {
-            const CoreCoord virtual_core =
-                cluster.get_virtual_coordinate_from_logical_coordinates(device_id, CoreCoord(x, y), CoreType::WORKER);
-            cluster.read_core(
-                assert_msg.data(), assert_msg.size(), {static_cast<size_t>(device_id), virtual_core}, assert_addr);
-            if (assert_msg.view().tripped() != dev_msgs::DebugAssertOK) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-bool cluster_has_tripped_watcher_assert(const Cluster& cluster, const Hal& hal, const std::set<ChipId>& device_ids) {
-    for (ChipId device_id : device_ids) {
-        if (device_has_tripped_watcher_assert(cluster, hal, device_id)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-}  // namespace
 
 // MetalContext destructor is private, so we can't use a unique_ptr to manage the instance.
 std::array<std::atomic<MetalContext*>, MAX_CONTEXT_COUNT> g_instances{};
@@ -200,11 +164,6 @@ void MetalContext::initialize(
     // Fabric config changes (e.g. legacy DeviceManager enabling dispatch fabric) also force a re-init.
     if (MetalEnvAccessor(*env_).impl().consume_force_reinit()) {
         force_reinit_ = true;
-    }
-    // DPRINT was enabled after the initial MetalContext init (e.g. watcher then dprint in one process).
-    if (initialized_ && rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint) && !dprint_server_) {
-        force_reinit_ = true;
-        log_debug(tt::LogAlways, "Re-initializing MetalContext to attach newly enabled DPRINT server.");
     }
 
     const size_t fw_compile_hash = std::hash<std::string>{}(rtoptions().get_compile_hash_string());
@@ -335,30 +294,6 @@ void MetalContext::initialize(
     }
 
     // Initialize debug tools, reset cores, init FW
-    watcher_server_->init_devices();
-
-    bool relaunch_firmware_before_debug_attach = false;
-    if (dprint_server_) {
-        if (firmware_recovery_needed_) {
-            relaunch_firmware_before_debug_attach = true;
-            log_debug(tt::LogMetal, "Relaunching firmware before DPRINT attach due to prior watcher error on device.");
-        } else if (cluster_has_tripped_watcher_assert(get_cluster(), hal(), device_ids)) {
-            relaunch_firmware_before_debug_attach = true;
-            log_warning(
-                tt::LogMetal,
-                "Detected tripped watcher assert before DPRINT attach; relaunching firmware to recover device.");
-        }
-    }
-
-    if (relaunch_firmware_before_debug_attach) {
-        for (ChipId device_id : device_ids) {
-            risc_firmware_initializer_->reinitialize_firmware(device_id);
-        }
-        firmware_recovery_needed_ = false;
-    } else {
-        risc_firmware_initializer_->run_launch_phase(device_ids);
-    }
-
     if (dprint_server_) {
         dprint_server_->attach_devices();
     }
@@ -391,16 +326,6 @@ void MetalContext::set_fast_dispatch_mode(bool enable) {
     reinitialize_dispatch_managers();
 }
 
-void MetalContext::reinitialize_firmware(const std::set<tt::ChipId>& device_ids) {
-    if (!risc_firmware_initializer_) {
-        return;
-    }
-    for (tt::ChipId device_id : device_ids) {
-        risc_firmware_initializer_->reinitialize_firmware(device_id);
-    }
-    firmware_recovery_needed_ = false;
-}
-
 void MetalContext::teardown() {
     ZoneScoped;
 
@@ -420,10 +345,6 @@ void MetalContext::teardown() {
         }
         dprint_server_.reset();
         rtoptions().set_disable_dma_ops(false);
-    }
-
-    if (watcher_server_ && watcher_server_->killed_due_to_error()) {
-        firmware_recovery_needed_ = true;
     }
 
     if (!get_cluster().is_mock_or_emulated()) {

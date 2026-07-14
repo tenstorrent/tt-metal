@@ -57,6 +57,8 @@ inline bool debug_l1_access_within_single_view(uint64_t addr, uint64_t len) {
     bool in_uncached_view = (addr >= MEM_L1_UNCACHED_BASE) && (addr + len <= MEM_L1_UNCACHED_BASE + MEM_L1_SIZE);
     return in_cached_view || in_uncached_view;
 }
+#else
+inline uint64_t debug_normalize_l1_addr(uint64_t addr) { return addr; }
 #endif
 
 // Helper function to get the core type from noc coords.

@@ -24,7 +24,6 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include "context/metal_env_impl.hpp"
-#include "impl/context/metal_context.hpp"
 #include "core_coord.hpp"
 #include "api/debug/ring_buffer.h"
 #include "debug_helpers.hpp"
@@ -574,7 +573,6 @@ void WatcherServer::Impl::poll_watcher_data() {
                 // Depending on whether test mode is enabled, catch and stop server, or re-throw.
                 if (rtoptions.get_test_mode_enabled()) {
                     server_killed_due_to_error_ = true;
-                    MetalContext::instance().set_firmware_recovery_needed(true);
                     break;
                 }
                 throw;
