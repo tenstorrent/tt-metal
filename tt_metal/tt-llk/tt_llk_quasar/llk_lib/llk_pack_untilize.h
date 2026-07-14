@@ -95,12 +95,11 @@ inline void _llk_pack_untilize_(const std::uint32_t dest_idx, const std::uint32_
  * @brief Builds the MOP for partial pack of a face, using strided reads to untilize.
  *
  * @tparam FULL_CT_DIM: Number of tiles per block in c_dim * number of blocks = full c_dim size of the tensor.
- * @tparam FACE_R_DIM: Number of rows per face.
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  *        stored in the buffer descriptor table, values = 16 - 31
  * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc.
  */
-template <std::uint32_t FULL_CT_DIM /*std::uint32_t FACE_R_DIM*/>
+template <std::uint32_t FULL_CT_DIM>
 inline void _llk_pack_untilize_strided_mop_config_(const std::uint8_t buf_desc_id, const TensorShape& tensor_shape)
 {
     constexpr std::uint32_t ROWS_READ      = 4;
@@ -233,14 +232,13 @@ inline void _llk_pack_untilize_strided_sparse_mop_config_(const std::uint8_t buf
  * reads the data, then dispatches to the per-FACE_R_DIM MOP builder.
  *
  * @tparam FULL_CT_DIM: Number of tiles per block in c_dim * number of blocks = full c_dim size of the tensor.
- * @tparam FACE_R_DIM: Number of rows per face, values = <1/2/4/8/16>
  * @tparam NUM_TILES_PER_BLOCK: Number of tiles processed per MOP run.
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  *        stored in the buffer descriptor table, values = 16 - 31
  * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc.
  * @note @ref _llk_pack_untilize_strided_ is the matching execute call on this thread.
  */
-template <std::uint32_t FULL_CT_DIM, /*std::uint32_t FACE_R_DIM,*/ std::uint32_t NUM_TILES_PER_BLOCK>
+template <std::uint32_t FULL_CT_DIM, std::uint32_t NUM_TILES_PER_BLOCK>
 inline void _llk_pack_untilize_strided_init_(const std::uint8_t buf_desc_id, const TensorShape& tensor_shape)
 {
     cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_VAL_SOURCE_RMW, 0); // sel STRIDE_OFFSET_0

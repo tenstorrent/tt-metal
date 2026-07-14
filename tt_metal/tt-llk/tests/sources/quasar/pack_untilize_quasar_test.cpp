@@ -74,11 +74,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Unpack one tile row at a time for double-buffering with packer (SyncHalf).
         // Writing all tiles at once would cause _llk_pack_dest_dvalid_section_done_'s
         // ZEROACC to wipe subsequent tile rows after packing the first one.
-        _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(
-            buf_desc_id, /*ckernel::DEFAULT_TENSOR_SHAPE*/ tensor_shape_A, BLOCK_CT_DIM);
+        _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, tensor_shape_A, BLOCK_CT_DIM);
         for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
         {
-            _llk_unpack_unary_operand_<SELECTED_UNPACKER>(block_rt * BLOCK_CT_DIM, /*ckernel::DEFAULT_TENSOR_SHAPE*/ tensor_shape_A);
+            _llk_unpack_unary_operand_<SELECTED_UNPACKER>(block_rt * BLOCK_CT_DIM, tensor_shape_A);
             _llk_unpack_dest_dvalid_section_done_<dest_sync>();
         }
     }
@@ -93,9 +92,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_unpack_configure_unary_<SELECTED_UNPACKER>(td_val);
         }
-        _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(
-            buf_desc_id, /*ckernel::DEFAULT_TENSOR_SHAPE*/ tensor_shape_A, num_tiles_per_unpack);
-        _llk_unpack_unary_operand_<SELECTED_UNPACKER>(0, /*ckernel::DEFAULT_TENSOR_SHAPE*/ tensor_shape_A);
+        _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, tensor_shape_A, num_tiles_per_unpack);
+        _llk_unpack_unary_operand_<SELECTED_UNPACKER>(0, tensor_shape_A);
     }
 }
 
@@ -174,7 +172,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     tdma_descriptor_t tdma_desc;
     std::uint32_t const buf_desc_id = 31;
 
-    tdma_desc = ckernel::trisc::construct_tdma_desc(tensor_shape, L1_ADDRESS(params.buffer_Res[0]), formats.unpack_A_src, buf_desc_id, formats.unpack_A_dst);
+    tdma_desc = ckernel::trisc::construct_tdma_desc(tensor_shape, L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst, buf_desc_id, formats.pack_src);
 
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
