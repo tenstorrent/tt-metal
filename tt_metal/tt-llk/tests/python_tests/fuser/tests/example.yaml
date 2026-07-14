@@ -3,6 +3,8 @@
 # elwadd with transpose, two matmul stages with SFPU chains, dest accumulation,
 # looping, broadcast scalar, acc_to_dest, SyncFull, and mixed formats.
 
+supported_archs: ["wormhole", "blackhole"]
+
 dest_acc: true
 loop_factor: 16
 

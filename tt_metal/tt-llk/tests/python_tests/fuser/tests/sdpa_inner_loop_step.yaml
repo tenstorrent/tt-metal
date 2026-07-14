@@ -4,6 +4,8 @@
 # L1 accumulation, pack relu, SubBcastColCustom+Exp fusion,
 # MatmulNoMop, ReduceBlockMaxRuntime, broadcast col multiply.
 
+supported_archs: ["wormhole", "blackhole"]
+
 operands:
   # Q: query tile block
   - name: "Q"

@@ -6,7 +6,7 @@
 # Op 3: Elwmul 4x32 tiles with broadcast scalar → block [12, 32] = 3 tiles
 # Op 4: Matmul (in0: 16x32, in1: 32x32 → 16x32) + Elwadd 16x32 tiles
 
-# dest_acc: true
+supported_archs: ["wormhole", "blackhole"]
 
 operands:
   - name: "datacopy_in_A"

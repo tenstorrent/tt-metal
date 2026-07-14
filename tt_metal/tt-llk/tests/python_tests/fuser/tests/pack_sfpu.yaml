@@ -4,6 +4,8 @@
 #   pack(raw) -> exp -> pack(exp) -> neg -> pack(neg(exp))
 # Each packed output captures a different snapshot of dest.
 
+supported_archs: ["wormhole", "blackhole"]
+
 operands:
   - name: "input_A"
     dims: [256, 256]

@@ -12,7 +12,7 @@ from fuser.fused_loop import FusedLoop, LoopTileByTile
 from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
 from helpers.golden_generators import ReduceGolden, get_golden_generator
-from helpers.llk_params import DataFormat, ReduceDimension, ReducePool
+from helpers.llk_params import ReduceDimension, ReducePool
 from helpers.tilize_untilize import tilize_block, untilize_block
 
 
@@ -136,13 +136,12 @@ class ReduceFpu(Fpu):
     ) -> str:
         stage = operation.stage_id
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
-        dest_acc = config.dest_acc.cpp_enum_value
         pool_type_cpp = self.reduce_pool.cpp_enum_value
         reduce_dim_cpp = self.reduce_dim.cpp_enum_value
-
         return (
             f"// Operation {stage}: Reduce {reduce_dim_cpp} FPU\n"
-            f"_llk_math_reduce_init_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}>({compute_unit.src_a.tile_shape.cpp_value});\n"
+            f"_llk_math_reduce_init_<{pool_type_cpp}, {reduce_dim_cpp}, {math_fidelity}>"
+            f"({compute_unit.src_a.tile_shape.cpp_value});\n"
         )
 
     def calculate(
@@ -152,32 +151,7 @@ class ReduceFpu(Fpu):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        math_fidelity = compute_unit.math_fidelity.cpp_enum_value
-        dest_acc = config.dest_acc.cpp_enum_value
-        pool_type_cpp = self.reduce_pool.cpp_enum_value
-        reduce_dim_cpp = self.reduce_dim.cpp_enum_value
-
-        _int_fpu_formats = {DataFormat.Int8, DataFormat.UInt8, DataFormat.Int32}
-        is_int_fpu_en = (
-            "true"
-            if (
-                (
-                    compute_unit.src_a is not None
-                    and compute_unit.src_a.data_format in _int_fpu_formats
-                )
-                or (
-                    compute_unit.src_b is not None
-                    and compute_unit.src_b.data_format in _int_fpu_formats
-                )
-            )
-            else "false"
-        )
-
-        return (
-            f"_llk_math_reduce_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}, {is_int_fpu_en}>(\n"
-            f"    {block.tile_id_block}, {compute_unit.src_a.tile_shape.cpp_value}\n"
-            f");\n"
-        )
+        return f"_llk_math_reduce_({block.tile_id_block});\n"
 
     def uninit(
         self,
@@ -186,4 +160,4 @@ class ReduceFpu(Fpu):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        return "_llk_math_reduce_uninit_();\n"
+        return ""

@@ -1,4 +1,6 @@
-# Matrix multiply that bypasses the MOP sequencer.
+# Datacopy test that reads through the tilize unpack path.
+
+supported_archs: ["wormhole", "blackhole"]
 
 operands:
   - name: "input_A"
@@ -7,7 +9,7 @@ operands:
   - name: "input_B"
     dims: [256, 256]
     format: "Float16_b"
-  - name: "matmul_no_mop_out"
+  - name: "datacopy_tilize_out"
     dims: [256, 256]
     format: "Float16_b"
 
@@ -16,10 +18,10 @@ operations:
       - type: "Fpu"
         src_a: "input_A"
         src_b: "input_B"
-        operation: "MatmulNoMop"
-        unpacker: "MatmulUnpacker"
+        operation: "Datacopy"
+        unpacker: "UnpackerTilizeA"
         math_fidelity: "HiFi2"
     block_size: [64, 128]
     pack:
-      - output: "matmul_no_mop_out"
+      - output: "datacopy_tilize_out"
         packer: "Packer"
