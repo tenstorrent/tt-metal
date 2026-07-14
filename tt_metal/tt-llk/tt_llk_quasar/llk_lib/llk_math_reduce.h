@@ -143,40 +143,6 @@ inline void _llk_math_reduce_row_int32_fpu_(const TensorShape& tensor_shape)
 }
 
 /**
- * @brief Perform reduce-scalar MAX at runtime for Int32 dest.
- *
- * MOVD2B(transpose) -> MOVB2A -> GMPOOL (FPU path, Int8-range exact).
- * SUM/AVG are not supported on FPU (partials cannot reload into Src for the final
- * GAPOOL) -> use SFPU
- * Full 32x32 tiles only — tiny tiles are not supported for Int8→Int32 reduce.
- */
-inline void _llk_math_reduce_scalar_int32_fpu_(const TensorShape& tensor_shape)
-{
-    LLK_ASSERT(
-        tensor_shape.face_r_dim == DEFAULT_TENSOR_SHAPE.face_r_dim && tensor_shape.face_c_dim == DEFAULT_TENSOR_SHAPE.face_c_dim &&
-            tensor_shape.num_faces_r_dim == DEFAULT_TENSOR_SHAPE.num_faces_r_dim && tensor_shape.num_faces_c_dim == DEFAULT_TENSOR_SHAPE.num_faces_c_dim,
-        "Int8 reduce-scalar: tiny tiles not supported (requires 32x32)");
-
-    constexpr std::uint32_t scratch_dst_addr = 16;
-
-    for (std::uint32_t face = 0; face < static_cast<std::uint32_t>(tensor_shape.total_num_faces() - 1); face++)
-    {
-        tti_pool_instr_func<PoolType::MAX, p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, scratch_dst_addr>();
-    }
-    tti_pool_instr_func<PoolType::MAX, p_gpool::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, scratch_dst_addr>();
-
-    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, p_setrwc::SET_AB);
-
-    // Transpose scratch face-row into SrcB[32:47], then copy to SrcA for GMPOOL.
-    TTI_MOVD2B(0, p_movd2b::SRC_ROW32_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, p_movd2b::TRANSPOSE_ON, scratch_dst_addr);
-    TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 0, ADDR_MOD_0, p_movb2a::MOV_8_ROWS, p_movb2a::SRCB_ROW32_OFFSET + 0);
-    TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_8_ROWS, p_movb2a::SRCB_ROW32_OFFSET + 8);
-
-    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, scratch_dst_addr);
-    tti_pool_instr_func<PoolType::MAX, p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0>();
-}
-
-/**
  * @brief Sets up mop config for reduce column operations.
  *
  * For reduce Col, in a 32 x 32 tile, faces layout would be the following:
@@ -524,7 +490,7 @@ inline void _llk_math_reduce_addrmod_(const TensorShape& tensor_shape)
  * @tparam REDUCE_DIMENSION: Sets the reduce dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @tparam MATH_FIDELITY_TYPE: Only works for AVG/SUM pool types; sets how many loops to use full precision of Source register datums with multiplies, values =
  * <LoFi/HiFi2/HiFi3/HiFi4>
- * @tparam is_int_fpu_en: When true for REDUCE_ROW/REDUCE_SCALAR, skip MOP programming (runtime int FPU path).
+ * @tparam is_int_fpu_en: When true for REDUCE_ROW, skip MOP programming (runtime int FPU path).
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  * @note On the unpack thread, pair with @ref _llk_unpack_reduce_init_ (T0); on the pack thread, pair with @ref _llk_pack_reduce_mask_config_ (T2).
  * @note @ref _llk_math_reduce_ runs the configured reduction with matching template args.
@@ -548,10 +514,7 @@ inline void _llk_math_reduce_init_(const TensorShape& tensor_shape)
     }
     else if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR)
     {
-        if constexpr (!is_int_fpu_en)
-        {
-            _llk_math_reduce_scalar_mop_config_<POOL_TYPE, MATH_FIDELITY_TYPE>(tensor_shape);
-        }
+        _llk_math_reduce_scalar_mop_config_<POOL_TYPE, MATH_FIDELITY_TYPE>(tensor_shape);
     }
 
     // For face_r_dim >= 8, dest is dense with tiles. For face_r_dim < 8, dest is sparse with tiles and tiles are placed every 8 rows.
@@ -567,10 +530,10 @@ inline void _llk_math_reduce_init_(const TensorShape& tensor_shape)
  *
  * @tparam POOL_TYPE: Type of reduce pool op, values = <MAX/SUM/AVG>
  * @tparam REDUCE_DIMENSION: Sets the reduce dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
- * @tparam is_int_fpu_en: When true for REDUCE_ROW/REDUCE_SCALAR, runs the runtime int FPU path instead of the MOP.
+ * @tparam is_int_fpu_en: When true for REDUCE_ROW, runs the runtime int FPU path instead of the MOP.
  * @param tile_idx: Tile index into the destination register. If dest reg in 16-bit mode -> values = [0 - 8] in double buffering mode, values = [0 - 16] in
  * full mode. If dest reg in 32-bit mode -> values = [0 - 4] in double buffering mode, values = [0 - 8] in full mode
- * @param tensor_shape: Tile shape; required when is_int_fpu_en is true for REDUCE_ROW/REDUCE_SCALAR.
+ * @param tensor_shape: Tile shape; required when is_int_fpu_en is true for REDUCE_ROW.
  * @note Call @ref _llk_math_reduce_init_ with matching template args before this function.
  */
 template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION, bool is_int_fpu_en = false>
@@ -584,7 +547,7 @@ inline void _llk_math_reduce_(const std::uint32_t tile_idx, const TensorShape& t
     }
     else if constexpr (is_int_fpu_en && REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR && POOL_TYPE == PoolType::MAX)
     {
-        _llk_math_reduce_scalar_int32_fpu_(tensor_shape);
+        ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
     }
     else if constexpr (is_int_fpu_en && REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR)
     {

@@ -19,7 +19,7 @@
  * @tparam EN_32BIT_DEST: Set to true to use 32bit destination register mode
  * @tparam math_fidelity: Only works for AVG/SUM pool types,  0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls
  * precision of multiplication
- * @tparam is_int_fpu_en: When true for REDUCE_ROW/REDUCE_SCALAR, skip MOP programming (runtime int FPU path)
+ * @tparam is_int_fpu_en: When true for REDUCE_ROW, skip MOP programming (runtime int FPU path)
  * @param operandA: The input operand Data Flow Buffer identifier
  * @param operandB: The scaler input operand Data Flow Buffer identifier
  *
@@ -46,7 +46,7 @@ inline void llk_math_reduce_init(const std::uint32_t operandA, const std::uint32
  *
  * @tparam type: Type of reduce pool op, values = [MAX, SUM, AVG]
  * @tparam dim: Sets the reduce dimension, values = [REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR]
- * @tparam is_int_fpu_en: When true for REDUCE_ROW/REDUCE_SCALAR, runs the runtime int FPU path instead of the MOP
+ * @tparam is_int_fpu_en: When true for REDUCE_ROW, runs the runtime int FPU path instead of the MOP
  * @param dst_index: Tile index into the destination register.
  */
 template <PoolType type, ReduceDim dim, bool is_int_fpu_en = false>
