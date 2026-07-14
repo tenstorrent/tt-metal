@@ -168,7 +168,7 @@ shield:
   e2e_tier2:
     wh_n150: 325
     wh_n300: 305
-    bh_p150: 295
+    bh_p150: 300
   unit:
     wh_n150: 90
     wh_n300: 115
