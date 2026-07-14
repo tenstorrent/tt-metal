@@ -132,6 +132,8 @@ def _run_regime_a_auto(device, M, K, N, Ns=None, Pk=None, Sm=None, kb=None, nsb=
     out = ttnn.experimental.regime_a_matmul(in0, in1, config=cfg)
     got = ttnn.to_torch(ttnn.from_device(out))[0, 0]
     assert tuple(got.shape) == tuple(ref.shape), f"shape {tuple(got.shape)} != {tuple(ref.shape)}"
+    # No NaN/Inf: guards the K-tail path (pad tiles must be exactly 0.0, never 0*garbage).
+    assert torch.isfinite(got.float()).all(), "regime_a_matmul produced non-finite output (K-tail poisoning?)"
     assert_with_pcc(ref, got.float(), pcc)
 
 
