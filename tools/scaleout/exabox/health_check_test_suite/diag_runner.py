@@ -155,10 +155,14 @@ RESET_PLAN = {
 CPLD_OLD_BANNER_RE = re.compile(r"CPLD FW v1\.16 or higher is required to use tt-smi -r", re.IGNORECASE)
 
 # gtest filter -> test name table. Names match deployment_tests_dram_glx (outlogix).
-# eth_bandwidth uses a trailing wildcard so it picks up BandwidthBidir automatically
+# The eth deployment tests are registered as TensixDeploymentEthernet<NN><Name>
+# (e.g. TensixDeploymentEthernet00LinkUp, ...Ethernet01Bandwidth), so the filters
+# need a wildcard for the two-digit index; otherwise gtest matches 0 tests, exits
+# 0, and the test is silently recorded as PASS without running.
+# eth_bandwidth keeps a trailing wildcard so it also picks up BandwidthBidir.
 TESTS = {
-    "eth_link_up": "*TensixDeploymentEthernetLinkUp",
-    "eth_bandwidth": "*TensixDeploymentEthernetBandwidth*",
+    "eth_link_up": "*TensixDeploymentEthernet*LinkUp",
+    "eth_bandwidth": "*TensixDeploymentEthernet*Bandwidth*",
     "gddr_fast": "*DramDeployment_PersistentOptimalWorkersAllDramBanks",
     "gddr_full": "*DramDeployment_*",
 }

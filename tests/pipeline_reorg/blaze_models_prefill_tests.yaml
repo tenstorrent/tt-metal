@@ -1,6 +1,4 @@
-# This file defines the test matrix for the Galaxy DeepSeek Prefill tests pipeline.
-# These tests run on exabox multihost infrastructure (single galaxy / spsg) with
-# allocation/reset lifecycle. Commands use mpirun --pernode to execute on workers.
+# This file defines the test matrix for the Blaze Models Prefill tests pipeline.
 
 # Each entry represents a parallel job with the following keys:
 #   name: The display name for the job in GitHub Actions.
@@ -15,7 +13,7 @@
 # For max allowed timeout refer to .github/time_budget.yaml
 
 # Blackhole Galaxy DeepSeek Prefill tests
-- name: "(Galaxy) DeepSeek Prefill - MoE Gate"
+- name: "Blaze - MoE Gate"
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528
     export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
@@ -37,7 +35,7 @@
   team: models
   sp_config: spsg
 
-- name: "(Galaxy) DeepSeek Prefill - MLA"
+- name: "Blaze - MLA"
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528
     export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
@@ -60,7 +58,7 @@
   team: models
   sp_config: spsg
 
-- name: "(Galaxy) DeepSeek Prefill - MLA Chunked"
+- name: "Blaze - MLA Chunked"
   cmd: |
     export TT_METAL_ALLOCATOR_MODE_HYBRID=1
 
@@ -77,7 +75,7 @@
   team: models
   sp_config: spsg
 
-- name: "(Galaxy) DeepSeek Prefill - KV cache table"
+- name: "Blaze - KV cache table"
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528
     export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
@@ -128,7 +126,7 @@
   team: models
   sp_config: spsg
 
-- name: "(Galaxy) DeepSeek Prefill - Prefill Block"
+- name: "Blaze - Prefill Block"
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528
     export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
@@ -151,7 +149,7 @@
   team: models
   sp_config: spsg
 
-- name: "(Galaxy) DeepSeek Prefill - Transformer (Longbook 25k Trace)"
+- name: "Blaze - Transformer (Longbook 25k Trace)"
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528
     export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
@@ -173,7 +171,7 @@
   team: models
   sp_config: spsg
 
-- name: "(Galaxy) DeepSeek Prefill - Kimi MLA"
+- name: "Blaze - Kimi MLA"
   cmd: |
     export KIMI_MLA_REF_CACHE=/mnt/models/kimi-prefill-cache/test_mla_output
     export TT_METAL_ALLOCATOR_MODE_HYBRID=1
@@ -190,7 +188,7 @@
   team: models
   sp_config: spsg
 
-- name: "(Galaxy) DeepSeek Prefill - DSA MLA (V3.2)"
+- name: "Blaze - DSA MLA (V3.2)"
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528
     export DEEPSEEK_V32_MLA_REF_CACHE=/tmp/deepseek_v32_mla_ref_cache
@@ -210,7 +208,7 @@
   team: models
   sp_config: spsg
 
-- name: "(Galaxy) DeepSeek Prefill - DSA MLA (GLM-5.1 + GLM-5.2 indexer reuse)"
+- name: "Blaze - DSA MLA (GLM-5.1 + GLM-5.2 indexer reuse)"
   cmd: |
     export MESH_DEVICE=TG
     export GLM51_MLA_REF_CACHE=/mnt/models/deepseek-prefill-cache/glm_5_1_mla_ref_cache
@@ -230,7 +228,7 @@
   team: models
   sp_config: spsg
 
-- name: "(Galaxy) DeepSeek Prefill - GLM MoE"
+- name: "Blaze - GLM MoE"
   cmd: |
     export MESH_DEVICE=TG
     # GLM-5.1 256-expert MoE (device gate, DEVICE_FP32) vs the CPU MoE reference; random weights.
@@ -245,7 +243,7 @@
   owner_id: U09LK84G4TF  # Nikola Milicevic
   team: models
 
-- name: "(Galaxy) DeepSeek Prefill - GLM-5.1 Prefill Block"
+- name: "Blaze - GLM-5.1 Prefill Block"
   cmd: |
     export TT_METAL_ALLOCATOR_MODE_HYBRID=1
     export MESH_DEVICE=TG
@@ -270,7 +268,7 @@
   team: models
   sp_config: spsg
 
-- name: "(Galaxy) DeepSeek Prefill - Kimi MoE"
+- name: "Blaze - Kimi MoE"
   cmd: |
     export TT_METAL_ALLOCATOR_MODE_HYBRID=1
 
@@ -286,7 +284,7 @@
   team: models
   sp_config: spsg
 
-- name: "(Galaxy) DeepSeek Prefill - Kimi Prefill Block"
+- name: "Blaze - Kimi Prefill Block"
   cmd: |
     export TT_METAL_ALLOCATOR_MODE_HYBRID=1
     export MESH_DEVICE=TG
@@ -307,7 +305,7 @@
   team: models
   sp_config: spsg
 
-- name: "(Galaxy) DeepSeek Prefill - Prefill Block Determinism"
+- name: "Blaze - Prefill Block Determinism"
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528
     export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
@@ -331,7 +329,7 @@
   team: models
   sp_config: spsg
 
-- name: "(Galaxy) DeepSeek Prefill - Transformer Determinism"
+- name: "Blaze - Transformer Determinism"
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528
     export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
@@ -356,7 +354,7 @@
 # Ring joint SDPA math-utilization perf checks (1 WAN, 1 MLA-100k, 1 Kimi chunked ring_mla).
 # Uses real-time device program records, so it runs on the plain build without ENABLE_TRACY.
 # sp/tp are auto-selected by MeshConfig.detect() on Galaxy (sp=8, tp=4).
-- name: "(Galaxy) Ring Joint SDPA - perf checks"
+- name: "Blaze - Ring Joint SDPA perf checks"
   # Run both perf checks unconditionally (so both report numbers) but fail the step if either
   # fails - the harness only propagates the last command's exit code, so aggregate it ourselves.
   cmd: |
@@ -378,7 +376,7 @@
   team: models
   sp_config: spsg
 
-- name: "(Galaxy) DeepSeek Prefill - Chunked Kimi (code_debug 55k)"
+- name: "Blaze - Chunked Kimi (code_debug 55k)"
   # 55k-ISL chunked-prefill perf/smoke for Kimi: full 61 layers, 11 chunks x 5120 = 56320 tokens
   # (the full code_debug trace), 10 iterations. No-PCC: it drives the real chunked-prefill path end to
   # end (build once, forward 10x) and passes on completion -- no golden readback, no accuracy compare.

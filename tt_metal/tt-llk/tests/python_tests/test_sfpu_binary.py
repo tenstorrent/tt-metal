@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import itertools
 from dataclasses import dataclass
 from enum import Enum
 
@@ -162,6 +163,189 @@ def test_sfpu_binary_int(
     )
 
 
+# ---------------------------------------------------------------------------
+# Deterministic edge-case coverage for the integer shift ops.
+#
+# The default Int32 stimuli are drawn uniformly from [0, 2^30), so they never
+# exercise negative values or in-range shift amounts, and the arithmetic vs.
+# logical / out-of-range behaviour is left untested. These edge cases pin down
+# the kernel contract from ckernel_sfpu_shift.h: shift amounts outside [0, 31]
+# produce 0, arithmetic right-shift sign-extends negative values, and negative
+# operands shift correctly (which requires the INT32_2S_COMP load/store mode -
+# see SFPU_INT32_SHIFT.md).
+#
+# INT32_MIN (0x80000000) is deliberately excluded here: Dst stores int32 as
+# sign-magnitude with range +-(2^31 - 1), so -2^31 has no representation (it is
+# "negative zero"). Any value or result equal to INT32_MIN cannot round-trip; it
+# is covered separately by the xfail test below.
+# ---------------------------------------------------------------------------
+
+_INT32_MIN = -(2**31)
+
+_SHIFT_EDGE_OPS = [
+    MathOperation.SfpuElwRightShift,
+    MathOperation.SfpuElwLeftShift,
+    MathOperation.SfpuElwLogicalRightShift,
+]
+
+# Representative Int32 values: zero, small magnitudes of both signs, byte / halfword
+# boundaries, the sign bit, an alternating bit pattern and the int32 extremes.
+_SHIFT_EDGE_VALUES = [
+    0,
+    1,
+    -1,
+    2,
+    -2,
+    7,
+    -8,
+    255,
+    -256,
+    0x0000FFFF,
+    -0x00010000,
+    0x40000000,
+    -0x40000000,
+    0x55555555,
+    -0x55555555,
+    0x7FFFFFFF,  # INT32_MAX
+    -0x80000000,  # INT32_MIN (filtered out per-op; see _build_shift_edge_case_src)
+]
+
+# Shift amounts spanning in-range values (0..31), the first out-of-range value (32),
+# larger out-of-range values, and negative amounts. Everything outside [0, 31] must
+# yield 0 to match the kernel.
+_SHIFT_EDGE_AMOUNTS = [
+    0,
+    1,
+    2,
+    7,
+    15,
+    16,
+    30,
+    31,  # in-range
+    32,
+    33,
+    40,
+    63,
+    100,
+    1000,  # >= 32 -> 0
+    -1,
+    -5,
+    -32,
+    -1000,  # < 0 -> 0
+]
+
+
+def _shift_reference(mathop, value, shift):
+    """Bit-exact reference for a single (value, shift) pair, matching the kernel contract.
+
+    Shift amounts outside [0, 31] produce 0. Right shift is arithmetic (sign-extending),
+    logical right shift treats the operand as unsigned, left shift is a plain bit shift.
+    Mirrors BinarySFPUGolden and is used to pre-filter results that Dst cannot represent.
+    """
+    shift = int(shift)
+    if shift < 0 or shift >= 32:
+        return 0
+    v = torch.tensor(int(value), dtype=torch.int32)
+    if mathop == MathOperation.SfpuElwRightShift:
+        return int(torch.bitwise_right_shift(v, shift))
+    if mathop == MathOperation.SfpuElwLeftShift:
+        return int(torch.bitwise_left_shift(v, shift))
+    if mathop == MathOperation.SfpuElwLogicalRightShift:
+        r = (int(value) & 0xFFFFFFFF) >> shift
+        return r - 0x100000000 if r >= 0x80000000 else r
+    raise ValueError(f"Unsupported shift op: {mathop}")
+
+
+def _build_shift_edge_case_src(mathop):
+    """Build a deterministic [64, 32] Int32 operand for the shift edge-case test.
+
+    The math kernel consumes only ``buffer_A``: tile 0 (rows 0-31) holds the values
+    and tile 1 (rows 32-63) holds the per-element shift amounts. ``tilize`` applies
+    the same permutation to both tiles, so a value at index ``k`` within tile 0 is
+    always paired with the shift at index ``k`` within tile 1. Laying both grids out
+    with the same ``k`` ordering lets us walk the cartesian product of interesting
+    (value, shift) pairs so every combination is exercised.
+
+    Pairs whose operand or result equals INT32_MIN are dropped, since Dst's
+    sign-magnitude int32 format cannot represent -2^31 (covered by the xfail test).
+    """
+    pairs = [
+        (v, s)
+        for v, s in itertools.product(_SHIFT_EDGE_VALUES, _SHIFT_EDGE_AMOUNTS)
+        if v != _INT32_MIN and _shift_reference(mathop, v, s) != _INT32_MIN
+    ]
+    num_elements = 32 * 32
+    value_grid = [pairs[i % len(pairs)][0] for i in range(num_elements)]
+    shift_grid = [pairs[i % len(pairs)][1] for i in range(num_elements)]
+    return torch.tensor(value_grid + shift_grid, dtype=torch.int32)
+
+
+@parametrize(
+    formats=input_output_formats(
+        [
+            DataFormat.Int32,
+        ]
+    ),
+    mathop=_SHIFT_EDGE_OPS,
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_sfpu_binary_int_shift_edge_cases(
+    formats,
+    dest_acc,
+    mathop,
+):
+    if TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE:
+        pytest.skip(
+            reason="Blackhole shift kernels (left / arithmetic right / logical right) are "
+            "unmigrated TTI microcode whose predicated out-of-range/sign handling breaks "
+            "under INT32_2S_COMP for negative operands, so all three diverge from the "
+            "two's-complement golden. See SFPU_INT32_SHIFT.md."
+        )
+
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        src_A_override=_build_shift_edge_case_src(mathop),
+    )
+
+
+@pytest.mark.xfail(
+    reason="Dst stores int32 as sign-magnitude with range +-(2^31 - 1). INT32_MIN "
+    "(0x80000000) is 'negative zero' and cannot round-trip through Dst, so shifts that "
+    "consume or produce it diverge from the two's-complement golden. This is a hardware "
+    "limitation of the Wormhole SFPU load/store path; see SFPU_INT32_SHIFT.md.",
+    strict=False,
+)
+@parametrize(
+    formats=input_output_formats(
+        [
+            DataFormat.Int32,
+        ]
+    ),
+    mathop=_SHIFT_EDGE_OPS,
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_sfpu_binary_int_shift_int32_min_unsupported(
+    formats,
+    dest_acc,
+    mathop,
+):
+    # Every value lane is INT32_MIN, shifted by 0 (identity). The golden expects
+    # INT32_MIN back, but the hardware loads it as 0 (sign-magnitude negative zero),
+    # so this is expected to fail until/unless the representation changes.
+    num_elements = 32 * 32
+    value_grid = [_INT32_MIN] * num_elements
+    shift_grid = [0] * num_elements
+    src = torch.tensor(value_grid + shift_grid, dtype=torch.int32)
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        src_A_override=src,
+    )
+
+
 @parametrize(
     formats=input_output_formats(
         [
@@ -250,6 +434,7 @@ def sfpu_binary(
     dest_acc,
     mathop,
     broadcast_type=None,
+    src_A_override=None,
 ):
 
     input_dimensions = [64, 32]
@@ -260,6 +445,12 @@ def sfpu_binary(
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
     )
+
+    # The math kernel only consumes buffer_A (operand 0 = tile 0, operand 1 = tile 1),
+    # so an explicit src_A fully controls the inputs and lets us exercise deterministic
+    # edge cases. src_B stays random but unused by the kernel.
+    if src_A_override is not None:
+        src_A = src_A_override.to(src_A.dtype).flatten()
 
     golden_src = src_A
     if broadcast_type is not None and broadcast_type != LlkBroadcastType.None_:
