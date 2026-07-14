@@ -1,0 +1,154 @@
+2026-07-14 07:06:30.590 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/odjuricic/.cache/ttnn,model_cache_path=/home/odjuricic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /opt/venv/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/odjuricic/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, anyio-4.14.1, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 23 items / 19 deselected / 4 selected
+
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[8] 2026-07-14 07:06:33.388 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-14 07:06:33.388 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-14 07:06:33.388 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-14 07:06:33.388 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-14 07:06:33.390 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-14 07:06:33.390 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-14 07:06:33.393 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-14 07:06:33.559 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[1, 2, 3, 0] and remote chip ids {} (cluster.cpp:168)
+2026-07-14 07:06:33.560 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-14 07:06:33.560 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-14 07:06:33.560 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-14 07:06:33.563 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-14 07:06:33.749 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-14 07:06:34.358 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-14 07:06:34.358 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-14 07:06:34.358 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-14 07:06:34.358 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-14 07:06:34.359 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-14 07:06:34.359 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-14 07:06:34.374 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-14 07:06:34.374 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-14 07:06:34.374 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-14 07:06:34.374 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-14 07:06:34.418 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-14 07:06:34.470 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115104_memory' (shm_resource_tracker.cpp:282)
+2026-07-14 07:06:34.470 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002118688_memory' (shm_resource_tracker.cpp:282)
+2026-07-14 07:06:34.470 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002114624_memory' (shm_resource_tracker.cpp:282)
+2026-07-14 07:06:34.470 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115584_memory' (shm_resource_tracker.cpp:282)
+2026-07-14 07:06:35.038 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349977 GHz, device_time_at_sync=1459266338947 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-14 07:07:35.386 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:281)
+2026-07-14 07:07:35.386 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-14 07:07:35.386 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-14 07:07:35.387 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-14 07:07:35.387 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-14 07:07:35.388 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-14 07:07:35.388 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-14 07:07:35.412 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-14 07:07:35.415 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-14 07:07:35.420 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-14 07:07:35.420 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-14 07:07:35.467 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-14 07:07:35.518 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-14 07:07:35.526 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-14 07:07:35.527 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-14 07:07:35.529 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-14 07:07:35.529 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-14 07:07:35.529 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:305)
+2026-07-14 07:07:36.159 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349970 GHz, device_time_at_sync=1541767309447 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-14 07:07:36.162 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349985 GHz, device_time_at_sync=1541770752987 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-14 07:07:36.163 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349987 GHz, device_time_at_sync=1541436923110 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-14 07:07:36.163 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349982 GHz, device_time_at_sync=1542205172534 cycles (realtime_profiler_manager.cpp:1127)
+PCC=0.9999536902462068
+PCC=0.9999536902462068
+PCC=0.9999536902462068
+PCC=0.9999536902462068
+MULTICHIP_MLP_GEOMETRY {"num_cores": 8, "gate_up_in0_block_w": 7, "down_in0_block_w": 21, "median_ms": 0.5324175, "samples_ms": [0.560208, 0.543107, 0.532438, 0.533057, 0.529858, 0.530767, 0.529758, 0.532397, 0.532888, 0.531268, 0.532897, 0.531598]}
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[12] Building ncrisc, compile step:
+cd /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_interleaved_no_bcast/10262113051843195011/ncrisc/ && /localdev/odjuricic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/odjuricic/tt-metal/ -I/localdev/odjuricic/tt-metal/ttnn -I/localdev/odjuricic/tt-metal/ttnn/cpp -I/localdev/odjuricic/tt-metal/tt_metal -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/common -I/localdev/odjuricic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/odjuricic/tt-metal/tt_metal/api/ -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow -c -o /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_interleaved_no_bcast/10262113051843195011/ncrisc/ncrisck.7804082052122141523.o /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_interleaved_no_bcast/10262113051843195011/ncrisc/ncrisck.7804082052122141523.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_interleaved_no_bcast/10262113051843195011/\"" -DBCAST_LLK='0' -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DFILL_TILE_WITH_FIRST_COLUMN='fill_tile_with_first_column_bfloat16' -DFILL_TILE_WITH_FIRST_COLUMN_B='fill_tile_with_first_column_bfloat16' -DFILL_TILE_WITH_FIRST_COLUMN_RM='fill_tile_with_first_column_rm_bfloat16' -DFILL_TILE_WITH_FIRST_ELEMENT='fill_tile_with_first_element_bfloat16' -DFILL_TILE_WITH_FIRST_ELEMENT_B='fill_tile_with_first_element_bfloat16' -DFILL_TILE_WITH_FIRST_ROW='fill_tile_with_first_row_bfloat16' -DFILL_TILE_WITH_FIRST_ROW_B='fill_tile_with_first_row_bfloat16' -DFILL_TILE_WITH_FIRST_ROW_RM='fill_tile_with_first_row_rm_bfloat16' -DFILL_WITH_VALUE='fill_with_val_bfloat16' -DFILL_WITH_VALUE_B='fill_with_val_bfloat16' -DROUTING_MODE='137' -DSRC_SHARDED='1' -DSRC_SHARDED_B='1' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=17,2048,1,12,14,33685762,67240706,100795650,167905026,201460482,16977154,17,2048,1,12,14,33685762,67240706,100795650,167905026,201460482,16977154,1
+In file included from ../kernel_includes.hpp:1,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:22:
+/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_no_bcast.cpp: In function 'void kernel_main()':
+/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_no_bcast.cpp:39:20: warning: variable 'src_b_args' set but not used [-Wunused-but-set-variable]
+   39 |     constexpr auto src_b_args =
+      |                    ^~~~~~~~~~
+PCC=0.9999559675167017
+PCC=0.9999559675167017
+PCC=0.9999559675167017
+PCC=0.9999559675167017
+MULTICHIP_MLP_GEOMETRY {"num_cores": 12, "gate_up_in0_block_w": 7, "down_in0_block_w": 7, "median_ms": 0.5293625, "samples_ms": [0.529278, 0.529447, 0.527148, 0.527377, 0.533648, 0.531197, 0.529818, 0.529518, 0.527638, 0.529218, 0.529217, 0.529618]}
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[21] Building ncrisc, compile step:
+cd /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_interleaved_no_bcast/3797268427987209619/ncrisc/ && /localdev/odjuricic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/odjuricic/tt-metal/ -I/localdev/odjuricic/tt-metal/ttnn -I/localdev/odjuricic/tt-metal/ttnn/cpp -I/localdev/odjuricic/tt-metal/tt_metal -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/common -I/localdev/odjuricic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/odjuricic/tt-metal/tt_metal/api/ -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow -c -o /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_interleaved_no_bcast/3797268427987209619/ncrisc/ncrisck.7804082052122141523.o /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_interleaved_no_bcast/3797268427987209619/ncrisc/ncrisck.7804082052122141523.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_interleaved_no_bcast/3797268427987209619/\"" -DBCAST_LLK='0' -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DFILL_TILE_WITH_FIRST_COLUMN='fill_tile_with_first_column_bfloat16' -DFILL_TILE_WITH_FIRST_COLUMN_B='fill_tile_with_first_column_bfloat16' -DFILL_TILE_WITH_FIRST_COLUMN_RM='fill_tile_with_first_column_rm_bfloat16' -DFILL_TILE_WITH_FIRST_ELEMENT='fill_tile_with_first_element_bfloat16' -DFILL_TILE_WITH_FIRST_ELEMENT_B='fill_tile_with_first_element_bfloat16' -DFILL_TILE_WITH_FIRST_ROW='fill_tile_with_first_row_bfloat16' -DFILL_TILE_WITH_FIRST_ROW_B='fill_tile_with_first_row_bfloat16' -DFILL_TILE_WITH_FIRST_ROW_RM='fill_tile_with_first_row_rm_bfloat16' -DFILL_WITH_VALUE='fill_with_val_bfloat16' -DFILL_WITH_VALUE_B='fill_with_val_bfloat16' -DROUTING_MODE='137' -DSRC_SHARDED='1' -DSRC_SHARDED_B='1' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=17,2048,1,21,8,33685762,67240706,100795650,167905026,201460482,16977154,50528771,84083715,117638659,184748547,3075,17,2048,1,21,8,33685762,67240706,100795650,167905026,201460482,16977154,50528771,84083715,117638659,184748547,3075,1
+In file included from ../kernel_includes.hpp:1,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:22:
+/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_no_bcast.cpp: In function 'void kernel_main()':
+/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_no_bcast.cpp:39:20: warning: variable 'src_b_args' set but not used [-Wunused-but-set-variable]
+   39 |     constexpr auto src_b_args =
+      |                    ^~~~~~~~~~
+PCC=0.9999405896165996
+PCC=0.9999405896165996
+PCC=0.9999405896165996
+PCC=0.9999405896165996
+MULTICHIP_MLP_GEOMETRY {"num_cores": 21, "gate_up_in0_block_w": 4, "down_in0_block_w": 4, "median_ms": 0.5413125000000001, "samples_ms": [0.541617, 0.542987, 0.540028, 0.541637, 0.540708, 0.539917, 0.541278, 0.541907, 0.542448, 0.541347, 0.541158, 0.540197]}
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[24] Building ncrisc, compile step:
+cd /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_interleaved_no_bcast/12938446664353948376/ncrisc/ && /localdev/odjuricic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/odjuricic/tt-metal/ -I/localdev/odjuricic/tt-metal/ttnn -I/localdev/odjuricic/tt-metal/ttnn/cpp -I/localdev/odjuricic/tt-metal/tt_metal -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/common -I/localdev/odjuricic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/odjuricic/tt-metal/tt_metal/api/ -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow -c -o /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_interleaved_no_bcast/12938446664353948376/ncrisc/ncrisck.7804082052122141523.o /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_interleaved_no_bcast/12938446664353948376/ncrisc/ncrisck.7804082052122141523.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_interleaved_no_bcast/12938446664353948376/\"" -DBCAST_LLK='0' -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DFILL_TILE_WITH_FIRST_COLUMN='fill_tile_with_first_column_bfloat16' -DFILL_TILE_WITH_FIRST_COLUMN_B='fill_tile_with_first_column_bfloat16' -DFILL_TILE_WITH_FIRST_COLUMN_RM='fill_tile_with_first_column_rm_bfloat16' -DFILL_TILE_WITH_FIRST_ELEMENT='fill_tile_with_first_element_bfloat16' -DFILL_TILE_WITH_FIRST_ELEMENT_B='fill_tile_with_first_element_bfloat16' -DFILL_TILE_WITH_FIRST_ROW='fill_tile_with_first_row_bfloat16' -DFILL_TILE_WITH_FIRST_ROW_B='fill_tile_with_first_row_bfloat16' -DFILL_TILE_WITH_FIRST_ROW_RM='fill_tile_with_first_row_rm_bfloat16' -DFILL_WITH_VALUE='fill_with_val_bfloat16' -DFILL_WITH_VALUE_B='fill_with_val_bfloat16' -DROUTING_MODE='137' -DSRC_SHARDED='1' -DSRC_SHARDED_B='1' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=17,2048,1,24,7,33685762,67240706,100795650,167905026,201460482,16977154,50528771,84083715,117638659,184748547,218303491,33816836,17,2048,1,24,7,33685762,67240706,100795650,167905026,201460482,16977154,50528771,84083715,117638659,184748547,218303491,33816836,1
+In file included from ../kernel_includes.hpp:1,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:22:
+/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_no_bcast.cpp: In function 'void kernel_main()':
+/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_no_bcast.cpp:39:20: warning: variable 'src_b_args' set but not used [-Wunused-but-set-variable]
+   39 |     constexpr auto src_b_args =
+      |                    ^~~~~~~~~~
+PCC=0.9999559675167017
+PCC=0.9999559675167017
+PCC=0.9999559675167017
+PCC=0.9999559675167017
+MULTICHIP_MLP_GEOMETRY {"num_cores": 24, "gate_up_in0_block_w": 7, "down_in0_block_w": 7, "median_ms": 0.5260675, "samples_ms": [0.528828, 0.527577, 0.526468, 0.525667, 0.527128, 0.527348, 0.525177, 0.531098, 0.525078, 0.524258, 0.524748, 0.524957]}
+PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+models/tt_transformers/tt/common.py:28
+  /localdev/odjuricic/tt-metal/models/tt_transformers/tt/common.py:28: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.14/migration/
+    class ImageMedia(BaseModel):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/multichip_decoder/evidence/mlp_geometry_sweep.xml -
+============================== slowest durations ===============================
+63.06s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[8]
+27.78s call     models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[21]
+26.75s call     models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[12]
+26.66s call     models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[24]
+25.59s call     models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[8]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[12]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[21]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[24]
+0.13s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[24]
+
+(3 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[8]
+PASSED models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[12]
+PASSED models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[21]
+PASSED models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[24]
+=========== 4 passed, 19 deselected, 3 warnings in 172.26s (0:02:52) ===========
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-07-14 07:09:26.219 | info     |    BuildKernels | JIT cache stats: 671/692 hits (97.0%) [671 cached, 601 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-14 07:09:26.219 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-14 07:09:26.243 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-14 07:09:26.243 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-14 07:09:26.837 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-14 07:09:26.838 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-14 07:09:26.838 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

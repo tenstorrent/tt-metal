@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="2" failures="0" skipped="0" tests="2" time="3.091" timestamp="2026-07-14T06:44:15.786366+00:00" hostname="spawner-exp-d-gemma31"><testcase classname="models.autoports.google_gemma_4_31b.tests.test_multichip_decoder" name="test_multichip_paged_decode_trace_matches_optimized_baseline[0-sliding_attention]" time="1.399"><error message="failed on setup with &quot;IndexError: unordered_map::at&quot;">hf_config = Gemma4TextConfig {
+  "attention_bias": false,
+  "attention_dropout": 0.0,
+  "attention_k_eq_v": true,
+  "bos_token_id"...
+  "use_cache": true,
+  "use_double_wide_mlp": false,
+  "vocab_size": 262144,
+  "vocab_size_per_layer_input": 262144
+}
+
+
+    @pytest.fixture(scope="module")
+    def optimized_baseline(hf_config):
+        """Collect the frozen single-P150 reference before enabling mesh fabric."""
+&gt;       mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), trace_region_size=64 &lt;&lt; 20)
+
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py:130:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+ttnn/ttnn/distributed/distributed.py:675: in open_mesh_device
+    dispatch_core_config=dispatch_core_config or ttnn.DispatchCoreConfig(),
+ttnn/ttnn/device.py:151: in __init__
+    self.type = get_default_dispatch_core_type()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def get_default_dispatch_core_type():
+        eth_default_dispatch_clusters = [
+            ttnn._ttnn.cluster.ClusterType.N300,
+            ttnn._ttnn.cluster.ClusterType.T3K,
+            ttnn._ttnn.cluster.ClusterType.N300_2x2,
+        ]
+        return (
+            ttnn._ttnn.device.DispatchCoreType.ETH
+&gt;           if ttnn._ttnn.cluster.get_cluster_type() in eth_default_dispatch_clusters
+            else ttnn._ttnn.device.DispatchCoreType.WORKER
+        )
+E       IndexError: unordered_map::at
+
+ttnn/ttnn/device.py:92: IndexError</error></testcase><testcase classname="models.autoports.google_gemma_4_31b.tests.test_multichip_decoder" name="test_multichip_paged_decode_trace_matches_optimized_baseline[5-full_attention]" time="0.000"><error message="failed on setup with &quot;IndexError: unordered_map::at&quot;">hf_config = Gemma4TextConfig {
+  "attention_bias": false,
+  "attention_dropout": 0.0,
+  "attention_k_eq_v": true,
+  "bos_token_id"...
+  "use_cache": true,
+  "use_double_wide_mlp": false,
+  "vocab_size": 262144,
+  "vocab_size_per_layer_input": 262144
+}
+
+
+    @pytest.fixture(scope="module")
+    def optimized_baseline(hf_config):
+        """Collect the frozen single-P150 reference before enabling mesh fabric."""
+&gt;       mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), trace_region_size=64 &lt;&lt; 20)
+
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py:130:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+ttnn/ttnn/distributed/distributed.py:675: in open_mesh_device
+    dispatch_core_config=dispatch_core_config or ttnn.DispatchCoreConfig(),
+ttnn/ttnn/device.py:151: in __init__
+    self.type = get_default_dispatch_core_type()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def get_default_dispatch_core_type():
+        eth_default_dispatch_clusters = [
+            ttnn._ttnn.cluster.ClusterType.N300,
+            ttnn._ttnn.cluster.ClusterType.T3K,
+            ttnn._ttnn.cluster.ClusterType.N300_2x2,
+        ]
+        return (
+            ttnn._ttnn.device.DispatchCoreType.ETH
+&gt;           if ttnn._ttnn.cluster.get_cluster_type() in eth_default_dispatch_clusters
+            else ttnn._ttnn.device.DispatchCoreType.WORKER
+        )
+E       IndexError: unordered_map::at
+
+ttnn/ttnn/device.py:92: IndexError</error></testcase></testsuite></testsuites>

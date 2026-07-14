@@ -1,0 +1,102 @@
+mkdir -p failed for path /home/odjuricic/.config/matplotlib: [Errno 13] Permission denied: '/home/odjuricic/.config/matplotlib'
+Matplotlib created a temporary cache directory at /tmp/matplotlib-2mgpx2r4 because there was an issue with the default path (/home/odjuricic/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+2026-07-14 07:22:44.815 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/odjuricic/.cache/ttnn,model_cache_path=/home/odjuricic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /opt/venv/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/odjuricic/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, anyio-4.14.1, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 26 items / 25 deselected / 1 selected
+
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_prefill_placement_sweep 2026-07-14 07:22:47.636 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-14 07:22:47.636 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-14 07:22:47.637 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-14 07:22:47.637 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-14 07:22:47.638 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-14 07:22:47.638 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-14 07:22:47.641 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-14 07:22:47.808 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[1, 2, 3, 0] and remote chip ids {} (cluster.cpp:168)
+2026-07-14 07:22:47.808 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-14 07:22:47.808 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-14 07:22:47.808 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-14 07:22:47.811 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-14 07:22:47.979 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-14 07:22:48.586 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-14 07:22:48.586 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-14 07:22:48.586 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-14 07:22:48.586 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-14 07:22:48.587 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-14 07:22:48.587 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-14 07:22:48.602 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-14 07:22:48.602 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-14 07:22:48.602 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-14 07:22:48.602 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-14 07:22:48.661 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-14 07:22:48.810 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-14 07:22:48.811 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-14 07:22:48.812 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-14 07:22:48.814 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-14 07:22:48.814 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-14 07:22:48.814 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:305)
+2026-07-14 07:22:48.866 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115104_memory' (shm_resource_tracker.cpp:282)
+2026-07-14 07:22:48.866 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002118688_memory' (shm_resource_tracker.cpp:282)
+2026-07-14 07:22:48.866 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002114624_memory' (shm_resource_tracker.cpp:282)
+2026-07-14 07:22:48.866 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115584_memory' (shm_resource_tracker.cpp:282)
+2026-07-14 07:22:49.439 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349986 GHz, device_time_at_sync=2510691826037 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-14 07:22:49.440 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349985 GHz, device_time_at_sync=2510797699080 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-14 07:22:49.450 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349982 GHz, device_time_at_sync=2512249941995 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-14 07:22:49.451 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349988 GHz, device_time_at_sync=2509358863497 cycles (realtime_profiler_manager.cpp:1127)
+PCC=0.9999327034524377
+PCC=0.9999327034524377
+PCC=0.9999327034524377
+PCC=0.9999327034524377
+PCC=0.9999459538789113
+PCC=0.9999459538789113
+PCC=0.9999459538789113
+PCC=0.9999459538789113
+PCC=0.9999470546275928
+PCC=0.9999470546275928
+PCC=0.9999470546275928
+PCC=0.9999470546275928
+PCC=0.9999459538789113
+PCC=0.9999459538789113
+PCC=0.9999459538789113
+PCC=0.9999459538789113
+MULTICHIP_MLP_PREFILL_PLACEMENT {"rows": 128, "baseline": {"placement": "dram_interleaved_auto_program", "median_ms": 0.7252959999999999, "samples_ms": [0.740906, 0.769306, 0.849535, 0.802646, 0.798195, 0.709686, 0.811215, 0.706856, 0.648706, 0.601037, 0.619016, 0.651416]}, "candidates": [{"placement": "dram_interleaved_explicit_1d", "num_cores": 8, "gate_up_in0_block_w": 7, "down_in0_block_w": 21, "per_core_M": 4, "per_core_N": 21, "out_subblock_h": 1, "out_subblock_w": 7, "median_ms": 0.793666, "samples_ms": [0.804005, 0.795426, 0.794675, 0.792886, 0.795945, 0.795155, 0.793646, 0.791755, 0.793686, 0.790685, 0.793546, 0.791275]}, {"placement": "dram_interleaved_explicit_1d", "num_cores": 12, "gate_up_in0_block_w": 7, "down_in0_block_w": 7, "per_core_M": 4, "per_core_N": 14, "out_subblock_h": 1, "out_subblock_w": 7, "median_ms": 0.6241019999999999, "samples_ms": [0.623056, 0.612467, 0.614806, 0.595307, 0.655556, 0.623857, 0.623846, 0.624347, 0.626146, 0.768056, 0.639706, 0.624757]}, {"placement": "dram_interleaved_explicit_1d", "num_cores": 21, "gate_up_in0_block_w": 4, "down_in0_block_w": 4, "per_core_M": 4, "per_core_N": 8, "out_subblock_h": 1, "out_subblock_w": 8, "median_ms": 0.622596, "samples_ms": [0.710626, 0.622276, 0.536657, 0.623927, 0.645506, 0.600797, 0.622916, 0.628237, 0.616377, 0.586617, 0.605296, 0.632477]}, {"placement": "dram_interleaved_explicit_1d", "num_cores": 24, "gate_up_in0_block_w": 7, "down_in0_block_w": 7, "per_core_M": 4, "per_core_N": 7, "out_subblock_h": 1, "out_subblock_w": 7, "median_ms": 0.5830219999999999, "samples_ms": [0.759546, 0.696536, 0.602877, 0.624627, 0.624657, 0.622416, 0.532377, 0.563167, 0.559337, 0.563107, 0.557546, 0.561357]}], "rejected_placement": "DRAM-sharded program hard-requires M=1; see rejected artifact"}
+PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+models/tt_transformers/tt/common.py:28
+  /localdev/odjuricic/tt-metal/models/tt_transformers/tt/common.py:28: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.14/migration/
+    class ImageMedia(BaseModel):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/multichip_decoder/evidence/mlp_prefill_sweep.xml -
+============================== slowest durations ===============================
+32.34s call     models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_prefill_placement_sweep
+2.11s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_prefill_placement_sweep
+0.14s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_prefill_placement_sweep
+=========================== short test summary info ============================
+PASSED models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_prefill_placement_sweep
+================ 1 passed, 25 deselected, 3 warnings in 36.19s =================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-07-14 07:23:24.382 | info     |    BuildKernels | JIT cache stats: 81/121 hits (66.9%) [81 cached, 74 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-14 07:23:24.382 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-14 07:23:24.407 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-14 07:23:24.407 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-14 07:23:25.019 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-14 07:23:25.020 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-14 07:23:25.020 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

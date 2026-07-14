@@ -1,0 +1,101 @@
+mkdir -p failed for path /home/odjuricic/.config/matplotlib: [Errno 13] Permission denied: '/home/odjuricic/.config/matplotlib'
+Matplotlib created a temporary cache directory at /tmp/matplotlib-fa4gvbgp because there was an issue with the default path (/home/odjuricic/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+2026-07-14 07:18:50.695 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/odjuricic/.cache/ttnn,model_cache_path=/home/odjuricic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /opt/venv/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/odjuricic/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, anyio-4.14.1, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 25 items / 23 deselected / 2 selected
+
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fractured_residual_boundary_probe[32] 2026-07-14 07:18:53.507 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-14 07:18:53.507 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-14 07:18:53.508 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-14 07:18:53.508 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-14 07:18:53.509 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-14 07:18:53.509 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-14 07:18:53.512 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-14 07:18:53.680 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[1, 2, 3, 0] and remote chip ids {} (cluster.cpp:168)
+2026-07-14 07:18:53.680 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-14 07:18:53.680 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-14 07:18:53.680 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-14 07:18:53.684 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-14 07:18:53.847 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-14 07:18:54.454 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-14 07:18:54.454 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-14 07:18:54.454 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-14 07:18:54.454 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-14 07:18:54.455 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-14 07:18:54.455 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-14 07:18:54.470 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-14 07:18:54.470 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-14 07:18:54.470 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-14 07:18:54.471 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-14 07:18:54.530 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-14 07:18:54.610 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-14 07:18:54.611 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-14 07:18:54.612 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-14 07:18:54.614 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-14 07:18:54.614 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-14 07:18:54.614 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:305)
+2026-07-14 07:18:54.666 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115104_memory' (shm_resource_tracker.cpp:282)
+2026-07-14 07:18:54.666 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002118688_memory' (shm_resource_tracker.cpp:282)
+2026-07-14 07:18:54.666 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002114624_memory' (shm_resource_tracker.cpp:282)
+2026-07-14 07:18:54.666 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115584_memory' (shm_resource_tracker.cpp:282)
+2026-07-14 07:18:55.239 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349981 GHz, device_time_at_sync=2273633630903 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-14 07:18:55.250 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349964 GHz, device_time_at_sync=2272386594316 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-14 07:18:55.251 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349982 GHz, device_time_at_sync=2271362365370 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-14 07:18:55.251 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349981 GHz, device_time_at_sync=2272483441892 cycles (realtime_profiler_manager.cpp:1127)
+PCC=0.9999164896138981
+PCC=0.9999163997147297
+PCC=0.9999168003524569
+PCC=0.9999174217271679
+MULTICHIP_FRACTURED_BOUNDARY {"rows": 32, "replicated_ms": 0.161644, "fractured_ms": 0.273424, "fractured_over_replicated": 1.691519635742743, "replicated_samples_ms": [0.162299, 0.161299, 0.161019, 0.161609, 0.160009, 0.16191, 0.161779, 0.162359, 0.161399, 0.161679, 0.16223, 0.160539], "fractured_samples_ms": [0.274609, 0.271539, 0.278798, 0.273269, 0.273579, 0.273708, 0.271728, 0.273099, 0.274019, 0.275828, 0.273019, 0.272729]}
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fractured_residual_boundary_probe[128] PCC=0.9998716037608368
+PCC=0.9998723974055601
+PCC=0.9998712182797869
+PCC=0.9998710171988853
+MULTICHIP_FRACTURED_BOUNDARY {"rows": 128, "replicated_ms": 0.6795869999999999, "fractured_ms": 0.854516, "fractured_over_replicated": 1.257404865013604, "replicated_samples_ms": [0.697756, 0.673667, 0.662737, 0.667657, 0.788646, 0.732517, 0.697887, 0.703347, 0.674577, 0.670577, 0.664986, 0.684597], "fractured_samples_ms": [0.918316, 0.923325, 0.850916, 0.852096, 0.861566, 0.840216, 0.907336, 0.856936, 0.847776, 0.850486, 0.944035, 0.851646]}
+PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+models/tt_transformers/tt/common.py:28
+  /localdev/odjuricic/tt-metal/models/tt_transformers/tt/common.py:28: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.14/migration/
+    class ImageMedia(BaseModel):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/multichip_decoder/evidence/fractured_boundary.xml -
+============================== slowest durations ===============================
+28.54s call     models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fractured_residual_boundary_probe[128]
+28.48s call     models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fractured_residual_boundary_probe[32]
+2.04s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fractured_residual_boundary_probe[32]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fractured_residual_boundary_probe[128]
+0.14s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fractured_residual_boundary_probe[128]
+
+(1 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fractured_residual_boundary_probe[32]
+PASSED models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fractured_residual_boundary_probe[128]
+=========== 2 passed, 23 deselected, 3 warnings in 61.02s (0:01:01) ============
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-07-14 07:19:55.078 | info     |    BuildKernels | JIT cache stats: 160/160 hits (100.0%) [160 cached, 82 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-14 07:19:55.078 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-14 07:19:55.099 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-14 07:19:55.099 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-14 07:19:55.700 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-14 07:19:55.700 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-14 07:19:55.700 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

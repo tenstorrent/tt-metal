@@ -1,0 +1,119 @@
+mkdir -p failed for path /home/odjuricic/.config/matplotlib: [Errno 13] Permission denied: '/home/odjuricic/.config/matplotlib'
+Matplotlib created a temporary cache directory at /tmp/matplotlib-y24uv8q1 because there was an issue with the default path (/home/odjuricic/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+2026-07-14 07:24:27.308 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/odjuricic/.cache/ttnn,model_cache_path=/home/odjuricic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /opt/venv/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/odjuricic/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, anyio-4.14.1, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 26 items / 22 deselected / 4 selected
+
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_optimized_baseline[0-sliding_attention] 2026-07-14 07:24:30.094 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-14 07:24:30.094 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-14 07:24:30.095 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-14 07:24:30.095 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-14 07:24:30.096 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-14 07:24:30.096 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-14 07:24:30.099 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-14 07:24:30.266 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[1, 2, 3, 0] and remote chip ids {} (cluster.cpp:168)
+2026-07-14 07:24:30.266 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-14 07:24:30.266 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-14 07:24:30.266 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-14 07:24:30.270 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-14 07:24:30.492 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-14 07:24:31.098 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-14 07:24:31.098 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-14 07:24:31.098 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-14 07:24:31.098 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-14 07:24:31.099 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-14 07:24:31.099 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-14 07:24:31.114 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-14 07:24:31.114 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-14 07:24:31.114 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-14 07:24:31.114 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-14 07:24:31.158 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-14 07:24:31.210 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002114624_memory' (shm_resource_tracker.cpp:282)
+2026-07-14 07:24:31.778 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349981 GHz, device_time_at_sync=2612823505589 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-14 07:25:32.406 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:281)
+2026-07-14 07:25:32.406 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-14 07:25:32.406 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-14 07:25:32.407 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-14 07:25:32.407 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-14 07:25:32.408 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-14 07:25:32.408 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-14 07:25:32.433 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-14 07:25:32.436 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-14 07:25:32.439 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-14 07:25:32.441 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-14 07:25:32.488 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-14 07:25:32.548 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-14 07:25:32.550 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-14 07:25:32.551 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-14 07:25:32.552 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-14 07:25:32.552 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-14 07:25:32.552 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:305)
+2026-07-14 07:25:33.175 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349981 GHz, device_time_at_sync=2697297154879 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-14 07:25:33.176 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349957 GHz, device_time_at_sync=2694096588950 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-14 07:25:33.187 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349983 GHz, device_time_at_sync=2695705259731 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-14 07:25:33.187 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349984 GHz, device_time_at_sync=2695585553337 cycles (realtime_profiler_manager.cpp:1127)
+PCC=0.9998458099608858
+PCC=0.9998458099608858
+PCC=0.9998458099608858
+PCC=0.9998458099608858
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_optimized_baseline[5-full_attention] PCC=0.9997565724638809
+PCC=0.9997565724638809
+PCC=0.9997565724638809
+PCC=0.9997565724638809
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_warmed_latency[0-sliding_attention] MULTICHIP_WARMED {"kind": "sliding_attention", "baseline_prefill128_ms": 2.672098, "multichip_prefill128_ms": 2.4043785, "prefill_speedup": 1.111346653615477, "prefill_tp4_efficiency": 0.27783666340386926, "baseline_decode_ms": 1.186214, "multichip_decode_ms": 0.5267824999999999, "decode_speedup": 2.251809807653064, "decode_tp4_efficiency": 0.562952451913266, "multichip_prefill128_samples_ms": [2.644407, 2.329909, 2.455628, 2.324509, 2.478748, 2.24331, 2.446558, 2.438489, 2.386618, 2.351969, 2.422139, 2.361019], "multichip_decode_samples_ms": [0.525937, 0.525677, 0.525517, 0.527897, 0.524997, 0.525248, 0.525957, 0.532228, 0.530917, 0.537558, 0.531017, 0.527608]}
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_warmed_latency[5-full_attention] MULTICHIP_WARMED {"kind": "full_attention", "baseline_prefill128_ms": 3.4453430000000003, "multichip_prefill128_ms": 2.4386835, "prefill_speedup": 1.4127880883271653, "prefill_tp4_efficiency": 0.3531970220817913, "baseline_decode_ms": 1.351973, "multichip_decode_ms": 0.5767675, "decode_speedup": 2.3440519793504317, "decode_tp4_efficiency": 0.5860129948376079, "multichip_prefill128_samples_ms": [2.588298, 2.400598, 2.415749, 2.391819, 2.430319, 2.481228, 2.342169, 2.452098, 2.469499, 2.447048, 2.458189, 2.382909], "multichip_decode_samples_ms": [0.576177, 0.575618, 0.576948, 0.577957, 0.577037, 0.579618, 0.577637, 0.575967, 0.575548, 0.576587, 0.575327, 0.578577]}
+PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+models/tt_transformers/tt/common.py:28
+  /localdev/odjuricic/tt-metal/models/tt_transformers/tt/common.py:28: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.14/migration/
+    class ImageMedia(BaseModel):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/multichip_decoder/evidence/final_latency.xml -
+============================== slowest durations ===============================
+63.38s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_optimized_baseline[0-sliding_attention]
+28.12s call     models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_warmed_latency[5-full_attention]
+28.02s call     models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_optimized_baseline[5-full_attention]
+27.23s call     models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_warmed_latency[0-sliding_attention]
+27.08s call     models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_optimized_baseline[0-sliding_attention]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_optimized_baseline[5-full_attention]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_warmed_latency[0-sliding_attention]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_warmed_latency[5-full_attention]
+0.14s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_warmed_latency[5-full_attention]
+
+(3 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_optimized_baseline[0-sliding_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_optimized_baseline[5-full_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_warmed_latency[0-sliding_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_warmed_latency[5-full_attention]
+=========== 4 passed, 22 deselected, 3 warnings in 176.24s (0:02:56) ===========
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-07-14 07:27:26.928 | info     |    BuildKernels | JIT cache stats: 912/930 hits (98.1%) [912 cached, 822 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-14 07:27:26.928 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-14 07:27:26.952 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-14 07:27:26.952 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-14 07:27:27.544 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-14 07:27:27.544 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-14 07:27:27.544 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

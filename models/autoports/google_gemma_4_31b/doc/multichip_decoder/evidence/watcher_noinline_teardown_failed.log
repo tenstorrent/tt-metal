@@ -1,0 +1,368 @@
+2026-07-14 06:34:49.257 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/odjuricic/.cache/ttnn,model_cache_path=/home/odjuricic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /opt/venv/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/odjuricic/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, anyio-4.14.1, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 19 items / 15 deselected / 4 selected
+
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_paged_decode_trace_matches_optimized_baseline[0-sliding_attention] 2026-07-14 06:34:52.052 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-14 06:34:52.052 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-14 06:34:52.052 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-14 06:34:52.052 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-14 06:34:52.054 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-14 06:34:52.054 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-14 06:34:52.057 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-14 06:34:52.224 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[1, 2, 3, 0] and remote chip ids {} (cluster.cpp:168)
+2026-07-14 06:34:52.224 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-14 06:34:52.224 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-14 06:34:52.224 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-14 06:34:52.228 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-14 06:34:52.405 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-14 06:34:53.018 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-14 06:34:53.018 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-14 06:34:53.018 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-14 06:34:53.018 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-14 06:34:53.019 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-14 06:34:53.019 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-14 06:34:54.159 | info     |       LLRuntime | Watcher log file: /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/multichip_decoder/watcher_final_noinline/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-14 06:34:54.159 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-14 06:34:54.159 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-07-14 06:34:54.159 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-07-14 06:34:54.159 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-07-14 06:34:54.159 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:547)
+2026-07-14 06:34:54.159 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-14 06:34:54.159 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:34:54.164 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:34:54.169 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:34:54.174 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:34:56.695 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115104_memory' (shm_resource_tracker.cpp:282)
+2026-07-14 06:34:56.695 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002118688_memory' (shm_resource_tracker.cpp:282)
+2026-07-14 06:34:56.695 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002114624_memory' (shm_resource_tracker.cpp:282)
+2026-07-14 06:34:56.695 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115584_memory' (shm_resource_tracker.cpp:282)
+2026-07-14 06:34:58.206 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349977 GHz, device_time_at_sync=23221140442058 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-14 06:35:04.201 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:35:04.206 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:35:04.211 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:35:04.216 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:35:14.230 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:35:14.235 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:35:14.240 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:35:14.245 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:35:24.259 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:35:24.264 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:35:24.269 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:35:24.274 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+Building ncrisc, compile step:
+cd /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12805643314080410615/kernels/reader_unary_interleaved_ln_rm_gb/8862299948098494697/ncrisc/ && /localdev/odjuricic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/odjuricic/tt-metal/ -I/localdev/odjuricic/tt-metal/ttnn -I/localdev/odjuricic/tt-metal/ttnn/cpp -I/localdev/odjuricic/tt-metal/tt_metal -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/common -I/localdev/odjuricic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/odjuricic/tt-metal/tt_metal/api/ -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow -c -o /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12805643314080410615/kernels/reader_unary_interleaved_ln_rm_gb/8862299948098494697/ncrisc/ncrisck.2625969145625556622.o /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12805643314080410615/kernels/reader_unary_interleaved_ln_rm_gb/8862299948098494697/ncrisc/ncrisck.2625969145625556622.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DWATCHER_ENABLED -DWATCHER_NOINLINE -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_unary_interleaved_ln_rm_gb/8862299948098494697/\"" -DFUSE_GAMMA='1' -DRMSNORM='1' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=8,0,5376,2,2048,0,0,2,64,0,0,64 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_ex2_welford\",19}, {\"cb_ex_welford\",18}, {\"welford_fp32_alias\",0}, {\"cb_x_welford\",0}, {\"cb_out_rm\",28}, {\"cb_in_rm\",27}, {\"cb_accumulate\",26}, {\"cb_reciprocals\",25}, {\"cb_xmm\",24}, {\"cb_in\",0}, {\"welford_state_fp32_alias\",0}, {\"cb_out\",16}, {\"cb_inb\",1}, {\"cb_beta\",6}, {\"cb_scaler\",2}, {\"cb_eps\",3}, {\"cb_gamma\",5}, {\"cb_ex\",18}, {\"cb_fusion\",22}, {\"cb_xmm2\",20}, {\"cb_ex2\",19}, {\"cb_ex2pe\",21}, {\"cb_x\",23}, "
+In file included from ../kernel_includes.hpp:1,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:22:
+/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_unary_interleaved_ln_rm_gb.cpp: In function 'void kernel_main()':
+/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_unary_interleaved_ln_rm_gb.cpp:54:20: warning: variable 'beta_args' set but not used [-Wunused-but-set-variable]
+   54 |     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+      |                    ^~~~~~~~~
+Building ncrisc, compile step:
+cd /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12805643314080410615/kernels/reader_unary_interleaved_ln_rm_gb/3397847739248191967/ncrisc/ && /localdev/odjuricic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/odjuricic/tt-metal/ -I/localdev/odjuricic/tt-metal/ttnn -I/localdev/odjuricic/tt-metal/ttnn/cpp -I/localdev/odjuricic/tt-metal/tt_metal -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/common -I/localdev/odjuricic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/odjuricic/tt-metal/tt_metal/api/ -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow -c -o /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12805643314080410615/kernels/reader_unary_interleaved_ln_rm_gb/3397847739248191967/ncrisc/ncrisck.2625969145625556622.o /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12805643314080410615/kernels/reader_unary_interleaved_ln_rm_gb/3397847739248191967/ncrisc/ncrisck.2625969145625556622.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DWATCHER_ENABLED -DWATCHER_NOINLINE -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_unary_interleaved_ln_rm_gb/3397847739248191967/\"" -DFUSE_GAMMA='1' -DRMSNORM='1' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=8,0,256,2,2048,0,0,2,64,0,0,64 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_ex2_welford\",19}, {\"cb_ex_welford\",18}, {\"welford_fp32_alias\",0}, {\"cb_x_welford\",0}, {\"cb_out_rm\",28}, {\"cb_in_rm\",27}, {\"cb_accumulate\",26}, {\"cb_reciprocals\",25}, {\"cb_xmm\",24}, {\"cb_in\",0}, {\"welford_state_fp32_alias\",0}, {\"cb_out\",16}, {\"cb_inb\",1}, {\"cb_beta\",6}, {\"cb_scaler\",2}, {\"cb_eps\",3}, {\"cb_gamma\",5}, {\"cb_ex\",18}, {\"cb_fusion\",22}, {\"cb_xmm2\",20}, {\"cb_ex2\",19}, {\"cb_ex2pe\",21}, {\"cb_x\",23}, "
+In file included from ../kernel_includes.hpp:1,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:22:
+/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_unary_interleaved_ln_rm_gb.cpp: In function 'void kernel_main()':
+/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_unary_interleaved_ln_rm_gb.cpp:54:20: warning: variable 'beta_args' set but not used [-Wunused-but-set-variable]
+   54 |     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+      |                    ^~~~~~~~~
+2026-07-14 06:35:34.286 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:35:34.291 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:35:34.296 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:35:34.301 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:35:44.314 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:35:44.319 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:35:44.324 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:35:44.329 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:35:54.342 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:35:54.347 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:35:54.352 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:35:54.357 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+Building ncrisc, compile step:
+cd /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12805643314080410615/kernels/reader_interleaved_no_bcast/16204798827964981213/ncrisc/ && /localdev/odjuricic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/odjuricic/tt-metal/ -I/localdev/odjuricic/tt-metal/ttnn -I/localdev/odjuricic/tt-metal/ttnn/cpp -I/localdev/odjuricic/tt-metal/tt_metal -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/common -I/localdev/odjuricic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/odjuricic/tt-metal/tt_metal/api/ -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow -c -o /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12805643314080410615/kernels/reader_interleaved_no_bcast/16204798827964981213/ncrisc/ncrisck.2625969145625556622.o /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12805643314080410615/kernels/reader_interleaved_no_bcast/16204798827964981213/ncrisc/ncrisck.2625969145625556622.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DWATCHER_ENABLED -DWATCHER_NOINLINE -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_interleaved_no_bcast/16204798827964981213/\"" -DBCAST_LLK='0' -DFILL_TILE_WITH_FIRST_COLUMN='fill_tile_with_first_column_bfloat16' -DFILL_TILE_WITH_FIRST_COLUMN_B='fill_tile_with_first_column_bfloat16' -DFILL_TILE_WITH_FIRST_COLUMN_RM='fill_tile_with_first_column_rm_bfloat16' -DFILL_TILE_WITH_FIRST_ELEMENT='fill_tile_with_first_element_bfloat16' -DFILL_TILE_WITH_FIRST_ELEMENT_B='fill_tile_with_first_element_bfloat16' -DFILL_TILE_WITH_FIRST_ROW='fill_tile_with_first_row_bfloat16' -DFILL_TILE_WITH_FIRST_ROW_B='fill_tile_with_first_row_bfloat16' -DFILL_TILE_WITH_FIRST_ROW_RM='fill_tile_with_first_row_rm_bfloat16' -DFILL_WITH_VALUE='fill_with_val_bfloat16' -DFILL_WITH_VALUE_B='fill_with_val_bfloat16' -DSRC_SHARDED='1' -DSRC_SHARDED_B='1' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=17,2048,1,8,84,33685762,67240706,100795650,167905026,17,2048,1,8,84,33685762,67240706,100795650,167905026,1
+In file included from ../kernel_includes.hpp:1,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:22:
+/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_no_bcast.cpp: In function 'void kernel_main()':
+/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_no_bcast.cpp:39:20: warning: variable 'src_b_args' set but not used [-Wunused-but-set-variable]
+   39 |     constexpr auto src_b_args =
+      |                    ^~~~~~~~~~
+2026-07-14 06:36:04.371 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:36:04.376 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:36:04.381 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:36:04.385 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:36:14.398 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:36:14.404 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:36:14.408 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:36:14.413 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:36:24.427 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:36:24.432 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:36:24.437 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:36:24.442 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:36:34.455 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:36:34.460 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:36:34.465 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:36:34.470 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:36:44.484 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:36:44.489 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:36:44.494 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:36:44.499 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:36:54.512 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:36:54.517 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:36:54.522 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:36:54.527 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:37:04.540 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:37:04.545 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:37:04.550 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:37:04.555 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:37:14.568 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:37:14.573 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:37:14.578 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:37:14.583 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+Building ncrisc, compile step:
+cd /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12805643314080410615/kernels/reader_unary_interleaved_ln_rm_gb/2650273593203720609/ncrisc/ && /localdev/odjuricic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/odjuricic/tt-metal/ -I/localdev/odjuricic/tt-metal/ttnn -I/localdev/odjuricic/tt-metal/ttnn/cpp -I/localdev/odjuricic/tt-metal/tt_metal -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/common -I/localdev/odjuricic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/odjuricic/tt-metal/tt_metal/api/ -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow -c -o /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12805643314080410615/kernels/reader_unary_interleaved_ln_rm_gb/2650273593203720609/ncrisc/ncrisck.2625969145625556622.o /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12805643314080410615/kernels/reader_unary_interleaved_ln_rm_gb/2650273593203720609/ncrisc/ncrisck.2625969145625556622.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DWATCHER_ENABLED -DWATCHER_NOINLINE -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_unary_interleaved_ln_rm_gb/2650273593203720609/\"" -DFUSE_GAMMA='1' -DRMSNORM='1' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=8,0,512,2,2048,0,0,2,64,0,0,64 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_ex2_welford\",19}, {\"cb_ex_welford\",18}, {\"welford_fp32_alias\",0}, {\"cb_x_welford\",0}, {\"cb_out_rm\",28}, {\"cb_in_rm\",27}, {\"cb_accumulate\",26}, {\"cb_reciprocals\",25}, {\"cb_xmm\",24}, {\"cb_in\",0}, {\"welford_state_fp32_alias\",0}, {\"cb_out\",16}, {\"cb_inb\",1}, {\"cb_beta\",6}, {\"cb_scaler\",2}, {\"cb_eps\",3}, {\"cb_gamma\",5}, {\"cb_ex\",18}, {\"cb_fusion\",22}, {\"cb_xmm2\",20}, {\"cb_ex2\",19}, {\"cb_ex2pe\",21}, {\"cb_x\",23}, "
+In file included from ../kernel_includes.hpp:1,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:22:
+/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_unary_interleaved_ln_rm_gb.cpp: In function 'void kernel_main()':
+/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_unary_interleaved_ln_rm_gb.cpp:54:20: warning: variable 'beta_args' set but not used [-Wunused-but-set-variable]
+   54 |     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+      |                    ^~~~~~~~~
+2026-07-14 06:37:24.595 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:37:24.601 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:37:24.606 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:37:24.610 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:37:34.623 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:37:34.628 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:37:34.633 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:37:34.638 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:37:41.580 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:281)
+2026-07-14 06:37:41.580 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-14 06:37:41.580 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-14 06:37:41.581 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-14 06:37:41.581 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-14 06:37:41.581 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-14 06:37:41.582 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-14 06:37:41.582 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-07-14 06:37:41.582 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-07-14 06:37:41.582 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-07-14 06:37:41.582 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-07-14 06:37:41.582 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-07-14 06:37:41.679 | info     |       LLRuntime | Watcher log file: /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/multichip_decoder/watcher_final_noinline/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-14 06:37:41.679 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-14 06:37:41.679 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-07-14 06:37:41.679 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-07-14 06:37:41.679 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-07-14 06:37:41.679 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:547)
+2026-07-14 06:37:41.679 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:37:41.683 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-14 06:37:41.684 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:37:41.690 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:37:41.694 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:37:45.064 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-14 06:37:48.849 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-14 06:37:48.850 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-14 06:37:48.852 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-14 06:37:48.852 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-14 06:37:48.852 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:305)
+2026-07-14 06:37:51.787 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:37:51.793 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:37:51.799 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:37:51.805 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:37:53.001 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349978 GHz, device_time_at_sync=23457108728869 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-14 06:37:53.001 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349983 GHz, device_time_at_sync=23453037031727 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-14 06:37:53.012 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349976 GHz, device_time_at_sync=23461241610503 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-14 06:37:53.012 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349981 GHz, device_time_at_sync=23457098603632 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-14 06:38:01.818 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:38:01.823 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:38:01.828 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:38:01.833 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:38:11.846 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:38:11.853 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:38:11.858 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:38:11.863 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:38:21.877 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:38:21.882 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:38:21.887 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:38:21.892 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+Building ncrisc, compile step:
+cd /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12805643314080410615/kernels/reader_unary_interleaved_ln_rm_gb/12282677500734934373/ncrisc/ && /localdev/odjuricic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/odjuricic/tt-metal/ -I/localdev/odjuricic/tt-metal/ttnn -I/localdev/odjuricic/tt-metal/ttnn/cpp -I/localdev/odjuricic/tt-metal/tt_metal -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/common -I/localdev/odjuricic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/odjuricic/tt-metal/tt_metal/api/ -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow -c -o /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12805643314080410615/kernels/reader_unary_interleaved_ln_rm_gb/12282677500734934373/ncrisc/ncrisck.2625969145625556622.o /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12805643314080410615/kernels/reader_unary_interleaved_ln_rm_gb/12282677500734934373/ncrisc/ncrisck.2625969145625556622.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DWATCHER_ENABLED -DWATCHER_NOINLINE -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_unary_interleaved_ln_rm_gb/12282677500734934373/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DFUSE_GAMMA='1' -DRMSNORM='1' -DROUTING_MODE='137' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=8,0,256,2,2048,0,0,2,64,0,0,64 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_ex2_welford\",19}, {\"cb_ex_welford\",18}, {\"welford_fp32_alias\",0}, {\"cb_x_welford\",0}, {\"cb_out_rm\",28}, {\"cb_in_rm\",27}, {\"cb_accumulate\",26}, {\"cb_reciprocals\",25}, {\"cb_xmm\",24}, {\"cb_in\",0}, {\"welford_state_fp32_alias\",0}, {\"cb_out\",16}, {\"cb_inb\",1}, {\"cb_beta\",6}, {\"cb_scaler\",2}, {\"cb_eps\",3}, {\"cb_gamma\",5}, {\"cb_ex\",18}, {\"cb_fusion\",22}, {\"cb_xmm2\",20}, {\"cb_ex2\",19}, {\"cb_ex2pe\",21}, {\"cb_x\",23}, "
+In file included from ../kernel_includes.hpp:1,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:22:
+/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_unary_interleaved_ln_rm_gb.cpp: In function 'void kernel_main()':
+/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_unary_interleaved_ln_rm_gb.cpp:54:20: warning: variable 'beta_args' set but not used [-Wunused-but-set-variable]
+   54 |     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+      |                    ^~~~~~~~~
+2026-07-14 06:38:31.904 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:38:31.910 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:38:31.915 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:38:31.920 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:38:41.932 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:38:41.938 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:38:41.943 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:38:41.948 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+Building ncrisc, compile step:
+cd /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12805643314080410615/kernels/reader_interleaved_no_bcast/13789874653957052600/ncrisc/ && /localdev/odjuricic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/odjuricic/tt-metal/ -I/localdev/odjuricic/tt-metal/ttnn -I/localdev/odjuricic/tt-metal/ttnn/cpp -I/localdev/odjuricic/tt-metal/tt_metal -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/common -I/localdev/odjuricic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/odjuricic/tt-metal/tt_metal/api/ -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow -c -o /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12805643314080410615/kernels/reader_interleaved_no_bcast/13789874653957052600/ncrisc/ncrisck.2625969145625556622.o /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12805643314080410615/kernels/reader_interleaved_no_bcast/13789874653957052600/ncrisc/ncrisck.2625969145625556622.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DWATCHER_ENABLED -DWATCHER_NOINLINE -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_interleaved_no_bcast/13789874653957052600/\"" -DBCAST_LLK='0' -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DFILL_TILE_WITH_FIRST_COLUMN='fill_tile_with_first_column_bfloat16' -DFILL_TILE_WITH_FIRST_COLUMN_B='fill_tile_with_first_column_bfloat16' -DFILL_TILE_WITH_FIRST_COLUMN_RM='fill_tile_with_first_column_rm_bfloat16' -DFILL_TILE_WITH_FIRST_ELEMENT='fill_tile_with_first_element_bfloat16' -DFILL_TILE_WITH_FIRST_ELEMENT_B='fill_tile_with_first_element_bfloat16' -DFILL_TILE_WITH_FIRST_ROW='fill_tile_with_first_row_bfloat16' -DFILL_TILE_WITH_FIRST_ROW_B='fill_tile_with_first_row_bfloat16' -DFILL_TILE_WITH_FIRST_ROW_RM='fill_tile_with_first_row_rm_bfloat16' -DFILL_WITH_VALUE='fill_with_val_bfloat16' -DFILL_WITH_VALUE_B='fill_with_val_bfloat16' -DROUTING_MODE='137' -DSRC_SHARDED='1' -DSRC_SHARDED_B='1' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=17,2048,1,8,21,33685762,67240706,100795650,167905026,17,2048,1,8,21,33685762,67240706,100795650,167905026,1
+In file included from ../kernel_includes.hpp:1,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:22:
+/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_no_bcast.cpp: In function 'void kernel_main()':
+/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_no_bcast.cpp:39:20: warning: variable 'src_b_args' set but not used [-Wunused-but-set-variable]
+   39 |     constexpr auto src_b_args =
+      |                    ^~~~~~~~~~
+PCC=0.9999536902462068
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_paged_decode_trace_matches_optimized_baseline[5-full_attention] 2026-07-14 06:38:51.961 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:38:51.966 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:38:51.971 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:38:51.976 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:39:01.988 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:39:01.993 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:39:01.998 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:39:02.003 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:39:12.016 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:39:12.022 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:39:12.027 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:39:12.031 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+Building ncrisc, compile step:
+cd /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12805643314080410615/kernels/reader_unary_interleaved_ln_rm_gb/7507113970441188139/ncrisc/ && /localdev/odjuricic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/odjuricic/tt-metal/ -I/localdev/odjuricic/tt-metal/ttnn -I/localdev/odjuricic/tt-metal/ttnn/cpp -I/localdev/odjuricic/tt-metal/tt_metal -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/common -I/localdev/odjuricic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/odjuricic/tt-metal/tt_metal/api/ -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow -c -o /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12805643314080410615/kernels/reader_unary_interleaved_ln_rm_gb/7507113970441188139/ncrisc/ncrisck.2625969145625556622.o /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12805643314080410615/kernels/reader_unary_interleaved_ln_rm_gb/7507113970441188139/ncrisc/ncrisck.2625969145625556622.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DWATCHER_ENABLED -DWATCHER_NOINLINE -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_unary_interleaved_ln_rm_gb/7507113970441188139/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DFUSE_GAMMA='1' -DRMSNORM='1' -DROUTING_MODE='137' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=8,0,512,2,2048,0,0,2,64,0,0,64 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_ex2_welford\",19}, {\"cb_ex_welford\",18}, {\"welford_fp32_alias\",0}, {\"cb_x_welford\",0}, {\"cb_out_rm\",28}, {\"cb_in_rm\",27}, {\"cb_accumulate\",26}, {\"cb_reciprocals\",25}, {\"cb_xmm\",24}, {\"cb_in\",0}, {\"welford_state_fp32_alias\",0}, {\"cb_out\",16}, {\"cb_inb\",1}, {\"cb_beta\",6}, {\"cb_scaler\",2}, {\"cb_eps\",3}, {\"cb_gamma\",5}, {\"cb_ex\",18}, {\"cb_fusion\",22}, {\"cb_xmm2\",20}, {\"cb_ex2\",19}, {\"cb_ex2pe\",21}, {\"cb_x\",23}, "
+In file included from ../kernel_includes.hpp:1,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:22:
+/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_unary_interleaved_ln_rm_gb.cpp: In function 'void kernel_main()':
+/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_unary_interleaved_ln_rm_gb.cpp:54:20: warning: variable 'beta_args' set but not used [-Wunused-but-set-variable]
+   54 |     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+      |                    ^~~~~~~~~
+2026-07-14 06:39:22.045 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:39:22.050 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:39:22.055 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:39:22.060 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:39:32.073 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:39:32.078 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:39:32.083 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:39:32.088 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+PCC=0.9998857834944461
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_batch32_nonaligned_prefill_and_traced_decode[0-sliding_attention] 2026-07-14 06:39:42.101 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:39:42.106 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:39:42.111 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:39:42.116 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:39:52.129 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:39:52.134 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:39:52.139 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:39:52.144 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:40:02.157 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:40:02.163 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:40:02.168 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:40:02.172 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+Building ncrisc, compile step:
+cd /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12805643314080410615/kernels/reader_unary_interleaved_ln_rm_gb/12008936747611609756/ncrisc/ && /localdev/odjuricic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/odjuricic/tt-metal/ -I/localdev/odjuricic/tt-metal/ttnn -I/localdev/odjuricic/tt-metal/ttnn/cpp -I/localdev/odjuricic/tt-metal/tt_metal -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/common -I/localdev/odjuricic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/odjuricic/tt-metal/tt_metal/api/ -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow -c -o /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12805643314080410615/kernels/reader_unary_interleaved_ln_rm_gb/12008936747611609756/ncrisc/ncrisck.2625969145625556622.o /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12805643314080410615/kernels/reader_unary_interleaved_ln_rm_gb/12008936747611609756/ncrisc/ncrisck.2625969145625556622.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DWATCHER_ENABLED -DWATCHER_NOINLINE -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_unary_interleaved_ln_rm_gb/12008936747611609756/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DFUSE_GAMMA='1' -DRMSNORM='1' -DROUTING_MODE='137' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=8,0,5376,2,2048,0,0,2,64,0,0,64 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_ex2_welford\",19}, {\"cb_ex_welford\",18}, {\"welford_fp32_alias\",0}, {\"cb_x_welford\",0}, {\"cb_out_rm\",28}, {\"cb_in_rm\",27}, {\"cb_accumulate\",26}, {\"cb_reciprocals\",25}, {\"cb_xmm\",24}, {\"cb_in\",0}, {\"welford_state_fp32_alias\",0}, {\"cb_out\",16}, {\"cb_inb\",1}, {\"cb_beta\",6}, {\"cb_scaler\",2}, {\"cb_eps\",3}, {\"cb_gamma\",5}, {\"cb_ex\",18}, {\"cb_fusion\",22}, {\"cb_xmm2\",20}, {\"cb_ex2\",19}, {\"cb_ex2pe\",21}, {\"cb_x\",23}, "
+In file included from ../kernel_includes.hpp:1,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:22:
+/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_unary_interleaved_ln_rm_gb.cpp: In function 'void kernel_main()':
+/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_unary_interleaved_ln_rm_gb.cpp:54:20: warning: variable 'beta_args' set but not used [-Wunused-but-set-variable]
+   54 |     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+      |                    ^~~~~~~~~
+2026-07-14 06:40:12.186 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:40:12.191 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:40:12.196 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:40:12.201 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:40:22.214 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:40:22.220 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:40:22.225 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:40:22.229 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+PCC=0.9999069020421482
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_batch32_nonaligned_prefill_and_traced_decode[5-full_attention] 2026-07-14 06:40:32.243 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:40:32.248 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:40:32.254 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:40:32.258 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:40:42.272 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:40:42.277 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:40:42.282 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:40:42.287 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:40:52.301 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:40:52.308 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:40:52.313 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:40:52.318 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:41:02.331 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:41:02.336 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:41:02.341 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:41:02.346 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+PCC=0.999890167735043
+PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+models/tt_transformers/tt/common.py:28
+  /localdev/odjuricic/tt-metal/models/tt_transformers/tt/common.py:28: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.14/migration/
+    class ImageMedia(BaseModel):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/multichip_decoder/evidence/watcher.xml -
+============================== slowest durations ===============================
+181.25s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_paged_decode_trace_matches_optimized_baseline[0-sliding_attention]
+56.01s call     models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_paged_decode_trace_matches_optimized_baseline[0-sliding_attention]
+52.65s call     models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_batch32_nonaligned_prefill_and_traced_decode[0-sliding_attention]
+43.37s call     models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_paged_decode_trace_matches_optimized_baseline[5-full_attention]
+41.65s call     models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_batch32_nonaligned_prefill_and_traced_decode[5-full_attention]
+0.24s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_batch32_nonaligned_prefill_and_traced_decode[5-full_attention]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_paged_decode_trace_matches_optimized_baseline[5-full_attention]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_batch32_nonaligned_prefill_and_traced_decode[0-sliding_attention]
+0.16s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_batch32_nonaligned_prefill_and_traced_decode[5-full_attention]
+
+(3 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_paged_decode_trace_matches_optimized_baseline[0-sliding_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_paged_decode_trace_matches_optimized_baseline[5-full_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_batch32_nonaligned_prefill_and_traced_decode[0-sliding_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_batch32_nonaligned_prefill_and_traced_decode[5-full_attention]
+=========== 4 passed, 15 deselected, 3 warnings in 377.38s (0:06:17) ===========
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-07-14 06:41:10.001 | info     |    BuildKernels | JIT cache stats: 0/846 hits (0.0%) [0 cached, 945 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-14 06:41:10.001 | info     |    BuildKernels | JIT telemetry: 2 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-14 06:41:10.003 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-07-14 06:41:10.004 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-07-14 06:41:10.004 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-07-14 06:41:10.004 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-07-14 06:41:10.004 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-07-14 06:41:30.007 | critical |           Metal | Device 0: Virtual core 29-25, Port status: 0x1, Retrain count: 0x0, Rx link up: 0x1, Train status: 0x2, PCS status: 0x1, SerDes reset status: 0x1, Postcode: 0xc0dea000, ERISC0 reset PC: 0x3650, ERISC1 reset PC: 0x9330, RISC soft reset: 0x0, Heartbeat start: 0xdcbaf940, Heartbeat end: 0xdcbaf940, Heartbeat changed: false (llrt.cpp:342)
+2026-07-14 06:41:30.007 | critical |          Always | TT_THROW: Device 0: Timed out while waiting for active ethernet core 29-25 to become active again. Try resetting the board. Minimum tt-firmware version is 18.10.0 (assert.hpp:104)
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  TT_THROW @ /home/ubuntu/tt-metal/tt_metal/llrt/llrt.cpp:566: tt::exception
+info:
+Device 0: Timed out while waiting for active ethernet core 29-25 to become active again. Try resetting the board. Minimum tt-firmware version is 18.10.0
+backtrace:
+ --- /localdev/odjuricic/tt-metal/build/lib/libtt_metal.so(+0xb707a8) [0x7f24e23677a8]
+ --- tt::llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(int, tt::xy_pair const&, int)
+ --- tt::tt_metal::RiscFirmwareInitializer::assert_active_ethernet_cores_to_reset(int)
+ --- tt::tt_metal::RiscFirmwareInitializer::teardown(std::unordered_set<tt::tt_metal::InitializerKey, std::hash<tt::tt_metal::InitializerKey>, std::equal_to<tt::tt_metal::InitializerKey>, std::allocator<tt::tt_metal::InitializerKey> >&)
+ --- tt::tt_metal::MetalContext::teardown()
+ --- tt::tt_metal::MetalContext::~MetalContext()
+ --- tt::tt_metal::MetalContext::destroy_instance(bool, ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+ --- tt::tt_metal::MetalContext::destroy_all_instances(bool)
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x45495) [0x7f2552365495]
+ --- /lib/x86_64-linux-gnu/libc.so.6(on_exit+0) [0x7f2552365610]
+ --- /opt/venv/bin/python3(+0x1b13f9) [0x562e71fbd3f9]
+ --- /opt/venv/bin/python3(+0x1b3a9a) [0x562e71fbfa9a]
+ --- /opt/venv/bin/python3(+0x1b2b08) [0x562e71fbeb08]
+ --- /opt/venv/bin/python3(_PyRun_SimpleFileObject+0x1d8) [0x562e71fbf1b8]
+ --- /opt/venv/bin/python3(_PyRun_AnyFileObject+0xa5) [0x562e71fbeae5]
+ --- /opt/venv/bin/python3(+0x1bcda9) [0x562e71fc8da9]
+ --- /opt/venv/bin/python3(+0x1bc912) [0x562e71fc8912]
+ --- /opt/venv/bin/python3(Py_RunMain+0x680) [0x562e72222030]
+ --- /opt/venv/bin/python3(+0x148028) [0x562e71f54028]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7f2552349d90]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7f2552349e40]
+ --- /opt/venv/bin/python3(+0x34616b) [0x562e7215216b]

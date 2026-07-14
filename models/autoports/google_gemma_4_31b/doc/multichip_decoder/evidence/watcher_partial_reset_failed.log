@@ -1,0 +1,140 @@
+2026-07-14 06:44:14.556 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/odjuricic/.cache/ttnn,model_cache_path=/home/odjuricic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /opt/venv/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/odjuricic/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, anyio-4.14.1, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 19 items / 17 deselected / 2 selected
+
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_paged_decode_trace_matches_optimized_baseline[0-sliding_attention] 2026-07-14 06:44:17.348 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-14 06:44:17.348 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-14 06:44:17.348 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-14 06:44:17.348 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-14 06:44:17.349 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-14 06:44:17.349 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-14 06:44:17.353 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-14 06:44:17.520 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[1, 2, 3, 0] and remote chip ids {} (cluster.cpp:168)
+2026-07-14 06:44:17.520 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-14 06:44:17.520 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-14 06:44:17.520 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-14 06:44:17.523 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-14 06:44:17.550 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-14 06:44:18.114 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-14 06:44:18.114 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-14 06:44:18.737 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-14 06:44:18.737 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-14 06:44:18.737 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)
+ERROR
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_paged_decode_trace_matches_optimized_baseline[5-full_attention] ERROR
+
+==================================== ERRORS ====================================
+_ ERROR at setup of test_multichip_paged_decode_trace_matches_optimized_baseline[0-sliding_attention] _
+
+hf_config = Gemma4TextConfig {
+  "attention_bias": false,
+  "attention_dropout": 0.0,
+  "attention_k_eq_v": true,
+  "bos_token_id"...
+  "use_cache": true,
+  "use_double_wide_mlp": false,
+  "vocab_size": 262144,
+  "vocab_size_per_layer_input": 262144
+}
+
+
+    @pytest.fixture(scope="module")
+    def optimized_baseline(hf_config):
+        """Collect the frozen single-P150 reference before enabling mesh fabric."""
+>       mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), trace_region_size=64 << 20)
+
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py:130:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+ttnn/ttnn/distributed/distributed.py:675: in open_mesh_device
+    dispatch_core_config=dispatch_core_config or ttnn.DispatchCoreConfig(),
+ttnn/ttnn/device.py:151: in __init__
+    self.type = get_default_dispatch_core_type()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def get_default_dispatch_core_type():
+        eth_default_dispatch_clusters = [
+            ttnn._ttnn.cluster.ClusterType.N300,
+            ttnn._ttnn.cluster.ClusterType.T3K,
+            ttnn._ttnn.cluster.ClusterType.N300_2x2,
+        ]
+        return (
+            ttnn._ttnn.device.DispatchCoreType.ETH
+>           if ttnn._ttnn.cluster.get_cluster_type() in eth_default_dispatch_clusters
+            else ttnn._ttnn.device.DispatchCoreType.WORKER
+        )
+E       IndexError: unordered_map::at
+
+ttnn/ttnn/device.py:92: IndexError
+_ ERROR at setup of test_multichip_paged_decode_trace_matches_optimized_baseline[5-full_attention] _
+
+hf_config = Gemma4TextConfig {
+  "attention_bias": false,
+  "attention_dropout": 0.0,
+  "attention_k_eq_v": true,
+  "bos_token_id"...
+  "use_cache": true,
+  "use_double_wide_mlp": false,
+  "vocab_size": 262144,
+  "vocab_size_per_layer_input": 262144
+}
+
+
+    @pytest.fixture(scope="module")
+    def optimized_baseline(hf_config):
+        """Collect the frozen single-P150 reference before enabling mesh fabric."""
+>       mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), trace_region_size=64 << 20)
+
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py:130:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+ttnn/ttnn/distributed/distributed.py:675: in open_mesh_device
+    dispatch_core_config=dispatch_core_config or ttnn.DispatchCoreConfig(),
+ttnn/ttnn/device.py:151: in __init__
+    self.type = get_default_dispatch_core_type()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def get_default_dispatch_core_type():
+        eth_default_dispatch_clusters = [
+            ttnn._ttnn.cluster.ClusterType.N300,
+            ttnn._ttnn.cluster.ClusterType.T3K,
+            ttnn._ttnn.cluster.ClusterType.N300_2x2,
+        ]
+        return (
+            ttnn._ttnn.device.DispatchCoreType.ETH
+>           if ttnn._ttnn.cluster.get_cluster_type() in eth_default_dispatch_clusters
+            else ttnn._ttnn.device.DispatchCoreType.WORKER
+        )
+E       IndexError: unordered_map::at
+
+ttnn/ttnn/device.py:92: IndexError
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+models/tt_transformers/tt/common.py:28
+  /localdev/odjuricic/tt-metal/models/tt_transformers/tt/common.py:28: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.14/migration/
+    class ImageMedia(BaseModel):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/multichip_decoder/evidence/watcher.xml -
+============================== slowest durations ===============================
+1.40s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_paged_decode_trace_matches_optimized_baseline[0-sliding_attention]
+
+(3 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+ERROR models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_paged_decode_trace_matches_optimized_baseline[0-sliding_attention]
+ERROR models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_paged_decode_trace_matches_optimized_baseline[5-full_attention]
+================= 17 deselected, 3 warnings, 2 errors in 3.09s =================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

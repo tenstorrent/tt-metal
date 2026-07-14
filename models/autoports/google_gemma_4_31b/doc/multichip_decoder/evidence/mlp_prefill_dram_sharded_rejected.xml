@@ -1,0 +1,241 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="30.350" timestamp="2026-07-14T07:20:58.593168+00:00" hostname="spawner-exp-d-gemma31"><testcase classname="models.autoports.google_gemma_4_31b.tests.test_multichip_decoder" name="test_multichip_mlp_prefill_placement_sweep" time="27.781"><properties><property name="start_timestamp" value="2026-07-14T07:21:01" /><property name="end_timestamp" value="2026-07-14T07:21:28" /></properties><failure message="RuntimeError: TT_FATAL @ /home/ubuntu/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:1371: M == 1&#10;info:&#10;currently only support in0 tensor height of tile height&#10;backtrace:&#10; --- /localdev/odjuricic/tt-metal/build/lib/_ttnncpp.so(+0x7c2dc9) [0x7fa5a5e39dc9]&#10; --- /localdev/odjuricic/tt-metal/build/lib/_ttnncpp.so(+0x188228d) [0x7fa5a6ef928d]&#10; --- ttnn::prim::MatmulDeviceOperation::validate_on_program_cache_miss(ttnn::prim::MatmulParams const&amp;, ttnn::prim::MatmulInputs const&amp;)&#10; --- /localdev/odjuricic/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0x29) [0x7fa5a6f01e89]&#10; --- /localdev/odjuricic/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x16e) [0x7fa5a6f00a2e]&#10; --- /localdev/odjuricic/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x4ea) [0x7fa5a6eff93a]&#10; --- ttnn::prim::matmul(tt::tt_metal::Tensor const&amp;, tt::tt_metal::Tensor const&amp;, std::optional&lt;tt::tt_metal::Tensor&gt; const&amp;, std::optional&lt;tt::tt_metal::Tensor&gt; const&amp;, ttnn::prim::MatmulParams const&amp;)&#10; --- /localdev/odjuricic/tt-metal/build/lib/_ttnncpp.so(+0x181bd61) [0x7fa5a6e92d61]&#10; --- /localdev/odjuricic/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKN2tt8tt_metal6TensorES6_RKSt8optionalIS5_EbbRKS7_IKNS3_12MemoryConfigEES7_IKNS3_8DataTypeEERKS7_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS7_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES7_IKNS_19ComputeKernelConfigEES7_IKNS_5types8CoreGridEERKS7_IKNS3_4TileEES7_IS4_ERKS7_IKNS3_12experimental20GlobalCircularBufferEERKS7_IN4ttsl10StrongTypeIhNS3_14SubDeviceIdTagEEEE+0x2e6) [0x7fa5a6e94456]&#10; --- /localdev/odjuricic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4daac8) [0x7fa5a79c6ac8]&#10; --- /localdev/odjuricic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4da7ae) [0x7fa5a79c67ae]&#10; --- /localdev/odjuricic/tt-metal/ttnn/ttnn/_ttnn.so(+0x312325) [0x7fa5a77fe325]&#10; --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x564867cc2c65]&#10; --- /opt/venv/bin/python3(+0x3a2b46) [0x564867cf6b46]&#10; --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x564867c2487c]&#10; --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]&#10; --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x564867cc2c65]&#10; --- /opt/venv/bin/python3(+0x3a2b46) [0x564867cf6b46]&#10; --- /opt/venv/bin/python3(+0x2fd2a2) [0x564867c512a2]&#10; --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x564867c1e5ff]&#10; --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]&#10; --- /opt/venv/bin/python3(+0x2fd0b9) [0x564867c510b9]&#10; --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x564867c1e778]&#10; --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]&#10; --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x36749) [0x564867c50e59]&#10; --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]&#10; --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x564867c22c17]&#10; --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]&#10; --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x564867c24aef]&#10; --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]&#10; --- /opt/venv/bin/python3(+0x273350) [0x564867bc7350]&#10; --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x564867c24aef]&#10; --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]&#10; --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x564867cc2c65]&#10; --- /opt/venv/bin/python3(+0x3a2b46) [0x564867cf6b46]&#10; --- /opt/venv/bin/python3(+0x2fd2a2) [0x564867c512a2]&#10; --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x564867c1e5ff]&#10; --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]&#10; --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x564867c23034]&#10; --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]&#10; --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x564867c22c17]&#10; --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]&#10; --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x564867c24aef]&#10; --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]&#10; --- /opt/venv/bin/python3(+0x273350) [0x564867bc7350]&#10; --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x564867c24aef]&#10; --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]&#10; --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x564867cc2c65]&#10; --- /opt/venv/bin/python3(+0x3a2b46) [0x564867cf6b46]&#10; --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x564867c2487c]&#10; --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]&#10; --- /opt/venv/bin/python3(+0x2fd0b9) [0x564867c510b9]&#10; --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x564867c1e778]&#10; --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]&#10; --- /opt/venv/bin/python3(+0x273350) [0x564867bc7350]&#10; --- /opt/venv/bin/python3(+0x2fd0b9) [0x564867c510b9]&#10; --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x564867c1e5ff]&#10; --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]&#10; --- /opt/venv/bin/python3(+0x2fd0b9) [0x564867c510b9]&#10; --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x564867c1e778]&#10; --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]&#10; --- /opt/venv/bin/python3(+0x2fd0b9) [0x564867c510b9]&#10; --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x564867c1e5ff]&#10; --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]&#10; --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x564867c22c17]&#10; --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]&#10; --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x564867c24aef]&#10; --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]&#10; --- /opt/venv/bin/python3(+0x273350) [0x564867bc7350]&#10; --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x564867c24aef]&#10; --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]&#10; --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x564867cc2c65]&#10; --- /opt/venv/bin/python3(+0x3a2b46) [0x564867cf6b46]&#10; --- /opt/venv/bin/python3(+0x2fd2a2) [0x564867c512a2]&#10; --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x564867c1e5ff]&#10; --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]&#10; --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x564867c22c17]&#10; --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]&#10; --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x564867c24aef]&#10; --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]&#10; --- /opt/venv/bin/python3(+0x273350) [0x564867bc7350]&#10; --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x564867c24aef]&#10; --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]&#10; --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x564867cc2c65]&#10; --- /opt/venv/bin/python3(+0x3a2b46) [0x564867cf6b46]&#10; --- /opt/venv/bin/python3(+0x2fd2a2) [0x564867c512a2]&#10; --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x564867c1e5ff]&#10; --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]&#10; --- /opt/venv/bin/python3(+0x2fd0b9) [0x564867c510b9]&#10; --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x564867c1e778]&#10; --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]&#10; --- /opt/venv/bin/python3(+0x2fd0b9) [0x564867c510b9]&#10; --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x564867c1e778]&#10; --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]&#10; --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x564867c22c17]&#10; --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]&#10; --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x564867c24aef]">hf_config = Gemma4TextConfig {
+  "attention_bias": false,
+  "attention_dropout": 0.0,
+  "attention_k_eq_v": true,
+  "bos_token_id"...
+  "use_cache": true,
+  "use_double_wide_mlp": false,
+  "vocab_size": 262144,
+  "vocab_size_per_layer_input": 262144
+}
+
+profile_mesh_device = MeshDevice(1x4 grid, 4 devices)
+
+    @pytest.mark.skipif(
+        "GEMMA4_MULTICHIP_MLP_PREFILL_SWEEP" not in os.environ,
+        reason="set GEMMA4_MULTICHIP_MLP_PREFILL_SWEEP=1",
+    )
+    def test_multichip_mlp_prefill_placement_sweep(hf_config, profile_mesh_device):
+        """Compare the interleaved prefill path with legal DRAM-sharded grids."""
+        mesh_device = profile_mesh_device
+        layer_idx, _ = LAYER_KINDS[0]
+        decoder = _decoder(hf_config, mesh_device, layer_idx)
+        mlp = decoder.layer.shared_mlp
+        hidden = hf_config.hidden_size
+        rows = 128
+        torch.manual_seed(20262351)
+        hidden_input = _tt_input(torch.randn(1, rows, hidden, dtype=torch.bfloat16) * 0.02, mesh_device)
+
+        def interleaved_call():
+            mlp.is_decode = False
+            return mlp(hidden_input)
+
+        def sharded_call(num_cores):
+            policy = _mlp_geometry_policy(num_cores)
+            core_grid = ttnn.num_cores_to_corerangeset(
+                num_cores,
+                mesh_device.compute_with_storage_grid_size(),
+                row_wise=True,
+            )
+            memory_config = ttnn.create_sharded_memory_config(
+                shape=(rows, hidden // num_cores),
+                core_grid=core_grid,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            def program(in0_block_w, fused_activation=None):
+                return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                    in0_block_w=in0_block_w,
+                    per_core_M=rows // ttnn.TILE_SIZE,
+                    per_core_N=hidden // (ttnn.TILE_SIZE * num_cores),
+                    fused_activation=fused_activation,
+                )
+
+            sharded_input = ttnn.to_memory_config(hidden_input, memory_config)
+            up = ttnn.linear(
+                sharded_input,
+                mlp.up_decode,
+                memory_config=memory_config,
+                program_config=program(policy.gate_up_in0_block_w),
+                compute_kernel_config=mlp.gate_up_compute,
+            )
+            gate = ttnn.linear(
+                sharded_input,
+                mlp.gate_decode,
+                memory_config=memory_config,
+                program_config=program(
+                    policy.gate_up_in0_block_w,
+                    ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0),
+                ),
+                compute_kernel_config=mlp.gate_up_compute,
+            )
+            sharded_input.deallocate(True)
+            activated = ttnn.mul(gate, up, memory_config=memory_config)
+            gate.deallocate(True)
+            up.deallocate(True)
+            partial = ttnn.linear(
+                activated,
+                mlp.down_decode,
+                memory_config=memory_config,
+                program_config=program(policy.down_in0_block_w),
+                compute_kernel_config=mlp.down_compute,
+            )
+            activated.deallocate(True)
+            return mlp._reduce(partial)
+
+        def measure(call):
+            warm = call()
+            ttnn.synchronize_device(mesh_device)
+            warm.deallocate(True)
+            samples = []
+            for _ in range(12):
+                start = time.perf_counter_ns()
+                output = call()
+                ttnn.synchronize_device(mesh_device)
+                samples.append((time.perf_counter_ns() - start) / 1_000_000)
+                output.deallocate(True)
+            return samples
+
+        baseline = interleaved_call()
+        baseline_devices = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(baseline)]
+        baseline.deallocate(True)
+        baseline_samples = measure(interleaved_call)
+        candidates = []
+        for num_cores in (8, 12, 21, 24):
+&gt;           candidate = sharded_call(num_cores)
+
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py:839:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py:789: in sharded_call
+    up = ttnn.linear(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = FastOperation(python_fully_qualified_name='ttnn.linear', function=&lt;ttnn._ttnn.operations.matmul.linear_t object at 0x7...&lt;function default_postprocess_golden_function_outputs at 0x7fa52ce6a710&gt;, is_cpp_operation=True, is_experimental=False)
+function_args = (device_id: 1, MeshCoordinate([0, 0])
+ttnn.Tensor([[[[ 2.7710e-02,  7.7820e-03,  ...,  1.7090e-02,  5.7678e-03],
+     ...  0.0000,  ...,  0.0000,  0.0078]]]], shape=Shape([1, 1, 5376, 5376]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE))
+function_kwargs = {'compute_kernel_config': &lt;ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7fa5275f5d40&gt;, 'memory_c...ultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=7,per_core_M=4,per_core_N=21,fused_activation=std::nullopt)}
+cq_id = None, recording = False
+
+    def __call__(self, *function_args, **function_kwargs):
+        cq_id = None
+        if "queue_id" in function_kwargs:
+            cq_id = function_kwargs.pop("queue_id")
+        elif "cq_id" in function_kwargs:
+            cq_id = function_kwargs.pop("cq_id")
+
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        if recording:
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
+            ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+            input_tensors = get_all_tensors((function_args, function_kwargs))
+            set_tensor_id(input_tensors)
+
+        try:
+            if cq_id is None:
+&gt;               result = self.function(*function_args, **function_kwargs)
+E               RuntimeError: TT_FATAL @ /home/ubuntu/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:1371: M == 1
+E               info:
+E               currently only support in0 tensor height of tile height
+E               backtrace:
+E                --- /localdev/odjuricic/tt-metal/build/lib/_ttnncpp.so(+0x7c2dc9) [0x7fa5a5e39dc9]
+E                --- /localdev/odjuricic/tt-metal/build/lib/_ttnncpp.so(+0x188228d) [0x7fa5a6ef928d]
+E                --- ttnn::prim::MatmulDeviceOperation::validate_on_program_cache_miss(ttnn::prim::MatmulParams const&amp;, ttnn::prim::MatmulInputs const&amp;)
+E                --- /localdev/odjuricic/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0x29) [0x7fa5a6f01e89]
+E                --- /localdev/odjuricic/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x16e) [0x7fa5a6f00a2e]
+E                --- /localdev/odjuricic/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x4ea) [0x7fa5a6eff93a]
+E                --- ttnn::prim::matmul(tt::tt_metal::Tensor const&amp;, tt::tt_metal::Tensor const&amp;, std::optional&lt;tt::tt_metal::Tensor&gt; const&amp;, std::optional&lt;tt::tt_metal::Tensor&gt; const&amp;, ttnn::prim::MatmulParams const&amp;)
+E                --- /localdev/odjuricic/tt-metal/build/lib/_ttnncpp.so(+0x181bd61) [0x7fa5a6e92d61]
+E                --- /localdev/odjuricic/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKN2tt8tt_metal6TensorES6_RKSt8optionalIS5_EbbRKS7_IKNS3_12MemoryConfigEES7_IKNS3_8DataTypeEERKS7_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS7_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES7_IKNS_19ComputeKernelConfigEES7_IKNS_5types8CoreGridEERKS7_IKNS3_4TileEES7_IS4_ERKS7_IKNS3_12experimental20GlobalCircularBufferEERKS7_IN4ttsl10StrongTypeIhNS3_14SubDeviceIdTagEEEE+0x2e6) [0x7fa5a6e94456]
+E                --- /localdev/odjuricic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4daac8) [0x7fa5a79c6ac8]
+E                --- /localdev/odjuricic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4da7ae) [0x7fa5a79c67ae]
+E                --- /localdev/odjuricic/tt-metal/ttnn/ttnn/_ttnn.so(+0x312325) [0x7fa5a77fe325]
+E                --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x564867cc2c65]
+E                --- /opt/venv/bin/python3(+0x3a2b46) [0x564867cf6b46]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x564867c2487c]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]
+E                --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x564867cc2c65]
+E                --- /opt/venv/bin/python3(+0x3a2b46) [0x564867cf6b46]
+E                --- /opt/venv/bin/python3(+0x2fd2a2) [0x564867c512a2]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x564867c1e5ff]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]
+E                --- /opt/venv/bin/python3(+0x2fd0b9) [0x564867c510b9]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x564867c1e778]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x36749) [0x564867c50e59]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x564867c22c17]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x564867c24aef]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]
+E                --- /opt/venv/bin/python3(+0x273350) [0x564867bc7350]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x564867c24aef]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]
+E                --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x564867cc2c65]
+E                --- /opt/venv/bin/python3(+0x3a2b46) [0x564867cf6b46]
+E                --- /opt/venv/bin/python3(+0x2fd2a2) [0x564867c512a2]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x564867c1e5ff]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x564867c23034]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x564867c22c17]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x564867c24aef]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]
+E                --- /opt/venv/bin/python3(+0x273350) [0x564867bc7350]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x564867c24aef]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]
+E                --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x564867cc2c65]
+E                --- /opt/venv/bin/python3(+0x3a2b46) [0x564867cf6b46]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x564867c2487c]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]
+E                --- /opt/venv/bin/python3(+0x2fd0b9) [0x564867c510b9]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x564867c1e778]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]
+E                --- /opt/venv/bin/python3(+0x273350) [0x564867bc7350]
+E                --- /opt/venv/bin/python3(+0x2fd0b9) [0x564867c510b9]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x564867c1e5ff]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]
+E                --- /opt/venv/bin/python3(+0x2fd0b9) [0x564867c510b9]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x564867c1e778]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]
+E                --- /opt/venv/bin/python3(+0x2fd0b9) [0x564867c510b9]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x564867c1e5ff]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x564867c22c17]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x564867c24aef]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]
+E                --- /opt/venv/bin/python3(+0x273350) [0x564867bc7350]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x564867c24aef]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]
+E                --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x564867cc2c65]
+E                --- /opt/venv/bin/python3(+0x3a2b46) [0x564867cf6b46]
+E                --- /opt/venv/bin/python3(+0x2fd2a2) [0x564867c512a2]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x564867c1e5ff]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x564867c22c17]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x564867c24aef]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]
+E                --- /opt/venv/bin/python3(+0x273350) [0x564867bc7350]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x564867c24aef]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]
+E                --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x564867cc2c65]
+E                --- /opt/venv/bin/python3(+0x3a2b46) [0x564867cf6b46]
+E                --- /opt/venv/bin/python3(+0x2fd2a2) [0x564867c512a2]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x564867c1e5ff]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]
+E                --- /opt/venv/bin/python3(+0x2fd0b9) [0x564867c510b9]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x564867c1e778]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]
+E                --- /opt/venv/bin/python3(+0x2fd0b9) [0x564867c510b9]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x564867c1e778]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x564867c22c17]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x564867bc5352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x564867c24aef]
+
+ttnn/ttnn/decorators.py:473: RuntimeError</failure></testcase></testsuite></testsuites>

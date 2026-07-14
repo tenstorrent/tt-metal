@@ -1,0 +1,37 @@
+{
+  "stage": "04-multichip-decoder",
+  "model": "google/gemma-4-31B",
+  "base_git_head": "702a45e2805da8816d9896b04483f7b3bccb5472",
+  "hardware": {
+    "devices": "4x Blackhole P150b",
+    "mesh": [1, 4],
+    "firmware": "19.9.0"
+  },
+  "source_sha256": {
+    "tt/multichip_decoder.py": "79aaaa757efd1ac5955925bd6874678bc731242d1118c66c0a5d9f03bebf988d",
+    "tests/test_multichip_decoder.py": "31e9dc8d740e32fd7568a01e7e013805228e040cfc61431bf5b904eb224c5b6a",
+    "doc/context_contract.json": "4d712e2c1b1fa3da189b5785a7b1357c199714da39dbb0283c1ad959f5914d3c"
+  },
+  "evidence_sha256": {
+    "evidence/final_suite.xml": "a510469fed1084c17d2e322bf2030ab1599eb1d00015b01e94f53c9299e65329",
+    "evidence/exact_context.xml": "a64b9f25539e3401616cf9341c55655c828fa5279aa2e6f0245086fc5379755c",
+    "evidence/watcher.xml": "94f30aca4d8a699aa91bba9cf4eb88be43abe6523192d6e245f43ed8733fa99b",
+    "evidence/watcher_device.log": "bfa4c6bb9f812f8a1cfcc919709ff24dfbfe717d0a6ba97308d899d448f4cc2a",
+    "evidence/final_latency.xml": "186c07cd54f1f29eb262e4320c436ffe7b7e3ae187263529a1e3014241bf56f3",
+    "evidence/mlp_geometry_sweep.xml": "adc4eac4717254ae9279cf05e9cd0fc0d6102fd88c79d47dd3fedaa64f59e6ec",
+    "evidence/mlp_prefill_sweep.xml": "dd239ced70b1600d3391ae107f3f004c7f59c6b3f16f47de262834baf94a8c81",
+    "evidence/fractured_boundary.xml": "cffe1114d375754b79fbd0597e9bfdefbb13c966c4d68d77a71cf84a59d22c78"
+  },
+  "commands": {
+    "acceptance": "pytest -q -s models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py --junitxml=models/autoports/google_gemma_4_31b/doc/multichip_decoder/evidence/final_suite.xml",
+    "exact_context": "GEMMA4_MULTICHIP_EXACT_CONTEXT=1 pytest -q -s models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py -k advertised_context_traced_decode --junitxml=models/autoports/google_gemma_4_31b/doc/multichip_decoder/evidence/exact_context.xml",
+    "benchmark": "GEMMA4_MULTICHIP_BENCH=1 pytest -q -s models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py -k 'prefill_matches_optimized_baseline or warmed_latency' --junitxml=models/autoports/google_gemma_4_31b/doc/multichip_decoder/evidence/final_latency.xml",
+    "watcher": "TT_METAL_WATCHER=10 TT_METAL_WATCHER_NOINLINE=1 TT_METAL_WATCHER_DISABLE_ETH=1 pytest -q -s models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py -k paged_decode_trace_matches --junitxml=models/autoports/google_gemma_4_31b/doc/multichip_decoder/evidence/watcher.xml"
+  },
+  "results": {
+    "acceptance": "11 passed, 15 opt-in skips",
+    "exact_context": "2 passed at absolute position 262143",
+    "watcher": "2 passed; worker and NoC checks enabled; clean teardown",
+    "review": "clean-pass"
+  }
+}

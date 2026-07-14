@@ -1,0 +1,806 @@
+mkdir -p failed for path /home/odjuricic/.config/matplotlib: [Errno 13] Permission denied: '/home/odjuricic/.config/matplotlib'
+Matplotlib created a temporary cache directory at /tmp/matplotlib-vdc53t5s because there was an issue with the default path (/home/odjuricic/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+2026-07-14 06:32:22.283 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/odjuricic/.cache/ttnn,model_cache_path=/home/odjuricic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /opt/venv/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/odjuricic/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, anyio-4.14.1, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 19 items / 15 deselected / 4 selected
+
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_paged_decode_trace_matches_optimized_baseline[0-sliding_attention] 2026-07-14 06:32:25.055 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-14 06:32:25.055 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-14 06:32:25.055 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-14 06:32:25.055 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-14 06:32:25.057 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-14 06:32:25.057 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-14 06:32:25.060 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-14 06:32:25.227 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[1, 2, 3, 0] and remote chip ids {} (cluster.cpp:168)
+2026-07-14 06:32:25.227 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-14 06:32:25.227 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-14 06:32:25.227 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-14 06:32:25.230 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-14 06:32:25.486 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-14 06:32:26.098 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-14 06:32:26.098 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-14 06:32:26.098 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-14 06:32:26.098 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-14 06:32:26.098 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-14 06:32:26.098 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-14 06:32:26.181 | info     |       LLRuntime | Watcher log file: /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/multichip_decoder/watcher_final/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-14 06:32:26.181 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-14 06:32:26.181 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-07-14 06:32:26.181 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-07-14 06:32:26.181 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-07-14 06:32:26.181 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:547)
+2026-07-14 06:32:26.181 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-14 06:32:26.182 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:32:26.187 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:32:26.192 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:32:26.196 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:32:26.251 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002114624_memory' (shm_resource_tracker.cpp:282)
+2026-07-14 06:32:26.820 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349981 GHz, device_time_at_sync=23029405298229 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-14 06:32:36.210 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:32:36.215 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:32:36.220 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:32:36.225 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:32:46.239 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:32:46.244 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:32:46.249 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:32:46.254 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:32:56.267 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:32:56.272 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:32:56.277 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:32:56.282 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:33:06.295 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:33:06.300 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:33:06.305 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:33:06.310 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:33:16.323 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:33:16.328 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:33:16.333 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:33:16.338 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:33:26.351 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:33:26.357 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:33:26.362 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:33:26.367 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:33:36.381 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:33:36.386 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:33:36.391 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:33:36.396 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:33:46.408 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:33:46.414 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:33:46.419 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:33:46.423 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:33:56.437 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:33:56.442 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:33:56.447 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:33:56.452 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:34:06.466 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:34:06.471 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:34:06.476 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:34:06.481 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:34:16.494 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:34:16.499 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:34:16.504 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:34:16.509 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:34:21.344 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:281)
+2026-07-14 06:34:21.344 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-14 06:34:21.344 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-14 06:34:21.345 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-14 06:34:21.345 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-14 06:34:21.346 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-14 06:34:21.346 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-14 06:34:21.346 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-07-14 06:34:21.346 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-07-14 06:34:21.346 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-07-14 06:34:21.346 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-07-14 06:34:21.346 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-07-14 06:34:21.441 | info     |       LLRuntime | Watcher log file: /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/multichip_decoder/watcher_final/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-14 06:34:21.442 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-14 06:34:21.442 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-07-14 06:34:21.442 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-07-14 06:34:21.442 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-07-14 06:34:21.442 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:547)
+2026-07-14 06:34:21.442 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-14 06:34:21.445 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-14 06:34:21.447 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-14 06:34:21.453 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-14 06:34:21.457 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-14 06:34:26.750 | critical |          Always | TT_FATAL: Program size (27792) too large for kernel config buffer (25600) on ACTIVE_ETH (assert.hpp:104)
+ERROR
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_paged_decode_trace_matches_optimized_baseline[5-full_attention] ERROR
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_batch32_nonaligned_prefill_and_traced_decode[0-sliding_attention] ERROR
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_batch32_nonaligned_prefill_and_traced_decode[5-full_attention] ERROR
+
+==================================== ERRORS ====================================
+_ ERROR at setup of test_multichip_paged_decode_trace_matches_optimized_baseline[0-sliding_attention] _
+
+optimized_baseline = {('full_attention', 'batch32_decode33'): tensor([[[ 0.0298,  0.0018, -0.0535,  ..., -0.0058, -0.0073, -0.0017]],
+
+    ...820,  ...,  0.0566, -0.0025, -0.0021]],
+
+        [[-0.0359,  0.0002,  0.0118,  ..., -0.0135, -0.0139,  0.0233]]]), ...}
+
+    @pytest.fixture(scope="module")
+    def mesh_device(optimized_baseline):
+        if ttnn.get_num_devices() < TP_SIZE:
+            pytest.skip("Gemma 4 multichip decoder requires four local devices")
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+>       mesh = ttnn.open_mesh_device(ttnn.MeshShape(*TARGET_MESH_SHAPE), trace_region_size=96 << 20)
+
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py:327:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+mesh_shape = MeshShape([1, 4]), l1_small_size = 0, trace_region_size = 100663296
+num_command_queues = 1, dispatch_core_config = None, offset = None
+physical_device_ids = [], worker_l1_size = 0
+
+    def open_mesh_device(
+        mesh_shape: ttnn.MeshShape = None,
+        l1_small_size: int = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE,
+        trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
+        num_command_queues: int = 1,
+        dispatch_core_config: ttnn.DispatchCoreConfig = None,
+        offset: Optional[ttnn.MeshCoordinate] = None,
+        physical_device_ids: List[int] = [],
+        worker_l1_size: int = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+    ):
+        """
+        Open a mesh device with the specified configuration.
+
+        Args:
+            mesh_shape (ttnn.MeshShape, optional): The shape of the mesh device. Defaults to the global shape of the system mesh.
+            l1_small_size (int, optional): Size of the L1 small memory. Defaults to ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE.
+            trace_region_size (int, optional): Size of the trace region. Defaults to ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE.
+            num_command_queues (int, optional): Number of command queues. Defaults to 1.
+            dispatch_core_type (int, optional): Type of dispatch core. Defaults to DispatchCoreType.WORKER.
+            offset (ttnn.MeshCoordinate, optional): Offset in logical mesh coordinates for the mesh device. Defaults to None.
+            physical_device_ids (List[int], optional): List of physical device IDs to use. Defaults to [].
+            worker_l1_size (int, optional): Size of the usable worker L1 memory. Defaults to ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE.
+
+        Returns:
+            ttnn._ttnn.multi_device.MeshDevice: The opened mesh device.
+
+        """
+>       return ttnn._ttnn.multi_device.open_mesh_device(
+            l1_small_size=l1_small_size,
+            trace_region_size=trace_region_size,
+            num_command_queues=num_command_queues,
+            dispatch_core_config=dispatch_core_config or ttnn.DispatchCoreConfig(),
+            mesh_shape=mesh_shape,
+            offset=offset,
+            physical_device_ids=physical_device_ids,
+            worker_l1_size=worker_l1_size,
+        )
+E       RuntimeError: TT_FATAL @ /home/ubuntu/tt-metal/tt_metal/impl/program/program.cpp:2483: state.offset <= max_size
+E       info:
+E       Program size (27792) too large for kernel config buffer (25600) on ACTIVE_ETH
+E       backtrace:
+E        --- /localdev/odjuricic/tt-metal/build/lib/libtt_metal.so(+0x92c71a) [0x7f35d120a71a]
+E        --- /localdev/odjuricic/tt-metal/build/lib/libtt_metal.so(_ZN2tt8tt_metal6detail11ProgramImpl24finalize_program_offsetsEN4ttsl10StrongTypeIiNS0_12ContextIdTagEEEPNS0_7IDeviceERKSt8functionIFRSt13unordered_mapIjSt10shared_ptrINS0_6KernelEESt4hashIjESt8equal_toIjESaISt4pairIKjSD_EEEjEERKS9_IFRSt6vectorISB_INS0_11KernelGroupEESaISU_EEjEERKS9_IFRKSS_INS0_9SemaphoreESaIS12_EEvEESt4spanIPS2_Lm18446744073709551615EE+0xa6e) [0x7f35d11e8ebe]
+E        --- tt::tt_metal::detail::ProgramImpl::finalize_offsets(tt::tt_metal::IDevice*)
+E        --- tt::tt_metal::Device::configure_fabric()
+E        --- tt::tt_metal::FabricFirmwareInitializer::compile_and_configure_fabric()
+E        --- tt::tt_metal::FabricFirmwareInitializer::init(std::vector<tt::tt_metal::Device*, std::allocator<tt::tt_metal::Device*> > const&, std::unordered_set<tt::tt_metal::InitializerKey, std::hash<tt::tt_metal::InitializerKey>, std::equal_to<tt::tt_metal::InitializerKey>, std::allocator<tt::tt_metal::InitializerKey> > const&)
+E        --- tt::tt_metal::DeviceManager::initialize_fabric_and_dispatch_fw()
+E        --- tt::tt_metal::distributed::MeshDeviceImpl::create(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>, tt::tt_metal::distributed::MeshDeviceConfig const&, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long)
+E        --- tt::tt_metal::distributed::MeshDevice::create(tt::tt_metal::distributed::MeshDeviceConfig const&, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long)
+E        --- ttnn::distributed::open_mesh_device(unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::optional<tt::tt_metal::distributed::MeshShape> const&, std::optional<tt::tt_metal::distributed::MeshCoordinate> const&, std::vector<int, std::allocator<int> > const&, unsigned long)
+E        --- /localdev/odjuricic/tt-metal/ttnn/ttnn/_ttnn.so(+0x7ef32e) [0x7f35d42db32e]
+E        --- /localdev/odjuricic/tt-metal/ttnn/ttnn/_ttnn.so(+0x312325) [0x7f35d3dfe325]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x563e0ae565ff]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x563e0ae565ff]
+E        --- /opt/venv/bin/python3(+0x2779e8) [0x563e0ae039e8]
+E        --- /opt/venv/bin/python3(+0x2c40c9) [0x563e0ae500c9]
+E        --- /opt/venv/bin/python3(+0x29259f) [0x563e0ae1e59f]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x563e0ae56778]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x563e0ae56778]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x563e0ae5ac17]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x273350) [0x563e0adff350]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x563e0aefac65]
+E        --- /opt/venv/bin/python3(+0x3a2b46) [0x563e0af2eb46]
+E        --- /opt/venv/bin/python3(+0x2fd2a2) [0x563e0ae892a2]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x563e0ae565ff]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x273350) [0x563e0adff350]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x563e0ae565ff]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x563e0ae5b034]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x563e0ae5b034]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x563e0ae5b034]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x563e0ae5b034]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x563e0ae5b034]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x563e0ae5ac17]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x273350) [0x563e0adff350]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x563e0aefac65]
+E        --- /opt/venv/bin/python3(+0x3a2b46) [0x563e0af2eb46]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x563e0ae5c87c]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x563e0ae56778]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x273350) [0x563e0adff350]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x563e0ae565ff]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x563e0ae56778]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x563e0ae565ff]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x563e0ae5ac17]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x273350) [0x563e0adff350]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x563e0aefac65]
+E        --- /opt/venv/bin/python3(+0x3a2b46) [0x563e0af2eb46]
+E        --- /opt/venv/bin/python3(+0x2fd2a2) [0x563e0ae892a2]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x563e0ae565ff]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x563e0ae5ac17]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x273350) [0x563e0adff350]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x563e0aefac65]
+E        --- /opt/venv/bin/python3(+0x3a2b46) [0x563e0af2eb46]
+
+ttnn/ttnn/distributed/distributed.py:671: RuntimeError
+_ ERROR at setup of test_multichip_paged_decode_trace_matches_optimized_baseline[5-full_attention] _
+
+optimized_baseline = {('full_attention', 'batch32_decode33'): tensor([[[ 0.0298,  0.0018, -0.0535,  ..., -0.0058, -0.0073, -0.0017]],
+
+    ...820,  ...,  0.0566, -0.0025, -0.0021]],
+
+        [[-0.0359,  0.0002,  0.0118,  ..., -0.0135, -0.0139,  0.0233]]]), ...}
+
+    @pytest.fixture(scope="module")
+    def mesh_device(optimized_baseline):
+        if ttnn.get_num_devices() < TP_SIZE:
+            pytest.skip("Gemma 4 multichip decoder requires four local devices")
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+>       mesh = ttnn.open_mesh_device(ttnn.MeshShape(*TARGET_MESH_SHAPE), trace_region_size=96 << 20)
+
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py:327:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+mesh_shape = MeshShape([1, 4]), l1_small_size = 0, trace_region_size = 100663296
+num_command_queues = 1, dispatch_core_config = None, offset = None
+physical_device_ids = [], worker_l1_size = 0
+
+    def open_mesh_device(
+        mesh_shape: ttnn.MeshShape = None,
+        l1_small_size: int = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE,
+        trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
+        num_command_queues: int = 1,
+        dispatch_core_config: ttnn.DispatchCoreConfig = None,
+        offset: Optional[ttnn.MeshCoordinate] = None,
+        physical_device_ids: List[int] = [],
+        worker_l1_size: int = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+    ):
+        """
+        Open a mesh device with the specified configuration.
+
+        Args:
+            mesh_shape (ttnn.MeshShape, optional): The shape of the mesh device. Defaults to the global shape of the system mesh.
+            l1_small_size (int, optional): Size of the L1 small memory. Defaults to ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE.
+            trace_region_size (int, optional): Size of the trace region. Defaults to ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE.
+            num_command_queues (int, optional): Number of command queues. Defaults to 1.
+            dispatch_core_type (int, optional): Type of dispatch core. Defaults to DispatchCoreType.WORKER.
+            offset (ttnn.MeshCoordinate, optional): Offset in logical mesh coordinates for the mesh device. Defaults to None.
+            physical_device_ids (List[int], optional): List of physical device IDs to use. Defaults to [].
+            worker_l1_size (int, optional): Size of the usable worker L1 memory. Defaults to ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE.
+
+        Returns:
+            ttnn._ttnn.multi_device.MeshDevice: The opened mesh device.
+
+        """
+>       return ttnn._ttnn.multi_device.open_mesh_device(
+            l1_small_size=l1_small_size,
+            trace_region_size=trace_region_size,
+            num_command_queues=num_command_queues,
+            dispatch_core_config=dispatch_core_config or ttnn.DispatchCoreConfig(),
+            mesh_shape=mesh_shape,
+            offset=offset,
+            physical_device_ids=physical_device_ids,
+            worker_l1_size=worker_l1_size,
+        )
+E       RuntimeError: TT_FATAL @ /home/ubuntu/tt-metal/tt_metal/impl/program/program.cpp:2483: state.offset <= max_size
+E       info:
+E       Program size (27792) too large for kernel config buffer (25600) on ACTIVE_ETH
+E       backtrace:
+E        --- /localdev/odjuricic/tt-metal/build/lib/libtt_metal.so(+0x92c71a) [0x7f35d120a71a]
+E        --- /localdev/odjuricic/tt-metal/build/lib/libtt_metal.so(_ZN2tt8tt_metal6detail11ProgramImpl24finalize_program_offsetsEN4ttsl10StrongTypeIiNS0_12ContextIdTagEEEPNS0_7IDeviceERKSt8functionIFRSt13unordered_mapIjSt10shared_ptrINS0_6KernelEESt4hashIjESt8equal_toIjESaISt4pairIKjSD_EEEjEERKS9_IFRSt6vectorISB_INS0_11KernelGroupEESaISU_EEjEERKS9_IFRKSS_INS0_9SemaphoreESaIS12_EEvEESt4spanIPS2_Lm18446744073709551615EE+0xa6e) [0x7f35d11e8ebe]
+E        --- tt::tt_metal::detail::ProgramImpl::finalize_offsets(tt::tt_metal::IDevice*)
+E        --- tt::tt_metal::Device::configure_fabric()
+E        --- tt::tt_metal::FabricFirmwareInitializer::compile_and_configure_fabric()
+E        --- tt::tt_metal::FabricFirmwareInitializer::init(std::vector<tt::tt_metal::Device*, std::allocator<tt::tt_metal::Device*> > const&, std::unordered_set<tt::tt_metal::InitializerKey, std::hash<tt::tt_metal::InitializerKey>, std::equal_to<tt::tt_metal::InitializerKey>, std::allocator<tt::tt_metal::InitializerKey> > const&)
+E        --- tt::tt_metal::DeviceManager::initialize_fabric_and_dispatch_fw()
+E        --- tt::tt_metal::distributed::MeshDeviceImpl::create(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>, tt::tt_metal::distributed::MeshDeviceConfig const&, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long)
+E        --- tt::tt_metal::distributed::MeshDevice::create(tt::tt_metal::distributed::MeshDeviceConfig const&, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long)
+E        --- ttnn::distributed::open_mesh_device(unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::optional<tt::tt_metal::distributed::MeshShape> const&, std::optional<tt::tt_metal::distributed::MeshCoordinate> const&, std::vector<int, std::allocator<int> > const&, unsigned long)
+E        --- /localdev/odjuricic/tt-metal/ttnn/ttnn/_ttnn.so(+0x7ef32e) [0x7f35d42db32e]
+E        --- /localdev/odjuricic/tt-metal/ttnn/ttnn/_ttnn.so(+0x312325) [0x7f35d3dfe325]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x563e0ae565ff]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x563e0ae565ff]
+E        --- /opt/venv/bin/python3(+0x2779e8) [0x563e0ae039e8]
+E        --- /opt/venv/bin/python3(+0x2c40c9) [0x563e0ae500c9]
+E        --- /opt/venv/bin/python3(+0x29259f) [0x563e0ae1e59f]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x563e0ae56778]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x563e0ae56778]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x563e0ae5ac17]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x273350) [0x563e0adff350]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x563e0aefac65]
+E        --- /opt/venv/bin/python3(+0x3a2b46) [0x563e0af2eb46]
+E        --- /opt/venv/bin/python3(+0x2fd2a2) [0x563e0ae892a2]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x563e0ae565ff]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x273350) [0x563e0adff350]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x563e0ae565ff]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x563e0ae5b034]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x563e0ae5b034]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x563e0ae5b034]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x563e0ae5b034]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x563e0ae5b034]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x563e0ae5ac17]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x273350) [0x563e0adff350]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x563e0aefac65]
+E        --- /opt/venv/bin/python3(+0x3a2b46) [0x563e0af2eb46]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x563e0ae5c87c]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x563e0ae56778]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x273350) [0x563e0adff350]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x563e0ae565ff]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x563e0ae56778]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x563e0ae565ff]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x563e0ae5ac17]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x273350) [0x563e0adff350]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x563e0aefac65]
+E        --- /opt/venv/bin/python3(+0x3a2b46) [0x563e0af2eb46]
+E        --- /opt/venv/bin/python3(+0x2fd2a2) [0x563e0ae892a2]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x563e0ae565ff]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x563e0ae5ac17]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x273350) [0x563e0adff350]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x563e0aefac65]
+E        --- /opt/venv/bin/python3(+0x3a2b46) [0x563e0af2eb46]
+
+ttnn/ttnn/distributed/distributed.py:671: RuntimeError
+_ ERROR at setup of test_multichip_batch32_nonaligned_prefill_and_traced_decode[0-sliding_attention] _
+
+optimized_baseline = {('full_attention', 'batch32_decode33'): tensor([[[ 0.0298,  0.0018, -0.0535,  ..., -0.0058, -0.0073, -0.0017]],
+
+    ...820,  ...,  0.0566, -0.0025, -0.0021]],
+
+        [[-0.0359,  0.0002,  0.0118,  ..., -0.0135, -0.0139,  0.0233]]]), ...}
+
+    @pytest.fixture(scope="module")
+    def mesh_device(optimized_baseline):
+        if ttnn.get_num_devices() < TP_SIZE:
+            pytest.skip("Gemma 4 multichip decoder requires four local devices")
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+>       mesh = ttnn.open_mesh_device(ttnn.MeshShape(*TARGET_MESH_SHAPE), trace_region_size=96 << 20)
+
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py:327:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+mesh_shape = MeshShape([1, 4]), l1_small_size = 0, trace_region_size = 100663296
+num_command_queues = 1, dispatch_core_config = None, offset = None
+physical_device_ids = [], worker_l1_size = 0
+
+    def open_mesh_device(
+        mesh_shape: ttnn.MeshShape = None,
+        l1_small_size: int = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE,
+        trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
+        num_command_queues: int = 1,
+        dispatch_core_config: ttnn.DispatchCoreConfig = None,
+        offset: Optional[ttnn.MeshCoordinate] = None,
+        physical_device_ids: List[int] = [],
+        worker_l1_size: int = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+    ):
+        """
+        Open a mesh device with the specified configuration.
+
+        Args:
+            mesh_shape (ttnn.MeshShape, optional): The shape of the mesh device. Defaults to the global shape of the system mesh.
+            l1_small_size (int, optional): Size of the L1 small memory. Defaults to ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE.
+            trace_region_size (int, optional): Size of the trace region. Defaults to ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE.
+            num_command_queues (int, optional): Number of command queues. Defaults to 1.
+            dispatch_core_type (int, optional): Type of dispatch core. Defaults to DispatchCoreType.WORKER.
+            offset (ttnn.MeshCoordinate, optional): Offset in logical mesh coordinates for the mesh device. Defaults to None.
+            physical_device_ids (List[int], optional): List of physical device IDs to use. Defaults to [].
+            worker_l1_size (int, optional): Size of the usable worker L1 memory. Defaults to ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE.
+
+        Returns:
+            ttnn._ttnn.multi_device.MeshDevice: The opened mesh device.
+
+        """
+>       return ttnn._ttnn.multi_device.open_mesh_device(
+            l1_small_size=l1_small_size,
+            trace_region_size=trace_region_size,
+            num_command_queues=num_command_queues,
+            dispatch_core_config=dispatch_core_config or ttnn.DispatchCoreConfig(),
+            mesh_shape=mesh_shape,
+            offset=offset,
+            physical_device_ids=physical_device_ids,
+            worker_l1_size=worker_l1_size,
+        )
+E       RuntimeError: TT_FATAL @ /home/ubuntu/tt-metal/tt_metal/impl/program/program.cpp:2483: state.offset <= max_size
+E       info:
+E       Program size (27792) too large for kernel config buffer (25600) on ACTIVE_ETH
+E       backtrace:
+E        --- /localdev/odjuricic/tt-metal/build/lib/libtt_metal.so(+0x92c71a) [0x7f35d120a71a]
+E        --- /localdev/odjuricic/tt-metal/build/lib/libtt_metal.so(_ZN2tt8tt_metal6detail11ProgramImpl24finalize_program_offsetsEN4ttsl10StrongTypeIiNS0_12ContextIdTagEEEPNS0_7IDeviceERKSt8functionIFRSt13unordered_mapIjSt10shared_ptrINS0_6KernelEESt4hashIjESt8equal_toIjESaISt4pairIKjSD_EEEjEERKS9_IFRSt6vectorISB_INS0_11KernelGroupEESaISU_EEjEERKS9_IFRKSS_INS0_9SemaphoreESaIS12_EEvEESt4spanIPS2_Lm18446744073709551615EE+0xa6e) [0x7f35d11e8ebe]
+E        --- tt::tt_metal::detail::ProgramImpl::finalize_offsets(tt::tt_metal::IDevice*)
+E        --- tt::tt_metal::Device::configure_fabric()
+E        --- tt::tt_metal::FabricFirmwareInitializer::compile_and_configure_fabric()
+E        --- tt::tt_metal::FabricFirmwareInitializer::init(std::vector<tt::tt_metal::Device*, std::allocator<tt::tt_metal::Device*> > const&, std::unordered_set<tt::tt_metal::InitializerKey, std::hash<tt::tt_metal::InitializerKey>, std::equal_to<tt::tt_metal::InitializerKey>, std::allocator<tt::tt_metal::InitializerKey> > const&)
+E        --- tt::tt_metal::DeviceManager::initialize_fabric_and_dispatch_fw()
+E        --- tt::tt_metal::distributed::MeshDeviceImpl::create(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>, tt::tt_metal::distributed::MeshDeviceConfig const&, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long)
+E        --- tt::tt_metal::distributed::MeshDevice::create(tt::tt_metal::distributed::MeshDeviceConfig const&, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long)
+E        --- ttnn::distributed::open_mesh_device(unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::optional<tt::tt_metal::distributed::MeshShape> const&, std::optional<tt::tt_metal::distributed::MeshCoordinate> const&, std::vector<int, std::allocator<int> > const&, unsigned long)
+E        --- /localdev/odjuricic/tt-metal/ttnn/ttnn/_ttnn.so(+0x7ef32e) [0x7f35d42db32e]
+E        --- /localdev/odjuricic/tt-metal/ttnn/ttnn/_ttnn.so(+0x312325) [0x7f35d3dfe325]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x563e0ae565ff]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x563e0ae565ff]
+E        --- /opt/venv/bin/python3(+0x2779e8) [0x563e0ae039e8]
+E        --- /opt/venv/bin/python3(+0x2c40c9) [0x563e0ae500c9]
+E        --- /opt/venv/bin/python3(+0x29259f) [0x563e0ae1e59f]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x563e0ae56778]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x563e0ae56778]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x563e0ae5ac17]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x273350) [0x563e0adff350]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x563e0aefac65]
+E        --- /opt/venv/bin/python3(+0x3a2b46) [0x563e0af2eb46]
+E        --- /opt/venv/bin/python3(+0x2fd2a2) [0x563e0ae892a2]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x563e0ae565ff]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x273350) [0x563e0adff350]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x563e0ae565ff]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x563e0ae5b034]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x563e0ae5b034]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x563e0ae5b034]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x563e0ae5b034]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x563e0ae5b034]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x563e0ae5ac17]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x273350) [0x563e0adff350]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x563e0aefac65]
+E        --- /opt/venv/bin/python3(+0x3a2b46) [0x563e0af2eb46]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x563e0ae5c87c]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x563e0ae56778]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x273350) [0x563e0adff350]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x563e0ae565ff]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x563e0ae56778]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x563e0ae565ff]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x563e0ae5ac17]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x273350) [0x563e0adff350]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x563e0aefac65]
+E        --- /opt/venv/bin/python3(+0x3a2b46) [0x563e0af2eb46]
+E        --- /opt/venv/bin/python3(+0x2fd2a2) [0x563e0ae892a2]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x563e0ae565ff]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x563e0ae5ac17]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x273350) [0x563e0adff350]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x563e0aefac65]
+E        --- /opt/venv/bin/python3(+0x3a2b46) [0x563e0af2eb46]
+
+ttnn/ttnn/distributed/distributed.py:671: RuntimeError
+_ ERROR at setup of test_multichip_batch32_nonaligned_prefill_and_traced_decode[5-full_attention] _
+
+optimized_baseline = {('full_attention', 'batch32_decode33'): tensor([[[ 0.0298,  0.0018, -0.0535,  ..., -0.0058, -0.0073, -0.0017]],
+
+    ...820,  ...,  0.0566, -0.0025, -0.0021]],
+
+        [[-0.0359,  0.0002,  0.0118,  ..., -0.0135, -0.0139,  0.0233]]]), ...}
+
+    @pytest.fixture(scope="module")
+    def mesh_device(optimized_baseline):
+        if ttnn.get_num_devices() < TP_SIZE:
+            pytest.skip("Gemma 4 multichip decoder requires four local devices")
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+>       mesh = ttnn.open_mesh_device(ttnn.MeshShape(*TARGET_MESH_SHAPE), trace_region_size=96 << 20)
+
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py:327:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+mesh_shape = MeshShape([1, 4]), l1_small_size = 0, trace_region_size = 100663296
+num_command_queues = 1, dispatch_core_config = None, offset = None
+physical_device_ids = [], worker_l1_size = 0
+
+    def open_mesh_device(
+        mesh_shape: ttnn.MeshShape = None,
+        l1_small_size: int = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE,
+        trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
+        num_command_queues: int = 1,
+        dispatch_core_config: ttnn.DispatchCoreConfig = None,
+        offset: Optional[ttnn.MeshCoordinate] = None,
+        physical_device_ids: List[int] = [],
+        worker_l1_size: int = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+    ):
+        """
+        Open a mesh device with the specified configuration.
+
+        Args:
+            mesh_shape (ttnn.MeshShape, optional): The shape of the mesh device. Defaults to the global shape of the system mesh.
+            l1_small_size (int, optional): Size of the L1 small memory. Defaults to ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE.
+            trace_region_size (int, optional): Size of the trace region. Defaults to ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE.
+            num_command_queues (int, optional): Number of command queues. Defaults to 1.
+            dispatch_core_type (int, optional): Type of dispatch core. Defaults to DispatchCoreType.WORKER.
+            offset (ttnn.MeshCoordinate, optional): Offset in logical mesh coordinates for the mesh device. Defaults to None.
+            physical_device_ids (List[int], optional): List of physical device IDs to use. Defaults to [].
+            worker_l1_size (int, optional): Size of the usable worker L1 memory. Defaults to ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE.
+
+        Returns:
+            ttnn._ttnn.multi_device.MeshDevice: The opened mesh device.
+
+        """
+>       return ttnn._ttnn.multi_device.open_mesh_device(
+            l1_small_size=l1_small_size,
+            trace_region_size=trace_region_size,
+            num_command_queues=num_command_queues,
+            dispatch_core_config=dispatch_core_config or ttnn.DispatchCoreConfig(),
+            mesh_shape=mesh_shape,
+            offset=offset,
+            physical_device_ids=physical_device_ids,
+            worker_l1_size=worker_l1_size,
+        )
+E       RuntimeError: TT_FATAL @ /home/ubuntu/tt-metal/tt_metal/impl/program/program.cpp:2483: state.offset <= max_size
+E       info:
+E       Program size (27792) too large for kernel config buffer (25600) on ACTIVE_ETH
+E       backtrace:
+E        --- /localdev/odjuricic/tt-metal/build/lib/libtt_metal.so(+0x92c71a) [0x7f35d120a71a]
+E        --- /localdev/odjuricic/tt-metal/build/lib/libtt_metal.so(_ZN2tt8tt_metal6detail11ProgramImpl24finalize_program_offsetsEN4ttsl10StrongTypeIiNS0_12ContextIdTagEEEPNS0_7IDeviceERKSt8functionIFRSt13unordered_mapIjSt10shared_ptrINS0_6KernelEESt4hashIjESt8equal_toIjESaISt4pairIKjSD_EEEjEERKS9_IFRSt6vectorISB_INS0_11KernelGroupEESaISU_EEjEERKS9_IFRKSS_INS0_9SemaphoreESaIS12_EEvEESt4spanIPS2_Lm18446744073709551615EE+0xa6e) [0x7f35d11e8ebe]
+E        --- tt::tt_metal::detail::ProgramImpl::finalize_offsets(tt::tt_metal::IDevice*)
+E        --- tt::tt_metal::Device::configure_fabric()
+E        --- tt::tt_metal::FabricFirmwareInitializer::compile_and_configure_fabric()
+E        --- tt::tt_metal::FabricFirmwareInitializer::init(std::vector<tt::tt_metal::Device*, std::allocator<tt::tt_metal::Device*> > const&, std::unordered_set<tt::tt_metal::InitializerKey, std::hash<tt::tt_metal::InitializerKey>, std::equal_to<tt::tt_metal::InitializerKey>, std::allocator<tt::tt_metal::InitializerKey> > const&)
+E        --- tt::tt_metal::DeviceManager::initialize_fabric_and_dispatch_fw()
+E        --- tt::tt_metal::distributed::MeshDeviceImpl::create(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>, tt::tt_metal::distributed::MeshDeviceConfig const&, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long)
+E        --- tt::tt_metal::distributed::MeshDevice::create(tt::tt_metal::distributed::MeshDeviceConfig const&, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long)
+E        --- ttnn::distributed::open_mesh_device(unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::optional<tt::tt_metal::distributed::MeshShape> const&, std::optional<tt::tt_metal::distributed::MeshCoordinate> const&, std::vector<int, std::allocator<int> > const&, unsigned long)
+E        --- /localdev/odjuricic/tt-metal/ttnn/ttnn/_ttnn.so(+0x7ef32e) [0x7f35d42db32e]
+E        --- /localdev/odjuricic/tt-metal/ttnn/ttnn/_ttnn.so(+0x312325) [0x7f35d3dfe325]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x563e0ae565ff]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x563e0ae565ff]
+E        --- /opt/venv/bin/python3(+0x2779e8) [0x563e0ae039e8]
+E        --- /opt/venv/bin/python3(+0x2c40c9) [0x563e0ae500c9]
+E        --- /opt/venv/bin/python3(+0x29259f) [0x563e0ae1e59f]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x563e0ae56778]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x563e0ae56778]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x563e0ae5ac17]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x273350) [0x563e0adff350]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x563e0aefac65]
+E        --- /opt/venv/bin/python3(+0x3a2b46) [0x563e0af2eb46]
+E        --- /opt/venv/bin/python3(+0x2fd2a2) [0x563e0ae892a2]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x563e0ae565ff]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x273350) [0x563e0adff350]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x563e0ae565ff]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x563e0ae5b034]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x563e0ae5b034]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x563e0ae5b034]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x563e0ae5b034]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x563e0ae5b034]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x563e0ae5ac17]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x273350) [0x563e0adff350]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x563e0aefac65]
+E        --- /opt/venv/bin/python3(+0x3a2b46) [0x563e0af2eb46]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x563e0ae5c87c]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x563e0ae56778]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x273350) [0x563e0adff350]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x563e0ae565ff]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x563e0ae56778]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x2fd0b9) [0x563e0ae890b9]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x563e0ae565ff]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x563e0ae5ac17]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x273350) [0x563e0adff350]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x563e0aefac65]
+E        --- /opt/venv/bin/python3(+0x3a2b46) [0x563e0af2eb46]
+E        --- /opt/venv/bin/python3(+0x2fd2a2) [0x563e0ae892a2]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x563e0ae565ff]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x563e0ae5ac17]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(+0x273350) [0x563e0adff350]
+E        --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x563e0ae5caef]
+E        --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x563e0adfd352]
+E        --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x563e0aefac65]
+E        --- /opt/venv/bin/python3(+0x3a2b46) [0x563e0af2eb46]
+
+ttnn/ttnn/distributed/distributed.py:671: RuntimeError
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+models/tt_transformers/tt/common.py:28
+  /localdev/odjuricic/tt-metal/models/tt_transformers/tt/common.py:28: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.14/migration/
+    class ImageMedia(BaseModel):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/multichip_decoder/evidence/watcher.xml -
+============================== slowest durations ===============================
+121.71s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_paged_decode_trace_matches_optimized_baseline[0-sliding_attention]
+
+(7 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+ERROR models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_paged_decode_trace_matches_optimized_baseline[0-sliding_attention]
+ERROR models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_paged_decode_trace_matches_optimized_baseline[5-full_attention]
+ERROR models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_batch32_nonaligned_prefill_and_traced_decode[0-sliding_attention]
+ERROR models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_batch32_nonaligned_prefill_and_traced_decode[5-full_attention]
+=========== 15 deselected, 3 warnings, 4 errors in 123.44s (0:02:03) ===========
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-07-14 06:34:29.094 | info     |    BuildKernels | JIT cache stats: 253/545 hits (46.4%) [253 cached, 468 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-14 06:34:29.094 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-14 06:34:29.095 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-07-14 06:34:29.095 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-07-14 06:34:29.095 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-07-14 06:34:29.095 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-07-14 06:34:29.095 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-07-14 06:34:29.117 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-14 06:34:29.117 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-14 06:34:29.780 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-14 06:34:29.780 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-14 06:34:29.780 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)
