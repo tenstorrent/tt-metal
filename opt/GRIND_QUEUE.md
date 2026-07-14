@@ -624,11 +624,13 @@ no gate does not ship.** Measure on the block harness (`test_ltx_transformer_blo
       Most promising next shape: give the gather real compute to hide behind by fusing gate+QKV into ONE wide AG-mm
       (concatenated weights, one gather, ~309 µs of matmul to overlap) — the natural successor now that W1 has already
       hoisted the gather out and left it standalone/fully-exposed by construction.
-  - [~] **PRICE the gate+QKV fusion before authoring it in the model (job 568, 2026-07-14 23:30Z).** `test_ccl_census.py`
-    +`gateqkv_v = col_linear(VIDEO_DIM, NUM_HEADS+3*VIDEO_DIM)` + rows `agmm_gateqkv_video_s1/s2` & `mm_gateqkv_video_*_gathered`,
-    `LTX_CCL_VARIANTS`-filtered to the fused pair + its post-W1 baseline (`ag_activation`+`mm_gate`+`mm_qkv`, `cut1b_new_attn1_v_s1`).
-    Decision rule: exposed = agmm_gateqkv − mm_gateqkv_gathered; if it approaches qkv's 23–32% hidden (not gate's ~0%) the
-    weight-concat fusion is a fund-worthy WARM `attention_ltx.py` session; if it nets ~0 like route-2a, this variant is dead.
+  - [x] **PRICED — the gate+QKV weight-concat fusion is a FUND-WORTHY WARM `attention_ltx.py` lever (job 568, harvested 2026-07-14 23:42Z).**
+    Fused `agmm_gateqkv` vs post-W1 baseline `AG+mm_gate+mm_qkv`: **S1 345.46 vs 415.18 = −69.72 µs/site (−16.8%); S2 1132.35 vs
+    1600.88 = −468.53 µs/site (−29.3%).** Dominant term = the MATMUL-FOLD (gate out=32 concats onto 12288-wide QKV at +0.08%:
+    `mm_gateqkv_gathered 251.20 ≈ mm_qkv_gathered 251.01`), NOT gather-overlap (S1 hides only 11%, S2 74%). Beats all priced
+    alternatives (`cut1b_new` 422.69, `cut1b_old` 467.64). **NOTE:** the original decision-rule keyed only on gather-hiding, which
+    undercounts S1 — the matmul-fold carries the win; total-cost accounting is what decides. E2E per-step ceiling (48 sites):
+    S2 22.5 ms/step (~2.1%), S1 3.3 ms/step (~1.0%). Follow-on = WARM weight-concat authoring, NOT a cron fire-and-exit.
 - [x] **W3 — the ~90 µs per-op fixed SETUP cost → NO NEW LEVER (the one candidate is receipt-DEAD; the rest have no API).**
       Off-device source attribution (2026-07-13 23:17Z lap), citations re-verified in-tree. The census-priced 89.9 µs is
       **100% on-device replay command-stream time, NOT host program-setup** — traced `enqueue_trace` emits one fixed-size
