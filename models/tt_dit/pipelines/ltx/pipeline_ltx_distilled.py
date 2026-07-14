@@ -925,8 +925,9 @@ class LTXDistilledPipeline(LTXPipeline):
         # pixel frames) so that last keyframe becomes INTERIOR — it regains a moving neighbor and flows
         # through append-token like any interior pin — then trim the padded tail back off before export.
         # Only engages for append-token last-frame i2v; a no-op (num_frames_out == num_frames) otherwise.
+        append_token = os.environ.get("LTX_KF_APPEND_TOKEN", "0") in ("1", "true", "True")
         num_frames_out = num_frames
-        if images and os.environ.get("LTX_KF_APPEND_TOKEN", "0") in ("1", "true", "True"):
+        if images and append_token:
             _last_lat = (num_frames - 1) // TEMPORAL_COMPRESSION  # index of the last latent frame
             # A keyframe worker (LTX_KF_TRACE_PAD) always pads so every keyframe gen matches its one
             # padded trace; the eager path pads only when a keyframe actually lands on the last frame.
@@ -998,7 +999,12 @@ class LTXDistilledPipeline(LTXPipeline):
                 lat_idx = pixel_to_latent_frame(img[1], num_frames)
                 s1s = img[2] if len(img) > 2 else 1.0
                 s2s = img[3] if len(img) > 3 else s1s
-                if kf_fix and lat_idx != 0:
+                # Softening blunts an IN-PLACE pin's wall against its two-sided neighbours. An
+                # append-token keyframe never pins the grid — the frame stays free and converges onto a
+                # HELD anchor — so softening only corrupts the reference itself: the anchor is denoised
+                # by (1 - strength), and at the coarse 720p S1 (0.25) it lands three-quarters noise, so
+                # every frame that converges on it decodes to mush. Anchors stay hard.
+                if kf_fix and lat_idx != 0 and not append_token:
                     s1s = min(s1s, _keyframe_s1_strength(s1_height))  # soften non-frame-0 pin; s2 re-locks
                 by_slot[lat_idx] = (img[0], s1s, s2s)
             # The conditioning latent depends only on (image, resolution), so encode once and memoize.
