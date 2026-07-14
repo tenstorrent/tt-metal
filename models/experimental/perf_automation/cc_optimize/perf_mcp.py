@@ -792,6 +792,150 @@ def _mode_rank(mode: str) -> int:
     return _FULLPIPE_MODE_RANK.get(mode, 1)
 
 
+_SIGNPOST_PREFIX = "PERF_BLOCK_SIGNPOST:"
+
+
+def _infer_block_count(counts: dict) -> int:
+    vals = [c for c in counts.values() if c > 1]
+    if not vals:
+        return 1
+    from collections import Counter as _C
+
+    return _C(vals).most_common(1)[0][0]
+
+
+def _block_starts(sequence: list, n_blocks: int | None = None) -> tuple:
+    # PREFER the real per-block signposts the probe emits (exact boundaries); fall back to inferring a
+    # once-per-block anchor op only when the model has no detectable repeated ModuleList to signpost.
+    seq = sequence or []
+    sp = [i for i, s in enumerate(seq) if isinstance(s, str) and s.startswith(_SIGNPOST_PREFIX)]
+    if sp:
+        return sp, "signposts"
+    if n_blocks is None:
+        n_blocks = _infer_block_count(_C_counts(seq))
+    from collections import Counter as _C
+
+    c = _C(seq)
+    anchor = next((s for s in seq if c.get(s) == n_blocks), None)
+    if anchor is None:
+        return [], "none"
+    return [i for i, s in enumerate(seq) if s == anchor], "inferred"
+
+
+def _C_counts(seq):
+    from collections import Counter as _C
+
+    return dict(_C(seq))
+
+
+def _block_of(pos: int, starts: list) -> int:
+    import bisect
+
+    return bisect.bisect_right(starts, pos) - 1
+
+
+def compute_lever_coverage(
+    counts: dict, sequence: list, op_match: str, stale_dtype: str = "", new_dtype: str = ""
+) -> dict:
+    matching = {s: n for s, n in (counts or {}).items() if op_match and op_match in s}
+    if not matching:
+        return {"status": "not_found", "note": "no op signature matched '%s' at full depth" % op_match}
+    total = sum(matching.values())
+    stale = sum(n for s, n in matching.items() if stale_dtype and stale_dtype in s)
+    fresh = sum(n for s, n in matching.items() if new_dtype and new_dtype in s)
+    starts, block_source = _block_starts(sequence or [], _infer_block_count(counts or {}))
+    n_blocks = len(starts) if starts else _infer_block_count(counts or {})
+    missed_blocks = []
+    if stale_dtype:
+        stale_sigs = {s for s in matching if stale_dtype in s}
+        seen = set()
+        for i, s in enumerate(sequence or []):
+            if s in stale_sigs:
+                b = _block_of(i, starts)
+                if b >= 0 and b not in seen:
+                    seen.add(b)
+                    missed_blocks.append(b)
+    fully = (stale == 0 and fresh > 0) if (stale_dtype and new_dtype) else None
+    if fully:
+        note = "lever reached ALL %d instances of this op" % total
+    elif fully is False:
+        note = (
+            "PARTIAL: %d of %d instances still carry the OLD signature (blocks %s) — the edit is on an "
+            "instance-specific path; move it to the SHARED block definition and reapply so every layer changes"
+            % (stale, total, sorted(missed_blocks))
+        )
+    else:
+        note = "signature-visible check only: pass stale_dtype+new_dtype for a dtype lever; grid/program_config levers are not tensor-visible and rely on shared-definition propagation"
+    return {
+        "status": "ok",
+        "op_match": op_match,
+        "total_instances": total,
+        "applied": fresh if new_dtype else None,
+        "stale_remaining": stale if stale_dtype else None,
+        "fully_applied": fully,
+        "n_blocks": n_blocks,
+        "block_source": block_source,
+        "missed_blocks": sorted(missed_blocks),
+        "note": note,
+    }
+
+
+def _full_depth_op_probe():
+    ptr = _MANIFEST.get("perf_test_resolved", {}) or {}
+    node = ptr.get("path")
+    if not node:
+        return None, None
+    case = ptr.get("case")
+    repo = str(Path(_PKG).parent.parent.parent)
+    env = dict(os.environ)
+    env["TT_METAL_HOME"] = repo
+    env["PYTHONPATH"] = repo
+    env["TT_PERF_LAYERS"] = "0"  # ALL layers — no tracy in this probe, so no marker buffer to overflow
+    env["TT_PERF_MAX_NEW_TOKENS"] = "1"
+    env.pop("TT_METAL_DEVICE_PROFILER", None)
+    cmd = [sys.executable, str(Path(__file__).parent / "_op_sig_probe.py"), node]
+    if case:
+        cmd.append(case)
+    try:
+        r = _sp.run(cmd, cwd=repo, env=env, capture_output=True, text=True, timeout=1800)
+    except Exception as exc:  # noqa: BLE001
+        return None, "probe failed: %s" % str(exc)[-300:]
+    out = (r.stdout or "") + "\n" + (r.stderr or "")
+    counts, seq = {}, []
+    for line in out.splitlines():
+        if line.startswith("PERF_OP_SIG_COUNTS="):
+            try:
+                counts = json.loads(line.split("=", 1)[1])
+            except Exception:  # noqa: BLE001
+                counts = {}
+        elif line.startswith("PERF_OP_SIG_SEQUENCE="):
+            try:
+                seq = json.loads(line.split("=", 1)[1])
+            except Exception:  # noqa: BLE001
+                seq = []
+    return counts, seq
+
+
+@mcp.tool()
+def check_lever_coverage(op_match: str, stale_dtype: str = "", new_dtype: str = "") -> dict:
+    """After applying a lever (dtype knob / kernel swap) to an op, VERIFY it reached EVERY layer instance,
+    not just the profiled representative slice. Runs an ALL-LAYERS op-signature probe (TT_PERF_LAYERS=0,
+    NO tracy -> no marker buffer -> overflow-safe) and checks whether the op still appears with its OLD
+    signature anywhere. op_match: a substring identifying the op (name + a shape dim, e.g. 'linear(1, 4096').
+    stale_dtype/new_dtype: the OLD and NEW dtype markers the lever changed (e.g. 'BFLOAT16','BFLOAT8_B') —
+    supply both for a dtype lever so coverage is exact. Returns fully_applied + missed_blocks: if PARTIAL,
+    the edit is on an instance-specific path (e.g. layers[0]) — move it to the SHARED block definition and
+    reapply so all N layers change. A repeated block is ONE class instantiated N times, so a lever on the
+    shared definition propagates to every instance; this catches the case where it did not."""
+    counts, seq = _full_depth_op_probe()
+    if not counts:
+        return {
+            "status": "skip",
+            "note": "all-layers op-signature probe produced no counts (%s)" % (seq or "no output"),
+        }
+    return compute_lever_coverage(counts, seq, op_match, stale_dtype, new_dtype)
+
+
 @mcp.tool()
 def check_full_pipeline_latency() -> dict:
     """Measure end-to-end latency and gate it as a CONVERGENCE gate toward the target (a GPU number if

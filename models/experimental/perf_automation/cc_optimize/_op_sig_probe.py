@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import sys
+from collections import Counter
 from pathlib import Path
 
 _PKG = Path(__file__).resolve().parent.parent
@@ -23,6 +24,7 @@ sys.path.insert(0, str(_PKG.parent.parent.parent))
 sys.path.insert(0, str(_PKG))
 
 _SIGS = set()
+_SEQ = []  # ordered op-signature stream — lets a consumer segment the run into repeated blocks
 
 
 def _shape_sig(args):
@@ -32,16 +34,22 @@ def _shape_sig(args):
         if s is None:
             continue
         try:
-            out.append(tuple(int(d) for d in s))
+            dims = tuple(int(d) for d in s)
         except Exception:  # noqa: BLE001
-            out.append(str(s))
+            dims = str(s)
+        # dtype is part of the signature: a dtype knob (bf16->bf8_b) leaves shapes identical, so without
+        # dtype the probe could not tell whether a lever actually changed an op — coverage would be blind.
+        dt = getattr(getattr(x, "dtype", None), "name", None) or str(getattr(x, "dtype", "") or "")
+        out.append((dims, dt) if dt else dims)
     return tuple(out)
 
 
 def _wrap(fn, name):
     def inner(*a, **k):
         try:
-            _SIGS.add("%s%s" % (name, _shape_sig(a)))
+            sig = "%s%s" % (name, _shape_sig(a))
+            _SIGS.add(sig)
+            _SEQ.append(sig)
         except Exception:  # noqa: BLE001
             pass
         return fn(*a, **k)
@@ -60,8 +68,61 @@ def _install():
                 setattr(mod, n, _wrap(op, "%s.%s" % (getattr(mod, "__name__", "ttnn"), n)))
 
 
+_BLOCK_TAG = "_perf_block_idx"
+_SIGNPOST_PREFIX = "PERF_BLOCK_SIGNPOST:"
+
+
+def _install_block_signposts():
+    """Emit a real per-block signpost into the op stream at every repeated-block invocation, so a
+    consumer can attribute each op to an exact block (not an inferred boundary). MODEL-AGNOSTIC: the
+    largest nn.ModuleList in the built model is the repeated stack; its children are tagged with an
+    index, and torch.nn.Module.__call__ is wrapped to drop a `PERF_BLOCK_SIGNPOST:<idx>` marker when a
+    tagged block is entered. No per-model code, no markers baked into model source; probe-local only."""
+    try:
+        import torch
+    except Exception:  # noqa: BLE001
+        return
+
+    orig = torch.nn.Module.__call__
+    state = {"tagged": False}
+
+    def _tag(root):
+        best = None
+        for m in root.modules():
+            for _, child in m.named_children():
+                if isinstance(child, torch.nn.ModuleList) and len(child) >= 2:
+                    if best is None or len(child) > len(best):
+                        best = child
+        if best is None:
+            return False
+        for i, blk in enumerate(best):
+            try:
+                setattr(blk, _BLOCK_TAG, i)
+            except Exception:  # noqa: BLE001
+                pass
+        return True
+
+    def wrapped(self, *a, **k):
+        if not state["tagged"]:
+            try:
+                if sum(1 for _ in self.modules()) > 8:  # first call on a real (root) model
+                    state["tagged"] = _tag(self)
+            except Exception:  # noqa: BLE001
+                pass
+        idx = getattr(self, _BLOCK_TAG, None)
+        if idx is not None:
+            try:
+                _SEQ.append("%s%d" % (_SIGNPOST_PREFIX, idx))
+            except Exception:  # noqa: BLE001
+                pass
+        return orig(self, *a, **k)
+
+    torch.nn.Module.__call__ = wrapped
+
+
 def main(node: str, case: str | None = None) -> None:
     _install()
+    _install_block_signposts()
     import pytest
 
     argv = ["-s", "-o", "timeout=0", node]
@@ -72,6 +133,9 @@ def main(node: str, case: str | None = None) -> None:
     except SystemExit:
         pass
     print("PERF_OP_SIGS=" + json.dumps(sorted(_SIGS)), flush=True)
+    print("PERF_OP_SIG_COUNTS=" + json.dumps(Counter(_SEQ)), flush=True)
+    # ordered stream (capped) so a consumer can infer per-block boundaries and attribute each op to a block
+    print("PERF_OP_SIG_SEQUENCE=" + json.dumps(_SEQ[:50000]), flush=True)
 
 
 if __name__ == "__main__":
