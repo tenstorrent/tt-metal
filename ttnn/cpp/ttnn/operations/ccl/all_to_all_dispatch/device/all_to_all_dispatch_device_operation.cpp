@@ -11,6 +11,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt_stl/reflection.hpp>
 
 namespace ttnn::operations::ccl {
 
@@ -75,6 +76,24 @@ void AllToAllDispatchDeviceOperation::validate_on_program_cache_miss(
 
 void AllToAllDispatchDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {}
+
+ttsl::hash::hash_t AllToAllDispatchDeviceOperation::compute_program_hash(
+    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+    // Workaround for PR #44408: the cross_device_semaphore and init_semaphore
+    // L1 addresses are baked into the cached program at first miss and never
+    // refreshed on cache hit (the descriptor framework only re-patches Buffer*
+    // slots).  Hash the input tensor buffer addresses so any allocation churn
+    // -- e.g. the failing test reallocating input tensors per iter -- forces
+    // a fresh build with current semaphore addresses.  Stable across trace
+    // replays that reuse the same buffers, so trace tests still cache-hit.
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<AllToAllDispatchDeviceOperation>,
+        attrs,
+        tensor_args,
+        tensor_args.input_tensor.buffer()->address(),
+        tensor_args.expert_indices_tensor.buffer()->address(),
+        tensor_args.expert_mapping_tensor.buffer()->address());
+}
 
 AllToAllDispatchDeviceOperation::spec_return_value_t AllToAllDispatchDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {

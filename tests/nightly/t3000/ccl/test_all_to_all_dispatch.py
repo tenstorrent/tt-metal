@@ -502,7 +502,10 @@ def run_all_to_all_dispatch_test(
             tt_metadata_list = []
 
             for i in range(n_iters):
-                buffer_index = i
+                # PR #44408 workaround: trace mode reuses iter-0 buffers so the op's
+                # buffer-address-hashed program cache hits during capture (avoids
+                # writes/reads in capture). Revert to `i` once ScalarBinding lands.
+                buffer_index = 0 if trace_mode else i
                 if test_skew:
                     ttnn.apply_device_delay(mesh_device, delays)
                 output_tensor, metadata_tensor = ttnn.all_to_all_dispatch(
@@ -594,6 +597,11 @@ def run_all_to_all_dispatch_test(
     failed_metadata_indices = []
 
     for tensor_index in range(len(tt_out_tensor_list)):
+        # PR #44408 workaround: trace mode reuses iter-0 inputs (see run_op), so all outputs
+        # match iter-0's golden.
+        # Revert to `tensor_index` once ScalarBinding lands.
+        golden_index = 0 if trace_mode else tensor_index
+
         tt_torch_tensor = ttnn.to_torch(
             tt_out_tensor_list[tensor_index],
             mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=shard_dim),
@@ -605,22 +613,22 @@ def run_all_to_all_dispatch_test(
         )
 
         if is_unsigned_tensor(tt_metadata_tensor):
-            tt_metadata_tensor = tt_metadata_tensor.to(output_metadata_goldens_list[tensor_index].dtype)
+            tt_metadata_tensor = tt_metadata_tensor.to(output_metadata_goldens_list[golden_index].dtype)
 
         batch = tt_torch_tensor.shape[1]
         devices = tt_metadata_tensor.shape[0]
         selected_experts_k = tt_metadata_tensor.shape[3]
 
-        metadata_all_close = torch.allclose(tt_metadata_tensor, output_metadata_goldens_list[tensor_index])
-        metadata_all_equal = torch.equal(tt_metadata_tensor, output_metadata_goldens_list[tensor_index])
+        metadata_all_close = torch.allclose(tt_metadata_tensor, output_metadata_goldens_list[golden_index])
+        metadata_all_equal = torch.equal(tt_metadata_tensor, output_metadata_goldens_list[golden_index])
         if not metadata_all_close or not metadata_all_equal:
             metadata_passed = False
             first_failed_metadata_index = tensor_index
-            failed_metadata_indices = torch.where(tt_metadata_tensor != output_metadata_goldens_list[tensor_index])
+            failed_metadata_indices = torch.where(tt_metadata_tensor != output_metadata_goldens_list[golden_index])
             logger.info(f"All failed metadata devices: {failed_metadata_indices}")
             logger.info(f"Failing tt_metadata_tensor tensor {tt_metadata_tensor[failed_metadata_indices]}")
             logger.info(
-                f"Relevant output_metadata_goldens_list tensor {output_metadata_goldens_list[tensor_index][failed_metadata_indices]}"
+                f"Relevant output_metadata_goldens_list tensor {output_metadata_goldens_list[golden_index][failed_metadata_indices]}"
             )
             break
 
@@ -629,9 +637,9 @@ def run_all_to_all_dispatch_test(
                 for k in range(selected_experts_k):
                     expert_id = tt_metadata_tensor[0, b, s, k]
                     for d in range(devices):
-                        if torch_expert_mappings[tensor_index][0, 0, expert_id, d] == 1:
+                        if torch_expert_mappings[golden_index][0, 0, expert_id, d] == 1:
                             is_all_equal = torch.equal(
-                                tt_torch_tensor[d, b, s, :], output_tensor_goldens_list[tensor_index][d, b, s, :]
+                                tt_torch_tensor[d, b, s, :], output_tensor_goldens_list[golden_index][d, b, s, :]
                             )
                             if not is_all_equal:
                                 logger.info(
@@ -643,7 +651,7 @@ def run_all_to_all_dispatch_test(
                                 first_failed_tensor_index = tensor_index
                                 first_failed_batch_index = b
                                 failed_indices = torch.where(
-                                    tt_torch_tensor[d, b, s, :] != output_tensor_goldens_list[tensor_index][d, b, s, :]
+                                    tt_torch_tensor[d, b, s, :] != output_tensor_goldens_list[golden_index][d, b, s, :]
                                 )
                                 first_10_fail_idx = failed_indices[0][:10]
                                 logger.info(f"First 10 failing indices: {first_10_fail_idx}")
@@ -651,7 +659,7 @@ def run_all_to_all_dispatch_test(
                                     f"Failing tt_torch_tensor tensor (first 10) {tt_torch_tensor[d, b, s, first_10_fail_idx]}"
                                 )
                                 logger.info(
-                                    f"Relevant output_tensor_goldens_list tensor (first 10) {output_tensor_goldens_list[tensor_index][d, b, s, first_10_fail_idx]}"
+                                    f"Relevant output_tensor_goldens_list tensor (first 10) {output_tensor_goldens_list[golden_index][d, b, s, first_10_fail_idx]}"
                                 )
                                 first_failed_expert_index = expert_id
                                 first_failed_device_index = d
@@ -661,9 +669,13 @@ def run_all_to_all_dispatch_test(
                     break
             if not passed:
                 break
-    num_program_cache_entries = 1
+    # PR #44408 workaround: non-trace iters use per-iter input buffers, so the op's
+    # buffer-address-hashed program cache misses once per iter. Trace mode reuses
+    # iter-0 buffers (see run_op) and still produces a single entry.
+    # Revert to a constant `1` (+1 for skew) once ScalarBinding lands.
+    num_program_cache_entries = 1 if trace_mode else num_iters
     if test_skew:
-        num_program_cache_entries = 2
+        num_program_cache_entries += 1
     logger.info(f"Device has {mesh_device.cache_entries_counter.total} program cache entries")
     assert (
         mesh_device.cache_entries_counter.total == num_program_cache_entries
@@ -880,7 +892,6 @@ def test_all_to_all_dispatch_trace(
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.skip(reason="Disabled by issue #45107")
 def test_decode_perf(
     mesh_device,
     trace_mode,
