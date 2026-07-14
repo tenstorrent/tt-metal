@@ -169,6 +169,62 @@ phase fallback is NOT a warm bottleneck** (ON vs OFF warm are identical), so **#
 - **Persistent program cache** (`enable_model_cache`, currently off) — skips the ~708 ms cold compile
   on repeat process runs. PCC-neutral, cheap; helps only across runs, not a single cold invocation.
 
+## Metal-trace status update (component traces shipped: Phases 0–2)
+
+Each fixed-shape component of the pipeline is now metal-trace-capturable, **bit-identical on replay**,
+via opt-in prepared-weight/upload caching (`tt_trace_prep.set_trace_weight_prep(True)`, default OFF,
+byte-identical to the untraced path — verified prep-on == prep-off and per-module PCC unchanged):
+
+| Segment | Test | eager→replay | warm speedup |
+|---|---|---|---|
+| **Generator** (vocoder tail) | `test_tt_generator_trace.py` | 202.7 → 7.9 ms | 25.8× |
+| **Decoder** (asr/F0/N/s → audio; "Trace B") | `test_tt_decoder_trace.py` | 195.3 → 12.1 ms | 16.1× |
+| **Prosody→duration** ("Trace A") | `test_tt_prosody_trace.py` | 205.4 → 10.4 ms | 19.8× |
+
+The blockers were per-forward host→device writes, each fixed by caching under the shared trace-prep
+flag (`tt_trace_prep.py`):
+- **conv weights** (`tt_conv`): `conv1d`/`conv_transpose2d` re-upload prepared weights each call →
+  cache via `return_weights_and_bias=True`; also the F0/N stride-2 conv weight + zero-pad uploads.
+- **BERT** (`tt_custom_albert`): embedding id uploads (word/token-type/position) + attention mask.
+- **BiLSTM** (`tt_lstm`): zero initial/working states (clone a cached zero template) + the anti-identity
+  reversal matrix.
+- **DurationEncoder** (`tt_duration_encoder`): the style `[B,style]→[B,T,style]` host-expand round-trip.
+- device SineGen, iSTFT dense matmul, elementwise, and the STFT fwd conv2d were already trace-clean.
+
+Program cache (`device.enable_program_cache()`) is enabled in the demo and the test conftest.
+
+**Still true:** a *single* full-pipeline trace remains infeasible — `T_aligned = sum(pred_dur)` is a
+data-dependent shape read back to host mid-forward (the deliberate Trace A / Trace B split point).
+Full-demo tracing is Phases 3–4: a TraceManager that captures A + B per bucket and replays them around
+the duration host-step, plus `T_tokens`/`T_aligned` bucketing. And the demo is cold-bound, so even a
+fully-traced demo mostly helps the warm/repeat-chunk path, not first-chunk latency.
+
+## Demo cold-cost breakdown (measured 2026-07-09) — program cache is the real lever
+
+Measured the full demo (`ttnn_kokoro_full_demo.py`, one 307-phoneme chunk → 18.7 s audio,
+`KOKORO_GEN_L1=1`). This **corrects the earlier assumption** that per-chunk generator/STFT
+*preprocess* dominates cold cost — it does not (`_get_decoder` preprocess = **2–5 s**, negligible):
+
+| run | config | infer_s |
+|---|---|---:|
+| 1 | cold: JIT kernel compile + no program cache | 436.6 |
+| 2 | JIT kernel cache warm (persists on disk), no program cache | 254.2 |
+| 3 | **JIT warm + `device.enable_program_cache()`** | **78.0** |
+
+- **JIT kernel build cache** (`~/.cache/tt-metal-cache`, RISC-V `.o`/`.elf`) already persists across
+  runs automatically → run 1→2 saves ~182 s with no code change.
+- **Device program cache was OFF** (Kokoro never called `enable_program_cache`). Every op — including
+  the ~`T_tokens`×2 identical-shape LSTM gate matmuls — rebuilt its program host-side each call.
+  Enabling it (one line in the demo) cut **254 → 78 s (3.3×)**, 5384 cached programs, audio
+  **bit-identical** (max abs diff 0.0, PCC 1.0). This is the shipped Phase-0 win.
+- **`enable_model_cache` (ttnn.CONFIG) is a no-op here**: it only caches
+  `ttnn.preprocess_model_parameters` output, and Kokoro uses its own `preprocess_tt_*` uploaders.
+- **Bucketing `_get_decoder` was measured not worth it**: preprocess is 2–5 s and normal text yields
+  ~1 chunk, so the `mask/trim` complexity + boundary-padding accuracy risk buys almost nothing.
+
+Remaining ~78 s is first-occurrence program builds + host dispatch (~thousands of ops incl. the LSTM
+host loop) + ~2 s preprocess. Cutting *that* is the metal-trace project below.
+
 ## Metal-trace feasibility (scoped)
 
 **Full-model metal trace is NOT feasible without a major refactor.** Metal trace requires a static

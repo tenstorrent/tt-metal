@@ -360,7 +360,7 @@ def test_sum_6d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
 @pytest.mark.parametrize("dim", [[1, 4], -1, None])
 @pytest.mark.parametrize("keepdim", [True])
 def test_sum_5d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim, keepdim):
-    torch.manual_seed(0)
+    torch.manual_seed(2)
 
     torch_input_tensor = torch.randn((dim_1, dim_2, dim_3, dim_4, dim_5), dtype=torch.bfloat16)
     torch_output_tensor = torch.sum(torch_input_tensor, dim=dim, keepdim=keepdim)

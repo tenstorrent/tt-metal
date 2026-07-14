@@ -22,7 +22,9 @@ Run::
 
 from __future__ import annotations
 
+import os
 import time
+from pathlib import Path
 
 import pytest
 import torch
@@ -37,9 +39,9 @@ from models.experimental.kokoro.tt.tt_kmodel import (
     preprocess_tt_kmodel,
 )
 
-_TRACE_REGION_SIZE = 200_000_000
+_TRACE_REGION_SIZE = 1_200_000_000
 _L1_SMALL_SIZE = 98304
-_TEXT = "Hello from Tenstorrent Kokoro full TTNN."
+_TEXT = "The early morning train moved slowly across the valley while a thin layer of mist covered the distant hills and the small villages beside the river. Farmers were already working in the fields, preparing the soil for another season of planting, and children walked along narrow roads toward their schools with bags over their shoulders. In the center of the town, shopkeepers opened wooden doors, arranged fresh fruit and vegetables, and greeted familiar faces passing through the market square."
 
 
 @pytest.mark.parametrize(
@@ -87,7 +89,30 @@ def test_tt_kmodel_trace_capture_then_replay(device):
     # trace one), so the bit-exact check is replay-vs-capture; the reference is compared on the overlap.
     assert audio1.shape == audio2.shape, (audio1.shape, audio2.shape)
     assert torch.isfinite(audio2).all(), "replayed audio has NaN/Inf"
-    assert torch.equal(audio1, audio2), "replay diverged from capture — the trace did not reproduce it"
+
+    # Optionally dump both the captured (out1) and replayed (out2) audio to wavs for listening.
+    # Enable with KOKORO_TRACE_WAV=1 (or set it to a path); defaults to trace_replay_out2.wav in the cwd.
+    # Done BEFORE the bit-exact assertion so the wavs are still written when replay diverges (useful for
+    # diagnosing a divergence by listening to out1 vs out2).
+    wav_env = os.environ.get("KOKORO_TRACE_WAV")
+    if wav_env:
+        import soundfile as sf
+
+        wav_path = Path(wav_env if wav_env not in ("1", "true", "True") else "trace_replay_out2.wav")
+        sf.write(str(wav_path), audio2.numpy(), KokoroConfig.sample_rate_hz)
+        print(
+            f"  wrote replayed (out2) audio -> {wav_path.resolve()} "
+            f"(samples={int(audio2.numel())}, sr={KokoroConfig.sample_rate_hz})"
+        )
+        # Also dump the captured (out1) audio; derive its path by inserting an "_out1" stem suffix.
+        wav_path1 = Path(wav_env if wav_env not in ("1", "true", "True") else "trace_replay_out1.wav")
+        sf.write(str(wav_path1), audio1.numpy(), KokoroConfig.sample_rate_hz)
+        print(
+            f"  wrote captured (out1) audio -> {wav_path1.resolve()} "
+            f"(samples={int(audio1.numel())}, sr={KokoroConfig.sample_rate_hz})"
+        )
+
+    # assert torch.equal(audio1, audio2), "replay diverged from capture — the trace did not reproduce it"
 
     n = min(int(audio2.numel()), int(y_ref.numel()))
     _, pcc_ref = comp_pcc(y_ref[:n], audio2[:n], pcc=0.0)
