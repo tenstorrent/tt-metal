@@ -29,6 +29,7 @@ class ExpertWeights:
     up_proj: ttnn.Tensor  # [1, E, H, I_per_device]
     down_proj: ttnn.Tensor  # [1, E, I_per_device, H]
     intermediate_size_per_device: int
+    gate_up_proj: ttnn.Tensor = None  # [1, E, H, 2*I_per_device] = concat(gate, up) on N
 
 
 def _stack_per_expert(state_dict, intermediate_size):
@@ -128,9 +129,16 @@ def load_expert_weights(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
+    # Fused gate|up along N (each device already holds the SAME intermediate slice of both,
+    # so a local concat yields [gate_slice | up_slice]). Prefill runs gate+up as ONE
+    # sparse_matmul with N = 2*I_per_device, doubling the N-gridded core count (4->8), then
+    # slices the two halves back apart — mathematically identical to two separate matmuls.
+    gate_up_proj_tt = ttnn.concat([gate_proj_tt, up_proj_tt], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
     return ExpertWeights(
         gate_proj=gate_proj_tt,
         up_proj=up_proj_tt,
         down_proj=down_proj_tt,
         intermediate_size_per_device=per_device_intermediate,
+        gate_up_proj=gate_up_proj_tt,
     )
