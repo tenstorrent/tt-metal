@@ -196,6 +196,101 @@ def matmul_1d_program_config(
     )
 
 
+def _width_shard_specs_match(a: ttnn.MemoryConfig, b: ttnn.MemoryConfig) -> bool:
+    if a.memory_layout != b.memory_layout or a.buffer_type != b.buffer_type:
+        return False
+    try:
+        sa, sb = a.shard_spec, b.shard_spec
+        return sa is not None and sb is not None and sa == sb
+    except Exception:
+        return False
+
+
+def _ensure_width_sharded_act(
+    x: ttnn.Tensor,
+    act_mc: ttnn.MemoryConfig,
+) -> tuple[ttnn.Tensor, bool]:
+    """Pad M→32 if needed and WIDTH_SHARD for 1D-mcast. Returns (x_sh, owns_tensor).
+
+    When ``x`` is already WIDTH_SHARDED with M≥32 and a matching shard spec, returns
+    it as-is (``owns_tensor=False``) so callers can leave resident embeddings alive.
+    """
+    m_dim = int(list(x.shape)[-2])
+    already_ws = ttnn.is_sharded(x) and x.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+
+    if already_ws and m_dim >= TILE_SIZE and _width_shard_specs_match(x.memory_config(), act_mc):
+        return x, False
+
+    if already_ws:
+        prev = x
+        x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if prev is not x:
+            ttnn.deallocate(prev)
+
+    m_dim = int(list(x.shape)[-2])
+    if m_dim < TILE_SIZE:
+        padded = ttnn.pad(x, [(0, 0), (0, 0), (0, TILE_SIZE - m_dim), (0, 0)], 0.0)
+        if padded is not x:
+            ttnn.deallocate(x)
+        x = padded
+
+    x_sh = ttnn.interleaved_to_sharded(x, act_mc)
+    ttnn.deallocate(x)
+    return x_sh, True
+
+
+def spill_resident_emb_to_dram(x: ttnn.Tensor) -> ttnn.Tensor:
+    """Move WIDTH_SHARDED resident t_emb to DRAM interleaved (keep M=32 pad).
+
+    L1-resident emb must not survive across backbone MoE: expert
+    ``l1_sharded_linear`` CBs clash with WIDTH_SHARDED emb on the same cores.
+    ResBlock still skips FillPad when M≥32 and only pays InterleavedToSharded.
+    """
+    if not ttnn.is_sharded(x):
+        return x
+    out = ttnn.sharded_to_interleaved(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if out is not x:
+        ttnn.deallocate(x)
+    return out
+
+
+def reshard_width_act_for_next_linear(
+    x: ttnn.Tensor,
+    *,
+    next_n: int,
+    device=None,
+) -> ttnn.Tensor:
+    """Reshard WIDTH_SHARDED ``[1,1,M,K]`` to the act layout for weight ``[K, next_n]``.
+
+    Used so TimestepEmbedder's resident t_emb matches ResBlock emb_layers and
+    the ResBlock linear can skip both FillPad and InterleavedToSharded.
+    """
+    if not ttnn.is_sharded(x):
+        return x
+    k = int(list(x.shape)[-1])
+    m_work = int(list(x.shape)[-2])
+    dev = device if device is not None else x.device()
+    grid_size, _, _, _ = _fit_1d_matmul_grid(dev, k, next_n)
+    num_cores = grid_size[0] * grid_size[1]
+    act_mc = ttnn.create_sharded_memory_config_(
+        [m_work, k // num_cores],
+        ttnn.CoreGrid(x=grid_size[0], y=grid_size[1]),
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        tile_layout=True,
+        use_height_and_width_as_shard_shape=True,
+    )
+    if _width_shard_specs_match(x.memory_config(), act_mc):
+        return x
+    prev = x
+    mid = ttnn.sharded_to_interleaved(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if prev is not mid:
+        ttnn.deallocate(prev)
+    out = ttnn.interleaved_to_sharded(mid, act_mc)
+    ttnn.deallocate(mid)
+    return out
+
+
 def act_width_sharded_linear(
     x: ttnn.Tensor,
     weight: ttnn.Tensor,
@@ -205,15 +300,22 @@ def act_width_sharded_linear(
     compute_kernel_config=None,
     grid_size: tuple[int, int] | None = None,
     device=None,
+    keep_sharded_output: bool = False,
 ) -> ttnn.Tensor:
-    """Width-sharded L1 activation + interleaved weight (Tracy in0:width_sharded)."""
+    """Width-sharded L1 activation + interleaved weight (Tracy in0:width_sharded).
+
+    If ``x`` is already WIDTH_SHARDED with M padded to 32 and the right shard
+    layout, skip FillPad + InterleavedToSharded. When ``keep_sharded_output`` is
+    True, leave the WIDTH_SHARDED M=32 result in L1 (for resident t_emb).
+    Pass ``batch_rows`` explicitly when ``x`` may be M-padded (resident emb).
+    """
     if not _l1_sharded_matmul_enabled():
         kwargs = {"memory_config": ttnn.DRAM_MEMORY_CONFIG, "compute_kernel_config": compute_kernel_config}
         if bias is not None:
             kwargs["bias"] = bias
         return ttnn.linear(x, weight, **kwargs)
 
-    m, k, n = infer_matmul_mkn(x, weight)
+    _, k, n = infer_matmul_mkn(x, weight)
     if batch_rows is None:
         batch_rows = int(list(x.shape)[-2])
 
@@ -224,15 +326,20 @@ def act_width_sharded_linear(
         per_core_N = None
         in0_block_w = None
 
-    # 1D-mcast expects M padded to TILE_SIZE (same as decode path).
     m_dim = int(list(x.shape)[-2])
-    if m_dim < TILE_SIZE:
-        x = ttnn.pad(x, [(0, 0), (0, 0), (0, TILE_SIZE - m_dim), (0, 0)], 0.0)
-    m_work = int(list(x.shape)[-2])
+    m_work = nearest_32(m_dim) if m_dim < TILE_SIZE else m_dim
+    num_cores = grid_size[0] * grid_size[1]
+    act_mc = ttnn.create_sharded_memory_config_(
+        [m_work, k // num_cores],
+        ttnn.CoreGrid(x=grid_size[0], y=grid_size[1]),
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        tile_layout=True,
+        use_height_and_width_as_shard_shape=True,
+    )
 
-    act_mc = _width_sharded_act_mem_config_from_tensor(x, grid_size)
-    x_sh = ttnn.interleaved_to_sharded(x, act_mc)
-    ttnn.deallocate(x)
+    x_sh, owns_x_sh = _ensure_width_sharded_act(x, act_mc)
+    m_work = int(list(x_sh.shape)[-2])
 
     out_mc = _width_sharded_output_mem_config(m_work, n, grid_size)
     kwargs = {
@@ -245,7 +352,14 @@ def act_width_sharded_linear(
     if bias is not None:
         kwargs["bias"] = bias
     out = ttnn.linear(x_sh, weight, **kwargs)
-    ttnn.deallocate(x_sh)
+    # Drop in0 after matmul unless we are returning a resident sharded emb produced
+    # from this same buffer (keep_sharded_output and already-sharded in0 match).
+    if owns_x_sh or not keep_sharded_output:
+        if x_sh is not out:
+            ttnn.deallocate(x_sh)
+
+    if keep_sharded_output:
+        return out
 
     out = ttnn.sharded_to_interleaved(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     if batch_rows < int(list(out.shape)[-2]):
@@ -332,22 +446,10 @@ def l1_sharded_linear(
             x, weight, bias=bias, batch_rows=batch_rows, compute_kernel_config=compute_kernel_config
         )
 
-    if not _l1_sharded_matmul_enabled():
-        kwargs = {"memory_config": ttnn.DRAM_MEMORY_CONFIG, "compute_kernel_config": compute_kernel_config}
-        if bias is not None:
-            kwargs["bias"] = bias
-        if dtype is not None:
-            kwargs["dtype"] = dtype
-        return ttnn.linear(x, weight, **kwargs)
-
-    if program_config is None:
-        program_config = prefill_matmul_program_config(m, k, n)
-
-    kwargs = {
-        "memory_config": ttnn.L1_MEMORY_CONFIG,
-        "program_config": program_config,
-        "compute_kernel_config": compute_kernel_config,
-    }
+    # Large-M (backbone MoE / shared MLP / gate on full sequence): L1 output +
+    # 8×10 prefill CBs clash with residual activations already in L1. DRAM is the
+    # stable denoise path; L1 width-sharding above remains for small-M emb ops.
+    kwargs = {"memory_config": ttnn.DRAM_MEMORY_CONFIG, "compute_kernel_config": compute_kernel_config}
     if bias is not None:
         kwargs["bias"] = bias
     if dtype is not None:
@@ -362,13 +464,14 @@ def l1_sharded_matmul(
     compute_kernel_config=None,
     program_config=None,
 ) -> ttnn.Tensor:
-    """ttnn.matmul with L1 output and a tuned multicast matmul program config."""
-    if not _l1_sharded_matmul_enabled():
+    """ttnn.matmul — L1 only for small-M; large-M stays DRAM (same as l1_sharded_linear)."""
+    m, k, n = infer_matmul_mkn(x, weight)
+    small_m = math.ceil(m / TILE_SIZE) <= 1
+    if not _l1_sharded_matmul_enabled() or not small_m:
         return ttnn.matmul(
             x, weight, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=compute_kernel_config
         )
 
-    m, k, n = infer_matmul_mkn(x, weight)
     if program_config is None:
         program_config = prefill_matmul_program_config(m, k, n)
 
