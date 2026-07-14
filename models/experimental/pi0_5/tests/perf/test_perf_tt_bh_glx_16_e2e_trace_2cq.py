@@ -205,7 +205,5 @@ def test_perf_16_socket_traced_2cq():
         print(f"16-chip pi0.5 socket-KV e2e replay  (N_CAMS={N_CAMS}, steps={cfg.num_denoising_steps})")
         print("=" * 72)
         print(f"  actions shape           : {tuple(last_actions.shape)}  (ah={ah}, ad={ad})")
-        print(f"  1CQ mean ({len(times_1cq)} iters)  : {mean_1cq:.2f} ms  (input H2D serial on CQ0)")
-        print(f"  2CQ mean ({len(times)} iters)  : {mean:.2f} ms  (input H2D on CQ1 || compute)")
-        print(f"  2CQ speedup             : {mean_1cq - mean:+.2f} ms  ({100.0 * (mean_1cq - mean) / mean_1cq:+.1f}%)")
+        print(f"  2CQ mean ({len(times)} iters)  : {mean:.2f} ms  (e2e: max(H2D on CQ1, compute) + D2H)")
         print("=" * 72)
