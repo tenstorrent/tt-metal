@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 from typing import List
 
 import torch
@@ -11,6 +12,50 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import _nearest_y, is_blackhole, is_quasar, is_wormhole_b0, nearest_32
 from models.demos.vision.classification.resnet50.quasar.tt.ttnn_functional_resnet50_model_utils import is_blackhole_p100
+
+# --- Per-op fingerprint logging (WH vs Quasar divergence pinpointing) ---------------------------
+# Enable with RESNET_PCC_LOG=1. After every value-producing op we log a numeric fingerprint of the
+# output tensor, tagged with a stable op NAME (e.g. "layer2_module1.conv2"). Run the model on WH and
+# on the Quasar emulator, then diff the two logs BY NAME: the first op whose fingerprint differs is
+# where the numerics diverge. Names are used (not the running index) because arch-gated ops -- e.g.
+# the WH-only stem tilize/reshards -- shift the index between arches; the name is the stable key.
+#
+# Optionally set RESNET_PCC_DUMP=<dir> to also save each op's torch output to
+# <dir>/op<NNN>_<name>.pt, so exact PCC can be computed offline (dump on WH, load+compare on Quasar).
+#
+# NOTE: enabling this forces a device->host readback per op (implicit sync), so it perturbs timing --
+# use it for numeric comparison, not perf. Disabled by default => zero overhead.
+_PCC_OP_IDX = 0
+
+
+def _reset_op_log():
+    global _PCC_OP_IDX
+    _PCC_OP_IDX = 0
+
+
+def _log_op(name, t):
+    if os.environ.get("RESNET_PCC_LOG") != "1":
+        return t
+    global _PCC_OP_IDX
+    _PCC_OP_IDX += 1
+    idx = _PCC_OP_IDX
+    try:
+        tt = ttnn.to_torch(t).float()
+        f = tt.flatten()
+        logger.info(
+            f"[PCCLOG] op{idx:03d} {name} shape={tuple(t.shape)} dtype={t.dtype} layout={t.layout} "
+            f"mem={t.memory_config().memory_layout} "
+            f"mean={f.mean().item():.6f} std={f.std().item():.6f} "
+            f"min={f.min().item():.6f} max={f.max().item():.6f} absmean={f.abs().mean().item():.6f} "
+            f"nan={int(torch.isnan(f).sum().item())} first8={[round(v, 4) for v in f[:8].tolist()]}"
+        )
+        dump = os.environ.get("RESNET_PCC_DUMP")
+        if dump:
+            os.makedirs(dump, exist_ok=True)
+            torch.save(tt, os.path.join(dump, f"op{idx:03d}_{name}.pt"))
+    except Exception as e:
+        logger.info(f"[PCCLOG] op{idx:03d} {name} <to_torch failed: {type(e).__name__}: {e}>")
+    return t
 
 
 def fit_width_sharded_cores(width_elems, desired_cores, device):
@@ -314,6 +359,7 @@ class resnet50Bottleneck:
             return_weights_and_bias=True,
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
+        out = _log_op(f"{layer_module}.conv1", out)
 
         # bfloat16 doubles every tensor and the residual is pinned through conv2, so the
         # bfloat8_b-tuned act_block_h overflows L1. Cap conv2 at one tile on every arch
@@ -343,6 +389,7 @@ class resnet50Bottleneck:
                 height_sharding,
                 packer_l1_accum_enabled=packer_l1_acc,
             )
+            ds_out = _log_op(f"{layer_module}.downsample", ds_out)
 
         logger.debug(f"Running conv2")
 
@@ -392,6 +439,7 @@ class resnet50Bottleneck:
             return_weights_and_bias=True,
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
+        out = _log_op(f"{layer_module}.conv2", out)
 
         # conv3 is 1x1 conv
         logger.debug(f"Running conv3")
@@ -431,6 +479,7 @@ class resnet50Bottleneck:
             return_weights_and_bias=True,
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
+        out = _log_op(f"{layer_module}.conv3", out)
 
         if not run_downsample_before_conv2:
             ds_out = self.run_downsample_if_req(
@@ -443,6 +492,7 @@ class resnet50Bottleneck:
                 height_sharding,
                 packer_l1_accum_enabled=packer_l1_acc,
             )
+            ds_out = _log_op(f"{layer_module}.downsample", ds_out)
 
         if ds_out.memory_config() != out.memory_config():
             ds_out = ttnn.experimental.quasar.to_memory_config(ds_out, out.memory_config())
@@ -453,6 +503,7 @@ class resnet50Bottleneck:
             ds_out,
             activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)],
         )
+        out = _log_op(f"{layer_module}.add", out)
         ttnn.deallocate(ds_out)
         return out, input_height, input_width
 
@@ -755,6 +806,7 @@ class resnet50:
 
     ## merged runs (first and optimized)
     def run(self, input_tensor, device) -> ttnn.Tensor:
+        _reset_op_log()
         logger.debug(f"==== fold on device")
 
         # run fold
@@ -786,6 +838,7 @@ class resnet50:
             )
         n, c, h, w = fold_output_tensor.shape
         fold_output_tensor = ttnn.experimental.quasar.reshape(fold_output_tensor, (1, 1, n * c * h, w))
+        fold_output_tensor = _log_op("fold", fold_output_tensor)
 
         ttnn.deallocate(input_tensor)
 
@@ -817,6 +870,7 @@ class resnet50:
             return_weights_and_bias=True,
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
+        x = _log_op("stem_conv1", x)
 
         x = ttnn.experimental.quasar.max_pool2d(
             input_tensor=x,
@@ -829,6 +883,7 @@ class resnet50:
             padding=[1, 1],
             dilation=[1, 1],
         )
+        x = _log_op("stem_maxpool", x)
 
         x_height = 56
         x_width = 56
@@ -844,6 +899,7 @@ class resnet50:
             )
             x = ttnn.experimental.quasar.to_memory_config(x, mem_config)
             x = ttnn.experimental.quasar.tilize(x, dtype=self.model_config["ACTIVATIONS_DTYPE"])
+            x = _log_op("stem_tilize", x)
 
         logger.debug(f"==== Running layer 1 module 1")
 
@@ -1087,6 +1143,7 @@ class resnet50:
                 self.device.arch(), math_fidelity=ttnn.MathFidelity.LoFi
             ),
         )
+        x = _log_op("avgpool", x)
 
         # WIDTH_SHARDED activation for fc, on the SAME rectangular grid as the fc
         # 1D-mcast matmul (mcast_in0 requires the input sharding to match the matmul grid). Both
@@ -1104,6 +1161,7 @@ class resnet50:
         x = ttnn.experimental.quasar.to_memory_config(x, width_mem_config)
 
         x = self.fc(x)
+        x = _log_op("fc", x)
         desired_shape = list(x.shape)
         desired_shape[-1] = 1000
         x = ttnn.experimental.quasar.untilize_with_unpadding(
@@ -1120,5 +1178,6 @@ class resnet50:
                 x.shape[3],
             ),
         )
+        x = _log_op("output", x)
 
         return x
