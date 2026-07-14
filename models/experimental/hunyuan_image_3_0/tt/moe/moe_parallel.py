@@ -25,6 +25,7 @@ from models.common.lightweightmodule import LightweightModule
 from .gate import HunyuanTtTopKGate
 from .mlp import HunyuanTtMLP
 from ..cache import cache_file
+from ..matmul_utils import l1_sharded_linear
 from ..parallel_utils import sp_gather, sp_shard
 
 
@@ -198,9 +199,7 @@ class HunyuanTtMoEParallel(LightweightModule):
         """Run local expert `el` (its weight slice differs per device)."""
         wgu = self.w_gate_up_experts[el]  # [H, 2I] (different global expert per device)
         wdn = self.w_down_experts[el]  # [I, H]
-        gu = ttnn.linear(
-            x, wgu, compute_kernel_config=self.compute_kernel_config, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        gu = l1_sharded_linear(x, wgu, compute_kernel_config=self.compute_kernel_config)
         x1, x2 = ttnn.chunk(gu, 2, dim=-1)
         ttnn.deallocate(gu)
         act = ttnn.silu(x2)
@@ -208,9 +207,7 @@ class HunyuanTtMoEParallel(LightweightModule):
         ttnn.deallocate(x1)
         ttnn.deallocate(x2)
         ttnn.deallocate(act)
-        out = ttnn.linear(
-            h, wdn, compute_kernel_config=self.compute_kernel_config, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        out = l1_sharded_linear(h, wdn, compute_kernel_config=self.compute_kernel_config)
         ttnn.deallocate(h)
         return out
 
