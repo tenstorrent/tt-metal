@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+#include <array>
 #include <functional>
 
 #include <tt-metalium/constants.hpp>
@@ -18,6 +20,8 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "device/repeat_device_operation.hpp"
 #include "device/repeat_utils.hpp"
+#include "codegen/repeat_codegen_device_operation.hpp"
+#include "codegen/repeat_codegen_supported.hpp"
 #include "repeat.hpp"
 
 namespace ttnn::operations::data_movement::detail {
@@ -154,6 +158,96 @@ ttnn::Tensor repeat_dim_tile(
         tensor, repetitions, dim, output_mem_config, higher, rep_dim_pages, lower, tile_page_size);
 }
 
+// Single-dim codegen repeat step. repeat_codegen's kernels assume a 4D input
+// (ops/repeat/spec.py's _page_map / build_repeat_rm_factory), so `tensor` is
+// padded up to 4D here (prepending 1s) regardless of its original rank; the
+// output is viewed back down to the true logical shape before returning.
+ttnn::Tensor repeat_dim_codegen(
+    const ttnn::Tensor& tensor, const uint32_t dim, const uint32_t repetitions, const MemoryConfig& output_mem_config) {
+    const auto& shape = tensor.logical_shape();
+    const uint32_t ndim = shape.rank();
+    TT_FATAL(ndim <= 4, "RepeatCodegen supports rank <= 4, got {}", ndim);
+    const uint32_t pad = ndim < 4 ? 4 - ndim : 0;
+
+    ttnn::Tensor working = tensor;
+    if (pad > 0) {
+        ttsl::SmallVector<uint32_t> padded_shape(4, 1);
+        std::copy(shape.cbegin(), shape.cend(), padded_shape.begin() + pad);
+        working = ttnn::view(tensor, ttnn::Shape(padded_shape));
+    }
+    const uint32_t rep_dim_4d = dim + pad;
+    const auto& shape4d = working.logical_shape();
+
+    uint32_t lower_pages = 0;
+    uint32_t rep_dim_pages = 0;
+    uint32_t total_out_pages = 0;
+    uint32_t stick_size = 0;
+
+    if (working.layout() == ttnn::TILE_LAYOUT) {
+        const uint32_t Ht = (shape4d[2] + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
+        const uint32_t Wt = (shape4d[3] + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
+        const std::array<uint32_t, 4> dim_pages = {shape4d[0], shape4d[1], Ht, Wt};
+        lower_pages = 1;
+        for (uint32_t d = rep_dim_4d + 1; d < 4; ++d) {
+            lower_pages *= dim_pages[d];
+        }
+        rep_dim_pages = dim_pages[rep_dim_4d];
+        total_out_pages = dim_pages[0] * dim_pages[1] * dim_pages[2] * dim_pages[3] * repetitions;
+        // stick_size stays 0: unused on the TILE branch.
+    } else {
+        stick_size = shape4d[3] * working.element_size();
+        if (rep_dim_4d == 3) {
+            // Last-dim (within-stick) path: page count is unaffected by the repeat.
+            total_out_pages = shape4d[0] * shape4d[1] * shape4d[2];
+        } else {
+            const std::array<uint32_t, 4> dim_pages = {shape4d[0], shape4d[1], shape4d[2], 1};
+            lower_pages = 1;
+            for (uint32_t d = rep_dim_4d + 1; d < 4; ++d) {
+                lower_pages *= dim_pages[d];
+            }
+            const uint32_t total_src_pages = dim_pages[0] * dim_pages[1] * dim_pages[2] * dim_pages[3];
+            rep_dim_pages = dim_pages[rep_dim_4d];
+            total_out_pages = total_src_pages * repetitions;
+        }
+    }
+
+    ttnn::prim::RepeatCodegenParams params{
+        .rep_dim = rep_dim_4d,
+        .num_repeats = repetitions,
+        .lower_pages = lower_pages,
+        .rep_dim_pages = rep_dim_pages,
+        .total_out_pages = total_out_pages,
+        .stick_size = stick_size,
+        .output_mem_config = output_mem_config,
+    };
+
+    auto out = ttnn::prim::repeat_codegen(working, params);
+
+    auto expected_shape = shape;
+    expected_shape[dim] *= repetitions;
+    return ttnn::view(out, ttnn::Shape(expected_shape));
+}
+
+// Decomposes a (possibly multi-dim) repeat into a sequence of single-dim
+// prim::repeat_codegen calls, mirroring the reverse-order per-dim loops
+// above (native TILE/RM) and ops/repeat/repeat.py's RepeatCodegen.repeat --
+// each single-dim step is independent (orthogonal axes), so iteration order
+// doesn't affect correctness.
+ttnn::Tensor repeat_via_codegen(
+    const ttnn::Tensor& tensor,
+    const ttsl::SmallVector<uint32_t>& repetition_vector,
+    const MemoryConfig& output_mem_config) {
+    ttnn::Tensor working_tensor = tensor;
+    for (auto it = repetition_vector.crbegin(); it != repetition_vector.crend(); ++it) {
+        if (*it == 1) {
+            continue;
+        }
+        const auto dim = repetition_vector.crend() - it - 1;
+        working_tensor = repeat_dim_codegen(working_tensor, dim, *it, output_mem_config);
+    }
+    return working_tensor;
+}
+
 }  // namespace ttnn::operations::data_movement::detail
 
 namespace ttnn {
@@ -161,7 +255,8 @@ namespace ttnn {
 ttnn::Tensor repeat(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<uint32_t>& repetition_vector,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    const std::string& implementation) {
     auto [working_tensor, working_repetition_vector] =
         operations::data_movement::detail::match_input_rank(input_tensor, repetition_vector);
     // Strip shard_spec from sharded input; device op re-derives for new output shape.
@@ -196,6 +291,31 @@ ttnn::Tensor repeat(
     if (std::all_of(
             working_repetition_vector.cbegin(), working_repetition_vector.cend(), [](auto x) { return x == 1; })) {
         return input_tensor;
+    }
+
+    {
+        namespace repeat_codegen = operations::data_movement::repeat_codegen;
+        const auto sel = repeat_codegen::parse_implementation(implementation);
+        // Sharded *output* has no resharding path in this port (codegen only ever produces an
+        // interleaved output tensor); gate it here rather than in supported_by_codegen(), which
+        // is about the input side per the manifest's hand-authored sharded case.
+        const bool codegen_output_ok = !output_mem_config.is_sharded();
+        if (sel != repeat_codegen::ImplementationSelector::Native) {
+            const bool supported =
+                codegen_output_ok && repeat_codegen::supported_by_codegen(working_tensor, working_repetition_vector);
+            if (sel == repeat_codegen::ImplementationSelector::Codegen) {
+                TT_FATAL(
+                    supported,
+                    "repeat: implementation=\"codegen\" requested but input is not supported by RepeatCodegen");
+                return operations::data_movement::detail::repeat_via_codegen(
+                    working_tensor, working_repetition_vector, output_mem_config);
+            }
+            // Auto: codegen iff supported and not perf-demoted; else fall through to native below.
+            if (supported && !repeat_codegen::is_demoted(working_tensor, working_repetition_vector)) {
+                return operations::data_movement::detail::repeat_via_codegen(
+                    working_tensor, working_repetition_vector, output_mem_config);
+            }
+        }
     }
 
     // Native path: sharded input, single-axis repeat, predicate accepts. Else composite.
@@ -289,9 +409,13 @@ ttnn::Tensor repeat(
     return working_tensor;
 }
 
-ttnn::Tensor repeat(const ttnn::Tensor& input_tensor, const ttnn::Shape& repeat_dims) {
+ttnn::Tensor repeat(
+    const ttnn::Tensor& input_tensor, const ttnn::Shape& repeat_dims, const std::string& implementation) {
     return ttnn::repeat(
-        input_tensor, ttsl::SmallVector<uint32_t>(repeat_dims.cbegin(), repeat_dims.cend()), std::nullopt);
+        input_tensor,
+        ttsl::SmallVector<uint32_t>(repeat_dims.cbegin(), repeat_dims.cend()),
+        std::nullopt,
+        implementation);
 }
 
 }  // namespace ttnn
