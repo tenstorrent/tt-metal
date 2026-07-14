@@ -12,10 +12,6 @@ on:
       docker-image:
         required: true
         type: string
-      extra-tag:
-        required: false
-        type: string
-        default: "in-service"
       models-to-run:
         required: false
         type: string
@@ -30,7 +26,7 @@ jobs:
   load-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.apply-runner-labels.outputs.matrix }}
+      matrix: ${{ steps.apply-filters.outputs.matrix }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/single_card_ttnn_models_frequent_tests.yaml
     steps:
@@ -79,16 +75,6 @@ jobs:
             echo "$FILTERED" >> "$GITHUB_OUTPUT"
             echo "EOF" >> "$GITHUB_OUTPUT"
           fi
-      - name: Apply runner labels (extra-tag)
-        id: apply-runner-labels
-        run: |
-          MATRIX='${{ steps.apply-filters.outputs.matrix }}'
-          UPDATED=$(echo "$MATRIX" | jq -c \
-            --arg tag "${{ inputs.extra-tag }}" \
-            'map(.runs_on |= map(if . == "in-service" then $tag else . end))')
-          echo "matrix<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$UPDATED" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
 
   single-card-ttnn-models-frequent-tests:
     needs: load-test-matrix
