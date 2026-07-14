@@ -118,6 +118,19 @@ _FOLD_CONTROL_RMSE = 0.002
 _FOLD_EQUIV_PCC = 0.9995
 _FOLD_EQUIV_RMSE = 0.015
 
+# Bounds for the LTX_PROBE_ADDCMUL_SPLIT control. The probe is not a shipping path: it swaps
+# addcmul(t, t1, t2) for the algebraically identical add(t, multiply(t1, t2)) at the same three
+# residuals the fold touches, perturbing nothing but bf16 rounding. Its whole job is to be the
+# yardstick the fold's 48-layer drift is read against, and it is only a yardstick while the kick it
+# injects per layer is no bigger than the fold's — so the bounds here are deliberately the fold's
+# own. Red means the two perturbations are NOT magnitude-matched, and the 48-layer comparison is
+# unnormalized: a control that kicks harder is expected to drift further, which would prove nothing
+# about the fold.
+_PROBE_CONTROL_PCC = _FOLD_CONTROL_PCC
+_PROBE_CONTROL_RMSE = _FOLD_CONTROL_RMSE
+_PROBE_EQUIV_PCC = _FOLD_EQUIV_PCC
+_PROBE_EQUIV_RMSE = _FOLD_EQUIV_RMSE
+
 
 # ---------------------------------------------------------------------------
 # Parametrize lists
@@ -977,6 +990,45 @@ def _assert_fold_equivalence(forward_to_host, *, fused_video, fused_audio) -> No
     logger.info("PASSED fold equivalence")
 
 
+def _assert_probe_split_magnitude(forward_to_host, *, addcmul_video, addcmul_audio) -> None:
+    """Size LTX_PROBE_ADDCMUL_SPLIT's per-layer kick against the fold's, on the unfolded path.
+
+    The probe reaches the three gated residuals only through _gated_residual(), which the fold
+    compiles out, so it perturbs anything at all only under LTX_FOLD_GATED_RESIDUAL=0 — which is
+    also the baseline the 48-layer A/B reads both the fold and this control against. That makes the
+    two perturbations single-flag deltas off one common baseline, hitting the same three sites.
+
+    The caller has already run the plain-addcmul path. Setting the module flag re-runs the same
+    weights, inputs, device and process through the split, so the difference is the rounding change
+    and nothing else. Running the split twice pins the device's run-to-run floor, which must sit
+    well inside the bound for the bound to mean anything.
+    """
+    assert not transformer_ltx.LTX_FOLD_GATED_RESIDUAL, (
+        "the fold absorbs the three addcmuls into the to_out epilogue, so _gated_residual — the "
+        "probe's only consumer — never runs and the probe measures nothing"
+    )
+    assert not transformer_ltx.LTX_PROBE_ADDCMUL_SPLIT, "the plain-addcmul path must be the one already run"
+    assert addcmul_audio is not None, "the gated residuals this probe perturbs exist only on the AV path"
+
+    transformer_ltx.LTX_PROBE_ADDCMUL_SPLIT = True
+    try:
+        split_video, split_audio = forward_to_host()
+        control_video, control_audio = forward_to_host()
+    finally:
+        transformer_ltx.LTX_PROBE_ADDCMUL_SPLIT = False
+
+    logger.info("probe A/B — noise floor, split vs split (video):")
+    assert_quality(split_video, control_video, pcc=_PROBE_CONTROL_PCC, relative_rmse=_PROBE_CONTROL_RMSE)
+    logger.info("probe A/B — noise floor, split vs split (audio):")
+    assert_quality(split_audio, control_audio, pcc=_PROBE_CONTROL_PCC, relative_rmse=_PROBE_CONTROL_RMSE)
+
+    logger.info("probe A/B — split vs addcmul (video):")
+    assert_quality(addcmul_video, split_video, pcc=_PROBE_EQUIV_PCC, relative_rmse=_PROBE_EQUIV_RMSE)
+    logger.info("probe A/B — split vs addcmul (audio):")
+    assert_quality(addcmul_audio, split_audio, pcc=_PROBE_EQUIV_PCC, relative_rmse=_PROBE_EQUIV_RMSE)
+    logger.info("PASSED probe magnitude")
+
+
 def _run_inner_step(
     *,
     mesh_device,
@@ -993,6 +1045,7 @@ def _run_inner_step(
     checkpoint_variant: str,
     use_forward_alias: bool,
     fold_ab: bool = False,
+    probe_ab: bool = False,
 ):
     """Shared body for the model forward tests; use_forward_alias picks tt_model(...) vs .forward(...)."""
     # Checkpoint variant only affects AV weight loading; skip the redundant copy in video mode.
@@ -1167,6 +1220,9 @@ def _run_inner_step(
     if fold_ab:
         _assert_fold_equivalence(_forward_to_host, fused_video=tt_video, fused_audio=tt_audio)
 
+    if probe_ab:
+        _assert_probe_split_magnitude(_forward_to_host, addcmul_video=tt_video, addcmul_audio=tt_audio)
+
     del tt_model
 
     if do_pcc:
@@ -1261,6 +1317,58 @@ def test_ltx_fold_gated_residual(
         checkpoint_variant=checkpoint_variant,
         use_forward_alias=True,
         fold_ab=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    _LTX_TRANSFORMER_MESH_PARAMS,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(("F", "H", "W"), _LTX_TRANSFORMER_SHAPE_PARAMS)
+@pytest.mark.parametrize("checkpoint_variant", _LTX_TRANSFORMER_CKPT_PARAMS)
+def test_ltx_probe_addcmul_split(
+    mesh_device,
+    sp_axis,
+    tp_axis,
+    num_links,
+    topology,
+    is_fsdp,
+    F,
+    H,
+    W,
+    checkpoint_variant,
+    reset_seeds,
+) -> None:
+    """Size the LTX_PROBE_ADDCMUL_SPLIT control's per-layer perturbation against the fold's.
+
+    The 48-layer A/B reads the fold's final-latent drift against this control's, and that only
+    licenses a conclusion about the fold while the two kick the sampler comparably hard per layer.
+    Nothing measured the control's kick; this does, on the same block, weights, seed and bounds the
+    fold's own 1-layer gate uses, so the two numbers are directly comparable.
+
+    AV-only and unfolded-only: the three residuals the probe perturbs exist only on the AV path,
+    and the fold compiles out _gated_residual, the probe's only consumer.
+    """
+    if transformer_ltx.LTX_FOLD_GATED_RESIDUAL:
+        pytest.skip("LTX_FOLD_GATED_RESIDUAL=1: the fold compiles out _gated_residual, the probe's only consumer")
+    if transformer_ltx.LTX_PROBE_ADDCMUL_SPLIT:
+        pytest.skip("LTX_PROBE_ADDCMUL_SPLIT=1: the plain-addcmul baseline this measures against is compiled out")
+    _run_inner_step(
+        mesh_device=mesh_device,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_links=num_links,
+        topology=topology,
+        is_fsdp=is_fsdp,
+        F=F,
+        H=H,
+        W=W,
+        has_audio=True,
+        run_pcc=True,
+        checkpoint_variant=checkpoint_variant,
+        use_forward_alias=True,
+        probe_ab=True,
     )
 
 

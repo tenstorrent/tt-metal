@@ -1,0 +1,17 @@
+TT_METAL_HOME: /home/smarton/tt-metal/.claude/worktrees/ltxperf-tip
+PYTHON_ENV_DIR: /home/smarton/tt-metal/.claude/worktrees/ltxperf-tip/python_env
+PYTHONPATH: /home/smarton/tt-metal/.claude/worktrees/ltxperf-tip/ttnn:/home/smarton/tt-metal/.claude/worktrees/ltxperf-tip:/home/smarton/tt-metal/.claude/worktrees/ltxperf-tip/tools
+TT_DIT_CACHE_DIR: /home/smarton/.cache/tt-dit-ltxrt
+TT_METAL_CACHE: /home/smarton/.cache/tt-metal-cache-ltxrt
+LTX_CHECKPOINT: /home/kevinmi/.cache/huggingface/hub/models--Lightricks--LTX-2.3/snapshots/76730e634e70a28f4e8d51f5e29c08e40e2d8e74/ltx-2.3-22b-distilled-1.1.safetensors
+TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES: "0"
+# The probe reaches the three gated residuals only via _gated_residual(), which the fold compiles
+# out — so it must be measured unfolded. This is also the baseline the 48-layer A/B reads both the
+# fold and this control against, so the 1-layer and 48-layer numbers describe the same two paths.
+LTX_FOLD_GATED_RESIDUAL: "0"
+# The test flips this in-process; it must start from the plain-addcmul baseline.
+LTX_PROBE_ADDCMUL_SPLIT: "0"
+# Pin the concurrently-edited attention path to its committed behaviour, so an uncommitted edit
+# landing mid-run cannot contaminate the probe's magnitude.
+LTX_DEDUP_GATE_GATHER: "0"
+LTX_DEDUP_GATE_MUTANT: "0"
