@@ -82,11 +82,7 @@ bool groupnorm_legacy_rm_input_fits_l1(
     } else {
         num_out_blocks = num_out_blocks_arg == 0 ? 1 : static_cast<uint32_t>(num_out_blocks_arg);
     }
-    if (num_out_blocks > block_ht) {
-        // Factory TT_FATALs when the explicit value exceeds block_ht; for the auto heuristic we clamp so
-        // the estimate still reflects the largest CB footprint the factory could actually allocate.
-        num_out_blocks = block_ht;
-    }
+    num_out_blocks = std::min(num_out_blocks, block_ht);
 
     // CB footprint, mirroring the factory's resident-path estimate (bf16 legacy). Seven per-out-block CBs
     // (in0/in/out/x/xmm/xmm2/xmm3), the resident tilized group (c_17), a flat small-CB allowance, plus
