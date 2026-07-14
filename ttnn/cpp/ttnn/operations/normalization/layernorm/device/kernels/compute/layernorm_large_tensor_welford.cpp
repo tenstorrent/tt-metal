@@ -549,10 +549,10 @@ void kernel_main() {
                         cb_inb, i, i);
                 }
                 cb_inb_obj.pop_front(block.full_block_size());
-                reconfig_data_format_srca(cb_inb, cb_ex2pe);
             }
 
-            // Multiply by 1/(√(Var(X) + ε))
+            // Multiply by 1/(√(Var(X) + ε)). SrcA currently holds cb_inb (fused) or cb_in
+            // (non-fused), the last operand read above; switch it to cb_ex2pe's format.
             reconfig_data_format_srca(fuse_pre_add ? cb_inb : cb_in, cb_ex2pe);
             binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe);
             for (auto i : block.local()) {
