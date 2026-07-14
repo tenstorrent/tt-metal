@@ -155,7 +155,10 @@ def test_ng_inplace_cache_hit_sharded_readdresses(device, isolate_program_cache)
         tt_b = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
         with device.cache_entries_counter.measure():
             tt_c = ttnn.add(tt_a, tt_b, output_tensor=tt_a)  # in-place, sharded (output preallocated)
-        assert tt_c.buffer_address() == tt_a.buffer_address()  # prove it's actually in-place
+        # prove it's actually in-place. NOTE: buffer_address() requires a single-address buffer, which
+        # standard create_sharded_memory_config gives; a per-core-allocation config would TT_FATAL here
+        # (use experimental_per_core_buffer_address if this test is ever parametrized onto one).
+        assert tt_c.buffer_address() == tt_a.buffer_address()
         keep_alive += [tt_a, tt_b, tt_c]
         assert_with_pcc(a + b, ttnn.to_torch(tt_c), 0.999)
 
