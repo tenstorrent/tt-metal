@@ -137,6 +137,10 @@ void kernel_main() {
             const uint32_t wleft_base = get_common_arg_val<uint32_t>(4);
             const uint32_t wright_base = get_common_arg_val<uint32_t>(5);
             const uint32_t pad2_right = get_common_arg_val<uint32_t>(6);
+            const uint32_t logical_h = get_common_arg_val<uint32_t>(7);         // 0 = no H masking
+            const uint32_t device_h_offset = get_common_arg_val<uint32_t>(8);   // global H of this shard row 0
+            const uint32_t logical_w = get_common_arg_val<uint32_t>(9);         // 0 = no W masking
+            const uint32_t device_w_offset = get_common_arg_val<uint32_t>(10);  // global W of this shard col 0
             const auto padded = TensorAccessor(padded_args, padded_addr, stick_size);
             const uint32_t Wd = num_interior_sticks;  // interior W (== num_sticks_per_halo_dim)
             const uint32_t pH = padding_h;
@@ -144,6 +148,7 @@ void kernel_main() {
             const uint32_t Hp = h_total;                      // padded H = Hd + 2*pH
             const uint32_t Wp = Wd + pad2_left + pad2_right;  // padded W
             const uint32_t h_sec = h_halo_hbot_base;          // H-bot compact base (H-top base = 0)
+            const uint64_t zeros_noc = get_noc_addr(MEM_ZEROS_BASE);
             // Batch compact->L1 reads and L1->padded writes to amortize the NOC barriers: per-stick
             // read+write barriers dominate otherwise (thousands of border sticks, serial on this core).
             constexpr uint32_t BATCH = 16;
@@ -161,8 +166,13 @@ void kernel_main() {
                 noc_async_write_barrier();
                 n = 0;
             };
-            auto copy = [&](uint32_t src, uint32_t dpage) {
-                noc_async_read(get_noc_addr(src, dst_accessor), l1_base + n * stick_size, stick_size);
+            // masked reads pull zeros from MEM_ZEROS instead of the compact buffer (logical padding region).
+            auto copy = [&](uint32_t src, uint32_t dpage, bool masked) {
+                if (masked) {
+                    noc_async_read(zeros_noc, l1_base + n * stick_size, stick_size);
+                } else {
+                    noc_async_read(get_noc_addr(src, dst_accessor), l1_base + n * stick_size, stick_size);
+                }
                 dpg[n++] = dpage;
                 if (n == BATCH) {
                     flush();
@@ -173,20 +183,28 @@ void kernel_main() {
                 const uint32_t t = gi / Hp;
                 const uint32_t hp = gi - t * Hp;
                 const uint32_t dframe = t * Hp * Wp + hp * Wp;
+                // A content row (pH <= hp < pH+Hd) is masked when its global H index reaches logical_h; the
+                // whole row's border (W-edge + interior) is then zeroed.
+                const bool h_row_masked =
+                    logical_h > 0 && hp >= pH && hp < pH + Hd && device_h_offset + (hp - pH) >= logical_h;
                 if (direction == 0) {
                     for (uint32_t wc = 0; wc < pad2_left; wc++) {
-                        copy(wleft_base + t * Hp * pad2_left + hp * pad2_left + wc, dframe + wc);
+                        copy(wleft_base + t * Hp * pad2_left + hp * pad2_left + wc, dframe + wc, h_row_masked);
                     }
                     if (hp < pH || hp >= pH + Hd) {
                         const uint32_t pr = (hp < pH) ? hp : (hp - pH - Hd);
                         const uint32_t hbase = (hp < pH) ? 0u : h_sec;
                         for (uint32_t w = 0; w < Wd; w++) {
-                            copy(hbase + t * pH * Wd + pr * Wd + w, dframe + pad2_left + w);
+                            const bool w_masked = logical_w > 0 && device_w_offset + w >= logical_w;
+                            copy(hbase + t * pH * Wd + pr * Wd + w, dframe + pad2_left + w, w_masked);
                         }
                     }
                 } else {
                     for (uint32_t wc = 0; wc < pad2_right; wc++) {
-                        copy(wright_base + t * Hp * pad2_right + hp * pad2_right + wc, dframe + pad2_left + Wd + wc);
+                        copy(
+                            wright_base + t * Hp * pad2_right + hp * pad2_right + wc,
+                            dframe + pad2_left + Wd + wc,
+                            h_row_masked);
                     }
                 }
             }

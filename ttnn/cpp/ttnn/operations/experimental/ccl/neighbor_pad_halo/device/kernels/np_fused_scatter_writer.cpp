@@ -20,6 +20,10 @@ void kernel_main() {
     const uint32_t stick_count = get_arg_val<uint32_t>(4);
     const uint32_t compact_ready_addr = get_arg_val<uint32_t>(5);  // local sem: W-readers signal compact ready
     const uint32_t num_readers = get_arg_val<uint32_t>(6);         // W-reader broadcast count (0 = interior-only)
+    const uint32_t logical_h = get_arg_val<uint32_t>(7);           // 0 = no H masking
+    const uint32_t device_h_offset = get_arg_val<uint32_t>(8);     // global H index of this shard's row 0
+    const uint32_t logical_w = get_arg_val<uint32_t>(9);           // 0 = no W masking
+    const uint32_t device_w_offset = get_arg_val<uint32_t>(10);    // global W index of this shard's col 0
 
     constexpr uint32_t page_size = get_compile_time_arg_val(0);
     constexpr uint32_t outer = get_compile_time_arg_val(1);
@@ -113,6 +117,27 @@ void kernel_main() {
         waited = true;
     }
 
+    const bool do_mask = (logical_h > 0) || (logical_w > 0);
+    // Logical mask for an interior stick: zeroed when its GLOBAL content (h,w) reaches logical_h/logical_w.
+    auto interior_masked = [&](uint32_t gi) -> bool {
+        const uint32_t t = gi / (Hd * Wd);
+        const uint32_t rem = gi - t * (Hd * Wd);
+        const uint32_t h = rem / Wd;
+        const uint32_t w = rem - h * Wd;
+        return (logical_h > 0 && device_h_offset + h >= logical_h) ||
+               (logical_w > 0 && device_w_offset + w >= logical_w);
+    };
+    const uint64_t zeros_noc = get_noc_addr(MEM_ZEROS_BASE);
+    auto zero_l1 = [&](uint32_t l1_addr) {
+        uint32_t off = 0;
+        for (; off + MEM_ZEROS_SIZE <= page_size; off += MEM_ZEROS_SIZE) {
+            noc_async_read(zeros_noc, l1_addr + off, MEM_ZEROS_SIZE);
+        }
+        if (off < page_size) {
+            noc_async_read(zeros_noc, l1_addr + off, page_size - off);
+        }
+    };
+
     for (uint32_t gi = stick_start; gi < end; gi += batch) {
         const uint32_t n = (end - gi < batch) ? (end - gi) : batch;
         if (!waited && num_readers > 0 && (gi + n) > n_int) {
@@ -120,7 +145,12 @@ void kernel_main() {
             waited = true;
         }
         for (uint32_t k = 0; k < n; k++) {
-            noc_async_read(src_noc(gi + k), l1_base + k * page_size, page_size);
+            const uint32_t gk = gi + k;
+            if (do_mask && gk < n_int && interior_masked(gk)) {
+                zero_l1(l1_base + k * page_size);
+            } else {
+                noc_async_read(src_noc(gk), l1_base + k * page_size, page_size);
+            }
         }
         noc_async_read_barrier();
         for (uint32_t k = 0; k < n; k++) {

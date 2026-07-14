@@ -49,6 +49,12 @@ struct NpHaloParams {
     bool output_padded = false;
     bool border_only = false;
 
+    // Logical masking (0 = off): zero output positions whose GLOBAL content index is >= logical_h (rows)
+    // or >= logical_w (cols). Mirrors neighbor_pad_async's fused logical_h so a mesh-padded shard's
+    // padding region stays zero without a separate mul-mask. Applied in the interior + W-border writers.
+    uint32_t logical_h = 0;
+    uint32_t logical_w = 0;
+
     // GlobalSemaphore is not default constructible, so an explicit constructor is required.
     NpHaloParams(
         uint32_t np_padding_h_,
@@ -99,7 +105,9 @@ struct NpHaloParams {
         "input_pad_h",
         "input_pad_w",
         "output_padded",
-        "border_only");
+        "border_only",
+        "logical_h",
+        "logical_w");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -116,7 +124,9 @@ struct NpHaloParams {
             input_pad_h,
             input_pad_w,
             output_padded,
-            border_only);
+            border_only,
+            logical_h,
+            logical_w);
     }
 };
 

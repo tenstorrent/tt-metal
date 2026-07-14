@@ -262,6 +262,7 @@ def test_neighbor_pad_halo_fold(mesh_device, device_params, input_shape):
         memory_config=mem,
         mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
     )
+    logical_h = int(os.environ.get("FOLD_LOGICAL_H", "0"))
     full = ttnn.experimental.neighbor_pad_async(
         inp_mesh,
         [h_dim, w_dim],
@@ -275,6 +276,7 @@ def test_neighbor_pad_halo_fold(mesh_device, device_params, input_shape):
         memory_config=mem,
         topology=ttnn.Topology.Linear,
         persistent_output_buffer=persist,
+        logical_h=logical_h,
     )
     ttnn.synchronize_device(mesh_device, sub_device_ids=[sub_id])
     # Compact halo scratch (op writes it internally) + padded output (op fills interior + border).
@@ -314,6 +316,7 @@ def test_neighbor_pad_halo_fold(mesh_device, device_params, input_shape):
         np_pad2_num_links=num_links,
         padding_mode="zeros",
         padded_output=padded,
+        logical_h=logical_h,
     )
     ttnn.synchronize_device(mesh_device, sub_device_ids=[sub_id])
 

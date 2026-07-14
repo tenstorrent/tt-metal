@@ -375,11 +375,13 @@ class CCLManager:
         padding_mode: str = "zeros",
         input_pad_h: int = 0,
         input_pad_w: int = 0,
+        logical_h: int = 0,
+        logical_w: int = 0,
     ) -> ttnn.Tensor:
         """Faster drop-in for neighbor_pad_persistent_buffer: fabric halo exchange (border only) with the
         interior copied concurrently on free cores and the border scattered by the W-readers, producing the
-        full [.,H+2pH,W+2pW,.] padded buffer. Requires 2D padding (both H and W parallel). The op is
-        masking-agnostic: apply logical_h/logical_w zeroing to `tensor` before calling."""
+        full [.,H+2pH,W+2pW,.] padded buffer. Requires 2D padding (both H and W parallel). logical_h/logical_w
+        (0 = off) zero the padded output's mesh-padding region in-kernel (no separate mul-mask)."""
         dim2 = dims[1] if len(dims) > 1 else None
         assert dim2 is not None, "neighbor_pad_halo_full requires 2D (H+W) padding; use neighbor_pad for 1D"
         padded = self.get_np_ping_pong_buffer(list(tensor.shape), dims, pad_left, pad_right, dtype=tensor.get_dtype())
@@ -414,6 +416,8 @@ class CCLManager:
             input_pad_h=input_pad_h,
             input_pad_w=input_pad_w,
             padded_output=padded,
+            logical_h=logical_h,
+            logical_w=logical_w,
         )
         return padded
 

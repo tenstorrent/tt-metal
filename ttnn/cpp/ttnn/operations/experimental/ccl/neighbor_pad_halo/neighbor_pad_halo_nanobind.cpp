@@ -77,7 +77,9 @@ void bind_neighbor_pad_halo(nb::module_& mod) {
         nb::arg("input_pad_h") = 0,
         nb::arg("input_pad_w") = 0,
         nb::arg("padded_output") = nb::none(),
-        nb::arg("border_only") = false);
+        nb::arg("border_only") = false,
+        nb::arg("logical_h") = 0,
+        nb::arg("logical_w") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

@@ -60,6 +60,8 @@ ttnn::Tensor neighbor_pad_halo(
     uint32_t input_pad_h = 0,
     uint32_t input_pad_w = 0,
     const std::optional<ttnn::Tensor>& padded_output = std::nullopt,
-    bool border_only = false);
+    bool border_only = false,
+    uint32_t logical_h = 0,
+    uint32_t logical_w = 0);
 
 }  // namespace ttnn::experimental

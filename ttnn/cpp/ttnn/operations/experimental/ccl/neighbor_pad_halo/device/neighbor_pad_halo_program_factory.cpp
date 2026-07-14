@@ -867,12 +867,25 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     const bool scatter_border = op.output_padded && tensor_args.padded_output.has_value() && compute_grid_size.x > 1;
     Buffer* padded_buf_w = scatter_border ? tensor_args.padded_output.value().buffer() : nullptr;
     constexpr uint32_t w_scatter_scratch_cb = tt::CB::c_in1;  // private L1 scratch for the border scatter
+    // Logical-mask offsets: a stick is zeroed when its GLOBAL content index (device offset + local index)
+    // is >= logical_h/logical_w. Mirrors neighbor_pad_async's fused masking.
+    const uint32_t mask_device_h_offset = device_index * input_halo_dim_size;
+    const uint32_t mask_device_w_offset =
+        op.np_pad2_cluster_axis.has_value()
+            ? ::ttnn::ccl::get_linearized_index_from_physical_coord(
+                  tensor_args.input_tensor, mesh_coordinate, op.np_pad2_cluster_axis.value()) *
+                  num_sticks_per_halo_dim
+            : 0u;
     auto w_border_common = [&](std::vector<uint32_t>& crta) {
         if (scatter_border) {
             crta.push_back(padded_buf_w->address());
             crta.push_back(w_section_wleft_base);
             crta.push_back(w_section_wright_base);
             crta.push_back(static_cast<uint32_t>(op.np_pad2_right));
+            crta.push_back(op.logical_h);
+            crta.push_back(mask_device_h_offset);
+            crta.push_back(op.logical_w);
+            crta.push_back(mask_device_w_offset);
         }
     };
     auto w_border_scratch_cb = [&](const CoreRangeSet& cores) {
@@ -1397,7 +1410,11 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                          start,
                          count,
                          /*compact_ready=*/0u,
-                         /*num_readers=*/0u});
+                         /*num_readers=*/0u,
+                         op.logical_h,
+                         mask_device_h_offset,
+                         op.logical_w,
+                         mask_device_w_offset});
                     assigned += count;
                 }
             }
