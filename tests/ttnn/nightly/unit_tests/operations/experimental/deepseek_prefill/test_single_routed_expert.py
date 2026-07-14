@@ -122,6 +122,7 @@ def run_single_routed_expert(
         torch_weights=[weights],  # List with single expert weights
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
+        activation=ttnn.RoutedExpertActivation.Silu,
     )
 
     # Run TTNN forward
@@ -305,6 +306,7 @@ def run_single_routed_expert_faked_token_count(
         torch_weights=[weights],
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
+        activation=ttnn.RoutedExpertActivation.Silu,
     )
 
     tt_output = tt_expert(tt_input, expert_token_counts_tt, expert_region_offsets_tt)

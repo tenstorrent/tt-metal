@@ -616,12 +616,48 @@ void generate_runtime_args_cmds(
     }
 }
 
+// Max cores whose RTA payloads fit in one large-unicast command. The command is inline: every core's
+// payload is embedded in the prefetcher command, so the whole command (relay-inline header + sub-cmds +
+// all per-core payloads) must fit max_prefetch_command_size — not just the 35-sub-cmd cap. On eth dispatch
+// max_prefetch_command_size is only 32KB (vs 128KB on worker) and the eth cmddat queue is 64KB (vs 256KB),
+// so a large per-core payload forces far fewer than 35 cores per command; exceeding it silently overflows
+// the eth cmddat queue and hangs the device. Returns >=1 (a single core's payload is L1-fit-checked at
+// finalize, so it is expected to fit).
+uint32_t max_cores_per_large_unicast_cmd(uint32_t rta_payload_sizeB, uint32_t max_prefetch_command_size) {
+    const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    const uint32_t aligned_core_payload = tt::align(rta_payload_sizeB, l1_alignment);
+    for (uint32_t n = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS; n >= 1; --n) {
+        DeviceCommandCalculator calculator;
+        calculator.add_dispatch_write_packed_large_unicast(n, n * aligned_core_payload);
+        if (calculator.write_offset_bytes() <= max_prefetch_command_size) {
+            return n;
+        }
+    }
+    // Even a single core's inline payload does not fit one prefetcher command. This path embeds the RTA
+    // payload inline in the command, so it cannot be split across commands (only across cores). Fail loudly
+    // here rather than emit an oversized command that silently hangs the device (the fetch_queue_write size
+    // guard is a TT_ASSERT and compiles out in release builds). The kernel-side RTA ceiling
+    // (validate_runtime_args_size) is set before the dispatch core type is known, so this is the first point
+    // that can enforce the dispatch-core-specific prefetch command size.
+    DeviceCommandCalculator single_core;
+    single_core.add_dispatch_write_packed_large_unicast(1, aligned_core_payload);
+    TT_FATAL(
+        false,
+        "A single core's unique runtime args ({} B payload -> {} B prefetcher command) exceed the max prefetch "
+        "command size ({} B) for this dispatch core type. The large-unicast RTA path sends the payload inline and "
+        "cannot split one core across commands. Reduce the number of unique runtime args for this kernel.",
+        rta_payload_sizeB,
+        single_core.write_offset_bytes(),
+        max_prefetch_command_size);
+    return 1;  // unreachable
+}
+
 // Emit unique runtime args for a kernel group using CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST instead of
 // CQ_DISPATCH_CMD_WRITE_PACKED. Unlike the packed path, the large-unicast dispatch handler wraps CB pages
 // per sub-command, so a single core's RTA payload is no longer limited to one dispatch page. Used when a
 // kernel group's per-core payload exceeds that page (see assemble_runtime_args_commands). The command
 // layout mirrors BatchedTransferGenerator: one sub-command (core) per unicast destination, up to
-// CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS per command, with each core's payload laid out
+// max_cores_per_large_unicast_cmd() per command, with each core's payload laid out
 // exactly as the packed path lays out its per-core data region so the RTA-update pointers stay valid.
 void generate_runtime_args_cmds_large_unicast(
     std::vector<HostMemDeviceCommand>& runtime_args_command_sequences,
@@ -633,18 +669,20 @@ void generate_runtime_args_cmds_large_unicast(
     std::vector<std::vector<
         std::pair<std::reference_wrapper<RuntimeArgsData>, std::reference_wrapper<const std::vector<uint32_t>>>>>&
         rt_args_data,
+    uint32_t max_prefetch_command_size,
     uint32_t write_offset_index) {
     const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     // Device reads rta_payload_sizeB bytes per sub-command, then pads the read pointer to `alignment`, so
     // consecutive per-core payloads in the command stream are separated by this aligned size.
     const uint32_t aligned_core_payload = tt::align(rta_payload_sizeB, l1_alignment);
     const uint32_t count_word_offset = is_watcher_assert_enabled() ? 1 : 0;
+    // Cap cores/command by the prefetcher command size, not just the sub-cmd count (see helper above).
+    const uint32_t max_cores_per_cmd = max_cores_per_large_unicast_cmd(rta_payload_sizeB, max_prefetch_command_size);
 
     const uint32_t num_cores = sub_cmds.size();
     uint32_t offset_idx = 0;
     while (offset_idx < num_cores) {
-        const uint32_t num_in_chunk =
-            std::min<uint32_t>(num_cores - offset_idx, CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS);
+        const uint32_t num_in_chunk = std::min<uint32_t>(num_cores - offset_idx, max_cores_per_cmd);
 
         std::vector<CQDispatchWritePackedLargeUnicastSubCmd> large_sub_cmds(num_in_chunk);
         // Per-core payload backing storage. Must outlive the add_dispatch call (memcpy'd into the command).
@@ -773,7 +811,9 @@ BatchedTransfers assemble_runtime_args_commands(
             if (kg->total_rta_size != 0) {
                 uint32_t num_sub_cmds = kg->core_ranges.num_cores();
                 if (unique_rta_requires_large_unicast(kg->total_rta_size)) {
-                    command_count += div_up(num_sub_cmds, CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS);
+                    command_count += div_up(
+                        num_sub_cmds,
+                        max_cores_per_large_unicast_cmd(kg->total_rta_size, constants.max_prefetch_command_size));
                 } else {
                     uint32_t max_runtime_args_len = kg->total_rta_size / sizeof(uint32_t);
                     uint32_t max_packed_cmds =
@@ -928,6 +968,7 @@ BatchedTransfers assemble_runtime_args_commands(
                         unique_rt_data_and_sizes,
                         kg->total_rta_size,
                         unique_rt_args_data,
+                        constants.max_prefetch_command_size,
                         get_dispatch_write_offset(programmable_core_type));
                 } else {
                     generate_runtime_args_cmds(
