@@ -33,8 +33,9 @@ triage priority (any ordering must come from a *caller* — follow the call grap
 `AUTOTTSYNC_ORDERED` (Quasar only) = the per-RISC TTSync HW-orders the write, so
 it's not a race candidate there (confirm the AutoTTSync model per the arch note).
 Then **widen for what the tool cannot see** (its `blind_spots`: interprocedural
-ordering; Quasar AutoTTSync — incl. its RQ-exception / non-CFG-GPR over-clear
-(MOP_CFG/REPLAY/RESOURCEDECL, replay-unit MMIO); the curated-partial CONSUMER_MATH
+ordering; Quasar AutoTTSync — incl. its RQ-consumer-exception over-clear (a CFG/GPR write
+consumed by MOP_CFG/REPLAY/RESOURCEDECL is not RQ-tracked; the non-CFG/GPR replay-unit
+MMIO arm is now excluded upstream by the tool, not over-cleared); the curated-partial CONSUMER_MATH
 set that can mis-credit a guard (false-negative); writes in SFPU files that failed to
 parse) using the
 method below. The tool never clears a site — you decide. If it is unbuilt, proceed

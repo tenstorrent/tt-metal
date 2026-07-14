@@ -206,8 +206,8 @@ config register, so it would draw a spurious `NO_UNIT_DRAIN`.
   QSR's `program` ALSO base-casts (`reinterpret_cast<mop_config_regs_t*>(MOP_CFG_BASE)`, its
   `instrn_buffer` param is `[[maybe_unused]]`) but writes via `mop_cfg->FIELD =` (a typed-struct MEMBER
   access), which the extractor does NOT emit as a `pointer_write` (see **L6**) — so QSR emits **0**
-  `program` `mmio_ptr` writes. ("0 on QSR" = 0 *program-fn* `mmio_ptr`, not 0 overall — QSR has 72
-  `mmio_ptr` writes elsewhere.) Plus the experimental BH pack helpers `_llk_pack_block_contiguous_` /
+  `program` `mmio_ptr` writes. ("0 on QSR" = 0 *program-fn* `mmio_ptr`, not 0 overall — QSR has 28
+  `mmio_ptr` writes elsewhere, after F5's region classification excluded the INSTRN_BUF/PC_BUF casts.) Plus the experimental BH pack helpers `_llk_pack_block_contiguous_` /
   `_llk_pack_fast_untilize_mop_patch_last_`. None are `RECONFIG_FN_SUBSTR` names, so `is_reconfig_fn`
   skips them.)
 - **Fix:** give reconfig-stall its own kind set excluding `mmio_ptr` (distinguishing mop- from
