@@ -767,10 +767,10 @@
   model: sdxl-nightly
   skus:
     wh_n150:
-      timeout: 40
+      timeout: 100
       tier: 2
     wh_n300:
-      timeout: 40
+      timeout: 100
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
