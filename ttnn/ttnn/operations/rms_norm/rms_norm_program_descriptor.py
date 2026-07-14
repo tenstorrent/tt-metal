@@ -11,9 +11,15 @@ factor and buffer depth is a knob derived from one source of truth:
 
 CB page counts and loop trip counts are computed FROM those knobs and the input
 shape — never sized to Wt / W / sequence length, so per-core L1 stays bounded
-for arbitrarily wide W. Phase-1 grid = single core owning all tile-rows; going
-multi-core is a runtime-arg change (start_tile_row / num_tile_rows) with no
-loop-nest change.
+for arbitrarily wide W.
+
+Refinement 4 (Multi-core row distribution + HEIGHT_SHARDED). The Row axis is
+independent, so the tile-row range is distributed across the grid with NO
+cross-core communication — a pure per-core runtime-arg change (each core gets its
+own (start_tile_row, num_tile_rows); the kernels already iterate `start_tile_row +
+t`, no loop-nest change). INTERLEAVED uses `split_work_to_cores`; HEIGHT_SHARDED
+uses the same split with the row->core assignment pinned by the shard spec (see
+_interleaved_assignment / _height_sharded_assignment).
 
 Refinement 3 (Data-movement co-tune, PERF). The real bottleneck (found by
 on-device measurement, not the design's assumption) was NOT NoC bandwidth but
@@ -88,6 +94,64 @@ def _elt(tensor) -> int:
         return tensor.element_size()
     except (ValueError, RuntimeError):
         return 1
+
+
+def _interleaved_assignment(device, total_tile_rows):
+    """Row knob-turn for INTERLEAVED: spread the contiguous [0, total_tile_rows)
+    tile-row range over the full compute grid via split_work_to_cores (which clips
+    to min(cores, work)). Returns (all_cores, [(core, start_tile_row, num_tile_rows)]).
+    Each core owns a disjoint contiguous span; the two work groups carry the
+    remainder (group 1 gets ceil, group 2 gets floor). No cross-core dependency."""
+    grid = device.compute_with_storage_grid_size()
+    (_num_cores, all_cores, core_group_1, core_group_2, per_g1, per_g2) = ttnn.split_work_to_cores(
+        grid, total_tile_rows, row_wise=True
+    )
+    assignment = []
+    start = 0
+    for group, per_core in ((core_group_1, per_g1), (core_group_2, per_g2)):
+        if per_core == 0:
+            continue
+        for c in ttnn.corerange_to_cores(group, None, True):
+            assignment.append((c, start, per_core))
+            start += per_core
+    return all_cores, assignment
+
+
+def _height_sharded_assignment(input_tensor, total_tile_rows, is_row_major):
+    """Row knob-turn for HEIGHT_SHARDED: the SAME contiguous row split, but the
+    row->core assignment is pinned by the shard spec instead of split_work_to_cores.
+
+    For TILE the shard's tile-row grid matches the op's work unit exactly:
+    `hg = prod(leading)*ceil(H/32)` (eval.sharding) == the op's `total_tile_rows`,
+    and each core owns `shard.shape[0]//32` contiguous tile-rows laid out row-major
+    (eval.sharding._corerangeset_for_ncores). Iterating the shard grid row-major
+    (corerange_to_cores matches that fill order) and striding by the shard height
+    hands core i its own shard's tile-rows, so every read/write TensorAccessor
+    resolves to that core's local L1 (reduction stays local, no cross-core comms).
+    The last shard may be zero-padded, so the last core's `num` is the real
+    remainder (< the shard height).
+
+    ROW_MAJOR shards by individual rows (sub-tile granule), so a tile-row can
+    straddle a shard boundary — there is no clean tile-row->core match. RM +
+    HEIGHT_SHARDED is EXCLUDED op-side, so this path is only reached for TILE; the
+    RM branch below is a defensive even split (still correct — TensorAccessor
+    routes every page regardless — just not guaranteed core-local)."""
+    shard_spec = input_tensor.memory_config().shard_spec
+    all_cores = shard_spec.grid
+    cores = ttnn.corerange_to_cores(all_cores, None, True)
+    if not is_row_major:
+        per_core_tiles = int(shard_spec.shape[0]) // TILE_DIM
+    else:
+        per_core_tiles = math.ceil(total_tile_rows / max(1, len(cores)))
+    assignment = []
+    start = 0
+    for c in cores:
+        num = min(per_core_tiles, total_tile_rows - start)
+        if num <= 0:
+            break
+        assignment.append((c, start, num))
+        start += per_core_tiles
+    return all_cores, assignment
 
 
 def create_program_descriptor(
@@ -188,11 +252,36 @@ def create_program_descriptor(
     out_rm_page = out_tile  # untilize emits tile-sized pages
     gamma_rm_page = wblock_cols * gamma_elt
 
-    # --- Grid: phase-1 single core owns all tile-rows ---
-    core = ttnn.CoreCoord(0, 0)
-    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
-    start_tile_row = 0
-    num_tile_rows = total_tile_rows
+    # --- Grid + per-core work assignment (Refinement 4: Row-axis knob-turn) ---
+    # The Row axis is INDEPENDENT (each tile-row's RMS is computed in isolation, no
+    # cross-row dependency), so distributing tile-rows across the grid needs NO
+    # cross-core communication — the kernels already key off per-core
+    # (start_tile_row, num_tile_rows) RT args and iterate `start_tile_row + t`, so
+    # this is a pure runtime-arg change (no loop-nest / kernel change).
+    #
+    #   * INTERLEAVED  — `split_work_to_cores(grid, total_tile_rows)` spreads the
+    #                    contiguous tile-row range over the full compute grid.
+    #   * HEIGHT_SHARDED — the SAME row split, but the row->core assignment is pinned
+    #                    by the shard spec (each core owns shard.shape[0]//32 tile-rows)
+    #                    instead of split_work_to_cores. The reduction stays LOCAL per
+    #                    core; TensorAccessor (built from the sharded tensor's
+    #                    memory-config) routes each global page id to the owning core's
+    #                    L1, so the resident shard is streamed through the SAME bounded
+    #                    scratch CBs (a local L1->L1 read). We deliberately do NOT point
+    #                    the input/output CBs at the whole resident shard via
+    #                    cb_descriptor_from_sharded_tensor: that would force a
+    #                    random-access rewrite of the two-pass streaming compute (a
+    #                    consumed CB cannot be rewound for pass 2) and a Wt-sized CB,
+    #                    breaking the design's bounded-streaming invariant — a
+    #                    scheme-change, not the Row knob-turn this refinement is.
+    device = input_tensor.device()
+    memory_layout = input_tensor.memory_config().memory_layout
+    is_height_sharded = memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+
+    if is_height_sharded:
+        all_cores, assignment = _height_sharded_assignment(input_tensor, total_tile_rows, is_row_major)
+    else:
+        all_cores, assignment = _interleaved_assignment(device, total_tile_rows)
 
     # --- CB indices (semantic) ---
     CB_INPUT_RM = 0
@@ -213,7 +302,7 @@ def create_program_descriptor(
     def cb(index, dtype, page_size, num_pages):
         return ttnn.CBDescriptor(
             total_size=num_pages * page_size,
-            core_ranges=core_grid,
+            core_ranges=all_cores,
             format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page_size)],
         )
 
@@ -269,16 +358,16 @@ def create_program_descriptor(
         if has_gamma
         else ttnn.TensorAccessorArgs().get_compile_time_args()
     )
+    input_addr = input_tensor.buffer_address()
+    gamma_addr = gamma.buffer_address() if has_gamma else 0
+    output_addr = output_tensor.buffer_address()
+
     reader_rt_args = ttnn.RuntimeArgs()
-    reader_rt_args[core.x][core.y] = [
-        input_tensor.buffer_address(),
-        gamma.buffer_address() if has_gamma else 0,
-        start_tile_row,
-        num_tile_rows,
-    ]
+    for c, c_start, c_num in assignment:
+        reader_rt_args[c.x][c.y] = [input_addr, gamma_addr, c_start, c_num]
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),
-        core_ranges=core_grid,
+        core_ranges=all_cores,
         compile_time_args=reader_ct_args,
         runtime_args=reader_rt_args,
         config=ttnn.ReaderConfigDescriptor(),
@@ -297,14 +386,11 @@ def create_program_descriptor(
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_rt_args = ttnn.RuntimeArgs()
-    writer_rt_args[core.x][core.y] = [
-        output_tensor.buffer_address(),
-        start_tile_row,
-        num_tile_rows,
-    ]
+    for c, c_start, c_num in assignment:
+        writer_rt_args[c.x][c.y] = [output_addr, c_start, c_num]
     writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_writer.cpp"),
-        core_ranges=core_grid,
+        core_ranges=all_cores,
         compile_time_args=writer_ct_args,
         runtime_args=writer_rt_args,
         config=ttnn.WriterConfigDescriptor(),
@@ -334,7 +420,8 @@ def create_program_descriptor(
         1 if gamma_is_row_major else 0,
     ]
     compute_rt_args = ttnn.RuntimeArgs()
-    compute_rt_args[core.x][core.y] = [num_tile_rows, start_tile_row, eps_bits]
+    for c, c_start, c_num in assignment:
+        compute_rt_args[c.x][c.y] = [c_num, c_start, eps_bits]
     # compute_kernel_config is threaded through as-is (math_fidelity /
     # fp32_dest_acc_en / math_approx_mode / dst_full_sync_en all honored by the
     # kernel's helpers). No CB is tagged UnpackToDestFp32: every fp32 intermediate
@@ -344,7 +431,7 @@ def create_program_descriptor(
     compute_config = compute_kernel_config if compute_kernel_config is not None else ttnn.ComputeConfigDescriptor()
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),
-        core_ranges=core_grid,
+        core_ranges=all_cores,
         compile_time_args=compute_ct_args,
         runtime_args=compute_rt_args,
         config=compute_config,
