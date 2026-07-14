@@ -89,20 +89,36 @@ struct PlanInputs {
 // Outputs
 // ------------------------------------------------------------------------------------------------
 
-// Padded geometry (spec §1).
+// Geometry with THREE cleanly separated concepts (balanced-tail design):
+//   (a) PHYSICAL STRIDES — derived from the tensor layouts; the ONLY values used as address strides.
+//   (b) SCHEDULE CAPACITIES — fixed uniform kernel block sizes (may round up to kb*8 / nsb); the loop
+//       trip-counts and CB sizes. Invalid block positions are locally zero-filled, never DRAM-read.
+//   (c) LOGICAL OWNERSHIP — per-core balanced (start, valid_extent) ranges over the logical tiles.
+// Schedule capacities must NEVER be used as a tensor address stride.
 struct Geometry {
-    uint32_t Mt{}, Kt{}, Nt{};                        // logical
-    uint32_t Kt_local{}, Kt_s{};                      // per-core k-slice (padded to kb*8), padded K
-    uint32_t M_block{}, Mt_s{};                       // per-core M rows, padded M
-    uint32_t N_band{}, N_own{}, N_sub{};              // per-bank N, per-core N, N-subblock width
-    uint32_t N_bpc{}, N_own_s{}, N_band_s{}, Nt_s{};  // subblocks/core, padded per-core/per-bank/total N
-    uint32_t K_num_blocks_eff{};                      // Kt_local/kb  (== G*W, multiple of 8)
-    uint32_t W{};                                     // ring shard width = K_num_blocks_eff / 8
-    uint32_t G{8};                                    // ring size (fixed 8 banks)
-    uint32_t preaders{};                              // Pk*Ns*Sm
-    uint32_t mfac{};                                  // Ns*Sm (reduction stride in core index)
-    uint32_t num_cores{};                             // 8*preaders
-    // padding waste (fraction), for reporting effective-vs-delivered.
+    uint32_t Mt{}, Kt{}, Nt{};  // logical tile counts
+
+    // (a) physical strides (tiles), from tensor layouts:
+    uint32_t in0_stride_k{};        // in0 [Mt,Kt] row stride = Kt
+    uint32_t in1_shard_stride_n{};  // in1 per-bank shard width = ceil(Nt/8) (K-row stride within a bank)
+    uint32_t out_stride_n{};        // out [Mt,Nt] row stride = Nt
+
+    // (b) schedule capacities (uniform kernel blocks):
+    uint32_t K_slice_capacity{};  // K tiles processed per k-slice = rup(ceil(Kt/Pk), kb*8) (== G*W*kb)
+    uint32_t M_block_capacity{};  // M tiles per m-block = ceil(Mt/Sm)
+    uint32_t N_slice_capacity{};  // N tiles per core = N_bpc * N_sub (rounded to nsb)
+    uint32_t N_band{};            // per-bank physical width = ceil(Nt/8) (also == in1_shard_stride_n)
+    uint32_t N_sub{};             // N-subblock width (nsb, or N_own when nsb==0)
+    uint32_t N_bpc{};             // N-subblocks per core
+    uint32_t K_num_blocks_eff{};  // K_slice_capacity / kb  (== G*W, multiple of 8)
+    uint32_t W{};                 // ring shard width = K_num_blocks_eff / 8
+    uint32_t G{8};                // ring size (fixed 8 banks)
+
+    uint32_t preaders{};   // Pk*Ns*Sm
+    uint32_t mfac{};       // Ns*Sm (reduction stride in core index)
+    uint32_t num_cores{};  // 8*preaders
+
+    // Reporting only (effective-vs-delivered): schedule zero-fill fraction over K and N.
     double waste_k{}, waste_n{};
 };
 
@@ -116,7 +132,9 @@ struct CbSizes {
     uint32_t l1_bytes{};   // total
 };
 
-// Per-core plan (spec §2-4).
+// Per-core plan. Ownership is LOGICAL + BALANCED: (start, valid) ranges over the logical tiles, with
+// no schedule padding folded into the address offsets. The kernel processes the fixed schedule
+// capacities and zero-fills positions >= valid.
 struct CorePlan {
     PlanXY coord{};    // assigned logical worker core
     uint32_t bank{};   // DRAM bank id 0..7
@@ -126,17 +144,14 @@ struct CorePlan {
     uint32_t mm{};     // m-block index 0..Sm-1
     uint32_t slice{};  // p = kk*mfac + nn*Sm + mm  (slice index within a bank)
 
-    // Padded ownership offsets (tiles).
-    uint32_t k_start{};  // kk * Kt_local
-    uint32_t m0{};       // mm * M_block
-    uint32_t nn_off{};   // nn * N_own_s (within the bank)
-    uint32_t bank_n0{};  // bank * N_band_s + nn_off (absolute N tile offset)
-
-    // Valid (unpadded) extents — for balanced-tail kernels (v1 kernels ignore these and run full
-    // padded blocks; a real output element is only [m<Mt, n<Nt], in0 pad-K is zero).
-    uint32_t valid_k{};  // valid K tiles this core's k-slice actually covers (0 => pure-pad slice)
-    uint32_t valid_m{};  // valid M rows in this core's M-block
-    uint32_t valid_n{};  // valid N tiles this core owns (of N_own_s)
+    // Balanced logical ownership (tiles). start = floor(i*extent/parts); valid = next_start - start.
+    uint32_t k_start{};  // first logical K tile of this k-slice (balanced over Pk)
+    uint32_t valid_k{};  // K tiles this slice owns (<= K_slice_capacity; tail beyond it is zero)
+    uint32_t m_start{};  // first logical M tile of this m-block (balanced over Sm)
+    uint32_t valid_m{};  // M tiles this m-block owns (<= M_block_capacity)
+    uint32_t n_start{};  // first logical (global) N tile this core owns (for OUTPUT addressing)
+    uint32_t valid_n{};  // N tiles this core owns (<= N_slice_capacity)
+    uint32_t n_local{};  // n_start - bank*N_band: column offset WITHIN this core's DRAM-bank shard (in1 addr)
 
     // in0 ring (spec §3): position and cyclic neighbours (physical coords filled by the device op;
     // here we store the ring member core INDICES so the op can translate to physical coords).
@@ -156,12 +171,11 @@ struct ExecutionPlan {
     CbSizes cb{};
     std::vector<CorePlan> cores;  // size num_cores, index i = bank*preaders + slice
 
-    // in1 canonical DRAM width-shard, per bank, in tiles: [Kt_shard_rows, Nt_shard_cols].
-    // NOTE (Step-2 design): this uses the CONFIG-padded Kt_s here to match the prototype oracle.
-    // The public create_regime_a_weight_memory_config must instead pad to config-independent
-    // bank alignment; see the design note in the .cpp / plan doc.
-    uint32_t in1_shard_rows{};  // Kt_s
-    uint32_t in1_shard_cols{};  // Nt_s / 8
+    // Physical in1 DRAM width-shard requirement, per bank, in tiles: [rows, cols]. rows must cover the
+    // logical Kt; cols = ceil(Nt/8) (== geo.in1_shard_stride_n). Depends only on (Kt, Nt), not on the
+    // schedule config.
+    uint32_t in1_shard_rows{};  // Kt
+    uint32_t in1_shard_cols{};  // ceil(Nt/8)
 };
 
 struct PlanResult {
@@ -176,6 +190,19 @@ struct PlanResult {
 
 inline uint32_t rap_cdiv(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 inline uint32_t rap_rup(uint32_t x, uint32_t y) { return rap_cdiv(x, y) * y; }
+
+// Balanced prefix range for owner `i` of `parts` over `[0, total)`:
+//   start = floor(i*total/parts), end = floor((i+1)*total/parts). Disjoint, exact cover, sizes differ
+//   by <= 1. Degenerates to uniform i*(total/parts) when total % parts == 0.
+struct BalRange {
+    uint32_t start{};
+    uint32_t extent{};
+};
+inline BalRange rap_balanced(uint32_t i, uint32_t total, uint32_t parts) {
+    const uint32_t s = static_cast<uint32_t>(static_cast<uint64_t>(i) * total / parts);
+    const uint32_t e = static_cast<uint32_t>(static_cast<uint64_t>(i + 1) * total / parts);
+    return BalRange{s, e - s};
+}
 
 // ------------------------------------------------------------------------------------------------
 // Planner
@@ -198,34 +225,45 @@ inline PlanResult build_plan(const PlanInputs& in) {
         res.error = "m_slices (Sm) must be <= Mt";
         return res;
     }
+    if (Pk > in.Kt) {
+        res.error = "k_slices (Pk) must be <= Kt (empty k-slice otherwise)";
+        return res;
+    }
     if (in.opt0.size() != 8 || in.opt1.size() != 8) {
         res.error = "opt0/opt1 must each have 8 bank-adjacent cores";
         return res;
     }
+    // Width-sharding across 8 banks requires every bank's physical N-interval to intersect logical Nt
+    // (else the last banks are wholly padded / empty). N_band = ceil(Nt/8); bank b owns [b*N_band, ...).
+    const uint32_t N_band = rap_cdiv(in.Nt, 8u);
+    if (7u * N_band >= in.Nt) {
+        res.error = "Nt too small to width-shard across 8 banks without empty banks (need Nt > 7*ceil(Nt/8))";
+        return res;
+    }
 
-    // --- Geometry (spec §1) ---
+    // --- Geometry: (a) physical strides, (b) schedule capacities ---
     Geometry g;
     g.Mt = in.Mt;
     g.Kt = in.Kt;
     g.Nt = in.Nt;
-    g.Kt_local = rap_rup(rap_cdiv(in.Kt, Pk), kb * 8u);
-    g.Kt_s = Pk * g.Kt_local;
-    g.M_block = rap_cdiv(in.Mt, Sm);
-    g.Mt_s = Sm * g.M_block;
-    g.N_band = rap_cdiv(in.Nt, 8u);
-    g.N_own = rap_cdiv(g.N_band, Ns);
-    g.N_sub = c.n_subblock_tiles ? c.n_subblock_tiles : g.N_own;
-    if (g.N_sub > g.N_own) {
+    // (a) physical strides — from tensor layouts, the ONLY address strides.
+    g.in0_stride_k = in.Kt;
+    g.N_band = N_band;
+    g.in1_shard_stride_n = N_band;
+    g.out_stride_n = in.Nt;
+    // (b) schedule capacities — uniform kernel blocks (round to kb*8 / nsb); tail positions zero-filled.
+    g.K_slice_capacity = rap_rup(rap_cdiv(in.Kt, Pk), kb * 8u);
+    g.M_block_capacity = rap_cdiv(in.Mt, Sm);
+    const uint32_t N_own = rap_cdiv(N_band, Ns);  // max N tiles a core owns (balanced subdivision bound)
+    g.N_sub = c.n_subblock_tiles ? c.n_subblock_tiles : N_own;
+    if (g.N_sub > N_own) {
         res.error = "n_subblock_tiles (nsb) must be <= N_own";
         return res;
     }
-    g.N_bpc = rap_cdiv(g.N_own, g.N_sub);
-    g.N_own_s = g.N_bpc * g.N_sub;
-    g.N_band_s = Ns * g.N_own_s;
-    g.Nt_s = 8u * g.N_band_s;
-    g.K_num_blocks_eff = g.Kt_local / kb;
+    g.N_bpc = rap_cdiv(N_own, g.N_sub);
+    g.N_slice_capacity = g.N_bpc * g.N_sub;
+    g.K_num_blocks_eff = g.K_slice_capacity / kb;
     if (g.K_num_blocks_eff % 8u != 0u) {
-        // Guaranteed by the kb*8 rounding of Kt_local; guard anyway.
         res.error = "internal: K_num_blocks_eff not a multiple of 8";
         return res;
     }
@@ -234,8 +272,9 @@ inline PlanResult build_plan(const PlanInputs& in) {
     g.preaders = Pk * Ns * Sm;
     g.mfac = Ns * Sm;
     g.num_cores = 8u * g.preaders;
-    g.waste_k = static_cast<double>(g.Kt_s) / in.Kt - 1.0;
-    g.waste_n = static_cast<double>(g.Nt_s) / in.Nt - 1.0;
+    // Schedule zero-fill fraction (compute/NoC-internal overhead; DRAM reads only valid tiles).
+    g.waste_k = static_cast<double>(Pk * g.K_slice_capacity) / in.Kt - 1.0;
+    g.waste_n = static_cast<double>(8u * Ns * g.N_slice_capacity) / in.Nt - 1.0;
 
     // --- Core-count feasibility (8 * Pk * Ns * Sm <= available workers) ---
     const uint32_t grid_cells = in.grid_x * in.grid_y;
@@ -248,11 +287,11 @@ inline PlanResult build_plan(const PlanInputs& in) {
 
     // --- CB sizing + L1 check (spec §5; cb7 only when Pk>1) ---
     CbSizes cb;
-    cb.cb0_tiles = g.M_block * g.Kt_local;  // == K_num_blocks_eff * M_block * kb
+    cb.cb0_tiles = g.M_block_capacity * g.K_slice_capacity;  // == K_num_blocks_eff * M_block * kb
     cb.cb1_tiles = 4u * kb * g.N_sub;
-    cb.cb2_tiles = 2u * g.M_block * g.N_sub;
-    cb.cb3_tiles = g.M_block * g.N_sub;
-    cb.cb7_tiles = (Pk > 1u) ? (2u * g.M_block * g.N_sub) : 0u;
+    cb.cb2_tiles = 2u * g.M_block_capacity * g.N_sub;
+    cb.cb3_tiles = g.M_block_capacity * g.N_sub;
+    cb.cb7_tiles = (Pk > 1u) ? (2u * g.M_block_capacity * g.N_sub) : 0u;
     cb.l1_bytes = (cb.cb0_tiles + cb.cb1_tiles + cb.cb2_tiles + cb.cb7_tiles) * in.tb + cb.cb3_tiles * in.tf;
     if (cb.l1_bytes > in.l1_budget_bytes) {
         res.error = "L1 over budget: needs " + std::to_string(cb.l1_bytes) + " B > " +
@@ -288,8 +327,8 @@ inline PlanResult build_plan(const PlanInputs& in) {
     ExecutionPlan plan;
     plan.geo = g;
     plan.cb = cb;
-    plan.in1_shard_rows = g.Kt_s;
-    plan.in1_shard_cols = g.Nt_s / 8u;
+    plan.in1_shard_rows = g.Kt;      // physical shard must cover the logical K tiles
+    plan.in1_shard_cols = g.N_band;  // ceil(Nt/8) per bank
     plan.cores.resize(g.num_cores);
 
     for (uint32_t b = 0; b < 8u; ++b) {
@@ -314,19 +353,27 @@ inline PlanResult build_plan(const PlanInputs& in) {
             cp.mm = sub % Sm;
             cp.nn = sub / Sm;
 
-            cp.k_start = kk * g.Kt_local;
-            cp.m0 = cp.mm * g.M_block;
-            cp.nn_off = cp.nn * g.N_own_s;
-            cp.bank_n0 = b * g.N_band_s + cp.nn_off;
-
-            // valid extents (clamp padded ownership to logical dims)
-            const uint32_t k_lo = kk * g.Kt_local;
-            const uint32_t k_hi = k_lo + g.Kt_local;
-            cp.valid_k = (k_lo >= in.Kt) ? 0u : (std::min(k_hi, in.Kt) - k_lo);
-            const uint32_t m_lo = cp.m0;
-            cp.valid_m = (m_lo >= in.Mt) ? 0u : std::min(g.M_block, in.Mt - m_lo);
-            const uint32_t n_lo = cp.bank_n0;
-            cp.valid_n = (n_lo >= in.Nt) ? 0u : std::min(g.N_own_s, in.Nt - n_lo);
+            // --- Balanced logical ownership (no schedule padding in the offsets) ---
+            // K over Pk, M over Sm: balanced prefix ranges.
+            const BalRange rk = rap_balanced(kk, in.Kt, Pk);
+            cp.k_start = rk.start;
+            cp.valid_k = rk.extent;
+            const BalRange rm = rap_balanced(cp.mm, in.Mt, Sm);
+            cp.m_start = rm.start;
+            cp.valid_m = rm.extent;
+            // N: intersect this bank's physical interval [b*N_band, (b+1)*N_band) with logical [0,Nt),
+            // then subdivide that VALID interval across Ns (avoids internal N_own_s holes).
+            const uint32_t b_start = b * g.N_band;
+            const uint32_t b_end = std::min((b + 1u) * g.N_band, in.Nt);
+            const uint32_t b_valid = (b_start < in.Nt) ? (b_end - b_start) : 0u;
+            const BalRange rn = rap_balanced(cp.nn, b_valid, Ns);
+            cp.n_start = b_start + rn.start;  // global N tile (output addressing)
+            cp.valid_n = rn.extent;
+            cp.n_local = rn.start;  // column within this bank's shard (in1 addressing)
+            if (cp.valid_k == 0u || cp.valid_m == 0u || cp.valid_n == 0u) {
+                res.error = "empty ownership for a core (k/m/n) — reduce Pk/Ns/Sm for this shape";
+                return res;
+            }
 
             // reduction links (spec §4)
             cp.is_bottom = (kk == 0u);
