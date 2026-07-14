@@ -1,8 +1,8 @@
 # CB → DFB Kernel Audit Report
 
-> **Status:** Living document (2026-07-09). **Standalone device-side audit** — classifies legacy **kernel** CB usage and CB→DFB port readiness per op or ProgramFactory. Does **not** audit host `ProgramSpec`, binding multiplicity, or factory refactors ([`port_op_to_metal2_audit.md`](port_op_to_metal2_audit.md) covers host/spec). **Scope is machine-discovered** from program factories and PR diffs — see [Automated scope discovery](#automated-scope-discovery).
+> **Status:** Living document (2026-07-14). **Standalone device-side audit** — classifies legacy **kernel** CB usage and CB→DFB port readiness per op or ProgramFactory. Does **not** audit host `ProgramSpec`, binding multiplicity, or factory refactors ([`port_op_to_metal2_audit.md`](port_op_to_metal2_audit.md) covers host/spec). **Scope is machine-discovered** from program factories and PR diffs — see [Automated scope discovery](#automated-scope-discovery).
 >
-> **Companion docs:** [CB→DFB flowchart](../human/CB-to-DFB-flowchart.svg), [Metal 2.0 port patterns](metal2_port_patterns.md) (host binding — cross-ref only), repo-root inventory `2026-07-07 Quasar CB port-readiness audit — illegal CB usage by op.md`.
+> **Companion docs:** [CB→DFB API whitelist](cb_dfb_api_whitelist.md) (CB API → DFB / evil_get|set mapping), [CB→DFB flowchart](../human/CB-to-DFB-flowchart.svg), [Metal 2.0 port patterns](metal2_port_patterns.md) (host binding — cross-ref only), repo-root inventory `2026-07-07 Quasar CB port-readiness audit — illegal CB usage by op.md`.
 
 ---
 
@@ -36,7 +36,7 @@
 | **YELLOW** | Any **Portable (prereq: LTA)** and/or **Blocked (runtime)** on 2xx with 1xx clear |
 | **RED** | Any **Blocked**, unresolved **GATE**, or NEEDS-DESIGN without v1 strategy |
 
-**Quick links:** [Verdict legend](#verdict-legend) · [Issue taxonomy](#issue-taxonomy-kernel-side) · [LTA vs scratchpad rollup](#port-recipe-rollup-lta-vs-scratchpad) · [Example report (layernorm)](#example-audit-report-layernorm-sharded-welford-path)
+**Quick links:** [Verdict legend](#verdict-legend) · [Issue taxonomy](#issue-taxonomy-kernel-side) · [LTA vs scratchpad rollup](#port-recipe-rollup-lta-vs-scratchpad) · [CB→DFB API whitelist](cb_dfb_api_whitelist.md) · [Example report (layernorm)](#example-audit-report-layernorm-sharded-welford-path)
 
 ---
 
@@ -59,7 +59,22 @@ Do not assume “it's a CB, so use DFB + push_back.” Many legacy CBs were **pi
 - `**LocalTensorAccessor`** — sync-free borrowed tensor view (Class 6 borrowed; some Class 2/5 pointer-only).
 - `**ScratchpadSpec` + `SemaphoreSpec**` — private L1 with **explicit** sync when FIFO credits would lie (Classes 2–4 window/ring/staging; Class 6 scratch; Quasar DM self-loop replacement). See [Scratchpad + semaphores](#scratchpad--semaphores-explicit-sync).
 
-**Audit default (port strategy preference):** When a buffer is Classes 2–5 and a linear DFB would require **ptr surgery**, **disabled implicit sync**, or **fake FIFO credits**, the audit should **first** evaluate **scratchpad + semaphores** (private L1) or **LocalTensorAccessor + semaphores** (borrowed tensor view) — whichever matches backing. Recommend **DFB ptr/credit surgery** only when LLK still requires a CB/DFB id (`pack_tile`, `cb_push_back_hold_wr_ptr`, etc.) or when scratchpad/LTA cannot express the layout. **Record status and workaround** in the **CB portability** table for every buffer (see [Report template](#report-template)).
+**Audit default (dual-track for Classes 2–5):**
+
+```mermaid
+flowchart LR
+  class25[Class 2-5 CB] --> v1["WH/BH v1: DFB + evil_get/set no semantic change"]
+  class25 --> qsr["Quasar end-state: redesign scratchpad/LTA/self-loop"]
+  v1 --> flag["Portable workaround + Quasar redesign required"]
+  qsr --> design["NEEDS-DESIGN-DECISION until Quasar port"]
+```
+
+| Track | Strategy | Report |
+|-------|----------|--------|
+| **1xx / WH-BH initial port** | Mechanical `CircularBuffer` → `DataflowBuffer`. Map `get_local_cb_interface(...).fifo_*_ptr` mutates to **`DataflowBuffer` `evil_set_*` / `evil_get_*`** ([whitelist §D](cb_dfb_api_whitelist.md) — status **in flight**). No dedicated hold API: `cb_push_back_hold_wr_ptr` → `push_back` + `evil_set_write_ptr`. Keep kernel semantics. | **Portable (workaround)** — Notes: **undesirable but OK hack** + **Quasar redesign required** |
+| **2xx / Quasar end-state** | Prefer **scratchpad + semaphores**, **LocalTensorAccessor**, compute self-loop, or strided DFB. **Do not** treat `evil_*` as the lasting Quasar fix. | **NEEDS-DESIGN-DECISION** until redesign lands |
+
+Record status and workaround in the **CB portability** table for every buffer (see [Report template](#report-template)). API names: [`cb_dfb_api_whitelist.md`](cb_dfb_api_whitelist.md).
 
 ### Port-recipe rollup (LTA vs scratchpad)
 
@@ -67,15 +82,20 @@ Aligned with [`port_op_to_metal2_recipe.md`](port_op_to_metal2_recipe.md):
 
 | End-state | Port recipe treatment | Report status | Op rollup |
 |-----------|----------------------|---------------|-----------|
-| **`ScratchpadSpec` + semaphores** | **Autoportable** — standard port move | **Portable** | **GREEN** |
+| **`ScratchpadSpec` + semaphores** | **Autoportable** Quasar / redesign end-state | **Portable** | **GREEN** |
 | **`LocalTensorAccessor`** | **Port prerequisite** — must land in the port (host `TensorBinding` + kernel ctor swap) | **Portable (prereq: LTA)** | **YELLOW** |
-| DFB ptr/credit workaround | Documented v1 hack — **undesirable but OK** | **Portable (workaround)** | **GREEN** (flag hack in Notes) |
+| DFB + `evil_get_*` / `evil_set_*` (1xx v1) | Documented WH/BH mechanical hack — **undesirable but OK**; opens Quasar design debt | **Portable (workaround)** | **GREEN** (flag hack + Quasar debt in Notes) |
 
 **What is already portable (do not churn):**
 
-- Bare `get_read_ptr()` / `get_write_ptr()` used **only** as L1 byte addresses (~600+ op files).
+- Class 1 DM transfers via **`Noc` from `noc.h`** (`async_read` / `async_write` + `offset_bytes`) — kernel must **not** call `get_*_ptr` or use `dataflow_api.h` `noc_async_*` with a grabbed L1 addr ([whitelist access control](cb_dfb_api_whitelist.md#access-control-get_ptr-vs-evil)).
 - Canonical producer/consumer FIFO (Pattern A/B in the audit).
-- `CoreLocalMem` / NOC endpoints built from those pointers.
+- Classes 2–5 pointer surgery → map to **evil_get/set** ([whitelist](cb_dfb_api_whitelist.md)), not leave `LocalCBInterface` field writes — and **not** blessed `get_*_ptr`.
+
+**What is rewrite debt (do not treat as OK on Device 2.0 ports):**
+
+- Kernel `dfb.get_*_ptr()` + `noc_async_*` from `dataflow_api.h` (~many Class 1 sites) → rewrite to `noc.h`.
+- Public `get_*_ptr` remaining on DFB until that migration + privatize/`friend` lands.
 
 **What is the litmus for illegal/un-portable** (run on [auto-discovered scope](#step-4--classification-scans-on-scan_files-only), not the whole repo, when auditing one op):
 
@@ -83,7 +103,7 @@ Aligned with [`port_op_to_metal2_recipe.md`](port_op_to_metal2_recipe.md):
 # GATE — any field read/write via get_local_cb_interface blocks Metal 2.0 port
 rg 'get_local_cb_interface' $SCAN_GLOB
 
-# QUASAR-BLOCKED until DFB read APIs land (see Runtime fixes in flight)
+# QUASAR-BLOCKED / WH read APIs — see Runtime fixes (#49617 in flight)
 rg 'read_tile_value|get_tile_address' $SCAN_GLOB
 
 # NEEDS-FIX — migrate sync-free borrowed reads to LocalTensorAccessor (Portable prereq: LTA → YELLOW)
@@ -209,7 +229,7 @@ rg -n 'get_local_cb_interface\s*\([^)]*\)\s*\.|cb_interface\.' $SCAN_GLOB
 # Silent-wrong on Quasar
 rg -n 'get_cb_tiles_acked_ptr|get_cb_tiles_received_ptr' $SCAN_GLOB
 
-# QUASAR-BLOCKED until DFB read APIs land (see Runtime fixes in flight)
+# QUASAR-BLOCKED / WH read APIs — see Runtime fixes (#49617 in flight)
 rg -n 'read_tile_value|get_tile_address' $SCAN_GLOB
 
 # NEEDS-FIX — migrate sync-free borrowed reads to LocalTensorAccessor (Portable prereq: LTA → YELLOW)
@@ -238,11 +258,12 @@ Use scan hits + short context (±5 lines) to assign verdicts per the [Issue taxo
 | `get_local_cb_interface(...).`                                    | —             | **GATE**                                                                      | Never WEIRD-OK                                                                                                                              |
 | `get_cb_tiles_*_ptr`                                              | —             | **NEEDS-FIX** (silent-wrong)                                                  | —                                                                                                                                           |
 | `get_pointer_to_cb_data` | 6 | **NEEDS-FIX** | Migrate to **LocalTensorAccessor** — report **Portable (prereq: LTA)** → op **YELLOW** |
-| `read_tile_value` / `get_tile_address` on DFB | 6 | **QUASAR-BLOCKED** on Quasar until DFB read API lands | Use **LocalTensorAccessor** when access is sync-free borrowed L1; DFB read API when LLK/DFB id required |
-| `get_read_ptr` / `get_write_ptr` only                             | 1             | **WEIRD-OK** or **PORTABLE**                                                  | Offset arithmetic for NOC → WEIRD-OK                                                                                                        |
-| `fifo_wr_ptr` / `fifo_rd_ptr` jumps                               | 2–4           | **NEEDS-DESIGN-DECISION**                                                     | **Prefer** scratchpad or LTA + sems; 1xx may fall back to **WEIRD-OK** ptr on DFB if LLK-coupled; Quasar Class 3 scatter → strided DFB note |
-| `push_back_hold` / partial save-restore on **compute**            | 4–5           | **WEIRD-OK** or **NEEDS-DESIGN-DECISION**                                     | Quasar + canonical PACK→UNPACK → also flag **SELF-LOOP-CANDIDATE**                                                                          |
-| Compute · sync-free or single-ended · **Quasar target**           | 5–6           | **SELF-LOOP-CANDIDATE** (audit annotation)                                    | WH/BH: use ptr workaround, LTA, or scratchpad — not self-loop                                                                               |
+| `read_tile_value` / `get_tile_address` on DFB | 6 | **QUASAR-BLOCKED** on Quasar until DFB read API lands; WH/BH **in flight** (#49617) | Use **LocalTensorAccessor** when access is sync-free borrowed L1; DFB read API when LLK/DFB id required |
+| `get_read_ptr` / `get_write_ptr` used for NOC addr + `dataflow_api.h` `noc_async_*` | 1 | **NEEDS-FIX** | Rewrite to `Noc` from **`noc.h`** — not OK to keep |
+| `get_read_ptr` / `get_write_ptr` used for save/jump/rewind | 2–5 | **WEIRD-OK** (1xx) after → `evil_get_*` | Do not leave blessed getters for surgery |
+| `fifo_wr_ptr` / `fifo_rd_ptr` jumps / `get_local_cb_interface` ptr assign | 2–5           | **WEIRD-OK** (1xx) / **NEEDS-DESIGN-DECISION** (2xx end-state)                | **1xx:** map to [`evil_get/set`](cb_dfb_api_whitelist.md) (**in flight**). **2xx:** redesign scratchpad/LTA/self-loop/strided — do not treat evil_* as Quasar end-state |
+| `push_back_hold` / `cb_push_back_hold_wr_ptr` / partial save-restore on **compute** | 4–5           | **WEIRD-OK** (1xx) / **NEEDS-DESIGN-DECISION** (2xx)                          | **No** hold DFB API — `push_back` + `evil_set_write_ptr`. Quasar + canonical PACK→UNPACK → also flag **SELF-LOOP-CANDIDATE**                                            |
+| Compute · sync-free or single-ended · **Quasar target**           | 5–6           | **SELF-LOOP-CANDIDATE** (audit annotation)                                    | WH/BH: evil_get/set workaround, LTA, or scratchpad — not self-loop                                                                                                        |
 | `fifo_page_size` / `fifo_num_pages`                               | 1             | **NEEDS-FIX**                                                                 | Use DFB getters                                                                                                                             |
 | FIFO sync calls only, no hits above                               | 1             | **PORTABLE**                                                                  | —                                                                                                                                           |
 | Path matches OUT-OF-SCOPE table                                   | —             | **OUT-OF-SCOPE**                                                              | Exclude from rollup                                                                                                                         |
@@ -259,8 +280,8 @@ For each factory slice under audit:
 1. **Run [scope discovery](#automated-scope-discovery)** (Steps 0–3) — derive `KERNEL_FILES` and `SCAN_FILES`.
 2. **Run classification scans** on `SCAN_FILES` only (Step 4).
 3. **Classify** each CB in the [Issue taxonomy](#issue-taxonomy-kernel-side) (classes 1–6).
-4. **Assign verdict** and device port strategy — [Scratchpad + semaphores](#scratchpad--semaphores-explicit-sync), [LTA](#localtensoraccessor-lta), [compute self-loop](#quasar-only-compute-self-loop-self-loop-candidate) (Quasar flag), [strided DFB fork](#architecture-fork-strided-scatter-class-3), or ptr workaround.
-5. **Fill the [report template](#report-template)** — one row per CB with **1xx** / **2xx** portable status → `CB_DFB_KERNEL_AUDIT.md` or PR comment.
+4. **Assign verdict** and device port strategy — dual-track for Classes 2–5: [CB→DFB API whitelist](cb_dfb_api_whitelist.md) (`evil_get/set` on 1xx) vs [Scratchpad + semaphores](#scratchpad--semaphores-explicit-sync) / [LTA](#localtensoraccessor-lta) / [compute self-loop](#quasar-only-compute-self-loop-self-loop-candidate) / [strided DFB](#architecture-fork-strided-scatter-class-3) (Quasar end-state).
+5. **Fill the [report template](#report-template)** — one row per CB with **1xx** / **2xx** portable status → `CB_DFB_KERNEL_AUDIT.md` or PR comment. Notes: `1xx_port: evil_DFB` / `2xx_endstate: scratchpad|LTA|self-loop|strided` when Class 2–5.
 
 ```mermaid
 flowchart TD
@@ -273,11 +294,11 @@ flowchart TD
     D --> H[Class 5: In-place accumulator]
     D --> I[Class 6: Structural non-FIFO]
     C --> J[DataflowBuffer + sync APIs]
-    E --> K[Scratchpad + semaphores OR disable opt]
-    F --> L[Strided DFB on 2xx OR multi-buffer OR disable]
-    G --> M[Ptr/credit workarounds OR LTA/borrowed]
-    H --> N[Ptr workarounds OR dest-only acc OR disable L1 acc]
-    I --> O[Scratchpad / borrowed_from / redesign]
+    E --> K["1xx: evil_get/set · 2xx: scratchpad/sems"]
+    F --> L["1xx: evil_set scatter · 2xx: strided DFB"]
+    G --> M["1xx: push_back + evil_set · 2xx: redesign"]
+    H --> N["1xx: evil save/restore · 2xx: self-loop/LTA"]
+    I --> O[Scratchpad / LTA / borrowed_from]
 ```
 
 
@@ -296,7 +317,7 @@ flowchart TD
 
 **What does *not* count (not a GATE):**
 
-- Bare `get_read_ptr()` / `get_write_ptr()` on `CircularBuffer` or `DataflowBuffer` — L1 address only
+- Bare `get_read_ptr()` / `get_write_ptr()` on `CircularBuffer` or `DataflowBuffer` — **not** a GATE by itself, but Class 1 Device 2.0 ports **must rewrite** to `noc.h` (see whitelist); Classes 2–5 surgery → `evil_*`
 - Official DFB getters (`get_entry_size()`, `get_total_num_entries()`, etc.)
 - `get_pointer_to_cb_data` — **NEEDS-FIX** (migrate to **LocalTensorAccessor**)
 - `read_tile_value` / `get_tile_address` via sanctioned DFB APIs (QUASAR-BLOCKED until API lands, not GATE)
@@ -309,7 +330,7 @@ flowchart TD
 | Known field → existing DFB getter                     | **NEEDS-FIX** — rewrite before port merges (e.g. `fifo_page_size` → `get_entry_size()`)              |
 | Known field → getter in flight (Runtime fixes table) | **BLOCKED** — port waits for API; track in audit report                                              |
 | Field has no getter yet                               | **File issue to Almeet** — see below; port BLOCKED until getter exists or pattern is redesigned away |
-| Field is *written* (pointer surgery, reconfig)        | **NEEDS-DESIGN-DECISION** — Class 2–5; port BLOCKED until redesign or op config disabled             |
+| `fifo_wr_ptr` / `fifo_rd_ptr` *written* (Classes 2–5) | **WEIRD-OK** on 1xx — uplift to `dfb.evil_set_*` / `evil_get_*` ([whitelist §D](cb_dfb_api_whitelist.md), **in flight**); report **Portable (workaround)** + **Quasar redesign required**. Leaving raw `LocalCBInterface` field writes = unresolved **GATE**. |
 
 
 ### Filing a missing-getter issue (→ Almeet)
@@ -356,11 +377,11 @@ Almeet owns the DFB getter API surface. The port stays RED until the issue is tr
 
 **WEIRD-OK examples (highlight in report, do not treat as GATE):**
 
-- `get_write_ptr() + byte_offset` for NOC tile write into reserved region (Class 1-ish)
-- `get_read_ptr()` / `get_write_ptr()` only as L1 cursors (~600+ op files)
+- `get_write_ptr() + byte_offset` + `dataflow_api.h` NOC — **NEEDS-FIX** → `noc.h` (not WEIRD-OK)
+- Kernel `get_read_ptr()` / `get_write_ptr()` for Class 1 transfers — **NEEDS-FIX** → `Noc::async_*` (~many op files = rewrite debt)
 - `get_pointer_to_cb_data` — **NEEDS-FIX** → **Portable (prereq: LTA)**; op rollup **YELLOW**
 - sanctioned `read_tile_value` / `get_tile_address` on DFB (QUASAR-BLOCKED until API, not GATE)
-- Manual `fifo_wr_ptr` assignment — **Portable (workaround)**; Notes: **undesirable but OK hack:** … (rollup stays **GREEN**)
+- Manual `fifo_wr_ptr` assignment → uplift to `evil_set_write_ptr` — **Portable (workaround)**; Notes: **undesirable but OK hack:** … + **Quasar redesign required** (rollup stays **GREEN**)
 
 **GATE (never WEIRD-OK):** Any `get_local_cb_interface(cb).<field>` read or write.
 
@@ -371,7 +392,7 @@ Almeet owns the DFB getter API surface. The port stays RED until the issue is tr
 | **PORTABLE** (Class 1, scratchpad end-state) | **Portable** | GREEN |
 | **NEEDS-FIX** → **LocalTensorAccessor** (`get_pointer_to_cb_data`, sync-free borrowed) | **Portable (prereq: LTA)** | YELLOW |
 | **NEEDS-FIX** (other mechanical: DFB getters, etc.) | **Portable** — note fix in Notes | YELLOW |
-| **WEIRD-OK**, **SELF-LOOP-CANDIDATE** | **Portable (workaround)** — prefix Notes with **undesirable but OK hack:** + class + ptr/credit hack; optional uplift | GREEN |
+| **WEIRD-OK**, **SELF-LOOP-CANDIDATE** | **Portable (workaround)** — Notes: **undesirable but OK hack:** + `evil_get/set` uplift + **Quasar redesign required** for Classes 2–5 | GREEN |
 | **NEEDS-DESIGN-DECISION**, **STRUCTURAL** (no strategy) | **Blocked** | RED |
 | **QUASAR-BLOCKED** | **Blocked (runtime)** on **2xx**; **Portable (workaround)** on **1xx** if ptr hack documented | YELLOW (2xx blocked) or GREEN (1xx only) |
 | **GATE** | **Blocked** on both arches | RED |
@@ -386,19 +407,21 @@ These unblock large swaths of the audit without per-kernel hacks. **Reclassify a
 | Fix                                                                 | Status                                                                   | Unblocks                                                                                                                                                 |
 | ------------------------------------------------------------------- | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `DataflowBuffer::get_total_num_entries()`                           | Merged — [PR #49197](https://github.com/tenstorrent/tt-metal/pull/49197) | `fifo_num_pages` field reads (`pool_kernels_common`, `clear_out_tiles`, `zero_out_tiles`, debug ASSERTs)                                                 |
-| `read_tile_value` / `get_tile_address` on `DataflowBuffer` (Quasar) | **In progress** (Runtime team)                                           | In-scope `QUASAR-BLOCKED` compute kernels; `memory.h` Welford family; sdpa sparse ctrl (DeepSeek / moe gate out of scope)                                |
-| `template<typename T> read_tile_value<T>(...)`                      | Planned with above                                                       | Typed scalar reads in in-scope ops; any typed scalar read                                                                                                |
-| `get_total_buffer_size_bytes()` / ring-span getters                 | **Needed** — file issue to Almeet if porting before landing              | `groupnorm_zero_fill` (`fifo_size`); `ring_attention` manual wrap (`fifo_limit`/`fifo_size`)                                                             |
+| Extent getters (`get_total_size_bytes`, local/span size & entries)  | **In flight** — [#49652](https://github.com/tenstorrent/tt-metal/pull/49652) | `fifo_page_size` / capacity / ring-span field reads; TRISC sizes in **bytes**                                                                            |
+| Templated `read_tile_value<T>` / `get_tile_address` on DFB (WH/BH) | **In flight** — [#49617](https://github.com/tenstorrent/tt-metal/pull/49617) | WH/BH scalar tile reads; Quasar follow-up after #49617 / related blockers                                                                                |
+| `read_tile_value` / `get_tile_address` on DFB (Quasar)              | **Blocked / follow-up** after #49617                                     | In-scope `QUASAR-BLOCKED` compute kernels; `memory.h` Welford family; sdpa sparse ctrl (DeepSeek / moe gate out of scope)                                |
+| `evil_get_write_ptr` / `evil_get_read_ptr` / `evil_set_*` on DFB    | **In flight** (not in tree yet) — [whitelist §D](cb_dfb_api_whitelist.md) | Classes 2–5 `get_local_cb_interface(...).fifo_*_ptr` mutates; SDPA hold-wr → `push_back` + `evil_set_write_ptr` (~66 in-scope mutate sites)               |
 
 
 **Already use today on DFB:**
 
 
-| Legacy field                                 | DFB getter                           |
+| Legacy field                                 | DFB getter / note                    |
 | -------------------------------------------- | ------------------------------------ |
-| `fifo_page_size` (entry bytes)               | `get_entry_size()`                   |
+| `fifo_page_size` (entry bytes)               | `get_entry_size()` (+ #49652 aliases when merged) |
 | Stride between entries                       | `get_stride_size()`                  |
-| `fifo_rd_ptr` / `fifo_wr_ptr` (as L1 cursor) | `get_read_ptr()` / `get_write_ptr()` |
+| `fifo_rd_ptr` / `fifo_wr_ptr` as Class 1 NOC L1 cursor | **Do not** expose to kernels — `Noc` from `noc.h` (private/`friend` `get_*_ptr`) |
+| Classes 2–5 pointer jumps / save-restore     | **`evil_get_*` / `evil_set_*`** (**in flight**) — never leave `LocalCBInterface` field writes |
 | Tile format bytes                            | `get_tile_size()` (from descriptors) |
 
 
@@ -406,7 +429,7 @@ These unblock large swaths of the audit without per-kernel hacks. **Reclassify a
 
 ## Quasar-only: compute self-loop (self-loop candidate)
 
-> **Scope:** **Quasar (Gen2) only.** WH/BH ports must **not** plan on compute self-loop — use ptr/credit workarounds, scratchpad + semaphores, LTA, or canonical cross-kernel DFBs instead.
+> **Scope:** **Quasar (Gen2) only.** WH/BH ports must **not** plan on compute self-loop — use **`evil_get/set`** ([whitelist](cb_dfb_api_whitelist.md)), scratchpad + semaphores, LTA, or canonical cross-kernel DFBs instead.
 >
 > **Audit terminology:** Mark matching buffers `**SELF-LOOP-CANDIDATE`** in the report. This is **not** a separate port-time option — it means “this buffer on **compute** could use a **self-loop DFB binding** (PRODUCER + CONSUMER on the same compute kernel) when the tile stream is canonical PACK→UNPACK on that kernel.” On Quasar the framework lowers that binding automatically; porters only choose the host self-loop bind pattern.
 
@@ -494,7 +517,7 @@ Host binding: `TensorBinding` on the touching kernel; kernel constructs `LocalTe
 
 **Litmus:** Would expressing this buffer as a DFB force pointer surgery, fake FIFO credits, window jumps, or a fabricated self-loop endpoint? If yes → classify the **memory** as scratchpad and the **handshake** as semaphores (or program semaphores + stallwait inside compute), not as a hacked DFB.
 
-**Why this matters for the audit:** Scratchpad + semaphores (or LTA where backing is borrowed) is the **preferred audit recommendation** for Classes 2 and 4 ring/window/staging patterns — **not** retaining DFB ptr surgery + disabled implicit sync unless LLK tile-stream coupling forces it. The report must state which path was chosen and why.
+**Why this matters for the audit:** Scratchpad + semaphores (or LTA where backing is borrowed) is the **preferred Quasar end-state** for Classes 2 and 4 ring/window/staging — **not** lasting DFB `evil_*` ptr surgery. On **WH/BH v1**, mechanical `evil_get/set` is allowed as **Portable (workaround)** with **Quasar redesign required**. The report must state which track was chosen.
 
 **Where scratchpad + semaphores helps** (by class):
 
@@ -530,7 +553,7 @@ Host binding: `TensorBinding` on the touching kernel; kernel constructs `LocalTe
 - Host: declare `ScratchpadSpec` on `ProgramSpec`; bind with `ScratchpadBinding` on each touching kernel; declare `SemaphoreSpec`(s) for each handshake edge.
 - Kernel: scratchpad base via scratchpad accessor API; `sem::foo.wait()` / `sem::foo.post()` (or legacy equivalent during migration) at phase boundaries — **no** `get_local_cb_interface` field access on a fake CB.
 
-**Audit report:** Class 2–5 CBs with **scratchpad + sems** end-state → **Portable** (GREEN). **LTA** end-state → **Portable (prereq: LTA)** (YELLOW). DFB ptr v1 hacks → **Portable (workaround)** (GREEN) — Notes must say **undesirable but OK hack:** …
+**Audit report:** Class 2–5 CBs with **1xx `evil_get/set`** → **Portable (workaround)** (GREEN) — Notes: **undesirable but OK hack:** + **Quasar redesign required** + cite [whitelist](cb_dfb_api_whitelist.md). **Scratchpad + sems** Quasar end-state → **Portable** (GREEN). **LTA** end-state → **Portable (prereq: LTA)** (YELLOW).
 
 **See also:** [metal2_port_patterns.md § Sync-free](metal2_port_patterns.md#pattern-sync-free-and-single-ended-cbs--self-loop-dfb-interim-workaround); [metal2_migration_guide.md](../metal2_migration_guide.md) (`ScratchpadSpec`, `SemaphoreSpec`).
 
@@ -545,7 +568,7 @@ Legacy **split-reader / multi-producer scatter** (e.g. conv2d tilize) often simu
 
 | Target            | Port strategy                                                                                                                                                                                                                                                                                                                                                                          | Verdict                                                                                                  |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| **WH / BH (1xx)** | **Keep raw pointer scatter as today** — `get_write_ptr()` + tile/byte offsets, manual pointer assignment, same layout conventions as Gen1. **1xx device code has no native strided DFB producer**; host strided DFB specs do not map to 1xx kernels. Mechanical `CircularBuffer` → `DataflowBuffer` rename applies to **linear** FIFO regions only; scatter paths stay pointer-driven. | **WEIRD-OK** — not a port blocker on 1xx                                                                 |
+| **WH / BH (1xx)** | **Keep pointer scatter via DFB `evil_set_write_ptr` / `evil_get_*`** ([whitelist](cb_dfb_api_whitelist.md) — **in flight**) — same layout conventions as Gen1. **1xx has no native strided DFB producer**. Linear FIFO regions use mechanical CB→DFB; scatter paths stay pointer-driven through evil setters. | **WEIRD-OK** / **Portable (workaround)** — Quasar redesign required |
 | **Quasar (2xx)**  | **Prefer 2xx strided multi-producer DFB** — host `stride_in_entries` (and related 2xx `DataflowBufferSpec` fields) models BRISC+NCRISC (or multi-endpoint) scatter into one logical buffer with canonical producer bindings. Replaces ptr surgery with first-class strided producer semantics when split-reader is retained.                                                           | **NEEDS-DESIGN-DECISION** until factory chooses strided DFB vs multi-DFB combine vs disable split reader |
 
 
@@ -558,7 +581,7 @@ Legacy **split-reader / multi-producer scatter** (e.g. conv2d tilize) often simu
 
 | Target arch       | What to record in report                                                                                                                              |
 | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **WH / BH (1xx)** | Split-reader scatter stays **ptr-driven** (**WEIRD-OK**). Note: no strided DFB on 1xx.                                                                |
+| **WH / BH (1xx)** | Split-reader scatter → **`evil_set_write_ptr`** (**Portable (workaround)**). Note: no strided DFB on 1xx; Quasar redesign required. |
 | **Quasar (2xx)**  | If split-reader kept: note **strided multi-producer DFB** as preferred end state, or document alternative (multi-DFB combine / disable split reader). |
 
 
@@ -570,7 +593,7 @@ Six categories cover essentially all illegal audit findings. Map flowchart red b
 
 ### Class 1 — Linear FIFO (canonical) ✅
 
-**Recognition:** `reserve_back` → write at `get_write_ptr()` → `push_back` on producer; `wait_front` → read at `get_read_ptr()` → `pop_front` on consumer. No `get_local_cb_interface` field access.
+**Recognition:** `reserve_back` → **`Noc::async_write`** (etc. from `noc.h`) → `push_back` on producer; `wait_front` → **`Noc::async_read`** → `pop_front` on consumer. No kernel `get_*_ptr`; no `get_local_cb_interface` field access.
 
 **Verdict:** `PORTABLE` once ids become `DataflowBuffer` / `dfb::name`.
 
@@ -592,18 +615,18 @@ Six categories cover essentially all illegal audit findings. Map flowchart red b
 
 **Why CB is wrong:** Producer/consumer credits imply contiguous front/back semantics; this pattern uses CB L1 as a **ring/window** with a shared layout convention.
 
-**Port strategy (pick one — audit recommends top row first):**
+**Port strategy (pick one — dual-track):**
 
 
 | Option                               | When                                                     | Notes                                                                                                                                                                |
 | ------------------------------------ | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Scratchpad + semaphores**          | Non-linear window with reader↔compute sync               | **Audit default.** Scratchpad holds stripe layout; semaphores replace misleading FIFO credits. See [Scratchpad + semaphores](#scratchpad--semaphores-explicit-sync). |
+| **DFB + `evil_get/set` (1xx v1)**    | WH/BH mechanical port — no semantic change               | **Initial WH/BH default.** Map `fifo_*_ptr` jumps to `dfb.evil_set_*` / `evil_get_*` ([whitelist](cb_dfb_api_whitelist.md) — **in flight**). **Portable (workaround)**; Notes: **Quasar redesign required**. |
+| **Scratchpad + semaphores**          | Quasar / redesign end-state; window with explicit sync   | Preferred **2xx** end-state. See [Scratchpad + semaphores](#scratchpad--semaphores-explicit-sync).                                                                    |
 | **LocalTensorAccessor + semaphores** | Sync-free **borrowed** stripe/LUT reads only             | Pointer-only views on tensor-backed L1 — not live pipelined window reuse with credits.                                                                               |
 | **Disable optimization**             | Simplest v1 bring-up                                     | Larger linear DFB, no reuse — back to Class 1                                                                                                                        |
-| **Raw ptr on DFB (fallback)**        | LLK requires CB/DFB id, or scratchpad migration deferred | **WEIRD-OK** on 1xx; on Quasar **disable implicit sync** on affected DFBs (see Class 4). Record as fallback, not first choice.                                       |
 
 
-**Flagship ops:** **conv2d** activation reuse (`conv_reader_common.hpp`, `conv_bmm_tilize.cpp` reader paths), **fused_swiglu** (scratch CBs — use `read_tile_value` once API lands, not field reads).
+**Flagship ops:** **conv2d** activation reuse (`conv_reader_common.hpp`, `conv_bmm_tilize.cpp` reader paths), **fused_swiglu** (scratch CBs — use `read_tile_value` once #49617 lands, not field reads).
 
 ---
 
@@ -611,16 +634,16 @@ Six categories cover essentially all illegal audit findings. Map flowchart red b
 
 **Recognition:** `reserve_back(N)` then writes at **computed offsets** within the region (not contiguous from `get_write_ptr()`). Often paired with Class 2.
 
-**Verdict:** `NEEDS-DESIGN-DECISION` on Quasar when choosing strided DFB vs alternatives; **WEIRD-OK** on WH/BH if keeping ptr scatter (see [Architecture fork](#architecture-fork-strided-scatter-class-3)).
+**Verdict:** `NEEDS-DESIGN-DECISION` on Quasar when choosing strided DFB vs alternatives; **WEIRD-OK** / **Portable (workaround)** on WH/BH with `evil_set_write_ptr` scatter (see [Architecture fork](#architecture-fork-strided-scatter-class-3)).
 
-**Port strategy (audit recommends top rows first):**
+**Port strategy (dual-track):**
 
 
 | Option                                   | When                    | Notes                                                                                                                        |
 | ---------------------------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| **Strided DFB (Quasar / 2xx only)**      | Split reader on **2xx** | **Preferred on Quasar** when split-reader is retained — see [Architecture fork](#architecture-fork-strided-scatter-class-3). |
+| **Raw pointer scatter via `evil_set_write_ptr` (WH / BH / 1xx)** | **1xx** split-reader    | **Initial WH/BH default** — keep Gen1 ptr pattern on DFB; **Portable (workaround)** + Quasar redesign required               |
+| **Strided DFB (Quasar / 2xx only)**      | Split reader on **2xx** | **Preferred Quasar** when split-reader is retained — see [Architecture fork](#architecture-fork-strided-scatter-class-3). |
 | **Scratchpad + semaphores → linear DFB** | Scatter is staging      | Writers scatter into scratchpad; sem handshake; push linearly into a separate DFB                                            |
-| **Raw pointer scatter (WH / BH / 1xx)**  | **1xx** split-reader    | **Audit note only:** keep Gen1 ptr pattern — **WEIRD-OK**, not a port blocker                                                |
 | **Separate DFBs per producer**           | Two readers             | Document in report if chosen over strided DFB                                                                                |
 | **Disable split reader**                 | Simplest v1             | Document in report if chosen                                                                                                 |
 
@@ -643,21 +666,28 @@ Six categories cover essentially all illegal audit findings. Map flowchart red b
 | Manual ring wrap + per-packet `push_back`                   | `ring_attention_all_gather_async` reader |
 
 
-**Verdict:** `NEEDS-DESIGN-DECISION` when scratchpad/LTA + sems vs DFB ptr surgery must be chosen; `**WEIRD-OK`** when audit records **DFB ptr/credit surgery** as the required v1 path (LLK tile-stream coupling).
+**Verdict:** **WEIRD-OK** / **Portable (workaround)** on 1xx with DFB evil setters; `NEEDS-DESIGN-DECISION` for Quasar end-state.
 
 **Important:** `push_back` is not a drop-in for bilinear's `llk_push_pages_bilinear`. `llk_push_tiles` also bumps `tiles_received` via `llk_push_to_brisc`; the bilinear helper only advances `fifo_wr_ptr` because nothing waits on those credits.
 
-**Audit scope for Class 4:** The audit **does not** track long-term LLK interface changes. For v1, classify whether the buffer can move to **scratchpad/LTA + semaphores** or must stay on **DFB ptr/credit surgery** because LLK still targets a CB/DFB id. When LLK coupling forces ptr surgery, verdict `**WEIRD-OK`** — not a port blocker. We are **not** pursuing `advance_write_ptr` / `push_back_credits_only` as near-term DFB APIs.
+**No `*_hold_wr_ptr` DFB API.** SDPA uplift:
 
-> **Quasar: disable implicit sync on DFB ptr surgery.** When the audit records **DFB ptr/credit manipulation** (fallback path), **do not use Gen2 implicit sync** on that DFB. Use **explicit** FIFO ops or semaphores and opt out via `Gen2Config::disable_implicit_sync_for`. See [Implicit sync (Quasar)](../metal2_migration_guide.md). **Prefer scratchpad/LTA + sems** so this callout is not needed.
+```cpp
+dfb.push_back(n);
+dfb.evil_set_write_ptr(/* rewound base */);  // wrap in kernel
+```
+
+**Audit scope for Class 4:** The audit **does not** track long-term LLK interface changes. For WH/BH v1, map to **`evil_set_*` / `evil_get_*`** ([whitelist](cb_dfb_api_whitelist.md) — **in flight**). When LLK coupling forces ptr surgery, verdict `**WEIRD-OK`**. Quasar: redesign — we are **not** pursuing `advance_write_ptr` / `push_back_credits_only` as near-term DFB APIs beyond evil setters.
+
+> **Quasar: disable implicit sync on DFB ptr surgery.** When the audit records **DFB evil ptr manipulation** (1xx fallback still used on Quasar bring-up), **do not use Gen2 implicit sync** on that DFB. Use **explicit** FIFO ops or semaphores and opt out via Gen2 `disable_dfb_implicit_sync_for`. Prefer redesign so this callout is not needed.
 
 
 | Option                                                  | Fits                                                                                                                                                |
 | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Scratchpad + semaphores**                             | **Audit default** for ring/window/staging (ring_attention, non-LLK pipes) — explicit slot sync replaces CB ring semantics                           |
+| **DFB + `evil_get/set` (1xx v1)**                       | **Initial WH/BH default** — SDPA hold-wr, bilinear wr advance, ring staging — **Portable (workaround)**; Quasar redesign required                   |
+| **Scratchpad + semaphores**                             | Preferred **2xx** for ring/window/staging (ring_attention, non-LLK pipes)                                                                           |
 | **LocalTensorAccessor + semaphores**                    | Borrowed tensor, pointer-only, no LLK `pack_tile(cb_id)`                                                                                            |
 | **Compute self-loop (Quasar only)**                     | Canonical PACK→UNPACK on one compute kernel — **not** decoupled ptr/credit. Flag **SELF-LOOP-CANDIDATE**.                                           |
-| **DFB ptr + manual credit/ptr manipulation (fallback)** | LLK-coupled: bilinear `llk_push_pages_bilinear`, SDPA `cb_push_back_hold_wr_ptr`, held-base restore — **WEIRD-OK**; disable implicit sync on Quasar |
 | `**borrowed_from` DFB**                                 | Synchronized pack into resident shard still using LLK `pack_tile(cb_id)`                                                                            |
 
 
@@ -669,21 +699,21 @@ Six categories cover essentially all illegal audit findings. Map flowchart red b
 
 **Recognition:** Same CB tiles read/modified/written across K or subblocks; save/restore `fifo_rd_ptr`/`fifo_wr_ptr` around `packer_l1_acc` / spill / bias paths.
 
-**Verdict:** `NEEDS-DESIGN-DECISION` (classification retained for audit tracking)
+**Verdict:** **WEIRD-OK** on 1xx with evil get/set; `NEEDS-DESIGN-DECISION` retained for Quasar classification.
 
-**Not fixable by semaphores alone when LLK drives tile streams** — accumulator RMW across K may still require **DFB ptr/credit surgery** (**WEIRD-OK**) or disable L1 acc paths.
+**Not fixable by semaphores alone when LLK drives tile streams** — accumulator RMW across K may still require **`evil_get/set`** on WH/BH (**Portable (workaround)**) or Quasar redesign.
 
-**Port gating:** **Not gated** on any LLK redesign. For v1 the audit records: **SELF-LOOP-CANDIDATE** (Quasar, canonical PACK→UNPACK), **LTA** (output-alias pointer-only), **scratchpad + semaphores** (non-LLK spill), **DFB ptr save/restore** (LLK partials), or **disable `packer_l1_acc` / spill**.
+**Port gating:** **Not gated** on any LLK redesign. For v1 the audit records: **DFB evil save/restore** (1xx), **SELF-LOOP-CANDIDATE** (Quasar, canonical PACK→UNPACK), **LTA** (output-alias pointer-only), **scratchpad + semaphores** (non-LLK spill), or **disable `packer_l1_acc` / spill**.
 
-**Port strategy (audit recommends top rows first):**
+**Port strategy (dual-track):**
 
 
 | Option                                                 | Notes                                                                                        |
 | ------------------------------------------------------ | -------------------------------------------------------------------------------------------- |
+| **DFB + `evil_get/set` save/restore (1xx v1)**         | **Initial WH/BH default** — replace `get_local_cb_interface(...).fifo_*_ptr =` with `dfb.evil_set_*` (**in flight**). Quasar redesign required |
 | **Compute self-loop (Quasar only)**                    | True PACK→UNPACK tile loop on one compute kernel — flag **SELF-LOOP-CANDIDATE**              |
 | **LocalTensorAccessor (read-write)**                   | Partials alias output shard; **pointer-only** RMW (e.g. `partials_cb_uses_output`)           |
 | **Scratchpad + semaphores**                            | Non-LLK phased partials / spill tiles                                                        |
-| **DFB ptr + manual partials bookkeeping (fallback)**   | LLK-driven `matmul_partials_cb` save/restore — **WEIRD-OK**; disable implicit sync on Quasar |
 | **Dest-only accumulation**                             | When K fits in dest registers                                                                |
 | **Disable `packer_l1_acc` / spill / fused bias paths** | v1 fallback if workarounds are too fragile                                                   |
 
@@ -730,7 +760,7 @@ Six categories cover essentially all illegal audit findings. Map flowchart red b
 
 **Ops (out of scope — see above):** `deepseek_moe_gate` / `generalized_moe_gate`; **DeepSeek** `deepseek_prefill` combine/dispatch/post_combine_reduce and related kernels — track separately, not under this audit's GATE.
 
-**Port strategy (in-scope ops):** Replace `CircularBuffer::read_tile_value` / `get_tile_address` with `DataflowBuffer` methods delegating to `ckernel::read_tile_value` / `get_tile_l1_byte_address` (Quasar path in `cb_api.h`). Fix `memory.h` once, unblock six kernels. Separate GATE from field reads — these APIs are not `get_local_cb_interface` access.
+**Port strategy (in-scope ops):** Replace `CircularBuffer::read_tile_value` / `get_tile_address` with `DataflowBuffer` methods — WH/BH via [#49617](https://github.com/tenstorrent/tt-metal/pull/49617) (**in flight**); Quasar follow-up after that. Fix `memory.h` once, unblock six kernels. Separate GATE from field reads — these APIs are not `get_local_cb_interface` access.
 
 #### `NEEDS-FIX` (mechanical, post-getters)
 
@@ -776,7 +806,7 @@ One fused compute kernel (`conv_bmm_tilize.cpp`) combines:
 | Partials L1 acc                      | Save/restore `matmul_partials_cb` rd/wr           | 5     |
 
 
-**Quasar v1 realistic path:** prefer **scratchpad + semaphores** for Class 2 window reuse where feasible; Class 3 split-reader — **strided DFB on Quasar**, **ptr scatter (WEIRD-OK) on WH/BH**; Class 4/5 — **DFB ptr/credit surgery (WEIRD-OK)** when LLK-coupled, else scratchpad/LTA/self-loop candidate per class tables above.
+**WH/BH v1 vs Quasar end-state:** WH/BH Class 2–5 → **`evil_get/set`** ([whitelist](cb_dfb_api_whitelist.md) — **in flight**), **Portable (workaround)** + Quasar redesign required. Quasar: prefer **scratchpad + semaphores** for Class 2 window reuse; Class 3 — **strided DFB**; Class 4/5 — redesign (self-loop / LTA / scratchpad) — do **not** treat evil_* as Quasar end-state.
 
 ---
 
@@ -788,21 +818,21 @@ The agent fills this block after Steps 0–5. **List every in-scope CB** (from S
 
 | Status | Meaning | Op rollup |
 |--------|---------|-----------|
-| **Portable** | Good to port — Class 1 linear FIFO, or **ScratchpadSpec + semaphores** end-state (**autoportable**) | GREEN |
+| **Portable** | Good to port — Class 1 linear FIFO, or **ScratchpadSpec + semaphores** Quasar end-state (**autoportable**) | GREEN |
 | **Portable (prereq: LTA)** | Sync-free borrowed tensor view — **LocalTensorAccessor** must land in the port (host binding + kernel ctor) | YELLOW |
-| **Portable (workaround)** | Non-canonical class — port proceeds now; Notes **must** lead with **undesirable but OK hack:** when a ptr/credit workaround is in use | GREEN |
+| **Portable (workaround)** | Non-canonical class — WH/BH proceeds with **`evil_get/set`** (or documented ptr hack); Notes **must** lead with **undesirable but OK hack:** + **Quasar redesign required** for Classes 2–5 | GREEN |
 | **Blocked** | Cannot port — GATE, unresolved design, or STRUCTURAL without end-state | RED |
-| **Blocked (runtime)** | Waiting on a [Runtime fix](#runtime-fixes-in-flight) (usually **2xx** only) | YELLOW (1xx clear) or RED |
+| **Blocked (runtime)** | Waiting on a [Runtime fix](#runtime-fixes-in-flight) (usually **2xx**; also WH until #49617 merges for scalar reads) | YELLOW (1xx clear) or RED |
 
 **Overall rollup:** **GREEN** when no **Blocked**, no **Portable (prereq: LTA)**, and no unresolved GATE — **Portable (workaround)** rows are GREEN but must flag ptr hacks in Notes. **YELLOW** for LTA prereqs or 2xx runtime blocks with 1xx clear. **RED** for **Blocked** or GATE.
 
-For every **Portable (workaround)** row using ptr surgery, credit decoupling, or manual `fifo_*` ptr jumps, Notes must include the phrase **undesirable but OK hack** and name the workaround (e.g. `get_write_ptr() + offset`, `fifo_wr_ptr` jump, `cb_push_back_hold_wr_ptr`).
+For every **Portable (workaround)** Class 2–5 row: Notes must include **undesirable but OK hack**, name the uplift (`evil_set_write_ptr`, `push_back` + `evil_set_write_ptr` for former `cb_push_back_hold_wr_ptr`, etc.), cite [cb_dfb_api_whitelist.md](cb_dfb_api_whitelist.md), and state **Quasar redesign required** with intended `2xx_endstate: scratchpad|LTA|self-loop|strided`.
 
 ```markdown
 # CB→DFB Kernel Audit: `<op_name>` [factory: `<FactoryClass>` if not whole op]
 
-**Date:** YYYY-MM-DD  
-**Op root:** `ttnn/cpp/ttnn/operations/<family>/<op>/`  
+**Date:** YYYY-MM-DD
+**Op root:** `ttnn/cpp/ttnn/operations/<family>/<op>/`
 
 **Scope:** `<factory helper or ProgramFactory>` → kernels: `path/to/kernel_a.cpp`, `path/to/kernel_b.cpp`, …
 
@@ -816,10 +846,11 @@ For every **Portable (workaround)** row using ptr surgery, credit decoupling, or
 |----|-------|-----------|------------|-----------|------------|-----------|
 | `cb_in` | 1 | `reader.cpp`, `compute.cpp` | Portable | linear FIFO → `DataflowBuffer` | Portable | — |
 | `cb_lut` | 6 | `compute.cpp` | Portable (prereq: LTA) | sync-free borrowed read → **LocalTensorAccessor** | Portable (prereq: LTA) | same |
-| `cb_scratch` | 2 | `reader.cpp` | Portable | autoportable: **ScratchpadSpec** + sems | Portable | same |
-| `cb_x` | 6 | `compute.cpp` | Portable (prereq: LTA) | — | Blocked (runtime) | needs `read_tile_value` on DFB (LTA insufficient — LLK needs DFB id) |
-| `cb_y` | 2 | `reader.cpp` | Portable (workaround) | **undesirable but OK hack:** Class 2 `fifo_wr_ptr` jump; uplift: scratchpad+sems | Portable (workaround) | **undesirable but OK hack:** ptr scatter; uplift: strided DFB |
-| `cb_z` | 4 | `compute.cpp` | Blocked | GATE: `get_local_cb_interface(cb_z).fifo_wr_ptr` write — resolve before port | Blocked | same |
+| `cb_scratch` | 2 | `reader.cpp` | Portable (workaround) | **undesirable but OK hack:** Class 2 → `evil_set_write_ptr` (whitelist §D, in flight); **Quasar redesign required**; `2xx_endstate: scratchpad` | NEEDS-DESIGN until redesign | scratchpad+sems |
+| `cb_x` | 6 | `compute.cpp` | Portable (prereq: LTA) | — | Blocked (runtime) | needs `read_tile_value` on DFB (#49617 Quasar follow-up) |
+| `cb_y` | 2 | `reader.cpp` | Portable (workaround) | **undesirable but OK hack:** Class 2 `fifo_wr_ptr` jump → `evil_set`; Quasar redesign required | Portable (after redesign) | strided DFB or scratchpad |
+| `cb_hold` | 4 | `compute_streaming.hpp` | Portable (workaround) | **undesirable but OK hack:** was `cb_push_back_hold_wr_ptr` → `push_back` + `evil_set_write_ptr`; Quasar redesign required | NEEDS-DESIGN | — |
+| `cb_z` | 4 | `compute.cpp` | Blocked | GATE: still `get_local_cb_interface(cb_z).fifo_wr_ptr` write — uplift to `evil_set_write_ptr` before merge | Blocked | same |
 
 ## GATE hits (must be empty to merge)
 
@@ -839,14 +870,14 @@ Filled example for the sharded Welford factory slice (`sharded_layernorm_factory
 ```markdown
 # CB→DFB Kernel Audit: `layernorm` [factory: sharded / Welford]
 
-**Date:** 2026-07-09  
-**Op root:** `ttnn/cpp/ttnn/operations/normalization/layernorm/`  
+**Date:** 2026-07-09
+**Op root:** `ttnn/cpp/ttnn/operations/normalization/layernorm/`
 
 **Scope:** `sharded_layernorm_factory_helpers.cpp` (Welford branch) → kernels: `layernorm_sharded_welford.cpp`, `reader_mcast_sender_unary_sharded_ln.cpp`, `writer_unary_sharded_ln_rm_gb.cpp`, `writer_unary_sharded_ln.cpp`, `combine_welford.h`
 
 ## Overall verdict: YELLOW
 
-Class 1 CBs are **Portable**. `cb_reciprocals` is **Portable (prereq: LTA)** — port must migrate `get_pointer_to_cb_data` to **LocalTensorAccessor**. Gamma/beta are **Portable (workaround)** with documented ptr-offset hacks (GREEN, flagged below).
+Class 1 CBs with canonical FIFO are **Portable** once transfers use **`noc.h`**. Sites still on `get_*_ptr` + `dataflow_api.h` NOC are **NEEDS-FIX**. `cb_reciprocals` is **Portable (prereq: LTA)**.
 
 ## CB portability
 
@@ -859,10 +890,10 @@ Class 1 CBs are **Portable**. `cb_reciprocals` is **Portable (prereq: LTA)** —
 | `cb_ex`, `cb_ex_global` | 1 | `layernorm_sharded_welford.cpp`, `combine_welford.h` | Portable | `combine_welford_partials` helper | Portable | — |
 | `cb_transpose` | 1 | `layernorm_sharded_welford.cpp` | Portable | column layout workaround | Portable | — |
 | `cb_xmm`, `cb_im`, `cb_out` | 1 | `layernorm_sharded_welford.cpp` | Portable | normalize pipeline | Portable | — |
-| `cb_gamma`, `cb_beta` | 1 | `layernorm_sharded_welford.cpp`, `writer_unary_sharded_ln_rm_gb.cpp` | Portable (workaround) | **undesirable but OK hack:** `get_write_ptr() + offset` for masked NOC weight write | Portable (workaround) | same |
+| `cb_gamma`, `cb_beta` | 1 | `layernorm_sharded_welford.cpp`, `writer_unary_sharded_ln_rm_gb.cpp` | NEEDS-FIX | Class 1: rewrite `get_write_ptr() + offset` + legacy NOC → `Noc` from `noc.h` | NEEDS-FIX | same |
 | `cb_reciprocals` | 6 | `layernorm_sharded_welford.cpp` | Portable (prereq: LTA) | sync-free LUT → **LocalTensorAccessor** (replaces `get_pointer_to_cb_data`) | Portable (prereq: LTA) | same |
 | `cb_out` | 1 | `writer_unary_sharded_ln_rm_gb.cpp` | Portable | pack → output | Portable | — |
-| `cb_partial` (+ reduce stage) | 1 | `reader_mcast_sender_unary_sharded_ln.cpp` | Portable | `get_read_ptr()` as NOC source | Portable | — |
+| `cb_partial` (+ reduce stage) | 1 | `reader_mcast_sender_unary_sharded_ln.cpp` | NEEDS-FIX | rewrite `get_read_ptr()` as NOC source → `noc.h` | NEEDS-FIX | same |
 
 ## GATE hits (must be empty to merge)
 
@@ -883,9 +914,9 @@ Class 1 CBs are **Portable**. `cb_reciprocals` is **Portable (prereq: LTA)** —
 4. **File to Almeet:** any remaining field read with no getter (`fifo_size`, `fifo_limit`, etc.) before port proceeds
 5. **Runtime APIs:** land `read_tile_value` / `get_tile_address` on Quasar DFB → unblock in-scope compute kernels + Welford
 6. **Quick wins:** fused_swiglu → `read_tile_value`
-7. **Class 4 / 5:** prefer scratchpad/LTA + sems or compute self-loop candidate (Quasar); **DFB ptr/credit surgery (WEIRD-OK)** when LLK-coupled
-8. **Class 3:** record arch fork in report — **1xx:** ptr scatter (WEIRD-OK); **Quasar:** strided DFB if split-reader kept
-9. **Class 2 / ring / window:** recommend **scratchpad + semaphores** before DFB ptr hacks
+7. **Class 2–5 (1xx):** map ptr/credit reach-arounds to **`evil_get/set`** ([whitelist](cb_dfb_api_whitelist.md)); Notes: **undesirable but OK hack** + **Quasar redesign required** (`2xx_endstate: scratchpad|LTA|self-loop|strided`)
+8. **Class 3:** record arch fork — **1xx:** `evil_set_write_ptr` scatter; **Quasar:** strided DFB if split-reader kept
+9. **Quasar end-state (Classes 2–5):** redesign to scratchpad + sems / LTA / self-loop / strided — do **not** treat `evil_*` as lasting fix
 
 ---
 
@@ -923,7 +954,7 @@ rg -l 'get_cb_tiles_acked_ptr|get_cb_tiles_received_ptr' \
 | LocalTensorAccessor                | `metal2_port_patterns.md`                               | Class 2/6 sync-free borrowed views; Class 5 output-alias partials when pointer-only |
 | `get_local_cb_interface` in kernel | —                                                       | **GATE**                                                                            |
 | `fifo_`* field R/W in kernel       | —                                                       | **GATE** — blocks port                                                              |
-| Ptr offsets / scatter / partials   | —                                                       | Classes 2–5 + WEIRD-OK vs RED                                                       |
+| Ptr offsets / scatter / partials   | —                                                       | Classes 2–5 → `evil_get/set` (1xx) + Quasar redesign flag                            |
 | Self-loop / LTA / borrowed         | `metal2_port_patterns.md`                               | Class 4/6 strategies                                                                |
 
 
@@ -941,4 +972,3 @@ rg -l 'get_cb_tiles_acked_ptr|get_cb_tiles_received_ptr' \
 - [metal2_migration_guide.md](../metal2_migration_guide.md) — CB→DFB concepts
 - [CB-to-DFB-flowchart.svg](../human/CB-to-DFB-flowchart.svg) — decision flowchart
 - DFB getters: [PR #49197](https://github.com/tenstorrent/tt-metal/pull/49197) (`get_total_num_entries`)
-
