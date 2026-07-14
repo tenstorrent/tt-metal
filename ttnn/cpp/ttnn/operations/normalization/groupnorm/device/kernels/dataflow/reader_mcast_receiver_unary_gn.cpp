@@ -209,13 +209,9 @@ void kernel_main() {
 #ifdef TILIZE_IN
                     // The input is laid out row-major (row by row), not as tiles, so read its rows into
                     // cb_in0 for the compute kernel to tilize on-core. GroupNorm reads the input three
-                    // times (mean/variance/normalize). In the fits-in-L1 variant the compute kernel tilizes
-                    // it once and keeps the whole group in L1, so gather from DRAM only on the first pass;
-                    // the re-tilize fallback (no INPUT_FITS_L1) re-gathers on every pass.
-#ifdef INPUT_FITS_L1
-                    if (cur_read_iteration == 0)
-#endif
-                    {
+                    // times (mean/variance/normalize), but the compute kernel tilizes it once and keeps the
+                    // whole group resident in L1, so gather from DRAM only on the first pass.
+                    if (cur_read_iteration == 0) {
                         constexpr uint32_t row_chunk_bytes = tile_width * datum_size_bytes;
                         const auto src_a = TensorAccessor(src0_args, src_addr);
                         uint32_t l1_write_addr = cb_in0.get_write_ptr();

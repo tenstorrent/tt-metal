@@ -4,11 +4,13 @@
 
 #include "groupnorm.hpp"
 #include "device/groupnorm_device_operation.hpp"
+#include "device/groupnorm_program_utils.hpp"
 #include "groupnorm_grid_utils.hpp"
 #include "groupnorm_input_mask.hpp"
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 
 namespace {
 
@@ -371,6 +373,47 @@ Tensor group_norm(
             negative_mask,
             reciprocals);
     }
+    // Legacy (non-Welford) ROW_MAJOR interleaved input whose per-core group would not fit in L1 as a resident
+    // tilized block: convert it once with ttnn::tilize_with_zero_padding and run the TILE-input path
+    // (composite), rather than re-gathering and re-tilizing on-core on every one of the three passes.
+    // Welford ROW_MAJOR is rejected upstream, so this only applies to the legacy path.
+    Tensor gn_input = input_tensor;
+    if (!use_welford && input_tensor.layout() == Layout::ROW_MAJOR) {
+        const uint32_t Ht = nhw / ttnn::types::TILE_SIZE;
+        const uint32_t tile_w = input_tensor.tensor_spec().tile().get_width();
+        const uint32_t tile_h = input_tensor.tensor_spec().tile().get_height();
+        const uint64_t base_l1 =
+            input_tensor.device()->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        const uint64_t available_l1 = input_tensor.device()->l1_size_per_core() - base_l1;
+        // Match factory heuristic: shape[1] * shape[2] * shape[3] == per_batch_hw * W.
+        const uint32_t per_batch_hw = input_padded_shape[1] * input_padded_shape[2];
+        const bool fits = ttnn::prim::groupnorm_legacy_rm_input_fits_l1(
+            Ht,
+            input_padded_shape[3],
+            per_batch_hw,
+            input_padded_shape[0],
+            core_grid->x,
+            core_grid->y,
+            static_cast<uint32_t>(num_groups),
+            core_grid_auto_selected ? -1 : num_out_blocks.value_or(1),
+            tile_w,
+            tile_h * tile_w * input_tensor.element_size(),
+            gamma.has_value(),
+            beta.has_value(),
+            /*has_mask=*/true,  // a mask CB is always allocated (get_mask_tensor creates one if absent)
+            output_layout.value_or(input_tensor.layout()) == Layout::ROW_MAJOR,
+            available_l1);
+        if (!fits) {
+            log_debug(
+                tt::LogOp,
+                "group_norm: ROW_MAJOR input does not fit L1 as a resident tilized group; "
+                "tilizing on host and running the TILE path (composite).");
+            // Keep the intermediate in the input's memory config (typically DRAM interleaved). Tilizing into
+            // output_mem_config would be wrong if the caller requested a different output config.
+            gn_input = ttnn::tilize_with_zero_padding(input_tensor, input_tensor.memory_config());
+        }
+    }
+
     // When the user did not pin a core grid, defer num_out_blocks to the program
     // factory's heuristic via the -1 sentinel (see GroupNormMultiCoreProgramConfig).
     // Otherwise honor the explicit num_out_blocks (defaulting to 1 = no chunking).
@@ -382,7 +425,7 @@ Tensor group_norm(
         .output_layout = output_layout.value_or(input_tensor.layout()),
         .num_out_blocks = core_grid_auto_selected ? -1 : num_out_blocks.value_or(1)};
     return ttnn::prim::group_norm(
-        input_tensor,
+        gn_input,
         epsilon,
         static_cast<uint32_t>(num_groups),
         output_mem_config,

@@ -328,36 +328,14 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     // c_30 (untilize output) and c_20 (row-major reread) scratch for the ROW_MAJOR-output path; each is one out-block.
     uint32_t rm_untilize_CB_size_group_1 = in_CB_size_group_1;
 
-    // Legacy ROW_MAJOR-input fast path: cb_in_tilized (c_17) holds the whole per-core group tilized once so the
-    // mean/variance/normalize passes reuse it. It spans all num_out_blocks out-blocks, so for num_out_blocks > 1 it
-    // can exceed L1; when the estimated footprint won't fit, drop the fast path and let the kernel fall back to the
-    // (always-fitting) re-tilize-per-pass path.
+    // Legacy ROW_MAJOR input: cb_in_resident (c_17) holds the whole per-core group tilized once so the
+    // mean/variance/normalize passes reuse it (no re-read / re-tilize). The host op (group_norm) guarantees this
+    // group fits L1 before dispatching a ROW_MAJOR input here; when it would not fit, the host converts the input
+    // with ttnn::tilize_with_zero_padding and takes the TILE path instead.
     uint32_t in_tilized_CB_size_group_1 = 0;
-    bool input_fits_l1 = !use_welford && tilize_in;
-    if (input_fits_l1) {
+    if (!use_welford && tilize_in) {
         in_tilized_CB_size_group_1 =
             groupnorm_tilized_group_tiles(block_ht_group_1, num_out_blocks, block_wt) * in_single_tile_size;
-
-        // Estimated per-core L1: resident tilized group + per-out-block CBs (c_0/c_29/c_16/c_24/c_25/c_23/c_22) +
-        // gamma/beta/mask + a flat allowance for the small scalar/reduction CBs, plus c_30/c_20 when output is RM.
-        uint64_t fast_path_l1 = in_tilized_CB_size_group_1 + in0_CB_size_group_1 + in_CB_size_group_1 +
-                                out_CB_size_group_1 + x_CB_size_group_1 + xmm_CB_size_group_1 + xmm2_CB_size_group_1 +
-                                xmm3_CB_size_group_1 +
-                                static_cast<uint64_t>(kGroupnormSmallCbAllowanceTiles) * single_tile_size;
-        fast_path_l1 += gamma.has_value() ? in5_CB_size : 0;
-        fast_path_l1 += beta.has_value() ? in6_CB_size : 0;
-        fast_path_l1 += input_mask.has_value() ? in_mask_CB_size : 0;
-        if (untilize_out) {
-            fast_path_l1 += rm_untilize_CB_size_group_1 + in_CB_size_group_1;  // c_30 + c_20
-        }
-
-        // Usable L1 = per-core L1 minus the base-allocated region (kernel binaries, etc.).
-        const uint64_t available_l1 =
-            device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-        if (fast_path_l1 * 100 > available_l1 * kGroupnormTilizedL1UsagePercent) {
-            input_fits_l1 = false;
-            in_tilized_CB_size_group_1 = 0;
-        }
     }
 
     std::vector<CoreCoord> core_coords = grid_to_cores(num_cores, num_actual_cols, num_actual_rows, row_wise);
@@ -444,13 +422,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     if (tilize_in) {
         reader_mcast_sender_defines["TILIZE_IN"] = "1";
         reader_mcast_receiver_defines["TILIZE_IN"] = "1";
-    }
-    if (input_fits_l1) {
-        // Fits-in-L1 variant: the reader gathers the input from DRAM only on the first pass; the compute
-        // kernel tilizes it once and keeps the whole group in L1. Without this define the reader re-gathers
-        // every pass (re-tilize fallback), used when the tilized-group CB would not fit in L1.
-        reader_mcast_sender_defines["INPUT_FITS_L1"] = "1";
-        reader_mcast_receiver_defines["INPUT_FITS_L1"] = "1";
     }
     if (untilize_out) {
         reader_mcast_sender_defines["UNTILIZE_OUT"] = "1";
@@ -646,9 +617,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     }
     if (tilize_in) {
         eltwise_binary_defines["TILIZE_IN"] = "1";
-    }
-    if (input_fits_l1) {
-        eltwise_binary_defines["INPUT_FITS_L1"] = "1";
     }
     if (untilize_out) {
         eltwise_binary_defines["UNTILIZE_OUT"] = "1";
