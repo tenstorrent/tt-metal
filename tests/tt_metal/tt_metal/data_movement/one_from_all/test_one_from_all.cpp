@@ -496,7 +496,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllPacketSizes_2_0) {
         auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
             unit_tests::dm::compute_physical_constraints(mesh_device);
         unit_tests::dm::core_from_all::OneFromAllConfig test_config = {
-            .test_id = 115,
+            .test_id = 162,
             .master_core_coord = {0, 0},
             .sub_start_core_coord = {0, 0},
             .sub_grid_size = {2, 1},
@@ -510,7 +510,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllPacketSizes_2_0) {
     }
 
     // WH/BH full sweep.
-    uint32_t test_id = 115;
+    uint32_t test_id = 162;
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_start_coord = {0, 0};
     CoreCoord subordinate_grid_size = {
@@ -557,7 +557,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllDirectedIdeal_2_0) 
         auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
             unit_tests::dm::compute_physical_constraints(mesh_device);
         unit_tests::dm::core_from_all::OneFromAllConfig test_config = {
-            .test_id = 130,
+            .test_id = 163,
             .master_core_coord = {0, 0},
             .sub_start_core_coord = {0, 0},
             .sub_grid_size = {2, 1},
@@ -571,7 +571,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllDirectedIdeal_2_0) 
     }
 
     // WH/BH ideal config.
-    uint32_t test_id = 130;
+    uint32_t test_id = 163;
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_start_coord = {0, 0};
     CoreCoord subordinate_grid_size = {
@@ -608,7 +608,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllVirtualChannels_2_0
         auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
             unit_tests::dm::compute_physical_constraints(mesh_device);
         unit_tests::dm::core_from_all::OneFromAllConfig test_config = {
-            .test_id = 162,
+            .test_id = 164,
             .master_core_coord = {0, 0},
             .sub_start_core_coord = {0, 0},
             .sub_grid_size = {2, 1},
@@ -625,7 +625,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllVirtualChannels_2_0
 
     unit_tests::dm::core_from_all::virtual_channels_test(
         mesh_device,
-        162,
+        164,
         {0, 0},
         {0, 0},
         {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y});
@@ -639,13 +639,13 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllCustom_2_0) {
         if (device->compute_with_storage_grid_size().x < 2) {
             GTEST_SKIP() << "Skipping: sub_grid_size {2, 1} requires >= 2 columns.";
         }
-        unit_tests::dm::core_from_all::custom_test(mesh_device, 163, {0, 0}, {0, 0}, {2, 1}, 4, 1, 2, NOC::NOC_0);
+        unit_tests::dm::core_from_all::custom_test(mesh_device, 165, {0, 0}, {0, 0}, {2, 1}, 4, 1, 2, NOC::NOC_0);
         return;
     }
 
     unit_tests::dm::core_from_all::custom_test(
         mesh_device,
-        163,
+        165,
         {0, 0},
         {0, 0},
         {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y},
