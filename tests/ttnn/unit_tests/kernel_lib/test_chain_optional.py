@@ -5,12 +5,10 @@
 """
 OptionalChainElement — compile-time on/off gating of a chain step (untested mechanism).
 
-Coverage spec: ttnn/cpp/ttnn/kernel_lib/docs/eltwise_helper_test_coverage.html.
-
   - optional_unary.cpp: gate a Negative. ON -> out = -A, OFF -> out = A (element elided).
   - optional_pack.cpp:  gate a second PackTile (fan-out). ON -> both cb_out0 and cb_out1 written;
     OFF -> only cb_out0, and the optional PackTile's FALSE stub must still compile (it must expose
-    pack_dst_slot — the bug fixed in eltwise_optional.hpp, project memory #16).
+    pack_dst_slot — the bug fixed in eltwise_optional.hpp).
 """
 
 import torch
@@ -80,7 +78,7 @@ def test_optional_pack_on_fanout(device):
 
 def test_optional_pack_off_falsestub(device):
     """OFF: only cb_out0 written; the optional PackTile FALSE stub must compile (pack_dst_slot bug)
-    and be elided. This is the regression guard for project memory #16."""
+    and be elided."""
     n = 4
     dt = ttnn.bfloat16
     shape = [1, 1, 32, 32 * n]

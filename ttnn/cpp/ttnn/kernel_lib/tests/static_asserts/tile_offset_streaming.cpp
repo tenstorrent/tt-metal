@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Negative compile test (G2 / SA-07): TileOffset::Set requires a Bulk-family / CallerManaged
+// Negative compile test: TileOffset::Set requires a Bulk-family / CallerManaged
 // lifecycle. A runtime base offset can't compose with iter-dependent (Streaming) wait/pop counts.
 // Scalar+Streaming is itself legal, so ONLY the TileOffset guard fires here (clean isolation).
 // MUST fail to compile with "TileOffset::Set requires".

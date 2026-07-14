@@ -34,9 +34,8 @@ void kernel_main() {
     CircularBuffer c0(cb0), c1(cb1);
     constexpr uint32_t onetile = 1;
 
-    // Push c_1 FIRST. c_1 is the held / upfront operand (Bulk/HeldBulk/Row/Col); the chain needs it
-    // resident before it starts draining the streaming c_0. If we filled c_0 first and its CB is
-    // small (the streaming case), reserve_back would block before c_1 is ever pushed -> deadlock.
+    // Push c_1 FIRST: it's the held/upfront operand and the chain needs it resident before it drains
+    // the streaming c_0. Filling a small c_0 first would block reserve_back before c_1 is pushed -> deadlock.
     for (uint32_t i = 0; i < n1; ++i) {
         c1.reserve_back(onetile);
         noc.async_read(s1, c1, bytes1, {.page_id = i}, {.offset_bytes = 0});

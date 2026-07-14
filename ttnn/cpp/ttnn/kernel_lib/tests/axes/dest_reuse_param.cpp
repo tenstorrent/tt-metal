@@ -2,14 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// DestReuseBinary matrix: reuse-direction x op.
-//
-// Stage 1 (fixed): D0 = A + B (BinaryFpu).
-// Stage 2: DestReuseBinary feeds DEST(D0) and CB C into the FPU, per ReuseType:
-//   DEST_TO_SRCA -> srca = DEST, srcb = C  => result = (A+B) op C
-//   DEST_TO_SRCB -> srca = C,    srcb = DEST => result = C op (A+B)
-// For Sub the two directions differ (C-(A+B) vs (A+B)-C), so the matrix proves DEST is routed to
-// the correct unpack lane, not just "a result came out".
+// DestReuseBinary matrix: reuse-direction x op. Stage 1 (fixed) D0 = A + B; stage 2 feeds DEST(D0)
+// and CB C into the FPU per ReuseType:
+//   DEST_TO_SRCA -> (A+B) op C     DEST_TO_SRCB -> C op (A+B)
+// For Sub the two directions differ, so the matrix proves DEST is routed to the correct unpack lane.
 //
 // CT args: [n, reuse (0=SRCA,1=SRCB), op (0=Add,1=Sub,2=Mul)].
 

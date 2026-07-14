@@ -9,12 +9,8 @@ A BinaryFpu chain over grid(Ht, Wt):
   cb_a: Streaming   + Scalar  -> one tile per (ht, wt), front-read, popped per tile
   cb_b: OuterStream + Scalar  -> ONE tile per row, front-read across the row's Wt cols,
                                  waited at row entry / popped at row exit (shallow 2-deep CB)
-Net: out[ht*Wt + wt] = a[ht*Wt + wt] + b[ht]   (b reused across the row's cols)
-
-This is the only path that exercises the per-row wait/pop hooks + the O(1)-L1 streamed
-broadcast that a resident Bulk+Col operand can't provide without an Ht-deep CB.
-
-  Kernels: ttnn/cpp/ttnn/kernel_lib/tests/outer_stream/
+Net: out[ht*Wt + wt] = a[ht*Wt + wt] + b[ht]. This is the only path exercising the per-row wait/pop
+hooks + the O(1)-L1 streamed broadcast (a resident Bulk+Col operand would need an Ht-deep CB).
 """
 
 import torch

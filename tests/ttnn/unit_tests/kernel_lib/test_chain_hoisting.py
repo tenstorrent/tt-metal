@@ -3,19 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Init-hoisting equality for same data (eltwise_chain G5 / hoisting).
+Init-hoisting equality for same data (eltwise_chain hoisting).
 
-A uniform chain over same-format data hoists its per-element init OUT of the tile loop and emits
-it once at boot (chain_hoist_math_mop_v && chain_hoist_sfpu_v -> hoist_compute_init,
-eltwise_chain.inl:2010-2042). A non-uniform chain re-inits per tile. Hoisting is a pure emission
-optimization: for the same op on same-format data it must produce a BIT-IDENTICAL result to the
-per-tile-init path.
+A uniform chain over same-format data hoists its per-element init out of the tile loop and emits it
+once at boot (chain_hoist_math_mop_v && chain_hoist_sfpu_v -> hoist_compute_init); a non-uniform
+chain re-inits per tile. Hoisting is a pure emission optimization: same op on same-format data must
+give a BIT-IDENTICAL result to the per-tile-init path.
 
-This compares two kernels computing exp(x) over N tiles:
-  - hoist_single_call.cpp : one eltwise_chain(N, ...) -> init hoisted once.
-  - hoist_per_tile.cpp    : N x eltwise_chain(1, ...) -> init emitted per tile.
-The outputs must be exactly equal (and both match torch.exp). If hoisting ever skipped a needed
-re-init, later tiles in the hoisted kernel would diverge from the per-tile baseline.
+Compares exp(x) over N tiles from hoist_single_call.cpp (init once) vs hoist_per_tile.cpp (init per
+tile). Outputs must be exactly equal (and match torch.exp); a skipped re-init would diverge.
 """
 
 import torch
