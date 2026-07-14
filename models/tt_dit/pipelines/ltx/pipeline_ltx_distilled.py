@@ -291,6 +291,9 @@ class LTXDistilledPipeline(LTXPipeline):
         # and keep only the prealloc trace-io + stage statics that gen#0 reuses. When prep_run is off
         # (CI / quality runs), keep the mini-denoise so the prep_run=False capture finds warm kernels.
         iter_fast = (not capture_all) and os.environ.get("LTX_ITER_FAST", "0") in ("1", "true", "True")
+        # generate() drops the audio decode entirely under LTX_VIDEO_ONLY, so warming and
+        # trace-capturing the audio decoder here compiles kernels that are never replayed.
+        video_only = os.environ.get("LTX_VIDEO_ONLY", "0") in ("1", "true", "True")
         warmup_steps = 1 if iter_fast else num_inference_steps
         skip_dit_warmup = LTX_DIT_PREP_RUN and not capture_all
 
@@ -406,7 +409,9 @@ class LTXDistilledPipeline(LTXPipeline):
             # _warmup_audio_decode, trace flags forced off) is what inits them; the first real
             # generate then captures+executes correctly and every later decode replays.
             # in_capture_pass / iter_fast are ltx-rt serving gates preserved from HEAD.
-            if in_capture_pass:
+            if video_only:
+                logger.info("LTX_VIDEO_ONLY=1: skipping warmup audio decode (generate() decodes no audio)")
+            elif in_capture_pass:
                 logger.info("capture pass: skipping audio decode (vocoder prep_run=False; real warmup inits it)")
             elif iter_fast:
                 logger.info("LTX_ITER_FAST=1: skipping warmup audio decode (gen#0 decodes eagerly)")
