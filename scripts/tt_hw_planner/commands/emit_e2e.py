@@ -230,7 +230,7 @@ def emit_e2e_report(model_id: str, demo_dir, *, verdict: str = "PASS") -> None:
                 print(f"      pcc    → pytest {rel}/tests/e2e/{pcc_test.name} -svv")
             if perf_test:
                 print(f"      trace  → pytest {rel}/tests/e2e/{perf_test.name} -svv")
-        print(f"  full report → {rel}/E2E_REPORT.md")
+        print(f"  full report → {rel}/RUN_REPORT.md")
         print(bar)
 
         md = [
@@ -274,7 +274,13 @@ def emit_e2e_report(model_id: str, demo_dir, *, verdict: str = "PASS") -> None:
                 md.append(f"pytest {rel}/tests/e2e/{perf_test.name} -svv")
             md.append("```")
             md.append("")
-        (demo_dir / "E2E_REPORT.md").write_text("\n".join(md))
+        from ..run_report import upsert_report_section
+
+        upsert_report_section(demo_dir, "emit-e2e", "\n".join(md))
+        try:
+            (demo_dir / "E2E_REPORT.md").unlink()  # consolidated into RUN_REPORT.md — drop the standalone
+        except OSError:
+            pass
     except Exception as exc:
         print(f"  [e2e-report] skipped: {type(exc).__name__}: {exc}")
 

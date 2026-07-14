@@ -61,6 +61,7 @@ LOOP:
     knob:dtype -> lower that op's WEIGHT dtype (bf16->bf8_b->bf4_b). check_pcc; measure_candidate; commit a win else revert. record_kernel_attempt(op,'dtype',measured_ms,beat_baseline) EVEN IF pcc forced a revert (that marks the knob tried).
     tt-lang    -> author a tt-lang (ttl) kernel (Read GUIDELINES/11). check_pcc; measure_candidate; commit a win else revert. record_kernel_attempt(op,'tt-lang',measured_ms,beat_baseline).
     cpp        -> author a C++ Metalium kernel via ttnn.generic_op (Read GUIDELINES/12). check_pcc; measure_candidate; commit a win else revert. record_kernel_attempt(op,'cpp',measured_ms,beat_baseline).
+  ALWAYS pass note= to record_kernel_attempt: ONE line stating (a) WHY you tried this lever on this op (the hypothesis — e.g. 'op is DRAM-bw bound, bf8_b weights halve reads') and (b) WHY it won or failed (the outcome reason — e.g. 'kept: 4.1->3.6ms', 'reverted: PCC 0.71<0.95', 'no gain: 4.1->4.1ms bw-bound', 'OOM under 2CQ'). This note is streamed LIVE into the model's RUN_REPORT.md the instant the attempt resolves (win OR fail), so it must explain the reasoning, not just restate the numbers.
   (IRON RULE: a real win = check_pcc ok AND check_full_pipeline_latency ok (moved TOWARD the target / not diverged) AND verdict 'valid' AND is_real_gain. REJECTED, pcc-fail, or a DIVERGED full-pipeline latency is never a win — revert. Note: check_full_pipeline_latency never fails for missing the target, only for getting SLOWER than best-so-far.)
   WRITE-BACK: after you COMMIT a win you IMPROVISED (recall_knobs had no match), call distill_knob to persist the general technique; if the win RE-USED a provisional lever learned on another model, pass its id to distill_knob to graduate it.
   Re-run termination_check. Repeat. NEVER stop while can_stop=false. NEVER reason a lever "won't help" — prove it by measuring + recording the attempt.
@@ -545,6 +546,14 @@ def _baseline_ms() -> float | None:
         return None
 
 
+def _prune_legacy_reports(demo_dir: Path) -> None:
+    for legacy in ("E2E_REPORT.md", "summary.md"):
+        try:
+            (Path(demo_dir) / legacy).unlink()
+        except OSError:
+            pass
+
+
 def _emit_summary(
     repo_root: Path,
     kernel_log: str,
@@ -600,8 +609,16 @@ def _emit_summary(
     md = _latest_manifest(repo_root / PERF_DIR)
     if md:
         try:
-            (md.parent / "summary.md").write_text(text)
-            print(f"  [optimize/cc] summary saved: {md.parent / 'summary.md'}")
+            _demo = Path(json.loads(md.read_text()).get("config", {}).get("model_root") or "")
+        except Exception:  # noqa: BLE001
+            _demo = None
+        if _demo and str(_demo):
+            when = f"Final end-of-run summary: {time.strftime('%Y-%m-%d %H:%M:%S %Z')} (adds committed wins, full-pipeline e2e, roofline residual)"
+            mod.upsert_report_section(_demo, "optimize", mod.optimize_block(_demo, 0, text, when))
+            print(f"  [optimize/cc] report updated: {_demo / 'RUN_REPORT.md'} (optimize section)")
+            _prune_legacy_reports(_demo)
+        try:
+            (md.parent / "summary.md").unlink()
         except OSError:
             pass
 

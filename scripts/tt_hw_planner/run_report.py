@@ -24,6 +24,32 @@ from typing import Any, Dict, List, Optional
 
 _REPORT_EMITTED = False
 
+_REPORT_NAME = "RUN_REPORT.md"
+_SECTION_KEYS = ("bringup", "emit-e2e", "optimize")
+
+
+def upsert_report_section(demo_dir, key: str, block_md: str):
+    try:
+        demo_dir = Path(demo_dir)
+        path = demo_dir / _REPORT_NAME
+        begin, end = f"<!-- BEGIN {key} -->", f"<!-- END {key} -->"
+        block = f"{begin}\n{block_md.strip()}\n{end}"
+        existing = path.read_text() if path.exists() else ""
+        if begin in existing and end in existing:
+            pre = existing.split(begin, 1)[0].rstrip()
+            post = existing.split(end, 1)[1].lstrip()
+            parts = [p for p in (pre, block, post) if p]
+        else:
+            parts = [existing.strip(), block] if existing.strip() else [block]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n\n".join(parts) + "\n")
+        return path
+    except Exception as exc:
+        import sys
+
+        print(f"  [run-report] upsert '{key}' failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return None
+
 
 def reset_run_report() -> None:
     """Clear the emit-once guard at the start of a bring-up run."""
@@ -314,8 +340,7 @@ def _emit_run_report_impl(
         lines.append(f"  - `python -m scripts.tt_hw_planner emit-e2e {model_id}`")
     lines.append("")
 
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text("\n".join(lines))
+    upsert_report_section(demo_dir, "bringup", "\n".join(lines))
 
     if echo_terminal:
         bar = "=" * 78

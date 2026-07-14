@@ -208,6 +208,53 @@ def _latest_summary(perf_dir: Path):
     }
 
 
+def _optimize_section_present(demo_dir) -> bool:
+    p = Path(demo_dir) / "RUN_REPORT.md"
+    try:
+        return p.is_file() and "<!-- BEGIN optimize -->" in p.read_text()
+    except Exception:
+        return False
+
+
+def _optimize_summary_md(label, args, summ) -> str:
+    import time as _t
+
+    engine = getattr(args, "engine", "cc") or "cc"
+    md = [
+        f"# Optimize (perf) — `{label}`",
+        "",
+        f"_Generated: {_t.strftime('%Y-%m-%d %H:%M:%S %Z')}_",
+        "",
+        f"- engine={engine} devices={args.devices} mesh={args.mesh or '-'} metric={args.metric}",
+    ]
+    if summ:
+        md.append(
+            f"- baseline {summ.get('baseline_ms')} ms -> final {summ.get('final_ms')} ms · "
+            f"{summ.get('kept')} lever(s) kept over {summ.get('iters')} iter(s)"
+        )
+        if summ.get("run_dir"):
+            md.append(f"- run dir: `{summ['run_dir']}`")
+        kl = summ.get("kept_levers") or []
+        if kl:
+            md += ["", "## Kept levers", "", "| lever | before ms | after ms |", "|---|---|---|"]
+            for k in kl:
+                md.append(f"| `{k.get('lever')}` | {k.get('before')} | {k.get('after')} |")
+    else:
+        md.append("- no per-lever summary available (baseline-only or no ledger yet).")
+    return "\n".join(md)
+
+
+def _write_optimize_fallback(demo_dir, label, args, summ) -> None:
+    if _optimize_section_present(demo_dir):
+        return
+    try:
+        from ..run_report import upsert_report_section
+
+        upsert_report_section(demo_dir, "optimize", _optimize_summary_md(label, args, summ))
+    except Exception:
+        pass
+
+
 def run_perf_optimization(
     demo_dir,
     repo_root,
@@ -377,6 +424,10 @@ def cmd_optimize(args) -> int:
             return 1
         for r in result.get("results", []):
             print(f"      pipeline {r['task']}: {r['rounds']} round(s), can_stop={r['can_stop']}")
+        if iso is None:
+            _write_optimize_fallback(
+                demo_dir, args.target or demo_dir.name, args, _latest_summary(repo_root / Path(PERF_DIR))
+            )
         if iso is not None:
             _report_isolation(iso, repo_root)
         return 0
@@ -401,4 +452,5 @@ def cmd_optimize(args) -> int:
     )
     for k in summary["kept_levers"]:
         print(f"      keep {k['lever']}: {k['before']} -> {k['after']} ms")
+    _write_optimize_fallback(demo_dir, args.target or demo_dir.name, args, summary)
     return 0 if rc == 0 else rc

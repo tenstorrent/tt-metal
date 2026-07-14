@@ -13,6 +13,35 @@ from pathlib import Path
 _LEVEL_COLS = ("grid", "dtype", "tt-lang", "cpp", "host")
 _HOST_KINDS = {"trace", "2cq", "structural", "fusion", "fuse", "gather", "sparse", "cache", "kv-cache"}
 
+_REPORT_NAME = "RUN_REPORT.md"
+
+
+def upsert_report_section(model_root, key: str, block_md: str):
+    try:
+        path = Path(model_root) / _REPORT_NAME
+        begin, end = f"<!-- BEGIN {key} -->", f"<!-- END {key} -->"
+        block = f"{begin}\n{block_md.strip()}\n{end}"
+        existing = path.read_text() if path.exists() else ""
+        if begin in existing and end in existing:
+            pre = existing.split(begin, 1)[0].rstrip()
+            post = existing.split(end, 1)[1].lstrip()
+            parts = [p for p in (pre, block, post) if p]
+        else:
+            parts = [existing.strip(), block] if existing.strip() else [block]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n\n".join(parts) + "\n")
+        return path
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def optimize_block(model_root, attempts_len: int, text: str, when_note: str) -> str:
+    from pathlib import Path as _P
+
+    return (
+        f"# Optimize (perf) — `{_P(model_root).name}`\n\n" f"_{when_note}_\n\n" "```\n" + (text or "").strip() + "\n```"
+    )
+
 
 def _level_of(kind: str) -> str:
     k = (kind or "").lower()
@@ -132,10 +161,10 @@ def render_summary(
     # --- Per-attempt detail: gain of EVERY optimization tried (#5a) ---
     if attempts:
         lines.append("")
-        lines.append("Per-attempt detail (every optimization tried, with gain vs baseline):")
-        ah = f"{'op':<34} {'lever':>10} {'ms':>9} {'gain vs base':>13}  result"
+        lines.append("Per-attempt detail (every optimization tried — win OR fail — with gain vs baseline and WHY):")
+        ah = f"{'op':<34} {'lever':>10} {'ms':>9} {'gain vs base':>13}  {'result':<10} why tried / why it won or failed"
         lines.append(ah)
-        lines.append("-" * len(ah))
+        lines.append("-" * min(len(ah), 120))
         for a in attempts:
             if not isinstance(a, dict):
                 continue
@@ -148,7 +177,8 @@ def render_summary(
             else:
                 gain_s = "—"
             res = "✓ win" if a.get("beat_baseline") else "· no gain"
-            lines.append(f"{sig:<34} {lever:>10} {ms_s:>9} {gain_s:>13}  {res}")
+            note = " ".join((a.get("note") or "").split())[:200] or "(no reason recorded)"
+            lines.append(f"{sig:<34} {lever:>10} {ms_s:>9} {gain_s:>13}  {res:<10} {note}")
 
     # --- Limitations / suggested manual next steps (#5c) ---
     _won_ops = {a.get("op_signature") for a in attempts if isinstance(a, dict) and a.get("beat_baseline")}
@@ -160,7 +190,9 @@ def render_summary(
         lines.append(f"- {len(_no_gain)} op(s) tried but no lever beat baseline: {shown}")
         lines.append("  -> inspect the per-op device report and consider a hand-written kernel or a structural change.")
     if baseline_ms and final_ms and final_ms >= baseline_ms:
-        lines.append("- No net speedup recorded — the model may already be at its ttnn floor, or the dominant op needs a custom kernel.")
+        lines.append(
+            "- No net speedup recorded — the model may already be at its ttnn floor, or the dominant op needs a custom kernel."
+        )
     if residual:
         _rv = residual.get("verdict") or residual.get("summary") or residual.get("reason")
         if _rv:
@@ -172,7 +204,9 @@ def render_summary(
     lines.append("")
     lines.append("Reproduce:")
     lines.append(
-        f"  trace+2CQ perf:  python -m pytest {perf_test} -svv" if perf_test else "  trace+2CQ perf:  (node-id not provided)"
+        f"  trace+2CQ perf:  python -m pytest {perf_test} -svv"
+        if perf_test
+        else "  trace+2CQ perf:  (node-id not provided)"
     )
     # Derive the demo (real input/output) + full-model e2e PCC test from the perf-test path
     # (perf tests live under models/demos/<model>/tests/...); best-effort, pointer only.

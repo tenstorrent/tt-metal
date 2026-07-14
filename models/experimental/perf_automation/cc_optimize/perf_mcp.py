@@ -154,6 +154,51 @@ def _save_attempts(a: list) -> None:
     _KERNEL_LOG_PATH.write_text(json.dumps(a))
 
 
+def _summary_mod():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("cc_summary", str(Path(__file__).parent / "summary.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _report_baseline_ms():
+    try:
+        if _BASELINE_PATH.exists():
+            return round(float(json.loads(_BASELINE_PATH.read_text()).get("device_ms", 0.0)), 4)
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _rebuild_optimize_report(model_root=None) -> None:
+    import time as _t
+
+    attempts = _load_attempts()
+    if not attempts:
+        return
+    root = model_root if model_root is not None else _MODEL_ROOT
+    try:
+        mod = _summary_mod()
+        perf_test = (_MANIFEST.get("perf_test_resolved") or {}).get("path") or ""
+        text = mod.render_summary(
+            _KERNEL_LOG_PATH,
+            _report_baseline_ms(),
+            model=Path(root).name,
+            task=os.environ.get("PERF_MCP_TASK", "main"),
+            metric=os.environ.get("PERF_MCP_METRIC", "device_ms"),
+            perf_test=perf_test,
+        )
+        when = (
+            f"Updated live: {_t.strftime('%Y-%m-%d %H:%M:%S %Z')} · {len(attempts)} lever attempt(s) so far — "
+            "each knob is logged the instant it resolves, win OR fail, with why it was tried and why it won or failed."
+        )
+        mod.upsert_report_section(root, "optimize", mod.optimize_block(root, len(attempts), text, when))
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [perf-report] render failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+
+
 def _norm(s: str) -> str:
     return " ".join((s or "").lower().split())
 
@@ -912,6 +957,7 @@ def record_kernel_attempt(
     }
     attempts.append(rec)
     _save_attempts(attempts)
+    _rebuild_optimize_report()
     return {
         "recorded": True,
         "attempt": rec,
