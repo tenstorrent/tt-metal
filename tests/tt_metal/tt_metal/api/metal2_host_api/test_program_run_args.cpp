@@ -50,7 +50,6 @@ namespace {
 // Import shared test helpers
 using test_helpers::BindTensorParameterToKernel;
 using test_helpers::MakeMinimalDFB;
-using test_helpers::MakeMinimalDMKernel;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalGen2DMKernel;
 using test_helpers::MakeMinimalTensorParameter;
