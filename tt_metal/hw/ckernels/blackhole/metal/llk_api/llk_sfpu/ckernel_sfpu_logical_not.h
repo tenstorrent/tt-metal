@@ -18,7 +18,6 @@ inline void calculate_logical_not() {
         "INSTRUCTION_MODE must be one of: DEFAULT, LO16, INT32.");
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        constexpr int tile_size = 64;
         // load in conditional uint16 value
         TTI_SFPLOAD(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, 0);
         // initially put 0 into output
