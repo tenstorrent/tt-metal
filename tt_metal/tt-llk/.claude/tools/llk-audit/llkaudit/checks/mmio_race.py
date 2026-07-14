@@ -41,12 +41,13 @@ class MmioRace(Check):
         "result (needs wait_*_idle), nor the EN_SUBDIVIDED cross-unpacker corner. "
         "It also does NOT account for the TTSync RQ EXCEPTIONS: MOP_CFG / "
         "REPLAY(load=1) / RESOURCEDECL / post-load-replay instructions are not "
-        "RQ-tracked (Confluence 1340276980), so a write CONSUMED by one is not "
-        "auto-ordered; and TTSync tracks only CFG/GPR/TDMA, not other MMIO spaces "
-        "(e.g. the replay unit's replay_mmap[], ordered by fence+wait_replay_idle+"
-        "mutex, not TTSync). For those the blanket AUTOTTSYNC_ORDERED over-clears — "
-        "the LLM must confirm the consumer is RQ-tracked and the target is CFG/GPR "
-        "(see KNOWN_GAPS L7). "
+        "RQ-tracked (Confluence 1340276980), so a CFG/GPR write CONSUMED by one is "
+        "not auto-ordered yet is still blanket-tagged AUTOTTSYNC_ORDERED — the LLM "
+        "must confirm the consumer is RQ-tracked (see KNOWN_GAPS L7). (Writes to a "
+        "non-CFG/GPR MMIO space TTSync doesn't track — the replay unit's "
+        "replay_mmap[] via INSTRN_BUF, the PC_BUF sync FIFO — are excluded upstream "
+        "by registry.classify_write's ISA-grounded region check, so they no longer "
+        "reach this tag.) "
         "MOP/REPLAY are treated as OPAQUE consumers (one consumer, stall-before): "
         "the tool does not see the instructions inside a MOP, does not distinguish "
         "TTI_REPLAY record (load) vs execute mode, does not model the "
@@ -122,9 +123,10 @@ class MmioRace(Check):
             # STALLWAIT(TRISC_CFG)/REG2FLOP discipline WH/BH need is not required, so a
             # CFG/GPR write with an RQ-tracked consumer is NOT a race candidate here.
             # OVER-BROAD CAVEAT (see blind_spots + KNOWN_GAPS L7): this blanket tag also
-            # clears writes consumed by an RQ-EXCEPTED instruction (MOP_CFG/REPLAY/
-            # RESOURCEDECL) or targeting a non-CFG/GPR MMIO space (e.g. replay_mmap),
-            # which TTSync does NOT order — the LLM confirms those.
+            # clears a CFG/GPR write consumed by an RQ-EXCEPTED instruction (MOP_CFG/
+            # REPLAY/RESOURCEDECL), which TTSync does NOT order — the LLM confirms those.
+            # (Non-CFG/GPR MMIO like replay_mmap[]/INSTRN_BUF/PC_BUF is excluded upstream
+            # by classify_write's region check, so it never reaches this tag.)
             if fb.arch == "quasar" and hint == "NO_LOCAL_ORDERING":
                 hint = "AUTOTTSYNC_ORDERED"
             ev = []

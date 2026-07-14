@@ -87,8 +87,22 @@ CFG_VAR_NAME_HINTS = {
     "mop_cfg": "mmio_ptr",
     "cfg": "cfg_ptr",
 }
-# Cast-target substrings that identify a raw MMIO pointer write.
+# Cast-target substrings that identify the MMIO REGION a `reinterpret_cast<…>(BASE)`
+# points at. Grounded in the ISA + the address map (WH/BH/QSR — purposes are arch-invariant):
+#   TENSIX_CFG_BASE / THCON_CFGREG_BASE / *_MOP_CFG_BASE  -> config register file (mmio_ptr, cfg/mop)
+#   RISCV_TDMA_REG_XMOV_L1_BASE_ADDR (Mover config the XMOV samples — ISA TDMA-RISC.md: "config/MMIO
+#     registers written by RISC-V and consumed by the Mover") -> mmio_ptr, matched via the "base" hint.
+#     NB the sibling RISCV_TDMA_REG_* param/command registers in ckernel_xmov.h (SRC/DST/SIZE/DIRECTION/
+#     COMMAND/STATUS) lack "base" and are NOT recalled — a pre-existing recall gap, see KNOWN_GAPS L8.
+#   REGFILE_BASE / GPRS_BASE                        -> GPR register file (regfile_gpr, via regfile/gpr)
+#   INSTRN_BUF_BASE (instruction-issue FIFO — ISA PushTensixInstruction.md: "a separate
+#     instruction-issue mechanism, NOT a configuration register file") and PC_BUF_BASE
+#     (sync/command FIFO — ISA PCBufs.md: "PCBufs are NOT configuration registers")
+#                                                   -> EXCLUDED (they match bare "base" but are not cfg)
 CFG_CAST_HINTS = ("cfg", "mop", "base")
+GPR_CAST_HINTS = ("regfile", "gpr")
+# Non-config MMIO FIFOs that a bare-"base" match would wrongly treat as config writes.
+NONCFG_CAST_EXCLUDE = ("instrn_buf", "ibuffer", "pc_buf", "pcbuffer")
 
 
 def classify_write(pw: dict):
@@ -102,8 +116,17 @@ def classify_write(pw: dict):
         return None, None
     if prov == "cast":
         t = prod.lower()
-        if "volatile" in t and any(h in t for h in CFG_CAST_HINTS):
-            return "mmio_ptr", "ast-provenance"
+        if "volatile" in t:
+            # By region/purpose: GPR file -> GPR write; config file -> config write.
+            # The instruction-issue (INSTRN_BUF) and sync (PC_BUF) FIFOs are MMIO but
+            # NOT config (ISA PushTensixInstruction.md / PCBufs.md) — a `*_BASE` cast to
+            # one matches the bare "base" hint, so exclude it explicitly and recall nothing.
+            if any(h in t for h in NONCFG_CAST_EXCLUDE):
+                return None, None
+            if any(h in t for h in GPR_CAST_HINTS):
+                return "regfile_gpr", "ast-provenance"
+            if any(h in t for h in CFG_CAST_HINTS):
+                return "mmio_ptr", "ast-provenance"
         return None, None
     if prov == "var":
         vn = prod.lower()

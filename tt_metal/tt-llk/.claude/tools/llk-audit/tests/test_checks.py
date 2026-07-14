@@ -14,6 +14,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from llkaudit import registry
 from llkaudit.checks.cb_sync import CbSync
 from llkaudit.checks.cfg_word_overlap import CfgWordOverlap
 from llkaudit.checks.mailbox_sync import MailboxSync
@@ -396,6 +397,47 @@ def test_reconfig_pointer_write_cfg_flagged():
         ),
     )
     assert ReconfigStall().run(FactBase("wormhole", facts)) == []
+
+
+@case
+def test_classify_write_cast_region_by_purpose():
+    # A reinterpret_cast<volatile T*>(SOME_BASE) is classified by the MMIO REGION it
+    # targets, grounded in the ISA + address map (purposes are arch-invariant):
+    #   config register file  -> mmio_ptr   (TENSIX_CFG / *_MOP_CFG / RISCV_TDMA_REG_*
+    #                                         — the last is Mover config, ISA TDMA-RISC.md)
+    #   GPR register file      -> regfile_gpr (REGFILE_BASE)
+    #   instruction-issue FIFO (INSTRN_BUF, ISA PushTensixInstruction.md) and sync FIFO
+    #     (PC_BUF, ISA PCBufs.md) are MMIO but NOT config -> recalled as neither, even
+    #     though they contain the bare "base" hint (the regression this locks: a naive
+    #     "base" match wrongly flagged the FIFOs as config writes).
+    def cls(base):
+        return registry.classify_write(
+            {
+                "provenance_kind": "cast",
+                "producer": f"(volatile std::uint32_t*){base}",
+                "index_text": "0",
+            }
+        )[0]
+
+    assert cls("TENSIX_CFG_BASE") == "mmio_ptr"
+    assert cls("TENSIX_MOP_CFG_BASE") == "mmio_ptr"
+    # TDMA-RISC Mover config must stay recalled (dropping it was a cap-reduction).
+    assert cls("RISCV_TDMA_REG_XMOV_L1_BASE_ADDR") == "mmio_ptr"
+    assert cls("REGFILE_BASE") == "regfile_gpr"
+    # The two non-config FIFOs — excluded despite the "base" substring.
+    assert cls("INSTRN_BUF_BASE") is None
+    assert cls("PC_BUF_BASE") is None
+    # A non-volatile cast is not a hardware register write at all.
+    assert (
+        registry.classify_write(
+            {
+                "provenance_kind": "cast",
+                "producer": "(std::uint32_t*)TENSIX_CFG_BASE",
+                "index_text": "0",
+            }
+        )[0]
+        is None
+    )
 
 
 # --- Copilot review regressions -------------------------------------------
