@@ -441,26 +441,16 @@ class WanCausalConv3d(Module):
         use_halo = h_pad_needed and w_pad_needed
 
         # Width pre-conv masking: zero padding columns so neighbor_pad doesn't propagate non-zero padding.
+        # Width pre-conv masking for the OLD NP only; the halo NP fuses logical_w in-kernel (see below).
         if (
-            logical_w > 0
+            not use_halo
+            and logical_w > 0
             and self.parallel_config.width_parallel.factor > 1
             and x_BTHWC.shape[3] * self.parallel_config.width_parallel.factor > logical_w
         ):
             x_BTHWC = ttnn.mul(
                 x_BTHWC,
                 _get_w_mask(self._w_mask_cache, x_BTHWC, logical_w, self.parallel_config, self.mesh_device, self.dtype),
-            )
-
-        # Height pre-conv masking (halo path only; the full-pad NP fuses logical_h in-kernel).
-        if (
-            use_halo
-            and logical_h > 0
-            and self.parallel_config.height_parallel.factor > 1
-            and x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h
-        ):
-            x_BTHWC = ttnn.mul(
-                x_BTHWC,
-                _get_h_mask(self._h_mask_cache, x_BTHWC, logical_h, self.parallel_config, self.mesh_device, self.dtype),
             )
 
         # T-front causal zero padding: fuse into the full-pad NP when possible; the halo NP does not fuse
@@ -504,6 +494,8 @@ class WanCausalConv3d(Module):
                     neighbor_sems=neighbor_sems,
                     num_links=links,
                     padding_mode="zeros",
+                    logical_h=logical_h,
+                    logical_w=logical_w,
                 )
             else:
                 fused_logical_h = (
@@ -538,6 +530,28 @@ class WanCausalConv3d(Module):
             dtype=self.dtype,
             compute_kernel_config=self.compute_kernel_config,
         )
+
+        # Zero the mesh-padding output region. The conv adds bias to every output position, so rows
+        # >= logical_h / cols >= logical_w are non-zero; without this they leak into the next op's halo
+        # exchange (and fail the padded-output invariant). Only fires when a shard carries mesh padding.
+        if (
+            logical_h > 0
+            and self.parallel_config.height_parallel.factor > 1
+            and x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h
+        ):
+            x_BTHWC = ttnn.mul(
+                x_BTHWC,
+                _get_h_mask(self._h_mask_cache, x_BTHWC, logical_h, self.parallel_config, self.mesh_device, self.dtype),
+            )
+        if (
+            logical_w > 0
+            and self.parallel_config.width_parallel.factor > 1
+            and x_BTHWC.shape[3] * self.parallel_config.width_parallel.factor > logical_w
+        ):
+            x_BTHWC = ttnn.mul(
+                x_BTHWC,
+                _get_w_mask(self._w_mask_cache, x_BTHWC, logical_w, self.parallel_config, self.mesh_device, self.dtype),
+            )
 
         return x_BTHWC
 
@@ -951,6 +965,28 @@ class WanConv2d(Module):
             dtype=self.dtype,
             compute_kernel_config=self.compute_kernel_config,
         )
+
+        # Zero the mesh-padding output region. The conv adds bias to every output position, so rows
+        # >= logical_h / cols >= logical_w are non-zero; without this they leak into the next op's halo
+        # exchange (and fail the padded-output invariant). Only fires when a shard carries mesh padding.
+        if (
+            logical_h > 0
+            and self.parallel_config.height_parallel.factor > 1
+            and x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h
+        ):
+            x_BTHWC = ttnn.mul(
+                x_BTHWC,
+                _get_h_mask(self._h_mask_cache, x_BTHWC, logical_h, self.parallel_config, self.mesh_device, self.dtype),
+            )
+        if (
+            logical_w > 0
+            and self.parallel_config.width_parallel.factor > 1
+            and x_BTHWC.shape[3] * self.parallel_config.width_parallel.factor > logical_w
+        ):
+            x_BTHWC = ttnn.mul(
+                x_BTHWC,
+                _get_w_mask(self._w_mask_cache, x_BTHWC, logical_w, self.parallel_config, self.mesh_device, self.dtype),
+            )
 
         return x_BTHWC
 
