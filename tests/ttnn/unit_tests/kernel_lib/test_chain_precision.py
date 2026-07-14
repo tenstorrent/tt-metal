@@ -3,17 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Precision matrix for eltwise_chain (Task #5).
+Precision matrix for eltwise_chain.
 
-Coverage spec: ttnn/cpp/ttnn/kernel_lib/docs/eltwise_helper_test_coverage.html (precision matrix).
-
-The functional suites are bf16-dominant. This sweeps the precision surface on a fidelity-sensitive
-chain (out = A * B, FPU multiply): input/output dtype x fp32_dest_acc_en x math_fidelity. Each config
-is asserted against its OWN per-(dtype,fidelity) threshold — never one config vs another (the
-test_batch_norm_compute_config brittleness: relative-ordering asserts flip on sub-1e-3 noise).
-
-Thresholds reflect inherent precision, not bugs: LoFi truncates FPU source mantissa bits, bfloat8_b
-quantizes inputs, so their PCC floors are lower by design.
+The functional suites are bf16-dominant. This sweeps a fidelity-sensitive chain (out = A * B, FPU
+multiply) over input/output dtype x fp32_dest_acc_en x math_fidelity. Each config is asserted
+against its OWN per-(dtype,fidelity) threshold — never one config vs another (relative-ordering
+asserts flip on sub-1e-3 noise). Thresholds reflect inherent precision, not bugs: LoFi truncates FPU
+source mantissa bits and bfloat8_b quantizes inputs, so their PCC floors are lower by design.
 """
 
 import torch
