@@ -543,6 +543,33 @@ TopologyMappingResult map_multi_mesh_to_physical(
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
     const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
 
+/**
+ * @brief Enumerate up to `max_solutions` distinct multi-mesh mappings.
+ *
+ * Like map_multi_mesh_to_physical, but returns multiple distinct full solutions instead of just the first.
+ * Distinct inter-mesh placements (which physical meshes / hosts host each logical mesh) are enumerated with
+ * the solver's blocking-clause search (see solve_topology_mapping_n); each placement is then completed with the
+ * same per-mesh intra-mesh (fabric-node -> ASIC) mapping used by map_multi_mesh_to_physical. Placements whose
+ * intra-mesh mapping is infeasible are skipped. Results are deduplicated by their full fabric-node -> ASIC
+ * assignment and returned in solver-preference order.
+ *
+ * @param max_solutions Maximum number of solutions to return. 0 means "all" up to the solver's internal safety cap.
+ *        When >0, the count may come back smaller if fewer distinct feasible solutions exist (or some enumerated
+ *        inter-mesh placements fail intra-mesh mapping).
+ * @param unique_shapes When true, count solutions by the set of physical meshes used (order-independent), so
+ *        placements that occupy the same physical meshes/hosts but differ only in assignment collapse to one.
+ *        Maps to the `unique_shapes` knob of solve_topology_mapping_n.
+ * @return Vector of successful TopologyMappingResults (empty if none exist). Each has success == true.
+ */
+std::vector<TopologyMappingResult> map_multi_mesh_to_physical_n(
+    const LogicalMultiMeshGraph& adjacency_map_logical,
+    const PhysicalMultiMeshGraph& adjacency_map_physical,
+    const TopologyMappingConfig& config,
+    std::size_t max_solutions,
+    bool unique_shapes = false,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
+
 /** Log inter-mesh and per-mesh intra-mesh degree histograms at INFO (one line each). */
 void log_logical_multi_mesh_adjacency_histograms(const LogicalMultiMeshGraph& multi_mesh_graph);
 void log_physical_multi_mesh_adjacency_histograms(const PhysicalMultiMeshGraph& multi_mesh_graph);
