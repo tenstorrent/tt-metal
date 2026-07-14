@@ -1,0 +1,1184 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>PR #49811 — Power-of-two FP8 scaling</title>
+  <style>
+    :root {
+      --ink: #eef4ff;
+      --muted: #99a9bf;
+      --dim: #65748a;
+      --bg: #061018;
+      --panel: rgba(15, 31, 44, .82);
+      --panel-strong: #102333;
+      --line: rgba(166, 197, 218, .18);
+      --cyan: #42e8e0;
+      --blue: #6ba8ff;
+      --violet: #a78bfa;
+      --amber: #ffc96b;
+      --red: #ff7b89;
+      --green: #72e6a6;
+      --shadow: 0 28px 90px rgba(0, 0, 0, .42);
+      --radius: 22px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        radial-gradient(circle at 12% 18%, rgba(66, 232, 224, .13), transparent 26%),
+        radial-gradient(circle at 88% 78%, rgba(107, 168, 255, .12), transparent 29%),
+        linear-gradient(rgba(255, 255, 255, .018) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, .018) 1px, transparent 1px);
+      background-size: auto, auto, 42px 42px, 42px 42px;
+    }
+
+    a { color: var(--cyan); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    code, .mono {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    .deck { position: relative; width: 100%; height: 100%; }
+
+    .slide {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 18px;
+      padding: clamp(28px, 4vw, 68px) clamp(32px, 6vw, 104px) 36px;
+      opacity: 0;
+      transform: translateX(36px) scale(.992);
+      pointer-events: none;
+      transition: opacity .28s ease, transform .35s ease;
+    }
+
+    .slide.active { opacity: 1; transform: none; pointer-events: auto; z-index: 2; }
+
+    .slide.exit-left { transform: translateX(-36px) scale(.992); }
+
+    .kicker {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 26px;
+      color: var(--cyan);
+      font-weight: 800;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+      font-size: 12px;
+    }
+
+    .kicker::before {
+      content: "";
+      width: 30px;
+      height: 2px;
+      background: var(--cyan);
+      box-shadow: 0 0 18px rgba(66, 232, 224, .7);
+    }
+
+    h1, h2, h3, p { margin-top: 0; }
+
+    h1 {
+      margin-bottom: 22px;
+      max-width: 1080px;
+      font-size: clamp(42px, 6.4vw, 92px);
+      line-height: .98;
+      letter-spacing: -.055em;
+    }
+
+    h2 {
+      margin-bottom: 12px;
+      font-size: clamp(34px, 4.1vw, 64px);
+      line-height: 1.02;
+      letter-spacing: -.045em;
+    }
+
+    h3 {
+      margin-bottom: 10px;
+      font-size: clamp(18px, 1.7vw, 27px);
+      line-height: 1.15;
+      letter-spacing: -.025em;
+    }
+
+    .lede {
+      max-width: 920px;
+      color: #c8d4e4;
+      font-size: clamp(18px, 1.65vw, 27px);
+      line-height: 1.45;
+    }
+
+    .big-statement {
+      max-width: 1100px;
+      font-size: clamp(27px, 3.2vw, 50px);
+      line-height: 1.18;
+      letter-spacing: -.035em;
+    }
+
+    .accent { color: var(--cyan); }
+    .blue { color: var(--blue); }
+    .amber { color: var(--amber); }
+    .red { color: var(--red); }
+    .green { color: var(--green); }
+    .muted { color: var(--muted); }
+    .small { font-size: 13px; color: var(--muted); line-height: 1.45; }
+
+    .content { min-height: 0; align-self: center; width: 100%; }
+
+    .grid-2, .grid-3, .grid-4 {
+      display: grid;
+      gap: clamp(14px, 1.5vw, 24px);
+      align-items: stretch;
+    }
+
+    .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+    .card {
+      position: relative;
+      padding: clamp(18px, 2vw, 30px);
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: linear-gradient(145deg, rgba(19, 40, 56, .88), rgba(10, 24, 35, .82));
+      box-shadow: var(--shadow);
+    }
+
+    .card::after {
+      content: "";
+      position: absolute;
+      inset: auto -30% -65% 30%;
+      height: 180px;
+      background: radial-gradient(ellipse, rgba(66, 232, 224, .08), transparent 68%);
+      pointer-events: none;
+    }
+
+    .card p:last-child, .card ul:last-child { margin-bottom: 0; }
+
+    .metric {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--cyan);
+      font-size: clamp(34px, 4vw, 64px);
+      font-weight: 850;
+      line-height: 1;
+      letter-spacing: -.05em;
+    }
+
+    .tag, .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(9, 23, 34, .72);
+      color: #c8d6e7;
+      font-size: 12px;
+      font-weight: 750;
+      letter-spacing: .035em;
+    }
+
+    .tag { padding: 7px 11px; text-transform: uppercase; }
+    .pill { padding: 8px 13px; }
+
+    .tag.good { border-color: rgba(114, 230, 166, .35); color: var(--green); }
+    .tag.warn { border-color: rgba(255, 201, 107, .35); color: var(--amber); }
+
+    .flow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .node {
+      min-width: 130px;
+      padding: 16px 18px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(13, 30, 43, .92);
+      text-align: center;
+    }
+
+    .node strong { display: block; margin-bottom: 4px; }
+    .arrow { color: var(--cyan); font-size: 24px; font-weight: 900; }
+
+    .formula {
+      padding: 18px 22px;
+      border-left: 3px solid var(--cyan);
+      border-radius: 0 14px 14px 0;
+      background: rgba(7, 18, 28, .78);
+      color: #f2f7ff;
+      font-size: clamp(16px, 1.6vw, 25px);
+      line-height: 1.6;
+      overflow-x: auto;
+      white-space: nowrap;
+    }
+
+    .formula b { color: var(--cyan); }
+
+    .bits {
+      display: grid;
+      grid-template-columns: 1fr 4fr 3fr;
+      gap: 5px;
+      margin: 20px 0 12px;
+    }
+
+    .bit-field {
+      padding: clamp(12px, 1.5vw, 20px) 10px;
+      border-radius: 13px;
+      text-align: center;
+      color: #061018;
+      font-weight: 900;
+      box-shadow: inset 0 -4px 10px rgba(0, 0, 0, .16);
+    }
+
+    .bit-field.sign { background: var(--amber); }
+    .bit-field.exp { background: var(--blue); }
+    .bit-field.frac { background: var(--cyan); }
+
+    .bit-labels {
+      display: grid;
+      grid-template-columns: 1fr 4fr 3fr;
+      gap: 5px;
+      color: var(--muted);
+      font-size: 12px;
+      text-align: center;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: clamp(12px, 1.15vw, 17px);
+    }
+
+    th, td {
+      padding: 11px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    th:first-child, td:first-child { text-align: left; }
+    th { color: var(--muted); font-size: .78em; letter-spacing: .07em; text-transform: uppercase; }
+    tr.highlight td { color: var(--cyan); background: rgba(66, 232, 224, .045); }
+
+    ul.clean {
+      display: grid;
+      gap: 12px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    ul.clean li {
+      position: relative;
+      padding-left: 24px;
+      color: #c9d5e5;
+      font-size: clamp(14px, 1.25vw, 19px);
+      line-height: 1.4;
+    }
+
+    ul.clean li::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: .55em;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--cyan);
+      box-shadow: 0 0 12px rgba(66, 232, 224, .55);
+    }
+
+    .cache-row {
+      display: grid;
+      grid-template-columns: 512fr 16fr 128fr;
+      height: 100px;
+      min-width: 0;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+    }
+
+    .cache-segment {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      min-width: 0;
+      padding: 12px;
+      color: #07121b;
+      text-align: center;
+      font-weight: 850;
+    }
+
+    .cache-segment small { opacity: .74; font-weight: 800; }
+    .cache-segment.latent { background: var(--cyan); }
+    .cache-segment.scales { background: var(--amber); font-size: 0; }
+    .cache-segment.rope { background: var(--blue); }
+
+    .scale-callout {
+      position: relative;
+      margin-top: 14px;
+      margin-left: 73%;
+      width: 140px;
+      color: var(--amber);
+      font-size: 12px;
+      text-align: center;
+    }
+
+    .scale-callout::before {
+      content: "";
+      position: absolute;
+      left: 50%;
+      bottom: calc(100% + 5px);
+      height: 24px;
+      border-left: 1px solid var(--amber);
+    }
+
+    .numberline { position: relative; height: 150px; margin: 26px 12px 0; }
+    .numberline .axis { position: absolute; left: 2%; right: 2%; top: 72px; height: 2px; background: var(--line); }
+    .tick { position: absolute; top: 62px; width: 1px; height: 22px; background: var(--muted); }
+    .tick span { position: absolute; top: 28px; left: 50%; transform: translateX(-50%); color: var(--muted); font-size: 12px; }
+    .marker { position: absolute; top: 12px; transform: translateX(-50%); text-align: center; }
+    .marker::after { content: ""; display: block; width: 2px; height: 55px; margin: 7px auto 0; background: currentColor; }
+
+    .api {
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: #07131d;
+      font-size: clamp(12px, 1.1vw, 17px);
+      line-height: 1.65;
+      overflow-x: auto;
+      white-space: pre;
+    }
+
+    .api .kw { color: var(--violet); }
+    .api .fn { color: var(--cyan); }
+    .api .num { color: var(--amber); }
+    .api .comment { color: var(--dim); }
+
+    .calculator {
+      display: grid;
+      grid-template-columns: minmax(230px, .7fr) 1.3fr;
+      gap: 22px;
+      align-items: center;
+    }
+
+    .calculator input[type="range"] { width: 100%; accent-color: var(--cyan); }
+    .calc-value { font-size: clamp(34px, 4vw, 64px); font-weight: 850; letter-spacing: -.05em; }
+    .calc-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+    .calc-cell { padding: 15px; border: 1px solid var(--line); border-radius: 14px; background: rgba(6, 18, 27, .74); }
+    .calc-cell span { display: block; color: var(--muted); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
+    .calc-cell strong { display: block; margin-top: 6px; font-family: "SFMono-Regular", Consolas, monospace; font-size: clamp(15px, 1.45vw, 22px); }
+
+    .pipeline {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 8px;
+      align-items: stretch;
+    }
+
+    .stage {
+      position: relative;
+      display: flex;
+      min-height: 135px;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 15px 12px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(10, 25, 36, .88);
+    }
+
+    .stage:not(:last-child)::after {
+      content: "›";
+      position: absolute;
+      z-index: 2;
+      right: -10px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--cyan);
+      font-size: 24px;
+      font-weight: 900;
+    }
+
+    .stage b { color: var(--cyan); font-size: 13px; }
+    .stage span { color: var(--muted); font-size: 11px; line-height: 1.35; }
+
+    .test-matrix {
+      display: grid;
+      grid-template-columns: 1fr repeat(3, 1fr);
+      gap: 7px;
+    }
+
+    .test-matrix > div {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 58px;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: rgba(8, 21, 31, .8);
+      color: var(--muted);
+      text-align: center;
+      font-size: 12px;
+    }
+
+    .test-matrix .pass { color: var(--green); background: rgba(114, 230, 166, .075); }
+    .test-matrix .label { color: var(--ink); font-weight: 750; }
+
+    .footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      min-height: 26px;
+      color: var(--dim);
+      font-size: 11px;
+      letter-spacing: .04em;
+    }
+
+    .footer .section { color: var(--muted); }
+
+    .controls {
+      position: fixed;
+      z-index: 20;
+      right: 22px;
+      bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .control {
+      width: 38px;
+      height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      background: rgba(8, 21, 31, .82);
+      color: var(--ink);
+      cursor: pointer;
+      backdrop-filter: blur(12px);
+    }
+
+    .control:hover { border-color: rgba(66, 232, 224, .48); color: var(--cyan); }
+
+    .counter {
+      min-width: 56px;
+      color: var(--muted);
+      font: 12px "SFMono-Regular", Consolas, monospace;
+      text-align: center;
+    }
+
+    .progress {
+      position: fixed;
+      z-index: 30;
+      top: 0;
+      left: 0;
+      width: 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--cyan), var(--blue));
+      box-shadow: 0 0 18px rgba(66, 232, 224, .68);
+      transition: width .3s ease;
+    }
+
+    .hint {
+      position: fixed;
+      z-index: 20;
+      left: 22px;
+      bottom: 20px;
+      color: var(--dim);
+      font-size: 11px;
+    }
+
+    .speaker-note {
+      position: fixed;
+      z-index: 50;
+      display: none;
+      right: 20px;
+      bottom: 72px;
+      width: min(520px, calc(100vw - 40px));
+      max-height: 42vh;
+      overflow: auto;
+      padding: 18px 20px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(5, 15, 23, .96);
+      box-shadow: var(--shadow);
+      color: #b9c7d9;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    body.notes-on .slide.active .speaker-note { display: block; }
+
+    @media (max-height: 760px) and (min-width: 901px) {
+      .slide { overflow-y: auto; gap: 12px; padding-top: 24px; padding-bottom: 68px; }
+      .content { align-self: start; }
+      .card { padding: 17px; }
+      .pipeline { margin-top: 18px !important; }
+      .stage { min-height: 108px; }
+    }
+
+    @media (max-width: 900px) {
+      .slide { overflow-y: auto; padding: 28px 26px 74px; }
+      .grid-3, .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .pipeline { grid-template-columns: repeat(4, 1fr); }
+      .stage:nth-child(4)::after { display: none; }
+      .cache-segment.scales { min-width: 28px; }
+    }
+
+    @media (max-width: 620px) {
+      .grid-2, .grid-3, .grid-4, .calculator { grid-template-columns: 1fr; }
+      .pipeline { grid-template-columns: repeat(2, 1fr); }
+      .stage:nth-child(even)::after { display: none; }
+      .hint { display: none; }
+      .cache-row { grid-template-columns: 5fr .7fr 2fr; }
+      h1 { font-size: 44px; }
+    }
+
+    @media print {
+      html, body { overflow: visible; height: auto; background: #061018; print-color-adjust: exact; }
+      .slide { position: relative; display: grid !important; width: 100vw; height: 100vh; opacity: 1 !important; transform: none !important; page-break-after: always; }
+      .controls, .progress, .hint, .speaker-note { display: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="progress" id="progress"></div>
+  <main class="deck" id="deck">
+
+    <section class="slide active" data-section="Opening">
+      <div class="kicker">Tenstorrent tt-metal · PR #49811</div>
+      <div class="content">
+        <div class="tag good">Foundational FP8 KV-cache change</div>
+        <h1 style="margin-top:20px">Power-of-two<br><span class="accent">FP8 scaling</span></h1>
+        <p class="lede">What changes inside <code>per_token_cast_to_fp8</code>, why Blackhole uses the full E4M3FN range through 448, and how four FP32 scales make a 512-value KV latent practical.</p>
+        <div class="flow" style="justify-content:flex-start;margin-top:28px">
+          <span class="pill">BF16 / FP32 input</span><span class="arrow">→</span>
+          <span class="pill">128-value blocks</span><span class="arrow">→</span>
+          <span class="pill">E4M3 + FP32 scales</span>
+        </div>
+      </div>
+      <div class="footer"><span class="section">Opening</span><span>Use ← → · Space · swipe · N for notes</span></div>
+      <aside class="speaker-note"><b>Thesis:</b> this PR does not introduce FP8 or the KV-cache packer. It adds the scaling mode required by the later packed sparse-MLA cache while leaving every existing caller on the prior behavior.</aside>
+    </section>
+
+    <section class="slide" data-section="Executive summary">
+      <div class="kicker">The change in one minute</div>
+      <div class="content">
+        <h2>One new knob. One opt-in path.</h2>
+        <div class="grid-3" style="margin-top:28px">
+          <div class="card"><span class="metric">2ᵏ</span><h3>Power-of-two scale</h3><p class="muted">Optionally rounds each block scale upward with <code>2^ceil(log2(scale))</code>.</p></div>
+          <div class="card"><span class="metric">448</span><h3>E4M3FN maximum</h3><p class="muted">Exponent 15 remains finite through mantissa 6; only the final encoding is NaN.</p></div>
+          <div class="card"><span class="metric">↔</span><h3>Host/device agreement</h3><p class="muted">Host conversion now decodes exponent-15 values through 448 exactly like Blackhole.</p></div>
+        </div>
+        <p class="big-statement" style="margin:30px 0 0">The PR changes <span class="accent">how the scale is chosen</span> and fixes the host model of E4M3FN—without changing block size, output shapes, or the default call.</p>
+      </div>
+      <div class="footer"><span class="section">Executive summary</span><span>PR head: e2ca4748e47d</span></div>
+    </section>
+
+    <section class="slide" data-section="Feature context">
+      <div class="kicker">Where this fits</div>
+      <div class="content">
+        <h2>One packed sparse-MLA cache row</h2>
+        <p class="lede">The larger DSA/GLM feature stores the compressible 512-value latent in FP8, but keeps scales in FP32 and positional information in BF16.</p>
+        <div class="cache-row" style="margin-top:28px">
+          <div class="cache-segment latent">512 × E4M3<small>latent · 512 bytes</small></div>
+          <div class="cache-segment scales">scales</div>
+          <div class="cache-segment rope">64 × BF16<small>RoPE · 128 bytes</small></div>
+        </div>
+        <div class="scale-callout">4 × FP32 scales<br>16 bytes</div>
+        <div class="grid-3" style="margin-top:18px">
+          <div class="card"><span class="metric">656 B</span><p>packed logical row</p></div>
+          <div class="card"><span class="metric">1,152 B</span><p>576-value all-BF16 row</p></div>
+          <div class="card"><span class="metric">43.1%</span><p>logical byte reduction</p></div>
+        </div>
+        <p class="small" style="margin-top:12px">This PR produces the E4M3 latent and FP32 scales. Packing them with BF16 RoPE belongs to the separate packing change.</p>
+      </div>
+      <div class="footer"><span class="section">Feature context</span><span>512 + 16 + 128 = 656 bytes</span></div>
+    </section>
+
+    <section class="slide" data-section="Floating point">
+      <div class="kicker">Floating-point anatomy</div>
+      <div class="content">
+        <h2>Range comes from exponent.<br>Precision comes from fraction.</h2>
+        <div class="grid-2" style="margin-top:26px;align-items:center">
+          <div class="card">
+            <div class="bits">
+              <div class="bit-field sign">S</div><div class="bit-field exp">EEEE</div><div class="bit-field frac">MMM</div>
+            </div>
+            <div class="bit-labels"><div>1 sign</div><div>4 exponent</div><div>3 fraction</div></div>
+            <p class="formula mono" style="margin-top:25px">x = (−1)<sup>S</sup> × (1 + M/8) × 2<sup>E−bias</sup></p>
+          </div>
+          <div>
+            <ul class="clean">
+              <li><b class="amber">Sign</b> selects positive or negative.</li>
+              <li><b class="blue">Exponent</b> moves the binary point, producing a large dynamic range.</li>
+              <li><b class="accent">Fraction</b> selects one of only eight significand steps per normal exponent bin.</li>
+              <li>Special exponent patterns represent zero, subnormals, and—depending on the E4M3 variant—non-finite values or extra finite range.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      <div class="footer"><span class="section">Floating point</span><span>E4M3 = 1 + 4 + 3 bits</span></div>
+      <aside class="speaker-note">The displayed equation is for normal values. Subnormals omit the implicit leading 1 and use the minimum normal exponent. E4M3FN extends the all-ones exponent to finite values through 448 and reserves only the final mantissa encoding for NaN.</aside>
+    </section>
+
+    <section class="slide" data-section="Floating point">
+      <div class="kicker">Formats in this path</div>
+      <div class="content">
+        <h2>Same idea, radically different budgets</h2>
+        <div class="card" style="margin-top:24px">
+          <table>
+            <thead><tr><th>Format</th><th>Bits</th><th>Sign</th><th>Exponent</th><th>Fraction</th><th>Step near 1</th><th>Typical max finite</th></tr></thead>
+            <tbody>
+              <tr><td>FP32</td><td>32</td><td>1</td><td>8</td><td>23</td><td>2<sup>−23</sup></td><td>≈3.40×10<sup>38</sup></td></tr>
+              <tr><td>BF16</td><td>16</td><td>1</td><td>8</td><td>7</td><td>2<sup>−7</sup></td><td>≈3.39×10<sup>38</sup></td></tr>
+              <tr><td>FP16</td><td>16</td><td>1</td><td>5</td><td>10</td><td>2<sup>−10</sup></td><td>65,504</td></tr>
+              <tr class="highlight"><td>E4M3FN</td><td>8</td><td>1</td><td>4</td><td>3</td><td>2<sup>−3</sup></td><td>448</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="grid-3" style="margin-top:20px">
+          <div class="card"><h3>Input</h3><p><b>BF16 or FP32</b><br><span class="muted">Broad range while reducing and scaling.</span></p></div>
+          <div class="card"><h3>Latent output</h3><p><b>E4M3</b><br><span class="muted">One byte per cached latent value.</span></p></div>
+          <div class="card"><h3>Scale output</h3><p><b>FP32</b><br><span class="muted">Four precise metadata values per 512 latents.</span></p></div>
+        </div>
+        <p class="small" style="margin-top:10px">E4M3 is a family. This path uses the finite-numbers E4M3FN interpretation implemented by the Blackhole packer.</p>
+      </div>
+      <div class="footer"><span class="section">Floating point</span><span>BF16 keeps FP32’s exponent width, not its precision</span></div>
+    </section>
+
+    <section class="slide" data-section="E4M3 variants">
+      <div class="kicker">Why 448, not 240?</div>
+      <div class="content">
+        <h2>“E4M3” does not uniquely define the top encoding</h2>
+        <div class="grid-2" style="margin-top:26px">
+          <div class="card">
+            <span class="tag warn">Conventional E4M3 boundary</span>
+            <h3 style="margin-top:17px">240</h3>
+            <div class="bits" style="grid-template-columns:1fr 4fr 3fr">
+              <div class="bit-field sign">0</div><div class="bit-field exp">1110</div><div class="bit-field frac">111</div>
+            </div>
+            <p class="formula mono">(1 + 7/8) × 2<sup>14−7</sup> = 1.875 × 128 = <b>240</b></p>
+          </div>
+          <div class="card">
+            <span class="tag good">Blackhole E4M3FN maximum</span>
+            <h3 style="margin-top:17px">448</h3>
+            <div class="bits" style="grid-template-columns:1fr 4fr 3fr">
+              <div class="bit-field sign">0</div><div class="bit-field exp">1111</div><div class="bit-field frac">110</div>
+            </div>
+            <p class="formula mono">(1 + 6/8) × 2<sup>15−7</sup> = 1.75 × 256 = <b>448</b></p>
+          </div>
+        </div>
+        <p class="big-statement" style="margin:27px 0 0">Blackhole preserves exponent-15 encodings through <span class="accent">448</span>. The host conversion now matches that device format, and the API no longer exposes a misleading configurable ceiling.</p>
+      </div>
+      <div class="footer"><span class="section">E4M3 variants</span><span>Bias shown: 7 · positive normal examples</span></div>
+      <aside class="speaker-note">The Blackhole RTL-ground-truth cases modeled in ttsim agree with PyTorch float8_e4m3fn at the top end: exponent 15, mantissas zero through six are finite. Encoding 0x7f is NaN. Host encode/decode tests now pin this behavior.</aside>
+    </section>
+
+    <section class="slide" data-section="E4M3FN contract">
+      <div class="kicker">One format · two conversion policies</div>
+      <div class="content">
+        <h2>448 is the value.<br><span class="accent">0x7E is the encoding.</span></h2>
+        <div class="card" style="margin-top:22px">
+          <table>
+            <thead><tr><th>Byte</th><th>Exponent</th><th>Mantissa</th><th>Decoded value</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">0x77</td><td class="mono">1110</td><td class="mono">111</td><td>240</td><td>Last exponent-14 value</td></tr>
+              <tr><td class="mono">0x78</td><td class="mono">1111</td><td class="mono">000</td><td>256</td><td>First extended finite value</td></tr>
+              <tr><td class="mono">0x7C</td><td class="mono">1111</td><td class="mono">100</td><td>384</td><td>Finite</td></tr>
+              <tr class="highlight"><td class="mono">0x7E</td><td class="mono">1111</td><td class="mono">110</td><td>448</td><td>Maximum finite</td></tr>
+              <tr><td class="mono">0x7F</td><td class="mono">1111</td><td class="mono">111</td><td>NaN</td><td>Sole positive NaN byte</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="grid-3" style="margin-top:18px">
+          <div class="card"><span class="tag good">Device packer</span><h3 style="margin-top:13px">Truncates</h3><p class="muted">Values from 448 up to—but not including—480 encode as 0x7E. At 480 the dropped mantissa reaches the 0x7F bucket.</p></div>
+          <div class="card"><span class="tag good">Host encoder</span><h3 style="margin-top:13px">Rounds + saturates</h3><p class="muted">Finite overflow and infinities saturate to ±0x7E. A NaN input remains the canonical 0x7F NaN.</p></div>
+          <div class="card"><span class="tag good">Host decoder</span><h3 style="margin-top:13px">Extends exponent 15</h3><p class="muted">0x78 through 0x7E decode as finite. Only mantissa 7 is treated as NaN.</p></div>
+        </div>
+      </div>
+      <div class="footer"><span class="section">E4M3FN contract</span><span>Representable max 448 · packer’s next bucket begins at 480</span></div>
+      <aside class="speaker-note">Do not confuse maximum representable value with conversion threshold. 448 is the largest finite code point. Because the Blackhole packer truncates three mantissa bits, values in [448, 480) still land on 448; 480 is the first input whose top three mantissa bits form 111.</aside>
+    </section>
+
+    <section class="slide" data-section="Quantization math">
+      <div class="kicker">The quantization contract</div>
+      <div class="content">
+        <h2>One scale per 128 consecutive values</h2>
+        <div class="formula mono" style="margin-top:24px">
+          a = max(max<sub>i∈block</sub> |x<sub>i</sub>|, 10<sup>−4</sup>)<br>
+          r = a / 448<br>
+          s = round_pow2 ? 2<sup>ceil(log2(r))</sup> : r<br>
+          q<sub>i</sub> = cast_E4M3(x<sub>i</sub> / s) &nbsp;&nbsp;&nbsp; x̂<sub>i</sub> = decode(q<sub>i</sub>) × s
+        </div>
+        <div class="flow" style="margin-top:28px">
+          <div class="node"><strong>Input</strong><span class="muted mono">[…, H]</span></div><span class="arrow">→</span>
+          <div class="node"><strong>Reshape</strong><span class="muted mono">[…, H/128, 128]</span></div><span class="arrow">→</span>
+          <div class="node"><strong>E4M3</strong><span class="muted mono">[…, H]</span></div>
+          <div class="node"><strong>FP32 scales</strong><span class="muted mono">[…, H/128]</span></div>
+        </div>
+        <p class="lede" style="margin-top:26px">For the 512-wide MLA latent: <b>four independent dynamic ranges</b>, four FP32 scales, and 128 FP8 values governed by each scale.</p>
+      </div>
+      <div class="footer"><span class="section">Quantization math</span><span>BLOCK_W = 128</span></div>
+    </section>
+
+    <section class="slide" data-section="Quantization math">
+      <div class="kicker">Why block scaling?</div>
+      <div class="content">
+        <h2>Local range beats one global compromise</h2>
+        <div class="grid-2" style="margin-top:26px">
+          <div class="card">
+            <h3>One scale for 512 values</h3>
+            <svg viewBox="0 0 620 190" width="100%" role="img" aria-label="Four blocks with different amplitudes under one global scale">
+              <line x1="20" y1="160" x2="600" y2="160" stroke="#65748a" stroke-width="2"/>
+              <g fill="none" stroke="#6ba8ff" stroke-width="3">
+                <path d="M20 150 C55 147 80 153 145 148"/><path d="M165 135 C205 120 245 150 290 128"/>
+                <path d="M310 100 C355 62 390 140 435 82"/><path d="M455 40 C500 165 550 15 600 78"/>
+              </g>
+              <line x1="20" y1="28" x2="600" y2="28" stroke="#ff7b89" stroke-dasharray="7 7"/>
+              <text x="24" y="20" fill="#ff7b89" font-size="13">global amax controls every quantization step</text>
+            </svg>
+            <p class="muted">The largest block sets the scale; low-amplitude blocks lose useful levels.</p>
+          </div>
+          <div class="card">
+            <h3>Four scales for 4 × 128</h3>
+            <svg viewBox="0 0 620 190" width="100%" role="img" aria-label="Four separately normalized amplitude blocks">
+              <line x1="20" y1="160" x2="600" y2="160" stroke="#65748a" stroke-width="2"/>
+              <g fill="none" stroke="#42e8e0" stroke-width="3">
+                <path d="M20 95 C55 65 90 120 145 72"/><path d="M165 88 C205 43 245 125 290 70"/>
+                <path d="M310 85 C355 40 390 132 435 68"/><path d="M455 75 C500 135 550 35 600 80"/>
+              </g>
+              <g stroke="#ffc96b" stroke-dasharray="6 6"><line x1="20" y1="34" x2="145" y2="34"/><line x1="165" y1="34" x2="290" y2="34"/><line x1="310" y1="34" x2="435" y2="34"/><line x1="455" y1="34" x2="600" y2="34"/></g>
+              <text x="24" y="20" fill="#ffc96b" font-size="13">each block uses its own FP8 range</text>
+            </svg>
+            <p class="muted">Metadata cost is 4 bytes per 128 bytes of FP8: <b class="accent">3.125%</b>.</p>
+          </div>
+        </div>
+      </div>
+      <div class="footer"><span class="section">Quantization math</span><span>Fine-grained dynamic range · modest metadata</span></div>
+    </section>
+
+    <section class="slide" data-section="Power-of-two scaling">
+      <div class="kicker">The new rounding rule</div>
+      <div class="content">
+        <h2>Always round the scale upward</h2>
+        <div class="calculator card" style="margin-top:24px">
+          <div>
+            <label for="amax" class="muted">Block absolute maximum</label>
+            <div class="calc-value"><span id="amaxValue">12.30</span></div>
+            <input id="amax" type="range" min="0" max="500" value="123" step="1" aria-label="Block absolute maximum">
+            <p class="small">Slider range: 0 to 50 · E4M3FN ceiling: 448</p>
+          </div>
+          <div class="calc-grid">
+            <div class="calc-cell"><span>Raw scale a / 448</span><strong id="rawScale">0.02745536</strong></div>
+            <div class="calc-cell"><span>ceil(log₂(raw))</span><strong id="scaleExponent">−5</strong></div>
+            <div class="calc-cell"><span>Power-of-two scale</span><strong id="pow2Scale">0.03125</strong></div>
+            <div class="calc-cell"><span>Largest normalized value</span><strong id="normalizedMax">393.6</strong></div>
+          </div>
+        </div>
+        <div class="numberline">
+          <div class="axis"></div>
+          <div class="tick" style="left:8%"><span>2⁻⁶</span></div><div class="tick" style="left:30%"><span>2⁻⁵</span></div>
+          <div class="tick" style="left:52%"><span>2⁻⁴</span></div><div class="tick" style="left:74%"><span>2⁻³</span></div><div class="tick" style="left:96%"><span>2⁻²</span></div>
+          <div class="marker red" id="rawMarker" style="left:45%"><b>raw</b></div>
+          <div class="marker green" id="powMarker" style="left:52%"><b>chosen 2ᵏ</b></div>
+        </div>
+      </div>
+      <div class="footer"><span class="section">Power-of-two scaling</span><span>Chosen scale ≥ raw scale → no FP8 overflow at the block amax</span></div>
+      <aside class="speaker-note">For positive raw scale r, 2^ceil(log2 r) is in [r, 2r), except exact powers of two where it equals r. Consequently amax / chosen_scale is in (224, 448], so the largest block value stays representable while at most roughly half the top range is left unused.</aside>
+    </section>
+
+    <section class="slide" data-section="Power-of-two scaling">
+      <div class="kicker">What “UE8M0-style” means here</div>
+      <div class="content">
+        <h2>Exponent-only behavior, FP32 storage</h2>
+        <div class="grid-2" style="margin-top:28px">
+          <div class="card">
+            <div class="bits" style="grid-template-columns:8fr">
+              <div class="bit-field exp">EEEEEEEE</div>
+            </div>
+            <h3>Conceptual UE8M0</h3>
+            <p class="muted">An unsigned exponent selects a power of two. There are no fraction bits, so every finite scale lies on the <code>2ᵏ</code> grid.</p>
+          </div>
+          <div class="card">
+            <div class="bits" style="grid-template-columns:1fr 8fr 23fr">
+              <div class="bit-field sign">S</div><div class="bit-field exp">EEEEEEEE</div><div class="bit-field frac">23 fraction bits</div>
+            </div>
+            <h3>What this PR actually emits</h3>
+            <p class="muted">The scale tensor remains <b class="accent">FP32</b>. Its values are constrained to powers of two; they are not packed into one-byte UE8M0.</p>
+          </div>
+        </div>
+        <div class="grid-3" style="margin-top:20px">
+          <div class="card"><h3>Binary exactness</h3><p class="muted">Multiplying by a normal power of two changes the exponent without changing significand bits, barring range limits.</p></div>
+          <div class="card"><h3>Consumer contract</h3><p class="muted">Sparse MLA and FlashMLA can rely on exponent-grid scales consistent with their expected format.</p></div>
+          <div class="card"><h3>Predictability</h3><p class="muted">Every emitted scale is an exact FP32 power of two. Device reduction near a threshold can select an adjacent power while remaining safe.</p></div>
+        </div>
+      </div>
+      <div class="footer"><span class="section">Power-of-two scaling</span><span>“Style” describes values, not storage width</span></div>
+    </section>
+
+    <section class="slide" data-section="Numerics">
+      <div class="kicker">Precision and error</div>
+      <div class="content">
+        <h2>Ideal invariant—and device reality</h2>
+        <div class="grid-3" style="margin-top:25px">
+          <div class="card"><span class="metric green">≤448</span><h3>Reduced-amax invariant</h3><p class="muted">For the amax produced on device, <code>s ≥ a/448</code>; its normalized value is at most 448.</p></div>
+          <div class="card"><span class="metric amber">&lt;480</span><h3>Host-reference safety</h3><p class="muted">FP32 reduction can quantize a value at a power boundary. Tests require the original host amax to remain below the packer’s 0x7F threshold.</p></div>
+          <div class="card"><span class="metric red">&lt;2×</span><h3>Precision cost</h3><p class="muted">Upward power-of-two rounding can almost double the minimal scale, enlarging each E4M3 step and pushing small values toward zero.</p></div>
+        </div>
+        <div class="grid-2" style="margin-top:22px">
+          <div class="formula mono">x̂ = Q<sub>E4M3</sub>(x / s) × s<br>|x̂ − x| = s × |Q(y) − y|</div>
+          <div class="card"><h3>Rounding detail</h3><p class="muted">The operation documentation notes that the Blackhole E4M3 packer truncates the mantissa. Results may differ from a round-to-nearest reference by up to one E4M3 ULP.</p></div>
+        </div>
+        <p class="small" style="margin-top:13px">448 is still the maximum finite decoded value. The 480 figure is only the Blackhole truncating packer’s first input bucket that produces byte 0x7F; it is not another representable finite value.</p>
+      </div>
+      <div class="footer"><span class="section">Numerics</span><span>Quantization error dominates; power-of-two scaling adds headroom</span></div>
+    </section>
+
+    <section class="slide" data-section="Numerics">
+      <div class="kicker">Zeros and tiny blocks</div>
+      <div class="content">
+        <h2>The 10<sup>−4</sup> clamp is part of the format contract</h2>
+        <div class="grid-2" style="margin-top:28px;align-items:center">
+          <div>
+            <div class="formula mono">a = max(amax, 0.0001)<br>raw = a / 448<br>s = 2<sup>ceil(log2(raw))</sup></div>
+            <p class="lede" style="margin-top:24px">For an all-zero block, the chosen scale is <b class="accent">2<sup>−22</sup> ≈ 2.384×10<sup>−7</sup></b>, while every quantized value remains exactly zero.</p>
+          </div>
+          <div class="card">
+            <ul class="clean">
+              <li>Prevents division by zero when computing <code>1/scale</code>.</li>
+              <li>Provides a valid positive input to the exponent-based power-of-two rounding helper.</li>
+              <li>Applies the lower bound before multiplying by the fixed <code>1/448</code> constant.</li>
+              <li>Keeps scale metadata finite and deterministic for zero-filled cache regions.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      <div class="footer"><span class="section">Numerics</span><span>Clamp first · divide by 448 · round exponent upward</span></div>
+    </section>
+
+    <section class="slide" data-section="Implementation">
+      <div class="kicker">On-device implementation</div>
+      <div class="content">
+        <h2>The Blackhole compute path</h2>
+        <div class="pipeline" style="margin-top:30px">
+          <div class="stage"><b>1 · Read</b><span>BF16/FP32<br>row-major DRAM</span></div>
+          <div class="stage"><b>2 · Tilize</b><span>Convert working tiles to FP32</span></div>
+          <div class="stage"><b>3 · Reduce</b><span>abs → max over each 128 block</span></div>
+          <div class="stage"><b>4 · Scale</b><span>clamp → × 1/448</span></div>
+          <div class="stage"><b>5 · Round</b><span>optional exponent extraction + mantissa check</span></div>
+          <div class="stage"><b>6 · Normalize</b><span>copy FP32 scale → reciprocal → multiply</span></div>
+          <div class="stage"><b>7 · Write</b><span>untilize E4M3 + FP32 scale outputs</span></div>
+        </div>
+        <div class="grid-3" style="margin-top:24px">
+          <div class="card"><h3>Compile-time branch</h3><p class="muted"><code>if constexpr(round_scale_to_power_of_two)</code> removes exponent rounding from the default kernel.</p></div>
+          <div class="card"><h3>Program cache safety</h3><p class="muted">The scaling-mode attribute participates in the operation hash, so the two kernel variants compile/cache separately.</p></div>
+          <div class="card"><h3>32-bit DEST</h3><p class="muted"><code>fp32_dest_acc_en=true</code> supports the FP8 CB and retains FP32 precision for reduction and division.</p></div>
+        </div>
+      </div>
+      <div class="footer"><span class="section">Implementation</span><span>TRISC computes · NCRISC streams</span></div>
+    </section>
+
+    <section class="slide" data-section="Host fix">
+      <div class="kicker">Host-side correction</div>
+      <div class="content">
+        <h2>The bug was one reserved-exponent assumption</h2>
+        <div class="grid-2" style="margin-top:25px">
+          <div class="card">
+            <span class="tag warn">Before</span>
+            <div class="api" style="margin-top:15px"><span class="comment">// Treated all E=15 encodings as NaN</span>
+FP8_EXP_MAX = <span class="num">14</span>
+
+<span class="kw">if</span> (exp == 15)
+    return NaN
+
+overflow → <span class="num">0x77</span>  <span class="comment">// 240</span></div>
+          </div>
+          <div class="card">
+            <span class="tag good">Now</span>
+            <div class="api" style="margin-top:15px"><span class="comment">// E4M3FN extends E=15 through M=6</span>
+FP8_EXP_MAX = <span class="num">15</span>
+
+<span class="kw">if</span> (exp == 15 && man == 7)
+    return NaN
+
+overflow → <span class="num">0x7E</span>  <span class="comment">// 448</span></div>
+          </div>
+        </div>
+        <div class="grid-3" style="margin-top:20px">
+          <div class="card"><h3>Encode</h3><p class="muted">RNE carry from 240 can enter exponent 15; finite values that would land on NaN saturate to 0x7E.</p></div>
+          <div class="card"><h3>Decode</h3><p class="muted">Bytes 0x78–0x7E and 0xF8–0xFE now decode as finite positive and negative values.</p></div>
+          <div class="card"><h3>Pin the contract</h3><p class="muted">Three CPU-only tests cover exponent-15 encoding, saturation/NaN, and decoding.</p></div>
+        </div>
+      </div>
+      <div class="footer"><span class="section">Host fix</span><span>Host utility now models E4M3FN—not a 240-limited variant</span></div>
+    </section>
+
+    <section class="slide" data-section="API">
+      <div class="kicker">Public API and compatibility</div>
+      <div class="content">
+        <h2>Existing callers remain unchanged</h2>
+        <div class="grid-2" style="margin-top:26px">
+          <div>
+            <div class="api"><span class="comment"># Legacy behavior</span>
+e4m3, scales = <span class="fn">per_token_cast_to_fp8</span>(x)
+
+<span class="comment"># Sparse MLA KV behavior</span>
+e4m3, scales = <span class="fn">per_token_cast_to_fp8</span>(
+    x,
+    <span class="kw">round_scale_to_power_of_two</span>=<span class="kw">True</span>,
+)</div>
+          </div>
+          <div class="card">
+            <ul class="clean">
+              <li>The new Python argument is keyword-only.</li>
+              <li>Its default is <code>false</code>.</li>
+              <li>The fixed E4M3FN maximum is 448 on host and device.</li>
+              <li>Input is still BF16/FP32, row-major, DRAM interleaved, Blackhole-only.</li>
+              <li><code>H</code> must remain divisible by 128.</li>
+              <li>Outputs remain row-major E4M3 and FP32 tensors.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      <div class="footer"><span class="section">API</span><span>One opt-in behavior · one fixed format</span></div>
+    </section>
+
+    <section class="slide" data-section="Tests">
+      <div class="kicker">What the PR tests</div>
+      <div class="content">
+        <h2>Power-of-two safety + E4M3FN boundaries</h2>
+        <div class="grid-2" style="margin-top:24px">
+          <div class="card">
+            <div class="test-matrix">
+              <div></div><div class="label">1 × 512</div><div class="label">30 × 512</div><div class="label">2×3×32×512</div>
+              <div class="label">BF16</div><div class="pass">✓ safe</div><div class="pass">✓ safe</div><div class="pass">✓ safe</div>
+              <div class="label">FP32</div><div class="pass">✓ safe</div><div class="pass">✓ safe</div><div class="pass">✓ safe</div>
+            </div>
+            <p class="small" style="margin-top:14px">Local results: 7 power-of-two cases and all 39 operator cases passed.</p>
+          </div>
+          <div class="card">
+            <ul class="clean">
+              <li>Four 128-wide blocks get distinct ranges: ×1, ×8, ×64, ×512.</li>
+              <li>Device scales may differ from the host reference by one adjacent power at a reduction threshold.</li>
+              <li>Every <code>log2(scale)</code> must be an integer.</li>
+              <li>E4M3 and scale output shapes must preserve the contract.</li>
+              <li>Cast-back quality: PCC ≥ 0.999, rtol 0.15, atol 10<sup>−3</sup>.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="grid-3" style="margin-top:18px">
+          <div class="card"><span class="tag good">Added</span><p style="margin-top:10px">Host encode/decode coverage for exponent-15 finite values, saturation, and NaN.</p></div>
+          <div class="card"><span class="tag good">Added</span><p style="margin-top:10px">Boundary blocks at 240, 256, 448, and just above the finite maximum.</p></div>
+          <div class="card"><span class="tag warn">Separate PR</span><p style="margin-top:10px">Byte-exact 656-byte packing and sparse-SDPA consumption.</p></div>
+        </div>
+      </div>
+      <div class="footer"><span class="section">Tests</span><span>2 dtypes × 3 ranks/shapes</span></div>
+    </section>
+
+    <section class="slide" data-section="PR boundaries">
+      <div class="kicker">What #49811 owns—and does not</div>
+      <div class="content">
+        <h2>A narrowly scoped numerical primitive</h2>
+        <div class="grid-2" style="margin-top:26px">
+          <div class="card">
+            <span class="tag good">In this PR</span>
+            <ul class="clean" style="margin-top:18px">
+              <li>Correct E4M3FN normalization ceiling of 448.</li>
+              <li>Optional upward power-of-two scale rounding.</li>
+              <li>Kernel compile arguments and cached-program identity.</li>
+              <li>Python/C++ API plumbing plus host encode/decode correction.</li>
+              <li>Focused scale and round-trip tests.</li>
+            </ul>
+          </div>
+          <div class="card">
+            <span class="tag warn">Outside this PR</span>
+            <ul class="clean" style="margin-top:18px">
+              <li>Mixed-format 656-byte KV-row packing.</li>
+              <li>FP8 cache initialization and zero-padding.</li>
+              <li>Sparse-SDPA decoding of FP8 + scales.</li>
+              <li>GLM runner selection of the scaled-FP8 cache.</li>
+              <li>End-to-end model quality and performance.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="flow" style="margin-top:28px">
+          <div class="node"><strong>#49811</strong><span class="muted">quantize + scales</span></div><span class="arrow">→</span>
+          <div class="node"><strong>#49812</strong><span class="muted">pack row bytes</span></div><span class="arrow">→</span>
+          <div class="node"><strong>Feature branch</strong><span class="muted">cache + sparse attention</span></div>
+        </div>
+      </div>
+      <div class="footer"><span class="section">PR boundaries</span><span>Independent API extension · consumed by integration</span></div>
+    </section>
+
+    <section class="slide" data-section="Review guide">
+      <div class="kicker">Review checklist</div>
+      <div class="content">
+        <h2>The questions that matter</h2>
+        <div class="grid-4" style="margin-top:26px">
+          <div class="card"><span class="metric">01</span><h3>Numerics</h3><p class="muted">Does exponent rounding guarantee safety? Does host behavior match Blackhole E4M3FN through 448? Is 10<sup>−4</sup> still the intended clamp?</p></div>
+          <div class="card"><span class="metric">02</span><h3>Compatibility</h3><p class="muted">Are defaults byte-for-byte equivalent? Are the new args truly opt-in at Python and C++ boundaries?</p></div>
+          <div class="card"><span class="metric">03</span><h3>Compilation</h3><p class="muted">Do the attributes hash distinctly? Is the optional branch compiled away for legacy callers?</p></div>
+          <div class="card"><span class="metric">04</span><h3>Coverage</h3><p class="muted">Do tests exercise exponent transitions, E4M3FN boundaries, and the exact sparse-KV consumer geometry?</p></div>
+        </div>
+        <p class="big-statement" style="margin:32px 0 0">The central invariant: <span class="accent">chosen scale is a power of two and never smaller than the device-reduced amax / 448.</span></p>
+      </div>
+      <div class="footer"><span class="section">Review guide</span><span>Correctness first · performance second</span></div>
+    </section>
+
+    <section class="slide" data-section="References">
+      <div class="kicker">Source map</div>
+      <div class="content">
+        <h2>Follow the implementation</h2>
+        <div class="grid-2" style="margin-top:26px">
+          <div class="card">
+            <h3>PR implementation</h3>
+            <ul class="clean">
+              <li><a href="https://github.com/tenstorrent/tt-metal/pull/49811">PR #49811 — per_token_cast_to_fp8: power-of-two scaling</a></li>
+              <li><a href="https://github.com/tenstorrent/tt-metal/blob/pjosipovic/power-of-two-fp8-scaling/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/device/kernels/compute/compute_per_token_cast_to_fp8.cpp">Blackhole compute kernel</a></li>
+              <li><a href="https://github.com/tenstorrent/tt-metal/blob/pjosipovic/power-of-two-fp8-scaling/tt_metal/impl/data_format/float8.cpp">Host E4M3FN encode/decode implementation</a></li>
+              <li><a href="https://github.com/tenstorrent/tt-metal/blob/pjosipovic/power-of-two-fp8-scaling/tests/tt_metal/tt_metal/misc/test_float8.cpp">Host boundary and saturation tests</a></li>
+              <li><a href="https://github.com/tenstorrent/tt-metal/blob/pjosipovic/power-of-two-fp8-scaling/tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_deepseek_prefill_per_token_cast.py">Focused tests and PyTorch reference</a></li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>Hardware evidence + integration</h3>
+            <ul class="clean">
+              <li><a href="https://github.com/tenstorrent/ttsim-private/blob/6cae99e3e8ce5a8e73a1b5d54177bd463f179b31/tests/tensix/test_pacr.c#L833-L853">ttsim Blackhole RTL-ground-truth packer cases: 240, 256, 384, 448, 480</a></li>
+              <li><a href="https://github.com/tenstorrent/tt-isa-documentation/blob/b7738d9ac14a34a4033d60dde9463466b23082e1/BlackholeA0/TensixTile/TensixCoprocessor/SFPSTORE.md">Blackhole SFPSTORE ISA reference</a></li>
+              <li><a href="https://github.com/tenstorrent/tt-metal/tree/pjosipovic/fp8-sparse-kv-cache">Scaled-FP8 KV-cache feature branch</a></li>
+              <li><a href="https://github.com/tenstorrent/tt-metal/blob/pjosipovic/fp8-sparse-kv-cache/models/demos/deepseek_v3_d_p/tt/mla/mla.py#L851-L865">Feature-branch Sparse MLA caller (to consume the revised API)</a></li>
+              <li><a href="https://github.com/tenstorrent/tt-metal/pull/49812">PR #49812 — mixed-format row packing</a></li>
+            </ul>
+          </div>
+        </div>
+        <p class="lede" style="margin-top:30px">#49811 is the numerical bridge between a BF16/FP32 latent and the packed FP8 cache consumed by DSA/GLM sparse attention.</p>
+      </div>
+      <div class="footer"><span class="section">References</span><span>Open links directly from this deck</span></div>
+    </section>
+
+    <section class="slide" data-section="Close">
+      <div class="kicker">Takeaway</div>
+      <div class="content">
+        <h1>Scale safely.<br><span class="accent">Cache compactly.</span></h1>
+        <p class="big-statement">#49811 aligns the whole path around one format contract: <span class="blue">128-value blocks</span>, <span class="amber">FP32 power-of-two scales</span>, and the full <span class="green">E4M3FN finite range through 448</span> on host and Blackhole.</p>
+        <div class="flow" style="justify-content:flex-start;margin-top:32px">
+          <span class="tag good">Default path preserved</span>
+          <span class="tag good">Host/device format aligned</span>
+          <span class="tag good">Boundary behavior tested</span>
+        </div>
+      </div>
+      <div class="footer"><span class="section">Close</span><span>PR #49811</span></div>
+    </section>
+  </main>
+
+  <div class="hint">← → navigate · Home/End jump · N notes · P print</div>
+  <nav class="controls" aria-label="Slide controls">
+    <button class="control" id="prev" aria-label="Previous slide">←</button>
+    <span class="counter" id="counter">01 / 21</span>
+    <button class="control" id="next" aria-label="Next slide">→</button>
+  </nav>
+
+  <script>
+    (() => {
+      const slides = [...document.querySelectorAll('.slide')];
+      const progress = document.getElementById('progress');
+      const counter = document.getElementById('counter');
+      let index = Math.max(0, Math.min(slides.length - 1, Number(location.hash.slice(1)) - 1 || 0));
+      let touchStartX = null;
+
+      function show(nextIndex, direction = 1) {
+        nextIndex = Math.max(0, Math.min(slides.length - 1, nextIndex));
+        slides.forEach((slide, i) => {
+          slide.classList.toggle('active', i === nextIndex);
+          slide.classList.toggle('exit-left', i < nextIndex);
+        });
+        index = nextIndex;
+        progress.style.width = `${((index + 1) / slides.length) * 100}%`;
+        counter.textContent = `${String(index + 1).padStart(2, '0')} / ${String(slides.length).padStart(2, '0')}`;
+        history.replaceState(null, '', `#${index + 1}`);
+      }
+
+      document.getElementById('prev').addEventListener('click', () => show(index - 1, -1));
+      document.getElementById('next').addEventListener('click', () => show(index + 1, 1));
+      document.addEventListener('keydown', (event) => {
+        if (['ArrowRight', 'PageDown', ' '].includes(event.key)) { event.preventDefault(); show(index + 1, 1); }
+        if (['ArrowLeft', 'PageUp'].includes(event.key)) { event.preventDefault(); show(index - 1, -1); }
+        if (event.key === 'Home') { event.preventDefault(); show(0, -1); }
+        if (event.key === 'End') { event.preventDefault(); show(slides.length - 1, 1); }
+        if (event.key.toLowerCase() === 'n') document.body.classList.toggle('notes-on');
+        if (event.key.toLowerCase() === 'p') window.print();
+      });
+      document.addEventListener('touchstart', event => { touchStartX = event.changedTouches[0].clientX; }, {passive: true});
+      document.addEventListener('touchend', event => {
+        if (touchStartX === null) return;
+        const dx = event.changedTouches[0].clientX - touchStartX;
+        if (Math.abs(dx) > 45) show(index + (dx < 0 ? 1 : -1), dx < 0 ? 1 : -1);
+        touchStartX = null;
+      }, {passive: true});
+
+      const slider = document.getElementById('amax');
+      const amaxValue = document.getElementById('amaxValue');
+      const rawScale = document.getElementById('rawScale');
+      const scaleExponent = document.getElementById('scaleExponent');
+      const pow2Scale = document.getElementById('pow2Scale');
+      const normalizedMax = document.getElementById('normalizedMax');
+      const rawMarker = document.getElementById('rawMarker');
+      const powMarker = document.getElementById('powMarker');
+
+      function fmt(value) {
+        if (Math.abs(value) < .001 || Math.abs(value) >= 10000) return value.toExponential(4);
+        return Number(value.toPrecision(7)).toString();
+      }
+
+      function updateCalculator() {
+        const amax = Number(slider.value) / 10;
+        const clamped = Math.max(amax, 1e-4);
+        const raw = clamped / 448;
+        const exponent = Math.ceil(Math.log2(raw));
+        const rounded = 2 ** exponent;
+        amaxValue.textContent = amax.toFixed(2);
+        rawScale.textContent = fmt(raw);
+        scaleExponent.textContent = String(exponent).replace('-', '−');
+        pow2Scale.textContent = fmt(rounded);
+        normalizedMax.textContent = fmt(amax / rounded);
+        const minExp = -6, maxExp = -2;
+        const rawPos = 8 + ((Math.log2(raw) - minExp) / (maxExp - minExp)) * 88;
+        const powPos = 8 + ((exponent - minExp) / (maxExp - minExp)) * 88;
+        rawMarker.style.left = `${Math.max(2, Math.min(98, rawPos))}%`;
+        powMarker.style.left = `${Math.max(2, Math.min(98, powPos))}%`;
+      }
+      slider.addEventListener('input', updateCalculator);
+      updateCalculator();
+      show(index);
+    })();
+  </script>
+</body>
+</html>
