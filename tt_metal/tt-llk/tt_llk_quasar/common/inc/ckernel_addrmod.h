@@ -152,8 +152,22 @@ behave like the Bias counter.
 
 #include "tensix.h"
 
+// The compute thread this kernel is compiled for. On Quasar every thread's addrmods live in one config
+// region indexed by thread id, so addr_mod_t::set() must know its own thread. This is the single source
+// of truth for the thread id (0=unpack, 1=math, 2=pack, 3=isolate-SFPU), replacing the per-namespace
+// TRISC_ID constants that used to live in c{unpack,math,pack}_common.h. It is derived from the
+// -DCOMPILE_FOR_TRISC=<n> the build already bakes into every compute compilation (metal:
+// llrt/hal/tt-2xx/hal_2xx_common.cpp; tt-llk tests: test_config.py) -- a compiler-provided macro, so it
+// needs no include and forms no cycle. ckernel_addrmod.h is only ever compiled in compute (trisc)
+// translation units, so the guard below never fires on data-movement/BRISC/NCRISC builds.
+#ifndef COMPILE_FOR_TRISC
+#error "COMPILE_FOR_TRISC must be defined for compute (trisc) builds; the addrmod thread id derives from it"
+#endif
+
 namespace ckernel
 {
+
+constexpr std::uint32_t TRISC_ID = COMPILE_FOR_TRISC;
 
 constexpr std::uint8_t ADDR_MOD_0 = 0;
 constexpr std::uint8_t ADDR_MOD_1 = 1;
@@ -257,8 +271,10 @@ struct addr_mod_t
 
 #define NUM_MATH_ADDR_MODS 8
 
-    // Program source and dest registers
-    __attribute__((always_inline)) inline addr_mod_t const& set(const std::uint8_t mod_index, std::uint32_t thread_id = 1) const
+    // Program source and dest registers. thread_id defaults to TRISC_ID (the thread this kernel is
+    // compiled for); a hard-coded default silently programmed another thread's addrmod slot -- the pack
+    // path (_llk_pack_dest_semaphore_section_done_) was writing into the math thread's slot. See tt-llk #1665.
+    __attribute__((always_inline)) inline addr_mod_t const& set(const std::uint8_t mod_index, std::uint32_t thread_id = TRISC_ID) const
     {
         auto cfg                                                                = (volatile std::uint32_t*)TENSIX_CFG_BASE;
         cfg[addr_mod_src_reg_addr[mod_index] + NUM_MATH_ADDR_MODS * thread_id]  = src_val();
