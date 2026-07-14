@@ -978,7 +978,7 @@
         "eps": "1e-06",
         "fused_activation": "std::nullopt",
         "norm_type": "LayerNormType::RMSNORM",
-        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::BLOCK_SHARDED;buffer_type=BufferType::L1;shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0;\"y\":0};\"end\":{\"x\":7;\"y\":0}]; shape=[16; 128]; orientation=ShardOrientation::ROW_MAJOR};nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::BLOCK_SHARDED;buffer_type=BufferType::L1;shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0;\"y\":0};\"end\":{\"x\":7;\"y\":0}]; shape=[32; 128]; orientation=ShardOrientation::ROW_MAJOR};nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)",
         "program_config": "LayerNormShardedMultiCoreProgramConfig(compute_with_storage_grid_size=8-1;subblock_w=4;block_h=1;block_w=4;inplace=0;legacy_reduction=0;legacy_rsqrt=0;use_welford=0)"
       },
       "inputs": [
@@ -986,13 +986,13 @@
           "shape_padded": [
             1,
             1,
-            16,
+            32,
             1024
           ],
           "shape_logical": [
             1,
             1,
-            16,
+            32,
             1024
           ],
           "layout": "TILE",
@@ -1003,7 +1003,7 @@
           "shape_padded": [
             1,
             1,
-            16,
+            32,
             1024
           ],
           "shape_logical": [
@@ -1020,7 +1020,7 @@
           "shape_padded": [
             1,
             1,
-            16,
+            32,
             1024
           ],
           "shape_logical": [
@@ -1039,13 +1039,13 @@
           "shape_padded": [
             1,
             1,
-            16,
+            32,
             1024
           ],
           "shape_logical": [
             1,
             1,
-            16,
+            32,
             1024
           ],
           "layout": "TILE",
