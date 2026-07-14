@@ -387,5 +387,6 @@ signposts are recorded in `tracy/final_post_fused_review/README.md`.
 
 - Fresh `$stage-review` rereview verdict: `clean-pass`; see
   `stage_review_fused_rereview.md`.
-- Stage-owned local commit SHA(s): recorded below after the technical
-  checkpoint.  No push was performed.
+- Stage-owned technical checkpoint: `96d41fdf0c5` (`Optimize Gemma 4 31B
+  multichip decoder`).  The follow-up metadata-only commit records this SHA.
+  No push was performed.
