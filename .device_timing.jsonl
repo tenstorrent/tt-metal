@@ -139,3 +139,9 @@
 {"source":"tt-probe","pid":3864746,"started_at_ms":1784071957775,"wait_ms":222,"run_ms":16810,"test_path":"rms_norm","exit_code":1}
 {"source":"tt-probe","pid":3865037,"started_at_ms":1784071985131,"wait_ms":189,"run_ms":16690,"test_path":"rms_norm","exit_code":1}
 {"source":"tt-probe","pid":3866153,"started_at_ms":1784072266950,"wait_ms":219,"run_ms":21552,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":3868070,"started_at_ms":1784072352325,"wait_ms":187,"run_ms":28309,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":3869065,"started_at_ms":1784072407181,"wait_ms":197,"run_ms":25350,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":3869977,"started_at_ms":1784072483505,"wait_ms":202,"run_ms":19491,"test_path":"rms_norm","exit_code":0}
+{"source":"run_safe_pytest","pid":3870515,"started_at_ms":1784072538063,"wait_ms":1,"run_ms":26870,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py","exit_code":0}
+{"source":"run_safe_pytest","pid":3871727,"started_at_ms":1784072619362,"wait_ms":2,"run_ms":33507,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_sharded.py","exit_code":0}
+{"source":"run_safe_pytest","pid":3872723,"started_at_ms":1784072664641,"wait_ms":2,"run_ms":22572,"test_path":"eval/golden_tests/rms_norm/test_golden.py::test_op_loose","exit_code":0}

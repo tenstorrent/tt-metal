@@ -108,20 +108,63 @@ def test_rms_norm_height_sharded(device, shape, dtype, layout, with_gamma):
     assert_with_pcc(expected.to(torch.float32), actual.to(torch.float32), PCC[dtype])
 
 
-def test_rms_norm_height_sharded_rejects_width_sharded(device, expect_error):
-    """WIDTH_SHARDED is a cross-core scheme-change (Refinement 5) — still refused."""
+# Refinement 5 — WIDTH_SHARDED + BLOCK_SHARDED cross-core reduction. The hidden W
+# is split across a reduction GROUP of cores; each core reduces its LOCAL W-slice to
+# a partial Σx²/W_global, the group root folds the partials + rsqrt-finalizes, and
+# broadcasts 1/rms back via the mcast_pipe. Rectangular groups only (BLOCK = grid-row
+# lines; WIDTH = the shard-grid bbox); TILE input, tile-aligned W.
+WIDTH = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+BLOCK = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+
+# (shape, memory_layout): each is a clean rectangular group fit.
+CROSS_CORE_SHAPES = [
+    ((1, 1, 32, 2048), WIDTH),  # design loose case: 64-core group, 1 tile-row
+    ((1, 1, 256, 512), BLOCK),  # design loose case: 8x8 grid, 8 line-groups
+    ((4, 8, 32, 256), WIDTH),  # multirow: 8-core group x 32 tile-rows (multi-round)
+    ((2, 4, 128, 512), BLOCK),  # multirow: per-core 4 tile-rows (multi-round)
+    ((1, 1, 50, 512), WIDTH),  # H non-aligned (padding tile-rows dropped)
+]
+
+
+@pytest.mark.parametrize("shape,memory_layout", CROSS_CORE_SHAPES)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("with_gamma", [False, True])
+def test_rms_norm_cross_core_sharded(device, shape, memory_layout, dtype, with_gamma):
+    """WIDTH/BLOCK cross-core reduce-root combine: output matches the reference and
+    keeps the input's shard spec."""
+    torch.manual_seed(0)
+    tdt = _TORCH_DTYPE[dtype]
+    torch_input = torch.randn(shape, dtype=tdt)
+    gamma_t = torch.randn(shape[-1], dtype=tdt) if with_gamma else None
+    mem_cfg = auto_shard_config(list(shape), memory_layout, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
+    ttnn_input = ttnn.from_torch(
+        torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_cfg
+    )
+    ttnn_gamma = (
+        ttnn.from_torch(gamma_t.reshape(1, 1, 1, shape[-1]), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        if with_gamma
+        else None
+    )
+    out = rms_norm(ttnn_input, gamma=ttnn_gamma, compute_kernel_config=_cfg(), memory_config=ttnn_input.memory_config())
+    assert out.memory_config().memory_layout == memory_layout
+    actual = ttnn.to_torch(out)
+    expected = pytorch_rms_norm(torch_input, gamma=gamma_t)
+    assert_with_pcc(expected.to(torch.float32), actual.to(torch.float32), PCC[dtype])
+
+
+@pytest.mark.parametrize("memory_layout", [WIDTH, BLOCK])
+def test_rms_norm_rejects_row_major_width_block(device, memory_layout, expect_error):
+    """ROW_MAJOR + WIDTH/BLOCK_SHARDED is EXCLUDED (R5): W-sharding splits each row's
+    sticks across cores at sub-tile granularity, unreadable by the TILE-only cross-core
+    path or the full-stick fallback. A follow-up (R5a) would tilize partial-width slices."""
     torch.manual_seed(42)
-    shape = (1, 1, 32, 2048)
+    shape = (1, 1, 64, 512)
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     mem_cfg = auto_shard_config(
-        list(shape),
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-        device=device,
+        list(shape), memory_layout, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device
     )
     ttnn_input = ttnn.from_torch(
-        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_cfg
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_cfg
     )
     with expect_error((NotImplementedError, RuntimeError), ".*"):
         rms_norm(ttnn_input, compute_kernel_config=_cfg(), memory_config=ttnn_input.memory_config())

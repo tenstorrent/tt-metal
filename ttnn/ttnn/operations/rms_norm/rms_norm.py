@@ -113,6 +113,15 @@ EXCLUSIONS = [
     # zero-padding keeps the block-float shared exponent clean, the masked
     # partial-W reduce zeros the W-tail, and H-padding rows reduce to 0 and are
     # dropped by the writer. So bf8b is FULLY supported — no exclusion added.
+    # R5: ROW_MAJOR + WIDTH/BLOCK_SHARDED. Width-sharding an RM tensor splits each
+    # row's W across cores at sub-tile (stick) granularity, so a logical row is NOT
+    # contiguous in any one core's L1. The TILE-only cross-core reduce path can't be
+    # reached (RM), and the interleaved-collapse fallback reads a full-W stick as one
+    # NoC page — which for a split stick returns garbage (measured PCC 0.0098). A
+    # correct RM cross-core path would tilize each core's partial-width stick slice
+    # before the combine — a structural extension (follow-up Refinement 5a).
+    {"layout": ttnn.ROW_MAJOR_LAYOUT, "memory_layout": ttnn.TensorMemoryLayout.WIDTH_SHARDED},
+    {"layout": ttnn.ROW_MAJOR_LAYOUT, "memory_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED},
 ]
 
 
