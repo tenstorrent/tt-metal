@@ -123,6 +123,7 @@ jobs:
               "model": "google/gemma-3-27b-it",
               "server-timeout": 45,
               "benchmark-timeout": 5,
+              "server_max_num_seqs_experiments": [8, 16, 32],
               "runner-label": "topology-6u",
               "arch": "arch-wormhole_b0",
               "mesh-device": "(4, 8)",
@@ -297,6 +298,7 @@ jobs:
               "benchmark-timeout": 20,
               "sampling-test-timeout": 20,
               "benchmark-num-prompts": 256,
+              "server_max_num_seqs_experiments": [8, 16, 32],
               "runner-label": "bh-loudbox",
               "arch": "arch-blackhole",
               "mesh-device": "P150x8",
@@ -312,6 +314,7 @@ jobs:
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 20,
               "benchmark-timeout": 5,
+              "server_max_num_seqs_experiments": [8, 16, 32],
               "runner-label": "topology-6u",
               "arch": "arch-wormhole_b0",
               "mesh-device": "TG",
@@ -413,35 +416,23 @@ jobs:
             matrix=$(echo "$all_tests" | jq -c "[.[] | select(.model | contains(\"${{ inputs.model }}\"))]")
           fi
 
-          # For jobs that already launch with --data_parallel_size, run
-          # multiple benchmark-only experiments that vary client-side
-          # in-flight load. This keeps the benchmark result schema unchanged
-          # (same `vllm bench serve` output) while giving us several data
-          # points per DP job without needing per-experiment server restarts.
+          # Expand selected DP jobs into several nightly experiments that vary
+          # server-side max_num_seqs. This is the actual batch-capacity knob,
+          # unlike benchmark-only client-side load controls such as
+          # max-concurrency.
           matrix=$(echo "$matrix" | jq -c '
-            map(
-              if ((.["additional-server-args"] // "") | contains("--data_parallel_size ")) then
-                . + {
-                  benchmark_step_timeout: (.["benchmark-timeout"] * 3),
-                  benchmark_experiments: [
-                    {
-                      "name": "mc8",
-                      "args": "--max-concurrency 8 --metadata experiment=mc8 max_concurrency=8"
-                    },
-                    {
-                      "name": "mc16",
-                      "args": "--max-concurrency 16 --metadata experiment=mc16 max_concurrency=16"
-                    },
-                    {
-                      "name": "mc32",
-                      "args": "--max-concurrency 32 --metadata experiment=mc32 max_concurrency=32"
-                    }
-                  ]
-                }
+            [ .[] as $job |
+              if ($job.server_max_num_seqs_experiments // null) then
+                [ $job.server_max_num_seqs_experiments[] as $max_num_seqs |
+                  $job
+                  | .name = ($job.name + " [max_num_seqs=" + ($max_num_seqs | tostring) + "]")
+                  | .server_max_num_seqs = $max_num_seqs
+                  | del(.server_max_num_seqs_experiments)
+                ]
               else
-                .
+                [ $job ]
               end
-            )')
+            ] | add')
 
           echo "matrix=$(echo "$matrix" | jq -c .)" >> $GITHUB_OUTPUT
 
@@ -565,6 +556,12 @@ jobs:
             ADDITIONAL_SERVER_ARGS=()
           fi
 
+          if [ -n "${{ matrix.test-group.server_max_num_seqs }}" ]; then
+            SERVER_MAX_NUM_SEQS_ARGS=(--max_num_seqs "${{ matrix.test-group.server_max_num_seqs }}")
+          else
+            SERVER_MAX_NUM_SEQS_ARGS=()
+          fi
+
           DEFAULT_CHAT_TEMPLATE_KWARGS_RAW='${{ matrix.test-group.default-chat-template-kwargs }}'
           if [ -n "$DEFAULT_CHAT_TEMPLATE_KWARGS_RAW" ]; then
             DEFAULT_CHAT_TEMPLATE_KWARGS=(--default-chat-template-kwargs "$DEFAULT_CHAT_TEMPLATE_KWARGS_RAW")
@@ -614,6 +611,7 @@ jobs:
           declare -a VLLM_SERVER_ARGS
           VLLM_SERVER_ARGS+=(--model "$HF_MODEL")
           VLLM_SERVER_ARGS+=("${ADDITIONAL_SERVER_ARGS[@]}")
+          VLLM_SERVER_ARGS+=("${SERVER_MAX_NUM_SEQS_ARGS[@]}")
           VLLM_SERVER_ARGS+=("${DEFAULT_CHAT_TEMPLATE_KWARGS[@]}")
           VLLM_SERVER_ARGS+=("${ADDITIONAL_CONFIG[@]}")
 
@@ -696,7 +694,7 @@ jobs:
           exit 1
 
       - name: 📐 Run benchmark
-        timeout-minutes: ${{ matrix.test-group.benchmark_step_timeout || matrix.test-group.benchmark-timeout }}
+        timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
         uses: ./docker-job/.github/actions/run-with-log
         with:
           log-file: ${{ env.FILE_BENCHMARK_LOG }}
@@ -708,97 +706,38 @@ jobs:
             fi
 
             BENCHMARK_NUM_PROMPTS=${{ matrix.test-group.benchmark-num-prompts || 32 }}
-            BENCHMARK_EXPERIMENTS_JSON='${{ toJson(matrix.test-group.benchmark_experiments) }}'
-            RESULT_MANIFEST="output/vllm_result_files.txt"
-            : > "$RESULT_MANIFEST"
 
-            run_benchmark_experiment() {
-              local experiment_name="$1"
-              local experiment_args_raw="$2"
-              local result_file="$3"
-              local experiment_num_prompts="$4"
-
-              if [ -n "$experiment_args_raw" ]; then
-                EXPERIMENT_ARGS=($experiment_args_raw)
-              else
-                EXPERIMENT_ARGS=()
-              fi
-
-              echo "Running benchmark experiment '$experiment_name' -> $result_file"
-
-              vllm bench serve \
-                --backend vllm \
-                --model ${{ matrix.test-group.model }} \
-                --dataset-name random \
-                --random-input-len 100 \
-                --random-output-len 100 \
-                --num-prompts "$experiment_num_prompts" \
-                --ignore-eos \
-                --percentile-metrics ttft,tpot,itl,e2el \
-                --save-result \
-                --result-filename "$result_file" \
-                "${ADDITIONAL_BENCHMARK_ARGS[@]}" \
-                "${EXPERIMENT_ARGS[@]}"
-
-              echo "$result_file" >> "$RESULT_MANIFEST"
-            }
-
-            if [ "$BENCHMARK_EXPERIMENTS_JSON" = "null" ]; then
-              run_benchmark_experiment \
-                "baseline" \
-                "" \
-                "output/vllm_result.json" \
-                "$BENCHMARK_NUM_PROMPTS"
-            else
-              while IFS= read -r experiment; do
-                EXPERIMENT_NAME=$(jq -r '.name' <<<"$experiment")
-                EXPERIMENT_ARGS_RAW=$(jq -r '.args // ""' <<<"$experiment")
-                EXPERIMENT_NUM_PROMPTS=$(jq -r '.num_prompts // empty' <<<"$experiment")
-                if [ -z "$EXPERIMENT_NUM_PROMPTS" ]; then
-                  EXPERIMENT_NUM_PROMPTS="$BENCHMARK_NUM_PROMPTS"
-                fi
-
-                run_benchmark_experiment \
-                  "$EXPERIMENT_NAME" \
-                  "$EXPERIMENT_ARGS_RAW" \
-                  "output/vllm_result_${EXPERIMENT_NAME}.json" \
-                  "$EXPERIMENT_NUM_PROMPTS"
-              done < <(jq -c '.[]' <<<"$BENCHMARK_EXPERIMENTS_JSON")
-            fi
+            vllm bench serve \
+              --backend vllm \
+              --model ${{ matrix.test-group.model }} \
+              --dataset-name random \
+              --random-input-len 100 \
+              --random-output-len 100 \
+              --num-prompts "$BENCHMARK_NUM_PROMPTS" \
+              --ignore-eos \
+              --percentile-metrics ttft,tpot,itl,e2el \
+              --save-result \
+              --result-filename output/vllm_result.json \
+              "${ADDITIONAL_BENCHMARK_ARGS[@]}"
       - name: Verify benchmark
         run: |
           # `vllm bench serve` exits 0 even when individual requests fail (a crashed
           # engine surfaces as failed requests, not a non-zero exit). Gate on the saved result and
           # require EVERY request to complete successfully.
-          RESULT_MANIFEST="output/vllm_result_files.txt"
-          if [ -f "$RESULT_MANIFEST" ]; then
-            mapfile -t RESULT_FILES < "$RESULT_MANIFEST"
-          else
-            RESULT_FILES=("output/vllm_result.json")
-          fi
-
-          if [ ${#RESULT_FILES[@]} -eq 0 ]; then
-            echo "❌ No benchmark result files were recorded"
+          RESULT_JSON="output/vllm_result.json"
+          if [ ! -f "$RESULT_JSON" ]; then
+            echo "❌ Benchmark result file not found ($RESULT_JSON) — the benchmark did not complete"
+            echo "Check out the server log in a step below."
             exit 1
           fi
-
-          for RESULT_JSON in "${RESULT_FILES[@]}"; do
-            if [ ! -f "$RESULT_JSON" ]; then
-              echo "❌ Benchmark result file not found ($RESULT_JSON) — the benchmark did not complete"
-              echo "Check out the server log in a step below."
-              exit 1
-            fi
-
-            completed=$(python3 -c "import json; print(json.load(open('$RESULT_JSON'))['completed'])")
-            expected=$(python3 -c "import json; print(json.load(open('$RESULT_JSON'))['num_prompts'])")
-            if [ "$completed" != "$expected" ]; then
-              echo "❌ Only $completed/$expected requests completed successfully in $RESULT_JSON (require all)"
-              echo "Check out the server log in a step below."
-              exit 1
-            fi
-
-            echo "✅ All $expected requests completed successfully in $RESULT_JSON"
-          done
+          completed=$(python3 -c "import json; print(json.load(open('$RESULT_JSON'))['completed'])")
+          expected=$(python3 -c "import json; print(json.load(open('$RESULT_JSON'))['num_prompts'])")
+          if [ "$completed" != "$expected" ]; then
+            echo "❌ Only $completed/$expected requests completed successfully (require all)"
+            echo "Check out the server log in a step below."
+            exit 1
+          fi
+          echo "✅ All $expected requests completed successfully"
 
       - name: 🧠 Run coherence guard (verbatim echo)
         if: ${{ matrix.test-group.coherence-test }}
@@ -964,15 +903,7 @@ jobs:
         if: always()
         continue-on-error: true
         run: |
-          RESULT_MANIFEST="output/vllm_result_files.txt"
-          if [ -f "$RESULT_MANIFEST" ]; then
-            while IFS= read -r result_file; do
-              if [ -f "$result_file" ]; then
-                echo "===== $result_file ====="
-                cat "$result_file"
-              fi
-            done < "$RESULT_MANIFEST"
-          elif [ -f output/vllm_result.json ]; then
+          if [ -f output/vllm_result.json ]; then
             cat output/vllm_result.json
           fi
 
@@ -1024,6 +955,160 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
+      - name: Download benchmark artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        continue-on-error: true
+        with:
+          pattern: vllm_output_*
+          path: benchmark_artifacts
+      - name: Summarize benchmark sweeps
+        if: always()
+        continue-on-error: true
+        shell: bash
+        env:
+          BENCHMARK_ARTIFACTS_DIR: benchmark_artifacts
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          root = Path(os.environ["BENCHMARK_ARTIFACTS_DIR"])
+          if not root.exists():
+              print("No benchmark artifacts directory found; skipping sweep summary.")
+              raise SystemExit(0)
+
+          result_paths = sorted(root.rglob("vllm_result.json"))
+          if not result_paths:
+              print("No benchmark result json files found; skipping sweep summary.")
+              raise SystemExit(0)
+
+          artifact_re = re.compile(r"^vllm_output_(.*)_([0-9a-fA-F-]{36})$")
+          suffix_patterns = [
+              (re.compile(r"^(.*) \[max_num_seqs=(\d+)\]$"), "max_num_seqs"),
+              (re.compile(r"^(.*) \[mc=(\d+)\]$"), "max_concurrency"),
+          ]
+
+          groups = {}
+          for result_path in result_paths:
+              rel = result_path.relative_to(root)
+              artifact_name = rel.parts[0]
+              match = artifact_re.match(artifact_name)
+              safe_name = match.group(1) if match else artifact_name
+              display_name = safe_name.replace("_", " ")
+
+              base_name = display_name
+              experiment_axis = None
+              experiment_value = None
+              for pattern, axis_name in suffix_patterns:
+                  suffix_match = pattern.match(display_name)
+                  if suffix_match:
+                      base_name = suffix_match.group(1)
+                      experiment_axis = axis_name
+                      experiment_value = int(suffix_match.group(2))
+                      break
+
+              with result_path.open("r", encoding="utf-8") as fh:
+                  data = json.load(fh)
+
+              row = {
+                  "experiment_value": experiment_value,
+                  "request_throughput": float(data.get("request_throughput", 0.0)),
+                  "output_throughput": float(data.get("output_throughput", 0.0)),
+                  "total_token_throughput": float(data.get("total_token_throughput", 0.0)),
+                  "mean_ttft_ms": float(data.get("mean_ttft_ms", 0.0)),
+                  "mean_tpot_ms": float(data.get("mean_tpot_ms", 0.0)),
+                  "p99_e2el_ms": float(data.get("p99_e2el_ms", 0.0)),
+              }
+
+              group = groups.setdefault(
+                  base_name,
+                  {"axis": experiment_axis, "rows": []},
+              )
+              if group["axis"] is None and experiment_axis is not None:
+                  group["axis"] = experiment_axis
+              group["rows"].append(row)
+
+          def _format_metric(value: float, best: bool) -> str:
+              text = f"{value:.2f}"
+              return f"*{text}" if best else text
+
+          def _print_ascii_table(title: str, headers: list[str], rows: list[list[str]]) -> str:
+              widths = [len(header) for header in headers]
+              for row in rows:
+                  for i, cell in enumerate(row):
+                      widths[i] = max(widths[i], len(cell))
+              border = "+" + "+".join("-" * (width + 2) for width in widths) + "+"
+              lines = [title, border]
+              lines.append("|" + "|".join(f" {headers[i].ljust(widths[i])} " for i in range(len(headers))) + "|")
+              lines.append(border)
+              for row in rows:
+                  lines.append("|" + "|".join(f" {row[i].rjust(widths[i])} " for i in range(len(row))) + "|")
+              lines.append(border)
+              return "\n".join(lines)
+
+          summary_blocks = []
+          for base_name in sorted(groups):
+              group = groups[base_name]
+              rows = group["rows"]
+              axis = group["axis"]
+              if axis is None or len(rows) < 2:
+                  continue
+
+              rows.sort(key=lambda item: item["experiment_value"])
+
+              best_req = max(row["request_throughput"] for row in rows)
+              best_out = max(row["output_throughput"] for row in rows)
+              best_total = max(row["total_token_throughput"] for row in rows)
+              best_ttft = min(row["mean_ttft_ms"] for row in rows)
+              best_tpot = min(row["mean_tpot_ms"] for row in rows)
+              best_e2el = min(row["p99_e2el_ms"] for row in rows)
+
+              headers = [
+                  axis,
+                  "req/s",
+                  "out tok/s",
+                  "total tok/s",
+                  "mean TTFT",
+                  "mean TPOT",
+                  "p99 E2EL",
+              ]
+              table_rows = []
+              for row in rows:
+                  table_rows.append(
+                      [
+                          str(row["experiment_value"]),
+                          _format_metric(row["request_throughput"], row["request_throughput"] == best_req),
+                          _format_metric(row["output_throughput"], row["output_throughput"] == best_out),
+                          _format_metric(row["total_token_throughput"], row["total_token_throughput"] == best_total),
+                          _format_metric(row["mean_ttft_ms"], row["mean_ttft_ms"] == best_ttft),
+                          _format_metric(row["mean_tpot_ms"], row["mean_tpot_ms"] == best_tpot),
+                          _format_metric(row["p99_e2el_ms"], row["p99_e2el_ms"] == best_e2el),
+                      ]
+                  )
+
+              block = _print_ascii_table(
+                  title=f"Benchmark sweep summary: {base_name}",
+                  headers=headers,
+                  rows=table_rows,
+              )
+              summary_blocks.append(block)
+
+          if not summary_blocks:
+              print("No multi-experiment benchmark groups found in downloaded artifacts.")
+              raise SystemExit(0)
+
+          summary_text = "\n\n".join(summary_blocks) + "\n\n* Throughput columns: higher is better. Latency columns: lower is better."
+          print(summary_text)
+
+          step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if step_summary:
+              with open(step_summary, "a", encoding="utf-8") as fh:
+                  fh.write("\n## Benchmark Sweep Summary\n\n```text\n")
+                  fh.write(summary_text)
+                  fh.write("\n```\n")
+          PY
       - id: ai-run-summary
         continue-on-error: true
         uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main
