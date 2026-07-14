@@ -664,3 +664,89 @@ def test_gate_logit_precision(mesh_device, sp_axis, tp_axis, num_links, topology
 
     logger.info("\n".join(["", "=" * 90, "GATE-LOGIT PRECISION SUMMARY complete", "=" * 90]))
     assert not failures, "\n".join(failures)
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology"),
+    [pytest.param((4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, id="ring_bh_4x8sp1tp0")],
+    indirect=["mesh_device", "device_params"],
+)
+def test_merge_is_not_the_reblock(mesh_device, sp_axis, tp_axis, num_links, topology):
+    """Is the merged Q/K/V what a RE-BLOCKED standalone to_qkv produces, or something else?
+
+    The merge moves attn1's stage-2 to_qkv from (4864,4096,3072)->(10,4,12) to
+    (4864,4096,4096)->(5,8,16). That was assumed to be a pure re-blocking — same math, different
+    fp reduction order — and TT_DIT_MM_REBLOCK was built to price exactly that: it forces the
+    STANDALONE to_qkv onto (5,8,16) without changing a single weight. End to end that control costs
+    frame-PCC 0.9978, which was then adopted as the precision noise floor.
+
+    But the merged pipeline scores 0.868 against the baseline AND 0.868 against that very control.
+    The control lands next to the baseline; the merge does not land next to the control. So if the
+    merge were only a re-blocking, the re-blocked standalone arm would reproduce the merged Q/K/V
+    exactly. This measures whether it does:
+
+        P = standalone, stock blocking      (10,4,12)
+        R = standalone, forced (5,8,16)     — the control: same weights, merged arm's blocking
+        M = merged                          (5,8,16) natively, N=4096, chunks=4
+
+    R vs M is the whole question. Bit-identical => the merge IS the re-blocking and the e2e
+    difference lives somewhere else entirely. Different => the merged matmul is NOT just re-blocked,
+    the "noise floor" was calibrated against a perturbation the merge does not make, and the number
+    to explain is how P->M differs from P->R.
+    """
+    checkpoint = _resolve_checkpoint_22b("fast")
+    if not os.path.exists(checkpoint):
+        pytest.skip(f"22B checkpoint not found at {checkpoint}")
+
+    M, dim = 4864, 4096  # attn1, stage 2, per-device video sequence
+    parallel_config = DiTParallelConfig(
+        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
+        sequence_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[sp_axis], mesh_axis=sp_axis),
+        tensor_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[tp_axis], mesh_axis=tp_axis),
+    )
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+
+    block0 = _block0_state_dict(checkpoint)
+    sub = {k[len("attn1.") :]: v for k, v in block0.items() if k.startswith("attn1.")}
+
+    kwargs = dict(
+        dim=dim,
+        num_heads=NUM_HEADS,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        is_self=True,
+        apply_gated_attention=True,
+    )
+    torch.manual_seed(0)
+    merged = _build(True, **kwargs)
+    plain = _build(False, **kwargs)
+    merged.load_torch_state_dict({k: v.clone() for k, v in sub.items()}, strict=False)
+    plain.load_torch_state_dict({k: v.clone() for k, v in sub.items()}, strict=False)
+
+    x = torch.randn(1, 1, M, dim)
+    x_tt = from_torch(
+        x, device=mesh_device, layout=ttnn.Layout.TILE, dtype=ttnn.bfloat16, mesh_axes=[None, None, None, tp_axis]
+    )
+    gather_w = lambda t: to_torch(t, mesh_axes=[None, None, None, tp_axis])  # noqa: E731
+
+    def project(attn):
+        out = attn.to_qkv(x_tt, compute_kernel_config=attn.mm_compute_kernel_config, parallel_config=parallel_config)
+        return [gather_w(t) for t in out[:3]]  # q, k, v — drop the merged gate chunk
+
+    # The merged arm's blocking, forced onto the standalone weights. Same math, same weights.
+    REBLOCK = "4864,4096,3072=5,8,16,1,4"
+
+    P = project(plain)
+    os.environ["TT_DIT_MM_REBLOCK"] = REBLOCK
+    try:
+        R = project(plain)
+    finally:
+        os.environ.pop("TT_DIT_MM_REBLOCK", None)
+    Mg = project(merged)
+
+    logger.info("===== attn1 to_qkv: merge vs re-block (stage 2, real block-0 weights) =====")
+    for i, nm in enumerate("QKV"):
+        logger.info("  " + _fmt(f"{nm}  P->R  (reblock control)", _err_stats(P[i], R[i])))
+        logger.info("  " + _fmt(f"{nm}  P->M  (the merge)", _err_stats(P[i], Mg[i])))
+        logger.info("  " + _fmt(f"{nm}  R->M  (is the merge the reblock?)", _err_stats(R[i], Mg[i])))
