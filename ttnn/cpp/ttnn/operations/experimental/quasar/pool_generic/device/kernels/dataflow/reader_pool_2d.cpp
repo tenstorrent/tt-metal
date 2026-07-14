@@ -106,6 +106,13 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 const uint32_t read_offset =
                     in_l1_read_base_addr + (stick_offset * shard_width_bytes + c_i * MAX_BYTES_PER_REDUCTION);
 #ifdef ARCH_QUASAR
+                // [DIAG cache-vs-data] Invalidate the source window bytes BEFORE any read (the POOLSRC DPRINT
+                // below AND the copy). Decisive test: if POOLSRC now shows ~0.032 (row0/1) the earlier 0.4375
+                // was stale DM cache and this is the fix; if POOLSRC STILL shows 0.4375 the input data at base
+                // is genuinely wrong (not cache) and coherency is a red herring.
+                invalidate_l2_cache_range(read_offset, static_cast<size_t>(read_bytes * w_multiple));
+#endif
+#ifdef ARCH_QUASAR
                 // [DIAG 64c reconfig escape] Dump the SOURCE the reader gathers for the first few windows:
                 // base + stick_offset + the actual read address + the source values. golden out_stick0 ~0.032
                 // (input row1); if src[] here already reads ~0.44 (row13) the reader/base is wrong; if src[]
@@ -137,13 +144,6 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                     volatile tt_l1_ptr uint32_t* rp_src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(read_offset);
                     volatile tt_l1_ptr uint32_t* rp_dst =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in_cb.get_write_ptr() + write_offset);
-                    // Read-side coherency (64c reconfig-escape fix): the input shard is host/NoC-written to TL1,
-                    // bypassing this DM core's L1/L2 cache. This gather is a CPU load, so without a read
-                    // invalidate a prior op (32c before 64c) leaves stale cached lines here -> the reduce
-                    // consumes stale data (passes alone = cold cache; fails after another op). Invalidate the
-                    // exact source bytes right before the load -- read-side analog of the write-back flush below.
-                    invalidate_l2_cache_range(
-                        reinterpret_cast<uintptr_t>(rp_src), static_cast<size_t>(read_bytes * w_multiple));
                     const uint32_t rp_nwords = (read_bytes * w_multiple) >> 2;
                     for (uint32_t rp_i = 0; rp_i < rp_nwords; ++rp_i) {
                         rp_dst[rp_i] = rp_src[rp_i];
