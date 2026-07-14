@@ -2,16 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Init-hoisting equality — HOISTED side (G5 / init-hoisting).
-//
-// One eltwise_chain call over N tiles. The chain is uniform (single CopyTile math-MOP + single
-// SFPU op, consistent CBs), so chain_hoist_math_mop_v && chain_hoist_sfpu_v are true and the
-// per-element init is emitted ONCE at boot (hoist_compute_init), not per tile
-// (eltwise_chain.inl:2010-2042). Same op (Exp) applied to every tile -> "same data".
-//
-// Paired with hoist_per_tile.cpp (init re-emitted per tile). For identical input the two outputs
-// must be bit-identical: hoisting the init out of the tile loop is a pure emission optimization
-// and must not change a single bit.
+// Init-hoisting equality — HOISTED side: one eltwise_chain over N tiles. The chain is uniform
+// (single CopyTile math-MOP + single SFPU op, consistent CBs), so the per-element init is emitted
+// ONCE at boot (hoist_compute_init), not per tile. Paired with hoist_per_tile.cpp; for identical
+// input the two outputs must be bit-identical — hoisting is a pure emission optimization.
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
