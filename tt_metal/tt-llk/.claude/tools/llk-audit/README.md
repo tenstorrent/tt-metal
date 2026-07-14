@@ -43,7 +43,7 @@ in `registry.py`; you rarely touch a checker and never the C++.**
 | `srcreg-bank` | SrcA/SrcB data-valid handshake control points; raw `SETDVALID` on Blackhole (ISA-unsupported) | `RAW_SETDVALID_BH` / `DVALID_SET` / `DVALID_CLEAR` |
 | `mailbox-sync` | in-tree RISC↔RISC mailbox FIFO endpoints + writer↔reader pairing by directed channel | `PAIRED_CHANNEL` / `UNPAIRED_ENDPOINT` / `UNRESOLVED_ENDPOINT` |
 | `cb-sync` † | circular-buffer reserve/push & wait/pop credit balance per CB (within a function) | `CB_RESERVE_PUSH_IMBALANCE` / `CB_WAIT_POP_IMBALANCE` |
-| `noc-sync` † | NoC credit signal (`noc_semaphore_inc/set/mcast`) with no preceding write flush/barrier | `NOC_SIGNAL_NO_FLUSH` |
+| `noc-sync` † | NoC credit signal (`noc_semaphore_inc/set_remote/mcast`) with no preceding write flush/barrier | `NOC_SIGNAL_NO_FLUSH` |
 | `noc-atomic-exit` † | non-posted NoC atomic (`noc_semaphore_inc` / remote `up`) left in flight at kernel exit (no following `noc_async_atomic_barrier` / `noc_async_full_barrier`) | `NO_ATOMIC_BARRIER_AT_EXIT` |
 | `noc-read-barrier` † | inbound `noc_async_read` consumed (`cb_push_back` / `tt_memmove`) before its `noc_async_read_barrier` | `READ_CONSUMED_BEFORE_BARRIER` |
 | `noc-l1-invalidate` † | (Blackhole) hand-rolled volatile-L1 poll of a remote flag with no `invalidate_l1_cache` | `MISSING_L1_INVALIDATE` |
