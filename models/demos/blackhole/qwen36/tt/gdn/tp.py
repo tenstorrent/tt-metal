@@ -651,14 +651,19 @@ class TPGatedDeltaNet:
         B, T = x.shape[0], x.shape[1]
         D = self.qkv_dim_tp
 
-        qkvz = ttnn.linear(x, tw["qkvz"], compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        qkv = ttnn.slice(qkvz, (0, 0, 0), (B, T, D))
-        z = ttnn.slice(qkvz, (0, 0, D), (B, T, self.qkvz_dim_tp))
-        ttnn.deallocate(qkvz)
-        ab = ttnn.linear(x, tw["ab"], compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        a = ttnn.slice(ab, (0, 0, 0), (B, T, Nv))
-        b = ttnn.slice(ab, (0, 0, Nv), (B, T, 2 * Nv))
-        ttnn.deallocate(ab)
+        # Route through the shared per-token projection (handles _fuse_ab/_fuse_agmm — required
+        # when the caller's norm skipped its post-AG and x arrives K-sharded, e.g. prefill_paged_
+        # grouped). A plain ttnn.linear(x, tw["qkvz"]) here would (a) mismatch the K-sharded width
+        # against the fused-weight's full-K height, and (b) KeyError on tw["ab"], which doesn't
+        # exist when _fuse_ab folds a/b into tw["qkvz"]. Flatten the batch dim into the token dim
+        # (the projection is per-token; user boundaries don't matter to a linear layer) since
+        # _project_qkvzab's slicing assumes a leading dim of 1.
+        x_flat = ttnn.reshape(x, (1, B * T, x.shape[-1]))
+        qkv_flat, z_flat, a_flat, b_flat = self._project_qkvzab(x_flat, B * T, out_mc=ttnn.DRAM_MEMORY_CONFIG)
+        qkv = ttnn.reshape(qkv_flat, (B, T, D))
+        z = ttnn.reshape(z_flat, (B, T, self.qkvz_dim_tp - D))
+        a = ttnn.reshape(a_flat, (B, T, Nv))
+        b = ttnn.reshape(b_flat, (B, T, Nv))
 
         # FIR causal conv1d + SiLU over each user's sequence (per-row valid_len picks each user's
         # decode conv window). Chunk-outer carry: left-context = previous chunk's last K-1 inputs.
