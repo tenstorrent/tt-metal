@@ -275,11 +275,13 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToA
         ProgramRunArgs run_params;
         ProgramRunArgs::KernelRunArgs sender_run_params{.kernel = sender_spec.unique_id};
         for (auto& mst_logical_core : corerange_to_cores(mst_logical_core_set)) {
-            sender_run_params.runtime_arg_values.push_back(
-                {.node = mst_logical_core,
-                 .args = {
-                     {"num_of_transactions", (uint32_t)test_config.num_of_transactions},
-                     {"pages_per_transaction", (uint32_t)test_config.pages_per_transaction}}});
+            AddRuntimeArgsForNode(
+                sender_run_params.runtime_arg_values,
+                mst_logical_core,
+                {
+                    {"num_of_transactions", (uint32_t)test_config.num_of_transactions},
+                    {"pages_per_transaction", (uint32_t)test_config.pages_per_transaction},
+                });
             if (!test_config.is_multicast) {
                 sender_run_params.advanced_options.runtime_varargs.emplace(mst_logical_core, sub_worker_coordinates);
             }

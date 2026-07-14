@@ -162,11 +162,13 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const AllFro
     ProgramRunArgs run_params;
     ProgramRunArgs::KernelRunArgs requestor_run_params{.kernel = requestor_spec.unique_id};
     for (auto& mst_logical_core : corerange_to_cores(mst_logical_core_set)) {
-        requestor_run_params.runtime_arg_values.push_back(
-            {.node = mst_logical_core,
-             .args = {
-                 {"num_of_transactions", (uint32_t)test_config.num_of_transactions_per_subordinate},
-                 {"bytes_per_transaction", (uint32_t)bytes_per_transaction}}});
+        AddRuntimeArgsForNode(
+            requestor_run_params.runtime_arg_values,
+            mst_logical_core,
+            {
+                {"num_of_transactions", (uint32_t)test_config.num_of_transactions_per_subordinate},
+                {"bytes_per_transaction", (uint32_t)bytes_per_transaction},
+            });
         requestor_run_params.advanced_options.runtime_varargs.emplace(mst_logical_core, sub_worker_coordinates);
     }
     run_params.kernel_run_args.push_back(requestor_run_params);

@@ -284,7 +284,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
     params.kernel_run_args = {
         ProgramRunArgs::KernelRunArgs{
             .kernel = KernelSpecName{"producer"},
-            .runtime_arg_values = {{node, {{"src_addr", input_buffer->address()}}}},
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"src_addr", input_buffer->address()}}),
             .common_runtime_arg_values = {{"num_entries", num_transfers}},
             .advanced_options =
                 AdvancedKernelRunArgs{
@@ -294,7 +294,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
         },
         ProgramRunArgs::KernelRunArgs{
             .kernel = KernelSpecName{"consumer"},
-            .runtime_arg_values = {{node, {{"dst_addr", output_buffer->address()}}}},
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"dst_addr", output_buffer->address()}}),
             .common_runtime_arg_values = {{"num_entries", num_transfers}},
             .advanced_options =
                 AdvancedKernelRunArgs{
@@ -405,7 +405,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
     params.kernel_run_args = {
         ProgramRunArgs::KernelRunArgs{
             .kernel = KernelSpecName{"compute"},
-            .runtime_arg_values = {{node, {{"input_offset", kInputOffset}}}},
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"input_offset", kInputOffset}}),
             .common_runtime_arg_values = {{"num_tiles", num_transfers}},
             .advanced_options =
                 AdvancedKernelRunArgs{
@@ -499,12 +499,12 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopback) {
     params.kernel_run_args = {
         ProgramRunArgs::KernelRunArgs{
             .kernel = KernelSpecName{"producer"},
-            .runtime_arg_values = {{node, {{"src_addr", input_buffer->address()}}}},
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"src_addr", input_buffer->address()}}),
             .common_runtime_arg_values = {{"num_entries", num_transfers}},
         },
         ProgramRunArgs::KernelRunArgs{
             .kernel = KernelSpecName{"consumer"},
-            .runtime_arg_values = {{node, {{"dst_addr", output_buffer->address()}}}},
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"dst_addr", output_buffer->address()}}),
             .common_runtime_arg_values = {{"num_entries", num_transfers}},
         },
     };
@@ -591,7 +591,7 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopbackCompute) {
     params.kernel_run_args = {
         ProgramRunArgs::KernelRunArgs{
             .kernel = KernelSpecName{"compute"},
-            .runtime_arg_values = {{node, {{"input_offset", kInputOffset}}}},
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"input_offset", kInputOffset}}),
             .common_runtime_arg_values = {{"num_tiles", num_transfers}},
         },
         ProgramRunArgs::KernelRunArgs{
@@ -1028,7 +1028,7 @@ TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = KernelSpecName{"scratch_kernel"},
-        .runtime_arg_values = {{node, {{"report_addr", kReportAddr}}}},
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"report_addr", kReportAddr}}),
     }};
     SetProgramRunArgs(program, params);
 
@@ -1202,7 +1202,8 @@ void kernel_main() {
     auto consumer_args = [&]() {
         return ProgramRunArgs::KernelRunArgs{
             .kernel = KernelSpecName{"consumer"},
-            .runtime_arg_values = {{node, {{"dst_addr", output_buffer->address()}, {"bank_id", 0u}}}},
+            .runtime_arg_values =
+                MakeRuntimeArgsForSingleNode(node, {{"dst_addr", output_buffer->address()}, {"bank_id", 0u}}),
         };
     };
 
@@ -1386,7 +1387,8 @@ void kernel_main() {
         ProgramRunArgs params;
         params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
             .kernel = KernelSpecName{"consumer"},
-            .runtime_arg_values = {{node, {{"dst_addr", output_buffer->address()}, {"bank_id", 0u}}}},
+            .runtime_arg_values =
+                MakeRuntimeArgsForSingleNode(node, {{"dst_addr", output_buffer->address()}, {"bank_id", 0u}}),
         }};
         params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"stage"}, .num_entries = dfb_num_entries});
         SetProgramRunArgs(program, params);

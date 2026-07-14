@@ -231,7 +231,7 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = {{node, {{"batch_start", 0u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"batch_start", 0u}}),
             .common_runtime_arg_values =
                 {{"Mt", p.Mt},
                  {"Kt", p.Kt},
@@ -243,7 +243,7 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = {{node, {{"batch_start", 0u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"batch_start", 0u}}),
             .common_runtime_arg_values = {{"Mt", p.Mt}, {"Nt", p.Nt}, {"batch", p.B_per_core}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
@@ -306,7 +306,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = {{node0, {{"batch_start", 0u}}}, {node1, {{"batch_start", 1u}}}},
+            .runtime_arg_values = {{"batch_start", {{node0, 0u}, {node1, 1u}}}},
             .common_runtime_arg_values =
                 {{"Mt", p.Mt},
                  {"Kt", p.Kt},
@@ -318,7 +318,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = {{node0, {{"batch_start", 0u}}}, {node1, {{"batch_start", 1u}}}},
+            .runtime_arg_values = {{"batch_start", {{node0, 0u}, {node1, 1u}}}},
             .common_runtime_arg_values = {{"Mt", p.Mt}, {"Nt", p.Nt}, {"batch", p.B_per_core}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
