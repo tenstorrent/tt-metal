@@ -82,6 +82,31 @@ degraded-note suppressed AND can let a `dirB/foo.h` finding surface in a scope m
 - **Fix hazard:** none of substance — a path-keyed rewrite is behavior-preserving wherever basenames
   are unique (today, everywhere), so there is no live divergence to regression-test it against.
 
+### L6 — extractor emits no `pointer_write`/`pointer_read` for MEMBER-ACCESS writes (`ptr->field=`)
+`extractor/llk_extract.cpp` matches an assignment LHS only as `ArraySubscriptExpr` (`ptr[i]=`) or
+`UnaryOperator`/`UO_Deref` (`*ptr=`); a `MemberExpr` LHS (`ptr->field = v`) matches neither, so NO fact
+is emitted — systemic across BOTH `VisitBinaryOperator` (writes) AND `VisitImplicitCastExpr` (the
+`pointer_read` poll source). A cfg/MMIO write via a typed-struct pointer member access is thus
+invisible to mmio-race / cfg-word / reconfig, and a `while(flag->field)` volatile member poll is
+invisible to noc-l1-invalidate. Worse than L4: the fact is never emitted, so it is invisible even to a
+raw `facts.<arch>.jsonl` inspection (L4's writes ARE emitted, just unrouted).
+- **Risk:** CAP-REDUCTION — a silent miss (no fact, no finding).
+- **Live today:** QSR-only recall ASYMMETRY, not a live race. `ckernel_(unpack_)template::program`
+  program the MOP via `reinterpret_cast<mop_config_regs_t*>(MOP_CFG_BASE); mop_cfg->FIELD = …`
+  (~30 sites) — all dropped; WH/BH use the `mop_cfg[i]=` array form and ARE captured (17 mmio-race
+  NO_LOCAL_ORDERING each; 0 on QSR). Those QSR writes are ordered by the **MOP-config-bank HW
+  backpressure / `mop_sync()`** (Confluence "MOP CFG double buffering" 113017192; LLK `program()`
+  comment "in use should block, so no mop_sync() needed"), **not** TTSync (Confluence 1340276980
+  EXCEPTS `MOP_CFG` from the RQ) — so a captured candidate would be LLM-adjudicated safe exactly like
+  the WH/BH ones. The only other member-access cfg write in tt-llk (QSR `ckernel_riscv_debug.h`
+  `RISCV_DEBUG_REGS->…`) is in an uncompiled header, never in the fact base.
+- **Fix:** add a `MemberExpr` LHS branch to both visitors, capturing the member name (member writes
+  carry no numeric `index_text`, which an index-keyed checker path would need). Low-hazard (`mop_cfg`
+  provenance resolves to the base cast → `mmio_ptr`; `program` is not a `RECONFIG_FN`, so no
+  reconfig-stall false-flag) but nontrivial → deferred. Related: the QSR `AUTOTTSYNC_ORDERED` blanket
+  tag (see mmio-race `blind_spots`) over-clears the excepted/non-CFG-GPR subset these MOP writes belong
+  to — even if captured they'd need the exception-aware tagging, not a blanket auto-order.
+
 ### X1 — object-method `async_read_with_state` not recalled by `noc_is_read`
 `noc_is_read` recalls the whole free-function `noc_async_read*` family by prefix, but its
 object-method branch matches only the exact name `async_read` — so the object form
@@ -121,11 +146,14 @@ config register, so it would draw a spurious `NO_UNIT_DRAIN`.
 - **Live today:** none — no `mmio_ptr` (`mop_cfg`/cast) write sits in a reconfig-named function.
   (The `mop_cfg` sites are `ckernel_template::program` and `ckernel_unpack_template::program` — both
   compile to `function="program"` in the facts — on **WH+BH only** (17 `mmio_ptr` writes each, via
-  `mop_cfg = reinterpret_cast<…>(TENSIX_MOP_CFG_BASE)`); QSR's `program(volatile uint32_t
-  *instrn_buffer)` writes the MOP through a passed-in pointer parameter, not a base cast, so it is NOT
-  classified `mmio_ptr` (0 on QSR). Plus the experimental BH pack helpers
-  `_llk_pack_block_contiguous_` / `_llk_pack_fast_untilize_mop_patch_last_`. None are
-  `RECONFIG_FN_SUBSTR` names, so `is_reconfig_fn` skips them.)
+  `mop_cfg = reinterpret_cast<…>(TENSIX_MOP_CFG_BASE); mop_cfg[i] = …`, i.e. ARRAY-SUBSCRIPT writes).
+  QSR's `program` ALSO base-casts (`reinterpret_cast<mop_config_regs_t*>(MOP_CFG_BASE)`, its
+  `instrn_buffer` param is `[[maybe_unused]]`) but writes via `mop_cfg->FIELD =` (a typed-struct MEMBER
+  access), which the extractor does NOT emit as a `pointer_write` (see **L6**) — so QSR emits **0**
+  `program` `mmio_ptr` writes. ("0 on QSR" = 0 *program-fn* `mmio_ptr`, not 0 overall — QSR has 72
+  `mmio_ptr` writes elsewhere.) Plus the experimental BH pack helpers `_llk_pack_block_contiguous_` /
+  `_llk_pack_fast_untilize_mop_patch_last_`. None are `RECONFIG_FN_SUBSTR` names, so `is_reconfig_fn`
+  skips them.)
 - **Fix:** give reconfig-stall its own kind set excluding `mmio_ptr` (distinguishing mop- from
   cfg-provenance — see Fix hazard).
 - **Fix hazard:** **CAP-REDUCTION TRAP** — a genuine `reinterpret_cast<volatile …>`-to-cfg write in a
