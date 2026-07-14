@@ -130,20 +130,34 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                         bf16_t(sv[3]));
                 }
 #endif
-                // Window gather via the NOC read (TL1-direct, coherent) on ALL arches. QSR emulator coherency
-                // fix (64c reconfig escape): the prior ARCH_QUASAR DM CPU-copy was a craq-SIM workaround (the
-                // sim's local self-loopback NOC read dropped data). On the physical emulator that CPU read
-                // returns L1-cache-STALE input across ops -- after 32c it reads 32c's leftover (POOLSRC=0.4375)
-                // even though base is correct, and invalidate_l2 doesn't clear it (Quasar DM L1-D$ is not
-                // invalidatable). The NOC engine reads/writes TL1 directly (non-caching), so it always sees
-                // this run's freshly-uploaded input and needs no flush. NOTE: if craq-sim regresses (self-
-                // loopback drop / "all zeros in curr_in_cb"), gate the CPU-copy back for the sim only.
+#ifdef ARCH_QUASAR
+                // Quasar sim: a local self-loopback NOC read (self_ep, src_coord==dst_coord) into in_cb drops
+                // data / reads stale SRAM. The window gather is a same-core L1->L1 copy, so do it with a direct
+                // RISC copy for reliable data. read_offset and the in_cb write ptr are L1-aligned (>=16B) and
+                // read_bytes is L1-aligned, so a uint32 word copy is safe. (NOTE: the 64c-after-32c failure is
+                // NOT this path -- CPU and NOC reads BOTH see the same wrong TL1 data at base, so the input
+                // tensor's L1 data is genuinely stale after 32c, a host-upload/L1-alloc issue, not the gather.)
+                {
+                    volatile tt_l1_ptr uint32_t* rp_src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(read_offset);
+                    volatile tt_l1_ptr uint32_t* rp_dst =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in_cb.get_write_ptr() + write_offset);
+                    const uint32_t rp_nwords = (read_bytes * w_multiple) >> 2;
+                    for (uint32_t rp_i = 0; rp_i < rp_nwords; ++rp_i) {
+                        rp_dst[rp_i] = rp_src[rp_i];
+                    }
+                    // Write back the CPU-store copy to TL1 so the compute unpack (which reads in_cb from TL1)
+                    // sees it. Without this, compute reduces stale/zero in_cb.
+                    flush_l2_cache_range(
+                        reinterpret_cast<uintptr_t>(rp_dst), static_cast<size_t>(read_bytes * w_multiple));
+                }
+#else
                 noc.async_read(
                     self_ep,
                     in_cb,
                     read_bytes * w_multiple,
                     experimental::local_addr(read_offset),
                     {.offset_bytes = write_offset});
+#endif
                 // if compute is using tilize_reconfig we will only untilize the needed number of tiles rather
                 // than the entire MAX_TILES_PER_REDUCTION, thus we use a different offset for the write address
                 if constexpr (tilize_reconfig) {
@@ -392,16 +406,7 @@ void kernel_main() {
     }
     const uint32_t core_nhw_index = get_arg(args::core_nhw_index);
 
-    // Borrowed input: read the DFB RING BASE (base_addr), NOT get_read_ptr(). On the DM core get_read_ptr()
-    // returns tc_slots[tc_idx].rd_ptr (the read cursor) -- for a borrowed, never-pop_front'd input that's a
-    // leftover/unreset cursor after a prior op (32c) and lands ~447 sticks into the tensor -> the 64c
-    // reconfig escape (out_stick0 reads row13 instead of row0). base_addr is re-resolved to tensor.address()
-    // every enqueue (set_borrowed_memory_base_addr), so it is always this run's stick 0. rd_ptr == base_addr
-    // for the passing 32c/128c/192c, so reading base_addr is safe for them too. (Same DM asymmetry as
-    // get_write_ptr()->wr_ptr; this is the Metal-2.0 DFB base, per-run-patched, unlike the stale Metal-1.0
-    // get_local_cb_interface getters.)
-    const auto& in_shard_ifc = get_local_dfb_interface(in_shard_cb_id);
-    const uint32_t in_l1_read_base_addr = in_shard_ifc.tc_slots[in_shard_ifc.tc_idx].base_addr;
+    const uint32_t in_l1_read_base_addr = in_shard_cb.get_read_ptr();
     if constexpr (config_in_dram) {
         if (reader_id == 0) {
             // Inlined load_config_tensor_if_in_dram: the reader-indices tensor flows in via its
