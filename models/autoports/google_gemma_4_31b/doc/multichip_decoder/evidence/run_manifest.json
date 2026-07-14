@@ -2,6 +2,7 @@
   "stage": "04-multichip-decoder",
   "model": "google/gemma-4-31B",
   "base_git_head": "702a45e2805da8816d9896b04483f7b3bccb5472",
+  "stage_git_commit": "683adda7a3d12cc060df9ab3a36f1fd506eef234",
   "hardware": {
     "devices": "4x Blackhole P150b",
     "mesh": [1, 4],

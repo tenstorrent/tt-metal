@@ -168,3 +168,9 @@ four final profiler windows. It found no required work or hard-check gaps.
 The remaining decoder-MLP and prefill-attention profiler flags are controlled
 by the measured winning geometry and like-for-like whole-layer benchmarks;
 the Ethernet watcher limitation remains isolated to instrumentation.
+
+## Local stage commit
+
+The stage-owned implementation, tests, documentation, and evidence were
+committed locally as `683adda7a3d12cc060df9ab3a36f1fd506eef234`. Nothing was
+pushed. The follow-up commit only records this checkpoint in stage metadata.
