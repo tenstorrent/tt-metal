@@ -512,6 +512,19 @@ void kernel_main() {
                     // fault at t=4 (first DEST bank-0 reuse after a full 4-bank rotation) is the tilize's own
                     // Quasar DEST bank rotation/release (pack_dest_section_done) not freeing banks — an LLK bug.
                     PACK((llk_pack_dest_init()));
+                    // [DIAG cursor] Confirm the t=5 tilize pack OOB is the ring cursor: llk_pack writes
+                    // tc_slots[tc_idx].wr_entry_idx + t into ACT_TILIZED (t up to 15). If wr_entry_idx != 0
+                    // (the in-place matmul-partials ring rewind leaves ACT_TILIZED off ring-start) the +t
+                    // overshoots the ring around t=5. Gated to the first tilize so it flushes pre-fault.
+                    if (in0_block_w_i == 0 && in0_block_h_i == 0) {
+                        PACK(DPRINT(
+                            "TZCUR tc_idx={} wr_entry_idx={} nent={}\n",
+                            (uint32_t)get_local_dfb_interface(tilized_in0_cb_id).tc_idx,
+                            (uint32_t)get_local_dfb_interface(tilized_in0_cb_id)
+                                .tc_slots[get_local_dfb_interface(tilized_in0_cb_id).tc_idx]
+                                .wr_entry_idx,
+                            (uint32_t)cb_tilized_in0.get_total_num_entries()));
+                    }
 #endif
                     // (TZHWCFG/TZBD/TZBDTAB/TILIZEPACK probes removed — they confirmed the tilize pack BD is
                     //  correctly at tilized's base; freed DPRINT-ring slots for the TZBLK/TZPK localizer.)
