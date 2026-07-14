@@ -406,6 +406,16 @@ void kernel_main() {
     const uint32_t core_nhw_index = get_arg(args::core_nhw_index);
 
     const uint32_t in_l1_read_base_addr = in_shard_cb.get_read_ptr();
+#ifdef ARCH_QUASAR
+    // Read-side coherency (64c reconfig-escape fix): the input shard is host/NoC-written to TL1, bypassing
+    // this DM core's L1/L2 cache. Our window gather below is a CPU load, so without a read invalidate a prior
+    // op (e.g. 32c before 64c) leaves stale cached lines for this L1 region -> the reduce consumes stale data
+    // (passes alone = cold cache; fails after another op). The shard is read-only for this op, so one
+    // invalidate up front covers every (overlapping) window read. Read-side analog of the in_cb write-back
+    // flush in read_kernel_with_top_left_index and the SCRATCH2OUT-read invalidate below.
+    invalidate_l2_cache_range(
+        in_l1_read_base_addr, static_cast<size_t>(in_shard_cb.get_total_num_entries() * in_shard_cb.get_entry_size()));
+#endif
     if constexpr (config_in_dram) {
         if (reader_id == 0) {
             // Inlined load_config_tensor_if_in_dram: the reader-indices tensor flows in via its
