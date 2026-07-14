@@ -35,9 +35,10 @@ namespace tt::tt_metal {
 namespace {
 
 using namespace experimental;
-using test_helpers::MakeMinimalComputeKernel;
-using test_helpers::MakeMinimalDMKernel;
+using test_helpers::MakeMinimalGen1ComputeKernel;
 using test_helpers::MakeMinimalGen1DMKernel;
+using test_helpers::MakeMinimalGen2ComputeKernel;
+using test_helpers::MakeMinimalGen2DMKernel;
 using test_helpers::MakeMinimalWorkUnit;
 
 // Kernel paths shared with the standard DFB tests.
@@ -111,8 +112,8 @@ void run_borrowed_memory_dfb_program(
 
     // --- Producer kernel (dfb_producer.cpp) ---
     KernelSpec producer_spec = (arch == ARCH::QUASAR)
-        ? MakeMinimalDMKernel("producer", static_cast<uint8_t>(cfg.num_producers))
-        : MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
+                                   ? MakeMinimalGen2DMKernel("producer", cfg.num_producers)
+                                   : MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
     producer_spec.source = DFB_PRODUCER_KERNEL;
     producer_spec.compile_time_args = {
         {"num_entries_per_producer", entries_per_producer},
@@ -132,18 +133,16 @@ void run_borrowed_memory_dfb_program(
     KernelSpec consumer_spec;
     if (cfg.tensix_consumer) {
         // dfb_t6_consumer.cpp: drains the DFB, does not write to DRAM.
-        consumer_spec = (arch == ARCH::QUASAR)
-            ? MakeMinimalComputeKernel("consumer", static_cast<uint8_t>(cfg.num_consumers))
-            : MakeMinimalComputeKernel("consumer");
+        consumer_spec = (arch == ARCH::QUASAR) ? MakeMinimalGen2ComputeKernel("consumer", cfg.num_consumers)
+                                               : MakeMinimalGen1ComputeKernel("consumer");
         consumer_spec.source = DFB_TENSIX_CONSUMER_KERNEL;
         consumer_spec.compile_time_args = {
             {"num_entries_per_consumer", entries_per_consumer},
         };
     } else {
         // dfb_consumer.cpp: reads DFB and writes to dst_tensor.
-        consumer_spec = (arch == ARCH::QUASAR)
-            ? MakeMinimalDMKernel("consumer", static_cast<uint8_t>(cfg.num_consumers))
-            : MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
+        consumer_spec = (arch == ARCH::QUASAR) ? MakeMinimalGen2DMKernel("consumer", cfg.num_consumers)
+                                               : MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
         consumer_spec.source = DFB_DM_CONSUMER_KERNEL;
         consumer_spec.compile_time_args = {
             {"num_entries_per_consumer", entries_per_consumer},
@@ -167,11 +166,13 @@ void run_borrowed_memory_dfb_program(
     // Disable implicit sync on the borrowed DFB for every DM endpoint (Gen2 only;
     // Gen1 has no ISR-based implicit sync to opt out of).
     if (arch == ARCH::QUASAR) {
-        std::get<DataMovementHardwareConfig>(producer_spec.hw_config).gen2_config->disable_dfb_implicit_sync_for_all =
-            true;
+        auto& producer_hw_config =
+            std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(producer_spec.hw_config));
+        producer_hw_config.disable_dfb_implicit_sync_for_all = true;
         if (!cfg.tensix_consumer) {
-            std::get<DataMovementHardwareConfig>(consumer_spec.hw_config)
-                .gen2_config->disable_dfb_implicit_sync_for_all = true;
+            auto& consumer_hw_config =
+                std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(consumer_spec.hw_config));
+            consumer_hw_config.disable_dfb_implicit_sync_for_all = true;
         }
     }
 
@@ -305,9 +306,10 @@ void run_update_address_test(
     ProgramSpec spec;
     spec.name = "borrowed_dfb_update_address";
 
+    // Gen1: RISCV_0/NOC_0 producer + RISCV_1/NOC_1 consumer (MakeMinimalGen1DMKernel pairs processor→NOC).
     KernelSpec producer_spec = (arch == ARCH::QUASAR)
-        ? MakeMinimalDMKernel("producer")
-        : MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
+                                   ? MakeMinimalGen2DMKernel("producer")
+                                   : MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
     producer_spec.source = DFB_PRODUCER_KERNEL;
     producer_spec.compile_time_args = {
         {"num_entries_per_producer", num_entries},
@@ -322,8 +324,8 @@ void run_update_address_test(
     producer_spec.dfb_bindings.push_back(ProducerOf(experimental::DFBSpecName{"borrowed_dfb"}, "out"));
 
     KernelSpec consumer_spec = (arch == ARCH::QUASAR)
-        ? MakeMinimalDMKernel("consumer")
-        : MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
+                                   ? MakeMinimalGen2DMKernel("consumer")
+                                   : MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
     consumer_spec.source = DFB_DM_CONSUMER_KERNEL;
     consumer_spec.compile_time_args = {
         {"num_entries_per_consumer", num_entries},
@@ -341,10 +343,12 @@ void run_update_address_test(
     // Disable implicit sync on the borrowed DFB for both DM endpoints (Gen2 only;
     // Gen1 has no ISR-based implicit sync to opt out of).
     if (arch == ARCH::QUASAR) {
-        std::get<DataMovementHardwareConfig>(producer_spec.hw_config).gen2_config->disable_dfb_implicit_sync_for_all =
-            true;
-        std::get<DataMovementHardwareConfig>(consumer_spec.hw_config).gen2_config->disable_dfb_implicit_sync_for_all =
-            true;
+        auto& producer_hw_config =
+            std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(producer_spec.hw_config));
+        auto& consumer_hw_config =
+            std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(consumer_spec.hw_config));
+        producer_hw_config.disable_dfb_implicit_sync_for_all = true;
+        consumer_hw_config.disable_dfb_implicit_sync_for_all = true;
     }
 
     DataflowBufferSpec dfb_spec{
