@@ -1,0 +1,88 @@
+one_from_one:
+  name: One from One
+  faq:
+    - q: What does the One from One test measure?
+      a: >
+        It measures the NoC read bandwidth and latency when a single reader core
+        issues noc_async_read calls to pull data from one remote sender core.
+        This isolates unicast read performance with no contention from other cores.
+    - q: Why does bandwidth plateau at larger transaction sizes?
+      a: >
+        The NoC has a fixed link bandwidth (e.g. ~32 bytes/cycle per link on Blackhole).
+        At small transaction sizes, per-transaction overhead (header, handshake) dominates,
+        so bandwidth is low. Once the payload is large enough to amortize that overhead,
+        you hit the link-rate ceiling and bandwidth flattens.
+    - q: What are virtual channels and why do they matter?
+      a: >
+        Virtual channels (VCs) are independent logical lanes on the same physical NoC link.
+        Using different VCs allows independent transactions to make progress without
+        head-of-line blocking. The virtual channel sweep test shows whether changing the VC
+        assignment affects throughput for this single-core-pair scenario.
+    - q: How is "Bandwidth (bytes/cycle)" calculated?
+      a: >
+        Total bytes transferred divided by the elapsed cycle count measured between
+        noc_async_read issue and the corresponding noc_async_read_barrier completion.
+        This is the effective application-visible bandwidth, not raw link rate.
+    - q: What is the difference between One from One and One to One?
+      a: >
+        One from One uses noc_async_read (the reader pulls data from the sender),
+        while One to One uses noc_async_write (the sender pushes data to the receiver).
+        Both are single-source single-destination, but the direction of the initiating
+        transaction differs, which can affect latency and bandwidth characteristics.
+
+one_to_one:
+  name: One to One
+
+one_from_all:
+  name: One from All
+
+one_to_all:
+  name: One to All
+
+one_packet:
+  name: One Packet
+
+all_to_all:
+  name: All to All
+
+all_from_all:
+  name: All from All
+
+multi_interleaved:
+  name: Multi Interleaved
+
+atomics:
+  name: Atomic Semaphore
+
+core_bidirectional:
+  name: Core Bidirectional
+
+direct_write:
+  name: Direct Write
+
+dram_neighbour:
+  name: DRAM Neighbour
+
+dram_sharded:
+  name: DRAM Sharded Read
+
+dram_unary:
+  name: DRAM Unary
+
+interleaved:
+  name: Interleaved
+
+loopback:
+  name: Loopback
+
+noc_estimator_tests:
+  name: Noc Estimator
+
+pcie_read_bw:
+  name: PCIe Read
+
+pcie_write_bw:
+  name: PCIe Write
+
+transaction_id:
+  name: Transaction ID

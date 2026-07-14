@@ -5,6 +5,7 @@
 
 const DATA_BASE_PATH = "../data";
 const KNOWN_ARCHITECTURES = ["blackhole", "wormhole_b0"];
+const GROUPS_YAML_PATH = "../python/test_mappings/web_viewer_groups.yaml";
 const GITHUB_BASE =
     "https://github.com/tenstorrent/tt-metal/blob/main/tests/tt_metal/tt_metal/data_movement";
 
@@ -287,7 +288,67 @@ let state = {
     csvData: null,
     analysis: null,
     chartConfig: null,
+    groupsYaml: null,
 };
+
+// ── YAML Loading ──────────────────────────────────────────────────
+
+async function loadGroupsYaml() {
+    try {
+        const resp = await fetch(GROUPS_YAML_PATH);
+        if (!resp.ok) return;
+        const text = await resp.text();
+        state.groupsYaml = jsyaml.load(text);
+    } catch {
+        // YAML not available
+    }
+}
+
+function renderFAQ(group) {
+    const section = document.getElementById("faq-section");
+    const list = document.getElementById("faq-list");
+    list.innerHTML = "";
+
+    const yamlEntry = state.groupsYaml && state.groupsYaml[group.directory];
+    const faq = yamlEntry && yamlEntry.faq;
+
+    if (!faq || faq.length === 0) {
+        section.style.display = "none";
+        return;
+    }
+
+    section.style.display = "";
+
+    for (const item of faq) {
+        const div = document.createElement("div");
+        div.className = "faq-item";
+
+        const question = document.createElement("div");
+        question.className = "faq-question";
+
+        const chevron = document.createElement("span");
+        chevron.className = "faq-chevron";
+        chevron.textContent = "▶";
+
+        const qText = document.createElement("span");
+        qText.textContent = item.q;
+
+        question.appendChild(chevron);
+        question.appendChild(qText);
+
+        const answer = document.createElement("div");
+        answer.className = "faq-answer";
+        answer.textContent = item.a;
+
+        question.addEventListener("click", () => {
+            div.classList.toggle("open");
+        });
+
+        div.appendChild(question);
+        div.appendChild(answer);
+        list.appendChild(div);
+    }
+}
 
 // ── Column Analysis ────────────────────────────────────────────────
 
@@ -799,6 +860,7 @@ async function selectTest(group, test) {
         `${GITHUB_BASE}/${group.directory}/README.md`;
 
     renderTestList();
+    renderFAQ(group);
 
     state.availableArchs = await probeArchitectures(test);
     if (state.availableArchs.length === 0) {
@@ -865,7 +927,8 @@ function setupYAxisListeners() {
 
 // ── Init ───────────────────────────────────────────────────────────
 
-function init() {
+async function init() {
+    await loadGroupsYaml();
     renderTagChips();
     renderTestList();
 
