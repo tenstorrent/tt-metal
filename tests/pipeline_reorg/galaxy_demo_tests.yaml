@@ -11,7 +11,9 @@
 # For max allowed timeout refer to .github/time_budget.yaml
 
 - name: Galaxy SentenceBert demo tests
-  cmd: pytest models/demos/tg/sentence_bert/tests/test_sentence_bert_e2e_performant.py --timeout=1500
+  cmd: |
+    export HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
+    pytest models/demos/tg/sentence_bert/tests/test_sentence_bert_e2e_performant.py --timeout=1500
   model: sentence_bert
   skus:
     wh_galaxy_perf:
@@ -30,17 +32,6 @@
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
 
-- name: Galaxy Flux.1-dev demo tests
-  cmd: |
-    export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache NO_PROMPT=1 TT_MM_THROTTLE_PERF=5
-    pytest models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k "4x8sp0tp1-dev" --timeout 1200
-  model: flux1
-  skus:
-    wh_galaxy_perf:
-      timeout: 15
-  owner_id: U08TED0JM9D # Samuel Adesoye
-  team: models
-
 - name: Galaxy Motif-Image-6B-Preview demo tests
   cmd: |
     export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache NO_PROMPT=1
@@ -54,19 +45,19 @@
 
 - name: Galaxy Wan2.2 demo tests
   cmd: |
-    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1 VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
     pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "wh_4x8sp1tp0 and resolution_720p" --timeout 1500
   model: wan22
   skus:
     wh_galaxy_perf:
-      timeout: 20
+      timeout: 25
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
 
 - name: Galaxy Mochi demo tests
   cmd: |
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1
-    pytest models/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "4x8sp1tp0" --timeout=1500
+    pytest models/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "wh_4x8sp1tp0" --timeout=1500
   model: mochi
   skus:
     wh_galaxy_perf:

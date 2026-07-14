@@ -59,8 +59,9 @@ ALWI void tilize_block_custom(uint32_t icb, uint32_t num_chunks, uint32_t chunk,
         PACK((t6_semaphore_wait_on_zero<p_stall::STALL_PACK>(semaphore::FPU_SFPU)));
         for (uint32_t t = 0; t < chunk; t++) {
             // Datacopy
-            MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
-                dst_index + t /*dst index*/)));
+            MATH((
+                llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
+                    dst_index + t /*dst index*/, icb /*operand*/)));
             PACK((llk_pack<DST_ACCUM_MODE>(dst_index + t /*tile index*/, ocb)));
         }
         PACK(t6_semaphore_get<p_stall::PACK>(semaphore::FPU_SFPU));

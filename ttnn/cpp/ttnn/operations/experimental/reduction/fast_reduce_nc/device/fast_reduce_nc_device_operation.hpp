@@ -36,6 +36,7 @@ Tensor fast_reduce_nc(
     const std::optional<const Tensor>& output,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<DataType>& output_dtype = std::nullopt);
 
 }  // namespace ttnn::prim

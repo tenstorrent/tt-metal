@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
-import ttnn
+from tests.ttnn.nightly.unit_tests.operations.matmul.utility_functions import ttnn_attn_matmul, ttnn_group_attn_matmul
 
 
 def generate_input_shapes():
@@ -46,7 +46,7 @@ def test_attn_matmul(num_loops, in0_dtype, in1_dtype, out_dtype, device):
             tt_input_tensor_a = tt_input_tensor_a.to(device)
             tt_input_tensor_b = tt_input_tensor_b.to(device)
             compute_grid_size = device.compute_with_storage_grid_size()
-            tt_output_tensor_on_device = ttnn.experimental.attn_matmul(
+            tt_output_tensor_on_device = ttnn_attn_matmul(
                 tt_input_tensor_a,
                 tt_input_tensor_b,
                 compute_with_storage_grid_size=ttnn.CoreCoord(compute_grid_size.x, compute_grid_size.y),
@@ -111,7 +111,7 @@ def test_attn_matmul_fp32(num_loops, in_dtype, device):
                 packer_l1_acc=False,
             )
 
-            tt_output_tensor_on_device = ttnn.experimental.attn_matmul(
+            tt_output_tensor_on_device = ttnn_attn_matmul(
                 tt_input_tensor_a,
                 tt_input_tensor_b,
                 compute_with_storage_grid_size=ttnn.CoreCoord(compute_grid_size.x, compute_grid_size.y),
@@ -289,7 +289,7 @@ def test_group_attn_matmul(
         else:
             output_mem_config = interleaved_mem_config
 
-        tt_output_tensor_on_device = ttnn.experimental.group_attn_matmul(
+        tt_output_tensor_on_device = ttnn_group_attn_matmul(
             tt_input_tensor_a,
             tt_input_tensor_b,
             compute_with_storage_grid_size=compute_grid_size,
@@ -336,8 +336,14 @@ def test_group_attn_matmul_with_program_cache(num_loops, in0_dtype, in1_dtype, o
     q_len = 1
     batch = 32
     num_cache_entries = 0  # Only track cache entries of group_attn_matmul
-    # NOTE: Program is cached on out_subblock_w as well, so only seq_len >= 256 (out_subblock_w = 8) will share cache
-    # For seq_len < = 256, recompile at worst 8 times.
+    # NOTE: After the descriptor-framework migration, CB total_size is baked into the
+    # program at create time and is not re-applied on cache hit (PR #44939 — the
+    # `apply_descriptor_runtime_args` CB-size extension — was closed). To keep
+    # correctness across different per-call CB sizings, padded_shape is now part of
+    # compute_program_hash (see commit 7d5fed56fd8), so each distinct shape gets its
+    # own cache entry. The two shape configs below have different Mt/Kt/Nt and
+    # therefore produce two cache entries (legacy used to share one via runtime
+    # UpdateCircularBufferTotalSize on dispatch).
     for K, seq_len, q_heads, kv_heads in ((96, 512 + 64, 10, 2), (64, 256, 50, 5)):
         for _ in range(num_loops):
             input_shape_a = [q_len, q_heads, batch, K]
@@ -424,7 +430,7 @@ def test_group_attn_matmul_with_program_cache(num_loops, in0_dtype, in1_dtype, o
                     check_ulp=False,
                 )
 
-    assert num_cache_entries == 1
+    assert num_cache_entries == 2
 
 
 @pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16])
@@ -526,7 +532,7 @@ def test_group_attn_matmul_fp32(
             packer_l1_acc=False,
         )
 
-        tt_output_tensor_on_device = ttnn.experimental.group_attn_matmul(
+        tt_output_tensor_on_device = ttnn_group_attn_matmul(
             tt_input_tensor_a,
             tt_input_tensor_b,
             compute_with_storage_grid_size=compute_grid_size,

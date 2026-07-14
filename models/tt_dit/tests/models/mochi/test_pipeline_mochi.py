@@ -110,23 +110,42 @@ def test_mochi_diffusers_pipeline():
 
 
 @pytest.mark.parametrize(
+    "traced",
+    [
+        # pytest.param(True, id="tracing_on"),
+        pytest.param(False, id="tracing_off"),
+    ],
+)
+@pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, vae_mesh_shape, vae_sp_axis, vae_tp_axis, num_links",
     [
         [(2, 2), 0, 1, (1, 4), 0, 1, 2],  # VAE mesh shape = (1, 4) is more memory efficient.
         [(1, 8), 1, 0, (1, 8), 0, 1, 1],
         [(2, 4), 0, 1, (1, 8), 0, 1, 1],  # VAE mesh shape = (1, 8) is more memory efficient.
         [(4, 8), 1, 0, (4, 8), 0, 1, 4],  # note sp <-> tp switch for VAE for memory efficiency.
+        [(4, 8), 1, 0, (4, 8), 0, 1, 2],
     ],
     ids=[
         "dit_2x2sp0tp1_vae_1x4sp0tp1",
         "dit_1x8sp1tp0_vae_1x8sp0tp1",
         "dit_2x4sp0tp1_vae_1x8sp0tp1",
-        "dit_4x8sp1tp0_vae_4x8sp0tp1",
+        "dit_wh_4x8sp1tp0_vae_4x8sp0tp1",
+        "dit_bh_4x8sp1tp0_vae_4x8sp0tp1",
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": 26000000,
+        }
+    ],
+    indirect=True,
+)
 def test_tt_mochi_pipeline(
+    *,
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
     tp_axis: int,
@@ -136,6 +155,7 @@ def test_tt_mochi_pipeline(
     num_links: int,
     is_ci_env: bool,
     monkeypatch: pytest.MonkeyPatch,
+    traced: bool,
 ):
     """
     Test that creates the modified TT MochiPipeline and runs it on a prompt.
@@ -145,8 +165,9 @@ def test_tt_mochi_pipeline(
         monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
 
     try:
-        from ....parallel.config import DiTParallelConfig, MochiVAEParallelConfig, ParallelFactor
+        from ....parallel.config import DiTParallelConfig, MochiVAEParallelConfig
         from ....pipelines.mochi.pipeline_mochi import MochiPipeline as TTMochiPipeline
+        from ....pipelines.mochi.pipeline_mochi import MochiPipelineConfig
     except ImportError as e:
         pytest.skip(f"Required TT modules not available: {e}")
 
@@ -157,38 +178,41 @@ def test_tt_mochi_pipeline(
         f"Creating TT Mochi pipeline with DiT mesh device shape {mesh_device.shape}, VAE mesh device shape {vae_mesh_shape}"
     )
     logger.info(f"DiT SP axis: {sp_axis}, TP axis: {tp_axis}")
-    logger.info(f"VAE SP axis: {vae_sp_axis}, TP axis: {tp_axis}")
+    logger.info(f"VAE SP axis: {vae_sp_axis}, TP axis: {vae_tp_axis}")
 
-    # Create parallel config
-    parallel_config = DiTParallelConfig(
-        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
-        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
-        sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
-    )
+    parallel_config = DiTParallelConfig.from_tuples(cfg=(1, 0), sp=(sp_factor, sp_axis), tp=(tp_factor, tp_axis))
 
-    if vae_mesh_shape[vae_sp_axis] == 1:
-        w_parallel_factor = 1
+    if vae_mesh_shape[0] > 1 and vae_mesh_shape[1] > 1:
+        # 2D mesh (e.g. Galaxy): separate H/W on different axes
+        vae_parallel_config = MochiVAEParallelConfig.from_tuples(
+            time=(1, vae_tp_axis),
+            h=(vae_mesh_shape[vae_sp_axis], vae_sp_axis),
+            w=(vae_mesh_shape[vae_tp_axis], vae_tp_axis),
+        )
     else:
-        w_parallel_factor = 2
+        # 1D mesh (e.g. T3K, N300): use time parallelism, no spatial
+        t_axis = 1 if vae_mesh_shape[1] > 1 else 0
+        vae_parallel_config = MochiVAEParallelConfig.from_tuples(
+            time=(vae_mesh_shape[t_axis], t_axis),
+            h=(1, 0),
+            w=(1, 1),
+        )
 
-    vae_parallel_config = MochiVAEParallelConfig(
-        time_parallel=ParallelFactor(factor=vae_mesh_shape[vae_tp_axis], mesh_axis=vae_tp_axis),
-        w_parallel=ParallelFactor(factor=w_parallel_factor, mesh_axis=vae_sp_axis),
-        h_parallel=ParallelFactor(factor=vae_mesh_shape[vae_sp_axis] // w_parallel_factor, mesh_axis=vae_sp_axis),
-    )
-    assert vae_parallel_config.h_parallel.factor * vae_parallel_config.w_parallel.factor == vae_mesh_shape[vae_sp_axis]
-    assert vae_parallel_config.h_parallel.mesh_axis == vae_parallel_config.w_parallel.mesh_axis
-
-    # Create the TT Mochi pipeline
     tt_pipe = TTMochiPipeline(
-        mesh_device=mesh_device,
-        vae_mesh_shape=vae_mesh_shape,
-        parallel_config=parallel_config,
-        vae_parallel_config=vae_parallel_config,
-        num_links=num_links,
-        use_reference_vae=False,
-        model_name="genmo/mochi-1-preview",
-        reload_dit_model=mesh_device.get_num_devices() <= 8,
+        device=mesh_device,
+        config=MochiPipelineConfig.default(
+            mesh_shape=mesh_device.shape,
+            dit_parallel_config=parallel_config,
+            vae_parallel_config=vae_parallel_config,
+            vae_mesh_shape=vae_mesh_shape,
+            num_links=num_links,
+            use_reference_vae=False,
+            checkpoint_name="genmo/mochi-1-preview",
+            height=480,
+            width=848,
+            num_frames=168,
+            reload_dit_model=mesh_device.get_num_devices() <= 8,
+        ),
     )
 
     # Define test prompt (same as the diffusers test)
@@ -196,16 +220,12 @@ def test_tt_mochi_pipeline(
 
     logger.info(f"Generating video with TT pipeline using prompt: '{prompt}'")
 
-    # Generate frames with reduced parameters for faster testing
     frames = tt_pipe(
-        prompt,
-        num_inference_steps=50,  # Reduced for faster testing
+        prompts=[prompt],
+        num_inference_steps=50,
         guidance_scale=3.5,
-        num_frames=168,  # Reduced for faster testing
-        height=480,  # Reduced resolution for faster testing
-        width=848,  # Reduced resolution for faster testing
-        seed=0,  # Make deterministic
-    ).frames[0]
+        traced=traced,
+    )[0]
 
     # Validate output
     assert frames is not None, "No frames were generated by the TT pipeline"
@@ -219,8 +239,13 @@ def test_tt_mochi_pipeline(
     try:
         from diffusers.utils import export_to_video
 
-        export_to_video(frames, "tt_mochi_test_output.mp4", fps=30)
-        logger.info("TT Pipeline video exported to tt_mochi_test_output.mp4")
+        filename = "tt_mochi_test_output"
+        if traced:
+            filename += "_traced"
+        filename += ".mp4"
+
+        export_to_video(frames, filename, fps=30)
+        logger.info(f"TT Pipeline video exported to {filename}")
     except ImportError:
         logger.info("Could not export video - diffusers.utils.export_to_video not available")
     except AttributeError as e:

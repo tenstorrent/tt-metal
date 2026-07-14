@@ -2,18 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
-#include "ttnn/operations/cb_utils.hpp"
-#include "full_program_factory_interleaved.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "full_program_factory_common.hpp"
+#include "full_program_factory_interleaved.hpp"
 
 using namespace tt;
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::full {
-FullInterleavedProgramFactory::cached_program_t FullInterleavedProgramFactory::create(
+
+ProgramDescriptor FullInterleavedProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     [[maybe_unused]] const tensor_args_t&,
     tensor_return_value_t& output) {
@@ -31,40 +32,59 @@ FullInterleavedProgramFactory::cached_program_t FullInterleavedProgramFactory::c
 
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
 
-    Program program = Program();
+    ProgramDescriptor desc;
 
     auto cb_index = tt::CBIndex::c_0;
-    tt::tt_metal::create_cb(cb_index, program, all_cores, page_size, 1, data_format);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = page_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_index),
+            .data_format = data_format,
+            .page_size = page_size,
+        }}},
+    });
 
-    auto writer_defines = get_writer_defines(dtype);
+    auto writer_defines_map = get_writer_defines(dtype);
+    auto writer_defines = defines_from_map(writer_defines_map);
     auto u = encode_fill_value(fill_value, dtype);
 
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)cb_index, elems_per_page, page_size};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
-    auto writer_id = CreateWriteKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/full/device/kernels/writer_full.cpp",
-        all_cores,
-        writer_compile_time_args,
-        writer_defines);
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = "ttnn/cpp/ttnn/operations/full/device/kernels/writer_full.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.defines = writer_defines;
+    writer_desc.config = WriterConfigDescriptor{};
 
     auto cores = corerange_to_cores(all_cores, std::nullopt);
 
-    std::optional<tt::tt_metal::KernelHandle> reader_id = std::nullopt;
-    if (num_pages > num_cores) {
+    KernelDescriptor reader_desc;
+    const bool has_reader = num_pages > num_cores;
+    if (has_reader) {
         auto cb_index2 = tt::CBIndex::c_1;
-        tt::tt_metal::create_cb(cb_index2, program, all_cores, page_size, 1, data_format);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = page_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_index2),
+                .data_format = data_format,
+                .page_size = page_size,
+            }}},
+        });
 
         std::vector<uint32_t> reader_compile_time_args = {(uint32_t)cb_index2, elems_per_page, page_size};
         tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_compile_time_args);
 
-        reader_id = CreateReadKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/full/device/kernels/writer_full.cpp",
-            all_cores,
-            reader_compile_time_args,
-            writer_defines);
+        reader_desc.kernel_source = "ttnn/cpp/ttnn/operations/full/device/kernels/writer_full.cpp";
+        reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        reader_desc.core_ranges = all_cores;
+        reader_desc.compile_time_args = std::move(reader_compile_time_args);
+        reader_desc.defines = defines_from_map(writer_defines_map);
+        reader_desc.config = ReaderConfigDescriptor{};
     }
 
     uint32_t page_offset = 0;
@@ -78,45 +98,26 @@ FullInterleavedProgramFactory::cached_program_t FullInterleavedProgramFactory::c
         } else {
             TT_THROW("Core not in specified core ranges");
         }
-        if (reader_id.has_value()) {
+        if (has_reader) {
             uint32_t reader_page_start = page_offset;
             uint32_t num_pages_per_reader = num_pages_per_core / 2;
-            std::vector<uint32_t> reader_args = {
-                output.buffer()->address(), u.u32, num_pages_per_reader, reader_page_start};
-            SetRuntimeArgs(program, reader_id.value(), core, reader_args);
+            reader_desc.emplace_runtime_args(core, {output.buffer(), u.u32, num_pages_per_reader, reader_page_start});
 
             uint32_t writer_page_start = reader_page_start + num_pages_per_reader;
             uint32_t num_pages_per_writer = num_pages_per_core - num_pages_per_reader;
-            std::vector<uint32_t> writer_args = {
-                output.buffer()->address(), u.u32, num_pages_per_writer, writer_page_start};
-            SetRuntimeArgs(program, writer_id, core, writer_args);
+            writer_desc.emplace_runtime_args(core, {output.buffer(), u.u32, num_pages_per_writer, writer_page_start});
         } else {
-            std::vector<uint32_t> writer_args = {output.buffer()->address(), u.u32, num_pages_per_core, page_offset};
-            SetRuntimeArgs(program, writer_id, core, writer_args);
+            writer_desc.emplace_runtime_args(core, {output.buffer(), u.u32, num_pages_per_core, page_offset});
         }
         page_offset += num_pages_per_core;
     }
-    return {std::move(program), {writer_id, reader_id, cores}};
+
+    desc.kernels.push_back(std::move(writer_desc));
+    if (has_reader) {
+        desc.kernels.push_back(std::move(reader_desc));
+    }
+
+    return desc;
 }
 
-void FullInterleavedProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    [[maybe_unused]] const tensor_args_t&,
-    tensor_return_value_t& output) {
-    auto& program = cached_program.program;
-    auto& writer_kernel_id = cached_program.shared_variables.writer_id;
-    auto& reader_kernel_id = cached_program.shared_variables.reader_id;
-    auto& cores = cached_program.shared_variables.cores;
-    for (const auto& core : cores) {
-        if (reader_kernel_id.has_value()) {
-            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id.value(), core);
-            runtime_args[0] = output.buffer()->address();
-        }
-        {
-            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = output.buffer()->address();
-        }
-    }
-}
 }  // namespace ttnn::operations::full

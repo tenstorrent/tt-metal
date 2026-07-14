@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_experimental_deepseek_prefill_post_combine_reduce ${LIB_TYPE})
 add_library(
     TTNN::Ops::Experimental::DeepSeekPrefill::PostCombineReduce
@@ -22,24 +24,16 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
+        FILES ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_POST_COMBINE_REDUCE_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        device/post_combine_reduce_device_operation.cpp
-        device/post_combine_reduce_program_factory.cpp
-        post_combine_reduce.cpp
+        ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_POST_COMBINE_REDUCE_SRCS}
 )
 
-target_include_directories(ttnn_op_experimental_deepseek_prefill_post_combine_reduce PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_experimental_deepseek_prefill_post_combine_reduce
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_experimental_deepseek_prefill_post_combine_reduce PRIVATE TT::Metalium PUBLIC TTNN::Core)
 
 install(
     TARGETS
@@ -51,4 +45,28 @@ install(
         COMPONENT ttnn-runtime
 )
 
-install(TARGETS ttnn_op_experimental_deepseek_prefill_post_combine_reduce LIBRARY COMPONENT tar)
+install(
+    TARGETS
+        ttnn_op_experimental_deepseek_prefill_post_combine_reduce
+    FILE_SET
+    api
+        COMPONENT ttnn-dev
+    LIBRARY
+        COMPONENT tar
+)
+
+# Python bindings for this op are registered directly on the shared `ttnn`
+# Python module target here, rather than in the centrally-owned
+# ttnn/sources.cmake — the target itself is necessarily shared (nanobind
+# builds one Python extension module), but which file lists a given op's
+# own registration source doesn't need to be. `ttnn` only exists when
+# WITH_PYTHON_BINDINGS is on, hence the guard.
+#
+# The actual file list (TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_POST_COMBINE_REDUCE_NANOBIND_SRCS) lives in sources.cmake, not here: this
+# file carries metalium-developers-infra as a required co-owner (so infra
+# can land sweeping build-system changes), and routine add/remove/rename of
+# a nanobind source shouldn't need to go through infra. This wiring line
+# itself is build logic and is expected to change rarely.
+if(TARGET ttnn)
+    target_sources(ttnn PRIVATE ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_POST_COMBINE_REDUCE_NANOBIND_SRCS})
+endif()

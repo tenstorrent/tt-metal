@@ -21,9 +21,17 @@ from pathlib import Path
 import yaml
 
 from compute_sweep_matrix import chunk_modules
-from constants import format_hardware_suffix, parse_hardware_suffix, strip_grouping_suffix
+from constants import (
+    format_hardware_suffix,
+    parse_hardware_suffix,
+    parse_mesh_suffix,
+    strip_grouping_suffix,
+    strip_mesh_suffix,
+)
 from matrix_runner_config import (
     GENERATION_MANIFEST_FILENAME,
+    LEAD_MODELS_BATCH_POLICY,
+    MODEL_TRACED_BATCH_POLICY,
     get_lead_models_test_group_name_for_hardware_group,
     get_runner_config,
     get_test_group_name_for_hardware_group,
@@ -99,6 +107,17 @@ def _get_hardware_from_master_json(master_json: dict):
     return None
 
 
+def _get_scope_trace_ids(manifest: dict, validation_scope: str) -> set[int]:
+    """Return trace IDs declared under a specific scope in the registry targets."""
+    targets = manifest.get("targets", {})
+    scope_entries = targets.get(validation_scope, [])
+    scope_ids = set()
+    for entry in scope_entries:
+        for tid in entry.get("trace", []):
+            scope_ids.add(int(tid))
+    return scope_ids
+
+
 def _get_trace_ids_by_hardware(trace_ids: list[int], registry: dict) -> dict:
     """Group trace IDs by the normalized hardware tuple declared in the workflow manifest."""
     trace_ids_by_hardware = defaultdict(list)
@@ -139,6 +158,12 @@ def compute_validation_matrix(
 
     registry = {entry["trace_id"]: entry for entry in manifest.get("registry", []) if entry.get("trace_id") is not None}
 
+    if validation_scope == "lead_models":
+        scope_trace_ids = _get_scope_trace_ids(manifest, validation_scope)
+        scoped_ids = [tid for tid in trace_ids if tid in scope_trace_ids] if scope_trace_ids else trace_ids
+    else:
+        scoped_ids = trace_ids
+
     generation_manifest = _load_generation_manifest(vectors_dir)
     grouping_mode = generation_manifest.get("vector_grouping_mode")
     if grouping_mode and grouping_mode != "hw":
@@ -153,12 +178,12 @@ def compute_validation_matrix(
         print(f"No vector JSON files found in {vectors_dir}", file=sys.stderr)
         sys.exit(1)
 
-    trace_ids_by_hardware = _get_trace_ids_by_hardware(trace_ids, registry)
+    trace_ids_by_hardware = _get_trace_ids_by_hardware(scoped_ids, registry)
 
     hardware_modules = defaultdict(list)
     unmatched_modules = []
     for module in vector_modules:
-        hardware_group = parse_hardware_suffix(module)
+        hardware_group = parse_hardware_suffix(strip_mesh_suffix(module))
         if hardware_group is None:
             unmatched_modules.append(module)
         else:
@@ -174,32 +199,82 @@ def compute_validation_matrix(
         if not base_modules:
             continue
 
+        trace_id_list = sorted(trace_ids_by_hardware.get(hardware_group, []))
+        if validation_scope == "lead_models" and not trace_id_list and hardware_group is not None:
+            continue
+
+        # Sub-group by mesh shape only when the hardware group has multiple
+        # distinct mesh topologies (e.g. N300 with both [1,1] and [1,2]).
+        mesh_to_modules = defaultdict(set)
+        for module in grouped_modules:
+            mesh = parse_mesh_suffix(module)
+            base = strip_grouping_suffix(module)
+            mesh_str = f"{mesh[0]}x{mesh[1]}" if mesh else ""
+            mesh_to_modules[mesh_str].add(base)
+
+        needs_mesh_split = len(mesh_to_modules) > 1
+
         hardware_label = _get_hardware_display_label(hardware_group)
         if validation_scope == "lead_models":
             test_group_name = get_lead_models_test_group_name_for_hardware_group(hardware_group)
         else:
             test_group_name = get_test_group_name_for_hardware_group(hardware_group)
         runner_config = get_runner_config(test_group_name)
-        runner_batches = chunk_modules(base_modules, batch_size)
-        total_batches = len(runner_batches)
-        trace_id_list = sorted(trace_ids_by_hardware.get(hardware_group, []))
+        group_batch_size = MODEL_TRACED_BATCH_POLICY.get(test_group_name, {}).get("batch_size", batch_size)
 
-        for index, batch in enumerate(runner_batches, start=1):
-            include.append(
-                {
-                    **runner_config,
-                    "batch_display": f"{validation_scope}:{hardware_label}:{batch}",
-                    "batch_ordinal": f"{index}/{total_batches}",
-                    "batch_index": index,
-                    "module_selector": batch,
-                    "suite_name": "model_traced",
-                    "validation_scope": validation_scope,
-                    "vectors_artifact_name": f"sweeps-vectors-{validation_scope}",
-                    "trace_ids": trace_id_list,
-                    "hardware_group": hardware_label,
-                }
-            )
+        solo_modules = set(LEAD_MODELS_BATCH_POLICY.get("solo_modules", []))
 
+        if needs_mesh_split:
+            for mesh_str, mesh_modules in sorted(mesh_to_modules.items()):
+                sorted_modules = sorted(mesh_modules)
+                solo = [m for m in sorted_modules if m in solo_modules]
+                rest = [m for m in sorted_modules if m not in solo_modules]
+                runner_batches = chunk_modules(rest, group_batch_size)
+                for sm in solo:
+                    runner_batches.append(sm)
+                total_batches = len(runner_batches)
+                mesh_label = f".{mesh_str}" if mesh_str else ""
+
+                for index, batch in enumerate(runner_batches, start=1):
+                    entry = {
+                        **runner_config,
+                        "batch_display": f"{validation_scope}:{hardware_label}{mesh_label}:{batch}",
+                        "batch_ordinal": f"{index}/{total_batches}",
+                        "batch_index": index,
+                        "module_selector": batch,
+                        "suite_name": "model_traced",
+                        "validation_scope": validation_scope,
+                        "vectors_artifact_name": f"sweeps-vectors-{validation_scope}",
+                        "trace_ids": trace_id_list,
+                        "hardware_group": hardware_label,
+                    }
+                    if mesh_str:
+                        entry["mesh_device_shape"] = mesh_str
+                    include.append(entry)
+        else:
+            single_mesh = next(iter(mesh_to_modules), "")
+            solo = [m for m in base_modules if m in solo_modules]
+            rest = [m for m in base_modules if m not in solo_modules]
+            runner_batches = chunk_modules(rest, group_batch_size)
+            for sm in solo:
+                runner_batches.append(sm)
+            total_batches = len(runner_batches)
+            for index, batch in enumerate(runner_batches, start=1):
+                include.append(
+                    {
+                        **runner_config,
+                        "batch_display": f"{validation_scope}:{hardware_label}:{batch}",
+                        "batch_ordinal": f"{index}/{total_batches}",
+                        "batch_index": index,
+                        "module_selector": batch,
+                        "suite_name": "model_traced",
+                        "validation_scope": validation_scope,
+                        "vectors_artifact_name": f"sweeps-vectors-{validation_scope}",
+                        "trace_ids": trace_id_list,
+                        "hardware_group": hardware_label,
+                        "mesh_device_shape": single_mesh,
+                    }
+                )
     return {"include": include}
 
 
@@ -230,7 +305,7 @@ def compute_pinned_validation_matrix(
     hardware_modules = defaultdict(list)
     unmatched_modules = []
     for module in vector_modules:
-        parsed = parse_hardware_suffix(module)
+        parsed = parse_hardware_suffix(strip_mesh_suffix(module))
         if parsed is None:
             unmatched_modules.append(module)
         else:
@@ -308,6 +383,10 @@ def compute_combined_validation_matrix(
         scopes = ["model_traced", "lead_models"]
     elif scope_target in {"model_traced", "lead_models"}:
         scopes = [scope_target]
+    elif scope_target == "none":
+        # Models-filter narrowed the request to no remaining targets — emit
+        # an empty matrix so downstream conditional steps simply skip.
+        return {"include": []}
     else:
         print(f"Unsupported validation scope target: {scope_target}", file=sys.stderr)
         sys.exit(1)

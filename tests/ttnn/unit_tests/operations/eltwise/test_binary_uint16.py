@@ -56,7 +56,7 @@ def test_binary_add_uint16_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, use_legacy=None)
+    output_tensor = ttnn.add(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
 
     assert torch.equal(output_tensor, torch_output_tensor)
@@ -156,7 +156,7 @@ def test_binary_uint16_sharded(a_shape, b_shape, sharded_config, ttnn_fn, device
     golden_function = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
-    output_tensor_sharded = ttnn_op(input_tensor_a, input_tensor_b, memory_config=sharded_config, use_legacy=None)
+    output_tensor_sharded = ttnn_op(input_tensor_a, input_tensor_b, memory_config=sharded_config)
     output_tensor = ttnn.to_memory_config(output_tensor_sharded, ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
 
@@ -210,7 +210,7 @@ def test_binary_sub_uint16_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    output_tensor = ttnn.sub(input_tensor_a, input_tensor_b, use_legacy=None)
+    output_tensor = ttnn.sub(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
 
     assert torch.equal(output_tensor, torch_output_tensor)
@@ -283,7 +283,7 @@ def test_binary_sub_uint16_sharded(a_shape, b_shape, sharded_config, device):
     golden_function = ttnn.get_golden_function(ttnn.sub)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
-    output_tensor_sharded = ttnn.sub(input_tensor_a, input_tensor_b, memory_config=sharded_config, use_legacy=None)
+    output_tensor_sharded = ttnn.sub(input_tensor_a, input_tensor_b, memory_config=sharded_config)
     output_tensor = ttnn.to_memory_config(output_tensor_sharded, ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
 
@@ -349,7 +349,7 @@ def test_binary_bitwise_op_uint16(a_shape, b_shape, low_a, high_a, low_b, high_b
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    output_tensor = bitwise_op(input_tensor_a, input_tensor_b, use_legacy=None)
+    output_tensor = bitwise_op(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
 
     assert torch.equal(output_tensor, torch_output_tensor)
@@ -406,7 +406,7 @@ def test_bitwise_op_uint16_sharded(a_shape, b_shape, sharded_config, bitwise_op,
     golden_function = ttnn.get_golden_function(bitwise_op)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
-    output_tensor_sharded = bitwise_op(input_tensor_a, input_tensor_b, memory_config=sharded_config, use_legacy=None)
+    output_tensor_sharded = bitwise_op(input_tensor_a, input_tensor_b, memory_config=sharded_config)
     output_tensor = ttnn.to_memory_config(output_tensor_sharded, ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
 
@@ -466,7 +466,7 @@ def test_binary_mul_uint16_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    output_tensor = ttnn.mul(input_tensor_a, input_tensor_b, use_legacy=None)
+    output_tensor = ttnn.mul(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
 
     assert torch.equal(output_tensor, torch_output_tensor)
@@ -557,7 +557,7 @@ def test_binary_logical_uint16_bcast(a_shape, b_shape, ttnn_op, low_a, high_a, l
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    output_tensor = ttnn_op(input_tensor_a, input_tensor_b, use_legacy=None)
+    output_tensor = ttnn_op(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
 
     assert torch.equal(output_tensor, torch_output_tensor)
@@ -571,8 +571,7 @@ def test_binary_logical_uint16_bcast(a_shape, b_shape, ttnn_op, low_a, high_a, l
         ttnn.logical_and,
     ],
 )
-@pytest.mark.parametrize("use_legacy", [True, False])
-def test_binary_logical_uint16_edge_cases(ttnn_op, use_legacy, device):
+def test_binary_logical_uint16_edge_cases(ttnn_op, device):
     torch_input_tensor_a = torch.tensor([0, 1, 0, 32767, 65534, 65535])
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -593,7 +592,7 @@ def test_binary_logical_uint16_edge_cases(ttnn_op, use_legacy, device):
 
     golden_function = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
-    output_tensor = ttnn_op(input_tensor_a, input_tensor_b, use_legacy=use_legacy)
+    output_tensor = ttnn_op(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
 
     assert torch.equal(output_tensor, torch_output_tensor)
@@ -742,6 +741,49 @@ def test_binary_bitwise_right_shift(device):
 
 
 @pytest.mark.parametrize(
+    "ttnn_function",
+    [
+        ttnn.bitwise_and,
+        ttnn.bitwise_or,
+        ttnn.bitwise_xor,
+    ],
+)
+@pytest.mark.parametrize("scalar", [0, 7, 0xFF, 0xABCD, 0xFFFF])
+def test_bitwise_scalar_uint16(device, ttnn_function, scalar):
+    x_torch = torch.tensor([[0, 1, 65535, 3, 32768, 0, 65533, 12345, 255, 256, 4096, 1]], dtype=torch.int32)
+
+    golden_fn = ttnn.get_golden_function(ttnn_function)
+    z_torch = golden_fn(x_torch, scalar) & 0xFFFF
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt_out = ttnn_function(x_tt, scalar)
+    tt_out = ttnn.to_torch(z_tt_out, dtype=torch.int32) & 0xFFFF
+
+    assert torch.equal(tt_out, z_torch)
+
+
+@pytest.mark.parametrize(
+    "ttnn_function",
+    [
+        ttnn.bitwise_left_shift,
+        ttnn.bitwise_right_shift,
+    ],
+)
+@pytest.mark.parametrize("shift", [0, 1, 4, 15])
+def test_bitwise_shift_scalar_uint16(device, ttnn_function, shift):
+    x_torch = torch.tensor([[0, 1, 2, 255, 4096, 32768, 65535, 65534, 12345, 256, 16384, 1]], dtype=torch.int32)
+
+    golden_fn = ttnn.get_golden_function(ttnn_function)
+    z_torch = golden_fn(x_torch, shift) & 0xFFFF
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt_out = ttnn_function(x_tt, shift)
+    tt_out = ttnn.to_torch(z_tt_out, dtype=torch.int32) & 0xFFFF
+
+    assert torch.equal(tt_out, z_torch)
+
+
+@pytest.mark.parametrize(
     "shape",
     [
         (torch.Size([1, 1, 64, 128])),
@@ -793,7 +835,7 @@ def test_binary_relational_uint16(shape, low_a, high_a, low_b, high_b, ttnn_op, 
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    output_tensor = ttnn_op(input_tensor_a, input_tensor_b, use_legacy=None)
+    output_tensor = ttnn_op(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
 
     assert torch.equal(output_tensor, torch_output_tensor)
@@ -839,7 +881,7 @@ def test_binary_relational_uint16_float_scalar(shape, low_a, high_a, scalar, ttn
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    output_tensor = ttnn_op(input_tensor_a, scalar, use_legacy=None)
+    output_tensor = ttnn_op(input_tensor_a, scalar)
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
 
     assert torch.equal(output_tensor, torch_output_tensor)

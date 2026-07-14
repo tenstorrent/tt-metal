@@ -21,7 +21,7 @@ void core_agnostic_main();
 #endif
 
 #include <cstdint>
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 using namespace tt;
 
@@ -62,17 +62,15 @@ void report_page(std::size_t i) {
 }
 
 void core_agnostic_main() {
-    experimental::CircularBuffer cb(CB_ID);
+    CircularBuffer cb(CB_ID);
     for (auto i = 0ul; i < CHURN_LOOP_COUNT; i++) {
         cb.wait_front(CB_STEP_SIZE);
         cb.pop_front(CB_STEP_SIZE);
     }
 
-    DPRINT << "Reader Wait" << ENDL();
-    DEVICE_PRINT("Reader Wait\n");
+    DPRINT("Reader Wait\n");
     riscv_wait(NUM_WAIT_CYCLES);
-    DPRINT << "Reader Wait Done" << ENDL();
-    DEVICE_PRINT("Reader Wait Done\n");
+    DPRINT("Reader Wait Done\n");
 
     for (auto i = 0ul; i < 3; i++) {
         cb.wait_front(CB_STEP_SIZE);

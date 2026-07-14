@@ -11,17 +11,60 @@ from types import NoneType
 from typing import Any, Mapping, Sequence
 
 import torch
+from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3.utils.config_dataclass import ConfigWeight, DeepseekSamplingArgs, SavedWeight
+from models.demos.deepseek_v3.utils.config_dataclass import (
+    ConfigWeight,
+    DeepseekSamplingArgs,
+    PrefillChunkSizes,
+    SavedWeight,
+)
 
 # Constants
 NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
+
+
+def _env_flag_enabled(name: str) -> bool:
+    value = os.getenv(name)
+    return value is not None and value.strip().lower() not in ("", "0", "false")
+
+
+def get_fabric_config() -> ttnn.FabricConfig:
+    """Get the fabric config for the model."""
+    return ttnn.FabricConfig.FABRIC_1D_RING if _env_flag_enabled("USE_TORUS_MODE") else ttnn.FabricConfig.FABRIC_1D
+
+
+def is_ring_fabric(fabric_config: ttnn.FabricConfig) -> bool:
+    """Check whether the given fabric config has a RING configuration"""
+    return fabric_config == ttnn.FabricConfig.FABRIC_1D_RING
+
+
+def is_quad_mesh_env() -> bool:
+    """True when ``MESH_DEVICE`` requests a QUAD run (before a mesh device exists)."""
+    return os.getenv("MESH_DEVICE") == "QUAD"
+
+
+# We can't warmup prefill for all possible prompt lengths, only warmup for the selective prompt lengths.
+# LINEAR_ADDITIVE: tile, 2*tile, 3*tile, ... hf_config.max_seq_len
+# LINEAR_MULTIPLES: tile, 2*tile, 4*tile, 8*tile, ... hf_config.max_seq_len
+PREFILL_WARMUP_MODE_LINEAR_ADDITIVE = "LINEAR_ADDITIVE"
+PREFILL_WARMUP_MODE_LINEAR_MULTIPLES = "LINEAR_MULTIPLES"
+DEFAULT_PREFILL_WARMUP_MODE_VLLM = PREFILL_WARMUP_MODE_LINEAR_MULTIPLES
+DEFAULT_PREFILL_WARMUP_MODE_DEMO = PREFILL_WARMUP_MODE_LINEAR_ADDITIVE
+
+
+def is_quad_mesh(mesh_device: ttnn.MeshDevice) -> bool:
+    """Check whether the mesh device has a QUAD configuration (16x8)."""
+    return mesh_device.shape[0] == 16 and mesh_device.shape[1] == 8
+
+
+OPTIMIZED_MOE_BLOCK_USERS_PER_ROW = 32
 USERS_PER_ROW = 32
 DEFAULT_MAX_SEQ_LEN = 2048
 SEQ_LEN_CHUNK_SIZE = 1024  # NOTE: should be 512 for blackhole (in case of future bring-up)
 Q_CHUNK_SIZE = 128
-K_CHUNK_SIZE = 128
+K_CHUNK_SIZE = int(os.getenv("DEEPSEEK_K_CHUNK_SIZE", "64"))
 TOPK_MIN_WIDTH = 64  # Minimum width of the topk input tensor
 MAX_TOP_K = 32
 # Default sampling parameters, huggingface recommended values
@@ -32,6 +75,50 @@ DEFAULT_SAMPLING_TOP_P = 0.95
 # So, using 32 as default value for top-k when sampling on device. If top-k = 0 is needed, then
 # do sampling on host.
 DEFAULT_SAMPLING_TOP_K = 32
+
+
+# Each value is a tuple of (seq_len_threshold, PrefillChunkSizes) pairs, sorted ascending by threshold.
+PREFILL_CHUNK_SIZES = {
+    # QUAD
+    16: (
+        (0, PrefillChunkSizes(model_chunk=DEFAULT_MAX_SEQ_LEN, mla_chunk=DEFAULT_MAX_SEQ_LEN, wkv_b2_chunk=2 * 1024)),
+        (32 * 1024, PrefillChunkSizes(model_chunk=32 * 1024, mla_chunk=32 * 1024, wkv_b2_chunk=8 * 1024)),
+        (48 * 1024, PrefillChunkSizes(model_chunk=48 * 1024, mla_chunk=48 * 1024, wkv_b2_chunk=4 * 1024)),
+        (64 * 1024, PrefillChunkSizes(model_chunk=64 * 1024, mla_chunk=4 * 1024, wkv_b2_chunk=4 * 1024)),
+        (128 * 1024, PrefillChunkSizes(model_chunk=1024, mla_chunk=256, wkv_b2_chunk=256)),
+    ),
+    # DUAL
+    8: (
+        (0, PrefillChunkSizes(model_chunk=DEFAULT_MAX_SEQ_LEN, mla_chunk=DEFAULT_MAX_SEQ_LEN, wkv_b2_chunk=2 * 1024)),
+        (8 * 1024, PrefillChunkSizes(model_chunk=8 * 1024, mla_chunk=8 * 1024, wkv_b2_chunk=2 * 1024)),
+        (16 * 1024, PrefillChunkSizes(model_chunk=16 * 1024, mla_chunk=1 * 1024, wkv_b2_chunk=1 * 1024)),
+        (32 * 1024, PrefillChunkSizes(model_chunk=1024, mla_chunk=512, wkv_b2_chunk=512)),
+    ),
+    # TG
+    4: (
+        (0, PrefillChunkSizes(model_chunk=DEFAULT_MAX_SEQ_LEN, mla_chunk=DEFAULT_MAX_SEQ_LEN, wkv_b2_chunk=2 * 1024)),
+        (32 * 1024, PrefillChunkSizes(model_chunk=32 * 1024, mla_chunk=32 * 1024, wkv_b2_chunk=2 * 1024)),
+    ),
+}
+
+
+def get_prefill_chunk_sizes(max_seq_len: int, num_rows: int) -> PrefillChunkSizes:
+    """Return PrefillChunkSizes for the given (num_rows, max_seq_len).
+
+    Return the configuration for the largest threshold not exceeding max_seq_len.
+    """
+    if num_rows not in PREFILL_CHUNK_SIZES:
+        raise ValueError(f"num_rows should be in (4, 8, 16), got {num_rows}")
+    chunk_sizes = PREFILL_CHUNK_SIZES[num_rows]
+
+    chunks_to_return = chunk_sizes[0][1]
+    for config_seq_len, chunks in chunk_sizes:
+        if config_seq_len > max_seq_len:
+            break
+        chunks_to_return = chunks
+    logger.info(f"Prefill chunks: {chunks_to_return}")
+    return chunks_to_return
+
 
 _LEGACY_SAVED_WEIGHT_EMISSION_DEPTH = 0
 
@@ -48,10 +135,29 @@ def emit_legacy_saved_weights():
         _LEGACY_SAVED_WEIGHT_EMISSION_DEPTH -= 1
 
 
-def get_fabric_config():
-    return (
-        ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
-    )
+def align_up(value: int, align_value: int) -> int:
+    """Round value up to the next multiple of align_value, with a minimum of align_value."""
+    return int(max(align_value, (value + align_value - 1) // align_value * align_value))
+
+
+def get_min_alignment_value_for_prefill(rows: int) -> int:
+    """for quad mesh, we need to align each seq_len chunk per row to the tile size
+    for other meshes, we align the entire seq_len to the tile size"""
+    return int(ttnn.TILE_SIZE) * rows if rows == 16 else int(ttnn.TILE_SIZE)
+
+
+def align_prefill_padded_seq_len(seq_len: int, num_mesh_rows: int) -> int:
+    """Round ``seq_len`` up to a multiple of ``TILE_SIZE * num_mesh_rows`` (mesh axis 0).
+
+    Used when padding prefill token batches so the workspace sequence length satisfies
+    dispatch / mesh-row alignment constraints.
+    """
+    seq_len_i = int(seq_len)
+    rows = int(num_mesh_rows)
+    if rows <= 0:
+        raise ValueError(f"num_mesh_rows must be > 0, got {num_mesh_rows!r}")
+    alignment = get_min_alignment_value_for_prefill(rows)
+    return align_up(seq_len_i, alignment)
 
 
 def make_deepseek_sampling_args(
@@ -61,6 +167,7 @@ def make_deepseek_sampling_args(
     max_top_k: int = MAX_TOP_K,
     max_batch_size: int = USERS_PER_ROW,
     sampling_all_gather_axis: int = 1,
+    pad_logits_to_power_of_2: bool = True,
 ) -> DeepseekSamplingArgs:
     cluster_shape = tuple(mesh_device.shape)
     sampling_dp = int(cluster_shape[0])  # one sampling group per row
@@ -76,6 +183,7 @@ def make_deepseek_sampling_args(
         sampling_dp=sampling_dp,
         cluster_shape=cluster_shape,
         sampling_all_gather_axis=sampling_all_gather_axis,
+        pad_logits_to_power_of_2=pad_logits_to_power_of_2,
     )
 
 

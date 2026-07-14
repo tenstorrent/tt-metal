@@ -6,18 +6,20 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import torch
+from diffusers.models.autoencoders.autoencoder_kl_qwenimage import AutoencoderKLQwenImage
+
 import ttnn
 
 from ...models.vae.vae_wan2_1 import WanDecoder
-from ...parallel.config import VAEParallelConfig
+from ...parallel.config import VaeHWParallelConfig, VAEParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils.conv3d import conv_pad_height, conv_pad_in_channels
 from ...utils.tensor import bf16_tensor_2dshard
+from ...utils.tracing import Tracer
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-
-    import torch
 
 
 class QwenImageVaeDecoder:
@@ -50,8 +52,9 @@ class QwenImageVaeDecoder:
         # TODO: Remove when WanDecoder is migrated to tt-dit Modules framework.
         self._is_loaded = False
 
-    def forward(self, x: ttnn.Tensor, logical_h: int) -> ttnn.Tensor:
-        return self.wan_decoder(x, logical_h=logical_h)
+    def forward(self, x: ttnn.Tensor, logical_h: int) -> tuple[ttnn.Tensor, int]:
+        output, new_logical_h, _new_logical_w = self.wan_decoder(x, logical_h=logical_h)
+        return output, new_logical_h
 
     def load_torch_state_dict(self, state_dict: dict[str, torch.Tensor]) -> None:
         if self.wan_decoder is None:
@@ -99,5 +102,75 @@ class QwenImageVaeDecoder:
             ),
         ).squeeze(
             2
-        )  # remove the temporal dimension
+        )  # remove the temporal dimension — output is (B, C, H, W)
+        decoded_output = decoded_output[:, :, :logical_h, :]
         return decoded_output
+
+
+class QwenImageVAEDecoderAdapter:
+    """Torch-in (NHWC), torch-out (BCHW) VAE decoder for the QwenImage VAE.
+
+    Applies per-channel scaling/shift inversion before decoding. Supports both the PyTorch and
+    TT-NN implementations; the TT-NN backend supports tracing and dynamic load / unload of weights
+    via ``deallocate_weights``/``reload_weights``.
+    """
+
+    def __init__(
+        self,
+        *,
+        checkpoint_name: str,
+        parallel_config: VaeHWParallelConfig,
+        ccl_manager: CCLManager,
+        use_torch: bool,
+    ) -> None:
+        torch_vae = AutoencoderKLQwenImage.from_pretrained(checkpoint_name, subfolder="vae")
+        assert isinstance(torch_vae, AutoencoderKLQwenImage)
+
+        self.device = ccl_manager.mesh_device
+        # Per-channel scaling (z_dim,)
+        self._latents_scaling = 1.0 / torch.tensor(torch_vae.config.latents_std)
+        self._latents_shift = torch.tensor(torch_vae.config.latents_mean)
+
+        if use_torch:
+            self._torch_vae = torch_vae
+            self._decoder = None
+            self._tracer = None
+            self._decoder_state_dict = None
+        else:
+            self._torch_vae = None
+            self._decoder = QwenImageVaeDecoder(
+                base_dim=torch_vae.config.base_dim,
+                z_dim=torch_vae.config.z_dim,
+                dim_mult=torch_vae.config.dim_mult,
+                num_res_blocks=torch_vae.config.num_res_blocks,
+                temperal_downsample=torch_vae.config.temperal_downsample,
+                device=self.device,
+                parallel_config=parallel_config,
+                ccl_manager=ccl_manager,
+            )
+            self._tracer = Tracer(self._decoder.forward, device=self.device, prep_run=False)
+            self._decoder_state_dict = torch_vae.state_dict()
+
+    def is_loaded(self) -> bool:
+        return self._torch_vae is not None or self._decoder.is_loaded()
+
+    def deallocate_weights(self) -> None:
+        if self._decoder is not None:
+            self._decoder.deallocate_weights()
+
+    def reload_weights(self) -> None:
+        if self._decoder is None or self._decoder.is_loaded():
+            return
+        self._decoder.load_torch_state_dict(self._decoder_state_dict)
+
+    @torch.no_grad()
+    def decode(self, latents: torch.Tensor, *, traced: bool) -> torch.Tensor:
+        latents = latents / self._latents_scaling + self._latents_shift
+
+        if self._torch_vae is not None:
+            return self._torch_vae.decode(latents.permute(0, 3, 1, 2).unsqueeze(2)).sample[:, :, 0]
+
+        tt_latents, logical_h = self._decoder.prepare_input(latents)
+        forward = self._tracer if traced else self._decoder.forward
+        tt_out, logical_h = forward(tt_latents, logical_h)
+        return self._decoder.postprocess_output(tt_out, logical_h)

@@ -4,8 +4,10 @@
 
 #pragma once
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <random>
+#include <vector>
 
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/test_utils/packing.hpp"
@@ -13,12 +15,10 @@
 namespace tt::test_utils {
 
 //! Generic Library of templated comparison functions.
-//! Custom type is supported as long as the custom type supports the following custom functions
-//! static SIZEOF - indicates byte size of custom type
-//! to_float() - get float value from custom type
-//! to_packed() - get packed (into an integral type that is of the bitwidth specified by SIZEOF)
-//! Constructor(float in) - constructor with a float as the initializer
-//! Constructor(uint32_t in) - constructor with a uint32_t as the initializer -- only lower bits needed
+//! Custom ValueType is supported as long as it is convertible to float (used
+//! by is_close to compute absolute / relative error). The unpack-and-compare
+//! helpers additionally require trivial-copyability for std::bit_cast through
+//! the byte-shuffling layer in packing.hpp.
 //
 // this follows the implementation of numpy's is_close
 template <typename ValueType>
@@ -50,13 +50,12 @@ bool is_close_vectors(
         vec_a.size(),
         vec_b.size());
 
-    for (unsigned int i = 0; i < vec_a.size(); i++) {
-        if (not comparison_function(vec_a.at(i), vec_b.at(i))) {
-            if (argfail) {
-                *argfail = i;
-            }
-            return false;
+    auto it = std::mismatch(vec_a.begin(), vec_a.end(), vec_b.begin(), comparison_function);
+    if (it.first != vec_a.end()) {
+        if (argfail) {
+            *argfail = static_cast<int>(std::distance(vec_a.begin(), it.first));
         }
+        return false;
     }
     return true;
 }
@@ -72,6 +71,56 @@ bool is_close_packed_vectors(
         unpack_vector<ValueType, PackType>(vec_b),
         comparison_function,
         argfail);
+}
+
+// Pearson correlation coefficient between two equally-sized float vectors.
+// Empty inputs are treated as a failure (caller has nothing to validate against).
+// Zero-variance handling: PCC is mathematically undefined when either input is
+// constant. We pass only when *both* sides are constant AND element-wise equal
+// (so constant-input identity checks still work); a constant device output
+// against a varying golden — the failure mode for FP8 corruption that saturates
+// to a single value — must not be silently accepted.
+inline bool check_pcc(const std::vector<float>& a, const std::vector<float>& b, double min_pcc) {
+    TT_FATAL(a.size() == b.size(), "check_pcc -- a.size()={} == b.size()={}", a.size(), b.size());
+
+    const std::size_t n = a.size();
+    if (n == 0) {
+        log_error(tt::LogTest, "check_pcc: empty inputs — nothing to validate, returning false");
+        return false;
+    }
+    double sum_a = 0.0, sum_b = 0.0, sum_a2 = 0.0, sum_b2 = 0.0, sum_ab = 0.0;
+    for (std::size_t i = 0; i < n; i++) {
+        double ai = a[i], bi = b[i];
+        sum_a += ai;
+        sum_b += bi;
+        sum_a2 += ai * ai;
+        sum_b2 += bi * bi;
+        sum_ab += ai * bi;
+    }
+    const double denom_a = (n * sum_a2) - (sum_a * sum_a);
+    const double denom_b = (n * sum_b2) - (sum_b * sum_b);
+    if (denom_a == 0.0 && denom_b == 0.0) {
+        if (a == b) {
+            return true;
+        }
+        log_error(tt::LogTest, "check_pcc: both inputs are constant but unequal — a[0]={}, b[0]={}", a[0], b[0]);
+        return false;
+    }
+    if (denom_a == 0.0 || denom_b == 0.0) {
+        log_error(
+            tt::LogTest,
+            "check_pcc: one input is constant while the other varies (a const={}, b const={}) — PCC is undefined",
+            denom_a == 0.0,
+            denom_b == 0.0);
+        return false;
+    }
+    const double pcc = (n * sum_ab - sum_a * sum_b) / std::sqrt(denom_a * denom_b);
+
+    if (pcc < min_pcc) {
+        log_error(tt::LogTest, "check_pcc: PCC = {} < min_pcc = {}", pcc, min_pcc);
+        return false;
+    }
+    return true;
 }
 
 }  // namespace tt::test_utils

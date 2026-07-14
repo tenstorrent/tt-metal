@@ -62,7 +62,12 @@ from transformers.utils import (
     logging,
     replace_return_docstrings,
 )
-from transformers.utils.import_utils import is_torch_fx_available
+
+# transformers >= 5.x removed is_torch_fx_available (it was just `is_torch_available()`).
+try:
+    from transformers.utils.import_utils import is_torch_fx_available
+except ImportError:
+    from transformers.utils import is_torch_available as is_torch_fx_available
 
 from .configuration_deepseek import DeepseekV3Config
 from .reference_utils import topk_bitonic
@@ -400,6 +405,8 @@ class MoEGate(nn.Module):
         import torch.nn.init as init
 
         init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        if self.topk_method == "noaux_tc":
+            init.zeros_(self.e_score_correction_bias)
 
     def grouped_gate_golden(
         self, scores, bias, route_scale, epsilon, n_groups, summed_experts_per_group, topk_groups, n_activated_experts
@@ -1124,7 +1131,7 @@ class DeepseekV3DecoderLayer(nn.Module):
         super().__init__()
         self.hidden_size = config.hidden_size
 
-        self.self_attn = ATTENTION_CLASSES[config._attn_implementation](config=config, layer_idx=layer_idx)
+        self.self_attn = ATTENTION_CLASSES[config._attn_implementation or "eager"](config=config, layer_idx=layer_idx)
 
         self.mlp = (
             DeepseekV3MoE(config)

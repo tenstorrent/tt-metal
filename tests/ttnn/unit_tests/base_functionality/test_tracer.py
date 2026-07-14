@@ -28,6 +28,29 @@ def test_exp():
     visualize(tensor)
 
 
+@pytest.mark.requires_fast_runtime_mode_off
+def test_nn_parameter_in_module_init_under_tracer():
+    # Regression: under the tracer, nn.Parameter(torch.empty(...)) inside Module.__init__
+    # used to fail with "Cannot assign non-leaf Tensor to parameter 'weight'" because
+    # TracedTorchTensor.__new__ wrapped the result of requires_grad_() as an alias view
+    # (grad_fn=AliasBackward0, is_leaf=False), which register_parameter rejects.
+    with trace():
+
+        class Gate(torch.nn.Module):
+            def __init__(self, n_routed_experts: int, gating_dim: int):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.empty((n_routed_experts, gating_dim)))
+
+        gate = Gate(n_routed_experts=8, gating_dim=16)
+        # Verify both the tensor autograd properties and that Module.__setattr__
+        # registered the attribute as a real nn.Parameter.
+        assert isinstance(gate.weight, torch.nn.Parameter)
+        assert "weight" in gate._parameters
+        assert gate._parameters["weight"] is gate.weight
+        assert gate.weight.is_leaf
+        assert gate.weight.grad_fn is None
+
+
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.requires_fast_runtime_mode_off
 def test_reshape():
@@ -99,9 +122,7 @@ def test_ttnn_bert(device, model_name, batch_size, sequence_size, bert):
 
     parameters = preprocess_model_parameters(
         model_name=tt_model_name,
-        initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(
-            model_name, torchscript=False
-        ).eval(),
+        initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(model_name).eval(),
         custom_preprocessor=bert.custom_preprocessor,
         device=device,
     )

@@ -4,9 +4,10 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     constexpr uint32_t N = get_named_compile_time_arg_val("N");
@@ -19,13 +20,13 @@ void kernel_main() {
     const uint32_t end_row = get_arg_val<uint32_t>(2);
 
     const auto s0 = TensorAccessor(src_args, src_addr);
-    experimental::CircularBuffer cb(tt::CBIndex::c_0);
-    experimental::Noc noc;
+    CircularBuffer cb(tt::CBIndex::c_0);
+    Noc noc;
 
-    uint32_t curr_addr = src_addr;
     for (uint32_t row = start_row; row < end_row; ++row) {
         cb.reserve_back(1);
-        noc.async_read(s0, cb, page_size, {.page_id = row}, {.offset_bytes = 0});
+        uint32_t l1_write_addr = cb.get_write_ptr();
+        tt::data_movement::common::noc_async_read_sharded(noc, l1_write_addr, s0, row, 0, page_size);
         noc.async_read_barrier();
         cb.push_back(1);
     }

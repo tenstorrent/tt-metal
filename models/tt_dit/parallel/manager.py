@@ -280,7 +280,9 @@ class CCLManager:
         self.barrier_idx[mesh_axis] = (cur_idx + 1) % 2
         return self.barrier_semaphores[mesh_axis][cur_idx]
 
-    def get_np_ping_pong_buffer(self, input_shape, dims, pad_left, pad_right, dtype=ttnn.bfloat16):
+    def get_np_ping_pong_buffer(
+        self, input_shape, dims, pad_left, pad_right, dtype=ttnn.bfloat16, t_front_pad: int = 0
+    ):
         """
         Get or create ping pong buffers for neighbor pad operations.
         Caches buffers based on output shape and dtype.
@@ -291,6 +293,7 @@ class CCLManager:
             pad_left: List of left padding amounts per dim
             pad_right: List of right padding amounts per dim
             dtype: Tensor dtype
+            t_front_pad: Number of T-front zero frames to prepend (fused T-causal padding)
 
         Returns:
             Current ping pong buffer (alternates between two buffers)
@@ -298,6 +301,8 @@ class CCLManager:
         output_shape = list(input_shape)
         for i, dim in enumerate(dims):
             output_shape[dim] += pad_left[i] + pad_right[i]
+        if t_front_pad > 0:
+            output_shape[dims[0] - 1] += t_front_pad
 
         cache_key = ("np", tuple(output_shape), dtype)
 
@@ -335,6 +340,8 @@ class CCLManager:
         axes: list,
         neighbor_sems: list,
         num_links: list,
+        logical_h: int = 0,
+        t_front_pad: int = 0,
     ) -> ttnn.Tensor:
         """
         Helper function to neighbor-pad a tensor with a persistent output buffer.
@@ -349,6 +356,8 @@ class CCLManager:
             neighbor_sems=neighbor_sems,
             num_links=num_links,
             use_persistent_buffer=True,
+            logical_h=logical_h,
+            t_front_pad=t_front_pad,
         )
 
     def neighbor_pad(
@@ -364,13 +373,15 @@ class CCLManager:
         neighbor_sems: list,
         num_links: list,
         use_persistent_buffer: bool = False,
+        logical_h: int = 0,
+        t_front_pad: int = 0,
     ) -> ttnn.Tensor:
         barrier_sem = self.get_barrier_semaphore(axes[0])
 
         persistent_buf = None
         if use_persistent_buffer:
             persistent_buf = self.get_np_ping_pong_buffer(
-                tensor.shape, dims, pad_left, pad_right, dtype=tensor.get_dtype()
+                tensor.shape, dims, pad_left, pad_right, dtype=tensor.get_dtype(), t_front_pad=t_front_pad
             )
 
         return ttnn.experimental.neighbor_pad_async(
@@ -385,6 +396,8 @@ class CCLManager:
             num_links=num_links,
             topology=self.topology,
             persistent_output_buffer=persistent_buf,
+            logical_h=logical_h,
+            t_front_pad=t_front_pad,
         )
 
     def reset_global_semaphores(self):

@@ -4,30 +4,25 @@
 
 #pragma once
 
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
+
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_device_operation_types.hpp"
 
 namespace ttnn::prim {
 
 struct ReshapeViewTiledProgramFactory {
-    struct shared_variables_t {
-        tt::tt_metal::KernelHandle reader_kernel_id{};
-        tt::tt_metal::KernelHandle writer_kernel_id{};
-        std::vector<CoreCoord> utilized_cores;
-        Tensor mapping_tensor;
-    };
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
+    // create_workload_descriptor() materializes the host-computed
+    // input-to-output page-mapping tensor onto the device and parks the
+    // owning Tensor on the WorkloadDescriptor so its backing buffer
+    // outlives the cached programs.  The mapping is fully determined by
+    // the hashed input/output shapes.
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const ReshapeViewParams& operation_attributes,
         const ReshapeViewInputs& tensor_args,
-        Tensor& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
-        const ReshapeViewParams& operation_attributes,
-        const ReshapeViewInputs& tensor_args,
-        Tensor& tensor_return_value);
+        Tensor& tensor_return_value,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 
 }  // namespace ttnn::prim

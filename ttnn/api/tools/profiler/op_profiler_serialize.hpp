@@ -208,7 +208,7 @@ inline void start_tracy_zone(
     [[maybe_unused]] uint32_t color = 0) {
 #if defined(TRACY_ENABLE)
     auto tracySrcLoc =
-        ___tracy_alloc_srcloc(lineNum, source.c_str(), source.length(), functName.c_str(), functName.length());
+        ___tracy_alloc_srcloc(lineNum, source.c_str(), source.length(), functName.c_str(), functName.length(), color);
     TracyCZoneCtx ctx = ___tracy_emit_zone_begin_alloc(tracySrcLoc, 1);
     if (color != 0) {
         TracyCZoneColor(ctx, color);
@@ -414,11 +414,14 @@ inline std::string op_meta_data_serialized_json(
                 /* Important! `TT_DNN_DEVICE_OP` must be used in conjunction with `TracyOpMeshWorkload` to feed */    \
                 /* regression tests well-formed data. */                                                              \
                 /* TODO: (Issue #20233): Move the zone below outside TracyOpMeshWorkload. */                          \
-                if (!(mesh_device)->is_local(coord)) {                                                                \
+                auto devices = (mesh_device)                                                                          \
+                                   ->get_view()                                                                       \
+                                   .get_devices(tt::tt_metal::distributed::MeshCoordinateRange(coord, coord));        \
+                if (devices.empty()) {                                                                                \
                     continue;                                                                                         \
                 }                                                                                                     \
                 ZoneScopedN("TT_DNN_DEVICE_OP");                                                                      \
-                auto device_id = (mesh_device)->get_device(coord)->id();                                              \
+                auto device_id = devices.front()->id();                                                               \
                 auto op_id = tt::tt_metal::detail::EncodePerDeviceProgramID(base_program_id, device_id, false);       \
                 std::string op_message = tt::tt_metal::op_profiler::op_meta_data_serialized_json(                     \
                     operation,                                                                                        \

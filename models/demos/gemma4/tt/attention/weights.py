@@ -135,6 +135,13 @@ def load_attention_weights(
 
     o_proj_cache_suffix = "_padded" if o_proj_pad_size > 0 and tp > 1 else ""
     tp_suffix = f"_tp{tp}" if tp > 1 else ""
+    # Tag the wqkv / o_proj cache filenames with their dtype so flipping
+    # ``attention`` precision in precision_overrides.json doesn't reuse a
+    # stale cached tensor at the previous dtype. q_norm / k_norm stay at
+    # bfloat16 (no override) and don't need the suffix.
+    from models.demos.gemma4.tt.precision import dtype_to_str
+
+    dtype_suffix = f"_{dtype_to_str(weight_dtype)}"
 
     wqkv = ttnn.as_tensor(
         qkv,
@@ -142,7 +149,7 @@ def load_attention_weights(
         dtype=weight_dtype,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=col_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"wqkv{tp_suffix}"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"wqkv{tp_suffix}{dtype_suffix}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     o_proj = ttnn.as_tensor(
@@ -151,7 +158,7 @@ def load_attention_weights(
         dtype=weight_dtype,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=row_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"o_proj{o_proj_cache_suffix}{tp_suffix}"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"o_proj{o_proj_cache_suffix}{tp_suffix}{dtype_suffix}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     q_norm_weight = ttnn.as_tensor(

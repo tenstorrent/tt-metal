@@ -6,11 +6,10 @@ import os
 import math
 from itertools import product
 
-import torch
-
 import ttnn
 from loguru import logger
 import pytest
+from tests.tests_common.cache_entries_counter import CacheEntriesCounter
 from models.tt_dit.tests.unit.test_ring_joint_attention import (
     run_ring_joint_sdpa,
     run_ring_joint_sdpa_model_config,
@@ -200,7 +199,7 @@ def test_ring_joint_sdpa(
     ],
     ids=["sd35"],
 )
-@pytest.mark.parametrize("n_iters, trace_enabled", [(1, False)], ids=["no_trace"])
+@pytest.mark.parametrize("n_iters, trace_enabled", [(3, False)], ids=["no_trace"])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
@@ -262,38 +261,32 @@ def test_ring_joint_sdpa_program_cache(
     skip_check = False
 
     submesh.cache_entries_counter = CacheEntriesCounter(submesh)
-    dummy_tensors = []
-    for i in range(3):
-        dummy_tensors.append(
-            ttnn.from_torch(
-                torch.rand((b, nh, seq_len, d)),
-                device=submesh,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=dtype,
-                mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=[None, None]),
-            )
-        )
-
-        run_ring_joint_sdpa(
-            submesh,
-            b,
-            nh,
-            seq_len,
-            seq_len,
-            joint_seq_len,
-            d,
-            q_chunk_size,
-            k_chunk_size,
-            dtype,
-            n_iters,
-            trace_enabled,
-            num_links,
-            rp_axis,
-            up_axis,
-            all_gather_topology,
-            skip_check,
-            pcc_threshold,
-        )
+    # Run the op n_iters (>1) times within a SINGLE run_ring_joint_sdpa invocation. The op must be
+    # exercised under one sub-device-manager lifetime: run_ring_joint_sdpa loads a sub-device manager
+    # on entry, which clears the program cache (mesh_device.cpp clear_program_cache on manager switch),
+    # so looping the whole helper would clear the cache between calls and defeat the reuse check.
+    # run_ring_joint_sdpa's internal loop runs the op n_iters times with distinct per-iter persistent
+    # buffers and global semaphores, so cache reuse is still validated against address variation.
+    run_ring_joint_sdpa(
+        submesh,
+        b,
+        nh,
+        seq_len,
+        seq_len,
+        joint_seq_len,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        n_iters,
+        trace_enabled,
+        num_links,
+        rp_axis,
+        up_axis,
+        all_gather_topology,
+        skip_check,
+        pcc_threshold,
+    )
 
     assert submesh.cache_entries_counter.total == 1
 

@@ -80,9 +80,6 @@ class TorchDispatchModule(torch.nn.Module):
             self.metadata_len,
         )
 
-        self.dispatched_buffer = torch.zeros(self.dispatched_shape, dtype=torch.float32)
-        self.dispatched_metadata = torch.ones(self.dispatched_metadata_shape, dtype=torch.int32) * -1
-
     def forward(
         self,
         x: torch.Tensor,

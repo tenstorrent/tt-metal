@@ -110,6 +110,22 @@ class TtTrainMetricsData(BaseModel):
         default=None,
         description="Iteration time at the 99th percentile (ms).",
     )
+    mfu: Optional[float] = Field(
+        default=None,
+        description="Model FLOPs utilization.",
+    )
+    github_event_name: Optional[str] = Field(
+        default=None,
+        description="Name of the Github event that triggered the current workflow.",
+    )
+    elapsed_time_ms: Optional[float] = Field(
+        default=None,
+        description="Total wall-clock time a model run takes to execute from start to finish.",
+    )
+    tps: Optional[int] = Field(
+        default=None,
+        description="Tokens per second.",
+    )
 
     model_config = {"from_attributes": True, "protected_namespaces": ()}
 

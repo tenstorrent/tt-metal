@@ -26,13 +26,17 @@ ExpPrecision get_data_exp_precision(std::span<const DataFormat> data_formats);
 // Checks if all formats in format array are fp32/tf32/invalid, then data can be unpacked as tf32 for fp32 accumulation
 bool is_all_fp32_formats(std::span<const DataFormat> data_format);
 
+// True for any OCP MX block-scaled format.
+bool is_mx_format(DataFormat data_format);
+
 std::vector<DataFormat> get_unpack_src_formats(std::span<const DataFormat> data_formats);
 std::vector<DataFormat> get_unpack_dst_formats(
     std::span<const DataFormat> buf_formats,
     DataFormat unpack_conditional_dst_format,
     bool fp32_dest_acc_en,
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode,
-    bool int_fpu_en = false);
+    bool int_fpu_en = false,
+    bool enable_2x_src_format = false);
 std::vector<DataFormat> get_pack_src_formats(
     std::span<const DataFormat> data_formats,
     DataFormat unpack_conditional_dst_format,

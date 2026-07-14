@@ -298,8 +298,8 @@ void kernel_main() {
     experimental::CB halo_cb(halo_cb_id);
     experimental::CB tilize_reduce_cb(tilize_reduce_cb_id);
     experimental::CB scalar_cb(in_scalar_cb_id);
-    experimental::Noc noc;
-    experimental::UnicastEndpoint self_ep;
+    Noc noc;
+    UnicastEndpoint self_ep;
 
     uint32_t l1_read_addr = halo_cb.get_read_ptr();
 
@@ -356,7 +356,6 @@ void kernel_main() {
 
         // Process each channel block
         uint32_t block_offset = 0;
-#pragma unroll
         for (uint32_t i = 0; i < blocks; i++) {
             tilize_reduce_cb.reserve_back(4);
 

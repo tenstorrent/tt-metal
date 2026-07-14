@@ -100,6 +100,8 @@ def test_ND_subtile_bcast(device, shapes, ttnn_fn):
 
     if ttnn_fn == ttnn.hypot:
         assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=2)
+    elif ttnn_fn == ttnn.divide:
+        assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=0)
     else:
         output_tensor = ttnn.to_torch(output_tensor)
         assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.999
@@ -153,7 +155,7 @@ def test_ND_scalar_bcast(device, shapes, ttnn_fn):
     )
     input_tensor_b = torch_input_tensor_b
 
-    output_tensor = ttnn_fn(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=None)
+    output_tensor = ttnn_fn(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988

@@ -21,7 +21,7 @@ import ttml
 from ttml.common.config import (
     TrainingConfig,
     DeviceConfig,
-    SchedulerConfig,
+    SpeedrunSchedulerConfig,
     load_config,
     yaml_deep_update,
 )
@@ -31,10 +31,10 @@ from ttml.common.utils import (
     round_up_to_tile,
     initialize_device,
     build_logits_mask,
+    build_causal_mask,
     no_grad,
     get_tt_metal_runtime_root,
 )
-from ttml.common.data import build_causal_mask
 from ttml.datasets import Batch, InMemoryDataloader
 from ttml.trainers import SFTConfig, SFTTrainer
 
@@ -336,7 +336,7 @@ def train():
         print("*********************************\n\n")
 
     training_config = TrainingConfig(yaml_config)
-    scheduler_config = SchedulerConfig(yaml_config)
+    scheduler_config = SpeedrunSchedulerConfig.from_yaml(yaml_config)
 
     batch_size = training_config.batch_size
 
@@ -377,8 +377,8 @@ def train():
 
     # Load dataset
     print("Loading GSM8K dataset...")
-    training_data = datasets.load_dataset("gsm8k", "main", split="train", ignore_verifications=True)
-    testing_data = datasets.load_dataset("gsm8k", "main", split="test", ignore_verifications=True)
+    training_data = datasets.load_dataset("gsm8k", "main", split="train", verification_mode="no_checks")
+    testing_data = datasets.load_dataset("gsm8k", "main", split="test", verification_mode="no_checks")
 
     training_data = tokenize_dataset(training_data, tokenizer)
     testing_data = tokenize_dataset(testing_data, tokenizer)

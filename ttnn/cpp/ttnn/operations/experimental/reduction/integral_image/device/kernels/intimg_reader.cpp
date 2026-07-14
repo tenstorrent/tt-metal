@@ -3,28 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 
 #include "common_dataflow.hpp"
 
 namespace {
 
-FORCE_INLINE void zero_buffer(uint32_t write_addr, int bytes) {
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    while (bytes > 0) {
-        uint32_t curr_bytes = std::min(bytes, MEM_ZEROS_SIZE);
-        noc_async_read(zeros_noc_addr, write_addr, curr_bytes);
-        write_addr += curr_bytes;
-        bytes -= curr_bytes;
-    }
-    noc_async_read_barrier();
+FORCE_INLINE void zero_buffer(const Noc& noc, const CircularBuffer& cb, uint32_t bytes) {
+    noc.async_write_zeros(cb, bytes);
+    noc.write_zeros_l1_barrier();
 }
 
 template <typename input_number_t>
-FORCE_INLINE void prepare_start_tile_for_cumsum_axis_2(uint32_t cb_start, uint32_t tile_size) {
-    WriteCBGuard start_cb_guard{cb_start, ONE_TILE};
+FORCE_INLINE void prepare_start_tile_for_cumsum_axis_2(const Noc& noc, const CircularBuffer& cb, uint32_t tile_size) {
+    WriteCBGuard start_cb_guard{cb.get_cb_id(), ONE_TILE};
 
-    uint32_t start_addr = get_write_ptr(cb_start);
-    zero_buffer(start_addr, tile_size * sizeof(input_number_t));
+    zero_buffer(noc, cb, tile_size * sizeof(input_number_t));
 }
 
 template <typename input_addr_gen_t>
@@ -65,13 +59,16 @@ void kernel_main() {
     const auto core_y = get_absolute_logical_y();
     const uint32_t my_channel = core_y * ctas.cores_x + core_x;
 
+    Noc noc;
+    CircularBuffer start_cb(ctas.start_cb);
+
     for (uint32_t batch_i = 0; batch_i < ctas.num_batches;
          ++batch_i) {  // only one batch expected, unit tests don't cover more, also not everything is implemented in
                        // terms of num_batches > 1
         for (uint32_t row_chunk_i = 0; row_chunk_i < num_blocks_in_column; ++row_chunk_i) {
             for (uint32_t column_block_i = 0; column_block_i < num_blocks_in_row; ++column_block_i) {
                 prepare_start_tile_for_cumsum_axis_2<input_number_type>(
-                    ctas.start_cb, ctas.tile_height * ctas.tile_width);
+                    noc, start_cb, ctas.tile_height * ctas.tile_width);
                 const uint32_t block_depth =
                     std::min(ctas.input_depth - column_block_i * ctas.block_depth, ctas.block_depth);
                 send_block(

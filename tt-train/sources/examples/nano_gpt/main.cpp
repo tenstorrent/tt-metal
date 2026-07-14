@@ -7,6 +7,7 @@
 #include <csignal>
 #include <cstdint>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/memory_reporter.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
@@ -24,6 +25,7 @@
 #include "models/gpt2.hpp"
 #include "models/llama.hpp"
 #include "ops/binary_ops.hpp"
+#include "ops/distributed/losses.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/remote_optimizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
@@ -134,6 +136,13 @@ uint64_t get_number_of_parameters(Model &model, bool tp) {
     return num_params;
 }
 
+uint64_t get_available_device_memory() {
+    auto *device = &ttml::autograd::ctx().get_device();
+    auto dram_view = tt::tt_metal::detail::GetMemoryView(device, ttnn::BufferType::DRAM);
+    uint64_t total_dram = dram_view.total_bytes_per_bank * dram_view.num_banks * tt::tt_metal::GetNumAvailableDevices();
+    return total_dram;
+}
+
 using ttml::autograd::TensorPtr;
 using SocketManager = ttml::core::distributed::SocketManager;
 using SocketType = ttml::core::distributed::SocketType;
@@ -149,7 +158,7 @@ using DataLoader = ttml::datasets::DataLoader<
 struct TrainingConfig {
     std::string project_name;
     uint32_t seed = 5489U;
-    uint32_t model_save_interval = 500;
+    uint32_t model_save_interval = 0;
     uint32_t batch_size = 64;
     uint32_t num_epochs = 1;
     uint32_t max_steps = 5000;
@@ -166,7 +175,7 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     auto training_config = yaml_config["training_config"];
     config.project_name = training_config["project_name"].as<std::string>("tt_train_nano_gpt");
     config.seed = training_config["seed"].as<uint32_t>();
-    config.model_save_interval = training_config["model_save_interval"].as<uint32_t>();
+    config.model_save_interval = training_config["model_save_interval"].as<uint32_t>(config.model_save_interval);
     config.batch_size = training_config["batch_size"].as<uint32_t>();
     config.num_epochs = training_config["num_epochs"].as<uint32_t>();
     config.max_steps = training_config["max_steps"].as<uint32_t>();
@@ -664,6 +673,7 @@ int main(int argc, char **argv) {
         model_config.transformer_config);
 
     fmt::print("Model number of parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
+    fmt::print("Available Device Memory: {} MB\n", get_available_device_memory() / (1024 * 1024));
     if (track_memory) {
         ttml::utils::MemoryUsageTracker::snapshot("MODEL_CREATION");
     }
@@ -778,6 +788,9 @@ int main(int argc, char **argv) {
     };
 
     const bool needs_to_call_loss = pipeline_needs_to_call_loss(multihost_config);
+    // All TP-enabled LM heads (TP-only and PP+TP) emit vocab-sharded logits, so the loss
+    // path is uniformly vocab_parallel_cross_entropy_loss whenever TP is on.
+    const bool use_vocab_parallel_loss = device_config.enable_tp;
 
     // Training loop
     for (uint32_t epoch = 0; epoch < num_epochs; ++epoch) {
@@ -794,7 +807,10 @@ int main(int argc, char **argv) {
             auto output = run_model(model, features, masks);
             float loss_float = 0.0F;
             if (needs_to_call_loss) {
-                auto loss = ttml::ops::cross_entropy_loss(output, target);
+                auto loss = use_vocab_parallel_loss
+                                ? ttml::ops::distributed::vocab_parallel_cross_entropy_loss(
+                                      output, target, ttml::autograd::ctx().get_parallelism_context().get_tp_axis())
+                                : ttml::ops::cross_entropy_loss(output, target);
                 loss = gradient_accumulator_helper.scale(loss);
                 loss_float = get_loss_value(loss);
                 ttml::autograd::ctx().get_profiler().read_results(device, "forward_pass_done");
@@ -854,7 +870,8 @@ int main(int argc, char **argv) {
 
                 if (!multihost_config.enable_mpi) {
                     // save training state if it's not 3 tier training
-                    if (!model_config.model_path.empty() && global_step % training_config.model_save_interval == 0) {
+                    if (!model_config.model_path.empty() && training_config.model_save_interval > 0 &&
+                        global_step % training_config.model_save_interval == 0) {
                         save_training_state(
                             model_config.model_path, model, scheduler, model_config.model_type, optimizer->get_name());
                     }

@@ -26,8 +26,9 @@ std::unordered_map<std::string, std::shared_future<void>> RemoteCompileCoordinat
 std::unordered_map<uint64_t, jit_server::UploadFirmwareRequest> RemoteCompileCoordinator::s_fw_cache_;
 
 RemoteCompileCoordinator::RemoteCompileCoordinator(
-    std::vector<std::string> endpoints, ChipId device_build_id, uint64_t build_key) :
+    std::vector<std::string> endpoints, ContextId context_id, ChipId device_build_id, uint64_t build_key) :
     endpoints_(std::move(endpoints)),
+    context_id_(context_id),
     device_build_id_(device_build_id),
     build_key_(build_key),
     sessions_(endpoints_.size()),
@@ -37,21 +38,20 @@ RemoteCompileCoordinator::RemoteCompileCoordinator(
 
 RemoteCompileCoordinator::~RemoteCompileCoordinator() = default;
 
-void RemoteCompileCoordinator::submit(KernelCompileDescriptor descriptor) {
-    const std::size_t hash = descriptor.kernel_hash;
-
-    // Check the cross-invocation dedup cache.
+void RemoteCompileCoordinator::submit(
+    std::size_t kernel_hash, const std::function<KernelCompileDescriptor()>& make_descriptor) {
+    // Check the cross-invocation dedup cache before generating files for this hash.
     std::shared_future<void> existing_future;
     std::shared_ptr<std::promise<void>> new_promise;
     {
         std::lock_guard lock(s_dedup_mutex_);
-        auto it = s_dedup_cache_.find(hash);
+        auto it = s_dedup_cache_.find(kernel_hash);
         if (it != s_dedup_cache_.end()) {
             existing_future = it->second;
         } else {
             new_promise = std::make_shared<std::promise<void>>();
             existing_future = new_promise->get_future().share();
-            s_dedup_cache_[hash] = existing_future;
+            s_dedup_cache_[kernel_hash] = existing_future;
         }
     }
 
@@ -62,9 +62,10 @@ void RemoteCompileCoordinator::submit(KernelCompileDescriptor descriptor) {
     }
 
     // This kernel is new — assign endpoint and pipeline the send.
-    const std::size_t ep_idx = hash % endpoints_.size();
+    const std::size_t ep_idx = kernel_hash % endpoints_.size();
 
     try {
+        auto descriptor = make_descriptor();
         ensure_session(ep_idx);
         ensure_firmware_uploaded(ep_idx);
 
@@ -73,7 +74,7 @@ void RemoteCompileCoordinator::submit(KernelCompileDescriptor descriptor) {
     } catch (...) {
         {
             std::lock_guard lock(s_dedup_mutex_);
-            s_dedup_cache_.erase(hash);
+            s_dedup_cache_.erase(kernel_hash);
         }
         new_promise->set_exception(std::current_exception());
         throw;
@@ -160,7 +161,7 @@ const jit_server::UploadFirmwareRequest& RemoteCompileCoordinator::get_firmware_
     std::lock_guard lock(s_fw_gate_mutex_);
     auto it = s_fw_cache_.find(build_key_);
     if (it == s_fw_cache_.end()) {
-        const auto& dev_env = BuildEnvManager::get_instance().get_device_build_env(device_build_id_);
+        const auto& dev_env = BuildEnvManager::get_instance(context_id_).get_device_build_env(device_build_id_);
 
         jit_server::UploadFirmwareRequest req;
         req.build_key = build_key_;

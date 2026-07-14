@@ -24,24 +24,8 @@ namespace tt::tt_metal {
 
 class HostStorage {
 public:
-    // Creates HostStorage distributed over a mesh that matches `buffer` shape.
-    [[deprecated("Use HostStorage(HostTensor tensor) instead")]]
-    explicit HostStorage(DistributedHostBuffer buffer);
-
-    // Creates HostStorage distributed over 1x1 mesh.
-    [[deprecated("Use HostStorage(HostTensor tensor) instead")]]
-    explicit HostStorage(HostBuffer buffer);
-
     // Creates HostStorage from a HostTensor.
     explicit HostStorage(HostTensor tensor);
-
-    // Transitional constructors: accept a pre-transition HostStorage (constructed
-    // without TensorSpec and TensorTopology) and assign them during construction.
-    // Overrides any existing spec/topology in the HostStorage.
-    //
-    // TODO(#40348): Remove these.
-    HostStorage(const HostStorage& other, TensorSpec spec, TensorTopology topology);
-    HostStorage(HostStorage&& other, TensorSpec spec, TensorTopology topology);
 
     // Returns the distributed host buffer.
     const DistributedHostBuffer& buffer() const;
@@ -95,9 +79,12 @@ struct DeviceStorage {
 
     // Creates a copy of the DeviceStorage that shares the underlying device memory
     DeviceStorage(const DeviceStorage&) = default;
-    DeviceStorage(DeviceStorage&&) noexcept = default;
     DeviceStorage& operator=(const DeviceStorage&) = default;
-    DeviceStorage& operator=(DeviceStorage&&) noexcept = default;
+
+    // Moves the ownership of the underlying device memory to the new DeviceStorage.
+    // The moved-from DeviceStorage is in a deallocated state.
+    DeviceStorage(DeviceStorage&&) noexcept;
+    DeviceStorage& operator=(DeviceStorage&&) noexcept;
 
     // Creates a copy of the DeviceStorage that shares the underlying device memory,
     // but with a different set of coords.
@@ -119,29 +106,23 @@ struct DeviceStorage {
     const MeshTensor& get_mesh_tensor() const;
 
     // Get the underlying MeshTensor, throws if the DeviceStorage is deallocated.
-    // Please do not move the MeshTensor out of the DeviceStorage using this function.
+    // Please do not move the MeshTensor out of the DeviceStorage using this function,
+    // use release_mesh_tensor instead.
     MeshTensor& get_mesh_tensor();
 
-    // Returns the MeshDevice associated with the underlying device memory.
-    // Throws if the DeviceStorage is not constructed from a MeshTensor.
-    //
-    // Workaround for https://github.com/tenstorrent/tt-metal/issues/40716:
-    // When DeviceStorage is copied (e.g. view/reshape) and the original is deallocated, the copy's
-    // holder becomes DeallocatedTombStone while the MeshBuffer reference is still present.
-    // This path preserves a valid device pointer when constructing new tensors from such storage.
-    //
-    // TODO: Remove this workaround once models properly manage tensor lifetimes and
-    // don't operate on deallocated tensors.
-    distributed::MeshDevice* get_device_bypass_deallocate_check() const;
-
+    // Moves out the MeshTensor this DeviceStorage holds, throws if the DeviceStorage is deallocated.
+    // post-condition: this DeviceStorage will be equivalent to a default constructed DeviceStorage.
+    MeshTensor release_mesh_tensor();
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // DeviceStorage as a view of the undelrying device memory at specific coordinates:
 
     // Returns true if the tensor spans across all devices in a mesh.
+    // Throws if the DeviceStorage is not allocated.
     bool is_uniform_storage() const;
 
     // Returns the coordinates the tensor spans across.
+    // Throws if the DeviceStorage is not allocated.
     std::span<const distributed::MeshCoordinate> get_coords() const;
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -160,13 +141,6 @@ struct DeviceStorage {
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // Begin internal functions:
-
-    // Returns the MeshBuffer associated with the underlying device memory.
-    // This function should be removed in-favor of `get_mesh_tensor()`.
-    // The function also leaks the ownership of the underlying device memory out.
-    // This is meant to be transitional and is to be removed.
-    // Throws if the DeviceStorage is not constructed from a MeshTensor.
-    std::shared_ptr<distributed::MeshBuffer> get_mesh_buffer_leak_ownership() const;
 
     // There are situations where we want to "reinterpret" an existing Tensor without modifying its underlying memory.
     // For example, select slice ops can be done in-place, as can select reshapes. This DeviceStorage constructor
@@ -221,7 +195,9 @@ private:
         std::vector<distributed::MeshCoordinate> coords,
         std::shared_ptr<MeshTensorHolder> root_mesh_tensor_holder);
 
+    // Invariant: should never be nullptr.
     std::shared_ptr<MeshTensorHolder> mesh_tensor_holder_;
+    // coords_ only make sense when the DeviceStorage is allocated.
     std::vector<distributed::MeshCoordinate> coords_;
 
     // Experimental features for viewing an existing DeviceStorage

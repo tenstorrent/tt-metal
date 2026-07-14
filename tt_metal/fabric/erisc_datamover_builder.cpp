@@ -31,6 +31,7 @@
 #include "tt_metal/fabric/builder/fabric_remote_channels_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
 
 #include "impl/context/metal_context.hpp"
 #include "core_coord.hpp"
@@ -543,7 +544,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
         static_cast<uint32_t>(sender_worker_flow_control_semaphore_id),
         static_cast<uint32_t>(sender_worker_terminate_semaphore_id),
         static_cast<uint32_t>(sender_worker_buffer_index_semaphore_id)};
-    args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
+    args_out.reserve(args_out.size() + values.size());
     std::ranges::copy(values, std::back_inserter(args_out));
 }
 
@@ -556,7 +557,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
         eth_channel,
         static_cast<uint32_t>(sender_worker_terminate_semaphore_id),
         static_cast<uint32_t>(sender_worker_buffer_index_semaphore_id)};
-    args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
+    args_out.reserve(args_out.size() + values.size());
     std::ranges::copy(values, std::back_inserter(args_out));
 }
 
@@ -587,6 +588,10 @@ void append_worker_to_fabric_edm_sender_rt_args(
     connection_info.edm_worker_location_info_addr = connection.edm_worker_location_info_addr;
     connection_info.buffer_size_bytes = connection.buffer_size_bytes;
     connection_info.buffer_index_semaphore_id = connection.buffer_index_semaphore_id;
+    // This non-device-init path is the local worker-style VC0 contract, so preserve
+    // the standard sender-channel-0 free-slots stream id when rewriting the entry.
+    connection_info.worker_free_slots_stream_id =
+        StreamRegAssignments::IncrementOnWrite::sender_channel_0_free_slots_stream_id;
     // NOTE: valid_connections_mask is not copied to L1 from performance reason
     //       because this callstack will be deprecated and not used in WorkerToFabricEdmSenderImpl yet
     //       we want to reduce the number of write_core calls
@@ -613,7 +618,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
         eth_channel,
         static_cast<uint32_t>(sender_worker_terminate_semaphore_id),
         static_cast<uint32_t>(sender_worker_buffer_index_semaphore_id)};
-    args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
+    args_out.reserve(args_out.size() + values.size());
     std::ranges::copy(values, std::back_inserter(args_out));
 }
 
@@ -663,7 +668,8 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     bool has_tensix_extension,
     std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_sender_channels_per_vc,
     std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc,
-    std::optional<ChannelTrimmingOverrides> channel_trimming_overrides) :
+    std::optional<ChannelTrimmingOverrides> channel_trimming_overrides,
+    std::optional<Vc0TrimFastPathInfo> vc0_trim_fast_path_info) :
     FabricDatamoverBuilderBase(my_noc_x, my_noc_y, direction),
     my_eth_core_logical(my_eth_core_logical),
     my_eth_channel(my_eth_core_logical.y),
@@ -689,6 +695,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     sender_channel_is_traffic_injection_channel_array(std::move(sender_channel_injection_flags)),
     actual_sender_channels_per_vc_(actual_sender_channels_per_vc),
     actual_receiver_channels_per_vc_(actual_receiver_channels_per_vc),
+    vc0_trim_fast_path_info_(vc0_trim_fast_path_info),
     build_in_worker_connection_mode(build_in_worker_connection_mode),
     has_tensix_extension(has_tensix_extension),
     // First level ack is enabled to support bubble flow control
@@ -1024,6 +1031,61 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
                                           ? actual_sender_channels_per_vc_.value()[2]
                                           : config.num_used_sender_channels_per_vc[2];
 
+    auto should_force_internal_sender_skip = [&](size_t channel_id) -> bool {
+        if (channel_id >= num_sender_channels || channel_trimming_overrides_.has_value()) {
+            return false;
+        }
+
+        if (!this->is_sender_channel_serviced_[risc_id][channel_id]) {
+            return false;
+        }
+
+        const size_t worker_channel = get_worker_connected_sender_channel();
+        const size_t vc2_start = actual_sender_channels_vc0 + actual_sender_channels_vc1;
+        const size_t vc2_end = vc2_start + actual_sender_channels_vc2;
+        const bool is_worker_channel = channel_id == worker_channel;
+        const bool is_vc2_channel = channel_id >= vc2_start && channel_id < vc2_end;
+        const bool has_static_peer = this->sender_channel_connection_liveness_check_disable_array[channel_id];
+
+        return !is_worker_channel && !is_vc2_channel && !has_static_peer;
+    };
+
+    const auto& builder_context = fabric_context.get_builder_context();
+    const auto& global_overrides = builder_context.get_channel_trimming_global_overrides();
+    const bool router_has_real_capture_entry = has_real_channel_trimming_capture_entry(
+        builder_context.get_channel_trimming_overrides(), local_physical_chip_id, my_eth_channel);
+    // Global overrides replace the sender/receiver enablement decision for a VC,
+    // but they do not rewrite the imported per-router "forwarded-to" capture.
+    // Once a VC is overridden, we stop using that forwarding capture to infer a
+    // speedy-safe topology and fall back to the conservative non-speedy path.
+    std::array<bool, builder_config::MAX_NUM_VCS> can_use_forwarding_capture_by_vc{};
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        can_use_forwarding_capture_by_vc[vc] = !global_overrides.per_vc[vc].has_override();
+    }
+
+    // `ComputeMeshRouterBuilder` precomputes the local VC0 trim
+    // shape, including whether a terminal-only router has an exact upstream
+    // peer that makes the speedy receiver path safe on this link.
+    const bool vc0_is_terminal_or_source_only_after_trim =
+        vc0_trim_fast_path_info_.has_value() && vc0_trim_fast_path_info_->terminal_or_source_only;
+    const bool vc0_is_worker_only_nonforwarding_after_trim =
+        vc0_trim_fast_path_info_.has_value() && vc0_trim_fast_path_info_->worker_only_nonforwarding;
+    const bool vc0_enable_terminal_speedy_rx_after_trim =
+        vc0_trim_fast_path_info_.has_value() && vc0_trim_fast_path_info_->enable_terminal_speedy_rx;
+
+    const bool base_enable_deadlock_avoidance = fabric_context.need_deadlock_avoidance_support(this->direction_);
+    const bool final_enable_deadlock_avoidance =
+        base_enable_deadlock_avoidance && !vc0_is_terminal_or_source_only_after_trim;
+    const bool final_enable_first_level_ack_vc0 = final_enable_deadlock_avoidance;
+    // Preserve the existing explicit single-sender behavior, allow the same
+    // fast path when trimming collapses a wider VC0 router to the worker-only
+    // shape, and optionally enable a terminal-only speedy receiver when the
+    // host has already proven that the exact peer on this link is the
+    // matching worker-only source router.
+    const bool enable_speedy_vc0 = (actual_sender_channels_vc0 == 1 && !base_enable_deadlock_avoidance) ||
+                                   vc0_is_worker_only_nonforwarding_after_trim ||
+                                   vc0_enable_terminal_speedy_rx_after_trim;
+
     // ===== Build named compile-time args (all non-pool/channel-mapping args) =====
     std::unordered_map<std::string, uint32_t> named_args;
 
@@ -1123,13 +1185,14 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["WAIT_FOR_HOST_SIGNAL"] = static_cast<uint32_t>(this->wait_for_host_signal ? 1 : 0);
     named_args["SWITCH_INTERVAL"] = static_cast<uint32_t>(this->firmware_context_switch_interval);
     named_args["FUSE_RECEIVER_FLUSH_AND_COMPLETION_PTR"] = this->fuse_receiver_flush_and_completion_ptr;
-    named_args["ENABLE_DEADLOCK_AVOIDANCE"] = fabric_context.need_deadlock_avoidance_support(this->direction_);
+    named_args["ENABLE_DEADLOCK_AVOIDANCE"] = final_enable_deadlock_avoidance ? 1 : 0;
+    named_args["ENABLE_SPEEDY_VC0"] = enable_speedy_vc0 ? 1 : 0;
     named_args["IS_INTERMESH_ROUTER"] = this->is_inter_mesh;
     named_args["IS_HANDSHAKE_SENDER"] = is_handshake_master;
     named_args["HANDSHAKE_ADDR"] = static_cast<uint32_t>(this->handshake_address);
     named_args["CHANNEL_BUFFER_SIZE"] = static_cast<uint32_t>(this->channel_buffer_size);
     named_args["FABRIC_TENSIX_EXTENSION_MUX_MODE"] = this->has_tensix_extension;
-    named_args["ENABLE_FIRST_LEVEL_ACK_VC0"] = this->enable_first_level_ack;
+    named_args["ENABLE_FIRST_LEVEL_ACK_VC0"] = final_enable_first_level_ack_vc0 ? 1 : 0;
     named_args["ENABLE_FIRST_LEVEL_ACK_VC1"] = 0;  // VC1 does not use bubble flow control
     named_args["ENABLE_RISC_CPU_DATA_CACHE"] = enable_risc_cpu_data_cache;
     named_args["Z_ROUTER_ENABLED"] = z_router_enabled;
@@ -1200,7 +1263,14 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
 
     // --- Sender channel per-channel arrays (always emit MAX entries; 0 for unused) ---
     for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
+        const bool has_static_peer =
+            (i < num_sender_channels) ? this->sender_channel_connection_liveness_check_disable_array[i] : false;
         named_args[fmt::format("SENDER_CH_{}_LIVE_CHECK_SKIP", i)] =
+            (i < num_sender_channels) ? static_cast<uint32_t>(has_static_peer || should_force_internal_sender_skip(i))
+                                      : 0;
+    }
+    for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
+        named_args[fmt::format("SENDER_CH_{}_WAIT_STATIC_CONNECTION", i)] =
             (i < num_sender_channels)
                 ? static_cast<uint32_t>(this->sender_channel_connection_liveness_check_disable_array[i])
                 : 0;
@@ -1272,22 +1342,34 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         named_args["RESOURCE_USAGE_CAPTURE_OUTPUT_L1_ADDRESS"] =
             static_cast<uint32_t>(config.datapath_usage_l1_address);
     }
-    if (channel_trimming_overrides_.has_value()) {
-        named_args["DISABLE_RX_CH0_FORWARDING"] =
-            channel_trimming_overrides_->is_receiver_channel_data_forwarded(0) ? 0 : 1;
-        named_args["DISABLE_RX_CH1_FORWARDING"] =
-            channel_trimming_overrides_->is_receiver_channel_data_forwarded(1) ? 0 : 1;
-        named_args["DISABLE_RX_CH2_FORWARDING"] = 1;  // VC2 receiver never forwards (always disabled)
-    } else {
-        named_args["DISABLE_RX_CH0_FORWARDING"] = 0;
-        named_args["DISABLE_RX_CH1_FORWARDING"] = 0;
-        named_args["DISABLE_RX_CH2_FORWARDING"] = 1;  // VC2 receiver never forwards (always disabled)
-    }
+    // Disabling RX forwarding is separate from "receiver saw traffic":
+    // receiver_channel_data_forwarded also covers local-only delivery, so use the
+    // forwarded-to capture together with locally-observed NOC writes when it is
+    // trustworthy and fall back to the safe non-speedy default otherwise.
+    auto compute_disable_rx_forwarding = [&](size_t vc) -> uint32_t {
+        if (vc == 0 && enable_speedy_vc0) {
+            return 1;
+        }
+        if (!router_has_real_capture_entry) {
+            return 0;
+        }
+        if (!channel_trimming_overrides_.has_value() || !can_use_forwarding_capture_by_vc[vc]) {
+            return 0;
+        }
+        const bool has_downstream_forwarding =
+            channel_trimming_overrides_->sender_channel_forwarded_to_bitfield_by_vc[vc] != 0;
+        const bool has_local_chip_delivery = channel_trimming_overrides_->used_noc_send_type_by_vc_bitfield[vc] != 0;
+        const bool should_disable_rx_forwarding = !has_downstream_forwarding && !has_local_chip_delivery;
+        return static_cast<uint32_t>(should_disable_rx_forwarding);
+    };
+    named_args["DISABLE_RX_CH0_FORWARDING"] = compute_disable_rx_forwarding(0);
+    named_args["DISABLE_RX_CH1_FORWARDING"] = compute_disable_rx_forwarding(1);
+    named_args["DISABLE_RX_CH2_FORWARDING"] = 1;  // VC2 receiver never forwards (always disabled)
 
     // Credit amortization named compile-time args
     uint32_t sender_amort_freq = 0;
     uint32_t receiver_amort_freq = 0;
-    if (actual_sender_channels_vc0 == 1) {
+    if (enable_speedy_vc0) {
         auto* static_alloc =
             dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get());
         if (static_alloc != nullptr) {
@@ -1307,7 +1389,11 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     auto* static_alloc_ptr = dynamic_cast<FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get());
     TT_FATAL(static_alloc_ptr != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator");
     static_alloc_ptr->emit_channel_allocations_ct_args(
-        ct_args, actual_sender_channels_vc0, actual_sender_channels_vc1, num_receiver_channels);
+        ct_args,
+        actual_sender_channels_vc0,
+        actual_sender_channels_vc1,
+        actual_sender_channels_vc2,
+        num_receiver_channels);
 
     // Emit remote channel allocations
     ct_args.push_back(0xabaddad6);
@@ -1386,9 +1472,15 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
     // Only the first NUM_DOWNSTREAM_CHANNELS values are used based on topology
     auto args_pt2 = std::vector<uint32_t>{};
 
-    // Pack downstream teardown semaphores (always send MAX_NUM_SENDER_CHANNELS for compatibility)
+    // Pack downstream teardown semaphores (always send MAX_NUM_SENDER_CHANNELS for compatibility).
+    // The array is sized max_downstream_edms which may be smaller than num_max_sender_channels,
+    // so clamp the index to avoid out-of-bounds reads (indices beyond the array get sentinel -1).
     for (uint32_t i = 0; i < builder_config::num_max_sender_channels; i++) {
-        args_pt2.push_back(this->receiver_channels_downstream_teardown_semaphore_id[i].value_or(-1));
+        if (i < builder_config::max_downstream_edms) {
+            args_pt2.push_back(this->receiver_channels_downstream_teardown_semaphore_id[i].value_or(-1));
+        } else {
+            args_pt2.push_back(static_cast<uint32_t>(-1));
+        }
     }
 
     rt_args.reserve(rt_args.size() + args_pt2.size());
@@ -1413,7 +1505,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     bool has_tensix_extension,
     std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_sender_channels_per_vc,
     std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc,
-    std::optional<ChannelTrimmingOverrides> channel_trimming_overrides) {
+    std::optional<ChannelTrimmingOverrides> channel_trimming_overrides,
+    std::optional<Vc0TrimFastPathInfo> vc0_trim_fast_path_info) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     log_debug(
         tt::LogFabric,
@@ -1437,7 +1530,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         has_tensix_extension,
         actual_sender_channels_per_vc,
         actual_receiver_channels_per_vc,
-        channel_trimming_overrides);
+        channel_trimming_overrides,
+        vc0_trim_fast_path_info);
 }
 
 FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
@@ -1453,7 +1547,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     bool has_tensix_extension,
     std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_sender_channels_per_vc,
     std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc,
-    std::optional<ChannelTrimmingOverrides> channel_trimming_overrides) {
+    std::optional<ChannelTrimmingOverrides> channel_trimming_overrides,
+    std::optional<Vc0TrimFastPathInfo> vc0_trim_fast_path_info) {
     std::array<size_t, builder_config::num_max_sender_channels> sender_channels_buffer_index_semaphore_id{};
     std::array<size_t, builder_config::num_max_sender_channels> sender_channels_flow_control_semaphore_id{};
     std::array<size_t, builder_config::num_max_sender_channels> sender_channels_connection_semaphore_id{};
@@ -1547,7 +1642,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         has_tensix_extension,
         actual_sender_channels_per_vc,
         actual_receiver_channels_per_vc,
-        channel_trimming_overrides);
+        channel_trimming_overrides,
+        vc0_trim_fast_path_info);
 }
 
 SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_channel(

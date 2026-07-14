@@ -6,14 +6,22 @@ inputs:
     description: 'Allocation name'
     required: true
   namespace:
-    description: 'Kubernetes namespace for the environment'
+    description: 'Target namespace for the allocation'
     required: false
     default: 'ttop-ci'
 
 runs:
   using: 'composite'
   steps:
+    - name: Get github ID token
+      shell: bash
+      id: token
+      run: |
+        IDTOKEN=$(curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" $ACTIONS_ID_TOKEN_REQUEST_URL -H "Accept: application/json; api-version=2.0" -H "Content-Type: application/json" -d "{}" | jq -r '.value')
+        echo "::add-mask::${IDTOKEN}"
+        echo "idToken=${IDTOKEN}" >> $GITHUB_OUTPUT
+
     - name: Delete Allocation
       shell: bash
       run: |
-        kubectl -n ${{ inputs.namespace }} delete allocation/${{ inputs.allocationName }} --ignore-not-found
+        kubectl --token ${{ steps.token.outputs.idToken }} -n ${{ inputs.namespace }} delete allocation/${{ inputs.allocationName }}

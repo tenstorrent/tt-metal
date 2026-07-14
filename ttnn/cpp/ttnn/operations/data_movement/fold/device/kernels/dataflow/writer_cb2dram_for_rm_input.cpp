@@ -26,7 +26,7 @@ void kernel_main() {
     const auto s_out = TensorAccessor(dst_args, dst_addr);
     uint32_t dst_index = get_arg_val<uint32_t>(1);
 
-    experimental::Noc noc;
+    Noc noc;
     experimental::CB cb_in0(cb_id_in0);
     experimental::CB cb_in1(cb_id_in1);
 
@@ -48,7 +48,7 @@ void kernel_main() {
         if constexpr (!is_l1_aligned) {
             // Scratch buffer (cb_in1) is populated at its WRITE_PTR; no push_back has advanced it yet.
             noc.async_write(
-                experimental::use<experimental::CB::AddrSelector::WRITE_PTR>(cb_in1),
+                use<experimental::CB::AddrSelector::WRITE_PTR>(cb_in1),
                 s_out,
                 stick_nbytes * patch_size,
                 {},

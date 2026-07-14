@@ -5,6 +5,7 @@
 import pytest
 import torch
 import ttnn
+from tests.ttnn.nightly.unit_tests.operations.matmul.utility_functions import ttnn_matmul, ttnn_linear
 
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.ttnn.unit_tests.operations.matmul.test_matmul_deepseek import _run_matmul_2d_interleaved_in0_sharded_in1
@@ -110,14 +111,14 @@ def test_sd_matmul(device, batch_size, channel_a, channel_b, m_size, k_size, n_s
     pcc = 0.94 if dtype == ttnn.bfloat8_b else 0.98
 
     if has_bias:
-        output_tensor = ttnn.linear(
+        output_tensor = ttnn_linear(
             input_tensor_a,
             input_tensor_b,
             bias=input_tensor_c,
             core_grid=core_grid,
         )
     else:
-        output_tensor = ttnn.matmul(
+        output_tensor = ttnn_matmul(
             input_tensor_a,
             input_tensor_b,
             core_grid=core_grid,
@@ -203,7 +204,7 @@ def test_sdxl_matmul(
         packer_l1_acc=True,
     )
 
-    output_tensor = ttnn.linear(
+    output_tensor = ttnn_linear(
         tt_act_block_sharded,
         tt_weights,
         bias=tt_bias,
@@ -309,7 +310,7 @@ def test_matmul_transpose_a_with_low_precision_rhs(device, rhs_dtype):
     Regression test for transpose_a with a lower-precision RHS tensor.
 
     When transpose_a is True the compute kernel transposes in0 tiles via
-    transpose_wh_init_short, which requires the HW srcA unpacker to be
+    transpose_init, which requires the HW srcA unpacker to be
     configured for in0's data format (bfloat16).  mm_block_init sets srcA
     to in1's format instead; when in1 is Bfp8_b the resulting format
     mismatch caused an LLK assert (issue #35247b).
@@ -337,10 +338,10 @@ def test_matmul_transpose_a_with_low_precision_rhs(device, rhs_dtype):
         packer_l1_acc=True,
     )
 
-    out_ref = ttnn.to_torch(ttnn.matmul(a_perm_ref, b, compute_kernel_config=compute_kernel_config))
+    out_ref = ttnn.to_torch(ttnn_matmul(a_perm_ref, b, compute_kernel_config=compute_kernel_config))
 
     out_candidate = ttnn.to_torch(
-        ttnn.matmul(a_perm_cand, b, transpose_a=True, compute_kernel_config=compute_kernel_config)
+        ttnn_matmul(a_perm_cand, b, transpose_a=True, compute_kernel_config=compute_kernel_config)
     )
 
     assert out_ref.shape == out_candidate.shape
@@ -439,7 +440,7 @@ def test_matmul_transpose_a_fuse_batch(device, batch, m, k, n, program_config):
         packer_l1_acc=True,
     )
 
-    output = ttnn.matmul(
+    output = ttnn_matmul(
         a,
         b,
         transpose_a=True,
@@ -452,4 +453,61 @@ def test_matmul_transpose_a_fuse_batch(device, batch, m, k, n, program_config):
     assert output.shape == torch_out.shape
     assert_numeric_metrics(
         torch_out, output, check_allclose=False, check_frobenius=False, pcc_threshold=0.999, check_ulp=False
+    )
+
+
+def test_matmul_m_direction_padding(device):
+    # Create input tensors (keep the same random data for comparison)
+    torch.manual_seed(0)
+    torch_a = torch.randn((1, 1, 64, 2880), dtype=torch.bfloat16)
+    torch_b = torch.randn((1, 1, 2880, 2880), dtype=torch.bfloat16)
+
+    tensor_a = ttnn.from_torch(
+        torch_a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    tensor_b = ttnn.from_torch(
+        torch_b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+
+    compute_kernel_config_HiFi4 = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        # compute_with_storage_grid_size=(13, 10),
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=6,
+        per_core_N=22,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+    # Perform matrix multiplication
+    result = ttnn_matmul(
+        tensor_a,
+        tensor_b,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config_HiFi4,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+    )
+
+    output = ttnn.to_torch(result)
+    expected = torch.matmul(torch_a, torch_b)
+
+    assert_numeric_metrics(
+        expected,
+        output,
+        check_allclose=False,
+        check_frobenius=True,
+        frobenius_threshold=0.02,
+        pcc_threshold=0.999,
+        check_ulp=False,
     )

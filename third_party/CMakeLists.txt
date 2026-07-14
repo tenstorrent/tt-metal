@@ -147,7 +147,7 @@ CPMAddPackage(
 ############################################################################################################################
 
 CPMAddPackage(
-    NAME googletest
+    NAME GTest
     GITHUB_REPOSITORY google/googletest
     GIT_TAG v1.13.0
     VERSION 1.13.0
@@ -155,6 +155,7 @@ CPMAddPackage(
         "INSTALL_GTEST OFF"
         "BUILD_SHARED_LIBS OFF"
 )
+CPMRegisterPackage("googletest" "1.13.0")
 
 ############################################################################################################################
 # boost-ext reflect : https://github.com/boost-ext/reflect
@@ -221,7 +222,7 @@ CPMAddPackage(
     NAME nanobind
     GITHUB_REPOSITORY wjakob/nanobind
     GIT_TAG
-        c5a3a378aa61d104c82ca053cb1e367782cd3618 # v2.10.2
+        2a61ad2494d09fecb2e13322c1383342c299900d # 2.12.0
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "NB_USE_SUBMODULE_DEPS ON"
@@ -399,20 +400,41 @@ CPMAddPackage(
 )
 
 ####################################################################################################################
-# libdwarf : https://github.com/davea42/libdwarf-code
-# Portable DWARF debug info parser (no libelf dependency, built-in ELF reader)
+# CaDiCaL : https://github.com/arminbiere/cadical
+# Upstream has no CMakeLists.txt; after CPM download we build STATIC from the same sources as makefile.in
+# (src/*.cpp minus cadical/mobical, plus src/*.c). NBUILD avoids generated build.hpp; patch fixes vivify.hpp.
 ####################################################################################################################
 CPMAddPackage(
-    NAME libdwarf
-    GITHUB_REPOSITORY davea42/libdwarf-code
-    GIT_TAG v0.12.0
-    OPTIONS
-        "BUILD_DWARFDUMP OFF"
-        "BUILD_DWARFEXAMPLE OFF"
-        "BUILD_SHARED_LIBS OFF"
-        "PIC_ALWAYS ON"
-        "BUILD_TESTING OFF"
-        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+    NAME cadical
+    GITHUB_REPOSITORY arminbiere/cadical
+    GIT_TAG rel-2.2.1
+    DOWNLOAD_ONLY YES
+    PATCHES
+        cadical_vivify_include_tuple.patch
+)
+
+file(GLOB CADICAL_CXX CONFIGURE_DEPENDS "${cadical_SOURCE_DIR}/src/*.cpp")
+list(FILTER CADICAL_CXX EXCLUDE REGEX ".*/(cadical|mobical)\\.cpp$")
+file(GLOB CADICAL_C CONFIGURE_DEPENDS "${cadical_SOURCE_DIR}/src/*.c")
+add_library(
+    cadical
+    STATIC
+    ${CADICAL_CXX}
+    ${CADICAL_C}
+)
+add_library(cadical::cadical ALIAS cadical)
+target_include_directories(cadical SYSTEM PUBLIC "${cadical_SOURCE_DIR}/src")
+target_compile_definitions(
+    cadical
+    PRIVATE
+        NBUILD
+        $<$<NOT:$<CONFIG:Debug>>:NDEBUG>
+)
+set_target_properties(
+    cadical
+    PROPERTIES
+        POSITION_INDEPENDENT_CODE
+            ON
 )
 
 ####################################################################################################################
@@ -444,3 +466,15 @@ if(TT_METAL_USE_EMULE)
         EXCLUDE_FROM_ALL YES
     )
 endif()
+
+############################################################################################################################
+# tt-exalens (only native ELF/DWARF parser)
+############################################################################################################################
+CPMAddPackage(
+    NAME ttexalens
+    GITHUB_REPOSITORY tenstorrent/tt-exalens
+    GIT_TAG 6f5720240b7254b25cb3d78aef81769fc12a30f9
+    SOURCE_SUBDIR ttexalens/cpp/elf
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+)

@@ -39,6 +39,14 @@ class SharedMLP:
         tp = mesh_config.tp if mesh_config else 1
         tp_suffix = f"_tp{tp}" if tp > 1 else ""
 
+        # Tag the cache filenames with the weight dtype so that flipping a
+        # SharedMLP weight's dtype (e.g. bf16 → bfp8 for DRAM-pressure relief)
+        # doesn't collide with a previously-cached file that holds the same
+        # logical weight at a different dtype. The rest of the model's cache
+        # entries are unaffected and stay reusable across runs.
+        _dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
+        dtype_suffix = f"_{_dtype_str}"
+
         if tp > 1:
             col_mapper = mesh_config.column_parallel(mesh_device)
             row_mapper = mesh_config.row_parallel(mesh_device)
@@ -62,7 +70,7 @@ class SharedMLP:
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=col_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_proj.weight{tp_suffix}"),
+            cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_proj.weight{tp_suffix}{dtype_suffix}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self.up_proj = ttnn.as_tensor(
@@ -71,7 +79,7 @@ class SharedMLP:
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=col_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, f"up_proj.weight{tp_suffix}"),
+            cache_file_name=get_cache_file_name(tensor_cache_path, f"up_proj.weight{tp_suffix}{dtype_suffix}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         # down: row-parallel (shard input dim, allreduce after)
@@ -81,7 +89,7 @@ class SharedMLP:
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=row_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, f"down_proj.weight{tp_suffix}"),
+            cache_file_name=get_cache_file_name(tensor_cache_path, f"down_proj.weight{tp_suffix}{dtype_suffix}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 

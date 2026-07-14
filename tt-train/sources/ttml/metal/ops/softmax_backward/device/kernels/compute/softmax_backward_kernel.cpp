@@ -4,77 +4,78 @@
 
 #include "api/compute/bcast.h"
 #include "api/compute/common.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/matmul.h"
+#include "api/compute/reconfig_data_format.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
+
+namespace ckernel {
+
+// When fp32_dest_acc_en is set, unpack/math must be explicitly reconfigured between ops (see FP32_DEST_ACC_EN).
+ALWI void mul_tiles_init_with_dt(uint32_t icb0, uint32_t icb1) {
+    reconfig_data_format(icb0, icb1);
+    mul_tiles_init(icb0, icb1);
+}
+
+ALWI void sub_bcast_cols_init_short_with_dt(uint32_t icb0, uint32_t icb1) {
+    reconfig_data_format(icb0, icb1);
+    sub_bcast_cols_init_short(icb0, icb1);
+}
+
+}  // namespace ckernel
 
 constexpr uint32_t DST_REG_ID = 0;
 constexpr uint32_t ONE_TILE = 1;
 
-// Caller is responsible for waiting cb_wait_front(icb_ones, onetile);
-ALWI void reduce_tile_to_cb(uint32_t icb0, uint32_t icb_ones, uint32_t ocb, uint32_t num_tiles) {
+// Stream y * grad through the row, mul-accumulating elementwise into DST[0].
+// `mul_tiles_init` programs ELWMUL with acc_to_dest=true, so within a single
+// tile_regs_acquire/commit window each `mul_tiles(y, grad, i, i, 0)` performs
+//   DST[0] += y[i] * grad[i]
+// (FP32 in DST when fp32_dest_acc_en). After all tiles, DST[0] holds 32 column
+// partials per row: column j = sum over k of input[k*32 + j]. The caller collapses
+// those 32 partials into a per-row scalar with a single matmul-with-ones.
+//
+// `RetainInputs` mirrors the reader contract: when the row fits in L1 the inputs
+// are kept for pass 2, otherwise they are popped block-by-block as we consume them.
+template <bool RetainInputs>
+ALWI void mul_accumulate_row_to_dst(
+    uint32_t y_cb_id,
+    uint32_t grad_cb_id,
+    uint32_t partial_cb_id,
+    uint32_t num_tiles_per_row,
+    uint32_t tiles_per_block) {
+    ckernel::mul_tiles_init_with_dt(y_cb_id, grad_cb_id);
+
     tile_regs_acquire();
-
-    // Initialize matmul - will accumulate across all tiles
-    mm_init(icb0, icb_ones, ocb, /*transpose*/ 0);
-
-    cb_wait_front(icb0, num_tiles);
-    for (uint32_t x = 0; x < num_tiles; ++x) {
-        // Multiply tile x with ones vector and accumulate to dst0
-        // false = no transpose, enables accumulation behavior
-        matmul_tiles(icb0, icb_ones, x, 0, DST_REG_ID);
-    }
-
-    tile_regs_commit();
-    pack_and_push(DST_REG_ID, ocb);
-}
-
-// Multiply tiles from two CBs; FullRowInL1 chooses row (per-tile pack) vs block (batch pack) code path.
-template <bool FullRowInL1>
-ALWI void elementwise_multiply(uint32_t src0_cb_id, uint32_t src1_cb_id, uint32_t out_cb_id, uint32_t size);
-
-template <>
-ALWI void elementwise_multiply<true>(uint32_t src0_cb_id, uint32_t src1_cb_id, uint32_t out_cb_id, uint32_t size) {
-    mul_tiles_init(src0_cb_id, src1_cb_id);
-    for (uint32_t i = 0; i < size; ++i) {
-        tile_regs_acquire();
-        mul_tiles(src0_cb_id, src1_cb_id, i, i, DST_REG_ID);
-        tile_regs_commit();
-        pack_and_push(DST_REG_ID, out_cb_id);
-    }
-}
-
-template <>
-ALWI void elementwise_multiply<false>(uint32_t src0_cb_id, uint32_t src1_cb_id, uint32_t out_cb_id, uint32_t size) {
-    mul_tiles_init(src0_cb_id, src1_cb_id);
-    tile_regs_acquire();
-    for (uint32_t i = 0; i < size; ++i) {
-        mul_tiles(src0_cb_id, src1_cb_id, i, i, i);
+    for (uint32_t block_start = 0; block_start < num_tiles_per_row; block_start += tiles_per_block) {
+        cb_wait_front(y_cb_id, tiles_per_block);
+        cb_wait_front(grad_cb_id, tiles_per_block);
+        for (uint32_t i = 0; i < tiles_per_block; ++i) {
+            mul_tiles(y_cb_id, grad_cb_id, i, i, DST_REG_ID);
+        }
+        if constexpr (!RetainInputs) {
+            cb_pop_front(y_cb_id, tiles_per_block);
+            cb_pop_front(grad_cb_id, tiles_per_block);
+        }
     }
     tile_regs_commit();
-    pack_and_push_block(out_cb_id, size);
+    pack_and_push(DST_REG_ID, partial_cb_id);
 }
 
-// Add a new value to an accumulator and replace the accumulator with the result
-// Reads from accum_cb and addend_cb, pops both, then pushes result back to accum_cb
-ALWI void accumulate(uint32_t accum_cb_id, uint32_t addend_cb_id) {
-    // Wait for both inputs
-    cb_wait_front(accum_cb_id, ONE_TILE);
-    cb_wait_front(addend_cb_id, ONE_TILE);
-
-    // Add them together
-    add_tiles_init(accum_cb_id, addend_cb_id);
+// Collapse the 32 column partials per row in `partial_cb_id` into a single per-row
+// scalar in `sum_cb_id` via one matmul with the ones tile.
+ALWI void reduce_partial_to_scalar(uint32_t partial_cb_id, uint32_t ones_cb_id, uint32_t sum_cb_id) {
     tile_regs_acquire();
-    add_tiles(accum_cb_id, addend_cb_id, 0, 0, DST_REG_ID);
+    ckernel::reconfig_data_format(ones_cb_id, partial_cb_id);
+    matmul_init(partial_cb_id, ones_cb_id, /*transpose*/ 0);
+
+    cb_wait_front(partial_cb_id, ONE_TILE);
+    matmul_tiles(partial_cb_id, ones_cb_id, 0, 0, DST_REG_ID);
     tile_regs_commit();
-    tile_regs_wait();
 
-    // Pop old values
-    cb_pop_front(accum_cb_id, ONE_TILE);
-    cb_pop_front(addend_cb_id, ONE_TILE);
-
-    // Write updated sum back to accumulator CB
-    pack_and_push(DST_REG_ID, accum_cb_id);
+    cb_pop_front(partial_cb_id, ONE_TILE);
+    pack_and_push(DST_REG_ID, sum_cb_id);
 }
 
 // Fused subtract and multiply: output = y * (grad - sum)
@@ -89,12 +90,16 @@ ALWI void fused_sub_mul(
     tile_regs_acquire();
 
     // Step 1: Compute grad - sum(y * grad) and store in DST[0]
-    sub_bcast_cols_init_short(grad_cb_id, sum_reduce_cb_id);
+    ckernel::sub_bcast_cols_init_short_with_dt(grad_cb_id, sum_reduce_cb_id);
     sub_tiles_bcast<BROADCAST_TYPE>(grad_cb_id, sum_reduce_cb_id, grad_tile_idx, 0, DST_REG_ID);
 
     // Step 2: Multiply y * DST[0], reusing the DST register
-    binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(y_cb_id);
-    binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(y_cb_id, y_tile_idx, DST_REG_ID);
+#if defined(FP32_DEST_ACC_EN)
+    ckernel::reconfig_data_format_srca(y_cb_id);
+#endif
+    binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(y_cb_id);
+    binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+        y_cb_id, y_tile_idx, DST_REG_ID);
 
     tile_regs_commit();
     pack_and_push(DST_REG_ID, out_cb_id);
@@ -105,12 +110,11 @@ void kernel_main() {
     constexpr uint32_t y_cb_id = get_compile_time_arg_val(0);            // softmax_output (y)
     constexpr uint32_t grad_cb_id = get_compile_time_arg_val(1);         // upstream_grad (grad)
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(2);          // output
-    constexpr uint32_t mul_cb_id = get_compile_time_arg_val(3);          // y * grad
-    constexpr uint32_t sum_reduce_cb_id = get_compile_time_arg_val(4);   // sum(y * grad) - accumulated
-    constexpr uint32_t ones_cb_id = get_compile_time_arg_val(5);         // ones vector for matmul reduction
-    constexpr uint32_t block_sum_cb_id = get_compile_time_arg_val(6);    // block sum temporary
-    constexpr uint32_t num_tiles_per_row = get_compile_time_arg_val(7);  // width in tiles
-    constexpr uint32_t tiles_per_block = get_compile_time_arg_val(8);  // block size - must match reader/writer kernels
+    constexpr uint32_t sum_reduce_cb_id = get_compile_time_arg_val(3);   // per-row scalar sum(y * grad)
+    constexpr uint32_t ones_cb_id = get_compile_time_arg_val(4);         // ones vector for matmul reduction
+    constexpr uint32_t partial_cb_id = get_compile_time_arg_val(5);      // 1-tile partial (32 col-partials per row)
+    constexpr uint32_t num_tiles_per_row = get_compile_time_arg_val(6);  // width in tiles
+    constexpr uint32_t tiles_per_block = get_compile_time_arg_val(7);  // block size - must match reader/writer kernels
     constexpr bool full_row_in_l1 = (num_tiles_per_row == tiles_per_block);  // skip second read when full row fits
 
     // Runtime args
@@ -122,34 +126,15 @@ void kernel_main() {
 
     // Two-pass streaming algorithm for minimal L1 memory
     for (uint32_t row = 0; row < num_rows; ++row) {
-        // === PASS 1: Streaming reduction to compute sum(y * grad) ===
-        cb_wait_front(ones_cb_id, ONE_TILE);
-
-        // Initialize accumulator with a zero tile
-        push_zero_tile(sum_reduce_cb_id);
-
-        // Process in blocks: compute products, then accumulate each block
-        for (uint32_t block_start = 0; block_start < num_tiles_per_row; block_start += tiles_per_block) {
-            cb_wait_front(y_cb_id, tiles_per_block);
-            cb_wait_front(grad_cb_id, tiles_per_block);
-
-            // Step 1a: Compute y * grad for all tiles in this block (padding slots are 0*0=0)
-            elementwise_multiply<full_row_in_l1>(y_cb_id, grad_cb_id, mul_cb_id, tiles_per_block);
-
-            // Step 1b: Reduce this block to a single sum tile (padding tiles add 0 to sum)
-            reduce_tile_to_cb(mul_cb_id, ones_cb_id, block_sum_cb_id, tiles_per_block);
-
-            // Step 1c: Add block sum to running total
-            // accumulated_sum = accumulated_sum + block_sum
-            accumulate(sum_reduce_cb_id, block_sum_cb_id);
-
-            // Pop this block
-            cb_pop_front(mul_cb_id, tiles_per_block);
-            if constexpr (!full_row_in_l1) {
-                cb_pop_front(y_cb_id, tiles_per_block);
-                cb_pop_front(grad_cb_id, tiles_per_block);
-            }
-        }
+        // === PASS 1: sum(y * grad) per row ===
+        // Reorder accumulation as (a_0 + a_32 + ...) + (a_1 + a_33 + ...) + ... :
+        // mul-accumulate elementwise into DST[0] across all tiles in the row, then a single
+        // matmul-with-ones collapses the 32 column partials into a per-row scalar.
+        // Avoids the per-block reduce/pack/unpack/add round trips
+        // and keeps the running accumulator in FP32 DST throughout the row.
+        mul_accumulate_row_to_dst<full_row_in_l1>(
+            y_cb_id, grad_cb_id, partial_cb_id, num_tiles_per_row, tiles_per_block);
+        reduce_partial_to_scalar(partial_cb_id, ones_cb_id, sum_reduce_cb_id);
 
         // === PASS 2: Compute final output (reuse data when full row in L1, else fresh read) ===
         cb_wait_front(sum_reduce_cb_id, ONE_TILE);

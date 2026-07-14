@@ -7,7 +7,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_ulp
 from models.common.utility_functions import skip_for_slow_dispatch
 
 
@@ -37,7 +37,7 @@ def test_non_4D_channel_bcast(device, shapes):
     output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
+    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize("scalar", [3])
@@ -52,7 +52,7 @@ def test_add_1D_tensor_and_scalar(device, scalar, size):
     output_tensor = input_tensor + scalar
     output_tensor = ttnn.to_torch(output_tensor, torch_rank=1)
 
-    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
+    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
     assert output_tensor.shape == (size,)
 
 
@@ -67,7 +67,7 @@ def test_add_2D_tensors(device, hw):
     output = ttnn.add(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, 0.9999)
+    assert_with_ulp(torch_output_tensor, output, ulp_threshold=1)
 
 
 @pytest.mark.parametrize("hw", [(32, 64), (1, 1), (0, 0)])
@@ -81,7 +81,7 @@ def test_add_2D_tensors_with_program_cache(device, hw):
     output = ttnn.add(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, 0.9999)
+    assert_with_ulp(torch_output_tensor, output, ulp_threshold=1)
 
 
 @pytest.mark.parametrize("hw", [(32, 64), (1, 1), (0, 0)])
@@ -94,7 +94,7 @@ def test_add_scalar(device, hw, scalar):
     output = input_tensor_a + scalar
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, 0.9999)
+    assert_with_ulp(torch_output_tensor, output, ulp_threshold=1)
 
 
 @pytest.mark.parametrize("hw", [(32, 64), (1, 1), (0, 0)])
@@ -107,7 +107,7 @@ def test_reverse_add_scalar(device, hw, scalar):
     output = scalar + input_tensor_a
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, 0.9999)
+    assert_with_ulp(torch_output_tensor, output, ulp_threshold=1)
 
 
 @pytest.mark.parametrize("hw", [(32, 64), (1, 1), (0, 0)])
@@ -121,7 +121,7 @@ def test_add_4D_tensors(device, hw):
     output = ttnn.add(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, 0.9999)
+    assert_with_ulp(torch_output_tensor, output, ulp_threshold=1)
 
 
 @pytest.mark.parametrize("h", [32])
@@ -137,7 +137,7 @@ def test_add_with_broadcast(device, h, w):
     output_tensor = ttnn.add(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize("h", [500])
@@ -152,7 +152,7 @@ def test_expand_and_broadcast(device, h, w):
     output_tensor = ttnn.add(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize("h", [32])
@@ -167,7 +167,7 @@ def test_add_with_broadcast_on_batch(device, h, w):
     output_tensor = ttnn.add(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize("shape", [(8, 16, 384, 384)])
@@ -184,7 +184,7 @@ def test_add_attention_scores_to_scalar(device, shape, scalar):
     output_tensor = ttnn.add(input_tensor, scalar, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
+    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
     assert output_tensor.shape == shape
 
 
@@ -206,7 +206,7 @@ def test_add_with_batch_broadcast(device, shape_a, shape_b):
     output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
+    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
     assert output_tensor.shape == shape_a
 
 
@@ -228,7 +228,7 @@ def test_add_dram_and_l1_tensor(device, shape_a, shape_b):
     output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
+    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
     assert output_tensor.shape == shape_a
 
 
@@ -249,7 +249,7 @@ def test_add_and_apply_activations(device, shape, activations):
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.add(input_tensor_a, input_tensor_b, activations=activations)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.99988)
+    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
     assert output_tensor.shape == shape
 
 
@@ -270,7 +270,7 @@ def test_in_place_add_and_apply_activations(device, shape, activations):
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.add_(input_tensor_a, input_tensor_b, activations=activations)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.99988)
+    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
     assert output_tensor.shape == shape
 
 
@@ -323,7 +323,7 @@ def test_add_with_different_batch(device, shape_a, shape_b):
     # we also get incorrect pcc as well
     torch_output_tensor = torch_output_tensor[:1]
 
-    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
+    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
     assert output_tensor.shape == shape_a
 
 
@@ -373,7 +373,7 @@ def test_add_with_height_sharding(device, input_a_sharded, input_b_sharded, out_
 
     output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=out_mem_config)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
+    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
     assert output_tensor.shape == shape
 
 
@@ -423,7 +423,7 @@ def test_add_with_width_sharding(device, input_a_sharded, input_b_sharded, out_s
 
     output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=out_mem_config)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
+    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
     assert output_tensor.shape == shape
 
 
@@ -470,7 +470,7 @@ def test_add_with_block_sharding(device, input_a_sharded, input_b_sharded, out_s
 
     output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=out_mem_config)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
+    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
     assert output_tensor.shape == shape
 
 
@@ -568,5 +568,5 @@ def test_add_with_sub_devices(device, input_a_sharded, input_b_sharded, out_shar
     device.load_sub_device_manager(sub_device_manager_id)
     output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=out_mem_config)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
+    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
     assert output_tensor.shape == shape

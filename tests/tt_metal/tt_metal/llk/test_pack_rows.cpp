@@ -18,7 +18,7 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include "device_fixture.hpp"
+#include "llk_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
@@ -101,7 +101,7 @@ void run_single_core_pack_rows_program(
 
     auto unary_writer_kernel = tt_metal::CreateKernel(
         program_,
-        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
@@ -168,8 +168,8 @@ void run_single_core_pack_rows_program(
 Following tests are for pack_rows
 ***************************************/
 
-// Parameterized test fixture that combines MeshDeviceFixture with test parameters
-class TensixComputePackRowsTest : public MeshDeviceFixture,
+// Parameterized test fixture that combines LLKMeshDeviceFixture with test parameters
+class TensixComputePackRowsTest : public LLKMeshDeviceFixture,
                                   public testing::WithParamInterface<unit_tests::compute::pack_rows::TestConfig> {};
 
 // The actual parameterized test

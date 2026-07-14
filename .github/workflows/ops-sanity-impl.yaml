@@ -1,0 +1,162 @@
+name: "[internal] ops sanity tests impl"
+
+# Runs the ops-team sanity bucket. Invoked from PR/sanity-stage gates
+# (sanity-tests.yaml) and the blackhole nightly debug path
+# (blackhole-sanity-tests.yaml). Reads
+# tests/pipeline_reorg/ops_sanity_tests.yaml and budgets under
+# ops.sanity.<sku>.
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      enabled-skus:
+        required: true
+        type: string
+        description: "Comma-separated SKUs (see .github/sku_config.yaml)."
+      enable-watcher:
+        required: false
+        type: boolean
+        default: false
+      enable-lightweight-kernel-asserts:
+        required: false
+        type: boolean
+        default: false
+      enable-llk-asserts:
+        required: false
+        type: boolean
+        default: false
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: "Commit SHA to test (default: HEAD)"
+
+jobs:
+  load-test-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/ops_sanity_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "sanity"
+      - name: Build test matrix based on enabled SKUs
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "${{ inputs.enabled-skus }}" \
+            ./.github/sku_config.yaml
+
+  ops-sanity-tests:
+    needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        ARCH_NAME: ${{ (contains(matrix.test-group.sku, 'bh_') || contains(matrix.test-group.sku, 'blackhole')) && 'blackhole' || 'wormhole_b0' }}
+        LOGURU_LEVEL: INFO
+        PYTHONPATH: /work
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          filter: blob:none
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher || false }}
+          enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+          enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+          auto-triage: ${{ !inputs.enable-watcher }}
+
+      - name: ${{ matrix.test-group.name }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TRACY_NO_INVARIANT_CHECK: 1
+          _TEST_CMD: ${{ matrix.test-group.cmd }}
+        run: |
+          if [ "${{ matrix.test-group.slow_dispatch }}" = "true" ]; then
+            export TT_METAL_SLOW_DISPATCH_MODE=1
+          fi
+          python3 tools/tt-power-sidecar/tt_power_sidecar.py \
+            --backend sysfs \
+            --out /work/power_report.json \
+            -- bash -c "$_TEST_CMD"
+
+          # Device perf branch
+          export DEVICE_PERF_REPORT_FILENAME="Ops_Perf.csv"
+          python3 models/perf/merge_device_perf_results.py "$DEVICE_PERF_REPORT_FILENAME" REPORT
+          echo "Showing ops perf report... will fail if not found"
+          cat $DEVICE_PERF_REPORT_FILENAME
+
+      - name: Upload power report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: power-report-${{ matrix.test-group.name }}
+          path: ${{ github.workspace }}/docker-job/power_report.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Merge and check test reports
+        if: ${{ github.event.pull_request.head.repo.fork == false }}
+        timeout-minutes: 5
+        env:
+          TRACY_NO_INVARIANT_CHECK: 1
+        run: |
+          export DEVICE_PERF_REPORT_FILENAME=Ops_Perf.csv
+          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME CHECK
+
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()

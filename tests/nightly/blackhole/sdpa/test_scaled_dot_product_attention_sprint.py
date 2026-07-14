@@ -4,6 +4,7 @@
 
 import os
 import math
+
 import torch
 from itertools import product
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -12,6 +13,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 import ttnn
 from loguru import logger
 import pytest
+from models.common.utility_functions import skip_with_llk_assert, skip_with_watcher
 
 
 def fa_rand(*shape):
@@ -19,10 +21,6 @@ def fa_rand(*shape):
     normal_2 = torch.randn(shape) * 10
     bernoulli = torch.bernoulli(torch.full(shape, 0.001))
     return normal_1 + normal_2 * bernoulli
-
-
-def is_watcher_enabled():
-    return os.environ.get("TT_METAL_WATCHER") is not None
 
 
 def run_sdpa_noncausal(
@@ -258,11 +256,19 @@ from tests.nightly.sdpa_perf_utils import (
     compute_cores_used,
     compute_math_utilization,
 )
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 
 
 def compute_sdpa_utilization(seqlen, head_dim, num_heads, duration_ns, core_count):
     """Single-chip SDPA utilization (local_seq == total_seq, arch=blackhole)."""
     return compute_math_utilization(seqlen, seqlen, head_dim, head_dim, num_heads, duration_ns, core_count)
+
+
+@pytest.fixture
+def sdpa_realtime_profiled_device(device):
+    if not ttnn.device.IsProgramRealtimeProfilerActive():
+        pytest.fail("Real-time profiler must be active for SDPA perf checks")
+    return device
 
 
 # === TEST 4: PERFORMANCE TABLE (skipped on CI) ===
@@ -412,3 +418,68 @@ def test_sdpa_create_perf_table(b, nh, s, d):
             f"{best['total_waste_pct']:.1f}% pad waste, {best['slot_waste_pct']:.1f}% slot waste)"
         )
     print(f"{'='*170}\n")
+
+
+# === TEST 5: PERFORMANCE CHECK ===
+# Symmetric +/- band — catches both regressions and unexpected speedups.
+SDPA_PERF_MARGIN = 0.01
+
+SDPA_PERF_CHECK_CONFIGS = [
+    # (shape_id, q_chunk_size, k_chunk_size, expected_util)
+    ("wan2_2_1xGLX_analog", 288, 512, 70.0),
+    ("wan2_2_4xGLX_analog", 224, 512, 57.5),
+]
+
+
+@pytest.mark.parametrize(
+    "shape_id, q_chunk_size, k_chunk_size, expected_util",
+    SDPA_PERF_CHECK_CONFIGS,
+    ids=[f"{cfg[0]}-q{cfg[1]}-k{cfg[2]}" for cfg in SDPA_PERF_CHECK_CONFIGS],
+)
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+def test_sdpa_perf_check(sdpa_realtime_profiled_device, shape_id, q_chunk_size, k_chunk_size, expected_util):
+    """Measure single-chip SDPA math utilization via real-time device program records."""
+    idx = INPUT_IDS.index(shape_id)
+    b, nh, s, d = INPUT_SHAPES[idx]
+    device = sdpa_realtime_profiled_device
+
+    def run_sdpa():
+        return run_sdpa_noncausal(
+            device,
+            b,
+            nh,
+            nh,
+            s,
+            d,
+            q_chunk_size,
+            k_chunk_size,
+            ttnn.bfloat16,
+            do_check=False,
+        )
+
+    measured_out, perf_record = profile_realtime_program(
+        device,
+        run_sdpa,
+    )
+
+    core_count = 11 * 10  # full Blackhole Tensix grid (11x10 = 110 cores); SDPA runs on the whole grid
+    duration_ns = perf_record["duration_ns"]
+    utilization = compute_sdpa_utilization(s, d, nh, duration_ns, core_count)
+
+    lower = expected_util * (1 - SDPA_PERF_MARGIN)
+    upper = expected_util * (1 + SDPA_PERF_MARGIN)
+
+    logger.info(
+        f"SDPA perf check {shape_id}-q{q_chunk_size}-k{k_chunk_size}: "
+        f"duration={duration_ns/1e6:.3f} ms, math_util={utilization:.2f}% "
+        f"(expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}]), "
+        f"core_count={core_count}, profiler_runtime_id={perf_record['runtime_id']}"
+    )
+
+    del measured_out
+
+    assert lower <= utilization <= upper, (
+        f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
+        f"(expected {expected_util:.2f}%, margin +/- {SDPA_PERF_MARGIN*100:.1f}%)"
+    )

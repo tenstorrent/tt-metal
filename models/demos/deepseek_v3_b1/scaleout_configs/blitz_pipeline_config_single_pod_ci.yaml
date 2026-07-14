@@ -4,28 +4,28 @@
 
 stage_to_slice_mapping:
   0:
-    host: host-0
+    host: host-1
     slice: 0
   1:
-    host: host-0
+    host: host-1
     slice: 1
   2:
-    host: host-0
+    host: host-1
     slice: 2
   3:
-    host: host-0
+    host: host-1
     slice: 3
   4:
-    host: host-1
+    host: host-0
     slice: 0
   5:
-    host: host-1
+    host: host-0
     slice: 1
   6:
-    host: host-1
+    host: host-0
     slice: 2
   7:
-    host: host-1
+    host: host-0
     slice: 3
   8:
     host: host-2

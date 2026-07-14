@@ -73,6 +73,7 @@ class LlamaMLP(AbstractModuleBase):
 
         self.embedding_size = embedding_size
         self.dropout_prob = dropout
+        self.use_tp = use_tp
 
         if intermediate_size is None:
             intermediate_size = compute_swiglu_intermediate_size(embedding_size)
@@ -85,7 +86,6 @@ class LlamaMLP(AbstractModuleBase):
                 embedding_size,
                 intermediate_size,
                 has_bias=False,
-                weight_init=ttml.init.normal(0.0, 0.02),
                 gather_output=False,
                 axis_name="tp",
             )
@@ -93,7 +93,6 @@ class LlamaMLP(AbstractModuleBase):
                 embedding_size,
                 intermediate_size,
                 has_bias=False,
-                weight_init=ttml.init.normal(0.0, 0.02),
                 gather_output=False,
                 axis_name="tp",
             )
@@ -101,7 +100,6 @@ class LlamaMLP(AbstractModuleBase):
                 intermediate_size,
                 embedding_size,
                 has_bias=False,
-                weight_init=ttml.init.normal(0.0, 0.02),
                 input_is_parallel=True,
                 axis_name="tp",
             )
@@ -110,19 +108,16 @@ class LlamaMLP(AbstractModuleBase):
                 embedding_size,
                 intermediate_size,
                 False,
-                weight_init=ttml.init.normal(0.0, 0.02),
             )
             self.w3 = LinearLayer(
                 embedding_size,
                 intermediate_size,
                 False,
-                weight_init=ttml.init.normal(0.0, 0.02),
             )
             self.w2 = LinearLayer(
                 intermediate_size,
                 embedding_size,
                 False,
-                weight_init=ttml.init.normal(0.0, 0.02),
             )
 
     def forward(self, input: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
@@ -134,6 +129,18 @@ class LlamaMLP(AbstractModuleBase):
         Returns:
             Output tensor after MLP
         """
+        if not self.use_tp:
+            dropout_prob = 0.0 if self.get_run_mode() == RunMode.EVAL else self.dropout_prob
+            return ttml.ops.swiglu.swiglu(
+                input,
+                self.w1.weight.tensor,
+                self.w2.weight.tensor,
+                self.w3.weight.tensor,
+                dropout_prob,
+            )
+
+        # TP path: ColumnParallelLinear / RowParallelLinear inject collectives
+        # between matmuls, which the fused op cannot express.
         swished = ttml.ops.unary.silu(self.w1(input))
         gate = self.w3(input)
         gated = ttml.ops.binary.mul(swished, gate)

@@ -15,7 +15,7 @@ using RingDirection = ttnn_fixed::distributed::RingShiftDirection;
 
 // ============== Backward Q Types ==============
 
-struct operation_attributes_t {
+struct RingSDPABwQParams {
     uint32_t ring_size = 0;
     uint32_t ring_axis = 0;
     uint32_t step = 0;
@@ -24,7 +24,7 @@ struct operation_attributes_t {
         ttnn_fixed::distributed::RingShiftDirection::Backward;  // Direction K/V is shifting in the ring
 };
 
-struct tensor_args_t {
+struct RingSDPABwQInputs {
     ttnn::Tensor grad_output;
     ttnn::Tensor attn_output;
     ttnn::Tensor query;
@@ -33,6 +33,9 @@ struct tensor_args_t {
     ttnn::Tensor intermediates;
     std::optional<ttnn::Tensor> preallocated_grad_query;  // Preallocated output buffer
 };
+
+using operation_attributes_t = RingSDPABwQParams;
+using tensor_args_t = RingSDPABwQInputs;
 
 using tensor_return_value_t = std::tuple<ttnn::Tensor, ttnn::Tensor>;  // [grad_Q, u_scaler]
 

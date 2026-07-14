@@ -47,7 +47,7 @@ void bind_ternary_where(nb::module_& mod, const std::string& description) {
 
                * - Dtypes
                  - Layouts
-               * - BFLOAT16, BFLOAT8_B, FLOAT32, INT32
+               * - BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295])
                  - TILE
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
@@ -200,7 +200,7 @@ void bind_ternary_addcmul(
 
                * - Dtypes
                  - Layouts
-               * - FLOAT32, BFLOAT16, BFLOAT8_B, INT32
+               * - {4}
                  - TILE
 
             Only TTT (tensor-tensor-tensor) variant is supported.
@@ -334,6 +334,48 @@ void bind_ternary_mac(nb::module_& mod, const std::string& description) {
             nb::arg("memory_config") = nb::none()));
 }
 
+void bind_ternary_snake_beta(nb::module_& mod, const std::string& description) {
+    auto doc = std::string(R"doc(
+Computes the SnakeBeta activation element-wise on :attr:`input_tensor`:
+
+.. math::
+
+    \text{output}_i = \text{input}_i + \frac{\sin^2(\text{alpha}_i \cdot \text{input}_i)}{\text{beta}_i}
+
+This is the BigVGAN-style Snake activation with separate learnable ``alpha`` and ``beta`` parameters.
+
+Args:
+    input_tensor (ttnn.Tensor): the input tensor. Must be rank >= 2 and in TILE layout.
+    alpha (ttnn.Tensor): the frequency parameter tensor. Broadcastable on the last dimension.
+    beta (ttnn.Tensor): the denominator parameter tensor. Same shape as ``alpha``.
+        Caller is responsible for ensuring ``beta != 0`` (no internal epsilon).
+
+Keyword Args:
+    memory_config (ttnn.MemoryConfig, optional): memory configuration for the output. Defaults to ``None``.
+    output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to ``None``.
+
+Note:
+    - ``alpha``, ``beta``, and ``input_tensor`` must all be TILE layout and share the same dtype (BFLOAT16 or FLOAT32).
+    - ``alpha.shape == beta.shape``; both may only have non-1 size on the last dimension, which must equal ``input_tensor.shape[-1]``.
+
+Example:
+    >>> alpha = ttnn.from_torch(torch.ones(48, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    >>> beta = ttnn.from_torch(torch.ones(48, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    >>> output = ttnn.snake_beta(input_tensor, alpha, beta)
+)doc") + description;
+
+    ttnn::bind_function<"snake_beta">(
+        mod,
+        doc.c_str(),
+        &ttnn::snake_beta,
+        nb::arg("input_tensor"),
+        nb::arg("alpha"),
+        nb::arg("beta"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
+}
+
 }  // namespace
 
 void py_module(nb::module_& mod) {
@@ -345,7 +387,7 @@ void py_module(nb::module_& mod) {
             :attr:`input_tensor_a`.
             Returns a tensor with the same layout as :attr:`input_tensor_a`.)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i + (value * \mathrm{input\_tensor\_b}_i * \mathrm{input\_tensor\_c}_i))doc",
-        "FLOAT32, BFLOAT16, BFLOAT8_B, INT32");
+        "FLOAT32, BFLOAT16, BFLOAT8_B, INT32, UINT32");
 
     bind_ternary_addcdiv(
         mod,
@@ -366,6 +408,10 @@ void py_module(nb::module_& mod) {
     bind_ternary_mac(
         mod,
         R"doc(Computes Mac on :attr:`input_tensor_a`, :attr:`input_tensor_b` and :attr:`input_tensor_c` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
+
+    bind_ternary_snake_beta(
+        mod,
+        R"doc(Computes the SnakeBeta activation `y = x + sin^2(alpha * x) / beta` element-wise on :attr:`input_tensor` with broadcastable per-channel :attr:`alpha` and :attr:`beta`, and returns a tensor with the same layout as :attr:`input_tensor`.)doc");
 }
 
 }  // namespace ttnn::operations::ternary

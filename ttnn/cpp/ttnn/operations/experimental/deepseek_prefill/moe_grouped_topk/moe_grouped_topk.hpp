@@ -5,13 +5,18 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <optional>
+#include <string>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk {
 
+// score_func selects the router affinity activation applied to the logits:
+//   "sigmoid"      -> DeepSeek-V3 / Kimi (default)
+//   "sqrtsoftplus" -> DeepSeek-V4 (sqrt(softplus(x)))
 std::array<Tensor, 2> moe_grouped_topk(
     const Tensor& scores,
     const Tensor& bias,
@@ -22,6 +27,8 @@ std::array<Tensor, 2> moe_grouped_topk(
     float route_scale = 1.0f,
     float epsilon = 1e-20f,
     bool stable_sort = false,
-    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+    const std::string& score_func = "sigmoid",
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<Tensor>& padding_config = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk

@@ -11,8 +11,9 @@ and TtRoutedExpert (which processes the tokens after they arrive).
 
 For each token and each of its top-k experts, the dispatch kernel:
   1. Looks up which destination device hosts that expert via the expert_dispatch_table.
-  2. Reads the write position (global_dispatch_offset) for this source device and expert
-     from tt_expert_offsets (produced by TtMoERoutingSetup).
+  2. Reads the starting write position for this source device and expert from
+     tt_expert_offsets (global_dispatch_offsets, produced by TtMoERoutingSetup), then
+     advances a running per-expert counter from it as tokens are packed.
   3. Writes the token embedding into the destination device's local dispatch buffer at that
      position: locally via NOC if the expert is on the same device, or remotely via fabric
      if it is on a different device in the dispatch group.
@@ -64,6 +65,9 @@ class TtDispatchModule(LightweightModule):
         cluster_axis: int = 0,
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Linear,
+        fp8_output: bool = False,
+        subdevice_id=None,
+        num_untilizers_per_sender: int = 2,
     ):
         """
         Initialize dispatch module with configuration parameters.
@@ -84,7 +88,11 @@ class TtDispatchModule(LightweightModule):
             cluster_axis: Mesh axis along which dispatch communicates (0 = SP/dispatch axis).
             num_links: Number of fabric links for remote token writes.
             topology: Fabric topology for remote token writes.
+            fp8_output: Output dtype for the dispatched buffer.
+            num_untilizers_per_sender: Number of untilizer cores per sender (any N >= 1).
         """
+        if fp8_output and "blackhole" not in ttnn.get_arch_name():
+            raise ValueError("fp8_output requires Blackhole hardware")
         super().__init__()
         self.mesh_device = mesh_device
         self.dispatch_group_size = dispatch_group_size
@@ -97,6 +105,11 @@ class TtDispatchModule(LightweightModule):
         self.cluster_axis = cluster_axis
         self.num_links = num_links
         self.topology = topology
+        self.fp8_output = fp8_output
+        self.subdevice_id = subdevice_id
+        # num_untilizers_per_sender >= 1 is validated on the device op side
+        # (DispatchDeviceOperation::validate_on_program_cache_miss).
+        self.num_untilizers_per_sender = num_untilizers_per_sender
 
     @staticmethod
     def shard_expert_offsets(
@@ -189,6 +202,7 @@ class TtDispatchModule(LightweightModule):
         indices: ttnn.Tensor,
         tt_expert_offsets: ttnn.Tensor,
         tt_expert_dispatch_table: ttnn.Tensor,
+        padding_config: ttnn.Tensor = None,
     ):
         """
         Route input tokens to destination device dispatch buffers based on top-k expert indices.
@@ -214,13 +228,17 @@ class TtDispatchModule(LightweightModule):
                 Shape per device: (1, num_routed_experts)
                 Values >= 0 are destination chip IDs; -1 means the expert is not present in
                 this dispatch group.
+            padding_config: Optional per-device [local_real_tokens, pad_side] tensor (uint32,
+                ROW_MAJOR). When provided, the dispatch kernels bound their token loop to the
+                real (unpadded) tokens. Must match the tensor the gate used to sentinel-mark
+                padded tokens. None means process the full token range.
 
         Returns:
             dispatched_buffer: Flat expert-centric token buffer on each destination device.
                 Shape per device: (1, 1, max_dispatch_buffer_token_size, emb_dim)
                 Token at index i belongs to the expert whose region covers index i; regions are
                 TILE_HEIGHT-aligned and laid out by the expert region offsets from offset_cumsum.
-            metadata: Per-token metadata written alongside dispatched_buffer.
+            metadata: Per-token routing metadata written alongside dispatched_buffer.
                 Shape per device: (1, 1, max_dispatch_buffer_token_size, metadata_len=5),
                 int32, ROW_MAJOR.
                 Fields per token: [linearized_mesh_coord, token_idx, topk_idx, routed_expert, weight].
@@ -249,6 +267,7 @@ class TtDispatchModule(LightweightModule):
             indices_tensor=indices,
             expert_offsets_tensor=tt_expert_offsets,
             expert_dispatch_table_tensor=tt_expert_dispatch_table,
+            padding_config=padding_config,
             dispatch_group_size=self.dispatch_group_size,
             experts_per_chip=self.experts_per_chip,
             num_routed_experts=self.num_routed_experts,
@@ -258,6 +277,9 @@ class TtDispatchModule(LightweightModule):
             cluster_axis=self.cluster_axis,
             num_links=self.num_links,
             topology=self.topology,
+            use_fp8_dispatch=self.fp8_output,
+            subdevice_id=self.subdevice_id,
+            num_untilizers_per_sender=self.num_untilizers_per_sender,
         )
 
         tt_dispatched_buffer_shape = tt_dispatched_buffer.shape

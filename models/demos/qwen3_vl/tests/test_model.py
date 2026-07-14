@@ -23,7 +23,7 @@ from models.tt_transformers.tt.load_checkpoints import (
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150x8": (1, 8)}.get(
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
@@ -144,7 +144,15 @@ def test_vision_model_inference(
     tt_input = tt_model.prepare_input(patch_input, seq_len)
 
     # Run reference model
-    reference_output, reference_deepstack_visual_embeds = reference_model(pt_pixel_values, image_grid_thw)
+    # transformers 5.x Qwen3VLVisionModel returns BaseModelOutputWithDeepstackFeatures, not a
+    # (last_hidden_state, deepstack_features) tuple. Unpack version-tolerantly.
+    _vis_out = reference_model(pt_pixel_values, image_grid_thw)
+    if isinstance(_vis_out, tuple):
+        reference_output, reference_deepstack_visual_embeds = _vis_out
+    else:
+        # 5.x merged image embeds are in pooler_output (the merger output); last_hidden_state is the
+        # pre-merger patch features. The LM itself consumes vision_output.pooler_output.
+        reference_output, reference_deepstack_visual_embeds = _vis_out.pooler_output, _vis_out.deepstack_features
 
     # Run TT model
     tt_out, tt_deepstack_visual_embeds = tt_model(

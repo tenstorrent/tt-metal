@@ -21,11 +21,12 @@ struct RingJointSDPADeviceOperation {
     using tensor_args_t = RingJointSDPAInputs;
     using spec_return_value_t = RingJointSDPAResultSpec;
     using tensor_return_value_t = RingJointSDPAResult;
-    using program_factory_t = std::variant<RingJointSDPAProgramFactory>;
+    using program_factory_t = std::variant<RingJointSDPAMeshWorkloadFactory>;
+
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> create_op_performance_model(
         const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors);
 };
@@ -33,12 +34,12 @@ struct RingJointSDPADeviceOperation {
 RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
-    const ttnn::Tensor& input_tensor_v,
-    const ttnn::Tensor& joint_tensor_q,
-    const ttnn::Tensor& joint_tensor_k,
-    const ttnn::Tensor& joint_tensor_v,
+    const std::optional<ttnn::Tensor>& input_tensor_v,
+    const std::optional<ttnn::Tensor>& joint_tensor_q,
+    const std::optional<ttnn::Tensor>& joint_tensor_k,
+    const std::optional<ttnn::Tensor>& joint_tensor_v,
     ttnn::Tensor& persistent_output_buffer_k,
-    ttnn::Tensor& persistent_output_buffer_v,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_v,
     const std::string& joint_strategy,
     std::size_t logical_n,
     ttnn::operations::transformer::SDPAProgramConfig program_config,
@@ -52,8 +53,12 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
     bool is_causal = false,
     bool is_balanced = false,
+    bool is_cross = false,
     std::optional<float> scale = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR);
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
+    std::optional<uint32_t> kv_cache_batch_idx = std::nullopt,
+    std::optional<uint32_t> kv_actual_isl = std::nullopt,
+    std::optional<uint32_t> latent_v_head_dim = std::nullopt);
 
 }  // namespace ttnn::prim
