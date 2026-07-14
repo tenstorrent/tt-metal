@@ -17,6 +17,7 @@ from models.common.lightweightmodule import LightweightModule
 
 from ..cache import cache_file
 from ..matmul_utils import l1_sharded_linear
+from ..parallel_utils import moe_full_seq_mem_config
 
 
 class HunyuanTtMLP(LightweightModule):
@@ -91,6 +92,12 @@ class HunyuanTtMLP(LightweightModule):
         Returns:
             [.., H] tensor.
         """
+        # l1_sharded_linear self-gates L1 vs DRAM by M-tile count (small-M -> L1
+        # width-sharded, large-M -> DRAM), which subsumes the seq bound for the two
+        # matmuls. The transient SwiGLU multiply still follows the measured
+        # full-sequence L1->DRAM gate so its full-S buffer never clashes with the
+        # ops' static CBs above the bound.
+        mc = moe_full_seq_mem_config(x.shape[1])
         gu = l1_sharded_linear(
             x,
             self.w_gate_up,
@@ -103,7 +110,7 @@ class HunyuanTtMLP(LightweightModule):
         # x1 * silu(x2), with SiLU folded into the multiply's LHS activation (one
         # fused BinaryNg instead of a separate silu Unary + multiply). SILU must apply
         # to x2 (the up half); multiply(x2, x1, a_acts=[SILU]) == x1 * silu(x2).
-        h = ttnn.multiply(x2, x1, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
+        h = ttnn.multiply(x2, x1, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=mc)
         ttnn.deallocate(x1)
         ttnn.deallocate(x2)
 

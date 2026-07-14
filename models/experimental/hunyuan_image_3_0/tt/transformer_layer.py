@@ -24,6 +24,7 @@ from .attention.attention import HunyuanTtAttention
 from .attention.rms_norm import HunyuanTtRMSNorm
 from .moe.moe import HunyuanTtMoE
 from .moe.moe_parallel import HunyuanTtMoEParallel
+from .parallel_utils import resid_mem_config
 
 
 class HunyuanTtDecoderLayer(LightweightModule):
@@ -158,8 +159,12 @@ class HunyuanTtDecoderLayer(LightweightModule):
             cos_tt, sin_tt = cos_sin
 
         # --- self-attention block ---
+        # Residual-stream ops run on the per-device (sp-sharded) sequence. Keep them
+        # L1-resident up to the measured CB-clash bound, else DRAM together (moving
+        # only some leaves a live tensor in the next op's CB path — see parallel_utils).
+        rs_mc = resid_mem_config(x.shape[1])
         residual = x
-        h = self.input_layernorm(x, out_memory_config=ttnn.L1_MEMORY_CONFIG)
+        h = self.input_layernorm(x, out_memory_config=rs_mc)
         attn_out = self.self_attn(
             h,
             cos_tt,
@@ -177,16 +182,16 @@ class HunyuanTtDecoderLayer(LightweightModule):
         # layers (a 4-D hidden would break the next layer's QKV reshape).
         if len(attn_out.shape) == 4:
             attn_out = ttnn.reshape(attn_out, [residual.shape[0], residual.shape[1], residual.shape[2]])
-        x = ttnn.add(residual, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.add(residual, attn_out, memory_config=rs_mc)
         ttnn.deallocate(residual)
         ttnn.deallocate(attn_out)
 
         # --- MoE block ---
         residual = x
-        h = self.post_attention_layernorm(x, out_memory_config=ttnn.L1_MEMORY_CONFIG)
+        h = self.post_attention_layernorm(x, out_memory_config=rs_mc)
         moe_out = self.mlp(h)
         ttnn.deallocate(h)
-        out = ttnn.add(residual, moe_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.add(residual, moe_out, memory_config=rs_mc)
         ttnn.deallocate(residual)
         ttnn.deallocate(moe_out)
 
