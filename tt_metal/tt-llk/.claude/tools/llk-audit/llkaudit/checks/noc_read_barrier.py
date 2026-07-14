@@ -48,6 +48,11 @@ class NocReadBarrier(Check):
         "(noc_async_read_set_state, noc_async_read_inc_num_issued) are mis-read as "
         "inbound reads and can raise a SPURIOUS candidate — only the issuing forms "
         "actually fill L1 (the LLM refutes a set_state / inc-num-issued candidate). "
+        "Facts are grouped by the (file, function-NAME) string, so two same-named "
+        "bodies in one file (multiple lambdas — each `operator()` — or C++ "
+        "overloads) merge into one bucket, and a read-barrier in ONE body can "
+        "clear a read in the OTHER (a cross-scope false-clear); semaphore-handshake "
+        "and cb-sync note the same grouping limitation. "
         "Requires a KERNEL fact base; empty over tt-llk."
     )
 
