@@ -113,6 +113,23 @@ _W2_DECODE_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     mcast_in0=True,
 )
 
+# Decode-only lm_head (1536x151936).  Weight-bandwidth-bound (~466MB bf16 weight): the auto
+# config runs at ~50% DRAM BW / ~1864us ("SLOW", no program_config).  Full 11x10 grid, N split
+# per_core_N=44 (4748 N-tiles), in0_block_w=4 (larger overflows L1 given the wide per-core N)
+# -> 1242us / ~375 GB/s (1.50x).  per_core_M=1 makes it valid ONLY for S==1 decode.
+# Precision-neutral (PCC vs auto 1.0); swept in tests/perf/lm_head_progcfg_probe.py.
+_LM_HEAD_DECODE_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+    in0_block_w=4,
+    out_subblock_h=1,
+    out_subblock_w=1,
+    per_core_M=1,
+    per_core_N=44,
+    fuse_batch=True,
+    fused_activation=None,
+    mcast_in0=True,
+)
+
 
 def _matmul_in_l1(x: ttnn.Tensor, decode: bool) -> ttnn.Tensor:
     """L1 interleaved activation for decode matmul inputs (S==1). No-op on prefill."""
@@ -919,6 +936,7 @@ class TTVibeVoiceLM:
                 _matmul_in_l1(x, S == 1),
                 self.w.lm_head_w,
                 compute_kernel_config=_HIFI4,
+                program_config=_LM_HEAD_DECODE_PROGCFG if S == 1 else None,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
@@ -1065,6 +1083,7 @@ class TTVibeVoiceLM:
                 _matmul_in_l1(x, True),
                 self.w.lm_head_w,
                 compute_kernel_config=_HIFI4,
+                program_config=_LM_HEAD_DECODE_PROGCFG,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         return logits, last_hidden
