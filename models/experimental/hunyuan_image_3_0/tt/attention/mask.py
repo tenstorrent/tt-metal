@@ -10,8 +10,6 @@
 
 import ttnn
 
-from ..matmul_utils import l1_sharded_matmul, to_interleaved_if_sharded
-
 # Large negative additive value for masked positions (representable in bf16).
 _NEG = -1.0e30
 
@@ -85,8 +83,10 @@ def _build_one(device, S, spans, dtype):
             ttnn.deallocate(lt)
 
             v_col = ttnn.reshape(v_s, [1, 1, S, 1])
-            block = l1_sharded_matmul(v_col, v_s)  # [1,1,S,1] @ [1,1,1,S] -> [1,1,S,S]
-            block = to_interleaved_if_sharded(block)
+            # Outer product [S,1]@[1,S] -> [S,S]. Use DRAM: the result is up to
+            # seq_len^2 and must not steal L1 from resident model / emb buffers
+            # (L1-sharded matmul CBs clash once the backbone is loaded).
+            block = ttnn.matmul(v_col, v_s, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(v_col)
             ttnn.deallocate(v_s)
 

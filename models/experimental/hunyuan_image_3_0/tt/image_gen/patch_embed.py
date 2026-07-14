@@ -313,13 +313,18 @@ class HunyuanTtResBlock(LightweightModule):
         h, H, W = self.in_conv(h, B, H, W)
         n_rows = B * H * W
 
-        e = ttnn.silu(t_emb)
-        batch_rows = int(list(t_emb.shape)[-2])
+        # Resident WIDTH_SHARDED t_emb (M=32) from TimestepEmbedder: keep shard
+        # through SiLU so emb linear skips FillPad + I2S. Always use B (not the
+        # padded M) for batch_rows / AdaGN slices.
+        if ttnn.is_sharded(t_emb):
+            e = ttnn.silu(t_emb, memory_config=t_emb.memory_config())
+        else:
+            e = ttnn.silu(t_emb)
         e = act_width_sharded_linear(
             e,
             self.emb_w,
             bias=self.emb_b,
-            batch_rows=batch_rows,
+            batch_rows=B,
             compute_kernel_config=_COMPUTE_KERNEL_CONFIG,
             device=self.device,
         )
@@ -342,6 +347,13 @@ class HunyuanTtResBlock(LightweightModule):
         hn, H, W = self.out_conv(hn, B, H, W)
 
         if self.skip_conv is not None:
+            # out_conv often leaves a large L1-sharded tensor; free it before
+            # skip_conv allocates another (grid=8 block+ADB winners OOM at prod H×W).
+            if ttnn.is_sharded(hn):
+                spilled = _to_interleaved_dram(hn)
+                if spilled is not hn:
+                    ttnn.deallocate(hn)
+                hn = spilled
             skip, _, _ = self.skip_conv(x_flat, B, H, W)
         else:
             skip = x_flat
