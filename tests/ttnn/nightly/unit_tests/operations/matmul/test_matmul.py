@@ -512,6 +512,7 @@ def test_matmul_m_direction_padding(device):
         check_ulp=False,
     )
 
+
 # ---------------------------------------------------------------------------
 # Issue #42927: validation tests for tiny-tile matmul unsupported shapes.
 # Moved here from unit tests per PR #49632 review (these are rejection-path

@@ -4010,4 +4010,3 @@ def test_matmul_kt_not_divisible_by_in0_block_w_rejected(device, expect_error):
 
     with expect_error(RuntimeError, r"Kt \(4\) must be divisible by in0_block_w \(3\)"):
         ttnn.matmul(in0, in1, program_config=program_config)
-
