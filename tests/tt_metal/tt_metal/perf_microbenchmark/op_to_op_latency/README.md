@@ -17,6 +17,14 @@ The binary does keep a few *fixed-config* knobs (NoC assignment, active-core cou
 default config above but can seed future pinned CI entries (e.g. a DRAM read-BW or
 NoC-direction metric with its own golden).
 
+By default the kernels run **lean**: they emit only the profiler markers the CI metrics
+actually consume (the firmware `{BRISC,NCRISC,TRISC}-KERNEL` zones for the gated metric,
+plus compute `PROG_ID` / tile-0 `TILE_IDX` / `FINISH_LAST_PUSH` for `pack_to_unpack`). The
+extra reader/writer `GO`/`DONE`/`BARRIER` markers and the per-tile compute `TILE_IDX` +
+`MATH` zone used by the research BW/gap-decomposition analysis are gated behind
+`--profile-detail` (off by default) so they don't add device cycles that perturb the gated
+op2op number.
+
 ## Files
 
 ```
@@ -32,25 +40,34 @@ op_to_op_blackhole_golden.json  Blackhole golden
 
 ## What is measured
 
-The test binary dumps two raw profiler CSVs after the run:
+The CI run uses only the standard **device profiler**, so it behaves identically on
+Wormhole and Blackhole. It dumps one raw CSV:
 
 | CSV | Source |
 |-----|--------|
 | `profile_log_device.csv` | device profiler (standard `{BRISC,NCRISC,TRISC}-KERNEL` zones) |
-| `profile_log_device_rt.csv` | realtime profiler (per-program go/done) |
 
-`op_to_op_postprocess.py` reduces them to:
+The newer **realtime profiler** is intentionally *not* used by the CI command — it is
+unsupported on some WH setups (and T3K/remote/ETH dispatch), so depending on it would make
+the test platform-specific. It is still available for local/research use by adding
+`--use-realtime-profiler` (which then also writes `profile_log_device_rt.csv`).
+
+`op_to_op_postprocess.py` loads the device log through the official parser
+(`tools/tracy/process_device_log.py`) rather than reading the CSV columns directly — that
+module owns the on-disk schema, so the test stays robust to CSV layout changes — and
+reduces the logs to:
 
 | Metric | Role | Meaning |
 |--------|------|---------|
 | `official_op2op_us` | **GATED** | Per-core adjacent-op gap from standard KERNEL zones: last KERNEL end(k) → first DM-KERNEL start(k+1). Canonical tools/tracy device number; works on every platform; no custom markers. |
-| `rt_gap_to_next_go_ns` | **TRACKED** | Chip-dispatcher done→go gap from the realtime profiler. Cleaner/absolute, but RT is only active on some setups (not T3K/remote/ETH dispatch), so it is recorded where available and **not gated**. |
 | `device_kernel_dur_us` | context | Per-op kernel span (first KERNEL start → last KERNEL end). |
 | `pack_to_unpack_op2op_us` | context | Per-core pack-finish → next-unpack-start (the research benchmark's op2op definition). |
+| `rt_gap_to_next_go_ns` | optional | Chip-dispatcher done→go gap from the realtime profiler. Cleaner/absolute, but only produced when `--use-realtime-profiler` is passed (research); empty (n=0) in the CI run. |
 
 We gate on the KERNEL-zone metric because it is portable across all CI
-single-card platforms; the RT metric is tracked alongside it where the realtime
-profiler is active.
+single-card platforms (Wormhole and Blackhole) and needs only the standard device
+profiler. The RT metric is not part of the CI flow; it can be captured locally where
+the realtime profiler is active.
 
 ## Where it runs
 
@@ -70,9 +87,10 @@ export TT_METAL_HOME=$(pwd)
 cmake --build build --target test_op_to_op_latency -j
 
 # the exact CI flow: run the pinned config, then post-process + gate vs golden
+# (add --use-realtime-profiler to also capture the optional RT metric where supported)
 TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/op_to_op_latency/test_op_to_op_latency \
   --use-trace --trace-warmup-replays 2 --num-programs 8 --num-pages-per-core 4 \
-  --compute-nops 2000 --use-device-profiler --use-realtime-profiler
+  --compute-nops 2000 --use-device-profiler
 
 # print metrics only (no gate)
 python3 tests/tt_metal/tt_metal/perf_microbenchmark/op_to_op_latency/op_to_op_postprocess.py --min-prog-id 3
@@ -102,6 +120,7 @@ To enable the gate:
 - `--compute-nops` is set so the program is comfortably long vs dispatch noise;
   the exact value is arch-dependent and folded into the golden, so it can be
   retuned when populating the golden.
-- The realtime profiler is guarded by `IsProgramRealtimeProfilerActive()` in the
-  binary; on platforms where it is inactive the RT metric is simply empty and the
-  KERNEL-zone gate still applies.
+- The CI flow uses only the device profiler, so the gate is identical on Wormhole and
+  Blackhole. The realtime profiler is optional (`--use-realtime-profiler`) and guarded by
+  `IsProgramRealtimeProfilerActive()` in the binary — if requested where it is inactive it
+  simply warns and skips, so the KERNEL-zone gate always applies.
