@@ -164,6 +164,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/conv3d/conv3d_nanobind.cpp
     cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.cpp
     cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_split_nanobind.cpp
+    cpp/ttnn/operations/experimental/regime_a_matmul/regime_a_matmul_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/post_combine_reduce/post_combine_reduce_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm_nanobind.cpp

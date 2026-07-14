@@ -252,6 +252,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::Matmul
         TTNN::Ops::Experimental::PaddedSlice
         TTNN::Ops::Experimental::MinimalMatmul
+        TTNN::Ops::Experimental::RegimeAMatmul
         TTNN::Ops::Experimental::DeepseekMoEPostCombineTilize
         TTNN::Ops::Experimental::DeepSeekPrefill::PostCombineReduce
         TTNN::Ops::Experimental::DeepSeek::MoE::MoEGateMM
@@ -350,6 +351,15 @@ if(WITH_PYTHON_BINDINGS)
             ${CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND}
             ${DEBUG_TTNN_SRCS_PYBIND}
             ${TTNN_P2P_PYBIND}
+    )
+    # Compile the regime_a_matmul nanobind file standalone: keeping it out of the unity batching avoids
+    # perturbing the unity chunk boundaries of neighbouring pybind sources (which rely on chunk-order
+    # namespace visibility, e.g. pytensor.cpp's unqualified `experimental::per_core_allocation`).
+    set_source_files_properties(
+        cpp/ttnn/operations/experimental/regime_a_matmul/regime_a_matmul_nanobind.cpp
+        PROPERTIES
+            SKIP_UNITY_BUILD_INCLUSION
+                ON
     )
     target_include_directories(
         ttnn
@@ -510,6 +520,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/dropout)
 add_subdirectory(cpp/ttnn/operations/experimental/isin)
 add_subdirectory(cpp/ttnn/operations/experimental/matmul)
 add_subdirectory(cpp/ttnn/operations/experimental/minimal_matmul)
+add_subdirectory(cpp/ttnn/operations/experimental/regime_a_matmul)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate)
 add_subdirectory(cpp/ttnn/operations/experimental/topk_router_gpt)

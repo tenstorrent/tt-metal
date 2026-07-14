@@ -1,0 +1,317 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "regime_a_matmul_program_factory.hpp"
+
+#include <algorithm>
+#include <map>
+#include <set>
+#include <string>
+#include <vector>
+
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+
+#include "regime_a_matmul_config.hpp"
+
+using namespace tt::tt_metal;
+using namespace tt::constants;
+
+namespace ttnn::experimental::prim {
+
+namespace {
+
+constexpr const char* kIn1ReaderKernel =
+    "ttnn/cpp/ttnn/operations/experimental/regime_a_matmul/device/kernels/in1_reader.cpp";
+constexpr const char* kWriterKernel =
+    "ttnn/cpp/ttnn/operations/experimental/regime_a_matmul/device/kernels/in0_ring_reduce_writer.cpp";
+constexpr const char* kComputeKernel =
+    "ttnn/cpp/ttnn/operations/experimental/regime_a_matmul/device/kernels/compute.cpp";
+
+constexpr uint32_t kTileBytesBf16 = 2048u;
+constexpr uint32_t kTileBytesFp32 = 4096u;
+
+// Largest divisor of v that is <= cap (always >= 1).
+uint32_t largest_div(uint32_t v, uint32_t cap) {
+    if (v == 0) {
+        return 1u;
+    }
+    for (uint32_t d = std::min(cap, v); d >= 1; --d) {
+        if (v % d == 0) {
+            return d;
+        }
+    }
+    return 1u;
+}
+
+// mkcb: single-format circular buffer over a core range set (matches the harness form).
+void mkcb(Program& program, const CoreRangeSet& crs, uint32_t idx, uint32_t ntiles, tt::DataFormat df, uint32_t tsz) {
+    CircularBufferConfig c(ntiles * tsz, {{idx, df}});
+    c.set_page_size(idx, tsz);
+    CreateCircularBuffer(program, crs, c);
+}
+
+}  // namespace
+
+RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::create(
+    const RegimeAMatmulParams& operation_attributes,
+    const RegimeAMatmulInputs& tensor_args,
+    Tensor& tensor_return_value) {
+    Program program = CreateProgram();
+
+    const auto& in0 = tensor_args.input_tensor;
+    const auto& in1 = tensor_args.weight_tensor;
+    Tensor& out = tensor_return_value;
+    IDevice* device = in0.device();
+
+    const RegimeAMatmulConfig cfg = operation_attributes.config.value();
+
+    // ---- Run the pure host planner ----
+    auto planres = make_and_build_plan(device, in0, in1, cfg);
+    TT_FATAL(planres.ok(), "regime_a_matmul planner rejected config: {}", planres.error);
+    const plan::ExecutionPlan& P = *planres.plan;
+    const plan::Geometry& geo = P.geo;
+    const plan::CbSizes& cb = P.cb;
+
+    const uint32_t Pk = cfg.k_slices ? cfg.k_slices : 1u;
+    const uint32_t Sm = cfg.m_slices ? cfg.m_slices : 1u;
+    const uint32_t kb = cfg.k_block_tiles ? cfg.k_block_tiles : 1u;
+    const uint32_t use_reduce = (Pk > 1u) ? 1u : 0u;
+
+    // ---- Core range sets: all cores + split-NoC groups (g0 = noc 0, g1 = noc 1) ----
+    std::set<CoreRange> all_set, g0_set, g1_set;
+    std::vector<CoreCoord> cores;
+    std::vector<uint32_t> core_noc;
+    cores.reserve(geo.num_cores);
+    core_noc.reserve(geo.num_cores);
+    for (const auto& cp : P.cores) {
+        CoreCoord c{cp.coord.x, cp.coord.y};
+        cores.push_back(c);
+        core_noc.push_back(cp.noc);
+        all_set.insert(CoreRange(c, c));
+        (cp.noc ? g1_set : g0_set).insert(CoreRange(c, c));
+    }
+    CoreRangeSet all_cores(all_set);
+    CoreRangeSet g0(g0_set);
+    CoreRangeSet g1(g1_set);
+
+    // ---- Circular buffers (spec §5) on all cores ----
+    mkcb(program, all_cores, 0, cb.cb0_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // in0 k-slice resident
+    mkcb(program, all_cores, 1, cb.cb1_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // in1
+    mkcb(program, all_cores, 2, cb.cb2_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // out
+    mkcb(program, all_cores, 3, cb.cb3_tiles, tt::DataFormat::Float32, kTileBytesFp32);    // fp32 intermediate
+    if (cb.cb7_tiles > 0u) {
+        mkcb(program, all_cores, 7, cb.cb7_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // reduce (Pk>1 only)
+    }
+
+    // ---- Semaphores ----
+    const uint32_t fwd_sem = CreateSemaphore(program, all_cores, 0u);      // in0 ring recv
+    const uint32_t red_sem = CreateSemaphore(program, all_cores, 0u);      // reduction recv
+    const uint32_t redfree_sem = CreateSemaphore(program, all_cores, 0u);  // cb_reduce reverse credit
+    uint32_t in1valid_sem = 0u, in1ready_sem = 0u;                         // M-split reader<->slaves
+    if (Sm > 1u) {
+        in1valid_sem = CreateSemaphore(program, all_cores, 0u);
+        in1ready_sem = CreateSemaphore(program, all_cores, 0u);
+    }
+
+    // ---- Kernels ----
+    // in1 reader == consumer. compile args (in1_reader.cpp order). No TensorAccessorArgs.
+    std::vector<uint32_t> rct = {
+        kb,              // 0 K_block
+        geo.N_sub,       // 1 N_block
+        geo.W,           // 2 W
+        geo.G,           // 3 G (=8)
+        kTileBytesBf16,  // 4 tile_bytes
+        geo.N_bpc,       // 5 N_bpc
+        geo.N_band_s,    // 6 N_band
+        in1valid_sem,    // 7
+        in1ready_sem,    // 8
+        0u};             // 9 in1_mcast (0 for v1: unicast forward)
+
+    auto mk = [&](const char* src,
+                  const CoreRangeSet& g,
+                  DataMovementProcessor proc,
+                  NOC noc,
+                  const std::vector<uint32_t>& ct) -> KernelHandle {
+        if (g.num_cores() == 0) {
+            return 0;
+        }
+        return CreateKernel(program, src, g, DataMovementConfig{.processor = proc, .noc = noc, .compile_args = ct});
+    };
+
+    // writer compile args (in0_ring_reduce_writer.cpp order). TensorAccessorArgs(in0) then (out).
+    std::vector<uint32_t> wct = {
+        geo.M_block,           // 0
+        kb,                    // 1 K_block
+        geo.N_sub,             // 2 N_block
+        geo.K_num_blocks_eff,  // 3 K_num_blocks
+        kTileBytesBf16,        // 4 tile_bytes
+        geo.Kt_s,              // 5 Kt
+        geo.Nt_s,              // 6 Nt
+        geo.W,                 // 7 W
+        geo.G,                 // 8 G
+        fwd_sem,               // 9
+        red_sem,               // 10
+        geo.N_bpc,             // 11 N_bpc
+        redfree_sem,           // 12
+        use_reduce};           // 13
+    TensorAccessorArgs(*in0.buffer()).append_to(wct);
+    TensorAccessorArgs(*out.buffer()).append_to(wct);
+
+    // Split-NOC: reader on the core's in1 NoC, writer on the OTHER NoC.
+    //   g0 (noc==0): reader RISCV_0/NOC0, writer RISCV_1/NOC1
+    //   g1 (noc==1): reader RISCV_1/NOC1, writer RISCV_0/NOC0
+    KernelHandle readerA = mk(kIn1ReaderKernel, g0, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default, rct);
+    KernelHandle readerB = mk(kIn1ReaderKernel, g1, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default, rct);
+    KernelHandle writerA = mk(kWriterKernel, g0, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default, wct);
+    KernelHandle writerB = mk(kWriterKernel, g1, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default, wct);
+
+    // compute (spec §6c). fp32 DST limit: subblock_h * subblock_w <= 4.
+    const uint32_t sbh = largest_div(geo.M_block, 2u);
+    const uint32_t sbw = largest_div(geo.N_sub, 4u / sbh);
+    std::vector<uint32_t> cct = {
+        geo.K_num_blocks_eff,  // 0 K_num_blocks
+        geo.M_block,           // 1 M_block_tiles
+        kb,                    // 2 K_block_tiles
+        geo.N_sub,             // 3 N_block_tiles
+        1u,                    // 4 M_blocks_per_core
+        geo.N_bpc,             // 5 N_blocks_per_core
+        sbh,                   // 6 subblock_h
+        sbw};                  // 7 subblock_w
+    std::map<std::string, std::string> cdefs = {{"REDUCE_K", "1"}, {"IN0_KSLICE_RESIDENT", "1"}};
+    KernelHandle compute = CreateKernel(
+        program,
+        kComputeKernel,
+        all_cores,
+        ComputeConfig{
+            .math_fidelity = MathFidelity::HiFi2,
+            .fp32_dest_acc_en = true,
+            .dst_full_sync_en = false,
+            .math_approx_mode = false,
+            .compile_args = cct,
+            .defines = cdefs});
+
+    // ---- Runtime args ----
+    const uint32_t in0_addr = in0.buffer()->address();
+    const uint32_t in1_addr = in1.buffer()->address();
+    const uint32_t out_addr = out.buffer()->address();
+
+    auto phys = [&](uint32_t core_idx) {
+        const auto& c = P.cores[core_idx].coord;
+        return device->worker_core_from_logical_core(CoreCoord{c.x, c.y});
+    };
+
+    for (uint32_t i = 0; i < geo.num_cores; ++i) {
+        const plan::CorePlan& cp = P.cores[i];
+        const KernelHandle rh = cp.noc ? readerB : readerA;
+        const KernelHandle wh = cp.noc ? writerB : writerA;
+
+        // in1 reader runtime args.
+        std::vector<uint32_t> ra = {
+            in1_addr,     // 0
+            cp.bank,      // 1
+            cp.ring_pos,  // 2
+            cp.k_start,   // 3
+            cp.nn_off};   // 4 n_base
+        if (Sm == 1u) {
+            ra.push_back(2u);  // 5 mrole = solo
+            ra.push_back(0u);  // 6 mpeers
+        } else if (cp.mm == 0u) {
+            // reader (mm==0 of this (bank,kk,nn) group): read from DRAM + forward to the Sm-1 slaves.
+            ra.push_back(1u);       // mrole = reader
+            ra.push_back(Sm - 1u);  // mpeers
+            for (uint32_t s = 1; s < Sm; ++s) {
+                auto p = phys(i + s);  // slaves are the next Sm-1 contiguous core indices (mm innermost)
+                ra.push_back(p.x);
+                ra.push_back(p.y);
+            }
+        } else {
+            // slave: receive from the group's reader (core i - mm).
+            ra.push_back(0u);  // mrole = slave
+            ra.push_back(1u);  // mpeers
+            auto p = phys(i - cp.mm);
+            ra.push_back(p.x);
+            ra.push_back(p.y);
+        }
+        SetRuntimeArgs(program, rh, cores[i], ra);
+
+        // writer runtime args.
+        auto fwd_next = phys(cp.ring_next_idx);
+        auto red_next = phys(cp.red_next_idx);
+        auto red_prev = phys(cp.red_prev_idx);
+        std::vector<uint32_t> wa = {
+            in0_addr,                // 0
+            out_addr,                // 1
+            cp.m0,                   // 2
+            cp.bank_n0,              // 3 n0
+            cp.k_start,              // 4
+            cp.ring_pos,             // 5
+            fwd_next.x,              // 6
+            fwd_next.y,              // 7
+            red_next.x,              // 8
+            red_next.y,              // 9
+            cp.is_bottom ? 1u : 0u,  // 10
+            cp.is_top ? 1u : 0u,     // 11
+            red_prev.x,              // 12
+            red_prev.y};             // 13
+        SetRuntimeArgs(program, wh, cores[i], wa);
+
+        // compute runtime args: N_end spans ALL N_bpc sub-blocks (see spec §7).
+        SetRuntimeArgs(
+            program, compute, cores[i], {0u, geo.M_block, 0u, geo.N_bpc * geo.N_sub, cp.is_bottom ? 1u : 0u});
+    }
+
+    return cached_program_t{
+        std::move(program),
+        shared_variables_t{
+            .num_cores = geo.num_cores,
+            .cores = std::move(cores),
+            .core_noc = std::move(core_noc),
+            .readerA = readerA,
+            .readerB = readerB,
+            .writerA = writerA,
+            .writerB = writerB,
+            .compute = compute}};
+}
+
+void RegimeAMatmulProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const RegimeAMatmulParams& /*operation_attributes*/,
+    const RegimeAMatmulInputs& tensor_args,
+    Tensor& tensor_return_value) {
+    auto& program = cached_program.program;
+    auto& sv = cached_program.shared_variables;
+
+    const uint32_t in0_addr = tensor_args.input_tensor.buffer()->address();
+    const uint32_t in1_addr = tensor_args.weight_tensor.buffer()->address();
+    const uint32_t out_addr = tensor_return_value.buffer()->address();
+
+    // Some configs place every core on a single NoC group (e.g. preaders==1 => all noc 0), leaving the
+    // other group's kernel handles unset. Only fetch runtime-arg maps for groups that actually exist.
+    bool has_g0 = false, has_g1 = false;
+    for (const auto n : sv.core_noc) {
+        (n ? has_g1 : has_g0) = true;
+    }
+    auto* readerA_args = has_g0 ? &GetRuntimeArgs(program, sv.readerA) : nullptr;
+    auto* readerB_args = has_g1 ? &GetRuntimeArgs(program, sv.readerB) : nullptr;
+    auto* writerA_args = has_g0 ? &GetRuntimeArgs(program, sv.writerA) : nullptr;
+    auto* writerB_args = has_g1 ? &GetRuntimeArgs(program, sv.writerB) : nullptr;
+
+    for (uint32_t i = 0; i < sv.num_cores; ++i) {
+        const CoreCoord& core = sv.cores[i];
+        const bool b = sv.core_noc[i] != 0u;
+
+        // reader arg 0 = in1_addr.
+        auto& ra = (*(b ? readerB_args : readerA_args))[core.x][core.y];
+        ra[0] = in1_addr;
+
+        // writer arg 0 = in0_addr, arg 1 = out_addr.
+        auto& wa = (*(b ? writerB_args : writerA_args))[core.x][core.y];
+        wa[0] = in0_addr;
+        wa[1] = out_addr;
+    }
+}
+
+}  // namespace ttnn::experimental::prim
