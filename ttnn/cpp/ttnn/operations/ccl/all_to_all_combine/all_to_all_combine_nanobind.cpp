@@ -78,17 +78,29 @@ void bind_all_to_all_combine(nb::module_& mod) {
         Returns:
             ttnn.Tensor: The combined tokens tensor. The tensor is expected to be [K, B, S, H] sharded along the output_shard_dim dimension across the number of devices along the cluster axis if it was set, or all devices if it was not set, (e.g. [K, B/D[A], S, H] per device if output_shard_dim is 1 or [K, B, S/D[A], H] per device if output_shard_dim is 2). The tensor is expected to be in Row Major, Interleaved format. The rows are sparsely populated such that each row is either a token if that token was dispatched to that device, or a placeholder row if that token was not dispatched to that device.
 
-        Example:
-            >>> output_tensor = ttnn.all_to_all_combine(
-                                    input_tensor,
-                                    expert_metadata_tensor,
-                                    expert_mapping_tensor,
-                                    num_links=num_links,
-                                    topology=topology,
-                                    memory_config=output_memory_config,
-                                    local_reduce=local_reduce,
-                                    cluster_axis=cluster_axis,
-                                    output_shard_dim=output_shard_dim)
+        Supported dtypes and layouts:
+
+            .. list-table::
+                :header-rows: 1
+
+                * - Tensor
+                  - Dtypes
+                  - Layouts
+                * - input_tensor
+                  - BFLOAT16
+                  - ROW_MAJOR
+                * - expert_metadata_tensor
+                  - UINT16
+                  - ROW_MAJOR
+                * - expert_mapping_tensor
+                  - UINT16
+                  - ROW_MAJOR
+
+            All input tensors must be rank 4 and ``cluster_axis`` is required. ``expert_mapping_tensor`` must be fully replicated across the mesh. The output preserves the input dtype (BFLOAT16) and is ROW_MAJOR.
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded: not supported (output memory config must not be sharded)
         )doc";
 
     ttnn::bind_function<"all_to_all_combine">(

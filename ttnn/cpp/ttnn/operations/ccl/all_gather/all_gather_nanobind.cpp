@@ -42,19 +42,21 @@ void bind_all_gather(nb::module_& mod) {
         Returns:
             ttnn.Tensor: The gathered tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] * num_devices, where num_devices is the number of devices along the `cluster_axis` if specified, else the total number of devices along the mesh.
 
-        Example:
-            >>> full_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
-            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
-            >>> ttnn_tensor = ttnn.from_torch(
-                            full_tensor,
-                            dtype=input_dtype,
-                            device=mesh_device,
-                            layout=layout,
-                            memory_config=mem_config,
-                            mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(1, 8), dims=(-1, -2)))
-            >>> output = ttnn.all_gather(ttnn_tensor, dim=0)
-            >>> print(output.shape)
-            [8, 1, 32, 256]
+        Supported dtypes and layouts:
+
+            .. list-table::
+                :header-rows: 1
+
+                * - Dtypes
+                  - Layouts
+                * - BFLOAT16, BFLOAT8_B, FLOAT32
+                  - TILE, ROW_MAJOR
+
+            All-gather is a data-movement collective and does not restrict the input dtype; the output preserves the input dtype. Input must be rank 2 or greater. Row-major inputs, and tiled inputs whose gather dim is not tile-aligned, are routed through the composite (all-broadcast based) implementation.
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded: WIDTH_SHARDED, HEIGHT_SHARDED, BLOCK_SHARDED (BLOCK_SHARDED must be in L1)
         )doc";
 
     ttnn::bind_function<"all_gather">(
