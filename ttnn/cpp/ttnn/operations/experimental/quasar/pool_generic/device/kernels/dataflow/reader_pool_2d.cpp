@@ -343,28 +343,26 @@ void kernel_main() {
                 // is a safe identity and the once-at-init clear persists across the in_cb ring (the reader
                 // only overwrites the window rows). The unwritten tail rows then reduce to a no-op.
                 DataflowBuffer icb_clear(in_cb_id);
-#ifdef ARCH_QUASAR
-                // [DIAG POISON — revert after debug] Bug 1 (64c passes alone, fails after 32c) is a suspected
-                // uninitialized/stale-memory read. Poison the in_cb clear region with 0xDEADBEEF instead of 0
-                // so any row the reduce touches that was NOT written with real window data shows up as an
-                // obvious poison value in the output (vs a plausible 0). This DELIBERATELY breaks max-pool
-                // correctness (poison is a huge positive, not the -inf/0 identity) -- its purpose is to reveal
-                // whether the reduce reads beyond the window / stale L1, not to produce a correct result.
-                {
-                    const uint32_t poison_bytes = icb_clear.get_entry_size() * multi_buffering_factor;
-                    volatile tt_l1_ptr uint32_t* poison_ptr =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(icb_clear.get_write_ptr());
-                    for (uint32_t pw = 0; pw < (poison_bytes >> 2); ++pw) {
-                        poison_ptr[pw] = 0xDEADBEEFu;
-                    }
-                    flush_l2_cache_range(
-                        static_cast<uintptr_t>(icb_clear.get_write_ptr()), static_cast<size_t>(poison_bytes));
-                }
-#else
                 Noc clear_noc;
+#ifdef ARCH_QUASAR
+                // [DIAG — clear-overrun / stale-wr_ptr probe, revert after]: this once-at-init clear writes
+                // clrsz = esz*mbf bytes starting at get_write_ptr() (= the DM wr_ptr). It overruns adjacent L1
+                // if clrsz > alloc (mbf > nent) OR if wr_ptr is stale from a prior op (not reset to the ring
+                // base per launch -- the suspected Bug-1 reconfig escape). Compare across a lone 64c run vs a
+                // 64c-after-32c run: wr changing => stale wr_ptr; clrsz>alloc => size overrun. (The 0xDEADBEEF
+                // poison was reverted -- a bf16 value can't fault the RISC; the poison fault was this overrun
+                // clobbering a control region with garbage instead of benign zeros.)
+                DPRINT(
+                    "POOLCLR wr={} esz={} mbf={} clrsz={} nent={} alloc={}\n",
+                    (uint32_t)icb_clear.get_write_ptr(),
+                    (uint32_t)icb_clear.get_entry_size(),
+                    (uint32_t)multi_buffering_factor,
+                    (uint32_t)(icb_clear.get_entry_size() * multi_buffering_factor),
+                    (uint32_t)icb_clear.get_total_num_entries(),
+                    (uint32_t)(icb_clear.get_total_num_entries() * icb_clear.get_entry_size()));
+#endif
                 clear_noc.async_write_zeros(icb_clear, icb_clear.get_entry_size() * multi_buffering_factor);
                 clear_noc.write_zeros_l1_barrier();
-#endif
             }
         }
     }

@@ -254,6 +254,14 @@ void kernel_main() {
                 if (first_c_block || last_c_block) {
                     UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                         in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce)));
+                    // QSR fix: the RM path re-inits only UNPACK per c-block, leaving MATH's reduce config from
+                    // the top-of-kernel tilizeA_B_reduce_init stale when tiles_to_reduce changes across
+                    // c-blocks (e.g. 4 then 2 for 6 tiles / 192c post-cap). The tilize reprograms the FPU, so
+                    // MATH must be re-init'd for reduce too -- omitting it desyncs UNPACK/MATH and trips a Risc
+                    // IB interrupt (watcher code 0x19) on the wide multi-c-block config. Mirror the
+                    // OUTPUT_TILED path's math re-init (below).
+                    MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>(
+                        in_cb_id_0, in_scalar_cb_id_0)));
                 }
             }
             // QSR fix (split-reader second stream): the top-of-kernel tilizeA_B_reduce_init binds the
