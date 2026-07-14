@@ -84,6 +84,34 @@ struct chip_info_t {
 
 static_assert(sizeof(chip_info_t) == 32, "chip_info_t size is not 32 bytes");
 
+// Coarse, always-on execution-stage breadcrumb for ethernet cores.
+//
+// Unlike watcher waypoints (which are compiled out unless -DWATCHER_ENABLED), this breadcrumb is
+// written unconditionally by the ethernet application firmware and kernels. That makes it possible
+// to recover, offline via a plain UMD L1 read, which layer of the ethernet firmware stack a stalled
+// core was executing (base FW vs Metal application FW vs a launched kernel) without a special build
+// or a live repro. Values are ASCII-packed (little-endian) so a raw hex dump is human-readable.
+//
+// It lives in eth_status_t.eth_fw_stage (MEM_SYSENG_ETH_FW_STAGE), so base FW and Metal FW share the
+// same words. It is exposed to the host as HalL1MemAddrType::FW_STAGE, which has size 0 on arches that
+// don't implement it. One 32-bit slot per ethernet processor (index from get_hw_thread_idx():
+// 0 = erisc/ierisc, 1 = subordinate erisc/ierisc).
+//
+// The base ethernet firmware is external (tt-firmware) and cannot be instrumented, so it is inferred:
+// the host initializes the slot to ETH_FW_STAGE_UNKNOWN before the application FW starts, and the
+// application FW stamps ETH_FW_STAGE_BASE_FW right before handing the core back to base FW.
+enum eth_fw_stage_e : uint32_t {
+    ETH_FW_STAGE_UNKNOWN = 0,           // Host sentinel; also implies (uninstrumented) base FW pre-app-FW
+    ETH_FW_STAGE_BASE_FW = 0x45534142,  // "BASE": app FW returned control to base FW
+    ETH_FW_STAGE_FW_INIT = 0x494e4946,  // "FINI": app FW early init, before the mailbox poll loop
+    ETH_FW_STAGE_FW_LOOP = 0x50554c46,  // "FLUP": app FW dispatch/poll loop, idle waiting for a go signal
+    ETH_FW_STAGE_KERNEL = 0x4c4e524b,   // "KRNL": executing a launched kernel (fabric router adds EDMStatus)
+};
+
+struct eth_fw_stage_t {
+    uint32_t stage[2];
+};
+
 struct eth_status_t {
     // Basic status
     uint32_t postcode;
@@ -91,7 +119,9 @@ struct eth_status_t {
     link_train_status_e train_status;
     uint32_t train_speed;  // Actual resulting speed from training
 
-    uint32_t spare[28 - 4];
+    eth_fw_stage_t eth_fw_stage;
+
+    uint32_t spare[28 - 6];
 
     // Heartbeat
     uint32_t heartbeat[4];
@@ -339,6 +369,8 @@ struct boot_results_t {
 
 #define MEM_SYSENG_ETH_STATUS (MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, eth_status))
 #define MEM_SYSENG_ETH_LIVE_STATUS (MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, eth_live_status))
+#define MEM_SYSENG_ETH_FW_STAGE (MEM_SYSENG_ETH_STATUS + offsetof(eth_status_t, eth_fw_stage))
+#define MEM_SYSENG_ETH_FW_STAGE_SIZE (sizeof(eth_fw_stage_t))
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "internal/tt-1xx/risc_common.h"
