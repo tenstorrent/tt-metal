@@ -110,8 +110,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     {
         ZONE_SCOPED("INIT")
-
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+        // PACK_ISOLATE / L1_CONGESTION: skip FPU→PACK dest-dvalid (math is src-clear only
+        // in congestion; pulsing never happens — matches WH/BH isolate semantics).
+        if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
+        {
+            set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+        }
 
         DataFormat math_format     = static_cast<DataFormat>(formats.math);
         DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
@@ -131,17 +135,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             _perf_math_loop_clear_valid<true, true>(LOOP_FACTOR * TILE_CNT * num_faces);
-        }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
-        {
-            _perf_math_loop_clear_valid<true, true>(TILE_CNT * num_faces);
-            _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
-            _perf_math_loop_clear_valid<true, true>((LOOP_FACTOR - 1) * TILE_CNT * num_faces);
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
@@ -194,8 +191,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+        // PACK_ISOLATE / L1_CONGESTION: no math↔pack dest-dvalid handshake.
+        // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            auto cfg = (std::uint32_t volatile *)TENSIX_CFG_BASE;
+            cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
+        }
+        else
+        {
+            set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+        }
 
         buffer_descriptor_u bd_val = {0};
         bd_val.f.l1_addr_16B       = buffer_Res[0] / 16;
@@ -228,7 +234,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 _llk_pack_(0, 0, ckernel::DEFAULT_TENSOR_SHAPE);
             }
-            _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }
         else
         {
