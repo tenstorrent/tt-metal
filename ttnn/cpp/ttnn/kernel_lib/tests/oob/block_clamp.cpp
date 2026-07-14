@@ -2,19 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Out-of-bounds block_size probe (G6 / OOB-03, DB-04/DB-05).
+// Out-of-bounds block_size probe: block-capable identity copy (Bulk + Block reader).
 //
-// Block-capable identity copy: a Bulk + Block CB-reader stages the whole window upfront, so the
-// chain honors block_size (processes block_size tiles per inner iter across DEST lanes j at slot
-// D0 + j*chain_lane_width). block_size is supplied as a compile-time arg.
-//
-// The point: block_size is a RUNTIME field of EltwiseShape, so it can't be static_asserted. The
-// chain instead clamps it at runtime to chain_max_block_v = DEST_AUTO_LIMIT / chain_lane_width
-// (eltwise_chain.inl:2024-2033) — an oversized value can NOT overflow DEST; it only makes the
-// outer loop take more iterations. Total tile coverage (and thus the output) is unchanged.
-//
-// So an over-large block_size must still produce the exact identity copy. The driving pytest
-// feeds {1, 4, 1000} and asserts all three reproduce the input.
+// block_size is a RUNTIME EltwiseShape field, so it can't be static_asserted; the chain clamps it
+// to chain_max_block_v = DEST_AUTO_LIMIT / chain_lane_width. An oversized block_size can't overflow
+// DEST — it only changes loop iteration count, not coverage. So {1, 4, 1000} must all reproduce the
+// input exactly (the driving pytest feeds those).
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"

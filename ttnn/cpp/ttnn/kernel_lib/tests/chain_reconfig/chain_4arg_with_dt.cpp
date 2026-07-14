@@ -2,13 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Case A — 4-arg reconfig_data_format(prev_a, curr_a, prev_b, curr_b) (_with_dt).
+// 4-arg reconfig_data_format(prev_a, curr_a, prev_b, curr_b) (_with_dt).
 //
-// Chain shape: BinaryFpu(CbA, CbB) → BinaryFpu(CbC, CbD) → PackTile(CbOut).
-// At element 1 the fold sees: srca rotates CbA → CbC (both with prev) AND srcb rotates CbB → CbD (both with prev),
-// so emit_pre_element_transitions emits the 4-arg _with_dt overload. The first BinaryFpu's result is overwritten by
-// the second; the chain's net semantic is CbC + CbD, packed to CbOut. Argument-order regressions in the 4-arg
-// overload surface as wrong outputs when the (CbA, CbB) dtypes differ from (CbC, CbD).
+// BinaryFpu(CbA,CbB) -> BinaryFpu(CbC,CbD) -> PackTile(CbOut). At element 1 both srca (CbA->CbC)
+// and srcb (CbB->CbD) rotate with prev set, so the chain emits the 4-arg _with_dt overload. Net
+// semantic is CbC+CbD (first add overwritten). Arg-order regressions fail when (CbA,CbB) dtypes
+// differ from (CbC,CbD).
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"

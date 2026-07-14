@@ -2,14 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// DestReuseBinary element coverage (untested element type).
-//
-// out = (A + B) * C, computed by reusing the DEST result as one operand of the next op:
-//   D0 = A + B                                         (BinaryFpu)
-//   D0 = DEST(D0) * C   via DEST_TO_SRCA: CB C -> srcb, DEST -> srca   (DestReuseBinary, Mul)
-//   pack D0
-// DestReuseBinary feeds DEST back into the FPU instead of a second CB read — a distinct element with
-// its own reconfig/side selection. The (A+B)*C golden fails if the DEST operand is mis-routed.
+// DestReuseBinary element coverage: out = (A + B) * C, reusing the DEST result as an FPU operand.
+//   D0 = A + B (BinaryFpu) ; D0 = DEST(D0) * C (DestReuseBinary Mul, DEST_TO_SRCA) ; pack D0
+// DestReuseBinary feeds DEST back into the FPU instead of a second CB read. The (A+B)*C golden fails
+// if the DEST operand is mis-routed.
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"

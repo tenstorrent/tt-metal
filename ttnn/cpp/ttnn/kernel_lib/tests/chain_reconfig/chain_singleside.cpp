@@ -2,16 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Case D — single-side _with_dt on srca. srca rotates across CBs of different dtypes; srcb untouched.
+// Single-side _with_dt on srca: srca rotates across dtypes; srcb untouched.
 //
-// Chain shape: CopyTile(CbA, D0) -> CopyTile(CbB, D0) -> PackTile(CbOut).
-// CopyTile only touches srca. At element 1: prev_a=CbA, curr_a=CbB, prev set → reconf_a=true,
-// emits reconfig_data_format_srca(prev_a, curr_a) (2-arg per-side _with_dt). srcb stays NO_PREV_DFB
-// throughout, so no srcb emission. Pack stays the same dtype across both PackTile-less intermediate
-// CopyTiles; pack reconfig fires only at the final PackTile (first-emit single-arg).
-//
-// CbA=bfp8, CbB=bf16 forces the srca-side rotation to span block-float -> IEEE — strongest single-side
-// format delta. Net semantic = CbB (the second CopyTile overwrites D0).
+// CopyTile(CbA) -> CopyTile(CbB) -> PackTile(CbOut). CopyTile only touches srca, so at element 1
+// srca rotates CbA->CbB with prev set (2-arg srca _with_dt) and srcb never emits. CbA=bfp8, CbB=bf16
+// spans block-float -> IEEE, the strongest single-side delta. Net semantic = CbB.
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"

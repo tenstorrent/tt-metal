@@ -6,7 +6,7 @@
 /**
  * @file eltwise_special.hpp
  * @brief Special-function SFPU op structs — Erf / Erfc / Erfinv / I0 / I1 / Lgamma / Digamma /
- *        Polygamma / TanhDerivative.
+ *        Where. (TanhDerivative lives in eltwise_activations.hpp.)
  */
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"

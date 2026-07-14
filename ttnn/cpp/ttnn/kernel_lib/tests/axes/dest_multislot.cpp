@@ -2,17 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// DEST multi-slot independence (G4 / DB-01, DB-02).
-//
-// Two FPU adds write INDEPENDENT DEST slots inside one tile_regs window, then an SFPU DEST+DEST add
-// combines them:
-//   D0 = A + B   (BinaryFpu -> D0)
-//   D1 = C + E   (BinaryFpu -> D1, must NOT disturb D0)
-//   D0 = D0 + D1 (AddBinary, SFPU DEST+DEST)
-//   pack D0
-// out = A + B + C + E. If the slots aliased / stomped each other, the result would collapse to just
-// (A+B) or (C+E). This is the running_statistics DEST-thread pattern. Runs under both fp32_dest_acc
-// settings (the halved-capacity path: half-sync limit 8 vs 4 — D0,D1 fit in both).
+// DEST multi-slot independence: two FPU adds write independent DEST slots in one tile_regs window,
+// then an SFPU DEST+DEST add combines them.
+//   D0 = A + B ; D1 = C + E (must NOT disturb D0) ; D0 = D0 + D1 ; pack D0  ->  out = A+B+C+E
+// If the slots aliased, the result would collapse to (A+B) or (C+E). Runs under both fp32_dest_acc
+// settings (halved-capacity path: half-sync limit 8 vs 4 — D0,D1 fit in both).
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
