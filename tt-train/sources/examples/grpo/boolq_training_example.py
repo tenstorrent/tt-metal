@@ -195,6 +195,16 @@ def parse_args():
         "Pass --no-memory_efficient for the retain-activations runner (RunnerType.Default): "
         "faster backward, much higher peak memory.",
     )
+    parser.add_argument(
+        "--num_steps_to_log",
+        type=int,
+        default=0,
+        help="Number of initial optimizer steps for which to snapshot bf16 model "
+        "weights and log the fp32 (raw) AND bf16-quantized diff distributions. "
+        "0 disables the instrumentation; a positive N logs the first N steps; -1 "
+        "logs every step. Dumps land in <output_dir>/weights_update_distribution/. "
+        "See tt-train/sources/examples/grpo_weights_update_distribution/README.md.",
+    )
     # Accept (and ignore) any extra flags passed by launch scripts so they
     # don't crash argument parsing.
     args, _ = parser.parse_known_args()
@@ -334,6 +344,7 @@ if __name__ == "__main__":
         optimizer_dict=optimizer_dict,
         callbacks=[GRPOMonitor(output_dir, wandb_enabled=wandb_enabled)],
         model_source=model_id,
+        num_steps_to_log=args.num_steps_to_log,
     )
     grpo_trainer.train()
     logging.info("BOOLQ GRPO TRAINING COMPLETE")

@@ -375,6 +375,237 @@ def save_checkpoint(
         f.write(datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC\n"))
 
 
+class _WeightsUpdateLogger:
+    """Diagnostic: measure the per-optimizer-step change of bf16 model weights.
+
+    Snapshots every trainable param as fp32 numpy right before ``optimizer.step()``
+    and diffs the fp32 upcast of the post-step params, then reports two views
+    per (step, param):
+
+    * ``fp32_*`` — the raw fp32 diff.
+    * ``bf16_*`` — the same diff quantized to bf16 (via ml_dtypes.bfloat16
+      round-to-nearest-even) then upcast back to fp32 for host-side stats.
+
+    Because ``MorehAdamW`` writes back into bf16 params, an ``fp32_n_changed``
+    of 0 for a param on a step means every AdamW update on that param was
+    smaller than the bf16 ULP at its magnitude -- a direct signal of bf16-
+    precision loss in the optimizer. The bf16 view answers "how many of these
+    already-effective updates survive a further bf16 requantization".
+    """
+
+    _HIST_LOG10_MIN: float = -12.0
+    _HIST_LOG10_MAX: float = 0.0
+    _HIST_NUM_BINS: int = 24
+
+    _PER_PARAM_HEADER: List[str] = [
+        "step",
+        "param",
+        "shape",
+        "numel",
+        "fp32_n_changed",
+        "fp32_frac_changed",
+        "fp32_abs_min_nonzero",
+        "fp32_abs_max",
+        "fp32_abs_mean_nonzero",
+        "fp32_abs_median_nonzero",
+        "fp32_q90_abs_nonzero",
+        "fp32_q99_abs_nonzero",
+        "fp32_signed_mean",
+        "fp32_signed_std",
+        "bf16_n_changed",
+        "bf16_frac_changed",
+        "bf16_abs_min_nonzero",
+        "bf16_abs_max",
+        "bf16_abs_mean_nonzero",
+        "bf16_abs_median_nonzero",
+        "bf16_q90_abs_nonzero",
+        "bf16_q99_abs_nonzero",
+        "bf16_signed_mean",
+        "bf16_signed_std",
+    ]
+
+    def __init__(self, output_dir: str, dp_composer: Any) -> None:
+        # Deferred imports so a user who never sets ``num_steps_to_log`` doesn't
+        # pay for numpy / ml_dtypes / csv at trainer construction time.
+        import csv as _csv  # noqa: F401
+        import ml_dtypes  # noqa: F401
+
+        self._dp_composer = dp_composer
+        self._out_dir = os.path.join(output_dir, "weights_update_distribution")
+        os.makedirs(self._out_dir, exist_ok=True)
+        self._csv_path = os.path.join(self._out_dir, "weight_update_distribution.csv")
+        self._hist_path = os.path.join(self._out_dir, "weight_update_distribution_histograms.csv")
+        self._log_path = os.path.join(self._out_dir, "weight_update_distribution.log")
+        self._snapshot: dict = {}
+
+        with open(self._csv_path, "w", newline="") as f:
+            _csv.writer(f).writerow(self._PER_PARAM_HEADER)
+
+        bin_edges = np.linspace(self._HIST_LOG10_MIN, self._HIST_LOG10_MAX, self._HIST_NUM_BINS + 1)
+        hist_header = [
+            "step",
+            "dtype",
+            "total_numel",
+            "total_n_changed",
+            "total_frac_changed",
+        ] + [f"bin_{i}_[{bin_edges[i]:.2f},{bin_edges[i + 1]:.2f})" for i in range(self._HIST_NUM_BINS)]
+        with open(self._hist_path, "w", newline="") as f:
+            _csv.writer(f).writerow(hist_header)
+        self._bin_edges = bin_edges
+
+        with open(self._log_path, "w") as f:
+            f.write("# GRPO bf16 weights update distribution log\n")
+            f.write("# Every |diff| stat is reported twice: fp32_ (raw fp32 diff) and\n")
+            f.write("# bf16_ (fp32 diff round-to-nearest-even quantized to bf16).\n")
+
+    def snapshot(self, model: Any) -> None:
+        """Store fp32 numpy copies of every trainable param."""
+        self._snapshot.clear()
+        for name, param in model.parameters().items():
+            if not param.get_requires_grad():
+                continue
+            self._snapshot[name] = param.to_numpy(ttnn.DataType.FLOAT32, self._dp_composer)
+
+    def finalize(self, step: int, model: Any) -> None:
+        """Diff post-step fp32 weights against the snapshot, then log."""
+        if not self._snapshot:
+            return
+
+        import csv as _csv
+        import ml_dtypes
+
+        rows: List[List[Any]] = []
+        # Per-dtype accumulators for the global histogram / summary line.
+        total_numel = 0
+        totals: dict = {
+            "fp32": {"n_changed": 0, "nonzero_abs": []},
+            "bf16": {"n_changed": 0, "nonzero_abs": []},
+        }
+        # For the log's "top per-param" preview.
+        per_param_summary: List[Tuple[str, float, float, float]] = []
+
+        params_dict = model.parameters()
+        for name, old in self._snapshot.items():
+            param = params_dict.get(name)
+            if param is None:
+                # Param disappeared between snapshot and finalize -- skip.
+                continue
+            new = param.to_numpy(ttnn.DataType.FLOAT32, self._dp_composer)
+            diff_fp32 = new - old
+            # ml_dtypes.bfloat16 -> fp32 gives round-to-nearest-even bf16
+            # quantization while keeping downstream numpy math in fp32.
+            diff_bf16 = diff_fp32.astype(ml_dtypes.bfloat16).astype(np.float32)
+
+            numel = int(diff_fp32.size)
+            total_numel += numel
+
+            row: List[Any] = [step, name, list(diff_fp32.shape), numel]
+            for dtype_key, diff in (("fp32", diff_fp32), ("bf16", diff_bf16)):
+                stats = self._per_param_stats(diff)
+                row.extend(
+                    [
+                        stats["n_changed"],
+                        stats["frac_changed"],
+                        stats["abs_min_nonzero"],
+                        stats["abs_max"],
+                        stats["abs_mean_nonzero"],
+                        stats["abs_median_nonzero"],
+                        stats["q90_abs_nonzero"],
+                        stats["q99_abs_nonzero"],
+                        stats["signed_mean"],
+                        stats["signed_std"],
+                    ]
+                )
+                totals[dtype_key]["n_changed"] += stats["n_changed"]
+                if stats["n_changed"] > 0:
+                    totals[dtype_key]["nonzero_abs"].append(np.abs(diff[diff != 0.0]))
+
+            rows.append(row)
+            # Use fp32 view for the "top unchanged" preview, since that is the
+            # direct bf16-in-optimizer diagnostic.
+            fp32_frac = rows[-1][self._PER_PARAM_HEADER.index("fp32_frac_changed")]
+            fp32_max = rows[-1][self._PER_PARAM_HEADER.index("fp32_abs_max")]
+            per_param_summary.append((name, float(fp32_frac), float(fp32_max), float(numel)))
+
+        with open(self._csv_path, "a", newline="") as f:
+            _csv.writer(f).writerows(rows)
+
+        hist_rows: List[List[Any]] = []
+        summary_lines: List[str] = [f"=== step {step} ==="]
+        for dtype_key in ("fp32", "bf16"):
+            n_changed = totals[dtype_key]["n_changed"]
+            frac = (n_changed / total_numel) if total_numel > 0 else 0.0
+            if totals[dtype_key]["nonzero_abs"]:
+                allabs = np.concatenate(totals[dtype_key]["nonzero_abs"])
+                p50 = float(np.quantile(allabs, 0.50))
+                p90 = float(np.quantile(allabs, 0.90))
+                p99 = float(np.quantile(allabs, 0.99))
+                pmax = float(allabs.max())
+                # Histogram in log10 space; guard against log(0) even though
+                # allabs is filtered to nonzero above.
+                log_abs = np.log10(np.maximum(allabs, np.finfo(np.float32).tiny))
+                counts, _ = np.histogram(log_abs, bins=self._bin_edges)
+            else:
+                p50 = p90 = p99 = pmax = 0.0
+                counts = np.zeros(self._HIST_NUM_BINS, dtype=np.int64)
+            hist_rows.append([step, dtype_key, total_numel, n_changed, frac] + [int(c) for c in counts.tolist()])
+            summary_lines.append(
+                f"  {dtype_key}: n_changed={n_changed:,}/{total_numel:,} ({frac * 100:.4f}%) "
+                f"|diff| p50={p50:.3e} p90={p90:.3e} p99={p99:.3e} max={pmax:.3e}"
+            )
+
+        # Top-5 params by fraction of *unchanged* elements (fp32 view) -- these
+        # are where bf16 precision is biting hardest.
+        per_param_summary.sort(key=lambda t: (t[1], -t[3]))
+        if per_param_summary:
+            summary_lines.append("  top-5 params by fraction UNCHANGED (fp32 view):")
+            for pname, frac_changed, abs_max, pnumel in per_param_summary[:5]:
+                summary_lines.append(
+                    f"    {pname}  numel={int(pnumel):,}  fp32_frac_changed={frac_changed * 100:.3f}%  "
+                    f"fp32_abs_max={abs_max:.3e}"
+                )
+
+        with open(self._hist_path, "a", newline="") as f:
+            _csv.writer(f).writerows(hist_rows)
+        with open(self._log_path, "a") as f:
+            f.write("\n".join(summary_lines) + "\n")
+        for line in summary_lines:
+            logging.info("[weights-update] %s", line)
+
+        self._snapshot.clear()
+
+    @staticmethod
+    def _per_param_stats(diff: np.ndarray) -> dict:
+        numel = int(diff.size)
+        mask = diff != 0.0
+        n_changed = int(np.count_nonzero(mask))
+        out = {
+            "n_changed": n_changed,
+            "frac_changed": (n_changed / numel) if numel > 0 else 0.0,
+            "abs_min_nonzero": 0.0,
+            "abs_max": 0.0,
+            "abs_mean_nonzero": 0.0,
+            "abs_median_nonzero": 0.0,
+            "q90_abs_nonzero": 0.0,
+            "q99_abs_nonzero": 0.0,
+            "signed_mean": 0.0,
+            "signed_std": 0.0,
+        }
+        if n_changed == 0:
+            return out
+        nonzero = diff[mask]
+        abs_nonzero = np.abs(nonzero)
+        out["abs_min_nonzero"] = float(abs_nonzero.min())
+        out["abs_max"] = float(abs_nonzero.max())
+        out["abs_mean_nonzero"] = float(abs_nonzero.mean())
+        out["abs_median_nonzero"] = float(np.median(abs_nonzero))
+        out["q90_abs_nonzero"] = float(np.quantile(abs_nonzero, 0.90))
+        out["q99_abs_nonzero"] = float(np.quantile(abs_nonzero, 0.99))
+        out["signed_mean"] = float(nonzero.mean())
+        out["signed_std"] = float(nonzero.std())
+        return out
+
+
 class GRPOTrainer:
     def __init__(
         self,
@@ -385,6 +616,7 @@ class GRPOTrainer:
         optimizer_dict: dict,
         callbacks: Optional[List[Any]] = None,
         model_source: Optional[str] = None,
+        num_steps_to_log: int = 0,
     ) -> None:
         self.completer = completer
         self.dataset = dataset
@@ -394,6 +626,13 @@ class GRPOTrainer:
         self.callbacks: List[Any] = callbacks or []
         self.model_source = model_source
         self.model: Any = None
+        # Diagnostic hook (branch grpo-weights-update-distribution): when non-zero,
+        # snapshot every trainable param as fp32 numpy right before optimizer.step()
+        # and diff after, dumping per-param + global stats (fp32 AND bf16-quantized
+        # views of the diff) to <output_dir>/weights_update_distribution/. See the
+        # README under tt-train/sources/examples/grpo_weights_update_distribution/.
+        # 0 = disabled, >0 = first N steps, <0 = every step.
+        self.num_steps_to_log = num_steps_to_log
 
     def _compute_grpo_loss(
         self,
@@ -496,6 +735,19 @@ class GRPOTrainer:
         dp_composer: Any = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0) if batch_sharded else None
         if not batch_sharded:
             num_devices = 1
+
+        # Diagnostic bf16-weights-update logger (branch grpo-weights-update-
+        # distribution). Only wired in when the caller explicitly opts in with a
+        # non-zero ``num_steps_to_log`` -- keeps the default training path
+        # bit-identical to before.
+        weights_logger: Optional[_WeightsUpdateLogger] = None
+        if self.num_steps_to_log != 0:
+            weights_logger = _WeightsUpdateLogger(grpo_cfg.output_dir, dp_composer)
+            logging.info(
+                "[weights-update] logging bf16 weight update distribution for %s optimizer step(s); output dir=%s",
+                "all" if self.num_steps_to_log < 0 else str(self.num_steps_to_log),
+                weights_logger._out_dir,
+            )
 
         # World size for the loss normalization. ``synchronize_gradients`` /
         # ``sync_gradients`` all-reduce (sum) each replicated gradient and then
@@ -686,10 +938,23 @@ class GRPOTrainer:
                     # here), matched to this reduction.
                     ttml.sync_gradients(tt_model.parameters(), axis_names=("dp",))
 
+                # bf16 weights-update diagnostic: snapshot right before, diff right after
+                # optimizer.step(). See _WeightsUpdateLogger and self.num_steps_to_log.
+                should_log_weights = weights_logger is not None and (
+                    self.num_steps_to_log < 0 or num_steps < self.num_steps_to_log
+                )
+                if should_log_weights:
+                    weights_logger.snapshot(tt_model)
+
                 for cb in self.callbacks:
                     cb.on_before_optimizer_step(self)
                 optimizer.step()
                 optimizer.zero_grad()
+
+                if should_log_weights:
+                    # num_steps is incremented later in this iteration; use the
+                    # human-friendly 1-based step number that matches on_step_end.
+                    weights_logger.finalize(num_steps + 1, tt_model)
 
                 step_time_s = time.perf_counter() - step_t0
                 # Generation runs once per effective batch; attribute its cost to
