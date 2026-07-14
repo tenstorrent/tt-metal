@@ -1103,6 +1103,77 @@ def test_bruteforce_sweep_h2w2_1024_t1(
 
 
 # ---------------------------------------------------------------------------
+# BH Galaxy 4x8, FIBO image decode (1024x1024, latent T=1, full-T uncached). h_factor=8, w_factor=4.
+# ---------------------------------------------------------------------------
+# FIBO's VaeHWParallelConfig on the 4x8 mesh is height=(tp_factor=8, tp_axis=1),
+# width=(sp_factor=4, sp_axis=0) -> h_factor=8, w_factor=4 (the mirror of Wan's video 4x8).
+# compute_decoder_dims(1024,1024,8,4,1,uncached): per-device OUTPUT (H_out, W_out) per stage:
+#   stage0 (16,32)  stage1 (32,64)  stage2 (64,128)  stage3 (128,256)
+# Input dims to run_sweep = per-device output + (kernel-1): (3,3,3)/(1,3,3) add (0,2,2); (3,1,1) adds 0.
+# These 13 convs were captured empirically from test_fibo_decode_device_profile[mesh_device1] as the exact
+# keys that hit `conv3d blocking [fallback]` (miss _BLOCKINGS) -> they fall back to the generic default
+# (256,32,1,1,1 etc.), so any tuned blocking wins big. Register each winner under the real key
+# (8, 4, C_in, C_out, kernel, T, H_out, W_out) with T from the key (tconv key T=2; see the tconv note below).
+# Ordered most-to-least compute (count x per-conv FLOPs), mirroring the h2w2 FIBO list.
+_SWEEP_LAYERS_H8W4_1024_T1 = [
+    # (name,          C_in, C_out, kernel,   stride,   padding,   T, H_in, W_in, h, w)
+    ("up2_res_256", 256, 256, (3, 3, 3), (1, 1, 1), (0, 0, 0), 3, 130, 258, 8, 4),  # stage3 H_out=128 W_out=256
+    ("up1_res_512", 512, 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 3, 66, 130, 8, 4),  # stage2 H_out=64  W_out=128
+    ("up1_res_1024", 1024, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 3, 34, 66, 8, 4),  # stage1 H_out=32  W_out=64
+    ("mid_res_1024", 1024, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 3, 18, 34, 8, 4),  # stage0 H_out=16  W_out=32
+    ("up0_first_64", 64, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 3, 18, 34, 8, 4),  # stage0 H_out=16  W_out=32
+    ("up1_first_1024", 1024, 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 3, 66, 130, 8, 4),  # stage2 H_out=64  W_out=128
+    ("up2_first_512", 512, 256, (3, 3, 3), (1, 1, 1), (0, 0, 0), 3, 130, 258, 8, 4),  # stage3 H_out=128 W_out=256
+    ("conv_out_256", 256, 12, (3, 3, 3), (1, 1, 1), (0, 0, 0), 3, 130, 258, 8, 4),  # stage3 H_out=128 W_out=256
+    ("up0_spatial_64", 1024, 1024, (1, 3, 3), (1, 1, 1), (0, 0, 0), 1, 34, 66, 8, 4),  # stage1 H_out=32  W_out=64
+    ("up1_spatial_128", 1024, 1024, (1, 3, 3), (1, 1, 1), (0, 0, 0), 1, 66, 130, 8, 4),  # stage2 H_out=64 W_out=128
+    ("up2_spatial_256", 512, 512, (1, 3, 3), (1, 1, 1), (0, 0, 0), 1, 130, 258, 8, 4),  # stage3 H_out=128 W_out=256
+    # Temporal-upsample tconvs (kernel (3,1,1), 1x1 spatial): swept at T_in=3 (-> T_out=1) so the valid
+    # conv emits a frame; kH=kW=1 so the C/H/W blocking is T-independent. Register the winner with
+    # T_out_block=1 under the real key (8,4,1024,2048,(3,1,1),2,H_out,W_out) (key T=2, causal-T-padded).
+    ("up0_tconv_32", 1024, 2048, (3, 1, 1), (1, 1, 1), (0, 0, 0), 3, 16, 32, 8, 4),  # stage0 key T=2 H_out=16 W_out=32
+    ("up1_tconv_64", 1024, 2048, (3, 1, 1), (1, 1, 1), (0, 0, 0), 3, 32, 64, 8, 4),  # stage1 key T=2 H_out=32 W_out=64
+]
+
+
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, device_params",
+    [[(1, 1), (1, 1), {"trace_region_size": TRACE_REGION_SIZE}]],
+    ids=["bh_4x8_fibo_1x1"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor",
+    _SWEEP_LAYERS_H8W4_1024_T1,
+    ids=[l[0] for l in _SWEEP_LAYERS_H8W4_1024_T1],
+)
+def test_bruteforce_sweep_h8w4_1024_t1(
+    mesh_device, mesh_shape, layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor
+):
+    # Per-device conv shape (h8w4), so a single chip reproduces exactly what each of the 32 devices runs.
+    parent_mesh = mesh_device
+    device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+    output = f"sweep_results_h8w4_1024_t1/{layer_name}_{C_in}x{C_out}.json"
+    run_sweep(
+        device,
+        C_in,
+        C_out,
+        kernel,
+        T,
+        H,
+        W,
+        output,
+        stride=stride,
+        padding=padding,
+        h_factor=h_factor,
+        w_factor=w_factor,
+        max_combos=_env_opt("CONV3D_SWEEP_MAX_COMBOS", 300),
+        max_t_block=_env_opt("CONV3D_SWEEP_MAX_T_BLOCK", 8),
+        hw_product=_env_opt("CONV3D_SWEEP_HW_PRODUCT", 32),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Table-driven generic sweep — every shape in models/tt_dit/utils/conv3d.py
 # ---------------------------------------------------------------------------
 # Each _BLOCKINGS key is (h_factor, w_factor, C_in, C_out, kernel, T, H_out, W_out)
