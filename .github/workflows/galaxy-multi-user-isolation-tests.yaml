@@ -188,7 +188,12 @@ jobs:
           # python3 below keeps using the setup-python env with the ttnn wheel.
           ACTIVATE=/opt/tt_metal_infra/provisioning/provisioning_env/bin/activate
           reset_cluster() { ( if [ -f "$ACTIVATE" ]; then source "$ACTIVATE"; fi; tt-smi -glx_reset_auto ); }
+          # A stale process from a previous run can hold the device's sysmem/TLB
+          # windows; a board reset does not release them, so kill such holders
+          # (sudo: /proc/<pid>/fd of other users' processes needs root to read).
+          free_tt_devices() { sudo python3 .github/scripts/utils/free_tt_devices.py || true; sleep 3; }
           attempts=3
+          free_tt_devices
           for i in $(seq 1 $attempts); do
             echo "generate_tray_mapping attempt $i of $attempts"
             if python3 .github/scripts/utils/generate_tray_mapping.py; then
@@ -197,6 +202,7 @@ jobs:
             fi
             echo "generate_tray_mapping failed on attempt $i"
             if [ "$i" -lt "$attempts" ]; then
+              free_tt_devices
               echo "Resetting cluster before retry..."
               reset_cluster || true
               sleep 10
