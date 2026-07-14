@@ -57,8 +57,15 @@ STAGE_2_DISTILLED_SIGMA_VALUES = _sigma_override("LTX_S2_SIGMAS", _DEFAULT_S2_SI
 # 6-step). Stage 1 for such gens uses a strict subset of the high sigma nodes and a looser interior
 # pin; stage 2 re-locks image identity at full strength (PCC stays ~0.99). Only engages below the
 # shipped node count — the 8-step high schedule already carries the reconciliation budget.
-_KEYFRAME_S1_ALIGNED = [1.0, 0.909375, 0.725, 0.421875, 0.0]
-_KEYFRAME_S1_ALIGNED_LONG = [1.0, 0.975, 0.909375, 0.725, 0.421875, 0.0]
+# The trajectory splits in two: the tail nodes carry the actual denoise and are mandatory (dropping
+# one is what puts the neighbors off-distribution), while the head nodes cluster near σ=1 and only
+# refine how much budget the coarse stage spends reconciling the pin wall. So a tier buys its extra
+# steps in head nodes, taking them from the σ=1 end of the high schedule inward. Anchoring on the
+# tail is what keeps every tier ON the distilled trajectory; without it a tier-sized subset is just
+# the off-trajectory schedule that scrambles.
+_KEYFRAME_S1_TAIL = [0.909375, 0.725, 0.421875, 0.0]
+_KEYFRAME_S1_HEAD = [0.99375, 0.9875, 0.98125, 0.975]
+_KEYFRAME_S1_ALIGNED = [1.0] + _KEYFRAME_S1_TAIL
 KEYFRAME_S1_STRENGTH = float(os.environ.get("LTX_KEYFRAME_S1_STRENGTH", "0.5"))
 # A coarser S1 reconciles the pin-wall across fewer spatial tokens, so it needs a softer interior
 # pin: 0.5 is clean at 1080p (s1 544) but smears the post-pin neighbors at 720p (s1 352), while 0.0
@@ -73,12 +80,19 @@ def _keyframe_s1_strength(s1_height: int) -> float:
 
 
 def _keyframe_s1_sigmas(latent_frames: int) -> list[float]:
-    """Trajectory-aligned S1 nodes for a non-frame-0 keyframe. A longer clip's interior pin has more
-    neighbors to reconcile, so a clip past ~6s gets one extra aligned node. LTX_KEYFRAME_S1_SIGMAS
-    overrides both."""
+    """Trajectory-aligned S1 nodes for a non-frame-0 keyframe, scaled to the active tier's budget.
+
+    The aligned tail is 4 steps, so a tier with fewer than that (fast, 3) pays a step to stay on the
+    trajectory, and one with more (medium, 6) spends the surplus on head nodes rather than collapsing
+    onto fast's schedule — which is what a fixed node list did: a keyframe gen rendered bit-identical
+    on medium and fast, making the tier a no-op for every keyframe user. A longer clip's interior pin
+    has more neighbors to reconcile, so past ~6s it takes a head node even when the tier wouldn't.
+    LTX_KEYFRAME_S1_SIGMAS overrides the lot."""
     if os.environ.get("LTX_KEYFRAME_S1_SIGMAS", "").strip():
         return _sigma_override("LTX_KEYFRAME_S1_SIGMAS", _KEYFRAME_S1_ALIGNED)
-    return _KEYFRAME_S1_ALIGNED_LONG if latent_frames > 20 else _KEYFRAME_S1_ALIGNED
+    tier_steps = len(DISTILLED_SIGMA_VALUES) - 1
+    extra = min(max(tier_steps - len(_KEYFRAME_S1_TAIL), 1 if latent_frames > 20 else 0), len(_KEYFRAME_S1_HEAD))
+    return [1.0] + (_KEYFRAME_S1_HEAD[-extra:] if extra else []) + _KEYFRAME_S1_TAIL
 
 
 def pixel_to_latent_frame(pixel_idx: int, num_frames: int) -> int:

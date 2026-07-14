@@ -1336,3 +1336,54 @@ def test_kf_fringe_repro(
             f"pinned frame f{pin} is {ratio:.2f}x the clean-frame sharpness — the pinned frame decoded to "
             f"high-frequency garbage (anchor reference degenerate), not a real image"
         )
+
+
+@pytest.mark.parametrize(
+    "tier, latent_frames, expected",
+    [
+        # fast (S1=3): below the 4-step aligned tail, so it pays a step to stay on the trajectory.
+        ("fast", 19, [1.0, 0.909375, 0.725, 0.421875, 0.0]),
+        # medium (S1=6): spends its surplus on head nodes instead of collapsing onto fast's schedule.
+        ("medium", 19, [1.0, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0]),
+        # A long clip's interior pin takes a head node even when the tier wouldn't.
+        ("fast", 31, [1.0, 0.975, 0.909375, 0.725, 0.421875, 0.0]),
+    ],
+)
+def test_keyframe_s1_sigmas_scale_with_the_tier(tier, latent_frames, expected, monkeypatch):
+    """A keyframe gen must render differently on medium than on fast. A fixed aligned node list made
+    the two bit-identical, so the tier was a no-op for every keyframe user. Every node must still come
+    from the high schedule -- an off-trajectory node is what scrambles the pin's neighbors."""
+    import importlib
+
+    import models.tt_dit.pipelines.ltx.pipeline_ltx_distilled as mod
+    from models.tt_dit.utils.ltx import apply_quality_env
+
+    monkeypatch.setenv("LTX_QUALITY", tier)
+    for v in ("LTX_S1_SIGMAS", "LTX_S2_SIGMAS", "LTX_KEYFRAME_S1_SIGMAS"):
+        monkeypatch.delenv(v, raising=False)
+    apply_quality_env()
+    mod = importlib.reload(mod)
+
+    got = mod._keyframe_s1_sigmas(latent_frames)
+    assert got == expected
+    assert set(got) <= set(mod._DEFAULT_S1_SIGMAS), "aligned nodes must be a subset of the high schedule"
+    assert got[-len(mod._KEYFRAME_S1_TAIL) :] == mod._KEYFRAME_S1_TAIL, "the denoise tail is mandatory"
+
+
+def test_keyframe_s1_sigmas_differ_between_tiers(monkeypatch):
+    """The regression itself: medium and fast must not produce the same schedule."""
+    import importlib
+
+    import models.tt_dit.pipelines.ltx.pipeline_ltx_distilled as mod
+    from models.tt_dit.utils.ltx import apply_quality_env
+
+    out = {}
+    for tier in ("fast", "medium"):
+        monkeypatch.setenv("LTX_QUALITY", tier)
+        for v in ("LTX_S1_SIGMAS", "LTX_S2_SIGMAS", "LTX_KEYFRAME_S1_SIGMAS"):
+            monkeypatch.delenv(v, raising=False)
+        apply_quality_env()
+        mod = importlib.reload(mod)
+        out[tier] = mod._keyframe_s1_sigmas(19)
+    assert out["fast"] != out["medium"]
+    assert len(out["medium"]) > len(out["fast"])
