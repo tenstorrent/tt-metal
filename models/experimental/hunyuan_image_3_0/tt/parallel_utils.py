@@ -65,13 +65,11 @@ def sp_gather(ccl, t, *, dim: int, mesh_axis: int, n: int, out_memory_config=Non
 # with the global sequence length. Past a sequence bound those buffers collide
 # with the ops' own static circular-buffer region — a low-address CB clash
 # (tt_metal program.cpp validate_circular_buffer_region), NOT an interleaved-bank
-# OOM: at the clash L1 is only ~15% full. The bound was MEASURED on hardware
-# (2x2 mesh, sp=2/tp=2, bf8 experts, 2 layers): the fused SwiGLU multiply
-# (moe/moe_parallel.py) is the first op to clash — the last L1-resident forward
-# is S=2560, the first clash S=2816. Keep the full-S MoE ops L1-resident at or
-# below the bound (fast, no DRAM round-trip) and fall back to DRAM above it so
-# long sequences run instead of crashing.
-MOE_L1_MAX_SEQ = 2560
+# OOM: at the clash L1 is only ~15% full. Bound MEASURED on hardware (2x2 mesh,
+# sp=2/tp=2, bf8 experts): full-S MoE ops clash near S~2816. Gate a 256-step below
+# so the exact-boundary value is itself safe — a coarse-sweep "last-good" is NOT
+# safe on every path: the 32-layer sp=2 PCC forward clashed at exactly S=2560.
+MOE_L1_MAX_SEQ = 2048
 
 
 def moe_full_seq_mem_config(seq_len: int) -> ttnn.MemoryConfig:
@@ -88,9 +86,9 @@ def moe_full_seq_mem_config(seq_len: int) -> ttnn.MemoryConfig:
 # static CB region — the same CB clash as MoE, but the resident tensor here is the
 # LIVE residual stream, so ALL these ops must fall to DRAM together above the bound
 # (moving one leaves another in the CBs' path). Bound measured on hardware: the
-# residual RMSNorm first clashes at global ISL 4096 (Sd=2048); gate at the last
-# jointly-validated L1 point (Sd=1280, i.e. global 2560, matching MOE_L1_MAX_SEQ).
-RESID_L1_MAX_SEQ = 1280
+# residual RMSNorm clashed at Sd=1280 (global 2560) on the 32-layer sp=2 forward,
+# so gate below that at Sd=1024 (global 2048, matching MOE_L1_MAX_SEQ).
+RESID_L1_MAX_SEQ = 1024
 
 
 def resid_mem_config(seq_len: int) -> ttnn.MemoryConfig:
