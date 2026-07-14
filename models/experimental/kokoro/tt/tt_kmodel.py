@@ -293,6 +293,12 @@ class TTKModel:
         # eager — the duration readback splits the pipeline (see docs/generator_perf_optimizations.md).
         self._trace = trace
         self._trace_mgr = TraceManager(device) if trace else None
+        # Trace A (prosody→duration + ASR TextEncoder): the fixed-shape T_tokens device region that
+        # runs BEFORE the duration readback splits the pipeline. Captured once per identical input
+        # (keyed by exact ids/speed/style — the token uploads are baked into the graph) and replayed
+        # bit-for-bit on a repeat call, so BERT + prosody + the ASR encoder's ~480 BiLSTM dispatches
+        # stop running eagerly. Full-length path only (the padded path uploads masks mid-graph).
+        self._trace_mgr_a = TraceManager(device) if trace else None
 
     # ------------------------------------------------------------------
     # Decoder cache
@@ -380,6 +386,8 @@ class TTKModel:
         """Release captured metal traces + persistent buffers. Call before closing the device."""
         if self._trace_mgr is not None:
             self._trace_mgr.release()
+        if self._trace_mgr_a is not None:
+            self._trace_mgr_a.release()
 
     # ------------------------------------------------------------------
     # Internal on-device forward
@@ -410,79 +418,110 @@ class TTKModel:
         full_length = _batch_is_full_length(input_lengths, T)
         text_mask: torch.Tensor | None = None if full_length else _text_mask_from_input_lengths(input_lengths, T)
 
-        if full_length:
-            bert_out = self._bert(input_ids, attention_mask=None)
-        else:
-            bert_out = self._bert(input_ids, attention_mask=_attention_keep_mask_bt(input_lengths, T).int())
-
-        bert_for_enc = bert_out
-        owns_bert_cast = False
-        if bert_out.dtype != ttnn.float32:
-            bert_for_enc = ttnn.typecast(bert_out, ttnn.float32, memory_config=mc)
-            owns_bert_cast = True
-        d_en = ttnn.linear(
-            bert_for_enc,
-            p.bert_encoder_w,
-            bias=p.bert_encoder_b,
-            transpose_b=True,
-            memory_config=mc,
-            compute_kernel_config=ck,
-        )
-        ttnn.deallocate(bert_for_enc if owns_bert_cast else bert_out)
-        while len(d_en.shape) > 3:
-            d_en = ttnn.squeeze(d_en, 0)
-        d_en_bct = ttnn.permute(d_en, (0, 2, 1), memory_config=mc)
-        ttnn.deallocate(d_en)
-
-        if d_en_bct.dtype != prosody_dtype:
-            d_en_fp32 = ttnn.typecast(d_en_bct, prosody_dtype, memory_config=mc)
-            ttnn.deallocate(d_en_bct)
-            d_en_bct = d_en_fp32
-
+        # Style + keep-mask are the Trace A region's device inputs; created here (outside the captured
+        # region) and treated as read-only inside it. Under a trace they become persistent buffers.
         s_pred_tt = ttnn.from_torch(
             s_pred_cpu, dtype=prosody_dtype, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=mc
         )
-
         if full_length:
             keep_mask = ttnn.ones([B, T, 1], dtype=prosody_dtype, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=mc)
         else:
             keep_mask = _keep_mask_btl_tt(input_lengths, T, device=dev, dtype=prosody_dtype, memory_config=mc)
-        d_nlc = self._predictor._text_encoder.forward(
-            d_en_bct=d_en_bct,
-            style_bs=s_pred_tt,
-            sequence_lengths=lengths_list,
-            keep_mask_btl=keep_mask,
-            compute_kernel_config=ck,
-            memory_config=mc,
-            wire_dtype=prosody_dtype,
-        )
-        ttnn.deallocate(d_en_bct)
+
+        def _trace_a_region(pers: dict) -> "tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]":
+            """Fixed-shape T_tokens device graph (steps 1–5 + the ASR TextEncoder):
+            BERT → bert_encoder → DurationEncoder → duration BiLSTM → duration_proj → dur_clipped,
+            and the ASR ``text_encoder`` → ``t_en_bct``. Returns ``(dur_clipped, d_nlc, t_en_bct)``.
+            Treats ``pers`` tensors (style, keep-mask) as read-only so they stay valid across replays.
+            """
+            s_pred = pers["s_pred"]
+            keep = pers["keep_mask"]
+            if full_length:
+                bert_out = self._bert(input_ids, attention_mask=None)
+            else:
+                bert_out = self._bert(input_ids, attention_mask=_attention_keep_mask_bt(input_lengths, T).int())
+            bert_for_enc = bert_out
+            owns_bert_cast = False
+            if bert_out.dtype != ttnn.float32:
+                bert_for_enc = ttnn.typecast(bert_out, ttnn.float32, memory_config=mc)
+                owns_bert_cast = True
+            d_en = ttnn.linear(
+                bert_for_enc,
+                p.bert_encoder_w,
+                bias=p.bert_encoder_b,
+                transpose_b=True,
+                memory_config=mc,
+                compute_kernel_config=ck,
+            )
+            ttnn.deallocate(bert_for_enc if owns_bert_cast else bert_out)
+            while len(d_en.shape) > 3:
+                d_en = ttnn.squeeze(d_en, 0)
+            d_en_bct = ttnn.permute(d_en, (0, 2, 1), memory_config=mc)
+            ttnn.deallocate(d_en)
+            if d_en_bct.dtype != prosody_dtype:
+                d_en_fp32 = ttnn.typecast(d_en_bct, prosody_dtype, memory_config=mc)
+                ttnn.deallocate(d_en_bct)
+                d_en_bct = d_en_fp32
+            d_nlc_r = self._predictor._text_encoder.forward(
+                d_en_bct=d_en_bct,
+                style_bs=s_pred,
+                sequence_lengths=lengths_list,
+                keep_mask_btl=keep,
+                compute_kernel_config=ck,
+                memory_config=mc,
+                wire_dtype=prosody_dtype,
+            )
+            ttnn.deallocate(d_en_bct)  # local temp; keep/s_pred are the caller's, left intact
+            x_lstm = tt_bilstm_nlc(
+                x_nlc=d_nlc_r,
+                fwd=p.predictor.lstm_fwd,
+                rev=p.predictor.lstm_rev,
+                compute_kernel_config=ck,
+                memory_config=mc,
+                sequence_lengths=lengths_list,
+            )
+            duration = self._predictor._duration_proj.forward(x_lstm, compute_kernel_config=ck, memory_config=mc)
+            ttnn.deallocate(x_lstm)
+            dur_sig = ttnn.sigmoid(duration, memory_config=mc)
+            ttnn.deallocate(duration)
+            dur_sum_tt = ttnn.sum(dur_sig, dim=-1, memory_config=mc)
+            ttnn.deallocate(dur_sig)
+            if speed != 1.0:
+                dur_scaled = ttnn.multiply(dur_sum_tt, 1.0 / speed, memory_config=mc)
+                ttnn.deallocate(dur_sum_tt)
+                dur_sum_tt = dur_scaled
+            dur_rounded_tt = ttnn.round(dur_sum_tt, memory_config=mc)
+            ttnn.deallocate(dur_sum_tt)
+            dur_clipped_r = ttnn.clip(dur_rounded_tt, min=1.0, memory_config=mc)
+            ttnn.deallocate(dur_rounded_tt)
+            # ASR TextEncoder — same T_tokens regime, depends only on ids/lengths (not the alignment).
+            t_en_r = self._text_encoder(input_ids, input_lengths=input_lengths, text_mask=text_mask)
+            return dur_clipped_r, d_nlc_r, t_en_r
+
+        # Trace A: capture once per identical input (ids baked into the graph), replay bit-for-bit on
+        # a repeat call so BERT + prosody + the ASR encoder stop running eagerly. Full-length only (the
+        # padded path uploads masks/ids mid-graph, which trace capture forbids).
+        if self._trace_mgr_a is not None and full_length:
+            key = (
+                "traceA",
+                int(T),
+                tuple(int(v) for v in input_ids.reshape(-1).tolist()),
+                round(float(speed), 6),
+                hash(s_pred_cpu.detach().cpu().contiguous().numpy().tobytes()),
+            )
+            dur_c, d_nlc_p, t_en_p = self._trace_mgr_a.run(
+                key, {"s_pred": s_pred_tt, "keep_mask": keep_mask}, _trace_a_region
+            )
+            # Manager owns the persistent outputs; clone so downstream can consume/free them freely.
+            dur_clipped_tt = ttnn.clone(dur_c)
+            d_nlc = ttnn.clone(d_nlc_p)
+            t_en_bct = ttnn.clone(t_en_p)
+        else:
+            dur_clipped_tt, d_nlc, t_en_bct = _trace_a_region({"s_pred": s_pred_tt, "keep_mask": keep_mask})
+
         ttnn.deallocate(keep_mask)
 
-        x_lstm = tt_bilstm_nlc(
-            x_nlc=d_nlc,
-            fwd=p.predictor.lstm_fwd,
-            rev=p.predictor.lstm_rev,
-            compute_kernel_config=ck,
-            memory_config=mc,
-            sequence_lengths=lengths_list,
-        )
-        duration = self._predictor._duration_proj.forward(x_lstm, compute_kernel_config=ck, memory_config=mc)
-        ttnn.deallocate(x_lstm)
-
         # 6. Alignment host step (unavoidable: T_aligned = sum(pred_dur) sets tensor shapes)
-        dur_sig = ttnn.sigmoid(duration, memory_config=mc)
-        ttnn.deallocate(duration)
-        dur_sum_tt = ttnn.sum(dur_sig, dim=-1, memory_config=mc)
-        ttnn.deallocate(dur_sig)
-        if speed != 1.0:
-            dur_scaled = ttnn.multiply(dur_sum_tt, 1.0 / speed, memory_config=mc)
-            ttnn.deallocate(dur_sum_tt)
-            dur_sum_tt = dur_scaled
-        dur_rounded_tt = ttnn.round(dur_sum_tt, memory_config=mc)
-        ttnn.deallocate(dur_sum_tt)
-        dur_clipped_tt = ttnn.clip(dur_rounded_tt, min=1.0, memory_config=mc)
-        ttnn.deallocate(dur_rounded_tt)
         pred_dur = ttnn.to_torch(dur_clipped_tt).long().squeeze()
         ttnn.deallocate(dur_clipped_tt)
         pred_dur_cpu = pred_dur.clone()
@@ -502,6 +541,7 @@ class TTKModel:
             pred_dur_cpu,
             mc,
             ck,
+            t_en_bct=t_en_bct,
         )
 
     def _device_forward_prosody_stages_from_aln(
@@ -516,8 +556,15 @@ class TTKModel:
         pred_dur_cpu: torch.LongTensor,
         mc: ttnn.MemoryConfig,
         ck,
+        *,
+        t_en_bct: "ttnn.Tensor | None" = None,
     ) -> "tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, int, torch.LongTensor]":
-        """Steps 7–9 given ``d_nlc``, alignment, and style (shared by on-device and CPU prosody paths)."""
+        """Steps 7–9 given ``d_nlc``, alignment, and style (shared by on-device and CPU prosody paths).
+
+        ``t_en_bct`` (optional): the ASR ``TextEncoder`` output ``[B, C, T_tokens]``, precomputed in the
+        Trace A region. When ``None`` the encoder is run here (the original eager order); when provided
+        (traced path) it is used directly and this method owns it (deallocates after the alignment matmul).
+        """
         aln_Ta_T = ttnn.permute(aln_tt, (0, 2, 1), memory_config=mc)
         d_mat, owns_d = _to_fp32_if_needed(d_nlc, mc)
         if owns_d:
@@ -535,7 +582,8 @@ class TTKModel:
         ttnn.deallocate(en_nlc)
         ttnn.deallocate(s_pred_tt)
 
-        t_en_bct = self._text_encoder(input_ids, input_lengths=input_lengths, text_mask=text_mask)
+        if t_en_bct is None:
+            t_en_bct = self._text_encoder(input_ids, input_lengths=input_lengths, text_mask=text_mask)
         asr_bct = ttnn.matmul(t_en_bct, aln_tt, memory_config=mc, compute_kernel_config=ck)
         ttnn.deallocate(t_en_bct)
         ttnn.deallocate(aln_tt)

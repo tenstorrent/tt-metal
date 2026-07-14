@@ -439,13 +439,24 @@ def _batched_tt_conv1d_nlc(
     # shape fits L1; long-sequence DRAM-slicing callers leave output_sharded=False and are untouched).
     slice_config = ttnn.Conv2dL1FullSliceConfig if output_sharded else None
 
-    y = ttnn.conv1d(
+    # Trace-prep weight caching (same mechanism as the standard per-item path above): with prep
+    # enabled the first call reuses the op's own prepared (bf8, tiled, resharded) weights and caches
+    # them on device; later calls (and the trace capture) reuse them so ttnn.conv1d does NO
+    # host->device weight upload — which is what makes the TextEncoder conv trace-capturable. Byte-
+    # identical to the raw path. Keyed by the batched shape so it never collides with the per-item sig.
+    _sig = (
+        _prep_signature(x_flat, out_dtype, extra=("conv1d_batched", batch, seq))
+        if _trace_weight_prep_enabled()
+        else None
+    )
+    _w, _b, _want_wb = _weights_for_conv(params, _sig)
+    _res = ttnn.conv1d(
         input_tensor=x_flat,
-        weight_tensor=params.weight,
+        weight_tensor=_w,
         in_channels=params.in_channels,
         out_channels=params.out_channels,
         device=device,
-        bias_tensor=params.bias,
+        bias_tensor=_b,
         kernel_size=params.kernel_size,
         stride=params.stride,
         padding=params.padding,
@@ -457,7 +468,13 @@ def _batched_tt_conv1d_nlc(
         slice_config=slice_config,
         groups=params.groups,
         dtype=out_dtype,
+        return_weights_and_bias=_want_wb,
     )
+    if _want_wb:
+        y, _wb = _res
+        _prep_cache_set((id(params.weight), _sig), (_wb[0], _wb[1]))
+    else:
+        y = _res
     # With ``output_sharded`` the conv's native block-sharded L1 output is returned as-is, so the
     # consumer (the TextEncoder channel-LayerNorm) reads it in place — no ShardedToInterleaved here AND
     # no InterleavedToSharded before the LayerNorm (the conv output is already a valid block-sharded LN

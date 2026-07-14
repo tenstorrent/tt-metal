@@ -39,7 +39,8 @@ from .tt_trace_prep import clear_trace_weight_prep_cache, set_trace_weight_prep
 class _Entry:
     tid: int
     persistent: dict  # name -> persistent input buffer (fixed address)
-    output: ttnn.Tensor  # persistent output buffer (overwritten by each replay)
+    output: object  # persistent output buffer(s) overwritten by each replay; Tensor or tuple[Tensor]
+    multi: bool = False  # True if forward_fn returned a tuple/list of tensors
 
 
 class TraceManager:
@@ -63,14 +64,24 @@ class TraceManager:
     def has(self, key) -> bool:
         return key in self._entries
 
-    def run(self, key, inputs: dict, forward_fn: Callable[[dict], ttnn.Tensor]) -> ttnn.Tensor:
+    def run(self, key, inputs: dict, forward_fn: Callable[[dict], object]) -> object:
         """Capture (first call for ``key``) or replay ``forward_fn`` with ``inputs`` updated in place.
 
         ``inputs``: name -> the call's fresh device tensor (same shape/dtype/layout for a given key).
-        ``forward_fn``: reads its inputs from the passed persistent dict and returns the output; must
-        treat the dict tensors as read-only (clone them if the graph consumes/deallocates inputs).
-        Returns the (persistent) output tensor — valid until the next ``run`` for the same key.
+        ``forward_fn``: reads its inputs from the passed persistent dict and returns EITHER a single
+        output tensor OR a tuple/list of output tensors; it must treat the dict tensors as read-only
+        (clone them if the graph consumes/deallocates inputs). Returns the (persistent) output(s) —
+        same shape (single tensor or tuple) as ``forward_fn`` returned — valid until the next ``run``
+        for the same key.
         """
+
+        def _warm_free(o):
+            if isinstance(o, (tuple, list)):
+                for t in o:
+                    ttnn.deallocate(t)
+            else:
+                ttnn.deallocate(o)
+
         entry = self._entries.get(key)
         if entry is None:
             self._ensure_prep()
@@ -80,12 +91,24 @@ class TraceManager:
             # (trace capture forbids the on-device writes those would otherwise emit).
             warm = forward_fn(persistent)
             ttnn.synchronize_device(self.device)
-            ttnn.deallocate(warm)
+            _warm_free(warm)
             # Capture.
             tid = ttnn.begin_trace_capture(self.device, cq_id=self.cq_id)
-            output = forward_fn(persistent)
-            ttnn.end_trace_capture(self.device, tid, cq_id=self.cq_id)
-            self._entries[key] = _Entry(tid=tid, persistent=persistent, output=output)
+            try:
+                output = forward_fn(persistent)
+            finally:
+                # Always end the capture — leaving the device mid-capture makes close/sync hang.
+                ttnn.end_trace_capture(self.device, tid, cq_id=self.cq_id)
+            # Trace capture only RECORDS the graph — the output buffers hold uncomputed garbage until
+            # the trace is executed. Run it once now (against the persistent inputs, = this call's
+            # values) so the returned output is valid for the capture call, exactly as a replay would
+            # be. Without this a caller that reads the capture output on the host (e.g. a duration
+            # readback that then sets a downstream shape) gets garbage and can crash.
+            ttnn.execute_trace(self.device, tid, cq_id=self.cq_id, blocking=True)
+            multi = isinstance(output, (tuple, list))
+            self._entries[key] = _Entry(
+                tid=tid, persistent=persistent, output=tuple(output) if multi else output, multi=multi
+            )
             self.captures += 1
             return output
 
@@ -102,7 +125,11 @@ class TraceManager:
             ttnn.release_trace(self.device, entry.tid)
             for t in entry.persistent.values():
                 ttnn.deallocate(t)
-            ttnn.deallocate(entry.output)
+            if entry.multi:
+                for t in entry.output:
+                    ttnn.deallocate(t)
+            else:
+                ttnn.deallocate(entry.output)
         self._entries.clear()
         if self._prep_enabled:
             set_trace_weight_prep(False)
