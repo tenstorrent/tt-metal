@@ -36,11 +36,16 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         tokens tensor (rows start at 0); use ``unified_routed_expert_moe`` below
         if you need the extract/insert glue.
 
-        Tensor requirements (enforced in validate_on_program_cache_miss):
-            * dtype: x must be BFLOAT8_B (BFLOAT16 path is untested and
-              rejected host-side; reintroduce when a real caller + PCC test
-              lands); gate/up/down any matmul-compatible weight dtype.
-            * layout: all tensors TILE.
+        Tensor requirements (enforced in validate_on_program_cache_miss),
+        conditional on ``x_is_row_major``:
+            * x dtype/layout: default mode (x_is_row_major=False) => BFLOAT8_B,
+              TILE (read as tile pages directly); row-major mode
+              (x_is_row_major=True) => BFLOAT16, ROW_MAJOR (streamed as sticks
+              and tilized + packed to bf8_b in-op before the matmul).
+            * gate/up/down: TILE, any matmul-compatible weight dtype.
+            * output: TILE. Its dtype must match x in the default mode, but in
+              row-major mode x is BFLOAT16 while output is TILE (typically
+              BFLOAT8_B) — the op packs its result to output's dtype regardless.
             * memory_config: all tensors DRAM-interleaved.
             * Blackhole-only — host expects 11x8 compute grid.
 
@@ -49,7 +54,9 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         cases land at ~0.98 on DS-V3 dims with LoFi math fidelity).
 
         Args:
-            x (ttnn.Tensor): (M_max, K=emb) DRAM-interleaved tile-layout input.
+            x (ttnn.Tensor): (M_max, K=emb) DRAM-interleaved input. Default mode:
+                TILE, BFLOAT8_B. Row-major mode (x_is_row_major=True): ROW_MAJOR,
+                BFLOAT16.
             gate_proj (ttnn.Tensor): (K=emb, N=hidden).
             up_proj (ttnn.Tensor): (K=emb, N=hidden).
             down_proj (ttnn.Tensor): (K=hidden, N=emb).
@@ -59,10 +66,13 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
 
         Keyword Args:
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional)
-            output (ttnn.Tensor, optional): pre-allocated output buffer.
-                Must match x.dtype() and x.shape() unless expert_region_offsets
-                is set (direct-write mode), in which case it is the larger
-                shared destination buffer.
+            output (ttnn.Tensor, optional): pre-allocated TILE output buffer.
+                Its dtype must match x.dtype() in the default mode; in row-major
+                mode (x_is_row_major=True) x is BFLOAT16 ROW_MAJOR while output is
+                TILE (typically BFLOAT8_B) and need not match x — the op packs to
+                output's dtype. Shape must match x.shape() unless
+                expert_region_offsets is set (direct-write mode), in which case it
+                is the larger shared destination buffer.
             expert_region_offsets (ttnn.Tensor, optional): UINT32
                 per-global-expert region start offsets. When set, the writer
                 places this expert's output directly into ``output`` at

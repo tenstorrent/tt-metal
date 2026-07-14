@@ -29,8 +29,11 @@ namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_exper
 // `unified_routed_expert_moe` below if you need the extract/insert glue.
 //
 // Args:
-//   x: (M_max, K=emb), TILE, DRAM interleaved, BFLOAT8_B. Only the first
-//      ceil_tile(count) rows are valid (the rest is dispatch padding).
+//   x: (M_max, K=emb), DRAM interleaved. Layout/dtype depend on x_is_row_major:
+//      false (default) => TILE, BFLOAT8_B (read as tile pages directly);
+//      true => ROW_MAJOR, BFLOAT16 (the reader streams sticks and the compute
+//      kernel tilizes+packs to bf8_b internally, see x_is_row_major). Only the
+//      first ceil_tile(count) rows are valid (the rest is dispatch padding).
 //   gate_proj: (K=emb, N=hidden), TILE, DRAM interleaved (any weights dtype).
 //   up_proj:   (K=emb, N=hidden), TILE, DRAM interleaved (any weights dtype).
 //   down_proj: (K=hidden, N=emb), TILE, DRAM interleaved (any weights dtype).
@@ -40,10 +43,14 @@ namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_exper
 //      actual token count.
 //   local_expert_id: index into global_expert_idx_table.
 //   compute_kernel_config: optional matmul math fidelity / accumulator config.
-//   output: optional pre-allocated DRAM-interleaved output tensor to write
-//      into. Must match x.dtype(); shape must match x unless
-//      expert_region_offsets is set (direct-write mode), in which case it is
-//      the larger shared destination buffer.
+//   output: optional pre-allocated DRAM-interleaved, TILE-layout output tensor
+//      to write into. Dtype rule is mode-dependent: in the default mode
+//      (x_is_row_major=false) it must match x.dtype() (BFLOAT8_B); in row-major
+//      mode (x_is_row_major=true) x is BFLOAT16 ROW_MAJOR while the op emits a
+//      TILE result (typically BFLOAT8_B) — the compute kernel tilizes+packs to
+//      the output's dtype regardless, so output need not match x there. Shape
+//      must match x unless expert_region_offsets is set (direct-write mode), in
+//      which case it is the larger shared destination buffer.
 //   expert_region_offsets: optional UINT32 per-global-expert region start
 //      offsets (the same `start` tensor ttnn::insert consumes). When set, the
 //      writer places this expert's output directly into `output` (the shared

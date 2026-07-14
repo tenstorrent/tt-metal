@@ -125,10 +125,14 @@ void kernel_main() {
     constexpr uint32_t read_x_at_offset = get_compile_time_arg_val(25);
     constexpr uint32_t cb_start_scratch = get_compile_time_arg_val(26);
     // x_is_row_major: x is ROW_MAJOR bf16 — stream sticks into cb_x_rm for the
-    // compute kernel to tilize. 0 => x is TILE bf8_b, read directly. (Consumed
-    // by the row-major read path added in a later commit; unused when 0.)
+    // compute kernel to tilize. 0 => x is TILE bf8_b, read directly.
     constexpr uint32_t x_is_row_major = get_compile_time_arg_val(27);
     constexpr uint32_t cb_x_rm = get_compile_time_arg_val(28);
+    // Tile height: rows (token-row sticks) per tile-row. Used to size row-major
+    // reads and to convert token counts to tile-rows.
+    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(29);
+    // Byte size of one row-major x element: x is bf16 in the row-major path.
+    constexpr uint32_t X_RM_ELEM_BYTES = get_compile_time_arg_val(30);
     // UP_SPLIT iff the reader multicasts up but does not read it from DRAM.
     constexpr bool up_split = (reader_mcasts_up != 0) && (reader_reads_up == 0);
 
@@ -139,15 +143,15 @@ void kernel_main() {
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
     constexpr uint32_t num_blocks_d = K_down_tiles_padded / in0_block_w_d;
 
-    constexpr uint32_t x_accessor_offset = 29;
+    constexpr uint32_t x_accessor_offset = 31;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
     // Row-major x accessor (x_is_row_major): x is a ROW_MAJOR bf16 buffer whose
-    // page is one token-row stick = emb elements = K_gate_tiles*32 bf16 (2 B
-    // each). Partial-stick reads index page_id=token-row, offset_bytes=column
-    // window. Only used in the row-major path; the tile-page x_acc above serves
-    // the TILE path.
-    constexpr uint32_t x_rm_stick_bytes = K_gate_tiles * 32 * 2;
+    // page is one token-row stick = emb elements = K_gate_tiles*TILE_HEIGHT bf16
+    // (X_RM_ELEM_BYTES each). Partial-stick reads index page_id=token-row,
+    // offset_bytes=column window. Only used in the row-major path; the tile-page
+    // x_acc above serves the TILE path.
+    constexpr uint32_t x_rm_stick_bytes = K_gate_tiles * TILE_HEIGHT * X_RM_ELEM_BYTES;
     const auto x_acc_rm = TensorAccessor(x_args, x_addr, x_rm_stick_bytes);
 
     constexpr uint32_t gate_accessor_offset = x_args.next_compile_time_args_offset();
@@ -246,7 +250,7 @@ void kernel_main() {
     // For count=0 the loop is empty (no chunks processed). For count > 0 we
     // process ceil(count_tiles / chunk_M_tiles) chunks; the remaining chunks
     // (if any) are skipped — no DRAM reads, no mcasts, no compute.
-    const uint32_t count_tiles = (count_value + 31) / 32;
+    const uint32_t count_tiles = (count_value + TILE_HEIGHT - 1) / TILE_HEIGHT;
     const uint32_t effective_chunks_runtime = (count_tiles + chunk_M_tiles - 1) / chunk_M_tiles;
     // Clamp to compile-time num_chunks just in case (defensive against bad input).
     const uint32_t effective_chunks = effective_chunks_runtime < num_chunks ? effective_chunks_runtime : num_chunks;
@@ -286,7 +290,7 @@ void kernel_main() {
         cb_start_scratch_obj.push_back(1);
         const volatile tt_l1_ptr uint32_t* start_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_l1);
         const uint32_t start_value = start_ptr[global_expert_id];
-        x_start_tile_idx = (start_value / 32) * K_gate_tiles;
+        x_start_tile_idx = (start_value / TILE_HEIGHT) * K_gate_tiles;
         x_start_stick = start_value;
     }
 
@@ -420,21 +424,21 @@ void kernel_main() {
                     DeviceZoneScopedN("XREAD");
                     if constexpr (x_is_row_major != 0) {
                         // Row-major: read this K-block's column window (in0_block_w_gu
-                        // tiles wide) from each of the 32 token-row sticks of every
-                        // tile-row, laid contiguously so each tile-row forms one
-                        // 32 x (in0_block_w_gu*32) strip for tilize_block. page_id is
-                        // the token-row stick; offset_bytes is the K-block column
-                        // window within the emb-wide stick.
-                        constexpr uint32_t rm_kblock_bytes = in0_block_w_gu * 32 * 2;
+                        // tiles wide) from each of the TILE_HEIGHT token-row sticks of
+                        // every tile-row, laid contiguously so each tile-row forms one
+                        // TILE_HEIGHT x (in0_block_w_gu*32) strip for tilize_block.
+                        // page_id is the token-row stick; offset_bytes is the K-block
+                        // column window within the emb-wide stick.
+                        constexpr uint32_t rm_kblock_bytes = in0_block_w_gu * TILE_HEIGHT * X_RM_ELEM_BYTES;
                         const uint32_t col_off_bytes = kb * rm_kblock_bytes;
                         for (uint32_t m = 0; m < per_core_M; ++m) {
                             const uint32_t tile_row = this_core_first_row + m;
                             if (tile_row < count_tiles) {
-                                for (uint32_t r = 0; r < 32; ++r) {
+                                for (uint32_t r = 0; r < TILE_HEIGHT; ++r) {
                                     // x_start_stick offsets into this expert's region
                                     // of the shared row-major buffer (0 when x is a
                                     // standalone per-expert buffer).
-                                    const uint32_t stick = x_start_stick + tile_row * 32 + r;
+                                    const uint32_t stick = x_start_stick + tile_row * TILE_HEIGHT + r;
                                     noc_read.async_read(
                                         x_acc_rm,
                                         CoreLocalMem<uint32_t>(l1_x),
@@ -444,7 +448,8 @@ void kernel_main() {
                                     l1_x += rm_kblock_bytes;
                                 }
                             } else {
-                                l1_x += 32 * rm_kblock_bytes;
+                                // Pre-zero already covered these L1 bytes. Just advance.
+                                l1_x += TILE_HEIGHT * rm_kblock_bytes;
                             }
                         }
                     } else {
