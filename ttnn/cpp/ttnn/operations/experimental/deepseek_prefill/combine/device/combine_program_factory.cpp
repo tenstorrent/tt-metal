@@ -247,6 +247,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     std::vector<std::vector<CoreCoord>> sender_untilizer_groups(num_cores);
     std::vector<CoreCoord> all_untilizer_cores;
     std::vector<uint32_t> untilizer_sender_map;
+    std::vector<CoreCoord> relay_cores;  // USE_RELAY: one relay ("R") core per row, left of the sender
 
     // Both TILE_LAYOUT and ROW_MAJOR route dispatched_buffer through the untilizer pipeline, so
     // both use the same layout: divide the line into per-sender groups with the sender at the
@@ -323,6 +324,83 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     senders_with_extra_untilizer = 0;
 #endif
 
+#if USE_RELAY
+    // ======================= USE_RELAY — STAGE 1: explicit placement =======================
+    // Discard the default line split above and rebuild the placement explicitly so each row reads
+    // R-S-U-U-U-U, with a dedicated relay core prepended to the left of the sender. Coordinates are
+    // PHYSICAL NOC0 (== virtual for unharvested BH tensix); we invert virtual_core_from_logical_core
+    // to recover the logical worker cores the rest of the factory addresses.
+    //   y=2: R@x1, S@x2, U@x3, U@x4, U@x5, U@x6
+    //   y=3: R@x2, S@x7, U@x10, U@x11, U@x12, U@x13
+    static_assert(!SENDERS_ONLY_MOCK, "USE_RELAY needs untilizers present -> set SENDERS_ONLY_MOCK 0");
+    static_assert(!SENDER_ONE_TO_ROW_Y3, "USE_RELAY sets placement explicitly -> set SENDER_ONE_TO_ROW_Y3 0");
+    TT_FATAL(num_cores == 2, "USE_RELAY currently supports exactly 2 senders (num_links>=2); got {}", num_cores);
+    {
+        // physical NOC0 (x,y) -> logical worker CoreCoord, by inverting the logical->virtual map.
+        std::map<std::pair<uint32_t, uint32_t>, CoreCoord> phys_to_logical;
+        auto cg = mesh_device->compute_with_storage_grid_size();
+        for (uint32_t ly = 0; ly < cg.y; ly++) {
+            for (uint32_t lx = 0; lx < cg.x; lx++) {
+                CoreCoord lc(lx, ly);
+                auto v = mesh_device->virtual_core_from_logical_core(lc, tt::CoreType::WORKER);
+                phys_to_logical[{(uint32_t)v.x, (uint32_t)v.y}] = lc;
+            }
+        }
+        auto relay_to_logical = [&](uint32_t px, uint32_t py) -> CoreCoord {
+            auto it = phys_to_logical.find({px, py});
+            TT_FATAL(
+                it != phys_to_logical.end(),
+                "USE_RELAY: requested physical worker core ({}, {}) is not a tensix worker on this device",
+                px,
+                py);
+            return it->second;
+        };
+
+        struct RelayBattery {
+            uint32_t phys_y;
+            uint32_t relay_x;
+            uint32_t sender_x;
+            std::array<uint32_t, 4> untilizer_x;
+        };
+        const std::array<RelayBattery, 2> relay_batteries = {{
+            {/*phys_y=*/2, /*relay_x=*/1, /*sender_x=*/2, {{3, 4, 5, 6}}},
+            {/*phys_y=*/3, /*relay_x=*/2, /*sender_x=*/7, {{10, 11, 12, 13}}},
+        }};
+
+        // Clear the default split's assignments and rebuild from the explicit table.
+        sender_cores.clear();
+        for (auto& g : sender_untilizer_groups) {
+            g.clear();
+        }
+        all_untilizer_cores.clear();
+        untilizer_sender_map.clear();
+        relay_cores.clear();
+
+        for (uint32_t s = 0; s < num_cores; s++) {
+            const auto& b = relay_batteries[s];
+            relay_cores.push_back(relay_to_logical(b.relay_x, b.phys_y));
+            sender_cores.push_back(relay_to_logical(b.sender_x, b.phys_y));
+            for (uint32_t u = 0; u < b.untilizer_x.size(); u++) {
+                CoreCoord uc = relay_to_logical(b.untilizer_x[u], b.phys_y);
+                sender_untilizer_groups[s].push_back(uc);
+                all_untilizer_cores.push_back(uc);
+                untilizer_sender_map.push_back(s);
+            }
+        }
+        num_untilizer_cores = static_cast<uint32_t>(all_untilizer_cores.size());
+        untilizer_cores_per_sender = num_untilizer_cores / num_cores;
+        senders_with_extra_untilizer = num_untilizer_cores % num_cores;
+
+        log_debug(
+            tt::LogOp,
+            "[cmb-place-host] USE_RELAY: relay_cores(logical): {} sender_cores(logical): {} "
+            "num_untilizer_cores: {}",
+            relay_cores,
+            sender_cores,
+            num_untilizer_cores);
+    }
+#endif
+
     // Build sender_core_grid from selected sender cores
     std::set<CoreRange> sender_ranges_set;
     for (const auto& sc : sender_cores) {
@@ -330,6 +408,54 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     }
     auto sender_core_grid = CoreRangeSet(sender_ranges_set);
     TT_FATAL(sender_cores.size() == num_cores, "Expected {} sender cores, got {}", num_cores, sender_cores.size());
+
+#if USE_RELAY
+    // Relay cores: dedicated single-writer-kernel cores with a deep L1 receive buffer. STAGE 1: the
+    // buffer is allocated and an idle writer kernel is created (NOC_0), but the relay is not yet driven.
+    tt::tt_metal::KernelHandle relay_writer_kernel_id = 0;
+    {
+        std::set<CoreRange> relay_ranges_set;
+        for (const auto& rc : relay_cores) {
+            relay_ranges_set.insert(CoreRange(rc));
+        }
+        CoreRangeSet relay_core_grid(relay_ranges_set);
+        TT_FATAL(relay_cores.size() == num_cores, "Expected {} relay cores, got {}", num_cores, relay_cores.size());
+
+        // Each relay slot holds one token payload plus its routing metadata, mirroring the sender's
+        // merged c_3 page layout: [0..l1_alignment) route_info, [l1_alignment..) aligned output page.
+        // This is what the sender will eventually NOC-write into the relay (token + the routing bytes
+        // the relay needs to issue the fabric send itself).
+        uint32_t relay_slot_size = l1_alignment + detail::get_aligned_page_size(output_tensor);
+        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = RELAY_SLOTS * relay_slot_size,
+            .core_ranges = relay_core_grid,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_24),
+                .data_format = tt::DataFormat::UInt8,
+                .page_size = relay_slot_size,
+            }}},
+        });
+
+        // Idle relay writer kernel. The relay core hosts ONLY this kernel, so it is free to use NOC_0
+        // (the preferred NOC for the eventual eth write) for all of its communication.
+        tt::tt_metal::KernelDescriptor relay_writer_kd;
+        relay_writer_kd.kernel_source =
+            "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/"
+            "writer_relay.cpp";
+        relay_writer_kd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+        relay_writer_kd.core_ranges = relay_core_grid;
+        relay_writer_kd.compile_time_args = {
+            static_cast<uint32_t>(tt::CBIndex::c_24),  // 0: cb_relay_buf
+            RELAY_SLOTS,                               // 1: RELAY_SLOTS
+        };
+        relay_writer_kd.config = tt::tt_metal::DataMovementConfigDescriptor{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::NOC_0,
+        };
+        relay_writer_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
+        desc.kernels.push_back(std::move(relay_writer_kd));
+    }
+#endif
 
     log_debug(
         tt::LogOp,
@@ -1259,6 +1385,20 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         args.push_back((uint32_t)(g.x - 1 - v.x));  // noc1.x = mirror
         args.push_back((uint32_t)(g.y - 1 - v.y));  // noc1.y = mirror
     };
+
+#if USE_RELAY
+    // Relay placement logging: feed each relay writer its index + host-computed coordinate quad so the
+    // kernel can emit a [cmb-place relay] line (mirroring [cmb-place sender]). RT arg order the kernel
+    // reads: relay_index, then push_worker_coord_quad = logical(x,y) virt(x,y) phys_noc0(x,y) noc1(x,y).
+    // STAGE 1: the relay has no downstream cores, so only its own placement is logged (no eth/downstream
+    // lines yet). Keep this in sync with the relay's topology as later stages add connectivity.
+    for (uint32_t s = 0; s < num_cores; s++) {
+        tt::tt_metal::KernelDescriptor::RTArgList relay_rt_args;
+        relay_rt_args.push_back(s);
+        push_worker_coord_quad(relay_rt_args, relay_cores[s]);
+        desc.kernels[relay_writer_kernel_id].emplace_runtime_args(relay_cores[s], relay_rt_args);
+    }
+#endif
 
     // Set runtime args for hybrid untilizer row cores.  Three layouts are possible:
     //   init_zeros && tile_layout: [output_addr, page_start, page_end, output_init_done_sem,

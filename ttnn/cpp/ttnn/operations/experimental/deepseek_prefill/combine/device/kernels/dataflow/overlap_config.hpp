@@ -70,11 +70,44 @@
 //   Later stages will add custom sender placement under a SEPARATE toggle.
 // HOST-FACTORY change -> needs a libttnn rebuild. Set to 0 (and re-comment MOCK above) to restore
 // normal combine (byte-identical). Diagnostics/perf experiment, not a correctness path.
-#define SENDERS_ONLY_MOCK 1
+// NOTE: SENDERS_ONLY_MOCK / SENDER_ONE_TO_ROW_Y3 are OFF for the relay experiment (USE_RELAY below):
+// the relay plan needs the full R-S-U-U-U-U chain, i.e. the untilizers must be present, and the relay
+// experiment sets placement explicitly (superseding the SENDER_ONE_TO_ROW_Y3 predicate).
+#define SENDERS_ONLY_MOCK 0
 
 // STAGE 3: move ONE of the 2 senders to physical row y=3 (logical y=1), keeping its column; the other
 // sender stays on y=2. No untilizers, no other changes. Verifies that a sender on a different physical
 // row (its worker->eth NOC path + fabric connection originating from y=3) is safe in isolation. The op
 // stays on the full worker grid, which provides the y=3 worker core + init/exit GlobalSemaphore
 // coverage. Requires SENDERS_ONLY_MOCK=1. Set to 0 to keep both senders on y=2 (Stage 1 behavior).
-#define SENDER_ONE_TO_ROW_Y3 1
+#define SENDER_ONE_TO_ROW_Y3 0
+
+// ============================================================================
+// USE_RELAY — introduce a dedicated relay ("R") tensix core per combine row
+// ============================================================================
+//
+// Motivation: the mandatory opposite-NOC rule (a core with both DM0+DM1 kernels cannot use the same
+// NOC) means the sender core cannot issue its eth write on NOC_0 while reader_combine also runs on it.
+// Breaking the untilizer->sender->eth chain into untilizer->sender->relay->eth moves the fabric send to
+// a dedicated single-kernel core, which is then free to use NOC_0 for the eth write — without perturbing
+// the sender/untilizer NOC assignments (kept identical to main).
+//
+// Developed in stages (see the relay plan):
+//   STAGE 1 (this): add one relay core per row (order R-S-U-U-U-U), placed to the LEFT of the current
+//     cores, with a deep L1 receive buffer (RELAY_SLOTS slots, each = route_info + one token payload)
+//     and a single idle writer kernel pinned to NOC_0. The relay is unconnected — this stage only
+//     validates placement, L1 fit, and grid growth; the op otherwise runs unchanged.
+//   Later stages: move the sender->eth send to relay->eth (mock, then real), forward routing metadata
+//     through the CB, and finally unmock the producers for functional parity with better perf.
+//
+// Explicit physical NOC0 placement (virtual==physical for unharvested BH tensix), num_cores==2:
+//   y=2: R@x1, S@x2, U@x3, U@x4, U@x5, U@x6
+//   y=3: R@x2, S@x7, U@x10, U@x11, U@x12, U@x13
+//
+// HOST-FACTORY change -> needs a libttnn rebuild. Set to 0 to remove the relay cores entirely.
+#define USE_RELAY 1
+
+// Slot count of the relay's L1 receive buffer. Each slot holds one token payload plus its routing
+// metadata (l1_align route_info + aligned output page, ~14.4 KB/slot). 64 slots ~= 0.9 MB, comfortably
+// within the relay core's L1 (it holds essentially nothing else). Reduce if program creation OOMs.
+#define RELAY_SLOTS 64
