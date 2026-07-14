@@ -19,6 +19,7 @@
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::prim::qsr {
 
@@ -26,6 +27,7 @@ using namespace tt::tt_metal;
 namespace m2 = tt::tt_metal::experimental;
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 std::vector<CoreRange> get_multicast_regions(const CoreRangeSet& all_cores, const CoreCoord& logical_controller) {
     TT_ASSERT(!all_cores.ranges().empty() and all_cores.ranges().size() <= 2);
@@ -73,12 +75,14 @@ const m2::SemaphoreSpecName SEM{"sem"};
 const m2::TensorParamName INPUT{"input"};
 const m2::TensorParamName OUTPUT{"output"};
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_program_artifacts(
     const MoveOperationAttributes& /*operation_attributes*/,
     const MoveTensorArgs& tensor_args,
     Tensor& tensor_return_value) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;  // resolve the file-local ids/helpers below
     using namespace tt::constants;
 
     const Tensor& input = tensor_args.input_tensor;
@@ -165,7 +169,7 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
             {
                 m2::TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"},
             },
-        .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
 
     // Named CTA: the stick-layout kernel needs the (unaligned) page size at compile time.
@@ -208,7 +212,7 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
             {
                 m2::TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"},
             },
-        .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::WRITER},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
 
     // The stick-layout writer needs the (unaligned) page size at compile time, like its reader.

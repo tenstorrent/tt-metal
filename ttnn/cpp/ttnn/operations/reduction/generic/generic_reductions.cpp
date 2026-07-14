@@ -37,7 +37,8 @@ Tensor reduce(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     float scalar = 1.0f,
     bool correction = true,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    bool fast_and_approximate_mode = false);
 
 // input_shape has original shape while output_shape has reduction applied and last 2 dims padded.
 // Need to get slice parameters based on the minimum of the two shapes.
@@ -136,7 +137,8 @@ static Tensor reduce_impl(
     // Sum precision chain: when active, intermediate stages stay FP32 and only
     // the stage with is_last_in_chain=true packs the final bf16 result.
     bool chain_active = false,
-    bool is_last_in_chain = false) {
+    bool is_last_in_chain = false,
+    bool fast_and_approximate_mode = false) {
     auto input_shape = input_tensor_arg.logical_shape();
     auto rank = input_shape.rank();
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
@@ -186,6 +188,9 @@ static Tensor reduce_impl(
                     // Only the smallest-axis sub-step ends the chain; earlier sub-steps stay in fp32.
                     const bool sub_is_last = chain_active && is_last_in_chain && (i_dim == min_reduce_axis);
                     if (use_reduce_type) {
+                        // Multi-axis / non-H·W single-axis means reduce via transpose-to-H here; the accurate
+                        // SFPU mean is scoped to natural W/H/HW, so keep these sub-steps on the FPU (fast/
+                        // approximate) path to preserve behavior.
                         output_tensor = reduce_impl<reduce_type>(
                             output_tensor,
                             {reduce_dim},
@@ -196,7 +201,8 @@ static Tensor reduce_impl(
                             non_height_width_dims,
                             sub_core_grids,
                             chain_active,
-                            sub_is_last);
+                            sub_is_last,
+                            /*fast_and_approximate_mode=*/true);
                     } else {
                         output_tensor = reduce_impl<reduction_common::ReduceType::Sum>(
                             output_tensor,
@@ -278,7 +284,10 @@ static Tensor reduce_impl(
                 memory_config,
                 std::nullopt,
                 compute_kernel_config,
-                sub_core_grids);
+                sub_core_grids,
+                /*negate=*/false,
+                /*use_row_major_support=*/false,
+                /*fast_and_approximate_mode=*/fast_and_approximate_mode);
         } else if constexpr (reduce_type == reduction_common::ReduceType::Max) {
             output_tensor = ttnn::operations::reduction::generic::detail::reduce(
                 input_tensor,
@@ -500,7 +509,8 @@ Tensor reduce(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
     bool correction,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    bool fast_and_approximate_mode) {
     // ttnn.mean does not support integer inputs. Remove once integer AVG is implemented.
     if constexpr (reduce_type == reduction_common::ReduceType::Mean) {
         const auto dt = input_tensor_arg.dtype();
@@ -598,7 +608,8 @@ Tensor reduce(
         non_height_width_dims,
         sub_core_grids,
         /*chain_active=*/chain_active,
-        /*is_last_in_chain=*/chain_active);
+        /*is_last_in_chain=*/chain_active,
+        /*fast_and_approximate_mode=*/fast_and_approximate_mode);
 }
 
 Tensor pool_sum(
@@ -650,7 +661,8 @@ Tensor mean(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
     bool correction,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    bool fast_and_approximate_mode) {
     return operations::reduction::reduce<reduction_common::ReduceType::Mean>(
         input_tensor_arg,
         dim_arg,
@@ -659,7 +671,8 @@ Tensor mean(
         compute_kernel_config,
         scalar,
         correction,
-        sub_core_grids);
+        sub_core_grids,
+        fast_and_approximate_mode);
 }
 
 Tensor max(
