@@ -40,6 +40,7 @@ Environment overrides:
     HY_DENOISE_TEXT_POST=32          # T2I suffix text tokens
     HY_DENOISE_PERF_ITERS=3          # timed iterations inside each signpost window
     HY_DENOISE_PERF_WARMUP=1         # warmup passes before each timed window
+    HY_DENOISE_RESIDENT_TEMB=1       # WIDTH_SHARDED M=32 t_emb via TimestepEmbedder (0 = host interleaved)
 """
 
 from __future__ import annotations
