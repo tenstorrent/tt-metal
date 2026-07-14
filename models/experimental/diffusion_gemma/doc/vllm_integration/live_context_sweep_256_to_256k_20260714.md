@@ -47,20 +47,34 @@ region overflows the 32 GB/chip — build-time OOM in `init_kv_cache` (two confi
 traced context ≈ **128K** (this run used `max_model_len=131072`, which builds fine). Reaching 256K
 needs **bf8 weights** (~6.5 GiB, frees the room), or dropping traced denoise, or expert-parallel.
 
-### 4. 32K serving request stalled (distinct from prefill compute)
-The 32768 request emitted no block markers and the request timed out (>… harness limit) during
-prefill / first-use SDPA-kernel compilation — **no eth-core hang, no OOM**. Notably the *standalone*
-32K prefill is 10.8 s (`context_window_prefill_only_chunkedlong_*`), so the vLLM **serving** 32K
-prefill path is pathologically slow (32768 is just below the >32768 chunked-SDPA threshold → full 32K
-attention + a fresh kernel-compile storm). A separate serving-path item to investigate.
+### 4. 32K serving request stalled — ROOT-CAUSED & FIXED (KV-group admission)
+The 32768 request emitted no block markers and sat in `Running: 0, Waiting: 1, GPU KV cache 0.0%`
+for the full hour until the client timeout — **no eth-core hang, no OOM, no compute** (my first guess
+of a "kernel-compile storm" was wrong; `Waiting`+0.0% is a *scheduler admission* failure, not a
+compute stall). Root cause: DG's `get_kv_cache_spec` emitted a `SlidingWindowSpec` for the 25 sliding
+layers, so vLLM split the KV cache into **6 groups** (1 full + 5 sliding) sharing one block pool. A
+whole-prompt single-shot prefill allocates `cdiv(L/64)` blocks in *every* group (sliding-window
+skipping is 0 on the first chunk), so demand = `6·cdiv(L/64)`; with `num_gpu_blocks=2049` (2048 free,
+sized for one group) admission caps at `(2048//6)·64 = 21824` tokens: 16384→1536 blocks (admits),
+32768→3072 blocks (`allocate_slots`→None→`break`→permanent WAITING). `--num-gpu-blocks-override` is
+clobbered by the plugin, so this is a code fix, not config.
+
+**Fixed** (`tt/generator_vllm.py`, DG-local, mirrors gemma4): emit `FullAttentionSpec` for the sliding
+layers too, so vLLM merges all layers into ONE group backed by the whole pool (demand = `cdiv(L/64)`).
+Memory-neutral (the model owns the physical KV; the spec is vLLM bookkeeping) and consistent with DG's
+inherited `_HYBRID_KV_CACHE_GROUPS_ENABLED = False` + non-hybrid single-page-table forward. **Verified
+on QB2** (`verify_32k_admission_20260714.json`, `max_model_len=65536` where the old cap was 10880):
+16384 prefill 5.30 s and **32768 prefill 11.96 s** (matching the ~10.8 s standalone) both admit and
+complete — the 1-hour stall is gone.
 
 ## Practical ceiling
 
-With the current code, clean traced serving is demonstrated to **16K** context. Above it, generation
-is impractically slow (recapture, §2) and 32K stalls in the serving prefill (§4); 256K is KV-memory
-bound (§3). The prefill optimization itself (§1) is solid across the whole measured range. Priority
-follow-ups: (a) restore denoise trace replay (§2), (b) fix the 32K serving-prefill stall (§4),
-(c) bf8 weights for >128K context (§3).
+The prefill optimization (§1) is solid across the whole measured range, and the >21824-token
+**admission stall is fixed** (§4), so prompts now admit and prefill up to the ~128K KV ceiling
+(a 32768 prompt prefills in 11.96 s). The remaining serving limits are: generation is slow above short
+contexts (trace recapture, §2 — ~3.6 tok/s at 48 steps) and 256K is KV-memory bound (§3). Priority
+follow-ups: (a) restore denoise trace replay (§2, the biggest serving win ~5×), (b) bf8 weights for
+>128K context (§3). The 32K admission stall (§4) is resolved.
 
 ## Harness changes (this run)
 

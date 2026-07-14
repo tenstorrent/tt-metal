@@ -270,17 +270,22 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
     # ── KV cache ────────────────────────────────────────────────────────
     @classmethod
     def get_kv_cache_spec(cls, vllm_config):
-        """Per-layer hybrid KV spec (copied from the gemma4 bridge geometry).
+        """Per-layer KV spec (copied from the gemma4 bridge geometry).
 
         DiffusionGemma's text backbone == Gemma-4 26B-A4B: sliding layers use
         ``head_dim`` (256) / ``num_key_value_heads``; full-attention layers use
-        ``global_head_dim`` (512) / ``num_global_key_value_heads``. Emitting the
-        correct per-type spec keeps vLLM's hybrid manager from crashing; note the
-        diffusion forward reads the model-owned contiguous cache, so this spec is
-        the manager's bookkeeping, not the physical cache (see #47488).
+        ``global_head_dim`` (512) / ``num_global_key_value_heads``. Every layer emits
+        a ``FullAttentionSpec`` (uniform type) so vLLM merges them into ONE KV-cache
+        group backed by the whole block pool — hybrid groups are disabled
+        (``_HYBRID_KV_CACHE_GROUPS_ENABLED = False``) and the diffusion forward uses
+        the non-hybrid single-page-table path, so a per-type spec would instead split
+        into 6 groups sharing the pool and cap prefill admission at ~21824 tokens (see
+        the sliding branch). The diffusion forward reads the model-owned contiguous
+        cache, so this spec is the manager's bookkeeping, not the physical cache
+        (#47488).
         """
         from vllm.utils.torch_utils import STR_DTYPE_TO_TORCH_DTYPE
-        from vllm.v1.kv_cache_interface import FullAttentionSpec, SlidingWindowSpec
+        from vllm.v1.kv_cache_interface import FullAttentionSpec
 
         model_config = vllm_config.model_config
         cache_config = vllm_config.cache_config
@@ -317,12 +322,22 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             if lt == "sliding_attention":
                 if sliding_window is None:
                     raise ValueError(f"layer_types[{i}] is sliding but sliding_window is None")
-                spec_per_layer[name] = SlidingWindowSpec(
+                # Hybrid kv-cache groups are disabled (``_HYBRID_KV_CACHE_GROUPS_ENABLED = False``,
+                # inherited; the diffusion forward uses the non-hybrid single-page-table path): emit
+                # ``FullAttentionSpec`` for sliding layers too, keeping their own sliding
+                # num_kv_heads/head_size. vLLM then merges all same-type specs into ONE
+                # ``UniformTypeKVCacheSpecs`` group so the full block pool backs every request,
+                # instead of splitting into 6 groups (1 full + 5 sliding) that share the pool and
+                # cap single-shot prefill admission at (num_gpu_blocks // 6) * block_size ~= 21824
+                # tokens — the cause of the >21824-token (e.g. 32768) prefill WAITING-forever stall
+                # (allocate_slots needs 6 * cdiv(L/64) blocks and returns None). The spec is vLLM
+                # bookkeeping only; the model owns the physical contiguous cache (#47488). Mirrors
+                # models/demos/gemma4/tt/generator_vllm.py.
+                spec_per_layer[name] = FullAttentionSpec(
                     block_size=block_size,
                     num_kv_heads=sliding_kv_heads_per_dev,
                     head_size=sliding_head_dim,
                     dtype=dtype,
-                    sliding_window=sliding_window,
                 )
             elif lt == "full_attention":
                 spec_per_layer[name] = FullAttentionSpec(
