@@ -281,6 +281,7 @@ private:
     void DumpRunState(uint32_t state) const;
     void DumpLaunchMessage() const;
     void DumpWaypoints(bool to_stdout = false) const;
+    void DumpEthFwStage() const;
     void DumpSyncRegs() const;
     void DumpTileCountersBypass() const;
     void DumpTileCountersWithRemapper() const;
@@ -624,6 +625,11 @@ void WatcherDeviceReader::Core::Dump() const {
 
     // Dump state always available
     DumpLaunchMessage();
+    // Always-on Metal ethernet firmware stage breadcrumb (written unconditionally by eth FW, so it is
+    // available even when the core was not compiled with watcher instrumentation).
+    if (is_eth_core) {
+        DumpEthFwStage();
+    }
     // Ethernet and DRAM cores don't use the sync reg
     if (!is_eth_core && !is_dram_core && rtoptions.get_watcher_dump_all()) {
         // Reading registers while running can cause hangs, only read if
@@ -1083,6 +1089,34 @@ void WatcherDeviceReader::Core::DumpWaypoints(bool to_stdout) const {
     } else {
         fmt::print(reader_.f, "{:>4}  ", fmt::join(risc_status, ","));
     }
+}
+
+void WatcherDeviceReader::Core::DumpEthFwStage() const {
+    const auto& hal = reader_.env.get_hal();
+    const uint32_t fw_stage_bytes = hal.get_dev_size(programmable_core_type_, HalL1MemAddrType::FW_STAGE);
+    if (fw_stage_bytes == 0) {
+        // FW stage breadcrumb not mapped for this arch (e.g. only instrumented on Wormhole/Blackhole).
+        return;
+    }
+    const uint64_t addr = hal.get_dev_noc_addr(programmable_core_type_, HalL1MemAddrType::FW_STAGE);
+    uint32_t num_slots = fw_stage_bytes / sizeof(uint32_t);
+    const uint32_t num_processors = hal.get_num_risc_processors(programmable_core_type_);
+    if (num_processors < num_slots) {
+        num_slots = num_processors;
+    }
+    std::vector<uint32_t> stages(num_slots, 0);
+    reader_.env.get_cluster().read_core(
+        stages.data(), num_slots * sizeof(uint32_t), {static_cast<size_t>(reader_.device_id), virtual_coord_}, addr);
+    fprintf(reader_.f, "fw_stage:");
+    for (uint32_t i = 0; i < num_slots; i++) {
+        fprintf(
+            reader_.f,
+            "%s%s=%s",
+            (i > 0) ? "|" : "",
+            get_riscv_name(hal, programmable_core_type_, i),
+            tt::llrt::eth_fw_stage_to_string(stages[i]).c_str());
+    }
+    fprintf(reader_.f, "  ");
 }
 
 void WatcherDeviceReader::Core::DumpSyncRegs() const {

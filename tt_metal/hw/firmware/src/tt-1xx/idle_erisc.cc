@@ -26,6 +26,7 @@
 #include "api/debug/waypoint.h"
 #include "api/debug/device_print.h"
 #include "internal/debug/stack_usage.h"
+#include "internal/ethernet/eth_fw_stage.h"
 
 uint8_t noc_index;
 
@@ -115,6 +116,7 @@ inline void wait_subordinate_eriscs(uint32_t& heartbeat) {
 int main() {
     configure_csr();
     WAYPOINT("I");
+    set_eth_fw_stage(ETH_FW_STAGE_FW_INIT);
     do_crt1((uint32_t*)MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH);
     uint32_t heartbeat = 0;
 
@@ -150,6 +152,7 @@ int main() {
     while (1) {
         // Wait...
         WAYPOINT("GW");
+        set_eth_fw_stage(ETH_FW_STAGE_FW_LOOP);
         while (mailboxes->go_messages[0].signal != RUN_MSG_GO) {
             invalidate_l1_cache();
             RISC_POST_HEARTBEAT(heartbeat);
@@ -180,10 +183,12 @@ int main() {
             int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
             if (enables & (1u << index)) {
                 WAYPOINT("R");
+                set_eth_fw_stage(ETH_FW_STAGE_KERNEL);
                 uint32_t kernel_lma =
                     (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
                 auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
                 record_stack_usage(stack_free);
+                set_eth_fw_stage(ETH_FW_STAGE_FW_LOOP);
                 WAYPOINT("D");
             }
 

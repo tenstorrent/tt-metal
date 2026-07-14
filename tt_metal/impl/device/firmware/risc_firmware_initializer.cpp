@@ -1197,6 +1197,16 @@ void RiscFirmwareInitializer::initialize_firmware(
                                                     : dev_msgs::DISPATCH_MODE_DEV;
             prepare_initial_launch_msg();
             write_initial_go_launch_msg();
+            // Initialize the always-on ethernet firmware stage breadcrumb to UNKNOWN (0) before the core
+            // starts. The Metal application FW stamps its own stage as it runs; a core that never reaches
+            // application FW therefore reads back as UNKNOWN (i.e. still in the external base firmware).
+            {
+                DeviceAddr fw_stage_addr = hal_.get_dev_addr(core_type, HalL1MemAddrType::FW_STAGE);
+                uint32_t fw_stage_size = hal_.get_dev_size(core_type, HalL1MemAddrType::FW_STAGE);
+                std::vector<uint8_t> fw_stage_init(fw_stage_size, 0);
+                cluster_.write_core(
+                    fw_stage_init.data(), fw_stage_init.size(), tt_cxy_pair(device_id, virtual_core), fw_stage_addr);
+            }
             if (core_type == HalProgrammableCoreType::ACTIVE_ETH) {
                 DeviceAddr mailbox_addr = hal_.get_dev_addr(core_type, HalL1MemAddrType::MAILBOX);
                 auto factory = hal_.get_dev_msgs_factory(core_type);

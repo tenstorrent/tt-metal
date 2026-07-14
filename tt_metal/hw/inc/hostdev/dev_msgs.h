@@ -227,6 +227,32 @@ struct debug_waypoint_msg_t {
     volatile uint8_t waypoint[num_waypoint_bytes_per_riscv];
 };
 
+// Coarse, always-on execution-stage breadcrumb for ethernet cores.
+//
+// Unlike watcher waypoints (which are compiled out unless -DWATCHER_ENABLED), this breadcrumb is
+// written unconditionally by the ethernet application firmware and kernels. That makes it possible
+// to recover, offline via a plain UMD L1 read, which layer of the ethernet firmware stack a stalled
+// core was executing (base FW vs Metal application FW vs a launched kernel) without a special build
+// or a live repro. Values are ASCII-packed (little-endian) so a raw hex dump is human-readable.
+//
+// It is NOT stored in mailboxes_t (the Tensix/DRAM mailboxes are sized to exactly fit that struct).
+// Instead it lives in a small dedicated per-core region carved from the tail of the ethernet mailbox
+// region (see MEM_*ERISC_FW_STAGE_BASE in dev_mem_map.h), exposed to the host as
+// HalL1MemAddrType::FW_STAGE. One 32-bit slot per ethernet processor
+// (index from get_hw_thread_idx(): 0 = erisc/ierisc, 1 = subordinate erisc/ierisc).
+//
+// The base ethernet firmware is external (tt-firmware) and cannot be instrumented, so it is inferred:
+// the host initializes the slot to ETH_FW_STAGE_UNKNOWN before the application FW starts, and the
+// application FW stamps ETH_FW_STAGE_BASE_FW right before handing the core back to base FW.
+constexpr uint32_t num_eth_fw_stage_processors = 2;
+enum EthFwStage : uint32_t {
+    ETH_FW_STAGE_UNKNOWN = 0,           // Host sentinel; also implies (uninstrumented) base FW pre-app-FW
+    ETH_FW_STAGE_BASE_FW = 0x45534142,  // "BASE": app FW returned control to base FW
+    ETH_FW_STAGE_FW_INIT = 0x494e4946,  // "FINI": app FW early init, before the mailbox poll loop
+    ETH_FW_STAGE_FW_LOOP = 0x50554c46,  // "FLUP": app FW dispatch/poll loop, idle waiting for a go signal
+    ETH_FW_STAGE_KERNEL = 0x4c4e524b,   // "KRNL": executing a launched kernel (fabric router adds EDMStatus)
+};
+
 // This structure is populated by the device and read by the host
 struct debug_sanitize_addr_msg_t {
     volatile uint64_t noc_addr;

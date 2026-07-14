@@ -23,6 +23,7 @@
 #include "dev_mem_map.h"
 #include "eth_fw_api.h"
 #include "internal/ethernet/erisc.h"
+#include "internal/ethernet/eth_fw_stage.h"
 
 #include "internal/debug/watcher_common.h"
 #include "internal/hw_thread.h"
@@ -202,6 +203,7 @@ extern "C" __attribute__((naked)) void enter_reset(void) {
 
 int __attribute__((noinline)) main(void) {
     WAYPOINT("I");
+    set_eth_fw_stage(ETH_FW_STAGE_FW_INIT);
     configure_csr();
     initialize_local_memory();
     noc_bank_table_init(MEM_AERISC_BANK_TO_NOC_SCRATCH);
@@ -257,6 +259,7 @@ int __attribute__((noinline)) main(void) {
     while (1) {
         // Wait...
         WAYPOINT("GW");
+        set_eth_fw_stage(ETH_FW_STAGE_FW_LOOP);
 
         uint8_t go_message_signal = RUN_MSG_DONE;
         while ((go_message_signal = mailboxes->go_messages[0].signal) != RUN_MSG_GO) {
@@ -265,6 +268,7 @@ int __attribute__((noinline)) main(void) {
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
             if (flag_disable[0] != 1) {
+                set_eth_fw_stage(ETH_FW_STAGE_BASE_FW);
                 return 0;
             } else if (
                 go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST ||
@@ -327,6 +331,7 @@ int __attribute__((noinline)) main(void) {
             constexpr int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
             if (enables & (1u << index)) {
                 WAYPOINT("R");
+                set_eth_fw_stage(ETH_FW_STAGE_KERNEL);
 
                 manually_flush_icache();
                 uint32_t kernel_config_base =
@@ -335,6 +340,7 @@ int __attribute__((noinline)) main(void) {
                     kernel_config_base +
                     mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index];
                 reinterpret_cast<void (*)()>(kernel_lma)();
+                set_eth_fw_stage(ETH_FW_STAGE_FW_LOOP);
                 WAYPOINT("D");
             }
 
