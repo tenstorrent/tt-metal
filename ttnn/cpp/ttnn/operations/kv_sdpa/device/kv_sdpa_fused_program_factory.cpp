@@ -62,8 +62,15 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     // KV tile counts derive from each tensor's actual tile height (tiny tiles may be < 32 tall).
     const uint32_t suffix_Kt = ks[2] / ktile.get_height();
     const uint32_t prefix_Kt = has_past ? (ta.past_k->padded_shape()[2] / pktile.get_height()) : 0;
-    // The two-source flash compute has no mask path (pi0 uses non-causal full attention with no mask).
-    TT_FATAL(!ta.mask.has_value(), "kv_sdpa FlashFused two-source path does not support an attention mask");
+    // Optional dense additive mask over the folded [prefix ; suffix] KV. The reader streams the mask
+    // column-tiles for a chunk alongside that chunk's K/V and the compute adds them to the QK scores
+    // before the online-softmax max, exactly as the general SDPA does, so the numerics match. Column
+    // tile g aligns with KV tile g by construction (validated in the device op), which holds at both
+    // tile heights because the suffix is a single K tile either way.
+    const bool use_provided_mask = ta.mask.has_value();
+    const auto mtile = use_provided_mask ? ta.mask->tensor_spec().tile() : qtile;
+    const auto mdf = use_provided_mask ? datatype_to_dataformat_converter(ta.mask->dtype()) : bf16;
+    const uint32_t m_ts = mtile.get_tile_size(mdf);
 
     // KV chunk size (tiles per flash chunk). This op is compute-bound on the per-chunk fixed overhead
     // (matmul re-init + the reduce/exp reconfig_data_format churn in sdpa_inner_loop), so we want the
@@ -164,6 +171,9 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     const uint32_t pk_cb_tiles = has_past ? prefix_Sk_chunk_t * DHt * 2 : 1;
     add_cb(C::c_8, pk_cb_tiles, pkdf, pk_ts, pktile);                    // cb_k_prefix
     add_cb(C::c_9, pk_cb_tiles, pvdf, pv_ts, pvtile);                    // cb_v_prefix
+    // cb_mask_in: one chunk's mask column-tiles, double-buffered so the reader can run ahead of the
+    // compute like it does for K/V. A 1-tile placeholder when unmasked (the index must stay declared).
+    add_cb(C::c_3, use_provided_mask ? max_Sk_chunk_t * 2 : 1, mdf, m_ts, mtile);  // cb_mask_in
     add_cb(C::c_5, 1, bf16, bf16_ts, qtile);                             // cb_identity_scale_in
     add_cb(C::c_7, 1, bf16, bf16_ts, qtile);                             // cb_col_identity
     add_cb(C::c_24, Sq_chunk_t * max_Sk_chunk_t, bf16, bf16_ts, qtile);  // cb_qk_im
@@ -246,9 +256,13 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
         // there is no real past they alias k/v and the reader never reads them (has_past gates use).
         TensorAccessorArgs(*pk_buf).append_to(c);
         TensorAccessorArgs(*pv_buf).append_to(c);
+        // Mask accessor is always appended so the reader's compile-time offsets stay valid; when there is
+        // no mask it aliases q and use_provided_mask gates every use of it.
+        TensorAccessorArgs(*(use_provided_mask ? ta.mask->buffer() : ta.q.buffer())).append_to(c);
         // After the accessors: accessor arg blocks are variable-length and q is pinned at slot 9, so
         // nothing may be inserted ahead of them.
         c.push_back((uint32_t)skip_prefix_tiles);
+        c.push_back((uint32_t)use_provided_mask);
         return c;
     };
     KernelDescriptor readers[2];
@@ -293,7 +307,8 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
         suffix_num_chunks,
         suffix_Sk_chunk_t,
         suffix_qk_subblock_w,
-        out_subblock_w};
+        out_subblock_w,
+        (uint32_t)use_provided_mask};
     // Granularity defines are DST-loop unroll factors (compute_common.hpp): each must be <= dst_size
     // and divide its tile count, or the DST overflows / trailing tiles are dropped. Derive them from
     // dst_size like the production SDPA (Sq_chunk_t == 1 here, so stats/reduce counts are 1).
@@ -335,9 +350,18 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
             const uint32_t r = (s == 0) ? 0u : 1u;
             const uint32_t prefix_tile_start = s * prefix_Kt_per_split;
             readers[r].emplace_runtime_args(
-                core, {ta.q.buffer(), ta.k.buffer(), ta.v.buffer(), h, kv_head, pk_buf, pv_buf, prefix_tile_start});
+                core,
+                {ta.q.buffer(),
+                 ta.k.buffer(),
+                 ta.v.buffer(),
+                 h,
+                 kv_head,
+                 pk_buf,
+                 pv_buf,
+                 prefix_tile_start,
+                 use_provided_mask ? ta.mask->buffer() : ta.q.buffer()});
             if (skip_prefix_tiles) {
-                // Slots 8..: the VALID prefix tile indices, in order. Runtime (not compile-time) args are
+                // Slots 9..: the VALID prefix tile indices, in order. Runtime (not compile-time) args are
                 // fine here -- they feed an index lookup, not a loop bound, so every loop in the reader
                 // and the compute stays constexpr-bounded (that distinction cost 12% once, see R9/R11).
                 auto& ra = readers[r].runtime_args.back().second;

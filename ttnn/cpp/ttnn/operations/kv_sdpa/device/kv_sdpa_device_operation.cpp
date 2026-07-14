@@ -86,12 +86,38 @@ void KvSdpaDeviceOperation::validate_on_program_cache_miss(const operation_attri
         const uint32_t kv_total = prefix + ks[2];
         TT_FATAL(ta.mask->layout() == Layout::TILE, "kv_sdpa: attn_mask must be TILE layout");
         TT_FATAL(ms.rank() == 4, "kv_sdpa: attn_mask must be rank-4 [1, 1, Sq, KV]");
-        // Mask is broadcast across Q heads (dim 1) and shares the single Sq tile-row; its KV (last)
-        // dim must cover the full folded [prefix ; suffix] KV so column-tile g aligns with KV-tile g.
+        // The mask is broadcast across Q heads (dim 1) and shares the single Sq tile-row. It is added to
+        // the QK score tiles, so its tile HEIGHT must match Q's (the score tile is [Sq_h x 32]) -- at a
+        // tiny tile that is 16, not 32.
         const uint32_t mask_tile_h = ta.mask->tensor_spec().tile().get_height();
+        const uint32_t q_tile_h = ta.q.tensor_spec().tile().get_height();
+        TT_FATAL(
+            mask_tile_h == q_tile_h,
+            "kv_sdpa: attn_mask tile height ({}) must match q's ({}) -- the mask is added to the "
+            "[Sq_h x 32] score tiles",
+            mask_tile_h,
+            q_tile_h);
         TT_FATAL(ms[2] == mask_tile_h, "kv_sdpa: attn_mask Sq must be one tile ({}); got {}", mask_tile_h, ms[2]);
-        TT_FATAL(ms[3] == kv_total, "kv_sdpa: attn_mask KV ({}) must equal prefix+suffix KV ({})", ms[3], kv_total);
+        // Column-tile g of the mask must align with KV-tile g of the folded [prefix ; suffix] KV, which
+        // the reader relies on to index the mask with the same tile counter it uses for K/V. Mask column
+        // tiles are TILE_WIDTH wide, so the prefix must occupy a whole number of them AND the prefix's
+        // own tile height must be TILE_WIDTH -- otherwise prefix tile g and mask column-tile g cover
+        // different KV ranges. (A 32x32 prefix + a 16x32 suffix, the pi0.5 config, satisfies this: the
+        // suffix is a single K tile at both tile heights.)
+        TT_FATAL(prefix % TILE_WIDTH == 0, "kv_sdpa: attn_mask requires a tile-aligned prefix; got {}", prefix);
+        if (ta.past_k.has_value()) {
+            const uint32_t pk_tile_h = ta.past_k->tensor_spec().tile().get_height();
+            TT_FATAL(
+                pk_tile_h == TILE_WIDTH,
+                "kv_sdpa: attn_mask requires a {}-row prefix tile so prefix tile g aligns with mask "
+                "column-tile g; got {}",
+                TILE_WIDTH,
+                pk_tile_h);
+        }
+        // The mask may be padded up to a tile boundary beyond the real KV (e.g. a 16-row suffix inside a
+        // 32-wide column tile), so require coverage rather than exact equality.
         TT_FATAL(ms[3] % TILE_WIDTH == 0, "kv_sdpa: attn_mask KV ({}) must be tile-aligned", ms[3]);
+        TT_FATAL(ms[3] >= kv_total, "kv_sdpa: attn_mask KV ({}) must cover prefix+suffix KV ({})", ms[3], kv_total);
     }
 }
 

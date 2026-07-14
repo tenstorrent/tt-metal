@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 
+import os
+
 import ttnn
 
 
@@ -102,15 +104,35 @@ def kv_sdpa(
     kv_splits=None,
     prefix_valid_tiles=None,
 ):
-    # The tiny-tile kv_sdpa dropped the mask path our earlier version had (cb_mask_in + a
-    # use_provided_mask compile-time gate) and now hard-fails:
-    #   TT_FATAL: kv_sdpa FlashFused two-source path does not support an attention mask
-    # Callers that genuinely need a mask (the DRAM ExpertChunkSlice expert in ttnn_gemma, which
-    # feeds the 28-chip and pipeline_1x8_v2 paths) fall back to the general SDPA below rather than
-    # silently dropping the mask, which would change numerics wherever the mask is not all-zero
-    # (e.g. the keep_padded phantom -1e4 band). Restoring the fused mask path on top of the
-    # tiny-tile two-phase chunking is stage 8; see TINY_TILE_INTEGRATION_PLAN.md.
-    if hasattr(ttnn, "kv_sdpa") and attn_mask is None:
+    # kv_sdpa now has a FUSED mask path (cb_mask_in + a use_provided_mask compile-time gate), so a masked
+    # call no longer has to detour through the general SDPA. It carries two geometry requirements the op
+    # validates: the mask's tile height must match q's (the mask is added to the [Sq_h x 32] score tiles),
+    # and the prefix's tile height must be 32 so prefix tile g lines up with mask column-tile g. The pi0.5
+    # config satisfies both at either tile height. Anything else (e.g. a caller with no past, or a 16-row
+    # prefix) still takes the promote-to-32 general-SDPA fallback below rather than silently dropping the
+    # mask, which would change numerics wherever it is non-zero (the keep_padded phantom -1e4 band).
+    # ---- STATUS: the fused mask path is NOT correct in-model yet; it is OPT-IN. -------------------
+    # It passes every unit check at TILE_HEIGHT=32 (whole-tile mask == tile skipping 0.999848; a
+    # half-masked tile lands strictly between open and blocked; mask composed with prefix_valid_tiles
+    # 0.999716) and the in-model single-layer PCC gate (0.9999 at both tile heights) -- yet LIBERO fails
+    # 6/6 at BOTH tile heights with it enabled, running clean and producing wrong actions, where the
+    # promote-to-32 fallback below scores 40/40. So something the model does is not covered by any of
+    # those checks. Prime suspect: the in-model chunk geometry. With max_kv_chunk_tiles=64 and DHt=8 the
+    # cap is 8 tiles, and LIBERO's prefix_Kt_eff of 17 (17 valid tiles, prime) forces
+    # prefix_Sk_chunk_t == 1 / prefix_num_chunks == 17 -- a 1-tile-per-chunk regime that also stresses
+    # add_block_inplace's pop/reserve/push cycle on cb_qk_im, which only lands back on the same physical
+    # tiles when the chunk fills the whole (single-buffered) CB.
+    # Note the single-layer PCC gate is near-useless here: with all-real inputs the pi0.5 mask blocks
+    # only the phantom suffix tail, so masked and unmasked agree to six decimals.
+    _FUSED_KV_MASK = os.environ.get("PI05_FUSED_KV_MASK", "0") == "1"
+
+    def _tile_h(t):
+        return int(t.get_tile().tile_shape[0])
+
+    can_fuse_mask = attn_mask is None or (
+        _FUSED_KV_MASK and past_k is not None and _tile_h(past_k) == 32 and _tile_h(attn_mask) == _tile_h(q)
+    )
+    if hasattr(ttnn, "kv_sdpa") and can_fuse_mask:
         kwargs = {"attn_mask": attn_mask, "scale": scale}
         if past_k is not None:
             kwargs["past_k"] = past_k

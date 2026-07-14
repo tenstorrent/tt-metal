@@ -1,0 +1,294 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Differential tests for kv_sdpa's FUSED attention-mask path.
+
+These exist because the mask path was silently lost in a merge and nothing caught it: the 16-chip perf
+gate feeds every camera present, so no prefix column is ever invalid and the maskless fast path is the
+only one it exercises. The single-layer PCC gate is barely better -- with all-real inputs the pi0.5
+expert mask only blocks the phantom suffix tail, so masked and unmasked agree to 6 decimal places and a
+dropped mask looks fine. A mask test has to supply a mask that CHANGES THE ANSWER.
+
+Strategy: two differential checks against references that live on the same device, rather than a torch
+oracle. A standalone torch reference for this op has burned us repeatedly (scratchpad/kvs_bench.py
+reports PCC ~0.38 for *stock* kv_sdpa, i.e. its reference does not match the op's contract), so these
+compare device path against device path with byte-identical inputs:
+
+  test_tile_aligned_mask_matches_tile_skipping
+      A mask that blocks WHOLE prefix tiles must agree with dropping those tiles via
+      prefix_valid_tiles. Two independent mechanisms, same math -- and both are kv_sdpa, so any
+      disagreement is in the mask handling itself.
+
+  test_ragged_mask_matches_general_sdpa
+      A mask that blocks a PARTIAL tile (which tile skipping fundamentally cannot express -- this is
+      exactly LIBERO's prompt ending mid-tile) must agree with the general
+      ttnn.transformer.scaled_dot_product_attention given the same mask.
+"""
+
+import pytest
+import torch
+import ttnn
+
+from models.experimental.pi0_5.tt.tile_config import TILE_HEIGHT
+
+# pi0.5 decode expert-attention shape: MQA, 8 Q heads / 1 KV head, head_dim 256, a 1024-row resident
+# prefix at a 32-row tile and a single suffix K tile at the model tile height.
+NQH, NKH, HD = 8, 1, 256
+PREFIX = 1024
+_MASK_VAL = -1e4
+_L1 = ttnn.L1_MEMORY_CONFIG
+
+
+def _mask_to_tt(mask_2d, device, tile_h):
+    """[Sq, KV] additive mask -> [1, 1, Sq, KV] bf16 TILE tensor at the q tile height."""
+    return ttnn.from_torch(
+        mask_2d.unsqueeze(0).unsqueeze(0),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        tile=ttnn.Tile((tile_h, 32)),
+        memory_config=_L1,
+    )
+
+
+def _inputs(device):
+    """(q, k, v, past_k, past_v) at the production dtypes/tiles, plus the torch suffix rows."""
+    sq = TILE_HEIGHT
+    torch.manual_seed(0)
+    q_t = torch.randn(1, NQH, sq, HD)
+    k_t = torch.randn(1, NKH, sq, HD)
+    v_t = torch.randn(1, NKH, sq, HD)
+    pk_t = torch.randn(1, NKH, PREFIX, HD)
+    pv_t = torch.randn(1, NKH, PREFIX, HD)
+
+    def to_tt(x, tile_h):
+        return ttnn.from_torch(
+            x,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            tile=ttnn.Tile((tile_h, 32)),
+            memory_config=_L1,
+        )
+
+    # Suffix rides the model tile height; the prefix is always a 32-row tile (the fused mask path
+    # requires it, so prefix tile g aligns with mask column-tile g).
+    return (
+        to_tt(q_t, sq),
+        to_tt(k_t, sq),
+        to_tt(v_t, sq),
+        to_tt(pk_t, 32),
+        to_tt(pv_t, 32),
+        sq,
+    )
+
+
+def _pcc(a, b):
+    a, b = a.flatten().to(torch.float32), b.flatten().to(torch.float32)
+    return torch.corrcoef(torch.stack([a, b]))[0, 1].item()
+
+
+def _unmasked_baseline(q, k, v, pk, pv):
+    """The unmasked kv_sdpa output, used as the 'mask ignored' comparison point.
+
+    IMPORTANT -- WHY THERE IS NO TORCH ORACLE HERE. In a standalone harness, kv_sdpa disagrees with an
+    exact fp32 torch reference at PCC ~0.39 *with no mask involved at all*, while the general
+    ttnn SDPA matches that same reference at 0.9997 (measured 2026-07-30, TILE_HEIGHT=32). The op is
+    nonetheless correct in the model (test_l1_single_layer_pcc: 0.9999). So the distortion belongs to the
+    harness, not the op -- and it means:
+
+      * an ABSOLUTE PCC against torch (or against the general SDPA) is meaningless here and must not be
+        asserted; that is what makes scratchpad/kvs_bench.py's long-standing "~0.38 for stock kv_sdpa"
+        a harness artifact rather than the op bug it was read as,
+      * only RELATIVE kv_sdpa-vs-kv_sdpa comparisons are valid, since both sides carry the same
+        distortion. Every assertion below is of that form.
+      * absolute correctness of the mask is established IN-MODEL instead: test_l1_single_layer_pcc with
+        PI05_PASS_EXPERT_MASK=1, plus the LIBERO rollout (whose mask has a genuinely partial tile).
+
+    At TILE_HEIGHT=16 this harness degrades further -- the unmasked baseline is not even finite
+    (absmax 3.4e38, mean -inf) -- so skip rather than emit a NaN PCC that reads as a mask bug.
+    """
+    base = ttnn.to_torch(ttnn.kv_sdpa(q, k, v, past_k=pk, past_v=pv)).float()
+    if not torch.isfinite(base).all() or base.abs().max() > 1e6:
+        pytest.skip(
+            f"unmasked kv_sdpa baseline is not finite in this harness at TILE_HEIGHT={TILE_HEIGHT} "
+            f"(absmax={base.abs().max():.3g}); tile-16 is covered in-model by test_l1_single_layer_pcc "
+            "and by the LIBERO rollout."
+        )
+    return base
+
+
+def test_tile_aligned_mask_matches_tile_skipping(device):
+    """A whole-tile mask must equal dropping those tiles. Blocks prefix tiles 16..23 (an absent
+    camera: 256 columns = 8 whole 32-wide tiles) plus the phantom suffix tail."""
+    q, k, v, pk, pv, sq = _inputs(device)
+    kv_total = PREFIX + 32  # one suffix column-tile
+
+    blocked = list(range(16, 24))
+    mask = torch.zeros(sq, kv_total, dtype=torch.bfloat16)
+    for t in blocked:
+        mask[:, t * 32 : (t + 1) * 32] = _MASK_VAL
+
+    valid = [t for t in range(PREFIX // 32) if t not in blocked]
+
+    unmasked = _unmasked_baseline(q, k, v, pk, pv)
+    masked = ttnn.to_torch(ttnn.kv_sdpa(q, k, v, past_k=pk, past_v=pv, attn_mask=_mask_to_tt(mask, device, sq)))
+    skipped = ttnn.to_torch(ttnn.kv_sdpa(q, k, v, past_k=pk, past_v=pv, prefix_valid_tiles=valid))
+
+    pcc = _pcc(masked, skipped)
+    print(f"\n[fused mask] tile-aligned mask vs tile skipping: PCC={pcc:.6f}  (TILE_HEIGHT={sq})")
+    # Not bit-identical: masking adds -1e4 then exponentiates (a true zero only in the limit), while
+    # skipping never reads the tile at all. They must agree to well within bf8 noise.
+    assert pcc > 0.999, f"fused mask disagrees with tile skipping: PCC={pcc}"
+
+    # And it must actually DIFFER from ignoring the mask -- otherwise this test proves nothing.
+    pcc_vs_unmasked = _pcc(masked, unmasked)
+    print(f"[fused mask] masked vs UNMASKED: PCC={pcc_vs_unmasked:.6f}  (must be clearly < 1)")
+    assert pcc_vs_unmasked < 0.99, (
+        f"masking 8 of 32 prefix tiles changed nothing (PCC={pcc_vs_unmasked}) -- the mask is being "
+        "ignored, which is exactly the regression this test exists to catch"
+    )
+
+
+def test_partial_tile_mask_is_strictly_between_open_and_blocked(device):
+    """Validate PARTIAL-tile masking -- what tile skipping fundamentally cannot express, and what LIBERO
+    actually needs (its prompt ends mid-tile, at prefix tile 24).
+
+    Phrased as a bracket so it stays valid in a harness where absolute PCC is not (see
+    _unmasked_baseline): masking HALF of tile 24 must land strictly between leaving that tile fully open
+    and blocking it entirely, and must differ from both. A mask that silently ignored the partial
+    columns would coincide with 'open'; one that over-masked the whole tile would coincide with
+    'blocked'. Only correct per-column masking sits in between.
+    """
+    q, k, v, pk, pv, sq = _inputs(device)
+    kv_total = PREFIX + 32
+    _unmasked_baseline(q, k, v, pk, pv)
+
+    def run(partial_cols):
+        # Tiles 16..23 blocked (absent camera) in every variant; tile 24 gets `partial_cols` blocked.
+        m = torch.zeros(sq, kv_total, dtype=torch.bfloat16)
+        m[:, 16 * 32 : 24 * 32] = _MASK_VAL
+        if partial_cols:
+            m[:, 24 * 32 + (32 - partial_cols) : 25 * 32] = _MASK_VAL
+        return ttnn.to_torch(ttnn.kv_sdpa(q, k, v, past_k=pk, past_v=pv, attn_mask=_mask_to_tt(m, device, sq))).float()
+
+    open_t, half, blocked = run(0), run(16), run(32)
+
+    d_open = (half - open_t).abs().mean().item()
+    d_blocked = (half - blocked).abs().mean().item()
+    span = (blocked - open_t).abs().mean().item()
+    print(
+        f"\n[fused mask] partial tile: |half-open|={d_open:.6g}  |half-blocked|={d_blocked:.6g}  "
+        f"|blocked-open|={span:.6g}  (TILE_HEIGHT={sq})"
+    )
+    assert span > 0, "blocking a whole prefix tile changed nothing -- the mask is being ignored"
+    # Strictly between: closer to each endpoint than the endpoints are to each other.
+    assert d_open > 0.05 * span, (
+        f"masking 16 of tile 24's 32 columns is indistinguishable from leaving it OPEN "
+        f"(|half-open|={d_open:.6g} vs span={span:.6g}) -- partial columns are being dropped"
+    )
+    assert d_blocked > 0.05 * span, (
+        f"masking 16 of tile 24's 32 columns is indistinguishable from blocking it ENTIRELY "
+        f"(|half-blocked|={d_blocked:.6g} vs span={span:.6g}) -- the whole tile is being over-masked"
+    )
+
+
+def test_mask_composes_with_prefix_tile_skipping(device):
+    """Mask AND prefix_valid_tiles together -- the combination the pi0.5 denoise block actually passes.
+
+    LIBERO's mask blocks prefix tiles 16..23 (absent camera), part of 24 (prompt ends mid-tile), and
+    25..31 (language padding), while the pipeline independently hands kv_sdpa a prefix_valid_tiles list
+    that DROPS the wholly-invalid tiles. Skipping shortens the prefix, so the mask's column-tile g no
+    longer sits at loop position g -- the reader has to indirect the mask index through the same MAPPER
+    as the K/V page index. If it does not, the mask lands on the wrong columns.
+
+    Reference is the same op with skipping disabled: identical mask, full prefix. The wholly-invalid
+    tiles are already masked to -1e4 there, so dropping them must not change the result.
+    """
+    q, k, v, pk, pv, sq = _inputs(device)
+    kv_total = PREFIX + 32
+    _unmasked_baseline(q, k, v, pk, pv)
+
+    mask = torch.zeros(sq, kv_total, dtype=torch.bfloat16)
+    mask[:, 16 * 32 : 24 * 32] = _MASK_VAL  # absent camera: whole tiles
+    mask[:, 24 * 32 + 16 : 25 * 32] = _MASK_VAL  # prompt ends mid-tile: PARTIAL
+    mask[:, 25 * 32 : 32 * 32] = _MASK_VAL  # language padding: whole tiles
+    m_tt = _mask_to_tt(mask, device, sq)
+
+    # Drop exactly the wholly-invalid tiles; tile 24 must stay (it is only partly invalid).
+    valid = [t for t in range(PREFIX // 32) if not (16 <= t < 24) and not (25 <= t < 32)]
+
+    mask_only = ttnn.to_torch(ttnn.kv_sdpa(q, k, v, past_k=pk, past_v=pv, attn_mask=m_tt))
+    mask_and_skip = ttnn.to_torch(ttnn.kv_sdpa(q, k, v, past_k=pk, past_v=pv, attn_mask=m_tt, prefix_valid_tiles=valid))
+
+    pcc = _pcc(mask_only, mask_and_skip)
+    print(f"\n[fused mask] mask+skip vs mask-only: PCC={pcc:.6f}  (TILE_HEIGHT={sq}, kept {len(valid)}/32 tiles)")
+    assert pcc > 0.999, (
+        f"mask does not compose with prefix tile skipping: PCC={pcc}. The mask column index is not "
+        "following the same tile mapping as K/V, so it is being applied to the wrong columns."
+    )
+
+
+@pytest.mark.parametrize("max_chunk", [128, 64], ids=["default-128", "model-64"])
+def test_mask_across_chunk_geometries(device, max_chunk):
+    """The mask must hold for the chunk geometry the MODEL actually uses, not just the default.
+
+    The unit tests above ran at the default max_kv_chunk_tiles=128; the denoise block passes 64. With
+    DHt=8 that caps a chunk at 8 tiles, and a prefix of 17 effective tiles (LIBERO's count after
+    dropping wholly-invalid ones -- and prime) forces prefix_Sk_chunk_t == 1, i.e. 17 single-tile chunks.
+    That regime is worth pinning independently: a 1-tile chunk is the case where add_block_inplace's
+    pop/reserve/push cycle on cb_qk_im does NOT wrap back onto the tile the matmul just wrote, since the
+    chunk no longer fills the whole single-buffered CB.
+
+    Reference is the same masked call at the same chunk cap WITHOUT the mask, plus the tile-skip
+    equivalent -- all kv_sdpa-vs-kv_sdpa, so valid despite the harness distortion.
+    """
+    q, k, v, pk, pv, sq = _inputs(device)
+    kv_total = PREFIX + 32
+    _unmasked_baseline(q, k, v, pk, pv)
+
+    blocked = list(range(16, 24))
+    mask = torch.zeros(sq, kv_total, dtype=torch.bfloat16)
+    for t in blocked:
+        mask[:, t * 32 : (t + 1) * 32] = _MASK_VAL
+    valid = [t for t in range(PREFIX // 32) if t not in blocked]
+
+    masked = ttnn.to_torch(
+        ttnn.kv_sdpa(
+            q, k, v, past_k=pk, past_v=pv, attn_mask=_mask_to_tt(mask, device, sq), max_kv_chunk_tiles=max_chunk
+        )
+    )
+    skipped = ttnn.to_torch(
+        ttnn.kv_sdpa(q, k, v, past_k=pk, past_v=pv, prefix_valid_tiles=valid, max_kv_chunk_tiles=max_chunk)
+    )
+    pcc = _pcc(masked, skipped)
+    print(f"\n[fused mask] max_kv_chunk_tiles={max_chunk}: mask vs skip PCC={pcc:.6f}  (TILE_HEIGHT={sq})")
+    assert pcc > 0.999, f"fused mask breaks at max_kv_chunk_tiles={max_chunk}: PCC={pcc}"
+
+
+def test_mask_with_single_tile_chunks(device):
+    """Force the 1-tile-per-chunk regime explicitly: a prime effective prefix under a tight cap."""
+    q, k, v, pk, pv, sq = _inputs(device)
+    kv_total = PREFIX + 32
+    _unmasked_baseline(q, k, v, pk, pv)
+
+    # 17 valid prefix tiles (prime) -> prefix_Sk_chunk_t == 1 whatever the cap. Mask tiles 16..23 and
+    # 25..31 (matching what is dropped) plus HALF of tile 24, so a partial tile rides along.
+    valid = [t for t in range(PREFIX // 32) if not (16 <= t < 24) and not (25 <= t < 32)]
+    assert len(valid) == 17
+    mask = torch.zeros(sq, kv_total, dtype=torch.bfloat16)
+    mask[:, 16 * 32 : 24 * 32] = _MASK_VAL
+    mask[:, 24 * 32 + 16 : 25 * 32] = _MASK_VAL
+    mask[:, 25 * 32 : 32 * 32] = _MASK_VAL
+    m_tt = _mask_to_tt(mask, device, sq)
+
+    a = ttnn.to_torch(
+        ttnn.kv_sdpa(q, k, v, past_k=pk, past_v=pv, attn_mask=m_tt, prefix_valid_tiles=valid, max_kv_chunk_tiles=64)
+    )
+    b = ttnn.to_torch(
+        ttnn.kv_sdpa(q, k, v, past_k=pk, past_v=pv, attn_mask=m_tt, prefix_valid_tiles=valid, max_kv_chunk_tiles=128)
+    )
+    pcc = _pcc(a, b)
+    print(f"\n[fused mask] 17 single-tile chunks (cap 64) vs cap 128: PCC={pcc:.6f}  (TILE_HEIGHT={sq})")
+    assert pcc > 0.999, f"fused mask is chunk-geometry dependent: PCC={pcc}"

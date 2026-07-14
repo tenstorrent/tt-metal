@@ -16,7 +16,13 @@
 // Accumulate one flash K/V chunk into the running (max/sum/out) state. Reads a full chunk from
 // k_src/v_src (their own tile geometry), computes QK^T -> online-softmax exp -> QK@V, and combines
 // with the previous running state. The prev/cur ping-pong CB aliases are updated in place.
-template <uint32_t cb_qk_im, uint32_t cb_id_scale, uint32_t scale_fp32, uint32_t DHt>
+template <
+    uint32_t cb_qk_im,
+    uint32_t cb_id_scale,
+    uint32_t scale_fp32,
+    uint32_t DHt,
+    bool use_provided_mask,
+    uint32_t cb_mask_in>
 inline void flash_accumulate_chunk(
     uint32_t cb_q_in,
     uint32_t k_src,
@@ -56,6 +62,16 @@ inline void flash_accumulate_chunk(
         /*subblock_h=*/1,
         qk_subblock_w,
         /*transpose=*/false);
+
+    /* QK += MASK (additive, over this chunk's column-tiles). Applied to the RAW scores, before the
+       row-max, so the scale folds in via sub_exp below exactly as in the general SDPA -- that ordering
+       is what makes the two numerically comparable. add_block_inplace's pop/reserve/push cycle on
+       cb_qk_im re-arms the produced state for reduce_c below; it is only safe because cb_qk_im is
+       single-buffered (see the program factory), otherwise the masked scores would land in the other
+       buffer and the reduce would read the unmasked ones. */
+    if constexpr (use_provided_mask) {
+        add_block_inplace(cb_qk_im, cb_mask_in, Sq_chunk_t * Sk_chunk_t);
+    }
 
     /* cur_max = (processed>0) ? max(prev_max, rowmax(QK)) : rowmax(QK) */
     reconfig_data_format(cb_qk_im, cb_id_scale);
@@ -116,14 +132,18 @@ void kernel_main() {
     constexpr uint32_t suffix_out_subblock_w = get_compile_time_arg_val(9);
     // Split-KV role, compile-time per core set. suffix_num_chunks (arg 6) is already the PER-CORE
     // count -- only the reducer is given the suffix -- so the loops above stay fully specialized.
-    constexpr bool is_reducer = get_compile_time_arg_val(10) == 1;
-    constexpr uint32_t num_children = get_compile_time_arg_val(11);
+    // Dense additive mask over the folded KV (index 10 -- keep is_reducer/num_children AFTER it, the
+    // factory push_backs them in that order).
+    constexpr bool use_provided_mask = get_compile_time_arg_val(10) == 1;
+    constexpr bool is_reducer = get_compile_time_arg_val(11) == 1;
+    constexpr uint32_t num_children = get_compile_time_arg_val(12);
 
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;      // suffix K
     constexpr uint32_t cb_v_in = tt::CBIndex::c_2;      // suffix V
     constexpr uint32_t cb_k_prefix = tt::CBIndex::c_8;  // prefix K (own tile geometry)
     constexpr uint32_t cb_v_prefix = tt::CBIndex::c_9;  // prefix V
+    constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;   // one chunk's mask column-tiles
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_7;
     // Split-KV reduction CBs (see the program factory). Unused when kv_splits == 1.
@@ -161,7 +181,7 @@ void kernel_main() {
     // Phase 1: resident prefix K/V (its own tile geometry, e.g. 32x32). Under split-KV this is only
     // THIS core's slice of the prefix -- the reader is given the matching tile offset.
     for (uint32_t c = 0; c < prefix_num_chunks; ++c) {
-        flash_accumulate_chunk<cb_qk_im, cb_identity_scale_in, scale_fp32, DHt>(
+        flash_accumulate_chunk<cb_qk_im, cb_identity_scale_in, scale_fp32, DHt, use_provided_mask, cb_mask_in>(
             cb_q_in,
             cb_k_prefix,
             cb_v_prefix,
@@ -180,7 +200,7 @@ void kernel_main() {
     }
     // Phase 2: new suffix K/V (model tiny tile, e.g. 16x32). Only the reducer owns the suffix.
     for (uint32_t c = 0; c < suffix_num_chunks; ++c) {
-        flash_accumulate_chunk<cb_qk_im, cb_identity_scale_in, scale_fp32, DHt>(
+        flash_accumulate_chunk<cb_qk_im, cb_identity_scale_in, scale_fp32, DHt, use_provided_mask, cb_mask_in>(
             cb_q_in,
             cb_k_in,
             cb_v_in,
