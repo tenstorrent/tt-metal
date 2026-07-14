@@ -36,7 +36,7 @@ enum SortDir : bool {
 // need to program that TRISC's section base instead.
 inline void set_dst_write_addr(std::uint32_t addr) {
     std::uint32_t dst_index = addr + ckernel::trisc::_get_dest_buffer_base_();
-    ckernel::trisc::_set_dest_section_base_<ckernel::math::TRISC_ID>(dst_index);
+    ckernel::trisc::_set_dest_section_base_<ckernel::TRISC_ID>(dst_index);
 }
 
 // Advance the dest RWC counter by `inc` rows in groups of 8.
