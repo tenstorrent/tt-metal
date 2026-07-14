@@ -23,7 +23,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import comp_pcc, tt2torch_tensor
+from models.common.utility_functions import comp_pcc, skip_for_blackhole, tt2torch_tensor
 
 
 def run_cqkv(device, batch, seq_len, num_q_heads, num_kv_heads, head_dim, cores_h, cores_w, transpose_k, dtype):
@@ -40,13 +40,16 @@ def run_cqkv(device, batch, seq_len, num_q_heads, num_kv_heads, head_dim, cores_
     QKV = torch.concat([Q.flatten(-2, -1), K.flatten(-2, -1), V.flatten(-2, -1)], -1)
     QKV_interleaved = torch.concat([Q, K, V], -1).flatten(-2, -1)
 
-    shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(cores_w - 1, cores_h - 1))}),
-        [seq_len, QKV.shape[-1] // cores_w],
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    in_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
-    out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(cores_w - 1, cores_h - 1))})
+    in_shard_spec = ttnn.ShardSpec(grid, [seq_len, QKV.shape[-1] // cores_w], ttnn.ShardOrientation.ROW_MAJOR)
+    in_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, in_shard_spec)
+    # The device op recomputes the real output shard spec from the input and only consumes the output
+    # memory_config's layout + buffer_type; the shard_spec shape passed here is functionally ignored.
+    # But the full MemoryConfig (incl. shard_spec) is a hashed op attribute, so keep it INDEPENDENT of
+    # seq_len -- otherwise varying the input shape would also vary the output attribute and the shape
+    # test would no longer isolate input-TensorSpec keying.
+    out_shard_spec = ttnn.ShardSpec(grid, [32, QKV.shape[-1] // cores_w], ttnn.ShardOrientation.ROW_MAJOR)
+    out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, out_shard_spec)
     in0_t = ttnn.Tensor(QKV_interleaved, dtype).to(ttnn.TILE_LAYOUT).to(device, in_mem_config)
 
     with device.cache_entries_counter.measure():
@@ -76,6 +79,7 @@ def isolate_program_cache(device):
     device.disable_and_clear_program_cache()
 
 
+@skip_for_blackhole("L1 and Circular buffers are crashing on BH, see #12349")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 def test_cqkv_cache_reuse_same_config(device, isolate_program_cache):
     """Same config run twice -> 1 entry."""
@@ -84,6 +88,7 @@ def test_cqkv_cache_reuse_same_config(device, isolate_program_cache):
     assert device.cache_entries_counter.total == 1
 
 
+@skip_for_blackhole("L1 and Circular buffers are crashing on BH, see #12349")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 def test_cqkv_cache_miss_transpose_k(device, isolate_program_cache):
     """transpose_k_heads toggled (hashed attribute, same input) -> 2 entries."""
@@ -92,9 +97,14 @@ def test_cqkv_cache_miss_transpose_k(device, isolate_program_cache):
     assert device.cache_entries_counter.total == 2
 
 
+@skip_for_blackhole("L1 and Circular buffers are crashing on BH, see #12349")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 def test_cqkv_cache_miss_different_shape(device, isolate_program_cache):
-    """Different input shape (seq_len) -> 2 entries."""
+    """Different input shape (seq_len), output attributes held constant -> 2 entries.
+
+    Only the input TensorSpec differs between the two calls (out_mem_config is
+    seq_len-independent), so this isolates the default input-shape keying.
+    """
     run_cqkv(device, **{**CFG, "seq_len": 224}, transpose_k=True, dtype=ttnn.bfloat16)
     run_cqkv(device, **{**CFG, "seq_len": 384}, transpose_k=True, dtype=ttnn.bfloat16)
     assert device.cache_entries_counter.total == 2
