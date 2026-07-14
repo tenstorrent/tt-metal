@@ -62,8 +62,10 @@ CBs are the credit-based FIFOs connecting **producers** (a reader on RISCV B, or
    it via `registry.cb_classify`), NOT only the free `cb_reserve_back(...)` — the
    second alternation above catches it. Caveat: `.push_back(` also matches an
    unrelated receiver (e.g. `std::vector::push_back`), so when classifying, keep
-   only receivers typed `CircularBuffer`/`CBInterface` (mirror the tool's
-   `_CB_RECV_TYPES`); the other three method names are CB-specific.
+   only receivers typed `CircularBuffer`/`CBInterface`/`DataflowBuffer`/`DFBInterface`
+   (mirror the tool's `_CB_RECV_TYPES`; `DataflowBuffer` is the Metal 2.0 CB object with
+   the same reserve_back/push_back/wait_front/pop_front quartet); the other three method
+   names are CB-specific.
    **Exhaustive run — no sampling.** That grep yields the full kernel set (typically ~150–200 files across the CCL/dataflow families — all_gather, reduce_scatter, all_to_all, llama, moe, deepseek, broadcast, sdpa, matmul, prefetcher, unary/binary readers-writers). Enumerate them **all** into the run's coverage ledger and fan out (≥) one cell per kernel-family; **do not sample** — "sampled 6 of 186" is a blocking incompleteness per `race-audit-all`, not a caveat. This class is **in scope** (frontmatter): "the CB races live above tt-llk, run it separately" is not a valid skip — audit them here, now.
 2. Per CB (per kernel pair), pair the producer (`reserve_back`+`push_back`) with the consumer (`wait_front`+`pop_front`) — they live in **different kernels** (reader↔compute, compute↔writer), so trace across the kernel set of the op.
 3. Run checks 1–7. For ordering, confirm a NOC/read barrier sits between the data fill and `cb_push_back` (and between the read and `cb_pop_front`).

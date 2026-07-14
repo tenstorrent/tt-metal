@@ -773,7 +773,15 @@ CB_METHOD_CALLS = {
     "wait_front": "wait",
     "pop_front": "pop",
 }
-_CB_RECV_TYPES = ("CircularBuffer", "CBInterface")
+# CB flow-control object types, matched as a SUBSTRING of recv_type (so template/
+# qualified forms resolve). Two API generations, each an OBJECT type + its INTERFACE:
+#   - legacy:   CircularBuffer  / (Local)CBInterface
+#   - Metal 2.0: DataflowBuffer / (Local)DFBInterface   (dataflow_buffer.h:61 — same
+#     reserve_back/push_back/wait_front/pop_front credit quartet)
+# The substring form over-matches host-only names (DataflowBufferConfig/Impl,
+# LocalDFBInterfaceHost) but those live under tt_metal/impl/ and are path-excluded
+# from the kernel fact base (capture.py is_host_path), so no live false-flag.
+_CB_RECV_TYPES = ("CircularBuffer", "CBInterface", "DataflowBuffer", "DFBInterface")
 
 
 def _is_cb_receiver(recv_type: str) -> bool:

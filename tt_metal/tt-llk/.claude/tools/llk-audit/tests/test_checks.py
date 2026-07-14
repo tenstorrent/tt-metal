@@ -1388,6 +1388,53 @@ def test_cb_sync_reserve_push_imbalance():
 
 
 @case
+def test_cb_sync_dataflow_buffer_object_recalled():
+    # Metal 2.0 `DataflowBuffer` (hw/inc/api/dataflow/dataflow_buffer.h:61) exposes the
+    # SAME reserve_back/push_back/wait_front/pop_front credit quartet as CircularBuffer.
+    # It must be recalled by cb_classify (was excluded from _CB_RECV_TYPES → a kernel-tier
+    # cap-reduction over the whole DataflowBuffer surface). Its interface is
+    # (Local)DFBInterface (parallel to (Local)CBInterface).
+    from llkaudit import registry
+
+    for rt in ("DataflowBuffer", "LocalDFBInterface", "DFBInterface"):
+        op, _ = registry.cb_classify(
+            call("k.cpp", 0, "push_back", recv_type=rt, recv="dfb")
+        )
+        assert op == "push", rt
+    # end-to-end: a DataflowBuffer reserve with no matching push -> imbalance finding
+    K = "ttnn/cpp/ttnn/operations/.../metal2_writer.cpp"
+    leaked = [
+        fn("kernel_main", K, 0, 100),
+        call(
+            K,
+            10,
+            "reserve_back",
+            func="kernel_main",
+            recv_type="DataflowBuffer",
+            recv="dfb_out",
+        ),
+        call(
+            K,
+            20,
+            "reserve_back",
+            func="kernel_main",
+            recv_type="DataflowBuffer",
+            recv="dfb_out",
+        ),
+        call(
+            K,
+            30,
+            "push_back",
+            func="kernel_main",
+            recv_type="DataflowBuffer",
+            recv="dfb_out",
+        ),
+    ]
+    out = CbSync().run(FactBase("wormhole", leaked))
+    assert len(out) == 1 and out[0].hint == "CB_RESERVE_PUSH_IMBALANCE", out
+
+
+@case
 def test_cb_sync_wait_pop_imbalance_and_per_cb():
     K = "ttnn/cpp/.../reader_kernel.cpp"
     facts = [
