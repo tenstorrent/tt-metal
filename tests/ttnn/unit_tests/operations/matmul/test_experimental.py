@@ -90,8 +90,7 @@ def test_ttnn_linear(
         fused_activation=None,
         mcast_in0=False,
     )
-    # Explicit program configs default to LoFi. Use HiFi2 for the BF16 accuracy case while retaining the
-    # intended LoFi path for mixed and block-float parametrizations.
+    # use hifi2 for bfloat16 to match torch behavior
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi2 if use_high_accuracy_compute else ttnn.MathFidelity.LoFi,
