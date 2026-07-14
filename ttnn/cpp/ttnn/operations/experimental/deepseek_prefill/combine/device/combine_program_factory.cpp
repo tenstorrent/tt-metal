@@ -410,21 +410,21 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     TT_FATAL(sender_cores.size() == num_cores, "Expected {} sender cores, got {}", num_cores, sender_cores.size());
 
 #if USE_RELAY
-    // Relay cores: dedicated single-writer-kernel cores with a deep L1 receive buffer. STAGE 1: the
-    // buffer is allocated and an idle writer kernel is created (NOC_0), but the relay is not yet driven.
+    // Relay cores: dedicated single-writer-kernel cores = the combine FABRIC ENDPOINT (relay-2). Here we
+    // build the core grid + L1 buffers; the writer kernel is created later (after fabric_defines) and its
+    // fabric connection + RT args are appended in the RT-arg section.
+    CoreRangeSet relay_core_grid;
     tt::tt_metal::KernelHandle relay_writer_kernel_id = 0;
     {
         std::set<CoreRange> relay_ranges_set;
         for (const auto& rc : relay_cores) {
             relay_ranges_set.insert(CoreRange(rc));
         }
-        CoreRangeSet relay_core_grid(relay_ranges_set);
+        relay_core_grid = CoreRangeSet(relay_ranges_set);
         TT_FATAL(relay_cores.size() == num_cores, "Expected {} relay cores, got {}", num_cores, relay_cores.size());
 
-        // Each relay slot holds one token payload plus its routing metadata, mirroring the sender's
-        // merged c_3 page layout: [0..l1_alignment) route_info, [l1_alignment..) aligned output page.
-        // This is what the sender will eventually NOC-write into the relay (token + the routing bytes
-        // the relay needs to issue the fabric send itself).
+        // c_24: relay receive buffer (also the mock payload scratch for now). RELAY_SLOTS slots, each =
+        // route_info (l1_alignment) + one aligned output page (token), mirroring the sender's c_3 layout.
         uint32_t relay_slot_size = l1_alignment + detail::get_aligned_page_size(output_tensor);
         desc.cbs.push_back(tt::tt_metal::CBDescriptor{
             .total_size = RELAY_SLOTS * relay_slot_size,
@@ -436,24 +436,21 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             }}},
         });
 
-        // Idle relay writer kernel. The relay core hosts ONLY this kernel, so it is free to use NOC_0
-        // (the preferred NOC for the eventual eth write) for all of its communication.
-        tt::tt_metal::KernelDescriptor relay_writer_kd;
-        relay_writer_kd.kernel_source =
-            "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/"
-            "writer_relay.cpp";
-        relay_writer_kd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-        relay_writer_kd.core_ranges = relay_core_grid;
-        relay_writer_kd.compile_time_args = {
-            static_cast<uint32_t>(tt::CBIndex::c_24),  // 0: cb_relay_buf
-            RELAY_SLOTS,                               // 1: RELAY_SLOTS
-        };
-        relay_writer_kd.config = tt::tt_metal::DataMovementConfigDescriptor{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::NOC_0,
-        };
-        relay_writer_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
-        desc.kernels.push_back(std::move(relay_writer_kd));
+        // c_5: packet-header pool on the relay (2 base headers + OVERLAP_POOL_DEPTH overlap headers),
+        // mirroring the sender's c_5. The relay owns the fabric endpoint now, so it owns the header pool.
+        if (num_links > 0) {
+            constexpr uint32_t num_relay_packet_headers = 2 + OVERLAP_POOL_DEPTH;
+            auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+            desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+                .total_size = num_relay_packet_headers * packet_header_size_bytes,
+                .core_ranges = relay_core_grid,
+                .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_5),
+                    .data_format = tt::DataFormat::UInt8,
+                    .page_size = packet_header_size_bytes,
+                }}},
+            });
+        }
     }
 #endif
 
@@ -1181,6 +1178,47 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     tt::tt_metal::KernelHandle writer_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
     desc.kernels.push_back(std::move(writer_kd));
 
+#if USE_RELAY
+    // Relay writer kernel = the fabric endpoint (opens eth connections, runs the init/exit handshake,
+    // sends tokens). Single kernel on its core -> free to use NOC_0 for all traffic. Gets the fabric
+    // defines (DEST_CHIP_ID / DEST_MESH_ID / DIRECTIONS / AXIS) so the ported 1D handshake + mock loop
+    // compile. num_chips mirrors writer_combine's compile arg 13 (== dispatch_group_size).
+    {
+        std::vector<uint32_t> relay_compile_time_args = {
+            detail::get_num_pages(output_tensor),          // 0:  output_pages
+            detail::get_aligned_page_size(output_tensor),  // 1:  aligned_output_page_size
+            (uint32_t)fabric_max_packet_size,              // 2:  fabric_max_packet_size
+            l1_alignment,                                  // 3:  l1_alignment
+            static_cast<uint32_t>(num_links),              // 4:  num_links
+            static_cast<uint32_t>(topology),               // 5:  topology
+            mesh_rows,                                     // 6:  mesh_rows
+            mesh_cols,                                     // 7:  mesh_cols
+            linearized_mesh_coord,                         // 8:  linearized_mesh_coord
+            src_chip_id,                                   // 9:  src_chip_id
+            src_mesh_id,                                   // 10: src_mesh_id
+            operation_attributes.dispatch_group_size,      // 11: num_chips (== writer_combine arg 13)
+            static_cast<uint32_t>(tt::CBIndex::c_5),       // 12: cb_packet_header_id
+            static_cast<uint32_t>(tt::CBIndex::c_24),      // 13: cb_relay_buf
+        };
+        tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(relay_compile_time_args);  // 14+
+
+        tt::tt_metal::KernelDescriptor relay_writer_kd;
+        relay_writer_kd.kernel_source =
+            "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/"
+            "writer_relay.cpp";
+        relay_writer_kd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+        relay_writer_kd.core_ranges = relay_core_grid;
+        relay_writer_kd.compile_time_args = std::move(relay_compile_time_args);
+        relay_writer_kd.defines = {writer_defines.begin(), writer_defines.end()};
+        relay_writer_kd.config = tt::tt_metal::DataMovementConfigDescriptor{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::NOC_0,
+        };
+        relay_writer_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
+        desc.kernels.push_back(std::move(relay_writer_kd));
+    }
+#endif
+
     // Compute kernel on untilizer cores that untilizes dispatched_buffer data (TILE_LAYOUT only).
     // Compile-time args are shared across all untilizer cores; per-sender values (core_id,
     // num_untilizer_cores, expert range) are passed via SetRuntimeArgs below.  Initialized to 0
@@ -1387,16 +1425,45 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     };
 
 #if USE_RELAY
-    // Relay placement logging: feed each relay writer its index + host-computed coordinate quad so the
-    // kernel can emit a [cmb-place relay] line (mirroring [cmb-place sender]). RT arg order the kernel
-    // reads: relay_index, then push_worker_coord_quad = logical(x,y) virt(x,y) phys_noc0(x,y) noc1(x,y).
-    // STAGE 1: the relay has no downstream cores, so only its own placement is logged (no eth/downstream
-    // lines yet). Keep this in sync with the relay's topology as later stages add connectivity.
+    // Relay RT args = the fabric endpoint's args. Order the relay kernel reads:
+    //   output_addr, init_sem_addr, exit_sem_addr, relay_index, coord_quad(8), then fabric-connection args.
+    // Build into a raw uint32 vector (append_fabric_connection_rt_args needs that), then promote to the
+    // RTArgList with output_tensor's Buffer* first (cache-hit fast path). FABRIC_1D only (matches the mock
+    // + the relay kernel's #error guards).
+    TT_FATAL(!is_2d_fabric, "USE_RELAY relay endpoint is FABRIC_1D only (matches MOCK_COMBINE_INTERNALS).");
     for (uint32_t s = 0; s < num_cores; s++) {
+        const CoreCoord& relay_core = relay_cores[s];
+        std::vector<uint32_t> relay_rt_raw = {
+            output_tensor.buffer()->address(),   // 0: output_addr (promoted to Buffer* below)
+            (uint32_t)init_semaphore.address(),  // 1: init_semaphore_address
+            (uint32_t)exit_semaphore.address(),  // 2: exit_semaphore_address
+            s,                                   // 3: relay_index
+        };
+        push_worker_coord_quad(relay_rt_raw, relay_core);  // 4..11: coord quad
+
+        if (num_links > 0) {
+            std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
+            for (const auto& neighbor_coordinate : neighbors) {
+                if (neighbor_coordinate[0] == mesh_coordinate[0] && neighbor_coordinate[1] == mesh_coordinate[1]) {
+                    continue;
+                }
+                dst_nodes.push_back(mesh_device->get_fabric_node_id(neighbor_coordinate));
+            }
+            const uint32_t core_link = s % num_links;
+            for (const auto& dst_node : dst_nodes) {
+                tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
+                    src_fabric_node_id, dst_node, core_link, desc, relay_core, relay_rt_raw);
+            }
+        }
+
+        // Promote: output_addr slot -> Buffer*, everything else stays uint32.
         tt::tt_metal::KernelDescriptor::RTArgList relay_rt_args;
-        relay_rt_args.push_back(s);
-        push_worker_coord_quad(relay_rt_args, relay_cores[s]);
-        desc.kernels[relay_writer_kernel_id].emplace_runtime_args(relay_cores[s], relay_rt_args);
+        relay_rt_args.reserve(relay_rt_raw.size());
+        relay_rt_args.push_back(output_tensor.buffer());
+        for (size_t i = 1; i < relay_rt_raw.size(); ++i) {
+            relay_rt_args.push_back(relay_rt_raw[i]);
+        }
+        desc.kernels[relay_writer_kernel_id].emplace_runtime_args(relay_core, relay_rt_args);
     }
 #endif
 
@@ -1551,7 +1618,10 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         // connections, so it must NOT sit after the fabric args (order is alignment-critical).
         push_worker_coord_quad(writer_runtime_args_raw, sender_core);
 
-        if (num_links > 0) {
+        // USE_RELAY: the relay is the fabric endpoint, so the SENDER registers no fabric connection and
+        // gets no fabric-connection RT args (writer_combine returns before it would read them). The relay's
+        // connection is appended in the relay RT-arg loop above.
+        if ((num_links > 0) && !USE_RELAY) {
             // Combine-axis neighbors (each a distinct fabric direction) as fabric nodes.
             std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
             for (const auto& neighbor_coordinate : neighbors) {

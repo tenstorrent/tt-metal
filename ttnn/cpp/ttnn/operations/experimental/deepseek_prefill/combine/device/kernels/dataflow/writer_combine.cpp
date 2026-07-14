@@ -278,6 +278,34 @@ void kernel_main() {
     noc_semaphore_set(output_init_complete_sem_ptr, 0);
 #endif
 
+#if USE_RELAY
+    // USE_RELAY: the relay core is the fabric endpoint now — it opens the eth connection, runs the
+    // cross-chip init/exit handshake, and sends all tokens (see writer_relay.cpp). The sender opens NO
+    // fabric connection and sends nothing to anyone; it just reports its placement and exits. The whole
+    // fabric section below is compiled but never reached on the sender (keeps USE_RELAY=0 byte-identical).
+    // NOTE: INIT_ZEROS + USE_RELAY is not a validated combo — our runs use init_zeros=False, so the
+    // INIT_ZEROS reader-barrier signal below (which the sender would otherwise emit post-handshake) is
+    // compiled out. Revisit if INIT_ZEROS is ever enabled with the relay.
+    DEVICE_PRINT(
+        "[cmb-place sender] idx={} logical=({},{}) virt=({},{}) phys_noc0=({},{}) noc1=({},{}) | "
+        "dev_virt=({},{}) dev_logical=({},{}) send_noc={} (idle: fabric endpoint moved to relay)\n",
+        combine_sender_index,
+        self_logical_x,
+        self_logical_y,
+        self_virt_x,
+        self_virt_y,
+        self_phys_noc0_x,
+        self_phys_noc0_y,
+        self_noc1_x,
+        self_noc1_y,
+        (uint32_t)my_x[noc_index],
+        (uint32_t)my_y[noc_index],
+        (uint32_t)get_absolute_logical_x(),
+        (uint32_t)get_absolute_logical_y(),
+        (uint32_t)noc_index);
+    return;
+#endif
+
 #ifdef DEST_CHIP_ID
     constexpr uint32_t total_mesh_devices = mesh_rows * mesh_cols;
     constexpr uint8_t dest_chip_ids[total_mesh_devices] = DEST_CHIP_ID;
