@@ -23,6 +23,11 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
     const auto& b = tensor_args.residual_input_tensor;
     const auto& gamma = tensor_args.weight;
 
+    TT_FATAL(
+        tensor_args.stats.has_value(),
+        "fused_rms_minimal requires a pre-allocated stats tensor; passing stats=None is not supported. It backs "
+        "an internal globally-allocated circular buffer.");
+
     TT_FATAL(a.padded_shape().rank() == 4, "Input shape must be rank 4");
     TT_FATAL(
         a.logical_shape()[0] == 1 && a.logical_shape()[1] == 1 && a.logical_shape()[2] <= 32 &&
@@ -36,6 +41,10 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
         "by the fabric api");
     uint32_t input_width = a.tensor_spec().tile().get_tile_shape()[1];
     uint32_t input_height = a.tensor_spec().tile().get_tile_shape()[0];
+    TT_FATAL(
+        args.output_mem_config.shard_spec().has_value(),
+        "fused_rms_minimal requires a sharded output memory config (width-sharded in L1); an interleaved output "
+        "memory config is not supported.");
     TT_FATAL(
         args.output_mem_config.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
         "Minimal version requires row major sharding orientation");
@@ -57,8 +66,8 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(a.device() == b.value().device(), "device is not same!");
     }
     TT_FATAL(
-        gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR,
-        "RMS all gather requires a weight which is row major");
+        gamma.has_value(), "fused_rms_minimal requires a weight (gamma) tensor; passing weight=None is not supported.");
+    TT_FATAL(gamma.value().layout() == Layout::ROW_MAJOR, "RMS all gather requires a weight which is row major");
 
     if (gamma.has_value()) {
         if (gamma.value().layout() == Layout::TILE) {
