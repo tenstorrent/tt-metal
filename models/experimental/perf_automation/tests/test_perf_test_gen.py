@@ -93,18 +93,35 @@ def test_validation_accepts_and_records_genuine_2cq(tmp_path, monkeypatch):
     assert caps["trace_1cq"] is True and caps["trace_2cq"] is True and caps["trace_2cq_path"] == "trace+2cq"
 
 
-def test_validation_records_2cq_degrade_as_not_capable(tmp_path, monkeypatch):
-    """The core fix: a test that silently DEGRADES to 1CQ under a 2-CQ device is recorded trace_2cq=False
-    — it is NEVER trusted/labelled as a 2CQ measurement downstream."""
+def test_persistent_1cq_is_corrected_not_shipped(tmp_path, monkeypatch):
+    """STRICT: a trace-capable pipeline that only ever degrades to 1CQ is NOT shipped — the loop keeps
+    feeding the failure back to correct it and returns None rather than accept a test that fails 2CQ
+    (it would silently downgrade at the optimize bookend). The degrade is still recorded along the way."""
     demo_rel = _demo(tmp_path)
     monkeypatch.setattr(
         "agent.perf_test_gen._run_perf_node",
         lambda node, env, timeout_s=2400: (0, "TRACE_PER_TOKEN_MS=6.0\nTRACE_REPLAY_PATH=trace+1cq\n"),
     )
     node = generate_perf_test(tmp_path, "text_generation", demo_rel, runner=lambda p: _VALID, force=True, validate=True)
-    assert node is not None
+    assert node is None  # never reached trace+2cq -> not accepted
     caps = _caps(tmp_path)
     assert caps["trace_1cq"] is True and caps["trace_2cq"] is False
+
+
+def test_eager_terminal_pipeline_is_accepted(tmp_path, monkeypatch):
+    """A pipeline that GENUINELY cannot trace (repeat-prefill / no decode_step) is the one legitimate
+    eager terminal — the authoritative TRACE_NOT_TRACE_CAPABLE=1 marker makes it accepted, not looped
+    forever chasing a trace+2cq it can never produce."""
+    demo_rel = _demo(tmp_path)
+    monkeypatch.setattr(
+        "agent.perf_test_gen._run_perf_node",
+        lambda node, env, timeout_s=2400: (
+            0,
+            "FORWARD_WALL_MS=10.0\nTRACE_NOT_TRACE_CAPABLE=1\nTRACE_REPLAY_SKIPPED=NotTraceCapable('repeat-prefill')\n",
+        ),
+    )
+    node = generate_perf_test(tmp_path, "text_generation", demo_rel, runner=lambda p: _VALID, force=True, validate=True)
+    assert node is not None  # eager is legitimate here (authoritative TRACE_NOT_TRACE_CAPABLE marker)
 
 
 def test_validation_skips_when_device_unavailable(tmp_path, monkeypatch):

@@ -141,8 +141,20 @@ def measure_adapter(adapter, device, mode: str = "auto") -> float:
     stage if present, else the whole-pipeline sum). Returns that headline ms.
 
     Raises (propagating to the perf test's guard) if the pipeline has no traceable step at all."""
-    # setup() builds the pipeline + binds stages; raises AttributeError for repeat-prefill pipelines.
-    adapter.setup(device)
+    # setup() builds the pipeline + binds stages. A pipeline that GENUINELY cannot trace (repeat-prefill /
+    # no decode_step) raises NotTraceCapable — the ONE legitimate eager terminal. Emit a STABLE marker so
+    # the generation-time validator can tell this apart from an incidental setup bug (which it must keep
+    # correcting) and accept the eager path, then re-raise so the perf test guard falls to FORWARD_WALL_MS.
+    try:
+        from .perf_adapter import NotTraceCapable
+    except Exception:  # pragma: no cover - perf_adapter always importable alongside this module
+        NotTraceCapable = ()
+    try:
+        adapter.setup(device)
+    except NotTraceCapable as exc:
+        print("TRACE_NOT_TRACE_CAPABLE=1", flush=True)
+        print("TRACE_REPLAY_SKIPPED=%r" % (exc,), flush=True)
+        raise
 
     stages = list(getattr(adapter, "stages", None) or [])
     if not stages:

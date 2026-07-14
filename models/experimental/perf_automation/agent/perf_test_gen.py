@@ -234,7 +234,125 @@ def _write_trace_caps(out_path: Path, caps: dict) -> None:
         pass
 
 
+# The correction loop keeps regenerating until the test is trace+2cq-acceptable (or a legitimate eager
+# terminal). It has NO fixed attempt budget — only a STALL guard: if the LLM fails to make forward
+# progress this many consecutive times, give up rather than spin forever on a pipeline it can't fix.
+_STALL_LIMIT = 6
+
+# Lines from a failing pytest run that are NOISE, not the real error: nanobind/UMD teardown chatter,
+# raw backtraces, python-internal frames. Feeding these back to the LLM as "the error" wastes the
+# correction (verified: a failing run's last 1800 chars were "leaked function" x10, zero error lines).
+_ERR_NOISE = re.compile(
+    r"leaked|nanobind|Backtrace|^\s*\[0x[0-9a-f]+\]|\.so[)\s]|_PyEval|Py_|"
+    r"ttnn/deprecated|site-packages/torch|^\s*File \"|^\s*self\.|^\s*return ",
+    re.IGNORECASE,
+)
+
+
+def _extract_error(out: str) -> str:
+    """Surface the REAL failure from a pytest run so the correction feedback is actionable. Anchor on
+    pytest's own error lines ('E   ...', 'ERROR collecting', assertion/exception summaries) and DROP the
+    teardown/backtrace noise — the LLM fixes the file, not the harness's leaked-function chatter."""
+    if not out:
+        return ""
+    lines = out.splitlines()
+    picked = []
+    for ln in lines:
+        s = ln.strip()
+        if not s or _ERR_NOISE.search(ln):
+            continue
+        if (
+            ln.lstrip().startswith("E ")
+            or ln.lstrip().startswith("E\t")
+            or "ERROR collecting" in ln
+            or re.match(r"^\s*[A-Za-z_][\w.]*Error\b", ln)
+            or "Traceback (most recent call last)" in ln
+            or "assert" in s
+            or "cannot import" in s
+            or "has no attribute" in s
+        ):
+            picked.append(s)
+    tail = "\n".join(picked[-25:]) if picked else ""
+    if not tail:
+        # nothing anchored — fall back to the last few non-noise lines so feedback is never empty.
+        clean = [l.strip() for l in lines if l.strip() and not _ERR_NOISE.search(l)]
+        tail = "\n".join(clean[-12:])
+    return tail[-2000:]
+
+
+def _is_eager_terminal(out: str) -> bool:
+    """A pipeline that GENUINELY cannot be trace-replayed (repeat-prefill / no decode_step) emits the
+    authoritative TRACE_NOT_TRACE_CAPABLE=1 marker (from measure_adapter). That is the ONE legitimate
+    reason a test stays on FORWARD_WALL_MS instead of trace+2cq — accept it, don't keep correcting."""
+    return "TRACE_NOT_TRACE_CAPABLE=1" in (out or "")
+
+
+def _pipeline_api_hint(root: Path, demo_src: str) -> str:
+    """Feed the model's REAL pipeline API (the build_pipeline factory signature + PIPELINE_STAGES) into
+    the prompt so the LLM fills `_build_for_perf` with the actual call, not a guess. Model-agnostic:
+    discovered by scanning the model's own tt/ pipeline modules; empty when there's nothing to surface."""
+    try:
+        sigs, stages_seen = [], False
+        for py in sorted(root.rglob("*.py")):
+            if "/tests/" in py.as_posix() or py.name.startswith("test_"):
+                continue
+            try:
+                txt = py.read_text(errors="ignore")
+            except Exception:  # noqa: BLE001
+                continue
+            for m in re.finditer(r"^def build_pipeline\s*\([^)]*\)", txt, re.MULTILINE):
+                rel = py.relative_to(root).as_posix()
+                sigs.append(f"# {rel}\n{m.group(0)}")
+            if "PIPELINE_STAGES" in txt and not stages_seen:
+                sm = re.search(r"PIPELINE_STAGES\s*=\s*[\[(][^\])]*[\])]", txt)
+                if sm:
+                    sigs.append(sm.group(0))
+                    stages_seen = True
+            if len(sigs) >= 4:
+                break
+        if not sigs:
+            return ""
+        return (
+            "\n\nMODEL PIPELINE API (use the ACTUAL factory below in `_build_for_perf` — do not invent a "
+            "signature; import it from the module shown and pass `dev` + the same build args):\n"
+            + "\n".join(sigs[:4])
+            + "\n"
+        )
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _correction_feedback(reason: str, failure: str, prev_draft: str | None) -> str:
+    """Build the correction addendum appended to the prompt for the NEXT attempt: the reason the last
+    draft was rejected, the REAL extracted error, and the LLM's own previous draft so it EDITS the
+    failing file instead of rewriting blind. This is what makes the loop converge rather than churn."""
+    parts = [
+        "\n\n=== CORRECTION — your previous draft was REJECTED. Fix it; do not start over blindly. ===",
+        f"REASON: {reason}",
+    ]
+    err = _extract_error(failure)
+    if err:
+        parts.append(f"REAL ERROR (fix THIS, ignore any leaked-function/backtrace teardown noise):\n{err}")
+    if prev_draft:
+        parts.append(
+            "YOUR PREVIOUS DRAFT (edit it to fix the error above; keep the parts that worked):\n"
+            f"```python\n{prev_draft[-6000:]}\n```"
+        )
+    parts.append("Return ONLY the corrected complete python file content — no prose, no markdown fences.")
+    return "\n".join(parts)
+
+
 def validate_generated_perf_test(out_path: Path, task: str) -> tuple[str, str]:
+    """Execute the freshly-generated perf test and JUDGE it, model- and hardware-agnostically:
+      skip      device/ttnn unavailable at generation time -> soft-accept (never a false rejection)
+      ok_2cq    the 2-CQ probe genuinely engaged (TRACE_REPLAY_PATH=trace+2cq) -> ship it
+      ok_marker the pipeline GENUINELY cannot trace (TRACE_NOT_TRACE_CAPABLE=1) -> the one legit eager
+                terminal, ship it on FORWARD_WALL_MS rather than loop forever chasing a trace it can't do
+      invalid   ran but produced no full-pipeline marker, OR is trace-capable yet only degraded to 1cq
+                -> NOT shipped; the caller keeps correcting until it reaches trace+2cq.
+    The 2-CQ run must run TWICE across the optimize loop (baseline + final bookend) WITHOUT degrading, so
+    a test that can't hold trace+2cq here is rejected NOW rather than silently downgraded later. Records
+    what it saw in the trace_caps sidecar either way. Second return value is the failure detail fed back."""
     node_abs = f"{out_path}::test_{task}_perf"
     rc1, out1 = _run_perf_node(node_abs, {"TT_PERF_NUM_CQ": "1"})
     if rc1 is None:
@@ -244,20 +362,36 @@ def validate_generated_perf_test(out_path: Path, task: str) -> tuple[str, str]:
         return "skip", "device/ttnn unavailable during generation-time validation"
     has_marker = ("TRACE_PER_TOKEN_MS=" in out1) or ("FORWARD_WALL_MS=" in out1)
     if rc1 != 0 or not has_marker:
-        return "invalid", "perf test did not run the full pipeline (no TRACE_PER_TOKEN_MS / FORWARD_WALL_MS marker)"
+        return "invalid", (
+            _extract_error(out1)
+            or "perf test did not run the full pipeline (no TRACE_PER_TOKEN_MS / FORWARD_WALL_MS marker)"
+        )
+    eager = _is_eager_terminal(out1)
     caps = {
         "trace_1cq": "TRACE_PER_TOKEN_MS=" in out1,
         "trace_1cq_path": _parse_trace_path(out1),
         "trace_2cq": False,
         "trace_2cq_path": None,
+        "eager_terminal": eager,
     }
+    if eager:
+        _write_trace_caps(out_path, caps)
+        return "ok_marker", ""
     rc2, out2 = _run_perf_node(node_abs, {"TT_PERF_NUM_CQ": "2"})
-    if rc2 == 0 and "TRACE_PER_TOKEN_MS=" in out2:
-        path2 = _parse_trace_path(out2)
-        caps["trace_2cq_path"] = path2
-        caps["trace_2cq"] = path2 == "trace+2cq"
+    path2 = _parse_trace_path(out2) if rc2 == 0 and "TRACE_PER_TOKEN_MS=" in out2 else None
+    caps["trace_2cq_path"] = path2
+    caps["trace_2cq"] = path2 == "trace+2cq"
+    if _is_eager_terminal(out2):
+        caps["eager_terminal"] = True
+        _write_trace_caps(out_path, caps)
+        return "ok_marker", ""
     _write_trace_caps(out_path, caps)
-    return "ok", ""
+    if caps["trace_2cq"]:
+        return "ok_2cq", ""
+    return "invalid", (
+        f"trace-capable pipeline degraded to 1cq (path={path2 or _parse_trace_path(out1)}); the 2-CQ "
+        "overlap never engaged, so it would silently downgrade at the optimize bookend. " + (_extract_error(out2) or "")
+    )
 
 
 def generate_perf_test(
@@ -403,6 +537,7 @@ def generate_perf_test(
             "Reuse their imports/constants (config builders, MESH_DEVICE_PARAMETRIZE_*, helpers) verbatim:\n"
             f"{inproc_ctx}\n"
         )
+    prompt += _pipeline_api_hint(root, demo_src)
     prompt += (
         "\n\nDo NOT use any tools and do NOT try to write the file yourself — the caller writes it. "
         "Respond with ONLY the complete python file content as your message text — no prose, no markdown fences."
@@ -415,25 +550,61 @@ def generate_perf_test(
     gen = runner or _claude
     if validate is None:
         validate = runner is None
-    # retry so a transient bad/partial draft is recomputed rather than dropped; never reuse existing.
-    for _attempt in range(3):
-        content = _strip_fence(gen(prompt) or "")
+    # CORRECTION LOOP — no fixed attempt budget. Keep regenerating until the test is trace+2cq-acceptable
+    # (or a legitimate eager terminal), feeding the REAL error + the LLM's own previous draft back each
+    # round so it EDITS the failing file rather than rewriting blind. Terminate only on acceptance or on
+    # a STALL (no forward progress _STALL_LIMIT times running) — never ship a test that fails 2cq. This is
+    # fully model- and hardware-agnostic: the verdicts come from what the pipeline actually did on device.
+    feedback = ""
+    prev_draft = None
+    stall = 0
+    while stall < _STALL_LIMIT:
+        content = _strip_fence(gen(prompt + feedback) or "")
         if "def test_" not in content or "ttnn" not in content:
+            stall += 1
+            feedback = _correction_feedback(
+                "draft was not a complete python perf test (missing `def test_` or `ttnn`)", "", prev_draft
+            )
             continue
         if re.search(
             r"import\s+subprocess|subprocess\.|\bPopen\s*\(|os\.system\s*\(|os\.popen\s*\(|"
             r"-m['\"]\s*,\s*['\"]pytest|python\s+-m\s+pytest",
             content,
         ):
+            stall += 1
+            feedback = _correction_feedback(
+                "draft shelled out (subprocess/Popen/os.system/python -m pytest) — tracy can't profile "
+                "child-process ops. Run the device forward IN-PROCESS.",
+                "",
+                content,
+            )
+            prev_draft = content
             continue
         if demo_is_generative and "TT_PERF_MAX_NEW_TOKENS" not in content:
+            stall += 1
+            feedback = _correction_feedback(
+                "generative pipeline but the test omits the decode-loop cap (TT_PERF_MAX_NEW_TOKENS) — it "
+                "would profile a prefill-only slice. Add the capped decode loop.",
+                "",
+                content,
+            )
+            prev_draft = content
             continue
+        prev_draft = content
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(content)
-        if validate:
-            verdict, reason = validate_generated_perf_test(out_path, task)
-            if verdict == "invalid":
-                print(f"[perf_test_gen] draft rejected (regenerating): {reason}", flush=True)
-                continue
-        return node
+        if not validate:
+            return node
+        verdict, failure = validate_generated_perf_test(out_path, task)
+        if verdict in ("ok_2cq", "ok_marker", "skip"):
+            return node
+        stall += 1
+        print(f"[perf_test_gen] draft rejected (correcting, stall {stall}/{_STALL_LIMIT}): {failure[:200]}", flush=True)
+        reason = (
+            "the test ran but never held trace+2cq (it degraded to 1cq); the 2-CQ input overlap must "
+            "engage so the optimize bookend doesn't silently downgrade"
+            if "degraded to 1cq" in failure
+            else "the test did not run the full pipeline / errored"
+        )
+        feedback = _correction_feedback(reason, failure, prev_draft)
     return None

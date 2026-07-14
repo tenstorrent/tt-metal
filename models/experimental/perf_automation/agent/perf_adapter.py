@@ -36,6 +36,16 @@ import os
 from typing import Callable
 
 
+class NotTraceCapable(AttributeError):
+    """A pipeline that GENUINELY cannot be trace-replayed (repeat-prefill / host-argmax decode, no
+    decode_step and no PIPELINE_STAGES). Subclasses AttributeError so existing `except AttributeError`
+    fallbacks still catch it, but the distinct type lets measure_adapter emit a STABLE, authoritative
+    TRACE_NOT_TRACE_CAPABLE=1 marker — the ONE legitimate eager terminal — instead of being confused
+    with an incidental setup/attribute failure (a real bug) that the generation loop must keep
+    correcting. Model- and hardware-agnostic: it is about the pipeline's decode contract, not any
+    specific model or board."""
+
+
 def resolve_mesh_shape(default_rows: int = 1, default_cols: int = 1) -> tuple[int, int]:
     """The topology the run should open, as (rows, cols). optimize/emit-e2e export the planned split
     (plan_parallelism -> TP x DP) into TT_PERF_MESH_ROWS/COLS; a model's device-open (or the generated
@@ -72,7 +82,7 @@ class PipelineDecodeAdapter:
         self._pipe = self._build(device)
         step = getattr(self._pipe, "decode_step", None)
         if not callable(step):
-            raise AttributeError(
+            raise NotTraceCapable(
                 "pipeline exposes no decode_step(state); its decode is repeat-prefill — "
                 "run the structural decode lever to add a cached single-token step"
             )
@@ -167,7 +177,7 @@ class PipelineStageAdapter:
         # Fallback: older single-stage decode contract wrapped as one "decode" stage.
         step = getattr(p, "decode_step", None)
         if not callable(step):
-            raise AttributeError(
+            raise NotTraceCapable(
                 "pipeline exposes neither PIPELINE_STAGES trace hooks nor decode_step(state); "
                 "its decode is repeat-prefill — run the structural decode lever to add a cached step"
             )

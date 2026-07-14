@@ -69,14 +69,16 @@ LEAVE CLEAN (commit wins, revert in-progress edits); end with git_head. Report s
 
 
 def _visible_devices(devices: str) -> str | None:
-    """Translate the --devices spec to a TT_VISIBLE_DEVICES value the same way before_loop does (UMD
-    wants explicit ids or the var UNSET): 'single' -> '0', 'all'/'' -> None (all chips visible, var
-    left unset), explicit ids ('0,1,2,3') pass through. Setting the literal 'all'/'single' breaks UMD."""
-    if not devices or devices == "all":
-        return None
-    if devices == "single":
-        return "0"
-    return devices
+    """DEVICE VISIBILITY IS INTENTIONALLY NEVER RESTRICTED — this is what makes the tool chip-count /
+    hardware agnostic. Pinning TT_VISIBLE_DEVICES to a chip SUBSET ('single' -> '0', '0,1', ...) makes
+    tt-metal's fabric auto-discovery classify the board as a CUSTOM cluster and fatally demand a
+    mesh-graph-descriptor path that we don't provide — so a subset spec crashes device/fabric init
+    (before any forward) on any multi-chip board. The full physical topology must stay visible so
+    auto-discovery works for single | all | explicit-ids alike. HOW MANY chips a run actually uses is
+    controlled by the mesh SHAPE (TT_PERF_MESH_ROWS/COLS via _derive_topology_env + resolve_mesh_shape),
+    which is the chip-count-agnostic lever. Hence: always None (leave TT_VISIBLE_DEVICES unset)."""
+    _ = devices  # spec informs the mesh shape, not OS-level visibility (which would break fabric)
+    return None
 
 
 def cc_env(repo_root: Path, devices: str) -> dict:
@@ -1047,9 +1049,7 @@ def run_cc_optimize(
     for pipe in pipes:
         print(f"  [optimize/cc] === optimizing pipeline: {pipe['task']} ===")
         try:
-            results.append(
-                optimize_pipeline(repo_root, manifest_path, pipe, devices, metric, model_name, max_rounds)
-            )
+            results.append(optimize_pipeline(repo_root, manifest_path, pipe, devices, metric, model_name, max_rounds))
         except Exception as exc:  # noqa: BLE001 — never let one pipeline's crash kill the whole run silently
             _print_optimize_stop(pipe, exc)
             results.append(None)

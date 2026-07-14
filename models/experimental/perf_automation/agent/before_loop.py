@@ -219,20 +219,16 @@ def before_loop(
     stages.done(f"{env['card']} · {env['arch']} · {env['worker_cores']} cores")
 
     devices = str(config.get("devices") or "single")
-    if devices == "single":
-        visible = "0"
-    elif devices == "all":
-        visible = None
-    else:
-        visible = devices
+    # DEVICE VISIBILITY IS INTENTIONALLY NEVER RESTRICTED (chip-count / hardware agnostic): pinning
+    # TT_VISIBLE_DEVICES to a chip SUBSET makes fabric auto-discovery classify the board as a CUSTOM
+    # cluster and fatally demand a mesh-graph descriptor we don't provide — crashing device/fabric
+    # init before any forward on any multi-chip board. Leave the full topology visible; the mesh
+    # SHAPE (TT_PERF_MESH_ROWS/COLS) is the chip-count lever, not OS-level visibility.
+    visible = None
     sub_env = dict(os.environ)
-    if visible is not None:
-        # TT_VISIBLE_DEVICES is the UMD-level var the fabric/topology mapper
-        # honors (verified on 4xn300: the TT_METAL_* one alone does NOT gate
-        # topology discovery). Set both for safety.
-        sub_env["TT_VISIBLE_DEVICES"] = visible
-        sub_env["TT_METAL_VISIBLE_DEVICES"] = visible
-    config["visible_devices"] = visible
+    sub_env.pop("TT_VISIBLE_DEVICES", None)
+    sub_env.pop("TT_METAL_VISIBLE_DEVICES", None)
+    config["visible_devices"] = None
     print(
         f"      devices={devices} -> TT_VISIBLE_DEVICES="
         f"{visible if visible is not None else '(unset: full fabric)'}",
@@ -711,8 +707,10 @@ def main(argv: list[str] | None = None) -> int:
             from .probes import make_run_profiled, preflight_collect
 
             tt_root = os.environ.get("TT_METAL_HOME", str(PKG_ROOT.parents[2]))
-            visible = "0" if args.devices == "single" else (None if args.devices == "all" else args.devices)
-            xenv = {"TT_VISIBLE_DEVICES": visible, "TT_METAL_VISIBLE_DEVICES": visible} if visible is not None else {}
+            # Visibility is NEVER restricted (see the devices block above): a chip-subset pin crashes
+            # fabric auto-discovery on multi-chip boards. Chip count is driven by the mesh shape, not
+            # OS visibility, so pass no visibility override here regardless of --devices.
+            xenv = {}
             factory = lambda perf, case: make_run_profiled(tt_root, perf, case, timeout_s=args.timeout, extra_env=xenv)
             preflight = preflight_collect
             from .probes import collect_cases as collect
