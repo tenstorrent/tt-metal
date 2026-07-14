@@ -1,0 +1,15 @@
+# Single BH Loudbox (8x p150) exposed as one 1x8 LINE mesh spanning 2 host
+# ranks on the same physical host (host rank 0 owns devices 0-3, host rank 1
+# owns devices 4-7). Used to exercise the multi-process distributed-context /
+# control-plane bringup on a single loudbox (e.g. with the ZMQ backend).
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 1, 8 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 2 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
