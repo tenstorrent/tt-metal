@@ -573,6 +573,24 @@ no gate does not ship.** Measure on the block harness (`test_ltx_transformer_blo
         a2v     (video Q)   334.8 → 228.0 = **−106.8 µs**   v2a (≈ attn2_a shape)             = **−29.5 µs**
       ⇒ **−352.6 µs/block traced** over the 6 attentions ≈ **−16.9 ms/step at S1** across 48 blocks. **Bank THIS
       number: production runs traced.**
+      **✅ CONFIRMED END-TO-END IN THE TRACED PIPELINE — the only regime that ships (jobs 131/134, `STEP_MS` from
+      `test_pipeline_ltx_distilled`, LTX_TRACED=1, denoise-only, SEED=10, `opt/w1_traced_dedup{0,1}.log`,
+      `opt/w1_traced_dedup0_drift.log`). This is the number to quote; everything above it is bottom-up estimate.**
+        S1 (vN=9728, 48 blocks)   346.85 ±0.11 (n=15) → **332.59 ±0.22 (n=15)** = **−14.26 ms/step, −4.11%** [221σ]
+        S2 (vN=38912, 48 blocks) 1089.58 ±0.82 (n=5)  → **1045.02 ±0.78 (n=5)**  = **−44.56 ms/step, −4.09%** [88σ]
+      ⇒ over the shipped 8×S1 + 3×S2 schedule: **−248 ms of denoise, banked.**
+      **DRIFT CONTROL (the confound that would have voided this):** the OFF arm was re-run AFTER a full board reset
+      that sat between the two arms. OFF pre-reset 346.66 vs OFF post-reset 346.85 = **+0.18 ms (+0.05%)** ⇒ the
+      reset is worth nothing and the −14.26 ms is the flag, not a fresh board. Both decisive arms ran one identical
+      source (`attention_ltx.py` mtime 01:38:32 < both runs; tree == HEAD).
+      **⚠ THE EAGER HARNESS OVERSTATED THE ABSOLUTE WIN 5×, AND ONLY LOOKED RIGHT BY COINCIDENCE.** Eager said
+      −1.54 ms/block; traced delivers **−0.297 ms/block** (14.26/48). ~81% of the eager win was host-dispatch that
+      trace replays for free. The *percentages* happen to agree (−3.6% eager vs −4.11% traced) **only because eager's
+      total is ~6× the traced total** — so a reviewer who banked the eager % got the right verdict for the wrong
+      reason. On a lever with a smaller device component that same coincidence would have shipped a zero.
+      **Bottom-up vs top-down:** the op-level slope sum predicted −16.9 ms/step at S1; E2E realizes −14.26 ms (84%).
+      The per-attention pricing is a *ceiling* — it prices ops in isolation and does not fully transfer. Discount
+      op-level sums ~15% before promising them.
       **Eager block harness (`WARM_FWD_MS`, AV, real 22B ckpt, ring_bh_4x8sp1tp0/stage_1): −1.5 to −1.8 ms/block** —
       i.e. LARGER than the traced saving, because an eager forward pays full per-op latency with no dispatch overlap.
       Do not quote the eager number as the production win. In-process A/B (job 101: one block, one weight load, flag
