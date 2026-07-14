@@ -6,10 +6,13 @@
 # logic is validated independently of the resident backbone. The device adapter
 # (make_backbone_logits_fn) is exercised separately on-box.
 #
+# Excluded from on-device PCC sweeps via @pytest.mark.unit_host.
+#
 # Run:
 #   python_env/bin/python -m pytest \
 #     models/experimental/hunyuan_image_3_0/tests/pcc/test_generate.py -v -s
 
+import pytest
 import torch
 
 from models.experimental.hunyuan_image_3_0.tt.generate import (
@@ -19,6 +22,9 @@ from models.experimental.hunyuan_image_3_0.tt.generate import (
 )
 
 V = 64
+
+
+pytestmark = pytest.mark.unit_host
 
 
 def const_logits_fn(token_logits):

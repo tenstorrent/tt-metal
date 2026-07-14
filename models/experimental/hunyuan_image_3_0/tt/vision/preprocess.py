@@ -23,6 +23,7 @@
 # single conditioning image occupies a contiguous, TILE-aligned (1024 = 32*32) span
 # of `<img>` tokens — exactly what the device concat scatter handles.
 
+import torch
 import ttnn
 
 from models.experimental.hunyuan_image_3_0.ref.vision.preprocess import (
@@ -53,7 +54,21 @@ def to_vision_inputs(device, pixel_values, spatial_shapes_hw, pixel_attention_ma
 
     Mirrors the upload pattern in `tests/vision/conftest.py` (bf16 TILE on DRAM); the
     4D additive attention mask is built on device inside the vision tower.
+    Accepts either batched ``[B, S, ...]`` / ``((h, w), ...)`` or a single-image
+    unbatched ``[S, ...]`` / ``(h, w)`` and normalizes to batched form.
     """
+    if isinstance(pixel_values, torch.Tensor) and pixel_values.ndim == 2:
+        pixel_values = pixel_values.unsqueeze(0)
+    if isinstance(pixel_attention_mask, torch.Tensor) and pixel_attention_mask.ndim == 1:
+        pixel_attention_mask = pixel_attention_mask.unsqueeze(0)
+    # Bare (h, w) -> ((h, w),) for Siglip2VisionInputs / pos-embed resize.
+    if (
+        isinstance(spatial_shapes_hw, tuple)
+        and len(spatial_shapes_hw) == 2
+        and not isinstance(spatial_shapes_hw[0], tuple)
+    ):
+        spatial_shapes_hw = (spatial_shapes_hw,)
+
     # ttnn.from_torch casts the source dtype (float32 pixels / int32 mask) to bf16.
     pv = ttnn.from_torch(
         pixel_values,
