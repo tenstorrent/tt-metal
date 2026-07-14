@@ -1010,8 +1010,26 @@ class LTXDistilledPipeline(LTXPipeline):
         timings.append(("VAE decode", t_vae_decode))
         logger.info(f"VAE decode (forward): {t_vae_decode:.1f}s — {tuple(video_pixels.shape)}")
 
+        # LTX_DUMP_FRAMES writes the exact (F,H,W,C) uint8 tensor the H.264 export would quantize.
+        # A pixel-level A/B read back from the mp4 measures the codec as much as the model; this
+        # lands the frames losslessly so the comparison sees only the model. Out-of-place: float()
+        # is a no-op view when video_pixels is already float32, so an in-place rescale here would
+        # corrupt the tensor the export below still needs.
+        dump_path = os.environ.get("LTX_DUMP_FRAMES", "").strip()
+        if dump_path:
+            frames_u8 = ((video_pixels[0].float() + 1.0) * 127.5).clamp(0.0, 255.0)
+            torch.save(frames_u8.to(torch.uint8).permute(1, 2, 3, 0).contiguous().cpu(), dump_path)
+            logger.info(f"LTX_DUMP_FRAMES: wrote raw frames to {dump_path}")
+
+        # The vocoder decodes s2_audio, a separate latent from the s2_video that produced
+        # video_pixels above, so LTX_VIDEO_ONLY cannot perturb a single pixel — it only drops the
+        # eager vocoder decode, which is trace-hidden in production but costs minutes untraced.
         t0 = time.time()
-        audio_obj = self.decode_audio(s2_audio, num_frames, fps=fps)
+        if os.environ.get("LTX_VIDEO_ONLY", "0") in ("1", "true", "True"):
+            audio_obj = None
+            logger.info("LTX_VIDEO_ONLY=1: skipping audio decode (video pixels unaffected)")
+        else:
+            audio_obj = self.decode_audio(s2_audio, num_frames, fps=fps)
         t_audio_decode = time.time() - t0
         timings.append(("Audio decode", t_audio_decode))
         logger.info(f"Audio decode: {t_audio_decode:.1f}s")
