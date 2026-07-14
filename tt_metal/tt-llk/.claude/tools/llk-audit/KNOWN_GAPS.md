@@ -163,6 +163,27 @@ are NOT recalled: `RISCV_TDMA_REG_XMOV_SRC_ADDR` / `_DST_ADDR` / `_XMOV_SIZE` / 
 - **Fix hazard:** FALSE-FLAG / baseline churn — surfacing 5 more XMOV writes per arch as config-write
   candidates when the Mover-ordering hazard is unconfirmed would over-flag; ground the ordering first → deferred.
 
+### L9 — mmio-race SKILL enumeration grep misses a multi-line `cfg[...] =` write (LLM floor)
+The `/mmio-race-audit` skill's `grep` floor requires `cfg[...] =` and the `=` to be followed by a
+non-`=` char ON THE SAME LINE (`\]\s*=[^=]`). A write whose RHS wraps to the next line (`cfg[FIELD_ADDR32]
+=` then the value on the following line) is missed on the write-LINE. Live: `tt_llk_wormhole_b0/common/
+inc/cunpack_common.h:801/805`, `tt_llk_blackhole/common/inc/cunpack_common.h:818/822`.
+- **Risk:** CAP-REDUCTION on the LLM enumeration floor (the TOOL still recalls these; this is the skill
+  grep only). Marginal — the enclosing functions ARE reached via the grep's `get_cfg_pointer` alternative
+  (`cfg = get_cfg_pointer()` on the decl line), so the LLM lands in the function anyway; only the specific
+  write-line prints elsewhere.
+- **Fix:** add a `\]\s*=\s*$` alternative (or run the grep with `-A1`). Deferred — LOW (indirectly
+  covered), and a bare `=\s*$` risks matching non-cfg wrapped assignments; not worth the noise today.
+
+### L10 — `CFG_VAR_NAME_HINTS` classification depends on dict insertion order
+`classify_write`'s `var`-provenance branch iterates `CFG_VAR_NAME_HINTS` and returns on the first
+substring hit. `mop_cfg` is a superset of `cfg`, so the table MUST list `mop_cfg`→`mmio_ptr` BEFORE
+`cfg`→`cfg_ptr` (it does today; Python 3.7+ preserves insertion order). A reorder would silently
+misclassify a `mop_cfg`-named pointer as `cfg_ptr`.
+- **Risk:** latent FALSE-FLAG/misclass if the table is reordered — none today (order is correct).
+- **Fix:** order the checks most-specific-first explicitly (or assert the ordering) instead of relying on
+  literal insertion order. Deferred — LOW (works today; a one-line maintenance hardening).
+
 ### X1 — object-method `async_read_with_state` not recalled by `noc_is_read`
 `noc_is_read` recalls the whole free-function `noc_async_read*` family by prefix, but its
 object-method branch matches only the exact name `async_read` — so the object form
