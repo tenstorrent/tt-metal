@@ -132,6 +132,19 @@ class Cosmos3OmniTransformer(Module):
             if enable_proj_in
             else None
         )
+        # proj_in is [192→5120]: CPU bfloat16 matmul uses float32 accumulators, so the
+        # device must match with HiFi4 to avoid RMSE drift that compounds over 64 layers.
+        self._proj_in_compute_kernel_config = (
+            ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            )
+            if enable_proj_in
+            else None
+        )
         self.proj_out = (
             Linear(hidden_size, patch_latent_dim, bias=True, mesh_device=mesh_device, dtype=dtype)
             if enable_proj_out
@@ -193,7 +206,7 @@ class Cosmos3OmniTransformer(Module):
         # multiply by 0, noisy rows by 1. Uses matmul (K=1) instead of ttnn.multiply because
         # ttnn.multiply's 2D broadcast ([1,1,1,H] × [1,1,N,1]) corrupts tile boundaries.
         if self.proj_in is not None:
-            gen_seq = self.proj_in(gen_seq)
+            gen_seq = self.proj_in(gen_seq, compute_kernel_config=self._proj_in_compute_kernel_config)
             if time_embed is not None and noisy_mask_gen is not None:
                 gen_seq = ttnn.add(gen_seq, ttnn.matmul(noisy_mask_gen, time_embed))
 
