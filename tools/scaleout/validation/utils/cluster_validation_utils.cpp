@@ -901,7 +901,8 @@ void print_ethernet_connectivity(
 void log_link_metrics(
     const std::vector<EthernetLinkMetrics>& link_metrics,
     const std::filesystem::path& output_path,
-    bool log_ethernet_metrics) {
+    bool log_ethernet_metrics,
+    const PhysicalSystemDescriptor& physical_system_descriptor) {
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
 
     if (*distributed_context.rank() != 0) {
@@ -990,6 +991,76 @@ void log_link_metrics(
         }
     }
 
+    // Resolve the connected (peer) endpoint for each link so the report can show the full
+    // host <-> host link, not just the local side. The link metrics only carry the local
+    // endpoint, so we look up the peer from the PhysicalSystemDescriptor's ASIC topology.
+    // Datacenter location fields (aisle/rack/shelf_u) are intentionally omitted: they are not
+    // available from the runtime PhysicalSystemDescriptor (querying them throws).
+    auto port_info_map = generate_port_info(physical_system_descriptor);
+    const auto& asic_descriptors = physical_system_descriptor.get_asic_descriptors();
+    const auto& asic_connectivity_graph = physical_system_descriptor.get_system_graph().asic_connectivity_graph;
+
+    struct PeerEndpoint {
+        bool found = false;
+        std::string host;
+        uint32_t tray_id = 0;
+        uint32_t asic_location = 0;
+        uint8_t channel = 0;
+        tt::scaleout_tools::PortType port_type = tt::scaleout_tools::PortType::UNKNOWN;
+        uint32_t port_id = 0;
+    };
+
+    auto find_peer = [&](const EthChannelIdentifier& id) -> PeerEndpoint {
+        PeerEndpoint peer;
+        auto host_it = asic_connectivity_graph.find(id.host);
+        if (host_it == asic_connectivity_graph.end()) {
+            return peer;
+        }
+        auto asic_it = host_it->second.find(id.asic_id);
+        if (asic_it == host_it->second.end()) {
+            return peer;
+        }
+        for (const auto& [dst_asic_id, eth_connections] : asic_it->second) {
+            for (const auto& eth_conn : eth_connections) {
+                if (eth_conn.src_chan != id.channel) {
+                    continue;
+                }
+                auto desc_it = asic_descriptors.find(dst_asic_id);
+                if (desc_it == asic_descriptors.end()) {
+                    return peer;
+                }
+                peer.found = true;
+                peer.host = physical_system_descriptor.get_host_name_for_asic(dst_asic_id);
+                peer.tray_id = *desc_it->second.tray_id;
+                peer.asic_location = *desc_it->second.asic_location;
+                peer.channel = eth_conn.dst_chan;
+                auto pim_it = port_info_map.find(dst_asic_id);
+                if (pim_it != port_info_map.end()) {
+                    auto ch_it = pim_it->second.find(eth_conn.dst_chan);
+                    if (ch_it != pim_it->second.end()) {
+                        peer.port_type = ch_it->second.port_type;
+                        peer.port_id = *ch_it->second.port_id;
+                    }
+                }
+                return peer;
+            }
+        }
+        return peer;
+    };
+
+    auto format_endpoint = [](const std::string& host,
+                              uint32_t tray_id,
+                              uint32_t asic_location,
+                              uint8_t channel,
+                              tt::scaleout_tools::PortType port_type,
+                              uint32_t port_id) {
+        std::stringstream ss;
+        ss << "PhysicalPortEndpoint{hostname='" << host << "', tray_id=" << tray_id
+           << ", asic_location=" << asic_location << ", port_type=" << enchantum::to_string(port_type)
+           << ", port_id=" << port_id << ", channel=" << static_cast<int>(channel) << "}";
+        return ss.str();
+    };
+
     // Print console table
     std::cout << std::endl;
     std::cout << "╔═══════════════════════════════════════════════════════════════════════════════════════════════════╗"
@@ -1076,6 +1147,33 @@ void log_link_metrics(
 
     std::cout << std::string(log_ethernet_metrics ? 177 : 217, '-') << std::endl << std::endl;
 
+    // For the faulty links report, also print each link as a full local <-> connected endpoint
+    // pair so operators can see which host/port sits on the other side of each faulty cable
+    // without cross-referencing the connectivity dump.
+    if (!log_ethernet_metrics) {
+        std::cout << "Faulty Link Endpoints (Local <-> Connected):" << std::endl;
+        for (const auto& row : metric_rows) {
+            auto local_port_type = static_cast<tt::scaleout_tools::PortType>(row.channel_id.port_type);
+            std::string local_str = format_endpoint(
+                row.channel_id.host,
+                *row.channel_id.tray_id,
+                *row.channel_id.asic_location,
+                row.channel_id.channel,
+                local_port_type,
+                row.channel_id.port_id);
+
+            PeerEndpoint peer = find_peer(row.channel_id);
+            std::string peer_str =
+                peer.found
+                    ? format_endpoint(
+                          peer.host, peer.tray_id, peer.asic_location, peer.channel, peer.port_type, peer.port_id)
+                    : std::string("PhysicalPortEndpoint{UNKNOWN}");
+
+            std::cout << "  - " << local_str << " <-> " << peer_str << std::endl;
+        }
+        std::cout << std::endl;
+    }
+
     // Write CSV file
     std::filesystem::path csv_path =
         log_ethernet_metrics ? output_path / "ethernet_metrics_report.csv" : output_path / "unhealthy_links_report.csv";
@@ -1087,9 +1185,14 @@ void log_link_metrics(
         if (!log_ethernet_metrics) {
             csv_file << ",Failure_Type";
         }
-        csv_file << ",Packet_Size_Bytes,Data_Size_Bytes,"
-                 << "Retrain_Count,CRC_Error_Count,Corrected_Codeword_Count,Uncorrected_Codeword_Count,Mismatched_Words"
-                 << std::endl;
+        csv_file
+            << ",Packet_Size_Bytes,Data_Size_Bytes,"
+            << "Retrain_Count,CRC_Error_Count,Corrected_Codeword_Count,Uncorrected_Codeword_Count,Mismatched_Words";
+        if (!log_ethernet_metrics) {
+            csv_file << ",Connected_Host,Connected_Tray,Connected_ASIC,Connected_Channel,Connected_Port_Type,"
+                        "Connected_Port_ID";
+        }
+        csv_file << std::endl;
 
         // CSV rows
         for (const auto& row : metric_rows) {
@@ -1106,7 +1209,18 @@ void log_link_metrics(
                      << "0x" << std::hex << row.crc_error_count << std::dec << ","
                      << "0x" << std::hex << row.corrected_codeword_count << std::dec << ","
                      << "0x" << std::hex << row.uncorrected_codeword_count << std::dec << ","
-                     << row.num_mismatched_words << std::endl;
+                     << row.num_mismatched_words;
+            if (!log_ethernet_metrics) {
+                PeerEndpoint peer = find_peer(row.channel_id);
+                if (peer.found) {
+                    csv_file << "," << peer.host << "," << peer.tray_id << "," << peer.asic_location << ","
+                             << static_cast<int>(peer.channel) << "," << enchantum::to_string(peer.port_type) << ","
+                             << peer.port_id;
+                } else {
+                    csv_file << ",UNKNOWN,,,,,";
+                }
+            }
+            csv_file << std::endl;
         }
 
         csv_file.close();
@@ -1131,9 +1245,17 @@ void handle_workload_timeout(
     dump_link_stats(ctx, inputs, statuses_per_link, data_size, packet_size_bytes);
     auto current_result = process_link_statuses(statuses_per_link, true);
     if (log_ethernet_metrics) {
-        log_link_metrics(current_result.all_link_metrics, std::filesystem::current_path(), true /*log_all_metrics*/);
+        log_link_metrics(
+            current_result.all_link_metrics,
+            std::filesystem::current_path(),
+            true /*log_all_metrics*/,
+            ctx.physical_system_descriptor);
     }
-    log_link_metrics(current_result.unhealthy_links, std::filesystem::current_path(), false /*log_all_metrics*/);
+    log_link_metrics(
+        current_result.unhealthy_links,
+        std::filesystem::current_path(),
+        false /*log_all_metrics*/,
+        ctx.physical_system_descriptor);
 
     if (validation_config.cabling_descriptor_path.has_value() || validation_config.fsd_path.has_value()) {
         log_output_rank0("Re-running discovery to check for link failures");
@@ -1681,9 +1803,14 @@ bool generate_link_metrics(
     // Log metrics
     if (log_ethernet_metrics) {
         // Log all ethernet metrics
-        log_link_metrics(result.all_link_metrics, validation_config.output_path, true /*log_all_metrics*/);
+        log_link_metrics(
+            result.all_link_metrics,
+            validation_config.output_path,
+            true /*log_all_metrics*/,
+            physical_system_descriptor);
     }
-    log_link_metrics(result.unhealthy_links, validation_config.output_path, false /*log_all_metrics*/);
+    log_link_metrics(
+        result.unhealthy_links, validation_config.output_path, false /*log_all_metrics*/, physical_system_descriptor);
     return result.unhealthy_links.empty();
 }
 
