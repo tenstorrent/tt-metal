@@ -1,0 +1,76 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <variant>
+
+#include "ttnn/tensor/tensor.hpp"
+
+#include "reduce_op_device_operation_types.hpp"
+#include "tt_stl/reflection.hpp"
+#include "ttnn/types.hpp"
+#include "ttnn/device_operation.hpp"
+#include <tt-metalium/program_descriptors.hpp>
+
+namespace ttnn::prim::qsr {
+
+struct ReduceDeviceOperation {
+    using operation_attributes_t = ReduceParams;
+    using tensor_args_t = Tensor;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
+
+    struct ReduceSingleCoreHwProgramFactory {
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
+    struct ReduceMultiCoreHProgramFactory {
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
+    struct ReduceMultiCoreWProgramFactory {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
+    using program_factory_t =
+        std::variant<ReduceSingleCoreHwProgramFactory, ReduceMultiCoreHProgramFactory, ReduceMultiCoreWProgramFactory>;
+
+    static program_factory_t select_program_factory(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static void validate_on_program_cache_miss(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static spec_return_value_t compute_output_specs(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+};
+
+ttnn::Tensor reduce(
+    const Tensor& input_tensor,
+    tt::tt_metal::ReduceOpMath reduce_math,
+    tt::tt_metal::ReduceOpDim reduce_dim,
+    float scaler,
+    const MemoryConfig& output_mem_config,
+    const std::optional<DataType>& output_dtype,
+    const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    bool negate = false,
+    float post_mul_scaler = 1.0f,
+    bool row_major_w_dense_path = false,
+    bool row_major_h_dense_path = false);
+
+}  // namespace ttnn::prim::qsr

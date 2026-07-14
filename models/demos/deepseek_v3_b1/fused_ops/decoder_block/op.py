@@ -173,6 +173,9 @@ class DecoderBlock:
         gate_proj_weights_tensor=None,
         up_proj_weights_tensor=None,
         down_proj_weights_tensor=None,
+        sram_gate_proj_weights_tensor=None,
+        sram_up_proj_weights_tensor=None,
+        sram_down_proj_weights_tensor=None,
         moe_final_output_tensor=None,
         rmsnorm_gamma_tensor=None,
         shared_gate_weights_overlapped=None,
@@ -201,6 +204,7 @@ class DecoderBlock:
         persistent_mode=False,
         termination_semaphore=None,
         is_torus=True,
+        enable_sram_bspm=False,
     ):
         """Build io_tensors and mesh_program_descriptor without executing.
 
@@ -266,6 +270,9 @@ class DecoderBlock:
             gate_proj_weights_tensor=gate_proj_weights_tensor,
             up_proj_weights_tensor=up_proj_weights_tensor,
             down_proj_weights_tensor=down_proj_weights_tensor,
+            sram_gate_proj_weights_tensor=sram_gate_proj_weights_tensor,
+            sram_up_proj_weights_tensor=sram_up_proj_weights_tensor,
+            sram_down_proj_weights_tensor=sram_down_proj_weights_tensor,
             final_output_tensor=moe_final_output_tensor,
             rmsnorm_gamma_tensor=rmsnorm_gamma_tensor,
             shared_gate_weights_overlapped=shared_gate_weights_overlapped,
@@ -283,6 +290,7 @@ class DecoderBlock:
             reduce_semaphores=reduce_semaphores,
             reduce_root_coord=reduce_root_coord,
             reconfig_moe_cbs=True,
+            enable_sram_bspm=enable_sram_bspm,
             semaphores=moe_semaphores,
             noc_mode=noc_mode,
             cb_id_context=moe_cb_id_context,

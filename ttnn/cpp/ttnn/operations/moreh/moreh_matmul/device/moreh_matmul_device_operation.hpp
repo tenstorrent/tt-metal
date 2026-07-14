@@ -10,6 +10,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::moreh::moreh_matmul {
 struct MorehMatmulOperation {
@@ -33,22 +34,7 @@ struct MorehMatmulOperation {
     using tensor_return_value_t = Tensor;
 
     struct MultiCoreProgramFactory {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle reader_kernel_id;
-            tt::tt_metal::KernelHandle writer_kernel_id;
-            std::size_t num_cores;
-            std::size_t num_cores_y;
-        };
-
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -62,8 +48,8 @@ struct MorehMatmulOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
-void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape);
-ttnn::SmallVector<int64_t> find_reduce_dim(const ttnn::Shape& a_shape, const ttnn::Shape& b_shape);
+void get_tensor_dim(ttsl::SmallVector<uint32_t>& dim, const ttnn::Shape& shape);
+ttsl::SmallVector<int64_t> find_reduce_dim(const ttnn::Shape& a_shape, const ttnn::Shape& b_shape);
 bool is_same_batch_dim(const Tensor& tensor_a, const Tensor& tensor_b);
 
 }  // namespace ttnn::operations::moreh::moreh_matmul

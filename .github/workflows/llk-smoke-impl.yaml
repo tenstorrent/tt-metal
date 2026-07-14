@@ -30,10 +30,11 @@ jobs:
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_smoke_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_pr_gate_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: |
             .github
@@ -47,7 +48,7 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "smoke"
+            pr_gate
       - name: Build test matrix
         id: build-matrix
         run: |
@@ -72,6 +73,7 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
       - name: Install SFPI
         shell: bash
         working-directory: ${{ env.LLK_PATH }}

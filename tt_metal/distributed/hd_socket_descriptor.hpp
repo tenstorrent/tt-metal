@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 #include <fmt/format.h>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 
@@ -51,6 +52,9 @@ struct HDSocketDescriptor {
     uint32_t device_id = 0;  // Physical chip ID
     uint32_t core_x = 0;     // Logical core coordinate X
     uint32_t core_y = 0;     // Logical core coordinate Y
+
+    // Owning device's mesh coordinate (1 entry per mesh dim), so the connector can rebuild the MeshCoreCoord.
+    std::vector<uint32_t> mesh_coord;
 
     // --- Pre-resolved transport info (connector uses these to bypass MetalContext) ---
     uint32_t virtual_core_x = 0;             // Virtual (translated) core coordinate X

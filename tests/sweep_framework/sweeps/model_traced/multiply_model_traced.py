@@ -17,9 +17,11 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_tensor_on_mesh,
     get_model_traced_mesh_shape,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import (
     build_op_kwargs,
+    check_with_pcc_safe,
     extract_named_tensor_kwargs,
     parse_dict_value,
 )
@@ -57,8 +59,19 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
+    import os as _os
+
     mesh_shape = get_model_traced_mesh_shape()
-    device = create_mesh_device(mesh_shape)
+    # Prefer WORKER COL: every traced config of this op runs on COL, but the
+    # auto-detect over-routes the whole module to ROW from a single x=7/8-8 master
+    # config, breaking the COL-only configs in single-pass (no-env) runs. Defer to
+    # TTNN_DISPATCH_AXIS when set so CI's two-pass (row+col) is unchanged.
+    _axis = (
+        None
+        if _os.environ.get("TTNN_DISPATCH_AXIS", "").strip().lower() in ("col", "row")
+        else ttnn.DispatchCoreAxis.COL
+    )
+    device = create_mesh_device(mesh_shape, dispatch_core_axis=_axis)
     device_name = ttnn.get_arch_name()
     yield (device, device_name)
     ttnn.close_mesh_device(device)
@@ -91,7 +104,7 @@ def run(
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
-    op_kwargs = build_op_kwargs(kwargs, exclude={"scalar"}, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, exclude={"scalar"}, output_memory_config=output_memory_config, device=device)
 
     # V2 format provides separate shapes for each input
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
@@ -106,6 +119,14 @@ def run(
         # Tensor-scalar multiply: use the scalar value directly.
         # The scalar may come from 'scalar' kwarg, 'arg1' param, or default to 2.0.
         scalar_value = scalar if scalar is not None else (arg1 if arg1 is not None else 2.0)
+        # The scalar is a float (e.g. masking value -FLT_MAX ≈ -3.4e38) but the
+        # tracer serializes it as a huge Python int; passing that to ttnn.multiply
+        # tries to cast to unsigned ("can't convert negative int to unsigned").
+        # Coerce numeric scalars to float so the op gets a real float scalar.
+        if isinstance(scalar_value, bool):
+            pass
+        elif isinstance(scalar_value, int):
+            scalar_value = float(scalar_value)
         torch_output_tensor = torch.mul(torch_input_tensor_a, scalar_value)
         is_scalar_multiply = True
     else:
@@ -283,11 +304,21 @@ def run(
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
+    # Reconcile the per-chip torch golden to the mesh-stitched actual output:
+    # for sharded inputs the golden is the full/global tensor while the device
+    # output is a per-device shard, so the golden must be sliced down to match
+    # (the previous code sliced the *actual* to the golden, which is backwards
+    # when the golden is larger -> shape-mismatch assert). Mirrors add_model_traced.
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(
+            torch_output_tensor, output_tensor, input_a_tensor_placement, input_b_tensor_placement
+        )
+
     # Slice output back to original shape in case tile padding expanded it
     if output_tensor.shape != torch_output_tensor.shape:
         output_tensor = output_tensor[tuple(slice(0, s) for s in torch_output_tensor.shape)]
 
     # Check with PCC
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    pcc = check_with_pcc_safe(torch_output_tensor, output_tensor, 0.999)
 
     return [pcc, e2e_perf]

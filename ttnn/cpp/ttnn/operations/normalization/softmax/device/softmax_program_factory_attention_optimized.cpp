@@ -79,8 +79,18 @@ tt::tt_metal::ProgramDescriptor SoftmaxDeviceOperation::SoftmaxProgramFactoryAtt
     uint32_t block_size =
         fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
 
+    // calc_numeric_stable() in softmax.cpp uses indexed access over Wt tiles of its input CB and a
+    // WaitUpfrontNoPop reduce, so whichever CB it consumes must be sized to Wt:
+    //   - no mask, no padding: it consumes cb_in0 directly.
+    //   - fused scale-mask path or mask-padded path: it consumes cb_x (cb_in0 is streamed/popped per block).
+    const bool small_kernel_numeric_stable_uses_cb_in0_at_wt =
+        attributes.numeric_stable && !tensor_args.mask.has_value() && !mask_padded_data;
+    const bool small_kernel_numeric_stable_uses_cb_x_at_wt =
+        attributes.numeric_stable && (tensor_args.mask.has_value() || mask_padded_data);
+
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
-    uint32_t in0_t = attributes.numeric_stable ? tt::div_up(Wt, block_size) * block_size : block_size * 2;
+    uint32_t in0_t =
+        small_kernel_numeric_stable_uses_cb_in0_at_wt ? tt::div_up(Wt, block_size) * block_size : block_size * 2;
     uint32_t out0_t = block_size * 2;
     uint32_t im1_t = 1;  // 1/sum(exp(x))
     uint32_t in2_t = 1;  // scaler for reduce coming from reader
@@ -106,7 +116,9 @@ tt::tt_metal::ProgramDescriptor SoftmaxDeviceOperation::SoftmaxProgramFactoryAtt
     constexpr uint32_t single_tile_cb_count = 5;  // approximate
     uint32_t cb_size_sum_bytes = (in0_t * in0_tile_size) + (im0_t * im_tile_size) + (out0_t * out0_tile_size) +
                                  (single_tile_cb_count * im_tile_size);
-    if (attributes.numeric_stable) {
+    if (small_kernel_numeric_stable_uses_cb_x_at_wt) {
+        // cb_x (c_10) is only allocated for the small kernel when calc_numeric_stable consumes it.
+        // In the no-mask numeric_stable path the kernel aliases cb_x to cb_exps, so no extra CB is needed.
         cb_size_sum_bytes += im4_t * im_tile_size;
     }
     if (tensor_args.mask.has_value()) {
@@ -123,7 +135,6 @@ tt::tt_metal::ProgramDescriptor SoftmaxDeviceOperation::SoftmaxProgramFactoryAtt
         im4_t = large_kernel_cb_size;
         im0_t = large_kernel_cb_size;
         im3_t = large_kernel_cb_size;
-        TT_FATAL(!attributes.inplace, "Tensor is too large to run softmax inplace, please use standard softmax");
     }
     if (!use_large_kernel) {
         TT_FATAL(
@@ -360,8 +371,10 @@ tt::tt_metal::ProgramDescriptor SoftmaxDeviceOperation::SoftmaxProgramFactoryAtt
             }}},
         });
     }
-    // cb_x
-    if (attributes.numeric_stable || use_large_kernel) {
+    // cb_x: only needed when calc_numeric_stable consumes a separate post-mask buffer (mask or
+    // mask-padded path), or when the streaming large kernel is selected. In the no-mask
+    // numeric_stable path softmax.cpp aliases cb_x to cb_exps, so we skip the allocation.
+    if (small_kernel_numeric_stable_uses_cb_x_at_wt || use_large_kernel) {
         desc.cbs.push_back(CBDescriptor{
             .total_size = im4_t * im_tile_size,
             .core_ranges = all_device_cores,
@@ -373,7 +386,7 @@ tt::tt_metal::ProgramDescriptor SoftmaxDeviceOperation::SoftmaxProgramFactoryAtt
         });
     }
 
-    uint32_t mask_addr = tensor_args.mask.has_value() ? tensor_args.mask.value().buffer()->address() : 0;
+    Buffer* mask_buffer = tensor_args.mask.has_value() ? tensor_args.mask.value().buffer() : nullptr;
 
     uint32_t curr_row = 0;
     uint32_t scale_value =
@@ -408,59 +421,50 @@ tt::tt_metal::ProgramDescriptor SoftmaxDeviceOperation::SoftmaxProgramFactoryAtt
                                ? ((mask_curr_ht * Wt) + mask_offset)
                                : (curr_row / Ht * Wt);  // causal mask start offset + causal mask batch offset
 
-        // NOTE: do not pass Buffer* here. scale_value and mask_addr depend on
-        // operation_attributes (scale + optional mask tensor); BufferBinding's
-        // fast cache-hit path skips create_descriptor() and would leave them stale.
         if (attributes.is_causal_mask) {
-            reader_desc.runtime_args.emplace_back(
+            reader_desc.emplace_runtime_args(
                 core,
-                KernelDescriptor::CoreRuntimeArgs{
-                    src0_buffer->address(),
-                    block_size,
-                    scale_value,
-                    num_tile_rows_per_core,
-                    tile_offset,
-                    Wt,
-                    Ht,
-                    mask_addr,
-                    curr_ht,
-                    mask_id,
-                    in0_t,
-                    mask_curr_ht,
-                    mask_offset});
+                {src0_buffer,
+                 block_size,
+                 scale_value,
+                 num_tile_rows_per_core,
+                 tile_offset,
+                 Wt,
+                 Ht,
+                 mask_buffer,
+                 curr_ht,
+                 mask_id,
+                 in0_t,
+                 mask_curr_ht,
+                 mask_offset});
         } else {
-            reader_desc.runtime_args.emplace_back(
+            reader_desc.emplace_runtime_args(
                 core,
-                KernelDescriptor::CoreRuntimeArgs{
-                    src0_buffer->address(),
-                    block_size,
-                    scale_value,
-                    num_tile_rows_per_core,
-                    tile_offset,
-                    Wt,
-                    Ht,
-                    mask_addr,
-                    curr_ht,
-                    mask_id,
-                    in0_t});
+                {src0_buffer,
+                 block_size,
+                 scale_value,
+                 num_tile_rows_per_core,
+                 tile_offset,
+                 Wt,
+                 Ht,
+                 mask_buffer,
+                 curr_ht,
+                 mask_id,
+                 in0_t});
         }
 
         softmax_desc.emplace_runtime_args(
             core,
             {num_tile_rows_per_core, Ht, Wt, block_size, curr_ht, static_cast<uint32_t>(mask_padded_data), cb_length});
 
-        // NOTE: do not pass Buffer* here. mask_padded_data and num_datum_padded
-        // depend on attribute state; BufferBinding fast cache-hit path skips
-        // create_descriptor() and would leave them stale.
-        writer_desc.runtime_args.emplace_back(
+        writer_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                out0_buffer->address(),
-                num_tile_rows_per_core * Wt,
-                tile_offset,
-                block_size,
-                static_cast<uint32_t>(mask_padded_data),
-                num_datum_padded});
+            {out0_buffer,
+             num_tile_rows_per_core * Wt,
+             tile_offset,
+             block_size,
+             static_cast<uint32_t>(mask_padded_data),
+             num_datum_padded});
 
         curr_row += num_tile_rows_per_core;
     }

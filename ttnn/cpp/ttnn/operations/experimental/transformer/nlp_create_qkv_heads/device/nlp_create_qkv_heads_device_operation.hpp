@@ -10,7 +10,11 @@
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/device_operation.hpp"
+#include "ttnn/types.hpp"  // exposes ttnn::MemoryConfig alias used in member/signature declarations
+#include "ttnn/distributed/types.hpp"  // exposes ttnn::MeshCoordinate used in get_dynamic_runtime_args()
+
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -33,59 +37,14 @@ struct NlpCreateHeadsDeviceOperation {
     using tensor_return_value_t = std::tuple<Tensor, Tensor, Tensor>;
 
     struct Interleaved {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle reader_kernel_id;
-            tt::tt_metal::KernelHandle writer_kernel_id;
-            std::size_t num_cores;
-            std::size_t num_cores_y;
-            bool read_from_input_tensor_kv;
-        };
-
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
     };
 
     struct Sharded {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle reader_kernel_id{};
-            tt::tt_metal::KernelHandle writer_kernel_id{};
-            std::size_t num_cores{};
-            std::size_t num_cores_y{};
-            bool read_from_input_tensor_kv{};
-            tt::tt_metal::CBHandle cb_q_output{};
-            tt::tt_metal::CBHandle cb_k_output{};
-            tt::tt_metal::CBHandle cb_v_output{};
-            std::vector<CoreCoord> cores;
-            uint32_t head_size{};
-            uint32_t per_risc0_out_q_heads{};
-            uint32_t per_risc1_out_q_heads{};
-            uint32_t per_core_in_q_heads{};
-            uint32_t per_core_out_kv_heads{};
-            uint32_t per_core_in_kv_heads{};
-            uint32_t head_tiles{};
-            uint32_t num_kv_cores{};
-            uint32_t single_tile_size{};
-        };
-
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -109,6 +68,18 @@ struct NlpCreateHeadsDeviceOperation {
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+
+    // Re-apply the Sharded factory's computed input-buffer addresses on every cache hit.
+    // The Sharded reader/writer bake raw base addresses AND per-core `base + head_offset` start
+    // addresses as uint32 runtime args; a plain Buffer* binding can only express the bare base, so
+    // these address-derived slots are refreshed here instead (the output CBs are patched via their
+    // `.buffer` bindings).  Defined in nlp_create_qkv_heads_program_factory.cpp so it can reuse the
+    // shared per-core arg builder that create_descriptor() uses. Interleaved returns no dynamic args.
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t&,
+        const tensor_args_t&,
+        tensor_return_value_t&,
+        const std::optional<ttnn::MeshCoordinate>& = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::transformer

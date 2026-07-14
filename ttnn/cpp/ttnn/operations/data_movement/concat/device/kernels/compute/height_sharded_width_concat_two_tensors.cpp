@@ -4,7 +4,8 @@
 
 #include <cstdint>
 
-#include "api/compute/transpose_wh.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/transpose.h"
 #include "api/dataflow/circular_buffer.h"
 
 template <uint32_t BatchSize = 1>
@@ -17,9 +18,9 @@ FORCE_INLINE void transpose(
 
     cb_out.reserve_back(BatchSize);
 
-    transpose_wh_init_short(cb_in_id);
+    transpose_init(cb_in_id);
     for (uint32_t i = 0; i < BatchSize; i++) {
-        transpose_wh_tile(cb_in_id, i, i);
+        transpose_tile(cb_in_id, i, i);
         pack_tile(i, cb_out_id);
     }
 
@@ -56,7 +57,8 @@ void kernel_main() {
     CircularBuffer output_transpose_cb(output_transpose_cb_id);
     CircularBuffer output_cb(output_cb_id);
 
-    transpose_wh_init(input0_cb_id, input0_transpose_cb_id);
+    compute_kernel_hw_startup(input0_cb_id, input0_transpose_cb_id);
+    transpose_init(input0_cb_id);
 
     constexpr uint32_t output_num_tiles_width = input0_num_tiles_width + input1_num_tiles_width;
 

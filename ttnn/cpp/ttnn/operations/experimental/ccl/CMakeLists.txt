@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_experimental_ccl ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::CCL ALIAS ttnn_op_experimental_ccl)
 
-tt_reuse_precompile_headers(ttnn_op_experimental_ccl TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_ccl TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_ccl)
 
 set_target_properties(
@@ -28,8 +28,11 @@ file(
     reduce_scatter_minimal_async/device/kernels/*
     ring_attention_all_gather_async/device/kernels/*
     rms_allgather/device/kernels/*
+    dit_fused_distributed_rmsnorm/device/kernels/*
     send_recv_async/send_async/device/kernels/*
     send_recv_async/recv_async/device/kernels/*
+    send_recv_async/recv_async_h2d/device/kernels/*
+    send_recv_async/send_async_d2h/device/kernels/*
     slice_reshard_async/device/kernels/*
     strided_all_gather_async/device/kernels/*
     strided_reduce_scatter_async/device/kernels/*
@@ -70,3 +73,20 @@ install(
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/ccl
         COMPONENT ttnn-runtime
 )
+
+# Python bindings for this op are registered directly on the shared `ttnn`
+# Python module target here, rather than in the centrally-owned
+# ttnn/sources.cmake — the target itself is necessarily shared (nanobind
+# builds one Python extension module), but which file lists a given op's own
+# registration source doesn't need to be. `ttnn` only exists when
+# WITH_PYTHON_BINDINGS is on, hence the guard.
+#
+# The actual file list (TTNN_OP_EXPERIMENTAL_CCL_NANOBIND_SRCS) lives in
+# sources.cmake, not here: this file carries metalium-developers-infra as a
+# required co-owner (so infra can land sweeping build-system changes), and
+# routine add/remove/rename of a nanobind source shouldn't need to go
+# through infra. This wiring line itself is build logic and is expected to
+# change rarely.
+if(TARGET ttnn)
+    target_sources(ttnn PRIVATE ${TTNN_OP_EXPERIMENTAL_CCL_NANOBIND_SRCS})
+endif()

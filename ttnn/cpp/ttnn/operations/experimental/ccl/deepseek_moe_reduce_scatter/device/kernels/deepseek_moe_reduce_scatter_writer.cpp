@@ -5,6 +5,8 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
@@ -151,9 +153,11 @@ void kernel_main() {
         page_size * 2);
 
     // execute pre op barrier wait phase
+    // Device 2.0 migration: legacy primitives retained, pre_op_barrier_semaphore is a GlobalSemaphore address.
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pre_op_barrier_semaphore), 1);
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pre_op_barrier_semaphore), 0);
 
+    Noc noc_obj;
     int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
     for (uint32_t i = 0; i < ring_size; ++i) {
         uint32_t actual_slice_idx;
@@ -164,6 +168,7 @@ void kernel_main() {
         }
 
         uint32_t reduced_cb_id = i == 0 ? input_slice_cb_ids[actual_slice_idx] : compute_cb_id;
+        CircularBuffer cb_reduced(reduced_cb_id);
 
         uint32_t tiles_read = start_tiles_read;
         uint32_t tiles_to_read = start_tiles_to_read;
@@ -223,8 +228,8 @@ void kernel_main() {
                 }
 
                 // op hardcoded for each worker handling even multiple of 2 tiles, so always use scatter_write
-                cb_wait_front(reduced_cb_id, tile_granularity);
-                uint32_t intermediate_slice_l1_read_addr = get_read_ptr(reduced_cb_id);
+                cb_reduced.wait_front(tile_granularity);
+                uint32_t intermediate_slice_l1_read_addr = cb_reduced.get_read_ptr();
                 fabric_unicast_noc_fused_scatter_write_atomic_inc_with_state<
                     UnicastFusedScatterWriteAtomicIncUpdateMask::WriteDstAddrs>(
                     fabric_connection,
@@ -237,21 +242,23 @@ void kernel_main() {
                         1,
                         true));
 
-                noc_async_writes_flushed();
-                cb_pop_front(reduced_cb_id, tile_granularity);
+                noc_obj.async_writes_flushed();
+                cb_reduced.pop_front(tile_granularity);
             }
         } else {
             while (tiles_read < tiles_to_read) {
-                cb_wait_front(reduced_cb_id, tile_granularity);
-                uint32_t output_l1_read_addr = get_read_ptr(reduced_cb_id);
+                cb_reduced.wait_front(tile_granularity);
+                uint32_t output_l1_read_addr = cb_reduced.get_read_ptr();
                 for (uint32_t j = 0; j < tile_granularity; ++j) {
+                    // Device 2.0 migration: legacy primitive retained — no endpoint today for "raw local L1
+                    // address as NoC write source." TODO(#45845): migrate to a LocalL1 endpoint once available.
                     noc_async_write_page(tiles_read, output_tensor_accessor, output_l1_read_addr);
                     output_l1_read_addr += page_size;
                     tiles_read++;
                 }
 
-                noc_async_writes_flushed();
-                cb_pop_front(reduced_cb_id, tile_granularity);
+                noc_obj.async_writes_flushed();
+                cb_reduced.pop_front(tile_granularity);
             }
         }
 
@@ -265,6 +272,6 @@ void kernel_main() {
 
     close_connections(fabric_connection);
 
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
+    noc_obj.async_write_barrier();
+    noc_obj.async_atomic_barrier();
 }

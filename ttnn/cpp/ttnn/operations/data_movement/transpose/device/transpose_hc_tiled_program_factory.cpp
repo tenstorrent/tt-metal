@@ -7,6 +7,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -18,10 +19,9 @@ namespace ttnn::prim {
 
 namespace {
 
-void set_runtime_args_hc_tiled(
-    Program& program,
-    KernelHandle reader_kernel_id,
-    KernelHandle writer_kernel_id,
+void emit_runtime_args_hc_tiled(
+    KernelDescriptor& reader_desc,
+    KernelDescriptor& writer_desc,
     const Tensor& input_tensor,
     Tensor& output_tensor,
     uint32_t num_cores_total,
@@ -29,8 +29,7 @@ void set_runtime_args_hc_tiled(
     const CoreRangeSet& core_group_1,
     uint32_t num_tiles_per_core_group_1,
     const CoreRangeSet& core_group_2,
-    uint32_t num_tiles_per_core_group_2,
-    bool is_create) {
+    uint32_t num_tiles_per_core_group_2) {
     auto* input_buffer = input_tensor.buffer();
     auto* output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
@@ -45,8 +44,8 @@ void set_runtime_args_hc_tiled(
     uint32_t CtHWt = Ct * H * Wt;
     uint32_t CtWt = Ct * Wt;
 
-    auto& cached_reader_args = GetRuntimeArgs(program, reader_kernel_id);
-    auto& cached_writer_args = GetRuntimeArgs(program, writer_kernel_id);
+    reader_desc.runtime_args.reserve(num_cores_total);
+    writer_desc.runtime_args.reserve(num_cores_total);
 
     for (uint32_t i = 0, num_tiles_read = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -63,51 +62,24 @@ void set_runtime_args_hc_tiled(
         uint32_t h = num_tiles_read / CtWt % H;
         uint32_t ct = num_tiles_read / Wt % Ct;
 
-        if (is_create) {
-            SetRuntimeArgs(
-                program,
-                reader_kernel_id,
-                core,
-                {input_buffer->address(),
-                 Wt,
-                 H,
-                 Ct,
-                 HW_bytes,
-                 CHW_bytes,
-                 num_tiles_read,
-                 num_tiles_per_core,
-                 num_tiles_read / CtHWt * CHW_bytes,
-                 h,
-                 h / TILE_HEIGHT * Wt,
-                 ct,
-                 ct * TILE_HEIGHT * HW_bytes,
-                 num_tiles_read % Wt});
+        reader_desc.emplace_runtime_args(
+            core,
+            {input_buffer,
+             Wt,
+             H,
+             Ct,
+             HW_bytes,
+             CHW_bytes,
+             num_tiles_read,
+             num_tiles_per_core,
+             num_tiles_read / CtHWt * CHW_bytes,
+             h,
+             h / TILE_HEIGHT * Wt,
+             ct,
+             ct * TILE_HEIGHT * HW_bytes,
+             num_tiles_read % Wt});
 
-            SetRuntimeArgs(
-                program, writer_kernel_id, core, {output_buffer->address(), num_tiles_per_core, num_tiles_read});
-        } else {
-            auto& reader_args = cached_reader_args.at(core.x).at(core.y);
-            auto& writer_args = cached_writer_args.at(core.x).at(core.y);
-
-            reader_args[0] = input_buffer->address();
-            reader_args[1] = Wt;
-            reader_args[2] = H;
-            reader_args[3] = Ct;
-            reader_args[4] = HW_bytes;
-            reader_args[5] = CHW_bytes;
-            reader_args[6] = num_tiles_read;
-            reader_args[7] = num_tiles_per_core;
-            reader_args[8] = num_tiles_read / CtHWt * CHW_bytes;
-            reader_args[9] = h;
-            reader_args[10] = h / TILE_HEIGHT * Wt;
-            reader_args[11] = ct;
-            reader_args[12] = ct * TILE_HEIGHT * HW_bytes;
-            reader_args[13] = num_tiles_read % Wt;
-
-            writer_args[0] = output_buffer->address();
-            writer_args[1] = num_tiles_per_core;
-            writer_args[2] = num_tiles_read;
-        }
+        writer_desc.emplace_runtime_args(core, {output_buffer, num_tiles_per_core, num_tiles_read});
 
         num_tiles_read += num_tiles_per_core;
     }
@@ -115,7 +87,7 @@ void set_runtime_args_hc_tiled(
 
 }  // namespace
 
-TransposeHCTiledProgramFactory::cached_program_t TransposeHCTiledProgramFactory::create(
+tt::tt_metal::ProgramDescriptor TransposeHCTiledProgramFactory::create_descriptor(
     const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input;
 
@@ -125,7 +97,7 @@ TransposeHCTiledProgramFactory::cached_program_t TransposeHCTiledProgramFactory:
     uint32_t sub_tile_line_bytes = 16 * input_tensor.element_size();
     uint32_t num_tensor_tiles = input_tensor.physical_volume() / TILE_HW;
 
-    Program program = CreateProgram();
+    ProgramDescriptor desc;
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
@@ -161,18 +133,29 @@ TransposeHCTiledProgramFactory::cached_program_t TransposeHCTiledProgramFactory:
     bool misaligned = alignment > sub_tile_line_bytes;
 
     uint32_t num_input_tiles = 2;
-    CircularBufferConfig cb_src0_config =
-        CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, single_tile_size);
-    CreateCircularBuffer(program, total_cores, cb_src0_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_input_tiles * single_tile_size,
+        .core_ranges = total_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(src0_cb_index),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        }}},
+    });
 
     // need some scratch memory here - if we need data from a misaligned address then we need to read from the
     // nearest aligned address and then copy the data to the correct location
     if (misaligned) {
         uint32_t src1_cb_index = 1;
-        CircularBufferConfig cb_src1_config =
-            CircularBufferConfig(alignment, {{src1_cb_index, cb_data_format}}).set_page_size(src1_cb_index, alignment);
-        CreateCircularBuffer(program, total_cores, cb_src1_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = alignment,
+            .core_ranges = total_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(src1_cb_index),
+                .data_format = cb_data_format,
+                .page_size = alignment,
+            }}},
+        });
     }
 
     Buffer* src0_buffer = input_tensor.buffer();
@@ -185,23 +168,26 @@ TransposeHCTiledProgramFactory::cached_program_t TransposeHCTiledProgramFactory:
     std::vector<uint32_t> writer_compile_time_args = {src0_cb_index};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
-    KernelHandle reader_kernel_id = CreateKernel(
-        program,
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
-        "reader_unary_transpose_hc_interleaved_partitioned.cpp",
-        total_cores,
-        ReaderDataMovementConfig(reader_compile_time_args));
+        "reader_unary_transpose_hc_interleaved_partitioned.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = total_cores;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.config = ReaderConfigDescriptor{};
 
-    KernelHandle writer_kernel_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
-        total_cores,
-        WriterDataMovementConfig(writer_compile_time_args));
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = total_cores;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.config = WriterConfigDescriptor{};
 
-    set_runtime_args_hc_tiled(
-        program,
-        reader_kernel_id,
-        writer_kernel_id,
+    emit_runtime_args_hc_tiled(
+        reader_desc,
+        writer_desc,
         input_tensor,
         output_tensor,
         num_cores_total,
@@ -209,42 +195,12 @@ TransposeHCTiledProgramFactory::cached_program_t TransposeHCTiledProgramFactory:
         core_group_1,
         num_tiles_per_core_group_1,
         core_group_2,
-        num_tiles_per_core_group_2,
-        true);
+        num_tiles_per_core_group_2);
 
-    return {
-        std::move(program),
-        {.reader_kernel_id = reader_kernel_id,
-         .writer_kernel_id = writer_kernel_id,
-         .core_group_1 = core_group_1,
-         .core_group_2 = core_group_2,
-         .num_cores_total = num_cores_total,
-         .num_cores_y = num_cores_y,
-         .num_tiles_per_core_group_1 = num_tiles_per_core_group_1,
-         .num_tiles_per_core_group_2 = num_tiles_per_core_group_2}};
-}
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
 
-void TransposeHCTiledProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const TransposeParams& /*operation_attributes*/,
-    const TransposeInputs& tensor_args,
-    Tensor& output_tensor) {
-    auto& program = cached_program.program;
-    auto& shared_variables = cached_program.shared_variables;
-
-    set_runtime_args_hc_tiled(
-        program,
-        shared_variables.reader_kernel_id,
-        shared_variables.writer_kernel_id,
-        tensor_args.input,
-        output_tensor,
-        shared_variables.num_cores_total,
-        shared_variables.num_cores_y,
-        shared_variables.core_group_1,
-        shared_variables.num_tiles_per_core_group_1,
-        shared_variables.core_group_2,
-        shared_variables.num_tiles_per_core_group_2,
-        false);
+    return desc;
 }
 
 }  // namespace ttnn::prim

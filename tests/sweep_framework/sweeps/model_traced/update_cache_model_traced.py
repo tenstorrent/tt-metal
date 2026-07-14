@@ -174,11 +174,8 @@ def run(
     else:
         cache_tensor = ttnn.from_torch(torch_cache, dtype=input_a_dtype, layout=input_a_layout)
 
-    # update_cache expects input in shape [batch=1, num_heads, seq_len=1, head_dim]
-    # Our traced input is [seq=1, num_heads, num_users, head_dim]
-    # Extract first user's data: [1, num_heads, 1, head_dim]
-    torch_input_for_update = torch_input[:, :, 0:1, :]  # [1, num_heads, 1, head_dim]
-    torch_input_for_update = torch_input_for_update.permute(2, 1, 0, 3)  # [1, num_heads, 1, head_dim]
+    # Use the exact traced input_b shape so the sweep trace matches master.
+    torch_input_for_update = torch.randn(shape_b, dtype=torch.bfloat16).float()
 
     if not is_host:
         if is_mesh_device and input_b_tensor_placement:
@@ -203,11 +200,12 @@ def run(
 
     # Run operation
     start_time = start_measuring_time()
+    if batch_offset != 0:
+        op_kwargs["batch_offset"] = batch_offset
     output_tensor = ttnn.update_cache(
         cache_tensor,
         input_tensor,
         cache_idx,
-        batch_offset=batch_offset,
         **op_kwargs,
     )
     mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None

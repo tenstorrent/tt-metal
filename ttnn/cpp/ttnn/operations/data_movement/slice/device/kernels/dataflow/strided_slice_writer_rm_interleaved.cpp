@@ -4,7 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     constexpr uint32_t page_size = get_compile_time_arg_val(0);
@@ -17,6 +19,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_out0 = 24;
 
+    Noc noc;
     // Create CircularBuffer for Device 2.0 API
     CircularBuffer cb_out0(cb_id_out0);
     const uint32_t start_id = 0;
@@ -25,10 +28,8 @@ void kernel_main() {
 
     for (uint32_t iter = i_stick; iter < num_sticks_per_core; ++iter) {
         cb_out0.wait_front(1);
-        uint32_t l1_read_addr = cb_out0.get_read_ptr();
-        uint64_t dst_noc_addr = s0.get_noc_addr(iter);
-        noc_async_write(l1_read_addr, dst_noc_addr, page_size);
-        noc_async_write_barrier();
+        noc.async_write(cb_out0, s0, page_size, {.offset_bytes = 0}, {.page_id = iter, .offset_bytes = 0});
+        noc.async_write_barrier();
         cb_out0.pop_front(1);
     }
 }

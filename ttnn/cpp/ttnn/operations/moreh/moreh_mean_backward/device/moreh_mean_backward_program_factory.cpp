@@ -16,7 +16,7 @@
 
 using namespace tt::tt_metal;
 
-void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) {
+void get_tensor_dim(ttsl::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -31,7 +31,7 @@ void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) 
 }
 
 ttnn::Shape get_output_grad_shape(
-    const Tensor& output_grad, const Tensor& input_grad, const ttnn::SmallVector<int64_t>& dims, const bool& keepdim) {
+    const Tensor& output_grad, const Tensor& input_grad, const ttsl::SmallVector<int64_t>& dims, const bool& keepdim) {
     if (keepdim) {
         return output_grad.logical_shape();
     }
@@ -80,14 +80,14 @@ ProgramDescriptor MorehMeanBackwardOperation::create_descriptor(
     const auto& input_grad_shape = input_grad.logical_shape();
     const uint32_t input_grad_rank = input_grad_shape.rank();
 
-    ttnn::SmallVector<uint32_t> input_grad_dim(input_grad_rank, 1);
+    ttsl::SmallVector<uint32_t> input_grad_dim(input_grad_rank, 1);
     get_tensor_dim(input_grad_dim, input_grad_shape);
     const auto& output_grad_shape = get_output_grad_shape(output_grad, input_grad, dims, keepdim);
 
-    ttnn::SmallVector<uint32_t> output_grad_dim(input_grad_rank, 1);
+    ttsl::SmallVector<uint32_t> output_grad_dim(input_grad_rank, 1);
     get_tensor_dim(output_grad_dim, output_grad_shape);
 
-    ttnn::SmallVector<uint32_t> need_bcast_dim(input_grad_rank, 0);
+    ttsl::SmallVector<uint32_t> need_bcast_dim(input_grad_rank, 0);
     for (auto i = 0; i < input_grad_rank; ++i) {
         auto idx = input_grad_rank - 1 - i;
         need_bcast_dim[i] = (output_grad_shape[idx] != input_grad_shape[idx]);
@@ -242,17 +242,27 @@ ProgramDescriptor MorehMeanBackwardOperation::create_descriptor(
             TT_THROW("Core not in specified core ranges.");
         }
 
-        // Build reader runtime args: addr, num_tiles, offset, num_dim, then dim vectors
-        KernelDescriptor::CoreRuntimeArgs reader_rt_args;
-        reader_rt_args.push_back(output_grad.buffer()->address());
+        // Build reader runtime args: addr, num_tiles, offset, num_dim, then dim vectors.
+        // output_grad goes in via the Buffer* overload so the framework registers a
+        // BufferBinding and re-patches the address on every cache hit; otherwise the
+        // reader keeps reading the first-call address even when callers (e.g. AdamW
+        // training loops) pass a freshly-allocated output_grad each step.
+        KernelDescriptor::RTArgList reader_rt_args;
+        reader_rt_args.push_back(output_grad.buffer());
         reader_rt_args.push_back(num_tiles_per_core);
         reader_rt_args.push_back(tile_offset);
         reader_rt_args.push_back(num_dim);
-        reader_rt_args.insert(reader_rt_args.end(), output_grad_dim.begin(), output_grad_dim.end());
-        reader_rt_args.insert(reader_rt_args.end(), input_grad_dim.begin(), input_grad_dim.end());
-        reader_rt_args.insert(reader_rt_args.end(), need_bcast_dim.begin(), need_bcast_dim.end());
+        for (uint32_t v : output_grad_dim) {
+            reader_rt_args.push_back(v);
+        }
+        for (uint32_t v : input_grad_dim) {
+            reader_rt_args.push_back(v);
+        }
+        for (uint32_t v : need_bcast_dim) {
+            reader_rt_args.push_back(v);
+        }
 
-        reader_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));
+        reader_desc.emplace_runtime_args(core, reader_rt_args);
 
         writer_desc.emplace_runtime_args(core, {input_grad.buffer(), num_tiles_per_core, tile_offset});
 

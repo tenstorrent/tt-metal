@@ -8,7 +8,10 @@ from loguru import logger
 
 import ttnn
 
+from models.common.utility_functions import torch2tt_tensor
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import ttnn_softmax_in_place, ttnn_layer_norm
+
 
 TEST_PADDING_VALUE = -42
 
@@ -21,7 +24,7 @@ def test_softmax(shape, device):
     x = torch.randn(shape).bfloat16().float()
     xt = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
     xt = ttnn.fill_implicit_tile_padding(xt, TEST_PADDING_VALUE)
-    xtt = ttnn.softmax_in_place(xt)
+    xtt = ttnn_softmax_in_place(xt)
 
     tt_got_back = xtt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
@@ -46,14 +49,10 @@ def test_layernorm(shape, device):
 
     xt = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
     xt = ttnn.fill_implicit_tile_padding(xt, TEST_PADDING_VALUE)
-    # Build gamma/beta with ttnn.from_torch so the ttnn tensors keep their original logical
-    # width and only tile padding is added. Can't use pad_by_zero here because it zero-pads in
-    # torch before construction, expanding the logical width to the tile boundary and producing
-    # gamma/beta whose logical widths don't match the input's logical width.
-    gammat = ttnn.from_torch(gamma, layout=ttnn.TILE_LAYOUT, device=device)
-    betat = ttnn.from_torch(beta, layout=ttnn.TILE_LAYOUT, device=device)
+    gammat = torch2tt_tensor(gamma, device)
+    betat = torch2tt_tensor(beta, device)
 
-    xtt = ttnn.layer_norm(xt, epsilon=1e-5, weight=gammat, bias=betat)
+    xtt = ttnn_layer_norm(xt, epsilon=1e-5, weight=gammat, bias=betat)
 
     tt_got_back = xtt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 

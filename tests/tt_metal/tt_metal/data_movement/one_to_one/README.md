@@ -60,3 +60,6 @@ This test suite now includes tests using the new device 2.0 NOC API. These tests
 - `sender.cpp`: Original sender kernel for comparison
 
 Both API versions run the same test cases but use different underlying implementations. The device 2.0 tests serve as a validation and performance comparison for the new API.
+
+## Quasar Notes
+`TensixDataMovementOneToOnePacketSizes` and `TensixDataMovementOneToOneDirectedIdeal` include Quasar-specific code paths inside `GenericMeshDeviceFixture`. Requires `TT_METAL_SLOW_DISPATCH_MODE=1`, the Quasar simulator, and a grid with at least 2 columns (e.g. `emu-quasar-2x3`).

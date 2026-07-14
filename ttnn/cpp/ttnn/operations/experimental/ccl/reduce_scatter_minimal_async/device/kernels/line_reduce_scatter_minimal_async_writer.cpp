@@ -398,7 +398,7 @@ void kernel_main() {
                     size_t l1_read_addr = get_read_ptr(cb_compute_output_id);
                     for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                         uint32_t output_tile_id = output_tile_id_start + tiles_read;
-                        uint64_t local_noc_addr = get_noc_addr(output_tile_id, output_addrgen);
+                        uint64_t local_noc_addr = output_addrgen.get_noc_addr(output_tile_id);
                         noc_async_write(l1_read_addr, local_noc_addr, page_size);
                         l1_read_addr += page_size;
                         tiles_read++;

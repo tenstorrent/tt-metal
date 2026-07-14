@@ -16,6 +16,7 @@ import ttnn
 from models.common.sampling import SamplingParams
 from models.demos.qwen3_vl.tt.common import (
     PagedAttentionConfig,
+    get_hf_visual,
     get_pad_embedding,
     merge_vision_tokens_single_user_ttnn,
     multimodal_rope_single_user_from_hf,
@@ -25,7 +26,9 @@ from models.demos.qwen3_vl.tt.common import (
 from models.demos.qwen3_vl.tt.generator import Generator
 from models.demos.qwen3_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen3_vl.tt.model_config import VisionModelArgs
-from models.demos.utils.llm_demo_utils import create_benchmark_data
+from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
+from models.demos.utils.model_targets import resolve_perf_targets
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, parse_decoder_json
 
@@ -230,7 +233,7 @@ def create_tt_model(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": True, "trace_region_size": 28467200, "num_command_queues": 1}],
+    [{"fabric_config": True, TRACE_MODEL_KEY_PARAM: "qwen3-vl", "num_command_queues": 1}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -382,9 +385,11 @@ def test_demo(
             optimizations=DecodersPrecision.accuracy(config.vision_config.depth, ref_model_name),
         )
         vision_model_args.hf_config.vision_config.depth = config.vision_config.depth
-        visual_model = DropInVisionTransformer(reference_model.visual, vision_model_args, debug=False)  # show PCC
+        visual_model = DropInVisionTransformer(
+            get_hf_visual(reference_model), vision_model_args, debug=False
+        )  # show PCC
     else:
-        visual_model = reference_model.visual
+        visual_model = get_hf_visual(reference_model)
     processor = AutoProcessor.from_pretrained(ref_model_name)
     num_tokens_generated_decode = []
     num_image_tokens = []
@@ -575,7 +580,13 @@ def test_demo(
 
         # Start decoding
         iteration = 0
-        argmax_on_device = sampling_params["temperature"] == 0
+        # Diagnostic A/B toggle (#48037). The actual gibberish fix is on the model side
+        # (Transformer in tt/model.py: force-argmax sampling path + always-refresh + eager sampling),
+        # which keeps on-device sampling. Setting TT_QWEN_FORCE_HOST_SAMPLING=1 forces host argmax
+        # instead: a known-good reference (correct output) but slower (per-step logits read-back),
+        # useful to compare against the on-device path locally.
+        force_host_sampling = os.environ.get("TT_QWEN_FORCE_HOST_SAMPLING", "0") == "1"
+        argmax_on_device = model._supports_on_device_sampling and not force_host_sampling
         if argmax_on_device:
             device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
         else:
@@ -625,6 +636,9 @@ def test_demo(
                     top_p=sampling_params["top_p"],
                     on_host=True,
                 )
+                # Normalize to the device-path feedback shape [batch, 1] so the next decode_forward and
+                # the out_tok[user].item() reads below behave identically to the on-device path.
+                out_tok = out_tok.reshape(batch_size, 1)
 
             if iteration == 0:  # First iteration will account the compile time
                 profiler.end(f"compile_decode", iteration=batch_idx)
@@ -720,7 +734,22 @@ def test_demo(
 
     if is_ci_env and "bert-score" in test_id:
         expected_output = load_expected_text(model_args.base_model_name)
+        import bert_score.utils as _bert_score_utils
         from bert_score import score as bert_score
+
+        # transformers 5.x leaves some tokenizers' model_max_length at the VERY_LARGE_INTEGER sentinel
+        # (~1e30); bert_score forwards it straight into the fast tokenizer's truncation, which overflows
+        # the Rust usize ("OverflowError: int too big to convert"). Clamp to the model's real limit so the
+        # metric runs (deberta-xlarge-mnli supports 512 positions; demo outputs are far shorter, so this
+        # never actually truncates).
+        _orig_sent_encode = _bert_score_utils.sent_encode
+
+        def _sent_encode_clamped(tokenizer, sent):
+            if getattr(tokenizer, "model_max_length", 0) and tokenizer.model_max_length > 1_000_000:
+                tokenizer.model_max_length = 512
+            return _orig_sent_encode(tokenizer, sent)
+
+        _bert_score_utils.sent_encode = _sent_encode_clamped
 
         candidates = text_outputs_all_users_all_batches
         references = [expected_output] * len(candidates)
@@ -834,30 +863,28 @@ def test_demo(
         f"Text model average speed: {round(avg_decode_iteration_time * 1000, 2)}ms @ {round(decode_tok_s_user, 2)} tok/s/user ({round(decode_tok_s, 2)} tok/s throughput)"
     )
 
-    # Benchmark targets
-    supported_models = []
-    supported_devices = []
-
     tt_device_name = model_args.device_name
-
-    if model_args.base_model_name in supported_models:
-        assert tt_device_name in supported_devices, f"Device {tt_device_name} not supported"
-
-        # Set the target times to first token for every combination of device and model
-        target_prefill_tok_s = {}[f"{tt_device_name}_{model_args.base_model_name}"]
-
-        # Set the target decode timesfor every combination of device and model
-        target_decode_tok_s_u = {}[f"{tt_device_name}_{model_args.base_model_name}"]
-
-        target_decode_tok_s = target_decode_tok_s_u * batch_size
-        targets = {
-            "prefill_t/s": target_prefill_tok_s,
-            "decode_t/s": target_decode_tok_s,
-            "decode_t/s/u": target_decode_tok_s_u,
-        }
+    resolved_perf_targets = resolve_perf_targets(
+        model_name=model_args.base_model_name,
+        sku=tt_device_name,
+        batch_size=batch_size,
+        seq_len=max(prefill_lens),
+    )
+    targets = {}
+    if resolved_perf_targets:
+        if resolved_perf_targets.get("prefill_t/s") is not None:
+            targets["prefill_t/s"] = float(resolved_perf_targets["prefill_t/s"])
+        if resolved_perf_targets.get("decode_t/s/u") is not None:
+            targets["decode_t/s/u"] = float(resolved_perf_targets["decode_t/s/u"])
+        if resolved_perf_targets.get("decode_t/s") is not None:
+            targets["decode_t/s"] = float(resolved_perf_targets["decode_t/s"])
+        elif "decode_t/s/u" in targets:
+            targets["decode_t/s"] = targets["decode_t/s/u"] * batch_size
     else:
-        logger.warning(f"Model {model_args.base_model_name} not does not have performance targets set")
-        targets = {}
+        logger.warning(
+            f"No centralized perf targets for model={model_args.base_model_name}, sku={tt_device_name}, "
+            f"batch={batch_size}, seq_len={max(prefill_lens)}"
+        )
 
     # Save benchmark data for CI dashboard
     if is_ci_env:
@@ -893,7 +920,7 @@ def test_demo(
 
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type="demo",
+            run_type="demo_perf",
             ml_model_name=model_args.base_model_name,
             ml_model_type="llm",
             device_name=tt_device_name,
@@ -903,6 +930,15 @@ def test_demo(
             input_sequence_length=max(prefill_lens),
             output_sequence_length=num_tokens_generated_decode[0],
         )
+        if targets:
+            verify_perf(
+                measurements,
+                expected_measurements={k: True for k in ("prefill_t/s", "decode_t/s", "decode_t/s/u") if k in targets},
+                model_name=model_args.base_model_name,
+                sku=tt_device_name,
+                batch_size=batch_size,
+                seq_len=max(prefill_lens),
+            )
 
 
 def load_inputs(input_file, batch_size):

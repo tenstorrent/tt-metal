@@ -28,7 +28,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include <tracy/Tracy.hpp>
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include "impl/dispatch/kernels/cq_prefetch.hpp"
@@ -59,7 +59,8 @@ void loop_and_wait_with_timeout(
     const FuncWait& wait_condition,
     const OnTimeout& on_timeout,
     std::chrono::duration<float> timeout_duration,
-    const GetProgress& get_progress) {
+    const GetProgress& get_progress,
+    std::atomic<bool>* exit_condition = nullptr) {
     if (timeout_duration.count() > 0.0f) {
         auto last_progress_time = std::chrono::high_resolution_clock::now();
         uint32_t last_progress_value = 0;
@@ -70,6 +71,10 @@ void loop_and_wait_with_timeout(
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_progress_update_ms());
 
         while (true) {
+            if (exit_condition != nullptr && exit_condition->load(std::memory_order_acquire)) {
+                break;
+            }
+
             func_body();
 
             // Check if operation is finished
@@ -101,6 +106,9 @@ void loop_and_wait_with_timeout(
         }
     } else {
         do {
+            if (exit_condition != nullptr && exit_condition->load(std::memory_order_acquire)) {
+                break;
+            }
             func_body();
         } while (wait_condition());
     }
@@ -151,10 +159,29 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
         this->cq_size = dram_backed_command_queues_size / num_hw_cqs;
         TT_ASSERT((this->cq_size % ctx.hal().get_alignment(tt::tt_metal::HalMemType::DRAM)) == 0);
         const IDevice* device = ctx.device_manager()->get_active_device(this->device_id);
-        TT_FATAL(device->is_mmio_capable(), "Device {} is not an MMIO device", this->device_id);
+        TT_FATAL(
+            device->is_mmio_capable() || ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Simulator,
+            "Device {} is not an MMIO device",
+            this->device_id);
+        // Host mirror of the DRAM-backed CQ sysmem region: the host edits this buffer and
+        // write_dram_vec/read_dram_vec sync it to each chip's DRAM (no PCIe hugepage).
         this->dram_region_staging_buffer = std::make_unique<char[]>(dram_backed_command_queues_size);
         this->cq_sysmem_start = this->dram_region_staging_buffer.get();
         this->channel_offset = 0;
+
+        // Carve out the hugepage "auxiliary" tail (same layout as the MMIO path below).
+        // Per HW CQ we reserve two TRANSFER_PAGE_SIZE (4 KiB) pages outside the issue/completion
+        // fifo layout; they are pooled after all CQ slots in free_region_* and allocated via
+        // allocate_region() when host code needs extra device-visible sysmem (e.g. D2H socket
+        // hugepage fallback for fifo data and bytes-sent counters).
+        static constexpr uint32_t AUX_PAGES_PER_CQ_SIM = 2;
+        uint32_t per_cq_reduction_sim = AUX_PAGES_PER_CQ_SIM * DispatchSettings::TRANSFER_PAGE_SIZE;
+        this->cq_size -= per_cq_reduction_sim;
+        uint32_t total_cq_space_sim = static_cast<uint32_t>(num_hw_cqs) * this->cq_size;
+        this->free_region_start_ = this->channel_offset + total_cq_space_sim;
+        this->free_region_size_ = static_cast<uint32_t>(num_hw_cqs) * per_cq_reduction_sim;
+        this->free_region_host_ptr_ = this->cq_sysmem_start + total_cq_space_sim;
+        this->free_region_bump_ = 0;
         this->init_dispatch_core_interfaces(num_hw_cqs, 0);
         return;
     }
@@ -182,6 +209,7 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
     this->channel_offset = DispatchSettings::MAX_HUGEPAGE_SIZE * get_umd_channel(channel) +
                            (channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
 
+    // Two TRANSFER_PAGE_SIZE pages per HW CQ reserved for free_region_* (see DRAM-backed path above).
     static constexpr uint32_t AUX_PAGES_PER_CQ = 2;
     uint32_t per_cq_reduction = AUX_PAGES_PER_CQ * DispatchSettings::TRANSFER_PAGE_SIZE;
     this->cq_size -= per_cq_reduction;
@@ -661,7 +689,7 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
         if (this->prefetch_q_dev_ptrs[cq_id] != this->prefetch_q_dev_fences[cq_id]) {
             return;
         }
-        ZoneScopedN("wait_for_fetch_q_space");
+        TTZoneScopedDN(DISPATCH, "wait_for_fetch_q_space");
 
         // Body of the operation
         auto fetch_operation_body = [&]() {
@@ -732,7 +760,6 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
     // Handler for the timeout
     auto on_timeout = [this, &exit_condition]() {
         exit_condition.store(true);
-
         tt::tt_metal::MetalContext::instance(this->context_id).on_dispatch_timeout_detected();
 
         TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");
@@ -748,7 +775,8 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
         wait_condition,
         on_timeout,
         tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations(),
-        get_dispatch_progress);
+        get_dispatch_progress,
+        &exit_condition);
 
     return write_ptr_and_toggle;
 }

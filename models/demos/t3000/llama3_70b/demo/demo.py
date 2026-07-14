@@ -7,6 +7,7 @@ from loguru import logger
 
 from models.demos.t3000.llama2_70b.demo.demo import construct_arg, main
 from models.demos.t3000.llama2_70b.tt.llama_common import check_mesh_device, setup_llama_env
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
 
@@ -62,7 +63,7 @@ from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
     ((32, 2048), (16, 8192), (1, 128 * 1024)),
     ids=("short_context", "long_context", "128k_context"),
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 14227456}], indirect=True)
+@pytest.mark.parametrize("device_params", [{TRACE_MODEL_KEY_PARAM: "llama3.1-70b-legacy"}], indirect=True)
 def test_LlamaModel_demo(
     # model args
     implementation,

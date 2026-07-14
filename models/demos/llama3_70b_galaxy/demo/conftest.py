@@ -32,6 +32,13 @@ def pytest_addoption(parser):
         help="Whether to print token output every decode iteration",
     )
     parser.addoption(
+        "--token_accuracy",
+        action="store",
+        default=False,
+        type=bool,
+        help="Whether to compute top1 and top5 exact token matching accuracy",
+    )
+    parser.addoption(
         "--prefill_profile",
         action="store",
         default=False,

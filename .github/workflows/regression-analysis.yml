@@ -44,6 +44,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           fetch-depth: 0
 
@@ -59,4 +60,4 @@ jobs:
           cutoff-commit: ${{ inputs.cutoff_commit }}
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-          SLACK_CHANNEL_ID: ${{ inputs.slack_channel_id != '' && inputs.slack_channel_id || secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
+          SLACK_CHANNEL_ID: ${{ inputs.slack_channel_id != '' && inputs.slack_channel_id || secrets.FULL_CI_TRIAGE_CHANNEL }}

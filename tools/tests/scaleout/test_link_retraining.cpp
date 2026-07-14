@@ -8,14 +8,32 @@
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/wormhole_eth.hpp>
+#include <umd/device/types/blackhole_eth.hpp>
 #include <factory_system_descriptor/utils.hpp>
 #include <gtest/gtest.h>
 #include <yaml-cpp/yaml.h>
 #include <fmt/format.h>
+#include <cstddef>
+#include <type_traits>
 
 namespace tt::scaleout_tools {
 
-constexpr uint32_t ETH_TRAINING_STATUS_REG = 0x1104;
+// Returns the L1 address of the ETH training status register for the given arch.
+// WH: ETH_TRAIN_STATUS_ADDR (0x1104)
+// BH: port_status in boot_results_t (BOOT_RESULTS_ADDR + 4).
+// Both use the same encoding: 0 = IN_PROGRESS, 1 = SUCCESS, 2 = FAIL.
+[[nodiscard]] uint32_t get_eth_train_status_addr(const tt::Cluster& cluster) {
+    if (cluster.arch() == tt::ARCH::WORMHOLE_B0) {
+        return tt::umd::wormhole::ETH_TRAIN_STATUS_ADDR;
+    }
+    if (cluster.arch() == tt::ARCH::BLACKHOLE) {
+        static_assert(std::is_standard_layout_v<tt::umd::blackhole::eth_status_t>);
+        return tt::umd::blackhole::BOOT_RESULTS_ADDR +
+               static_cast<uint32_t>(offsetof(tt::umd::blackhole::eth_status_t, port_status));
+    }
+    TT_THROW("Unsupported architecture for ETH training status check: {}", cluster.arch());
+}
 
 struct LinkDescriptors {
     std::string host;
@@ -34,7 +52,7 @@ struct LinkDescriptors {
 
 void set_link_training_status(const tt::Cluster& cluster, ChipId chip_id, const tt_xy_pair& coord, uint32_t status) {
     const std::vector<uint32_t> status_data{status};
-    cluster.write_core(chip_id, coord, status_data, ETH_TRAINING_STATUS_REG);
+    cluster.write_core(chip_id, coord, status_data, get_eth_train_status_addr(cluster));
     cluster.l1_barrier(chip_id);
 }
 
@@ -42,7 +60,6 @@ class DirectedRetrainingFixture : public ::testing::Test {
 protected:
     tt::tt_metal::MetalContext* context_{};
     const tt::Cluster* cluster_{};
-    const std::unique_ptr<tt::umd::Cluster>* driver_{};
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> distributed_context_;
     std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> physical_system_descriptor_;
     std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id_;
@@ -50,23 +67,15 @@ protected:
     void SetUp() override {
         context_ = &tt::tt_metal::MetalContext::instance();
         cluster_ = &context_->get_cluster();
-        driver_ = &cluster_->get_driver();
         distributed_context_ = context_->get_distributed_context_ptr();
 
-        // Check if running on T3K (8 WH devices)
-        auto* const cluster_desc = (*driver_)->get_cluster_description();
-        const size_t num_devices = cluster_->get_unique_chip_ids().size();
-        const auto board_type = cluster_desc->get_board_type(0);
-
-        if (num_devices != 8 || board_type != BoardType::N300) {
-            GTEST_SKIP() << "This test requires a T3K system";
+        if (!cluster_->supports_ethernet_link_retraining()) {
+            GTEST_SKIP() << "Link retraining not supported on this system (requires WH or BH with ETH FW >= 1.9.0)";
         }
 
         // Initialize physical system descriptor
         auto psd = tt::tt_metal::run_physical_system_discovery(
-            *(*driver_)->get_cluster_description(),
-            distributed_context_,
-            context_->rtoptions().get_target_device());
+            *cluster_->get_cluster_desc(), distributed_context_, context_->rtoptions().get_target_device());
         physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
 
         // Populate asic_id_to_chip_id map
@@ -77,7 +86,6 @@ protected:
 
 public:
     const tt::Cluster& get_cluster() const { return *cluster_; }
-    const std::unique_ptr<tt::umd::Cluster>& get_driver() const { return *driver_; }
     tt::tt_metal::PhysicalSystemDescriptor& get_physical_system_descriptor() { return *physical_system_descriptor_; }
     const tt::tt_metal::PhysicalSystemDescriptor& get_physical_system_descriptor() const {
         return *physical_system_descriptor_;
@@ -88,7 +96,7 @@ public:
 
 [[nodiscard]] uint32_t get_link_training_status(const tt::Cluster& cluster, ChipId chip_id, const tt_xy_pair& coord) {
     std::vector<uint32_t> status(1, 0);
-    cluster.read_core(status, sizeof(uint32_t), tt_cxy_pair(chip_id, coord), ETH_TRAINING_STATUS_REG);
+    cluster.read_core(status, sizeof(uint32_t), tt_cxy_pair(chip_id, coord), get_eth_train_status_addr(cluster));
     return status[0];
 }
 
@@ -117,31 +125,30 @@ void validate_connectivity(
     log_output_rank0("Factory System Descriptor Validation Complete");
 }
 
-// Helper function to process ethernet connections for a given operation
+// Helper function to process ethernet connections for a given operation.
+// `operation` is invoked once per matching ethernet connection, so take it by const ref
+// (forwarding-then-calling in a loop would risk use-after-move on iterations past the first).
 template <typename Operation>
 void process_ethernet_connections(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const std::unordered_map<uint64_t, ChipId>& asic_id_to_chip_id,
     const tt::Cluster& cluster,
-    const std::unique_ptr<tt::umd::Cluster>& driver,
-    Operation&& operation) {
-    auto* const cluster_desc = driver->get_cluster_description();
+    const tt::umd::ClusterDescriptor& cluster_desc,
+    const Operation& operation) {
     const auto& asic_topology = physical_system_descriptor.get_asic_topology(physical_system_descriptor.my_host_name());
-    auto&& callable = std::forward<Operation>(operation);
     for (const auto& [asic_id, asic_connections] : asic_topology) {
         for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
             const auto src_chip_id = asic_id_to_chip_id.at(*asic_id);
             const auto dst_chip_id = asic_id_to_chip_id.at(*dst_asic_id);
 
             const bool both_mmio =
-                cluster_desc->is_chip_mmio_capable(src_chip_id) && cluster_desc->is_chip_mmio_capable(dst_chip_id);
+                cluster_desc.is_chip_mmio_capable(src_chip_id) && cluster_desc.is_chip_mmio_capable(dst_chip_id);
             const bool both_non_mmio =
-                !cluster_desc->is_chip_mmio_capable(src_chip_id) && !cluster_desc->is_chip_mmio_capable(dst_chip_id);
+                !cluster_desc.is_chip_mmio_capable(src_chip_id) && !cluster_desc.is_chip_mmio_capable(dst_chip_id);
 
             if (both_mmio || both_non_mmio) {
                 for (const auto& eth_connection : eth_connections) {
-                    callable(
-                        src_chip_id, get_eth_core_coord(cluster, src_chip_id, eth_connection.src_chan));
+                    operation(src_chip_id, get_eth_core_coord(cluster, src_chip_id, eth_connection.src_chan));
                 }
             }
         }
@@ -156,7 +163,7 @@ TEST_F(DirectedRetrainingFixture, TestActiveEthRetraining) {
         get_physical_system_descriptor(),
         get_asic_id_to_chip_id(),
         get_cluster(),
-        get_driver(),
+        *get_cluster().get_cluster_desc(),
         [&](ChipId chip_id, const tt_xy_pair& coord) { set_link_training_status(get_cluster(), chip_id, coord, 0); });
 
     reset_ethernet_links(
@@ -167,7 +174,7 @@ TEST_F(DirectedRetrainingFixture, TestActiveEthRetraining) {
         get_physical_system_descriptor(),
         get_asic_id_to_chip_id(),
         get_cluster(),
-        get_driver(),
+        *get_cluster().get_cluster_desc(),
         [&](ChipId chip_id, const tt_xy_pair& coord) {
             EXPECT_EQ(get_link_training_status(get_cluster(), chip_id, coord), 1);
         });
@@ -175,14 +182,9 @@ TEST_F(DirectedRetrainingFixture, TestActiveEthRetraining) {
     // Re-run discovery
     get_physical_system_descriptor().clear();
     auto new_psd = tt::tt_metal::run_physical_system_discovery(
-        *get_driver()->get_cluster_description(),
-        distributed_context_,
-        context_->rtoptions().get_target_device(),
-        true,
-        true);
+        *get_cluster().get_cluster_desc(), distributed_context_, context_->rtoptions().get_target_device(), true, true);
     get_physical_system_descriptor().merge(std::move(new_psd));
 
-    // Validate connectivity after link reset
     validate_connectivity(get_physical_system_descriptor(), get_cabling_descriptor_path());
 }
 
@@ -229,11 +231,7 @@ TEST_F(DirectedRetrainingFixture, DISABLED_TestExitNodeRetraining) {
     // Re-run discovery
     get_physical_system_descriptor().clear();
     auto new_psd = tt::tt_metal::run_physical_system_discovery(
-        *get_driver()->get_cluster_description(),
-        distributed_context_,
-        context_->rtoptions().get_target_device(),
-        true,
-        true);
+        *get_cluster().get_cluster_desc(), distributed_context_, context_->rtoptions().get_target_device(), true, true);
     get_physical_system_descriptor().merge(std::move(new_psd));
 }
 
@@ -241,7 +239,7 @@ TEST_F(DirectedRetrainingFixture, DISABLED_TestExitNodeRetraining) {
     const DirectedRetrainingFixture& fixture, const tt::tt_metal::AsicTopology& asic_topology) {
     constexpr size_t MAX_LINKS_TO_RESET = 4;
 
-    auto* const cluster_desc = fixture.get_driver()->get_cluster_description();
+    auto* const cluster_desc = fixture.get_cluster().get_cluster_desc();
     const auto& asic_descriptors = fixture.get_physical_system_descriptor().get_asic_descriptors();
 
     std::vector<LinkDescriptors> local_links;
@@ -328,7 +326,46 @@ TEST_F(DirectedRetrainingFixture, TestOnDemandCableRestart) {
         EXPECT_EQ(get_link_training_status(get_cluster(), link.chip_id, link.coord), 1);
     }
 
-    // Validate connectivity after link resets using T3K cabling descriptor
+    validate_connectivity(get_physical_system_descriptor(), get_cabling_descriptor_path());
+}
+
+TEST_F(DirectedRetrainingFixture, TestLinkRetrainingWithDescriptorRefresh) {
+    validate_connectivity(get_physical_system_descriptor(), get_cabling_descriptor_path());
+
+    // Take down MMIO-to-MMIO and non-MMIO-to-non-MMIO links
+    process_ethernet_connections(
+        get_physical_system_descriptor(),
+        get_asic_id_to_chip_id(),
+        get_cluster(),
+        *get_cluster().get_cluster_desc(),
+        [&](ChipId chip_id, const tt_xy_pair& coord) { set_link_training_status(get_cluster(), chip_id, coord, 0); });
+
+    // Retrain all downed links
+    reset_ethernet_links(
+        get_physical_system_descriptor(),
+        get_physical_system_descriptor().get_asic_topology(get_physical_system_descriptor().my_host_name()));
+
+    // Verify links are back up at the register level
+    process_ethernet_connections(
+        get_physical_system_descriptor(),
+        get_asic_id_to_chip_id(),
+        get_cluster(),
+        *get_cluster().get_cluster_desc(),
+        [&](ChipId chip_id, const tt_xy_pair& coord) {
+            EXPECT_EQ(get_link_training_status(get_cluster(), chip_id, coord), 1);
+        });
+
+    // Refresh the cluster descriptor so the driver sees the recovered topology
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    cluster.rediscover_ethernet_links();
+
+    // Re-run physical system discovery with the refreshed descriptor
+    get_physical_system_descriptor().clear();
+    auto new_psd = tt::tt_metal::run_physical_system_discovery(
+        *get_cluster().get_cluster_desc(), distributed_context_, context_->rtoptions().get_target_device(), true, true);
+    get_physical_system_descriptor().merge(std::move(new_psd));
+
+    // Validate that the refreshed topology matches the expected cabling
     validate_connectivity(get_physical_system_descriptor(), get_cabling_descriptor_path());
 }
 

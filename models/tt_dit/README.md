@@ -13,6 +13,7 @@ For detailed information about each model including performance metrics, usage i
 - **[Mochi-1](models/Mochi_1.md)** - Video generation model
 - **[Wan2.2-T2V-A14B](models/Wan2_2.md)** - Text-to-video generation model
 - See **[experimental/](experimental/)** for in-progress model variants (AniSora, Wan2.2-Distill, LoRA adapters)
+- **[LTX-2.3](models/LTX2.md)** - Joint audio-video generation model (Pro and Fast variants)
 
 ## Directory Structure
 
@@ -20,16 +21,18 @@ For detailed information about each model including performance metrics, usage i
 tt_dit/
 ├── layers/              # Core neural network layers
 ├── models/              # Model architectures and documentation
-│   ├── transformers/    # Transformer implementations (SD35, Mochi, Wan, Flux1, Motif, QwenImage)
+│   ├── transformers/    # Transformer implementations (SD35, Mochi, Wan, LTX, Flux1, Motif, QwenImage)
 │   ├── vae/            # VAE/Autoencoder implementations
 │   ├── StableDiffusion35.md  # SD3.5 model documentation
 │   ├── Flux1.md         # Flux 1 model documentation
 │   ├── Motif.md         # Motif model documentation
 │   ├── QwenImage.md     # Qwen-Image model documentation
 │   ├── Mochi_1.md       # Mochi-1 model documentation
-│   └── Wan2_2.md        # Wan2.2 model documentation
+│   ├── Wan2_2.md        # Wan2.2 model documentation
+│   └── LTX2.md          # LTX-2.3 model documentation
 ├── encoders/            # Text encoder implementations
 │   ├── clip/           # CLIP encoder
+│   ├── gemma/          # Gemma encoder
 │   └── t5/             # T5 encoder
 ├── parallel/            # Parallelization utilities
 │   ├── config.py        # Parallel configuration
@@ -38,11 +41,12 @@ tt_dit/
 │   ├── stable_diffusion_35_large/
 │   ├── mochi/
 │   ├── wan/
+│   ├── ltx/
 │   ├── flux1/
 │   ├── motif/
 │   └── qwenimage/
 ├── tests/              # Test suite
-│   ├── models/         # Model-level tests (sd35, mochi, wan2_2, flux1, motif, qwenimage)
+│   ├── models/         # Model-level tests (sd35, mochi, wan2_2, ltx, flux1, motif, qwenimage)
 │   ├── encoders/       # Encoder tests
 │   ├── blocks/         # Block-level tests
 │   └── unit/          # Unit tests for layers
@@ -63,7 +67,7 @@ tt_dit/
 
 ### Models
 - **Transformers**: DiT transformer implementations for various generative models
-  - Support for multiple architectures including SD3.5, Mochi, Wan2.2, Flux1, Motif, and Qwen-Image
+  - Support for multiple architectures including SD3.5, Mochi, Wan2.2, LTX-2, Flux1, Motif, and Qwen-Image
   - Model-specific attention mechanisms and transformer architectures
 - **Autoencoders**: VAE implementations for different models
 
@@ -79,6 +83,7 @@ End-to-end pipeline implementations for multiple generative models:
 - **Qwen-Image**: Text-to-image generation (1024x1024px)
 - **Mochi-1**: Video generation model (824x480px, 168 frames)
 - **Wan2.2-T2V-A14B**: Text-to-video generation
+- **LTX-2.3**: Joint audio-video generation (Pro one-stage and Fast distilled two-stage)
 
 Each pipeline includes:
 - Automatic parallel configuration for different device meshes
@@ -101,19 +106,23 @@ The test suite is organized into three main categories:
 
 Running tests:
 ```bash
+# Run tests from tt-metal/
+
 # Run unit tests
-python -m pytest tests/unit/
+python -m pytest  models/tt_dit/tests/unit/
 
 # Run all model tests
-python -m pytest tests/models/
+python -m pytest  models/tt_dit/tests/models/
 
 # Run specific model pipeline tests
-python -m pytest tests/models/sd35/test_pipeline_sd35.py -v
-python -m pytest tests/models/flux1/test_pipeline_flux1.py -v
-python -m pytest tests/models/motif/test_pipeline_motif.py -v
-python -m pytest tests/models/qwenimage/test_pipeline_qwenimage.py -v
-python -m pytest tests/models/mochi/test_pipeline_mochi.py -v
-python -m pytest tests/models/wan2_2/test_pipeline_wan.py -v
+python -m pytest models/tt_dit/tests/models/sd35/test_pipeline_sd35.py -v
+python -m pytest models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -v
+python -m pytest models/tt_dit/tests/models/motif/test_pipeline_motif.py -v
+python -m pytest models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py -v
+python -m pytest models/tt_dit/tests/models/mochi/test_pipeline_mochi.py -v
+python -m pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -v
+python -m pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py -v
+python -m pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_two_stages.py -v
 ```
 
 ## Key Features

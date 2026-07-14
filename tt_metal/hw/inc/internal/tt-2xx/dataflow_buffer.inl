@@ -18,14 +18,45 @@
 
 #include "api/kernel_thread_globals.h"
 
+#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_MATH)
+#define DFB_IS_COMPUTE_MATH 1
+#else
+#define DFB_IS_COMPUTE_MATH 0
+#endif
+
+#if DFB_IS_COMPUTE_MATH
+inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id) : logical_dfb_id_(logical_dfb_id) {}
+#else
 inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id)
-    : local_dfb_interface_(g_dfb_interface[logical_dfb_id]), logical_dfb_id_(logical_dfb_id) {}
+    : logical_dfb_id_(logical_dfb_id), local_dfb_interface_(g_dfb_interface[logical_dfb_id]) {}
+#endif
 
-inline uint32_t DataflowBuffer::get_entry_size() const { return local_dfb_interface_.entry_size; }
+inline uint32_t DataflowBuffer::get_entry_size() const {
+#if DFB_IS_COMPUTE_MATH
+    return 0;
+#else
+    return local_dfb_interface_.entry_size;
+#endif
+}
 
-inline uint32_t DataflowBuffer::get_stride_size() const { return local_dfb_interface_.stride_size; }
+inline uint32_t DataflowBuffer::get_stride_size() const {
+#if DFB_IS_COMPUTE_MATH
+    return 0;
+#else
+    return local_dfb_interface_.stride_size;
+#endif
+}
+
+inline uint32_t DataflowBuffer::get_total_num_entries() const {
+#if DFB_IS_COMPUTE_MATH
+    return 0;
+#else
+    return local_dfb_interface_.num_entries;
+#endif
+}
 
 inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
+#if !DFB_IS_COMPUTE_MATH
     WAYPOINT("RBW");
     dfb::PackedTileCounter packed_tc =
         local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
@@ -55,9 +86,11 @@ inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
     }
 #endif
     WAYPOINT("RBD");
+#endif
 }
 
 inline void DataflowBuffer::push_back_impl(uint16_t num_entries) {
+#if !DFB_IS_COMPUTE_MATH
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
@@ -88,9 +121,11 @@ inline void DataflowBuffer::push_back_impl(uint16_t num_entries) {
         local_dfb_interface_.tc_idx = (local_dfb_interface_.tc_idx + 1) % local_dfb_interface_.num_tcs_to_rr;
     }
 #endif
+#endif
 }
 
 inline void DataflowBuffer::wait_front_impl(uint16_t num_entries) {
+#if !DFB_IS_COMPUTE_MATH
     WAYPOINT("WFW");
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
@@ -106,9 +141,11 @@ inline void DataflowBuffer::wait_front_impl(uint16_t num_entries) {
     while (overlay::llk_intf_get_occupancy(tensix_id, tc_id) < num_entries);
 #endif
     WAYPOINT("WFD");
+#endif
 }
 
 inline void DataflowBuffer::pop_front_impl(uint16_t num_entries) {
+#if !DFB_IS_COMPUTE_MATH
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
@@ -127,9 +164,11 @@ inline void DataflowBuffer::pop_front_impl(uint16_t num_entries) {
     }
     local_dfb_interface_.tc_idx = (local_dfb_interface_.tc_idx + 1) % local_dfb_interface_.num_tcs_to_rr;
 #endif
+#endif
 }
 
 inline void DataflowBuffer::finish_impl() {
+#if !DFB_IS_COMPUTE_MATH
 #ifndef COMPILE_FOR_TRISC
     if (ptiles_read_ > 0) {
         handle_final_credits<true>(ptiles_read_, ptxn_id_index_);
@@ -145,10 +184,17 @@ inline void DataflowBuffer::finish_impl() {
         for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
             dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
             uint8_t tc_id = dfb::get_counter_id(packed_tc);
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
+#if defined(COMPILE_FOR_TRISC) && (defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK))
+            // TRISC drain: finish() must not return until this TC is empty (posted == 0) -
+            // covers the consumer (UNPACK), the Tensix->DM producer (PACK), and both sides of
+            // an INTRA self-loop. The consumer also skips TCs this TRISC doesn't own via
+            // tensix_trisc_mask, which exists only in the UNPACK-side LocalDFBInterface, so the
+            // gate sits under an inner UNPACK guard (the PACK struct has no such member).
+#ifdef UCK_CHLKC_UNPACK
             if ((local_dfb_interface_.tensix_trisc_mask & (1u << ckernel::csr_read<ckernel::CSR::TRISC_ID>())) == 0) {
                 continue;
             }
+#endif
             all_acked = all_acked && (ckernel::trisc::tile_counters[tc_id].f.posted == 0);
 #elif !defined(COMPILE_FOR_TRISC)
             uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
@@ -158,10 +204,13 @@ inline void DataflowBuffer::finish_impl() {
         }
     }
     WAYPOINT("AAD");
+#endif
 }
 
 inline uint32_t DataflowBuffer::get_write_ptr_impl() const {
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
+#if DFB_IS_COMPUTE_MATH
+    return 0;
+#elif defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
     return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr +
            local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_offset;
 #elif !defined(COMPILE_FOR_TRISC)
@@ -174,7 +223,9 @@ inline uint32_t DataflowBuffer::get_write_ptr_impl() const {
 }
 
 inline uint32_t DataflowBuffer::get_read_ptr_impl() const {
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
+#if DFB_IS_COMPUTE_MATH
+    return 0;
+#elif defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
     return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr +
            local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_offset;
 #elif !defined(COMPILE_FOR_TRISC)
@@ -217,7 +268,10 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
     //   completed      → tack == 0, tiles >  0   ← break here
     // Also exits early if the ISR fires (collective batch done).
     WAYPOINT("WTP1");
-    while (read_actual_slot0() < expected_slot0) {
+    // Modular comparison: read_actual_slot0() and expected_slot0 are both
+    // uint16; their wrapped difference interpreted as int16 is negative when
+    // actual is "behind" expected. See prepare_implicit_read for rationale.
+    while (static_cast<int16_t>(read_actual_slot0() - expected_slot0) < 0) {
         uint64_t tack, tiles;
         if constexpr (is_producer) {
             tack  = CMDBUF_TR_ACK_TRID(OVERLAY_RD_CMD_BUF, tail_txn_id);
@@ -237,10 +291,12 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
     // different threads' checks, causing some to enter the barrier and others to skip
     // it. Once past this point, tiles_to_process on the tail txn_id reflects the
     // contributions of all producers / consumers for this collective batch.
-    sync_threads();
+    // Producer and consumer kernels co-reside with different thread counts, so each
+    // side uses its own barrier (0 = producer, 1 = consumer) — sharing one deadlocks.
+    sync_threads(is_producer ? 0 : 1);
 
-    // ISR already handled the collective batch
-    if (read_actual_slot0() >= expected_slot0) {
+    // ISR already handled the collective batch — modular check (see WTP1).
+    if (static_cast<int16_t>(read_actual_slot0() - expected_slot0) >= 0) {
         return;
     }
 
@@ -249,7 +305,7 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
     // never post credits for it, so we fall through to the manual posting below.
     uint16_t global_threshold = local_dfb_interface_.threshold;
     WAYPOINT("WTP2");
-    while (read_actual_slot0() < expected_slot0) {
+    while (static_cast<int16_t>(read_actual_slot0() - expected_slot0) < 0) {
         uint64_t tiles;
         if constexpr (is_producer) {
             tiles = CMDBUF_READ_TILES_TO_PROCESS_TR_ACK(OVERLAY_RD_CMD_BUF, tail_txn_id);
@@ -262,22 +318,28 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
     }
 
     // Manually post missing credits if ISR did not fire.
+    // Modular: int16(actual - expected) < 0 means actual is behind expected,
+    // and the unsigned difference (expected - actual) is the number of missing
+    // increments — correct across the uint16 wrap because both operands wrap.
     uint16_t actual_slot0 = read_actual_slot0();
-    if (actual_slot0 < expected_slot0) {
+    if (static_cast<int16_t>(actual_slot0 - expected_slot0) < 0) {
         for (uint8_t i = 0; i < N; i++) {
             dfb::PackedTileCounter ptc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
             uint8_t tensix_id = dfb::get_tensix_id(ptc);
             uint8_t tc_id     = dfb::get_counter_id(ptc);
             uint16_t expected = transactions_issued / N + (i < (transactions_issued % N) ? 1u : 0u);
             if constexpr (is_producer) {
+                // Modular int16 comparison: posted (16-bit HW) wraps at 65 536, so
+                // `actual < expected` is wrong at wrap; cast the difference to int16_t
+                // to get a signed modular distance. Negative = behind, ≥0 = caught up.
                 uint16_t actual = static_cast<uint16_t>(overlay::fast_llk_intf_read_posted(tensix_id, tc_id));
-                if (actual < expected) {
-                    overlay::fast_llk_intf_inc_posted(tensix_id, tc_id, expected - actual);
+                if (static_cast<int16_t>(actual - expected) < 0) {
+                    overlay::fast_llk_intf_inc_posted(tensix_id, tc_id, static_cast<uint16_t>(expected - actual));
                 }
             } else {
                 uint16_t actual = static_cast<uint16_t>(overlay::fast_llk_intf_read_acked(tensix_id, tc_id));
-                if (actual < expected) {
-                    overlay::fast_llk_intf_inc_acked(tensix_id, tc_id, expected - actual);
+                if (static_cast<int16_t>(actual - expected) < 0) {
+                    overlay::fast_llk_intf_inc_acked(tensix_id, tc_id, static_cast<uint16_t>(expected - actual));
                 }
             }
         }
@@ -293,7 +355,7 @@ inline void DataflowBuffer::write_barrier_impl(const Noc &noc) const {
         return;
     } else {
         for (uint8_t i = 0; i < local_dfb_interface_.num_txn_ids; i++) {
-            noc.async_write_barrier<Noc::BarrierMode::TXN_ID>(local_dfb_interface_.txn_ids[i]);
+            noc.async_write_barrier<NocOptions::TXN_ID>({.trid = local_dfb_interface_.txn_ids[i]});
         }
     }
 }
@@ -306,7 +368,16 @@ inline uint32_t DataflowBuffer::prepare_implicit_read() {
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
     const uint32_t txn_id = local_dfb_interface_.txn_ids[ptxn_id_index_];
     WAYPOINT("PIRW");
-    while (overlay::fast_llk_intf_read_posted(tensix_id, tc_id) < (ptxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc));
+    // Modular comparison: posted (16-bit HW) wraps at 65 536, and so does the
+    // kernel-side expectation `ptxn_id_loop_cnt_ * per_tc` if both operands are
+    // reduced to uint16 before subtracting. Interpreting the wrapped difference
+    // as int16 gives a signed modular distance — negative means posted is behind
+    // expected, non-negative means it has caught up. Safe as long as the gap
+    // never exceeds half the wrap range (~32K), which is guaranteed by the
+    // bounded txn-id ring depth.
+    while (static_cast<int16_t>(
+        static_cast<uint16_t>(overlay::fast_llk_intf_read_posted(tensix_id, tc_id)) -
+        static_cast<uint16_t>(ptxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc)) < 0);
     while (overlay::fast_llk_intf_get_free_space(tensix_id, tc_id) < 1);
     WAYPOINT("PIRD");
     return txn_id;
@@ -336,7 +407,11 @@ inline uint32_t DataflowBuffer::prepare_implicit_write() {
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
     const uint32_t txn_id = local_dfb_interface_.txn_ids[ctxn_id_index_];
     WAYPOINT("PIWW");
-    while (overlay::fast_llk_intf_read_acked(tensix_id, tc_id) < (ctxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc));
+    // Modular comparison — see prepare_implicit_read for the rationale. Same
+    // trick applied to the acked side.
+    while (static_cast<int16_t>(
+        static_cast<uint16_t>(overlay::fast_llk_intf_read_acked(tensix_id, tc_id)) -
+        static_cast<uint16_t>(ctxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc)) < 0);
     while (overlay::fast_llk_intf_get_occupancy(tensix_id, tc_id) < 1);
     WAYPOINT("PIWD");
     return txn_id;
@@ -362,8 +437,8 @@ inline void DataflowBuffer::commit_implicit_write() {
 // These are member functions of Noc but must be defined here because they need the complete
 // DataflowBuffer type (circular dependency: dataflow_buffer.h includes noc.h, not vice versa).
 
-template <Noc::TxnIdMode txn_id_mode, typename Src>
-std::enable_if_t<txn_id_mode == Noc::TxnIdMode::ENABLED>
+template <NocOptions opts, typename Src>
+std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
 Noc::async_read(
     const Src& src,
     DataflowBuffer& dst,
@@ -372,7 +447,7 @@ Noc::async_read(
     uint32_t txn_id = dst.prepare_implicit_read();
     noc_async_read_set_trid(txn_id, noc_id_);
     while (noc_available_transactions(noc_id_, txn_id) < ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2));
-    // DPRINT << "Issue the read" << ENDL();
+    // DPRINT("Issue the read\n");
     noc_async_read<NOC_MAX_BURST_SIZE + 1, true>(
         get_src_ptr<AddressType::NOC>(src, src_args),
         dst.get_write_ptr(),
@@ -382,8 +457,8 @@ Noc::async_read(
     dst.commit_implicit_read();
 }
 
-template <Noc::TxnIdMode txn_id_mode, typename Dst>
-std::enable_if_t<txn_id_mode == Noc::TxnIdMode::ENABLED>
+template <NocOptions opts, typename Dst>
+std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
 Noc::async_write(
     DataflowBuffer& src,
     const Dst& dst,
@@ -394,7 +469,7 @@ Noc::async_write(
     auto dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size_bytes, -1, posted, noc_id_);
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_noc_addr, src_addr, src.get_entry_size());
-    // DPRINT << "Issue the write" << ENDL();
+    // DPRINT("Issue the write\n");
     ncrisc_noc_fast_write_any_len<noc_mode, true, /*one_packet*/false>(
         noc_id_,
         write_cmd_buf,
@@ -406,7 +481,7 @@ Noc::async_write(
         false,   // linked
         1,       // num_dests
         true,    // multicast_path_reserve
-        false,   // posted == false (Noc::ResponseMode::NON_POSTED)
+        false,   // posted == false (NocOptions::POSTED not set)
         txn_id);
     src.commit_implicit_write();
 }

@@ -5,8 +5,10 @@
 #include "auto_context.hpp"
 
 #include <optional>
+#include <sstream>
 
 #include "core/tt_profiler.hpp"
+#include "ttnn_fixed/distributed/tt_metal.hpp"
 
 namespace ttml::autograd {
 
@@ -16,6 +18,20 @@ std::mt19937& AutoContext::get_generator() {
 
 void AutoContext::set_generator(const std::mt19937& generator) {
     m_generator = generator;
+}
+
+std::string AutoContext::get_generator_state() const {
+    std::ostringstream oss;
+    oss << m_generator;  // mt19937's stream operator emits its full internal state (624 words + position)
+    return oss.str();
+}
+
+void AutoContext::set_generator_state(const std::string& state) {
+    std::istringstream iss(state);
+    iss >> m_generator;
+    if (iss.fail()) {
+        throw std::runtime_error("Failed to deserialize RNG generator state.");
+    }
 }
 
 void AutoContext::set_seed(uint32_t seed) {
@@ -63,6 +79,14 @@ void AutoContext::close_profiler() {
 
 void AutoContext::close_device() {
     m_device = nullptr;
+    // Drop the process-global fabric config that open_device_mesh may have
+    // installed via enable_fabric(). Without this, fabric stays armed for
+    // the remainder of the process and any subsequent default 1x1 open on a
+    // host where mmio_chip_ids().size() != all_chip_ids().size() trips the
+    // "Fabric is being used but Device i is not active" check in
+    // tt_metal/impl/device/device_manager.cpp. Going TO DISABLED while no
+    // devices are open is explicitly supported (see metal_env.cpp).
+    ttnn_fixed::distributed::disable_fabric();
 }
 
 ttnn::distributed::MeshDevice& AutoContext::get_device() {

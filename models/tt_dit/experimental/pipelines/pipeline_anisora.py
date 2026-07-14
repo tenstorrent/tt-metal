@@ -31,9 +31,10 @@ from __future__ import annotations
 import contextlib
 import os
 
+import ttnn
 from models.tt_dit.experimental.pipelines.pipeline_wan_distill import _patch_torch_transformer_random
 from models.tt_dit.experimental.utils.lightx2v_loader import load_lightx2v_state_dict
-from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
+from models.tt_dit.pipelines.wan.pipeline_wan import WanPipelineConfig
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
 from models.tt_dit.utils import cache
 
@@ -49,15 +50,13 @@ class AniSoraPipeline(WanPipelineI2V):
 
     def __init__(
         self,
-        *args,
+        *,
+        device: ttnn.MeshDevice,
+        config: WanPipelineConfig,
         anisora_local_dir: str | None = None,
         allow_download: bool | None = None,
         random_weights: bool | None = None,
-        **kwargs,
-    ):
-        kwargs["checkpoint_name"] = kwargs.get("checkpoint_name") or self.BASE_DIFFUSERS_REPO
-        kwargs["boundary_ratio"] = self.ANISORA_BOUNDARY_RATIO
-
+    ) -> None:
         if allow_download is None:
             allow_download = os.environ.get("TT_DIT_ALLOW_HF_DOWNLOAD") == "1"
         if anisora_local_dir is None:
@@ -71,28 +70,27 @@ class AniSoraPipeline(WanPipelineI2V):
 
         ctx = _patch_torch_transformer_random() if random_weights else contextlib.nullcontext()
         with ctx:
-            super().__init__(*args, **kwargs)
+            super().__init__(device=device, config=config)
 
     def _prepare_transformer(self, idx: int):
+        state = self.transformer_states[idx]
         if self._random_weights:
-            state = self.transformer_states[idx]
             cache.load_model(
                 state.model,
                 model_name=self.RANDOM_CACHE_NAMESPACE,
-                subfolder=state.subfolder,
+                subfolder=state.checkpoint.subfolder,
                 parallel_config=self.parallel_config,
                 mesh_shape=tuple(self.mesh_device.shape),
                 is_fsdp=self.is_fsdp,
-                get_torch_state_dict=lambda s=state: s.torch_model.state_dict(),
+                get_torch_state_dict=lambda s=state: s.checkpoint.state_dict(),
             )
             return
 
-        state = self.transformer_states[idx]
         filename = self.HIGH_NOISE_FILE if idx == 0 else self.LOW_NOISE_FILE
         cache.load_model(
             state.model,
             model_name=self.CACHE_NAMESPACE,
-            subfolder=state.subfolder,
+            subfolder=state.checkpoint.subfolder,
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             is_fsdp=self.is_fsdp,
@@ -104,7 +102,30 @@ class AniSoraPipeline(WanPipelineI2V):
             ),
         )
 
-    @staticmethod
-    def create_pipeline(*args, **kwargs):
-        kwargs["checkpoint_name"] = kwargs.get("checkpoint_name") or AniSoraPipeline.BASE_DIFFUSERS_REPO
-        return WanPipeline.create_pipeline(*args, pipeline_class=AniSoraPipeline, **kwargs)
+    @classmethod
+    def create_pipeline(
+        cls,
+        *,
+        mesh_device: ttnn.MeshDevice,
+        height: int = 480,
+        width: int = 832,
+        num_frames: int = 81,
+        num_links: int | None = None,
+        dynamic_load: bool | None = None,
+        topology: ttnn.Topology | None = None,
+        is_fsdp: bool | None = None,
+    ) -> AniSoraPipeline:
+        config = WanPipelineConfig.default(
+            mesh_shape=mesh_device.shape,
+            checkpoint_name=cls.BASE_DIFFUSERS_REPO,
+            height=height,
+            width=width,
+            num_frames=num_frames,
+            num_links=num_links,
+            topology=topology,
+            dynamic_load=dynamic_load,
+            is_fsdp=is_fsdp,
+            boundary_ratio=cls.ANISORA_BOUNDARY_RATIO,
+            model_type="i2v",
+        )
+        return cls(device=mesh_device, config=config)
