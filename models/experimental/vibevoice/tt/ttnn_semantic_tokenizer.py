@@ -361,6 +361,10 @@ class TTConv1d:
         cp = self.causal_pad
 
         if use_cache:
+            # Streaming keeps the ROW_MAJOR concat path: at T_enc=1 the tensors are tiny and
+            # a TILE concat over the non-tile-aligned cache (cp=1/6 rows) repacks tiles for
+            # more cost than the untilize it would save (measured: eager 34.5->42.9 ms/frame,
+            # traced 13.3->12.8 tok/s), so the W3 TILE-feed win is non-streaming only.
             if x.layout != ttnn.ROW_MAJOR_LAYOUT:
                 x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
             if cp > 0:

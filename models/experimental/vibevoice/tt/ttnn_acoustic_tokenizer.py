@@ -201,16 +201,17 @@ def preprocess_acoustic_tokenizer_weights(
 class TTConvTranspose1d:
     """SConvTranspose1d (causal, trim_right_ratio=1) via polyphase conv2d.
 
-    A stride-S transposed conv with kernel K = 2*S is decomposed into S regular
-    causal conv1d's of kernel size 2 (one per output phase), whose outputs are
-    interleaved.  This avoids ttnn.conv_transpose2d (which mis-streams at small
-    non-tile-aligned widths and is sharding-fragile) and reuses TTConv1d's working
-    streaming cache.
+    A stride-S transposed conv with kernel K = 2*S is expressed as a single kernel-2
+    causal conv with out_channels = S*out (the S output phases stacked along the channel
+    dim), whose interleave-reshape yields the upsampled output.  This avoids
+    ttnn.conv_transpose2d (which mis-streams at small non-tile-aligned widths and is
+    sharding-fragile) and reuses TTConv1d's working streaming cache.
 
     With W = ConvTranspose1d weight [in, out, K]:
         output[t*S + s] = x[t] * W[:, :, s] + x[t-1] * W[:, :, s+S]
     which is exactly the causal, right-trimmed SConvTranspose1d output (length T*S).
-    Each phase is therefore a kernel-2 causal conv (taps x[t-1], x[t]); no extra trim.
+    Phase s is a kernel-2 causal conv (taps x[t-1], x[t]); stacking all S phases into one
+    conv's out channels gives one dispatch/halo/shard instead of S plus a concat.
     """
 
     def __init__(self, ctw: ConvTransposeWeightsHost, device, compute_dtype=ttnn.bfloat16):
@@ -224,40 +225,43 @@ class TTConvTranspose1d:
         self.out_ch = out_ch
         self.K = K
 
-        # One kernel-2 causal conv per phase; bias added in every phase (each output
-        # position is produced by exactly one phase, so bias lands once per position).
+        # Stack all S phases into ONE kernel-2 causal conv with out_channels = S*out_ch,
+        # instead of S separate convs + a channel concat.  Phase s / output channel c maps
+        # to stacked channel s*out_ch + c, taps (x[t-1], x[t]) = (W[:,:,s+S], W[:,:,s]).
+        # The interleave-reshape below then places phase s at position t*S+s, reproducing
+        # the causal right-trimmed SConvTranspose1d output exactly — but with a single conv
+        # dispatch (one halo/shard/unshard) and one shared causal cache.
         W = ctw.weight  # [in, out, K]
-        self._phases = []
+        phase_ws = []
         for s in range(S):
-            k_tm1 = W[:, :, s + S].transpose(0, 1).contiguous()  # [out, in] coeff of x[t-1]
-            k_t = W[:, :, s].transpose(0, 1).contiguous()  # [out, in] coeff of x[t]
-            phase_w = torch.stack([k_tm1, k_t], dim=2).contiguous()  # [out, in, 2]
-            cw = ConvWeightsHost(weight=phase_w, bias=ctw.bias, stride=1, groups=1, causal_pad=1)
-            self._phases.append(TTConv1d(cw, device, compute_dtype=compute_dtype))
+            k_tm1 = W[:, :, s + S].transpose(0, 1)  # [out, in] coeff of x[t-1]
+            k_t = W[:, :, s].transpose(0, 1)  # [out, in] coeff of x[t]
+            phase_ws.append(torch.stack([k_tm1, k_t], dim=2))  # [out, in, 2]
+        stacked_w = torch.cat(phase_ws, dim=0).contiguous()  # [S*out, in, 2]
+        stacked_b = ctw.bias.repeat(S).contiguous() if ctw.bias is not None else None  # [S*out]
+        cw = ConvWeightsHost(weight=stacked_w, bias=stacked_b, stride=1, groups=1, causal_pad=1)
+        self._conv = TTConv1d(cw, device, compute_dtype=compute_dtype)
 
     def reset_cache(self) -> None:
-        for p in self._phases:
-            p.reset_cache()
+        self._conv.reset_cache()
 
     def reset_cache_inplace(self) -> None:
-        for p in self._phases:
-            p.reset_cache_inplace()
+        self._conv.reset_cache_inplace()
 
     def __call__(self, x: ttnn.Tensor, use_cache: bool = False, is_final_chunk: bool = False) -> ttnn.Tensor:
         """x: [B, 1, T, in_ch] -> [B, 1, T*stride, out_ch]."""
         B, _, T, _ = x.shape
         S = self.stride
 
-        phase_outs = [p(x, use_cache=use_cache, is_final_chunk=is_final_chunk) for p in self._phases]
+        out = self._conv(x, use_cache=use_cache, is_final_chunk=is_final_chunk)  # [B,1,T,S*out_ch]
         if S == 1:
-            return phase_outs[0]
+            return out
 
-        # Interleave phases: concat along channel -> [B,1,T,S*out_ch], reshape to
-        # [B,1,T*S,out_ch] so position t*S+s carries phase s (row-major flat order).
-        cat = ttnn.concat(phase_outs, dim=3)
-        if cat.layout != ttnn.ROW_MAJOR_LAYOUT:
-            cat = ttnn.to_layout(cat, ttnn.ROW_MAJOR_LAYOUT)
-        out = ttnn.reshape(cat, [B, 1, T * S, self.out_ch])
+        # Interleave phases: reshape [B,1,T,S*out_ch] -> [B,1,T*S,out_ch] so position
+        # t*S+s carries phase s (row-major flat order — a free view on ROW_MAJOR).
+        if out.layout != ttnn.ROW_MAJOR_LAYOUT:
+            out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+        out = ttnn.reshape(out, [B, 1, T * S, self.out_ch])
         # Downstream ops (e.g. ttnn.rms_norm in the next block) require TILE layout.
         return ttnn.to_layout(out, ttnn.TILE_LAYOUT)
 

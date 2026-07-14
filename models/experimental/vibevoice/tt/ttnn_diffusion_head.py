@@ -99,9 +99,9 @@ def preprocess_diffusion_head_weights(
     def w(key) -> torch.Tensor:
         return hf_state[key].to(torch.bfloat16)
 
-    def _w_tile(key: str) -> ttnn.Tensor:
+    def _w_tile(key: str, dtype=ttnn.bfloat16) -> ttnn.Tensor:
         # ttnn.linear computes x @ W (no transpose), so store weights transposed [in, out]
-        return _as_tile(w(key).t().unsqueeze(0).unsqueeze(0), device)
+        return _as_tile(w(key).t().unsqueeze(0).unsqueeze(0), device, dtype=dtype)
 
     def _norm_tile(w_1d: torch.Tensor) -> ttnn.Tensor:
         # ttnn.rms_norm requires gamma shape [1, 1, dim//32, 32] in ROW_MAJOR
@@ -130,8 +130,11 @@ def preprocess_diffusion_head_weights(
     for i in range(num_layers):
         layer_adaLN_w.append(_w_tile(f"layers.{i}.adaLN_modulation.1.weight"))
         layer_norm_w.append(_norm_tile(w(f"layers.{i}.norm.weight")))
-        layer_ffn_gate_w.append(_w_tile(f"layers.{i}.ffn.gate_proj.weight"))
-        layer_ffn_up_w.append(_w_tile(f"layers.{i}.ffn.up_proj.weight"))
+        # gate/up-proj weights bf8_b (weight-bandwidth-bound at B=2, M=1); down_proj stays
+        # bf16 — it feeds the gated residual and this head runs iteratively (10 steps), so
+        # down bf8_b drops single-forward PCC 0.9953->0.9940 (too tight without an e2e gate).
+        layer_ffn_gate_w.append(_w_tile(f"layers.{i}.ffn.gate_proj.weight", dtype=ttnn.bfloat8_b))
+        layer_ffn_up_w.append(_w_tile(f"layers.{i}.ffn.up_proj.weight", dtype=ttnn.bfloat8_b))
         layer_ffn_down_w.append(_w_tile(f"layers.{i}.ffn.down_proj.weight"))
 
     final_adaLN_w = _w_tile("final_layer.adaLN_modulation.1.weight")
