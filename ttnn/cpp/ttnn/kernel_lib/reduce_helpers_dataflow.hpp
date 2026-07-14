@@ -60,6 +60,20 @@ FORCE_INLINE void prepare_reduce_scaler(
     float scaler_f, uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH);
 
 /**
+ * @brief Fill a 0/1 MASK tile for the AccumulateViaAdd partial (non-tile-aligned) reduce path.
+ *
+ * Writes 1.0 in the first `valid_elems` positions along the reduce dimension and 0 elsewhere, in the
+ * broadcast layout the compute consumes on the last tile: REDUCE_ROW -> row-0 (mul_tiles_bcast_rows),
+ * REDUCE_COL -> col-0 (mul_tiles_bcast_cols). REDUCE_SCALAR is rejected (2-D partial unsupported).
+ *
+ * @tparam dfb_id DataflowBuffer ID to write the mask to (must be constexpr)
+ * @tparam reduce_dim Reduction dimension (REDUCE_ROW or REDUCE_COL)
+ * @param valid_elems Valid reduce-dim elements in the last tile, in [1, tile reduce-axis dim - 1].
+ */
+template <uint32_t dfb_id, ReduceDim reduce_dim>
+FORCE_INLINE void prepare_reduce_mask(uint32_t valid_elems);
+
+/**
  * @brief Generate a reduce scaler tile with format and tile shape deduced from dfb_id
  *
  * Computes the appropriate scaler value based on pool type, reduce dimension,

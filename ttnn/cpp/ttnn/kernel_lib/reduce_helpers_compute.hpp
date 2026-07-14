@@ -108,6 +108,42 @@ enum class ReduceDataFormatReconfigMode { NONE, INPUT, OUTPUT, INPUT_AND_OUTPUT 
 enum class ReduceInputPolicy { WaitAndPopPerTile, BulkWaitBulkPop, WaitUpfrontNoPop, NoWaitNoPop };
 
 // =============================================================================
+// Algorithm - which datapath implements the reduce
+// =============================================================================
+
+/**
+ * @brief Which datapath implements the reduce.
+ *
+ * - Auto (default): pick the implementation automatically. For now this always resolves to ReduceTile;
+ *   a cost heuristic (reduced tiles-per-output vs reduce dim, DEST width, input policy, ...) will choose
+ *   between the paths later. Callers should prefer Auto and let the library decide.
+ *
+ * - ReduceTile: the standard datapath — FPU matmul-with-ones (reduce_tile) per input tile, or the SFPU
+ *   fold for Int32. Handles EVERY configuration (all pool types, partial / non-tile-aligned reduce dims
+ *   via the scaler, cross-call accumulation, all input policies).
+ *
+ * - AccumulateViaAdd: sum the reduce-dim tiles into ONE DST register with pairwise FPU add_tiles(acc_to_dest),
+ *   then finalize within the tile on the SFPU (sfpu_reduce) and, for AVG, apply 1/N with a single SFPU
+ *   scalar-multiply. One DST register per output tile, so it handles an arbitrary block without the
+ *   REDUCE_COL DST/chunk limit; it wins for wide reduces (many tiles per output) and is more accurate for
+ *   AVG / scalar. RESTRICTED — guarded by static_assert / ASSERT in reduce():
+ *     - SUM or AVG only (an additive accumulate cannot express MAX/MIN),
+ *     - float only (no Int32),
+ *     - BulkWaitBulkPop (resident block, indexed) or WaitAndPopPerTile (streaming: DST is the accumulator,
+ *       so only ~2 input tiles resident at a time — contiguous row/scalar, aligned only).
+ *   PARTIAL (non-tile-aligned) reduce dims are supported standalone (NoAccumulation), ROW/COL only, under
+ *   BulkWaitBulkPop: the last reduce-dim tile is folded in with a masked accumulating broadcast-mul and the
+ *   mean divides by the true element count. The scaler CB is otherwise unused (1/N is computed internally).
+ *   Cross-call Accumulate (CB accumulator across reduce() calls) IS supported: the accumulator CB holds the
+ *   RAW partial-sum tile (not a reduced tile), each chunk folds it into the pairwise add NATIVELY (no
+ *   binary_dest_reuse) via a parity rule, and sfpu_reduce finalizes only on the last chunk (Accumulate::at_last).
+ *   Accumulate is further restricted to SUM (the internal AVG 1/N is per-call and cannot span chunks — for a
+ *   cross-chunk mean use SUM + a 1/N post_reduce_op on the last chunk), BulkWaitBulkPop, and tile-aligned (no
+ *   partial).
+ */
+enum class ReduceAlgorithm { Auto, ReduceTile, AccumulateViaAdd };
+
+// =============================================================================
 // Configuration Types
 // =============================================================================
 
@@ -175,12 +211,21 @@ struct ReduceInputBlockShape {
  *   reduce<SUM, REDUCE_ROW>(cb_in, cb_scaler, cb_out, shape, ..., partial);
  */
 struct ReducePartialScaler {
-    // Scaler-tile index to use for the LAST reduce-dim iteration. 0 = no
-    // partial (use tile 0 everywhere); >0 = index of the partial scaler tile.
+    // ReduceTile: scaler-tile index to use for the LAST reduce-dim iteration. 0 = no partial (use tile 0
+    // everywhere); >0 = index of the partial scaler tile.
+    // AccumulateViaAdd: index of the 0/1 MASK tile in the scaler CB (may be 0).
     uint32_t last_tile_scaler_idx = 0;
+    // AccumulateViaAdd only: valid reduce-dim elements in the LAST tile (1..31). >0 signals a partial
+    // reduce and gives the true count for the mean's 1/N. 0 = tile-aligned (unused by ReduceTile).
+    uint32_t valid_reduce_dim_elements = 0;
 
-    static constexpr ReducePartialScaler none() { return {0}; }
-    static constexpr ReducePartialScaler last_tile_at(uint32_t idx = 1) { return {idx}; }
+    static constexpr ReducePartialScaler none() { return {0, 0}; }
+    static constexpr ReducePartialScaler last_tile_at(uint32_t idx = 1) { return {idx, 0}; }
+    // AccumulateViaAdd: `valid` real elements in the last reduce-dim tile; 0/1 mask tile at scaler-CB index
+    // `mask_idx`.
+    static constexpr ReducePartialScaler partial_mask(uint32_t valid, uint32_t mask_idx = 0) {
+        return {mask_idx, valid};
+    }
 };
 
 /**
@@ -225,17 +270,32 @@ struct AccumulationConfig {
 struct Accumulate {
     AccumulationConfig config;
     uint32_t iteration = 0;
+    // AccumulateViaAdd only: marks the LAST chunk. The accumulator CB holds the RAW partial-sum tile, so the
+    // within-tile finalize (sfpu_reduce + scaler + post_reduce_op) must run exactly once — on the last chunk,
+    // writing the finalized result to the output CB. Non-last chunks write the raw partial sum back to the
+    // accumulator CB and skip the finalize. The ReduceTile datapath ignores this flag (it finalizes every
+    // chunk, so accumulating REDUCED partials is correct there); only AccumulateViaAdd reads it.
+    bool last = false;
 
-    explicit constexpr Accumulate(AccumulationConfig cfg, uint32_t iter = 0) : config(cfg), iteration(iter) {}
-    explicit constexpr Accumulate(uint32_t cb, uint32_t iter = 0) : config{cb, 0}, iteration(iter) {}
+    explicit constexpr Accumulate(AccumulationConfig cfg, uint32_t iter = 0, bool lst = false) :
+        config(cfg), iteration(iter), last(lst) {}
+    explicit constexpr Accumulate(uint32_t cb, uint32_t iter = 0, bool lst = false) :
+        config{cb, 0}, iteration(iter), last(lst) {}
 
     // Factory for concise call sites
     static constexpr Accumulate at(uint32_t cb, uint32_t iter, uint32_t dst = 0) {
         return Accumulate(AccumulationConfig{cb, dst}, iter);
     }
+    // AccumulateViaAdd: mark the LAST chunk (finalize within the tile and write to the output CB). Equivalent
+    // to at() for the ReduceTile datapath, which finalizes every chunk regardless.
+    static constexpr Accumulate at_last(uint32_t cb, uint32_t iter, uint32_t dst = 0) {
+        return Accumulate(AccumulationConfig{cb, dst}, iter, /*last=*/true);
+    }
 
     // Convenience: check if this is first iteration (skip reload)
     constexpr bool is_first() const { return iteration == 0; }
+    // AccumulateViaAdd: is this the last chunk (finalize + write to output)? See `last`.
+    constexpr bool is_last() const { return last; }
 };
 
 // NoAccumulation is defined in common_types.hpp (shared with binary_op_helpers).
@@ -419,6 +479,7 @@ template <
     uint32_t output_dfb_id,
     ReduceInputPolicy input_policy = ReduceInputPolicy::WaitAndPopPerTile,
     ReduceDataFormatReconfigMode reconfig_mode = ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+    ReduceAlgorithm algorithm = ReduceAlgorithm::Auto,
     ReduceFp32Mode fp32_mode = ReduceFp32Mode::Fast,
     typename AccumulateT = NoAccumulation,
     typename PostReduceOp = NoOp>
