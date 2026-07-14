@@ -15,7 +15,7 @@ using namespace tt::tt_metal;
 namespace ttnn::experimental::prim {
 
 void RegimeAMatmulDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    [[maybe_unused]] const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& act = tensor_args.input_tensor;
     const auto& weight = tensor_args.weight_tensor;
 
@@ -60,11 +60,8 @@ void RegimeAMatmulDeviceOperation::validate_on_program_cache_miss(
         w_mem.buffer_type() == BufferType::DRAM && w_mem.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
         "regime_a_matmul weight must be DRAM WIDTH_SHARDED (use create_regime_a_weight_memory_config)");
 
-    // v1 requires an explicit config (no auto picker yet).
-    TT_FATAL(
-        operation_attributes.config.has_value(),
-        "regime_a_matmul v1 requires an explicit RegimeAMatmulConfig (auto config selection is not yet "
-        "supported)");
+    // config is optional: nullopt -> the program factory auto-selects via auto_select_config (ported
+    // FLUX/LTX picker). An explicit RegimeAMatmulConfig overrides for reproducibility.
 }
 
 RegimeAMatmulDeviceOperation::spec_return_value_t RegimeAMatmulDeviceOperation::compute_output_specs(

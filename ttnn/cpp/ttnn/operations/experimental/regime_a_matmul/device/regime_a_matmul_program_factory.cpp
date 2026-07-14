@@ -66,7 +66,11 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     Tensor& out = tensor_return_value;
     IDevice* device = in0.device();
 
-    const RegimeAMatmulConfig cfg = operation_attributes.config.value();
+    // Resolve config=None via the auto-selector (deterministic in the tile dims, program-cache-safe).
+    const uint32_t Mt_r = (static_cast<uint32_t>(in0.logical_shape()[-2]) + 31u) / 32u;
+    const uint32_t Kt_r = (static_cast<uint32_t>(in0.logical_shape()[-1]) + 31u) / 32u;
+    const uint32_t Nt_r = (static_cast<uint32_t>(in1.logical_shape()[-1]) + 31u) / 32u;
+    const RegimeAMatmulConfig cfg = operation_attributes.config.value_or(auto_select_config(Mt_r, Kt_r, Nt_r));
 
     // ---- Run the pure host planner ----
     auto planres = make_and_build_plan(device, in0, in1, cfg);

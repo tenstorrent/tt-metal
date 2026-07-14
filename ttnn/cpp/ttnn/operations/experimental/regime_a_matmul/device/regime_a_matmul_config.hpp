@@ -28,11 +28,18 @@ struct RegimeAMatmulConfig {
 
 namespace plan = ttnn::operations::experimental::regime_a_matmul::plan;
 
+// Auto-select a (Pk, Ns, Sm, kb, nsb) config for a shape given in TILE counts. Ported from the
+// validated FLUX/LTX picker (tools/mm_sweep/picker_table.py oracle + picker_v2.py cost-model
+// fallback): a lookup table for the 20 production shapes, else enumerate feasible candidates (Sm=1)
+// and pick the min-cost one. Used when the caller passes config=None.
+RegimeAMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt);
+
 // Device adapter: read (Mt, Kt, Nt) from the tensors, fetch the compute grid + bank-adjacent worker
 // assignments off the device, translate RegimeAMatmulConfig -> plan::RegimeAConfig, and run the pure
-// planner. Returns the plan result verbatim; the caller must TT_FATAL on !ok() with plan.error.
+// planner. When cfg is nullopt, auto_select_config picks the config. Returns the plan result verbatim;
+// the caller must TT_FATAL on !ok() with plan.error.
 plan::PlanResult make_and_build_plan(
-    tt::tt_metal::IDevice* device, const Tensor& in0, const Tensor& in1, const RegimeAMatmulConfig& cfg);
+    tt::tt_metal::IDevice* device, const Tensor& in0, const Tensor& in1, const std::optional<RegimeAMatmulConfig>& cfg);
 
 // Build the canonical DRAM width-sharded MemoryConfig for the Regime-A in1 (weight) tensor.
 //

@@ -55,6 +55,26 @@ def test_regime_a_matmul_correctness(device, label, M, K, N, Ns, Pk, Sm, kb, nsb
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="Regime-A matmul is Blackhole-only")
+@pytest.mark.parametrize(
+    "M,K,N",
+    [(32, 6144, 4608), (64, 6144, 4608), (128, 6144, 4608), (32, 6144, 6144)],
+    ids=["mt1", "mt2", "mt4", "mt1-big"],
+)
+def test_regime_a_matmul_auto_config(device, M, K, N):
+    # config=None -> the op auto-selects (Pk,Ns,Sm,kb,nsb) via the ported FLUX/LTX picker.
+    torch.manual_seed(0)
+    t0 = torch.randn(1, 1, M, K, dtype=torch.bfloat16)
+    t1 = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
+    ref = (t0.float() @ t1.float())[0, 0]
+    a0 = ttnn.from_torch(t0, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    wcfg = ttnn.create_regime_a_weight_memory_config(list(t1.shape), ttnn.bfloat16, device)
+    a1 = ttnn.from_torch(t1, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=wcfg)
+    out = ttnn.experimental.regime_a_matmul(a0, a1)  # config omitted -> auto
+    got = ttnn.to_torch(ttnn.from_device(out))[0, 0]
+    assert_with_pcc(ref, got.float(), 0.999)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="Regime-A matmul is Blackhole-only")
 def test_regime_a_matmul_cache_replay(device):
     # Run the same config twice on FRESH tensors (different buffer addresses). The second call hits the
     # program cache and must pick up the new addresses via override_runtime_arguments.
