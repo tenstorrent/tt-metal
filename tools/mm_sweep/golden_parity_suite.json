@@ -1,0 +1,725 @@
+[
+  {
+    "label": "Mt1  base",
+    "shape": [
+      32,
+      6144,
+      4608
+    ],
+    "golden": {
+      "label": "Mt1  base",
+      "M": 32,
+      "K": 6144,
+      "N": 4608,
+      "Mt": 1,
+      "Ns": 1,
+      "Pk": 12,
+      "Sm": 1,
+      "kb": 2,
+      "nsb": 1,
+      "cores": 96,
+      "cyc": 160105,
+      "us": 118.6,
+      "eff_bw": 483.2,
+      "eff_pct": 94.4,
+      "deliv_bw": 483.2,
+      "deliv_pct": 94.4,
+      "per_risc": {
+        "BRISC": 160105,
+        "NCRISC": 159414,
+        "TRISC": 159641
+      },
+      "l1_kb": 60.0,
+      "wasteK_pct": 0.0,
+      "wasteN_pct": 0.0,
+      "in1_shard_tiles": [
+        192,
+        18
+      ],
+      "GOLDEN": true
+    },
+    "all_candidates": [
+      {
+        "label": "Mt1  base",
+        "M": 32,
+        "K": 6144,
+        "N": 4608,
+        "Mt": 1,
+        "Ns": 1,
+        "Pk": 12,
+        "Sm": 1,
+        "kb": 2,
+        "nsb": 1,
+        "cores": 96,
+        "cyc": 160105,
+        "us": 118.6,
+        "eff_bw": 483.2,
+        "eff_pct": 94.4,
+        "deliv_bw": 483.2,
+        "deliv_pct": 94.4,
+        "per_risc": {
+          "BRISC": 160105,
+          "NCRISC": 159414,
+          "TRISC": 159641
+        },
+        "l1_kb": 60.0,
+        "wasteK_pct": 0.0,
+        "wasteN_pct": 0.0,
+        "in1_shard_tiles": [
+          192,
+          18
+        ],
+        "GOLDEN": true
+      },
+      {
+        "label": "Mt1  base",
+        "M": 32,
+        "K": 6144,
+        "N": 4608,
+        "Mt": 1,
+        "Ns": 2,
+        "Pk": 6,
+        "Sm": 1,
+        "kb": 2,
+        "nsb": 1,
+        "cores": 96,
+        "cyc": 162451,
+        "us": 120.33,
+        "eff_bw": 476.3,
+        "eff_pct": 93.0,
+        "deliv_bw": 476.3,
+        "deliv_pct": 93.0,
+        "per_risc": {
+          "BRISC": 162451,
+          "NCRISC": 161063,
+          "TRISC": 162055
+        },
+        "l1_kb": 92.0,
+        "wasteK_pct": 0.0,
+        "wasteN_pct": 0.0,
+        "in1_shard_tiles": [
+          192,
+          18
+        ]
+      },
+      {
+        "label": "Mt1  base",
+        "M": 32,
+        "K": 6144,
+        "N": 4608,
+        "Mt": 1,
+        "Ns": 2,
+        "Pk": 6,
+        "Sm": 1,
+        "kb": 4,
+        "nsb": 1,
+        "cores": 96,
+        "cyc": 161396,
+        "us": 119.55,
+        "eff_bw": 479.4,
+        "eff_pct": 93.6,
+        "deliv_bw": 479.4,
+        "deliv_pct": 93.6,
+        "per_risc": {
+          "BRISC": 161110,
+          "NCRISC": 160710,
+          "TRISC": 160926
+        },
+        "l1_kb": 108.0,
+        "wasteK_pct": 0.0,
+        "wasteN_pct": 0.0,
+        "in1_shard_tiles": [
+          192,
+          18
+        ]
+      },
+      {
+        "label": "Mt1  base",
+        "M": 32,
+        "K": 6144,
+        "N": 4608,
+        "Mt": 1,
+        "Ns": 1,
+        "Pk": 12,
+        "Sm": 1,
+        "kb": 1,
+        "nsb": 2,
+        "cores": 96,
+        "cyc": 161262,
+        "us": 119.45,
+        "eff_bw": 479.8,
+        "eff_pct": 93.7,
+        "deliv_bw": 479.8,
+        "deliv_pct": 93.7,
+        "per_risc": {
+          "BRISC": 161262,
+          "NCRISC": 160212,
+          "TRISC": 160700
+        },
+        "l1_kb": 72.0,
+        "wasteK_pct": 0.0,
+        "wasteN_pct": 0.0,
+        "in1_shard_tiles": [
+          192,
+          18
+        ]
+      }
+    ]
+  },
+  {
+    "label": "Mt2  base",
+    "shape": [
+      64,
+      6144,
+      4608
+    ],
+    "golden": {
+      "label": "Mt2  base",
+      "M": 64,
+      "K": 6144,
+      "N": 4608,
+      "Mt": 2,
+      "Ns": 1,
+      "Pk": 6,
+      "Sm": 1,
+      "kb": 4,
+      "nsb": 2,
+      "cores": 48,
+      "cyc": 165269,
+      "us": 122.42,
+      "eff_bw": 473.8,
+      "eff_pct": 92.5,
+      "deliv_bw": 473.8,
+      "deliv_pct": 92.5,
+      "per_risc": {
+        "BRISC": 165269,
+        "NCRISC": 164108,
+        "TRISC": 164571
+      },
+      "l1_kb": 240.0,
+      "wasteK_pct": 0.0,
+      "wasteN_pct": 0.0,
+      "in1_shard_tiles": [
+        192,
+        18
+      ],
+      "GOLDEN": true
+    },
+    "all_candidates": [
+      {
+        "label": "Mt2  base",
+        "M": 64,
+        "K": 6144,
+        "N": 4608,
+        "Mt": 2,
+        "Ns": 1,
+        "Pk": 6,
+        "Sm": 1,
+        "kb": 4,
+        "nsb": 2,
+        "cores": 48,
+        "cyc": 165269,
+        "us": 122.42,
+        "eff_bw": 473.8,
+        "eff_pct": 92.5,
+        "deliv_bw": 473.8,
+        "deliv_pct": 92.5,
+        "per_risc": {
+          "BRISC": 165269,
+          "NCRISC": 164108,
+          "TRISC": 164571
+        },
+        "l1_kb": 240.0,
+        "wasteK_pct": 0.0,
+        "wasteN_pct": 0.0,
+        "in1_shard_tiles": [
+          192,
+          18
+        ],
+        "GOLDEN": true
+      }
+    ]
+  },
+  {
+    "label": "Mt4  base",
+    "shape": [
+      128,
+      6144,
+      4608
+    ],
+    "golden": {
+      "label": "Mt4  base",
+      "M": 128,
+      "K": 6144,
+      "N": 4608,
+      "Mt": 4,
+      "Ns": 1,
+      "Pk": 12,
+      "Sm": 1,
+      "kb": 2,
+      "nsb": 1,
+      "cores": 96,
+      "cyc": 177039,
+      "us": 131.14,
+      "eff_bw": 452.8,
+      "eff_pct": 88.4,
+      "deliv_bw": 452.8,
+      "deliv_pct": 88.4,
+      "per_risc": {
+        "BRISC": 177039,
+        "NCRISC": 175756,
+        "TRISC": 176352
+      },
+      "l1_kb": 192.0,
+      "wasteK_pct": 0.0,
+      "wasteN_pct": 0.0,
+      "in1_shard_tiles": [
+        192,
+        18
+      ],
+      "GOLDEN": true
+    },
+    "all_candidates": [
+      {
+        "label": "Mt4  base",
+        "M": 128,
+        "K": 6144,
+        "N": 4608,
+        "Mt": 4,
+        "Ns": 1,
+        "Pk": 12,
+        "Sm": 1,
+        "kb": 2,
+        "nsb": 1,
+        "cores": 96,
+        "cyc": 177039,
+        "us": 131.14,
+        "eff_bw": 452.8,
+        "eff_pct": 88.4,
+        "deliv_bw": 452.8,
+        "deliv_pct": 88.4,
+        "per_risc": {
+          "BRISC": 177039,
+          "NCRISC": 175756,
+          "TRISC": 176352
+        },
+        "l1_kb": 192.0,
+        "wasteK_pct": 0.0,
+        "wasteN_pct": 0.0,
+        "in1_shard_tiles": [
+          192,
+          18
+        ],
+        "GOLDEN": true
+      }
+    ]
+  },
+  {
+    "label": "Mt8  base",
+    "shape": [
+      256,
+      6144,
+      4608
+    ],
+    "golden": {
+      "label": "Mt8  base",
+      "M": 256,
+      "K": 6144,
+      "N": 4608,
+      "Mt": 8,
+      "Ns": 1,
+      "Pk": 12,
+      "Sm": 1,
+      "kb": 2,
+      "nsb": 1,
+      "cores": 96,
+      "cyc": 208983,
+      "us": 154.8,
+      "eff_bw": 401.3,
+      "eff_pct": 78.4,
+      "deliv_bw": 401.3,
+      "deliv_pct": 78.4,
+      "per_risc": {
+        "BRISC": 208983,
+        "NCRISC": 207559,
+        "TRISC": 208287
+      },
+      "l1_kb": 368.0,
+      "wasteK_pct": 0.0,
+      "wasteN_pct": 0.0,
+      "in1_shard_tiles": [
+        192,
+        18
+      ],
+      "GOLDEN": true
+    },
+    "all_candidates": [
+      {
+        "label": "Mt8  base",
+        "M": 256,
+        "K": 6144,
+        "N": 4608,
+        "Mt": 8,
+        "Ns": 1,
+        "Pk": 12,
+        "Sm": 1,
+        "kb": 2,
+        "nsb": 1,
+        "cores": 96,
+        "cyc": 208983,
+        "us": 154.8,
+        "eff_bw": 401.3,
+        "eff_pct": 78.4,
+        "deliv_bw": 401.3,
+        "deliv_pct": 78.4,
+        "per_risc": {
+          "BRISC": 208983,
+          "NCRISC": 207559,
+          "TRISC": 208287
+        },
+        "l1_kb": 368.0,
+        "wasteK_pct": 0.0,
+        "wasteN_pct": 0.0,
+        "in1_shard_tiles": [
+          192,
+          18
+        ],
+        "GOLDEN": true
+      },
+      {
+        "label": "Mt8  base",
+        "M": 256,
+        "K": 6144,
+        "N": 4608,
+        "Mt": 8,
+        "Ns": 2,
+        "Pk": 6,
+        "Sm": 1,
+        "kb": 2,
+        "nsb": 1,
+        "cores": 96,
+        "cyc": 236225,
+        "us": 174.98,
+        "eff_bw": 355.1,
+        "eff_pct": 69.3,
+        "deliv_bw": 355.1,
+        "deliv_pct": 69.3,
+        "per_risc": {
+          "BRISC": 233457,
+          "NCRISC": 236225,
+          "TRISC": 235421
+        },
+        "l1_kb": 624.0,
+        "wasteK_pct": 0.0,
+        "wasteN_pct": 0.0,
+        "in1_shard_tiles": [
+          192,
+          18
+        ]
+      },
+      {
+        "label": "Mt8  base",
+        "M": 256,
+        "K": 6144,
+        "N": 4608,
+        "Mt": 8,
+        "Ns": 2,
+        "Pk": 6,
+        "Sm": 1,
+        "kb": 4,
+        "nsb": 1,
+        "cores": 96,
+        "cyc": 242441,
+        "us": 179.59,
+        "eff_bw": 346.0,
+        "eff_pct": 67.6,
+        "deliv_bw": 346.0,
+        "deliv_pct": 67.6,
+        "per_risc": {
+          "BRISC": 236985,
+          "NCRISC": 242441,
+          "TRISC": 241628
+        },
+        "l1_kb": 640.0,
+        "wasteK_pct": 0.0,
+        "wasteN_pct": 0.0,
+        "in1_shard_tiles": [
+          192,
+          18
+        ]
+      },
+      {
+        "label": "Mt8  base",
+        "M": 256,
+        "K": 6144,
+        "N": 4608,
+        "Mt": 8,
+        "Ns": 1,
+        "Pk": 12,
+        "Sm": 1,
+        "kb": 2,
+        "nsb": 2,
+        "cores": 96,
+        "cyc": 209962,
+        "us": 155.53,
+        "eff_bw": 399.5,
+        "eff_pct": 78.0,
+        "deliv_bw": 399.5,
+        "deliv_pct": 78.0,
+        "per_risc": {
+          "BRISC": 209962,
+          "NCRISC": 207344,
+          "TRISC": 208635
+        },
+        "l1_kb": 480.0,
+        "wasteK_pct": 0.0,
+        "wasteN_pct": 0.0,
+        "in1_shard_tiles": [
+          192,
+          18
+        ]
+      }
+    ]
+  },
+  {
+    "label": "Mt4  small-N",
+    "shape": [
+      128,
+      6144,
+      768
+    ],
+    "golden": {
+      "label": "Mt4  small-N",
+      "M": 128,
+      "K": 6144,
+      "N": 768,
+      "Mt": 4,
+      "Ns": 1,
+      "Pk": 12,
+      "Sm": 1,
+      "kb": 2,
+      "nsb": 1,
+      "cores": 96,
+      "cyc": 47554,
+      "us": 35.23,
+      "eff_bw": 318.1,
+      "eff_pct": 62.1,
+      "deliv_bw": 318.1,
+      "deliv_pct": 62.1,
+      "per_risc": {
+        "BRISC": 47554,
+        "NCRISC": 46371,
+        "TRISC": 46890
+      },
+      "l1_kb": 192.0,
+      "wasteK_pct": 0.0,
+      "wasteN_pct": 0.0,
+      "in1_shard_tiles": [
+        192,
+        3
+      ],
+      "GOLDEN": true
+    },
+    "all_candidates": [
+      {
+        "label": "Mt4  small-N",
+        "M": 128,
+        "K": 6144,
+        "N": 768,
+        "Mt": 4,
+        "Ns": 1,
+        "Pk": 12,
+        "Sm": 1,
+        "kb": 2,
+        "nsb": 1,
+        "cores": 96,
+        "cyc": 47554,
+        "us": 35.23,
+        "eff_bw": 318.1,
+        "eff_pct": 62.1,
+        "deliv_bw": 318.1,
+        "deliv_pct": 62.1,
+        "per_risc": {
+          "BRISC": 47554,
+          "NCRISC": 46371,
+          "TRISC": 46890
+        },
+        "l1_kb": 192.0,
+        "wasteK_pct": 0.0,
+        "wasteN_pct": 0.0,
+        "in1_shard_tiles": [
+          192,
+          3
+        ],
+        "GOLDEN": true
+      }
+    ]
+  },
+  {
+    "label": "Mt1  non-divis",
+    "shape": [
+      32,
+      6080,
+      4640
+    ],
+    "golden": {
+      "label": "Mt1  non-divis",
+      "M": 32,
+      "K": 6080,
+      "N": 4640,
+      "Mt": 1,
+      "Ns": 1,
+      "Pk": 12,
+      "Sm": 1,
+      "kb": 2,
+      "nsb": 1,
+      "cores": 96,
+      "cyc": 168848,
+      "us": 125.07,
+      "eff_bw": 456.6,
+      "eff_pct": 89.2,
+      "deliv_bw": 483.5,
+      "deliv_pct": 94.4,
+      "per_risc": {
+        "BRISC": 168848,
+        "NCRISC": 167897,
+        "TRISC": 168356
+      },
+      "l1_kb": 60.0,
+      "wasteK_pct": 1.1,
+      "wasteN_pct": 4.8,
+      "in1_shard_tiles": [
+        192,
+        19
+      ],
+      "GOLDEN": true
+    },
+    "all_candidates": [
+      {
+        "label": "Mt1  non-divis",
+        "M": 32,
+        "K": 6080,
+        "N": 4640,
+        "Mt": 1,
+        "Ns": 1,
+        "Pk": 12,
+        "Sm": 1,
+        "kb": 2,
+        "nsb": 1,
+        "cores": 96,
+        "cyc": 168848,
+        "us": 125.07,
+        "eff_bw": 456.6,
+        "eff_pct": 89.2,
+        "deliv_bw": 483.5,
+        "deliv_pct": 94.4,
+        "per_risc": {
+          "BRISC": 168848,
+          "NCRISC": 167897,
+          "TRISC": 168356
+        },
+        "l1_kb": 60.0,
+        "wasteK_pct": 1.1,
+        "wasteN_pct": 4.8,
+        "in1_shard_tiles": [
+          192,
+          19
+        ],
+        "GOLDEN": true
+      },
+      {
+        "label": "Mt1  non-divis",
+        "M": 32,
+        "K": 6080,
+        "N": 4640,
+        "Mt": 1,
+        "Ns": 1,
+        "Pk": 12,
+        "Sm": 1,
+        "kb": 1,
+        "nsb": 2,
+        "cores": 96,
+        "cyc": 180577,
+        "us": 133.76,
+        "eff_bw": 426.9,
+        "eff_pct": 83.4,
+        "deliv_bw": 475.7,
+        "deliv_pct": 92.9,
+        "per_risc": {
+          "BRISC": 180577,
+          "NCRISC": 179521,
+          "TRISC": 180028
+        },
+        "l1_kb": 72.0,
+        "wasteK_pct": 1.1,
+        "wasteN_pct": 10.3,
+        "in1_shard_tiles": [
+          192,
+          20
+        ]
+      },
+      {
+        "label": "Mt1  non-divis",
+        "M": 32,
+        "K": 6080,
+        "N": 4640,
+        "Mt": 1,
+        "Ns": 1,
+        "Pk": 12,
+        "Sm": 1,
+        "kb": 2,
+        "nsb": 2,
+        "cores": 96,
+        "cyc": 180217,
+        "us": 133.49,
+        "eff_bw": 427.8,
+        "eff_pct": 83.6,
+        "deliv_bw": 476.7,
+        "deliv_pct": 93.1,
+        "per_risc": {
+          "BRISC": 180217,
+          "NCRISC": 179161,
+          "TRISC": 179665
+        },
+        "l1_kb": 88.0,
+        "wasteK_pct": 1.1,
+        "wasteN_pct": 10.3,
+        "in1_shard_tiles": [
+          192,
+          20
+        ]
+      },
+      {
+        "label": "Mt1  non-divis",
+        "M": 32,
+        "K": 6080,
+        "N": 4640,
+        "Mt": 1,
+        "Ns": 1,
+        "Pk": 12,
+        "Sm": 1,
+        "kb": 1,
+        "nsb": 4,
+        "cores": 96,
+        "cyc": 201257,
+        "us": 149.08,
+        "eff_bw": 383.1,
+        "eff_pct": 74.8,
+        "deliv_bw": 426.9,
+        "deliv_pct": 83.4,
+        "per_risc": {
+          "BRISC": 201257,
+          "NCRISC": 199995,
+          "TRISC": 200590
+        },
+        "l1_kb": 112.0,
+        "wasteK_pct": 1.1,
+        "wasteN_pct": 10.3,
+        "in1_shard_tiles": [
+          192,
+          20
+        ]
+      }
+    ]
+  }
+]
