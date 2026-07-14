@@ -11,7 +11,6 @@ import threading
 import argparse
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 import asyncio
-import websockets
 import json
 import signal
 
@@ -527,6 +526,11 @@ async def ws_handler(websocket):
 
 async def websocket_main(ws_port):
     # Bind to loopback by default; remote viewing is via SSH port-forwarding (see docs).
+    # Imported lazily: websockets is only needed by the live-reload WASM GUI server (run in a
+    # detached subprocess). Keeping it out of module scope lets headless profiling / CSV report
+    # generation work without the optional `websockets` package installed.
+    import websockets
+
     async with websockets.serve(ws_handler, "127.0.0.1", ws_port):
         logger.info(f"WebSocket server running on ws://127.0.0.1:{ws_port}")
         await watch_embed_file()
