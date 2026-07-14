@@ -22,6 +22,7 @@
 
 #include "context/context_types.hpp"
 #include "tt_metal/common/broadcast_ring.hpp"
+#include <tt-metalium/experimental/realtime_profiler_packets.hpp>
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 
 namespace tt::tt_metal {
@@ -161,7 +162,10 @@ private:
     // profiler-packet callbacks. Returns the number of pages read.
     uint32_t drain_x280_device(DeviceState& dev_state);
 
-    using RecordRing = BroadcastRing<tt::ProgramRealtimeRecord>;
+    // PROTOTYPING: the ring is repurposed to carry X280 device-zone markers (WorkerZoneWire), not
+    // program records. The translator (drain_x280_device) publishes WorkerZoneWire; the existing
+    // consumer threads enrich + push to Tracy off the receiver. Program-record publishing is disabled.
+    using RecordRing = BroadcastRing<tt::tt_metal::experimental::WorkerZoneWire>;
 
     enum class ConsumerStopMode : uint8_t { Running, StopWithoutDrain, DrainThenStop };
 
@@ -245,6 +249,10 @@ private:
     std::optional<RecordRing> ring_;
     std::mutex consumers_mutex_;
     std::unordered_map<tt::ProgramRealtimeProfilerCallbackHandle, std::unique_ptr<Consumer>> consumers_;
+
+    // X280 device whose enrich maps (virt->noc0, chip_id) the consumer uses when pushing WorkerZone
+    // records pulled from the ring. Single X280 device on bh; set at boot_x280_drainer.
+    DeviceState* x280_dev_ = nullptr;
 };
 
 }  // namespace distributed

@@ -381,6 +381,15 @@ void RealtimeProfilerManager::publish_pages(
     const uint32_t* page_buf,
     uint32_t num_pages,
     std::vector<tt::ProgramRealtimeRecord>& records) {
+    // PROTOTYPING: program-record publishing is DISABLED. The ring is repurposed to carry X280
+    // device-zone markers (published by drain_x280_device). The program D2H socket is still drained
+    // (to keep its FIFO from filling / sync markers scanned) but its records are dropped here.
+    (void)dev_state;
+    (void)page_buf;
+    (void)num_pages;
+    (void)records;
+    return;
+#if 0
     constexpr uint32_t kPageWords = RealtimeProfilerRuntimeSizes::page_size / sizeof(uint32_t);
     auto is_record = [](const uint32_t* page) { return page[2] != 0 && page[3] != REALTIME_PROFILER_SYNC_MARKER_ID; };
     records.clear();
@@ -406,6 +415,7 @@ void RealtimeProfilerManager::publish_pages(
     num_published_records_.fetch_add(records.size(), std::memory_order_relaxed);
     num_published_batches_.fetch_add(1, std::memory_order_relaxed);
     ring_->writer().publish_batch(std::span<const tt::ProgramRealtimeRecord>(records));
+#endif
 }
 
 bool RealtimeProfilerManager::has_active_finish_sync() const {
@@ -1072,6 +1082,7 @@ void RealtimeProfilerManager::boot_x280_drainer(
                 }
             } else {
                 dev_state.x280_active = true;
+                x280_dev_ = &dev_state;  // consumer enriches WorkerZone records against this device's maps
                 // Clear the auto-prime loop guard: a clean boot means the prime (if any) took.
                 std::remove(("/tmp/tt_x280_autoprime_dev" + std::to_string(device_id)).c_str());
                 log_info(
@@ -1421,31 +1432,17 @@ uint32_t RealtimeProfilerManager::drain_x280_device(DeviceState& dev_state) {
         return n;
     }
 
-    // 16-bit-hash -> zone name/file/line, resolved the same way the DRAM profiler names zones.
-    // Built lazily on the first packet (kernels have compiled + written the zone-source logs by
-    // the time any marker is drained), so device zones show real names instead of "Zone_<hash>".
-    // Function-local static: only the single receiver thread ever calls this, so no lock needed.
-    static std::unordered_map<uint16_t, tracy::MarkerDetails> x280_zone_names;
-    static bool x280_zone_names_ready = false;
-    if (!x280_zone_names_ready) {
-        try {
-            x280_zone_names = loadZoneSourceLocationsHashesReadOnly();
-        } catch (const std::exception& e) {
-            log_warning(tt::LogMetal, "[Real-time profiler] X280 zone-name resolution failed: {}", e.what());
-        }
-        x280_zone_names_ready = true;
-        log_debug(tt::LogMetal, "[Real-time profiler] X280 resolved {} zone-name hashes", x280_zone_names.size());
-    }
-
-    // TRANSLATE the raw X280 marker stream into WorkerZone packets, then hand each to the existing
-    // profiler-packet callback UNCHANGED (the branch owns the ring/consumer/Tracy decoupling). The X280
-    // relays raw 2-word markers (8 per 64B page, no on-device reshape); identity is carried in-band by
-    // STICKY_META context packets (BRISC emits one per launch into every RISC ring). Forward-fill the
-    // last-seen (core, risc) onto the following timing markers. Context persists across drain calls
-    // (single receiver thread).
+    // TRANSLATE the raw X280 marker stream into WorkerZoneWire records and PUBLISH to the ring. No enrich
+    // and no Tracy push here -- a consumer thread does both off the receiver (feed-the-ring, exactly like
+    // the program-record path). The X280 relays raw 2-word markers (8 per 64B page, no on-device reshape);
+    // identity is carried in-band by STICKY_META context packets (BRISC emits one per launch into every
+    // RISC ring), so forward-fill the last-seen (core, risc) onto the following timing markers. The context
+    // and the scratch batch persist across drain calls (single receiver thread).
     static uint32_t ctx_cx = 0, ctx_cy = 0, ctx_risc = 0;
     static bool ctx_valid = false;
-    ZoneScopedN("X280-Translate");  // raw marker -> WorkerZone packet; enrich + hand to callback
+    static std::vector<exp::WorkerZoneWire> wz;
+    wz.clear();
+    ZoneScopedN("X280-Translate");  // raw marker -> WorkerZoneWire record -> ring
     for (uint32_t pg = 0; pg < n; pg++) {
         const uint32_t* page = x280_page_buf.data() + static_cast<size_t>(pg) * page_words;
         for (uint32_t m = 0; m + 1 < page_words; m += 2) {
@@ -1468,39 +1465,19 @@ uint32_t RealtimeProfilerManager::drain_x280_device(DeviceState& dev_state) {
             if (!ctx_valid) {
                 continue;  // no sticky context seen yet -> cannot attribute this marker
             }
-            // Enrich: virtual -> NOC0 (map built at boot; fall back to virtual if unmapped).
-            uint32_t noc0_x = ctx_cx, noc0_y = ctx_cy;
-            if (auto it = dev_state.x280_virt_to_noc0.find((static_cast<uint64_t>(ctx_cx) << 32) | ctx_cy);
-                it != dev_state.x280_virt_to_noc0.end()) {
-                noc0_x = it->second.first;
-                noc0_y = it->second.second;
-            }
-            const uint16_t hash = static_cast<uint16_t>((w0 >> 12) & 0xFFFF);
-            std::string_view name;
-            if (hash == 0x7FFF) {  // PROFILER_STALL_ZONE_ID: X280 back-pressure stall zone
-                name = "X280-STALL";
-            } else if (auto it = x280_zone_names.find(hash); it != x280_zone_names.end()) {
-                name = it->second.marker_name;
-            }
-            exp::WorkerZonePacket pkt{
-                .chip_id = dev_state.chip_id,
-                .core_virtual_x = ctx_cx,
-                .core_virtual_y = ctx_cy,
-                .core_noc0_x = noc0_x,
-                .core_noc0_y = noc0_y,
-                .risc = ctx_risc,
-                .timer_id = hash,
-                .name = name,
-                .timestamp = (static_cast<uint64_t>(w0 & 0xFFF) << 32) | w1,
-                .is_start = (type == kernel_profiler::ZONE_START),
-            };
-            // CHECKPOINT (working drain, no Tracy output): translation is done here on the receiver, but
-            // the push is intentionally NOT invoked -- doing it inline on the receiver back-pressures the
-            // D2H FIFO (2.26M reserve-stalls); skipping it gives 0 reserve-stalls (the ~200x drain rate).
-            // The push moves to a consumer thread in the next step (feed the ring, consumer pushes).
-            (void)pkt;
-            // exp::InvokeProfilerPacketCallbacks(exp::ProfilerPacketType::WorkerZone, &pkt);
+            exp::WorkerZoneWire rec{};
+            rec.core_x = ctx_cx;  // virtual coords; the consumer maps virt->noc0 + resolves the name
+            rec.core_y = ctx_cy;
+            rec.risc = ctx_risc;
+            rec.timer_id = (w0 >> 12) & 0x7FFFF;  // (type<<16)|hash
+            rec.time_hi = w0 & 0xFFF;
+            rec.time_lo = w1;
+            wz.push_back(rec);
         }
+    }
+    if (!wz.empty()) {
+        // Publish to the ring; a consumer thread enriches + pushes to Tracy (drain_all_devices wakes it).
+        ring_->writer().publish_batch(std::span<const exp::WorkerZoneWire>(wz));
     }
     return n;
 }
@@ -1598,19 +1575,56 @@ void RealtimeProfilerManager::run_receiver() {
 
 void RealtimeProfilerManager::run_consumer(Consumer& consumer) {
     tracy::SetThreadName(fmt::format("RtProfilerConsumer{}", consumer.handle).c_str());
-    std::vector<tt::ProgramRealtimeRecord> records(
-        std::min(kMaxConsumerBatchCap, kMaxConsumerBatchPerDevice * devices_.size()));
-    uint64_t reported_dropped = 0;
+    namespace exp = tt::tt_metal::experimental;
+    // PROTOTYPING: the ring carries X280 WorkerZoneWire records (program records disabled). This consumer
+    // reads them OFF the receiver thread, enriches (virt->noc0 + zone name), and pushes to Tracy via the
+    // packet callback -- moving the Tracy push off the receiver (the confirmed back-pressure). consumer.callback
+    // (the program-record callback) is unused in this mode.
+    std::vector<exp::WorkerZoneWire> records(
+        std::min(kMaxConsumerBatchCap, kMaxConsumerBatchPerDevice * std::max<size_t>(devices_.size(), 1)));
+    std::unordered_map<uint16_t, tracy::MarkerDetails> zone_names;  // per-thread; loaded once
+    try {
+        zone_names = loadZoneSourceLocationsHashesReadOnly();
+    } catch (const std::exception& e) {
+        log_warning(tt::LogMetal, "[Real-time profiler] X280 zone-name resolution failed: {}", e.what());
+    }
 
-    auto deliver_batch = [&](std::span<const tt::ProgramRealtimeRecord> batch, uint64_t dropped_total) {
-        const tt::ProgramRealtimeRecordBatch arg{batch, dropped_total - reported_dropped};
-        reported_dropped = dropped_total;
-        try {
-            consumer.callback(arg);
-        } catch (const std::exception& e) {
-            log_warning(tt::LogMetal, "[Real-time profiler] Callback threw an exception: {}", e.what());
-        } catch (...) {
-            log_warning(tt::LogMetal, "[Real-time profiler] Callback threw an unknown exception");
+    auto push_batch = [&](std::span<const exp::WorkerZoneWire> batch) {
+        DeviceState* dev = x280_dev_;
+        if (dev == nullptr) {
+            return;  // no X280 device booted
+        }
+        for (const auto& w : batch) {
+            const uint32_t ptype = (w.timer_id >> 16) & 0x7;
+            if (ptype != kernel_profiler::ZONE_START && ptype != kernel_profiler::ZONE_END) {
+                continue;
+            }
+            uint32_t noc0_x = w.core_x, noc0_y = w.core_y;
+            if (auto it = dev->x280_virt_to_noc0.find((static_cast<uint64_t>(w.core_x) << 32) | w.core_y);
+                it != dev->x280_virt_to_noc0.end()) {
+                noc0_x = it->second.first;
+                noc0_y = it->second.second;
+            }
+            const uint16_t hash = static_cast<uint16_t>(w.timer_id & 0xFFFF);
+            std::string_view name;
+            if (hash == 0x7FFF) {  // PROFILER_STALL_ZONE_ID
+                name = "X280-STALL";
+            } else if (auto it = zone_names.find(hash); it != zone_names.end()) {
+                name = it->second.marker_name;
+            }
+            exp::WorkerZonePacket pkt{
+                .chip_id = dev->chip_id,
+                .core_virtual_x = w.core_x,
+                .core_virtual_y = w.core_y,
+                .core_noc0_x = noc0_x,
+                .core_noc0_y = noc0_y,
+                .risc = w.risc,
+                .timer_id = hash,
+                .name = name,
+                .timestamp = (static_cast<uint64_t>(w.time_hi) << 32) | w.time_lo,
+                .is_start = (ptype == kernel_profiler::ZONE_START),
+            };
+            exp::InvokeProfilerPacketCallbacks(exp::ProfilerPacketType::WorkerZone, &pkt);
         }
     };
 
@@ -1619,13 +1633,12 @@ void RealtimeProfilerManager::run_consumer(Consumer& consumer) {
         // wake and hang
         const auto token = consumer.reader.wait_token();
         const auto batch = consumer.reader.read_batch(records);
-        const uint64_t dropped_total = consumer.reader.dropped();
         const ConsumerStopMode stop_mode = consumer.stop_mode.load(std::memory_order_acquire);
         if (stop_mode == ConsumerStopMode::StopWithoutDrain) {
             break;
         }
         if (!batch.empty()) {
-            deliver_batch(batch, dropped_total);
+            push_batch(batch);
         } else if (stop_mode == ConsumerStopMode::DrainThenStop) {
             break;
         } else {
