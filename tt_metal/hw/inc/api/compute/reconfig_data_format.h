@@ -90,7 +90,7 @@ ALWI void reconfig_df_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_
 // SrcOrder is added as a same-name overload with no default on src_order, so a plain reconfig_data_format(a, b) call
 // resolves to the functions below while an explicit reconfig_data_format<false, true>(...) still resolves to the
 // deprecated bool overloads (further down). Those bool overloads carry the removed to_from_int8 flag, are deprecated,
-// and work until 2026-08-15; the cleanup PR deletes them and their now-vestigial flag.
+// and work until 2026-08-20; the cleanup PR deletes them and their now-vestigial flag.
 //
 // NOTE(ARCH_QUASAR): On Quasar, buffer descriptors are programmed into the unpack MOP at op init. reconfig_data_format
 // only reprograms THCON data formats (gasket), not the MOP. When operands or buffer descriptors change, call the op
@@ -239,7 +239,7 @@ ALWI void reconfig_data_format_srcb_skip_int8(const uint32_t srcb_old_operand, c
 
 // -------------------------------------------------------------------------------------------------------------------
 // Deprecated (tt-metal#34499). These keep the old <to_from_int8, is_tile_dim_reconfig_en> signature and work until
-// 2026-08-15. to_from_int8 is now ignored: the int8/unsigned state is always re-derived from the format, so callers
+// 2026-08-20. to_from_int8 is now ignored: the int8/unsigned state is always re-derived from the format, so callers
 // get the fix for free. Move to reconfig_data_format<SrcOrder::Regular>() (or reconfig_data_format_skip_int8() when you know
 // no int8 boundary is crossed). The cleanup PR removes these overloads and the now-vestigial to_from_int8 flag.
 //
@@ -252,12 +252,12 @@ ALWI void reconfig_data_format_srcb_skip_int8(const uint32_t srcb_old_operand, c
 // -------------------------------------------------------------------------------------------------------------------
 
 /// \cond DEPRECATED_RECONFIG_DATA_FORMAT (excluded from published docs; overloads the current API by template only)
-#define RECONFIG_DF_DEPRECATED(new_fn)                                                                             \
-    [[deprecated("reconfig_data_format signature is changing (SrcOrder support; int8 state always derived). Use " \
-                 new_fn "() or the *_skip_int8 variant. This overload works until 2026-08-15. See tt-metal#34499.")]]
+#define RECONFIG_DF_DEPRECATED(new_fn)                                                                              \
+    [[deprecated("This call to reconfig_data_format_* will be removed after August 20th 2026 (tt-metal#34499). Use " \
+                 new_fn "() or the *_skip_int8 variant; int8/unsigned state is now always derived from the format.")]]
 
 /**
- * @deprecated Use reconfig_data_format<SrcOrder::Regular>() (or reconfig_data_format_skip_int8()). Kept until 2026-08-15;
+ * @deprecated Use reconfig_data_format<SrcOrder::Regular>() (or reconfig_data_format_skip_int8()). Kept until 2026-08-20;
  * to_from_int8 is ignored and the int8/unsigned state is always re-derived from the format. See tt-metal#34499.
  */
 template <bool to_from_int8, bool is_tile_dim_reconfig_en>
@@ -273,7 +273,7 @@ ALWI void reconfig_data_format(const uint32_t srca_new_operand, const uint32_t s
 }
 
 /**
- * @deprecated Use reconfig_data_format<SrcOrder::Regular>() (or reconfig_data_format_skip_int8()). Kept until 2026-08-15;
+ * @deprecated Use reconfig_data_format<SrcOrder::Regular>() (or reconfig_data_format_skip_int8()). Kept until 2026-08-20;
  * to_from_int8 is ignored and the int8/unsigned state is always re-derived from the format. See tt-metal#34499.
  */
 template <bool to_from_int8, bool is_tile_dim_reconfig_en>
@@ -294,7 +294,7 @@ ALWI void reconfig_data_format(
 }
 
 /**
- * @deprecated Use reconfig_data_format_srca() (or reconfig_data_format_srca_skip_int8()). Kept until 2026-08-15;
+ * @deprecated Use reconfig_data_format_srca() (or reconfig_data_format_srca_skip_int8()). Kept until 2026-08-20;
  * to_from_int8 is ignored and the int8/unsigned state is always re-derived from the format. See tt-metal#34499.
  */
 template <bool to_from_int8, bool is_tile_dim_reconfig_en>
@@ -310,7 +310,7 @@ ALWI void reconfig_data_format_srca(const uint32_t srca_new_operand) {
 }
 
 /**
- * @deprecated Use reconfig_data_format_srca() (or reconfig_data_format_srca_skip_int8()). Kept until 2026-08-15;
+ * @deprecated Use reconfig_data_format_srca() (or reconfig_data_format_srca_skip_int8()). Kept until 2026-08-20;
  * to_from_int8 is ignored and the int8/unsigned state is always re-derived from the format. See tt-metal#34499.
  */
 template <bool to_from_int8, bool is_tile_dim_reconfig_en>
@@ -326,7 +326,7 @@ ALWI void reconfig_data_format_srca(const uint32_t srca_old_operand, const uint3
 }
 
 /**
- * @deprecated Use reconfig_data_format_srcb() (or reconfig_data_format_srcb_skip_int8()). Kept until 2026-08-15;
+ * @deprecated Use reconfig_data_format_srcb() (or reconfig_data_format_srcb_skip_int8()). Kept until 2026-08-20;
  * to_from_int8 is ignored and the int8/unsigned state is always re-derived from the format. See tt-metal#34499.
  */
 template <bool to_from_int8, bool is_tile_dim_reconfig_en>
@@ -342,7 +342,7 @@ ALWI void reconfig_data_format_srcb(const uint32_t srcb_new_operand) {
 }
 
 /**
- * @deprecated Use reconfig_data_format_srcb() (or reconfig_data_format_srcb_skip_int8()). Kept until 2026-08-15;
+ * @deprecated Use reconfig_data_format_srcb() (or reconfig_data_format_srcb_skip_int8()). Kept until 2026-08-20;
  * to_from_int8 is ignored and the int8/unsigned state is always re-derived from the format. See tt-metal#34499.
  */
 template <bool to_from_int8, bool is_tile_dim_reconfig_en>
