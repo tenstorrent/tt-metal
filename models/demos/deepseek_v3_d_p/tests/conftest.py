@@ -482,9 +482,7 @@ def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: 
     env_path = os.getenv(variant.env_var)
     if env_path:
         model_path = Path(env_path)
-        if not model_path.exists():
-            logger.warning(f"{variant.env_var}={env_path!r} is set but path does not exist on this host")
-        else:
+        if model_path.exists():
             # Accept an HF hub-cache root (e.g. /mnt/MLPerf/huggingface/hub/models--zai-org--GLM-5.1)
             # by descending into its current snapshot, where config.json + the safetensors index live.
             model_path = _resolve_hf_snapshot_dir(model_path)
@@ -497,7 +495,8 @@ def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: 
                 # safetensors load works through the symlink either way; only the config import cares.
                 # This matches _resolve_config_only, which already loads config from the raw env path.
                 return model_path.absolute()
-            logger.warning(f"{variant.env_var} set but missing index file: {index_file}")
+            else:
+                logger.warning(f"{variant.env_var} set but missing index file: {index_file}")
 
     # Check default location
     if variant.default_local_path is not None and variant.default_local_path.exists():
