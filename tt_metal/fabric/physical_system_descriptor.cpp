@@ -6,6 +6,7 @@
 #include <yaml-cpp/yaml.h>
 #include <algorithm>
 #include <set>
+#include <unordered_set>
 #include <fstream>
 #include <climits>
 
@@ -278,6 +279,42 @@ std::vector<EthConnection> PhysicalSystemDescriptor::get_eth_connections(AsicID 
         }
     }
     return {};
+}
+
+PortType PhysicalSystemDescriptor::get_port_type(AsicID src_asic, AsicID dst_asic, uint8_t src_chan) const {
+    for (const auto& eth_conn : get_eth_connections(src_asic, dst_asic)) {
+        if (eth_conn.src_chan == src_chan) {
+            return eth_conn.port_type;
+        }
+    }
+    TT_THROW("No port type found for connection from ASIC {} to ASIC {} on channel {}", src_asic, dst_asic, src_chan);
+}
+
+std::vector<PortType> PhysicalSystemDescriptor::get_available_port_types(AsicID src_asic) const {
+    std::unordered_set<PortType> port_types;
+    for (const auto& [host, asic_group] : system_graph_.asic_connectivity_graph) {
+        if (!asic_group.contains(src_asic)) {
+            continue;
+        }
+        for (const auto& [dst_asic, eth_connections] : asic_group.at(src_asic)) {
+            for (const auto& eth_conn : eth_connections) {
+                port_types.insert(eth_conn.port_type);
+            }
+        }
+        break;
+    }
+    std::vector<PortType> result(port_types.begin(), port_types.end());
+    std::sort(result.begin(), result.end());
+    return result;
+}
+
+bool PhysicalSystemDescriptor::has_port_type(AsicID src_asic, AsicID dst_asic, PortType port_type) const {
+    for (const auto& eth_conn : get_eth_connections(src_asic, dst_asic)) {
+        if (eth_conn.port_type == port_type) {
+            return true;
+        }
+    }
+    return false;
 }
 
 const AsicTopology& PhysicalSystemDescriptor::get_asic_topology(const std::string& hostname) const {
