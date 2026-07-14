@@ -2285,6 +2285,13 @@ static std::mutex g_conn_route_mu;
 // the sender, so a per-core key would miss). Deduped by direction; append order makes index 0=fwd, 1=bwd.
 // See tt-emule docs/fabric-ccl-emulation.md.
 static std::unordered_map<uint32_t, std::vector<ConnRoute>> g_conn_route;
+// Persistent UNDIRECTED ring adjacency (chip -> ring-neighbor chips), accumulated across ALL ops and never
+// reset: the physical ethernet ring is static, but each op's senders open only the connection(s) they use,
+// so any single op's g_conn_route is an incomplete, per-chip one-sided view. The ring walk needs the full
+// undirected topology to traverse the turning Hamiltonian cycle without dead-ending at a chip that opened
+// only one direction this op. Direction (which way a send goes) still comes from per-op g_conn_route; only
+// the ring *connectivity* comes from here. See tt-emule docs/fabric-ccl-emulation.md.
+static std::unordered_map<uint32_t, std::set<uint32_t>> g_ring_adj;
 // Per-op reset flag: cleared at each new op's first connection-record so a later op's different line
 // orientation can't corrupt the src-keyed, direction-deduped table. See tt-emule docs/fabric-ccl-emulation.md.
 static std::atomic<bool> g_conn_route_dirty{true};
@@ -2309,6 +2316,9 @@ extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t w
     // Record the connection-owner core's (the mux core, on the MUX path) direction, keyed by its LOGICAL
     // coords — before the per-direction dedup below, which is for the src-keyed g_conn_route only.
     g_mux_dir[__emule_worker_key(src, wx, wy)] = dir;
+    // Accumulate the undirected ring edge (persistent; unaffected by the per-op reset above).
+    g_ring_adj[src].insert(neighbor);
+    g_ring_adj[neighbor].insert(src);
     auto& v = g_conn_route[src];
     for (const auto& c : v) {
         if (c.dir == dir) {
@@ -2340,16 +2350,18 @@ static std::vector<uint32_t> __emule_fabric_walk_ring(uint32_t src, uint32_t sta
         return walk;  // start direction not recorded — caller falls back
     }
     walk.push_back(static_cast<uint32_t>(first));
+    // Traverse the persistent UNDIRECTED ring adjacency: g_conn_route only fixes the FIRST hop's direction;
+    // connectivity comes from g_ring_adj so a chip that opened one connection this op doesn't dead-end.
     uint32_t prev = src, cur = static_cast<uint32_t>(first);
     for (int hop = 0; hop < 64; ++hop) {  // 64 = chip-count backstop
-        auto cit = g_conn_route.find(cur);
-        if (cit == g_conn_route.end()) {
+        auto ait = g_ring_adj.find(cur);
+        if (ait == g_ring_adj.end()) {
             break;
         }
         int next = -1;
-        for (const auto& c : cit->second) {
-            if (c.neighbor != prev) {  // the ring edge that continues forward (not the one back to prev)
-                next = static_cast<int>(c.neighbor);
+        for (uint32_t nb : ait->second) {
+            if (nb != prev) {  // the ring edge that continues forward (not the one back to prev)
+                next = static_cast<int>(nb);
                 break;
             }
         }
@@ -2453,8 +2465,19 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
         // mux signal above is absent. See tt-emule docs/fabric-ccl-emulation.md.
         if (dir < 0 && r.kind == emule_route_kind::MCAST_1D) {
             const uint32_t range = r.b ? r.b : 1;
+            // Match on the direction whose reachable length equals the multicast range, measured along the
+            // ACTUAL ring/line (g_ring_adj via walk_ring) — the compass walk dead-ends on the snaking
+            // Hamiltonian cycle, so it under-measures every direction and the match silently falls through to
+            // conns[0], sending a wide barrier the short way (delivering to too few chips → the barrier's
+            // wait never completes → deadlock). walk_ring reflects the true reach, so a range-R barrier picks
+            // the direction that actually reaches R chips, disambiguating the two directions of a bidirectional
+            // reduce_scatter. See tt-emule docs/fabric-ccl-emulation.md.
             for (const auto& cr : conns) {
-                if (__emule_fabric_walk(src_chip, static_cast<tt::tt_fabric::RoutingDirection>(cr.dir)).size() == range) {
+                size_t reach = __emule_fabric_walk_ring(src_chip, cr.dir).size();
+                if (reach == 0) {
+                    reach = __emule_fabric_walk(src_chip, static_cast<tt::tt_fabric::RoutingDirection>(cr.dir)).size();
+                }
+                if (reach == range) {
                     dir = static_cast<int>(cr.dir);
                     break;
                 }
@@ -3234,7 +3257,9 @@ static void launch_cores(
             id.logical_x = lx;
             id.logical_y = ly;
             id.proc_id = ki.processor_id;
-            id.kernel_src = nullptr;
+            // Point at the KernelInfo's owned source-path string (lives for the program run) so the
+            // deadlock dump names each parked fiber's kernel. EMULE-LOCAL DIAG (Bug B investigation).
+            id.kernel_src = ki.kernel_name.empty() ? nullptr : ki.kernel_name.c_str();
 
             // The fiber entry is the kernel body. __emule_self is set by the scheduler
             // on swap-in; the no-op start-barrier of the OS-thread model is gone (a
