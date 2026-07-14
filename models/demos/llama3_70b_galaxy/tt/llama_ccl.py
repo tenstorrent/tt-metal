@@ -92,7 +92,6 @@ class TT_CCL:
         self.use_ring_rs_prefill = (self.ring_topology and not LINE_RS) and mode == "prefill"
         self.max_top_k = model_args.max_top_k
         self.max_batch_size = model_args.max_batch_size
-        self.is_qwen = is_qwen
 
         # Double buffered on each axis
         self.gather_semaphore_handles = [[], []]
@@ -162,30 +161,6 @@ class TT_CCL:
         self.gather_idx = [0, 0]
         self.reduce_scatter_buffer_idx = [0, 0]
         self.barrier_semaphore_idx = [0, 0]
-
-    def reset_global_semaphores(self):
-        """Reset all global semaphores to 0 and rotating indices, so a reused CCL behaves like a
-        freshly-created one. close() only resets the stall group and leaves semaphores intact, so
-        when a CCL is reused across repeat batches the semaphore values drift away from the
-        trace-capture-time state (which assumes fresh 0-valued semaphores), eventually hanging the
-        CCL ops. Resetting here re-establishes that clean state at each mode switch."""
-
-        def _reset(obj):
-            if isinstance(obj, (list, tuple)):
-                for item in obj:
-                    _reset(item)
-            elif obj is not None:
-                ttnn.reset_global_semaphore_value(obj, 0)
-
-        for container in (
-            self.gather_semaphore_handles,
-            self.barrier_semaphore_handles,
-            getattr(self, "from_semaphore_handles", None),
-            getattr(self, "to_semaphore_handles", None),
-            getattr(self, "reduce_semaphore_handles", None),
-        ):
-            _reset(container)
-        self.reset_gather_and_buffer_idx()
 
     def get_and_cycle_barrier_semaphore_handle(self, cluster_axis):
         semaphore_index = cluster_axis
@@ -813,10 +788,7 @@ class TT_CCL:
                 persistent_buffer = self.tt_lm_head_buffer_l1
             else:
                 persistent_buffer = self.persistent_buffers[cluster_axis]
-            if (
-                not self.model_config.get("USE_PREFETCHER", True)
-                and input_tensor_mesh.memory_config().buffer_type == ttnn.BufferType.DRAM
-            ):
+            if not self.use_prefetcher and input_tensor_mesh.memory_config().buffer_type == ttnn.BufferType.DRAM:
                 # Blackhole all_reduce_async cannot read a DRAM input (the kernel has no accessor for
                 # the fabric NoC address). Bring the input into an L1 layout first: prefer the
                 # all-reduce output layout when it is L1, otherwise the persistent interim buffer's.
@@ -1080,7 +1052,7 @@ class TT_CCL:
         batch_size=1,
     ):
         if self.mode == "prefill":
-            if not self.model_config.get("USE_PREFETCHER", True):
+            if not self.use_prefetcher:
                 # BH no-prefetch (Qwen and Llama): reduce_scatter_minimal_async (the ring prefill
                 # path) and the Linear-topology reduce_scatter deadlock on the 2D-torus fabric for
                 # the column reduction. Use the stable ttnn.reduce_scatter with the configured Ring
@@ -1137,7 +1109,7 @@ class TT_CCL:
             self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
 
         else:
-            if not self.model_config.get("USE_PREFETCHER", True):
+            if not self.use_prefetcher:
                 # BH no-prefetch (Qwen and Llama): use the stable ttnn.reduce_scatter with the
                 # configured Ring topology instead of llama_reduce_scatter, which deadlocks on the
                 # 2D-torus fabric column reduction.
@@ -1543,15 +1515,17 @@ class TT_CCL:
                 if self.mode != "decode" and gathered_memcfg.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
                     # nlp_concat_heads does not accept WIDTH_SHARDED input.
                     concat_input = ttnn.to_memory_config(gathered, ttnn.DRAM_MEMORY_CONFIG)
-            except Exception:
+            except Exception as e:
                 # nlp_concat_heads does not accept WIDTH_SHARDED input.
+                logger.warning(f"all_gather_concat: memory_config introspection failed, using gathered as-is: {e}")
                 concat_input = gathered
 
         decode_concat_sub_core_grids = None
         if self.mode == "decode":
             try:
                 decode_concat_sub_core_grids = concat_input.memory_config().shard_spec.grid
-            except Exception:
+            except Exception as e:
+                logger.warning(f"all_gather_concat: could not read concat_input shard grid, using None: {e}")
                 decode_concat_sub_core_grids = None
         use_two_step_concat = False
         try:
@@ -1560,7 +1534,8 @@ class TT_CCL:
                 and memory_config.is_sharded()
                 and memory_config.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
             )
-        except Exception:
+        except Exception as e:
+            logger.warning(f"all_gather_concat: could not inspect output memory_config, disabling two-step concat: {e}")
             use_two_step_concat = False
 
         if use_two_step_concat:
@@ -1595,7 +1570,11 @@ class TT_CCL:
                         shard_spec.orientation,
                     ),
                 )
-            except Exception:
+            except Exception as e:
+                logger.warning(
+                    f"all_gather_concat: could not build width-sharded target memcfg, "
+                    f"falling back to requested memory_config: {e}"
+                )
                 target_memcfg = memory_config
 
             ttnn_tensor_out = ttnn.to_memory_config(concat_tmp, target_memcfg)

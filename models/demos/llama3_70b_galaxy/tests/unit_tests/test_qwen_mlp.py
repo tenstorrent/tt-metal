@@ -5,7 +5,6 @@
 # Single parametrized test. Wormhole runs the original (main) prefetcher path; Blackhole Galaxy runs
 # the no-prefetcher bring-up path. The architecture is detected once at import so the pytest
 # parameters (fabric config, batch/seq) and the in-body setup select the right path automatically.
-import os
 import torch
 import pytest
 from loguru import logger
@@ -20,35 +19,10 @@ from models.common.utility_functions import (
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 from models.demos.llama3_70b_galaxy.reference.qwen import FeedForward
-
-
-def _is_blackhole_galaxy():
-    # Optional explicit override (set to "blackhole"/"bh" or "wormhole"/"wh").
-    forced = os.environ.get("QWEN_TEST_FORCE_ARCH", "").lower()
-    if forced in ("blackhole", "bh"):
-        return True
-    if forced in ("wormhole", "wormhole_b0", "wh"):
-        return False
-    try:
-        cluster_type = ttnn.cluster.get_cluster_type()
-        if cluster_type == ttnn.cluster.ClusterType.BLACKHOLE_GALAXY:
-            return True
-        if cluster_type in (ttnn.cluster.ClusterType.GALAXY, ttnn.cluster.ClusterType.TG):
-            return False
-    except Exception:
-        pass
-    arch = os.environ.get("ARCH_NAME", "")
-    if not arch:
-        try:
-            arch = ttnn.get_arch_name()
-        except Exception:
-            arch = ""
-    return "blackhole" in arch.lower()
-
-
-_IS_BLACKHOLE = _is_blackhole_galaxy()
-# Blackhole Galaxy decode collectives need a 2D-torus fabric; Wormhole keeps main's fabric_config=True.
-_FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_2D_TORUS_XY if _IS_BLACKHOLE else True
+from models.demos.llama3_70b_galaxy.tests.unit_tests.qwen_test_utils import (
+    IS_BLACKHOLE as _IS_BLACKHOLE,
+    DECODE_FABRIC_CONFIG as _FABRIC_CONFIG,
+)
 
 
 @torch.no_grad()

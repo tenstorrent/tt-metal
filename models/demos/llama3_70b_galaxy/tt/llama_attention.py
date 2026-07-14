@@ -120,6 +120,9 @@ class TtLlamaAttention(LightweightModule):
         self.transformation_mats = transformation_mats
 
         self.model_config = configuration.get_model_config()
+        # Single source of truth for the prefetcher gate (Wormhole/TG True, Blackhole bring-up False).
+        # Also mirrored into model_config for any config-dict consumers.
+        self.use_prefetcher = configuration.use_prefetcher
         self.model_config["USE_PREFETCHER"] = configuration.use_prefetcher
         self.sdpa_decode_compute_kernel_config = self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"]
         self.ccl_topology = configuration.ccl_topology()
@@ -270,7 +273,7 @@ class TtLlamaAttention(LightweightModule):
             self.init_kv_cache(configuration, weight_cache_path)
 
         self.scale = self.head_dim**-0.5
-        if tt_ccl.mode == "decode" and self.model_config["USE_PREFETCHER"]:
+        if tt_ccl.mode == "decode" and self.use_prefetcher:
             self.prefetch(prefetcher_setup, tt_ccl)
 
         # If we are using qk_norm, we need to add a layer norm to the q and k
@@ -379,7 +382,7 @@ class TtLlamaAttention(LightweightModule):
         self.tt_ccl = tt_ccl
 
     def _apply_decode_qk_norm(self, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD):
-        if self.model_config.get("USE_PREFETCHER", False):
+        if self.use_prefetcher:
             return self._apply_decode_qk_norm_sharded(q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD)
         return self._apply_decode_qk_norm_flat(q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD)
 
@@ -526,7 +529,7 @@ class TtLlamaAttention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
-        if self.model_config["USE_PREFETCHER"]:
+        if self.use_prefetcher:
             xqkv_fused_sharded = ttnn.matmul(  # [1, 1, 32, 1280]
                 x,
                 self.wqkv,
@@ -562,7 +565,7 @@ class TtLlamaAttention(LightweightModule):
         ###
         # Reshape and rotary embeddings
         ###
-        if not self.model_config.get("USE_PREFETCHER", False):
+        if not self.use_prefetcher:
             xqkv_fused_interleaved = ttnn.to_memory_config(xqkv_fused_sharded, memory_config=ttnn.L1_MEMORY_CONFIG)
             fqkv_shape = xqkv_fused_interleaved.shape
             if fqkv_shape[3] > self._qkv_n_local:
@@ -644,7 +647,7 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(xqkv_fused_sharded)
 
         # Q, K Rotary Embeddings
-        if self.model_config.get("USE_PREFETCHER", False):
+        if self.use_prefetcher:
             q_heads_1BQD, k_heads_1BKD = ttnn.experimental.rotary_embedding_llama_fused_qk(
                 q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"]
             )  # [1, 8, 8, 128], [1, 8, 8, 128]
@@ -730,7 +733,7 @@ class TtLlamaAttention(LightweightModule):
         # k_heads, [seqlen, n_kv_heads, bsz, head_dim]
         # v_heads [seqlen, n_kv_heads, bsz, head_dim]
         # keys, [max_batch_size, n_kv_heads // configuration.num_devices, max_seq_len, head_dim]
-        if not self.model_config.get("USE_PREFETCHER", False):
+        if not self.use_prefetcher:
             v_update_mem_cfg = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.BufferType.L1,
@@ -784,7 +787,7 @@ class TtLlamaAttention(LightweightModule):
             )
         ttnn.deallocate(q_heads_1BQD)
 
-        if not self.model_config.get("USE_PREFETCHER", False):
+        if not self.use_prefetcher:
             # Device SDPA output is batch-first [1, B_local, H_local, D] (8 users/col). Order matters:
             # nlp_concat_heads_decode pads batch to 32, so gather users across cols FIRST (8 -> 32),
             # then concat heads. Mimic tt_transformers.tt_all_gather: all_gather_async with
@@ -834,11 +837,9 @@ class TtLlamaAttention(LightweightModule):
 
         # WO matmul on each device [1, 1, 32, 1024] @ [1, 1, 1024, 2048]
         use_replicated_full_wo = (
-            self.is_qwen
-            and not self.model_config.get("USE_PREFETCHER", False)
-            and attn_output_cat.shape[-1] == self.n_heads * self.head_dim
+            self.is_qwen and not self.use_prefetcher and attn_output_cat.shape[-1] == self.n_heads * self.head_dim
         )
-        if not self.model_config.get("USE_PREFETCHER", False):
+        if not self.use_prefetcher:
             # BH no-prefetch cannot use the ring WO program here: its static CB
             # allocation exceeds L1 once concat produces the correct decode shape.
             attn_output_cat_for_matmul = ttnn.to_memory_config(attn_output_cat, ttnn.DRAM_MEMORY_CONFIG)
@@ -868,10 +869,7 @@ class TtLlamaAttention(LightweightModule):
         if use_replicated_full_wo:
             dense_out_reduced = dense_out_ttnn
         else:
-            if (
-                not self.model_config.get("USE_PREFETCHER", False)
-                and dense_out_ttnn.memory_config().buffer_type == ttnn.BufferType.DRAM
-            ):
+            if not self.use_prefetcher and dense_out_ttnn.memory_config().buffer_type == ttnn.BufferType.DRAM:
                 # The device all_reduce (ttnn.experimental.all_reduce_async) rejects DRAM input on
                 # Blackhole; bring the WO output into the all_reduce's L1 layout first (mirrors the
                 # MLP FF2 path). The no-prefetch WO matmul emits DRAM.
@@ -914,7 +912,7 @@ class TtLlamaAttention(LightweightModule):
         if seq_len > 2048:
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // 2048, 2048, -1])
 
-        if self.model_config["USE_PREFETCHER"]:
+        if self.use_prefetcher:
             xqkv = ttnn.linear(
                 x_11SH,
                 self.wqkv_interleaved,

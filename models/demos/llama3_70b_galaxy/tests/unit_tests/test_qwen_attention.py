@@ -5,7 +5,6 @@
 # Single parametrized test. Wormhole runs the original (main) prefetcher path; Blackhole Galaxy runs
 # the no-prefetcher bring-up path. The architecture is detected once at import so the pytest
 # parameters (fabric config, paged attention) and the in-body setup select the right path.
-import os
 import torch
 import pytest
 from loguru import logger
@@ -24,37 +23,10 @@ from models.common.utility_functions import (
 )
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
-
-
-def _is_blackhole_galaxy():
-    # Optional explicit override (set to "blackhole"/"bh" or "wormhole"/"wh").
-    forced = os.environ.get("QWEN_TEST_FORCE_ARCH", "").lower()
-    if forced in ("blackhole", "bh"):
-        return True
-    if forced in ("wormhole", "wormhole_b0", "wh"):
-        return False
-    try:
-        cluster_type = ttnn.cluster.get_cluster_type()
-        if cluster_type == ttnn.cluster.ClusterType.BLACKHOLE_GALAXY:
-            return True
-        if cluster_type in (ttnn.cluster.ClusterType.GALAXY, ttnn.cluster.ClusterType.TG):
-            return False
-    except Exception:
-        pass
-    arch = os.environ.get("ARCH_NAME", "")
-    if not arch:
-        try:
-            arch = ttnn.get_arch_name()
-        except Exception:
-            arch = ""
-    return "blackhole" in arch.lower()
-
-
-_IS_BLACKHOLE = _is_blackhole_galaxy()
-# The 8x4 Blackhole Galaxy decode path runs column-axis (cluster_axis=1) collectives on device, which
-# requires a 2D-torus fabric (FABRIC_1D / FABRIC_1D_RING throw `IndexError: map::at` on the cross-column
-# route). Wormhole keeps main's fabric_config=True.
-_FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_2D_TORUS_XY if _IS_BLACKHOLE else True
+from models.demos.llama3_70b_galaxy.tests.unit_tests.qwen_test_utils import (
+    IS_BLACKHOLE as _IS_BLACKHOLE,
+    DECODE_FABRIC_CONFIG as _FABRIC_CONFIG,
+)
 
 
 def _decode_pos_tensor(pos, batch_size, mesh_device, cluster_shape):

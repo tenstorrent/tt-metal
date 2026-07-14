@@ -400,6 +400,10 @@ class TtQwenModelArgs(TtModelArgs):
             # Keep shard width consistent with the actual norm core range.
             # core_grid_ln is currently 5x2 -> 10 cores.
             num_cores_ln = core_grid_ln[0] * core_grid_ln[1]
+            # DECODE_RESIDUAL_MEMCFG width (1280 // num_cores_ln) and the axis-0 persistent-buffer
+            # sizing feed the Wormhole-Qwen path too, so the WH-identical guarantee relies on this
+            # being exactly 10. Lock the assumption: revisit those shapes if core_grid_ln changes.
+            assert num_cores_ln == 10, f"Expected core_grid_ln 5x2 (10 cores) for RMSNorm, got {num_cores_ln}"
             residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
             # Decode width-sharded paths operate on tile-padded batch rows.
             # Wormhole keeps main's fixed height (32); only the Blackhole bring-up path uses the

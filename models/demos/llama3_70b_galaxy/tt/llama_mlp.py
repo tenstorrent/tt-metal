@@ -47,6 +47,8 @@ class TtLlamaMLP(LightweightModule):
         self.args = args
         self.dim = args.dim
         self.model_config = model_config
+        # Single source of truth for the prefetcher gate (Wormhole/TG True, Blackhole bring-up False).
+        self.use_prefetcher = args.use_prefetcher
         self.prefetcher_setup = prefetcher_setup
         self.tt_ccl = tt_ccl
         state_dict_prefix = state_dict_prefix or args.get_state_dict_prefix(self.__class__.__name__, layer_num)
@@ -103,7 +105,7 @@ class TtLlamaMLP(LightweightModule):
             "w3_interleaved", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
         )
 
-        if tt_ccl.mode == "decode" and self.model_config.get("USE_PREFETCHER", False):
+        if tt_ccl.mode == "decode" and self.use_prefetcher:
             self.prefetch(prefetcher_setup, tt_ccl)
 
     def prefetch(self, prefetcher_setup, tt_ccl):
@@ -123,7 +125,7 @@ class TtLlamaMLP(LightweightModule):
         pc_1_3 = self.model_config["FF1_3_TG_RING_PROGCFG"]
         pc_2 = self.model_config["FF2_TG_RING_PROGCFG"]
 
-        if self.args.is_blackhole and not self.model_config.get("USE_PREFETCHER", False):
+        if self.args.is_blackhole and not self.use_prefetcher:
             # The MLP input arrives width-sharded on the prefetcher ring cores (core column x=6).
             # The auto-selected 1D matmul compute grid does not span that column, so current main
             # rejects the sharded input ("Tensor shard spec grid ... must lie within compute grid").
@@ -183,11 +185,9 @@ class TtLlamaMLP(LightweightModule):
                 dtype=ttnn.bfloat8_b,
                 program_config=pc_1_3,
                 memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
-                global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+                global_cb=self.prefetcher_setup.global_circular_buffer if self.use_prefetcher else None,
                 sub_device_id=(
-                    self.prefetcher_setup.worker_sub_device_id
-                    if mode == "decode" and self.model_config.get("USE_PREFETCHER", False)
-                    else None
+                    self.prefetcher_setup.worker_sub_device_id if mode == "decode" and self.use_prefetcher else None
                 ),
                 use_noc1_only=False,
             )
@@ -226,9 +226,7 @@ class TtLlamaMLP(LightweightModule):
             num_links=self.model_config["GALAXY_NUM_LINKS"],
             memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
             buffer_key="BINARY_MUL",
-            use_optimal_ccl_for_llama=(
-                mode == "decode" and (self.model_config.get("USE_PREFETCHER", False) or self.args.is_qwen)
-            ),
+            use_optimal_ccl_for_llama=(mode == "decode" and (self.use_prefetcher or self.args.is_qwen)),
         )
         if return_intermediates:
             intermediates["ff2_input"] = w2_in
@@ -236,9 +234,7 @@ class TtLlamaMLP(LightweightModule):
         if not return_intermediates:
             ttnn.deallocate(ff1ff3)
 
-        use_bh_decode_no_pf = (
-            self.args.is_blackhole and mode == "decode" and not self.model_config.get("USE_PREFETCHER", False)
-        )
+        use_bh_decode_no_pf = self.args.is_blackhole and mode == "decode" and not self.use_prefetcher
         w2_in_for_matmul = w2_in
         pc_2_for_matmul = pc_2
         if use_bh_decode_no_pf:
@@ -273,18 +269,12 @@ class TtLlamaMLP(LightweightModule):
                 program_config=pc_2_for_matmul,
                 memory_config=self.model_config["FF2_OUT_RING_MEMCFG"],
                 core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2_for_matmul else None,
-                global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+                global_cb=self.prefetcher_setup.global_circular_buffer if self.use_prefetcher else None,
                 sub_device_id=(
-                    self.prefetcher_setup.worker_sub_device_id
-                    if mode == "decode" and self.model_config.get("USE_PREFETCHER", False)
-                    else None
+                    self.prefetcher_setup.worker_sub_device_id if mode == "decode" and self.use_prefetcher else None
                 ),
             )
-        if (
-            use_bh_decode_no_pf
-            and not self.model_config.get("USE_PREFETCHER", False)
-            and w2_out.memory_config().buffer_type == ttnn.BufferType.DRAM
-        ):
+        if use_bh_decode_no_pf and w2_out.memory_config().buffer_type == ttnn.BufferType.DRAM:
             # The FF2 no-prefetch matmul emits to DRAM, but the device all_reduce
             # (ttnn.experimental.all_reduce_async) rejects DRAM input on Blackhole. Bring it into the
             # all_reduce's own L1 layout (same per-device shape as the all_reduce output).
