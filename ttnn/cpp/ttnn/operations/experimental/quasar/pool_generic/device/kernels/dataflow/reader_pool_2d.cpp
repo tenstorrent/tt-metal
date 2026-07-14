@@ -106,6 +106,27 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 const uint32_t read_offset =
                     in_l1_read_base_addr + (stick_offset * shard_width_bytes + c_i * MAX_BYTES_PER_REDUCTION);
 #ifdef ARCH_QUASAR
+                // [DIAG 64c reconfig escape] Dump the SOURCE the reader gathers for the first few windows:
+                // base + stick_offset + the actual read address + the source values. golden out_stick0 ~0.032
+                // (input row1); if src[] here already reads ~0.44 (row13) the reader/base is wrong; if src[]
+                // is correct (~0.03) but the output is 0.4375, the bug is downstream (compute reduce).
+                if (c_i == 0 && h == 0 && w_offset == 0 && ind <= 8) {
+                    volatile tt_l1_ptr uint16_t* sv = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(read_offset);
+                    DPRINT(
+                        "POOLSRC ind={} soff={} roff={} base={} sw={} inwp={} src0={} src1={} src2={} src3={}\n",
+                        (uint32_t)ind,
+                        (uint32_t)stick_offset,
+                        (uint32_t)read_offset,
+                        (uint32_t)in_l1_read_base_addr,
+                        (uint32_t)shard_width_bytes,
+                        (uint32_t)in_w_padded,
+                        bf16_t(sv[0]),
+                        bf16_t(sv[1]),
+                        bf16_t(sv[2]),
+                        bf16_t(sv[3]));
+                }
+#endif
+#ifdef ARCH_QUASAR
                 // Quasar sim: a local self-loopback NOC read (self_ep, src_coord==dst_coord) into in_cb drops
                 // data / reads stale SRAM -- the same sim limitation the clear-path below works around with
                 // async_write_zeros (see the ~287-312 comments). It's what the LLK team saw as "all zeros in
