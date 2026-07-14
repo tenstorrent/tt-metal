@@ -100,7 +100,7 @@ transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LIN
 #ifndef ARCH_QUASAR
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>()));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>(ocb)));
 #else
     PACK((llk_pack_hw_configure(ocb)));
     PACK((llk_pack_init(ocb)));
