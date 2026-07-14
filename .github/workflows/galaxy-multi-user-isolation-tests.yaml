@@ -160,7 +160,7 @@ jobs:
           HEALTH_CHECK=./build/test/tt_metal/tt_fabric/test_system_health
           for i in $(seq 1 10); do
             echo "Reset/health-check attempt $i"
-            if tt-smi -r >/dev/null 2>&1; then
+            if tt-smi -glx_reset_auto; then
               if [ ! -x "$HEALTH_CHECK" ]; then
                 echo "Reset succeeded; test_system_health binary not present, skipping link verification"
                 exit 0
@@ -179,12 +179,6 @@ jobs:
         # Retry with a reset in between: the first cluster open of a nightly run
         # can still hit a transient degraded state (manual re-runs historically
         # pass), so automate that recovery instead of failing the whole job.
-        # The reset is applied for every arch, not just Blackhole: on Wormhole a
-        # stale/crashed process from a previous run can keep holding the device's
-        # sysmem NOC space and TLB windows, which makes serialize_cluster_descriptor()
-        # fail with "tt_tlb_alloc failed with error code -12" (ENOMEM). Without a
-        # reset between retries the loop just re-runs the identical failing open and
-        # never recovers; a board reset clears that state so the next attempt passes.
         timeout-minutes: 10
         run: |
           attempts=3
@@ -197,7 +191,7 @@ jobs:
             echo "generate_tray_mapping failed on attempt $i"
             if [ "$i" -lt "$attempts" ]; then
               echo "Resetting cluster before retry..."
-              tt-smi -r >/dev/null 2>&1 || true
+              tt-smi -glx_reset_auto || true
               sleep 10
             fi
           done
