@@ -641,10 +641,7 @@ ProgramArtifacts create_no_bcast_artifacts(
     }
     TT_FATAL(!cores.empty(), "binary_ng Metal 2.0 no-bcast factory: empty core set");
 
-    m2::Group<m2::ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs> reader_args, writer_args, compute_args;
-    reader_args.reserve(cores.size());
-    writer_args.reserve(cores.size());
-    compute_args.reserve(cores.size());
+    m2::KernelRunArgs::RuntimeArgValues reader_args, writer_args, compute_args;
 
     const uint32_t isclose_rtol_bits = std::bit_cast<uint32_t>(op.rtol);
     const uint32_t isclose_atol_bits = std::bit_cast<uint32_t>(op.atol);
@@ -681,46 +678,41 @@ ProgramArtifacts create_no_bcast_artifacts(
             start_tile_id += c_num_tiles_core;
         }
 
-        reader_args.push_back(
-            {node,
-             {{"start_tile_id", c_start_id},
-              {"src_num_tiles", a_num_tiles},
-              {"dst_num_tiles", c_num_tiles_core},
-              {"dst_shard_width", c_current_shard_width},
-              {"nD_stride", nD_stride},
-              {"d_stride", d_stride},
-              {"n_stride", n_stride},
-              {"c_stride", c_stride},
-              {"D", cD},
-              {"N", cN},
-              {"C", cC},
-              {"Ht", cHt},
-              {"Wt", cWt},
-              {"cND", cND},
-              {"nD_stride_b", nD_stride_b},
-              {"d_stride_b", d_stride_b},
-              {"n_stride_b", n_stride_b},
-              {"c_stride_b", c_stride_b},
-              {"src_num_tiles_b", b_num_tiles}}});
+        reader_args["start_tile_id"][node] = c_start_id;
+        reader_args["src_num_tiles"][node] = a_num_tiles;
+        reader_args["dst_num_tiles"][node] = c_num_tiles_core;
+        reader_args["dst_shard_width"][node] = c_current_shard_width;
+        reader_args["nD_stride"][node] = nD_stride;
+        reader_args["d_stride"][node] = d_stride;
+        reader_args["n_stride"][node] = n_stride;
+        reader_args["c_stride"][node] = c_stride;
+        reader_args["D"][node] = cD;
+        reader_args["N"][node] = cN;
+        reader_args["C"][node] = cC;
+        reader_args["Ht"][node] = cHt;
+        reader_args["Wt"][node] = cWt;
+        reader_args["cND"][node] = cND;
+        reader_args["nD_stride_b"][node] = nD_stride_b;
+        reader_args["d_stride_b"][node] = d_stride_b;
+        reader_args["n_stride_b"][node] = n_stride_b;
+        reader_args["c_stride_b"][node] = c_stride_b;
+        reader_args["src_num_tiles_b"][node] = b_num_tiles;
 
-        writer_args.push_back(
-            {node,
-             {{"start_tile_id", c_start_id},
-              {"dst_num_tiles", c_num_tiles_core},
-              {"dst_shard_width", c_current_shard_width},
-              {"D", cD},
-              {"N", cN},
-              {"C", cC},
-              {"Ht", cHt},
-              {"Wt", cWt},
-              {"cND", cND}}});
+        writer_args["start_tile_id"][node] = c_start_id;
+        writer_args["dst_num_tiles"][node] = c_num_tiles_core;
+        writer_args["dst_shard_width"][node] = c_current_shard_width;
+        writer_args["D"][node] = cD;
+        writer_args["N"][node] = cN;
+        writer_args["C"][node] = cC;
+        writer_args["Ht"][node] = cHt;
+        writer_args["Wt"][node] = cWt;
+        writer_args["cND"][node] = cND;
 
-        m2::KernelRunArgs::RuntimeArgValues compute_vals = {{"num_tiles", c_num_tiles_core}};
+        compute_args["num_tiles"][node] = c_num_tiles_core;
         if (op_type == BinaryOpType::ISCLOSE) {
-            compute_vals.emplace("rtol_bits", isclose_rtol_bits);
-            compute_vals.emplace("atol_bits", isclose_atol_bits);
+            compute_args["rtol_bits"][node] = isclose_rtol_bits;
+            compute_args["atol_bits"][node] = isclose_atol_bits;
         }
-        compute_args.push_back({node, std::move(compute_vals)});
     }
     m2::NodeRangeSet target_nodes(target_ranges);
 
