@@ -39,6 +39,7 @@ def run_reduce_scatter_impl(
     mem_config_weights=None,
     num_iters=1,
     enable_trace=True,
+    out_block_w_override=None,
 ):
     torch.manual_seed(0)
 
@@ -139,7 +140,7 @@ def run_reduce_scatter_impl(
         out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
         per_core_M=per_core_M,
         per_core_N=per_core_N,
-        out_block_w=per_core_N // 2,
+        out_block_w=out_block_w_override if out_block_w_override is not None else per_core_N // 2,
         transpose_mcast=False,
         fused_activation=None,  # ttnn.UnaryOpType.SILU,
         fuse_batch=False,

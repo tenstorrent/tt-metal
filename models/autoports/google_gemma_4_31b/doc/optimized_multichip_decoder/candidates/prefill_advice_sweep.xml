@@ -1,0 +1,285 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="40.516" timestamp="2026-07-14T10:54:12.896165+00:00" hostname="spawner-exp-d-gemma31"><testcase classname="models.autoports.google_gemma_4_31b.tests.test_multichip_decoder" name="test_multichip_mlp_prefill_placement_sweep" time="38.801"><properties><property name="start_timestamp" value="2026-07-14T10:54:16" /><property name="end_timestamp" value="2026-07-14T10:54:53" /></properties><failure message="AssertionError: PCC 0.035550033346441814 below 0.995&#10;assert False">hf_config = Gemma4TextConfig {
+  "attention_bias": false,
+  "attention_dropout": 0.0,
+  "attention_k_eq_v": true,
+  "bos_token_id": 2,
+  "dtype": "bfloat16",
+  "enable_moe_block": false,
+  "eos_token_id": 1,
+  "expert_intermediate_size": null,
+  "final_logit_softcapping": 30.0,
+  "global_head_dim": 512,
+  "head_dim": 256,
+  "hidden_activation": "gelu_pytorch_tanh",
+  "hidden_size": 5376,
+  "hidden_size_per_layer_input": 0,
+  "initializer_range": 0.02,
+  "intermediate_size": 21504,
+  "layer_types": [
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "full_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "full_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "full_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "full_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "full_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "full_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "full_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "full_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "full_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "sliding_attention",
+    "full_attention"
+  ],
+  "max_position_embeddings": 262144,
+  "model_type": "gemma4_text",
+  "moe_intermediate_size": null,
+  "num_attention_heads": 32,
+  "num_experts": null,
+  "num_global_key_value_heads": 4,
+  "num_hidden_layers": 60,
+  "num_key_value_heads": 16,
+  "num_kv_shared_layers": 0,
+  "pad_token_id": 0,
+  "rms_norm_eps": 1e-06,
+  "rope_parameters": {
+    "full_attention": {
+      "partial_rotary_factor": 0.25,
+      "rope_theta": 1000000.0,
+      "rope_type": "proportional"
+    },
+    "sliding_attention": {
+      "rope_theta": 10000.0,
+      "rope_type": "default"
+    }
+  },
+  "sliding_window": 1024,
+  "tie_word_embeddings": true,
+  "top_k_experts": null,
+  "transformers_version": "5.10.2",
+  "use_bidirectional_attention": "vision",
+  "use_cache": true,
+  "use_double_wide_mlp": false,
+  "vocab_size": 262144,
+  "vocab_size_per_layer_input": 262144
+}
+
+profile_mesh_device = MeshDevice(1x4 grid, 4 devices)
+
+    @pytest.mark.skipif(
+        "GEMMA4_MULTICHIP_MLP_PREFILL_SWEEP" not in os.environ,
+        reason="set GEMMA4_MULTICHIP_MLP_PREFILL_SWEEP=1",
+    )
+    def test_multichip_mlp_prefill_placement_sweep(hf_config, profile_mesh_device):
+        """Compare the interleaved prefill path with legal DRAM-sharded grids."""
+        mesh_device = profile_mesh_device
+        layer_idx, _ = LAYER_KINDS[0]
+        decoder = _decoder(hf_config, mesh_device, layer_idx)
+        mlp = decoder.layer.shared_mlp
+        hidden = hf_config.hidden_size
+        rows = 128
+        torch.manual_seed(20262351)
+        hidden_input = _tt_input(torch.randn(1, rows, hidden, dtype=torch.bfloat16) * 0.02, mesh_device)
+
+        def interleaved_call():
+            mlp.is_decode = False
+            return mlp(hidden_input)
+
+        def explicit_1d_call(num_cores, *, l1_input=False):
+            policy = _mlp_geometry_policy(num_cores)
+            grids = {8: (8, 1), 12: (6, 2), 21: (7, 3), 24: (8, 3), 28: (7, 4), 42: (7, 6), 56: (8, 7)}
+            grid = grids[num_cores]
+            per_core_n = hidden // (ttnn.TILE_SIZE * num_cores)
+            out_subblock_w = max(value for value in range(1, 9) if per_core_n % value == 0)
+
+            matmul_input = hidden_input
+            if l1_input:
+                input_memory_config = ttnn.create_sharded_memory_config(
+                    shape=(rows, hidden // num_cores),
+                    core_grid=ttnn.num_cores_to_corerangeset(
+                        num_cores,
+                        mesh_device.compute_with_storage_grid_size(),
+                        row_wise=True,
+                    ),
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+                matmul_input = ttnn.to_memory_config(hidden_input, input_memory_config)
+
+            def program(in0_block_w, fused_activation=None):
+                return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=grid,
+                    in0_block_w=in0_block_w,
+                    per_core_M=rows // ttnn.TILE_SIZE,
+                    per_core_N=per_core_n,
+                    out_subblock_h=1,
+                    out_subblock_w=out_subblock_w,
+                    fuse_batch=True,
+                    fused_activation=fused_activation,
+                    mcast_in0=True,
+                )
+
+            up = ttnn.linear(
+                matmul_input,
+                mlp.up_prefill,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=program(policy.gate_up_in0_block_w),
+                compute_kernel_config=mlp.gate_up_compute,
+            )
+            gate = ttnn.linear(
+                matmul_input,
+                mlp.gate_prefill,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=program(
+                    policy.gate_up_in0_block_w,
+                    ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0),
+                ),
+                compute_kernel_config=mlp.gate_up_compute,
+            )
+            if l1_input:
+                matmul_input.deallocate(True)
+            activated = ttnn.mul(gate, up, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            gate.deallocate(True)
+            up.deallocate(True)
+            partial = ttnn.linear(
+                activated,
+                mlp.down_prefill,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=program(policy.down_in0_block_w),
+                compute_kernel_config=mlp.down_compute,
+            )
+            activated.deallocate(True)
+            return mlp._reduce(partial)
+
+        def measure(call):
+            warm = call()
+            ttnn.synchronize_device(mesh_device)
+            warm.deallocate(True)
+            samples = []
+            for _ in range(12):
+                start = time.perf_counter_ns()
+                output = call()
+                ttnn.synchronize_device(mesh_device)
+                samples.append((time.perf_counter_ns() - start) / 1_000_000)
+                output.deallocate(True)
+            return samples
+
+        baseline = interleaved_call()
+        baseline_devices = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(baseline)]
+        baseline.deallocate(True)
+        baseline_samples = measure(interleaved_call)
+        candidates = []
+        for num_cores in (8, 12, 21, 24, 28, 42, 56):
+            candidate = explicit_1d_call(num_cores)
+            candidate_devices = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(candidate)]
+            for expected, actual in zip(baseline_devices, candidate_devices):
+                _assert_pcc(expected, actual, PCC_THRESHOLD)
+            candidate.deallocate(True)
+            samples = measure(lambda num_cores=num_cores: explicit_1d_call(num_cores))
+            policy = _mlp_geometry_policy(num_cores)
+            per_core_n = hidden // (ttnn.TILE_SIZE * num_cores)
+            candidates.append(
+                {
+                    "placement": "dram_interleaved_explicit_1d",
+                    "num_cores": num_cores,
+                    "gate_up_in0_block_w": policy.gate_up_in0_block_w,
+                    "down_in0_block_w": policy.down_in0_block_w,
+                    "per_core_M": rows // ttnn.TILE_SIZE,
+                    "per_core_N": per_core_n,
+                    "out_subblock_h": 1,
+                    "out_subblock_w": max(value for value in range(1, 9) if per_core_n % value == 0),
+                    "median_ms": statistics.median(samples),
+                    "samples_ms": samples,
+                }
+            )
+        l1_candidate = explicit_1d_call(24, l1_input=True)
+        l1_candidate_devices = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(l1_candidate)]
+        for expected, actual in zip(baseline_devices, l1_candidate_devices):
+&gt;           _assert_pcc(expected, actual, PCC_THRESHOLD)
+
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py:1174:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+reference = tensor([[[[-5.8365e-04,  5.3644e-05, -1.3733e-04,  ..., -3.0327e-04,
+           -6.5994e-04,  3.5667e-04],
+          [-5.9128e-04,  1.4782e-04,  1.8120e-04,  ..., -1.4782e-04,
+           -5.7983e-04,  1.8024e-04],
+          [-7.9155e-05, -3.6621e-04,  3.8528e-04,  ..., -2.6321e-04,
+           -4.3488e-04,  2.8229e-04],
+          ...,
+          [ 1.7881e-06,  2.3079e-04,  9.8419e-04,  ..., -6.0272e-04,
+           -4.9210e-04,  6.0272e-04],
+          [-3.8528e-04,  3.5286e-04,  2.2984e-04,  ..., -7.7248e-05,
+           -8.7738e-04,  3.8147e-05],
+          [-5.7983e-04,  1.0490e-04,  3.6430e-04,  ..., -3.7193e-04,
+           -6.9046e-04,  1.9836e-04]]]])
+actual = tensor([[[[ 1.3769e-05,  1.3947e-05,  2.7657e-04,  ..., -2.8801e-04,
+           -1.9455e-04,  1.0967e-04],
+          [-2.3651e-04,  2.9564e-04,  3.2234e-04,  ..., -3.1662e-04,
+           -1.6022e-04, -1.7643e-05],
+          [-2.2800e+02,  2.8125e+01,  7.9000e+01,  ..., -7.0000e+01,
+           -4.0500e+01,  5.0000e+01],
+          ...,
+          [-7.1200e+02,  2.3840e+03,  2.8640e+03,  ..., -7.4560e+03,
+            6.1760e+03,  5.5040e+03],
+          [-2.4480e+03,  9.3600e+02,  3.0400e+03,  ..., -5.1200e+03,
+            3.1200e+02,  3.9040e+03],
+          [-3.7600e+02,  1.7440e+03,  2.5920e+03,  ..., -4.2560e+03,
+            2.7200e+03,  3.4880e+03]]]])
+threshold = 0.995
+
+    def _assert_pcc(reference, actual, threshold=0.995):
+        passing, pcc = comp_pcc(reference.float(), actual.float(), threshold)
+        print(f"PCC={pcc}")
+&gt;       assert passing, f"PCC {pcc} below {threshold}"
+E       AssertionError: PCC 0.035550033346441814 below 0.995
+E       assert False
+
+models/autoports/google_gemma_4_31b/tests/test_functional_decoder.py:141: AssertionError</failure></testcase></testsuite></testsuites>

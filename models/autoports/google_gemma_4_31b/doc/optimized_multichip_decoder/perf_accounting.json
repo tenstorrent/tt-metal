@@ -1,0 +1,30 @@
+{
+  "workload": {
+    "profile": "multichip_decoder_final_noop_removed_traced_decode",
+    "prompt_len": 32,
+    "gen_len": 1,
+    "batch": 1,
+    "mesh_shape": [1, 4]
+  },
+  "per_device_dram_bandwidth_gb_s": 512,
+  "layer_kinds": {
+    "sliding_attention": {
+      "mandatory_weight_and_kv_bytes_per_device": 57614336,
+      "roofline_ms_per_token_estimate": 0.112528,
+      "decode_ms_per_token_device": 0.42814175,
+      "decode_ms_per_token_e2e": 0.464383,
+      "e2e_minus_device_ms": 0.03624125
+    },
+    "full_attention": {
+      "mandatory_weight_and_kv_bytes_per_device": 61966336,
+      "roofline_ms_per_token_estimate": 0.121028,
+      "decode_ms_per_token_device": 0.48092775,
+      "decode_ms_per_token_e2e": 0.5175075,
+      "e2e_minus_device_ms": 0.03657975
+    }
+  },
+  "named_limitations": [
+    "DRAM-sharded decode matmul program configs do not expose output-subblock fields to tt-perf-report",
+    "tt-perf-report merged multi-device op-to-op gaps overlap and are not a critical-path sum"
+  ]
+}

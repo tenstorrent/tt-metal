@@ -16,6 +16,10 @@
   "multichip_decoder_largest_decode_context_tested": 262144,
   "multichip_decoder_largest_decode_absolute_position_tested": 262143,
   "multichip_decoder_largest_non_aligned_prefill_tested": 1057,
+  "optimized_multichip_decoder_supported_context": 262144,
+  "optimized_multichip_decoder_largest_decode_context_tested": 262144,
+  "optimized_multichip_decoder_largest_decode_absolute_position_tested": 262143,
+  "optimized_multichip_decoder_largest_non_aligned_prefill_tested": 1057,
   "multichip_decoder_plan": {
     "status": "complete_clean_pass",
     "target_hardware": "4x Blackhole P150b",
@@ -35,6 +39,28 @@
     "planned_supported_context": 262144,
     "capability_reduction": null,
     "calculation_document": "multichip_decoder/README.md"
+  },
+  "optimized_multichip_decoder_plan": {
+    "status": "complete_clean_pass",
+    "target_hardware": "4x Blackhole P150b",
+    "mesh_shape": [1, 4],
+    "tensor_parallel_size": 4,
+    "residual_contract": "replicated_bfloat16_layer_input_output_no_inter_layer_collective",
+    "attention_weight_dtype": "bfloat8_b",
+    "mlp_weight_dtype": "bfloat4_b",
+    "mlp_packed_decode_output_dtype": "bfloat8_b",
+    "collective_payload_dtype": {
+      "prefill": "bfloat16_input_and_output",
+      "decode": "bfloat8_b_input_pages_and_output_restored_to_bfloat16_boundary"
+    },
+    "kv_cache_dtype": "bfloat8_b",
+    "activation_sharding": "decode_working_tensors_width_sharded_l1_residual_dram_replicated",
+    "per_device_persistent_ccl_scratch_bytes": 731136,
+    "persistent_ccl_scratch_pool_scope": "shared_across_all_decoder_layers_one_tail24_physical_buffer_two_semaphore_epochs",
+    "per_device_accounted_weight_kv_activation_ccl_total_bytes": 25173663744,
+    "planned_supported_context": 262144,
+    "capability_reduction": null,
+    "calculation_document": "optimized_multichip_decoder/README.md"
   },
   "capability_reduction": null,
   "page_block_size": 64,
@@ -78,6 +104,12 @@
     "multichip_fractured_boundary": "multichip_decoder/evidence/fractured_boundary.xml",
     "multichip_profile_root": "multichip_decoder/tracy/final",
     "multichip_watcher_clean": "multichip_decoder/evidence/watcher.xml",
-    "multichip_watcher_log": "multichip_decoder/evidence/watcher_device.log"
+    "multichip_watcher_log": "multichip_decoder/evidence/watcher_device.log",
+    "optimized_multichip_standard_suite": "optimized_multichip_decoder/evidence/final_suite.xml",
+    "optimized_multichip_advertised_position_trace": "optimized_multichip_decoder/evidence/exact_context.xml",
+    "optimized_multichip_warmed_latency": "optimized_multichip_decoder/evidence/final_latency.log",
+    "optimized_multichip_profile_root": "optimized_multichip_decoder/tracy/final_post_fused_review",
+    "optimized_multichip_watcher_clean": "optimized_multichip_decoder/evidence/watcher.xml",
+    "optimized_multichip_watcher_log": "optimized_multichip_decoder/evidence/watcher_device.log"
   }
 }

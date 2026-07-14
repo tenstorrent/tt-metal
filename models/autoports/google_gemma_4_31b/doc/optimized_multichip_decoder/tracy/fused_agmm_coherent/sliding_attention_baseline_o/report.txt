@@ -1,0 +1,55 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'AGMM_sliding_attention_BASELINE_O'.
+Using operations until 'AGMM_sliding_attention_BASELINE_O_END'.
+Detected data from 4 devices. Merging device data...
+
+🚀 Performance Report 🚀
+========================
+
+ID     Total %  Bound  OP Code                                 Device   Device Time  Op-to-Op Gap  Cores  DRAM      DRAM %  FLOPs        FLOPs %  Math Fidelity
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 1445    0.9 %         TypecastDeviceOperation                       1         2 μs                  110                                                      BF16 => BFP8
+ 1451   16.9 %   DRAM  MatmulDeviceOperation 32 x 2048 x 5376        3        29 μs          4 μs     12  383 GB/s  74.7 %  24.5 TFLOPs   36.9 %  LoFi BF16 x BFP8 => BF16
+ 1453    1.3 %         ReshardDeviceOperation                        3         2 μs          1 μs     24                                                      BFP8 => BFP8
+ 1456    1.5 %         TypecastDeviceOperation                       3         2 μs          1 μs    110                                                      BFP8 => BF16
+ 1457   71.8 %         InterleavedToShardedDeviceOperation           0         1 μs        139 μs      8                                                      BF16 => BF16
+ 1461    6.4 %         AllReduceAsyncDeviceOperation                 0        12 μs          1 μs     35                                                BFP8, BFP8 => BFP8
+ 1462    1.1 %         ShardedToInterleavedDeviceOperation           0         2 μs          1 μs     24                                                      BFP8 => BFP8
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+       100.0 %         7 device ops, 0 host ops, 0 signposts                  49 μs        145 μs         224 GB/s  43.7 %
+
+💡 Advice 💡
+============
+
+High Op-to-Op Gap
+----------------
+ 1457   71.8 %         InterleavedToShardedDeviceOperation           0         1 μs        139 μs      8                                                      BF16 => BF16
+
+These ops have a >6 μs gap since the previous operation. Running with tracing could save 133 μs (68.2% of overall time)
+Alternatively ensure device is not waiting for the host. Experts can try moving runtime args in the kernels to compile-time args.
+
+Matmul Optimization
+-------------------
+ 1451   16.9 %   DRAM  MatmulDeviceOperation 32 x 2048 x 5376        3        29 μs          4 μs     12  383 GB/s  74.7 %  24.5 TFLOPs   36.9 %  LoFi BF16 x BFP8 => BF16
+- Use HiFi2 or HiFi4 with BF16 activations for improved accuracy
+
+Warning: Unclassified operation 'AllReduceAsyncDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+
+📊 Stacked report 📊
+====================
+
+Total %  Op Code                                                     Device Time Sum  Op Count  Op Category  Min FLOPs  Max FLOPs  Mean FLOPs  Std FLOPs  Weighted Mean FLOPs
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+58.49 %  MatmulDeviceOperation (in0:width_sharded)                          28.78 μs         1      Compute    36.90 %    36.90 %     36.90 %                         36.90 %
+24.22 %  AllReduceAsyncDeviceOperation (in0:width_sharded)                  11.92 μs         1        Other
+ 4.64 %  TypecastDeviceOperation (in0:dram_interleaved)                      2.28 μs         1           TM
+ 3.83 %  ReshardDeviceOperation (in0:width_sharded)                          1.89 μs         1           DM
+ 3.63 %  TypecastDeviceOperation (in0:width_sharded)                         1.79 μs         1           TM
+ 3.30 %  ShardedToInterleavedDeviceOperation (in0:width_sharded)             1.62 μs         1           DM
+ 1.90 %  InterleavedToShardedDeviceOperation (in0:dram_interleaved)          0.93 μs         1           DM
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Writing CSV stacked report to models/autoports/google_gemma_4_31b/doc/optimized_multichip_decoder/tracy/fused_agmm_coherent/sliding_attention_baseline_o/summary.csv.csv
+Plotting PNG stacked report to models/autoports/google_gemma_4_31b/doc/optimized_multichip_decoder/tracy/fused_agmm_coherent/sliding_attention_baseline_o/summary.csv.png

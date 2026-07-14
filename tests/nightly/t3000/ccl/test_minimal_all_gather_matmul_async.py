@@ -46,6 +46,7 @@ def run_all_gather_impl(
     chunks_per_sync=None,
     num_workers_per_link=None,
     num_buffers_per_channel=None,
+    out_subblock_w_override=None,
 ):
     if use_legacy_allgather:
         pytest.skip(LEGACY_CCL_SKIP)
@@ -170,7 +171,9 @@ def run_all_gather_impl(
         compute_with_storage_grid_size=core_grid,
         in0_block_w=min(max_in0_block_w, hidden_dim // 32 // core_grid[0]),  # how much inner dim you take each time
         out_subblock_h=1,  # Must be divisible by per_core_M
-        out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+        out_subblock_w=(
+            4 if out_subblock_w_override is None else out_subblock_w_override
+        ),  # Must divide per_core_N; direct fused callers may need a narrower legal value.
         per_core_M=max(1, math.ceil(ag_output_shape[2] / 32 / core_grid[1])),  # M / TILE_HEIGHT / Grid_Size
         per_core_N=max(1, math.ceil(matmul_output_dim / 32 / core_grid[0])),  # N / TILE_WIDTH / Grid_Size
         transpose_mcast=False,

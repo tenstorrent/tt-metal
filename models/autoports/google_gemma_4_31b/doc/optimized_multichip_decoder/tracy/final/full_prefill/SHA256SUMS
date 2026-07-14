@@ -1,0 +1,2 @@
+114c43463b44b0a5b92c8af1c17dba896adf3c55a7c62b10f2c3961dbb34c392  models/autoports/google_gemma_4_31b/doc/optimized_multichip_decoder/tracy/final/full_prefill/report.txt
+50ca57c56d4e824d721060c8dc9bff9b7a2cbdfe822865ca19a7410d1bc0c19c  models/autoports/google_gemma_4_31b/doc/optimized_multichip_decoder/tracy/final/full_prefill/perf_report.csv

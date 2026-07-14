@@ -1,0 +1,44 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'AGMM_full_attention_TRAILING_O'.
+Using operations until 'AGMM_full_attention_TRAILING_O_END'.
+Detected data from 4 devices. Merging device data...
+
+🚀 Performance Report 🚀
+========================
+
+ID     Total %  Bound  OP Code                                               Device   Device Time  Op-to-Op Gap  Cores  DRAM      DRAM %  FLOPs       FLOPs %  Math Fidelity
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 3213   87.5 %   SLOW  AllGatherMatmulAsyncDeviceOperation 32 x 4096 x 1344        0       167 μs                    9  140 GB/s  27.3 %  2.1 TFLOPs    4.2 %  LoFi BF16 x BFP8 => BF16
+ 3215    9.6 %         AllGatherDeviceOperation                                    0        18 μs          1 μs      6                                                     BFP8 => BFP8
+ 3216    1.5 %         TypecastDeviceOperation                                     0         2 μs          1 μs    110                                                     BFP8 => BF16
+ 3218    1.3 %         TypecastDeviceOperation                                     2         2 μs          1 μs     42                                                     BF16 => BFP8
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+       100.0 %         4 device ops, 0 host ops, 0 signposts                               189 μs          2 μs         124 GB/s  24.1 %
+
+💡 Advice 💡
+============
+
+Matmul Optimization
+-------------------
+ 3213   87.5 %   SLOW  AllGatherMatmulAsyncDeviceOperation 32 x 4096 x 1344        0       167 μs                    9  140 GB/s  27.3 %  2.1 TFLOPs    4.2 %  LoFi BF16 x BFP8 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible
+- Use HiFi2 or HiFi4 with BF16 activations for improved accuracy
+
+Warning: Unclassified operation 'AllGatherMatmulAsyncDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'AllGatherDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+
+📊 Stacked report 📊
+====================
+
+Total %  Op Code                                                     Device Time Sum  Op Count  Op Category  Min FLOPs  Max FLOPs  Mean FLOPs  Std FLOPs  Weighted Mean FLOPs
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+88.35 %  AllGatherMatmulAsyncDeviceOperation (in0:dram_interleaved)        166.84 μs         1        Other     4.24 %     4.24 %      4.24 %                          4.24 %
+ 9.37 %  AllGatherDeviceOperation (in0:dram_interleaved)                    17.69 μs         1        Other
+ 2.28 %  TypecastDeviceOperation (in0:dram_interleaved)                      4.31 μs         2           TM
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Writing CSV stacked report to models/autoports/google_gemma_4_31b/doc/optimized_multichip_decoder/tracy/fused_agmm_coherent/full_attention_trailing_o/summary.csv.csv
+Plotting PNG stacked report to models/autoports/google_gemma_4_31b/doc/optimized_multichip_decoder/tracy/fused_agmm_coherent/full_attention_trailing_o/summary.csv.png

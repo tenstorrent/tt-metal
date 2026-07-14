@@ -12,8 +12,8 @@ optimized single-chip decoder.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
 import math
+from dataclasses import dataclass, replace
 
 import torch
 
@@ -51,8 +51,44 @@ TARGET_MESH_SHAPE = (1, 4)
 TP_SIZE = 4
 PAGE_BLOCK_SIZE = 64
 QKV_DECODE_OUTPUT_CORES = 32
-MLP_DECODE_CORES = 24
+MLP_DECODE_CORES = 14
+MLP_PREFILL_CORES = 24
 MLP_PREFILL_1D_MAX_ROWS = 128
+PERSISTENT_CCL_CORES = 24
+DEFAULT_MULTICHIP_OPTIMIZATION_POLICY = replace(
+    DEFAULT_OPTIMIZATION_POLICY,
+    name=f"{DEFAULT_OPTIMIZATION_POLICY.name}_tp4_packed_mlp_bfp8",
+    qkv_in0_block_w=7,
+    mlp_gate_up_topology="packed",
+    mlp_packed_output_dtype=ttnn.bfloat8_b,
+)
+_PERSISTENT_CCL_POOLS: dict[int, dict] = {}
+
+
+def release_multichip_decoder_resources(mesh_device) -> bool:
+    """Release mesh-scoped decoder resources before the owning mesh closes.
+
+    Traces capture the persistent scratch addresses, so this is a terminal
+    mesh-owner operation: callers must release every trace and stop using all
+    decoders on the mesh before invoking it.  Returning ``False`` makes an
+    already-clean teardown idempotent.
+    """
+    key = id(mesh_device)
+    pool = _PERSISTENT_CCL_POOLS.get(key)
+    if pool is None:
+        return False
+    if pool.get("mesh_device") is not mesh_device:
+        raise RuntimeError("persistent CCL pool identity does not match the mesh being released")
+
+    ttnn.synchronize_device(mesh_device)
+    for buffer in tuple(pool["buffers"].values()):
+        buffer.deallocate(True)
+    pool["buffers"].clear()
+    pool["semaphores"].clear()
+    pool["mesh_device"] = None
+    pool["released"] = True
+    del _PERSISTENT_CCL_POOLS[key]
+    return True
 
 
 @dataclass(frozen=True)
@@ -89,14 +125,192 @@ def _tp_tensor(
     )
 
 
+def _persistent_ccl_memory_config(mesh_device, shard_height: int, width: int) -> ttnn.MemoryConfig:
+    """Place stable async-CCL storage on the tail of the Blackhole worker grid.
+
+    Prefill RMSNorm, SDPA, and the tuned MLP occupy the low rectangular grids.
+    Keeping the persistent buffer on the final 24 row-major cores lets those
+    programs compile after a decode trace without reclaiming trace-owned
+    addresses.  The row projections remain on their tuned grids; only their
+    reduced partial is resharded at the collective boundary.
+    """
+    grid = mesh_device.compute_with_storage_grid_size()
+    total_cores = grid.x * grid.y
+    if total_cores < PERSISTENT_CCL_CORES:
+        raise ValueError(f"persistent TP4 all-reduce requires {PERSISTENT_CCL_CORES} workers, got {grid.x}x{grid.y}")
+    if width % (ttnn.TILE_SIZE * PERSISTENT_CCL_CORES):
+        raise ValueError(f"persistent TP4 width {width} is not tile-divisible over {PERSISTENT_CCL_CORES} cores")
+
+    first = total_cores - PERSISTENT_CCL_CORES
+    first_x, first_y = first % grid.x, first // grid.x
+    ranges = {
+        ttnn.CoreRange(
+            ttnn.CoreCoord(first_x, first_y),
+            ttnn.CoreCoord(grid.x - 1, first_y),
+        )
+    }
+    if first_y + 1 < grid.y:
+        ranges.add(
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, first_y + 1),
+                ttnn.CoreCoord(grid.x - 1, grid.y - 1),
+            )
+        )
+    return ttnn.create_sharded_memory_config(
+        shape=(shard_height, width // PERSISTENT_CCL_CORES),
+        core_grid=ttnn.CoreRangeSet(ranges),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+
+def _tp_allreduce(
+    partial,
+    mesh_config,
+    ccl_manager,
+    *,
+    communication_dtype: ttnn.DataType,
+    use_persistent_async: bool,
+    persistent_role: str,
+):
+    """Reduce a row-parallel result while keeping BF16 layer boundaries.
+
+    ``communication_dtype`` controls the async reduction output.  Fabric input
+    pages retain the partial tensor's dtype: attention sends BF16 pages, while
+    the packed MLP sends its native BFP8 pages and accumulates to BF16.  An
+    explicit BFP8-to-BF16 cast would not recover projection precision and would
+    add a conversion plus larger wire pages.  The optional BFP8 policy instead
+    quantizes BF16 partials before the collective and restores BF16 afterward.
+    """
+    communicated = partial
+    if partial.dtype != communication_dtype:
+        communicated = ttnn.typecast(
+            partial,
+            communication_dtype,
+            memory_config=partial.memory_config(),
+        )
+        partial.deallocate(True)
+    if use_persistent_async:
+        pool = ccl_manager._persistent_allreduce_pool
+        if pool.get("released") or pool.get("mesh_device") is not ccl_manager.mesh_device:
+            raise RuntimeError("persistent CCL pool was released or belongs to a different mesh")
+        input_memory_config = communicated.memory_config()
+        if (
+            input_memory_config.memory_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED
+            or input_memory_config.buffer_type != ttnn.BufferType.L1
+        ):
+            raise ValueError(
+                "persistent Blackhole all-reduce requires an L1 WIDTH_SHARDED partial, " f"got {input_memory_config}"
+            )
+        shard_spec = input_memory_config.shard_spec
+        if shard_spec is None:
+            raise ValueError("persistent Blackhole all-reduce requires a shard spec")
+        rows, width = communicated.shape[-2], communicated.shape[-1]
+        persistent_memory_config = _persistent_ccl_memory_config(
+            ccl_manager.mesh_device,
+            shard_spec.shape[0],
+            width,
+        )
+        persistent_partial = ttnn.to_memory_config(communicated, persistent_memory_config)
+        communicated.deallocate(True)
+        communicated = persistent_partial
+        input_memory_config = persistent_memory_config
+        shard_spec = input_memory_config.shard_spec
+        if shard_spec is None:
+            raise ValueError("persistent Blackhole all-reduce reshard lost its shard spec")
+        slot = pool["slot"]
+        pool["slot"] = (slot + 1) % len(pool["semaphores"])
+        grid_key = tuple(
+            (core_range.start.x, core_range.start.y, core_range.end.x, core_range.end.y)
+            for core_range in shard_spec.grid.ranges()
+        )
+        key = (
+            communication_dtype,
+            tuple(shard_spec.shape),
+            grid_key,
+            shard_spec.orientation,
+        )
+        buffer = pool["buffers"].get(key)
+        if buffer is None:
+            # The minimal all-reduce consumes a stable intermediate whose
+            # per-core L1 shard is TP times the reduced output shard.  It must
+            # use the output grid because the device op installs the scratch
+            # and result as globally allocated circular buffers.
+            buffer_memory_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    shard_spec.grid,
+                    [shard_spec.shape[0], shard_spec.shape[1] * TP_SIZE],
+                    shard_spec.orientation,
+                ),
+            )
+            # Both row projections have the same physical TP4 shape and are
+            # serialized on the command queue.  Sharing one physical-capacity
+            # buffer avoids role/slot and logical-M duplication while the two
+            # semaphores still maintain independent collective epochs.
+            buffer_source = torch.zeros(
+                (1, TP_SIZE, shard_spec.shape[0], width * TP_SIZE),
+                dtype=torch.bfloat16,
+            )
+            buffer = ttnn.from_torch(
+                buffer_source,
+                device=ccl_manager.mesh_device,
+                dtype=communication_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=buffer_memory_config,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    ccl_manager.mesh_device,
+                    dims=(0, 1),
+                    mesh_shape=ccl_manager.mesh_device.shape,
+                ),
+            )
+            pool["buffers"][key] = buffer
+        reduced = ttnn.experimental.all_reduce_async(
+            communicated,
+            buffer,
+            mesh_config.tp_axis,
+            ccl_manager.mesh_device,
+            pool["semaphores"][slot],
+            dtype=communication_dtype,
+            memory_config=input_memory_config,
+            topology=ccl_manager.topology,
+            num_links=ccl_manager.num_links,
+        )
+        communicated.deallocate(True)
+        reduced_l1 = reduced
+        reduced = ttnn.sharded_to_interleaved(reduced_l1, ttnn.DRAM_MEMORY_CONFIG)
+        reduced_l1.deallocate(True)
+    else:
+        reduced = ccl_allreduce(communicated, mesh_config, ccl_manager)
+    if communication_dtype == ttnn.bfloat16:
+        return reduced
+    restored = ttnn.typecast(reduced, ttnn.bfloat16)
+    reduced.deallocate(True)
+    return restored
+
+
 class _TPOptimizedSharedMLP:
     """GeGLU with BFP4 TP weights and optimized local decode matmuls."""
 
-    def __init__(self, *, mesh_device, mesh_config, ccl_manager, state, policy):
+    def __init__(
+        self,
+        *,
+        mesh_device,
+        mesh_config,
+        ccl_manager,
+        state,
+        policy,
+        communication_dtype,
+        use_persistent_async_ccl,
+    ):
         self.mesh_device = mesh_device
         self.mesh_config = mesh_config
         self.ccl_manager = ccl_manager
         self.policy = policy
+        self.communication_dtype = communication_dtype
+        self.use_persistent_async_ccl = use_persistent_async_ccl
         self.is_decode = False
         hidden = int(state["gate_proj.weight"].shape[1])
         intermediate = int(state["gate_proj.weight"].shape[0])
@@ -137,6 +351,21 @@ class _TPOptimizedSharedMLP:
             dtype=policy.mlp_down_weight_dtype,
             memory_config=local_mem,
         )
+        self.packed_gate_up_decode = None
+        if policy.mlp_gate_up_topology == "packed":
+            packed_per_device = []
+            gate_chunks = torch.chunk(gate, TP_SIZE, dim=3)
+            up_chunks = torch.chunk(up, TP_SIZE, dim=3)
+            for device_idx in range(TP_SIZE):
+                packed_per_device.append(torch.cat((gate_chunks[device_idx], up_chunks[device_idx]), dim=3))
+            packed_source = torch.cat(packed_per_device, dim=3)
+            self.packed_gate_up_decode = _tp_tensor(
+                packed_source,
+                mesh_device,
+                mesh_dim=3,
+                dtype=policy.mlp_gate_up_weight_dtype,
+                memory_config=_dram_weight_memory_config(mesh_device, k=hidden, n=2 * hidden),
+            )
         self.gate_up_compute = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=policy.mlp_gate_up_math_fidelity,
@@ -153,11 +382,19 @@ class _TPOptimizedSharedMLP:
         )
 
     def _reduce(self, partial):
-        if partial.is_sharded():
+        use_persistent_async = self.use_persistent_async_ccl and self.is_decode
+        if partial.is_sharded() and not use_persistent_async:
             interleaved = ttnn.sharded_to_interleaved(partial, ttnn.DRAM_MEMORY_CONFIG)
             partial.deallocate(True)
             partial = interleaved
-        return ccl_allreduce(partial, self.mesh_config, self.ccl_manager)
+        return _tp_allreduce(
+            partial,
+            self.mesh_config,
+            self.ccl_manager,
+            communication_dtype=self.communication_dtype if self.is_decode else ttnn.bfloat16,
+            use_persistent_async=use_persistent_async,
+            persistent_role="mlp_down",
+        )
 
     def _decode_memory_config(self, num_cores: int, width: int) -> ttnn.MemoryConfig:
         if width % (ttnn.TILE_SIZE * num_cores):
@@ -197,7 +434,7 @@ class _TPOptimizedSharedMLP:
                     out_subblock_h=1,
                     out_subblock_w=7,
                     per_core_M=rows // ttnn.TILE_SIZE,
-                    per_core_N=self.local_intermediate // (ttnn.TILE_SIZE * MLP_DECODE_CORES),
+                    per_core_N=self.local_intermediate // (ttnn.TILE_SIZE * MLP_PREFILL_CORES),
                     fuse_batch=True,
                     mcast_in0=True,
                 )
@@ -262,21 +499,88 @@ class _TPOptimizedSharedMLP:
             num_cores=self.policy.decode_num_cores,
             in0_block_w=self.policy.gate_up_in0_block_w,
         )
-        up = ttnn.linear(
-            sharded_input,
-            self.up_decode,
-            memory_config=local_mem,
-            program_config=up_program,
-            compute_kernel_config=self.gate_up_compute,
-        )
-        gate = ttnn.linear(
-            sharded_input,
-            self.gate_decode,
-            memory_config=local_mem,
-            program_config=gate_program,
-            compute_kernel_config=self.gate_up_compute,
-        )
-        sharded_input.deallocate(True)
+        if self.policy.mlp_gate_up_topology == "packed" and hidden_states.shape[-2] == 1:
+            packed_mem = self._decode_memory_config(self.policy.decode_num_cores, 2 * self.local_intermediate)
+            packed_program = self._decode_program_config(
+                k=hidden,
+                n=2 * self.local_intermediate,
+                num_cores=self.policy.decode_num_cores,
+                in0_block_w=self.policy.gate_up_in0_block_w,
+            )
+            packed_sharded = ttnn.linear(
+                sharded_input,
+                self.packed_gate_up_decode,
+                dtype=self.policy.mlp_packed_output_dtype,
+                memory_config=packed_mem,
+                program_config=packed_program,
+                compute_kernel_config=self.gate_up_compute,
+            )
+            sharded_input.deallocate(True)
+            packed = ttnn.sharded_to_interleaved(packed_sharded, ttnn.DRAM_MEMORY_CONFIG)
+            packed_sharded.deallocate(True)
+            gate = ttnn.slice(packed, [0, 0, 0, 0], [1, 1, packed.shape[2], self.local_intermediate])
+            up = ttnn.slice(
+                packed,
+                [0, 0, 0, self.local_intermediate],
+                [1, 1, packed.shape[2], 2 * self.local_intermediate],
+            )
+            packed.deallocate(True)
+            gate = ttnn.gelu(gate, fast_and_approximate_mode=True)
+            gate_sharded = ttnn.to_memory_config(gate, local_mem)
+            gate.deallocate(True)
+            up_sharded = ttnn.to_memory_config(up, local_mem)
+            up.deallocate(True)
+            gate, up = gate_sharded, up_sharded
+        elif self.policy.mlp_gate_up_topology == "packed":
+            # The packed N=2*local_intermediate matmul is the fastest M=1
+            # graph, but its triple-buffered BFP4 weight CB cannot coexist
+            # with persistent collectives when a distinct logical-M program
+            # is compiled.  For M>1, keep the same BFP8 projection boundary
+            # and device-only math while halving N.  Spill each projection to
+            # DRAM before launching the next so their L1 outputs never overlap.
+            up_sharded = ttnn.linear(
+                sharded_input,
+                self.up_decode,
+                dtype=self.policy.mlp_packed_output_dtype,
+                memory_config=local_mem,
+                program_config=up_program,
+                compute_kernel_config=self.gate_up_compute,
+            )
+            up = ttnn.sharded_to_interleaved(up_sharded, ttnn.DRAM_MEMORY_CONFIG)
+            up_sharded.deallocate(True)
+            gate_sharded = ttnn.linear(
+                sharded_input,
+                self.gate_decode,
+                dtype=self.policy.mlp_packed_output_dtype,
+                memory_config=local_mem,
+                program_config=up_program,
+                compute_kernel_config=self.gate_up_compute,
+            )
+            sharded_input.deallocate(True)
+            gate = ttnn.sharded_to_interleaved(gate_sharded, ttnn.DRAM_MEMORY_CONFIG)
+            gate_sharded.deallocate(True)
+            gate = ttnn.gelu(gate, fast_and_approximate_mode=True)
+            gate_sharded = ttnn.to_memory_config(gate, local_mem)
+            gate.deallocate(True)
+            up_sharded = ttnn.to_memory_config(up, local_mem)
+            up.deallocate(True)
+            gate, up = gate_sharded, up_sharded
+        else:
+            up = ttnn.linear(
+                sharded_input,
+                self.up_decode,
+                memory_config=local_mem,
+                program_config=up_program,
+                compute_kernel_config=self.gate_up_compute,
+            )
+            gate = ttnn.linear(
+                sharded_input,
+                self.gate_decode,
+                memory_config=local_mem,
+                program_config=gate_program,
+                compute_kernel_config=self.gate_up_compute,
+            )
+            sharded_input.deallocate(True)
         activated = ttnn.mul(gate, up, memory_config=local_mem)
         gate.deallocate(True)
         up.deallocate(True)
@@ -308,7 +612,8 @@ class MultichipDecoder(OptimizedDecoder):
         "tp": TP_SIZE,
         "activation_contract": "replicated BF16 residual at layer input/output",
         "attention": "column-parallel local-head QKV/SDPA; row-parallel O plus TP sum",
-        "mlp": "BFP4 column-parallel gate/up; BFP4 row-parallel down plus TP sum; 24-core local decode",
+        "mlp": "BFP4 column-parallel gate/up; BFP4 row-parallel down plus persistent TP sum; 14-core local decode",
+        "collective_dtype": "BF16 prefill; BFP8 decode input/output restored to BF16 boundary",
         "kv_cache": "BFP8 paged local KV heads; replicated page table and positions",
         "moe": "not applicable: dense target",
     }
@@ -317,7 +622,7 @@ class MultichipDecoder(OptimizedDecoder):
         # Bypass FusedDecoder/OptimizedDecoder construction-time module
         # rewrites: this class already installs its TP-aware attention and MLP.
         FunctionalDecoder.__init__(self, **kwargs)
-        self.policy = DEFAULT_OPTIMIZATION_POLICY
+        self.policy = DEFAULT_MULTICHIP_OPTIMIZATION_POLICY
         self.attention_compute = None
         self.decode_wqkv = None
         self.decode_wq = None
@@ -327,6 +632,12 @@ class MultichipDecoder(OptimizedDecoder):
         self.mesh_config = None
         self.ccl_manager = None
         self.qkv_decode_output_cores = QKV_DECODE_OUTPUT_CORES
+        self.communication_dtype = ttnn.bfloat8_b
+        self.use_persistent_async_ccl = True
+        self.sdpa_q_chunk_size = 32
+        self.sdpa_k_chunk_size = 64
+        self.sdpa_exp_approx_mode = False
+        self.sdpa_force_full_grid = False
         self.timings = MultichipDecoderTimings()
 
     @classmethod
@@ -338,10 +649,13 @@ class MultichipDecoder(OptimizedDecoder):
         layer_idx,
         mesh_device,
         tensor_cache_path=None,
-        optimization_policy=DEFAULT_OPTIMIZATION_POLICY,
+        optimization_policy=DEFAULT_MULTICHIP_OPTIMIZATION_POLICY,
         bounded_sliding_kv_cache=True,
         num_links=2,
         qkv_decode_output_cores=QKV_DECODE_OUTPUT_CORES,
+        communication_dtype=ttnn.bfloat8_b,
+        use_persistent_async_ccl=True,
+        topology=ttnn.Topology.Linear,
         **kwargs,
     ):
         if kwargs:
@@ -351,12 +665,27 @@ class MultichipDecoder(OptimizedDecoder):
                 f"MultichipDecoder requires MeshShape{TARGET_MESH_SHAPE}, got "
                 f"shape={tuple(mesh_device.shape)} devices={mesh_device.get_num_devices()}"
             )
-        if qkv_decode_output_cores not in (8, QKV_DECODE_OUTPUT_CORES):
-            raise ValueError("qkv_decode_output_cores must be one of the validated 8/32-core geometries")
+        if qkv_decode_output_cores not in (8, 16, QKV_DECODE_OUTPUT_CORES):
+            raise ValueError("qkv_decode_output_cores must be one of the validated 8/16/32-core geometries")
         contract = _validate_target_config(hf_config, layer_idx)
         model_args = Gemma4ModelArgs.from_hf_config(hf_config)
         mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=TP_SIZE), prefill=ModeConfig(tp=TP_SIZE))
-        ccl_manager = CCLManager(mesh_device, num_links=num_links, topology=ttnn.Topology.Linear)
+        ccl_manager = CCLManager(mesh_device, num_links=num_links, topology=topology)
+        if use_persistent_async_ccl:
+            pool_key = id(mesh_device)
+            pool = _PERSISTENT_CCL_POOLS.get(pool_key)
+            if pool is None or pool["mesh_device"] is not mesh_device:
+                grid = mesh_device.compute_with_storage_grid_size()
+                cores = ttnn.num_cores_to_corerangeset(grid.x * grid.y, grid, row_wise=True)
+                pool = {
+                    "mesh_device": mesh_device,
+                    "semaphores": [ttnn.create_global_semaphore(mesh_device, cores, 0) for _ in range(2)],
+                    "buffers": {},
+                    "slot": 0,
+                }
+                _PERSISTENT_CCL_POOLS[pool_key] = pool
+                ttnn.synchronize_device(mesh_device)
+            ccl_manager._persistent_allreduce_pool = pool
         layer = Gemma4DecoderLayer(
             mesh_device=mesh_device,
             hf_config=model_args,
@@ -377,10 +706,10 @@ class MultichipDecoder(OptimizedDecoder):
         mlp_state = {key.removeprefix("mlp."): value for key, value in local.items() if key.startswith("mlp.")}
         mlp_policy = replace(
             optimization_policy,
-            name=f"{optimization_policy.name}_tp4_square_mlp_24c",
+            name=f"{optimization_policy.name}_tp4_square_mlp_14c",
             decode_num_cores=MLP_DECODE_CORES,
-            gate_up_in0_block_w=7,
-            down_in0_block_w=7,
+            gate_up_in0_block_w=12,
+            down_in0_block_w=12,
         )
         layer.shared_mlp = _TPOptimizedSharedMLP(
             mesh_device=mesh_device,
@@ -388,6 +717,8 @@ class MultichipDecoder(OptimizedDecoder):
             ccl_manager=ccl_manager,
             state=mlp_state,
             policy=mlp_policy,
+            communication_dtype=communication_dtype,
+            use_persistent_async_ccl=use_persistent_async_ccl,
         )
         for weight in (old_mlp.gate_proj, old_mlp.up_proj, old_mlp.down_proj):
             weight.deallocate(True)
@@ -396,6 +727,8 @@ class MultichipDecoder(OptimizedDecoder):
         decoder.mesh_config = mesh_config
         decoder.ccl_manager = ccl_manager
         decoder.qkv_decode_output_cores = qkv_decode_output_cores
+        decoder.communication_dtype = communication_dtype
+        decoder.use_persistent_async_ccl = use_persistent_async_ccl
         decoder.attention_compute = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=optimization_policy.attention_math_fidelity,
@@ -438,6 +771,26 @@ class MultichipDecoder(OptimizedDecoder):
             dtype=optimization_policy.attention_weight_dtype,
             memory_config=_dram_weight_memory_config(mesh_device, k=config.hidden_size, n=local_qkv_width),
         )
+        if optimization_policy.attention_projection_topology == "split":
+            split_sources = []
+            for chunks in (q_chunks, k_chunks, v_chunks):
+                split_sources.append(
+                    torch.cat([chunk.transpose(-2, -1) for chunk in chunks], dim=-1).unsqueeze(0).unsqueeze(0)
+                )
+            decoder.decode_wq, decoder.decode_wk, decoder.decode_wv = (
+                _tp_tensor(
+                    source,
+                    mesh_device,
+                    mesh_dim=3,
+                    dtype=optimization_policy.attention_weight_dtype,
+                    memory_config=_dram_weight_memory_config(
+                        mesh_device,
+                        k=config.hidden_size,
+                        n=source.shape[-1] // TP_SIZE,
+                    ),
+                )
+                for source in split_sources
+            )
         o_source = attn_state["o_proj.weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
         local_o_k = config.num_attention_heads * config.head_dim // TP_SIZE
         decoder.decode_o_proj = _tp_tensor(
@@ -467,34 +820,48 @@ class MultichipDecoder(OptimizedDecoder):
         local_kv_heads = config.num_key_value_heads // TP_SIZE
         input_mem = self._decode_memory_config(self.mesh_device, self.policy.decode_num_cores, hidden_states.shape[-1])
         sharded_input = ttnn.to_memory_config(hidden_states, input_mem)
-        qkv_n = local_heads * config.head_dim + 2 * local_kv_heads * config.head_dim
-        qkv_grid = ttnn.num_cores_to_corerangeset(
-            self.qkv_decode_output_cores,
-            self.mesh_device.compute_with_storage_grid_size(),
-            row_wise=True,
+        decode_weights = (
+            (self.decode_wqkv,)
+            if self.policy.attention_projection_topology == "packed"
+            else (self.decode_wq, self.decode_wk, self.decode_wv)
         )
-        qkv_mem = ttnn.create_sharded_memory_config(
-            shape=(ttnn.TILE_SIZE, qkv_n // self.qkv_decode_output_cores),
-            core_grid=qkv_grid,
-            strategy=ttnn.ShardStrategy.WIDTH,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-        qkv_program = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-            in0_block_w=self.policy.qkv_in0_block_w,
-            per_core_M=1,
-            per_core_N=qkv_n // (ttnn.TILE_SIZE * self.qkv_decode_output_cores),
-        )
-        qkv_sharded = ttnn.linear(
-            sharded_input,
-            self.decode_wqkv,
-            memory_config=qkv_mem,
-            program_config=qkv_program,
-            compute_kernel_config=self.attention_compute,
-        )
+        qkv_parts = []
+        for decode_weight in decode_weights:
+            qkv_n = decode_weight.shape[-1]
+            output_cores = self.qkv_decode_output_cores if len(decode_weights) == 1 else self.policy.decode_num_cores
+            qkv_grid = ttnn.num_cores_to_corerangeset(
+                output_cores,
+                self.mesh_device.compute_with_storage_grid_size(),
+                row_wise=True,
+            )
+            qkv_mem = ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, qkv_n // output_cores),
+                core_grid=qkv_grid,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            qkv_program = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                in0_block_w=self.policy.qkv_in0_block_w,
+                per_core_M=1,
+                per_core_N=qkv_n // (ttnn.TILE_SIZE * output_cores),
+            )
+            qkv_sharded = ttnn.linear(
+                sharded_input,
+                decode_weight,
+                memory_config=qkv_mem,
+                program_config=qkv_program,
+                compute_kernel_config=self.attention_compute,
+            )
+            qkv_parts.append(ttnn.sharded_to_interleaved(qkv_sharded, ttnn.L1_MEMORY_CONFIG))
+            qkv_sharded.deallocate(True)
         sharded_input.deallocate(True)
-        qkv = ttnn.sharded_to_interleaved(qkv_sharded, ttnn.L1_MEMORY_CONFIG)
-        qkv_sharded.deallocate(True)
+        if len(qkv_parts) == 1:
+            qkv = qkv_parts[0]
+        else:
+            qkv = ttnn.concat(qkv_parts, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+            for part in qkv_parts:
+                part.deallocate(True)
         q, k, v = split_qkv_heads_decode(qkv, config, weights.is_global, tp=TP_SIZE, kv_replicated=False)
         qkv.deallocate(True)
 
@@ -583,13 +950,15 @@ class MultichipDecoder(OptimizedDecoder):
         v.deallocate(True)
 
         sdpa_grid = (
-            ttnn.CoreCoord(8, 4) if config.head_dim >= 512 else self.mesh_device.compute_with_storage_grid_size()
+            self.mesh_device.compute_with_storage_grid_size()
+            if self.sdpa_force_full_grid or config.head_dim < 512
+            else ttnn.CoreCoord(8, 4)
         )
         sdpa_program = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=sdpa_grid,
-            q_chunk_size=32,
-            k_chunk_size=64,
-            exp_approx_mode=False,
+            q_chunk_size=self.sdpa_q_chunk_size,
+            k_chunk_size=self.sdpa_k_chunk_size,
+            exp_approx_mode=self.sdpa_exp_approx_mode,
         )
         sdpa = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q,
@@ -654,9 +1023,19 @@ class MultichipDecoder(OptimizedDecoder):
             compute_kernel_config=self.attention_compute,
         )
         o_input.deallocate(True)
-        projected = ttnn.sharded_to_interleaved(projected_sharded, ttnn.DRAM_MEMORY_CONFIG)
-        projected_sharded.deallocate(True)
-        return ccl_allreduce(projected, self.mesh_config, self.ccl_manager)
+        if self.use_persistent_async_ccl:
+            projected = projected_sharded
+        else:
+            projected = ttnn.sharded_to_interleaved(projected_sharded, ttnn.DRAM_MEMORY_CONFIG)
+            projected_sharded.deallocate(True)
+        return _tp_allreduce(
+            projected,
+            self.mesh_config,
+            self.ccl_manager,
+            communication_dtype=self.communication_dtype,
+            use_persistent_async=self.use_persistent_async_ccl,
+            persistent_role="attention_o",
+        )
 
     def init_paged_kv_cache(self, *, max_context=262_144, batch_size=1):
         config = self.layer.self_attn.config
@@ -768,7 +1147,16 @@ class MultichipDecoder(OptimizedDecoder):
         sdpa.deallocate(True)
         partial = ttnn.linear(concatenated, weights.o_proj)
         concatenated.deallocate(True)
-        return ccl_allreduce(partial, self.mesh_config, self.ccl_manager)
+        return _tp_allreduce(
+            partial,
+            self.mesh_config,
+            self.ccl_manager,
+            # BFP8 async communication wins at M=1, while prefill pays for the
+            # explicit casts and is faster with its native BF16 reduction.
+            communication_dtype=ttnn.bfloat16,
+            use_persistent_async=False,
+            persistent_role="attention_o_prefill",
+        )
 
     def _forward_device(
         self,
@@ -850,6 +1238,7 @@ __all__ = [
     "MultichipDecoderTimings",
     "PAGE_BLOCK_SIZE",
     "QKV_DECODE_OUTPUT_CORES",
+    "release_multichip_decoder_resources",
     "TARGET_MESH_SHAPE",
     "TP_SIZE",
 ]

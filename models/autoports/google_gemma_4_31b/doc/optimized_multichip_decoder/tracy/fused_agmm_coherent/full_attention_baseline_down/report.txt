@@ -1,0 +1,53 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'AGMM_full_attention_BASELINE_DOWN'.
+Using operations until 'AGMM_full_attention_BASELINE_DOWN_END'.
+Detected data from 4 devices. Merging device data...
+
+🚀 Performance Report 🚀
+========================
+
+ID     Total %  Bound  OP Code                                 Device   Device Time  Op-to-Op Gap  Cores  DRAM      DRAM %  FLOPs        FLOPs %  Math Fidelity
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 3296   23.6 %   SLOW  MatmulDeviceOperation 32 x 5376 x 5376        1        54 μs                   12  266 GB/s  51.9 %  34.0 TFLOPs   51.2 %  LoFi BFP8 x BFP4 => BFP8
+ 3299    0.9 %         ShardedToInterleavedDeviceOperation           1         2 μs          1 μs     24                                                      BFP8 => BFP8
+ 3300    1.2 %         TypecastDeviceOperation                       1         2 μs          1 μs    110                                                      BFP8 => BF16
+ 3307   67.9 %         InterleavedToShardedDeviceOperation           0         1 μs        156 μs     14                                                      BFP8 => BFP8
+ 3309    0.9 %         ReshardDeviceOperation                        0         2 μs          1 μs     24                                                      BFP8 => BFP8
+ 3310    5.4 %         AllReduceAsyncDeviceOperation                 0        12 μs          1 μs     35                                                BFP8, BFP8 => BFP8
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+       100.0 %         6 device ops, 0 host ops, 0 signposts                  73 μs        158 μs         198 GB/s  38.7 %
+
+💡 Advice 💡
+============
+
+High Op-to-Op Gap
+----------------
+ 3307   67.9 %         InterleavedToShardedDeviceOperation           0         1 μs        156 μs     14                                                      BFP8 => BFP8
+
+These ops have a >6 μs gap since the previous operation. Running with tracing could save 150 μs (64.8% of overall time)
+Alternatively ensure device is not waiting for the host. Experts can try moving runtime args in the kernels to compile-time args.
+
+Matmul Optimization
+-------------------
+ 3296   23.6 %   SLOW  MatmulDeviceOperation 32 x 5376 x 5376        1        54 μs                   12  266 GB/s  51.9 %  34.0 TFLOPs   51.2 %  LoFi BFP8 x BFP4 => BFP8
+- No output subblock size found
+
+Warning: Unclassified operation 'AllReduceAsyncDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+
+📊 Stacked report 📊
+====================
+
+Total %  Op Code                                                     Device Time Sum  Op Count  Op Category  Min FLOPs  Max FLOPs  Mean FLOPs  Std FLOPs  Weighted Mean FLOPs
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+74.69 %  MatmulDeviceOperation (in0:width_sharded)                          54.41 μs         1      Compute    51.23 %    51.23 %     51.23 %                         51.23 %
+16.37 %  AllReduceAsyncDeviceOperation (in0:width_sharded)                  11.92 μs         1        Other
+ 3.14 %  TypecastDeviceOperation (in0:dram_interleaved)                      2.28 μs         1           TM
+ 2.24 %  ShardedToInterleavedDeviceOperation (in0:width_sharded)             1.64 μs         1           DM
+ 2.24 %  ReshardDeviceOperation (in0:width_sharded)                          1.63 μs         1           DM
+ 1.33 %  InterleavedToShardedDeviceOperation (in0:dram_interleaved)          0.97 μs         1           DM
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Writing CSV stacked report to models/autoports/google_gemma_4_31b/doc/optimized_multichip_decoder/tracy/fused_agmm_coherent/full_attention_baseline_down/summary.csv.csv
+Plotting PNG stacked report to models/autoports/google_gemma_4_31b/doc/optimized_multichip_decoder/tracy/fused_agmm_coherent/full_attention_baseline_down/summary.csv.png

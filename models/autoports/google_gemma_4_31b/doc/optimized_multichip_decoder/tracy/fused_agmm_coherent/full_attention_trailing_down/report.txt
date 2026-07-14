@@ -1,0 +1,49 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'AGMM_full_attention_TRAILING_DOWN'.
+Using operations until 'AGMM_full_attention_TRAILING_DOWN_END'.
+Detected data from 4 devices. Merging device data...
+
+🚀 Performance Report 🚀
+========================
+
+ID     Total %  Bound  OP Code                                               Device   Device Time  Op-to-Op Gap  Cores  DRAM     DRAM %  FLOPs       FLOPs %  Math Fidelity
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 3359    0.7 %         TypecastDeviceOperation                                     1         3 μs                  110                                                    BFP8 => BF16
+ 3363   94.4 %   SLOW  AllGatherMatmulAsyncDeviceOperation 32 x 5376 x 1344        0       203 μs        133 μs      9  75 GB/s  14.7 %  2.3 TFLOPs    4.6 %  LoFi BFP8 x BFP4 => BFP8
+ 3364    4.9 %         AllGatherDeviceOperation                                    0        17 μs          1 μs      6                                                    BFP8 => BFP8
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+       100.0 %         3 device ops, 0 host ops, 0 signposts                               222 μs        134 μs         69 GB/s  13.5 %
+
+💡 Advice 💡
+============
+
+High Op-to-Op Gap
+----------------
+ 3363   94.4 %   SLOW  AllGatherMatmulAsyncDeviceOperation 32 x 5376 x 1344        0       203 μs        133 μs      9  75 GB/s  14.7 %  2.3 TFLOPs    4.6 %  LoFi BFP8 x BFP4 => BFP8
+
+These ops have a >6 μs gap since the previous operation. Running with tracing could save 127 μs (35.6% of overall time)
+Alternatively ensure device is not waiting for the host. Experts can try moving runtime args in the kernels to compile-time args.
+
+Matmul Optimization
+-------------------
+ 3363   94.4 %   SLOW  AllGatherMatmulAsyncDeviceOperation 32 x 5376 x 1344        0       203 μs        133 μs      9  75 GB/s  14.7 %  2.3 TFLOPs    4.6 %  LoFi BFP8 x BFP4 => BFP8
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible
+
+Warning: Unclassified operation 'AllGatherMatmulAsyncDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'AllGatherDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+
+📊 Stacked report 📊
+====================
+
+Total %  Op Code                                                     Device Time Sum  Op Count  Op Category  Min FLOPs  Max FLOPs  Mean FLOPs  Std FLOPs  Weighted Mean FLOPs
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+91.38 %  AllGatherMatmulAsyncDeviceOperation (in0:dram_interleaved)        203.14 μs         1        Other     4.57 %     4.57 %      4.57 %                          4.57 %
+ 7.49 %  AllGatherDeviceOperation (in0:dram_interleaved)                    16.65 μs         1        Other
+ 1.13 %  TypecastDeviceOperation (in0:dram_interleaved)                      2.51 μs         1           TM
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Writing CSV stacked report to models/autoports/google_gemma_4_31b/doc/optimized_multichip_decoder/tracy/fused_agmm_coherent/full_attention_trailing_down/summary.csv.csv
+Plotting PNG stacked report to models/autoports/google_gemma_4_31b/doc/optimized_multichip_decoder/tracy/fused_agmm_coherent/full_attention_trailing_down/summary.csv.png

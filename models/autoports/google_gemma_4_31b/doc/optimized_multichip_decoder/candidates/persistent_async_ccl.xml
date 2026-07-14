@@ -1,0 +1,173 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="1" failures="1" skipped="0" tests="2" time="118.987" timestamp="2026-07-14T08:10:57.158562+00:00" hostname="spawner-exp-d-gemma31"><testcase classname="models.autoports.google_gemma_4_31b.tests.test_multichip_decoder" name="test_multichip_paged_decode_trace_matches_optimized_baseline[0-sliding_attention]" time="89.013"><properties><property name="start_timestamp" value="2026-07-14T08:12:02" /><property name="end_timestamp" value="2026-07-14T08:12:27" /></properties><failure message="TypeError: __getitem__(): incompatible function arguments. The following argument types are supported:&#10;    1. __getitem__(self, arg: int, /) -&gt; int&#10;&#10;Invoked with types: ttnn._ttnn.types.Shape, slice">hf_config = Gemma4TextConfig {
+  "attention_bias": false,
+  "attention_dropout": 0.0,
+  "attention_k_eq_v": true,
+  "bos_token_id"...
+  "use_cache": true,
+  "use_double_wide_mlp": false,
+  "vocab_size": 262144,
+  "vocab_size_per_layer_input": 262144
+}
+
+mesh_device = MeshDevice(1x4 grid, 4 devices)
+optimized_baseline = {('full_attention', 'baseline_latency'): {'decode_ms': 1.3344865000000001, 'decode_samples_ms': [1.363771, 1.359721, 1....0001,  ..., -0.0255, -0.0267,  0.0052],
+         [ 0.0245,  0.0310,  0.0231,  ..., -0.0034, -0.0214, -0.0115]]]), ...}
+layer_idx = 0, layer_kind = 'sliding_attention'
+
+    @pytest.mark.parametrize("layer_idx,layer_kind", LAYER_KINDS)
+    def test_multichip_paged_decode_trace_matches_optimized_baseline(
+        hf_config, mesh_device, optimized_baseline, layer_idx, layer_kind
+    ):
+        decoder = _decoder(hf_config, mesh_device, layer_idx)
+        values = _inputs(hf_config, layer_idx)
+        cache, identity_page_table = decoder.init_paged_kv_cache(max_context=128)
+        page_table = _permuted_page_table(identity_page_table, mesh_device)
+        decoder.prefill_forward(
+            _tt_input(values["prompt32"], mesh_device),
+            rope_mats=_rope_device(hf_config, layer_idx, 32, mesh_device, decode=False),
+            page_table=page_table,
+            kv_cache=cache,
+            valid_seq_len=32,
+        )
+        pos_u_host = torch.zeros((1, 32), dtype=torch.int32)
+        pos_u_host[0, 0] = 32
+        pos_u = _replicated_int(pos_u_host, mesh_device, dtype=ttnn.uint32)
+        pos_i = _replicated_int(torch.tensor([32], dtype=torch.int32), mesh_device, dtype=ttnn.int32)
+        token = _tt_input(values["token"], mesh_device)
+        rope = _rope_device(hf_config, layer_idx, 128, mesh_device, decode=True)
+
+        def call():
+            return decoder.decode_forward(
+                token,
+                rope_mats=rope,
+                page_table=page_table,
+                kv_cache=cache,
+                current_position=pos_u,
+                current_position_cache=pos_i,
+            )
+
+&gt;       warm = call()
+
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py:438:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py:429: in call
+    return decoder.decode_forward(
+models/autoports/google_gemma_4_31b/tt/functional_decoder.py:570: in decode_forward
+    return self._forward_device(
+models/autoports/google_gemma_4_31b/tt/multichip_decoder.py:913: in _forward_device
+    attn_output = self._decode_attention_tp(
+models/autoports/google_gemma_4_31b/tt/multichip_decoder.py:764: in _decode_attention_tp
+    return _tp_allreduce(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+partial = device_id: 1, MeshCoordinate([0, 0])
+ttnn.Tensor([[[[ 5.3125e-01, -1.3672e-01,  ...,  8.2422e-01,  2.6719e+00]]]], sha...7e-01,  ...,  2.2559e-01,  8.6426e-02]]]], shape=Shape([1, 1, 1, 5376]), dtype=DataType::BFLOAT16, layout=Layout::TILE)
+mesh_config = MeshConfig((1, 4), decode[TP=4, EP=1, SP=1, DP=1], prefill[TP=4, EP=1, SP=1, DP=1])
+ccl_manager = &lt;models.demos.gemma4.tt.ccl.CCLManager object at 0x7fc3455de890&gt;
+
+    def _tp_allreduce(
+        partial,
+        mesh_config,
+        ccl_manager,
+        *,
+        communication_dtype: ttnn.DataType,
+        use_persistent_async: bool,
+    ):
+        """Reduce a row-parallel result while keeping BF16 layer boundaries.
+
+        The optional BFP8 communication contract quantizes only the collective
+        payload.  Norms, residual adds, projection activations, and the public
+        layer input/output remain BF16.  This makes CCL precision independently
+        measurable without silently changing the residual or matmul policy.
+        """
+        communicated = partial
+        if communication_dtype != ttnn.bfloat16:
+            communicated = ttnn.typecast(partial, communication_dtype)
+            partial.deallocate(True)
+        if use_persistent_async:
+            slot = ccl_manager._persistent_allreduce_slot
+            ccl_manager._persistent_allreduce_slot = (slot + 1) % len(
+                ccl_manager._persistent_allreduce_semaphores
+            )
+&gt;           rows, width = communicated.shape[-2:]
+E           TypeError: __getitem__(): incompatible function arguments. The following argument types are supported:
+E               1. __getitem__(self, arg: int, /) -&gt; int
+E
+E           Invoked with types: ttnn._ttnn.types.Shape, slice
+
+models/autoports/google_gemma_4_31b/tt/multichip_decoder.py:116: TypeError</failure></testcase><testcase time="0.235" /><testcase classname="pytest" name="internal" time="0.000"><error message="internal error">Traceback (most recent call last):
+  File "/opt/venv/lib/python3.10/site-packages/_pytest/main.py", line 318, in wrap_session
+    session.exitstatus = doit(config, session) or 0
+  File "/opt/venv/lib/python3.10/site-packages/_pytest/main.py", line 372, in _main
+    config.hook.pytest_runtestloop(session=session)
+  File "/opt/venv/lib/python3.10/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/opt/venv/lib/python3.10/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 167, in _multicall
+    raise exception
+  File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+    teardown.throw(exception)
+  File "/opt/venv/lib/python3.10/site-packages/_pytest/logging.py", line 801, in pytest_runtestloop
+    return (yield)  # Run all the tests.
+  File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+    teardown.throw(exception)
+  File "/opt/venv/lib/python3.10/site-packages/_pytest/terminal.py", line 707, in pytest_runtestloop
+    result = yield
+  File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/opt/venv/lib/python3.10/site-packages/_pytest/main.py", line 396, in pytest_runtestloop
+    item.config.hook.pytest_runtest_protocol(item=item, nextitem=nextitem)
+  File "/opt/venv/lib/python3.10/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/opt/venv/lib/python3.10/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 167, in _multicall
+    raise exception
+  File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+    teardown.throw(exception)
+  File "/opt/venv/lib/python3.10/site-packages/_pytest/warnings.py", line 89, in pytest_runtest_protocol
+    return (yield)
+  File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+    teardown.throw(exception)
+  File "/opt/venv/lib/python3.10/site-packages/_pytest/assertion/__init__.py", line 192, in pytest_runtest_protocol
+    return (yield)
+  File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+    teardown.throw(exception)
+  File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 53, in run_old_style_hookwrapper
+    return result.get_result()
+  File "/opt/venv/lib/python3.10/site-packages/pluggy/_result.py", line 103, in get_result
+    raise exc.with_traceback(tb)
+  File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 38, in run_old_style_hookwrapper
+    res = yield
+  File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+    teardown.throw(exception)
+  File "/opt/venv/lib/python3.10/site-packages/_pytest/unittest.py", line 591, in pytest_runtest_protocol
+    return (yield)
+  File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+    teardown.throw(exception)
+  File "/opt/venv/lib/python3.10/site-packages/_pytest/faulthandler.py", line 102, in pytest_runtest_protocol
+    return (yield)
+  File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/opt/venv/lib/python3.10/site-packages/_pytest/runner.py", line 118, in pytest_runtest_protocol
+    runtestprotocol(item, nextitem=nextitem)
+  File "/opt/venv/lib/python3.10/site-packages/_pytest/runner.py", line 137, in runtestprotocol
+    reports.append(call_and_report(item, "call", log))
+  File "/opt/venv/lib/python3.10/site-packages/_pytest/runner.py", line 251, in call_and_report
+    ihook.pytest_runtest_logreport(report=report)
+  File "/opt/venv/lib/python3.10/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/opt/venv/lib/python3.10/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 167, in _multicall
+    raise exception
+  File "/opt/venv/lib/python3.10/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/opt/venv/lib/python3.10/site-packages/_pytest/terminal.py", line 698, in pytest_runtest_logreport
+    self.flush()
+  File "/opt/venv/lib/python3.10/site-packages/_pytest/terminal.py", line 531, in flush
+    self._tw.flush()
+  File "/opt/venv/lib/python3.10/site-packages/_pytest/_io/terminalwriter.py", line 187, in flush
+    self._file.flush()
+BrokenPipeError: [Errno 32] Broken pipe</error></testcase></testsuite></testsuites>
