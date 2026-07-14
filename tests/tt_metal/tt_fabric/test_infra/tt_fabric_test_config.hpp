@@ -580,6 +580,8 @@ private:
     // one fabric connection. This prevents the worker from becoming the bottleneck.
     void split_senders_by_direction_for_benchmark(ParsedTestConfig& test);
 
+    void resolve_hop_sentinels(ParsedTestConfig& test);
+
     bool expand_link_duplicates(ParsedTestConfig& test);
 
     void resolve_missing_params(ParsedTestConfig& test);

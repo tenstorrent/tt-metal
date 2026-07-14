@@ -873,6 +873,19 @@ public:
         return hops;
     }
 
+    uint32_t get_full_line_mcast_hops(RoutingDirection direction) const override {
+        // Full-line hops in one direction: axis_dim - 1. Uses the GLOBAL mesh shape (mesh_shape_ is
+        // initialized with MeshScope::GLOBAL) so big-mesh / multi-host setups hop across the whole
+        // mesh, not just the local host shard.
+        switch (direction) {
+            case RoutingDirection::E:
+            case RoutingDirection::W: return mesh_shape_[EW_DIM] - 1;
+            case RoutingDirection::N:
+            case RoutingDirection::S: return mesh_shape_[NS_DIM] - 1;
+            default: TT_THROW("Unsupported routing direction for full-line multicast hops");
+        }
+    }
+
     /**
      * Unlike traditional multicast that sends in all directions from a source, unidirectional
      * linear multicast divides the mesh into halves and only sends in ONE direction per source:
