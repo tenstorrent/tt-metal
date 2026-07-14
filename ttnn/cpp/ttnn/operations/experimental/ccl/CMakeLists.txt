@@ -28,6 +28,7 @@ file(
     reduce_scatter_minimal_async/device/kernels/*
     ring_attention_all_gather_async/device/kernels/*
     rms_allgather/device/kernels/*
+    dit_fused_distributed_rmsnorm/device/kernels/*
     send_recv_async/send_async/device/kernels/*
     send_recv_async/recv_async/device/kernels/*
     send_recv_async/recv_async_h2d/device/kernels/*
