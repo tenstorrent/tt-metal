@@ -50,9 +50,13 @@ class NocReadBarrier(Check):
         "actually fill L1 (the LLM refutes a set_state / inc-num-issued candidate). "
         "Facts are grouped by the (file, function-NAME) string, so two same-named "
         "bodies in one file (multiple lambdas — each `operator()` — or C++ "
-        "overloads) merge into one bucket, and a read-barrier in ONE body can "
-        "clear a read in the OTHER (a cross-scope false-clear); semaphore-handshake "
-        "and cb-sync note the same grouping limitation. "
+        "overloads) merge into one bucket. The offset-ordered next-barrier/between "
+        "logic CANNOT clear a real race from a disjoint sibling body (a foreign "
+        "body's offsets can't fall between a read and its consumer), so the "
+        "cross-body effect is a false-FLAG, not a false-clear: a read in one body "
+        "can be spuriously paired with an unrelated consumer in another same-named "
+        "body (over-report). semaphore-handshake notes the same same-name MERGE; "
+        "cb-sync notes the converse SPLIT. "
         "Requires a KERNEL fact base; empty over tt-llk."
     )
 

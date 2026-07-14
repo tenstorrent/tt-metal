@@ -100,8 +100,8 @@ class NocSync(Check):
         "lambdas (each `operator()`) or C++ overloads — merge into one bucket, and "
         "a flush/barrier in ONE body then clears a signal in the OTHER (a "
         "cross-scope false-clear); the tool has no per-lambda / per-overload "
-        "identity (semaphore-handshake and cb-sync note the same grouping "
-        "limitation). Requires a KERNEL fact base (the "
+        "identity (semaphore-handshake notes the same same-name MERGE; cb-sync "
+        "notes the converse SPLIT). Requires a KERNEL fact base (the "
         "on-request capture); empty over tt-llk."
     )
 
