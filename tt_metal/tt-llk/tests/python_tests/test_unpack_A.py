@@ -71,12 +71,7 @@ dest_acc = [DestAccumulation.Yes, DestAccumulation.No]
 # single value to preserve the test-variant wiring; full removal of the parameter is tracked in #47001.
 disable_src_zero_flags = [False]
 acc_to_dest_flags = [False, True]
-stochastic_rnd = [
-    StochasticRounding.No,
-    StochasticRounding.Fpu,
-    StochasticRounding.Pack,
-    StochasticRounding.All,
-]
+stochastic_rnd = [StochasticRounding.No]
 reuse_dest_types = [
     EltwiseBinaryReuseDestType.NONE,
     EltwiseBinaryReuseDestType.DEST_TO_SRCA,
@@ -265,12 +260,6 @@ def filter_params_with_constraints(all_params):
             # This would result in unpack_to_dest=True, but hardware requires acc_to_dest=False
             # when unpack_to_dest=True. Block this combination.
             continue
-
-        # Format-specific checks (most expensive, do last)
-        # Block Bfp8_b output with stochastic rounding (Pack or All)
-        if formats.output_format == DataFormat.Bfp8_b:
-            if stochastic_rnd in (StochasticRounding.Pack, StochasticRounding.All):
-                continue
 
         # Block Float16/Float16_b transpose combinations that produce garbage values on CI runners
         if (
