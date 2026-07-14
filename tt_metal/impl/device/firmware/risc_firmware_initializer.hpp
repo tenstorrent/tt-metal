@@ -42,9 +42,6 @@ public:
 
     void run_async_build_phase(const std::set<tt::ChipId>& device_ids);
     void run_launch_phase(const std::set<tt::ChipId>& device_ids);
-    // Assert worker/eth/dram cores and relaunch base firmware. Used to recover from watcher assert hangs
-    // when run_launch_phase is skipped (mock/emulated targets).
-    void reinitialize_firmware(tt::ChipId device_id);
 
 private:
     void clear_l1_state(tt::ChipId device_id);

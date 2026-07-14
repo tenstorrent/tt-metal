@@ -809,7 +809,6 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
     DumpRingBuffer(true);
     LogRunningKernels();
     MetalContext::instance().watcher_server()->set_exception_message(error_msg);
-    MetalContext::instance().set_firmware_recovery_needed(true);
     TT_THROW("Watcher detected tripped assert and stopped device.");
 }
 
