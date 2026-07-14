@@ -50,25 +50,6 @@ constexpr bool tensor_shape_eq(const TensorShape& lhs, const TensorShape& rhs)
            lhs.num_faces_c_dim == rhs.num_faces_c_dim;
 }
 
-constexpr const char* tensor_shape_dim_name(const std::uint8_t dim)
-{
-    switch (dim)
-    {
-        case 1:
-            return "1";
-        case 2:
-            return "2";
-        case 4:
-            return "4";
-        case 8:
-            return "8";
-        case 16:
-            return "16";
-        default:
-            return "unknown";
-    }
-}
-
 __attribute__((noinline, cold)) inline void assert_tensor_shape_coverage_unobserved_()
 {
     LLK_ASSERT(false, "TensorShape not observed before, please add it to the coverage table.");
@@ -86,9 +67,9 @@ __attribute__((noinline, cold)) inline void assert_tensor_shape_coverage_unobser
 // Concatenate fn_name into the format literal instead of using CTSTR(fn_name);
 // CTSTR's COMDAT string object conflicts with DEVICE_PRINT's own string-section
 // metadata at inline template call sites. fn_name must be a string literal.
-// Print dims as integers (not tensor_shape_dim_name string pointers): DEVICE_PRINT
-// cannot reliably resolve those COMDAT string addresses on device, and the
-// coverage parser harvests digit fields from these lines.
+// Dims are printed as integers so DEVICE_PRINT stringifies them (no hand-rolled
+// dim->string table / std::to_string on device); the coverage parser harvests
+// those digit fields.
 #define LLK_VALIDATE_TENSOR_SHAPE_EMIT_(fn_name, ts)                                                       \
     DEVICE_PRINT(                                                                                          \
         "[" fn_name "] tensor_shape: face_r_dim={} face_c_dim={} num_faces_r_dim={} num_faces_c_dim={}\n", \
