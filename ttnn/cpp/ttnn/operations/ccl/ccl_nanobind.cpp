@@ -9,6 +9,9 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
+#include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/tensor/tensor.hpp"
+
 #include "ttnn/operations/ccl/mesh_partition/mesh_partition_nanobind.hpp"
 #include "ttnn/operations/ccl/all_broadcast/all_broadcast_nanobind.hpp"
 #include "ttnn/operations/ccl/all_gather/all_gather_nanobind.hpp"
@@ -31,6 +34,36 @@ void bind_common(nb::module_& mod) {
         .value("Linear", ttnn::ccl::Topology::Linear)
         .value("Mesh", ttnn::ccl::Topology::Mesh)
         .value("Torus", ttnn::ccl::Topology::Torus);
+
+    mod.def(
+        "get_usable_topology",
+        &ttnn::ccl::get_usable_topology,
+        nb::arg("tensor"),
+        nb::arg("topology") = nb::none(),
+        nb::arg("cluster_axis") = nb::none(),
+        R"doc(
+            Resolve the CCL topology that is actually usable for a tensor on the current fabric.
+
+            When ``topology`` is ``None`` this defaults to the topology the fabric was brought up
+            with (``tt::tt_fabric::get_fabric_topology()``). A ring/torus request is demoted to
+            linear/mesh when the tensor's devices along ``cluster_axis`` do not form a full
+            wraparound, so the returned topology is always valid for the given tensor placement.
+            This is the same selection the CCL ops perform internally, exposed so model code can
+            stop hand-rolling Ring-vs-Linear detection.
+
+            Args:
+                tensor (ttnn.Tensor): A device tensor whose mesh placement determines the usable topology.
+                topology (ttnn.Topology, optional): Requested topology. Defaults to the fabric topology.
+                cluster_axis (int, optional): Cluster axis the CCL operates along.
+
+            Returns:
+                ttnn.Topology: The topology usable for this tensor.
+
+            Example:
+                >>> import ttnn
+                >>> topology = ttnn.get_usable_topology(input_tensor, cluster_axis=1)
+                >>> output = ttnn.reduce_scatter(input_tensor, dim=3, cluster_axis=1, topology=topology)
+        )doc");
 }
 }  // namespace
 
