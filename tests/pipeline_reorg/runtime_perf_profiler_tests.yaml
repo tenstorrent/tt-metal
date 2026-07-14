@@ -13,18 +13,19 @@
 # For max allowed timeout refer to .github/time_budget.yaml (subheading: perf_profiler).
 
 # --- Op-to-op latency microbenchmark ---
-# Runs one pinned steady-state config to completion with the device + realtime
-# profiler, then post-processes the profiler CSVs in Python and gates the portable
-# device KERNEL-zone op2op (official_op2op_us) against the per-arch golden. The RT
-# gap_to_next_go is recorded (tracked, not gated) and self-disables where the RT
-# profiler is unsupported. Goldens ship in record mode (null) until populated.
+# Runs one pinned steady-state config to completion with the device profiler, then
+# post-processes the profiler CSV in Python and gates the portable device KERNEL-zone
+# op2op (official_op2op_us) against the per-arch golden. The metric comes only from the
+# standard device profiler so it behaves identically on Wormhole and Blackhole; the new
+# realtime profiler is intentionally NOT used here (it is unsupported on some WH setups).
+# Goldens ship in record mode (null) until populated.
 - name: runtime_perf_op_to_op_latency
   cmd: |
     mkdir -p generated/test_reports
     export TT_METAL_DEVICE_PROFILER=1
     ./build/test/tt_metal/perf_microbenchmark/op_to_op_latency/test_op_to_op_latency \
       --use-trace --trace-warmup-replays 2 --num-programs 8 --num-pages-per-core 4 \
-      --compute-nops 2000 --use-device-profiler --use-realtime-profiler
+      --compute-nops 2000 --use-device-profiler
     GOLDEN=tests/tt_metal/tt_metal/perf_microbenchmark/op_to_op_latency/op_to_op_golden.json
     if [ "$ARCH_NAME" = "blackhole" ]; then
       GOLDEN=tests/tt_metal/tt_metal/perf_microbenchmark/op_to_op_latency/op_to_op_blackhole_golden.json

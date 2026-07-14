@@ -10,7 +10,7 @@
 //   2: start_tile_id          (in tiles)
 //   3: program_id
 //
-// Compile-time args (see TensorAccessorArgs<6> for src accessor):
+// Compile-time args (see TensorAccessorArgs<7> for src accessor):
 //   0: cb_in
 //   1: READER_MODE            (0 = reserve N, read+push one-by-one with a global barrier
 //                              1 = reserve N, read all, single barrier, push N
@@ -26,12 +26,25 @@
 //   5: CROSS_PROGRAM_OFFSET_TILES (0 = every program reads the same slice; >0 = program k
 //                              reads pages starting at start_tile_id + k*OFFSET. Host
 //                              must allocate a buffer big enough for all program slices.)
+//   6: PROFILE_DETAIL          (0 = lean CI path: emit no custom markers; 1 = research:
+//                              emit GO/DONE/BARRIER markers for BW/gap decomposition)
 //
-// Profiler on first tile of the slice only: READ_BEFORE_BARRIER / READ_AFTER_BARRIER.
+// Profiler on first tile of the slice only: READ_BEFORE_BARRIER / READ_AFTER_BARRIER
+// (research only; gated by PROFILE_DETAIL).
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
+
+// Research-only detail markers. Compiled out on the lean CI path (PROFILE_DETAIL == 0) so
+// they add zero device cycles to the gated op2op measurement. Expanded only inside
+// kernel_main, where PROFILE_DETAIL (a compile-time arg) is in scope.
+#define DETAIL_MARK(name, value)                \
+    do {                                        \
+        if constexpr (PROFILE_DETAIL) {         \
+            DeviceTimestampedData(name, value); \
+        }                                       \
+    } while (0)
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -45,7 +58,8 @@ void kernel_main() {
     constexpr uint32_t TILES_PER_PAGE = get_compile_time_arg_val(3);
     constexpr uint32_t TRID_IN_FLIGHT = get_compile_time_arg_val(4);
     constexpr uint32_t CROSS_PROGRAM_OFFSET_TILES = get_compile_time_arg_val(5);
-    constexpr auto src_args = TensorAccessorArgs<6>();
+    constexpr uint32_t PROFILE_DETAIL = get_compile_time_arg_val(6);
+    constexpr auto src_args = TensorAccessorArgs<7>();
 
     constexpr uint32_t chunk_size = PUSH_TILE_COUNT > 0 ? PUSH_TILE_COUNT : 1;
     constexpr uint32_t tiles_per_page = TILES_PER_PAGE > 0 ? TILES_PER_PAGE : 1;
@@ -53,8 +67,8 @@ void kernel_main() {
 
     const auto src = TensorAccessor(src_args, src_addr);
 
-    DeviceTimestampedData("PROG_ID", program_id);
-    DeviceTimestampedData("NCRISC_GO", program_id);
+    DETAIL_MARK("PROG_ID", program_id);
+    DETAIL_MARK("NCRISC_GO", program_id);
 
     // When CROSS_PROGRAM_OFFSET_TILES > 0, each program reads a disjoint tile slice
     // so the DRAM controller sees fresh row opens per program (more app-like).
@@ -106,7 +120,7 @@ void kernel_main() {
         cb_reserve_back(cb_in, 2 * batch_tiles);
         const uint32_t cb_base = get_write_ptr(cb_in);
 
-        DeviceTimestampedData("READ_BEFORE_BARRIER", effective_start_tile_id);
+        DETAIL_MARK("READ_BEFORE_BARRIER", effective_start_tile_id);
 
         // Prologue: issue batch 0 on TRID_A.
         uint32_t issue_trid = TRID_A;
@@ -133,7 +147,7 @@ void kernel_main() {
             issued += nb;
 
             noc_async_read_barrier_with_trid(drain_trid);
-            DeviceTimestampedData("READ_AFTER_BARRIER", effective_start_tile_id);
+            DETAIL_MARK("READ_AFTER_BARRIER", effective_start_tile_id);
             cb_push_back(cb_in, batch_tiles);
             pushed += N;
             drain_trid ^= 1u;
@@ -166,12 +180,12 @@ void kernel_main() {
         noc_async_read_barrier_with_trid(drain_trid);
         if (pushed == 0) {
             // n_pages <= N: head never ran, so emit the first-read marker here.
-            DeviceTimestampedData("READ_AFTER_BARRIER", effective_start_tile_id);
+            DETAIL_MARK("READ_AFTER_BARRIER", effective_start_tile_id);
         }
-        DeviceTimestampedData("READ_LAST_BARRIER", effective_start_tile_id);
+        DETAIL_MARK("READ_LAST_BARRIER", effective_start_tile_id);
         cb_push_back(cb_in, (n_pages - pushed) * tiles_per_page);
 
-        DeviceTimestampedData("NCRISC_DONE", program_id);
+        DETAIL_MARK("NCRISC_DONE", program_id);
         return;
     }
 
@@ -191,13 +205,13 @@ void kernel_main() {
                 const uint32_t tid = tile_id + i;
                 const uint32_t l1_write_addr = cb_base + i * tile_bytes;
                 if (tid == effective_start_tile_id) {
-                    DeviceTimestampedData("READ_BEFORE_BARRIER", tid);
+                    DETAIL_MARK("READ_BEFORE_BARRIER", tid);
                 }
                 noc_async_read_tile(tid, src, l1_write_addr);
             }
             noc_async_read_barrier();
             if (tile_id == effective_start_tile_id) {
-                DeviceTimestampedData("READ_AFTER_BARRIER", tile_id);
+                DETAIL_MARK("READ_AFTER_BARRIER", tile_id);
             }
             cb_push_back(cb_in, chunk);
         } else {
@@ -205,12 +219,12 @@ void kernel_main() {
                 const uint32_t tid = tile_id + i;
                 const uint32_t l1_write_addr = get_write_ptr(cb_in);
                 if (tid == effective_start_tile_id) {
-                    DeviceTimestampedData("READ_BEFORE_BARRIER", tid);
+                    DETAIL_MARK("READ_BEFORE_BARRIER", tid);
                 }
                 noc_async_read_tile(tid, src, l1_write_addr);
                 noc_async_read_barrier();
                 if (tid == effective_start_tile_id) {
-                    DeviceTimestampedData("READ_AFTER_BARRIER", tid);
+                    DETAIL_MARK("READ_AFTER_BARRIER", tid);
                 }
                 cb_push_back(cb_in, 1);
             }
@@ -219,5 +233,5 @@ void kernel_main() {
         tile_id += chunk;
     }
 
-    DeviceTimestampedData("NCRISC_DONE", program_id);
+    DETAIL_MARK("NCRISC_DONE", program_id);
 }

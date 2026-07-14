@@ -9,8 +9,9 @@
 The test binary (test_op_to_op_latency) runs one pinned steady-state config to
 completion and dumps two raw profiler CSVs:
 
-  generated/profiler/.logs/profile_log_device.csv      device profiler (KERNEL zones)
-  generated/profiler/.logs/profile_log_device_rt.csv   realtime profiler (per-program go/done)
+  generated/profiler/.logs/profile_log_device.csv      device profiler (KERNEL zones, via process_device_log)
+  generated/profiler/.logs/profile_log_device_rt.csv   realtime profiler (optional; only if the
+                                                        binary ran with --use-realtime-profiler)
 
 This module turns those into a small set of scalar metrics for the CI gate. Two
 kinds of op-to-op number are produced:
@@ -32,9 +33,11 @@ Also emitted for context: device_kernel_dur_us (per-op kernel span) and the
 per-core pack-finish -> next-unpack-start op2op (the definition the research
 benchmark used).
 
-The metric extraction functions (official_kernel_metrics etc.) are copied from
-the research benchmark's decompose_latency_bw.py / export_op_to_op_profiler_csv.py
-so this file is self-contained.
+The device log is loaded through the official parser (tools/tracy/process_device_log.py),
+not by reading the CSV columns directly: that module owns the on-disk schema and is
+updated in lockstep with it, so consuming its structured output keeps this test robust
+to CSV layout changes (profiler-team review). We normalize its output to our own stable
+column names and do the op-to-op math on top of that.
 """
 
 from __future__ import annotations
@@ -42,7 +45,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -59,40 +61,76 @@ DM_KERNEL_ZONES = ("BRISC-KERNEL", "NCRISC-KERNEL")
 
 
 # --------------------------------------------------------------------------- #
-# CSV loading (device profiler log has a metadata first line with CHIP_FREQ)
+# Device log loading via the official parser (owns the CSV schema for us)
 # --------------------------------------------------------------------------- #
-def parse_chip_freq_mhz(log_path: Path) -> float:
-    with log_path.open() as f:
-        header = f.readline()
-    match = re.search(r"CHIP_FREQ\[MHz\]:\s*([0-9.]+)", header)
-    if not match:
-        raise ValueError(f"Could not parse CHIP_FREQ from first line of {log_path}")
-    return float(match.group(1))
+def _to_int(v) -> int:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            return 0
 
 
-def load_device_csv(log_path: Path) -> pd.DataFrame:
-    df = pd.read_csv(log_path, skiprows=1)
-    df.columns = df.columns.str.strip()
-    return df
+def load_device_events(log_path: Path) -> tuple[pd.DataFrame, float]:
+    """Load the device profiler log through tools/tracy/process_device_log.py.
+
+    We deliberately do NOT read the CSV columns directly: that module owns the on-disk
+    schema and is updated in lockstep with it, so consuming its structured output keeps
+    us robust to CSV layout changes. Returns a normalized event frame with our own
+    stable column names (chip, core_x, core_y, risc, zone, type, t, data,
+    trace_id_count) plus the chip frequency in MHz.
+    """
+    try:
+        from tracy.process_device_log import import_device_profile_log
+    except ImportError as exc:  # pragma: no cover - env guard
+        raise SystemExit(
+            "Could not import tracy.process_device_log; run under the tt-metal profiler "
+            f"environment (PYTHONPATH must include the tools/ dir). Original error: {exc}"
+        )
+
+    devices = import_device_profile_log(str(log_path))
+    freq_mhz = float(devices["deviceInfo"]["freq"])
+
+    rows = []
+    for chip, ddata in devices["devices"].items():
+        for core, cdata in ddata["cores"].items():
+            core_x, core_y = core
+            for risc, rdata in cdata["riscs"].items():
+                for timer_id, t, data in rdata["timeseries"]:
+                    rows.append(
+                        {
+                            "chip": chip,
+                            "core_x": core_x,
+                            "core_y": core_y,
+                            "risc": risc,
+                            "zone": timer_id["zone_name"],
+                            "type": timer_id["type"],
+                            "t": int(t),
+                            "data": _to_int(data),
+                            "trace_id_count": _to_int(timer_id.get("trace_id_count", -1)),
+                        }
+                    )
+    return pd.DataFrame(rows), freq_mhz
 
 
 def select_measured_trace_replay(df: pd.DataFrame) -> pd.DataFrame:
     """Keep only the measured trace replay.
 
     With trace warmup replays the device profiler accumulates every replay's
-    markers into one CSV, tagged by 'trace id counter' (1..R, incrementing per
-    replay); the final drain dumps them all at once. Warmup replays reuse the same
-    PROG_IDs as the measured replay, so they can't be separated by program id -- but
-    the measured replay is always the last one, i.e. the max trace-id-counter.
-    No-op for non-trace (FD back-to-back) runs, which have no trace id counter.
+    markers into one log, tagged by trace_id_count (1..R, incrementing per replay);
+    the final drain dumps them all at once. Warmup replays reuse the same PROG_IDs as
+    the measured replay, so they can't be separated by program id -- but the measured
+    replay is always the last one, i.e. the max trace_id_count. No-op for non-trace
+    (FD back-to-back) runs, where the parser reports trace_id_count == -1.
     """
-    col = "trace id counter"
-    if col not in df.columns:
+    if df.empty or "trace_id_count" not in df.columns:
         return df
-    counters = pd.to_numeric(df[col], errors="coerce")
-    if not counters.notna().any():
+    valid = df["trace_id_count"][df["trace_id_count"] >= 0]
+    if valid.empty:
         return df
-    return df[counters == counters.max()]
+    return df[df["trace_id_count"] == valid.max()]
 
 
 def _median(xs) -> float:
@@ -118,15 +156,15 @@ def official_kernel_metrics(df: pd.DataFrame, freq_mhz: float, max_gap_us: float
     trace capture/replay duplicate program ids). The max_gap_us cap drops trace-instance
     boundaries. Returns (op2op_us list, kernel_dur_us list).
     """
-    z = df[df["zone name"].isin(KERNEL_ZONES) & df["type"].isin(["ZONE_START", "ZONE_END"])]
+    z = df[df["zone"].isin(KERNEL_ZONES) & df["type"].isin(["ZONE_START", "ZONE_END"])]
     op2op, kdur = [], []
     cap = max_gap_us * freq_mhz
-    for _key, g in z.groupby(["PCIe slot", "core_x", "core_y"], sort=False):
+    for _key, g in z.groupby(["chip", "core_x", "core_y"], sort=False):
         evs = sorted(
             (
-                int(r["time[cycles since reset]"]),
+                int(r["t"]),
                 r["type"] == "ZONE_START",
-                r["zone name"] in DM_KERNEL_ZONES,
+                r["zone"] in DM_KERNEL_ZONES,
             )
             for _, r in g.iterrows()
         )
@@ -165,18 +203,17 @@ def official_kernel_metrics(df: pd.DataFrame, freq_mhz: float, max_gap_us: float
 # --------------------------------------------------------------------------- #
 def pack_to_unpack_op2op_us(df: pd.DataFrame, freq_mhz: float, min_prog_id: int):
     markers = df[
-        (df["zone name"].isin(["PROG_ID", "TILE_IDX", "FINISH_LAST_PUSH"]))
-        & (df["RISC processor type"].isin([UNPACK_RISC, PACK_RISC]))
+        (df["zone"].isin(["PROG_ID", "TILE_IDX", "FINISH_LAST_PUSH"])) & (df["risc"].isin([UNPACK_RISC, PACK_RISC]))
     ].copy()
-    markers = markers.sort_values(["PCIe slot", "core_x", "core_y", "RISC processor type", "time[cycles since reset]"])
+    markers = markers.sort_values(["chip", "core_x", "core_y", "risc", "t"])
     pack_finish: dict[tuple, int] = {}
     unpack_tile0: dict[tuple, int] = {}
-    for key, group in markers.groupby(["PCIe slot", "core_x", "core_y", "RISC processor type"], sort=False):
+    for key, group in markers.groupby(["chip", "core_x", "core_y", "risc"], sort=False):
         chip, cx, cy, risc = key
         cur_prog = None
         for _, row in group.iterrows():
-            zone = row["zone name"]
-            t = int(row["time[cycles since reset]"])
+            zone = row["zone"]
+            t = int(row["t"])
             data = int(row["data"])
             if zone == "PROG_ID":
                 cur_prog = data
@@ -222,8 +259,7 @@ def rt_gap_to_next_go_ns(rt_path: Path, min_prog_id: int):
 # Top-level metric computation
 # --------------------------------------------------------------------------- #
 def compute_metrics(device_csv: Path, rt_csv: Path | None, min_prog_id: int) -> dict:
-    freq_mhz = parse_chip_freq_mhz(device_csv)
-    df = load_device_csv(device_csv)
+    df, freq_mhz = load_device_events(device_csv)
     df = select_measured_trace_replay(df)
 
     op2op_us, kdur_us = official_kernel_metrics(df, freq_mhz)
@@ -253,7 +289,13 @@ def main() -> int:
         "--input-file", type=Path, default=None, help=f"device CSV (default $TT_METAL_HOME/{DEFAULT_DEVICE_LOG})"
     )
     ap.add_argument(
-        "--rt-file", type=Path, default=None, help=f"realtime CSV (default $TT_METAL_HOME/{DEFAULT_RT_LOG})"
+        "--rt-file",
+        type=Path,
+        default=None,
+        help="optional realtime-profiler CSV (canonical path: $TT_METAL_HOME/"
+        f"{DEFAULT_RT_LOG}). The CI flow is device-profiler-only (portable across WH/BH), so "
+        "RT is off by default; pass this only when you ran the binary with "
+        "--use-realtime-profiler, to also report the (ungated) rt_gap_to_next_go metric.",
     )
     ap.add_argument(
         "--min-prog-id",
@@ -284,7 +326,9 @@ def main() -> int:
 
     home = os.environ.get("TT_METAL_HOME", ".")
     device_csv = args.input_file or Path(home) / DEFAULT_DEVICE_LOG
-    rt_csv = args.rt_file or Path(home) / DEFAULT_RT_LOG
+    # RT is opt-in: only read it when explicitly pointed at a file, so a stale RT CSV from an
+    # earlier run can never leak into a device-only (CI) run.
+    rt_csv = args.rt_file
 
     if not device_csv.exists():
         print(f"ERROR: device profiler CSV not found: {device_csv}", file=sys.stderr)
