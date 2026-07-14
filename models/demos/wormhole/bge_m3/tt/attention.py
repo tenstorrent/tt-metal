@@ -272,7 +272,12 @@ class BgeM3Attention(LightweightModule):
         # SDPA chunk sizing keys off the full (key) sequence length. In
         # sequence-parallel mode queries are local (S/tp) but keys span full S.
         sdpa_seq_len = k.shape[2]
-        sdpa_program_config = _sdpa_program_config(sdpa_seq_len, self.config.mesh_device, batch_size=batch_size)
+        sdpa_program_config = _sdpa_program_config(
+            sdpa_seq_len,
+            self.config.mesh_device,
+            batch_size=batch_size,
+            sequence_parallel=self.config.sequence_parallel_axis is not None,
+        )
         context = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
@@ -344,17 +349,20 @@ class BgeM3Attention(LightweightModule):
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def _sdpa_chunks_for_seq_len(seq_len, batch_size=None):
+def _sdpa_chunks_for_seq_len(seq_len, batch_size=None, sequence_parallel=False):
     if seq_len % 128 == 0:
         # N300 B12/S8192: q256/k256 wins IN-MODEL (4056ms). Standalone sweep is
         # unreliable for SDPA (see sweep_sdpa_b12_s8192.py warning); tuned by
         # direct perf.py runs. Tested in-model: q512/k128=4489, q256/k256=4056(best),
         # q256/k128=4596. k_chunk=256 is the sweet spot.
         if seq_len == 8192:
-            # Sequence-parallel: local Sq=4096, gathered Sk=8192. Lower L1
-            # pressure (halved Sq) lets k_chunk=512 fit, halving the number of
-            # k-passes and the online-softmax rescaling overhead.
-            return 512, 512
+            if sequence_parallel:
+                # Sequence-parallel: local Sq=4096, gathered Sk=8192. Lower L1
+                # pressure (halved Sq) lets k_chunk=512 fit, halving the number
+                # of k-passes and the online-softmax rescaling overhead.
+                return 512, 512
+            # Dense-mask S8192 needs the lower-L1 k256 configuration.
+            return 512, 256
         # B8: q=256 k=256 (swept q{64..512} x k{128,256,512}; 256x256 is the min,
         # ~0.27ms under the B32-inherited 256x512). B32 keeps 256x512.
         # B16: q=256 k=256 (swept; 256x256 ~0.25ms under 256x512, same as B8).
@@ -392,8 +400,8 @@ def _sdpa_compute_grid(mesh_device):
         return (8, 8)
 
 
-def _sdpa_program_config(seq_len, mesh_device, batch_size=None):
-    q_chunk, k_chunk = _sdpa_chunks_for_seq_len(seq_len, batch_size=batch_size)
+def _sdpa_program_config(seq_len, mesh_device, batch_size=None, sequence_parallel=False):
+    q_chunk, k_chunk = _sdpa_chunks_for_seq_len(seq_len, batch_size=batch_size, sequence_parallel=sequence_parallel)
     grid = _sdpa_compute_grid(mesh_device)
     # B1/S512 on Blackhole: 8x8=64 cores beats the default 11x10=110 grid.
     # Sweep showed ~10% lower SDPA device time at smaller grid (less dispatch

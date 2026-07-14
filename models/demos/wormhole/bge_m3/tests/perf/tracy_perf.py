@@ -206,3 +206,47 @@ def test_bge_m3_tracy_perf_b12_s8192(mesh_device):
 
     logger.info("Tracy profiling complete.")
     ttnn.deallocate(out)
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 1)], indirect=True, ids=["tp2_n300"])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 50_000_000,
+            "num_command_queues": 1,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
+)
+def test_bge_m3_tracy_perf_b12_s8192_tp2(mesh_device):
+    """Profile one untraced TP2 sequence-parallel forward between signposts."""
+    if os.environ.get("TT_METAL_DEVICE_PROFILER", "0") != "1":
+        pytest.fail("TT_METAL_DEVICE_PROFILER=1 is required for device kernel profiling.")
+
+    from models.demos.wormhole.bge_m3.tests.perf.tp2_perf import _to_seqsharded_tensors
+
+    assert tuple(mesh_device.shape) == (2, 1)
+    assert mesh_device.get_num_devices() == 2
+
+    model_args, model, _ = create_tt_model(
+        mesh_device=mesh_device,
+        max_batch_size=12,
+        max_seq_len=SEQ_LEN_8192,
+        dtype=ttnn.bfloat8_b,
+    )
+    host_inputs = prepare_inputs(model_args.tokenizer, 12, SEQ_LEN_8192, model_args.pad_token_id)
+    device_inputs = _to_seqsharded_tensors(host_inputs, mesh_device, device=True)
+
+    logger.info("Compiling TP2 warmup forward outside signposts")
+    out = model.forward(**device_inputs)
+    ttnn.synchronize_device(mesh_device)
+    ttnn.deallocate(out)
+
+    logger.info("Running signed TP2 profiled forward")
+    signpost("start")
+    out = model.forward(**device_inputs)
+    ttnn.synchronize_device(mesh_device)
+    signpost("stop")
+    ttnn.deallocate(out)
