@@ -354,7 +354,8 @@ bool single_tile_matmul(
     tt::DataFormat in0_fmt = tt::DataFormat::Float16_b,
     tt::DataFormat in1_fmt = tt::DataFormat::Float16_b,
     tt::DataFormat out_fmt = tt::DataFormat::Float16_b,
-    bool fp32_dest_acc_en = false) {
+    bool fp32_dest_acc_en = false,
+    const std::string& compute_kernel_override = "") {
     bool pass = true;
     CoreCoord core(0, 0);
     const uint32_t in0_cb_index = 0;
@@ -432,7 +433,9 @@ bool single_tile_matmul(
 
     tt_metal::CreateKernel(
         program_,
-        "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/single_tile_compute.cpp",
+        compute_kernel_override.empty()
+            ? "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/single_tile_compute.cpp"
+            : compute_kernel_override,
         core,
         tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = {in0_cb_index, in1_cb_index, out_cb_index}});
@@ -980,11 +983,221 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     return pass;
 }
 
+inline std::vector<uint32_t> transpose_tiles(
+    const std::vector<uint32_t>& data, uint32_t row_tiles, uint32_t col_tiles, uint32_t in0_block_w) {
+    std::vector<uint32_t> result;
+    const uint32_t tile_size = 512;  // uint32s per Float16_b 32x32 tile
+    for (uint32_t c = 0; c < col_tiles; c += in0_block_w) {
+        for (uint32_t r = 0; r < row_tiles; r++) {
+            for (uint32_t k = 0; k < in0_block_w; k++) {
+                const uint32_t offset = tile_size * col_tiles * r + c * tile_size + k * tile_size;
+                for (uint32_t i = 0; i < tile_size; i++) {
+                    result.push_back(data.at(offset + i));
+                }
+            }
+        }
+    }
+    return result;
+}
+
+// Faithful bmm_large_block harness (LLKMeshDeviceFixture / MeshWorkload port):
+// sub-block-tiled blocked matmul with spill/reload, driven by reader_matmul_blocked +
+// writer_unswizzle, checked against the identity-matrix golden (weights = identity =>
+// output == first N cols of the random activations). `compute_kernel_path` selects the
+// reference vs SST kernel.
+bool bmm_large_block(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    uint32_t M,
+    uint32_t K,
+    uint32_t N,
+    uint32_t out_subblock_h,
+    uint32_t out_subblock_w,
+    uint32_t in0_block_w,
+    const std::string& compute_kernel_path = "tests/tt_metal/tt_metal/test_kernels/compute/matmul_large_block_zm.cpp") {
+    bool pass = true;
+    CoreCoord core(0, 0);
+    const uint32_t single_tile_size = 2 * 1024;  // Float16_b 32x32
+
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
+    auto* device = mesh_device->get_devices()[0];
+
+    const uint32_t dram_act = single_tile_size * M * K;
+    const uint32_t dram_wts = single_tile_size * K * N;
+    const uint32_t dram_out = single_tile_size * M * N;
+    tt::tt_metal::InterleavedBufferConfig act_cfg{
+        .device = device, .size = dram_act, .page_size = dram_act, .buffer_type = tt::tt_metal::BufferType::DRAM};
+    tt::tt_metal::InterleavedBufferConfig wts_cfg{
+        .device = device, .size = dram_wts, .page_size = dram_wts, .buffer_type = tt::tt_metal::BufferType::DRAM};
+    tt::tt_metal::InterleavedBufferConfig out_cfg{
+        .device = device, .size = dram_out, .page_size = dram_out, .buffer_type = tt::tt_metal::BufferType::DRAM};
+
+    tt_metal::Program program = tt_metal::CreateProgram();
+    workload.add_program(device_range, std::move(program));
+    auto& program_ = workload.get_programs().at(device_range);
+
+    auto src0 = CreateBuffer(act_cfg);
+    auto src1 = CreateBuffer(wts_cfg);
+    auto dst = CreateBuffer(out_cfg);
+
+    // CBs: in0, in1 (double-buffered blocks), and output/partials aliased in L1.
+    tt_metal::CircularBufferConfig cb0_cfg(M * in0_block_w * 2 * single_tile_size, {{0, tt::DataFormat::Float16_b}});
+    cb0_cfg.set_page_size(0, single_tile_size);
+    tt_metal::CreateCircularBuffer(program_, core, cb0_cfg);
+    tt_metal::CircularBufferConfig cb1_cfg(N * in0_block_w * 2 * single_tile_size, {{1, tt::DataFormat::Float16_b}});
+    cb1_cfg.set_page_size(1, single_tile_size);
+    tt_metal::CreateCircularBuffer(program_, core, cb1_cfg);
+    std::map<uint8_t, tt::DataFormat> out_spec = {
+        {tt::CBIndex::c_16, tt::DataFormat::Float16_b}, {tt::CBIndex::c_24, tt::DataFormat::Float16_b}};
+    tt_metal::CircularBufferConfig cbo_cfg(M * N * single_tile_size, out_spec);
+    cbo_cfg.set_page_size(tt::CBIndex::c_16, single_tile_size);
+    cbo_cfg.set_page_size(tt::CBIndex::c_24, single_tile_size);
+    tt_metal::CreateCircularBuffer(program_, core, cbo_cfg);
+
+    // Derived geometry (matches matmul_large_block_zm.cpp's compile-arg contract).
+    const uint32_t num_blocks = K / in0_block_w;
+    const uint32_t in0_num_subblocks = M / out_subblock_h;
+    const uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
+    const uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
+    const uint32_t in1_num_subblocks = N / out_subblock_w;
+    const uint32_t in1_block_num_tiles = out_subblock_w * in0_block_w * in1_num_subblocks;
+    const uint32_t in1_per_core_w = out_subblock_w * in1_num_subblocks;
+    const uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
+
+    auto reader = tt_metal::CreateKernel(
+        program_,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_blocked.cpp",
+        core,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+    auto writer = tt_metal::CreateKernel(
+        program_,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unswizzle.cpp",
+        core,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+    std::vector<uint32_t> compute_args = {
+        in0_block_w,
+        in0_num_subblocks,
+        in0_block_num_tiles,
+        in0_subblock_num_tiles,
+        in1_num_subblocks,
+        in1_block_num_tiles,
+        in1_per_core_w,
+        num_blocks,
+        out_subblock_h,
+        out_subblock_w,
+        out_subblock_num_tiles};
+    // LoFi to match the reference; the SST kernel's matmul recipe is fidelity-fixed.
+    tt_metal::CreateKernel(
+        program_,
+        compute_kernel_path,
+        core,
+        tt_metal::ComputeConfig{.math_fidelity = MathFidelity::LoFi, .compile_args = compute_args});
+
+    // Stimulus + identity golden (weights = identity => out == first N cols of act).
+    const uint32_t Me = M * 32, Ke = K * 32, Ne = N * 32;
+    auto act_rm =
+        u16_from_u32_vector(generate_packed_uniform_random_vector<uint32_t, bfloat16>(0.0f, 1.0f, Me * Ke, 0x1234));
+    std::vector<uint16_t> golden_rm(Me * Ne);
+    for (uint32_t i = 0; i < Me; i++) {
+        for (uint32_t j = 0; j < Ne; j++) {
+            golden_rm[i * Ne + j] = act_rm[i * Ke + j];  // N <= K so column j exists
+        }
+    }
+    auto act_tiled = convert_layout<uint16_t>(
+        act_rm, std::vector<uint32_t>{1, 1, Me, Ke}, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES);
+    auto act_transposed = transpose_tiles(u32_from_u16_vector(act_tiled), M, K, in0_block_w);
+    tt_metal::detail::WriteToBuffer(src0, act_transposed);
+
+    auto id_bf16 = create_identity_matrix(Ke, Ne, std::min(K, N) * 32);
+    std::vector<uint16_t> id_rm(id_bf16.size());
+    for (size_t i = 0; i < id_bf16.size(); i++) {
+        id_rm[i] = std::bit_cast<uint16_t>(id_bf16[i]);
+    }
+    auto id_tiled = convert_layout<uint16_t>(
+        id_rm, std::vector<uint32_t>{1, 1, Ke, Ne}, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES);
+    tt_metal::detail::WriteToBuffer(src1, u32_from_u16_vector(id_tiled));
+
+    tt_metal::SetRuntimeArgs(
+        program_,
+        reader,
+        core,
+        {(uint32_t)src0->address(),
+         0u,
+         (uint32_t)src1->address(),
+         0u,
+         num_blocks,
+         M * in0_block_w,
+         N * in0_block_w,
+         M * in0_block_w * single_tile_size,
+         N * in0_block_w * single_tile_size});
+    tt_metal::SetRuntimeArgs(
+        program_,
+        writer,
+        core,
+        {(uint32_t)dst->address(),
+         0u,
+         out_subblock_h,
+         out_subblock_w,
+         M / out_subblock_h,
+         N / out_subblock_w,
+         out_subblock_w * single_tile_size * (N / out_subblock_w),
+         out_subblock_h * out_subblock_w * single_tile_size * (N / out_subblock_w),
+         out_subblock_w * single_tile_size});
+
+    distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+    distributed::Finish(cq);
+
+    std::vector<uint32_t> out_packed;
+    tt_metal::detail::ReadFromBuffer(dst, out_packed);
+    auto out_u16 = u16_from_u32_vector(out_packed);
+    auto out_rm = convert_layout<uint16_t>(
+        out_u16, std::vector<uint32_t>{1, 1, Me, Ne}, TensorLayoutType::TILED_NFACES, TensorLayoutType::LIN_ROW_MAJOR);
+
+    uint32_t not_close = 0;
+    for (size_t i = 0; i < golden_rm.size(); i++) {
+        if (not is_close(std::bit_cast<bfloat16>(out_rm[i]), std::bit_cast<bfloat16>(golden_rm[i]), 0.05f, 0.05f)) {
+            not_close++;
+        }
+    }
+    pass = (not_close == 0);
+    if (not pass) {
+        log_info(tt::LogTest, "bmm_large_block: {} / {} elements not close", not_close, golden_rm.size());
+    }
+    return pass;
+}
 }  // namespace unit_tests::compute::matmul
 
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleTileComputeMatmul) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         ASSERT_TRUE(unit_tests::compute::matmul::single_tile_matmul(this->devices_.at(id)));
+    }
+}
+TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleTileComputeMatmulStaticState) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        ASSERT_TRUE(unit_tests::compute::matmul::single_tile_matmul(
+            this->devices_.at(id),
+            tt::DataFormat::Float16_b,
+            tt::DataFormat::Float16_b,
+            tt::DataFormat::Float16_b,
+            /*fp32_dest_acc_en=*/false,
+            "experiments/static-state-tracking/kernels/single_tile_compute_sst.cpp"));
+    }
+}
+TEST_F(LLKMeshDeviceFixture, TensixBmmLargeBlockStaticState) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        ASSERT_TRUE(unit_tests::compute::matmul::bmm_large_block(
+            this->devices_.at(id),
+            /*M=*/8,
+            /*K=*/4,
+            /*N=*/4,
+            /*out_subblock_h=*/2,
+            /*out_subblock_w=*/2,
+            /*in0_block_w=*/2,
+            "experiments/static-state-tracking/kernels/bmm_large_block_matmul_sst.cpp"));
     }
 }
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleBlockSingleTileComputeMatmul) {

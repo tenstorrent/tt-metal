@@ -11,6 +11,8 @@
 //   pack_untilize_mop_cfg     — the untilize-mode PACR MOP (keyed on block width).
 //   pack_untilize_row_cfg — per-row L1 strides + output offset (keyed on row width).
 //   pack_untilize             — drain one DST block to L1 untilized (per block).
+//   pack_default_mop_cfg      — the default (tiled) PACR MOP (keyed on tile geometry).
+//   pack_default              — drain one DST tile to L1 tiled (per tile).
 //   packer_wait_for_math_done / pack_dest_section_done — tile_regs_* (PACK).
 
 #ifndef SST_COMPUTE_HW_PACK_H
@@ -157,7 +159,7 @@ inline void pack_untilize_row_cfg(const sst::TileConfig& tile_config) {
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(z_stride);
 
     const std::uint32_t output_addr_offset =
-        SCALE_DATUM_SIZE(df, TilesPerRow * ((tile_config.num_faces == 1) ? 1 : 2) * FACE_C_DIM);
+        SCALE_DATUM_SIZE(df, TilesPerRow * 2 /*num_faces=4: 2 face-rows*/ * FACE_C_DIM);
     TT_SETDMAREG(0, LOWER_HALFWORD(output_addr_offset / 16), 0, LO_16(p_gpr_pack::OUTPUT_ADDR_OFFSET));
     TT_SETDMAREG(0, UPPER_HALFWORD(output_addr_offset / 16), 0, HI_16(p_gpr_pack::OUTPUT_ADDR_OFFSET));
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
@@ -177,14 +179,14 @@ inline void pack_untilize(
     std::uint32_t col_tile_offset,
     const sst::TileConfig& tile_config,
     std::uint32_t dst_tile_index = 0) {
-    const std::uint32_t col_faces = (tile_config.num_faces > 2) ? (tile_config.num_faces / 2) : tile_config.num_faces;
+    const std::uint32_t col_faces = 2;  // num_faces=4 -> 2 face-columns
     const std::uint32_t off16 =
         SCALE_DATUM_SIZE(tile_config.data_format, col_tile_offset * col_faces * FACE_C_DIM) / 16;
     const std::uint32_t address = out_l1_addr_16B - 1 + off16;
 
     program_packer_destination(address);
 
-    const std::uint32_t num_faces_per_rdim_tile = (tile_config.num_faces > 2) ? 2 : 1;
+    const std::uint32_t num_faces_per_rdim_tile = 2;  // num_faces=4
     const std::uint32_t tile_dst_offset = dst_tile_index;
 
     TTI_SETADCZW(p_setadc::PAC, 0 /*Ch1_W*/, 0 /*Ch1_Z*/, 0 /*Ch0_W*/, 0 /*Ch0_Z*/, 0b0001 /*write Ch0_Z*/);
@@ -199,6 +201,89 @@ inline void pack_untilize(
 
     TTI_SETADCZW(p_setadc::PAC, 0 /*Ch1_W*/, 0 /*Ch1_Z*/, 0 /*Ch0_W*/, 0 /*Ch0_Z*/, 0b0101 /*write Ch0_Z+Ch1_Z*/);
     TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_dst_offset);
+}
+
+// --- Default (tiled) PACK configure + drain, mirroring the LLK default pack
+// (llk_pack.h: _llk_pack_configure_addrmod_ / _llk_pack_mop_config_ / _llk_pack_).
+// A plain tiled PACR MOP (DST_ACCESS_NORMAL_MODE, no strided mode, no row-stride
+// replay), keyed on the tile geometry (num_faces + face_r_dim). This is the tiled
+// sibling of pack_untilize.
+//   pack_default_mop_cfg — pack addrmods + the tiled PACR MOP.
+//   pack_default         — drain one DST tile to L1 in natural (tiled) layout.
+inline void pack_default_mop_cfg(const sst::TileConfig& /*tile_config*/) {
+    // Pack addrmods for the tiled layout (default branch of _llk_pack_configure_addrmod_).
+    addr_mod_pack_t{.y_src = {.incr = 4}, .y_dst = {.incr = 4}}.set(ADDR_MOD_0);
+    addr_mod_pack_t{
+        .y_src = {.incr = 0, .clr = 1, .cr = 0},
+        .y_dst = {.incr = 0, .clr = 1, .cr = 0},
+        .z_src = {.incr = 0, .clr = 1},
+        .z_dst = {.incr = 0, .clr = 0}}
+        .set(ADDR_MOD_1);
+    addr_mod_pack_t{
+        .y_src = {.incr = 0, .clr = 1, .cr = 0},
+        .y_dst = {.incr = 4, .clr = 0, .cr = 0},
+        .z_src = {.incr = 1, .clr = 0}}
+        .set(ADDR_MOD_2);
+
+    // Prototype scope: Float16_b 32x32 only — face_r_dim=16, num_faces=4.
+    const std::uint32_t PACK_INTF_SEL = p_pacr::ALL_INTF_ACTIVE;  // face_r_dim=16 -> all interfaces
+    const std::uint32_t MOP_INNER_LOOP = 4;                       // face_r_dim(16) >> 2
+    const std::uint32_t MOP_OUTER_LOOP = 4;                       // num_faces
+
+    ckernel_template tmp(
+        MOP_OUTER_LOOP,
+        MOP_INNER_LOOP,
+        TT_OP_PACR(
+            p_pacr::CFG_CTXT_0,
+            p_pacr::NO_ROW_PAD_ZERO,
+            p_pacr::DST_ACCESS_NORMAL_MODE,
+            ADDR_MOD_0,
+            p_pacr::ADDR_CNT_CTXT_0,
+            p_pacr::P_ZERO_OUTPUT_DISABLED,
+            PACK_INTF_SEL,
+            0,
+            0,
+            0,
+            0,
+            0));
+    tmp.set_last_inner_loop_instr(TT_OP_PACR(
+        p_pacr::CFG_CTXT_0,
+        p_pacr::NO_ROW_PAD_ZERO,
+        p_pacr::DST_ACCESS_NORMAL_MODE,
+        ADDR_MOD_2,
+        p_pacr::ADDR_CNT_CTXT_0,
+        p_pacr::P_ZERO_OUTPUT_DISABLED,
+        PACK_INTF_SEL,
+        0,
+        0,
+        0,
+        0,
+        0));
+    tmp.set_last_outer_loop_instr(TT_OP_PACR(
+        p_pacr::CFG_CTXT_0,
+        p_pacr::NO_ROW_PAD_ZERO,
+        p_pacr::DST_ACCESS_NORMAL_MODE,
+        ADDR_MOD_1,
+        p_pacr::ADDR_CNT_CTXT_0,
+        p_pacr::P_ZERO_OUTPUT_DISABLED,
+        PACK_INTF_SEL,
+        0,
+        0,
+        0,
+        0,
+        1 /*close tile*/));
+    tmp.program();
+}
+
+// Drain one DST tile to L1 (natural tiled layout). `out_l1_addr_16B` is the output
+// tile's write pointer; `dst_tile_index` is the DST source tile.
+inline void pack_default(std::uint32_t out_l1_addr_16B, std::uint32_t dst_tile_index) {
+    const std::uint32_t address = out_l1_addr_16B - 1;
+    // Select the DST source tile (packer W counter), program the L1 dest, run the MOP.
+    TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, dst_tile_index);
+    program_packer_destination(address);
+    ckernel::ckernel_template::run();
+    TTI_SETADCZW(p_setadc::PAC, 0 /*Ch1_W*/, 0 /*Ch1_Z*/, 0 /*Ch0_W*/, 0 /*Ch0_Z*/, 0b0101 /*reset Ch0_Z+Ch1_Z*/);
 }
 
 // tile_regs_wait (PACK side): block until MATH signals the DST section is ready.

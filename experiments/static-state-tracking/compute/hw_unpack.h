@@ -100,6 +100,81 @@ inline void unpack_a(std::uint32_t l1_addr_16B) {
     switch_config_context(unp_cfg_context);
 }
 
+// --- Matmul UNPACK recipe (prototype), transcribed from the LLK matmul unpack path
+// (llk_unpack_AB_matmul.h) for the FIXED case: full 32x32 tiles, ct=rt=kt=1 (single
+// tile, reuse_a=true), no partial face, no broadcast. Convention: in0 -> SrcB (SEC0),
+// in1 -> SrcA (SEC1). The AB MOP streams SrcA (in1) with a per-tile base advance; the
+// execute unpacks SrcB (in0) directly, then runs the MOP.
+//   unpack_matmul_mop_cfg — the two-context SrcA replay + unpack template.
+//   unpack_matmul         — set SrcA/SrcB L1 bases, unpack SrcB, run the SrcA MOP.
+inline void unpack_matmul_mop_cfg(const sst::TileConfig& /*tile_config*/) {
+    // Whole-tile unpack setup (no partial face): re-enable face transpose, reset the
+    // Z/W counters, and widen the X-dim so ONE UNPACR unpacks the full 32x32 tile.
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
+    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    const std::uint32_t x_end = 4 /*num_faces*/ * FACE_R_DIM * FACE_C_DIM - 1;  // whole 32x32 tile
+    TT_SETADCXX(p_setadc::UNP_A, x_end, 0x0);
+    TT_SETADCXX(p_setadc::UNP_B, x_end, 0x0);
+    TT_SETDMAREG(0, LOWER_HALFWORD(1), 0, LO_16(p_gpr_unpack::KT_DIM));  // kt_dim = 1
+
+    // Per-context (6 instrs each): unpack a whole SrcA tile (in1, set dvalid), then
+    // advance the SrcA L1 base by one tile (matmul-style RDCFG/ADDDMAREG/WRCFG).
+    constexpr std::uint32_t prog_len = 12;
+    constexpr std::uint32_t run_len = 6;
+    load_replay_buf(0, prog_len, [] {
+        // context 0
+        TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC0_REG3_Base_address_ADDR32);
+        TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TILE_SIZE_A);
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+        TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
+        TTI_NOP;
+        // context 1
+        TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+        TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TILE_SIZE_A);
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+        TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+        TTI_NOP;
+    });
+    // A0 = context-0 replay, skipA = context-1 replay; the TT_MOP zmask selects by context.
+    ckernel_unpack_template tmp = ckernel_unpack_template(
+        false /*srcB*/,
+        false /*halo*/,
+        lltt::replay_insn(0, run_len),
+        0,
+        0,
+        0,
+        lltt::replay_insn(run_len, run_len),
+        0,
+        0);
+    tmp.program();
+}
+
+inline void unpack_matmul(std::uint32_t in0_l1_addr_16B, std::uint32_t in1_l1_addr_16B) {
+    const std::uint32_t addr_in0 = in0_l1_addr_16B - 1;  // in0 -> SrcB (SEC1)
+    const std::uint32_t addr_in1 = in1_l1_addr_16B - 1;  // in1 -> SrcA (SEC0)
+
+    volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
+    wait_for_next_context(2);
+
+    // in1 -> SrcA (SEC0), in0 -> SrcB (SEC1), for the current config context.
+    const std::uint32_t sec0_reg =
+        (unp_cfg_context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
+    const std::uint32_t sec1_reg =
+        (unp_cfg_context == 0) ? THCON_SEC1_REG3_Base_address_ADDR32 : THCON_SEC1_REG3_Base_cntx1_address_ADDR32;
+    cfg[sec0_reg] = addr_in1;  // in1 -> SrcA
+    cfg[sec1_reg] = addr_in0;  // in0 -> SrcB
+
+    semaphore_post(semaphore::UNPACK_SYNC);
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+    // Unpack in0 -> SrcB directly; the MOP then streams in1 -> SrcA.
+    TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    TT_MOP(0, 0 /*ct_dim-1*/, unp_cfg_context == 0 ? 0 : 0xff);
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+    switch_config_context(unp_cfg_context);
+}
+
 }  // namespace hw
 }  // namespace compute
 }  // namespace sst

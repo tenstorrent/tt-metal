@@ -60,6 +60,18 @@ constexpr State with_untilize(
     s.p.tiles_per_row = Tracked<uint16_t>{tiles_per_row};
     return s;
 }
+constexpr State with_pack_default(State s, const TileConfig& tile_config) {
+    s.p.mode = Tracked<PackMode>{PackMode::Default};
+    s.p.tile_config = Tracked<TileConfig>{tile_config};
+    return s;
+}
+constexpr State with_matmul(State s, const TileConfig& tile_config) {
+    s.u.mode = Tracked<UnpackMode>{UnpackMode::Matmul};
+    s.u.tile_config = Tracked<TileConfig>{tile_config};
+    s.m.mode = Tracked<MathMode>{MathMode::Matmul};
+    s.m.tile_config = Tracked<TileConfig>{tile_config};
+    return s;
+}
 
 template <const State& S, typename TileT>
 struct CopyNext {
@@ -68,6 +80,14 @@ struct CopyNext {
 template <const State& S, uint16_t TilesPerBlock, uint16_t TilesPerRow, typename TileT>
 struct UntilizeNext {
     static constexpr State value = with_untilize(S, Resolver<TileT>::tile_config(), TilesPerBlock, TilesPerRow);
+};
+template <const State& S, typename TileT>
+struct PackTileNext {
+    static constexpr State value = with_pack_default(S, Resolver<TileT>::tile_config());
+};
+template <const State& S, typename TileT>
+struct MatmulNext {
+    static constexpr State value = with_matmul(S, Resolver<TileT>::tile_config());
 };
 
 // hw_startup establishes the DST-produce layout for the whole kernel (it emits
@@ -188,6 +208,56 @@ ALWI auto untilize_block(Tag<S>, const Tensor<TileT, B>& out, uint32_t col_tile_
     (void)out;
     (void)col_tile_offset;
     return Tag<UntilizeNext<S, TilesPerBlock, TilesPerRow, TileT>::value>{};
+}
+
+// ---------------------------------------------------------------------------
+// pack_tile: pack one DST tile -> L1 in natural (tiled) layout. Configures PACK
+// for default (tiled) pack only when the incoming state does not already match.
+// The tiled sibling of untilize_block (which packs row-major). Needs a tiled-DST
+// kernel (hw_startup<..., Remap=false>).
+// ---------------------------------------------------------------------------
+template <const State& S, typename TileT, Backend B>
+ALWI auto pack_tile(Tag<S>, const Tensor<TileT, B>& out, uint32_t dst_idx) {
+    constexpr TileConfig tile_config = Resolver<TileT>::tile_config();
+
+    if constexpr (!S.p.mode.matches(PackMode::Default) || !S.p.tile_config.matches(tile_config)) {
+        PACK((hw::pack_default_mop_cfg(tile_config)));
+    }
+
+    PACK((hw::pack_default(out.tile_addr_16B(dst_idx), dst_idx)));
+    (void)out;
+    (void)dst_idx;
+    return Tag<PackTileNext<S, TileT>::value>{};
+}
+
+// ---------------------------------------------------------------------------
+// matmul (prototype): multiply-accumulate in0[i0] x in1[i1] into DST[dst_idx].
+// Configures UNPACK-AB + MATH for matmul only when the incoming state does not
+// already say so — matmul_init is implicit and elided when the mode is unchanged
+// (the reconfigure-elision payoff). in0 -> SrcB, in1 -> SrcA. Fixed: HiFi2, full
+// 32x32 tiles, single output tile; needs a tiled-DST kernel (hw_startup<..,false>).
+// ---------------------------------------------------------------------------
+template <const State& S, typename TileT, Backend B>
+ALWI auto matmul(
+    Tag<S>, const Tensor<TileT, B>& in0, const Tensor<TileT, B>& in1, uint32_t i0, uint32_t i1, uint32_t dst_idx) {
+    constexpr TileConfig tile_config = Resolver<TileT>::tile_config();
+
+    // UNPACK: the AB matmul MOP (keyed on op mode). MATH: the matmul MOP (mode + geometry).
+    if constexpr (!S.u.mode.matches(UnpackMode::Matmul)) {
+        UNPACK((hw::unpack_matmul_mop_cfg(tile_config)));
+    }
+    if constexpr (!S.m.mode.matches(MathMode::Matmul) || !S.m.tile_config.matches(tile_config)) {
+        MATH((hw::math_matmul_mop_cfg(tile_config)));
+    }
+
+    UNPACK((hw::unpack_matmul(in0.tile_addr_16B(i0), in1.tile_addr_16B(i1))));
+    MATH((hw::math_matmul(dst_idx)));
+    (void)in0;
+    (void)in1;
+    (void)i0;
+    (void)i1;
+    (void)dst_idx;
+    return Tag<MatmulNext<S, TileT>::value>{};
 }
 
 }  // namespace compute
