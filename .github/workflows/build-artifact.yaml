@@ -718,7 +718,7 @@ jobs:
           compression-level: 0
           if-no-files-found: error
 
-      - name: 🗜️ Stage + strip ttnn-import libs
+      - name: Stage ttnn-import libs
         if: ${{ inputs.build-ttnn-import-artifact }}
         run: |
           # Lean TT_FROM_PRECOMPILED_DIR tree (build/lib + runtime). strip --strip-unneeded

@@ -84,10 +84,7 @@ jobs:
         if: ${{ inputs.ttnn-import-artifact-id != '' }}
         env:
           TT_FROM_PRECOMPILED_DIR: /work
-        run: |
-          ls -hal /work/build/lib
-          ls -hal /work/runtime
-          uv pip install .
+        run: uv pip install .
       - name: Check TTNN ops are documented
         # Verifies every registered ttnn op has an entry in docs/source/ttnn/ttnn/api.rst.
         # Runs here (no hardware needed) rather than in nightly — catches missing docs on the PR that adds the op.
