@@ -40,12 +40,14 @@ template <
     uint32_t dilation_w,
     bool zero_pages,
     uint32_t in_cb_sz,
-    uint32_t bf16_init_value>
+    uint32_t bf16_init_value,
+    bool force_max_tiles_per_reduction_4>
 ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
     // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
     // otherwise we can reduce 8 tiles at a time.
-    constexpr uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
+    constexpr uint32_t MAX_TILES_PER_REDUCTION =
+        (force_max_tiles_per_reduction_4 || (is_avg_pool && is_large_kernel)) ? 4 : 8;
     constexpr uint32_t MAX_BYTES_PER_REDUCTION = MAX_TILES_PER_REDUCTION * TILE_WIDTH * BYTES_PER_ELEM;
     constexpr uint32_t in_ntiles_c = (in_c + TILE_WIDTH - 1) / TILE_WIDTH;
     constexpr uint32_t num_tilized_rows =
@@ -241,6 +243,8 @@ void kernel_main() {
     constexpr uint32_t in_scalar_cb_id = dfb::in_scalar_cb;
     constexpr uint32_t clear_value_cb_id = dfb::clear_value_cb;
     constexpr bool is_avg_pool = (bool)get_arg(args::pool_type_is_avg);
+    // QSR: cap tiles-per-pack to 4 (matches compute + host in_nblocks_c); see factory comment (PACR0 bounds).
+    constexpr bool force_max_tiles_per_reduction_4 = (bool)get_arg(args::force_max_tiles_per_reduction_4);
     constexpr bool one_scalar_per_core = get_arg(args::one_scalar_per_core);
     // The avg-pool scalar config DFB + tensor::config only exist when !one_scalar_per_core; the
     // host emits HAS_CONFIG to this kernel's defines exactly then. Gate every dfb::config_cb /
@@ -478,7 +482,8 @@ void kernel_main() {
                 dilation_w,
                 zero_pages,
                 in_cb_sz,
-                bf16_init_value>(ind, in_l1_read_base_addr);
+                bf16_init_value,
+                force_max_tiles_per_reduction_4>(ind, in_l1_read_base_addr);
 #if ENABLE_DEBUG_PRINT == 1
             // [DIAG] Peek THIS reader's just-filled input CB (reader is producer; on DM get_read_ptr still
             // points at the base page it filled, before compute pops). Tilized face0 row0 = first 16
