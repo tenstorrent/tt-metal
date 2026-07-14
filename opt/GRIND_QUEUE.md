@@ -843,10 +843,142 @@ transferred at 84%). Do NOT use it to price a RE-ARRANGEMENT that moves a collec
 that must be measured traced, end-to-end.** This is the same lesson as the eager-harness receipt (W1: eager
 overstated 5×), one level up: a harness that is honest for one class of change silently lies about another.
 
-**Leading hypothesis for the extra ≈143 µs/block (NOT measured — a next experiment, not a claim):** the AG
-ping-pong buffer is keyed on (shape, dim, mesh_axis) (`manager.py get_ag_ping_pong_buffer`), and the de-fused
-video-ff1 gather has the SAME key `(1,1,1216,1024)/dim=3/tp` as the activation gather W1 already hoists in all 6
-attentions. That puts 7 gathers/block on ONE ping-pong PAIR, so a gather can find both buffers still live in a
-downstream consumer and stall. If true, the cost is a *collision with W1*, not a property of de-fusing, and it
-would also explain why the audio sites (whose gathers likewise collide with the hoisted audio attention gather)
-came back null rather than winning. Testable by giving the de-fused gather its own buffer key.
+**~~Leading hypothesis for the extra ≈143 µs/block:~~ AG ping-pong buffer collision with W1's hoisted gathers —
+KILLED BY SOURCE (Batch W7 below). No device time spent. The mechanism it needs does not exist in the op.**
+
+## Batch W7 — AG ping-pong buffer collision ("6 gathers sharing 2 buffers serialize") — **DEAD ON ARRIVAL, source-verified. NO device time burned. The predicted ΔSTEP_MS is 0 BY CONSTRUCTION, not by measurement.**
+
+The W6 post-mortem's leading hypothesis was that `get_ag_ping_pong_buffer` keys on SHAPE, so W1's 6 hoisted
+attention gathers share one 2-buffer pair, and each gather stalls waiting for a buffer to free. **Five
+independent kills, all mechanical. The lever was never implemented and never run.**
+
+1. **THERE IS NO BUFFER-KEYED WAIT ANYWHERE IN THE OP.** This is the decisive fact and it is not an estimate.
+   The writer (`minimal_default_writer.cpp`) writes into the peer's output buffer over the fabric and increments
+   `out_ready_sem`; it *never reads, locks, or waits on the output buffer*. The reader's only wait is
+   `noc_semaphore_wait_min(out_ready_sem, ...)` (`minimal_default_reader.cpp:292,368`) — waiting for *peer data
+   to land*, which is the collective's inherent cost — then it resets the sem to 0 (`:392`). A second gather
+   with the same buffer does not block; it simply writes. **"Each must wait for a buffer to free before it can
+   start" describes a mechanism that is not in the code.**
+2. **The one barrier that exists is COMPILED OUT on exactly this path.** `all_gather_async_default_program_factory
+   .cpp:734` sets the kernel's `use_barrier_sem` = `barrier_semaphore.has_value() && !using_persistent_buffers`
+   (arg map verified 1:1 against `minimal_default_writer.cpp:104-110`). `using_persistent_buffers` is true for
+   every W1 gather (`all_gather_async_device_operation.cpp:277`), and `manager.py:461` passes
+   `barrier_semaphore=None` on the persistent path anyway ⇒ **doubly false, barrier block (writer :224-272)
+   skipped.** The persistent buffer is what *buys* the barrier-free path — it is a correctness device, not a
+   scheduling resource.
+3. **The dispatcher is buffer-blind, so buffer identity CANNOT change the schedule.** The address enters as a
+   *runtime arg* (`output_tensor.buffer()->address()` → `writer_rt_args[0]`, patched by
+   `override_runtime_arguments` :835-849). tt-metal keeps no buffer dependency graph; programs on a CQ run in
+   enqueue order, and under trace the addresses are baked into the replayed command stream. Re-keying the buffers
+   yields an **identical program, identical kernels, identical semaphores, identical op order** — only the
+   destination address moves. **ΔSTEP_MS = 0 by construction.** Consistency check that closes it: if the shared
+   buffers *did* serialize the gathers, nothing would be enforcing it — the code would be RACY, not slow. It is
+   bit-exact today. Bit-exact + zero enforcement ⇒ the gathers are already ordered by op-issue order. That is
+   precisely the "clean NULL" branch: **the buffers are never contended.**
+4. **The fix targets the LOOSER of the two resources.** Buffer key = `("ag", shape, dim, mesh_axis, dtype)`
+   (`manager.py:166`) → per-shape. But the **semaphore** key is `mesh_axis` ALONE (`manager.py:236-239`): 2 sets,
+   alternating on *every* call, so it recycles every **2 CCL ops on the axis regardless of shape** — strictly
+   TIGHTER than the per-shape buffer. If ping-pong depth serialized anything, the semaphore would bind first, and
+   distinct *buffer* keys would not relax it by a single op. (The 2-deep sem ping-pong is what grants the 1-op
+   device-skew tolerance that lets the barrier be compiled out — load-bearing, not vestigial.)
+5. **The premise "all 6 have the SAME shape" is FALSE.** Of the 6 attentions, 3 are video-stream (`attn1`,
+   `attn2`, `audio_to_video_attn` — `spatial_1BND` = video_normed / video_ca_input / video_q_a2v) and 3 are
+   audio-stream (`audio_attn1`, `audio_attn2`, `video_to_audio_attn` — audio_normed / audio_ca_input /
+   audio_q_v2a). Local N = **1216 video vs 256 audio** (independently confirmed by `opt/agbuf_forensics.log`
+   rows=1216 / rows=256) ⇒ **two distinct keys, 3 gathers each. Never 6 on one pair**, and the de-fused ff1
+   gather would have been the **4th** on the video key, not the 7th.
+
+**The +6.63 ms W6 regression needs no buffer collision — the parsimonious cause was already on the table.**
+`all_gather_minimal_matmul_async` **overlaps the gather with the matmul** (that is the whole point of the fused
+op: gather chunks stream into the matmul as they land). De-fusing it into (explicit AG) → (plain matmul) takes a
+gather that was *hidden behind compute* and exposes it as serial fabric time on the critical path. Magnitude fits
+(~143 µs/block for a 1216-row video gather that previously cost ≈0 exposed), and it **explains the S2 null for
+free**: S2 never fires the video-ff1 key, so only the small 256-row audio sites changed, where the exposed cost
+is ≈4 µs/block = noise. The census's own internal inconsistency (every de-fused paired body priced CHEAPER than
+its parts summed) is the *same* effect surfacing as a lower bound. **Occam beats the exotic mechanism; and the
+exotic mechanism does not exist in the source.**
+
+**DURABLE RULE:** the AG persistent ping-pong buffer is a **correctness device against 1-op device skew** (it is
+what allows `use_barrier_sem=0`), **NOT a concurrency resource.** Adding buffer keys can never buy parallelism:
+CCL ops on one device do not overlap, and nothing in the dispatcher or the kernels consults buffer identity to
+schedule. Do not re-raise "give the gathers their own buffers" as a perf lever.
+
+## Batch Q — QUANT, RE-MEASURED ON THE TRACED INSTRUMENT (Batches H/J/N were all EAGER — and eager is blind to this)
+**The whole quant space was closed on `WARM_FWD_MS` (the eager block harness). That instrument is
+HOST-DISPATCH-BOUND and therefore structurally incapable of seeing a device-time win.** Receipts for the
+indictment: eager full-pipeline S1 2113 ms ≈ S2 2136 ms despite **4× the tokens** (work-independent ⇒ host-bound);
+eager 44 ms/block vs traced 6.93 ms/block = **6.3× on identical AV blocks**; and W1 (an op-COUNT cut) measured
+eager −1.54 ms/block but traced only −0.297 ⇒ **eager OVERSTATES an op-count cut 5×**. The mirror image must also
+hold: a change that cuts DEVICE time but not op count is **masked**. Quant is exactly that change. So H/J/N's
+"`all_bf8_lofi` = −1.1%, no win" was taken in the one regime that cannot see the win.
+**The traced denoise is device/work-bound** (the precondition): S1 348.3 @ N=9,690 vs S2 1092.5 @ N=38,760 ⇒
+linear fit gives fixed a≈100 ms and work-dependent b·N = 71% of S1 / 91% of S2. And W0/W6a localize it:
+`mm_qkv_video_gathered` 250.93 µs is a **link-INSENSITIVE pure matmul**, and `ff1` = 334.84 µs matmul + 105.40 µs
+gather ⇒ a large pure-matmul-compute bucket exists for quant to attack.
+
+**What `all_bf8_lofi` actually does (source-verified, NOT what the docstring claims):** linear weights bf16→**bf8_b**
+(to_qkv/to_q/to_kv/ff1/ff2; `to_out` stays bf16 by carve-out); `mm_`/`ff_compute_kernel_config` HiFi2→**LoFi** and
+fp32_dest_acc True→**False**. **SDPA is byte-for-byte UNCHANGED** (both baseline and preset = HiFi2/fp32acc=False).
+⚠ **`activation_dtype` and `_sdpa_input_dtype` are DEAD CODE — declared in the presets, never read by any consumer
+(LTX or Wan).** So activations stay bf16 and **the collectives still move bf16: there is no CCL-bandwidth win.**
+The win is purely matmul-internal (LoFi math phases, bf8 weight DRAM reads, freed dest registers).
+
+**PRE-REGISTERED PREDICTION (before the run):** S1 −30 ms (range −15..−60), S2 −110 ms (range −50..−220);
+`..._sdpa_lofi_fp32acc` 0..+5 ms vs `all_bf8_lofi` (Batch B measured SDPA-LoFi null at op level, and fp32acc ADDS
+cost). Null criterion: |ΔS1| < 3 ms ⇒ quant is a true null and the space closes for real.
+
+- [x] **Q0 — `LTX_QUANT` IS wired into the traced pipeline (contrary to the Batch-B-era "no-op" warning).**
+      `pipeline_ltx.py:376-380` calls `_maybe_apply_quant_config()` **before** `_prime_caches` ⇒ weights typecast as
+      they load and the trace is captured over the quantized ops; `_build_transformer_cache_name` is quant-tagged, and
+      **the bf8 tensorbin caches already exist and are complete** (`…q-all_bf8_lofi/transformer`, 3419 files = same
+      count as the bf16 baseline, 23G vs 37G) ⇒ a quant run is a cache HIT, not a 22B safetensors reload.
+      The **AV oracle was NOT wired** — `test_ltx_transformer_model` never read `LTX_QUANT`. Now it does
+      (`_run_inner_step`, via the same `QuantConfig` factory the pipeline uses), so the preset faces the diffusers
+      AV reference at pcc 0.992 / rmse 0.15 — a tighter bar than the block test's 0.988.
+- [x] **Q1 — `all_bf8_lofi` TRACED: a REAL WIN. Eager understated it ~5.7×. SHIPPED-QUALITY.**
+      Traced `STEP_MS`, `LTX_PROFILE_DENOISE_ONLY=1`, SEED=10, prod 4x8 Ring (jobs 173/174/176/177, logs
+      `opt/quant_{A_base,B_bf8lofi,C_bf8sdpa,A2_drift}.log`). Quant confirmed live in-log: *"Applying LTX quant config
+      to 48 transformer blocks (has_audio=True) | Weight dtypes {BFLOAT16, BFLOAT8_B} | fidelities {LoFi}"*.
+      | arm | S1 (n=15) | ΔS1 | S2 (n=5) | ΔS2 |
+      | baseline A / A′(drift) | 332.88 / 333.01 | — | 1046.42 / 1044.56 | — |
+      | **pooled baseline** | **332.94** | — | **1045.49** | — |
+      | **`all_bf8_lofi`** | **312.06** | **−20.88 (−6.27%)** | **992.78** | **−52.71 (−5.04%)** |
+      | `..._sdpa_lofi_fp32acc` | 316.61 | −16.33 (−4.90%) | 989.16 | −56.33 (−5.39%) |
+      **DRIFT CONTROL:** baseline re-run AFTER both quant arms = S1 +0.13 ms / S2 −1.86 ms vs the first baseline ⇒
+      board stable; the effects are 10–30× the drift, and σ≈0.1 makes −20.88 ms a ~200σ move.
+      **INTERNAL CONTROL (stronger):** the two presets **cross over** — `all_bf8_lofi` wins S1 while
+      `..._sdpa_lofi_fp32acc` wins S2. A board/clock artifact moves both stages of both arms the same way; a
+      shape-specific inversion cannot be drift. Also `_ttnn.so` mtime 03:31:16 was unchanged across all four arms
+      (03:59–04:15) ⇒ the sibling's rebuild did not land mid-flight.
+      **E2E denoise (8×S1 + 3×S2):** 5800.0 → **5474.8 ms = −325.2 ms (−5.61%)** for `all_bf8_lofi`
+      (vs −299.6 ms for the SDPA variant) ⇒ **`all_bf8_lofi` is the better E2E arm despite losing S2**, because the
+      schedule is S1-heavy.
+      **Mechanism check:** −20.88 ms/step over 48 blocks = **−435 µs/block**, i.e. ~26% off the ~1.7 ms/block
+      matmul-compute bucket — inside the pre-registered 25–40% band. Prediction was directionally right and
+      magnitude-conservative-correct (measured −20.9 vs predicted −30, inside the stated range).
+      **PCC GATE — PASSES, and the gate provably BITES** (AV oracle, 1-layer, ring_bh_4x8sp1tp0, gate pcc≥0.992 /
+      rmse≤0.15; jobs 201/204/206):
+      | arm | stage | video PCC | video RMSE/σ | audio PCC | audio RMSE/σ |
+      | baseline (0 quant hooks) | S1 | 99.9985% | 0.6% | 99.9981% | 0.6% |
+      | baseline (0 quant hooks) | S2 | 99.9984% | 0.7% | 99.9982% | 0.6% |
+      | **`all_bf8_lofi`** | **S1** | **99.9967%** | **2.0%** | **99.9967%** | **0.9%** |
+      | **`all_bf8_lofi`** | **S2** | **99.9966%** | **2.2%** | **99.9967%** | **1.0%** |
+      Quant costs real precision (RMSE/σ 0.6% → 2.2%, a 3.3× degradation — so the metric is not asleep) yet lands
+      far inside the gate. ⚠ **HONEST LIMIT: the in-tree AV oracle is 1-LAYER; it cannot see 48-layer error
+      compounding.** That risk is separately retired by the fact that **`all_bf8_lofi` is ALREADY the shipped
+      `LTX_QUALITY=medium` quant** (`utils/ltx.py: FAST_QUANT = "all_bf8_lofi"`) on the real 48-layer pipeline.
+- [x] **Q2 — `all_bf8_lofi_sdpa_lofi_fp32acc`: real, but WORSE E2E. Do not ship.** −16.33 (S1) / −56.33 (S2).
+      It **loses 4.55 ms at S1 and wins 3.62 ms at S2** vs `all_bf8_lofi`. Coherent physics and it **refines Batch B**:
+      SDPA-LoFi is *not* uniformly null — its saving scales with seq² so it only pays at S2, while the bundled
+      fp32_dest_acc=True is a ~fixed accumulation tax that dominates at S1. Net E2E −299.6 vs −325.2 ms ⇒ KILL for
+      the S1-heavy production schedule. (A per-stage preset — bf8_lofi on S1, sdpa variant on S2 — would give
+      −336.0 ms, only **11 ms** beyond `all_bf8_lofi`: not worth two weight caches + two quant states.)
+
+→ **BATCH Q: the quant space is REOPENED and WON. `all_bf8_lofi` = −325 ms/generation of denoise (−5.6%) at
+  PCC 99.997% / RMSE 2.2% against a 0.992 / 0.15 gate. SHIP IT.**
+  **The durable lesson (this is the point):** Batches H/J/N/K/P closed quant as "null" on `WARM_FWD_MS`. The
+  measurement was real; the *instrument* was wrong. **Eager overstates op-count cuts ~5× and understates
+  device-time cuts ~5×** — the two errors have opposite sign, so eager cannot be "corrected" with a fudge factor;
+  it must not be used to price ANY device-time lever. **Every axis previously closed on `WARM_FWD_MS` alone
+  (math fidelity, dest-acc, weight dtype — Batches H/J/N, and arguably the VAE fidelity work in K/O) is
+  UN-closed and deserves re-measurement on traced `STEP_MS`.**

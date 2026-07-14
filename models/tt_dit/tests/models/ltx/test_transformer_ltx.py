@@ -1237,6 +1237,19 @@ def _run_inner_step(
     tt_model.load_torch_state_dict(state_dict, strict=not has_audio)
     logger.info(f"state-dict load: {time.time() - t0:.1f}s")
 
+    # Quant is the one lever that genuinely changes the math, so it has to face the diffusers AV oracle
+    # below (pcc 0.992) — a tighter bar than the block test's 0.988, and over the whole model wrapper.
+    # The pipeline reads the same var through the same QuantConfig factory, so a preset that clears this
+    # gate is precisely the one the pipeline runs.
+    quant_preset = os.environ.get("LTX_QUANT", "").strip()
+    if quant_preset:
+        from models.tt_dit.pipelines.ltx.quant_config import QuantConfig, apply_quant_config
+
+        factory = getattr(QuantConfig, quant_preset, None)
+        assert callable(factory), f"LTX_QUANT='{quant_preset}' is not a QuantConfig preset"
+        logger.info(f"LTX_QUANT='{quant_preset}': quantizing model for the AV PCC gate")
+        apply_quant_config(tt_model, factory())
+
     # === Build TT-side RoPE / cross-PE / prompt tensors (INTERLEAVED + trans_mat) ===
     tt_video_prompt = bf16_tensor(video_prompt.unsqueeze(0), device=mesh_device)
     tt_vc, tt_vs = _tt_rope(
