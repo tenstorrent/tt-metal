@@ -88,17 +88,6 @@ Tensor::Tensor(MeshTensor tensor) : Tensor::Tensor(DeviceStorage(std::move(tenso
 Tensor::Tensor(DeviceStorage storage) :
     tensor_id(Tensor::next_tensor_id()), tensor_attributes(std::make_shared<TensorAttributes>(std::move(storage))) {}
 
-Tensor& Tensor::operator=(const Tensor& other) {
-    if (this == &other) {
-        return *this;
-    }
-    this->tensor_id = other.tensor_id;
-    if (this->tensor_attributes != other.tensor_attributes) {
-        this->tensor_attributes = other.tensor_attributes;
-    }
-    return *this;
-}
-
 Tensor& Tensor::operator=(Tensor&& other) noexcept {
     this->tensor_id = other.tensor_id;
     other.tensor_id = INVALID_TENSOR_ID;
@@ -107,8 +96,6 @@ Tensor& Tensor::operator=(Tensor&& other) noexcept {
     }
     return *this;
 }
-
-Tensor::Tensor(const Tensor& other) = default;
 
 Tensor::~Tensor() { this->deallocate_impl(/*force=*/false); }
 

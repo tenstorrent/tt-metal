@@ -45,9 +45,9 @@ public:
     //                                  Hi Level APIs
     // ======================================================================================
     [[nodiscard]] explicit Tensor() = default;
-    [[nodiscard]] Tensor(const Tensor& other);
+    [[nodiscard]] Tensor(const Tensor& other) = default;
     [[nodiscard]] Tensor(Tensor&& other) noexcept = default;
-    Tensor& operator=(const Tensor& other);
+    Tensor& operator=(const Tensor& other) = default;
     Tensor& operator=(Tensor&& other) noexcept;
     ~Tensor();
 
