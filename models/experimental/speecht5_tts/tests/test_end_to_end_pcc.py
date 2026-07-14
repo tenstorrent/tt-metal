@@ -22,9 +22,12 @@ Usage:
 """
 
 import sys
+import os
+import math
 from pathlib import Path
 import torch
 import ttnn
+import pytest
 
 # Add tt-metal root directory to path
 sys.path.append(str(Path(__file__).parent.parent.parent.parent))
@@ -48,6 +51,65 @@ from models.experimental.speecht5_tts.tt.ttnn_speecht5_postnet import (
 from models.experimental.speecht5_tts.tt.ttnn_speecht5_encoder import TTNNEncoderConfig
 from models.experimental.speecht5_tts.tt.ttnn_speecht5_decoder import TTNNDecoderConfig
 from models.experimental.speecht5_tts.tt.ttnn_speecht5_postnet import TTNNPostNetConfig
+
+
+def _get_env_float(name: str, default: float) -> float:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    return float(raw_value)
+
+
+def _is_ttnn_device_unavailable_error(error: RuntimeError) -> bool:
+    message = str(error)
+    return (
+        "Failed to allocate TLB window" in message
+        or "tt_tlb_alloc failed" in message
+        or "NOC address of a hugepage does not match the expected address" in message
+    )
+
+
+def _skip_device_unavailable() -> None:
+    pytest.skip(
+        "Skipping: TT device unavailable/busy (TLB allocation failed). "
+        "Check /proc/driver/tenstorrent/*/pids for active processes."
+    )
+
+
+def _assert_end_to_end_results(
+    results,
+    encoder_threshold: float,
+    decoder_threshold: float,
+    pre_postnet_threshold: float,
+    post_postnet_threshold: float,
+    stop_logits_threshold: float,
+):
+    expected_keys = (
+        "encoder_pcc",
+        "decoder_pcc",
+        "pre_postnet_pcc",
+        "post_postnet_pcc",
+        "stop_logits_pcc",
+    )
+    for key in expected_keys:
+        assert key in results, f"missing key '{key}' in end-to-end PCC results"
+        assert math.isfinite(results[key]), f"non-finite value for '{key}': {results[key]}"
+
+    assert (
+        results["encoder_pcc"] >= encoder_threshold
+    ), f"encoder_pcc {results['encoder_pcc']:.6f} is below threshold {encoder_threshold:.6f}"
+    assert (
+        results["decoder_pcc"] >= decoder_threshold
+    ), f"decoder_pcc {results['decoder_pcc']:.6f} is below threshold {decoder_threshold:.6f}"
+    assert (
+        results["pre_postnet_pcc"] >= pre_postnet_threshold
+    ), f"pre_postnet_pcc {results['pre_postnet_pcc']:.6f} is below threshold {pre_postnet_threshold:.6f}"
+    assert (
+        results["post_postnet_pcc"] >= post_postnet_threshold
+    ), f"post_postnet_pcc {results['post_postnet_pcc']:.6f} is below threshold {post_postnet_threshold:.6f}"
+    assert (
+        results["stop_logits_pcc"] >= stop_logits_threshold
+    ), f"stop_logits_pcc {results['stop_logits_pcc']:.6f} is below threshold {stop_logits_threshold:.6f}"
 
 
 def compute_pcc(tensor1, tensor2):
@@ -387,6 +449,33 @@ def test_end_to_end_pcc():
         "post_postnet_pcc": post_postnet_pcc,
         "stop_logits_pcc": stop_logits_pcc,
     }
+
+
+test_end_to_end_pcc.__test__ = False
+
+
+def test_end_to_end_pcc_wrapper():
+    encoder_threshold = _get_env_float("SPEECHT5_E2E_ENCODER_PCC_MIN", -1.0)
+    decoder_threshold = _get_env_float("SPEECHT5_E2E_DECODER_PCC_MIN", -1.0)
+    pre_postnet_threshold = _get_env_float("SPEECHT5_E2E_PRE_POSTNET_PCC_MIN", -1.0)
+    post_postnet_threshold = _get_env_float("SPEECHT5_E2E_POST_POSTNET_PCC_MIN", -1.0)
+    stop_logits_threshold = _get_env_float("SPEECHT5_E2E_STOP_LOGITS_PCC_MIN", -1.0)
+
+    try:
+        results = test_end_to_end_pcc()
+    except RuntimeError as error:
+        if _is_ttnn_device_unavailable_error(error):
+            _skip_device_unavailable()
+        raise
+
+    _assert_end_to_end_results(
+        results=results,
+        encoder_threshold=encoder_threshold,
+        decoder_threshold=decoder_threshold,
+        pre_postnet_threshold=pre_postnet_threshold,
+        post_postnet_threshold=post_postnet_threshold,
+        stop_logits_threshold=stop_logits_threshold,
+    )
 
 
 if __name__ == "__main__":
