@@ -325,8 +325,16 @@ inline void _llk_pack_dest_semaphore_section_done_()
         TT_ZEROACC(p_zeroacc::CLR_HALF, EN_32BIT_DEST, 0, ADDR_MOD_7, dest_register_offset != 0);
     }
 
-    // Tell math that it can write again
-    _llk_packer_set_math_semaphore_();
+    // Tell math that it can write again. QSR FIX: stall on PACK first so the bank-clear ZEROACC above drains
+    // BEFORE the SEMGET releases MATH. The SEMGET decrements MATH_PACK, which clears MATH's
+    // _llk_math_wait_for_dest_available_ SEMWAIT; without the drain, MATH issues its next datacopy MOP into the
+    // bank while this ZEROACC is still in flight -> the backend rejects the overlapping MOP -> ERROR_TRISC1 /
+    // 0x19 (Risc IB interrupt on MATH). This makes the PACK->MATH release drain-guarded, symmetric with the
+    // already-guarded MATH->PACK post (_llk_math_dest_section_done_: t6_semaphore_post<p_stall::MATH,
+    // WAIT_SFPU>). WH/BH use the HW dest-dvalid interlock and don't need this; the Quasar semaphore workaround
+    // omitted the PACK->MATH drain. Exposed by the conv 16-tile tilize_block (fast full-tile datacopy reuses
+    // DEST banks faster than the clear drains); matmul/pool hide it via longer per-tile compute.
+    _llk_packer_set_math_semaphore_<p_stall::PACK>();
 
     if constexpr (DST == DstSync::SyncHalf)
     {
