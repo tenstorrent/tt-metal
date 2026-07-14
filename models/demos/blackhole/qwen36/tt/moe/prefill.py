@@ -5,11 +5,12 @@
 Mirrors the gpt_oss experts prefill path (all-ones sparsity computes every expert; the
 dense routing weights zero out the inactive ones after down_proj) with SwiGLU and the
 qwen reduce-scatter. The sequence is processed in chunks of PREFILL_CHUNK_SIZE tokens;
-within a chunk gate/up run as ONE grouped sparse_matmul (group_size = chunk/32 folded into
-the sparse batch dim, per_core_M stays 1 tile), so gate/up dispatch once per chunk instead
-of once per 32-token sub-chunk. The down projection's M *is* the chunk length, so its
-program config is sized from the real chunk_len (per_core_M = chunk_len/32); PREFILL_CHUNK_SIZE
-bounds that so the down grid/L1 never overflows.
+within a chunk gate and up run as ONE fused sparse_matmul over concatenated weights
+(N = 2*intermediate), which doubles the N-gridded core count (4 -> 8) vs two separate
+matmuls; the fused output is then sliced back into gate | up halves. group_size = chunk/32
+folds into the sparse batch dim so per_core_M stays 1 tile. The down projection's M *is*
+the chunk length, so its program config is sized from the real chunk_len (per_core_M =
+chunk_len/32); PREFILL_CHUNK_SIZE bounds that so the down grid/L1 never overflows.
 """
 
 import torch
@@ -54,29 +55,16 @@ def _process_prefill_chunk(hidden_states, routing_weights, weights: ExpertWeight
 
     output_tile = ttnn.Tile([32, 32])
     intermediate_size = weights.intermediate_size_per_device
-    # gate/up: M is one 32-row tile per group (group_size folded into the sparse batch dim),
-    # so per_core_M stays 1 regardless of chunk_len. down: M is the full chunk_len, so its
-    # per_core_M must reflect the real M (= chunk_len/32) or the kernel's M-block count mismatches.
-    gate_up_config = _build_sparse_matmul_config(TILE_SIZE, intermediate_size)
+    # gate/up fused into ONE sparse_matmul: N = 2*intermediate (gate|up concatenated), so
+    # the N-gridded core count doubles (4 -> 8) vs running gate and up separately. M is one
+    # 32-row tile per group (group_size folded into the sparse batch dim), per_core_M stays 1.
+    # down: M is the full chunk_len, so its per_core_M reflects the real M (= chunk_len/32).
+    gate_up_config = _build_sparse_matmul_config(TILE_SIZE, 2 * intermediate_size)
     down_config = _build_sparse_matmul_config(chunk_len, hidden_size)
 
-    gate = ttnn.sparse_matmul(
+    gate_up = ttnn.sparse_matmul(
         hidden_grouped,
-        weights.gate_proj,
-        sparsity=sparsity,
-        nnz=nnz,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        output_tile=output_tile,
-        program_config=gate_up_config,
-        dtype=ttnn.bfloat16,
-    )
-    sm_intermediate = gate.shape[-1]
-    gate = ttnn.transpose(gate, 1, 3)
-    gate = ttnn.reshape(gate, (1, num_experts, chunk_len, sm_intermediate))
-
-    up = ttnn.sparse_matmul(
-        hidden_grouped,
-        weights.up_proj,
+        weights.gate_up_proj,
         sparsity=sparsity,
         nnz=nnz,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -87,11 +75,15 @@ def _process_prefill_chunk(hidden_states, routing_weights, weights: ExpertWeight
     # NB: do NOT deallocate hidden_grouped — it is a reshape *view* of the caller's
     # input x, which Qwen36MoE.forward reuses for the shared expert after the routed
     # experts run. Freeing it here frees x (TT_FATAL: input not allocated).
-    up = ttnn.transpose(up, 1, 3)
-    up = ttnn.reshape(up, (1, num_experts, chunk_len, sm_intermediate))
+    gate_up = ttnn.transpose(gate_up, 1, 3)
+    gate_up = ttnn.reshape(gate_up, (1, num_experts, chunk_len, 2 * intermediate_size))
+    # Split the fused N back into gate | up halves (mathematically identical to two matmuls).
+    gate = ttnn.slice(gate_up, (0, 0, 0, 0), (1, num_experts, chunk_len, intermediate_size))
+    up = ttnn.slice(gate_up, (0, 0, 0, intermediate_size), (1, num_experts, chunk_len, 2 * intermediate_size))
+    gate_up.deallocate(True)
 
     down_input = apply_swiglu(gate, up)
-    down_input = ttnn.reshape(down_input, (1, num_experts, chunk_len, sm_intermediate))
+    down_input = ttnn.reshape(down_input, (1, num_experts, chunk_len, intermediate_size))
 
     down = ttnn.sparse_matmul(
         down_input,
