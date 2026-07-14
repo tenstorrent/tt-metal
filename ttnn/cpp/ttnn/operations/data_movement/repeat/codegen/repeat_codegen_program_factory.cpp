@@ -45,11 +45,18 @@ struct CoreSplit {
 CoreSplit split_work(const Tensor& input, uint32_t total_work) {
     IDevice* device = input.device();
     auto grid_size = device->compute_with_storage_grid_size();
+    // row_wise=false (column-major core enumeration) to match the generator's
+    // split_cores()/emit_per_core_rt(), which always calls ttnn.split_work_to_cores
+    // and corerange_to_cores at their row_wise=False default. This is a no-op for
+    // work counts that fill the whole grid, but for the small per-core-page RM
+    // cases (a handful of sticks spread over a mostly-idle grid) the enumeration
+    // order picks a different physical core per page range, which changes NOC
+    // hop distance to the DRAM channel enough to show up as a device-time delta.
     auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core_1, work_per_core_2] =
-        tt::tt_metal::split_work_to_cores(grid_size, total_work, /*row_wise=*/true);
+        tt::tt_metal::split_work_to_cores(grid_size, total_work, /*row_wise=*/false);
     return CoreSplit{
         .all_cores = all_cores,
-        .cores_in_order = corerange_to_cores(all_cores, num_cores, /*row_wise=*/true),
+        .cores_in_order = corerange_to_cores(all_cores, num_cores, /*row_wise=*/false),
         .core_group_1 = core_group_1,
         .core_group_2 = core_group_2,
         .work_per_core_1 = work_per_core_1,
