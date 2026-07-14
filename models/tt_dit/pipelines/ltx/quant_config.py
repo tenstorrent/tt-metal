@@ -20,11 +20,24 @@ Usage:
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 from loguru import logger
 
 import ttnn
+
+# ``activation_dtype`` is honoured only when this is set. It is a far more aggressive change than
+# the weight quant it rides on — weights are a fixed, well-conditioned distribution, activations
+# are not — and it is the one knob here that changes what the *collectives* move, so it is opt-in
+# and A/B-able against the shipped preset rather than folded into it.
+LTX_QUANT_ACTIVATIONS = os.environ.get("LTX_QUANT_ACTIVATIONS", "0") in ("1", "true", "True")
+
+# Forces the ring-SDPA input cast on top of whatever preset is selected. Same knob as
+# ``all_bf8_lofi_sdpa_bf8``, reachable without changing the preset name — which matters because the
+# pipeline's tensorbin cache is keyed on that name, so the preset form cannot be measured on the
+# pipeline without re-materialising the 22B checkpoint it shares weights with.
+LTX_QUANT_SDPA_BF8 = os.environ.get("LTX_QUANT_SDPA_BF8", "0") in ("1", "true", "True")
 
 # ---------------------------------------------------------------------------
 # Config dataclasses (identical to the Wan template)
@@ -91,7 +104,10 @@ class QuantConfig:
 
     @staticmethod
     def all_bf8_lofi() -> QuantConfig:
-        """Weights + activations bfloat8_b, LoFi compute. SDPA stays bf16/HiFi2.
+        """Weights bfloat8_b, LoFi compute. SDPA stays bf16/HiFi2.
+
+        ``activation_dtype`` is bf8 here but is inert unless ``LTX_QUANT_ACTIVATIONS`` is set, so by
+        default this preset is matmul-internal only: the collectives still move bf16.
 
         Carve-out: both ``self_attn_out`` (attn1) and the video ``cross_attn_out`` (attn2)
         run the fused ``dit_minimal_matmul_addcmul_fused`` / ``all_gather_minimal_matmul_async``
@@ -99,9 +115,8 @@ class QuantConfig:
         attn1 and the cross_attention_adaln attn2). That kernel's ternary addcmul inputs
         (residual, gate) are bf16 and must match the weight tile format, so those weights
         stay bf16. ``ffn_ff2`` uses the RowParallel RS-fused addcmul, which Wan runs at bf8
-        with no issue, so it is quantized. SDPA stays fully unquantized for the first landing
-        (FastVideo kept attention higher precision; casting SDPA inputs to bf8 is a separate
-        bandwidth-only tweak).
+        with no issue, so it is quantized. SDPA stays fully unquantized here (FastVideo kept
+        attention higher precision); ``all_bf8_lofi_sdpa_bf8`` is the separate SDPA-input arm.
         """
         lc = LinearQuantConfig(
             weight_dtype=ttnn.bfloat8_b,
@@ -133,13 +148,30 @@ class QuantConfig:
     def all_bf8_lofi_sdpa_lofi() -> QuantConfig:
         """all_bf8_lofi plus the self-attention ring SDPA dropped HiFi2 -> LoFi.
 
-        Only the ``sdpa_compute_kernel_config`` fidelity changes (inputs stay bf16 -- the
-        ``_sdpa_input_dtype`` cast is a separate, not-yet-wired tweak). Ring SDPA is the
-        O(seq^2) self-attention (video seq ~9.7k at stage-2), so if stage-2 is attention-
+        Only the ``sdpa_compute_kernel_config`` fidelity changes; SDPA inputs stay bf16. Ring SDPA
+        is the O(seq^2) self-attention (video seq ~9.7k at stage-2), so if stage-2 is attention-
         compute-bound this roughly halves those matmul phases. Cross-attention SDPA (attn2,
         seq x prompt_len) is untouched. Quality-sensitive: gate on PCC / a frame check."""
         cfg = QuantConfig.all_bf8_lofi()
         cfg.ring_sdpa = SDPAQuantConfig(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc=False)
+        return cfg
+
+    @staticmethod
+    def all_bf8_lofi_sdpa_bf8() -> QuantConfig:
+        """all_bf8_lofi with the SDPA inputs (Q/K/V) cast to bf8, fidelity left at HiFi2.
+
+        Independent of ``LTX_QUANT_ACTIVATIONS``: that flag gates the *linear* activation cast, this
+        preset carries the SDPA one. On the ring paths K/V are the collective's payload, so this is a
+        bandwidth lever, not just a math one — but SDPA inputs carry the block's widest dynamic range
+        and SDPA-LoFi alone has already been measured failing the PCC bar, so it gates on PCC first.
+
+        Weights are byte-identical to ``all_bf8_lofi``, but the pipeline's tensorbin cache is keyed on
+        the preset *name*, so a pipeline run under this name is a cache MISS and re-materialises the
+        22B checkpoint. The PCC oracle builds from the torch reference and is unaffected; a traced run
+        would need the cache key taught to hash the weight dtypes instead.
+        """
+        cfg = QuantConfig.all_bf8_lofi()
+        cfg.ring_sdpa = SDPAQuantConfig(input_dtype=ttnn.bfloat8_b, math_fidelity=ttnn.MathFidelity.HiFi2)
         return cfg
 
     @staticmethod
@@ -182,9 +214,17 @@ def _make_compute_config(arch, math_fidelity, fp32_dest_acc, math_approx_mode=Fa
     )
 
 
-def _quantize_linear_weights(linear, lc: LinearQuantConfig) -> None:
-    """Typecast a linear's weight (and bias) to the configured dtype, if loaded."""
-    if linear is None or lc.weight_dtype == ttnn.bfloat16:
+def _apply_linear_quant(linear, lc: LinearQuantConfig) -> None:
+    """Typecast a linear's weight (and bias) to the configured dtype, and install its activation cast.
+
+    ``activation_dtype`` is only defined on ``ColParallelLinear`` — the one variant whose input is a
+    collective's payload — so the cast lands exactly where it shrinks fabric bytes and nowhere else.
+    """
+    if linear is None:
+        return
+    if LTX_QUANT_ACTIVATIONS and hasattr(linear, "activation_dtype"):
+        linear.activation_dtype = lc.activation_dtype
+    if lc.weight_dtype == ttnn.bfloat16:
         return
     _quantize_weight(linear.weight, lc.weight_dtype)
     if getattr(linear, "bias", None) is not None:
@@ -218,28 +258,30 @@ def apply_quant_config_to_block(block, config: QuantConfig, arch, has_audio: boo
         fp32_dest_acc_en=config.ring_sdpa.fp32_dest_acc,
     )
 
+    sdpa_input_dtype = ttnn.bfloat8_b if LTX_QUANT_SDPA_BF8 else config.ring_sdpa.input_dtype
+
     def _quant_self_attn(attn):
         if attn is None:
             return
-        _quantize_linear_weights(attn.to_qkv, config.self_attn_qkv)
-        _quantize_linear_weights(attn.to_out, config.self_attn_out)
+        _apply_linear_quant(attn.to_qkv, config.self_attn_qkv)
+        _apply_linear_quant(attn.to_out, config.self_attn_out)
         attn.mm_compute_kernel_config = qkv_compute
         attn.sdpa_compute_kernel_config = sdpa_compute
-        if config.ring_sdpa.input_dtype is not None:
-            attn._sdpa_input_dtype = config.ring_sdpa.input_dtype
+        if sdpa_input_dtype is not None:
+            attn._sdpa_input_dtype = sdpa_input_dtype
 
     def _quant_cross_attn(attn):
         if attn is None:
             return
-        _quantize_linear_weights(attn.to_q, config.cross_attn_q)
-        _quantize_linear_weights(attn.to_kv, config.cross_attn_kv)
-        _quantize_linear_weights(attn.to_out, config.cross_attn_out)
+        _apply_linear_quant(attn.to_q, config.cross_attn_q)
+        _apply_linear_quant(attn.to_kv, config.cross_attn_kv)
+        _apply_linear_quant(attn.to_out, config.cross_attn_out)
         attn.mm_compute_kernel_config = cross_compute
 
     _quant_self_attn(block.attn1)
     _quant_cross_attn(block.attn2)
-    _quantize_linear_weights(block.ffn.ff1, config.ffn_ff1)
-    _quantize_linear_weights(block.ffn.ff2, config.ffn_ff2)
+    _apply_linear_quant(block.ffn.ff1, config.ffn_ff1)
+    _apply_linear_quant(block.ffn.ff2, config.ffn_ff2)
     block.ff_compute_kernel_config = ffn_compute
 
     if has_audio:
@@ -252,8 +294,8 @@ def apply_quant_config_to_block(block, config: QuantConfig, arch, has_audio: boo
         _quant_cross_attn(getattr(block, "video_to_audio_attn", None))
         audio_ff = getattr(block, "audio_ff", None)
         if audio_ff is not None:
-            _quantize_linear_weights(audio_ff.ff1, config.ffn_ff1)
-            _quantize_linear_weights(audio_ff.ff2, config.ffn_ff2)
+            _apply_linear_quant(audio_ff.ff1, config.ffn_ff1)
+            _apply_linear_quant(audio_ff.ff2, config.ffn_ff2)
 
 
 def apply_quant_config(model, config: QuantConfig) -> None:
@@ -286,7 +328,13 @@ def apply_quant_config(model, config: QuantConfig) -> None:
         config.ffn_ff1.math_fidelity,
     }
     logger.info(f"  Weight dtypes: {weight_dtypes} | Linear fidelities: {fidelities}")
-    logger.info(f"  Ring SDPA: input_dtype={config.ring_sdpa.input_dtype}, fidelity={config.ring_sdpa.math_fidelity}")
+    act = config.self_attn_qkv.activation_dtype if LTX_QUANT_ACTIVATIONS else None
+    logger.info(
+        f"  LTX_QUANT_ACTIVATIONS={LTX_QUANT_ACTIVATIONS} -> linear activation cast: {act} "
+        f"(None = collectives move bf16)"
+    )
+    sdpa_in = ttnn.bfloat8_b if LTX_QUANT_SDPA_BF8 else config.ring_sdpa.input_dtype
+    logger.info(f"  Ring SDPA: input_dtype={sdpa_in}, fidelity={config.ring_sdpa.math_fidelity}")
 
 
 def set_quant_config(pipeline, config: QuantConfig) -> None:
