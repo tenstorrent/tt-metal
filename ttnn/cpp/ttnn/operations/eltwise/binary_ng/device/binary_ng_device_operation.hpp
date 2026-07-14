@@ -92,10 +92,16 @@ struct BinaryNgDeviceOperation {
 
     // Opt in to the in-place output_tensor program-cache fast path (#48928: in-place residual add):
     // an output_tensor carried in tensor_args that aliases input_a is treated as a safe in-place
-    // alias instead of bailing to slow-path rebuild. Safe here because get_dynamic_runtime_args()
+    // alias instead of bailing to slow-path rebuild (drives resolve_bindings'
+    // allow_inplace_output_tensor_alias via the adapter). Safe here because get_dynamic_runtime_args()
     // above re-derives EVERY per-core arg for the current tensors on each cache hit, so the shared
     // cached program stays correct for a differently-shaped/-allocated in-place call. Ops without a
     // complete get_dynamic (unary/ternary/moreh_*) must NOT set this — they keep bailing (see #49573).
+    //
+    // POLICY: this flag IS the correctness argument and nothing verifies it. Set it true ONLY with an
+    // accompanying in-place cache-hit regression test that varies shape/allocation across the hit and
+    // asserts a single cache entry + PCC (test_binary_ng_program_cache.py: the interleaved cross-shape
+    // and sharded-readdress cases). No test → do not opt in.
     static constexpr bool allow_inplace_program_cache_alias = true;
 };
 
