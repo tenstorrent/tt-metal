@@ -2,13 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Precision-matrix workload: out = A * B (FPU multiply).
-//
-// FPU multiply is the classic math_fidelity-sensitive op (LoFi truncates source mantissa bits), and
-// it round-trips through every CB/DEST format, so it exercises the helper's precision surface:
-// input dtype (bf16 / fp32 / bfloat8_b), output dtype, fp32_dest_acc, and math_fidelity. The kernel
-// is dtype-agnostic — the chain reconfigs to whatever format the CBs carry — so the whole matrix is
-// driven host-side via CB dtypes + ComputeConfigDescriptor.
+// Precision-matrix workload: out = A * B (FPU multiply). Multiply is fidelity-sensitive (LoFi
+// truncates source mantissa bits) and round-trips through every CB/DEST format, so it exercises the
+// precision surface: input/output dtype, fp32_dest_acc, math_fidelity. The kernel is dtype-agnostic
+// (the chain reconfigs to the CBs' formats), so the whole matrix is driven host-side.
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
