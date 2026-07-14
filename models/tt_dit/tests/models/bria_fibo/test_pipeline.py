@@ -19,19 +19,19 @@ def _fibo_local():
         pytest.skip(f"FIBO not cached: {e}")
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=["mesh_device"])
+@pytest.mark.parametrize("mesh_device", [(2, 2), (4, 8)], indirect=["mesh_device"])
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}],
     indirect=["device_params"],
 )
 def test_fibo_pipeline_smoke(*, mesh_device):
-    """Full end-to-end FIBO text->image smoke on the 2x2 Blackhole mesh.
+    """Full end-to-end FIBO text->image smoke on the mesh (2x2 sp=2/tp=2, or 4x8 Galaxy sp=4/tp=8).
 
-    Encode (SmolLM3, replicated) -> 30-step CFG flow-match denoise (BriaFibo transformer, sp=2/tp=2)
-    -> Wan 2.2 residual VAE decode -> 1024x1024 image. No reference comparison at full steps (the
-    per-step path is PCC-gated elsewhere); this only asserts the pipeline runs and produces a
-    finite (1024, 1024, 3) image, and saves the PNG for visual inspection.
+    Encode (SmolLM3, replicated) -> 30-step CFG flow-match denoise (BriaFibo transformer) -> Wan 2.2
+    residual VAE decode -> 1024x1024 image. No reference comparison at full steps (the per-step path
+    is PCC-gated elsewhere); this only asserts the pipeline runs and produces a finite (1024, 1024, 3)
+    image, and saves the PNG for visual inspection.
     """
     import numpy as np
 
