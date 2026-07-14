@@ -97,6 +97,41 @@ def test_ng_cache_reuse_same_config(device, isolate_program_cache):
     assert not torch.equal(tt_out1, tt_out2)
 
 
+@pytest.mark.parametrize(
+    "shape_first, shape_second",
+    [
+        ([1, 1, 32, 64], [1, 1, 128, 256]),  # grow volume
+        ([1, 1, 128, 256], [1, 1, 32, 64]),  # shrink volume
+    ],
+)
+def test_ng_inplace_cache_reuse_different_shapes(device, isolate_program_cache, shape_first, shape_second):
+    """binary_ng opts in to the in-place program-cache fast path (allow_inplace_program_cache_alias,
+    #48928). An in-place add (output_tensor aliases input) with different logical shapes shares one
+    cache entry (volume is excluded from the hash), so the second call is a cache HIT that reuses the
+    first program WITHOUT rebuild. binary_ng's get_dynamic_runtime_args must re-derive every per-core
+    arg for the current shape or the reused program corrupts the result. Regression guard for the
+    in-place fast path that #49573 protects for ops WITHOUT a complete get_dynamic (SDXL silu / moreh)
+    but that binary_ng is allowed to take."""
+
+    def inplace_add(shape, seed):
+        torch.manual_seed(seed)
+        a = torch.rand(shape, dtype=torch.bfloat16)
+        b = torch.rand(shape, dtype=torch.bfloat16)
+        tt_a = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tt_b = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        with device.cache_entries_counter.measure():
+            tt_c = ttnn.add(tt_a, tt_b, output_tensor=tt_a)  # in-place
+        return a + b, ttnn.to_torch(tt_c)
+
+    ref1, out1 = inplace_add(shape_first, 0)
+    assert_with_pcc(ref1, out1, 0.999)
+
+    ref2, out2 = inplace_add(shape_second, 1)  # cache HIT on the differently-shaped program
+    assert_with_pcc(ref2, out2, 0.999)
+
+    assert device.cache_entries_counter.total == 1  # proves it was a hit, not a rebuild masking the bug
+
+
 def test_ng_cache_reuse_scalar_different_values(device, isolate_program_cache):
     """Different scalar values but same op -> 1 cache entry, different outputs."""
     shape = [1, 1, 32, 64]

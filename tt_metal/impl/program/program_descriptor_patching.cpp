@@ -40,7 +40,8 @@ ResolvedBindings resolve_bindings(
     Program& program,
     const ProgramDescriptor& desc,
     std::span<Buffer* const> tensor_buffers,
-    size_t num_input_buffers) {
+    size_t num_input_buffers,
+    bool allow_inplace_output_tensor_alias) {
     ResolvedBindings result;
 
     // If the same Buffer* appears more than once, every binding for that buffer maps to the
@@ -58,14 +59,22 @@ ResolvedBindings resolve_bindings(
     //
     // tensor_buffers is ordered inputs-first; the first num_input_buffers entries are inputs.
     {
-        // Buffers in the output/workload region. An input-region entry that also appears here is the
-        // op's own output carried inside tensor_args (e.g. an in-place op's optional output_tensor
-        // aliasing an input) — a same-buffer-by-construction alias, NOT the ambiguous matmul(X, X)
-        // case — so it must not bail. (#48928: binary_ng in-place residual add.)
+        // Buffers in the output/workload region.  When the op opts in via
+        // allow_inplace_output_tensor_alias, an input-region entry that also appears here is the op's
+        // own output carried inside tensor_args (e.g. an in-place op's optional output_tensor aliasing
+        // an input) — a same-buffer-by-construction alias, NOT the ambiguous matmul(X, X) case — so it
+        // must not bail.  This is UNSAFE unless the op re-applies every cache-hit-varying runtime arg
+        // itself: otherwise the shared cached program is reused for a differently-shaped/-allocated
+        // in-place call with stale args (SDXL in-place silu, MorehAdamW → PCC garbage; see #48928 /
+        // #49573).  So it is OPT-IN: default false ⇒ such a duplicate bails to the safe slow-path
+        // rebuild.  binary_ng opts in (#48928: in-place residual add; its get_dynamic re-derives all
+        // per-core args).  When false, output_region stays empty and every in-place duplicate bails.
         std::unordered_set<Buffer*> output_region;
-        for (size_t i = num_input_buffers; i < tensor_buffers.size(); ++i) {
-            if (tensor_buffers[i]) {
-                output_region.insert(tensor_buffers[i]);
+        if (allow_inplace_output_tensor_alias) {
+            for (size_t i = num_input_buffers; i < tensor_buffers.size(); ++i) {
+                if (tensor_buffers[i]) {
+                    output_region.insert(tensor_buffers[i]);
+                }
             }
         }
         std::unordered_set<Buffer*> input_buffers;   // buffers seen in the input region
@@ -82,9 +91,10 @@ ResolvedBindings resolve_bindings(
                 continue;
             }
             // An output buffer carried in the input region (the op's output_tensor) is an in-place
-            // alias, not a distinct input — skip it ONCE. A second input-region occurrence means the
-            // buffer genuinely repeats across input positions (e.g. op(X, X, out=X)); fall through so
-            // it still bails, else a later same-shape op(X, Y, out=X) hit would patch input-b to X.
+            // alias, not a distinct input — skip it ONCE (opt-in only; output_region is empty
+            // otherwise).  A second input-region occurrence means the buffer genuinely repeats across
+            // input positions (e.g. op(X, X, out=X)); fall through so it still bails, else a later
+            // same-shape op(X, Y, out=X) hit would patch input-b to X.
             if (is_input && output_region.contains(buf) && inplace_alias_used.insert(buf).second) {
                 continue;
             }
