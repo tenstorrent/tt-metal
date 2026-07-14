@@ -15,7 +15,7 @@ from pathlib import Path
 
 from . import gitio
 
-_PCC_RE = re.compile(r"(?i)pcc\D{0,12}(-?\d\.\d+)")
+_PCC_RE = re.compile(r"(?i)pcc[^\n]*?[:=]\s*(-?\d+\.\d+)")
 
 
 def parse_pcc(text: str):
