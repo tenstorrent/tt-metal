@@ -145,17 +145,15 @@ _QUASAR_DEVICE_DURATION_COLS = [
     _QUASAR_DM_FW_COL,
     _QUASAR_TRISC_FW_COL,
 ]
-# Op-to-op latency on Quasar is measured on the DM0 master zone only — a single clock domain, unlike the
-# stock kernel-based latency which mixes DM and Neo-TRISC cycles (different wall-clock aliases). DM0-FW
-# brackets the whole op, so DEVICE FW START/END CYCLE are its bounds and the gap is
-#   (this op's DEVICE FW START CYCLE - prev op's DEVICE FW END CYCLE) * ns_per_cycle.
-_QUASAR_OP2OP_DM0_COL = "OP TO OP LATENCY DM0 END/START [ns]"
+# Op-to-op latency on Quasar is reported per processor type: the gap from the previous op's last
+# <type>-KERNEL end to this op's first <type>-KERNEL start.
+_QUASAR_OP2OP_DM_COL = "OP TO OP DM LATENCY [ns]"
+_QUASAR_OP2OP_TRISC_COL = "OP TO OP TRISC LATENCY [ns]"
 # Stock columns replaced in place by the per-type columns above.
 _QUASAR_COL_REPLACEMENTS = {
     "DEVICE BRISC KERNEL DURATION [ns]": [_QUASAR_DM_KERNEL_COL, _QUASAR_TRISC_KERNEL_COL],
     "DEVICE FW DURATION [ns]": [_QUASAR_DM_FW_COL, _QUASAR_TRISC_FW_COL],
-    # op-to-op: the DM0-master single-domain latency replaces the cross-domain kernel-based latency
-    "OP TO OP LATENCY [ns]": [_QUASAR_OP2OP_DM0_COL],
+    "OP TO OP LATENCY [ns]": [_QUASAR_OP2OP_DM_COL, _QUASAR_OP2OP_TRISC_COL],
 }
 _QUASAR_COLS_TO_REMOVE = {
     "DEVICE NCRISC KERNEL DURATION [ns]",
@@ -167,7 +165,7 @@ _QUASAR_COLS_TO_REMOVE = {
     "DEVICE KERNEL DURATION [ns]",
     "DEVICE KERNEL DURATION DM START [ns]",
     "DEVICE KERNEL FIRST TO LAST START [ns]",
-    # DM-start op-to-op (mixes DM+Neo-TRISC cycles); DM0-master latency above replaces it
+    # DM-start op-to-op (mixes DM+Neo-TRISC cycles)
     "OP TO OP LATENCY BR/NRISC START [ns]",
 }
 # Stale [ns] row keys to strip so the strict DictWriter accepts the reshaped rows.
@@ -219,6 +217,11 @@ DEVICE_PERF_INT_FIELDS = {
     "DEVICE QUASAR_NEO_TRISC KERNEL DURATION [ns]",
     "DEVICE DM FW DURATION [ns]",
     "DEVICE TRISC FW DURATION [ns]",
+    # Quasar per-type KERNEL start/end cycles
+    "DEVICE QUASAR_DM KERNEL START CYCLE",
+    "DEVICE QUASAR_DM KERNEL END CYCLE",
+    "DEVICE QUASAR_NEO_TRISC KERNEL START CYCLE",
+    "DEVICE QUASAR_NEO_TRISC KERNEL END CYCLE",
 }
 
 
@@ -1450,7 +1453,8 @@ def generate_reports(
 
         prev_device_kernel_end_cycle = {}
         prev_device_dm_start_cycle = {}
-        prev_device_fw_end_cycle: Dict[int, int] = {}
+        prev_device_dm_kernel_end_cycle: Dict[int, int] = {}
+        prev_device_trisc_kernel_end_cycle: Dict[int, int] = {}
         device_ns_per_cycle: Dict[int, Optional[float]] = {}
 
         tensorCSVData = {
@@ -1714,19 +1718,38 @@ def generate_reports(
                     if "OP TO OP LATENCY BR/NRISC START [ns]" not in csv_row and perf_device_id is not None:
                         csv_row["OP TO OP LATENCY BR/NRISC START [ns]"] = 0
 
-                    # Quasar: DM0-master op-to-op latency (single clock domain). DM0-FW brackets the op, so
-                    # DEVICE FW START/END CYCLE are its bounds; gap = this FW start - prev op's FW end,
-                    # converted with ns_per_cycle (DM0 clock on Quasar, via the C++ FW duration).
-                    if is_quasar_report and perf_device_id is not None and ns_per_cycle:
-                        fw_start = device_perf_row.get("DEVICE FW START CYCLE")
-                        fw_end = device_perf_row.get("DEVICE FW END CYCLE")
-                        if fw_start is not None:
-                            prev_fw_end = prev_device_fw_end_cycle.get(perf_device_id)
-                            csv_row[_QUASAR_OP2OP_DM0_COL] = (
-                                round((fw_start - prev_fw_end) * ns_per_cycle) if prev_fw_end is not None else 0
-                            )
-                        if fw_end is not None:
-                            prev_device_fw_end_cycle[perf_device_id] = fw_end
+                    # Quasar: per-type op-to-op latency — gap from the previous op's last <type>-KERNEL end
+                    # to this op's first <type>-KERNEL start, per processor type.
+                    if is_quasar_report and perf_device_id is not None:
+                        for start_col, end_col, dur_col, prev_map, out_col in (
+                            (
+                                "DEVICE QUASAR_DM KERNEL START CYCLE",
+                                "DEVICE QUASAR_DM KERNEL END CYCLE",
+                                _QUASAR_DM_KERNEL_COL,
+                                prev_device_dm_kernel_end_cycle,
+                                _QUASAR_OP2OP_DM_COL,
+                            ),
+                            (
+                                "DEVICE QUASAR_NEO_TRISC KERNEL START CYCLE",
+                                "DEVICE QUASAR_NEO_TRISC KERNEL END CYCLE",
+                                _QUASAR_TRISC_KERNEL_COL,
+                                prev_device_trisc_kernel_end_cycle,
+                                _QUASAR_OP2OP_TRISC_COL,
+                            ),
+                        ):
+                            kernel_start = device_perf_row.get(start_col)
+                            kernel_end = device_perf_row.get(end_col)
+                            kernel_dur_ns = device_perf_row.get(dur_col)
+                            if kernel_start is not None:
+                                prev_end = prev_map.get(perf_device_id)
+                                span = (kernel_end - kernel_start) if kernel_end is not None else 0
+                                ns_per_cycle_type = (kernel_dur_ns / span) if (kernel_dur_ns and span > 0) else None
+                                if prev_end is not None and ns_per_cycle_type is not None:
+                                    csv_row[out_col] = round((kernel_start - prev_end) * ns_per_cycle_type)
+                                else:
+                                    csv_row[out_col] = 0
+                            if kernel_end is not None:
+                                prev_map[perf_device_id] = kernel_end
 
                     skip_headers = {
                         "GLOBAL CALL COUNT",
