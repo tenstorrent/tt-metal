@@ -169,7 +169,7 @@ protected:
 };
 
 // ============================================================================
-// SECTION 1: Structural Validation Tests (CollectSpecData)
+// Structural Validation Tests (CollectSpecData)
 // ============================================================================
 // These test the structural integrity checks that happen during spec collection.
 
@@ -944,7 +944,7 @@ TEST_F(ProgramSpecTestQuasar, DisableImplicitSyncForAllAgreesWithExplicitList) {
 }
 
 // ============================================================================
-// SECTION 2: Semantic Validation Tests (ValidateProgramSpec)
+// Semantic Validation Tests (ValidateProgramSpec)
 // ============================================================================
 
 TEST_F(ProgramSpecTestQuasar, EmptyKernelsFails) {
@@ -1945,7 +1945,7 @@ TEST_F(ProgramSpecTestQuasar, TooManyDFBsFailsValidation) {
 }
 
 // ============================================================================
-// SECTION 3: WorkUnitSpec Validation Tests
+// WorkUnitSpec Validation Tests
 // ============================================================================
 
 TEST_F(ProgramSpecTestQuasar, EmptyWorkUnitSpecsFails) {
@@ -2128,7 +2128,7 @@ TEST_F(ProgramSpecTestQuasar, LocalDFBConsumerOnNodeWithoutProducerFails) {
 }
 
 // ============================================================================
-// SECTION 4: Programs Creation Tests
+// Programs Creation Tests
 // ============================================================================
 // These verify that valid ProgramSpec configurations produce a Program without throwing.
 // They exercise the full MakeProgramFromSpec pipeline, but only on mock device.
@@ -2352,7 +2352,7 @@ TEST_F(ProgramSpecTestQuasar, VarargPerNodeOverlapFails) {
 }
 
 // ============================================================================
-// SECTION 5: Edge Cases and Boundary Tests
+// Edge Cases and Boundary Tests
 // ============================================================================
 
 TEST_F(ProgramSpecTestQuasar, NodeRangeSetTargetNodesSucceeds) {
@@ -2472,7 +2472,58 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestModePlacedAtDfbIdSlot) {
 }
 
 // ============================================================================
-// SECTION 6: Processor Assignment Edge Cases
+// Compute-config translation stability (defaults + inversion/enum)
+// ============================================================================
+// These tests pin the public ComputeGen{1,2}Config -> internal
+// ComputeConfig / QuasarComputeConfig translation at the boundary where the
+// field rename is absorbed (MakeGen1ComputeConfig / MakeGen2ComputeConfig).
+//
+// Several of these knobs are performance / numerical-precision settings that do
+// NOT change a functional pass/fail result, so a flipped inversion
+// (dst_full_sync_en <-> double_buffer_dest) or a wrong precision-enum direction
+// would be invisible to the behavioral tests. Asserting the internal values
+// documents that the defaults must not change and guards the conversions
+// against silent drift. (The public -> internal translation is Metal-side and
+// testable here; the TTNN ComputeKernelConfig -> public bridge lives above this
+// layer and is out of scope for a Metal unit test.)
+
+TEST_F(ProgramSpecTestQuasar, ComputeGen2ConfigDefaultsMapToInternalDefaults) {
+    // A default ComputeGen2Config{} must yield the historical internal QuasarComputeConfig defaults.
+    ProgramSpec spec = MakeMinimalValidProgramSpec();  // compute_kernel carries a default ComputeGen2Config
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    const auto built_variant = program.impl().get_kernel_by_spec_name("compute_kernel")->config();
+    const auto& built = std::get<experimental::quasar::QuasarComputeConfig>(built_variant);
+    EXPECT_EQ(built.math_fidelity, MathFidelity::HiFi4);
+    EXPECT_FALSE(built.fp32_dest_acc_en);
+    EXPECT_FALSE(built.dst_full_sync_en);      // double_buffer_dest defaults true -> !true
+    EXPECT_FALSE(built.math_approx_mode);      // sfpu_precision_mode defaults Precise
+    EXPECT_FALSE(built.enable_2x_src_format);  // enable_2x_src_register defaults false
+    EXPECT_FALSE(built.unpack_to_dest_en);
+}
+
+TEST_F(ProgramSpecTestQuasar, ComputeGen2ConfigInversionAndEnumMapToInternal) {
+    // Non-default polarity: the double_buffer_dest inversion and the SFPU precision-enum mapping
+    // must reach the internal config correctly. Guards the case a defaults-only check would miss
+    // (a flip compensated by a changed default).
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    for (auto& kernel : spec.kernels) {
+        if (kernel.is_compute_kernel()) {
+            auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
+            config.double_buffer_dest = false;                                  // -> internal dst_full_sync_en == true
+            config.sfpu_precision_mode = tt::tt_metal::Precision::Approximate;  // -> internal math_approx_mode == true
+        }
+    }
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    const auto built_variant = program.impl().get_kernel_by_spec_name("compute_kernel")->config();
+    const auto& built = std::get<experimental::quasar::QuasarComputeConfig>(built_variant);
+    EXPECT_TRUE(built.dst_full_sync_en);
+    EXPECT_TRUE(built.math_approx_mode);
+}
+
+// ============================================================================
+// Processor Assignment Edge Cases
 // ============================================================================
 // Here, we test several edge cases:
 //
@@ -2717,7 +2768,7 @@ TEST_F(ProgramSpecTestQuasar, DFBMultiBindingForcesUniformRiscMaskAcrossProducer
 }
 
 // ============================================================================
-// SECTION 7: Aggregate Type Enforcement Tests
+// Aggregate Type Enforcement Tests
 // ============================================================================
 //
 // DESIGN DECISION: All *Spec types must remain aggregates (POD-like structs).
@@ -3005,7 +3056,7 @@ TEST(AggregateSpecTypes, NestedStructsDesignatedInitializers) {
 }
 
 // ============================================================================
-// SECTION 8: Gen1 (WH/BH) Tests
+// Gen1 (WH/BH) Tests
 // ============================================================================
 
 // Test fixture for ProgramSpec on Wormhole - uses WORMHOLE_B0 mock device
@@ -3028,6 +3079,22 @@ protected:
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
     std::optional<ScopedSlowDispatchOverride> slow_dispatch_override_;
 };
+
+// Gen1 counterpart of the compute-config translation-stability tests (the Gen2 pair lives in the
+// Quasar suite): a default ComputeGen1Config{} must yield the historical internal ComputeConfig
+// defaults. Guards the perf/precision knobs that don't move a functional pass/fail result.
+TEST_F(ProgramSpecTestGen1, ComputeGen1ConfigDefaultsMapToInternalDefaults) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();  // compute_kernel carries a default ComputeGen1Config
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    const auto built_variant = program.impl().get_kernel_by_spec_name("compute_kernel")->config();
+    const auto& built = std::get<ComputeConfig>(built_variant);
+    EXPECT_EQ(built.math_fidelity, MathFidelity::HiFi4);
+    EXPECT_FALSE(built.fp32_dest_acc_en);
+    EXPECT_FALSE(built.dst_full_sync_en);   // double_buffer_dest defaults true -> !true
+    EXPECT_FALSE(built.bfp8_pack_precise);  // bfp_pack_precision_mode defaults Approximate
+    EXPECT_FALSE(built.math_approx_mode);   // sfpu_precision_mode defaults Precise
+}
 
 TEST_F(ProgramSpecTestGen1, MinimalValidProgramSpecSucceeds) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
@@ -3476,7 +3543,7 @@ TEST_F(ProgramSpecTestGen1, DuplicateKernelNameFails) {
 }
 
 // ============================================================================
-// SECTION 9: TensorParameter Validation Tests (Gen1 / WH)
+// TensorParameter Validation Tests (Gen1 / WH)
 // ============================================================================
 // Spec-level validation for the Metal 2.0 TensorAccessor binding feature. These tests exercise
 // CollectSpecData paths only — they do not need a MeshTensor at enqueue (those run-params paths
@@ -3593,7 +3660,7 @@ TEST_F(ProgramSpecTestGen1, MinimalValidProgramSpecWithTensorParameterSucceeds) 
 }
 
 // ============================================================================
-// SECTION 10: TensorParameter JIT Smoke Tests (Gen1 / WH)
+// TensorParameter JIT Smoke Tests (Gen1 / WH)
 // ============================================================================
 // Codegen-path smoke test for the Metal 2.0 TensorAccessor binding feature. Ends in
 // CompileProgram, so the auto-generated kernel_bindings_generated.h (with its `tensor::` namespace)
