@@ -26,7 +26,7 @@ from .gate import HunyuanTtTopKGate
 from .mlp import HunyuanTtMLP
 from ..cache import cache_file
 from ..matmul_utils import l1_sharded_linear
-from ..parallel_utils import sp_gather, sp_shard
+from ..parallel_utils import moe_full_seq_mem_config, resid_mem_config, sp_gather, sp_shard
 
 
 class HunyuanTtMoEParallel(LightweightModule):
@@ -200,13 +200,18 @@ class HunyuanTtMoEParallel(LightweightModule):
         """Run local expert `el` (its weight slice differs per device)."""
         wgu = self.w_gate_up_experts[el]  # [H, 2I] (different global expert per device)
         wdn = self.w_down_experts[el]  # [I, H]
+        # l1_sharded_linear self-gates the two matmuls (small-M -> L1 width-sharded,
+        # large full-sequence M -> DRAM). The transient SwiGLU multiply runs on the
+        # full gathered sequence, so its L1 buffer scales with S and clashes with the
+        # ops' static CBs past the measured bound — follow the seq-length L1->DRAM gate.
+        mc = moe_full_seq_mem_config(x.shape[1])
         gu = l1_sharded_linear(x, wgu, compute_kernel_config=self.compute_kernel_config)
         x1, x2 = ttnn.chunk(gu, 2, dim=-1)
         ttnn.deallocate(gu)
         # SwiGLU x1 * silu(x2), with SiLU folded into the multiply's LHS activation
         # (one fused BinaryNg instead of a separate silu Unary + multiply). SILU must
         # apply to x2 (the up half); multiply(x2, x1, a_acts=[SILU]) == x1 * silu(x2).
-        h = ttnn.multiply(x2, x1, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
+        h = ttnn.multiply(x2, x1, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=mc)
         ttnn.deallocate(x1)
         ttnn.deallocate(x2)
         out = l1_sharded_linear(h, wdn, compute_kernel_config=self.compute_kernel_config)
@@ -228,7 +233,7 @@ class HunyuanTtMoEParallel(LightweightModule):
             B = gathered.shape[0] // n
             S, H = gathered.shape[1], gathered.shape[2]
             gathered = ttnn.reshape(gathered, (n, B, S, H))
-            out = ttnn.sum(gathered, dim=0)  # [B,S,H]
+            out = ttnn.sum(gathered, dim=0, memory_config=moe_full_seq_mem_config(S))  # [B,S,H]
             ttnn.deallocate(gathered)
         return out
 
@@ -237,12 +242,35 @@ class HunyuanTtMoEParallel(LightweightModule):
         # the full-mesh EP below is valid; reshard the combined output back at the end.
         # `xf` is a fresh tensor — the caller-owned `x` is left untouched.
         sp = self.sp_factor > 1
-        xf = sp_gather(self.ccl, x, dim=1, mesh_axis=self.sp_axis, n=self.sp_factor) if sp else x
+        # gathered tokens feed the router matmul next: land L1-resident up to the
+        # full-sequence CB-clash bound (the gathered tensor is the GLOBAL seq), else DRAM.
+        global_seq = x.shape[1] * self.sp_factor if sp else x.shape[1]
+        xf = (
+            sp_gather(
+                self.ccl,
+                x,
+                dim=1,
+                mesh_axis=self.sp_axis,
+                n=self.sp_factor,
+                out_memory_config=moe_full_seq_mem_config(global_seq),
+            )
+            if sp
+            else x
+        )
 
         out = self._forward_full(xf)
         if sp:
             ttnn.deallocate(xf)
-            out = sp_shard(self.ccl, out, dim=1, mesh_axis=self.sp_axis, n=self.sp_factor)
+            # MoE output feeds the layer's residual add next: land it L1-resident up to
+            # the per-device residual bound (the reshard output is the per-device seq).
+            out = sp_shard(
+                self.ccl,
+                out,
+                dim=1,
+                mesh_axis=self.sp_axis,
+                n=self.sp_factor,
+                out_memory_config=resid_mem_config(out.shape[1] // self.sp_factor),
+            )
         return out
 
     def _forward_full(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -250,6 +278,9 @@ class HunyuanTtMoEParallel(LightweightModule):
         topk_idx = ttnn.typecast(topk_idx_raw, ttnn.bfloat16)  # ids <= 63 exact in bf16
         ttnn.deallocate(topk_idx_raw)
 
+        # Full-S combine accumulator [B,S,H] scales with sequence like the expert body,
+        # so it follows the same measured L1->DRAM gate.
+        mc = moe_full_seq_mem_config(x.shape[1])
         partial = None
         for el in range(self.experts_per_dev):
             gid = self.local_ids_experts[el]  # [1] — global id of this device's el-th expert
@@ -261,11 +292,11 @@ class HunyuanTtMoEParallel(LightweightModule):
 
             oe = self._expert(x, el)
             if partial is None:
-                partial = ttnn.multiply(oe, w_e)  # [B,S,H]
+                partial = ttnn.multiply(oe, w_e, memory_config=mc)  # [B,S,H]
             else:
                 # addcmul(partial, oe, w_e) = partial + oe * w_e, fused in one op
                 # instead of a separate multiply + add.
-                tmp = ttnn.addcmul(partial, oe, w_e)
+                tmp = ttnn.addcmul(partial, oe, w_e, memory_config=mc)
                 ttnn.deallocate(partial)
                 partial = tmp
             ttnn.deallocate(oe)
@@ -283,7 +314,7 @@ class HunyuanTtMoEParallel(LightweightModule):
 
         if self.shared_mlp is not None:
             shared = self.shared_mlp(x)
-            out = ttnn.add(shared, combined)
+            out = ttnn.add(shared, combined, memory_config=moe_full_seq_mem_config(x.shape[1]))
             ttnn.deallocate(shared)
             ttnn.deallocate(combined)
             return out
