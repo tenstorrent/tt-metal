@@ -102,6 +102,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_srcs.h"
 #include "params.h"
+#include "sfpu/ckernel_sfpu_exp.h"
 
 using namespace ckernel;
 using namespace ckernel::math;
@@ -158,6 +159,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_sfpu_init_();
 
     const int num_sfpu_iterations = PARAM_SRCS_YDIM >> 1;
+    const int load_base_addr      = ckernel::math::SFPU_SRCS_BASE_ADDR;
+    const int store_offset        = 2 * PARAM_SRCS_YDIM; // store folded into the macro; results land in the next SrcS slice
+
+    // One-time setup: program the self-contained exp LOADMACRO sequence (load -> EXP->STG ->
+    // store to load_addr + store_offset) and record one macro per element into replay slot 0.
+    _exp_init_loadmacro_(load_base_addr, store_offset, num_sfpu_iterations);
+    const std::uint32_t exp_replay_len = _exp_loadmacro_replay_len_(num_sfpu_iterations);
+
+    // Full TRISC3 path: UNP_S -> SFPU exp (self-contained SFPLOADMACRO replay) -> PACK1.
+    // The final LOADMACRO's `done` bit resets the SrcS dvalids, so no per-slice clear_vlds / NOPs.
     for (std::uint32_t i = 0; i < num_tiles; ++i)
     {
         _llk_unpack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_unpack, i * PARAM_SRCS_SLICE_COUNT);
@@ -165,23 +176,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         for (std::uint32_t slice = 0; slice < PARAM_SRCS_SLICE_COUNT; slice++)
         {
-            const int load_base_addr  = ckernel::math::SFPU_SRCS_BASE_ADDR;
-            const int store_base_addr = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * PARAM_SRCS_YDIM;
-
-#pragma GCC unroll 8
-            for (int d = 0; d < num_sfpu_iterations; d++)
-            {
-                TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, load_base_addr + (d << 1));
-                TTI_SFPNONLINEAR(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpnonlinear::EXP_MODE);
-                TT_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, store_base_addr + (d << 1));
-            }
-
-            _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>();
+            TT_REPLAY(0, exp_replay_len, 0, 0, 0, 0);
         }
     }
 
-    wait_sfpu_idle();
+    // Drain the LOADMACRO pipeline before returning: pad with SFPNOPs (>= remaining sequence
+    // length after the final LOADMACRO); the last one toggles the RF done bit.
+    TTI_SFPNOP(0, 0, 0);
+    TTI_SFPNOP(0, 0, 1);
+
     wait_unpack_idle();
+    wait_sfpu_idle();
     wait_pack_idle();
 }
 
