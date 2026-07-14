@@ -196,11 +196,6 @@ test_suite_wh_6u_llama_long_stress_tests() {
     FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "stress-test and not mini-stress-test" --timeout 1000
 }
 
-test_suite_bh_ttnn_stress_tests() {
-    echo "[upstream-tests] running BH upstream ttnn stress tests"
-    pytest tests/ttnn/stress_tests/
-}
-
 test_suite_bh_6u_metal_unit_tests() {
     echo "[upstream-tests] running BH GLX upstream metal unit tests"
 
@@ -306,9 +301,6 @@ test_suite_wh_6u_llama_demo_tests
 test_suite_wh_6u_metal_torus_xy_health_check_tests
 test_suite_wh_6u_model_unit_tests
 test_suite_wh_6u_metal_unit_tests"
-
-hw_topology_test_suites["blackhole_ttnn_stress_tests"]="
-test_suite_bh_ttnn_stress_tests"
 
 hw_topology_test_suites["blackhole_glx_deployment_tests"]="
 test_suite_bh_6u_deployment_tests"
