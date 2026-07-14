@@ -16,6 +16,12 @@
 
 #include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
+#include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/subchunk_bands.hpp"
+
+#ifndef IN0_SUB_CHUNKS
+#define IN0_SUB_CHUNKS 1
+#endif
+
 void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     copy_tile_to_dst_init_short(in_cb);
     reconfig_data_format_srca(in_cb);
@@ -262,6 +268,11 @@ void add_bias_and_addcmul_block(
 }
 
 // Slightly modified from compute_common.hpp
+//
+// m_out_tile_offset shifts where this call's rows land in the (full) output block. When in0 is
+// delivered as M-row sub-chunk bands, each band's in0 CB slot is 0-based (M_block_tiles == band_h,
+// in0 indexing starts at 0) but the band's results must accumulate into rows [band_lo, band_lo+band_h)
+// of the intermediate block, so pass m_out_tile_offset = band_lo. Whole-block callers pass 0.
 void matmul_blocks(
     const uint32_t in0_cb,
     const uint32_t in1_cb,
@@ -271,7 +282,8 @@ void matmul_blocks(
     const uint32_t full_N_block_tiles,
     const uint32_t K_block_tiles,
     const uint32_t subblock_h,
-    const uint32_t subblock_w) {
+    const uint32_t subblock_w,
+    const uint32_t m_out_tile_offset = 0) {
     DeviceZoneScopedN("MATMUL_BLOCK");
 
     uint32_t in0_index_offset = 0;
@@ -304,7 +316,7 @@ void matmul_blocks(
             tile_regs_wait();
             uint32_t write_dst_index = 0;
             for (uint32_t h = 0; h < subblock_h; h++) {
-                uint32_t h_tile_id = M_start + h;
+                uint32_t h_tile_id = M_start + h + m_out_tile_offset;
                 for (uint32_t w = 0; w < subblock_w; w++) {
                     uint32_t w_tile_id = N_start + w;
                     uint32_t out_tile_id = h_tile_id * full_N_block_tiles + w_tile_id;
@@ -330,6 +342,11 @@ void kernel_main() {
     constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(5);
     constexpr uint32_t subblock_h = get_compile_time_arg_val(6);
     constexpr uint32_t subblock_w = get_compile_time_arg_val(7);
+    // Number of leading (self/local) k-block positions this device owns. The AG schedule always drains
+    // the local slice first, so positions [0, num_local_k_blocks) are local (never sub-chunked) and the
+    // rest are remote (sub-chunked into IN0_SUB_CHUNKS M-row bands on the first N-block). Kept identical
+    // across the dm_in0/dm_in1 senders so per-band CB push/pop counts match.
+    [[maybe_unused]] constexpr uint32_t num_local_k_blocks = get_compile_time_arg_val(8);
 
     uint32_t argidx = 0;
     const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
@@ -368,8 +385,6 @@ void kernel_main() {
     constexpr uint32_t M_num_subblocks = M_block_tiles / subblock_h;
     constexpr uint32_t N_num_subblocks = N_block_tiles / subblock_w;
 
-    bool reuse_in0_block = false;
-
     uint32_t current_M_block_tiles = M_block_tiles;
     uint32_t current_N_block_tiles = N_block_tiles;
     uint32_t current_subblock_h = subblock_h;
@@ -398,36 +413,80 @@ void kernel_main() {
             pack_reconfig_data_format(intermediate_cb);
             // Accumulation buffer
             cb_reserve_back(intermediate_cb, out_block_num_tiles);
+            // Sub-chunked (banded) matmul. Remote k-blocks on the first N-block arrive as IN0_SUB_CHUNKS
+            // M-row bands; local k-blocks and every k-block on later N-blocks arrive whole (nb == 1). in1
+            // is re-presented once per band (read once, pushed nb times by the in1 sender), so in0 and in1
+            // advance in lockstep and the matmul fires per band. Each k-block position is delivered fresh
+            // (no N-stride in0 reuse). With IN0_SUB_CHUNKS == 1 this degenerates to one whole band per
+            // position.
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
-                cb_wait_front(in0_cb, in0_block_num_tiles);
-                cb_wait_front(in1_cb, in1_block_num_tiles);
-
-                matmul_blocks(
-                    in0_cb,
-                    in1_cb,
-                    intermediate_cb,
-                    current_M_block_tiles,
-                    current_N_block_tiles,
-                    N_block_tiles,
-                    K_block_tiles,
-                    current_subblock_h,
-                    current_subblock_w);
-
-                if (k_block == K_num_blocks - 1) {
-                    /**
-                     * On next iteration we might get reuse on in0
-                     *
-                     */
-                    if (n_block_iter < N_blocks_per_core - 1) {
-                        // going to stride on N, so reuse in0
-                        reuse_in0_block = true;
+                const uint32_t nb =
+                    (n_block_iter == 0 && k_block >= num_local_k_blocks) ? (uint32_t)IN0_SUB_CHUNKS : 1u;
+#ifdef AG_INTERLEAVE_BANDS
+                // Interleave a forward remote k-block with the following backward one at band granularity:
+                // A.b0, B.b0, A.b1, B.b1, ... Both members share band_lo and accumulate into the same
+                // output rows; both are past k-block 0 so L1 accumulation is already on, so the two partials
+                // sum correctly regardless of order. The position-based pairing matches dm_in0/dm_in1 so the
+                // per-band in0/in1 CB counts stay in lockstep.
+                if (n_block_iter == 0 && nb > 1 && k_block >= num_local_k_blocks && (k_block + 1) < K_num_blocks &&
+                    ((k_block - num_local_k_blocks) & 1u) == 0) {
+                    for (uint32_t band = 0; band < nb; band++) {
+                        uint32_t band_lo, band_h;
+                        balanced_band(current_M_block_tiles, nb, band, band_lo, band_h);
+                        if (band_h == 0) {
+                            break;
+                        }
+                        const uint32_t band_in0_tiles = band_h * K_block_tiles;
+                        for (uint32_t member = 0; member < 2; member++) {
+                            cb_wait_front(in0_cb, band_in0_tiles);
+                            cb_wait_front(in1_cb, in1_block_num_tiles);
+                            matmul_blocks(
+                                in0_cb,
+                                in1_cb,
+                                intermediate_cb,
+                                band_h,
+                                current_N_block_tiles,
+                                N_block_tiles,
+                                K_block_tiles,
+                                current_subblock_h,
+                                current_subblock_w,
+                                band_lo);
+                            cb_pop_front(in0_cb, band_in0_tiles);
+                            cb_pop_front(in1_cb, in1_block_num_tiles);
+                        }
                     }
+                    k_block++;  // the backward member of the pair is consumed here too
+                    continue;
                 }
-                if (!reuse_in0_block) {
-                    cb_pop_front(in0_cb, in0_block_num_tiles);
+#endif
+                for (uint32_t band = 0; band < nb; band++) {
+                    uint32_t band_lo, band_h;
+                    balanced_band(current_M_block_tiles, nb, band, band_lo, band_h);
+                    if (band_h == 0) {
+                        break;  // only when nb > current_M_block_tiles
+                    }
+                    const uint32_t band_in0_tiles = band_h * K_block_tiles;
+                    cb_wait_front(in0_cb, band_in0_tiles);
+                    cb_wait_front(in1_cb, in1_block_num_tiles);
+
+                    // band_h is a whole multiple of subblock_h (host guards SUB | M_block and
+                    // subblock_h | (M_block / SUB) with full M blocks), so current_subblock_h matches
+                    // the rt_dim mm_block_init_short was configured with.
+                    matmul_blocks(
+                        in0_cb,
+                        in1_cb,
+                        intermediate_cb,
+                        band_h,
+                        current_N_block_tiles,
+                        N_block_tiles,
+                        K_block_tiles,
+                        current_subblock_h,
+                        current_subblock_w,
+                        band_lo);
+
+                    cb_pop_front(in0_cb, band_in0_tiles);
+                    cb_pop_front(in1_cb, in1_block_num_tiles);
                 }
-                cb_pop_front(in1_cb, in1_block_num_tiles);
-                reuse_in0_block = false;
                 if (k_block == 0) {
                     PACK((llk_pack_reconfig_l1_acc(1)));
                 }

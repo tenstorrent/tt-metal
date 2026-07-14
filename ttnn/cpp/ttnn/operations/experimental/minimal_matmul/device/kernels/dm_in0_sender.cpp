@@ -8,6 +8,12 @@
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/subchunk_bands.hpp"
 #include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/dprint.h"  // TEMP: instrumentation for num_local_k_blocks / num_ag_workers
+
+// Set by the host only when fusing AG; default to 1 (single whole band per k-block) otherwise.
+#ifndef IN0_SUB_CHUNKS
+#define IN0_SUB_CHUNKS 1
+#endif
 
 void kernel_main() {
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
@@ -48,6 +54,10 @@ void kernel_main() {
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
     const uint32_t max_defer_write_k_block = get_arg_val<uint32_t>(argidx++);
+    // Leading (self/local) k-block positions this device owns. Receivers don't run the AG scheduler,
+    // so they use this to compute the same per-position band count the injector derives from streamed_dir.
+    // (Read unconditionally to keep the arg layout fixed; only consumed by receivers / IN0_SUB_CHUNKS > 1.)
+    [[maybe_unused]] const uint32_t num_local_k_blocks = get_arg_val<uint32_t>(argidx++);
 
 #ifdef FUSE_TERNARY
     // Fuse addcmul - read runtime addresses before setting out_addr_rt_arg_idx
@@ -134,6 +144,15 @@ void kernel_main() {
     uint32_t num_devices = get_arg_val<uint32_t>(fused_op_rt_args_idx);
     uint32_t num_k_blocks = get_arg_val<uint32_t>(fused_op_rt_args_idx + 1);
     uint32_t num_ag_workers = get_arg_val<uint32_t>(fused_op_rt_args_idx + 9);  // after the 9 scalar args
+    // TEMP INSTRUMENTATION: confirm the fused-op arg base and num_local_k_blocks are sane. A huge
+    // num_local_k_blocks (a DRAM address) confirms the override-callback off-by-one corrupted it.
+    DPRINT(
+        "AGMM-DM0 fidx={} nlkb={} ndev={} nkb={} nwrk={}\n",
+        fused_op_rt_args_idx,
+        num_local_k_blocks,
+        num_devices,
+        num_k_blocks,
+        num_ag_workers);
     uint8_t k_block_device_expected[num_k_blocks]{};
     uint8_t k_block_device_received[num_k_blocks]{};
     uint32_t device_k_block_counts[num_devices]{};
@@ -200,7 +219,6 @@ void kernel_main() {
      */
 
     bool k_forward = true;
-    bool reuse_block = false;
 
     uint32_t defer_write_m_tile = 0;
     uint32_t defer_write_m_tile_end = 0;
@@ -212,15 +230,12 @@ void kernel_main() {
         uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
         uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
         uint32_t current_M_block_tiles = m_tile_end - m_tile;
-        uint32_t current_block_bytes = current_M_block_tiles * K_block_tiles * in0_tile_size;
 #ifdef FUSE_AG
         if constexpr (is_injector_core) {
             fused_op_receiver.reset();
         }
 #endif
 
-        // When striding M block, in0 gets no reuse
-        reuse_block = false;
         k_forward = true;
         for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
             uint32_t n_tile = N_start_tile + n_block_iter * N_block_tiles;
@@ -230,6 +245,95 @@ void kernel_main() {
 
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 DeviceZoneScopedN("AVAILABLE");
+#if defined(FUSE_AG) && (IN0_SUB_CHUNKS > 1) && defined(AG_INTERLEAVE_BANDS)
+                if constexpr (is_injector_core) {
+                    // Interleave a forward remote k-block with the following backward one: read/push/mcast
+                    // A.b0, B.b0, A.b1, B.b1, ... Position-based pairing matches compute and dm_in1 so the
+                    // per-band in0 CB counts stay in lockstep. Injectors never defer_write, so the deferred
+                    // output flush below never applies on this path.
+                    if (n_block_iter == 0 && k_block_iter >= num_local_k_blocks && (k_block_iter + 1) < K_num_blocks &&
+                        ((k_block_iter - num_local_k_blocks) & 1u) == 0) {
+                        // Resolve both slots up front; each call advances the schedule and updates
+                        // streamed_dir, so capture the forward direction before resolving the backward slot.
+                        const uint32_t kb_a =
+                            fused_op_receiver.compute_actual_k_block_iter(true, k_block_iter, k_forward);
+                        const uint8_t dir_a = fused_op_receiver.streamed_dir;
+                        const uint32_t kb_b =
+                            fused_op_receiver.compute_actual_k_block_iter(true, k_block_iter + 1, k_forward);
+                        const uint32_t kb_pair2[2] = {kb_a, kb_b};
+                        const uint8_t dir_pair[2] = {dir_a, fused_op_receiver.streamed_dir};
+                        for (uint32_t band = 0; band < (uint32_t)IN0_SUB_CHUNKS; band++) {
+                            uint32_t band_lo, band_h;
+                            balanced_band(current_M_block_tiles, (uint32_t)IN0_SUB_CHUNKS, band, band_lo, band_h);
+                            if (band_h == 0) {
+                                break;
+                            }
+                            const uint32_t band_in0_tiles = band_h * K_block_tiles;
+                            const uint32_t band_bytes = band_in0_tiles * in0_tile_size;
+                            const uint32_t band_start = m_tile + band_lo;
+                            const uint32_t band_end = band_start + band_h;
+                            for (uint32_t member = 0; member < 2; member++) {
+                                cb_reserve_back(cb_id_in0, band_in0_tiles);
+                                uint32_t in0_start_address = get_write_ptr(cb_id_in0);
+                                {
+                                    DeviceZoneScopedN("DRAM-Latency");
+#ifndef SKIP_IN0_DRAM_READ
+                                    // band 0's signal was consumed by compute_actual_k_block_iter above; later
+                                    // bands wait this member's own per-direction aggregator signal.
+                                    if (band > 0) {
+                                        DeviceZoneScopedN("IN0-BAND-WAIT");
+                                        fused_op_receiver.wait_for_dir(dir_pair[member]);
+                                    }
+                                    read_in0_block_sync<M_block_tiles, K_block_tiles>(
+                                        in0_reader,
+                                        in0_shape,
+                                        in0_start_address,
+                                        in0_tile_size,
+#ifdef READ_FROM_LOCAL_INPUT
+                                        in3_reader,
+                                        fused_op_receiver.local_k_start,
+                                        fused_op_receiver.local_k_end,
+                                        fused_op_receiver.input_tensor_Wt,
+#endif
+                                        band_start,
+                                        band_end,
+                                        kb_pair2[member] * K_block_tiles,
+                                        (kb_pair2[member] + 1) * K_block_tiles,
+                                        /*issue_barrier=*/true);
+#endif
+                                }
+                                cb_push_back(cb_id_in0, band_in0_tiles);
+                                if (!is_sink_core) {
+                                    DeviceZoneScopedN("MCAST-SEND");
+                                    noc_semaphore_wait(in0_sender_semaphore_addr_ptr, 1);
+                                    noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
+                                    uint64_t in0_unicast_data_addr =
+                                        get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_start_address);
+                                    noc_async_write(in0_start_address, in0_unicast_data_addr, band_bytes);
+#ifdef ARCH_BLACKHOLE
+                                    noc_async_writes_flushed();
+#endif
+                                    noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
+                                }
+                            }
+                        }
+#ifdef SRS_FUSE_OP_SIGNALER
+                        if constexpr (is_output_writer) {
+                            if (not_first_block && k_block_iter == max_defer_write_k_block) {
+                                noc_async_write_barrier();
+                                srs_fuse_signaler.synchronize_workers_and_signal_op(0);
+                            }
+                            if (not_first_block && (k_block_iter + 1) == max_defer_write_k_block) {
+                                noc_async_write_barrier();
+                                srs_fuse_signaler.synchronize_workers_and_signal_op(0);
+                            }
+                        }
+#endif
+                        k_block_iter++;  // the backward member of the pair is consumed here too
+                        continue;
+                    }
+                }
+#endif
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
                         DeviceZoneScopedN("DEFER-WRITE");
@@ -263,68 +367,52 @@ void kernel_main() {
                     }
                 }
 
-                if (reuse_block && k_block_iter == 0) {
-                    // We strided an N block and this is the first k block, so we get reuse and do not need to read in0
-                    reuse_block = false;
-                    continue;
-                }
-                uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
-                cb_reserve_back(cb_id_in0, in0_block_num_tiles);
-
-                uint32_t in0_start_address = get_write_ptr(cb_id_in0);
-                if constexpr (is_injector_core) {
-                    DeviceZoneScopedN("DRAM-Latency");
+                // ---- Sub-chunked (banded) delivery ----
+                // Each k-block position is delivered as `nb` M-row bands. Remote positions on the first
+                // N-block use IN0_SUB_CHUNKS bands (matching the AG's per-band signalling); local positions
+                // and every position on later N-blocks use a single whole-block band. Reserve/read (or
+                // recv)/push/forward happen per band so the matmul and the downstream forward pipeline at
+                // band granularity. N-stride in0 reuse is intentionally disabled here (every position is
+                // delivered fresh), so there is no reuse skip on this path.
+                [[maybe_unused]] uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
 #ifdef FUSE_AG
-                    if (is_injector_core) {
-                        k_block =
-                            fused_op_receiver.compute_actual_k_block_iter(n_block_iter == 0, k_block_iter, k_forward);
+                if constexpr (is_injector_core) {
+                    k_block = fused_op_receiver.compute_actual_k_block_iter(n_block_iter == 0, k_block_iter, k_forward);
+                }
+                // streamed_dir is only meaningful on the injector; receivers use num_local_k_blocks below.
+                [[maybe_unused]] const uint8_t k_dir = is_injector_core ? fused_op_receiver.streamed_dir : (uint8_t)2;
+#else
+                [[maybe_unused]] const uint8_t k_dir = 2;
+#endif
+                uint32_t nb;
+                if constexpr (is_injector_core) {
+                    nb = (n_block_iter == 0 && k_dir != 2) ? (uint32_t)IN0_SUB_CHUNKS : 1u;
+                } else {
+                    nb = (n_block_iter == 0 && k_block_iter >= num_local_k_blocks) ? (uint32_t)IN0_SUB_CHUNKS : 1u;
+                }
+                for (uint32_t band = 0; band < nb; band++) {
+                    uint32_t band_lo, band_h;
+                    balanced_band(current_M_block_tiles, nb, band, band_lo, band_h);
+                    if (band_h == 0) {
+                        break;  // only when nb > current_M_block_tiles
                     }
-#endif
+                    const uint32_t band_in0_tiles = band_h * K_block_tiles;
+                    const uint32_t band_bytes = band_h * K_block_tiles * in0_tile_size;
+                    cb_reserve_back(cb_id_in0, band_in0_tiles);
+                    uint32_t in0_start_address = get_write_ptr(cb_id_in0);
+                    if constexpr (is_injector_core) {
+                        DeviceZoneScopedN("DRAM-Latency");
 #ifndef SKIP_IN0_DRAM_READ
-#if IN0_SUB_CHUNKS > 1
-                    // Stream the in0 block in IN0_SUB_CHUNKS M-row bands so band s's DRAM read overlaps
-                    // band s+1's fabric delivery. compute_actual_k_block_iter already awaited band 0;
-                    // wait_for_dir awaits each later band's aggregator signal. Only remote directions
-                    // are band-signaled -- self/local (dir 2) has no fabric wait, so read it whole.
-                    const uint8_t k_dir = fused_op_receiver.streamed_dir;
-                    if (n_block_iter == 0 && k_dir != 2) {
-                        const uint32_t total_rows = m_tile_end - m_tile;
-                        for (uint32_t sub = 0; sub < IN0_SUB_CHUNKS; sub++) {
-                            uint32_t band_lo, band_h;
-                            balanced_band(total_rows, IN0_SUB_CHUNKS, sub, band_lo, band_h);
-                            if (band_h == 0) {
-                                break;  // empty trailing band, only when IN0_SUB_CHUNKS > total_rows
-                            }
-                            const uint32_t band_start = m_tile + band_lo;
-                            if (sub > 0) {
-                                DeviceZoneScopedN("IN0-BAND-WAIT");  // per-band; multiplies zone count with SUB
-                                fused_op_receiver.wait_for_dir(k_dir);
-                            }
-                            const uint32_t band_end = band_start + band_h;
-                            {
-                                DeviceZoneScopedN("IN0-READ-ISSUE");  // per-band; multiplies zone count with SUB
-                                read_in0_block_sync<M_block_tiles, K_block_tiles>(
-                                    in0_reader,
-                                    in0_shape,
-                                    in0_start_address + band_lo * K_block_tiles * in0_tile_size,
-                                    in0_tile_size,
-#ifdef READ_FROM_LOCAL_INPUT
-                                    in3_reader,
-                                    fused_op_receiver.local_k_start,
-                                    fused_op_receiver.local_k_end,
-                                    fused_op_receiver.input_tensor_Wt,
-#endif
-                                    band_start,
-                                    band_end,
-                                    k_block * K_block_tiles,
-                                    (k_block + 1) * K_block_tiles,
-                                    /*issue_barrier=*/false);
-                            }
+                        const uint32_t band_start = m_tile + band_lo;
+                        const uint32_t band_end = band_start + band_h;
+#ifdef FUSE_AG
+                        // band 0's signal was already awaited by compute_actual_k_block_iter above; each
+                        // later band waits its own aggregator signal.
+                        if (nb > 1 && band > 0) {
+                            DeviceZoneScopedN("IN0-BAND-WAIT");
+                            fused_op_receiver.wait_for_dir(k_dir);
                         }
-                        noc_async_read_barrier();  // one barrier: every band's reads stayed in flight
-                    } else
 #endif
-                    {
                         read_in0_block_sync<M_block_tiles, K_block_tiles>(
                             in0_reader,
                             in0_shape,
@@ -336,44 +424,35 @@ void kernel_main() {
                             fused_op_receiver.local_k_end,
                             fused_op_receiver.input_tensor_Wt,
 #endif
-                            m_tile,
-                            m_tile_end,
+                            band_start,
+                            band_end,
                             k_block * K_block_tiles,
-                            (k_block + 1) * K_block_tiles);
-                    }
+                            (k_block + 1) * K_block_tiles,
+                            /*issue_barrier=*/true);
 #else
-                    (void)k_block;  // still computed for its semaphore side effects; just not read from
+                        (void)k_block;
 #endif
-                } else {
-                    DeviceZoneScopedN("RECV-WAIT");
-                    // Get from previous device
-                    noc_semaphore_set(in0_receiver_semaphore_addr_ptr, INVALID);
-                    noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
-                    noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, VALID);
-                }
+                    } else {
+                        DeviceZoneScopedN("RECV-WAIT");
+                        noc_semaphore_set(in0_receiver_semaphore_addr_ptr, INVALID);
+                        noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
+                        noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, VALID);
+                    }
 
-                // Critical to performance for sender to push data to compute before mcasting
-                // This frees sender to start next read earlier
-                cb_push_back(cb_id_in0, in0_block_num_tiles);
+                    cb_push_back(cb_id_in0, band_in0_tiles);
 
-                if (!is_sink_core) {
-                    DeviceZoneScopedN("MCAST-SEND");
-                    noc_semaphore_wait(in0_sender_semaphore_addr_ptr, 1);
-                    noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
-
-                    uint64_t in0_unicast_data_addr = get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_start_address);
-
-                    /**
-                     * in0 is M_block_tiles x K_block_tiles. When M block is partial, we don't need to write the
-                     * padded tiles. Use `current_block_bytes`.
-                     */
-                    noc_async_write(in0_start_address, in0_unicast_data_addr, current_block_bytes);
-
+                    if (!is_sink_core) {
+                        DeviceZoneScopedN("MCAST-SEND");
+                        noc_semaphore_wait(in0_sender_semaphore_addr_ptr, 1);
+                        noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
+                        uint64_t in0_unicast_data_addr =
+                            get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_start_address);
+                        noc_async_write(in0_start_address, in0_unicast_data_addr, band_bytes);
 #ifdef ARCH_BLACKHOLE
-                    noc_async_writes_flushed();
+                        noc_async_writes_flushed();
 #endif
-
-                    noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
+                        noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
+                    }
                 }
 #ifdef SRS_FUSE_OP_SIGNALER
                 if constexpr (is_output_writer) {
@@ -418,8 +497,6 @@ void kernel_main() {
 #endif
 
             k_forward = !k_forward;
-            // We get reuse on in0 when striding N block
-            reuse_block = true;
 
             defer_write_m_tile = m_tile;
             defer_write_m_tile_end = m_tile_end;
