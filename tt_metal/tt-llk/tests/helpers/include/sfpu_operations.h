@@ -45,9 +45,11 @@
 #include "llk_sfpu/ckernel_sfpu_hardshrink.h"
 #include "llk_sfpu/ckernel_sfpu_i1.h"
 #include "llk_sfpu/ckernel_sfpu_identity.h"
+#include "llk_sfpu/ckernel_sfpu_isclose.h"
 #include "llk_sfpu/ckernel_sfpu_lcm.h"
 #include "llk_sfpu/ckernel_sfpu_lgamma.h"
 #include "llk_sfpu/ckernel_sfpu_logical_not.h"
+#include "llk_sfpu/ckernel_sfpu_logsigmoid.h"
 #include "llk_sfpu/ckernel_sfpu_mask.h"
 #include "llk_sfpu/ckernel_sfpu_mul_int32.h"
 #include "llk_sfpu/ckernel_sfpu_polygamma.h"
@@ -1352,8 +1354,9 @@ void call_binary_sfpu_operation_init()
     else
     {
         // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
-        // BITWISE_AND/OR/XOR, RSUB_INT32 and MASK land here: those kernels need no
-        // per-op init beyond the standard binary addrmod configuration.
+        // BITWISE_AND/OR/XOR, RSUB_INT32, MASK, ISCLOSE and LOGSIGMOID land here: those
+        // kernels need no per-op init beyond the standard binary addrmod configuration
+        // (logsigmoid_init is a no-op).
         SFPU_BINARY_INIT(add1);
     }
 }
@@ -1700,6 +1703,41 @@ void call_binary_sfpu_operation(
         // product < 2^31 (see test_sfpu_binary_mul_int32).
         SFPU_BINARY_CALL(
             DST_SYNC_MODE, DST_ACCUM_MODE, mul_int32, (APPROXIMATION_MODE, PER_FACE_ITERATIONS), dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::ISCLOSE)
+    {
+        // isclose: out = (|a - b| <= atol + rtol * |b|) ? 1 : 0, with a=in0, b=in1.
+        // rtol/atol are passed as fp32 bit patterns via the params wrapper's runtime-arg
+        // forwarding. Fixed to torch's defaults rtol=1e-5 (0x3727c5ac), atol=1e-8
+        // (0x322bcc77); EQUAL_NAN=false, so any NaN operand yields 0. The test uses
+        // large-margin stimuli so the exact tolerance (and fp32-vs-bf16 rounding of the
+        // tol term) never flips the pass/fail decision.
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_sfpu_isclose,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, /*EQUAL_NAN=*/false),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode,
+            /*rtol_bits=*/0x3727c5acu,
+            /*atol_bits=*/0x322bcc77u);
+    }
+    else if constexpr (BINOP == BinaryOp::LOGSIGMOID)
+    {
+        // logsigmoid(x) = -softplus(-x), with x = in0 and exp(-x) = in1 (the compute
+        // kernel is expected to supply exp(-x) as the second operand; the test bakes
+        // it into the paired stimuli). No dedicated init (baseline add1 addrmod).
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_logsigmoid,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
     }
     else
     {
