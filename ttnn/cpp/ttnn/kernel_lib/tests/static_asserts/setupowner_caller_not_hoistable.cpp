@@ -2,13 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// SA: SetupOwner::Caller on a chain whose setup is NOT fully boot-hoistable — must not compile.
+// Negative compile test: SetupOwner::Caller on a chain whose setup is NOT fully boot-hoistable.
 //
-// Exp and Sqrt are two DIFFERENT SFPU ops, so the chain's SFPU init is non-uniform
-// (chain_hoist_sfpu_v is false) → the one-time setup can't all be emitted once at boot. There is
-// then no single "before the loop" the caller can own, so SetupOwner::Caller is meaningless and
-// the helper must reject it. (Reconfig is None throughout so the OTHER Caller assert can't fire
-// first — this isolates the boot-hoistable guard.)
+// Exp and Sqrt are different SFPU ops, so the SFPU init is non-uniform (chain_hoist_sfpu_v is
+// false) — there is no single pre-loop setup the caller can own, so Caller must be rejected.
+// Reconfig is None throughout, isolating this guard from the reconfig-knob guard.
+// MUST fail to compile with "boot-hoistable".
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"

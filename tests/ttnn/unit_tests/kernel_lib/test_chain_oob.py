@@ -3,25 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-G6 — out-of-bounds / boundary tests for eltwise_chain.
+Out-of-bounds / boundary tests for eltwise_chain.
 
-Coverage spec: ttnn/cpp/ttnn/kernel_lib/docs/eltwise_helper_test_coverage.html (group G6).
-
-The DST-capacity cases ("use more DST than we have"). The helper static_asserts every
-element's DEST slot against DEST_AUTO_LIMIT, which itself depends on the compute config:
+DST-capacity cases: the helper static_asserts every element's DEST slot against DEST_AUTO_LIMIT,
+which depends on the compute config:
 
     sync mode      bf16 (fp32_acc off)    fp32 (fp32_acc on)
     half-sync             8                       4
     full-sync           16                       8
 
-So a slot that is legal in one config is over-limit in another. Each test pins
-(slot, dst_full_sync_en, fp32_dest_acc_en) and asserts either:
-  - a legal slot compiles + runs and reproduces the input (identity copy), or
-  - an over-limit slot FAILS to compile with "DEST slot exceeds DEST_AUTO_LIMIT".
-
-The compile-time guard surfaces as an exception from ttnn.generic_op (the kernel JIT build
-fails); we catch it and assert the assert message is present, so the test proves the guard
-actually fired rather than the build failing for some unrelated reason.
+So a slot legal in one config is over-limit in another. Each test pins (slot, dst_full_sync_en,
+fp32_dest_acc_en) and asserts either a legal slot compiles + reproduces the input, or an over-limit
+slot FAILS to compile with "DEST slot exceeds DEST_AUTO_LIMIT" (surfaced as a generic_op exception).
 """
 
 import torch
@@ -78,38 +71,38 @@ def test_dst_slot_legal_identity(device, slot, fp32_dest_acc_en, dst_full_sync_e
 
 
 # =============================================================================
-# OOB-01 — slot 8 over the half-sync bf16 limit (8). Must fail to compile.
+# Slot 8 over the half-sync bf16 limit (8). Must fail to compile.
 # =============================================================================
-def test_oob01_dst_overflow_halfsync_bf16(device, expect_error):
+def test_dst_overflow_halfsync_bf16(device, expect_error):
     """D8 is not < 8 (half-sync bf16 limit) -> the per-element static_assert must fire."""
     with expect_error(Exception, DST_OVERFLOW_MSG):
         _run_identity_copy(device, slot=8, num_tiles=4, fp32_dest_acc_en=False, dst_full_sync_en=False)
-    logger.info("OOB-01: D8 over half-sync bf16 limit correctly rejected at compile time")
+    logger.info("D8 over half-sync bf16 limit correctly rejected at compile time")
 
 
 # =============================================================================
-# OOB-02 — cross-mode boundary. Slot 5: legal half-sync bf16 (limit 8),
+# Cross-mode boundary. Slot 5: legal half-sync bf16 (limit 8),
 #          over-limit once fp32_dest_acc shrinks the limit to 4.
 # =============================================================================
-def test_oob02_dst_slot5_legal_bf16(device):
+def test_dst_slot5_legal_bf16(device):
     """Same slot, bf16 half-sync (limit 8): 5 < 8 -> compiles + runs correctly."""
     golden, out = _run_identity_copy(device, slot=5, num_tiles=4, fp32_dest_acc_en=False, dst_full_sync_en=False)
     pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([ttnn.bfloat16]))
-    logger.info(f"OOB-02 bf16: slot=5 legal | {msg}")
+    logger.info(f"bf16: slot=5 legal | {msg}")
     assert pcc_ok, msg
 
 
-def test_oob02_dst_slot5_overflow_fp32(device, expect_error):
+def test_dst_slot5_overflow_fp32(device, expect_error):
     """Same slot under fp32_dest_acc (limit 4): 5 is not < 4 -> must fail to compile."""
     with expect_error(Exception, DST_OVERFLOW_MSG):
         _run_identity_copy(device, slot=5, num_tiles=4, fp32_dest_acc_en=True, dst_full_sync_en=False)
-    logger.info("OOB-02 fp32: slot=5 over fp32 half-sync limit (4) correctly rejected")
+    logger.info("fp32: slot=5 over fp32 half-sync limit (4) correctly rejected")
 
 
 # =============================================================================
-# OOB-03 — runtime block_size clamp. block_size is a runtime EltwiseShape field, so it
+# Runtime block_size clamp. block_size is a runtime EltwiseShape field, so it
 # can't be static_asserted; the chain clamps it down to chain_max_block_v at runtime
-# (eltwise_chain.inl:2024-2033) so it can NEVER overflow DEST. An over-large block_size
+# so it can NEVER overflow DEST. An over-large block_size
 # must therefore still produce the exact identity copy (clamp only changes loop structure).
 #
 # The chain here is a Bulk + Block reader (block-capable), so block_size is honored. Bulk
@@ -119,7 +112,7 @@ BLOCK_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/oob/block_clamp.cpp"
 
 
 @pytest.mark.parametrize("block_size", [1, 4, 1000])
-def test_oob03_block_size_clamp_identity(device, block_size):
+def test_block_size_clamp_identity(device, block_size):
     """chain_lane_width=1 here -> chain_max_block_v=8 (half-sync bf16). block_size=1000 must clamp
     to 8 and still copy the input exactly; {1,4} are within range. All three agree with the input."""
     n = 16
@@ -140,5 +133,5 @@ def test_oob03_block_size_clamp_identity(device, block_size):
     golden = torch_in.to(torch.float32)
     out = ttnn.to_torch(output).to(torch.float32)
     pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([dt]))
-    logger.info(f"OOB-03 block_size={block_size} (clamps to <=8) | {msg}")
+    logger.info(f"block_size={block_size} (clamps to <=8) | {msg}")
     assert pcc_ok, msg
