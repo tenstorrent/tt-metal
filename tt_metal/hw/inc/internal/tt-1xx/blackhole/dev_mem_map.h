@@ -272,6 +272,11 @@
 
 #define MEM_SYSENG_ETH_RESULTS_BASE_ADDR 0x7CC00
 #define MEM_SYSENG_ETH_MAILBOX_BASE_ADDR 0x7D000
+// Always-on ethernet firmware execution-stage breadcrumb (see EthFwStage in dev_msgs.h). One 32-bit
+// slot per ethernet processor, stored in base FW's boot_results_t.eth_status.spare[0..1] so base FW and
+// Metal FW share the same words. Shared by active and idle eth (static_asserted in bh_hal_active_eth.cpp).
+#define MEM_ERISC_FW_STAGE_BASE 0x7CC10
+#define MEM_ERISC_FW_STAGE_SIZE 8
 
 #define MEM_SUBORDINATE_ERISC_LOCAL_SIZE (8 * 1024)
 #define MEM_ERISC_FIRMWARE_SIZE (24 * 1024)

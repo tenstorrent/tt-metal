@@ -52,6 +52,7 @@ enum class HalL1MemAddrType : uint8_t {
     ROUTER_STATE,
     ROUTER_COMMAND,
     ETH_FW_MAILBOX,
+    FW_STAGE,  // Always-on ethernet firmware execution-stage breadcrumb (mailboxes_t.eth_fw_stage)
     TENSIX_FABRIC_CONNECTIONS,
     FABRIC_CONNECTION_LOCK,
     ETH_PTP_TRACE,  // Runtime FW entry/exit PTP stamps (Blackhole only)

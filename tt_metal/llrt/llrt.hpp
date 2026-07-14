@@ -78,6 +78,25 @@ void write_binary_to_address(
     const tt::tt_metal::CoreCoord& core,
     uint32_t address);
 
+// Ethernet firmware execution-stage breadcrumb helpers (see EthFwStage in dev_msgs.h).
+//
+// These read/decode the always-on eth_fw_stage breadcrumb, which records the coarse layer of the
+// ethernet firmware stack a core is executing (base FW vs Metal application FW vs a launched kernel).
+// Unlike watcher waypoints, the breadcrumb is written unconditionally by the firmware, so it can be
+// inspected on a stalled core via a plain UMD L1 read without a watcher build or a live repro.
+
+// Decode a raw eth_fw_stage value into a short human-readable label.
+std::string eth_fw_stage_to_string(uint32_t stage);
+
+// Read the eth firmware stage breadcrumb for one ethernet processor (0 = erisc/ierisc,
+// 1 = subordinate erisc/ierisc) via UMD. core_type must be ACTIVE_ETH or IDLE_ETH.
+uint32_t read_eth_fw_stage(
+    tt::tt_metal::MetalEnvImpl& env,
+    ChipId device_id,
+    const tt::tt_metal::CoreCoord& virtual_core,
+    tt_metal::HalProgrammableCoreType core_type,
+    uint32_t processor_index = 0);
+
 namespace internal_ {
 
 void wait_until_cores_done(
