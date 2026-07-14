@@ -97,10 +97,12 @@ invisible to mmio-race / cfg-word / reconfig, and a `while(flag->field)` volatil
 invisible to noc-l1-invalidate. Worse than L4: the fact is never emitted, so it is invisible even to a
 raw `facts.<arch>.jsonl` inspection (L4's writes ARE emitted, just unrouted).
 - **Risk:** CAP-REDUCTION — a silent miss (no fact, no finding).
-- **Live today:** QSR-only recall ASYMMETRY, not a live race. `ckernel_(unpack_)template::program`
-  program the MOP via `reinterpret_cast<mop_config_regs_t*>(MOP_CFG_BASE); mop_cfg->FIELD = …`
-  (~30 sites) — all dropped; WH/BH use the `mop_cfg[i]=` array form and ARE captured (17 mmio-race
-  NO_LOCAL_ORDERING each; 0 on QSR). Those QSR writes are ordered by the **MOP-config-bank HW
+- **Live today:** QSR-only recall ASYMMETRY, not a live race. QSR `ckernel_template::program` /
+  `program_bank0_sw_cntl` / `program_bank1_sw_cntl` program the MOP via
+  `reinterpret_cast<mop_config_regs_t*>(MOP_CFG_BASE); mop_cfg->FIELD = …` (32 member-write sites) —
+  all dropped. (`ckernel_unpack_template::program` uses the array form `mop_cfg[i]=` but is `#if 0`
+  on QSR, so it contributes nothing either way.) WH/BH use the `mop_cfg[i]=` array form and ARE
+  captured (17 mmio-race NO_LOCAL_ORDERING each; 0 on QSR). Those QSR writes are ordered by the **MOP-config-bank HW
   backpressure / `mop_sync()`** (Confluence "MOP CFG double buffering" 113017192; LLK `program()`
   comment "in use should block, so no mop_sync() needed"), **not** TTSync (Confluence 1340276980
   EXCEPTS `MOP_CFG` from the RQ) — so a captured candidate would be LLM-adjudicated safe exactly like
@@ -137,9 +139,9 @@ auto-ordered — and TTSync tracks only CFG/GPR/TDMA, not other MMIO spaces (e.g
 object-method branch matches only the exact name `async_read` — so the object form
 `noc.async_read_with_state<...>(...)` is not recalled. `noc-read-barrier` gates on `noc_is_read`, so a
 consumed-before-barrier hazard expressed via the object API produces no finding.
-- **Risk:** CAP-REDUCTION — a kernel-tier `noc-read-barrier` false-negative over ~26 object-API reader
-  files (≈20 under ttnn/cpp, the rest test kernels) spanning matmul, concat, transpose, untilize,
-  sdpa, pool, topk — only ~6 are matmul.
+- **Risk:** CAP-REDUCTION — a kernel-tier `noc-read-barrier` false-negative over the object-API reader
+  surface: **20 files under `ttnn/cpp`** (robust count) plus a handful of test kernels (grep-sensitive
+  total ≈25–27) spanning matmul, concat, transpose, untilize, sdpa, pool, topk — only ~6 are matmul.
 - **Live today:** none — every live site is batched-safe (`set_state → read → barrier → push`).
 - **Fix:** broaden the object branch to `startswith("async_read")` minus barrier/flush forms, gated
   on the `Noc` receiver type (mirrors the free-fn branch). No object `async_read_set_state` exists to
