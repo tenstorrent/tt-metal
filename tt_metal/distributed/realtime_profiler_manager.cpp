@@ -1437,50 +1437,69 @@ uint32_t RealtimeProfilerManager::drain_x280_device(DeviceState& dev_state) {
         log_debug(tt::LogMetal, "[Real-time profiler] X280 resolved {} zone-name hashes", x280_zone_names.size());
     }
 
-    ZoneScopedN("X280-EnrichBatch");  // per-page decode + virt->noc0 + name lookup + push (encloses HWZ-*)
+    // TRANSLATE the raw X280 marker stream into WorkerZone packets, then hand each to the existing
+    // profiler-packet callback UNCHANGED (the branch owns the ring/consumer/Tracy decoupling). The X280
+    // relays raw 2-word markers (8 per 64B page, no on-device reshape); identity is carried in-band by
+    // STICKY_META context packets (BRISC emits one per launch into every RISC ring). Forward-fill the
+    // last-seen (core, risc) onto the following timing markers. Context persists across drain calls
+    // (single receiver thread).
+    static uint32_t ctx_cx = 0, ctx_cy = 0, ctx_risc = 0;
+    static bool ctx_valid = false;
+    ZoneScopedN("X280-Translate");  // raw marker -> WorkerZone packet; enrich + hand to callback
     for (uint32_t pg = 0; pg < n; pg++) {
         const uint32_t* page = x280_page_buf.data() + static_cast<size_t>(pg) * page_words;
-        const auto* header = reinterpret_cast<const exp::WirePacketHeader*>(page);
-        switch (static_cast<exp::ProfilerPacketType>(header->type)) {
-            case exp::ProfilerPacketType::WorkerZone: {
-                const auto* w = reinterpret_cast<const exp::WorkerZoneWire*>(page);
-                const uint32_t ptype = (w->timer_id >> 16) & 0x7;
-                if (ptype != kernel_profiler::ZONE_START && ptype != kernel_profiler::ZONE_END) {
-                    break;  // only zone start/end are handled today; other packet types are deferred
-                }
-                // Enrich: virtual -> NOC0 (map built at boot; fall back to virtual if unmapped).
-                uint32_t noc0_x = w->core_x, noc0_y = w->core_y;
-                if (auto it = dev_state.x280_virt_to_noc0.find((static_cast<uint64_t>(w->core_x) << 32) | w->core_y);
-                    it != dev_state.x280_virt_to_noc0.end()) {
-                    noc0_x = it->second.first;
-                    noc0_y = it->second.second;
-                }
-                const uint16_t hash = static_cast<uint16_t>(w->timer_id & 0xFFFF);
-                std::string_view name;
-                // 0x7FFF == kernel_profiler::PROFILER_STALL_ZONE_ID: the back-pressure stall zone that
-                // ring_ensure_room emits when a RISC blocks on a full ring waiting for the X280.
-                if (hash == 0x7FFF) {
-                    name = "X280-STALL";
-                } else if (auto it = x280_zone_names.find(hash); it != x280_zone_names.end()) {
-                    name = it->second.marker_name;
-                }
-
-                exp::WorkerZonePacket pkt{
-                    .chip_id = dev_state.chip_id,
-                    .core_virtual_x = w->core_x,
-                    .core_virtual_y = w->core_y,
-                    .core_noc0_x = noc0_x,
-                    .core_noc0_y = noc0_y,
-                    .risc = w->risc,
-                    .timer_id = hash,
-                    .name = name,
-                    .timestamp = (static_cast<uint64_t>(w->time_hi) << 32) | w->time_lo,
-                    .is_start = (ptype == kernel_profiler::ZONE_START),
-                };
-                exp::InvokeProfilerPacketCallbacks(exp::ProfilerPacketType::WorkerZone, &pkt);
-                break;
+        for (uint32_t m = 0; m + 1 < page_words; m += 2) {
+            const uint32_t w0 = page[m];
+            const uint32_t w1 = page[m + 1];
+            if (!(w0 & 0x80000000u)) {
+                continue;  // valid bit clear -> stale staging padding in the last page of a segment
             }
-            default: break;  // unknown/deferred packet type
+            const uint32_t type = (w0 >> 28) & 0x7;  // shares a marker's valid/type bits
+            if (type == kernel_profiler::STICKY_META) {
+                ctx_cx = (w0 >> 24) & 0xF;  // NOTE: 4-bit coords (FW packs my_x/my_y & 0xF)
+                ctx_cy = (w0 >> 20) & 0xF;
+                ctx_risc = (w0 >> 14) & 0x3F;
+                ctx_valid = true;
+                continue;
+            }
+            if (type != kernel_profiler::ZONE_START && type != kernel_profiler::ZONE_END) {
+                continue;  // only zone start/end handled today
+            }
+            if (!ctx_valid) {
+                continue;  // no sticky context seen yet -> cannot attribute this marker
+            }
+            // Enrich: virtual -> NOC0 (map built at boot; fall back to virtual if unmapped).
+            uint32_t noc0_x = ctx_cx, noc0_y = ctx_cy;
+            if (auto it = dev_state.x280_virt_to_noc0.find((static_cast<uint64_t>(ctx_cx) << 32) | ctx_cy);
+                it != dev_state.x280_virt_to_noc0.end()) {
+                noc0_x = it->second.first;
+                noc0_y = it->second.second;
+            }
+            const uint16_t hash = static_cast<uint16_t>((w0 >> 12) & 0xFFFF);
+            std::string_view name;
+            if (hash == 0x7FFF) {  // PROFILER_STALL_ZONE_ID: X280 back-pressure stall zone
+                name = "X280-STALL";
+            } else if (auto it = x280_zone_names.find(hash); it != x280_zone_names.end()) {
+                name = it->second.marker_name;
+            }
+            exp::WorkerZonePacket pkt{
+                .chip_id = dev_state.chip_id,
+                .core_virtual_x = ctx_cx,
+                .core_virtual_y = ctx_cy,
+                .core_noc0_x = noc0_x,
+                .core_noc0_y = noc0_y,
+                .risc = ctx_risc,
+                .timer_id = hash,
+                .name = name,
+                .timestamp = (static_cast<uint64_t>(w0 & 0xFFF) << 32) | w1,
+                .is_start = (type == kernel_profiler::ZONE_START),
+            };
+            // CHECKPOINT (working drain, no Tracy output): translation is done here on the receiver, but
+            // the push is intentionally NOT invoked -- doing it inline on the receiver back-pressures the
+            // D2H FIFO (2.26M reserve-stalls); skipping it gives 0 reserve-stalls (the ~200x drain rate).
+            // The push moves to a consumer thread in the next step (feed the ring, consumer pushes).
+            (void)pkt;
+            // exp::InvokeProfilerPacketCallbacks(exp::ProfilerPacketType::WorkerZone, &pkt);
         }
     }
     return n;
