@@ -239,4 +239,6 @@ bits; `MemoryOrdering.md`: the store-then-store race). The checkers match
 even though the encoding differs per arch (Wormhole `TRISC_CFG` = condition C13;
 Blackhole = `0x400` / bit 10; Quasar = index 21). Known modeling limitations
 (StateID banks, STALLWAIT block-mask coverage, interprocedural linkage) are
-listed per check in `blind_spots`.
+listed per check in `blind_spots`; cross-cutting **deferred** gaps (known
+limitations the tool defers rather than fixes) are consolidated in
+[`KNOWN_GAPS.md`](KNOWN_GAPS.md).
