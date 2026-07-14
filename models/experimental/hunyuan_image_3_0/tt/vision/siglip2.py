@@ -152,7 +152,14 @@ def build_siglip2_attention_mask(
     no from_torch). Equivalent to prepare_4d_attention_mask:
     additive[b, 0, :, j] = 0 if key j is valid else neg_fill.
     """
-    batch, seq_len = pixel_attention_mask.shape
+    shape = list(pixel_attention_mask.shape)
+    if len(shape) == 1:
+        batch, seq_len = 1, shape[0]
+        pixel_attention_mask = ttnn.reshape(pixel_attention_mask, [1, seq_len])
+    elif len(shape) == 2:
+        batch, seq_len = shape
+    else:
+        raise ValueError(f"pixel_attention_mask rank must be 1 or 2, got shape={shape}")
     # [B, S] -> [B, 1, 1, S] (key axis last); reshape is a view, input is caller-owned.
     mask = ttnn.reshape(pixel_attention_mask, [batch, 1, 1, seq_len])
     # inv = 1 - mask  -> 0 for valid keys, 1 for padded keys
