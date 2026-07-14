@@ -306,6 +306,8 @@ def _device_params():
 @pytest.mark.parametrize(
     "mesh_device",
     [
+        # Default: all visible devices (int N → MeshShape(1, N)). A hardcoded
+        # (1, 4) on 1x8 Blackhole opens a subset and fabric eth handshakes hang.
         {
             "N150": (1, 1),
             "N300": (1, 2),
@@ -316,7 +318,7 @@ def _device_params():
             "P300X2": (1, 4),
             "P150x8": (1, 8),
             "T3K": (1, 8),
-        }.get(os.environ.get("MESH_DEVICE"), (1, 4))
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )
@@ -1011,7 +1013,7 @@ def _run_spec_decode_batched(
             "P300X2": (1, 4),
             "P150x8": (1, 8),
             "T3K": (1, 8),
-        }.get(os.environ.get("MESH_DEVICE"), (1, 4))
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )
