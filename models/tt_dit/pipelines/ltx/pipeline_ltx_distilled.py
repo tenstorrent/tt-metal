@@ -35,6 +35,9 @@ from .pipeline_ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline
 _DEFAULT_S1_SIGMAS = [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0]
 _DEFAULT_S2_SIGMAS = [0.909375, 0.725, 0.421875, 0.0]
 
+# Serial number for LTX_DUMP_LATENTS files; see the dump site in generate().
+_LATENT_DUMP_N = 0
+
 
 def _sigma_override(env_name: str, default: list[float]) -> list[float]:
     raw = os.environ.get(env_name, "").strip()
@@ -949,6 +952,39 @@ class LTXDistilledPipeline(LTXPipeline):
         t_stage2 = time.time() - t0
         timings.append(("Stage 2 denoise", t_stage2))
         logger.info(f"Stage 2 denoise: {t_stage2:.1f}s")
+
+        dump_prefix = os.environ.get("LTX_DUMP_LATENTS", "")
+        if dump_prefix:
+            # The denoised S2 latents are the last point where a transformer-only change is still
+            # isolated — VAE/vocoder decode below would fold their own error in on top. One file per
+            # generate() call (traced runs generate twice: capture, then steady-state replay), so an
+            # A/B compares like with like instead of racing on one path.
+            global _LATENT_DUMP_N  # noqa: PLW0603
+            path = f"{dump_prefix}.gen{_LATENT_DUMP_N}.pt"
+            _LATENT_DUMP_N += 1
+            # Provenance travels inside the artifact: the flags are read back off the module that
+            # actually ran, not off the environment. An A/B is only worth its weakest claim about
+            # which code produced each side, and an env echo in a log does not survive the tree
+            # being rebuilt underneath it.
+            from ...models.transformers.ltx import transformer_ltx as _tx
+
+            flags = {
+                "LTX_FOLD_GATED_RESIDUAL": _tx.LTX_FOLD_GATED_RESIDUAL,
+                "LTX_PROBE_ADDCMUL_SPLIT": _tx.LTX_PROBE_ADDCMUL_SPLIT,
+                "seed": seed,
+            }
+            torch.save(
+                {
+                    "video": s2_video.detach().cpu().float(),
+                    "audio": s2_audio.detach().cpu().float(),
+                    "flags": flags,
+                },
+                path,
+            )
+            logger.info(
+                f"LTX_DUMP_LATENTS: wrote video {tuple(s2_video.shape)} + audio "
+                f"{tuple(s2_audio.shape)} to {path} with {flags}"
+            )
 
         if os.environ.get("LTX_PROFILE_DENOISE_ONLY", "0") in ("1", "true", "True"):
             # Profiling-only: stop before VAE/audio so the reservation is spent on the traced denoise.

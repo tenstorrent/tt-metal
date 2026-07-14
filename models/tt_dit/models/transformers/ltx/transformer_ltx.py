@@ -33,6 +33,17 @@ LTX_DIT_PREP_RUN = os.environ.get("LTX_DIT_PREP_RUN", "0") in ("1", "true", "Tru
 # worth more than the FLOPs it carried. Set to 0 to restore the standalone addcmul for an A/B.
 LTX_FOLD_GATED_RESIDUAL = os.environ.get("LTX_FOLD_GATED_RESIDUAL", "1") in ("1", "true", "True")
 
+# PROBE ONLY (not a shipping path): replace the three gated-residual addcmul(t,t1,t2) calls with the
+# algebraically identical add(t, multiply(t1,t2)). Same math, different bf16 rounding — a control that
+# measures how far the sampler amplifies a rounding-scale perturbation, independent of the fold.
+LTX_PROBE_ADDCMUL_SPLIT = os.environ.get("LTX_PROBE_ADDCMUL_SPLIT", "0") in ("1", "true", "True")
+
+
+def _gated_residual(t: ttnn.Tensor, t1: ttnn.Tensor, t2: ttnn.Tensor) -> ttnn.Tensor:
+    if LTX_PROBE_ADDCMUL_SPLIT:
+        return ttnn.add(t, ttnn.multiply(t1, t2))
+    return ttnn.addcmul(t, t1, t2)
+
 
 def _tile_preserving_chunk0(x: ttnn.Tensor, n: int) -> list[ttnn.Tensor]:
     """Split ``x`` into ``n`` size-1 slices along dim 0 WITHOUT leaving TILE layout.
@@ -457,7 +468,7 @@ class LTXTransformerBlock(Module):
                 audio_ca_out = self.audio_attn2(
                     spatial_1BND=audio_ca_input, N=audio_N, prompt_1BLP=audio_prompt_mod, kv_replicated=True
                 )
-                audio_1BND = ttnn.addcmul(audio_1BND, audio_ca_out, a_gate_ca)
+                audio_1BND = _gated_residual(audio_1BND, audio_ca_out, a_gate_ca)
         else:
             audio_ca_input = self.audio_norm2(audio_1BND)
             audio_ca_out = self.audio_attn2(
@@ -500,7 +511,7 @@ class LTXTransformerBlock(Module):
                 addcmul_residual=video_1BND if LTX_FOLD_GATED_RESIDUAL else None,
                 addcmul_gate=v_ca_gate if LTX_FOLD_GATED_RESIDUAL else None,
             )
-            video_1BND = a2v_output if LTX_FOLD_GATED_RESIDUAL else ttnn.addcmul(video_1BND, a2v_output, v_ca_gate)
+            video_1BND = a2v_output if LTX_FOLD_GATED_RESIDUAL else _gated_residual(video_1BND, a2v_output, v_ca_gate)
 
             # V→A: video provides context for audio
             audio_q_v2a = ttnn.addcmul(a_shift_v2a, audio_normed_xattn, a_scale_v2a_p1)
@@ -523,7 +534,7 @@ class LTXTransformerBlock(Module):
                 addcmul_residual=audio_1BND if LTX_FOLD_GATED_RESIDUAL else None,
                 addcmul_gate=a_ca_gate if LTX_FOLD_GATED_RESIDUAL else None,
             )
-            audio_1BND = v2a_output if LTX_FOLD_GATED_RESIDUAL else ttnn.addcmul(audio_1BND, v2a_output, a_ca_gate)
+            audio_1BND = v2a_output if LTX_FOLD_GATED_RESIDUAL else _gated_residual(audio_1BND, v2a_output, a_ca_gate)
 
         # Video feed forward
         video_1BND = self._modulated_ffn(self.ffn, self.norm3, video_1BND, v_shift_ff, v_scale_ff_p1, v_gate_ff)
