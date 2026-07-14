@@ -142,7 +142,6 @@ class MathOperation(Enum):
     Cbrt = OpSpec("cbrt", MathOpType.SFPU_UNARY)
     I1 = OpSpec("i1", MathOpType.SFPU_UNARY)
     Sign = OpSpec("sign", MathOpType.SFPU_UNARY)
-    Signbit = OpSpec("signbit", MathOpType.SFPU_UNARY)
     TanhDerivative = OpSpec("tanh_derivative", MathOpType.SFPU_UNARY)
     # Legacy LUT variant of tanh'(x): 1 - tanh(x)^2 with tanh from the piecewise
     # LUT (distinct kernel path from the accurate sech2 TanhDerivative above).
