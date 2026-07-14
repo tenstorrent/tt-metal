@@ -2,6 +2,8 @@
 # and pack pipelines to reconfigure between every stage. Goes from Float16_b
 # through Bfp8_b to Float32.
 
+supported_archs: ["wormhole", "blackhole"]
+
 dest_acc: true
 
 operands:

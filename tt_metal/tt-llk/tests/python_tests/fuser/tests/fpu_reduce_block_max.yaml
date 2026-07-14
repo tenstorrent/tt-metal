@@ -1,5 +1,7 @@
 # Block max reduce. Source B is all ones as the identity scale.
 
+supported_archs: ["wormhole", "blackhole"]
+
 dest_acc: true
 
 operands:

@@ -1,6 +1,8 @@
 # Same as fpu_reduce_block_max but the unpacker is configured at runtime
 # instead of compile time.
 
+supported_archs: ["wormhole", "blackhole"]
+
 dest_acc: true
 
 operands:

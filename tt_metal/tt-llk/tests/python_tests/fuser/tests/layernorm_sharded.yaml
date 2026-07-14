@@ -8,6 +8,8 @@
 # dest tile per block, matching the metal kernel's cross tile reduce behavior.
 # The global allgather reduce is not modeled; ex_global is a pre reduced constant.
 
+supported_archs: ["wormhole", "blackhole"]
+
 operands:
   # x: input tensor
   - name: "x"

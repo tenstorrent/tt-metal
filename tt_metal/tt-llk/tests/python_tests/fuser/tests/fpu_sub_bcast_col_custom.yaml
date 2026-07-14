@@ -1,5 +1,7 @@
 # Subtraction where source B is a column vector broadcast across every column.
 
+supported_archs: ["wormhole", "blackhole"]
+
 operands:
   - name: "input_A"
     dims: [32, 256]
