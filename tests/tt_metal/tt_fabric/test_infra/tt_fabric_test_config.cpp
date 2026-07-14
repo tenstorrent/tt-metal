@@ -619,8 +619,16 @@ static bool check_sync_filter(const ParsedTestConfig& test_config, const std::op
 
 static bool check_num_links_filter(
     const ParsedTestConfig& test_config, const std::optional<std::string>& filter_value, bool fine_grained) {
-    if (fine_grained && fine_grained_contains_uint(test_config, "num_links", stoi(filter_value.value()))) {
-        return true;
+    if (fine_grained) {
+        // num_links: max / all are resolved during build-time expansion; defer to the post-expansion
+        // filter, which compares against the resolved value.
+        if (test_config.fabric_setup.num_links_max ||
+            fine_grained_contains_uint(test_config, "num_links", kNumLinksAll)) {
+            return true;
+        }
+        if (fine_grained_contains_uint(test_config, "num_links", stoi(filter_value.value()))) {
+            return true;
+        }
     }
     return test_config.fabric_setup.num_links == stoi(filter_value.value());
 }

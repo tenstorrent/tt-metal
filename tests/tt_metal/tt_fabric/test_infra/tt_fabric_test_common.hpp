@@ -1712,7 +1712,7 @@ public:
         for (const auto& device : devices) {
             uint32_t max_routing_planes = get_max_routing_planes_for_device(device);
             // TODO: remove this once we have correct
-            if (num_pci_devices != num_devices) {
+            if (num_pci_devices != num_devices && max_routing_planes > 0) {
                 max_routing_planes -= 1;
             }
             max_num_links = std::min(max_num_links, max_routing_planes);
