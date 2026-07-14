@@ -1,27 +1,23 @@
-# OpenMP NOP-injection pytest plugin (space-efficient, xdist-safe).
+# OpenMP NOP-injection pytest plugin (host OpenMP is NOT here — see run_nop_injector.sh).
 #
-# For every test case (when OPENMP_NOP=1):
-#   1. Baseline: compile (DEFAULT) + device run; capture TestConfig.
-#   2. Snapshot ELFs into a per-nodeid work dir.
-#   3. OpenMP `ttnop batch` 1..100 into that private dir.
-#   4. Re-run each count via a unique temporary variant_id.
-#       Keep ONLY failing sets under OPENMP_NOP_OUT/fails/.
-#   5. Wipe this item's private work dir + temp variant dirs;
+# OPENMP_NOP=1 and OPENMP_NOP_PHASE=
+#   prepare  — compile-only (PRODUCE): snapshot base ELFs → work/<key>/bk + meta.json
+#   consume  — device runs only: one xdist item per NOP count; delete-on-pass / keep-on-fail
 #
-# Failures kept under OPENMP_NOP_OUT/fails/
+# ttnop batch (OpenMP) is invoked by the shell between prepare and consume.
 
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
+from _pytest.python import Function
 
-_CFG = {}
-_IN_SWEEP = False
+_CFG: dict = {}
 
 
 def _parse_counts() -> list[int]:
@@ -39,11 +35,6 @@ def _parse_counts() -> list[int]:
     return counts
 
 
-def _ttnop_bin() -> Path:
-    here = Path(__file__).resolve().parent / "ttnop" / "ttnop"
-    return Path(os.environ.get("TTNOP", str(here)))
-
-
 def _item_key(item) -> str:
     return hashlib.sha1(item.nodeid.encode()).hexdigest()[:16]
 
@@ -52,12 +43,19 @@ def _out_base() -> Path:
     return Path(os.environ.get("OPENMP_NOP_OUT", "/tmp/tt-llk-build/nop_injector"))
 
 
-def _record_fail(item, text: str) -> None:
-    """Append one line to a single summary.log (no per-test log files)."""
+def _phase() -> str:
+    return os.environ.get("OPENMP_NOP_PHASE", "").strip().lower()
+
+
+def _keep_elfs() -> bool:
+    return os.environ.get("OPENMP_NOP_KEEP", "").strip() in ("1", "true", "yes")
+
+
+def _record_fail(nodeid: str, text: str) -> None:
     out = _out_base()
     out.mkdir(parents=True, exist_ok=True)
     with open(out / "summary.log", "a", buffering=1) as f:
-        f.write(f"{item.nodeid}\t{text}")
+        f.write(f"{nodeid}\t{text}")
 
 
 def _components_present(elf_dir: Path) -> dict[str, bool]:
@@ -65,7 +63,6 @@ def _components_present(elf_dir: Path) -> dict[str, bool]:
 
 
 def _copy_elf_set(src: Path, dst: Path, have: dict[str, bool]) -> None:
-    """Copy present ELFs; raise a clear error if a claimed file is missing."""
     dst.mkdir(parents=True, exist_ok=True)
     for e, ok in have.items():
         if not ok:
@@ -83,8 +80,15 @@ def _rm_tree(path: Path) -> None:
         shutil.rmtree(path, ignore_errors=True)
 
 
+def _elf_fingerprint(elf_path: Path) -> str:
+    """Short identity for log lines: size + md5 prefix (proves which ELF was loaded)."""
+    if not elf_path.is_file():
+        return "missing"
+    data = elf_path.read_bytes()
+    return f"size={len(data)} md5={hashlib.md5(data).hexdigest()[:12]}"
+
+
 def _move_dir(src: Path, dst: Path) -> None:
-    """Move src -> dst; fall back to copy+rm if src vanished mid-flight."""
     if not src.exists():
         raise FileNotFoundError(f"cannot move missing dir: {src}")
     _rm_tree(dst)
@@ -99,171 +103,269 @@ def _move_dir(src: Path, dst: Path) -> None:
             raise
 
 
+def _exc_value(excinfo):
+    """pytest hookwrapper excinfo may be ExceptionInfo or a (type, value, tb) tuple."""
+    if excinfo is None:
+        return None
+    if isinstance(excinfo, tuple):
+        return excinfo[1] if len(excinfo) > 1 else None
+    return getattr(excinfo, "value", None)
+
+
+def _exc_typename(excinfo) -> str:
+    if excinfo is None:
+        return ""
+    if isinstance(excinfo, tuple):
+        t = excinfo[0] if excinfo else None
+        return t.__name__ if t is not None else ""
+    return getattr(excinfo, "typename", "") or ""
+
+
+def _is_compile_skip(excinfo) -> bool:
+    """PRODUCE mode ends in pytest.skip(SKIP_JUST_FOR_COMPILE_MARKER)."""
+    if excinfo is None:
+        return False
+    from helpers.test_config import TestConfig
+
+    marker = getattr(TestConfig, "SKIP_JUST_FOR_COMPILE_MARKER", "") or ""
+    val = str(_exc_value(excinfo) or "")
+    if marker and marker in val:
+        return True
+    return _exc_typename(excinfo) in ("Skipped",) and (
+        "compile" in val.lower() or (marker and marker in val)
+    )
+
+
+def _prepare_snapshot(item, cfg) -> None:
+    from helpers.test_config import TestConfig
+
+    thread = os.environ.get("NOP_THREAD", "math")
+    counts = _parse_counts()
+    key = _item_key(item)
+    vdir = TestConfig.ARTEFACTS_DIR / cfg.test_name / cfg.variant_id / "elf"
+    if not (vdir / f"{thread}.elf").is_file():
+        raise RuntimeError(
+            f"prepare: base ELF not found: {vdir / f'{thread}.elf'}\n"
+            "Compile-producer must materialize unpack/math/pack.elf first."
+        )
+
+    have = _components_present(vdir)
+    work = _out_base() / "work" / key
+    bk = work / "bk"
+    _rm_tree(work)
+    _copy_elf_set(vdir, bk, have)
+
+    meta = {
+        "nodeid": item.nodeid,
+        "key": key,
+        "test_name": cfg.test_name,
+        "variant_id": cfg.variant_id,
+        "thread": thread,
+        "counts": counts,
+        "have": have,
+    }
+    (work / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
+    print(
+        f"[openmp_nop] prepare ok key={key} bk={bk} "
+        f"counts={counts[0]}..{counts[-1]} ({len(counts)})",
+        flush=True,
+    )
+
+
+def _name_for_count(item, n: int) -> str:
+    """Derive a unique Function name so xdist/pytest do not share teardown state."""
+    name = item.name
+    if name.endswith("]"):
+        return f"{name[:-1]}-n{n}]"
+    return f"{name}[n{n}]"
+
+
+def _nodeid_for_count(item, n: int) -> str:
+    nid = item.nodeid
+    if nid.endswith("]"):
+        return f"{nid[:-1]}-n{n}]"
+    return f"{nid}[n{n}]"
+
+
+def _clone_item_for_count(item, n: int, work: Path, meta: dict):
+    """
+    Build a fresh Function node for one NOP count.
+
+    Do NOT use copy.copy(item): shallow copies share Session/fixture finalizer
+    state and blow up under xdist (AssertionError in runner teardown).
+    """
+    parent = item.parent
+    new_name = _name_for_count(item, n)
+    kwargs = {
+        "name": new_name,
+        "callobj": item.obj,
+        "fixtureinfo": item._fixtureinfo,
+        "originalname": getattr(item, "originalname", None) or item.name,
+    }
+    callspec = getattr(item, "callspec", None)
+    if callspec is not None:
+        kwargs["callspec"] = callspec
+    # keywords can be a Marker or dict depending on pytest version
+    keywords = getattr(item, "keywords", None)
+    if keywords is not None:
+        try:
+            kwargs["keywords"] = dict(keywords)
+        except Exception:  # noqa: BLE001
+            pass
+
+    ni = Function.from_parent(parent, **kwargs)
+    ni.own_markers = list(getattr(item, "own_markers", []) or [])
+    ni._omp_nop_count = n
+    ni._omp_work = work
+    ni._omp_meta = meta
+    ni._omp_base_nodeid = item.nodeid
+    # Keep nodeid stable/unique for xdist scheduling + reporting.
+    object.__setattr__(ni, "_nodeid", _nodeid_for_count(item, n))
+    return ni
+
+
+def pytest_collection_modifyitems(session, config, items):
+    """Consume: expand selected nodeid(s) into one fresh item per NOP count.
+
+    Single-case: OPENMP_NOP_WORK + OPENMP_NOP_BASE_NODEID (legacy).
+    Chunked: OPENMP_NOP_CHUNK_MANIFEST = JSON list of
+      {"nodeid": "...", "key": "...", "work": "/path/to/work/<key>"}
+    """
+    if os.environ.get("OPENMP_NOP") != "1" or _phase() != "consume":
+        return
+
+    manifest_path = os.environ.get("OPENMP_NOP_CHUNK_MANIFEST", "").strip()
+    if manifest_path:
+        mp = Path(manifest_path)
+        if not mp.is_file():
+            raise RuntimeError(f"consume: missing chunk manifest {mp}")
+        entries = json.loads(mp.read_text())
+        if not isinstance(entries, list) or not entries:
+            raise RuntimeError(f"consume: chunk manifest empty/invalid: {mp}")
+        by_nodeid = {e["nodeid"]: e for e in entries}
+    else:
+        work = Path(os.environ.get("OPENMP_NOP_WORK", ""))
+        if not work.is_dir():
+            raise RuntimeError(
+                "consume: set OPENMP_NOP_CHUNK_MANIFEST or OPENMP_NOP_WORK"
+            )
+        meta_path = work / "meta.json"
+        if not meta_path.is_file():
+            raise RuntimeError(f"consume: missing {meta_path}")
+        meta = json.loads(meta_path.read_text())
+        base = os.environ.get("OPENMP_NOP_BASE_NODEID", meta["nodeid"])
+        by_nodeid = {base: {"nodeid": base, "key": meta["key"], "work": str(work)}}
+
+    selected = [i for i in items if i.nodeid in by_nodeid]
+    if not selected and len(items) == 1 and len(by_nodeid) == 1:
+        selected = list(items)
+    if not selected:
+        raise RuntimeError(
+            f"consume: no collected items match chunk manifest "
+            f"({len(by_nodeid)} nodeid(s); collected {len(items)} item(s))"
+        )
+
+    new_items = []
+    for item in selected:
+        entry = by_nodeid.get(item.nodeid) or next(iter(by_nodeid.values()))
+        work = Path(entry["work"])
+        meta_path = work / "meta.json"
+        if not meta_path.is_file():
+            raise RuntimeError(f"consume: missing {meta_path}")
+        meta = json.loads(meta_path.read_text())
+        counts = meta.get("counts") or _parse_counts()
+        for n in counts:
+            new_items.append(_clone_item_for_count(item, n, work, meta))
+    items[:] = new_items
+    print(
+        f"[openmp_nop] consume: {len(selected)} case(s) → {len(new_items)} "
+        f"count-item(s)",
+        flush=True,
+    )
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_call(item):
     if os.environ.get("OPENMP_NOP") != "1":
         yield
         return
 
-    global _IN_SWEEP
-    if _IN_SWEEP:
+    phase = _phase()
+    if phase not in ("prepare", "consume"):
+        # Old nested OpenMP sweep removed; require an explicit phase.
         yield
         return
 
-    from helpers.test_config import BuildMode, TestConfig
-
-    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
-        yield
-        return
-
-    _CFG.clear()
-    orig_run, orig_ref = TestConfig.run, TestConfig.run_elf_files
-
-    def cap(orig):
-        def wrapped(self, *a, **k):
-            _CFG.setdefault("cfg", self)
-            return orig(self, *a, **k)
-
-        return wrapped
-
-    TestConfig.run = cap(orig_run)
-    TestConfig.run_elf_files = cap(orig_ref)
-    try:
-        outcome = yield
-    finally:
-        TestConfig.run = orig_run
-        TestConfig.run_elf_files = orig_ref
-
-    if outcome.excinfo is not None:
-        return
-    if "cfg" not in _CFG:
-        return
-
-    _IN_SWEEP = True
-    try:
-        _sweep(item)
-    finally:
-        _IN_SWEEP = False
-
-
-def _keep_elfs() -> bool:
-    return os.environ.get("OPENMP_NOP_KEEP", "").strip() in ("1", "true", "yes")
-
-
-def _sweep(item) -> None:
     from helpers.test_config import TestConfig
 
-    cfg = _CFG["cfg"]
-    thread = os.environ.get("NOP_THREAD", "math")
-    counts = _parse_counts()
-    keep = _keep_elfs()
-    ttnop = _ttnop_bin()
-    if not ttnop.is_file():
+    if phase == "prepare":
+        _CFG.clear()
+        orig_run = TestConfig.run
+
+        def cap(self, *a, **k):
+            _CFG.setdefault("cfg", self)
+            return orig_run(self, *a, **k)
+
+        TestConfig.run = cap
+        try:
+            outcome = yield
+        finally:
+            TestConfig.run = orig_run
+
+        if "cfg" not in _CFG:
+            if outcome.excinfo is not None and not _is_compile_skip(outcome.excinfo):
+                return
+            raise RuntimeError(
+                "prepare: TestConfig.run was never called; cannot snapshot ELFs"
+            )
+        if outcome.excinfo is not None and not _is_compile_skip(outcome.excinfo):
+            return
+        _prepare_snapshot(item, _CFG["cfg"])
+        return
+
+    # --- consume ---
+    n = getattr(item, "_omp_nop_count", None)
+    work: Path = getattr(item, "_omp_work", None)
+    meta: dict = getattr(item, "_omp_meta", None)
+    if n is None or work is None or meta is None:
         raise RuntimeError(
-            f"ttnop binary not found: {ttnop}\n"
-            "Build it with `make` in tests/python_tests/ttnop/."
+            "consume: item missing _omp_nop_count/_omp_work/_omp_meta "
+            "(collection_modifyitems did not expand counts)"
         )
 
-    key = _item_key(item)
-    vdir = TestConfig.ARTEFACTS_DIR / cfg.test_name / cfg.variant_id / "elf"
-    if not (vdir / f"{thread}.elf").is_file():
-        return
+    thread = meta["thread"]
+    have = meta["have"]
+    key = meta["key"]
+    test_name = meta["test_name"]
+    variant_id = meta["variant_id"]
+    base_nodeid = getattr(item, "_omp_base_nodeid", meta["nodeid"])
+    keep = _keep_elfs()
 
-    have = _components_present(vdir)
-    out_base = _out_base()
-    # Per-nodeid paths: many different cases share the same variant_id hash.
-    work = out_base / "work" / key
-    bk = work / "bk"
-    batch_root = work / "batch"
-    fail_root = out_base / "fails" / key
-
-    _rm_tree(work)
-    try:
-        _copy_elf_set(vdir, bk, have)
-    except FileNotFoundError:
-        _rm_tree(work)
-        return
-
-    batch_root.mkdir(parents=True, exist_ok=True)
-    cmd = [
-        str(ttnop),
-        "batch",
-        "--base-dir",
-        str(bk),
-        "--out-root",
-        str(batch_root),
-        "--thread",
-        thread,
-        "--counts",
-        ",".join(str(c) for c in counts),
-    ]
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode != 0:
-        message = f"BATCH-ERR\trc={r.returncode}\t{(r.stderr or '').strip()[:200]}"
-        _record_fail(item, f"{message}\n")
-        if not keep:
-            _rm_tree(work)
+    src = work / "batch" / f"n{n}"
+    if not (src / f"{thread}.elf").is_file():
+        message = f"n{n}\tFAIL-ERR\tmissing perturbed ELF set at {src}"
+        _record_fail(f"{base_nodeid}::n{n}", f"{message}\n")
         raise RuntimeError(message)
 
-    for n in counts:
-        src = batch_root / f"n{n}"
-        if not (src / f"{thread}.elf").is_file():
-            message = f"n{n}\tFAIL-ERR\tmissing perturbed ELF set"
-            _record_fail(item, f"{message}\n")
-            raise RuntimeError(message)
+    elf_fp = _elf_fingerprint(src / f"{thread}.elf")
+    print(
+        f"[openmp_nop] n={n} LOAD {thread}.elf {elf_fp}  path={src / f'{thread}.elf'}",
+        flush=True,
+    )
 
-        # Unique temp variant so we never clobber the shared baseline elf dir.
-        per_suffix = f"__omp_{key}_n{n}"
-        try:
-            _run_perturbed(item, src, have, per_suffix)
-            if not keep:
-                _rm_tree(src)
-        except Exception as ex:  # noqa: BLE001
-            s = str(ex)
-            if "Timeout" in s or "TIMED OUT" in s:
-                tag = "FAIL-TIMEOUT"
-            else:
-                tag = "FAIL-MISMATCH"
-            if keep:
-                _record_fail(item, f"n{n}\t{tag}\t{s[:120]}\n")
-            else:
-                try:
-                    _move_dir(src, fail_root / f"n{n}")
-                except FileNotFoundError as move_ex:
-                    _record_fail(item, f"n{n}\tFAIL-ERR\tkeep-fail move: {move_ex}\n")
-                _record_fail(item, f"n{n}\t{tag}\t{s[:120]}\n")
-        finally:
-            if not keep:
-                _rm_tree(
-                    TestConfig.ARTEFACTS_DIR
-                    / cfg.test_name
-                    / f"{cfg.variant_id}{per_suffix}"
-                )
-
-    if keep:
-        print(
-            f"[openmp_nop] kept ELFs: {work} "
-            f"(bk=baseline, batch/n<count>=perturbed)",
-            flush=True,
-        )
-    else:
-        _rm_tree(work)
-    TestConfig.LAST_LOADED_ELFS = None
-
-
-def _run_perturbed(item, elf_src: Path, have: dict[str, bool], per_suffix: str) -> None:
-    """Re-invoke the test loading ELFs from a unique temporary variant dir."""
-    from helpers.test_config import TestConfig
-
+    per_suffix = f"__omp_{key}_n{n}"
+    fail_root = _out_base() / "fails" / key
     orig_run = TestConfig.run
     done = {"ok": False}
 
     def wrapped(self, *a, **k):
         if not done["ok"]:
             self.prepare()
-            per_id = f"{self.variant_id}{per_suffix}"
+            # Prefer meta.variant_id so we do not depend on re-hash matching prepare.
+            base_vid = variant_id if variant_id else self.variant_id
+            per_id = f"{base_vid}{per_suffix}"
             dest = TestConfig.ARTEFACTS_DIR / self.test_name / per_id / "elf"
-            _copy_elf_set(elf_src, dest, have)
+            _copy_elf_set(src, dest, have)
             self.variant_id = per_id
             TestConfig.LAST_LOADED_ELFS = None
             done["ok"] = True
@@ -271,7 +373,32 @@ def _run_perturbed(item, elf_src: Path, have: dict[str, bool], per_suffix: str) 
 
     TestConfig.run = wrapped
     try:
-        item.runtest()
+        outcome = yield
     finally:
         TestConfig.run = orig_run
         TestConfig.LAST_LOADED_ELFS = None
+        if not keep:
+            _rm_tree(TestConfig.ARTEFACTS_DIR / test_name / f"{variant_id}{per_suffix}")
+
+    report_id = f"{base_nodeid}::n{n}"
+    if outcome.excinfo is None:
+        print(f"[openmp_nop] n={n} PASS  {elf_fp}", flush=True)
+        if not keep:
+            _rm_tree(src)
+        return
+
+    err = _exc_value(outcome.excinfo)
+    s = str(err) if err is not None else ""
+    if "Timeout" in s or "TIMED OUT" in s:
+        tag = "FAIL-TIMEOUT"
+    else:
+        tag = "FAIL-MISMATCH"
+    print(f"[openmp_nop] n={n} {tag}  {elf_fp}  {s[:120]}", flush=True)
+    if keep:
+        _record_fail(report_id, f"n{n}\t{tag}\t{s[:120]}\n")
+    else:
+        try:
+            _move_dir(src, fail_root / f"n{n}")
+        except FileNotFoundError as move_ex:
+            _record_fail(report_id, f"n{n}\tFAIL-ERR\tkeep-fail move: {move_ex}\n")
+        _record_fail(report_id, f"n{n}\t{tag}\t{s[:120]}\n")
