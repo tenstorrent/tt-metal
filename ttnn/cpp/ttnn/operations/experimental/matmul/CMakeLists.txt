@@ -15,8 +15,8 @@ set_target_properties(
 
 file(
     GLOB_RECURSE kernels
-    attn_matmul/device/kernels/*
-    group_attn_matmul/device/kernels/*
+    attn_matmul/device/kernels/*.cpp
+    group_attn_matmul/device/kernels/*.cpp
 )
 
 target_sources(
