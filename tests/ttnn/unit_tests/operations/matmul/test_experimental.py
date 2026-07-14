@@ -66,8 +66,6 @@ def test_ttnn_linear(
     grid_size = (6, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
     use_high_accuracy_compute = input_a_dtype == ttnn.bfloat16 and input_b_dtype == ttnn.bfloat16
-    max_out_subblock_tiles = 4 if use_high_accuracy_compute else 8
-    out_subblock_w = min(n_size // 32, max_out_subblock_tiles)
 
     input_shape_a = [1, 1, m_size, k_size]
     input_shape_b = [1, 1, k_size, n_size]
@@ -84,21 +82,21 @@ def test_ttnn_linear(
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=k_size // 32,
-        out_subblock_h=max_out_subblock_tiles // out_subblock_w,
-        out_subblock_w=out_subblock_w,
+        out_subblock_h=8 // (n_size // 32),
+        out_subblock_w=n_size // 32,
         per_core_M=m_size // 32 // num_cores,
         per_core_N=n_size // 32,
         fuse_batch=True,
         fused_activation=None,
         mcast_in0=False,
     )
-    # Explicit program configs default to LoFi. Use a smaller output subblock and FP32 accumulation for the
-    # BF16 accuracy case, while retaining the intended LoFi path for mixed and block-float parametrizations.
+    # Explicit program configs default to LoFi. Use HiFi2 for the BF16 accuracy case while retaining the
+    # intended LoFi path for mixed and block-float parametrizations.
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi2 if use_high_accuracy_compute else ttnn.MathFidelity.LoFi,
         math_approx_mode=False,
-        fp32_dest_acc_en=use_high_accuracy_compute,
+        fp32_dest_acc_en=False,
         packer_l1_acc=True,
     )
 
