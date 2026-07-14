@@ -196,16 +196,23 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const auto& k_shape = input_tensor_k.logical_shape();
     const auto& v_shape = input_tensor_v.logical_shape();
     const uint32_t B = q_shape[0], NQH = q_shape[1], Sq = q_shape[2], DH = q_shape[3];
-    // Geometry overrides for an HMA-shared paged buffer (see SDPAParams): when the paged K/V
-    // cache was allocated for a different layer's view, the reader must address it with this
-    // call's num_kv_heads / block_size (Q already drives head_dim via DHt) rather than the
-    // cache's declared shape. Unset ⇒ the cache's own num_kv_heads / block_size (all existing
-    // callers are unchanged). The reader computes physical tile ids manually from these as
-    // compile-time args (dataflow_common.hpp virtual_seq_tile_id_to_physical_tile_id), so the
-    // flat-tile buffer is reinterpreted correctly without any kernel change.
-    const uint32_t NKH = operation_attributes.num_kv_heads_override.value_or(k_shape[1]);
-    const uint32_t NVH = operation_attributes.num_kv_heads_override.value_or(v_shape[1]);
-    const uint32_t effective_kv_block_size = operation_attributes.block_size_override.value_or(k_shape[2]);
+    // Geometry overrides for an HMA-shared paged buffer (see PagedCacheGeometryOverride):
+    // when the paged K/V cache was allocated for a different layer's view, the reader must
+    // address it with this call's num_kv_heads / block_size (Q already drives head_dim via
+    // DHt) rather than the cache's declared shape. Unset ⇒ the cache's own num_kv_heads /
+    // block_size (all existing callers are unchanged). The reader computes physical tile ids
+    // manually from these as compile-time args (dataflow_common.hpp
+    // virtual_seq_tile_id_to_physical_tile_id), so the flat-tile buffer is reinterpreted
+    // correctly without any kernel change.
+    //
+    // Apply only when !use_mla: MLA never passes overrides (validated above), and applying
+    // num_kv_heads to NVH under MLA would reinterpret V without the elems/block check that
+    // is gated behind !use_mla.
+    const auto& geo = operation_attributes.paged_cache_geometry;
+    const bool apply_geometry_override = !use_mla && geo.active();
+    const uint32_t NKH = apply_geometry_override ? geo.num_kv_heads.value_or(k_shape[1]) : k_shape[1];
+    const uint32_t NVH = apply_geometry_override ? geo.num_kv_heads.value_or(v_shape[1]) : v_shape[1];
+    const uint32_t effective_kv_block_size = apply_geometry_override ? geo.block_size.value_or(k_shape[2]) : k_shape[2];
 
     // In flash mla prefill, we have to support the case where NKH != NVH
     // We are calling op with the following shapes:

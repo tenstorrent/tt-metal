@@ -436,12 +436,42 @@ def test_sdpa_chunked_iterate_batch(
 
 
 @pytest.mark.timeout(60)
+def _permute_view_general(t_alloc, view_kv, view_block_size, view_head_dim):
+    """Reinterpret paged-cache tiles under a different (kv, block, head_dim) view.
+
+    Same helper as the decode / paged-cache flexible-geometry tests: kernels address by
+    linear tile index within a block, so a plain torch reshape of untilized data does
+    not match TILE_LAYOUT storage when alloc and view geometries differ.
+    """
+    N, alloc_kv, alloc_block_size, alloc_head_dim = t_alloc.shape
+    TILE = 32
+    alloc_BR_t = alloc_block_size // TILE
+    alloc_Wt = alloc_head_dim // TILE
+    view_BR_t = view_block_size // TILE
+    view_Wt = view_head_dim // TILE
+    alloc_total_tiles = alloc_kv * alloc_BR_t * alloc_Wt
+    view_total_tiles = view_kv * view_BR_t * view_Wt
+    assert alloc_total_tiles == view_total_tiles
+
+    t = t_alloc.view(N, alloc_kv, alloc_BR_t, TILE, alloc_Wt, TILE)
+    t = t.permute(0, 1, 2, 4, 3, 5).contiguous()
+    t = t.reshape(N, alloc_total_tiles, TILE, TILE)
+    t = t.reshape(N, view_kv, view_BR_t, view_Wt, TILE, TILE)
+    t = t.permute(0, 1, 2, 4, 3, 5).contiguous()
+    return t.reshape(N, view_kv, view_block_size, view_head_dim)
+
+
 def test_chunked_sdpa_geometry_override_hma_shared_buffer(device):
     """HMA-shared cache: declared (nkv, block, head_dim) differs from the call view.
 
     Cache allocated as nkv=2 / block=64 / head_dim=128; call view is nkv=1 /
     block=64 / head_dim=256 (same elems/block). Overrides must address the buffer
     correctly so chunked SDPA matches the torch reference for the view geometry.
+
+    Physical tiles are filled in the *declared* tile-grid (as from_torch on the
+    alloc shape does); the reference reinterprets those same tiles through the
+    view grid via ``_permute_view_general`` — matching how the kernel reads with
+    PagedCacheGeometryOverride.
     """
     torch.manual_seed(7)
     b, nh, nkv_view, s, d_view = 1, 4, 1, 512, 256
@@ -464,25 +494,26 @@ def test_chunked_sdpa_geometry_override_hma_shared_buffer(device):
         packer_l1_acc=False,
     )
 
-    Q = fa_rand(b, nh, s, d_view)
-    K = fa_rand(b, nkv_view, s, d_view)
-    V = fa_rand(b, nkv_view, s, d_view)
-    K_rep = K.repeat_interleave(nh // nkv_view, dim=1)
-    V_rep = V.repeat_interleave(nh // nkv_view, dim=1)
-    gt = torch.nn.functional.scaled_dot_product_attention(Q, K_rep, V_rep, is_causal=True)
-
     num_pages = s // block_size
     page_table = torch.arange(num_pages, dtype=torch.int32).reshape(b, num_pages)
 
-    def to_declared(cache_view):
-        # [b, nkv_view, s, d_view] -> [num_pages, nkv_cache, block_size, d_cache]
-        return cache_view.reshape(b, nkv_view, num_pages, block_size * d_view).reshape(
-            b * num_pages, nkv_cache, block_size, d_cache
-        )
-
-    tt_k = ttnn.from_torch(to_declared(K), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_v = ttnn.from_torch(to_declared(V), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    # Fill the shared buffer in the *declared* tile-grid (peer-layer allocation).
+    K_alloc = fa_rand(num_pages, nkv_cache, block_size, d_cache)
+    V_alloc = fa_rand(num_pages, nkv_cache, block_size, d_cache)
+    tt_k = ttnn.from_torch(K_alloc, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_v = ttnn.from_torch(V_alloc, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
     page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
+
+    # Same DRAM bytes as the kernel sees under the view override.
+    K_view_pages = _permute_view_general(K_alloc, nkv_view, block_size, d_view)
+    V_view_pages = _permute_view_general(V_alloc, nkv_view, block_size, d_view)
+    K = K_view_pages.reshape(b, nkv_view, s, d_view)
+    V = V_view_pages.reshape(b, nkv_view, s, d_view)
+
+    Q = fa_rand(b, nh, s, d_view)
+    K_rep = K.repeat_interleave(nh // nkv_view, dim=1)
+    V_rep = V.repeat_interleave(nh // nkv_view, dim=1)
+    gt = torch.nn.functional.scaled_dot_product_attention(Q, K_rep, V_rep, is_causal=True)
 
     for chunk_idx in range(s // prefill_chunk_size):
         start = chunk_idx * prefill_chunk_size

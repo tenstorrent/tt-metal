@@ -465,12 +465,13 @@ void bind_sdpa(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
-            block_size (int, optional): Geometry override for an HMA-shared paged cache. When the
+            block_size (int, optional): Part of PagedCacheGeometryOverride (with
+                `num_kv_heads`). Geometry override for an HMA-shared paged cache. When the
                 K/V cache was allocated for a different layer's view, pass this call's view
                 block_size (tokens/block); Q drives head_dim and the per-block element count must
                 be invariant. Defaults to the cache's declared block_size.
-            num_kv_heads (int, optional): Geometry override companion to `block_size`; this call's
-                view num_kv_heads. Defaults to the cache's declared num_kv_heads.
+            num_kv_heads (int, optional): Companion to `block_size` in PagedCacheGeometryOverride;
+                this call's view num_kv_heads. Defaults to the cache's declared num_kv_heads.
 
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x dh].
