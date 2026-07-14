@@ -93,14 +93,11 @@ void bind_sdpa_decode(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("program_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        // block_size reads the K/V cache through a different (block_size, head_dim)
-        // view than its declared shape; needed for vLLM's shared kv-cache groups. See
-        // ttnn.experimental.paged_update_cache's kwarg of the same name.
+        // block_size / num_kv_heads form PagedCacheGeometryOverride: read the K/V cache
+        // through a different (block_size, num_kv_heads, head_dim) view than its declared
+        // shape; needed for vLLM's shared kv-cache groups. Same pair as chunked prefill SDPA.
+        // See ttnn.experimental.paged_update_cache kwargs of the same names.
         nb::arg("block_size") = nb::none(),
-        // num_kv_heads reads the cache through a different per-block kv-head count
-        // than its declared shape. Companion to block_size for HMA cross-group sharing
-        // when sliding/full layers have asymmetric num_kv_heads. See
-        // ttnn.experimental.paged_update_cache's kwarg of the same name.
         nb::arg("num_kv_heads") = nb::none(),
         // cache_position_modulo (in tokens) treats the cache as a circular buffer:
         // every page_table lookup uses cur_pos % cache_position_modulo. Required when

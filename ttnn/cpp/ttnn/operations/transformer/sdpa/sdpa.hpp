@@ -41,9 +41,9 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    // Geometry overrides for an HMA-shared paged cache (see SDPAParams / decode op). Q drives
-    // head_dim; supply this call's block_size / num_kv_heads when the cache was allocated for a
-    // different layer's view. Unset ⇒ use the cache's declared block_size / num_kv_heads.
+    // Geometry overrides for an HMA-shared paged cache (see PagedCacheGeometryOverride).
+    // Q drives head_dim; supply this call's block_size / num_kv_heads when the cache was
+    // allocated for a different layer's view. Unset ⇒ use the cache's declared values.
     std::optional<uint32_t> block_size = std::nullopt,
     std::optional<uint32_t> num_kv_heads = std::nullopt);
 
@@ -58,6 +58,7 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    // See PagedCacheGeometryOverride (chunked overload above).
     std::optional<uint32_t> block_size = std::nullopt,
     std::optional<uint32_t> num_kv_heads = std::nullopt);
 
