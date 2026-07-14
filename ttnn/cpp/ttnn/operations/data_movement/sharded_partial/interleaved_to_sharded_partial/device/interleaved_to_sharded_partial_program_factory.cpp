@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "interleaved_to_sharded_partial_program_factory.hpp"
+#include "interleaved_to_sharded_partial_op.hpp"
 
 #include <cmath>
 
@@ -428,6 +429,41 @@ ProgramDescriptor InterleavedToShardedPartialProgramFactory::create_descriptor(
     }
 
     return desc;
+}
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> InterleavedToShardedPartialDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& operation_attributes,
+    const Tensor& input_tensor,
+    tensor_return_value_t& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Only TILE layout is supported (validated in validate_on_program_cache_miss). starting_idx_h is
+    // the sole slice_index-dependent value; it is uniform across cores and baked into reader arg 7
+    // (always) and writer arg 7 (only when the output is in DRAM -- the sharded-output writer carries
+    // no start id). Re-apply it here so a cache hit for a different slice reads the right input slice.
+    const uint32_t starting_idx_h = operations::data_movement::detail::calculate_starting_idx_h(
+        input_tensor, operation_attributes.num_slices, operation_attributes.slice_index);
+
+    const auto& shard_spec = operation_attributes.shard_spec;
+    const bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+    const auto cores = corerange_to_cores(shard_spec.grid, std::nullopt, rm_orientation);
+    const bool dst_is_dram = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
+
+    // Kernel push order in create_descriptor: reader (0), writer (1)[, compute (2)].
+    constexpr uint32_t kReaderKernelIdx = 0;
+    constexpr uint32_t kWriterKernelIdx = 1;
+    // Reader RT args: {src, shard_h, shard_w, padded_offset, num_units_offset, units_per_shard,
+    //   curr_idx_h+curr_idx_w, starting_idx_h}; DRAM writer RT args mirror it with starting_idx_h at 7.
+    constexpr uint32_t kStartingIdxHArgIdx = 7;
+
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    dynamic_args.reserve(cores.size() * (dst_is_dram ? 2 : 1));
+    for (const auto& core : cores) {
+        dynamic_args.push_back({kReaderKernelIdx, core, kStartingIdxHArgIdx, starting_idx_h});
+        if (dst_is_dram) {
+            dynamic_args.push_back({kWriterKernelIdx, core, kStartingIdxHArgIdx, starting_idx_h});
+        }
+    }
+    return dynamic_args;
 }
 
 }  // namespace ttnn::prim
