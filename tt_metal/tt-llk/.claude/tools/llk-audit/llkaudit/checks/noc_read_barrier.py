@@ -42,7 +42,7 @@ class NocReadBarrier(Check):
         "reachability. A bare noc_async_reads_flushed is not treated as the drain "
         "(it does not invalidate the BH L1 cache) — such a kernel is surfaced "
         "conservatively. Whether the consumer truly reads the not-yet-landed bytes is "
-        "the /noc-sync (read-side) skill's verdict. The read matcher "
+        "the /noc-sync-audit (read-side) skill's verdict. The read matcher "
         "(registry.noc_is_read) matches ANY noc_async_read* name except barrier/"
         "flush forms, so the NON-ISSUING state/counter helpers "
         "(noc_async_read_set_state, noc_async_read_inc_num_issued) are mis-read as "

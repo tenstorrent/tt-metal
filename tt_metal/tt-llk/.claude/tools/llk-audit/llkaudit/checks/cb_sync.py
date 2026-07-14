@@ -16,10 +16,11 @@ the tt-llk fact base there are no cb_* calls, so it is trivially empty.
 
 Pure AUGMENTOR: the mechanical, in-one-function signal it recalls is a
 reserve/push or wait/pop COUNT imbalance per CB — a leaked or missing credit.
-The load-bearing VERDICTS stay with the /dataflow-cb-sync skill (see
+The load-bearing VERDICTS stay with the /dataflow-cb-sync-audit skill (see
 blind_spots): cross-kernel producer↔consumer balance, the data-before-credit
 NoC-flush ordering, capacity vs num_pages, and single-producer/consumer.
 """
+
 from __future__ import annotations
 
 from collections import defaultdict
