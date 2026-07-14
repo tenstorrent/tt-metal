@@ -189,3 +189,6 @@ misattributing the Stage 05 overlay. It returned `clean-pass` with no required
 work or hard-check gaps. Its full verdict and anomaly ledger are recorded in
 `stage_review_resume.md`. No hardware rerun was needed, no Stage 05 changes
 were modified or staged, and nothing was pushed.
+
+The resumed review artifact was committed in the `tt-metal` repository on
+branch `odjuricic/agentic-research/graph-rewrite-skill` as `540983e5b85`.
