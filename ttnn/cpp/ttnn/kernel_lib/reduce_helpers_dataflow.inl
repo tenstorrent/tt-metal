@@ -132,6 +132,38 @@ FORCE_INLINE void fill_each_face_row0_partial(
 }
 
 // =============================================================================
+// Format-aware fill_each_face_col0_partial — fills COLUMN 0 of each left face for the first
+// `valid_rows` rows (a col-0 mask, consumed by mul_tiles_bcast_cols for a partial REDUCE_COL). Only the
+// left face-column is written; bcast_cols broadcasts col 0 across, so the rest is don't-care (zeroed).
+// =============================================================================
+template <DataFormat data_format, uint32_t face_rows, uint32_t faces_per_row>
+FORCE_INLINE void fill_each_face_col0_partial(
+    volatile tt_l1_ptr uint32_t* ptr, uint32_t scaler, uint32_t valid_rows) {
+    static_assert(
+        data_format == DataFormat::Float16_b || data_format == DataFormat::Float32,
+        "fill_each_face_col0_partial only supports Float16_b (bfloat16) and Float32 formats");
+
+    constexpr uint32_t face_size_u32 = (data_format == DataFormat::Float32) ? FACE_SIZE_U32_FP32 : FACE_SIZE_U32;
+    constexpr uint32_t row_size_u32 = (data_format == DataFormat::Float32) ? ROW_SIZE_U32_FP32 : ROW_SIZE_U32;
+    constexpr uint32_t rows_per_face = tt::constants::FACE_HEIGHT;
+
+    for (uint32_t face_row = 0; face_row < face_rows; ++face_row) {
+        const uint32_t face_row_start = face_row * rows_per_face;
+        uint32_t rows_in_face = 0;
+        if (valid_rows > face_row_start) {
+            const uint32_t remaining = valid_rows - face_row_start;
+            rows_in_face = remaining < rows_per_face ? remaining : rows_per_face;
+        }
+        // left face only (face_col == 0); write column 0 of each valid row (fill_face_row0_cols with a
+        // single column lands on col 0, incl. the bf16 low-16-bits case).
+        volatile tt_l1_ptr uint32_t* face_ptr = ptr + (face_row * faces_per_row) * face_size_u32;
+        for (uint32_t r = 0; r < rows_in_face; ++r) {
+            fill_face_row0_cols<data_format>(face_ptr + r * row_size_u32, scaler, 1);
+        }
+    }
+}
+
+// =============================================================================
 // Prepare CB tile for reduce using a caller-provided float scaler
 // =============================================================================
 
@@ -197,6 +229,53 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_di
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
     {
         constexpr uint32_t tile_size_bytes = get_tile_size(cb_id);
+        flush_l2_cache_range(write_addr, tile_size_bytes);
+    }
+#endif
+    dfb.push_back(1);
+}
+
+// =============================================================================
+// Prepare a 0/1 MASK tile for the AccumulateViaAdd partial (non-tile-aligned) reduce path.
+// The mask is 1.0 in the first `valid_elems` reduce-dim positions and 0 elsewhere, laid out for the
+// broadcast direction the compute uses on the last tile:
+//   REDUCE_ROW -> row-0 mask (mul_tiles_bcast_rows)   REDUCE_COL -> col-0 mask (mul_tiles_bcast_cols)
+// =============================================================================
+template <uint32_t dfb_id, ReduceDim reduce_dim>
+FORCE_INLINE void prepare_reduce_mask(uint32_t valid_elems) {
+    static_assert(
+        reduce_dim == ReduceDim::REDUCE_ROW || reduce_dim == ReduceDim::REDUCE_COL,
+        "prepare_reduce_mask supports REDUCE_ROW / REDUCE_COL only (scalar partial is unsupported)");
+    constexpr DataFormat data_format = get_dataformat(dfb_id);
+    constexpr uint32_t tile_r_dim = get_tile_r_dim<dfb_id>();
+    constexpr uint32_t tile_c_dim = get_tile_c_dim<dfb_id>();
+    constexpr uint32_t face_rows = tile_r_dim / tt::constants::FACE_HEIGHT;
+    constexpr uint32_t faces_per_row = tile_c_dim / tt::constants::FACE_WIDTH;
+    static_assert(
+        data_format == DataFormat::Float16_b || data_format == DataFormat::Float32,
+        "prepare_reduce_mask only supports Float16_b (bfloat16) and Float32 formats");
+    ASSERT(valid_elems > 0);
+
+    DataflowBuffer dfb(dfb_id);
+    dfb.reserve_back(1);
+    uint32_t write_addr = dfb.get_write_ptr();
+
+    Noc noc;
+    noc.async_write_zeros(dfb, get_tile_size(dfb_id));
+    noc.write_zeros_l1_barrier();
+
+    const uint32_t one = float_to_scaler_bits<data_format>(1.0f);
+    if constexpr (reduce_dim == ReduceDim::REDUCE_ROW) {
+        fill_each_face_row0_partial<data_format, ReduceDim::REDUCE_ROW, face_rows, faces_per_row>(
+            addr_to_l1_ptr(write_addr), one, valid_elems);
+    } else {
+        fill_each_face_col0_partial<data_format, face_rows, faces_per_row>(
+            addr_to_l1_ptr(write_addr), one, valid_elems);
+    }
+
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    {
+        constexpr uint32_t tile_size_bytes = get_tile_size(dfb_id);
         flush_l2_cache_range(write_addr, tile_size_bytes);
     }
 #endif
