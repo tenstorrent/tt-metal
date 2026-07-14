@@ -143,13 +143,16 @@ void read_in1_block_sync(
     uint32_t d0_start,
     uint32_t d0_end,
     uint32_t d1_start,
-    uint32_t d1_end) {
+    uint32_t d1_end,
+    // Byte offset from the CB base at which this block's writes begin. Lets a caller stage several
+    // blocks into distinct slots of one scratch CB (e.g. the fwd/bwd pair of AG_INTERLEAVE_BANDS).
+    uint32_t write_ptr_offset = 0) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
     Noc noc;
     CircularBuffer cb(cb_id);
     const uint32_t cb_base_write_ptr = cb.get_write_ptr();
-    uint32_t write_ptr = cb_base_write_ptr;
+    uint32_t write_ptr = cb_base_write_ptr + write_ptr_offset;
     for (uint32_t i = d0_start; i < d0_end; i++) {
         for (uint32_t j = d1_start; j < d1_end; j++) {
             if (j >= shape.logical_d1) {

@@ -302,6 +302,31 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
     uint32_t in2_block_num_tiles = N_block_tiles;
 
+    // Sub-chunk (M-row band) count for the fused AG in0 delivery; only meaningful when fusing AG.
+    // Parsed here so the in1 scratch CB, the divisibility checks, and the per-kernel define all agree
+    // on one value.
+    uint32_t in0_sub_chunks = 1;
+    if (fuse_op) {
+        if (const char* e = std::getenv("IN0_SUB_CHUNKS")) {
+            long v = std::strtol(e, nullptr, 10);
+            if (v > 1) {
+                in0_sub_chunks = static_cast<uint32_t>(v);
+            }
+        }
+    }
+    // Band-interleave: process a forward remote k-block and the following backward one one-band-at-a-time
+    // (fwd.b0, bwd.b0, ...) instead of draining each whole. Needs two k-blocks resident in the in1 scratch
+    // at once, so it also drives the scratch CB size below.
+    bool interleave_bands = false;
+    if (fuse_op && in0_sub_chunks > 1) {
+        if (const char* e = std::getenv("AG_INTERLEAVE_BANDS")) {
+            interleave_bands = (e[0] == '1');
+        }
+    }
+    // Number of leading (self/local) k-block positions this device owns (see kernels). Placeholder
+    // K_blocks when not fusing / not banding (value only consumed on the IN0_SUB_CHUNKS > 1 path).
+    uint32_t num_local_k_blocks = K_blocks;
+
     const uint32_t double_buffer_factor = 2;
     uint32_t in0_cb_num_tiles = in0_block_num_tiles * double_buffer_factor;
     uint32_t in1_cb_num_tiles = in1_block_num_tiles * double_buffer_factor;
@@ -337,6 +362,22 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
 
     uint32_t in1_cb_id = tt::CBIndex::c_1;
     tt::tt_metal::create_cb(in1_cb_id, program, core_grid, in1_tile_size, in1_cb_num_tiles, in1_data_format);
+
+    {
+        // Scratch holds one K_block x N_block so the in1 injector can read it once and re-present it to
+        // compute per M-row band without re-reading DRAM (see dm_in1_sender_out.cpp). Single-buffered.
+        // Created unconditionally: the in1 dataflow always reads through it (nb == 1 when not banding).
+        // Band-interleave needs the forward and backward k-blocks of a pair resident at once, so it holds
+        // two blocks.
+        uint32_t in1_scratch_cb_id = tt::CBIndex::c_7;
+        tt::tt_metal::create_cb(
+            in1_scratch_cb_id,
+            program,
+            core_grid,
+            in1_tile_size,
+            in1_block_num_tiles * (interleave_bands ? 2u : 1u),
+            in1_data_format);
+    }
 
     uint32_t out_cb_id = tt::CBIndex::c_2;
     tt::tt_metal::create_cb(out_cb_id, program, core_grid, out_tile_size, out_cb_num_tiles, output_data_format);
@@ -431,14 +472,71 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         // Create semaphores
         fused_op_signaler->init_fused_op(program, device, in0_sender_cores);
         defines["FUSE_AG"] = "1";
-        // Stream the in0 read in this many M-row bands, matching the AG's per-band delivery/signal so
-        // band s's read overlaps band s+1's fabric write. Must equal the AG program's IN0_SUB_CHUNKS.
-        const char* in0_sub_chunks_env = std::getenv("IN0_SUB_CHUNKS");
-        defines["IN0_SUB_CHUNKS"] = (in0_sub_chunks_env != nullptr) ? in0_sub_chunks_env : "1";
+        // Stream the in0 read in this many M-row bands (parsed above), matching the AG's per-band
+        // delivery/signal. On the IN0_SUB_CHUNKS > 1 path the matmul also matmuls + forwards per band
+        // (see compute.cpp / dm_in0_sender.cpp / dm_in1_sender_out.cpp). Must equal the AG program's
+        // IN0_SUB_CHUNKS so the per-band signal counts match.
+        defines["IN0_SUB_CHUNKS"] = std::to_string(in0_sub_chunks);
+        if (in0_sub_chunks > 1) {
+            // Per-band matmul (matmul_blocks) needs uniform M-row bands with whole subblocks, and full
+            // (non-partial) M blocks so current_subblock_h == subblock_h on every band.
+            TT_FATAL(
+                (M_tiles_per_core % M_block_tiles) == 0,
+                "M_tiles_per_core ({}) must be a multiple of M_block_tiles ({}) when IN0_SUB_CHUNKS > 1 "
+                "(no partial M blocks)",
+                M_tiles_per_core,
+                M_block_tiles);
+            TT_FATAL(
+                (M_block_tiles % in0_sub_chunks) == 0,
+                "IN0_SUB_CHUNKS ({}) must divide M_block_tiles ({})",
+                in0_sub_chunks,
+                M_block_tiles);
+            TT_FATAL(
+                ((M_block_tiles / in0_sub_chunks) % subblock_h) == 0,
+                "subblock_h ({}) must divide the M-row band height ({}) when IN0_SUB_CHUNKS > 1",
+                subblock_h,
+                M_block_tiles / in0_sub_chunks);
+            // Count this device's local (self) k-blocks = the leading schedule positions the AG delivers
+            // whole (never sub-chunked). Mirrors compute_device_chunk_stats for start_ring_index. v1
+            // requires K_block_tiles-aligned device boundaries: a straddling (co-owned) k-block would
+            // break the local-first band schedule, so assert none exist.
+            uint32_t my_chip = fused_op_signaler->start_ring_index;
+            uint32_t in_Wt = fused_op_signaler->input_tensor_Wt;
+            uint32_t curr_device = 0;
+            uint32_t curr_device_end = in_Wt - 1;
+            uint32_t my_count = 0;
+            for (uint32_t kb = 0; kb < K_blocks; kb++) {
+                uint32_t kb_end = (kb + 1) * K_block_tiles - 1;
+                if (kb_end < curr_device_end) {
+                    if (curr_device == my_chip) {
+                        my_count++;
+                    }
+                } else if (kb_end == curr_device_end) {
+                    if (curr_device == my_chip) {
+                        my_count++;
+                    }
+                    curr_device++;
+                    curr_device_end = (curr_device + 1) * in_Wt - 1;
+                } else {
+                    TT_FATAL(
+                        false,
+                        "IN0_SUB_CHUNKS > 1 requires K_block_tiles ({}) aligned device boundaries "
+                        "(input_tensor_Wt = {}); a straddling k-block is not supported",
+                        K_block_tiles,
+                        in_Wt);
+                }
+            }
+            num_local_k_blocks = my_count;
+        }
         // Consume the middle forward/backward k-blocks 1-backward-1-forward instead of grouped.
         // Env override lets A/B runs disable it (AG_ALTERNATE_MIDDLE=0) without a rebuild-time edit.
         const char* alt_middle_env = std::getenv("AG_ALTERNATE_MIDDLE");
         defines["AG_ALTERNATE_MIDDLE"] = (alt_middle_env != nullptr) ? alt_middle_env : "1";
+        // Band-interleave a forward remote k-block with the following backward one (see dm_in0_sender.cpp).
+        // Assigned to the shared defines map so in0/in1 senders and compute all agree on the paired path.
+        if (interleave_bands) {
+            defines["AG_INTERLEAVE_BANDS"] = "1";
+        }
         // Timing-isolation knob: SKIP_IN0_DRAM_READ=1 makes the in0 injector skip the DRAM/local read
         // (semaphores still fire) to measure the read's contribution. PCC is garbage under this flag.
         const char* skip_in0_read_env = std::getenv("SKIP_IN0_DRAM_READ");
@@ -658,7 +756,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         M_blocks_per_core,
         N_blocks_per_core,
         subblock_h,
-        subblock_w};
+        subblock_w,
+        num_local_k_blocks};
 
     auto compute_defines = defines;
     std::map<std::string, std::string> compute_activation_defines;
@@ -773,6 +872,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             N_end_tile,
             defer_write_k_block,
             max_defer_write_k_block,
+            num_local_k_blocks,
         };
         // Add ternary addresses if present (after defer_write_k_block, before output addresses)
         if (use_fused_ternary) {
@@ -826,6 +926,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             N_end_tile,
             defer_write_k_block,
             max_defer_write_k_block,
+            num_local_k_blocks,
         };
         // Add ternary addresses if present (after defer_write_k_block, before output addresses)
         if (use_fused_ternary) {
@@ -974,20 +1075,22 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
     constexpr uint32_t in0_in0_addr_idx = 0;
     constexpr uint32_t in0_in2_addr_idx = 1;
     constexpr uint32_t in0_in3_addr_idx = 2;
-    constexpr uint32_t in0_ternary_a_addr_idx = 14;  // After max_defer_write_k_block (index 13) for in0
-    constexpr uint32_t in0_ternary_b_addr_idx = 15;
+    constexpr uint32_t in0_ternary_a_addr_idx = 15;  // After max_defer_write_k_block (13), num_local_k_blocks (14)
+    constexpr uint32_t in0_ternary_b_addr_idx = 16;
 
     constexpr uint32_t in1_in0_addr_idx = 0;
     constexpr uint32_t in1_bias_addr_idx = 1;
-    constexpr uint32_t in1_ternary_a_addr_idx = 13;  // After max_defer_write_k_block (index 12) for in1
-    constexpr uint32_t in1_ternary_b_addr_idx = 14;
+    constexpr uint32_t in1_ternary_a_addr_idx = 14;  // After max_defer_write_k_block (12), num_local_k_blocks (13)
+    constexpr uint32_t in1_ternary_b_addr_idx = 15;
 
     // Check if ternary addresses are present
     bool has_fused_ternary =
         tensor_args.fused_ternary_input_a.has_value() && tensor_args.fused_ternary_input_b.has_value();
-    // Output addresses start after max_defer_write_k_block and optional ternary addresses
-    uint32_t in0_out_addr_start_idx = has_fused_ternary ? 17 : 14;
-    uint32_t in1_out_addr_start_idx = has_fused_ternary ? 16 : 13;
+    // Output addresses start after max_defer_write_k_block, num_local_k_blocks, and optional ternary addresses.
+    // in0: max_defer(13), num_local(14) -> outputs at 15 (+3 for ternary a/b/broadcast = 18).
+    // in1: max_defer(12), num_local(13) -> outputs at 14 (+3 for ternary = 17).
+    uint32_t in0_out_addr_start_idx = has_fused_ternary ? 18 : 15;
+    uint32_t in1_out_addr_start_idx = has_fused_ternary ? 17 : 14;
 
     for (uint32_t i = 0; i < override_variables.num_cores; ++i) {
         CoreCoord core = override_variables.cores.at(i);
