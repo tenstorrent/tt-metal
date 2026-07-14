@@ -95,11 +95,11 @@ struct Rpow : UnaryOp<Rpow<Slot>, Slot> {
 };
 
 // ---- Cumsum — columnwise cumulative sum (in-DEST). ----
-// LLK `cumsum_tile(idst, first)` where `first` resets the accumulator for the
-// first row tile. Modelled as a unary op with a single bool param `first` so
-// the chain can iterate over consecutive tiles with `first=true` only on the
-// initial call. For chain-driven multi-tile loops where each iteration is a
-// fresh row, leave `first = true` (default).
+// LLK `cumsum_tile(idst, first)` where `first` resets the accumulator for the first row tile.
+// Modelled as a unary op with a single bool param `first` — a FIXED instance field applied
+// identically on every tile of the walk (exec ignores the tile index). So one Cumsum element is
+// correct only when every tile is a fresh row (`first=true`, default); a genuine multi-tile column
+// cumsum (first=true on ht=0, false after) is NOT expressible as a single chain element.
 template <Dst Slot>
 struct Cumsum : UnaryOp<Cumsum<Slot>, Slot> {
     bool first;
