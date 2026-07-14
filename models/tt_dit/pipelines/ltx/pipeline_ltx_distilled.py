@@ -29,6 +29,27 @@ from ...utils.tensor import bf16_tensor
 from ...utils.video import export_video_audio
 from .pipeline_ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline, LTXTransformerState, latent_grid
 
+
+def _latent_fp(tag: str, t: torch.Tensor | None) -> None:
+    """LTX_LATENT_FP=1: exact fingerprint of a latent at a stage boundary.
+
+    Two arms whose per-block math is identical must produce a bit-identical latent. When an
+    end-to-end gate disagrees with a per-block equivalence test, this is what says WHICH stage the
+    two arms actually part company in — the block harness cannot, because it never runs the stack.
+    """
+    if not os.environ.get("LTX_LATENT_FP") or t is None:
+        return
+    import hashlib
+
+    x = t.detach().float().contiguous()
+    f = x.flatten().to(torch.float64)
+    sha = hashlib.sha1(x.numpy().tobytes()).hexdigest()[:16]
+    logger.info(
+        f"LATENT_FP {tag}: shape={tuple(t.shape)} sha1={sha} "
+        f"sum={f.sum().item():.10e} sumsq={(f * f).sum().item():.10e}"
+    )
+
+
 # Distilled sigma schedules for the two stages. The defaults are the shipped 8-step (stage 1)
 # and 3-step (stage 2) schedules. LTX_S1_SIGMAS / LTX_S2_SIGMAS override with a comma-separated
 # list to A/B fewer-step schedules (L2 step cut). Unset = byte-identical to the shipped baseline.
@@ -880,6 +901,8 @@ class LTXDistilledPipeline(LTXPipeline):
         t_stage1 = time.time() - t0
         timings.append(("Stage 1 denoise", t_stage1))
         logger.info(f"Stage 1 denoise: {t_stage1:.1f}s")
+        _latent_fp("s1_video", s1_video)
+        _latent_fp("s1_audio", s1_audio)
 
         latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1
         s1_h, s1_w = s1_height // SPATIAL_COMPRESSION, s1_width // SPATIAL_COMPRESSION
@@ -893,6 +916,8 @@ class LTXDistilledPipeline(LTXPipeline):
         upsampled_flat = upsampled.permute(0, 2, 3, 4, 1).reshape(
             1, latent_frames * (height // SPATIAL_COMPRESSION) * (width // SPATIAL_COMPRESSION), 128
         )
+
+        _latent_fp("upsampled", upsampled_flat)
 
         logger.info(f"Stage 2: {height}x{width}, {len(STAGE_2_DISTILLED_SIGMA_VALUES) - 1} steps")
         t0 = time.time()
@@ -913,6 +938,8 @@ class LTXDistilledPipeline(LTXPipeline):
         t_stage2 = time.time() - t0
         timings.append(("Stage 2 denoise", t_stage2))
         logger.info(f"Stage 2 denoise: {t_stage2:.1f}s")
+        _latent_fp("s2_video", s2_video)
+        _latent_fp("s2_audio", s2_audio)
 
         t0 = time.time()
         self._prepare_vae()
