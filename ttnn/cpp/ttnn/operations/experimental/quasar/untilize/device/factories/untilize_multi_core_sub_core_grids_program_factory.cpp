@@ -13,6 +13,8 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -107,7 +109,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreSubCoreGridsProgramFac
             .dfb_spec_name = IN, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
     };
 
     // ---- Writer (Metal 2.0 fork of writer_..._interleaved_parallel_columns) ----
@@ -122,7 +124,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreSubCoreGridsProgramFac
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"num_sticks", "num_tiles_per_core", "tile_width_size", "start_stick_id", "offset_within_stick"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
     };
 
     // ---- Compute (Metal 2.0 fork of untilize; uniform across all sub-core-grid cores) ----
@@ -130,9 +132,13 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreSubCoreGridsProgramFac
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
         compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
-    ComputeHardwareConfig compute_hw{.fp32_dest_acc_en = fp32_dest_acc_en};
+    ttnn::ComputeKernelConfig compute_config{
+        .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(a.device()->arch(), compute_config);
     if (fp32_dest_acc_en) {
-        compute_hw.unpack_to_dest_mode.emplace(IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+        std::visit(
+            [&](auto& c) { c.unpack_to_dest_mode.emplace(IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32); },
+            compute_hw);
     }
     KernelSpec compute{
         .unique_id = COMPUTE,

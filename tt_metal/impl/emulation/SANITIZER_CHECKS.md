@@ -155,7 +155,11 @@ an overrun throws, which the host turns into the `[ASAN ERROR] Metadata Overflow
 abort.
 *Diagnostic:* `Metadata Overflow: Program metadata exceeds reserved L1 region`.
 *Exercised by:* `test_metadata_size.cpp` (an overrunning CB death test + a
-fitting-CB positive control).
+fitting-CB positive control, plus a self-calibrating direct test of the emule
+`check_program_metadata_size` throw — it inflates a no-tensor program's static
+config with runtime args to overflow the KERNEL_CONFIG window, and SKIPs on arches
+where that window equals the finalize ring buffer so the check is not
+independently reachable, as on WH/BH today).
 
 ---
 
@@ -205,7 +209,9 @@ offsets, and a raw absolute value would never match a relative range — then ch
 that offset against the live extents. In none → abort.
 *Diagnostic:* `Out-of-Bounds Write: Attempted to access address 0x… which is not part of any allocated tensor`.
 *Exercised by:* `test_write_outside_tensor.cpp` (L1 + DRAM gap death tests +
-in-bounds L1 and DRAM positive controls).
+in-bounds L1 and DRAM positive controls, a host-poke fallback accept control
+confirming raw L1 the host designated via `WriteToDeviceL1` is not flagged, and a
+just-past-the-poke death test confirming the fallback is not a blanket whitelist).
 
 #### Host-poked L1 regions (false-positive fix)
 The L1 OOB check assumes every legitimately-accessed L1 address ≥ the unreserved
@@ -329,7 +335,9 @@ A write *past* the CB's allocated region is caught by the OOB check (§4) instea
 *Diagnostic:* `CB Boundary Violation: Attempted to access CB <id> at offset 0x… outside the write/read window`.
 *Exercised by:* `test_write_beyond_res_pages.cpp` (write side, read side, a
 wraparound positive control + a wraparound violation that confirms the modular
-window stays active through a wrap, and a no-active-window control).
+window stays active through a wrap, a no-active-window control, a produced-region
+reuse control, and a globally-allocated-CB exemption control confirming a
+sharded/global CB accessed outside its nominal window is not flagged).
 
 ### 8. CB Reservation Overflow  *(always on)*
 **Lives in:** `__emule_asan_cb_on_reserve` in `[emule] include/jit_hw/asan/asan_cb.h` (called from `cb_reserve_back`).
@@ -359,8 +367,11 @@ read there is harmless.
 `__emule_pending_noc_reads`; the read barrier clears it. `cb_pop_front` aborts if
 that counter is still > 0 (a barrier was skipped before the pop).
 *Diagnostic:* `Race Condition: cb_pop_front(cb_id=…) called while a NoC read is still pending`.
-*Exercised by:* `test_noc_without_barrier.cpp` (a missing-barrier death test + a
-barrier-present positive control confirming the barrier clears the counter).
+*Exercised by:* `test_noc_without_barrier.cpp` (a missing-barrier death test on
+the raw-read path + a barrier-present positive control, an addrgen-path
+missing-barrier death test via `noc_async_read_page` confirming that increment
+site is covered, and a multi-read/single-barrier control pinning the
+clear-to-zero — not decrement — semantic).
 
 ### 10. NOC Transfer Alignment
 **Lives in:** `__emule_check_noc_read_alignment` / `__emule_check_noc_write_alignment`
@@ -375,7 +386,7 @@ L1 = 16 B; DRAM read = 32 B (WH) / 64 B (BH); DRAM write = 16 B. So a DRAM read
 from a 32-aligned source into a 16-aligned L1 destination is legal even though
 their low bits differ.
 *Diagnostic:* `NOC Transfer Alignment: <L1|DRAM> <source|destination> 0x… must be N-byte aligned`.
-*Exercised by:* `test_alignment_writes.cpp` (4 misalignment death tests + a positive control).
+*Exercised by:* `test_alignment_writes.cpp` (7 misalignment death tests + 3 positive controls), covering each per-side branch: L1 destination/source on read, L1 source/destination on write, DRAM source on read, DRAM destination on write, plus an L1-16B positive control. The DRAM-read tests are split per arch — `_WH` variants bake in the 32 B rule, `_BH` variants the 64 B rule. Each queries `device->arch()` at runtime and `GTEST_SKIP`s when it doesn't match, so the bare `Noc*` filter is safe on either cluster (the wrong-arch DRAM variants skip). The regression runners additionally pre-exclude the wrong-arch variant by filter (`Noc*:-*_BH` on wormhole, `Noc*:-*_WH` on blackhole).
 
 ---
 
@@ -481,8 +492,11 @@ to it is legitimate. The base address passed as a runtime arg equals the buffer'
 offset (same address space, no normalization), so the match is exact.
 *Diagnostic:* `Object Intent Violation: Attempted to modify memory belonging to an adjacent object context — L1 buffer [start, end) … changed but no pointer was resolved into it`.
 *Exercised by:* `test_valid_mem_wrong_alloc.cpp` (adjacent + non-adjacent
-violations, a resolve-both control, and an I/O-arg-exemption positive control
-that confirms a buffer handed to the kernel via runtime args is NOT flagged).
+violations, a resolve-both control, an I/O-arg-exemption positive control
+that confirms a buffer handed to the kernel via runtime args is NOT flagged, a
+globally-allocated-CB exemption control confirming the kernel's own persistent CB
+is not flagged, and a multi-kernel-core control confirming the check cleanly
+no-ops when a core runs more than one kernel — the single-kernel attribution gate).
 Note: a violation test must pass the victim's *byte offset*, never its absolute
 address — passing the address would exempt the victim as an I/O tensor and mask
 the violation.

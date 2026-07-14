@@ -18,16 +18,45 @@
 
 #include "api/kernel_thread_globals.h"
 
+#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_MATH)
+#define DFB_IS_COMPUTE_MATH 1
+#else
+#define DFB_IS_COMPUTE_MATH 0
+#endif
+
+#if DFB_IS_COMPUTE_MATH
+inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id) : logical_dfb_id_(logical_dfb_id) {}
+#else
 inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id)
-    : local_dfb_interface_(g_dfb_interface[logical_dfb_id]), logical_dfb_id_(logical_dfb_id) {}
+    : logical_dfb_id_(logical_dfb_id), local_dfb_interface_(g_dfb_interface[logical_dfb_id]) {}
+#endif
 
-inline uint32_t DataflowBuffer::get_entry_size() const { return local_dfb_interface_.entry_size; }
+inline uint32_t DataflowBuffer::get_entry_size() const {
+#if DFB_IS_COMPUTE_MATH
+    return 0;
+#else
+    return local_dfb_interface_.entry_size;
+#endif
+}
 
-inline uint32_t DataflowBuffer::get_stride_size() const { return local_dfb_interface_.stride_size; }
+inline uint32_t DataflowBuffer::get_stride_size() const {
+#if DFB_IS_COMPUTE_MATH
+    return 0;
+#else
+    return local_dfb_interface_.stride_size;
+#endif
+}
 
-inline uint32_t DataflowBuffer::get_total_num_entries() const { return local_dfb_interface_.num_entries; }
+inline uint32_t DataflowBuffer::get_total_num_entries() const {
+#if DFB_IS_COMPUTE_MATH
+    return 0;
+#else
+    return local_dfb_interface_.num_entries;
+#endif
+}
 
 inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
+#if !DFB_IS_COMPUTE_MATH
     WAYPOINT("RBW");
     dfb::PackedTileCounter packed_tc =
         local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
@@ -57,9 +86,11 @@ inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
     }
 #endif
     WAYPOINT("RBD");
+#endif
 }
 
 inline void DataflowBuffer::push_back_impl(uint16_t num_entries) {
+#if !DFB_IS_COMPUTE_MATH
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
@@ -90,9 +121,11 @@ inline void DataflowBuffer::push_back_impl(uint16_t num_entries) {
         local_dfb_interface_.tc_idx = (local_dfb_interface_.tc_idx + 1) % local_dfb_interface_.num_tcs_to_rr;
     }
 #endif
+#endif
 }
 
 inline void DataflowBuffer::wait_front_impl(uint16_t num_entries) {
+#if !DFB_IS_COMPUTE_MATH
     WAYPOINT("WFW");
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
@@ -108,9 +141,11 @@ inline void DataflowBuffer::wait_front_impl(uint16_t num_entries) {
     while (overlay::llk_intf_get_occupancy(tensix_id, tc_id) < num_entries);
 #endif
     WAYPOINT("WFD");
+#endif
 }
 
 inline void DataflowBuffer::pop_front_impl(uint16_t num_entries) {
+#if !DFB_IS_COMPUTE_MATH
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
@@ -129,9 +164,11 @@ inline void DataflowBuffer::pop_front_impl(uint16_t num_entries) {
     }
     local_dfb_interface_.tc_idx = (local_dfb_interface_.tc_idx + 1) % local_dfb_interface_.num_tcs_to_rr;
 #endif
+#endif
 }
 
 inline void DataflowBuffer::finish_impl() {
+#if !DFB_IS_COMPUTE_MATH
 #ifndef COMPILE_FOR_TRISC
     if (ptiles_read_ > 0) {
         handle_final_credits<true>(ptiles_read_, ptxn_id_index_);
@@ -167,10 +204,13 @@ inline void DataflowBuffer::finish_impl() {
         }
     }
     WAYPOINT("AAD");
+#endif
 }
 
 inline uint32_t DataflowBuffer::get_write_ptr_impl() const {
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
+#if DFB_IS_COMPUTE_MATH
+    return 0;
+#elif defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
     return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr +
            local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_offset;
 #elif !defined(COMPILE_FOR_TRISC)
@@ -183,7 +223,9 @@ inline uint32_t DataflowBuffer::get_write_ptr_impl() const {
 }
 
 inline uint32_t DataflowBuffer::get_read_ptr_impl() const {
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
+#if DFB_IS_COMPUTE_MATH
+    return 0;
+#elif defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
     return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr +
            local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_offset;
 #elif !defined(COMPILE_FOR_TRISC)

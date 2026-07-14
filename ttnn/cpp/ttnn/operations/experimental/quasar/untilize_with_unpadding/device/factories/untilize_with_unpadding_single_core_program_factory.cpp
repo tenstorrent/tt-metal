@@ -12,6 +12,8 @@
 #include <tt-metalium/allocator.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -137,7 +139,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramF
             .dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
     };
 
     // ---- Writer kernel ----
@@ -166,7 +168,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramF
                   "num_blocks_w_diff",
                   "block_row_size",
                   "block_row_leftover_size"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
     };
 
     // ---- Compute kernel ----
@@ -174,9 +176,13 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramF
     if (float32_dtype) {
         compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
-    ComputeHardwareConfig compute_hw{.fp32_dest_acc_en = fp32_dest_acc_en};
+    ttnn::ComputeKernelConfig compute_config{
+        .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(a.device()->arch(), compute_config);
     if (fp32_dest_acc_en) {
-        compute_hw.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+        std::visit(
+            [&](auto& c) { c.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32); },
+            compute_hw);
     }
     KernelSpec compute{
         .unique_id = COMPUTE,
@@ -190,7 +196,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramF
         .compile_time_args =
             {{"per_core_block_cnt", static_cast<uint32_t>(num_tiles / num_tiles_per_block)},
              {"per_core_block_tile_cnt", num_tiles_per_block}},
-        .hw_config = std::move(compute_hw),
+        .hw_config = compute_hw,
     };
 
     // ---- ProgramSpec ----

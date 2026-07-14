@@ -309,6 +309,60 @@ __attribute__((noinline)) bool is_packer_to_L1_conversion_supported(const DataFo
     return is_packer_to_L1_early_conversion_supported(in_reg, out_l1) || is_packer_to_L1_late_conversion_supported(in_reg, out_l1);
 }
 
+/**
+ * @brief Per-packer BFP Exp_section_size (the THCON_SEC*_REG*_Exp_section_size cfg field), in 16-byte chunks.
+ *
+ * Chosen so a packer's data-stream Addr equals face `idx`'s datum address in the tile the unpacker reads.
+ * Per OutputAddressGenerator.md, a BFP packer computes its data-stream Addr (in 16B chunks) as
+ *     Addr = L1_Dest_addr + !Sub_l1_tile_header_size  (+ Packer0InitialAddr for idx >= 1)  + Exp_section_size
+ * Take the tile base as 0 so the values below are just offsets within the tile. Packer 0's L1_Dest_addr is
+ * the tile base, so the terms in its Addr before adding Exp_section_size sum to 0 + 1 (own header) = 1, saved
+ * as Packer0InitialAddr. For idx >= 1, set_packer_l1_offset programs L1_Dest_addr = idx * l1_offset - 1 =
+ * idx - 1 (BFP l1_offset == 1); the own header (+1) and the shared Packer0InitialAddr (+1) are then added:
+ * (idx - 1) + 1 + 1 = idx + 1. Packer 0 is 0 + 1 = 1, also idx + 1, so the terms before Exp_section_size
+ * always sum to idx + 1.
+ *
+ * Per UNPACR_Regular.md, face `idx`'s datums sit at, in 16B chunks from the tile base:
+ *     (1 + DigestSize)                        tile header             (DigestSize == 0 -> 1)
+ *   + ceil(NumExponents/16) == num_faces      exponent section        (one exponent chunk per face)
+ *   + idx * datum_bytes                       datums of the idx preceding faces
+ *
+ * Equating Addr to that datum address and solving for Exp_section_size:
+ *     Exp_section_size = (1 + num_faces + idx * datum_bytes) - (idx + 1) = num_faces + idx * (datum_bytes - 1)
+ *
+ * @param idx: Packer index 0..3 (SEC0_REG1 / SEC0_REG8 / SEC1_REG1 / SEC1_REG8). Only called with idx 1..3 —
+ *             packer 0's value (EXP0 / the partial_face case) is written separately.
+ * @param datum_bytes: Per-face data size in 16B chunks (Bfp8 16, Bfp4 8, Bfp2 4; == 16 * the ISA DatumSizeBytes 1 / 0.5 / 0.25).
+ * @param num_faces: Number of faces in the tile (1, 2, or 4).
+ * @return Exp_section_size for packer `idx`, in 16-byte chunks.
+ *
+ * @note Packers 2 and 3 write faces 2 and 3, which exist only in a 4-face tile, so num_faces is 4 whenever they
+ *       fire; the code uses 4 for idx >= 2 unconditionally. This is also needed for correctness: EXP2/EXP3 are
+ *       not re-cached on a data-format reconfig (only EXP0/EXP1 are), so a config at num_faces < 4 must not
+ *       leave them holding a smaller value that a later 4-face pack would read. Packers 0 and 1 are re-cached
+ *       every reconfig, so they use the actual num_faces.
+ * @note Wormhole only — Blackhole uses a single Exp_section_size value. Centralizes the {1*D, 2*D, 3*D} triple
+ *       hand-expanded in @ref cache_exponential_section_sizes_in_gprs and @ref set_packer_config.
+ *
+ * @see https://github.com/tenstorrent/tt-isa-documentation/tree/main/WormholeB0/TensixTile/TensixCoprocessor/Packers/OutputAddressGenerator.md
+ * @see https://github.com/tenstorrent/tt-isa-documentation/tree/main/WormholeB0/TensixTile/TensixCoprocessor/UNPACR_Regular.md
+ */
+constexpr std::uint32_t bfp_exp_section_size(const std::uint32_t idx, const std::uint32_t datum_bytes, const std::uint32_t num_faces)
+{
+    // idx >= 2 packers only ever fire at num_faces == 4 and are not re-cached on reconfig; use 4 for them.
+    const std::uint32_t effective_num_faces = (idx >= 2) ? 4 : num_faces;
+    // face idx datum address (1 + effective_num_faces + idx*datum_bytes, UNPACR_Regular.md)
+    //   minus Addr's terms before Exp_section_size (idx + 1, OutputAddressGenerator.md; see above)
+    return 1 + effective_num_faces + idx * datum_bytes - (idx + 1);
+}
+
+// Mantissa bytes for one face row (16 datums = FACE_C_DIM) of each BFP format, i.e. the `datum_bytes`
+// @ref bfp_exp_section_size expects: 16 datums * per-datum mantissa size (Bfp8 = 1 B, Bfp4 = 1/2 B,
+// Bfp2 = 1/4 B). Named once here so the packer exp-section-size call sites carry no bare 16/8/4.
+constexpr std::uint32_t bfp8_row_bytes = 16;
+constexpr std::uint32_t bfp4_row_bytes = 8;
+constexpr std::uint32_t bfp2_row_bytes = 4;
+
 // This function saves the exponential section size/required offsets to GPR for reconfiguring
 // of data format for packer. These registers are not explicitly used by the packer during
 // operation, thus we do not need to use a semaphore to wait for the packer to finish before
@@ -318,28 +372,30 @@ inline void cache_exponential_section_sizes_in_gprs(const std::uint32_t num_face
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     regfile[p_gpr_pack::EXP0_SEC_SIZE_BFP]  = (partial_face ? 1 : num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
-    regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP8] = (1 + ((num_faces > 2) ? 2 : 0) + 16) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+    regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP8] = bfp_exp_section_size(1 /* index */, bfp8_row_bytes, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
 
     if constexpr (!reconfiguring)
     {
-        regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP8] = (1 + 1 + 32) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
-        regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP8] = (1 + 0 + 48) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+        regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP8] = bfp_exp_section_size(2 /* index */, bfp8_row_bytes, num_faces)
+                                                  << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+        regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP8] = bfp_exp_section_size(3 /* index */, bfp8_row_bytes, num_faces)
+                                                  << THCON_SEC0_REG8_Exp_section_size_SHAMT;
     }
 
-    regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP4] = (1 + ((num_faces > 2) ? 2 : 0) + 8) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+    regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP4] = bfp_exp_section_size(1 /* index */, bfp4_row_bytes, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
 
     if constexpr (!reconfiguring)
     {
-        regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP4] = (1 + 1 + 16) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
-        regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP4] = (1 + 0 + 24) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+        regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP4] = bfp_exp_section_size(2 /* index */, bfp4_row_bytes, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+        regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP4] = bfp_exp_section_size(3 /* index */, bfp4_row_bytes, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
     }
 
-    regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP2] = (1 + ((num_faces > 2) ? 2 : 0) + 4) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+    regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP2] = bfp_exp_section_size(1 /* index */, bfp2_row_bytes, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
 
     if constexpr (!reconfiguring)
     {
-        regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP2] = (1 + 1 + 8) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
-        regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP2] = (1 + 0 + 12) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+        regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP2] = bfp_exp_section_size(2 /* index */, bfp2_row_bytes, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+        regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP2] = bfp_exp_section_size(3 /* index */, bfp2_row_bytes, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
         sync_regfile_write(p_gpr_pack::EXP3_SEC_SIZE_BFP2);
     }
     else
@@ -471,33 +527,32 @@ inline void set_packer_config(
 
     if (IS_BFP_FORMAT(pack_dst_format))
     {
-        // Override exp section size for packers 1,2,3
-        // Tile header + exp size + datum size
+        // Override exp section size for packers 1,2,3 (see bfp_exp_section_size)
         if ((pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp8) || (pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp8_b))
         {
-            config.f.exp_section_size                              = 1 + ((num_faces > 2) ? 2 : 0) + 16;
+            config.f.exp_section_size                              = bfp_exp_section_size(1 /* index */, bfp8_row_bytes, num_faces);
             cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 0] = config.val[0];
-            config.f.exp_section_size                              = 1 + 1 + 32;
+            config.f.exp_section_size                              = bfp_exp_section_size(2 /* index */, bfp8_row_bytes, num_faces);
             cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 0] = config.val[0];
-            config.f.exp_section_size                              = 1 + 0 + 48;
+            config.f.exp_section_size                              = bfp_exp_section_size(3 /* index */, bfp8_row_bytes, num_faces);
             cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 0] = config.val[0];
         }
         else if ((pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp4) || (pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp4_b))
         {
-            config.f.exp_section_size                              = 1 + ((num_faces > 2) ? 2 : 0) + 8;
+            config.f.exp_section_size                              = bfp_exp_section_size(1 /* index */, bfp4_row_bytes, num_faces);
             cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 0] = config.val[0];
-            config.f.exp_section_size                              = 1 + 1 + 16;
+            config.f.exp_section_size                              = bfp_exp_section_size(2 /* index */, bfp4_row_bytes, num_faces);
             cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 0] = config.val[0];
-            config.f.exp_section_size                              = 1 + 0 + 24;
+            config.f.exp_section_size                              = bfp_exp_section_size(3 /* index */, bfp4_row_bytes, num_faces);
             cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 0] = config.val[0];
         }
         else if ((pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp2) || (pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp2_b))
         {
-            config.f.exp_section_size                              = 1 + ((num_faces > 2) ? 2 : 0) + 4;
+            config.f.exp_section_size                              = bfp_exp_section_size(1 /* index */, bfp2_row_bytes, num_faces);
             cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 0] = config.val[0];
-            config.f.exp_section_size                              = 1 + 1 + 8;
+            config.f.exp_section_size                              = bfp_exp_section_size(2 /* index */, bfp2_row_bytes, num_faces);
             cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 0] = config.val[0];
-            config.f.exp_section_size                              = 1 + 0 + 12;
+            config.f.exp_section_size                              = bfp_exp_section_size(3 /* index */, bfp2_row_bytes, num_faces);
             cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 0] = config.val[0];
         }
     }
@@ -646,7 +701,6 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
         TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::TRISC_CFG);
 
         // Override exp section size for packers 1,2,3
-        // Tile header + exp size + datum size
         TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 0 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP0_SEC_SIZE_BFP);
         if ((pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp8) || (pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp8_b))
         {
