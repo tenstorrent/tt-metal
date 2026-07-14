@@ -98,11 +98,13 @@ struct BinaryNgDeviceOperation {
     // cached program stays correct for a differently-shaped/-allocated in-place call. Ops without a
     // complete get_dynamic (unary/ternary/moreh_*) must NOT set this — they keep bailing (see #49573).
     //
-    // POLICY: this flag IS the correctness argument and nothing verifies it. Set it true ONLY with an
-    // accompanying in-place cache-hit regression test that varies shape/allocation across the hit and
+    // POLICY: this flag IS the correctness argument and nothing verifies it — the UNSAFE_ prefix is a
+    // deliberate hazard marker at the declaration site, not a normal tuning knob. Set it true ONLY with
+    // an accompanying in-place cache-hit regression test that varies shape/allocation across the hit and
     // asserts a single cache entry + PCC (test_binary_ng_program_cache.py: the interleaved cross-shape
-    // and sharded-readdress cases). No test → do not opt in.
-    static constexpr bool allow_inplace_program_cache_alias = true;
+    // and sharded-readdress cases). No test → do not opt in. (Removed once get_dynamic is made complete
+    // for all in-place ops, or a debug parity check lands, or descriptors move to Metal 2.0.)
+    static constexpr bool UNSAFE_optin_inplace_program_cache_alias = true;
 };
 
 }  // namespace ttnn::operations::binary_ng

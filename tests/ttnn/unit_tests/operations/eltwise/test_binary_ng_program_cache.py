@@ -105,7 +105,7 @@ def test_ng_cache_reuse_same_config(device, isolate_program_cache):
     ],
 )
 def test_ng_inplace_cache_reuse_different_shapes(device, isolate_program_cache, shape_first, shape_second):
-    """binary_ng opts in to the in-place program-cache fast path (allow_inplace_program_cache_alias,
+    """binary_ng opts in to the in-place program-cache fast path (UNSAFE_optin_inplace_program_cache_alias,
     #48928). An in-place add (output_tensor aliases input) with different logical shapes shares one
     cache entry (volume is excluded from the hash), so the second call is a cache HIT that reuses the
     first program WITHOUT rebuild. binary_ng's get_dynamic_runtime_args must re-derive every per-core
@@ -121,6 +121,9 @@ def test_ng_inplace_cache_reuse_different_shapes(device, isolate_program_cache, 
         tt_b = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         with device.cache_entries_counter.measure():
             tt_c = ttnn.add(tt_a, tt_b, output_tensor=tt_a)  # in-place
+        # Prove the op is ACTUALLY in-place: if a future change ignored output_tensor or allocated a
+        # fresh output, PCC + single-cache-entry would still pass while no longer testing the alias.
+        assert tt_c.buffer_address() == tt_a.buffer_address()
         return a + b, ttnn.to_torch(tt_c)
 
     ref1, out1 = inplace_add(shape_first, 0)
@@ -151,7 +154,8 @@ def test_ng_inplace_cache_hit_sharded_readdresses(device, isolate_program_cache)
         tt_a = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
         tt_b = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
         with device.cache_entries_counter.measure():
-            tt_c = ttnn.add(tt_a, tt_b, output_tensor=tt_a, memory_config=mem)  # in-place, sharded
+            tt_c = ttnn.add(tt_a, tt_b, output_tensor=tt_a)  # in-place, sharded (output preallocated)
+        assert tt_c.buffer_address() == tt_a.buffer_address()  # prove it's actually in-place
         keep_alive += [tt_a, tt_b, tt_c]
         assert_with_pcc(a + b, ttnn.to_torch(tt_c), 0.999)
 

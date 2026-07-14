@@ -446,14 +446,16 @@ public:
         }
 
         // Whether this op may take the program-cache fast path for an in-place output_tensor carried
-        // in tensor_args that aliases an input (see resolve_bindings' allow_inplace_output_tensor_alias).
+        // in tensor_args that aliases an input (drives resolve_bindings' allow_inplace_output_tensor_alias).
         // Default false — such a duplicate bails to the safe slow-path rebuild. An op opts in with
-        // `static constexpr bool allow_inplace_program_cache_alias = true;` ONLY if it re-applies every
-        // cache-hit-varying runtime arg itself (get_dynamic_runtime_args + Buffer* bindings); otherwise
-        // the shared cached program would be reused in-place with stale args (SDXL silu, MorehAdamW).
-        static consteval bool allow_inplace_program_cache_alias() {
-            if constexpr (requires { DeviceOperation::allow_inplace_program_cache_alias; }) {
-                return DeviceOperation::allow_inplace_program_cache_alias;
+        // `static constexpr bool UNSAFE_optin_inplace_program_cache_alias = true;` ONLY if it re-applies
+        // every cache-hit-varying runtime arg itself (get_dynamic_runtime_args + Buffer* bindings) AND
+        // ships an in-place cache-hit regression test; otherwise the shared cached program is reused
+        // in-place with stale args (SDXL silu, MorehAdamW). The UNSAFE_ name is the hazard marker — the
+        // flag is an unverified per-op waiver, not a tuning knob.
+        static consteval bool unsafe_optin_inplace_program_cache_alias() {
+            if constexpr (requires { DeviceOperation::UNSAFE_optin_inplace_program_cache_alias; }) {
+                return DeviceOperation::UNSAFE_optin_inplace_program_cache_alias;
             } else {
                 return false;
             }
@@ -510,7 +512,7 @@ public:
                         desc,
                         collected.buffers,
                         collected.num_input_buffers,
-                        allow_inplace_program_cache_alias());
+                        unsafe_optin_inplace_program_cache_alias());
                     mesh_workload.add_program(device_range, std::move(program));
                     shared_variables[device_range] = shared_variables_t{
                         .workload_descriptor = workload_descriptor, .resolved_bindings = std::move(bindings)};
@@ -536,7 +538,7 @@ public:
                             desc,
                             collected.buffers,
                             collected.num_input_buffers,
-                            allow_inplace_program_cache_alias());
+                            unsafe_optin_inplace_program_cache_alias());
                         mesh_workload.add_program(device_range, std::move(program));
                         shared_variables[device_range] = shared_variables_t{.resolved_bindings = std::move(bindings)};
                     };
