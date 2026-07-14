@@ -904,6 +904,12 @@ def test_ltx_transformer_block(
             audio_padding_mask_full=a_pad_full,
             video_padding_mask=v_pad_sp,
         )
+        # LTX_SKIP_CROSS_ATTN ablates the a2v/v2a cross-modal block to split the audio-path floor:
+        # (av) − (av skip-cross) isolates the cross-modal cost — the target of the A→V collective
+        # fold — and the residual is audio-self attention. The av path is WARM_FWD-only (no PCC),
+        # so dropping the cross-modal residual does not disturb any quality gate.
+        if os.environ.get("LTX_SKIP_CROSS_ATTN", "0") in ("1", "true", "True"):
+            forward_kwargs["skip_cross_attn"] = True
 
     # L1 quality gate: LTX_QUANT names a QuantConfig preset (e.g. all_bf8_lofi) to apply the
     # exact pipeline quant path (weight typecast + compute configs) to this block, then PCC it
