@@ -379,12 +379,6 @@ jobs:
   # Copilot PR type labeler — auto-label PRs by change type (feat/fix/docs/etc.)
   # on open, using the GitHub Copilot CLI.
   #
-  # TEST/DRAFT: this references the composite action at a specific branch ref
-  # (brain/copilot-pr-type-labeler) because the upstream PR that adds it is not
-  # yet merged: https://github.com/tenstorrent/tt-github-actions/pull/144
-  # TODO: switch the ref to @main once #144 merges (or revert this job if the
-  # test doesn't need to stay).
-  #
   # Job-level permissions (following the llk-label-pr convention above) — the
   # composite action needs contents:read, pull-requests:write, copilot-requests:write.
   copilot-pr-labeler:
@@ -398,7 +392,7 @@ jobs:
       copilot-requests: write
     runs-on: ubuntu-latest
     steps:
-      - uses: tenstorrent/tt-github-actions/.github/actions/copilot-pr-labeler@brain/copilot-pr-type-labeler
+      - uses: tenstorrent/tt-github-actions/.github/actions/copilot-pr-labeler@main
 
   # PR-gate LLK python_tests matrix (tests/pipeline_reorg/llk_pr_gate_tests.yaml).
   # SKU coverage is narrowed below based on find-changed-files outputs.
