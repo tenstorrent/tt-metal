@@ -690,20 +690,18 @@ class LTXPipeline:
 
     @staticmethod
     def _build_transformer_cache_name(checkpoint_path: str, lora_specs: list[LoraSpec]) -> str:
-        """Cache key for ``cache_module.load_model``. LoRA-tagged so fused and base
-        weights don't alias in ``TT_DIT_CACHE_DIR``; quant-tagged because cached
-        tensorbins carry their dtype — a bf8 quant run and the bf16 baseline must use
-        separate dirs or the loader dtype-clashes on a stale-precision cache hit."""
+        """Cache key for ``cache_module.load_model``. LoRA-tagged so fused and base weights don't
+        alias in ``TT_DIT_CACHE_DIR``: fusing rewrites values but no shape or dtype, so it is
+        invisible to the content key and the strength has to be spelled out here.
+
+        Quant carries no tag. The tensorbin dtype is already in the content key, via the
+        ``Parameter.dtype`` the preset sets before the load — so presets that differ only in
+        compute (``all_bf8_lofi_sdpa_bf8`` vs ``all_bf8_lofi``) share the weights they are
+        byte-identical in, and only a preset that restages a weight rebuilds the 22B cache."""
         base = os.path.basename(checkpoint_path).removesuffix(".safetensors")
         if lora_specs:
             tag = "+".join(f"{os.path.basename(s.path).removesuffix('.safetensors')}@{s.strength}" for s in lora_specs)
             base = f"{base}.lora-{tag}"
-        preset = os.environ.get("LTX_QUANT", "").strip()
-        if preset:
-            from .quant_config import QuantConfig
-
-            if callable(getattr(QuantConfig, preset, None)):
-                base = f"{base}.q-{preset}"
         return base
 
     def _new_transformer(self) -> LTXTransformerModel:
@@ -918,6 +916,7 @@ class LTXPipeline:
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             is_fsdp=self.is_fsdp,
+            sources=[self.checkpoint_name, *(s.path for s in state.lora_specs)],
             get_torch_state_dict=state.state_dict_provider,
             post_load_hook=getattr(self, "_transformer_post_load_hook", None),
         )
@@ -990,6 +989,7 @@ class LTXPipeline:
             subfolder=subfolder,
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            sources=[self._vae_checkpoint_path],
             get_torch_state_dict=_vae_state_provider,
         )
         logger.info(f"Loaded TTNN VAE decoder ({len(self._vae_decoder_blocks)} blocks)")
@@ -1021,6 +1021,7 @@ class LTXPipeline:
             subfolder=subfolder,
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            sources=[self._vae_checkpoint_path],
             get_torch_state_dict=_vae_encoder_state_provider,
         )
         logger.info(f"Loaded TTNN VAE encoder ({len(self._vae_encoder_blocks)} blocks)")
@@ -1240,6 +1241,7 @@ class LTXPipeline:
             subfolder=subfolder,
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            sources=[self._upsampler_path],
             get_torch_state_dict=_upsampler_state_provider,
         )
         logger.info("Loaded TTNN latent upsampler")
@@ -1884,6 +1886,7 @@ class LTXPipeline:
                 subfolder=dec_subfolder,
                 parallel_config=self.parallel_config,
                 mesh_shape=tuple(self.audio_mesh_device.shape),
+                sources=[self.checkpoint_name],
                 get_torch_state_dict=self._audio_decoder_state_provider,
             )
 
@@ -1894,6 +1897,7 @@ class LTXPipeline:
                 subfolder=voc_subfolder,
                 parallel_config=self.parallel_config,
                 mesh_shape=tuple(self.audio_mesh_device.shape),
+                sources=[self.checkpoint_name],
                 get_torch_state_dict=self._vocoder_state_provider,
             )
 
