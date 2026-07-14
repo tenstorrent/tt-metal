@@ -82,7 +82,7 @@ inline void init_topk_addr_mod() {
         .srcb = {.incr = 0},
         .dest = {.incr = 32},
     }
-        .set(ADDR_MOD_6, csr_read<CSR::TRISC_ID>());
+        .set(ADDR_MOD_6);
 }
 
 /**
