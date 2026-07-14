@@ -28,6 +28,7 @@ import socket
 import sys
 import time
 import zlib
+from ctypes import c_int32
 
 from loguru import logger
 
@@ -291,6 +292,17 @@ def _host_tag_int():
     return zlib.crc32(socket.gethostname().encode()) & 0x7FFFFFFF
 
 
+def _u32_to_i32(value):
+    """Reinterpret the low 32 bits of ``value`` as a signed int32.
+
+    ``allgather_int`` carries a SIGNED 32-bit int, but a KV base address word can set bit 31 (a
+    per-rank buffer landing >= 2 GB in a ~3.98 GB DRAM bank), which overflows the binding. Passing
+    the two's-complement view keeps the raw 32 bits intact; the receiver re-masks with
+    ``& 0xFFFFFFFF`` to recover the unsigned word.
+    """
+    return c_int32(value).value
+
+
 def allgather_kv_stage_layout(mesh_device, tt_kvpe_cache, mesh_shape, first_layer_idx, num_my_layers):
     """COLLECTIVE (all ranks): all-gather each rank's pipeline-STAGE layout so one merged table can
     span every layer across every host -- tt-blaze's layer->mesh merge strategy.
@@ -318,8 +330,8 @@ def allgather_kv_stage_layout(mesh_device, tt_kvpe_cache, mesh_shape, first_laye
 
     all_first = ttnn.distributed_context_allgather_int(int(first_layer_idx))
     all_count = ttnn.distributed_context_allgather_int(int(num_my_layers))
-    all_lo = ttnn.distributed_context_allgather_int(base_addr & 0xFFFFFFFF)
-    all_hi = ttnn.distributed_context_allgather_int((base_addr >> 32) & 0xFFFFFFFF)
+    all_lo = ttnn.distributed_context_allgather_int(_u32_to_i32(base_addr))
+    all_hi = ttnn.distributed_context_allgather_int(_u32_to_i32(base_addr >> 32))
     all_banks = ttnn.distributed_context_allgather_int(int(num_banks))
     all_host = ttnn.distributed_context_allgather_int(_host_tag_int())
 
