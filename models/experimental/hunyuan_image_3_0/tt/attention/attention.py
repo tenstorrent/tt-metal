@@ -29,6 +29,7 @@ from models.common.lightweightmodule import LightweightModule
 
 from ..cache import cache_file
 from ..matmul_utils import l1_sharded_linear, to_interleaved_if_sharded
+from ..parallel_utils import resid_mem_config
 from .rms_norm import HunyuanTtRMSNorm
 from .rope_2d import HunyuanTtRoPE2D
 
@@ -73,14 +74,14 @@ def _pad_kv_heads_for_decode(t: ttnn.Tensor, num_kv_heads: int, head_dim: int, p
     return ttnn.concat([t, pad_tt], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG), pad_tt
 
 
-def _repeat_interleave_heads(x: ttnn.Tensor, grp: int, dim: int) -> ttnn.Tensor:
+def _repeat_interleave_heads(x: ttnn.Tensor, grp: int, dim: int, memory_config=ttnn.L1_MEMORY_CONFIG) -> ttnn.Tensor:
     """Interleaved repeat along `dim` (e.g. [K0,K0,K0,K0,K1,K1,...] for grp=4), staying
     in TILE layout throughout. `dim` must not be one of the last two (tiled) dims —
     unsqueeze/concat/reshape on a non-tiled leading dim are metadata-only w.r.t. tiling,
     unlike ttnn.repeat_interleave, which round-trips through ROW_MAJOR internally.
     """
     unsq = ttnn.unsqueeze(x, dim + 1)
-    expanded = ttnn.concat([unsq] * grp, dim=dim + 1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    expanded = ttnn.concat([unsq] * grp, dim=dim + 1, memory_config=memory_config)
     out_shape = list(x.shape)
     out_shape[dim] *= grp
     return ttnn.reshape(expanded, out_shape)
@@ -281,6 +282,12 @@ class HunyuanTtAttention(LightweightModule):
         if self.sp_factor > 1:
             assert attention_mask is not None, "SP attention requires an explicit (query-sharded) mask"
 
+        # Attention intermediates run on the per-device (sp-sharded) sequence x.shape[1].
+        # Keep them L1-resident up to the measured CB-clash bound, else DRAM — same gate
+        # as the residual stream (parallel_utils.resid_mem_config). Above the bound these
+        # ops' CBs would otherwise collide with the resident intermediates.
+        attn_mc = resid_mem_config(x.shape[1])
+
         # ---- 1. Fused QKV projection ----------------------------------------
         # x: [B, S, H]  →  xqkv: [B, S, Q_dim + 2*KV_dim]
         xqkv = l1_sharded_linear(
@@ -306,7 +313,7 @@ class HunyuanTtAttention(LightweightModule):
             num_heads=self.num_heads,
             num_kv_heads=self.num_kv_heads,
             transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=attn_mc,
         )
         xqkv_4d.deallocate(True)  # frees xqkv's buffer too (reshape is a view)
 
@@ -320,8 +327,8 @@ class HunyuanTtAttention(LightweightModule):
             # q_rot/k_rot are [B, heads, S, head_dim].
             # ttnn.rms_norm normalises the last dim — applies over head_dim dimension,
             # which is exactly what Hunyuan's per-head layernorm does.
-            q_rot = self.query_norm(q_rot)
-            k_rot = self.key_norm(k_rot)
+            q_rot = self.query_norm(q_rot, out_memory_config=attn_mc)
+            k_rot = self.key_norm(k_rot, out_memory_config=attn_mc)
 
         if use_cache and kv_cache is not None:
             past_k, past_v = kv_cache.get(layer_idx)
@@ -389,8 +396,8 @@ class HunyuanTtAttention(LightweightModule):
         # via unsqueeze+concat+reshape on the (non-tiled) heads dim, staying in TILE.
         if self.num_kv_heads < self.num_heads:
             grp = self.num_heads // self.num_kv_heads
-            k_attn = _repeat_interleave_heads(k_attn, grp, dim=1)
-            v_attn = _repeat_interleave_heads(v_attn, grp, dim=1)
+            k_attn = _repeat_interleave_heads(k_attn, grp, dim=1, memory_config=attn_mc)
+            v_attn = _repeat_interleave_heads(v_attn, grp, dim=1, memory_config=attn_mc)
 
         # ---- 6. SDPA -------------------------------------------------------
         is_causal = attention_mask is None and not use_cache
@@ -401,6 +408,7 @@ class HunyuanTtAttention(LightweightModule):
             is_causal=is_causal,
             attn_mask=attention_mask,
             compute_kernel_config=self.compute_kernel_config,
+            memory_config=attn_mc,
         )
         q_rot.deallocate(True)
         if not use_cache:
@@ -411,7 +419,7 @@ class HunyuanTtAttention(LightweightModule):
         # [B, num_heads, S, head_dim] → [B, S, hidden_size]
         attn_out = ttnn.experimental.nlp_concat_heads(
             attn_out,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=attn_mc,
         )
 
         # ---- 8. Output projection -------------------------------------------
@@ -440,6 +448,7 @@ class HunyuanTtAttention(LightweightModule):
         shape = list(gathered.shape)
         B = shape[0] // n
         gathered = ttnn.reshape(gathered, (n, B, *shape[1:]))
-        out = ttnn.sum(gathered, dim=0)
+        # partial is [B,1,Sd,H] — gate on the per-device seq (dim 2) like the rest.
+        out = ttnn.sum(gathered, dim=0, memory_config=resid_mem_config(shape[-2]))
         ttnn.deallocate(gathered)
         return out
