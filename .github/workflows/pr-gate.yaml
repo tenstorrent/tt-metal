@@ -421,7 +421,7 @@ jobs:
          needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
          needs.find-changed-files.outputs.llk-ci-changed == 'true')
       }}
-    runs-on: tt-ubuntu-2204-large-stable
+    runs-on: tt-ubuntu-2204-xlarge-stable
     timeout-minutes: 20
     container:
       image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
