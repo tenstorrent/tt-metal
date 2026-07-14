@@ -4,23 +4,41 @@
 # Shared pytest fixtures for the HunyuanImage-3.0 PCC tests.
 
 import sys
+from pathlib import Path
 
 import pytest
 
-ROOT = "/home/iguser/ign-tt/tt-metal"
-HUNYUAN = "/home/iguser/ign-tt/hunyan_instruct"
-for _p in (ROOT, HUNYUAN):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+ROOT = Path(__file__).resolve().parents[5]
+PCC_DIR = Path(__file__).resolve().parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+if str(PCC_DIR) not in sys.path:
+    sys.path.insert(0, str(PCC_DIR))
 
 
-@pytest.fixture(scope="session")
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "unit_host: host-only unit tests (mock logits); excluded from on-device PCC sweeps",
+    )
+    config.addinivalue_line(
+        "markers",
+        "e2e_random_inputs: integration test with random latent/text embeds; opt-in via HY_RUN_E2E_RANDOM=1",
+    )
+
+
+def pytest_collection_modifyitems(items):
+    """Production slow tests (32L load) exceed the global 300s pytest.ini timeout."""
+    for item in items:
+        if "slow" in item.keywords and not any(m.name == "timeout" for m in item.iter_markers()):
+            item.add_marker(pytest.mark.timeout(10800))
+
+
+@pytest.fixture(scope="function")
 def device():
-    """One TTNN device shared across the test session (open is expensive)."""
+    """Function-scoped device — safe for single-device and mesh tests."""
     import ttnn
 
-    # l1_small_size is required by conv2d (halo/sliding-window scratch buffers);
-    # harmless for the conv-free tests that share this fixture.
     dev = ttnn.open_device(device_id=0, l1_small_size=32768)
     yield dev
     ttnn.close_device(dev)

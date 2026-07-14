@@ -77,13 +77,14 @@ class HunyuanImage3DecoderLayer(nn.Module):
         self.input_layernorm = HunyuanRMSNorm(hidden_size, eps=rms_norm_eps)
         self.post_attention_layernorm = HunyuanRMSNorm(hidden_size, eps=rms_norm_eps)
 
-    def forward(self, hidden_states, attention_mask=None, custom_pos_emb=None):
+    def forward(self, hidden_states, attention_mask=None, custom_pos_emb=None, **kwargs):
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
         hidden_states, _, _ = self.self_attn(
             hidden_states,
             attention_mask=attention_mask,
             custom_pos_emb=custom_pos_emb,
+            **kwargs,
         )
         hidden_states = residual + hidden_states
 

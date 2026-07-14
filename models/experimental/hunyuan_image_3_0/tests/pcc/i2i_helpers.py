@@ -14,11 +14,14 @@ from PIL import Image
 from safetensors import safe_open
 
 ROOT = Path(__file__).resolve().parents[5]
-HUNYUAN = Path(os.environ.get("HUNYUAN_UPSTREAM", "/home/iguser/ign-tt/hunyan_instruct"))
-for p in (str(ROOT), str(HUNYUAN)):
+HUNYUAN_UPSTREAM = os.environ.get("HUNYUAN_UPSTREAM")
+for p in (str(ROOT),):
     if p not in sys.path:
         sys.path.insert(0, p)
+if HUNYUAN_UPSTREAM and HUNYUAN_UPSTREAM not in sys.path:
+    sys.path.insert(0, HUNYUAN_UPSTREAM)
 
+from models.experimental.hunyuan_image_3_0.ref.attention.rope_2d import build_batch_2d_rope
 from models.experimental.hunyuan_image_3_0.ref.image_gen.patch_embed import UNetDown as RefDown, UNetUp as RefUp
 from models.experimental.hunyuan_image_3_0.ref.image_gen.timestep_embedder import TimestepEmbedder as RefTimeEmbed
 from models.experimental.hunyuan_image_3_0.ref.image_processor import HunyuanImage3ImageProcessor
@@ -274,8 +277,6 @@ def ref_i2i_step(
     *,
     num_layers=NUM_LAYERS,
 ):
-    from hunyuan_image_3.modeling_hunyuan_image_3 import build_batch_2d_rope
-
     h_dim = c["H"]
     latent_ch, hid, hsz = pe_dims(down_sd)
     ref_down = RefDown(1, latent_ch, hsz, hid, hsz).eval()

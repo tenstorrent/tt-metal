@@ -21,6 +21,11 @@
 # loads each expert's weights, runs it, and frees them before the next expert,
 # bounding device memory to ~one expert at a time (needed for the 64-expert
 # real-weight layer); set it False to pre-load all experts for speed.
+#
+# Host RAM: streaming still needs expert tensors to rebuild MLPs each forward.
+# Retaining the full layer state_dict across a 32-layer stack pins ~150–200GB and
+# gets SIGTERM'd by the OOM killer mid-backbone-load. Call ``bind_expert_loader``
+# (done by HunyuanTtModel) to swap retained tensors for on-demand disk reads.
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -57,8 +62,8 @@ class HunyuanTtMoE(LightweightModule):
         self.use_mixed_mlp_moe = use_mixed_mlp_moe
         self.weight_dtype = weight_dtype
         self.stream_experts = stream_experts
-        self.state_dict = state_dict
         self.prefix = prefix
+        self._expert_loader = None
 
         self.gate = HunyuanTtTopKGate(
             device,
@@ -82,6 +87,34 @@ class HunyuanTtMoE(LightweightModule):
                 HunyuanTtMLP(device, hidden_size, state_dict, f"{prefix}.experts.{i}", weight_dtype=weight_dtype)
                 for i in range(num_experts)
             ]
+            # Experts now live on device; drop the host-RAM reference to this
+            # layer's torch weights so the backbone loader's `del sd; gc.collect()`
+            # can actually free them.
+            self.state_dict = None
+        else:
+            # Keep expert tensors only (gate/shared already uploaded). Single-layer
+            # PCC fits; multi-layer stacks must call bind_expert_loader().
+            expert_pfx = f"{prefix}.experts."
+            self.state_dict = {k: v for k, v in state_dict.items() if k.startswith(expert_pfx)}
+
+    def bind_expert_loader(self, loader):
+        """Use ``loader(expert_idx) -> state_dict`` and drop retained host experts.
+
+        ``loader`` must return a dict containing
+        ``{prefix}.experts.{e}.gate_and_up_proj.weight`` and
+        ``{prefix}.experts.{e}.down_proj.weight`` for the requested expert.
+        """
+        if not self.stream_experts:
+            raise RuntimeError("bind_expert_loader requires stream_experts=True")
+        self._expert_loader = loader
+        self.state_dict = None
+
+    def _expert_state_dict(self, expert_idx: int) -> dict:
+        if self._expert_loader is not None:
+            return self._expert_loader(expert_idx)
+        if self.state_dict is None:
+            raise RuntimeError("streaming MoE has no state_dict or expert_loader")
+        return self.state_dict
 
     def _gate_weights(self, x):
         """Run the gate once and return its top-k routing on device:
@@ -120,7 +153,7 @@ class HunyuanTtMoE(LightweightModule):
                 else HunyuanTtMLP(
                     self.device,
                     self.hidden_size,
-                    self.state_dict,
+                    self._expert_state_dict(e),
                     f"{self.prefix}.experts.{e}",
                     weight_dtype=self.weight_dtype,
                 )

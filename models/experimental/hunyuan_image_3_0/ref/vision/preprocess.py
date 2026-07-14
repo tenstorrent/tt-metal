@@ -54,40 +54,44 @@ def vit_process_image(processor, image):
     `pixel_values`, the token grid `spatial_shapes`, and the per-patch
     `pixel_attention_mask` (1 = real patch, 0 = pad).
 
+    Always keeps a leading batch dim so the TT upload path
+    (`to_vision_inputs` / `Siglip2VisionInputs`) can unpack ``[B, S, ...]``.
+
     Returns:
         pixel_values:         torch [B, max_num_patches, 3*patch**2] float32
-        spatial_shapes_hw:    tuple of (token_h, token_w) per image
+        spatial_shapes_hw:    tuple of (token_h, token_w) per batch item, e.g. ``((h, w),)``
         pixel_attention_mask: torch [B, max_num_patches]
     """
     out = processor(image)
     pixel_values = out["pixel_values"]
     if isinstance(pixel_values, list):
-        pixel_values = pixel_values[0] if len(pixel_values) == 1 else torch.stack(pixel_values)
+        pixel_values = torch.stack(pixel_values) if len(pixel_values) > 1 else pixel_values[0]
     pixel_values = pixel_values.to(torch.float32)
-    if pixel_values.ndim == 3 and pixel_values.shape[0] == 1:
-        pixel_values = pixel_values.squeeze(0)
+    if pixel_values.ndim == 2:
+        pixel_values = pixel_values.unsqueeze(0)
 
     pixel_attention_mask = out["pixel_attention_mask"]
     if isinstance(pixel_attention_mask, list):
         pixel_attention_mask = (
-            pixel_attention_mask[0] if len(pixel_attention_mask) == 1 else torch.stack(pixel_attention_mask)
+            torch.stack(pixel_attention_mask) if len(pixel_attention_mask) > 1 else pixel_attention_mask[0]
         )
-    if (
-        isinstance(pixel_attention_mask, torch.Tensor)
-        and pixel_attention_mask.ndim == 2
-        and pixel_attention_mask.shape[0] == 1
-    ):
-        pixel_attention_mask = pixel_attention_mask.squeeze(0)
+    if isinstance(pixel_attention_mask, torch.Tensor) and pixel_attention_mask.ndim == 1:
+        pixel_attention_mask = pixel_attention_mask.unsqueeze(0)
 
     spatial_shapes = out["spatial_shapes"]
     if isinstance(spatial_shapes, list):
-        spatial_shapes = spatial_shapes[0] if len(spatial_shapes) == 1 else spatial_shapes
+        spatial_shapes = spatial_shapes[0] if len(spatial_shapes) == 1 else torch.stack(spatial_shapes)
     if isinstance(spatial_shapes, torch.Tensor):
-        if spatial_shapes.ndim == 2 and spatial_shapes.shape[0] == 1:
-            spatial_shapes = spatial_shapes.squeeze(0)
-        spatial_shapes_hw = (int(spatial_shapes[0]), int(spatial_shapes[1]))
+        if spatial_shapes.ndim == 1:
+            spatial_shapes_hw = ((int(spatial_shapes[0]), int(spatial_shapes[1])),)
+        else:
+            spatial_shapes_hw = tuple(
+                (int(spatial_shapes[i, 0]), int(spatial_shapes[i, 1])) for i in range(spatial_shapes.shape[0])
+            )
+    elif isinstance(spatial_shapes, tuple) and len(spatial_shapes) == 2 and not isinstance(spatial_shapes[0], tuple):
+        spatial_shapes_hw = ((int(spatial_shapes[0]), int(spatial_shapes[1])),)
     elif isinstance(spatial_shapes, tuple):
-        spatial_shapes_hw = (int(spatial_shapes[0]), int(spatial_shapes[1]))
+        spatial_shapes_hw = tuple((int(h), int(w)) for h, w in spatial_shapes)
     else:
         raise TypeError(f"unexpected spatial_shapes type: {type(spatial_shapes)}")
     return pixel_values, spatial_shapes_hw, pixel_attention_mask

@@ -79,8 +79,8 @@ and default to 32 backbone layers (`HY_NUM_LAYERS=32`).
 
 | Variant | Demo | Steps | CFG | Checkpoint env / default path |
 |---|---|---:|---|---|
-| **Base** T2I | `demo/demo.py` | 50 | yes (`HY_GUIDANCE=5.0`) | `HUNYUAN_MODEL_DIR` (local `/home/iguser/ign-tt/base`, or HF `tencent/HunyuanImage-3.0`) |
-| **Instruct** I2I | `demo/demo_i2i.py` | 50 | yes (`HY_GUIDANCE=2.5`) | `HUNYUAN_INSTRUCT_MODEL_DIR` (local `/home/iguser/ign-tt/hunyan_instruct`, or HF `tencent/HunyuanImage-3.0-Instruct`) |
+| **Base** T2I | `demo/demo.py` | 50 | yes (`HY_GUIDANCE=5.0`) | `HUNYUAN_MODEL_DIR` (or HF `tencent/HunyuanImage-3.0`) |
+| **Instruct** I2I | `demo/demo_i2i.py` | 50 | yes (`HY_GUIDANCE=2.5`) | `HUNYUAN_INSTRUCT_MODEL_DIR` (or HF `tencent/HunyuanImage-3.0-Instruct`) |
 | **Instruct-Distil** I2I | `demo/demo_i2i.py --distil` | 8 | no (distilled) | `HUNYUAN_INSTRUCT_DISTIL_MODEL_DIR` (HF `tencent/HunyuanImage-3.0-Instruct-Distil`) |
 
 ### Base text-to-image
@@ -193,26 +193,26 @@ Without `HY_STEPS`, Instruct defaults to 50 steps and Distil to 8 (from each che
 - Flow-matching scheduler — `tt/scheduler.py`
 - VAE encoder / decoder blocks (Conv3D) — `tt/vae/`
 - **Full-res VAE decode on device** — `tt/vae/spatial.py` H/W-spatial-parallel
-  (each device a 512² quadrant of 1024²); `tests/vae/test_decode_latent_spatial.py`
-  vs fp32 reference: PCC 0.999489, no OOM. **Optional trace VAE decode**
+  (each device a 512² quadrant of 1024²); `tests/vae/test_decode_pipeline.py`
+  (`test_decode_latent_spatial_vs_reference`) vs fp32 reference: PCC 0.999489, no OOM. **Optional trace VAE decode**
   (``HY_VAE_DECODE_TRACE=1`` with ``HY_TRACE=1``): CQ0 ``execute_trace`` via
   ``tt/stage_trace.py``; 2CQ async RGB D2H — see ``tt/vae_dual_cq.py``.
 - **On-device single denoise step** — `tt/pipeline.py` `HunyuanTtDenoiseStep`
-  (`tests/pcc/test_pipeline_step.py`): 4-layer PCC 0.99999, full 32-layer PCC 0.983.
+  (`tests/pcc/test_pipeline.py`): 4-layer PCC 0.99999, full 32-layer PCC 0.983.
   Device-side scatter (concat) + image-span slice; no host round-trips.
 - **Multi-step denoise loop** — `tt/pipeline.py` `denoise_loop`
-  (`tests/pcc/test_denoise_loop.py`, PCC 0.99999): per-step timestep embedding,
+  (`tests/pcc/test_denoise.py`, PCC 0.99999): per-step timestep embedding,
   scheduler Euler update, CFG. **Trace denoise** (``HY_TRACE=1`` and steps >
   ``HY_DENOISE_TRACE_MIN_STEPS``): CQ0 ``execute_trace`` CFG loop via ``tt/stage_trace.py``;
   2CQ latent D2H fallback — see ``tt/denoise_dual_cq.py``.
-- **`decode_latent` glue** — `tt/pipeline.py` (`tests/vae/test_decode_latent.py`):
+- **`decode_latent` glue** — `tt/pipeline.py` (`tests/vae/test_decode_pipeline.py`):
   scaling / temporal-dim / denormalize wiring verified with an injected decoder.
 
 ### Known issues / blockers
 - ~~**VAE full-res decode OOMs.**~~ RESOLVED — the decoder is now H/W-spatial-parallel
   across the 2×2 mesh (`tt/vae/spatial.py`), so each device holds a 512² quadrant and the
   conv im2col is 4× smaller per shard. Full 1024² decode runs with no OOM, PCC 0.999489 vs
-  fp32 reference (`tests/vae/test_decode_latent_spatial.py`). See MEMORY_FIT_PLAN.md.
+  fp32 reference (`tests/vae/test_decode_pipeline.py`). See MEMORY_FIT_PLAN.md.
 - **32-layer backbone drift:** free-running PCC ≈ 0.88 (bf16) for the standalone backbone;
   the full denoise step composes to 0.983. Audit before final image fidelity.
 - **Host RAM:** 32 layers resident with `stream_experts=True` ≈ 150 GB host RAM
@@ -240,7 +240,7 @@ Without `HY_STEPS`, Instruct defaults to 50 steps and Distil to 8 (from each che
 6. **VAE upsample memory** — chunk/shard/stream the DCAE upsample (the Phase-1 VAE
    blocker is really this work).
 7. Resolve 32-layer bf16 drift (precision audit; candidate ops: MoE accumulation,
-   RMSNorm, attention softmax). **Instrument:** `tests/pcc/test_model_teacher_forced.py::
+   RMSNorm, attention softmax). **Instrument:** `tests/pcc/test_teacher_forced.py::
    test_bf8_mixed_precision_audit` sweeps each layer at bf16 vs bf8 against the fp32 golden
    and prints the recommended `bf16_layers` set (layers whose bf8 per-layer PCC < 0.99).
    Run it on the box, then feed the result into `HunyuanTtModel(bf16_layers=...)` / `demo.py`.
@@ -292,27 +292,70 @@ Vision input path — device pieces + host glue DONE; full on-box AR decode rema
 
 ---
 
+## PCC thresholds and exceptions
+
+Default gates live in `tests/pcc/pcc_common.py` and `tests/pcc/pipeline_helpers.py`.
+Tests compare TT output against the PyTorch `ref/` path. **Activations** (hidden states,
+latents, text embeds) are randomly generated; **weights** come from the HF checkpoint.
+
+| Threshold | Value | Test / module | Notes |
+|-----------|------:|---------------|-------|
+| `PCC_STRICT` | 0.999 | RMSNorm, RoPE, MoE expert FFN, WTE, **lm_head @ S=4160** | Per-block strict gate |
+| `PCC_BLOCK` | 0.99 | Attention, decoder layer, teacher-forced final, 32L production backbone | Default block gate; production gates at S=1 + S=4160 |
+| `PCC_CHAINED` | 0.86 | 32L chained free-running final hidden | Accumulated drift across layers |
+| `PCC_DECODE_STACK` | 0.96 | Backbone at **S=1** (decode smoke) | Lower bar for single-token stack |
+| `PCC_LOGIT_DECODE` | 0.96 | `test_logit_stack_production_pcc` at S=1 | 32L **teacher-forced** logits (free-running S=1 ~0.59 — known MoE drift) |
+| `PCC_LOGIT_PREFILL` | 0.85 | `test_logit_stack_production_pcc` at S=4160 | 32L chained last-token logits |
+| `PCC_LOGIT_MAX_CONTEXT` | 0.85 | `test_logit_stack_max_context_pcc` | 32L last-token at S=22784 (production slow CI) |
+| `PCC_PIPELINE` | 0.98 | Reserved pipeline constant | See denoise/e2e rows below |
+| Denoise step (≤8L, bf16) | 0.99 | `test_pipeline.py` / `pipeline_pcc_threshold` | |
+| Denoise step (32L, bf16) | 0.85 | `test_denoise_step_production_32l_pcc`, `test_i2i_denoise_step_production_32l_pcc` | **Observed ~0.983** (T2I); threshold is conservative |
+| Denoise step (bf8) | 0.90 | `pipeline_pcc_threshold(bf8)` | |
+| Resident mesh denoise | 0.98 | `test_denoise_step_resident_mesh` | |
+| E2E latent | 0.98 | `test_e2e_pipeline` (`HY_LATENT_PCC`) | Random latent/text inputs; **opt-in** (`HY_RUN_E2E_RANDOM=1`) |
+| E2E RGB | 0.97 | `test_e2e_pipeline` (`HY_RGB_PCC`) | |
+| `test_generate.py` | — | Host unit tests (`@pytest.mark.unit_host`) | Mock logits (V=64); excluded from smoke/PCC sweeps |
+| Recaption AR | greedy token match | `test_recaption_production_greedy_tokens` | 32L instruct; not PCC (token parity) |
+| Scheduler | 0.99 | `test_scheduler.py` | **Smoke tier only** — deterministic ref match; not in production script |
+| Timestep embedders | 0.999 | `test_timestep_embedder_pcc` | **Smoke tier only** — scalar/batch timesteps @ S≤32; not in production script |
+| lm_head (standalone) | 0.99 / 0.999 | `test_lm_head.py` | Smoke @ S=32 (`PCC_THR=0.99`); **production last-token @ S=4160** (`PCC_STRICT`); integrated path in logit stack |
+| I2I denoise step | 0.85 | `test_i2i_denoise_step_production_32l_pcc` | 32L instruct bundle @ 1024²; in production slow CI |
+| Vision / VAE | varies | `tests/vision/`, `tests/vae/` | Separate subtrees; not in backbone production script |
+| VAE spatial decode | 0.99 | `test_decode_latent_spatial_vs_reference` | **Observed ~0.999489** |
+| Free-running 32L backbone | ~0.88 | Known issue (not a CI gate) | See blockers below |
+| 32L chained decode hidden | 0.96 | `test_backbone_production_32l_decode_pcc` | Chained, not teacher-forced |
+| Attention mask | bitwise | `test_mask_production_pcc` | Exact match @ S=4160 image layout |
+
+Override e2e thresholds with `HY_LATENT_PCC` / `HY_RGB_PCC`. Denoise weight dtype via
+`HY_WEIGHT_DTYPE=bf8` and layer precision via `HY_BF16_LAYERS=0,1,...`.
+
+---
+
 ## Running tests
 
 ```bash
 # Single block (example)
 python_env/bin/python -m pytest \
-  models/experimental/hunyuan_image_3_0/tests/pcc/test_transformer_layer.py -v -s
+  models/experimental/hunyuan_image_3_0/tests/pcc/test_transformer.py -v -s
 
 # On-device denoise step + multi-step loop
 python_env/bin/python -m pytest \
-  models/experimental/hunyuan_image_3_0/tests/pcc/test_pipeline_step.py \
-  models/experimental/hunyuan_image_3_0/tests/pcc/test_denoise_loop.py -v -s
+  models/experimental/hunyuan_image_3_0/tests/pcc/test_pipeline.py \
+  models/experimental/hunyuan_image_3_0/tests/pcc/test_denoise.py -v -s
 
 # Full 32-layer single step on real weights (slow, ~6 min)
 HY_NUM_LAYERS=32 python_env/bin/python -m pytest \
-  models/experimental/hunyuan_image_3_0/tests/pcc/test_pipeline_step.py -v -s
+  models/experimental/hunyuan_image_3_0/tests/pcc/test_pipeline.py -k denoise_step -v -s
+
+# Production slow CI gate (32L, GRID=64, S=4160 + S=22784 max-context, submodule gates)
+bash models/experimental/hunyuan_image_3_0/tests/run_pcc_production_slow.sh
 ```
 
 Checkpoint weights (sharded safetensors + `*.index.json` + `config.json`):
 
-- **Base:** `HUNYUAN_MODEL_DIR` — local `/home/iguser/ign-tt/base`, or newest HF hub snapshot for `tencent/HunyuanImage-3.0`
-- **Instruct:** `HUNYUAN_INSTRUCT_MODEL_DIR` — local `/home/iguser/ign-tt/hunyan_instruct`, or HF `tencent/HunyuanImage-3.0-Instruct`
+- **Base:** `HUNYUAN_MODEL_DIR` — or newest HF hub snapshot for `tencent/HunyuanImage-3.0`
+- **Instruct:** `HUNYUAN_INSTRUCT_MODEL_DIR` — or HF `tencent/HunyuanImage-3.0-Instruct`
+- **Upstream parity:** `HUNYUAN_UPSTREAM` — local clone of the `hunyuan_image_3` Python package (tokenizer tests)
 - **Distil:** `HUNYUAN_INSTRUCT_DISTIL_MODEL_DIR` — HF `tencent/HunyuanImage-3.0-Instruct-Distil`
 
 Demos call `ensure_*_weights()` in `ref/weights.py`: env override first, then HF hub cache, auto-download on first run.

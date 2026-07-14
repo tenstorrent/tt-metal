@@ -1,9 +1,16 @@
 import sys
+from pathlib import Path
 
-sys.path.insert(0, "/home/iguser/ign-tt/tt-metal")
-import pytest, torch, ttnn
+import pytest
+import torch
+import ttnn
 from loguru import logger
 from models.common.utility_functions import comp_pcc
+
+ROOT = Path(__file__).resolve().parents[5]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 import models.experimental.hunyuan_image_3_0.tt.vae.decoder as dec
 
 

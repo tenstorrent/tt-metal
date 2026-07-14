@@ -31,7 +31,7 @@
 #     HY_OUT         output PNG path (default ./hy_e2e.png).
 #
 # PCC validation against an fp32 host reference lives in the separate test
-# tests/pcc/test_e2e_pipeline.py, which imports run_denoise / run_vae_decode from
+# tests/pcc/test_pipeline.py, which imports run_denoise / run_vae_decode from
 # this file so the device pipeline is defined exactly once.
 #
 # Run (base, full 1024x1024, heavy):
