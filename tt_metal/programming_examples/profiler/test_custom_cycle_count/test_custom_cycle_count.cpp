@@ -48,16 +48,14 @@ bool RunCustomCycle(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
                 .source = dm_src,
                 .num_threads = 6,
                 .compiler_options = {.defines = defines},
-                .hw_config =
-                    experimental::DataMovementHardwareConfig{
-                        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+                .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen2Config{}},
             },
             experimental::KernelSpec{
                 .unique_id = COMPUTE_KERNEL,
                 .source = compute_src,
                 .num_threads = 4,
                 .compiler_options = {.defines = defines},
-                .hw_config = experimental::ComputeHardwareConfig{},
+                .hw_config = experimental::ComputeGen2Config{},
             },
         };
         wu_kernels = {DM_KERNEL, COMPUTE_KERNEL};
@@ -71,29 +69,23 @@ bool RunCustomCycle(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
                 .source = dm_src,
                 .num_threads = 1,
                 .compiler_options = {.defines = defines},
-                .hw_config =
-                    experimental::DataMovementHardwareConfig{
-                        .gen1_config =
-                            experimental::DataMovementHardwareConfig::Gen1Config{
-                                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}},
+                .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
+                    .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}},
             },
             experimental::KernelSpec{
                 .unique_id = NCRISC_KERNEL,
                 .source = dm_src,
                 .num_threads = 1,
                 .compiler_options = {.defines = defines},
-                .hw_config =
-                    experimental::DataMovementHardwareConfig{
-                        .gen1_config =
-                            experimental::DataMovementHardwareConfig::Gen1Config{
-                                .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default}},
+                .hw_config = experimental::DataMovementHardwareConfig{experimental::DataMovementGen1Config{
+                    .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default}},
             },
             experimental::KernelSpec{
                 .unique_id = COMPUTE_KERNEL,
                 .source = compute_src,
                 .num_threads = 1,
                 .compiler_options = {.defines = defines},
-                .hw_config = experimental::ComputeHardwareConfig{},
+                .hw_config = experimental::ComputeGen1Config{},
             },
         };
         wu_kernels = {BRISC_KERNEL, NCRISC_KERNEL, COMPUTE_KERNEL};
