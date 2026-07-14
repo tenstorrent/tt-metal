@@ -48,8 +48,7 @@ constexpr uint32_t kScratchBytes = 8 * 1024;
 constexpr uint32_t kZeroBytes = 2 * 1024;
 
 experimental::DataMovementHardwareConfig make_hw_config() {
-    return experimental::DataMovementHardwareConfig{
-        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}};
+    return experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
 }
 
 Program make_program(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {

@@ -8,6 +8,8 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -82,7 +84,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedProgramFactory::c
             .endpoint_type = DFBEndpointType::PRODUCER,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(input.device()->arch()),
     };
 
     // -- Writer kernel --
@@ -96,13 +98,16 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedProgramFactory::c
             .endpoint_type = DFBEndpointType::CONSUMER,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"num_units"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config = ttnn::create_writer_datamovement_config(input.device()->arch()),
     };
 
     // -- Compute kernel --
-    ComputeHardwareConfig compute_hw{.fp32_dest_acc_en = fp32_llk_acc};
+    ttnn::ComputeKernelConfig compute_config{
+        .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_llk_acc};
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(input.device()->arch(), compute_config);
     if (fp32_llk_acc) {
-        compute_hw.unpack_to_dest_mode = {{INPUT_DFB, UnpackToDestMode::UnpackToDestFp32}};
+        std::visit(
+            [&](auto& c) { c.unpack_to_dest_mode.emplace(INPUT_DFB, UnpackToDestMode::UnpackToDestFp32); }, compute_hw);
     }
     KernelSpec compute{
         .unique_id = COMPUTE_KERNEL,

@@ -111,15 +111,15 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
         *mesh_device, make_alias_dram_tensor_spec(entry_size_b, num_entries_b), TensorTopology{});
 
     // DM kernel configs (Gen1 + Gen2 variants so the same spec runs everywhere).
-    const DataMovementHardwareConfig producer_cfg{
-        .gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_0},
-        .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true},
-    };
-    const DataMovementHardwareConfig consumer_cfg{
-        .gen1_config =
-            DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1},
-        .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true},
-    };
+    DataMovementHardwareConfig producer_cfg;
+    DataMovementHardwareConfig consumer_cfg;
+    if (mesh_device->arch() == ARCH::QUASAR) {
+        producer_cfg = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        consumer_cfg = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+    } else {
+        producer_cfg = DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
+        consumer_cfg = DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
+    }
 
     DataflowBufferSpec dfb_a{
         .unique_id = experimental::DFBSpecName{"dfb_a"},
@@ -275,7 +275,7 @@ void run_alias_dfb_program(
     detail::WriteToBuffer(*in_a.mesh_buffer().get_reference_buffer(), input_a);
     detail::WriteToBuffer(*in_b.mesh_buffer().get_reference_buffer(), input_b);
 
-    if (mesh_device->get_devices()[0]->arch() == ARCH::QUASAR) {
+    if (mesh_device->arch() == ARCH::QUASAR) {
         // TODO #38042: barrier for Quasar DRAM write visibility.
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
@@ -322,15 +322,15 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
     MeshTensor ring  = MeshTensor::allocate_on_device(
         *mesh_device, make_alias_l1_tensor_spec(entry_size, num_entries), TensorTopology{});
 
-    const DataMovementHardwareConfig producer_cfg{
-        .gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_0},
-        .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true},
-    };
-    const DataMovementHardwareConfig consumer_cfg{
-        .gen1_config =
-            DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1},
-        .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true},
-    };
+    DataMovementHardwareConfig producer_cfg;
+    DataMovementHardwareConfig consumer_cfg;
+    if (mesh_device->arch() == ARCH::QUASAR) {
+        producer_cfg = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        consumer_cfg = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+    } else {
+        producer_cfg = DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
+        consumer_cfg = DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
+    }
 
     // dfb_borrowed: backed by ring_tensor (L1)
     DataflowBufferSpec dfb_borrowed{
@@ -472,7 +472,7 @@ TEST_F(MeshDeviceFixture, AliasDFBDataFlow1Sx1S) {
 }
 
 TEST_F(MeshDeviceFixture, AliasDFBDataFlow2Sx4S) {
-    if (devices_.at(0)->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Multi-producer DFB requires Quasar TC hardware";
     }
     run_alias_dfb_program(
@@ -483,7 +483,7 @@ TEST_F(MeshDeviceFixture, AliasDFBDataFlow2Sx4S) {
 }
 
 TEST_F(MeshDeviceFixture, AliasDFBDataFlow4Sx2S) {
-    if (devices_.at(0)->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Multi-producer DFB requires Quasar TC hardware";
     }
     run_alias_dfb_program(
@@ -708,7 +708,7 @@ TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryDataFlow1Sx1S) {
     detail::WriteToBuffer(*in_a.mesh_buffer().get_reference_buffer(), input_a);
     detail::WriteToBuffer(*in_b.mesh_buffer().get_reference_buffer(), input_b);
 
-    if (devices_.at(0)->get_devices()[0]->arch() == ARCH::QUASAR) {
+    if (devices_.at(0)->arch() == ARCH::QUASAR) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 

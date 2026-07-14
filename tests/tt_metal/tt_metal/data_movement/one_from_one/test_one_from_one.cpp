@@ -81,6 +81,15 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
         {"test_id", (uint32_t)test_config.test_id},
         {"num_vc", (uint32_t)test_config.num_virtual_channels}};
 
+    DataMovementHardwareConfig requestor_hw_config;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        requestor_hw_config = DataMovementGen2Config{};
+    } else {
+        requestor_hw_config = DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = test_config.noc_id,
+        };
+    }
     KernelSpec requestor_spec{
         .unique_id = KernelSpecName{"requestor"},
         .source = requestor_kernel_path,
@@ -90,15 +99,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
             {
                 .runtime_arg_names = {"num_of_transactions", "transaction_size_bytes", "responder_x", "responder_y"},
             },
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config =
-                    DataMovementHardwareConfig::Gen1Config{
-                        .processor = DataMovementProcessor::RISCV_1,
-                        .noc = test_config.noc_id,
-                    },
-                .gen2_config = DataMovementHardwareConfig::Gen2Config{},
-            },
+        .hw_config = requestor_hw_config,
     };
 
     ProgramSpec spec{

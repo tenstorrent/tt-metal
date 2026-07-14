@@ -4,6 +4,7 @@
 
 #include "common/device_fixture.hpp"
 #include "context/metal_context.hpp"
+#include "experimental/metal2_host_api/data_movement_hardware_config.hpp"
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -45,9 +46,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceSingleReplay) {
         .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
         .num_threads = 2,
         .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
     experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = node};
     experimental::ProgramSpec spec{.name = "trace_test", .kernels = {dm_kernel_spec}, .work_units = {main_wu}};
@@ -110,9 +109,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceMultipleReplays) {
         .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
         .num_threads = 2,
         .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
     experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = node};
     experimental::ProgramSpec spec{

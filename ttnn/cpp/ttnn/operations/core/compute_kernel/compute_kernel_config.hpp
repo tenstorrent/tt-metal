@@ -10,11 +10,8 @@
 #include <optional>
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/base_types.hpp>
+#include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
-
-namespace tt::tt_metal::experimental {
-struct ComputeHardwareConfig;
-}
 
 namespace ttnn {
 
@@ -62,14 +59,21 @@ ttnn::operations::compute_throttle_utils::ThrottleLevel get_throttle_level(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 
 std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
-    tt::ARCH arch, DeviceComputeKernelConfig compute_kernel_config);
+    tt::ARCH arch, const DeviceComputeKernelConfig& compute_kernel_config);
 
 // Maps the four hardware knobs (math_fidelity, math_approx_mode, fp32_dest_acc_en,
-// dst_full_sync_en) to a Metal 2.0 ComputeHardwareConfig.
+// dst_full_sync_en) of a ComputeKernelConfig to a Metal 2.0 ComputeHardwareConfig. The knobs are
+// common to both generations; `arch` selects the matching alternative (ComputeGen2Config on Quasar,
+// else ComputeGen1Config) — the config's generation must match the target platform.
 // packer_l1_acc and throttle_level are op-side concerns, not translated.
 // The result's per-DFB unpack_to_dest_mode is left default for the program factory to set.
 // (As is bfp8_pack_precise, but that is rarely to never set non-default.)
-tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(const ComputeKernelConfig& config);
+//
+// Please note that the following TEMPORARY fields are not set from this helper:
+// enable_2x_src_format, unpack_to_dest_en, unpack_to_dest_mode
+// If specialization is desired, use site should update them instead.
+tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(
+    tt::ARCH arch, const ComputeKernelConfig& config);
 
 uint32_t get_dest_reg_count(
     const DeviceComputeKernelConfig& compute_kernel_config,
