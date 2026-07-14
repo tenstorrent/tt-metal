@@ -294,13 +294,9 @@ jobs:
   # =============================================================================
   # ARCHITECTURE NOTE: Artifact Reuse by Commit SHA
   # =============================================================================
-  # Before running the expensive C++ build, check if a prior successful run of
-  # this workflow already produced artifacts for the same commit SHA. If so,
-  # skip the build and reuse those artifacts via the existing download-artifacts
-  # job. This saves ~100 runner-minutes per duplicate pipeline invocation.
-  #
-  # This job is skipped when use-artifacts-from-run is explicitly provided
-  # (the caller already knows which run to reuse).
+  # Look for artifacts from a prior run of the same commit SHA; if found, the
+  # build/wheel jobs skip and download-artifacts reuses them. Skipped when
+  # use-artifacts-from-run is set (the caller already named a run to reuse).
   # =============================================================================
 
   find-existing-build:
@@ -362,7 +358,7 @@ jobs:
       harbor-prefix: ${{ inputs.harbor-prefix }}
   download-artifacts:
     needs: find-existing-build
-    # Use always() so this runs even when find-existing-build is skipped (explicit run ID provided)
+    # always() so this still runs when find-existing-build is skipped (explicit run ID provided)
     if: >-
       ${{ always() && !failure() && !cancelled() &&
           (inputs.use-artifacts-from-run != '' ||
@@ -390,9 +386,8 @@ jobs:
                 needs.find-existing-build.outputs.run-id }}
           working-directory: ${{ github.workspace }}/artifacts
           tracy: ${{ inputs.tracy }}
-          # Exact names from the automated SHA matcher. Empty on the manual
-          # override path (use-artifacts-from-run), where find-existing-build is
-          # skipped — the action then falls back to trusted pattern matching.
+          # Empty on the override path (find-existing-build skipped), where the
+          # action falls back to pattern matching.
           build-artifact-name: ${{ needs.find-existing-build.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.find-existing-build.outputs.wheel-artifact-name }}
           packages-artifact-name: ${{ needs.find-existing-build.outputs.packages-artifact-name }}
@@ -421,7 +416,7 @@ jobs:
           retention-days: 1
   build-artifact:
     # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
-    # Skip when artifacts are available from a prior run (explicit input or auto-detected by find-existing-build)
+    # Skip when a prior run's artifacts are available (explicit input or found by find-existing-build)
     if: >-
       ${{ always() && !failure() && !cancelled() &&
           inputs.use-artifacts-from-run == '' &&
@@ -568,10 +563,9 @@ jobs:
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
           TRACY_SUFFIX="${{ (inputs.tracy && '-profiler') || '' }}"
           DIST_SUFFIX="${{ (inputs.distributed == false && '-no-distributed') || '' }}"
-          # Keep the packages name disambiguated on the same content-affecting
-          # dimensions as the build tarball (lto / tt-train / umd-tests). Two jobs
-          # for the same SHA that differ only in these dimensions would otherwise
-          # collide on the packages artifact name.
+          # Disambiguate the packages name on the same content-affecting
+          # dimensions as the build tarball; otherwise two jobs for the same SHA
+          # differing only in lto/tt-train/umd-tests collide on the name.
           LTO_SUFFIX="${{ (inputs.enable-lto && '-lto') || '' }}"
           TT_TRAIN_SUFFIX="${{ (inputs.skip-tt-train != true && '-with-tt-train') || '' }}"
           UMD_TESTS_SUFFIX="${{ (inputs.build-umd-tests && '-umd-tests') || '' }}"
@@ -786,13 +780,11 @@ jobs:
           TRACY_SUFFIX="${{ (inputs.tracy && '_profiler') || '' }}"
           DIST_SUFFIX="${{ (inputs.distributed == false && '_no_distributed') || '' }}"
           LTO_SUFFIX="${{ (inputs.enable-lto && '_lto') || '' }}"
-          # skip-tt-train and build-umd-tests both change what ends up in the
-          # tarball (see the "Tar files" step, which conditionally adds
-          # build/tt-train + data, and the CMake configure, which conditionally
-          # builds UMD tests). They MUST be encoded in the name so the matcher
-          # never reuses a tarball built with a different set of contents.
-          # Condition mirrors the build's own rule: tt-train is included (tag
-          # stamped) whenever skip-tt-train is not literally true.
+          # skip-tt-train and build-umd-tests both change the tarball contents
+          # (see the "Tar files" step and the CMake configure), so they MUST be
+          # in the name or the matcher could reuse differently-populated tarballs.
+          # The tt-train condition mirrors the build's own rule: included
+          # whenever skip-tt-train is not literally true.
           TT_TRAIN_SUFFIX="${{ (inputs.skip-tt-train != true && '_with_tt_train') || '' }}"
           UMD_TESTS_SUFFIX="${{ (inputs.build-umd-tests && '_umd_tests') || '' }}"
           VERSION="${{ env.VERSION }}"
@@ -824,8 +816,7 @@ jobs:
 
   build-wheel:
     # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
-    # Skip when a prior run with BOTH C++ and wheel artifacts was found (found=true with check-wheel=true).
-    # found=true guarantees the wheel is present in the same run as the C++ build.
+    # Skip when found=true: with check-wheel=true that guarantees a matching wheel in the same run as the C++ build.
     if: >-
       ${{ always() && !failure() && !cancelled() && inputs.build-wheel &&
           inputs.use-artifacts-from-run == '' &&

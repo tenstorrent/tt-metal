@@ -79,16 +79,12 @@ jobs:
       fetch-depth: 0
       skip-tt-train: false
       enable-lto: false
-      # CRITICAL 2 fix: this job builds the SHA-based wheel only. Its C++ build
-      # tarball and .deb packages are byte-identical to build-artifact-release's
-      # (same SHA, tracy=false, all content dimensions equal — the only
-      # difference is wheel-ref, which does not affect the C++/packages
-      # contents) and nothing downstream consumes them. Publishing them would
-      # collide on artifact name with build-artifact-release inside this same
-      # run (identical name incl. github.run_id) and, once SHA-reuse is active,
-      # leave two same-named C++ artifacts for later matchers. So publish only
-      # the wheel here; build-artifact-release remains the single publisher of
-      # the reusable C++ build + packages for this SHA/config.
+      # This job publishes only the SHA-based wheel. Its C++ build and .deb
+      # packages match build-artifact-release's for this SHA/config, so
+      # publishing them would collide on artifact name (identical incl.
+      # github.run_id) and leave two same-named artifacts for later matchers.
+      # build-artifact-release stays the single publisher of the reusable C++
+      # build + packages.
       publish-artifact: false
       publish-package: false
 

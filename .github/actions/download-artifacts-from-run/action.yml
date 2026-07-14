@@ -12,32 +12,22 @@ inputs:
   tracy:
     required: false
     default: "true"
-    description: >
-      Whether to look for profiler-enabled artifacts. Only used by the
-      pattern-matching fallback path (when exact names are NOT provided).
+    description: "Whether to look for profiler-enabled artifacts. Only used by the pattern-matching fallback."
   build-artifact-name:
     required: false
     default: ""
     description: >
-      EXACT name of the C++ build artifact to download. When set, the action
-      downloads precisely this artifact instead of grepping the run's artifact
-      list and taking the first match. This is the trusted path used by the
-      automated SHA matcher (find-build-for-sha), which already knows the exact
-      name. Leave empty for the manual-override path (see workflow_run_id docs).
+      Exact name of the C++ build artifact to download. When set, download this
+      artifact directly instead of pattern-matching the run's artifact list.
+      Empty selects the manual-override fallback path (see workflow_run_id).
   wheel-artifact-name:
     required: false
     default: ""
-    description: >
-      EXACT name of the wheel artifact to download. Only honored when
-      build-artifact-name is also set (exact-name mode). Empty means "no wheel
-      expected" in exact-name mode.
+    description: "Exact name of the wheel to download. Only honored in exact-name mode; empty means no wheel expected."
   packages-artifact-name:
     required: false
     default: ""
-    description: >
-      EXACT name of the packages (.deb) artifact to download. Only honored when
-      build-artifact-name is also set (exact-name mode). Empty means "no
-      packages expected" in exact-name mode.
+    description: "Exact name of the packages (.deb) artifact. Only honored in exact-name mode; empty means none expected."
 
 outputs:
   build-artifact-name:
@@ -92,9 +82,8 @@ runs:
 
     - name: List available artifacts
       id: list-artifacts
-      # Only needed for the pattern-matching fallback (manual-override path with
-      # no exact build-artifact-name). In exact-name mode we download by name and
-      # never list+grep, so skip this entirely.
+      # Only the pattern-matching fallback needs the listing; exact-name mode
+      # downloads by name.
       if: ${{ inputs.build-artifact-name == '' }}
       shell: bash
       run: |
@@ -121,7 +110,6 @@ runs:
         WORK_DIR="${{ inputs.working-directory }}"
         TRACY_ENABLED="${{ inputs.tracy }}"
 
-        # Exact-name inputs from the automated SHA matcher (trusted, precise).
         EXACT_BUILD="${{ inputs.build-artifact-name }}"
         EXACT_WHEEL="${{ inputs.wheel-artifact-name }}"
         EXACT_PACKAGES="${{ inputs.packages-artifact-name }}"
@@ -130,24 +118,16 @@ runs:
         cd "$WORK_DIR"
 
         if [ -n "$EXACT_BUILD" ]; then
-          # -------------------------------------------------------------------
-          # EXACT-NAME MODE (automated matcher path).
-          # find-build-for-sha already resolved the precise artifact names for
-          # this SHA + full config. Download exactly those — no list+grep+head-1
-          # that could pick the wrong same-run artifact (CRITICAL 1 fix).
-          # -------------------------------------------------------------------
+          # Exact-name mode: find-build-for-sha resolved the precise names, so
+          # download exactly those rather than grep+head-1 over the run, which
+          # could pick the wrong same-run artifact.
           echo "Exact-name mode: names supplied by find-build-for-sha."
           BUILD_ARTIFACT="$EXACT_BUILD"
           WHEEL_ARTIFACT="$EXACT_WHEEL"
           PACKAGES_ARTIFACT="$EXACT_PACKAGES"
         else
-          # -------------------------------------------------------------------
-          # PATTERN-MATCHING FALLBACK (trusted human/manual-override path).
-          # Reached only via inputs.use-artifacts-from-run, where a human named
-          # a specific run to reuse from and no exact artifact name is known
-          # ahead of time. We infer the artifact by pattern here; the operator
-          # is responsible for pointing at a compatible run.
-          # -------------------------------------------------------------------
+          # Fallback: reached only via use-artifacts-from-run, where a human
+          # named a run to reuse and no exact name is known, so infer by pattern.
           echo "Fallback mode: no exact build-artifact-name given; matching by pattern."
           ARTIFACTS="${{ steps.list-artifacts.outputs.artifacts }}"
 
