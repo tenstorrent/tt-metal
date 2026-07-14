@@ -75,6 +75,8 @@ tt::tt_metal::HostBuffer create_host_buffer_from_bytes(
             ttsl::Span<uint8_t> typed_span(reinterpret_cast<uint8_t*>(data.data()), size_bytes / sizeof(uint8_t));
             return tt::tt_metal::HostBuffer(typed_span, memory_pin);
         }
+        case tt::tt_metal::DataType::INT8:
+            TT_THROW("Flatbuffer load for DataType::INT8 is not supported during tensor deserialization.");
         case tt::tt_metal::DataType::UINT16: {
             ttsl::Span<uint16_t> typed_span(reinterpret_cast<uint16_t*>(data.data()), size_bytes / sizeof(uint16_t));
             return tt::tt_metal::HostBuffer(typed_span, memory_pin);

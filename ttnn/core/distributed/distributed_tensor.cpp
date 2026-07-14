@@ -170,6 +170,7 @@ public:
             case tt::tt_metal::DataType::UINT32: return extract_logical_data.template operator()<uint32_t>(tensor);
             case tt::tt_metal::DataType::FP8_E4M3: TT_THROW("FP8_E4M3 ingestion via TensorToMesh is not supported");
             case tt::tt_metal::DataType::UINT8: return extract_logical_data.template operator()<uint8_t>(tensor);
+            case tt::tt_metal::DataType::INT8: return extract_logical_data.template operator()<int8_t>(tensor);
             case tt::tt_metal::DataType::UINT16: return extract_logical_data.template operator()<uint16_t>(tensor);
             case tt::tt_metal::DataType::INT32: return extract_logical_data.template operator()<int32_t>(tensor);
             case tt::tt_metal::DataType::INVALID: TT_THROW("Invalid data type: {}", tensor.tensor_spec().data_type());
@@ -507,6 +508,7 @@ public:
             case tt::tt_metal::DataType::FP8_E4M3:
                 TT_THROW("FP8_E4M3 aggregation via aggregate_tensor is not supported");
             case tt::tt_metal::DataType::UINT8: return dispatch_to_concrete.template operator()<uint8_t>(tensor);
+            case tt::tt_metal::DataType::INT8: return dispatch_to_concrete.template operator()<int8_t>(tensor);
             case tt::tt_metal::DataType::UINT16: return dispatch_to_concrete.template operator()<uint16_t>(tensor);
             case tt::tt_metal::DataType::INT32: return dispatch_to_concrete.template operator()<int32_t>(tensor);
             case tt::tt_metal::DataType::INVALID: TT_THROW("Invalid data type: {}", tensor.dtype());
@@ -736,6 +738,7 @@ INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(bfloat16)
 INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(float)
 INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(int32_t)
 INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(uint8_t)
+INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(int8_t)
 INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(uint16_t)
 INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(uint32_t)
 
@@ -748,6 +751,7 @@ template std::pair<std::vector<float>, Shape> MeshToTensor::compose<float>(const
 template std::pair<std::vector<bfloat16>, Shape> MeshToTensor::compose<bfloat16>(const Tensor& tensor) const;
 template std::pair<std::vector<int32_t>, Shape> MeshToTensor::compose<int32_t>(const Tensor& tensor) const;
 template std::pair<std::vector<uint8_t>, Shape> MeshToTensor::compose<uint8_t>(const Tensor& tensor) const;
+template std::pair<std::vector<int8_t>, Shape> MeshToTensor::compose<int8_t>(const Tensor& tensor) const;
 template std::pair<std::vector<uint16_t>, Shape> MeshToTensor::compose<uint16_t>(const Tensor& tensor) const;
 template std::pair<std::vector<float8_e4m3>, Shape> MeshToTensor::compose<float8_e4m3>(const Tensor& tensor) const;
 

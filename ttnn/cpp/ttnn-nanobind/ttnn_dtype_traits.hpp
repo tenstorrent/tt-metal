@@ -34,10 +34,11 @@ namespace ttnn_dtype_traits::detail {
 // uint16        -> N/A
 // int16         -> uint16
 // uint8         -> uint8
-// int8          -> N/A
+// int8          -> int8
 
 // ttnn label    -> torch convert egress
 // uint8         -> uint8
+// int8          -> int8
 // uint16        -> int16
 // int32         -> int32
 // uint32        -> int32
@@ -56,10 +57,11 @@ namespace ttnn_dtype_traits::detail {
 // uint16        -> N/A
 // int16         -> uint16
 // uint8         -> ubyte
-// int8          -> N/A
+// int8          -> byte
 
 // ttnn label    -> numpy convert egress
 // uint8         -> ubyte
+// int8          -> byte
 // uint16        -> int16
 // int32         -> int32
 // uint32        -> int32
@@ -158,6 +160,11 @@ struct py_to_<DtypeID::UINT8> {
 };
 
 template <>
+struct py_to_<DtypeID::INT8> {
+    constexpr static auto ttnn_DataType = DataType::INT8;
+};
+
+template <>
 struct py_to_<DtypeID::UINT32> {
     constexpr static auto ttnn_DataType = DataType::UINT32;
 };
@@ -248,6 +255,14 @@ struct ttnn_datatype_traits<DataType::UINT8> {
 };
 
 template <>
+struct ttnn_datatype_traits<DataType::INT8> {
+    using underlying_type = std::int8_t;
+    static constexpr nbdlp::dtype value{
+        .code = static_cast<std::uint8_t>(nbdlp::dtype_code::Int), .bits = 8, .lanes = 1};
+    static constexpr auto name = nbd::const_name("INT8");
+};
+
+template <>
 struct ttnn_datatype_traits<DataType::UINT16> {
     using underlying_type = std::uint16_t;
     static constexpr nbdlp::dtype value{
@@ -280,6 +295,7 @@ constexpr nbdlp::dtype get_dtype_from_ttnn_datatype(DataType dt) noexcept {
         case DataType::BFLOAT8_B: return ttnn_datatype_traits<DataType::BFLOAT8_B>::value;
         case DataType::BFLOAT4_B: return ttnn_datatype_traits<DataType::BFLOAT4_B>::value;
         case DataType::UINT8: return ttnn_datatype_traits<DataType::UINT8>::value;
+        case DataType::INT8: return ttnn_datatype_traits<DataType::INT8>::value;
         case DataType::UINT16: return ttnn_datatype_traits<DataType::UINT16>::value;
         case DataType::INT32: return ttnn_datatype_traits<DataType::INT32>::value;
         case DataType::FP8_E4M3: return ttnn_datatype_traits<DataType::FP8_E4M3>::value;

@@ -46,6 +46,7 @@ inline Tensor make_zero_host_tensor(const TensorSpec& spec) {
         case DataType::FLOAT32: return Tensor::from_vector<float>(std::vector<float>(bytes / sizeof(float)), spec);
         case DataType::INT32: return Tensor::from_vector<int32_t>(std::vector<int32_t>(bytes / sizeof(int32_t)), spec);
         case DataType::UINT8: return Tensor::from_vector<uint8_t>(std::vector<uint8_t>(bytes / sizeof(uint8_t)), spec);
+        case DataType::INT8: return Tensor::from_vector<int8_t>(std::vector<int8_t>(bytes / sizeof(int8_t)), spec);
         case DataType::UINT16:
             return Tensor::from_vector<uint16_t>(std::vector<uint16_t>(bytes / sizeof(uint16_t)), spec);
         case DataType::BFLOAT4_B:
