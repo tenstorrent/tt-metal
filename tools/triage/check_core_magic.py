@@ -46,14 +46,12 @@ class CoreMagicValues:
         self.active_eth = fw_elf.get_enum_value("CoreMagicNumber::ACTIVE_ETH")
         self.idle_eth = fw_elf.get_enum_value("CoreMagicNumber::IDLE_ETH")
         self.dram = fw_elf.get_enum_value("CoreMagicNumber::DRAM")
-        self.dispatch = fw_elf.get_enum_value("CoreMagicNumber::DISPATCH")
 
         self.magic_to_name = {
             self.worker: "WORKER",
             self.active_eth: "ACTIVE_ETH",
             self.idle_eth: "IDLE_ETH",
             self.dram: "DRAM",
-            self.dispatch: "DISPATCH",
         }
 
     def get_name(self, magic_value: int) -> str | None:
@@ -77,8 +75,6 @@ def get_expected_magic_for_location(
             return magic_values.active_eth, "ACTIVE_ETH"
         case "dram":
             return magic_values.dram, "DRAM"
-        case "dispatch":
-            return magic_values.dispatch, "DISPATCH"
         case _:
             return magic_values.worker, "WORKER"
 
@@ -161,8 +157,6 @@ def check_core_magic(
         other_elfs_to_try.append(("ACTIVE_ETH", dispatcher_data._active_erisc_elf))
     if expected_type != "DRAM" and dispatcher_data._drisc_elf is not None:
         other_elfs_to_try.append(("DRAM", dispatcher_data._drisc_elf))
-    if expected_type != "DISPATCH" and dispatcher_data._dispatch_dm_elf is not None:
-        other_elfs_to_try.append(("DISPATCH", dispatcher_data._dispatch_dm_elf))
 
     found_type = None
     for type_name, other_elf in other_elfs_to_try:
@@ -192,10 +186,10 @@ def check_core_magic(
 
 
 def run(args, context: Context):
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth", "dram", "dispatch"]
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth", "dram"]
     # Only check one RISC per core since magic is core-wide, not per-RISC
-    # Use brisc for tensix, erisc/erisc0 for eth, drisc for dram, dispatch_dm0 for dispatch
-    RISC_CORES_TO_CHECK = ["brisc", "erisc", "erisc0", "drisc", "dispatch_dm0"]
+    # Use brisc for tensix, erisc/erisc0 for eth, drisc for dram
+    RISC_CORES_TO_CHECK = ["brisc", "erisc", "erisc0", "drisc"]
 
     dispatcher_data = get_dispatcher_data(args, context)
     run_checks = get_run_checks(args, context)

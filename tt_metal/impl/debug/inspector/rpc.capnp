@@ -86,8 +86,6 @@ struct BuildEnvData {
     # Whether DRAM programmable RISC cores are enabled on this device (Blackhole only)
     dramProgrammableCoresEnabled @3 :Bool;
     tensixFwLaunchAddrValue @4 :UInt32; # Expected value at L1[0] for TENSIX worker cores
-    # Whether dispatch programmable RISC cores are enabled on this device (Quasar only)
-    dispatchProgrammableCoresEnabled @5 :Bool;
 }
 
 struct BuildEnvPerDevice {
@@ -171,9 +169,6 @@ struct ChipBlocksByType {
     # the cores in this list. Reported as TranslatedCoord so consumers resolve cores without the
     # UMD-vs-metal logical-DRAM numbering mismatch.
     dramCores @2 :List(TranslatedCoord);
-    # Dispatch cores Metal manages (TRANSLATED coords). Reported only when dispatch programmable
-    # cores are available (Quasar). Same coordinate system as dramCores.
-    dispatchCores @3 :List(TranslatedCoord);
 }
 
 enum ConfigurationScope {

@@ -306,8 +306,6 @@ void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builde
         // Reflects what the HAL registered at init; see MetalEnvImpl for the enable conditions.
         build_info.setDramProgrammableCoresEnabled(
             tt::tt_metal::MetalContext::instance().hal().has_programmable_core_type(HalProgrammableCoreType::DRAM));
-        build_info.setDispatchProgrammableCoresEnabled(
-            tt::tt_metal::MetalContext::instance().hal().has_programmable_core_type(HalProgrammableCoreType::DISPATCH));
         build_info.setTensixFwLaunchAddrValue(tensix_fw_launch_addr_value);
     }
 }
@@ -408,15 +406,6 @@ void Data::rpc_get_blocks_by_type(rpc::Inspector::GetBlocksByTypeResults::Builde
             }
         }
         set_coords([&chip_entry](size_t n) { return chip_entry.initDramCores(n); }, dram_cores_xy);
-
-        std::vector<std::pair<uint32_t, uint32_t>> dispatch_cores_xy;
-        if (MetalContext::instance().hal().has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
-            for (const auto& dispatch_core :
-                 cluster.get_soc_desc(device_id).get_cores(tt::CoreType::DISPATCH, tt::CoordSystem::TRANSLATED)) {
-                dispatch_cores_xy.emplace_back(dispatch_core.x, dispatch_core.y);
-            }
-        }
-        set_coords([&chip_entry](size_t n) { return chip_entry.initDispatchCores(n); }, dispatch_cores_xy);
     }
 }
 
@@ -686,7 +675,6 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     // Dispatch data / testing
     RT(dispatch_data_collection_enabled);
     RT(test_mode_enabled);
-    RT(use_quasar_tensix_dispatch_cores);
 
     // DispatchCoreConfig
     {

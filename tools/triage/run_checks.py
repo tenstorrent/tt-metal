@@ -60,10 +60,8 @@ script_config = ScriptConfig(
 )
 
 # Block and core types that scripts return.
-BlockType: TypeAlias = Literal["idle_eth", "active_eth", "tensix", "eth", "dram", "dispatch"]
-CoreType: TypeAlias = Literal[
-    "brisc", "trisc0", "trisc1", "trisc2", "ncrisc", "erisc", "erisc0", "erisc1", "drisc", "dispatch_dm0"
-]
+BlockType: TypeAlias = Literal["idle_eth", "active_eth", "tensix", "eth", "dram"]
+CoreType: TypeAlias = Literal["brisc", "trisc0", "trisc1", "trisc2", "ncrisc", "erisc", "erisc0", "erisc1", "drisc"]
 
 BLOCK_TYPES: list[BlockType] = list(get_args(BlockType))
 CORE_TYPES: set[CoreType] = set(get_args(CoreType))
@@ -188,16 +186,6 @@ def _exalens_block_locations(device: Device, block_type: BlockType) -> list[OnCh
         return device.idle_eth_block_locations
     if block_type == "dram" and not device.is_blackhole():
         return []
-    if block_type == "dispatch":
-        if not device.is_quasar():
-            return []
-        import tt_umd
-
-        dispatch_core_type = getattr(tt_umd.CoreType, "DISPATCH", None)
-        if dispatch_core_type is None:
-            return []
-        core_coords = device._soc_descriptor.get_cores(dispatch_core_type, tt_umd.CoordSystem.TRANSLATED)
-        return [OnChipCoordinate(c.x, c.y, "translated", device, "dispatch") for c in core_coords]
     return device.get_block_locations("functional_workers" if block_type == "tensix" else block_type)
 
 
@@ -235,11 +223,6 @@ def get_block_locations(
                 if len(dram_cores) > 0:
                     block_locations[device]["dram"] = [
                         OnChipCoordinate(c.x, c.y, "translated", device, "dram") for c in dram_cores
-                    ]
-                dispatch_cores = chip_blocks_list[i].dispatchCores
-                if len(dispatch_cores) > 0:
-                    block_locations[device]["dispatch"] = [
-                        OnChipCoordinate(c.x, c.y, "translated", device, "dispatch") for c in dispatch_cores
                     ]
 
     # Exalens fallback for any device Inspector didn't cover (no inspector at all, or

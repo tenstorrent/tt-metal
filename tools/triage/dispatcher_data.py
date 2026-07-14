@@ -136,7 +136,6 @@ class DispatcherData:
 
             build_env = self._build_env_cache[device_unique_id]
             self._drisc_enabled_flag: bool | None = bool(build_env.dramProgrammableCoresEnabled)
-            self._dispatch_enabled_flag: bool | None = bool(build_env.dispatchProgrammableCoresEnabled)
             # Use build_env for initial firmware paths
             brisc_elf_path = os.path.join(build_env.firmwarePath, "brisc", "brisc.elf")
             idle_erisc_elf_path = os.path.join(build_env.firmwarePath, "idle_erisc", "idle_erisc.elf")
@@ -164,7 +163,6 @@ class DispatcherData:
         self._active_erisc_elf = elfs_cache[active_erisc_elf_path]
 
         self._is_blackhole = run_checks.devices[0].is_blackhole()
-        self._is_quasar = run_checks.devices[0].is_quasar()
 
         # Load DRISC ELF for DRAM cores (Blackhole only)
         self._drisc_elf = None
@@ -176,21 +174,11 @@ class DispatcherData:
                 # DRISC firmware is optional; if it cannot be loaded, leave self._drisc_elf as None
                 pass
 
-        # Load dispatch DM ELF for dispatch cores (Quasar only)
-        self._dispatch_dm_elf = None
-        if self._is_quasar and self._dispatch_enabled_flag:
-            try:
-                dispatch_dm_elf_path = os.path.join(build_env.firmwarePath, "dispatch_dm0", "dispatch_dm0.elf")
-                self._dispatch_dm_elf = elfs_cache[dispatch_dm_elf_path]
-            except Exception:
-                pass
-
         # Access the value of enumerator for supported blocks
         self._ProgrammableCoreTypes_TENSIX = self._brisc_elf.get_enum_value("ProgrammableCoreType::TENSIX")
         self._ProgrammableCoreTypes_IDLE_ETH = self._brisc_elf.get_enum_value("ProgrammableCoreType::IDLE_ETH")
         self._ProgrammableCoreTypes_ACTIVE_ETH = self._brisc_elf.get_enum_value("ProgrammableCoreType::ACTIVE_ETH")
         self._ProgrammableCoreTypes_DRAM = self._brisc_elf.get_enum_value("ProgrammableCoreType::DRAM")
-        self._ProgrammableCoreTypes_DISPATCH = self._brisc_elf.get_enum_value("ProgrammableCoreType::DISPATCH")
 
         # Enumerators for tensix block
         self._enum_values_tenisx = {
@@ -226,15 +214,6 @@ class DispatcherData:
             self._enum_values_dram = {
                 "ProcessorTypes": {
                     "DRISC": self._drisc_elf.get_enum_value("DramProcessorTypes::DM0"),
-                },
-            }
-
-        # Enumerators for dispatch block (Quasar only)
-        self._enum_values_dispatch: dict = {}
-        if self._dispatch_dm_elf is not None:
-            self._enum_values_dispatch = {
-                "ProcessorTypes": {
-                    "DISPATCH_DM0": self._dispatch_dm_elf.get_enum_value("TensixProcessorTypes::DM0"),
                 },
             }
 
@@ -336,14 +315,9 @@ class DispatcherData:
         # Casting to bool to avoid using ternary operator
         return bool(self._drisc_enabled_flag)
 
-    def dispatch_dm_enabled(self) -> bool:
-        return bool(self._dispatch_enabled_flag)
-
     def risc_enabled(self, risc_name: str) -> bool:
         if risc_name == "drisc":
             return self.drisc_enabled()
-        if risc_name == "dispatch_dm0":
-            return self.dispatch_dm_enabled()
         return True
 
     def is_idle_in_default_view(self, location: OnChipCoordinate, risc_name: str) -> bool:
@@ -381,10 +355,6 @@ class DispatcherData:
                 if self._drisc_elf is None:
                     raise TTTriageError("DRISC ELF not available for DRAM block type (Blackhole only)")
                 fw_elf = self._drisc_elf
-            case "dispatch":
-                if self._dispatch_dm_elf is None:
-                    raise TTTriageError("Dispatch DM ELF not available for dispatch block type (Quasar only)")
-                fw_elf = self._dispatch_dm_elf
             case _:
                 raise TTTriageError(f"Unsupported block type: {block_type}")
         return fw_elf.read_global("mailboxes", l1_mem_access)
@@ -408,11 +378,6 @@ class DispatcherData:
                     raise TTTriageError("DRISC ELF not available for DRAM block type (Blackhole only)")
                 programmable_core_type = self._ProgrammableCoreTypes_DRAM
                 enum_values = self._enum_values_dram
-            case "dispatch":
-                if self._dispatch_dm_elf is None or not self._enum_values_dispatch or not self._dispatch_enabled_flag:
-                    raise TTTriageError("Dispatch DM ELF not available for dispatch block type (Quasar only)")
-                programmable_core_type = self._ProgrammableCoreTypes_DISPATCH
-                enum_values = self._enum_values_dispatch
             case _:
                 raise TTTriageError(f"Unsupported block type: {block_type}")
         # Get the build_env for the device to get the correct firmware path
@@ -573,8 +538,6 @@ class DispatcherData:
                 symbols = "BNT"
             elif self._get_block_type(location) == "dram":
                 symbols = "D"
-            elif self._get_block_type(location) == "dispatch":
-                symbols = "D"
             elif location.device.is_blackhole():
                 symbols = "EE"
             else:
@@ -634,8 +597,6 @@ class DispatcherData:
         # This ensures we get the correct firmware path for this device and build config
         if block_type == "dram":
             firmware_path = os.path.join(build_env.firmwarePath, "drisc", "drisc.elf")
-        elif block_type == "dispatch":
-            firmware_path = os.path.join(build_env.firmwarePath, "dispatch_dm0", "dispatch_dm0.elf")
         elif is_active_eth:
             if proc_name.lower() == "erisc":
                 firmware_path = os.path.join(build_env.firmwarePath, "erisc", "erisc.elf")
@@ -701,8 +662,6 @@ class DispatcherData:
             elif block_type == "dram":
                 # DRAM kernel ELFs are linked at their actual load address (kernel_text_offset),
                 # not at address 0 like Tensix kernels, so no base adjustment is needed.
-                kernel_offset = kernel_text_offset
-            elif block_type == "dispatch":
                 kernel_offset = kernel_text_offset
             else:
                 # For most blocks, the kernel is loaded at an offset from the config base, so we add them together to get the actual load address.
