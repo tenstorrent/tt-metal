@@ -5,14 +5,12 @@
 """
 SetupOwner::Caller functional test for eltwise_chain.
 
-SetupOwner::Caller is the contract "the caller emitted the chain's one-time setup (init + reconfig)
-itself, before the loop, so the chain emits none of it." This validates the positive path: the
-kernel (axes/setup_owner_caller.cpp) emits that setup as raw LLK (copy_tile_init + exp_tile_init),
-then runs eltwise_chain<SetupOwner::Caller> over N tiles. If Caller wrongly skipped a needed init,
-or the raw caller-side setup didn't match what the chain expects, exp(x) would come out wrong.
-
-The two compile-time guards on SetupOwner::Caller (must-be-boot-hoistable; no live reconfig knob)
-are covered by the negative tests in test_chain_static_asserts.py (SA-09 / SA-10).
+SetupOwner::Caller means the caller emitted the chain's one-time setup (init + reconfig) itself
+before the loop, so the chain emits none of it. Positive path: setup_owner_caller.cpp emits that
+setup as raw LLK (copy_tile_init + exp_tile_init), then runs eltwise_chain<SetupOwner::Caller> over
+N tiles; exp(x) comes out wrong if Caller skipped a needed init or the raw setup didn't match.
+The two compile-time guards (must-be-boot-hoistable; no live reconfig knob) are covered by the
+negative tests in test_chain_static_asserts.py.
 """
 
 import torch
