@@ -18,6 +18,12 @@
 #include "api/compute/experimental/matmul_custom.h"
 #include "api/compute/experimental/sdpa_sub_custom.h"
 #endif
+
+// Number of faces of the QK-scores tile fed to reduce_block_max_row: 4 for a full 32x32 tile,
+// 2 for a 16x32 tiny tile (one face-row). Set by the program factory from the operand tile height.
+#ifndef QK_NUM_FACES
+#define QK_NUM_FACES 4
+#endif
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
 #include "tools/profiler/kernel_profiler.hpp"
@@ -436,10 +442,11 @@ void reduce_c_row_group(
         CircularBuffer(in0_cb).wait_front(cumulative_input_tiles);
     }
 
-    reduce_block_max_row_init_runtime(out_cb, reduce_cols, respect_trigger);
+    reduce_block_max_row_init_runtime(out_cb, reduce_cols, respect_trigger, QK_NUM_FACES);
     for (uint32_t i = 0; i < group_size; i++) {
         const uint32_t input_tile_start = (row_start + i) * row_stride;
-        reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i, respect_trigger, overlap_first_half);
+        reduce_block_max_row_runtime(
+            in0_cb, scale_cb, input_tile_start, i, respect_trigger, overlap_first_half, QK_NUM_FACES);
     }
     reduce_block_max_row_uninit_runtime(in0_cb, respect_trigger, overlap_first_half);
 
