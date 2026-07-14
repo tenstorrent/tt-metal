@@ -268,3 +268,71 @@
   (perf harness: wide-W / few-tile-row shapes x {TILE,RM} x {gamma,no_gamma} x
   {bf16,fp32}, N-iter device-ns via --profile; not a correctness gate). Preserved
   as a reusable perf measurement harness for future refinements.
+
+## Refinement 4 — Multi-core row distribution + HEIGHT_SHARDED
+- Date: 2026-07-14
+- What was done: Landed the Row-axis knob-turn — the two things this refinement
+  bundled, both embarrassingly parallel with NO cross-core communication:
+  * **Interleaved multi-core**: the contiguous tile-row range is spread over the
+    full compute grid via `ttnn.split_work_to_cores(grid, total_tile_rows,
+    row_wise=True)`; each core gets its own `(start_tile_row, num_tile_rows)`
+    runtime args. No SUPPORTED axis change (INTERLEAVED was already supported) —
+    an internal parallelism change. Multi-tile-row shapes now use up to 64 cores;
+    single-tile-row (wide-W) shapes still use 1 core (unchanged — so R1/R2a's
+    wide-W precision fixes are untouched).
+  * **HEIGHT_SHARDED** added to `SUPPORTED["memory_layout"]`: the SAME row split,
+    but the row->core assignment is pinned by the shard spec. For TILE the
+    shard's tile-row grid matches the op's work unit exactly (eval.sharding's
+    `hg = prod(leading)*ceil(H/32)` == the op's `total_tile_rows`; each core owns
+    `shard.shape[0]//32` contiguous tile-rows). The resident L1 shard is streamed
+    through the SAME bounded scratch CBs via `TensorAccessor` (built from the
+    sharded tensor's memory-config, which routes each global page id to the
+    owning core's local L1 — a local L1->L1 read). The reduction stays LOCAL per
+    core; output inherits the input's shard spec.
+  - **Reused**: the reader/writer/compute kernels are BYTE-IDENTICAL to R3 — they
+    already key off per-core `(start_tile_row, num_tile_rows)` RT args and iterate
+    `start_tile_row + t`, and `TensorAccessorArgs(tensor)` already captures the
+    sharded memory-config, so sharded addressing needs no kernel change. All four
+    registry declarations + validate() reused (only SUPPORTED["memory_layout"]
+    grew by one value + PROPERTIES.multi_core True).
+  - **Added**: `_interleaved_assignment` (split_work_to_cores over the full grid)
+    and `_height_sharded_assignment` (shard-spec-pinned tile-row spans) in the
+    descriptor; a per-core RuntimeArgs loop for reader/writer/compute; CBs and
+    kernels now span `all_cores`.
+  - **Deliberately NOT `cb_descriptor_from_sharded_tensor`**: pointing the
+    input/output CBs at the whole resident shard would force a random-access
+    rewrite of the two-pass streaming compute (a consumed CB cannot be rewound
+    for pass 2) and a Wt-sized CB — breaking the design's bounded-streaming
+    invariant. That is a scheme-change, not the Row knob-turn this refinement is;
+    streaming the resident shard via TensorAccessor is the faithful knob-turn.
+  - **No EXCLUSIONS added**: on-device verification showed HEIGHT_SHARDED works
+    for the FULL surface — TILE + ROW_MAJOR, all three alignments (tile /
+    w_non / h_non), bf16 / fp32 / bf8b, gamma / no_gamma, fp32_dest_acc_en
+    True/False, single-image / multi-image / 3D / 2D. RM+HEIGHT_SHARDED works too
+    (TensorAccessor routes any page regardless of the sub-tile RM shard boundary;
+    the RM row->core split is defensive-even, still correct).
+- Accuracy achieved (golden tolerances, HEIGHT_SHARDED): loose case
+  `(1,1,256,512)` bf16 TILE — PCC=0.999997, relRMS=0.00242 (« 0.04). Cartesian
+  sample (3 shapes × full HEIGHT combos): 144 passed / 0 failed / 0 xpassed /
+  36 xfailed (the permanent `{fp32, False}` EXCLUSION) / 684 INVALID-skipped.
+  Landscape sweep (48 combos across 6 shapes × TILE/RM × bf16/fp32/bf8b ×
+  gamma/no_gamma): 48/48 pass.
+- Golden test progress: `test_op_loose` — HEIGHT_SHARDED `(1,1,256,512)` flips
+  xfail->**PASS** (Done-when gate met); WIDTH_SHARDED / BLOCK_SHARDED stay
+  xfail-strict (Refinement 5); interleaved wide loose cases (16384/32768/12288)
+  still PASS (unaffected — 1 tile-row -> 1 core). Interleaved cartesian sample
+  (4 multi-tile-row shapes, now multi-core): 192 passed / 0 failed / 0 xpassed.
+  `test_regression.py` + `test_translated.py`: 99 passed. Unit dir: 183 passed.
+- Issues encountered: fp32 + 1-tile-row + very-wide-W HEIGHT cells (e.g.
+  `(1,1,32,8192)` fp32) correctly `infeasible_skipped` by the harness (a 1 MB
+  input shard + 1 MB output shard on ONE core — HEIGHT can't split a single
+  tile-row across cores; that's the WIDTH-split territory of Refinement 5). This
+  is a buffer OOM in the harness `oom_guard` (uncharged), not an op failure —
+  inherent to HEIGHT_SHARDED, matching the design's "HEIGHT doesn't shrink CBs /
+  orthogonal to L1" note.
+- Tests added: `tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_sharded.py`
+  (HEIGHT_SHARDED: 6 shapes × bf16/fp32 × TILE/RM × gamma/no_gamma = 48 cases,
+  each asserting output stays HEIGHT_SHARDED + PCC; plus a WIDTH_SHARDED
+  rejection test). Probes `probe_021.py`–`probe_024.py` capture the loose-case
+  verification, the 48-combo cartesian landscape, and the wide/large L1-pressure
+  sweep.

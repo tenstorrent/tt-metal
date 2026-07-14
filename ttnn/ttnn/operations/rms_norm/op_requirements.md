@@ -181,7 +181,7 @@ Wide-W bf16 cells (W=4096/8192, few tile-rows) are the most latency-bound target
 still green, and no regression across the config-spanning guard set (one representative per distinct
 kernel path × layout × placement: {TILE, RM} × {gamma, no_gamma} × {bf16, f32}, interleaved).
 
-### [ ] Refinement 4 — Multi-core row distribution + HEIGHT_SHARDED
+### [x] Refinement 4 — Multi-core row distribution + HEIGHT_SHARDED
 
 **Goal**: add `ttnn.TensorMemoryLayout.HEIGHT_SHARDED` to `SUPPORTED["memory_layout"]` and distribute
 the row work across the grid for interleaved tensors. Both are the **Row-axis knob-turn** (the design's

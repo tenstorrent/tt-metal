@@ -83,7 +83,11 @@ SUPPORTED = {
     # second gamma reader leg alongside the RM one, required for bf8b gamma and
     # independently useful for mixed-precision (bf16 acts + fp32/bf8b TILE weights).
     "gamma_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, "none"],
-    "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
+    # R4 added HEIGHT_SHARDED: the Row-axis knob-turn. Each core owns a contiguous
+    # span of tile-rows (pinned by the shard spec) and computes their RMS locally —
+    # the reduction stays LOCAL per core, no cross-core communication. WIDTH/BLOCK
+    # (cross-core Σx² combine) remain a scheme-change → Refinement 5.
+    "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.TensorMemoryLayout.HEIGHT_SHARDED],
 }
 
 
@@ -104,7 +108,9 @@ EXCLUSIONS = [
 
 
 PROPERTIES = {
-    "multi_core": {"value": False, "source": "declared"},
+    # R4: row work is distributed across the grid (INTERLEAVED via split_work_to_cores;
+    # HEIGHT_SHARDED via the shard spec) — embarrassingly parallel, no cross-core comms.
+    "multi_core": {"value": True, "source": "declared"},
     "bounded_cb": {"value": True, "source": "declared"},
     "math_fidelity": {"value": ["LoFi", "HiFi2", "HiFi3", "HiFi4"], "source": "declared"},
 }
