@@ -250,7 +250,7 @@ void kernel_main() {
 
         // 3. Read this batch's indices pages
         {
-            DeviceZoneScopedN("batch-DRAM-read-indices-weights");
+            // DeviceZoneScopedN("batch-DRAM-read-indices-weights");
             for (uint32_t t = 0; t < batch_count; t++) {
                 noc_async_read_page(batch_start + t, indices_addr_gen, indices_base + t * aligned_indices_page_size);
             }
