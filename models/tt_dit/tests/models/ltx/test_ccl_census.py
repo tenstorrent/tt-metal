@@ -439,6 +439,10 @@ def test_ccl_census(mesh_device: ttnn.MeshDevice) -> None:
         ("mm_qkv_video_s2_gathered", lambda: qkv_v(x_v2_full), True),
         ("agmm_gateqkv_video_s2", lambda: gateqkv_v(x_v2, parallel_config=pc), True),
         ("mm_gateqkv_video_s2_gathered", lambda: gateqkv_v(x_v2_full), True),
+        ("agmm_ff1_video_s2", lambda: ff1_v(x_v2, parallel_config=pc), True),
+        ("mm_ff1_video_s2_gathered", lambda: ff1_v(x_v2_full), True),
+        ("agmm_out_video_s2", lambda: out_v(x_v2, parallel_config=pc), True),
+        ("mm_out_video_s2_gathered", lambda: out_v(x_v2_full), True),
     ]
 
     variants += cut1c
