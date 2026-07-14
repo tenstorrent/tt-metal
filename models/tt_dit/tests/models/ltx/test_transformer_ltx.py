@@ -19,7 +19,7 @@ from loguru import logger
 from safetensors.torch import load_file
 
 import ttnn
-from models.tt_dit.models.transformers.ltx import transformer_ltx
+from models.tt_dit.models.transformers.ltx import attention_ltx, transformer_ltx
 from models.tt_dit.models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis
 from models.tt_dit.models.transformers.ltx.transformer_ltx import (
     LTXTransformerBlock,
@@ -130,6 +130,19 @@ _PROBE_CONTROL_PCC = _FOLD_CONTROL_PCC
 _PROBE_CONTROL_RMSE = _FOLD_CONTROL_RMSE
 _PROBE_EQUIV_PCC = _FOLD_EQUIV_PCC
 _PROBE_EQUIV_RMSE = _FOLD_EQUIV_RMSE
+
+# Agreement bounds for LTX_DEDUP_GATE_GATHER. Both paths gather the same activation and run the
+# same two projections on it; only the kernel differs (fused all_gather_minimal_matmul_async vs
+# a standalone gather + minimal_matmul), so they agree to bf16 rounding of the matmul, not to the
+# bit. Tighter than the fold's bounds because no accumulation is re-associated across ops here.
+# The control (same path twice) pins the device noise floor and is asserted first: a floor as wide
+# as the bound would pass the dedup without having tested it. Separation is set by the mutant:
+# LTX_DEDUP_GATE_MUTANT feeds the gate a corrupted copy of the gathered activation — the silent
+# miswiring this cut could introduce — and must drive these bounds red.
+_DEDUP_CONTROL_PCC = 0.999999
+_DEDUP_CONTROL_RMSE = 0.002
+_DEDUP_EQUIV_PCC = 0.9999
+_DEDUP_EQUIV_RMSE = 0.008
 
 
 # ---------------------------------------------------------------------------
@@ -922,6 +935,8 @@ def test_ltx_transformer_block(
             f"WARM_FWD_MS={sum(_warm_ms) / len(_warm_ms):.2f} "
             f"num_links={os.environ.get('LTX_NUM_LINKS', 'param')} iters={len(_warm_ms)}"
         )
+    if os.environ.get("LTX_DEDUP_PERF_AB", "0") in ("1", "true", "True"):
+        _dedup_perf_ab(tt_block, forward_kwargs, mesh_device, iters=max(_prof_iters, 5))
     if has_audio:
         tt_v, tt_a = tt_out
     else:
@@ -1029,6 +1044,79 @@ def _assert_probe_split_magnitude(forward_to_host, *, addcmul_video, addcmul_aud
     logger.info("PASSED probe magnitude")
 
 
+def _assert_dedup_equivalence(forward_to_host, *, dedup_video, dedup_audio) -> None:
+    """Gate LTX_DEDUP_GATE_GATHER: one hoisted activation gather feeding the gate and Q/QKV must
+    match the two fused gathers it replaces, to within bf16 rounding.
+
+    The caller has already run the dedup path. Clearing the module flag restores the double-gather
+    on the same weights, inputs, device and process, so any difference is the dedup's. A second
+    double-gather run pins the device's run-to-run noise floor, which must land well inside the
+    equivalence bound for that bound to mean anything.
+    """
+    assert attention_ltx.LTX_DEDUP_GATE_GATHER, "the dedup path must be the one already run"
+    assert dedup_audio is not None, "the gate whose gather this dedups exists only on the AV path"
+
+    attention_ltx.LTX_DEDUP_GATE_GATHER = False
+    try:
+        base_video, base_audio = forward_to_host()
+        control_video, control_audio = forward_to_host()
+    finally:
+        attention_ltx.LTX_DEDUP_GATE_GATHER = True
+
+    logger.info("dedup A/B — noise floor, double-gather vs double-gather (video):")
+    assert_quality(base_video, control_video, pcc=_DEDUP_CONTROL_PCC, relative_rmse=_DEDUP_CONTROL_RMSE)
+    logger.info("dedup A/B — noise floor, double-gather vs double-gather (audio):")
+    assert_quality(base_audio, control_audio, pcc=_DEDUP_CONTROL_PCC, relative_rmse=_DEDUP_CONTROL_RMSE)
+
+    logger.info("dedup A/B — dedup vs double-gather (video):")
+    assert_quality(base_video, dedup_video, pcc=_DEDUP_EQUIV_PCC, relative_rmse=_DEDUP_EQUIV_RMSE)
+    logger.info("dedup A/B — dedup vs double-gather (audio):")
+    assert_quality(base_audio, dedup_audio, pcc=_DEDUP_EQUIV_PCC, relative_rmse=_DEDUP_EQUIV_RMSE)
+    logger.info("PASSED dedup equivalence")
+
+
+def _dedup_perf_ab(tt_block, forward_kwargs, mesh_device, *, iters: int) -> None:
+    """Time the block with LTX_DEDUP_GATE_GATHER on vs off, on one built block in one process.
+
+    The flag is a module global read inside attention forward(), so flipping it between passes swaps
+    the gather path with nothing rebuilt. Separate processes would fold device-open and 22B weight-load
+    variance into the delta; here the flag is the only thing that differs between passes.
+
+    Each pass drops its own first lap: a flip selects op variants the program cache has not seen, so
+    the lap right after it is a cold compile, not a steady-state forward. The third pass repeats the
+    first pass's setting — if those two disagree by more than the delta, the device drifted under the
+    measurement and the delta means nothing.
+    """
+    was_enabled = attention_ltx.LTX_DEDUP_GATE_GATHER
+
+    def _pass(enabled: bool) -> float:
+        attention_ltx.LTX_DEDUP_GATE_GATHER = enabled
+        laps = []
+        for _ in range(iters):
+            t0 = time.perf_counter()
+            tt_block(**forward_kwargs)
+            ttnn.synchronize_device(mesh_device)
+            laps.append((time.perf_counter() - t0) * 1000)
+        warm = laps[1:]
+        logger.info(
+            f"DEDUP_PERF pass dedup={int(enabled)} dropped_lap={laps[0]:.2f} " f"warm={[f'{lap:.2f}' for lap in warm]}"
+        )
+        return sum(warm) / len(warm)
+
+    try:
+        on_1 = _pass(True)
+        off = _pass(False)
+        on_2 = _pass(True)
+    finally:
+        attention_ltx.LTX_DEDUP_GATE_GATHER = was_enabled
+
+    on = (on_1 + on_2) / 2
+    logger.info(
+        f"DEDUP_PERF_MS on={on_1:.2f} off={off:.2f} on_repeat={on_2:.2f} "
+        f"delta={on - off:+.2f} drift={abs(on_2 - on_1):.2f} warm_iters={iters - 1}"
+    )
+
+
 def _run_inner_step(
     *,
     mesh_device,
@@ -1046,6 +1134,7 @@ def _run_inner_step(
     use_forward_alias: bool,
     fold_ab: bool = False,
     probe_ab: bool = False,
+    dedup_ab: bool = False,
 ):
     """Shared body for the model forward tests; use_forward_alias picks tt_model(...) vs .forward(...)."""
     # Checkpoint variant only affects AV weight loading; skip the redundant copy in video mode.
@@ -1223,6 +1312,9 @@ def _run_inner_step(
     if probe_ab:
         _assert_probe_split_magnitude(_forward_to_host, addcmul_video=tt_video, addcmul_audio=tt_audio)
 
+    if dedup_ab:
+        _assert_dedup_equivalence(_forward_to_host, dedup_video=tt_video, dedup_audio=tt_audio)
+
     del tt_model
 
     if do_pcc:
@@ -1369,6 +1461,53 @@ def test_ltx_probe_addcmul_split(
         checkpoint_variant=checkpoint_variant,
         use_forward_alias=True,
         probe_ab=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    _LTX_TRANSFORMER_MESH_PARAMS,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(("F", "H", "W"), _LTX_TRANSFORMER_SHAPE_PARAMS)
+@pytest.mark.parametrize("checkpoint_variant", _LTX_TRANSFORMER_CKPT_PARAMS)
+def test_ltx_dedup_gate_gather(
+    mesh_device,
+    sp_axis,
+    tp_axis,
+    num_links,
+    topology,
+    is_fsdp,
+    F,
+    H,
+    W,
+    checkpoint_variant,
+    reset_seeds,
+) -> None:
+    """LTX_DEDUP_GATE_GATHER must not move the AV output: one hoisted gather vs two fused ones.
+
+    AV-only, because the per-head gate whose gather this dedups is only built with audio
+    (apply_gated_attention=has_audio).
+    """
+    if not attention_ltx.LTX_DEDUP_GATE_GATHER:
+        pytest.skip("LTX_DEDUP_GATE_GATHER=0: the hoisted-gather path this gates is compiled out")
+    if topology == ttnn.Topology.Linear and tuple(mesh_device.shape)[tp_axis] > 1:
+        pytest.skip("Linear topology already hoists the gather (use_nonfused_agmm): dedup is a no-op")
+    _run_inner_step(
+        mesh_device=mesh_device,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_links=num_links,
+        topology=topology,
+        is_fsdp=is_fsdp,
+        F=F,
+        H=H,
+        W=W,
+        has_audio=True,
+        run_pcc=True,
+        checkpoint_variant=checkpoint_variant,
+        use_forward_alias=True,
+        dedup_ab=True,
     )
 
 

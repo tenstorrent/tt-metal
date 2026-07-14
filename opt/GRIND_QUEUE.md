@@ -537,40 +537,75 @@ no gate does not ship.** Measure on the block harness (`test_ltx_transformer_blo
       deleted.** (It is, however, pathologically under-utilized: one tile of work spread over 32 devices.)
       (b) **Per-op fixed SETUP ≫ program launch.** `to_qkv` AG-mm carries **89.9 µs** of N-independent cost,
       `to_gate` 37.5 µs, vs a 5.83 µs bare program launch. Over ~195 ops/block that is plausibly 50–100 ms/step.
-      **BONUS (the biggest lever found): `all_gather_minimal_matmul_async` DOES NOT OVERLAP.** agmm_gate 166.3 µs
-      vs AG 105.5 + mm 58.3 = 163.8 ⇒ **only 1.6% of the gather is hidden**; to_qkv hides ~23%. The gather is
+      **BONUS (the biggest lever found): `all_gather_minimal_matmul_async` DOES NOT MEANINGFULLY OVERLAP.** agmm_gate
+      166.3 µs vs AG 105.5 + mm 58.3 = 163.8 ⇒ **only ~1.6% of the gather is hidden**; to_qkv hides ~23%. The gather is
       serialized before the matmul. 11 video AG-mms/block ⇒ full-overlap ceiling ≈1.0 ms/block ≈ **−1.0 s E2E**.
+      **✅ CONFIRMED 2026-07-14 01:11Z — NOT RETRACTED — by an independent method (job 062, `opt/w1_links_ab.log`).**
+      The objection to the line above was that `agmm ≈ AG + mm` assumes the fused op's internal compute equals the
+      standalone matmul's, which need not hold (per-K-shard partials + accumulation). Valid objection; it does not
+      bite. The **num_links falsifier** sidesteps it entirely — whatever the fused kernel's internal compute is, it is
+      link-count-INDEPENDENT, so the swing from halving fabric BW measures purely how EXPOSED the gather is. Both link
+      counts priced in ONE reservation; link-insensitive controls (`mm_qkv_video_gathered` 250.93 both runs,
+      `prog_launch_ref` 5.83/5.84) are flat to <0.05 µs, so every delta below is signal, not drift.
+      Standalone activation AG, num_links 2→1: 105.4 → 183.5 = **+78.1 µs** (the full BW sensitivity of one gather).
+      A fused agmm inherits that swing in proportion to how exposed ITS gather is:
+        `agmm_gate` 166.3 → 239.7 = +73.5 µs ⇒ **94% EXPOSED** (gate matmul is N=32 — no compute to hide behind)
+        `agmm_out`  178.0 → 249.1 = +71.1 µs ⇒ **91% EXPOSED**
+        `agmm_qkv`  326.4 → 379.1 = +52.7 µs ⇒ **68% EXPOSED** (widest matmul ⇒ hides most, and still only ~1/3)
+      The level-decomposition and the BW-slope agree, and the level identity reproduces at BOTH link counts (1 link:
+      AG 183.5 + mm 58.3 = 241.9 vs agmm_gate 239.7). It was not a coincidence. **Overlap grows with the matmul's
+      compute, but even the widest projection hides only a third of its gather.**
       **REDUNDANCY: in all 6 attentions, `to_gate_logits` and `to_q`/`to_qkv` each fuse an AG of the IDENTICAL
       tensor** (attention_ltx.py:416 vs :419/:438) ⇒ **6 duplicate activation AGs/block, 288/step.**
       Also flagged (not a collective issue): `ff2` (mm+RS, 645 µs) + `ff1` (438 µs) = 1.08 ms/block = **52 ms/step
       at S1 — ~15% of the step in TWO ops.**
-- [~] **W1 — CUT 1b: dedup the duplicate gate/qkv gather** (math-identical: one explicit AG + two plain matmuls,
-      vs today's two fused AG-mms that gather the same tensor twice). Predicted **−83.9 µs/video attn**. IN FLIGHT
-      (live-driver `LTX_DEDUP_GATE_GATHER` WIP, uncommitted). ⚠ **W2 (above) refutes the stated premise:** the fused
-      AG-mm ALREADY overlaps its gather with compute, so the second fused gather is NOT pure exposed waste — the
-      dedup trades two *overlapped* gathers for one *standalone* (fully-exposed, no matmul to hide it) gather. The
-      remaining win is the halved fabric *bandwidth* (activation crosses once, not twice), real only if this attn is
-      bandwidth-bound; if latency-bound the exposed standalone gather can make it a WASH or a LOSS. −83.9µs is a
-      compute-model estimate that omits the exposed-latency term — **measure the A/B, don't assume the sign.**
-      **✅ SIGN NOW MEASURED POSITIVE (2026-07-14 00:10Z, job 060 chain probe): the gate gather is fully exposed
-      (~0% overlap, agmm_gate 166.8 ≈ mm_gate 56.1 + gather 110µs) ⇒ it has ZERO overlap to sacrifice; dedup is a
-      pure gate-side win.** Net ≈ 110µs gate saving − ~25µs qkv-overlap loss ≈ −85µs/attn, matching the −83.9µs
-      estimate. W2's "wash-lean-loss if latency-bound" caveat is refuted. Still driver-owned + AV-only (needs the
-      absent 22B ckpt to run the `av` block harness here); the video-path receipt validates the premise.
-- [x] **W2 — the fused AG-matmul ALREADY overlaps → DEAD (no ≈−1.0s ceiling; it's already banked).** Off-device
-      kernel-source read (2026-07-13 22:30Z), citations independently re-verified in-tree. The gathered dim IS the
-      matmul contraction (K) dim (`linear.py:207,212-214`; `..._program_factory.cpp:245-246`), K is ring-sharded, and
-      the compute kernel streams gather→matmul per K-shard: local shard matmul'd with zero wait, each remote shard
-      gated by its own `noc_semaphore_wait_min` (`matmul_dataflow_common.hpp:122,167`), partials L1-accumulated
-      (`compute.cpp:329,404,405,440`), sender pushes each K-block to compute BEFORE mcasting ("frees sender to start
-      next read earlier", `dm_in0_sender.cpp:403-404`). No full-tensor barrier. **⇒ overlap already exploited; W2
-      lever DEAD.** ⚠ **REFUTES the W1 premise** ("the fused gather barely overlaps its matmul") — see W1 note.
-      **⚠ MEASURED CORRECTION (2026-07-14 00:10Z, job 060 `test_agmm_chain_probe.py`, video-path/ckpt-free): the
-      "already overlaps" conclusion is WRONG FOR THE GATE.** Slope-priced fused agmm_gate=166.8µs ≈ mm_gate=56.1µs +
-      gather≈110µs @grid.y=9 ⇒ the gate's gather is **fully exposed (~0% hidden)** — the per-K-shard streaming exists
-      structurally but the N_tiles=1 gate matmul (56µs) is too small to hide the 110µs gather. W2 holds only for WIDE
-      matmuls (qkv hides ~23% per W0); it is REFUTED for tiny-N matmuls (gate). This RE-OPENS the exposed-gather term
-      that W1's dedup eliminates (see W1).
+- [x] **W1 — CUT 1b: dedup the duplicate gate/qkv gather → MEASURED WIN, COMMITTED.** One explicit AG feeding two
+      plain matmuls, replacing the two fused AG-mms that gathered the SAME activation twice. `LTX_DEDUP_GATE_GATHER`
+      (default 1, `attention_ltx.py`); active only on Ring + tp>1 + gate-live (Linear topology already hoists the
+      gather, so the cut is a no-op there).
+      ⚠ **The W2 objection — "the fused op already overlaps, so hoisting the gather EXPOSES it and the dedup may be a
+      LOSS" — is REFUTED BY MEASUREMENT.** The sign was the whole risk, and it came back positive: the gate's gather
+      was already **94% exposed** (see W0), so the dedup had almost no overlap to sacrifice.
+      **Traced, slope-priced per-attention A/B (job 062, `opt/w1_links_ab.log`, num_links=2, S1, drift <0.05 µs) —
+      old (2 fused AG-mms) vs new (1 AG + 2 plain matmuls), each priced as ONE traced body. Every attention wins:**
+        attn1_v (self, QKV) 494.0 → 425.2 = **−68.9 µs**    attn1_a (audio self)  98.5 → 66.2 = **−32.3 µs**
+        attn2_v (cross, Q)  338.8 → 253.2 = **−85.7 µs**    attn2_a (audio cross) 77.1 → 47.6 = **−29.5 µs**
+        a2v     (video Q)   334.8 → 228.0 = **−106.8 µs**   v2a (≈ attn2_a shape)             = **−29.5 µs**
+      ⇒ **−352.6 µs/block traced** over the 6 attentions ≈ **−16.9 ms/step at S1** across 48 blocks. **Bank THIS
+      number: production runs traced.**
+      **Eager block harness (`WARM_FWD_MS`, AV, real 22B ckpt, ring_bh_4x8sp1tp0/stage_1): −1.5 to −1.8 ms/block** —
+      i.e. LARGER than the traced saving, because an eager forward pays full per-op latency with no dispatch overlap.
+      Do not quote the eager number as the production win. In-process A/B (job 101: one block, one weight load, flag
+      flipped BETWEEN passes, 14 warm laps each, ON/OFF/ON): ON median 40.31/40.65 ms vs OFF 42.29 ms; the two ON
+      passes' minima reproduce to 0.09 ms and median-drift is 0.34 ms ⇒ **−1.8 ms/block**. Use medians: the OFF pass
+      carries a fat host-jitter tail (57.8 / 50.8 / 47.2 ms) that inflates its mean.
+      ⚠ **The lap right after a flag flip is a COLD JIT COMPILE (1954 ms observed) — the flip selects op variants the
+      program cache has not seen. Drop the first lap of EVERY pass, not just the first pass.**
+      **PCC gate `test_ltx_dedup_gate_gather`** (AV-only — the per-head gate exists only with audio; real 22B weights,
+      in-process A/B on one built model): dedup vs double-gather video **PCC 99.9997% / RMSE 0.2%**, audio **99.9999%
+      / 0.1%**; same-path noise floor comes back bit-exact (100.0000%, RMSE 0.0%).
+      **Gate PROVEN able to go RED:** `LTX_DEDUP_GATE_MUTANT=1` feeds the gate a corrupted copy of the gathered
+      activation (the silent miswiring this cut could introduce) ⇒ **FAILS**, video RMSE 1.1% vs the 0.8% bound.
+      ⚠ **The RMSE limb is what catches it — the mutant's PCC (99.9935%) still clears the 99.99% PCC bound. Do not
+      loosen `_DEDUP_EQUIV_RMSE`; it is the limb doing the work.**
+- [ ] **W2 — RE-OPENED. "The fused AG-matmul ALREADY overlaps → DEAD" is RETRACTED: REFUTED ON DEVICE.**
+      The off-device kernel-source read (2026-07-13 22:30Z) is *structurally* accurate and its citations re-verify in
+      tree: the gathered dim IS the matmul contraction (K) dim (`linear.py:207,212-214`;
+      `..._program_factory.cpp:245-246`), K is ring-sharded, and the compute kernel streams gather→matmul per K-shard
+      — local shard matmul'd with zero wait, each remote shard gated by its own `noc_semaphore_wait_min`
+      (`matmul_dataflow_common.hpp:122,167`), partials L1-accumulated (`compute.cpp:329,404,405,440`), sender pushes
+      each K-block to compute BEFORE mcasting (`dm_in0_sender.cpp:403-404`). No full-tensor barrier.
+      **But structural streaming ≠ REALIZED overlap.** The num_links falsifier (W0, job 062) measures the gather to be
+      **94% EXPOSED in `to_gate`, 91% in `to_out`, 68% in `to_qkv`**. The source told us overlap was POSSIBLE; the
+      device says it is barely HAPPENING.
+      **⚠ METHODOLOGICAL RECEIPT — do not re-derive "W2 is dead" from the kernel source again. Source code cannot
+      answer "how much is actually hidden"; only a bandwidth-slope (num_links) measurement can. A code path that
+      streams is not a path that overlaps.**
+      ⇒ The lever is LIVE, and the ≈1.0 ms/block ≈ **−1.0 s E2E** full-overlap ceiling from W0 STANDS (it is a ceiling
+      on a hypothetical fix, and W1 does not claim it — W1 only deletes the duplicate gather).
+      Most promising next shape: give the gather real compute to hide behind by fusing gate+QKV into ONE wide AG-mm
+      (concatenated weights, one gather, ~309 µs of matmul to overlap) — the natural successor now that W1 has already
+      hoisted the gather out and left it standalone/fully-exposed by construction.
 - [x] **W3 — the ~90 µs per-op fixed SETUP cost → NO NEW LEVER (the one candidate is receipt-DEAD; the rest have no API).**
       Off-device source attribution (2026-07-13 23:17Z lap), citations re-verified in-tree. The census-priced 89.9 µs is
       **100% on-device replay command-stream time, NOT host program-setup** — traced `enqueue_trace` emits one fixed-size

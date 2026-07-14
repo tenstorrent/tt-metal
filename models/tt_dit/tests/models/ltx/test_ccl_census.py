@@ -196,6 +196,37 @@ def test_ccl_census(mesh_device: ttnn.MeshDevice) -> None:
     )
     gate_reduce_select = col_linear(32 * tp, NUM_HEADS)  # (N, 32*tp) -> this device's 8 head gates
 
+    # CUT 1b: the block's six attentions each gather their input activation TWICE (to_gate_logits
+    # and to_q/to_qkv both fuse a gather of it). Below, each attention's Q-side projection pair is
+    # priced BOTH ways as one traced body — old = 2 fused agmms, new = 1 gather + 2 plain matmuls —
+    # so the cut's per-attention saving is measured, not summed from separately priced parts.
+    q_v = col_linear(VIDEO_DIM, VIDEO_DIM)  # attn2.to_q (video cross)
+    q_a2v = col_linear(VIDEO_DIM, AUDIO_DIM)  # audio_to_video_attn.to_q (video Q, audio dim)
+    q_a = col_linear(AUDIO_DIM, AUDIO_DIM)  # audio_attn2.to_q and video_to_audio_attn.to_q
+
+    def _dealloc(*outs) -> None:
+        for out in outs:
+            for t in out if isinstance(out, (list, tuple)) else [out]:
+                ttnn.deallocate(t)
+
+    def old_pair(gate_mm, q_mm, x):
+        """Today: gate and Q each fuse their own all-gather of the same activation."""
+
+        def body():
+            _dealloc(gate_mm(x, parallel_config=pc), q_mm(x, parallel_config=pc))
+
+        return body
+
+    def new_pair(gate_mm, q_mm, x):
+        """CUT 1b: gather the activation once, then two plain matmuls on the gathered tensor."""
+
+        def body():
+            # The gather returns CCLManager's persistent buffer — never deallocate it (see _free).
+            xg = ccl.all_gather_persistent_buffer(x, dim=3, mesh_axis=tp_axis)
+            _dealloc(gate_mm(xg), q_mm(xg))
+
+        return body
+
     # ---- variants, priority-ordered (each logs as soon as it is measured) ----
     # (name, body, dealloc-output?) — see _free() for why CCL outputs must not be deallocated.
     variants = [
@@ -241,6 +272,18 @@ def test_ccl_census(mesh_device: ttnn.MeshDevice) -> None:
             lambda: ccl.all_gather_persistent_buffer(x_v1_bf8, dim=3, mesh_axis=tp_axis),
             False,
         ),
+        # CUT 1b, priced per attention: the block runs attn1_v + attn2_v + a2v (video Q) and
+        # audio_attn1 + audio_attn2 + v2a (audio Q); v2a shares audio_attn2's shape.
+        ("cut1b_old_attn1_v_s1", old_pair(gate_v, qkv_v, x_v1), False),
+        ("cut1b_new_attn1_v_s1", new_pair(gate_v, qkv_v, x_v1), False),
+        ("cut1b_old_attn2_v_s1", old_pair(gate_v, q_v, x_v1), False),
+        ("cut1b_new_attn2_v_s1", new_pair(gate_v, q_v, x_v1), False),
+        ("cut1b_old_a2v_v_s1", old_pair(gate_v, q_a2v, x_v1), False),
+        ("cut1b_new_a2v_v_s1", new_pair(gate_v, q_a2v, x_v1), False),
+        ("cut1b_old_attn1_a", old_pair(gate_a, qkv_a, x_a), False),
+        ("cut1b_new_attn1_a", new_pair(gate_a, qkv_a, x_a), False),
+        ("cut1b_old_attn2_a", old_pair(gate_a, q_a, x_a), False),
+        ("cut1b_new_attn2_a", new_pair(gate_a, q_a, x_a), False),
         # S2 (4x tokens): separates a collective's fixed cost from its bandwidth cost
         ("ag_activation_video_s2", lambda: ccl.all_gather_persistent_buffer(x_v2, dim=3, mesh_axis=tp_axis), False),
         ("agmm_gate_video_s2", lambda: gate_v(x_v2, parallel_config=pc), True),
