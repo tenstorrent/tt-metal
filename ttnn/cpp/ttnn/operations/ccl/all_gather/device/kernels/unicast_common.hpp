@@ -96,7 +96,7 @@ private:
 // scatter-write packet when they fit, else split a big page across packets).
 //
 // Templated on the sender type (SenderT*) so the same writer drives either a direct WorkerToFabricEdmSender
-// (one worker per direction) or a WorkerToFabricMuxSender (workers sharing a fabric mux). The send calls are
+// (one worker per direction) or a FabricMuxV2Sender (workers sharing a fabric mux). The send calls are
 // base sender-pointer overloads that accept either; for 1D-linear all routing is to_chip_unicast(1) set via
 // set_state, so no route-manager is needed. FabricWriter owns its two packet headers directly.
 template <uint32_t page_size, uint32_t packet_size, typename SenderT>
