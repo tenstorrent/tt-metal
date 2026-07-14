@@ -117,9 +117,13 @@ provenance reads `has_noc == False` and its poll is dropped.
 `cfg`/`mop`/`base` target). A MOP-buffer write in a reconfig-named function is not a unit-sampled
 config register, so it would draw a spurious `NO_UNIT_DRAIN`.
 - **Risk:** FALSE-FLAG.
-- **Live today:** none — no `mop_cfg`/cast write sits in a reconfig-named function. (The `mop_cfg`
-  sites — `ckernel_template::program`/`program_unpack` across all three arches, and the experimental
-  BH pack helpers `_llk_pack_block_contiguous_` / `_llk_pack_fast_untilize_*` — are not
+- **Live today:** none — no `mmio_ptr` (`mop_cfg`/cast) write sits in a reconfig-named function.
+  (The `mop_cfg` sites are `ckernel_template::program` and `ckernel_unpack_template::program` — both
+  compile to `function="program"` in the facts — on **WH+BH only** (17 `mmio_ptr` writes each, via
+  `mop_cfg = reinterpret_cast<…>(TENSIX_MOP_CFG_BASE)`); QSR's `program(volatile uint32_t
+  *instrn_buffer)` writes the MOP through a passed-in pointer parameter, not a base cast, so it is NOT
+  classified `mmio_ptr` (0 on QSR). Plus the experimental BH pack helpers
+  `_llk_pack_block_contiguous_` / `_llk_pack_fast_untilize_mop_patch_last_`. None are
   `RECONFIG_FN_SUBSTR` names, so `is_reconfig_fn` skips them.)
 - **Fix:** give reconfig-stall its own kind set excluding `mmio_ptr` (distinguishing mop- from
   cfg-provenance — see Fix hazard).
