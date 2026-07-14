@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 from typing import NamedTuple
 
 from loguru import logger
@@ -11,6 +12,50 @@ import ttnn
 
 # Track unique warning signatures to avoid stdout spam
 _warned_matmul_signatures = set()
+
+
+def _parse_reblock_env(spec: str) -> dict:
+    """Parse TT_DIT_MM_REBLOCK="M,K,N=Mb,Kb,Nb[,sub_h,sub_w]; ..." into a config table."""
+    table = {}
+    for entry in spec.split(";"):
+        entry = entry.strip()
+        if not entry:
+            continue
+        shape_s, _, blocking_s = entry.partition("=")
+        shape = tuple(int(v) for v in shape_s.split(","))
+        blocking = tuple(int(v) for v in blocking_s.split(","))
+        if len(shape) != 3 or len(blocking) not in (3, 5):
+            msg = f"TT_DIT_MM_REBLOCK entry {entry!r} must be 'M,K,N=Mb,Kb,Nb[,sub_h,sub_w]'"
+            raise ValueError(msg)
+        table[shape] = (blocking[:3] + ((blocking[3], blocking[4]),)) if len(blocking) == 5 else blocking
+    return table
+
+
+_reblock_cache: tuple[str, dict] = ("", {})
+
+
+def reblock_overrides() -> dict:
+    """Blocking overrides from TT_DIT_MM_REBLOCK, keyed on (M, K, N), any core grid.
+
+    A matmul blocking is a LOOP TILING of one and the same sum: M_block/K_block/N_block change which
+    partial products a core accumulates together and in what order, never *what* is summed. So a
+    re-blocking is math-equivalent by construction and differs from the tuned config only in
+    floating-point reduction order (K_block is the one that bites: it sets how many tiles are
+    accumulated before a partial is rounded).
+
+    That makes it the control this codebase otherwise lacks: a run that is mathematically identical
+    to the baseline but numerically different, which is the only way to measure the PRECISION NOISE
+    FLOOR of an end-to-end similarity gate (frame-PCC) on an iterative sampler. Without it you cannot
+    tell "this lever broke the kernel" from "this lever perturbed the last bf16 bit and six denoise
+    steps amplified it".
+
+    DIAGNOSTIC ONLY. It forces an un-swept blocking, so it must never appear in a perf claim.
+    """
+    global _reblock_cache
+    spec = os.environ.get("TT_DIT_MM_REBLOCK", "")
+    if spec != _reblock_cache[0]:
+        _reblock_cache = (spec, _parse_reblock_env(spec) if spec.strip() else {})
+    return _reblock_cache[1]
 
 
 # Known best blockings for 8x8 core grid for specific (M, K, N) shapes
@@ -216,6 +261,16 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None):
     grid_dict = grid_lookup.get((grid_x, grid_y))
     if grid_dict is not None:
         config_tuple = grid_dict.get((M, K, N))
+
+    # Diagnostic re-blocking (see reblock_overrides): same math, different fp reduction order.
+    # Logged at INFO, not debug — a run whose numerics were deliberately perturbed must say so in
+    # its own log, so no measurement from it can later be mistaken for a stock run.
+    override = reblock_overrides().get((M, K, N))
+    if override is not None:
+        logger.info(
+            f"TT_DIT_MM_REBLOCK: ({M}, {K}, {N}) on {grid_x}x{grid_y} forced to {override} (was {config_tuple})"
+        )
+        config_tuple = override
 
     # Unpack: 3-tuple (M_block_size, K_block_size, N_block_size) or
     # 4-tuple (M_block_size, K_block_size, N_block_size, (sub_h, sub_w))
