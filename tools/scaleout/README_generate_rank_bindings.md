@@ -4,6 +4,8 @@
 
 **`tt-run` (auto allocation mode):** For application launches, you normally do **not** call this binary directly. Use **`tt-run --mesh-graph-descriptor <mgd> --hosts …`** (real cluster) or **`--mock-cluster-rank-binding …`** (mock); `tt-run` runs `generate_rank_bindings` as **Phase 1** (or reuses a cache under `generated/ttrun/<cache_id>/`). See [ttnn/ttnn/distributed/README_ttrun.md](../../ttnn/ttnn/distributed/README_ttrun.md).
 
+**Enumerating all solutions:** to generate rank bindings for **every** valid topology solution (not just the first), see [README_generate_rank_bindings_all_solutions.md](README_generate_rank_bindings_all_solutions.md).
+
 ---
 
 ## Prerequisites
