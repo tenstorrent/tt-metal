@@ -62,7 +62,8 @@ LOOP:
     tt-lang    -> author a tt-lang (ttl) kernel (Read GUIDELINES/11). check_pcc; measure_candidate; commit a win else revert. record_kernel_attempt(op,'tt-lang',measured_ms,beat_baseline).
     cpp        -> author a C++ Metalium kernel via ttnn.generic_op (Read GUIDELINES/12). check_pcc; measure_candidate; commit a win else revert. record_kernel_attempt(op,'cpp',measured_ms,beat_baseline).
   ALWAYS pass note= to record_kernel_attempt: ONE line stating (a) WHY you tried this lever on this op (the hypothesis — e.g. 'op is DRAM-bw bound, bf8_b weights halve reads') and (b) WHY it won or failed (the outcome reason — e.g. 'kept: 4.1->3.6ms', 'reverted: PCC 0.71<0.95', 'no gain: 4.1->4.1ms bw-bound', 'OOM under 2CQ'). This note is streamed LIVE into the model's RUN_REPORT.md the instant the attempt resolves (win OR fail), so it must explain the reasoning, not just restate the numbers.
-  (IRON RULE: a real win = check_pcc ok AND check_full_pipeline_latency ok (moved TOWARD the target / not diverged) AND verdict 'valid' AND is_real_gain. REJECTED, pcc-fail, or a DIVERGED full-pipeline latency is never a win — revert. Note: check_full_pipeline_latency never fails for missing the target, only for getting SLOWER than best-so-far.)
+  TWO measurements are fed back to you each step — use BOTH: (1) measure_candidate returns the per-op tracy device_ms (the fast steering signal that tells you WHICH op moved); (2) check_full_pipeline_latency returns the robust whole-pipeline trace+1cq per-token ms (its `mode` field = trace+1cq, `full_pipeline_ms` + `delta_pct` vs best) — this is the per-iteration VERDICT you bank a compute win on. trace+1cq always engages (no 2-CQ reservation), so a dtype/grid/fusion/kernel win it confirms is real and will NOT spuriously fail the way a 2-CQ run can; the trace+2cq production number is measured only at the start/end bookend, so DO NOT treat a mid-loop 1cq result as a downgrade. Only levers whose whole value is the 2-CQ input/compute overlap or L1 headroom need the 2cq bookend to judge.
+  (IRON RULE: a real win = check_pcc ok AND check_full_pipeline_latency status 'ok' (moved TOWARD the target / not diverged, at its trace+1cq mode) AND measure_candidate verdict 'valid' AND is_real_gain. REJECTED, pcc-fail, or a DIVERGED full-pipeline latency is never a win — revert. Note: check_full_pipeline_latency never fails for missing the target, only for getting SLOWER than best-so-far in its CQ track.)
   WRITE-BACK: after you COMMIT a win you IMPROVISED (recall_knobs had no match), call distill_knob to persist the general technique; if the win RE-USED a provisional lever learned on another model, pass its id to distill_knob to graduate it.
   Re-run termination_check. Repeat. NEVER stop while can_stop=false. NEVER reason a lever "won't help" — prove it by measuring + recording the attempt.
 
@@ -182,6 +183,9 @@ def _mcp_config(repo_root: Path, manifest_path: str, pipe: dict, devices: str, k
         "TT_METAL_HOME": str(repo_root),
         "PYTHONPATH": str(repo_root),
         "PATH": f"{repo_root / 'python_env' / 'bin'}{os.pathsep}/usr/bin:/bin",
+        # Mid-loop check_full_pipeline_latency runs the ROBUST trace+1cq gate (always engages, no 2-CQ
+        # OOM/downgrade); the trace+2cq ship number is measured only at the start/end bookend.
+        "PERF_MCP_FULLPIPE_CQ": "1",
     }
     if pipe.get("case"):
         env["PERF_MCP_PERF_CASE"] = pipe["case"]
@@ -255,6 +259,7 @@ def _fullpipe_e2e(repo_root: Path, mcp_env: dict, devices: str, label: str) -> f
     )
     env = cc_env(repo_root, devices)
     env.update(mcp_env)
+    env["PERF_MCP_FULLPIPE_CQ"] = "2"  # bookend = the trace+2cq production ship metric
     env.setdefault("PERF_MCP_FULLPIPE_SAMPLES", "3")
     print(
         f"  [optimize/cc] measuring FULL-model end-to-end ({label}) — ALL 52 layers, no tracy (one slow run, minutes)..."

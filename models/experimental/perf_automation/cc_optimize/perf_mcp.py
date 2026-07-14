@@ -56,6 +56,10 @@ _ENV = _MANIFEST.get("env", {})
 # where profile_model stashes the current baseline so measure_candidate can compare structurally
 _BASELINE_PATH = Path(tempfile.gettempdir()) / "perf_mcp_baseline.json"
 _FULLPIPE_BASELINE_PATH = Path(tempfile.gettempdir()) / "perf_mcp_full_pipeline_baseline.json"
+# Separate best-so-far per command-queue track so the robust trace+1cq per-iteration signal is NEVER
+# compared against the trace+2cq bookend baseline (that cross-mode compare would falsely read as a
+# fidelity "degrade"). 1cq = per-iteration gate; 2cq = start/end ship-metric anchor.
+_FULLPIPE_BASELINE_1CQ_PATH = Path(tempfile.gettempdir()) / "perf_mcp_full_pipeline_baseline_1cq.json"
 _FULLPIPE_TOL = float(os.environ.get("PERF_MCP_FULLPIPE_TOL", "0.08"))
 _FULLPIPE_SAMPLES = max(1, int(os.environ.get("PERF_MCP_FULLPIPE_SAMPLES", "1")))
 _FULLPIPE_TARGET_MS = float(os.environ.get("PERF_MCP_TARGET_MS", "0") or "0")
@@ -648,6 +652,11 @@ def _run_full_pipeline_ms():
     env["TT_PERF_MAX_NEW_TOKENS"] = os.environ.get("PERF_MCP_FULLPIPE_TOKENS", "1")
     env.setdefault("TT_PERF_TRACE", "1")
     env["TT_PERF_PREFILL_TRACE"] = "1"
+    # CQ selector: mid-loop forces 1 (robust trace+1cq — no 2-CQ reservation, so no OOM/downgrade), the
+    # start/end bookend forces 2 (trace+2cq ship metric). Unset -> the perf test's own default (2).
+    _cq = os.environ.get("PERF_MCP_FULLPIPE_CQ")
+    if _cq and _cq.isdigit():
+        env["TT_PERF_NUM_CQ"] = _cq
     env.pop("TT_METAL_DEVICE_PROFILER", None)
     cmd = [sys.executable, "-m", "pytest", "-o", "timeout=0", "-s", node]
     if case:
@@ -801,11 +810,23 @@ def check_full_pipeline_latency() -> dict:
     $TMPDIR/perf_mcp_fullpipe_gate.log so the gated end-to-end time is visible every iteration.
     Returns {status, full_pipeline_ms, method, metric, best_ms?, delta_pct?, target_ms?,
     gap_to_target_ms?, reached_target?}."""
+    _cq_env = os.environ.get("PERF_MCP_FULLPIPE_CQ")
+    cq = int(_cq_env) if (_cq_env and _cq_env.isdigit()) else 1
     ms, method, err, path = _run_full_pipeline_ms()
     if ms is None:
-        return _emit_fullpipe({"status": "crash", "error": err})
+        return _emit_fullpipe({"status": "crash", "error": err, "cq": cq})
     metric = "trace_per_token_ms" if method == "trace" else "eager_full_pipeline_ms"
     mode = _fullpipe_mode(method, path)
+    # 1cq and 2cq are tracked against SEPARATE best-so-far baselines: the trace+1cq per-iteration gate
+    # never compares against the trace+2cq bookend anchor (that would falsely flag a fidelity "degrade").
+    base_path = _FULLPIPE_BASELINE_PATH if cq >= 2 else _FULLPIPE_BASELINE_1CQ_PATH
+    cq_note = (
+        "trace+1cq (robust per-iteration signal): validate/bank compute-op wins here — it always engages "
+        "(no 2-CQ reservation, so no OOM/downgrade). The trace+2cq production number is confirmed at the "
+        "start/end bookend; only 2-CQ-overlap / L1-headroom levers require that bookend to judge."
+        if cq < 2
+        else "trace+2cq (production ship metric): start/end bookend anchor."
+    )
     tgt = _FULLPIPE_TARGET_MS if _FULLPIPE_TARGET_MS > 0 else None
     tgt_fields = {}
     if tgt is not None:
@@ -815,9 +836,9 @@ def check_full_pipeline_latency() -> dict:
             "reached_target": ms <= tgt,
         }
     base = {}
-    if _FULLPIPE_BASELINE_PATH.exists():
+    if base_path.exists():
         try:
-            base = json.loads(_FULLPIPE_BASELINE_PATH.read_text())
+            base = json.loads(base_path.read_text())
         except Exception:  # noqa: BLE001
             base = {}
     best = float(base.get("full_pipeline_ms", 0.0) or 0.0)
@@ -830,16 +851,18 @@ def check_full_pipeline_latency() -> dict:
                 "method": method,
                 "metric": metric,
                 "mode": mode,
+                "cq": cq,
                 "baseline_mode": base_mode,
                 "error": (
-                    "trace fidelity degraded %s -> %s at this bookend; before/after not comparable — "
-                    "fix the 2CQ path or revert (delta NOT banked, baseline NOT downgraded)" % (base_mode, mode)
+                    "trace fidelity degraded %s -> %s in the %d-CQ track; delta NOT banked, baseline NOT "
+                    "downgraded — the workload fell back below the expected trace mode (fix or revert)"
+                    % (base_mode, mode, cq)
                 ),
                 **tgt_fields,
             }
         )
     if base_mode != mode or best <= 0:
-        _FULLPIPE_BASELINE_PATH.write_text(json.dumps({"full_pipeline_ms": ms, "method": method, "mode": mode}))
+        base_path.write_text(json.dumps({"full_pipeline_ms": ms, "method": method, "mode": mode}))
         return _emit_fullpipe(
             {
                 "status": "ok",
@@ -847,14 +870,15 @@ def check_full_pipeline_latency() -> dict:
                 "method": method,
                 "metric": metric,
                 "mode": mode,
-                "note": "best-so-far recorded",
+                "cq": cq,
+                "note": "best-so-far recorded · " + cq_note,
                 **tgt_fields,
             }
         )
     delta_pct = round((ms - best) / best * 100.0, 2) if best > 0 else None
     diverged = ms > best * (1.0 + _FULLPIPE_TOL)
     if ms < best:
-        _FULLPIPE_BASELINE_PATH.write_text(json.dumps({"full_pipeline_ms": ms, "method": method, "mode": mode}))
+        base_path.write_text(json.dumps({"full_pipeline_ms": ms, "method": method, "mode": mode}))
     return _emit_fullpipe(
         {
             "status": "diverged" if diverged else "ok",
@@ -864,6 +888,8 @@ def check_full_pipeline_latency() -> dict:
             "method": method,
             "metric": metric,
             "mode": mode,
+            "cq": cq,
+            "note": cq_note,
             **tgt_fields,
         }
     )
