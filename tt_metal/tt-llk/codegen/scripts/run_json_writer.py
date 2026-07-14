@@ -35,9 +35,17 @@ Subcommands:
                     status to a terminal value, merge in any remaining summary
                     fields passed via --patch-json.
 
-Every subcommand is idempotent in the sense that running it twice with the
-same arguments produces the same final document (modulo timestamps the
-caller passes explicitly).
+Idempotency:
+    State-replacing subcommands are idempotent — running one twice with the
+    same arguments yields the same final document (modulo timestamps the caller
+    passes explicitly): init, message, phase-start, phase-test, metric,
+    link-siblings, finalize.
+
+    Append/counter subcommands are intentionally NOT idempotent, per
+    RUN_JSON_SPEC.md: advance and finalize's closeout append one step_history
+    entry per invocation (the timeline records retries), failure appends to the
+    append-only failures[] log, and phase-end increments phases_completed.
+    Callers must emit these exactly once per real event.
 """
 
 from __future__ import annotations

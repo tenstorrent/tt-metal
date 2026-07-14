@@ -108,17 +108,18 @@ Exports two variables, passed to the orchestrator in Step 3:
 | **quasar** | `codegen/agents/quasar/orchestrator.md` |
 | **wormhole/blackhole** | Not yet supported — inform the user |
 
-**Mandatory:** pass the orchestrator this exact JSON structure:
-```json
-{
-  "KERNEL_NAME": "{kernel}",
-  "TARGET_ARCH": "{target_arch}",
-  "SFPI_MODE": "{SFPI_MODE}",
-  "WORKTREE_DIR": "{worktree_dir}",
-  "WORKTREE_BRANCH": "{worktree_branch}",
-  "LOG_DIR_BASE": "/proj_sw/user_dev/llk_code_gen"
-}
+**Mandatory:** before invoking the orchestrator, write its startup parameters
+via `state.py --worktree-dir` — do not hand-construct the state file path
+(`--worktree-dir` resolves it the same way for every caller):
+```bash
+python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set KERNEL_NAME     "{kernel}"
+python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set TARGET_ARCH     "{target_arch}"
+python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set SFPI_MODE       "{SFPI_MODE}" --json
+python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set WORKTREE_BRANCH "{worktree_branch}"
+python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set LOG_DIR_BASE    "/proj_sw/user_dev/llk_code_gen"
 ```
+Then invoke the orchestrator, telling it only `WORKTREE_DIR={worktree_dir}` —
+it reads everything else back the same way, via `state.py --worktree-dir`.
 
 ### Solve Issue (`REQUEST_TYPE` = `issue`)
 

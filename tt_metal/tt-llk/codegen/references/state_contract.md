@@ -1,0 +1,41 @@
+# Quasar CodeGen — `state.py` Dependency Graph
+
+`boot` = `--worktree-dir` file · `run` = `--log-dir "$LOG_DIR"` file.
+`★` = agent must write those keys back into `run`.
+
+## Orchestrator ⇄ agents
+
+Left box into an agent = what it consumes · right box out = what it produces.
+
+```mermaid
+flowchart LR
+  ROUTER["router"] --> RB["KERNEL_NAME, TARGET_ARCH, SFPI_MODE,<br/>WORKTREE_BRANCH, LOG_DIR_BASE"] --> ORCH(["orchestrator"])
+
+  ORCH --> aI["kernel identity"] --> ANA["analyzer"] --> aO["analysis.md,<br/>error line"] --> ORCH
+  ORCH --> wI["analysis, CYCLE,<br/>GENERATED_KERNEL"] --> WR["writer"] --> wO["PASSED / FAILED,<br/>error line, compile count"] --> ORCH
+  ORCH --> tI["compiled kernel,<br/>CYCLE, LOG_DIR"] --> TST["tester ★"] --> tO["PASS / STUCK / ENV_ERROR,<br/>TESTS_TOTAL, TESTS_PASSED, TESTS_GENERATED,<br/>TESTER_COMPILE_COUNT, PHASE_DEBUGS,<br/>FORMATS_TESTED_JSON, FORMATS_EXCLUDED_JSON"] --> ORCH
+  ORCH --> rI["PREV_RESULT,<br/>failure summary, CYCLE"] --> RE["refiner"] --> rO["REFINED / ESCALATE,<br/>reason"] --> ORCH
+  ORCH --> oI["passing kernel,<br/>SFPI_MODE"] --> OP["optimizer ★"] --> oO["OPTIMIZED,<br/>OPTIMIZATION_TYPE"] --> ORCH
+  ORCH --> fI["kernel"] --> FM["format"] --> ORCH
+
+  ORCH --> FIN["finalize → run.json + runs.jsonl"]
+
+  classDef inb fill:#eef,stroke:#88a;
+  classDef outb fill:#efe,stroke:#8a8;
+  classDef star fill:#fde,stroke:#c39,stroke-width:2px;
+  class RB,aI,wI,tI,rI,oI,fI inb;
+  class aO,wO,tO,rO,oO outb;
+  class TST,OP star;
+```
+
+## Orchestrator internal state (run file, in order)
+
+```mermaid
+flowchart TB
+  A["setup_run<br/>LOG_DIR, WORKTREE_DIR, RUN_ID, START_TIME, GIT_COMMIT,<br/>CODEGEN_VERSION, PROMPT, BATCH_ID, MODEL, RUN_TYPE"]
+  B["set_kernel_identity<br/>KERNEL_TYPE, REF_ARCH, KERNEL_PATH, GENERATED_KERNEL"]
+  C["write_initial_run_json (seeds)<br/>SESSION_ID, PROJECT_CWD, CYCLE, MAX_CYCLES, REFINEMENT_COUNT,<br/>COMPILATION_ATTEMPTS, DEBUG_CYCLES, PHASES_TOTAL, PHASES_COMPLETED,<br/>LINES_GENERATED, TOKENS_JSON, OBSTACLE, +★ defaults"]
+  D["writer/tester/refiner loop<br/>PHASE_COMPILES, PHASE_COMPILE_ERRORS_JSON, PHASE_TEST_DETAILS,<br/>PREV_RESULT, STATUS, FINAL_RESULT, error/diagnosis/reason lines"]
+  E["finalize → run.json + runs.jsonl"]
+  A --> B --> C --> D --> E
+```

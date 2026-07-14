@@ -23,15 +23,13 @@ setup() {
   "run_failures": 0
 }
 JSON
-    # Write state file so the hook can find LOG_DIR
-    cat > /tmp/codegen_run_state.sh <<EOF
-export LOG_DIR="$LOG_DIR"
+    cat > "$LOG_DIR/.codegen_run_state.json" <<EOF
+{"LOG_DIR": "$LOG_DIR"}
 EOF
 }
 
 teardown() {
     rm -rf "$LOG_DIR"
-    rm -f /tmp/codegen_run_state.sh
 }
 
 # Feed a JSON payload to the hook; capture stdout
@@ -65,13 +63,15 @@ assert_no_file() {
 # Wrap a command+output into the PostToolUse JSON the hook expects.
 # $1 = command, $2 = output (may include "Exit code: N")
 make_payload() {
+    local cwd="${3:-$LOG_DIR}"
     python3 -c "
 import json, sys
 print(json.dumps({
     'tool_name': 'Bash',
     'tool_input': {'command': sys.argv[1]},
     'tool_response': sys.argv[2],
-}))" "$1" "$2"
+    'cwd': sys.argv[3],
+}))" "$1" "$2" "$cwd"
 }
 
 # ── test cases ─────────────────────────────────────────────────────────────
@@ -188,7 +188,6 @@ teardown
 
 echo ""
 echo "=== no state file — hook exits silently ==="
-rm -f /tmp/codegen_run_state.sh
 LOG_DIR=$(mktemp -d)
 # Should exit 0 and produce no output
 out=$(run_hook "$(make_payload "python scripts/compiler.py foo.cpp" "Exit code: 1")")
