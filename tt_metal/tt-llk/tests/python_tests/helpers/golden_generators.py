@@ -3254,6 +3254,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuBitwiseAnd: self._bitwise_and,
                 MathOperation.SfpuBitwiseOr: self._bitwise_or,
                 MathOperation.SfpuBitwiseXor: self._bitwise_xor,
+                MathOperation.SfpuDivInt32: self._div_int32,
                 MathOperation.SfpuDivInt32Floor: self._div_int32_floor,
                 MathOperation.SfpuGcd: self._gcd,
                 MathOperation.SfpuLcm: self._lcm,
@@ -3470,6 +3471,12 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
 
     def _bitwise_xor(self, t1, t2):
         return torch.bitwise_xor(t1.to(torch.int32), t2.to(torch.int32)).to(torch.int32)
+
+    def _div_int32(self, t1, t2):
+        # int32 truncating division (rounds toward zero), matching calculate_div_int32.
+        return torch.div(
+            t1.to(torch.int64), t2.to(torch.int64), rounding_mode="trunc"
+        ).to(torch.int32)
 
     def _div_int32_floor(self, t1, t2):
         # int32 floor division (rounds toward -inf), matching calculate_div_int32_floor.

@@ -22,7 +22,8 @@ from helpers.test_variant_parameters import (
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
-# EMA smoothing factor, matching ttnn's ema op default (alpha=0.25, beta=1-alpha).
+# EMA smoothing factor chosen for this test (ttnn.ema has no default alpha; it is a
+# required argument). beta is derived as 1 - alpha.
 EMA_ALPHA = 0.25
 EMA_BETA = 1.0 - EMA_ALPHA
 
@@ -110,4 +111,6 @@ def test_sfpu_ema(dest_acc, num_time_tiles):
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
     res_tensor = untilize_block(res_tensor, formats.output_format, input_dimensions)
 
-    assert passed_test(golden_tensor, res_tensor, formats.output_format)
+    assert passed_test(
+        golden_tensor, res_tensor, formats.output_format
+    ), "EMA result does not match golden"
