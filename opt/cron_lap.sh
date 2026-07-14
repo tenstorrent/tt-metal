@@ -14,11 +14,10 @@ if [[ -e "$ROOT/DONE" ]]; then echo "$(ts) DONE present — halted" >>"$LOG"; ex
 
 # Skip if an interactive session touched its liveness marker in the last 18 min: it owns the laps,
 # cron is only the failsafe for when that session is dead. Prevents double-dispatch.
-MARK="$ROOT/opt/.session_alive"
-if [[ -f "$MARK" ]]; then
-  age=$(( $(date +%s) - $(stat -c %Y "$MARK" 2>/dev/null || echo 0) ))
-  if (( age < 1080 )); then echo "$(ts) interactive session alive (${age}s) — cron lap skipped" >>"$LOG"; exit 0; fi
-fi
+# NO session-defer. A live session used to suppress these laps for 18 min at a time, and it
+# suppressed 234 of them -- every one a window in which a worker could die and leave the device
+# idle with nothing watching. Double-dispatch is cheap (flock serialises the laps, the broker
+# queue serialises the device); an idle device is not. Cron runs regardless of who else is awake.
 
 echo "$(ts) cron lap firing (no live session)" >>"$LOG"
 cd "$ROOT" || exit 1

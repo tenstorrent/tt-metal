@@ -1,5 +1,20 @@
 # LTX-opt autonomous loop — ONE LAP per invocation
 
+## RULE ZERO — CHECK THE DEVICE FIRST, DISPATCH, THEN THINK
+
+`tt-device-mcp status`. **If nothing owned by `[claude]smarton` is RUNNING or QUEUED and the goal is open,
+queue a device job THIS LAP — before any analysis, any archaeology, any report.** An idle device with an
+open goal is the single failure this loop exists to prevent, and it is the one that keeps happening:
+subagents die silently (MCP disconnect, API error, context limit) and the box goes idle with nobody
+watching. **A dead worker must never cost the device.**
+
+- For a single well-defined run, **submit it yourself** via `tt_device_job_run_bg` and harvest the result
+  from `/var/log/tt-device-broker/*_<jobid>.log`. Do NOT wrap a one-shot device run in a subagent — three
+  subagents died mid-flight in this campaign and each death idled the box.
+- Reserve subagents for genuinely multi-step work (integration, scoring, pushing).
+- **A worker's PASS is a CLAIM.** Re-verify it from the raw broker log before banking it.
+
+
 You are the LTX 1080p-high optimization loop agent, fired by **OS cron** as a fresh
 headless process. You have **NO prior conversation context** — all state is on disk.
 Working dir: `/home/smarton/tt-metal/.claude/worktrees/ltxperf-tip` (you are already in it).
