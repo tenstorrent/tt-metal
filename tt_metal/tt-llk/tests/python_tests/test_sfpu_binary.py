@@ -11,13 +11,18 @@ from helpers.chip_architecture import ChipArchitecture
 from helpers.data_format_inference import is_format_combination_outlier
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
+    TILE_DIMENSIONS,
     BinarySFPUGolden,
     BroadcastGolden,
     get_golden_generator,
 )
 from helpers.llk_params import BroadcastType as LlkBroadcastType
-from helpers.llk_params import DestAccumulation, MathOperation, format_dict
-from helpers.param_config import input_output_formats, parametrize
+from helpers.llk_params import DestAccumulation, DestSync, MathOperation, format_dict
+from helpers.param_config import (
+    get_num_blocks_and_num_tiles_in_block,
+    input_output_formats,
+    parametrize,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import DistributionKind, StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
@@ -25,6 +30,8 @@ from helpers.test_variant_parameters import (
     APPROX_MODE,
     BROADCAST_TYPE,
     MATH_OP,
+    NUM_BLOCKS,
+    NUM_TILES_IN_BLOCK,
     TILE_COUNT,
     TemplateParameter,
     generate_input_dim,
@@ -713,6 +720,10 @@ def test_sfpu_binary_add_top_row(formats, dest_acc, mathop):
         else golden_tensor.view(input_dimensions)
     )
 
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
+    )
+
     configuration = TestConfig(
         "sources/sfpu_binary_test.cpp",
         formats,
@@ -722,7 +733,11 @@ def test_sfpu_binary_add_top_row(formats, dest_acc, mathop):
             APPROX_MODE(),
             BROADCAST_TYPE(LlkBroadcastType.None_),
         ],
-        runtimes=[TILE_COUNT(tile_cnt_A)],
+        runtimes=[
+            TILE_COUNT(tile_cnt_A),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,
@@ -763,7 +778,9 @@ def sfpu_binary(
     twos_complement=False,
 ):
 
-    input_dimensions = [64, 32]
+    # FP32 destination tiles occupy twice the register space. Keep four full destination
+    # blocks for those formats and four blocks of eight tiles for the remaining formats.
+    input_dimensions = [128, 128] if formats.input_format.is_32_bit() else [256, 128]
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -777,7 +794,12 @@ def sfpu_binary(
     # The kernel only consumes buffer_A (operand 0 = tile 0, operand 1 = tile 1), so an
     # explicit src_A fully controls inputs for edge cases; src_B stays random but unused.
     if src_A_override is not None:
-        src_A = src_A_override.to(src_A.dtype).flatten()
+        override = src_A_override.to(src_A.dtype).flatten()
+        if src_A.numel() % override.numel() != 0:
+            raise ValueError(
+                "SFPU binary override must contain a whole number of tile pairs"
+            )
+        src_A = override.repeat(src_A.numel() // override.numel())
 
     golden_src = src_A
     if broadcast_type is not None and broadcast_type != LlkBroadcastType.None_:
@@ -794,20 +816,27 @@ def sfpu_binary(
         )
 
     generate_golden = get_golden_generator(BinarySFPUGolden)
-    golden_tensor = generate_golden(
-        mathop,
-        golden_src,
-        0,  # src1_idx: use tile 0
-        1,  # src2_idx: use tile 1
-        0,  # dst_idx: write to tile 0
-        32,  # num_iterations: 32 rows
-        input_dimensions,  # [64, 32] = 2 tiles
-        (
-            DataFormat.Float16_b
-            if formats.input_format == DataFormat.Bfp8_b
-            else formats.input_format
-        ),
-    ).flatten()
+    golden_format = (
+        DataFormat.Float16_b
+        if formats.input_format == DataFormat.Bfp8_b
+        else formats.input_format
+    )
+    elements_per_pair = 2 * 32 * 32
+    golden_tensor = torch.cat(
+        [
+            generate_golden(
+                mathop,
+                golden_src[offset : offset + elements_per_pair],
+                0,
+                1,
+                0,
+                32,
+                [64, 32],
+                golden_format,
+            ).flatten()
+            for offset in range(0, golden_src.numel(), elements_per_pair)
+        ]
+    )
 
     # ONLY Blackhole needs this for some reason
     if (
@@ -818,6 +847,10 @@ def sfpu_binary(
 
     bcast = broadcast_type if broadcast_type else LlkBroadcastType.None_
 
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
+    )
+
     configuration = TestConfig(
         "sources/sfpu_binary_test.cpp",
         formats,
@@ -827,7 +860,11 @@ def sfpu_binary(
             APPROX_MODE(),
             BROADCAST_TYPE(bcast),
         ],
-        runtimes=[TILE_COUNT(tile_cnt_A)],
+        runtimes=[
+            TILE_COUNT(tile_cnt_A),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,

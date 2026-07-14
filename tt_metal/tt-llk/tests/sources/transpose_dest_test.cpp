@@ -79,8 +79,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         // A2D datacopy and transpose_dest need different ALU data-format state,
         // so (re)configure datacopy at the start of each block's copy phase.
-        _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
-            params.num_faces, formats.math);
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<
+            DataCopyType::A2D,
+            is_fp32_dest_acc_en,
+            BroadcastType::NONE,
+            false /* is_int_fpu_en */,
+            PackMode::Default>(params.num_faces, formats.math);
         for (std::uint32_t tile = 0; tile < params.NUM_TILES_IN_BLOCK; ++tile)
         {
             LLK_ASSERT(

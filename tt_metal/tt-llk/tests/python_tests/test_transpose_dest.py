@@ -261,10 +261,13 @@ def transpose_dest_int8(
 
 def transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest):
 
-    # 16 tiles (4x4) forces the input to span several destination-register banks
-    # for both 16-bit (8 tiles/bank -> 2 banks) and 32-bit (4 tiles/bank -> 4 banks)
-    # dest modes, so the kernel's DEST bank switching is exercised.
-    input_dimensions = [128, 128]
+    # Exercise four destination-register usages. FP32 destination modes hold four
+    # tiles per half, while 16-bit modes hold eight tiles per half.
+    input_dimensions = (
+        [128, 128]
+        if dest_acc == DestAccumulation.Yes or formats.input_format.is_32_bit()
+        else [256, 128]
+    )
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
