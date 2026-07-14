@@ -106,13 +106,10 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 const uint32_t read_offset =
                     in_l1_read_base_addr + (stick_offset * shard_width_bytes + c_i * MAX_BYTES_PER_REDUCTION);
 #ifdef ARCH_QUASAR
-                // [DIAG cache-vs-data] Invalidate the source window bytes BEFORE any read (the POOLSRC DPRINT
-                // below AND the copy). Decisive test: if POOLSRC now shows ~0.032 (row0/1) the earlier 0.4375
-                // was stale DM cache and this is the fix; if POOLSRC STILL shows 0.4375 the input data at base
-                // is genuinely wrong (not cache) and coherency is a red herring.
-                invalidate_l2_cache_range(read_offset, static_cast<size_t>(read_bytes * w_multiple));
-#endif
-#ifdef ARCH_QUASAR
+                // [DIAG cache-vs-data RESULT] The invalidate above proved coherency is NOT the cause: with the
+                // invalidate before this DPRINT, POOLSRC still shows 0.4375 -> the data at base is genuinely
+                // wrong (stick ~447 / row13), not stale cache. Reverted the read invalidate; the real bug is
+                // the input base / data-layout (in_shard_cb.get_read_ptr() misaligned with the input's stick0).
                 // [DIAG 64c reconfig escape] Dump the SOURCE the reader gathers for the first few windows:
                 // base + stick_offset + the actual read address + the source values. golden out_stick0 ~0.032
                 // (input row1); if src[] here already reads ~0.44 (row13) the reader/base is wrong; if src[]
