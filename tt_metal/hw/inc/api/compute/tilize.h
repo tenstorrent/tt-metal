@@ -236,6 +236,14 @@ ALWI void tilize_block(
             0 /*dst index*/, icb)));
         PACK((llk_pack<DST_ACCUM_MODE, true, PackMode::Default>(0 /*tile index*/, ocb, t + output_tile_index)));
 #else
+        // QSR workaround (serialize the tilize DEST reuse): stall MATH until the packer pipe drains before
+        // issuing this tile's datacopy MOP, so MATH cannot write a DEST bank while the prior tile's PACK
+        // read/clear of it is still in flight -- the timing race that trips ERROR_TRISC1 0x19 on the fast
+        // full-tile tilize (the per-tile semaphore handshake alone does not fully serialize datacopy vs pack
+        // on Quasar; the fault tile/core moved with DPRINT latency across every prior fix). Slower but correct;
+        // no-op on t=0 (packer idle). PACK's wait_for_math_done keys off the MATH_PACK semaphore (posted by
+        // dest_section_done), not this stall, so there is no circular wait / deadlock.
+        MATH((TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::NOTHING, p_stall::PACK)));
         MATH((llk_math_eltwise_unary_datacopy(0 /*dst index*/, icb)));
         // DEBUG: print immediately BEFORE the tilize pack; last TZPK before the fault = the faulting tile.
         PACK(DPRINT("TZPK t={} l1idx={}\n", (uint32_t)t, (uint32_t)(t + output_tile_index)));
