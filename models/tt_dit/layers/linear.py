@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 
 import ttnn
@@ -14,6 +16,29 @@ MATH_FIDELITY = {
     ttnn.bfloat16: ttnn.MathFidelity.HiFi2,
     ttnn.float32: ttnn.MathFidelity.HiFi4,
 }
+
+# LTX_OP_CENSUS=1: tally every fused all-gather-matmul by its full program-cache-relevant spec.
+# Two arms that differ only in a weight fold must issue the SAME ops on every shape they share; a
+# census diff says which op actually changed, which a per-block harness cannot (it never runs the
+# stack). Dumped and cleared at each stage boundary by the pipeline's _latent_fp.
+import collections as _collections
+
+OP_CENSUS = _collections.Counter()
+
+
+def _ck_str(ck):
+    """Stable text for a compute-kernel config (its repr is an address)."""
+    parts = []
+    for attr in ("math_fidelity", "math_approx_mode", "fp32_dest_acc_en", "packer_l1_acc", "dst_full_sync_en"):
+        if hasattr(ck, attr):
+            parts.append(f"{attr[:4]}={getattr(ck, attr)}")
+    return ",".join(parts) or str(ck)
+
+
+def _census(kind, M, K, N, chunks, act, ck):
+    if os.environ.get("LTX_OP_CENSUS"):
+        OP_CENSUS[f"{kind} M={M} K={K} N={N} chunks={chunks} act={act} ck[{_ck_str(ck)}]"] += 1
+
 
 # Activation strings accepted by Linear / ColParallelLinear `activation_fn`,
 # mapped to the values the matmul fused-activation path expects. Each value is
@@ -204,13 +229,15 @@ class ColParallelLinear(Module):
             ag_global_semaphores = self.ccl_manager.get_ag_ping_pong_semaphore(
                 parallel_config.tensor_parallel.mesh_axis
             )
+            _ck = compute_kernel_config or self.compute_config
+            _census("AGMM", M, K, N, self.chunks if self.chunks is not None else 1, self.fused_activation_fn, _ck)
             outputs = ttnn.experimental.all_gather_minimal_matmul_async(
                 input_tensor=x,
                 weight_tensor=weight,
                 bias_tensor=self.bias.data if self.bias is not None else None,
                 config=matmul_config,
                 fused_activation=self.fused_activation_fn,
-                compute_kernel_config=compute_kernel_config or self.compute_config,
+                compute_kernel_config=_ck,
                 persistent_output_buffer=ag_persistent_buffer,
                 multi_device_global_semaphore=ag_global_semaphores,
                 num_links=self.ccl_manager.num_links,

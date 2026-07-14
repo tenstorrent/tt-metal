@@ -50,6 +50,17 @@ def _latent_fp(tag: str, t: torch.Tensor | None) -> None:
     )
 
 
+def _op_census(tag: str) -> None:
+    """LTX_OP_CENSUS=1: dump + clear the fused-AG-matmul tally accumulated since the last dump."""
+    if not os.environ.get("LTX_OP_CENSUS"):
+        return
+    from ...layers.linear import OP_CENSUS
+
+    for sig, n in sorted(OP_CENSUS.items()):
+        logger.info(f"OP_CENSUS [{tag}] x{n:<6d} {sig}")
+    OP_CENSUS.clear()
+
+
 # Distilled sigma schedules for the two stages. The defaults are the shipped 8-step (stage 1)
 # and 3-step (stage 2) schedules. LTX_S1_SIGMAS / LTX_S2_SIGMAS override with a comma-separated
 # list to A/B fewer-step schedules (L2 step cut). Unset = byte-identical to the shipped baseline.
@@ -903,6 +914,7 @@ class LTXDistilledPipeline(LTXPipeline):
         logger.info(f"Stage 1 denoise: {t_stage1:.1f}s")
         _latent_fp("s1_video", s1_video)
         _latent_fp("s1_audio", s1_audio)
+        _op_census("stage1")
 
         latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1
         s1_h, s1_w = s1_height // SPATIAL_COMPRESSION, s1_width // SPATIAL_COMPRESSION
@@ -940,6 +952,7 @@ class LTXDistilledPipeline(LTXPipeline):
         logger.info(f"Stage 2 denoise: {t_stage2:.1f}s")
         _latent_fp("s2_video", s2_video)
         _latent_fp("s2_audio", s2_audio)
+        _op_census("stage2")
 
         t0 = time.time()
         self._prepare_vae()

@@ -11,7 +11,7 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 
-from ....layers.linear import ColParallelLinear
+from ....layers.linear import ColParallelLinear, _census
 from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
@@ -440,12 +440,14 @@ class LTXAttention(Module):
             ag_global_semaphores = self.ccl_manager.get_ag_ping_pong_semaphore(
                 parallel_config.tensor_parallel.mesh_axis
             )
+            _ck = compute_kernel_config or to_out.compute_config
+            _census("AGMM-out+addcmul", M, K, N_out, 1, None, _ck)
             output = ttnn.experimental.all_gather_minimal_matmul_async(
                 input_tensor=x,
                 weight_tensor=weight,
                 bias_tensor=to_out.bias.data if to_out.bias is not None else None,
                 config=matmul_config,
-                compute_kernel_config=compute_kernel_config or to_out.compute_config,
+                compute_kernel_config=_ck,
                 persistent_output_buffer=ag_persistent_buffer,
                 multi_device_global_semaphore=ag_global_semaphores,
                 num_links=self.ccl_manager.num_links,
