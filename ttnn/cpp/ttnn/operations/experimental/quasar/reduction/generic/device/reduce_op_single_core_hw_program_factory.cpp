@@ -211,10 +211,10 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
         num_tensor_tiles,
         out_dim_divider);
 
-    Group<KernelRunArgs::NodeRuntimeArgs> reader_node_args = {KernelRunArgs::NodeRuntimeArgs{
-        .node = selected_core_coord, .args = {{"num_tiles", num_tensor_tiles}, {"start_id", 0u}}}};
-    Group<KernelRunArgs::NodeRuntimeArgs> writer_node_args = {KernelRunArgs::NodeRuntimeArgs{
-        .node = selected_core_coord, .args = {{"num_pages", num_tensor_tiles / out_dim_divider}, {"start_id", 0u}}}};
+    KernelRunArgs::RuntimeArgValues reader_node_args =
+        MakeRuntimeArgsForSingleNode(selected_core_coord, {{"num_tiles", num_tensor_tiles}, {"start_id", 0u}});
+    KernelRunArgs::RuntimeArgValues writer_node_args = MakeRuntimeArgsForSingleNode(
+        selected_core_coord, {{"num_pages", num_tensor_tiles / out_dim_divider}, {"start_id", 0u}});
 
     ProgramSpec spec{
         .name = "reduce_single_core_hw",

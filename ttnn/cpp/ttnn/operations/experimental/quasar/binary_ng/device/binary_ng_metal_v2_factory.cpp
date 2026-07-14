@@ -298,16 +298,13 @@ ProgramArtifacts create_sharded_artifacts(
     // -----------------------------------------------------------------------------------------
     // Per-core runtime args (num_tiles per shard) + tensor bindings.
     // -----------------------------------------------------------------------------------------
-    m2::Group<m2::ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs> reader_args, writer_args, compute_args;
-    reader_args.reserve(cores.size());
-    writer_args.reserve(cores.size());
-    compute_args.reserve(cores.size());
+    m2::KernelRunArgs::RuntimeArgValues reader_args, writer_args, compute_args;
     for (const auto& core : cores) {
         const m2::NodeCoord node{static_cast<uint32_t>(core.x), static_cast<uint32_t>(core.y)};
         const uint32_t n = c_shard_tiles;
-        reader_args.push_back({node, {{"num_tiles", n}}});
-        writer_args.push_back({node, {{"num_tiles", n}}});
-        compute_args.push_back({node, {{"num_tiles", n}}});
+        reader_args["num_tiles"][node] = n;
+        writer_args["num_tiles"][node] = n;
+        compute_args["num_tiles"][node] = n;
     }
 
     m2::ProgramRunArgs run_params;

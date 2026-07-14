@@ -261,36 +261,37 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
     // ------------------------------------------------------------------------
     const std::vector<CoreCoord> all_core_coords = corerange_to_cores(all_cores, std::nullopt, row_major);
 
-    Group<KernelRunArgs::NodeRuntimeArgs> reader_node_args;
-    Group<KernelRunArgs::NodeRuntimeArgs> writer_node_args;
-    reader_node_args.reserve(all_core_coords.size());
-    writer_node_args.reserve(all_core_coords.size());
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
 
     for (const auto& core : all_core_coords) {
         const NodeCoord node = core;
-        reader_node_args.push_back(
-            KernelRunArgs::NodeRuntimeArgs{.node = node, .args = {{"num_tiles_per_core", num_input_tiles}}});
+        reader_node_args["num_tiles_per_core"][node] = num_input_tiles;
     }
 
     if (out_sharded) {
         for (const auto& core : all_core_coords) {
             const NodeCoord node = core;
             if (unpad_tensor_w_16) {
-                writer_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-                    .node = node,
-                    .args = {
+                AddRuntimeArgsForNode(
+                    writer_node_args,
+                    node,
+                    {
                         {"num_unpadded_output_rows", num_output_rows_unpadded},
-                        {"num_padded_tiles_per_core", num_input_tiles}}});
+                        {"num_padded_tiles_per_core", num_input_tiles},
+                    });
             } else {
-                writer_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-                    .node = node,
-                    .args = {
+                AddRuntimeArgsForNode(
+                    writer_node_args,
+                    node,
+                    {
                         {"num_unpadded_output_rows", num_output_rows_unpadded},
                         {"num_padded_tiles_per_batch", ntiles_per_batch},
                         {"num_unpadded_rows_per_batch", out_shard_spec.shape[0] / batch},
                         {"padded_block_row_size_bytes", shard_spec.shape[1] * output.element_size()},
                         {"unpadded_block_row_size_bytes", block_row_size},
-                        {"batch", batch}}});
+                        {"batch", batch},
+                    });
             }
         }
     } else {
@@ -355,9 +356,10 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
             // Legacy positional RTAs (dst_addr dropped -> carried by the OUTPUT TensorAccessor):
             //   {dst_addr, num_rows_block, block_row_size, 1, 1, 1, row_size_unpadded,
             //    num_rows_unpadded, block_start_row_id_offset, block_start_row_offset}
-            writer_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-                .node = node,
-                .args = {
+            AddRuntimeArgsForNode(
+                writer_node_args,
+                node,
+                {
                     {"num_rows_block", num_rows_block},
                     {"block_row_size", block_row_size},
                     {"batch", 1u},
@@ -366,7 +368,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
                     {"last_block_row_size_unpadded", row_size_unpadded},
                     {"num_output_rows_unpadded", num_rows_unpadded},
                     {"block_start_row_id", block_start_row_id_offset},
-                    {"block_start_row_offset", block_start_row_offset}}});
+                    {"block_start_row_offset", block_start_row_offset},
+                });
         }
     }
 

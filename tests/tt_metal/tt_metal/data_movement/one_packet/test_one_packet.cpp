@@ -120,15 +120,17 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
 
     ProgramRunArgs run_params;
     ProgramRunArgs::KernelRunArgs krp{.kernel = kspec.unique_id};
-    krp.runtime_arg_values.push_back(
-        {.node = test_config.master_core_coord,
-         .args = {
-             {"num_packets", (uint32_t)test_config.num_packets},
-             {"packet_size_bytes", (uint32_t)test_config.packet_size_bytes},
-             {"master_l1_addr", master_l1_address},
-             {"subordinate_l1_addr", subordinate_l1_address},
-             {"responder_x", (uint32_t)physical_subordinate_core.x},
-             {"responder_y", (uint32_t)physical_subordinate_core.y}}});
+    AddRuntimeArgsForNode(
+        krp.runtime_arg_values,
+        test_config.master_core_coord,
+        {
+            {"num_packets", (uint32_t)test_config.num_packets},
+            {"packet_size_bytes", (uint32_t)test_config.packet_size_bytes},
+            {"master_l1_addr", master_l1_address},
+            {"subordinate_l1_addr", subordinate_l1_address},
+            {"responder_x", (uint32_t)physical_subordinate_core.x},
+            {"responder_y", (uint32_t)physical_subordinate_core.y},
+        });
     run_params.kernel_run_args.push_back(krp);
     SetProgramRunArgs(program, run_params);
 

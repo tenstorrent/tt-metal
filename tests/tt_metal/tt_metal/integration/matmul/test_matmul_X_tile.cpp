@@ -409,22 +409,22 @@ static void matmul_tile_block(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values =
-                {{node,
-                  {{"src0_addr", ctx.src0_dram_buffer->address()},
-                   {"src0_dram_bank_id", 0u},
-                   {"src1_addr", ctx.src1_dram_buffer->address()},
-                   {"src1_dram_bank_id", 0u},
-                   {"num_blocks", num_blocks},
-                   {"in0_block_tile_cnt", in0_block_tile_cnt},
-                   {"in1_block_tile_cnt", in1_block_tile_cnt},
-                   {"in0_block_size_bytes", in0_block_size_bytes},
-                   {"in1_block_size_bytes", in1_block_size_bytes}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src0_addr", ctx.src0_dram_buffer->address()},
+                 {"src0_dram_bank_id", 0u},
+                 {"src1_addr", ctx.src1_dram_buffer->address()},
+                 {"src1_dram_bank_id", 0u},
+                 {"num_blocks", num_blocks},
+                 {"in0_block_tile_cnt", in0_block_tile_cnt},
+                 {"in1_block_tile_cnt", in1_block_tile_cnt},
+                 {"in0_block_size_bytes", in0_block_size_bytes},
+                 {"in1_block_size_bytes", in1_block_size_bytes}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values =
-                {{node, {{"dst_addr", ctx.dst_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", ctx.num_tiles}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"dst_addr", ctx.dst_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", ctx.num_tiles}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };

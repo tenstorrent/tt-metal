@@ -180,10 +180,8 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
 
     const auto& cores = corerange_to_cores(available_grid);
 
-    Group<KernelRunArgs::NodeRuntimeArgs> reader_node_args;
-    Group<KernelRunArgs::NodeRuntimeArgs> writer_node_args;
-    reader_node_args.reserve(ncores);
-    writer_node_args.reserve(ncores);
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
     Table<NodeCoord, AdvancedKernelRunArgs::Varargs> writer_varargs;
     uint32_t max_varargs = 0;
 
@@ -223,17 +221,26 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
         // Writer named RTAs (the legacy fixed prefix, minus the dropped buffer address).
         // start_stick_id (legacy row_start_id at the core's start) is filled in by the
         // fixup loop below.
-        writer_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args = {
-                {"padded_X_size", padded_row_size_bytes}, {"start_stick_id", 0u}, {"n_block_reps", n_block_reps}}});
+        AddRuntimeArgsForNode(
+            writer_node_args,
+            core,
+            {
+                {"padded_X_size", padded_row_size_bytes},
+                {"start_stick_id", 0u},
+                {"n_block_reps", n_block_reps},
+            });
 
         writer_varargs.emplace(core, std::move(writer_tail));
 
         uint32_t num_tiles_per_core = num_tiles_per_row * nblocks_per_core_core;
 
-        reader_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core, .args = {{"num_pages", num_tiles_per_core}, {"start_id", tile_start_id}}});
+        AddRuntimeArgsForNode(
+            reader_node_args,
+            core,
+            {
+                {"num_pages", num_tiles_per_core},
+                {"start_id", tile_start_id},
+            });
 
         tile_start_id += num_tiles_per_core;
     }
@@ -245,7 +252,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
         uint32_t rsid = 0;
         for (uint32_t i = 0; i < ncores; ++i) {
             const std::vector<BlockRep>& assignment = core_assignments.at(i);
-            writer_node_args[i].args["start_stick_id"] = rsid;
+            writer_node_args["start_stick_id"][cores[i]] = rsid;
             for (const auto& el : assignment) {
                 rsid += el.data_row_count();
             }

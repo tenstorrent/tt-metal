@@ -164,13 +164,11 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
         .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device()->arch()),
     };
 
+    // Both kernels take no named runtime args (data flows via CBs/compile-time args), so
+    // runtime_arg_values stays empty; the kernels still run on their nodes per the work unit's
+    // target_nodes.
     KernelRunArgs reader_run{.kernel = READER_KERNEL};
     KernelRunArgs writer_run{.kernel = WRITER_KERNEL};
-    for (const auto& core : ordered_cores_with_data) {
-        const NodeCoord node = core;
-        reader_run.runtime_arg_values.push_back({node, {}});
-        writer_run.runtime_arg_values.push_back({node, {}});
-    }
 
     WorkUnitSpec wu{
         .name = "pad_rm_sharded_width_only",

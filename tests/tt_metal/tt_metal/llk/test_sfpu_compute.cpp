@@ -794,19 +794,19 @@ std::vector<uint32_t> run_sfpu_pipeline(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values =
-                {{node,
-                  {{"src_addr", input_dram_buffer->address()},
-                   {"bank_id", 0u},
-                   {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src_addr", input_dram_buffer->address()},
+                 {"bank_id", 0u},
+                 {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values =
-                {{node,
-                  {{"dst_addr", output_dram_buffer->address()},
-                   {"bank_id", 0u},
-                   {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dst_addr", output_dram_buffer->address()},
+                 {"bank_id", 0u},
+                 {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
@@ -1097,20 +1097,20 @@ bool run_sfpu_binary_two_input_buffer(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values =
-                {{node,
-                  {{"src0_addr", input0_dram_buffer->address()},
-                   {"src0_bank_id", 0u},
-                   {"src1_addr", input1_dram_buffer->address()},
-                   {"src1_bank_id", 0u},
-                   {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src0_addr", input0_dram_buffer->address()},
+                 {"src0_bank_id", 0u},
+                 {"src1_addr", input1_dram_buffer->address()},
+                 {"src1_bank_id", 0u},
+                 {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}})},
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values =
-                {{node,
-                  {{"dst_addr", output_dram_buffer->address()},
-                   {"bank_id", 0u},
-                   {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dst_addr", output_dram_buffer->address()},
+                 {"bank_id", 0u},
+                 {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
@@ -1277,23 +1277,23 @@ bool run_sfpu_ternary_three_input_buffer(
         params.kernel_run_args = {
             experimental::ProgramRunArgs::KernelRunArgs{
                 .kernel = READER,
-                .runtime_arg_values =
-                    {{node,
-                      {{"src0_addr", input0_dram_buffer->address()},
-                       {"src0_bank_id", 0u},
-                       {"src1_addr", input1_dram_buffer->address()},
-                       {"src1_bank_id", 0u},
-                       {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)},
-                       {"src2_addr", input2_dram_buffer->address()},
-                       {"src2_bank_id", 0u}}}},
+                .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                    node,
+                    {{"src0_addr", input0_dram_buffer->address()},
+                     {"src0_bank_id", 0u},
+                     {"src1_addr", input1_dram_buffer->address()},
+                     {"src1_bank_id", 0u},
+                     {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)},
+                     {"src2_addr", input2_dram_buffer->address()},
+                     {"src2_bank_id", 0u}}),
             },
             experimental::ProgramRunArgs::KernelRunArgs{
                 .kernel = WRITER,
-                .runtime_arg_values =
-                    {{node,
-                      {{"dst_addr", output_dram_buffer->address()},
-                       {"bank_id", 0u},
-                       {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}}},
+                .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                    node,
+                    {{"dst_addr", output_dram_buffer->address()},
+                     {"bank_id", 0u},
+                     {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}),
             },
             experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
         };

@@ -443,30 +443,31 @@ void RunTestOnCore(
         // ETH cores still go through the legacy API.
         tt_metal::SetRuntimeArgs(program, dram_copy_kernel, core, rta_values);
     } else {
+        const experimental::NodeCoord node{core};
         experimental::ProgramRunArgs params;
         params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DRAM_COPY_KERNEL_NAME,
-            .runtime_arg_values =
-                {{experimental::NodeCoord{core},
-                  {{"local_buffer_addr", buffer_addr},
-                   {"buffer_src_addr", input_buffer_addr},
-                   {"src_noc_x", input_buf_noc_xy.x},
-                   {"src_noc_y", input_buf_noc_xy.y},
-                   {"buffer_dst_addr", output_buffer_addr},
-                   {"dst_noc_x", output_buf_noc_xy.x},
-                   {"dst_noc_y", output_buf_noc_xy.y},
-                   {"buffer_size", buffer_size},
-                   {"use_inline_dw_write", use_inline_dw_write},
-                   {"bad_linked_transaction", bad_linked_transaction},
-                   {"l1_overflow_addr", l1_overflow_addr},
-                   {"eth_src_overflow_addr", eth_src_overflow_addr_words},
-                   {"eth_dest_overflow_addr", eth_dest_overflow_addr_words},
-                   {"use_multicast_semaphore_inc", use_multicast_semaphore_inc},
-                   {"mcast_dst_end_x", mcast_dst_end_x},
-                   {"mcast_dst_end_y", mcast_dst_end_y},
-                   {"use_write_with_state", use_write_with_state},
-                   {"use_inline_dw_write_from_state", use_inline_dw_write_from_state},
-                   {"use_inline_dw_write_with_state", use_inline_dw_write_with_state}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"local_buffer_addr", buffer_addr},
+                 {"buffer_src_addr", input_buffer_addr},
+                 {"src_noc_x", input_buf_noc_xy.x},
+                 {"src_noc_y", input_buf_noc_xy.y},
+                 {"buffer_dst_addr", output_buffer_addr},
+                 {"dst_noc_x", output_buf_noc_xy.x},
+                 {"dst_noc_y", output_buf_noc_xy.y},
+                 {"buffer_size", buffer_size},
+                 {"use_inline_dw_write", use_inline_dw_write},
+                 {"bad_linked_transaction", bad_linked_transaction},
+                 {"l1_overflow_addr", l1_overflow_addr},
+                 {"eth_src_overflow_addr", eth_src_overflow_addr_words},
+                 {"eth_dest_overflow_addr", eth_dest_overflow_addr_words},
+                 {"use_multicast_semaphore_inc", use_multicast_semaphore_inc},
+                 {"mcast_dst_end_x", mcast_dst_end_x},
+                 {"mcast_dst_end_y", mcast_dst_end_y},
+                 {"use_write_with_state", use_write_with_state},
+                 {"use_inline_dw_write_from_state", use_inline_dw_write_from_state},
+                 {"use_inline_dw_write_with_state", use_inline_dw_write_with_state}}),
         }};
         experimental::SetProgramRunArgs(program, params);
     }

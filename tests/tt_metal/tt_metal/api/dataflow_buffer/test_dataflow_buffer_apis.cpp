@@ -155,11 +155,11 @@ TEST_F(MeshDeviceFixture, DataflowBufferReadTileValue) {
         m2::ProgramRunArgs::KernelRunArgs{
             .kernel = PRODUCER,
             .runtime_arg_values =
-                {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}},
+                m2::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}),
         },
         m2::ProgramRunArgs::KernelRunArgs{
             .kernel = CONSUMER,
-            .runtime_arg_values = {{.node = node, .args = {{"result_l1_addr", result_l1_addr}}}},
+            .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", result_l1_addr}}),
         },
     };
     params.tensor_args = {{IN_TENSOR, std::cref(in_tensor)}};

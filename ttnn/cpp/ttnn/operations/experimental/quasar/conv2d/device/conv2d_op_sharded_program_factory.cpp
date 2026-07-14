@@ -1708,21 +1708,20 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                     act_mcast_sender_id = core.x;
                     act_mcast_sender_noc_x = core_physical.y;
                 }
-                reader_run_args.runtime_arg_values.push_back(m2::KernelRunArgs::NodeRuntimeArgs{
-                    .node = core,
-                    .args =
-                        {
-                            {"mcast_dest_noc_start_x", mcast[0]},
-                            {"mcast_dest_noc_start_y", mcast[1]},
-                            {"mcast_dest_noc_end_x", mcast[2]},
-                            {"mcast_dest_noc_end_y", mcast[3]},
-                            {"act_mcast_sender_id", act_mcast_sender_id},
-                            {"act_mcast_sender_noc_x", act_mcast_sender_noc_x},
-                            {"is_receiver_core", (uint32_t)is_receiver_core},
-                            {"is_sender_core", (uint32_t)is_sender_core},
-                            {"dram_config_reader_index", transpose_mcast ? core.x : core.y},
-                        },
-                });
+                m2::AddRuntimeArgsForNode(
+                    reader_run_args.runtime_arg_values,
+                    core,
+                    {
+                        {"mcast_dest_noc_start_x", mcast[0]},
+                        {"mcast_dest_noc_start_y", mcast[1]},
+                        {"mcast_dest_noc_end_x", mcast[2]},
+                        {"mcast_dest_noc_end_y", mcast[3]},
+                        {"act_mcast_sender_id", act_mcast_sender_id},
+                        {"act_mcast_sender_noc_x", act_mcast_sender_noc_x},
+                        {"is_receiver_core", (uint32_t)is_receiver_core},
+                        {"is_sender_core", (uint32_t)is_sender_core},
+                        {"dram_config_reader_index", transpose_mcast ? core.x : core.y},
+                    });
                 m2::AdvancedKernelRunArgs::Varargs varargs(act_mcast_noc_y.begin(), act_mcast_noc_y.end());
                 reader_run_args.advanced_options.runtime_varargs.insert({core, std::move(varargs)});
             }
@@ -1735,10 +1734,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         uint32_t core_index = 0;
         for (const CoreRange& core_range : input_cores.ranges()) {
             for (const CoreCoord& core : core_range) {
-                reader_run_args.runtime_arg_values.push_back(m2::KernelRunArgs::NodeRuntimeArgs{
-                    .node = core,
-                    .args = {{"core_index", core_index}, {"remaining_tiles_to_push", 0u}},
-                });
+                m2::AddRuntimeArgsForNode(
+                    reader_run_args.runtime_arg_values,
+                    core,
+                    {
+                        {"core_index", core_index},
+                        {"remaining_tiles_to_push", 0u},
+                    });
                 core_index++;
             }
         }
@@ -1747,26 +1749,26 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
 
     // ---- Writer SENDER RTAs ----
     m2::KernelRunArgs writer_sender_run_args{.kernel = KERNEL_WRITER_SENDER};
+    m2::KernelRunArgs::RuntimeArgValues& writer_sender_rtas = writer_sender_run_args.runtime_arg_values;
     for (const CoreRange& core_range : mcast_sender_cores.ranges()) {
         for (const CoreCoord& core : core_range) {
             if (populate_skipped_work_cores && !output_cores.contains(core)) {
                 // Pad-out path: zeros with only the bias-flag/skip slots populated.
-                writer_sender_run_args.runtime_arg_values.push_back(m2::KernelRunArgs::NodeRuntimeArgs{
-                    .node = core,
-                    .args =
-                        {
-                            {"out_start_tile_id_w", 0u},
-                            {"bias_tile_offset", 0u},
-                            {"mcast_dest_noc_start_x", 0u},
-                            {"mcast_dest_noc_start_y", 0u},
-                            {"mcast_dest_noc_end_x", 0u},
-                            {"mcast_dest_noc_end_y", 0u},
-                            {"weights_mcast_num_dests", 0u},
-                            {"weights_mcast_num_cores", 0u},
-                            {"is_sender_core", 1u},
-                            {"skip_work", 1u},
-                        },
-                });
+                m2::AddRuntimeArgsForNode(
+                    writer_sender_rtas,
+                    core,
+                    {
+                        {"out_start_tile_id_w", 0u},
+                        {"bias_tile_offset", 0u},
+                        {"mcast_dest_noc_start_x", 0u},
+                        {"mcast_dest_noc_start_y", 0u},
+                        {"mcast_dest_noc_end_x", 0u},
+                        {"mcast_dest_noc_end_y", 0u},
+                        {"weights_mcast_num_dests", 0u},
+                        {"weights_mcast_num_cores", 0u},
+                        {"is_sender_core", 1u},
+                        {"skip_work", 1u},
+                    });
                 continue;
             }
             uint32_t weight_slice_i = ((block_sharded && transpose_mcast) || !block_sharded) ? core.y : core.x;
@@ -1791,22 +1793,21 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                         right_core_physical.y,
                         bottom_right_core_physical.x,
                         right_core_physical.y);
-                    writer_sender_run_args.runtime_arg_values.push_back(m2::KernelRunArgs::NodeRuntimeArgs{
-                        .node = core,
-                        .args =
-                            {
-                                {"out_start_tile_id_w", out_start_tile_id_w},
-                                {"bias_tile_offset", bias_tile_offset},
-                                {"mcast_dest_noc_start_x", mcast[0]},
-                                {"mcast_dest_noc_start_y", mcast[1]},
-                                {"mcast_dest_noc_end_x", mcast[2]},
-                                {"mcast_dest_noc_end_y", mcast[3]},
-                                {"weights_mcast_num_dests", num_cores_x - 1},
-                                {"weights_mcast_num_cores", num_cores_x - 1},
-                                {"is_sender_core", (uint32_t)is_sender_core},
-                                {"skip_work", 0u},
-                            },
-                    });
+                    m2::AddRuntimeArgsForNode(
+                        writer_sender_rtas,
+                        core,
+                        {
+                            {"out_start_tile_id_w", out_start_tile_id_w},
+                            {"bias_tile_offset", bias_tile_offset},
+                            {"mcast_dest_noc_start_x", mcast[0]},
+                            {"mcast_dest_noc_start_y", mcast[1]},
+                            {"mcast_dest_noc_end_x", mcast[2]},
+                            {"mcast_dest_noc_end_y", mcast[3]},
+                            {"weights_mcast_num_dests", num_cores_x - 1},
+                            {"weights_mcast_num_cores", num_cores_x - 1},
+                            {"is_sender_core", (uint32_t)is_sender_core},
+                            {"skip_work", 0u},
+                        });
                 } else {
                     CoreCoord top_core = {(std::size_t)core.x, 0};
                     CoreCoord top_core_physical = device->worker_core_from_logical_core(top_core);
@@ -1817,22 +1818,21 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                         top_left_core_plus_one_physical.y,
                         top_core_physical.x,
                         bottom_right_core_physical.y);
-                    writer_sender_run_args.runtime_arg_values.push_back(m2::KernelRunArgs::NodeRuntimeArgs{
-                        .node = core,
-                        .args =
-                            {
-                                {"out_start_tile_id_w", out_start_tile_id_w},
-                                {"bias_tile_offset", bias_tile_offset},
-                                {"mcast_dest_noc_start_x", mcast[0]},
-                                {"mcast_dest_noc_start_y", mcast[1]},
-                                {"mcast_dest_noc_end_x", mcast[2]},
-                                {"mcast_dest_noc_end_y", mcast[3]},
-                                {"weights_mcast_num_dests", num_cores_y - 1},
-                                {"weights_mcast_num_cores", num_cores_y - 1},
-                                {"is_sender_core", (uint32_t)is_sender_core},
-                                {"skip_work", 0u},
-                            },
-                    });
+                    m2::AddRuntimeArgsForNode(
+                        writer_sender_rtas,
+                        core,
+                        {
+                            {"out_start_tile_id_w", out_start_tile_id_w},
+                            {"bias_tile_offset", bias_tile_offset},
+                            {"mcast_dest_noc_start_x", mcast[0]},
+                            {"mcast_dest_noc_start_y", mcast[1]},
+                            {"mcast_dest_noc_end_x", mcast[2]},
+                            {"mcast_dest_noc_end_y", mcast[3]},
+                            {"weights_mcast_num_dests", num_cores_y - 1},
+                            {"weights_mcast_num_cores", num_cores_y - 1},
+                            {"is_sender_core", (uint32_t)is_sender_core},
+                            {"skip_work", 0u},
+                        });
                 }
             } else {
                 std::array<uint32_t, 4> mcast = setup_mcast_args(
@@ -1841,21 +1841,23 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                     top_left_core_physical.y,
                     bottom_right_core_physical.x,
                     bottom_right_core_physical.y);
-                m2::KernelRunArgs::RuntimeArgValues args;
-                args["out_start_tile_id_w"] = out_start_tile_id_w;
+                m2::AddRuntimeArgsForNode(
+                    writer_sender_rtas,
+                    core,
+                    {
+                        {"out_start_tile_id_w", out_start_tile_id_w},
+                        {"mcast_dest_noc_start_x", mcast[0]},
+                        {"mcast_dest_noc_start_y", mcast[1]},
+                        {"mcast_dest_noc_end_x", mcast[2]},
+                        {"mcast_dest_noc_end_y", mcast[3]},
+                        {"weights_mcast_num_dests", total_active_num_cores - 1},
+                        {"weights_mcast_num_cores", total_num_cores - 1},
+                        // remaining_tiles_to_push is always in the 1D schema (activation reuse deferred -> 0).
+                        {"remaining_tiles_to_push", 0u},
+                    });
                 if (has_bias) {
-                    args["bias_tile_offset"] = bias_tile_offset;
+                    writer_sender_rtas["bias_tile_offset"][core] = bias_tile_offset;
                 }
-                args["mcast_dest_noc_start_x"] = mcast[0];
-                args["mcast_dest_noc_start_y"] = mcast[1];
-                args["mcast_dest_noc_end_x"] = mcast[2];
-                args["mcast_dest_noc_end_y"] = mcast[3];
-                args["weights_mcast_num_dests"] = total_active_num_cores - 1;
-                args["weights_mcast_num_cores"] = total_num_cores - 1;
-                // remaining_tiles_to_push is always in the 1D schema (activation reuse deferred -> 0).
-                args["remaining_tiles_to_push"] = 0u;
-                writer_sender_run_args.runtime_arg_values.push_back(
-                    m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = std::move(args)});
             }
         }
     }
@@ -1864,6 +1866,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // ---- Writer RECEIVER RTAs ----
     if (create_writer_mcast_receiver) {
         m2::KernelRunArgs writer_receiver_run_args{.kernel = KERNEL_WRITER_RECEIVER};
+        m2::KernelRunArgs::RuntimeArgValues& writer_receiver_rtas = writer_receiver_run_args.runtime_arg_values;
         for (const CoreRange& core_range : mcast_receiver_cores.ranges()) {
             for (const CoreCoord& core : core_range) {
                 if (block_sharded) {
@@ -1880,25 +1883,26 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                         sender_noc_y = top_left_core_physical.y;
                     }
                     const bool is_sender_core = input_cores.contains(core);
-                    writer_receiver_run_args.runtime_arg_values.push_back(m2::KernelRunArgs::NodeRuntimeArgs{
-                        .node = core,
-                        .args =
-                            {
-                                {"weights_mcast_sender_noc_x", sender_noc_x},
-                                {"weights_mcast_sender_noc_y", sender_noc_y},
-                                {"is_sender_core", (uint32_t)is_sender_core},
-                            },
-                    });
+                    m2::AddRuntimeArgsForNode(
+                        writer_receiver_rtas,
+                        core,
+                        {
+                            {"weights_mcast_sender_noc_x", sender_noc_x},
+                            {"weights_mcast_sender_noc_y", sender_noc_y},
+                            {"is_sender_core", (uint32_t)is_sender_core},
+                        });
                 } else {
                     bool is_no_op_core = !input_cores.contains(core);
-                    m2::KernelRunArgs::RuntimeArgValues args;
-                    args["noop"] = (uint32_t)is_no_op_core;
-                    args["weights_mcast_sender_noc_x"] = top_left_core_physical.x;
-                    args["weights_mcast_sender_noc_y"] = top_left_core_physical.y;
-                    // remaining_tiles_to_push is always in the 1D receiver schema (reuse deferred -> 0).
-                    args["remaining_tiles_to_push"] = 0u;
-                    writer_receiver_run_args.runtime_arg_values.push_back(
-                        m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = std::move(args)});
+                    m2::AddRuntimeArgsForNode(
+                        writer_receiver_rtas,
+                        core,
+                        {
+                            {"noop", (uint32_t)is_no_op_core},
+                            {"weights_mcast_sender_noc_x", top_left_core_physical.x},
+                            {"weights_mcast_sender_noc_y", top_left_core_physical.y},
+                            // remaining_tiles_to_push is always in the 1D receiver schema (reuse deferred -> 0).
+                            {"remaining_tiles_to_push", 0u},
+                        });
                 }
             }
         }
@@ -1914,8 +1918,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         for (const CoreRange& range : all_cores.ranges()) {
             for (const CoreCoord& core : range) {
                 bool skip_compute = transpose_mcast ? core.y > end_coord_y : core.x > end_coord_x;
-                compute_run_args.runtime_arg_values.push_back(m2::KernelRunArgs::NodeRuntimeArgs{
-                    .node = core, .args = {{"skip_compute", (uint32_t)skip_compute}}});
+                compute_run_args.runtime_arg_values["skip_compute"][core] = (uint32_t)skip_compute;
             }
         }
     }

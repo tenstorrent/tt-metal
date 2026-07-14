@@ -140,11 +140,13 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
 
     ProgramRunArgs run_params;
     ProgramRunArgs::KernelRunArgs gatherer_run_params{.kernel = gatherer_spec.unique_id};
-    gatherer_run_params.runtime_arg_values.push_back(
-        {.node = test_config.master_core_coord,
-         .args = {
-             {"num_of_transactions", (uint32_t)test_config.num_of_transactions},
-             {"transaction_size_bytes", (uint32_t)transaction_size_bytes}}});
+    AddRuntimeArgsForNode(
+        gatherer_run_params.runtime_arg_values,
+        test_config.master_core_coord,
+        {
+            {"num_of_transactions", (uint32_t)test_config.num_of_transactions},
+            {"transaction_size_bytes", (uint32_t)transaction_size_bytes},
+        });
     gatherer_run_params.advanced_options.runtime_varargs.emplace(
         test_config.master_core_coord, subordinate_phys_coords);
     run_params.kernel_run_args.push_back(gatherer_run_params);
