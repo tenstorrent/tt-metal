@@ -3,19 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-G5 — emission / codegen asserts for eltwise_chain (inspect the compiled artifact, not values).
+Emission / codegen asserts for eltwise_chain (inspect the compiled artifact, not values).
 
-Coverage spec: ttnn/cpp/ttnn/kernel_lib/docs/eltwise_helper_test_coverage.html (group G5).
+Some helper behavior is invisible to PCC. INLINING has a real precedent: a CPS lambda once defeated
+always_inline and pushed the Tensix MATH body out of line, producing NaN. These tests disassemble
+the trisc1 (MATH) and trisc2 (PACK) kernels and assert the chain body is fully inlined (no
+out-of-line chain-helper symbols). Runs after JIT; the ELF is on disk even on a cache hit.
 
-Some helper behavior is invisible to PCC. The one with a real precedent is INLINING: a CPS lambda
-once defeated always_inline and pushed the Tensix MATH body out of line, producing NaN
-(project_eltwise_chain_no_inline_lambda). EM-03 guards that structurally — it disassembles the
-trisc1 (MATH) kernel and asserts the chain body is fully inlined (no out-of-line chain-helper
-symbols). This runs after the kernel JITs; the ELF is on disk even on a cache hit.
-
-EM-01/02/04 (reconfig-elision instruction counts, no-engine-init, block-clamp at asm) need finer
-asm diffing and are tracked in TEST_DECISION_LOG.md as follow-up — they are more fragile than a
-symbol-table scan, so they are deliberately not shipped here as flaky asserts.
+Finer emission checks (reconfig-elision counts, no-engine-init, block-clamp at asm) need asm diffing
+and are tracked as follow-up — more fragile than a symbol-table scan, so not shipped here.
 """
 
 import glob
@@ -63,15 +59,15 @@ def _demangled_text_symbols(elf):
     return [ln for ln in out.splitlines() if " t " in f" {ln} " or " T " in f" {ln} "]
 
 
-def test_em03_chain_body_is_inlined(device):
-    """EM-03: the MATH (trisc1) kernel must contain NO out-of-line chain-helper symbols — the chain
+def test_chain_body_is_inlined(device):
+    """The MATH (trisc1) kernel must contain NO out-of-line chain-helper symbols — the chain
     body is fully inlined into the kernel entry. A regression that broke always_inline (the NaN bug)
     would surface an out-of-line exec function here."""
     _jit_compile(device)
     elf = _newest_trisc_elf(KERNEL_STEM, "trisc1")
     syms = _demangled_text_symbols(elf)
     offenders = [s for s in syms if any(m in s for m in OUT_OF_LINE_MARKERS)]
-    logger.info(f"EM-03 trisc1 text symbols={len(syms)} | offenders={len(offenders)} | {elf}")
+    logger.info(f"trisc1 text symbols={len(syms)} | offenders={len(offenders)} | {elf}")
     assert (
         not offenders
     ), "chain body is NOT fully inlined — out-of-line helper symbols found (the no-inline NaN class):\n" + "\n".join(
@@ -79,11 +75,11 @@ def test_em03_chain_body_is_inlined(device):
     )
 
 
-def test_em03_pack_body_is_inlined(device):
+def test_pack_body_is_inlined(device):
     """Same inlining guard on the PACK (trisc2) kernel — the PackTile path must inline too."""
     _jit_compile(device)
     elf = _newest_trisc_elf(KERNEL_STEM, "trisc2")
     syms = _demangled_text_symbols(elf)
     offenders = [s for s in syms if any(m in s for m in OUT_OF_LINE_MARKERS)]
-    logger.info(f"EM-03 trisc2 text symbols={len(syms)} | offenders={len(offenders)}")
+    logger.info(f"trisc2 text symbols={len(syms)} | offenders={len(offenders)}")
     assert not offenders, "pack body not fully inlined:\n" + "\n".join(offenders)

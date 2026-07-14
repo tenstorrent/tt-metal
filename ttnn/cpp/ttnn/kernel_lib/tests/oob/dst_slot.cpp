@@ -2,18 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Out-of-bounds DST probe (G6 / OOB-01, OOB-02).
+// Out-of-bounds DST probe: identity copy through a single DEST slot (slot index is a CT arg).
 //
-// Identity copy of one input through a single DEST slot whose index is supplied as a
-// compile-time arg. CopyTile writes DEST[slot]; PackTile reads DEST[slot]; output == input.
-//
-// The point is the slot index: every chain element static_asserts `to_u32(slot) <
-// DEST_AUTO_LIMIT` (eltwise_chain.inl CopyTile:431, PackTile:549). DEST_AUTO_LIMIT depends on
-// the compute config (half/full sync × fp32_dest_acc) per dest_helpers.hpp:88-102:
-//   half-sync bf16 = 8, half-sync fp32 = 4, full-sync bf16 = 16, full-sync fp32 = 8.
-//
-// The driving pytest picks (slot, sync, fp32_acc) so a legal slot compiles + runs (golden ==
-// input) and an over-limit slot FAILS to compile with "DEST slot exceeds DEST_AUTO_LIMIT".
+// Every chain element static_asserts `to_u32(slot) < DEST_AUTO_LIMIT`, which depends on the compute
+// config (half/full sync × fp32_dest_acc): half-sync bf16=8/fp32=4, full-sync bf16=16/fp32=8. The
+// driving pytest picks (slot, sync, fp32_acc) so a legal slot compiles and reproduces the input,
+// and an over-limit slot FAILS to compile with "DEST slot exceeds DEST_AUTO_LIMIT".
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
