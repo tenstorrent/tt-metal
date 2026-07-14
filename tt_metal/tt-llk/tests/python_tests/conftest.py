@@ -479,26 +479,75 @@ def _collapse_runtime_only_variants(config, items):
         items[:] = keep
 
 
-_SFPU_OPS_HEADER = (
-    Path(__file__).resolve().parent.parent / "helpers" / "include" / "sfpu_operations.h"
+# SFPU ops that --op accepts, as lowercased MathOperation names. These are the
+# ops with a `SfpuType::<name>` case in tests/helpers/include/sfpu_operations.h.
+# Keep this in sync with that header: when you add a new `SfpuType::` case there,
+# add its MathOperation name here too, otherwise `--op <op>` errors out (by
+# design: it forces the table to stay current with the header).
+SUPPORTED_SFPU_OPS = frozenset(
+    {
+        "abs",
+        "atanh",
+        "asinh",
+        "acosh",
+        "celu",
+        "cos",
+        "elu",
+        "exp",
+        "exp2",
+        "fill",
+        "gelu",
+        "gelutanh",
+        "hardsigmoid",
+        "log",
+        "log1p",
+        "neg",
+        "reciprocal",
+        "rsqrt",
+        "sigmoid",
+        "sin",
+        "silu",
+        "signbit",
+        "sqrt",
+        "square",
+        "erfinv",
+        "heaviside",
+        "softshrink",
+        "softsign",
+        "mish",
+        "selu",
+        "i0",
+        "rdiv",
+        "clamp",
+        "hardtanh",
+        "tanhshrink",
+        "floor",
+        "ceil",
+        "trunc",
+        "frac",
+        "equalzero",
+        "notequalzero",
+        "lessthanzero",
+        "greaterthanzero",
+        "lessthanequalzero",
+        "greaterthanequalzero",
+        "tanh",
+        "typecast",
+        "threshold",
+        "relumax",
+        "relumin",
+        "lrelu",
+        "addint32",
+        "subint32",
+        "topklocalsort",
+        "topkmerge",
+        "topkrebuild",
+        "sfpuaddcmul",
+        "sfpuaddcdiv",
+        "sfpulerp",
+        "sfpusnakebeta",
+    }
 )
-
-
-def _sfpu_operations_header_text() -> str:
-    try:
-        return _SFPU_OPS_HEADER.read_text()
-    except OSError:
-        return ""
-
-
-def _op_defined_in_header(cpp_enum_value: str, header_text: str) -> bool:
-    """Whether an op's C++ enum name is referenced in sfpu_operations.h.
-
-    If the header can't be read we return True so we never emit false warnings.
-    """
-    if not header_text:
-        return True
-    return re.search(rf"\b{re.escape(cpp_enum_value)}\b", header_text) is not None
 
 
 def _item_op_names(item) -> set:
@@ -526,38 +575,25 @@ def _select_tests_by_op(config, items):
     """Run only the tests for the op(s) passed with --op.
 
     Matching is case-insensitive and exact, so "exp" selects Exp but not Exp2.
-    If op isn't listed in sfpu_operations.h it is still run, just with a warning
-    that it may not work. A name that isn't an SFPU op at all is skipped with a warning.
+    Each op must be listed in SUPPORTED_SFPU_OPS; an op that isn't (a typo, or a
+    new op added to sfpu_operations.h but not to the table) raises an error.
     Does nothing when --op isn't given.
     """
     requested = config.getoption("--op") or []
     if not requested:
         return
 
-    from helpers.llk_params import MathOperation
-
-    by_name = {op.name.lower(): op for op in MathOperation}
-    header_text = _sfpu_operations_header_text()
-
     wanted = set()
     for raw in requested:
-        op = by_name.get(raw.lower())
-        if op is None:
-            logger.warning(
-                f"--op {raw!r}: not a known SFPU op (MathOperation) — ignoring. "
-                f"Names are case-insensitive, e.g. Exp, Reciprocal, Gelu."
+        key = raw.lower()
+        if key not in SUPPORTED_SFPU_OPS:
+            raise pytest.UsageError(
+                f"--op {raw!r}: not a supported SFPU op. Supported ops are listed "
+                f"in SUPPORTED_SFPU_OPS in tests/python_tests/conftest.py. If you "
+                f"added this op to sfpu_operations.h, add its MathOperation name "
+                f"to that table too."
             )
-            continue
-        cpp = op.value.cpp_enum_value
-        if not _op_defined_in_header(cpp, header_text):
-            logger.warning(
-                f"--op {raw!r}: '{op.name}' (C++ '{cpp}') is not defined in "
-                f"sfpu_operations.h; its tests may not build or run."
-            )
-        wanted.add(op.name.lower())
-
-    if not wanted:
-        return
+        wanted.add(key)
 
     selected, deselected = [], []
     for item in items:
