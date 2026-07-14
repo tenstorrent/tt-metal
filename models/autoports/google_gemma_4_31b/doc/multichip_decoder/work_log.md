@@ -174,3 +174,18 @@ the Ethernet watcher limitation remains isolated to instrumentation.
 The stage-owned implementation, tests, documentation, and evidence were
 committed locally as `683adda7a3d12cc060df9ab3a36f1fd506eef234`. Nothing was
 pushed. The follow-up commit only records this checkpoint in stage metadata.
+
+## Resumed Stage 04 audit
+
+The multigoal runner resumed this thread after a later Stage 05 attempt left an
+uncommitted optimization overlay in the shared worktree. The Stage 04 baseline
+was audited at its immutable metadata checkpoint `e1a3f724877`; its source,
+context, and evidence hashes still match `evidence/run_manifest.json`. Stage
+05's own unchanged-baseline rerun also reproduced the Stage 04 PCC and latency
+before applying its later changes.
+
+A fresh read-only `$stage-review` inspected the checkpoint rather than
+misattributing the Stage 05 overlay. It returned `clean-pass` with no required
+work or hard-check gaps. Its full verdict and anomaly ledger are recorded in
+`stage_review_resume.md`. No hardware rerun was needed, no Stage 05 changes
+were modified or staged, and nothing was pushed.
