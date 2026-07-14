@@ -3,12 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/experimental/transformer/rotary_embedding/device/rotary_embedding_program_factory.hpp"
+#include "ttnn/operations/experimental/transformer/rotary_embedding/device/rotary_embedding_device_operation.hpp"
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::experimental::prim {
@@ -18,6 +20,68 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace {
+
+// Work distribution shared between create_descriptor (cache miss) and get_dynamic_runtime_args
+// (cache hit).  Keeping this in one place guarantees the cache-hit path targets exactly the same
+// cores/kernel arg slots the miss path built, so the re-applied decode offsets can't drift from the
+// program layout.  `Wt` is the per-row tile count (1 on the single-tile path).
+struct RotaryWorkSplit {
+    bool row_major = true;
+    uint32_t num_cores = 0;
+    uint32_t num_cores_x = 0;
+    uint32_t num_cores_y = 0;
+    uint32_t num_rows_per_core_group_1 = 0;
+    uint32_t num_rows_per_core_group_2 = 0;
+    CoreRangeSet all_cores;
+    CoreRangeSet core_group_1;
+    CoreRangeSet core_group_2;
+    bool in_sharded = false;
+    bool out_sharded = false;
+    uint32_t num_input_tiles = 0;
+    uint32_t num_output_tiles = 0;
+};
+
+RotaryWorkSplit compute_rotary_work_split(const Tensor& input, const Tensor& output, uint32_t Wt) {
+    RotaryWorkSplit w;
+    w.in_sharded = input.shard_spec().has_value();
+    w.out_sharded = output.shard_spec().has_value();
+    std::optional<ShardSpec> shard_spec = w.in_sharded ? input.shard_spec() : output.shard_spec();
+
+    uint32_t num_rows = input.physical_volume() / input.padded_shape()[-1] / TILE_HEIGHT;
+
+    auto compute_with_storage_grid_size = input.device()->compute_with_storage_grid_size();
+    w.num_cores_x = compute_with_storage_grid_size.x;
+    w.num_cores_y = compute_with_storage_grid_size.y;
+
+    if (shard_spec.has_value()) {
+        w.row_major = shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;
+        w.all_cores = shard_spec.value().grid;
+        w.num_cores = w.all_cores.num_cores();
+        w.core_group_1 = w.all_cores;
+        w.core_group_2 = CoreRangeSet();
+        w.num_rows_per_core_group_1 = shard_spec.value().shape[0] / TILE_HEIGHT;
+        w.num_rows_per_core_group_2 = 0;
+        w.num_input_tiles = w.in_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW : 2 * Wt;
+        w.num_output_tiles =
+            w.out_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW : 2 * Wt;
+        auto bbox = w.all_cores.bounding_box();
+        w.num_cores_x = bbox.end_coord.x + 1;
+        w.num_cores_y = bbox.end_coord.y + 1;
+    } else {
+        w.row_major = true;
+        std::tie(
+            w.num_cores,
+            w.all_cores,
+            w.core_group_1,
+            w.core_group_2,
+            w.num_rows_per_core_group_1,
+            w.num_rows_per_core_group_2) =
+            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows, w.row_major);
+        w.num_input_tiles = 2 * Wt;
+        w.num_output_tiles = w.num_input_tiles;
+    }
+    return w;
+}
 
 // Single-tile (Wt == 1) path. The Wt >= 2 path implements HF rotate_half via
 // inter-tile half-swap + scalar negation, which collapses when Wt == 1 (half_Wt
@@ -53,7 +117,6 @@ ProgramDescriptor create_single_tile_descriptor(
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     constexpr uint32_t Wt = 1;
-    uint32_t num_rows = input.physical_volume() / input.padded_shape()[-1] / TILE_HEIGHT;
     uint32_t Ht = input.padded_shape()[-2] / TILE_HEIGHT;
     uint32_t HtWt = Ht * Wt;
     uint32_t Wbytes = input.padded_shape()[-1] * sizeof(bfloat16);
@@ -63,41 +126,20 @@ ProgramDescriptor create_single_tile_descriptor(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-
-    bool row_major;
-    uint32_t num_cores, num_rows_per_core_group_1, num_rows_per_core_group_2;
-    CoreRangeSet all_cores, core_group_1, core_group_2;
-
-    bool in_sharded = input.shard_spec().has_value();
-    bool out_sharded = output.shard_spec().has_value();
-    std::optional<ShardSpec> shard_spec = in_sharded ? input.shard_spec() : output.shard_spec();
-
-    uint32_t num_input_tiles, num_output_tiles;
-
-    if (shard_spec.has_value()) {
-        row_major = shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;
-        all_cores = shard_spec.value().grid;
-        num_cores = all_cores.num_cores();
-        core_group_1 = all_cores;
-        core_group_2 = CoreRangeSet();
-        num_rows_per_core_group_1 = shard_spec.value().shape[0] / TILE_HEIGHT;
-        num_rows_per_core_group_2 = 0;
-        num_input_tiles = in_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW : 2 * Wt;
-        num_output_tiles = out_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW : 2 * Wt;
-        auto bbox = all_cores.bounding_box();
-        num_cores_x = bbox.end_coord.x + 1;
-        num_cores_y = bbox.end_coord.y + 1;
-    } else {
-        row_major = true;
-        std::tie(
-            num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2) =
-            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows, row_major);
-        num_input_tiles = 2 * Wt;
-        num_output_tiles = num_input_tiles;
-    }
+    auto work = compute_rotary_work_split(input, output, Wt);
+    bool row_major = work.row_major;
+    uint32_t num_cores = work.num_cores;
+    uint32_t num_cores_x = work.num_cores_x;
+    uint32_t num_cores_y = work.num_cores_y;
+    uint32_t num_rows_per_core_group_1 = work.num_rows_per_core_group_1;
+    uint32_t num_rows_per_core_group_2 = work.num_rows_per_core_group_2;
+    CoreRangeSet all_cores = work.all_cores;
+    CoreRangeSet core_group_1 = work.core_group_1;
+    CoreRangeSet core_group_2 = work.core_group_2;
+    bool in_sharded = work.in_sharded;
+    bool out_sharded = work.out_sharded;
+    uint32_t num_input_tiles = work.num_input_tiles;
+    uint32_t num_output_tiles = work.num_output_tiles;
 
     constexpr uint8_t input_cb_index = tt::CBIndex::c_0;
     desc.cbs.push_back(CBDescriptor{
@@ -458,7 +500,6 @@ ProgramDescriptor create_multi_tile_descriptor(
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
-    uint32_t num_rows = input.physical_volume() / input.padded_shape()[-1] / TILE_HEIGHT;
     uint32_t Ht = input.padded_shape()[-2] / TILE_HEIGHT;
     uint32_t Wt = input.padded_shape()[-1] / TILE_WIDTH;
     uint32_t half_Wt = Wt / 2;
@@ -470,42 +511,20 @@ ProgramDescriptor create_multi_tile_descriptor(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-
-    bool row_major;
-    uint32_t num_cores, num_rows_per_core_group_1, num_rows_per_core_group_2;
-
-    CoreRangeSet all_cores, core_group_1, core_group_2;
-
-    bool in_sharded = input.shard_spec().has_value();
-    bool out_sharded = output.shard_spec().has_value();
-    std::optional<ShardSpec> shard_spec = in_sharded ? input.shard_spec() : output.shard_spec();
-
-    uint32_t num_input_tiles, num_output_tiles;
-
-    if (shard_spec.has_value()) {
-        row_major = shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;
-        all_cores = shard_spec.value().grid;
-        num_cores = all_cores.num_cores();
-        core_group_1 = all_cores;
-        core_group_2 = CoreRangeSet();
-        num_rows_per_core_group_1 = shard_spec.value().shape[0] / TILE_HEIGHT;
-        num_rows_per_core_group_2 = 0;
-        num_input_tiles = in_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW : 2 * Wt;
-        num_output_tiles = out_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW : 2 * Wt;
-        auto bbox = all_cores.bounding_box();
-        num_cores_x = bbox.end_coord.x + 1;
-        num_cores_y = bbox.end_coord.y + 1;
-    } else {
-        row_major = true;
-        std::tie(
-            num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2) =
-            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows, row_major);
-        num_input_tiles = 2 * Wt;
-        num_output_tiles = num_input_tiles;
-    }
+    auto work = compute_rotary_work_split(input, output, Wt);
+    bool row_major = work.row_major;
+    uint32_t num_cores = work.num_cores;
+    uint32_t num_cores_x = work.num_cores_x;
+    uint32_t num_cores_y = work.num_cores_y;
+    uint32_t num_rows_per_core_group_1 = work.num_rows_per_core_group_1;
+    uint32_t num_rows_per_core_group_2 = work.num_rows_per_core_group_2;
+    CoreRangeSet all_cores = work.all_cores;
+    CoreRangeSet core_group_1 = work.core_group_1;
+    CoreRangeSet core_group_2 = work.core_group_2;
+    bool in_sharded = work.in_sharded;
+    bool out_sharded = work.out_sharded;
+    uint32_t num_input_tiles = work.num_input_tiles;
+    uint32_t num_output_tiles = work.num_output_tiles;
 
     constexpr uint8_t input_cb_index = tt::CBIndex::c_0;
     desc.cbs.push_back(CBDescriptor{
@@ -878,6 +897,51 @@ ProgramDescriptor RotaryEmbeddingProgramFactory::create_descriptor(
         return create_single_tile_descriptor(operation_attributes, tensor_args, tensor_return_value);
     }
     return create_multi_tile_descriptor(operation_attributes, tensor_args, tensor_return_value);
+}
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> RotaryEmbeddingDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    const auto& token_idx = operation_attributes.token_idx;
+    // Prefill mode (no token_idx) derives cos_sin_start_id from hashed shapes (num_tiles_written %
+    // HtWt), so the cached program's static args are already correct on a hit -- nothing to re-apply.
+    if (!token_idx.has_value()) {
+        return {};
+    }
+
+    const auto& input = tensor_args.input;
+    // Wt == 1 on the single-tile path (X == TILE_WIDTH); this expression yields 1 there too.
+    const uint32_t Wt = input.padded_shape()[-1] / TILE_WIDTH;
+    const uint32_t Wbytes = input.padded_shape()[-1] * sizeof(bfloat16);
+    // Identical arithmetic to create_*_descriptor's decode branch.
+    const uint32_t cos_sin_offset = token_idx.value() % TILE_HEIGHT * Wbytes;
+    const uint32_t cos_sin_start_id = token_idx.value() / TILE_HEIGHT * Wt;
+
+    // Reproduce the descriptor's work distribution so we target the exact same cores and, via
+    // grid_to_cores, the identical ordering used when the runtime args were built.
+    const auto work = compute_rotary_work_split(input, output, Wt);
+    const auto cores = grid_to_cores(work.num_cores, work.num_cores_x, work.num_cores_y, work.row_major);
+
+    // Kernel push order in create_descriptor: reader (0), writer (1), compute (2[, 3]).
+    constexpr uint32_t kReaderKernelIdx = 0;
+    constexpr uint32_t kWriterKernelIdx = 1;
+    // cos_sin_start_id is the last reader runtime arg; the interleaved reader prepends the src buffer
+    // (arg 0), shifting it to index 6, while the sharded reader omits src, leaving it at index 4.
+    const uint32_t reader_cos_sin_start_id_arg_idx = work.in_sharded ? 4 : 6;
+    // Writer runtime args: {dst, num_rows*Wt, num_tiles_written, cos_sin_offset, Wt, Wbytes}.
+    constexpr uint32_t kWriterCosSinOffsetArgIdx = 3;
+
+    // In decode mode both offsets are constant across cores (they depend only on token_idx), so every
+    // work core gets the same re-applied values.
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    dynamic_args.reserve(cores.size() * 2);
+    for (const auto& core : cores) {
+        dynamic_args.push_back({kReaderKernelIdx, core, reader_cos_sin_start_id_arg_idx, cos_sin_start_id});
+        dynamic_args.push_back({kWriterKernelIdx, core, kWriterCosSinOffsetArgIdx, cos_sin_offset});
+    }
+    return dynamic_args;
 }
 
 }  // namespace ttnn::experimental::prim
