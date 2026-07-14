@@ -609,9 +609,11 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     signpost("inference_decode")
     profiler.start("inference_decode")
     while len(generated) < max_generated_tokens:
-        _update(nxt, pos)
-        # Timing includes forward + sampling
+        # Time the FULL decode step (input update + device decode + host readback + sampling),
+        # matching _run_tp_generation_batched and the tt_transformers reference convention —
+        # not just the device compute — so the reported tok/s is real end-to-end throughput.
         t_step = time.time()
+        _update(nxt, pos)
         if eager:
             tt_logits = _decode_fwd()
             if _ondev_sample:
