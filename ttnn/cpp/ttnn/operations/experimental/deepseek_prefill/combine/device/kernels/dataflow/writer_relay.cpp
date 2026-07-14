@@ -248,6 +248,23 @@ void kernel_main() {
         const uint64_t sender_credits_noc_addr =
             get_noc_addr(sender_noc_x, sender_noc_y, get_semaphore(relay_credits_sem_id));
 
+        DeviceZoneScopedN("combine-ethernet-flow");
+
+#if RELAY_ROUNDROBIN_ROUTE
+        // EXPERIMENT (RELAY_ROUNDROBIN_ROUTE): override each token's route + distance below with round-robin
+        // values to spread traffic across both active directions and a range of hop-distances. Payload +
+        // page still come from the slot, so tokens are MISROUTED (perf/BW spread only, output is garbage).
+        // route cycles the ACTIVE fabric directions (raw 0/1 would index unopened connections); distance
+        // cycles {1,2,3,3,2,1,4}. Driven by `consumed` (== the per-real-token index at override time).
+        uint32_t rr_active_dirs[4];
+        uint32_t rr_num_active = 0;
+        for (uint32_t d = 0; d < 4; d++) {
+            if (directions[d]) {
+                rr_active_dirs[rr_num_active++] = d;
+            }
+        }
+        constexpr uint32_t rr_distances[7] = {1, 2, 3, 3, 2, 1, 4};
+#endif
         uint32_t consumed = 0;
         while (true) {
             // Wait until slot `consumed` is filled: the producer monotonically ++ data_ready per token.
@@ -260,7 +277,7 @@ void kernel_main() {
             const uint32_t r = consumed % RELAY_SLOTS;
             const uint32_t slot_base = relay_buf_base_c + r * relay_slot_size;
             volatile tt_l1_ptr uint32_t* ri = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_base);
-            const uint32_t route = ri[0];  // captured into a register before the send
+            uint32_t route = ri[0];  // real route; may be overridden below under RELAY_ROUNDROBIN_ROUTE
 
             if (route == ROUTE_INFO_SENTINEL) {
                 // Sender signalled end-of-stream. Free the sentinel slot and stop.
@@ -269,9 +286,15 @@ void kernel_main() {
                 break;
             }
 
-            const uint32_t distance = ri[1];
+            uint32_t distance = ri[1];
             const uint32_t output_page_idx = ri[2];
             const uint32_t payload_addr = slot_base + l1_alignment;
+
+#if RELAY_ROUNDROBIN_ROUTE
+            // Spread: alternate active directions + cycle the distance array (see toggle comment).
+            route = rr_active_dirs[consumed % rr_num_active];
+            distance = rr_distances[consumed % 7];
+#endif
 
             ccl_routing_utils::line_unicast_route_info_t pkt_route_info{};
             pkt_route_info.distance_in_hops = static_cast<uint16_t>(distance);

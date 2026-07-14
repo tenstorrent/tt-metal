@@ -114,3 +114,10 @@
 // metadata (l1_align route_info + aligned output page, ~14.4 KB/slot). 64 slots ~= 0.9 MB, comfortably
 // within the relay core's L1 (it holds essentially nothing else). Reduce if program creation OOMs.
 #define RELAY_SLOTS 64
+
+// RELAY_ROUNDROBIN_ROUTE — BW-spread experiment. When 1, the relay OVERRIDES each token's route +
+// distance (from the CB slot) with round-robin values so traffic spreads across both active fabric
+// directions and a range of hop-distances: route = i-th active direction alternating (i%num_active),
+// distance = {1,2,3,3,2,1,4}[i%7], where i is the per-token index. Payload/page still come from the slot,
+// so tokens are MISROUTED — output is garbage (perf/liveness only). Set 0 to route tokens for real.
+#define RELAY_ROUNDROBIN_ROUTE 1
