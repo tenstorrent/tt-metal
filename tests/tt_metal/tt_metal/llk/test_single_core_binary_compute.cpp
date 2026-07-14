@@ -365,11 +365,11 @@ bool single_core_binary(
     experimental::ComputeHardwareConfig compute_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
-            .math_fidelity = test_config.math_fidelity,
+            .fpu_math_fidelity = test_config.math_fidelity,
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{
-            .math_fidelity = test_config.math_fidelity,
+            .fpu_math_fidelity = test_config.math_fidelity,
         };
     }
     experimental::KernelSpec compute_spec{

@@ -946,20 +946,20 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
     }
 
-    // Validate compute kernel unpack_to_dest_mode entries.
+    // Validate compute kernel unpack_modes entries.
     //
-    // UnpackToDestMode only has a meaningful effect when the kernel CONSUMES the
+    // UnpackMode only has a meaningful effect when the kernel CONSUMES the
     // DFB (endpoint_type == CONSUMER), the DFB data format is Float32, and
-    // fp32_dest_acc_en is true. Only in that configuration is there a real choice:
-    //   - Default          → unpack via SrcA/B (~19-bit, full FPU access)
-    //   - UnpackToDestFp32 → direct Unpacker0 → Dest (full FP32, no SrcA/B for this DFB)
+    // enable_32_bit_dest is true. Only in that configuration is there a real choice:
+    //   - UnpackToSrc  → unpack via SrcA/B (~19-bit, full FPU access)
+    //   - UnpackToDest → direct Unpacker0 → Dest (full FP32, no SrcA/B for this DFB)
     // Anywhere else, the value is dead config (non-consumer / non-FP32) or
-    // incoherent (UnpackToDestFp32 with fp32_dest_acc_en=false — Dest is 16-bit).
+    // incoherent (UnpackToDest with enable_32_bit_dest=false — Dest is 16-bit).
     //
     // Rules enforced:
     //   - Every entry references a DFB the kernel binds.
     //   - No duplicate entries for the same DFB.
-    //   - UnpackToDestFp32 is rejected only when it is INCOHERENT (fp32_dest_acc_en=false —
+    //   - UnpackToDest is rejected only when it is INCOHERENT (enable_32_bit_dest=false —
     //     Dest is 16-bit and can't hold full FP32). Setting it where it is merely INERT (a
     //     non-CONSUMER binding or a non-Float32 DFB) is tolerated: the LLK ignores the mode
     //     there, and legacy ops commonly set it unconditionally across dtypes. (Failing to set
@@ -967,18 +967,17 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     //     rule below, not here.)
     //   - When the triple holds for a DFB, an explicit entry is REQUIRED — the two
     //     values have very different runtime semantics, so we surface the choice in source.
-    //   - Default is silently assumed everywhere else (no entry required, no busywork).
+    //   - UnpackToSrc is silently assumed everywhere else (no entry required, no busywork).
     for (const auto& kernel : spec.kernels) {
         if (!kernel.is_compute_kernel()) {
             continue;
         }
         const auto& compute_config = std::get<ComputeHardwareConfig>(kernel.hw_config);
 
-        const auto& unpack_to_dest_mode =
-            std::visit([](const auto& config) { return config.unpack_to_dest_mode; }, compute_config);
+        const auto& unpack_modes = std::visit([](const auto& config) { return config.unpack_modes; }, compute_config);
 
-        const bool fp32_dest_acc_en =
-            std::visit([](const auto& config) { return config.fp32_dest_acc_en; }, compute_config);
+        const bool enable_32_bit_dest =
+            std::visit([](const auto& config) { return config.enable_32_bit_dest; }, compute_config);
 
         // Index the kernel's DFB bindings: which DFBs it binds.
         std::unordered_set<DFBSpecName> bound_dfbs;
@@ -988,36 +987,36 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
 
         // Validate each user-supplied entry, tracking which DFBs got an explicit
         // entry (used below to require one where the FP32 choice is real).
-        // Duplicate DFB entries are impossible now that unpack_to_dest_mode is a
+        // Duplicate DFB entries are impossible now that unpack_modes is a
         // Table with unique keys: a repeated DFB overwrites the prior value.
         std::unordered_set<DFBSpecName> entries_seen;
-        for (const auto& [dfb_name, mode] : unpack_to_dest_mode) {
+        for (const auto& [dfb_name, mode] : unpack_modes) {
             entries_seen.insert(dfb_name);
             TT_FATAL(
                 bound_dfbs.contains(dfb_name),
-                "Kernel '{}' unpack_to_dest_mode entry references DFB '{}', which the kernel does not bind",
+                "Kernel '{}' unpack_modes entry references DFB '{}', which the kernel does not bind",
                 kernel.unique_id,
                 dfb_name);
 
-            if (mode == UnpackToDestMode::Default) {
-                continue;  // Default is always allowed.
+            if (mode == UnpackMode::UnpackToSrc) {
+                continue;  // UnpackToSrc is always allowed.
             }
-            // mode == UnpackToDestFp32. Inert where the kernel doesn't consume the DFB or the DFB
+            // mode == UnpackToDest. Inert where the kernel doesn't consume the DFB or the DFB
             // isn't Float32 — the LLK ignores the mode there, so we don't reject (legacy ops set it
             // unconditionally). Reject only the incoherent case: full-precision FP32 in Dest is
-            // impossible without fp32_dest_acc_en (otherwise Dest is 16-bit).
+            // impossible without enable_32_bit_dest (otherwise Dest is 16-bit).
             TT_FATAL(
-                fp32_dest_acc_en,
-                "Kernel '{}' unpack_to_dest_mode entry for DFB '{}' specifies UnpackToDestFp32, "
-                "but fp32_dest_acc_en is false. Full-precision FP32 in the Dest register requires "
-                "fp32_dest_acc_en=true (otherwise Dest is 16-bit and the mode is incoherent).",
+                enable_32_bit_dest,
+                "Kernel '{}' unpack_modes entry for DFB '{}' specifies UnpackToDest, "
+                "but enable_32_bit_dest is false. Full-precision FP32 in the Dest register requires "
+                "enable_32_bit_dest=true (otherwise Dest is 16-bit and the mode is incoherent).",
                 kernel.unique_id,
                 dfb_name);
         }
 
         // Require an explicit entry where the choice is real:
-        // CONSUMER binding + FP32 data format + fp32_dest_acc_en=true.
-        if (!fp32_dest_acc_en) {
+        // CONSUMER binding + FP32 data format + enable_32_bit_dest=true.
+        if (!enable_32_bit_dest) {
             continue;
         }
         for (const auto& binding : kernel.dfb_bindings) {
@@ -1033,10 +1032,10 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             }
             TT_FATAL(
                 entries_seen.contains(binding.dfb_spec_name),
-                "Kernel '{}' consumes FP32 DFB '{}' with fp32_dest_acc_en=true, but has no "
-                "unpack_to_dest_mode entry for it. This configuration requires an explicit choice "
-                "between UnpackToDestMode::Default (unpack via SrcA/B — enables binary FPU ops, "
-                "precision reduced to ~19 bits) and UnpackToDestMode::UnpackToDestFp32 (unpack "
+                "Kernel '{}' consumes FP32 DFB '{}' with enable_32_bit_dest=true, but has no "
+                "unpack_modes entry for it. This configuration requires an explicit choice "
+                "between UnpackMode::UnpackToSrc (unpack via SrcA/B — enables binary FPU ops, "
+                "precision reduced to ~19 bits) and UnpackMode::UnpackToDest (unpack "
                 "direct to Dest — full FP32 precision, SrcA/B access disabled for this DFB).",
                 kernel.unique_id,
                 binding.dfb_spec_name);
@@ -2612,7 +2611,7 @@ DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
 // ----------------------------------------------------------------------------
 
 std::vector<UnpackToDestMode> BuildUnpackToDestModeVector(
-    const ComputeUnpackToDestModes& user_modes, const DFBNameToIdMap& dfb_name_to_id) {
+    const ComputeUnpackModes& user_modes, const DFBNameToIdMap& dfb_name_to_id) {
     const uint32_t max_cbs = tt::tt_metal::hal::get_arch_num_circular_buffers();
     std::vector<UnpackToDestMode> unpack_modes(max_cbs, UnpackToDestMode::Default);
     for (const auto& [dfb_name, mode] : user_modes) {
@@ -2625,7 +2624,10 @@ std::vector<UnpackToDestMode> BuildUnpackToDestModeVector(
             dfb_name,
             dfb_id,
             max_cbs);
-        unpack_modes[dfb_id] = mode;
+        // Public UnpackMode -> internal UnpackToDestMode. UnpackToDest keeps full FP32 by
+        // unpacking straight to Dest; UnpackToSrc is the SrcA/B path (the internal "Default").
+        unpack_modes[dfb_id] =
+            (mode == UnpackMode::UnpackToDest) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
     }
     return unpack_modes;
 }
@@ -2644,15 +2646,15 @@ ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBName
         "ComputeGen1Config, generation mismatch, please provide the correctly typed hardware config.");
     const auto& gen1 = std::get<ComputeGen1Config>(compute_config);
 
-    std::vector<UnpackToDestMode> unpack_modes = BuildUnpackToDestModeVector(gen1.unpack_to_dest_mode, dfb_name_to_id);
+    std::vector<UnpackToDestMode> unpack_dst_modes = BuildUnpackToDestModeVector(gen1.unpack_modes, dfb_name_to_id);
 
     return ComputeConfig{
-        .math_fidelity = gen1.math_fidelity,
-        .fp32_dest_acc_en = gen1.fp32_dest_acc_en,
-        .dst_full_sync_en = gen1.dst_full_sync_en,
-        .unpack_to_dest_mode = unpack_modes,
-        .bfp8_pack_precise = gen1.bfp8_pack_precise,
-        .math_approx_mode = gen1.math_approx_mode,
+        .math_fidelity = gen1.fpu_math_fidelity,
+        .fp32_dest_acc_en = gen1.enable_32_bit_dest,
+        .dst_full_sync_en = !gen1.double_buffer_dest,
+        .unpack_to_dest_mode = unpack_dst_modes,
+        .bfp8_pack_precise = (gen1.bfp_pack_precision_mode == Precision::Precise),
+        .math_approx_mode = (gen1.sfpu_precision_mode == Precision::Approximate),
         .compile_args = {},  // only named_compile_args is used
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),
@@ -2680,10 +2682,10 @@ experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(cons
 }
 
 // ----------------------------------------------------------------------------
-// MakeQuasarComputeConfig: Create a QuasarComputeConfig from a KernelSpec
+// MakeGen2ComputeConfig: Create a QuasarComputeConfig from a KernelSpec
 // ----------------------------------------------------------------------------
 
-experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
+experimental::quasar::QuasarComputeConfig MakeGen2ComputeConfig(
     const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
     const auto& compute_config = std::get<ComputeHardwareConfig>(kernel_spec.hw_config);
@@ -2693,16 +2695,16 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
         "ComputeGen2Config, generation mismatch, please provide the correctly typed hardware config.");
     const auto& gen2 = std::get<ComputeGen2Config>(compute_config);
 
-    std::vector<UnpackToDestMode> unpack_modes = BuildUnpackToDestModeVector(gen2.unpack_to_dest_mode, dfb_name_to_id);
+    std::vector<UnpackToDestMode> unpack_dst_modes = BuildUnpackToDestModeVector(gen2.unpack_modes, dfb_name_to_id);
 
     return experimental::quasar::QuasarComputeConfig{
         .num_threads_per_cluster = kernel_spec.num_threads,
-        .math_fidelity = gen2.math_fidelity,
-        .fp32_dest_acc_en = gen2.fp32_dest_acc_en,
-        .dst_full_sync_en = gen2.dst_full_sync_en,
-        .unpack_to_dest_mode = unpack_modes,
-        .math_approx_mode = gen2.math_approx_mode,
-        .enable_2x_src_format = gen2.enable_2x_src_format,
+        .math_fidelity = gen2.fpu_math_fidelity,
+        .fp32_dest_acc_en = gen2.enable_32_bit_dest,
+        .dst_full_sync_en = !gen2.double_buffer_dest,
+        .unpack_to_dest_mode = unpack_dst_modes,
+        .math_approx_mode = (gen2.sfpu_precision_mode == Precision::Approximate),
+        .enable_2x_src_format = gen2.enable_2x_src_register,
         .unpack_to_dest_en = gen2.unpack_to_dest_en,
         .compile_args = {},  // Compile args are passed via named_compile_args
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
@@ -2989,7 +2991,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
                     tensor_binding_handles,
                     ta_bindings.crta_layout);
             } else {
-                auto config = MakeQuasarComputeConfig(kernel_spec, dfb_name_to_id);
+                auto config = MakeGen2ComputeConfig(kernel_spec, dfb_name_to_id);
                 config.compile_args = ta_bindings.cta_words;
                 auto processors = GetComputeProcessorSet(ComputeEngineMask{(uint8_t)(risc_mask >> 8)});
                 kernel = std::make_shared<experimental::quasar::QuasarComputeKernel>(

@@ -139,8 +139,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
         ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(device->arch(), hw);
         if (fp32_llk_acc) {
             std::visit(
-                [&](auto& c) { c.unpack_to_dest_mode.emplace(IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32); },
-                compute_hw);
+                [&](auto& c) { c.unpack_modes.emplace(IN, tt::tt_metal::UnpackMode::UnpackToDest); }, compute_hw);
         }
         return compute_hw;
     };

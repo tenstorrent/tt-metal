@@ -1700,10 +1700,10 @@ TEST_F(ProgramSpecTestQuasar, ComputeConfigUnpackToDestModeReferencesUnboundDFBF
     auto producer = MakeMinimalGen2DMKernel("producer");
     auto consumer = MakeMinimalGen2ComputeKernel("consumer");
 
-    // Set unpack_to_dest_mode referencing a DFB this kernel doesn't bind
+    // Set an unpack_modes entry referencing a DFB this kernel doesn't bind
     // (in this case, a DFB that doesn't exist in the spec at all).
     auto& compute_config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(consumer.hw_config));
-    compute_config.unpack_to_dest_mode = {{DFBSpecName{"nonexistent_dfb"}, UnpackToDestMode::UnpackToDestFp32}};
+    compute_config.unpack_modes = {{DFBSpecName{"nonexistent_dfb"}, UnpackMode::UnpackToDest}};
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -1718,7 +1718,7 @@ TEST_F(ProgramSpecTestQuasar, ComputeConfigUnpackToDestModeReferencesUnboundDFBF
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("Kernel 'consumer' unpack_to_dest_mode entry references DFB 'nonexistent_dfb', "
+            ::testing::HasSubstr("Kernel 'consumer' unpack_modes entry references DFB 'nonexistent_dfb', "
                                  "which the kernel does not bind")));
 }
 
@@ -1734,30 +1734,30 @@ TEST_F(ProgramSpecTestQuasar, NonFP32DFBWithExplicitDefaultUnpackToDestModeSucce
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
-            config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::Default}};
+            config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToSrc}};
         }
     }
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, NonFP32DFBWithUnpackToDestFp32ModeSucceeds) {
-    // UnpackToDestFp32 on a non-Float32 DFB is INERT: the LLK ignores the mode where the data
+    // UnpackToDest on a non-Float32 DFB is INERT: the LLK ignores the mode where the data
     // isn't FP32. The validator tolerates it (rejecting it would force porters to dtype-gate
     // legacy unpack_to_dest_mode vectors that set UnpackToDestFp32 unconditionally). With
-    // fp32_dest_acc_en=true the entry is coherent, so the spec validates.
+    // enable_32_bit_dest=true the entry is coherent, so the spec validates.
     ProgramSpec spec = MakeMinimalValidProgramSpec();  // dfb_0 is Float16_b (non-FP32)
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
-            config.fp32_dest_acc_en = true;
-            config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
+            config.enable_32_bit_dest = true;
+            config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToDest}};
         }
     }
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, FP32ConsumerWithFp32DestAccEnAndNoEntryFails) {
-    // The narrow case where a choice is required: CONSUMER + FP32 + fp32_dest_acc_en=true.
+    // The narrow case where a choice is required: CONSUMER + FP32 + enable_32_bit_dest=true.
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     for (auto& dfb : spec.dataflow_buffers) {
         if (dfb.unique_id == DFBSpecName{"dfb_0"}) {
@@ -1767,34 +1767,34 @@ TEST_F(ProgramSpecTestQuasar, FP32ConsumerWithFp32DestAccEnAndNoEntryFails) {
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
-            config.fp32_dest_acc_en = true;
+            config.enable_32_bit_dest = true;
         }
     }
-    // Compute kernel intentionally has no unpack_to_dest_mode entry.
+    // Compute kernel intentionally has no unpack_modes entry.
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
-            "Kernel 'compute_kernel' consumes FP32 DFB 'dfb_0' with fp32_dest_acc_en=true, but has no "
-            "unpack_to_dest_mode entry for it")));
+            "Kernel 'compute_kernel' consumes FP32 DFB 'dfb_0' with enable_32_bit_dest=true, but has no "
+            "unpack_modes entry for it")));
 }
 
 TEST_F(ProgramSpecTestQuasar, FP32ConsumerWithoutFp32DestAccEnDoesNotRequireEntry) {
-    // Without fp32_dest_acc_en, UnpackToDestFp32 is incoherent (Dest is 16-bit), so there's
-    // no real choice — Default is the only valid value. No explicit entry required.
+    // Without enable_32_bit_dest, UnpackToDest is incoherent (Dest is 16-bit), so there's
+    // no real choice — UnpackToSrc is the only valid value. No explicit entry required.
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     for (auto& dfb : spec.dataflow_buffers) {
         if (dfb.unique_id == DFBSpecName{"dfb_0"}) {
             dfb.data_format_metadata = tt::DataFormat::Float32;
         }
     }
-    // fp32_dest_acc_en stays at its default (false). No unpack_to_dest_mode entry.
+    // enable_32_bit_dest stays at its default (false). No unpack_modes entry.
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, FP32ProducerOnlyBindingDoesNotRequireEntry) {
     // A compute kernel that only PRODUCES an FP32 DFB never unpacks it, so the unpack mode
-    // is dead config — no explicit entry required regardless of fp32_dest_acc_en.
+    // is dead config — no explicit entry required regardless of enable_32_bit_dest.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -1802,7 +1802,7 @@ TEST_F(ProgramSpecTestQuasar, FP32ProducerOnlyBindingDoesNotRequireEntry) {
 
     auto producer_compute = MakeMinimalGen2ComputeKernel("producer_compute");
     auto& producer_config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(producer_compute.hw_config));
-    producer_config.fp32_dest_acc_en = true;
+    producer_config.enable_32_bit_dest = true;
 
     auto consumer_dm = MakeMinimalGen2DMKernel("consumer_dm");
 
@@ -1821,8 +1821,8 @@ TEST_F(ProgramSpecTestQuasar, FP32ProducerOnlyBindingDoesNotRequireEntry) {
 }
 
 TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32OnProducerBindingSucceeds) {
-    // UnpackToDestFp32 on a producer-only binding is INERT (producers don't unpack), so the
-    // validator tolerates it rather than rejecting. With fp32_dest_acc_en=true it is coherent.
+    // UnpackToDest on a producer-only binding is INERT (producers don't unpack), so the
+    // validator tolerates it rather than rejecting. With enable_32_bit_dest=true it is coherent.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -1830,8 +1830,8 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32OnProducerBindingSucceeds) {
 
     auto producer_compute = MakeMinimalGen2ComputeKernel("producer_compute");
     auto& producer_config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(producer_compute.hw_config));
-    producer_config.fp32_dest_acc_en = true;
-    producer_config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
+    producer_config.enable_32_bit_dest = true;
+    producer_config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToDest}};
 
     auto consumer_dm = MakeMinimalGen2DMKernel("consumer_dm");
 
@@ -1850,7 +1850,7 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32OnProducerBindingSucceeds) {
 }
 
 TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32WithoutFp32DestAccEnFails) {
-    // UnpackToDestFp32 requires fp32_dest_acc_en=true (Dest must be 32-bit-wide to hold FP32).
+    // UnpackToDest requires enable_32_bit_dest=true (Dest must be 32-bit-wide to hold FP32).
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     for (auto& dfb : spec.dataflow_buffers) {
         if (dfb.unique_id == DFBSpecName{"dfb_0"}) {
@@ -1860,18 +1860,18 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32WithoutFp32DestAccEnFails) {
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
-            // fp32_dest_acc_en stays at its default (false).
-            config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
+            // enable_32_bit_dest stays at its default (false).
+            config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToDest}};
         }
     }
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("specifies UnpackToDestFp32, but fp32_dest_acc_en is false")));
+            ::testing::HasSubstr("specifies UnpackToDest, but enable_32_bit_dest is false")));
 }
 
 TEST_F(ProgramSpecTestQuasar, FP32DFBWithDefaultUnpackToDestModeSucceeds) {
-    // Default is always a valid value, even outside the (CONSUMER + FP32 + fp32_dest_acc_en) triple.
+    // UnpackToSrc is always a valid value, even outside the (CONSUMER + FP32 + enable_32_bit_dest) triple.
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     for (auto& dfb : spec.dataflow_buffers) {
         if (dfb.unique_id == DFBSpecName{"dfb_0"}) {
@@ -1881,8 +1881,8 @@ TEST_F(ProgramSpecTestQuasar, FP32DFBWithDefaultUnpackToDestModeSucceeds) {
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
-            config.fp32_dest_acc_en = true;
-            config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::Default}};
+            config.enable_32_bit_dest = true;
+            config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToSrc}};
         }
     }
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
@@ -2392,9 +2392,9 @@ TEST_F(ProgramSpecTestQuasar, ComputeConfigMathFidelitySucceeds) {
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
-            config.math_fidelity = MathFidelity::LoFi;
-            config.fp32_dest_acc_en = true;
-            config.math_approx_mode = true;
+            config.fpu_math_fidelity = MathFidelity::LoFi;
+            config.enable_32_bit_dest = true;
+            config.sfpu_precision_mode = tt::tt_metal::Precision::Approximate;
         }
     }
 
@@ -2405,7 +2405,7 @@ TEST_F(ProgramSpecTestQuasar, ValidUnpackToDestModeSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     // The full meaningfulness triple: FP32 DFB, consumed by a compute kernel with
-    // fp32_dest_acc_en=true. UnpackToDestFp32 is meaningful here.
+    // enable_32_bit_dest=true. UnpackToDest is meaningful here.
     for (auto& dfb : spec.dataflow_buffers) {
         if (dfb.unique_id == DFBSpecName{"dfb_0"}) {
             dfb.data_format_metadata = tt::DataFormat::Float32;
@@ -2414,8 +2414,8 @@ TEST_F(ProgramSpecTestQuasar, ValidUnpackToDestModeSucceeds) {
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
-            config.fp32_dest_acc_en = true;
-            config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
+            config.enable_32_bit_dest = true;
+            config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToDest}};
         }
     }
 
@@ -2439,7 +2439,7 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestModePlacedAtDfbIdSlot) {
     auto dfb0 = MakeMinimalDFB("dfb_0");
     dfb0.data_format_metadata = tt::DataFormat::Float16_b;
     auto dfb1 = MakeMinimalDFB("dfb_1");
-    // dfb_1 is FP32 so the user can opt into UnpackToDestFp32 on it.
+    // dfb_1 is FP32 so the user can opt into UnpackToDest on it.
     dfb1.data_format_metadata = tt::DataFormat::Float32;
 
     producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_0"}, "out0"));
@@ -2448,8 +2448,8 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestModePlacedAtDfbIdSlot) {
     consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_1"}, "in1"));
 
     auto& compute_config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(consumer.hw_config));
-    compute_config.fp32_dest_acc_en = true;
-    compute_config.unpack_to_dest_mode = {{DFBSpecName{"dfb_1"}, UnpackToDestMode::UnpackToDestFp32}};
+    compute_config.enable_32_bit_dest = true;
+    compute_config.unpack_modes = {{DFBSpecName{"dfb_1"}, UnpackMode::UnpackToDest}};
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb0, dfb1};
@@ -2795,8 +2795,8 @@ TEST(AggregateSpecTypes, KernelSpecDesignatedInitializers) {
         .hw_config =
             ComputeHardwareConfig{
                 ComputeGen2Config{
-                    .math_fidelity = MathFidelity::LoFi,
-                    .fp32_dest_acc_en = true,
+                    .fpu_math_fidelity = MathFidelity::LoFi,
+                    .enable_32_bit_dest = true,
                 },
             },
     };

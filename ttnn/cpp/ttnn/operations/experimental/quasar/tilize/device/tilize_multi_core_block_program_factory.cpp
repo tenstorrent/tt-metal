@@ -266,8 +266,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
         // Compute: consumes c_0 (in), produces c_16 (out).
         ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_config_template);
         if (fp32_llk_acc) {
-            std::visit(
-                [&](auto& c) { c.unpack_to_dest_mode.emplace(g.in, UnpackToDestMode::UnpackToDestFp32); }, compute_hw);
+            std::visit([&](auto& c) { c.unpack_modes.emplace(g.in, UnpackMode::UnpackToDest); }, compute_hw);
         }
         spec.kernels.push_back(KernelSpec{
             .unique_id = g.compute,
