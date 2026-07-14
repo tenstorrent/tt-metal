@@ -115,7 +115,7 @@ kernel changes when helpers are wired") and owns the dtype set + config + interm
 RM+tilize one — the CB single-producer rule applies). Once this lands, the 3 WIDE loose cases
 (`gamma_layout=TILE`) flip from `xfail_expected` to `supported_pass`.
 
-### [ ] Refinement 2a — bf16 wide-W reduce-accumulation precision (R1-analog for bf16)
+### [x] Refinement 2a — bf16 wide-W reduce-accumulation precision (R1-analog for bf16)
 
 **Goal**: close the two bf16 reduce-accumulation precision misses that Refinement 2
 exposed (both left failing, not silenced — they are this refinement's baseline):

@@ -131,3 +131,58 @@
 - **Tests added**: none new (regression handled by the existing golden suite + unit tests). Debug
   probes `probes/probe_012.py`–`probe_015.py` capture the bf8b / TILE-gamma / bf16+False /
   wide-W verification and the fp32-cb_sumsq null-result measurement. Unit dir: **106 passed**.
+
+## Refinement 2a — bf16 wide-W reduce-accumulation precision (R1-analog for bf16)
+- Date: 2026-07-14
+- What was done: Extended R1's `ReduceAlgorithm::AccumulateViaAdd` fp32-raw-accumulator
+  Σx² datapath to the **bf16 tile-aligned** path — the bf16 sibling of Refinement 1.
+  The datapath selector was generalized from `IS_FP32 && !HAS_PARTIAL_W` to
+  `USE_ACC_VIA_ADD = float(fp32|bf16) && tile-aligned`, and the accumulator CB
+  (`cb_sumsq`) is now **fp32 for bf16 input too** (host-forced `sumsq_dtype`), so the
+  RAW running Σx² never truncates. The reduce helper folds the bf16 `cb_xsq` into the
+  fp32 accumulator natively (its documented SRCB/SRCA reconfig around the acc-add —
+  `reduce_helpers_compute.inl`). This removes the per-block reduced-partial reload of
+  the ReduceTile path, whose bf16 roundtrip parked a running sum that saturated
+  catastrophically at very wide W (the cliff). Because the AccumulateViaAdd path defers
+  the 32-column sum to a single SFPU finalize, the per-block accumulator values stay
+  small, so the fix helps **even with `fp32_dest_acc_en=False`** (bf16 DEST).
+  - **Reused**: the existing `reduce()` helper (only the `USE_ACC_VIA_ADD` gate widened
+    to admit bf16), the existing `cb_sumsq` accumulator + its `max(2·ROW_BLOCK_TILES,2)`
+    page count, the shared `transform_in_place` finalizer, and the whole pass-2 normalize
+    path (all untouched — bf16 input × fp32 `cb_sumsq` scalar is handled by the pass-2
+    `mul<Col>`'s input reconfig). `cb_xsq` stays interm_dtype (bf16) — individual x²
+    values, and the helper handles the mixed fold.
+  - **Added**: `use_acc_via_add` / `sumsq_dtype` / `sumsq_tile` in the descriptor;
+    renamed compute CT arg 9 `IS_FP32` → `USE_ACC_VIA_ADD` (host now folds in
+    `!has_partial_w`). No new kernel file, no parallel datapath.
+  - **Non-regression guards**: bf8b stays on ReduceTile (`use_acc_via_add` excludes it;
+    already passes there, R2); the non-tile-aligned partial path stays on ReduceTile
+    (AccumulateViaAdd cross-call cannot express the masked partial tile). fp32 is
+    byte-identical to R1 (its `cb_sumsq` was already fp32). This is the R2 null-result's
+    real fix: R2 measured that forcing `cb_sumsq` fp32 on the *ReduceTile* path was a net
+    regression; the fix is the fp32 accumulator ON the AccumulateViaAdd datapath, which
+    carries no ∝W bias.
+  - **No SUPPORTED axis change** (bf16 and `fp32_dest_acc_en=False` were already supported)
+    — a datapath precision fix, per the refinement.
+- Accuracy achieved (probe_019/020, before → after):
+  - **Case 1** bf16 + fp32_dest_acc_en=True, randn, `(1,1,32,W)`, rms (ceiling 0.04) &
+    got/true median ratio: W=8192 `0.0099→0.0017` (ratio `0.993→0.999`); W=16384
+    `0.0243→0.0018` (`1.019→1.000`); **W=32768 `0.4046→0.0038`** (ratio `1.405→1.003` —
+    the cliff is gone). PCC ≈ 0.99999 throughout.
+  - **Case 2** bf16 + fp32_dest_acc_en=False, uniform `torch.rand` + gamma, W=4096,
+    relative Frobenius: `(1,24,4096)` `0.0506→0.0061`; `(1,128,4096)` `0.0518→0.0062`
+    (~8× under the translated threshold 0.052). The fp32 accumulator recovered the 0.5%
+    overshoot — NOT an inherent `fp32_dest_acc_en=False` floor.
+- Golden test progress: `test_golden.py` **1683 passed / 0 failed / 6723 xfailed / 31920
+  skipped** (was R2's 1682 + the 32768 loose case failing → now +1 passing, 0 failing);
+  `test_translated.py` **84 passed / 0 failed** (the 12 `test_rms_norm_row_major[*-False-*-4096-*]`
+  cells now pass); `test_regression.py` **15 passed**. Unit dir **106 passed** (--dev + non-dev).
+  Both Done-when gates met: `test_op_loose[1x1x32x32768…]` passes; the 12 translated cells pass.
+- Issues encountered: None. The pre-analysed concern that bf16 DEST (`fp32_dest_acc_en=False`)
+  would blunt the fp32-accumulator win did not materialize — deferring the column-sum to one
+  SFPU finalize keeps the running accumulator small, so the fp32 store dominates.
+- Tests added: `test_rms_norm_precision_baseline.py` — added the `xwide-bf16` (W=32768) cliff
+  case to `CASES` (guarded by the existing got/true + rms asserts), and a new
+  `test_r2a_bf16_false_wide_uniform` covering the case-2 bf16+False wide-uniform regime
+  (relative-Frobenius guard). probes `probe_019.py`/`probe_020.py` capture the before/after
+  case-1 + case-2 metrics.

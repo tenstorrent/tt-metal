@@ -31,21 +31,29 @@
 // the partial scaler routed only to the last block). transform_in_place, which
 // does not touch reduce(), is used as-is.
 //
-// REDUCE DATAPATH (Refinement 1 — fp32 Σx² scale bug). The Σx² reduce runs on
-// one of two reduce() datapaths, picked at compile time:
-//   * fp32 tile-aligned (IS_FP32 && !HAS_PARTIAL_W): ReduceAlgorithm::AccumulateViaAdd.
-//     The cb_sumsq accumulator holds the RAW element-wise Σx² tile (fp32), folded
-//     natively per block with add_tiles and reduced ONCE (sfpu_reduce) on the last
-//     block. SUM has no scaler tile, so 1/W (the mean) is applied on the last block
-//     via the post_reduce_op hook. This removes the per-block reduced-partial reload
-//     of the ReduceTile path, whose fp32 roundtrip undercounted mean(x²) linearly in
-//     W (got/true ≈ 1 + 2.5e-6·W). cb_sumsq holds mean(x²) after the loop — identical
-//     contract to the ReduceTile path, so the finalize + pass 2 are shared.
-//   * bf16 (any alignment) and fp32 non-tile-aligned: the unchanged ReduceTile
-//     matmul-with-ones path + partial scaler on the last block's last tile. bf16's
-//     accumulator is bf16, where a RAW-sum accumulator would re-introduce the same
-//     truncation bug; AccumulateViaAdd's cross-call accumulate cannot express the
-//     masked partial tile — both keep ReduceTile.
+// REDUCE DATAPATH (Refinement 1 — fp32 Σx² scale bug; Refinement 2a — bf16 sibling).
+// The Σx² reduce runs on one of two reduce() datapaths, picked at compile time via
+// USE_ACC_VIA_ADD (host = float(fp32|bf16) && tile-aligned):
+//   * tile-aligned float (USE_ACC_VIA_ADD): ReduceAlgorithm::AccumulateViaAdd.
+//     The cb_sumsq accumulator holds the RAW element-wise Σx² tile, folded natively
+//     per block with add_tiles and reduced ONCE (sfpu_reduce) on the last block. SUM
+//     has no scaler tile, so 1/W (the mean) is applied on the last block via the
+//     post_reduce_op hook. This removes the per-block reduced-partial reload of the
+//     ReduceTile path, whose roundtrip undercounted mean(x²) linearly in W (fp32:
+//     got/true ≈ 1 + 2.5e-6·W) / catastrophically at very wide W (bf16 W=32768:
+//     rel-RMS 0.40). cb_sumsq holds mean(x²) after the loop — identical contract to
+//     the ReduceTile path, so the finalize + pass 2 are shared.
+//     R2a: cb_sumsq is fp32 for BOTH fp32 and bf16 input (host-forced) so the raw
+//     running sum never truncates. For bf16 input the reduce helper folds the bf16
+//     cb_xsq into the fp32 accumulator natively (SRCB/SRCA reconfig around the
+//     acc-add; see reduce_helpers_compute.inl). A bf16 accumulator (the pre-R2a
+//     state) hit the W=32768 cliff; merely forcing cb_sumsq fp32 on the *ReduceTile*
+//     path was measured a net regression (R2 null result) — the fix is the fp32
+//     accumulator ON this AccumulateViaAdd datapath, which carries no ∝W bias.
+//   * bf8b (any alignment) and fp32/bf16 non-tile-aligned: the unchanged ReduceTile
+//     matmul-with-ones path + partial scaler on the last block's last tile.
+//     AccumulateViaAdd's cross-call accumulate cannot express the masked partial
+//     tile, and bf8b already passes on ReduceTile (R2) — both keep ReduceTile.
 
 #include <cstdint>
 
@@ -85,7 +93,10 @@ void kernel_main() {
     constexpr uint32_t W_BLOCK_TILES = get_compile_time_arg_val(6);
     constexpr uint32_t num_w_blocks = get_compile_time_arg_val(7);
     constexpr uint32_t RECIP_W_BITS = get_compile_time_arg_val(8);  // 1/W float bits (mean scaler)
-    constexpr uint32_t IS_FP32 = get_compile_time_arg_val(9);
+    // Selects the AccumulateViaAdd reduce datapath (R1 fp32; R2a bf16). Host folds
+    // in !has_partial_w, so the gate is just this flag. bf8b + non-tile-aligned use
+    // ReduceTile.
+    constexpr uint32_t USE_ACC_VIA_ADD = get_compile_time_arg_val(9);
     // Gamma layout leg: RM gamma is tilized here; TILE gamma arrives already
     // tiled from the reader (skip the gamma-tilize step). Independent of the
     // input layout (IS_ROW_MAJOR).
@@ -114,11 +125,14 @@ void kernel_main() {
             ckl::square<cb_input_tiles, cb_xsq>(wshape);
             // Accumulating SUM reduce over W: fresh at b==0, reload+add after.
             const bool is_last = (b + 1 == num_w_blocks);
-            if constexpr (IS_FP32 && !HAS_PARTIAL_W) {
-                // fp32-accurate datapath: fold the RAW Σx² tile in the fp32 accumulator
-                // (add_tiles), reduce once on the last block, and apply 1/W (the mean) via
-                // the last-block post_reduce_op — SUM carries no scaler tile. RECIP_W_BITS
-                // is a compile-time constant so the lambda needs no capture.
+            if constexpr (USE_ACC_VIA_ADD) {
+                // Accurate datapath (R1 fp32; R2a bf16): fold the RAW Σx² tile in the
+                // fp32 accumulator (add_tiles), reduce once on the last block, and apply
+                // 1/W (the mean) via the last-block post_reduce_op — SUM carries no scaler
+                // tile. RECIP_W_BITS is a compile-time constant so the lambda needs no
+                // capture. cb_sumsq is fp32 here (set host-side) so the raw running sum
+                // does not truncate; the reduce helper folds the bf16 cb_xsq into it
+                // natively (SRCB/SRCA reconfig around the acc-add).
                 const auto acc = is_last ? ckl::Accumulate::at_last(cb_sumsq, b) : ckl::Accumulate::at(cb_sumsq, b);
                 ckl::reduce<
                     ckernel::PoolType::SUM,

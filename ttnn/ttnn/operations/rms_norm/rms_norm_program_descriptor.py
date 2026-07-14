@@ -97,17 +97,31 @@ def create_program_descriptor(
     # passing cells) and only lifts bf8b's intermediates off the block format.
     interm_dtype = ttnn.bfloat16 if in_dtype == ttnn.bfloat8_b else in_dtype
 
-    # NOTE (R2, null result): forcing cb_sumsq to Float32 when fp32_dest_acc_en=True
-    # (numeric-formats-metal §4) was measured on the wide-W bf16 loose cases and
-    # REVERTED — it is a net regression, not a win. The bf16 accumulator has a
-    # cliff (fine <=W=16384, catastrophic at 32768: rel-RMS 0.40); the fp32
-    # accumulator instead grows SMOOTHLY with W (the residual ReduceTile
-    # matmul-with-ones bias R1 fixed for fp32 via AccumulateViaAdd but left on the
-    # bf16 path), so fp32-sumsq pushes W=16384 from 0.037 pass -> 0.044 fail while
-    # W=32768 (0.092) still fails. No single-core config passes both wide cases;
-    # the real fix is the R1-analog AccumulateViaAdd fp32-raw-accumulator datapath
-    # for bf16 — a follow-up refinement (see op_requirements Refinement 2a). No
-    # cartesian SUPPORTED cell (W<=8192) needs it, so cb_sumsq stays interm_dtype.
+    # REDUCE DATAPATH selector (Refinement 1 for fp32; Refinement 2a extends it to
+    # bf16). The tile-aligned float Σx² reduce runs on ReduceAlgorithm::AccumulateViaAdd:
+    # the accumulator holds the RAW element-wise Σx² tile (folded per W-block with
+    # add_tiles) and is reduced ONCE on the last block — removing the per-block
+    # reduced-partial reload of ReduceTile whose truncation undercounts mean(x²) ∝ W.
+    #   * fp32 (R1): the accumulator was already fp32 (interm_dtype), fixed the
+    #     ∝W scale bias.
+    #   * bf16 (R2a): the accumulator was bf16 and hit a catastrophic cliff at very
+    #     wide W (W=32768: rel-RMS 0.40). Extending the AccumulateViaAdd datapath
+    #     alone is NOT enough — the RAW running sum must not truncate, so the
+    #     accumulator CB is forced to fp32 here (the reduce helper natively folds a
+    #     bf16 input CB into an fp32 accumulator: reconfig_data_format_srcb/srca
+    #     around the acc-add, per reduce_helpers_compute.inl).
+    # bf8b stays on ReduceTile (already passes there, R2) and the non-tile-aligned
+    # partial path stays on ReduceTile (AccumulateViaAdd cross-call cannot express
+    # the masked partial tile). This is the R2 null-result's real fix: R2 measured
+    # that merely forcing cb_sumsq fp32 on the *ReduceTile* path was a net regression
+    # (removed the cliff but exposed the smooth ∝W bias); the fix is the fp32
+    # accumulator ON the AccumulateViaAdd datapath, which has no ∝W bias.
+    use_acc_via_add = in_dtype in (ttnn.float32, ttnn.bfloat16) and not has_partial_w
+    # Accumulator CB format: fp32 whenever AccumulateViaAdd is used (raw Σx² must
+    # not truncate); otherwise interm_dtype (unchanged ReduceTile path). cb_xsq
+    # stays interm_dtype — it holds individual x² values (small; bf16 is fine) and
+    # the helper handles the mixed bf16-input / fp32-accumulator fold.
+    sumsq_dtype = ttnn.float32 if use_acc_via_add else interm_dtype
 
     # Gamma tiles: TILE gamma is a raw tile copy (reader writes the on-disk bytes,
     # so the CB MUST carry gamma_dtype); RM gamma is tilized by compute (which
@@ -118,6 +132,7 @@ def create_program_descriptor(
     in_tile = ttnn.tile_size(in_dtype)
     out_tile = ttnn.tile_size(out_dtype)
     interm_tile = ttnn.tile_size(interm_dtype)
+    sumsq_tile = ttnn.tile_size(sumsq_dtype)
     gamma_tiles_tile = ttnn.tile_size(gamma_tiles_dtype)
     scaler_tile = ttnn.tile_size(ttnn.bfloat16)
 
@@ -164,8 +179,9 @@ def create_program_descriptor(
         cb(CB_OUTPUT_TILES, out_dtype, out_tile, double * W_BLOCK_TILES),
         # x^2 scratch (pass 1) — compute->compute, single-depth full block
         cb(CB_XSQ, interm_dtype, interm_tile, W_BLOCK_TILES),
-        # Sum(x^2)/W accumulator -> 1/rms (held across pass 2)
-        cb(CB_SUMSQ, interm_dtype, interm_tile, max(double * ROW_BLOCK_TILES, 2)),
+        # Sum(x^2)/W accumulator -> 1/rms (held across pass 2). fp32 on the
+        # AccumulateViaAdd path (raw Σx² must not truncate); interm_dtype otherwise.
+        cb(CB_SUMSQ, sumsq_dtype, sumsq_tile, max(double * ROW_BLOCK_TILES, 2)),
     ]
     if is_row_major:
         # RM input sticks -> tilize; RM output sticks <- untilize
@@ -257,13 +273,15 @@ def create_program_descriptor(
         Wt,
         W_BLOCK_TILES,
         num_w_blocks,
-        # 1/W as float bits: the mean scaler. For the fp32 tile-aligned reduce path
-        # (AccumulateViaAdd, SUM has no scaler tile) this is applied as the last-chunk
+        # 1/W as float bits: the mean scaler. For the tile-aligned AccumulateViaAdd
+        # reduce path (SUM has no scaler tile) this is applied as the last-chunk
         # post_reduce_op; the ReduceTile path applies it via the bf16 scaler CB instead.
         scaler_bits,
-        # IS_FP32 selects the fp32-accurate reduce datapath (AccumulateViaAdd) — see
-        # the compute kernel. Keeps bf16/bf8b on the unchanged ReduceTile path.
-        1 if in_dtype == ttnn.float32 else 0,
+        # USE_ACC_VIA_ADD selects the accurate AccumulateViaAdd reduce datapath
+        # (R1 for fp32, R2a extends it to bf16 with an fp32 accumulator CB). Already
+        # folds in !has_partial_w. bf8b and the non-tile-aligned partial path keep
+        # the unchanged ReduceTile path.
+        1 if use_acc_via_add else 0,
         # GAMMA_IS_ROW_MAJOR: RM gamma is tilized by compute; TILE gamma arrives
         # already tiled from the reader (skip the gamma-tilize step).
         1 if gamma_is_row_major else 0,

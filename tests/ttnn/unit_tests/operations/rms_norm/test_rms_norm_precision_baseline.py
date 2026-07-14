@@ -56,10 +56,19 @@ def pytorch_rms_norm(x, gamma=None, epsilon=1e-6):
 # reduce through ReduceAlgorithm::AccumulateViaAdd (raw fp32 accumulator, single
 # finalize), so the xfail is removed — the row is now an ordinary passing cell and
 # the got/true scale-bug guard below (median ≈ 1.0) protects against regression.
+#
+# The `xwide-bf16` row (W=32768) is the Refinement 2a cliff: on the pre-R2a bf16
+# ReduceTile datapath the running Σx² parked in a bf16 accumulator saturated
+# catastrophically at very wide W (got/true ratio 1.40, rel_rms 0.40 — well over
+# both guards below). R2a extended R1's ReduceAlgorithm::AccumulateViaAdd datapath
+# (raw fp32 accumulator, single finalize) to bf16, so the row now passes with
+# median ≈ 1.0 and rel_rms ≈ 0.004; the got/true + rms guards below protect against
+# regression of the cliff.
 CASES = [
     pytest.param((1, 1, 32, 64), ttnn.bfloat16, 0.995, 0.05, id="small-bf16"),
     pytest.param((2, 4, 128, 512), ttnn.bfloat16, 0.995, 0.05, id="med-bf16"),
     pytest.param((1, 1, 32, 8192), ttnn.bfloat16, 0.995, 0.05, id="wide-bf16"),
+    pytest.param((1, 1, 32, 32768), ttnn.bfloat16, 0.995, 0.05, id="xwide-bf16"),
     pytest.param((1, 1, 32, 4096), ttnn.float32, 0.999, 0.02, id="mid-fp32"),
     pytest.param((1, 1, 32, 8192), ttnn.float32, 0.999, 0.02, id="wide-fp32"),
 ]
@@ -128,3 +137,57 @@ def test_precision_baseline(device, shape, dtype, pcc_floor, rms_ceiling, with_g
     # from the fp32 W=8192 scale bug (bias ~0.020, both gamma variants) that the
     # `wide-fp32` xfail encodes (Refinement 1).
     assert abs(r_med - 1.0) < 0.015, f"got/true median {r_med:.5f} != 1.0 -> scale bug (Refinement 1)"
+
+
+# Refinement 2a case 2: bf16 + fp32_dest_acc_en=False, wide W, UNIFORM data
+# (torch.rand, all-positive, harder for the reduce than centred randn). This is
+# the regime the translated test (test_rms_norm_row_major[*-False-*-4096-*])
+# exercises. Pre-R2a the running Σx² parked in a bf16 accumulator on the ReduceTile
+# path overshot ~0.5% (relative Frobenius ~0.0522, right at the translated
+# threshold 0.052). R2a routes bf16 through AccumulateViaAdd with an fp32
+# accumulator CB — the raw running sum no longer truncates and the deferred single
+# finalize keeps the per-block sums small, so even with a bf16 DEST (no fp32
+# dest-acc) the Frobenius drops ~8x. This guards that fix against regression.
+_R2A_FALSE_CASES = [
+    pytest.param((1, 24, 4096), id="h24-w4096"),
+    pytest.param((1, 128, 4096), id="h128-w4096"),
+]
+
+
+@pytest.mark.parametrize("shape", _R2A_FALSE_CASES)
+def test_r2a_bf16_false_wide_uniform(device, shape):
+    """bf16 + fp32_dest_acc_en=False over wide, uniform (positive) rows + gamma."""
+    torch.manual_seed(0)
+    W = shape[-1]
+
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+    torch_gamma = torch.rand(W, dtype=torch.bfloat16)
+    expected = pytorch_rms_norm(torch_input, gamma=torch_gamma, epsilon=1e-6).to(torch.float32)
+
+    ttnn_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ttnn_gamma = ttnn.from_torch(
+        torch_gamma.reshape(1, 1, 1, W),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    cfg = ttnn.ComputeConfigDescriptor()
+    cfg.math_fidelity = ttnn.MathFidelity.HiFi4
+    cfg.fp32_dest_acc_en = False  # the case-2 corner: no fp32 dest to lean on
+    cfg.math_approx_mode = False
+
+    ttnn_output = rms_norm(ttnn_input, gamma=ttnn_gamma, epsilon=1e-6, compute_kernel_config=cfg)
+    actual = ttnn.to_torch(ttnn_output).reshape(expected.shape).to(torch.float32)
+
+    frob = (torch.linalg.norm((actual - expected).flatten()) / torch.linalg.norm(expected.flatten())).item()
+    print(f"\n[r2a-false] shape={shape} rel_frobenius={frob:.5f}")
+    # Comfortably under the translated-test threshold (0.052); post-R2a ~0.006.
+    assert frob < 0.02, f"relative Frobenius {frob:.5f} regressed (translated threshold 0.052)"
