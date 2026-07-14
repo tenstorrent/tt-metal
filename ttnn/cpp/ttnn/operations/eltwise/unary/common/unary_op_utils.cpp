@@ -68,12 +68,12 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::SELU: return "SFPU_OP_SELU_INCLUDE";
         case UnaryOpType::PRELU_SFPU: return "SFPU_OP_PRELU_INCLUDE";
         case UnaryOpType::TYPECAST: return "SFPU_OP_TYPECAST_INCLUDE";
-        case UnaryOpType::BITWISE_XOR: return "SFPU_OP_BITWISE_XOR_INCLUDE";
+        case UnaryOpType::BITWISE_AND:
+        case UnaryOpType::BITWISE_OR:
+        case UnaryOpType::BITWISE_XOR: return "SFPU_OP_BITWISE_INCLUDE";
         case UnaryOpType::BITWISE_NOT: return "SFPU_OP_BITWISE_NOT_INCLUDE";
-        case UnaryOpType::BITWISE_AND: return "SFPU_OP_BITWISE_AND_INCLUDE";
-        case UnaryOpType::BITWISE_OR: return "SFPU_OP_BITWISE_OR_INCLUDE";
-        case UnaryOpType::RIGHT_SHIFT: return "SFPU_OP_RIGHT_SHIFT_INCLUDE";
-        case UnaryOpType::LEFT_SHIFT: return "SFPU_OP_LEFT_SHIFT_INCLUDE";
+        case UnaryOpType::LEFT_SHIFT:
+        case UnaryOpType::RIGHT_SHIFT: return "SFPU_OP_SHIFT_INCLUDE";
         case UnaryOpType::REMAINDER: return "SFPU_OP_REMAINDER_INCLUDE";
         case UnaryOpType::FMOD: return "SFPU_OP_FMOD_INCLUDE";
         case UnaryOpType::FILL: return "SFPU_OP_FILL_INCLUDE";
@@ -108,6 +108,23 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::MISH: return "SFPU_OP_MISH_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
+}
+
+const char* bitwise_shift_data_format_str(UnaryOpType op_type, std::optional<DataType> input_dtype) {
+    TT_FATAL(
+        input_dtype.has_value(),
+        "Missing input dtype for op_type {}: a valid integer input dtype (Int32/UInt32/UInt16) is required.",
+        op_type);
+    if (*input_dtype == DataType::INT32) {
+        return "Int32";
+    }
+    if (*input_dtype == DataType::UINT32) {
+        return "UInt32";
+    }
+    if (*input_dtype == DataType::UINT16) {
+        return "UInt16";
+    }
+    TT_THROW("Unsupported input dtype for bitwise/shift op_type {}: expected Int32, UInt32, or UInt16.", op_type);
 }
 
 template <typename T>
@@ -160,6 +177,30 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::RELU_MAX:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::UINT16) {
+                const auto as_int = static_cast<std::int32_t>(param0_raw);
+                TT_FATAL(
+                    as_int >= 0 && as_int <= std::numeric_limits<std::uint16_t>::max(),
+                    "RELU_MAX upper_limit {} out of range for UInt16",
+                    as_int);
+                return {
+                    "relu_max_tile_init();",
+                    fmt::format("relu_max_tile_uint16({}, {}u);", idst, static_cast<uint32_t>(param0_raw))};
+            }
+            // UINT8 is zero-extended to 32 bits in DST by the unpacker (high bits = 0), so the
+            // U32-layout kernel clamps it correctly with the same unsigned compare logic.
+            if (input_dtype == DataType::UINT32 || input_dtype == DataType::UINT8) {
+                if (input_dtype == DataType::UINT8) {
+                    const auto as_int = static_cast<std::int32_t>(param0_raw);
+                    TT_FATAL(
+                        as_int >= 0 && as_int <= std::numeric_limits<std::uint8_t>::max(),
+                        "RELU_MAX upper_limit {} out of range for UInt8",
+                        as_int);
+                }
+                return {
+                    "relu_max_tile_init();",
+                    fmt::format("relu_max_tile_uint32({}, {}u);", idst, static_cast<uint32_t>(param0_raw))};
+            }
             if (input_dtype == DataType::INT32) {
                 return {
                     "relu_max_tile_init();",
@@ -172,6 +213,30 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::RELU_MIN:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::UINT16) {
+                const auto as_int = static_cast<std::int32_t>(param0_raw);
+                TT_FATAL(
+                    as_int >= 0 && as_int <= std::numeric_limits<std::uint16_t>::max(),
+                    "RELU_MIN lower_limit {} out of range for UInt16",
+                    as_int);
+                return {
+                    "relu_min_tile_init();",
+                    fmt::format("relu_min_tile_uint16({}, {}u);", idst, static_cast<uint32_t>(param0_raw))};
+            }
+            // UINT8 is zero-extended to 32 bits in DST by the unpacker (high bits = 0), so the
+            // U32-layout kernel clamps it correctly with the same unsigned compare logic.
+            if (input_dtype == DataType::UINT32 || input_dtype == DataType::UINT8) {
+                if (input_dtype == DataType::UINT8) {
+                    const auto as_int = static_cast<std::int32_t>(param0_raw);
+                    TT_FATAL(
+                        as_int >= 0 && as_int <= std::numeric_limits<std::uint8_t>::max(),
+                        "RELU_MIN lower_limit {} out of range for UInt8",
+                        as_int);
+                }
+                return {
+                    "relu_min_tile_init();",
+                    fmt::format("relu_min_tile_uint32({}, {}u);", idst, static_cast<uint32_t>(param0_raw))};
+            }
             if (input_dtype == DataType::INT32) {
                 return {"relu_min_tile_init();", fmt::format("relu_min_tile_int32({}, {}u);", idst, static_cast<uint32_t>(static_cast<int32_t>(params[0])))};
             }
@@ -190,6 +255,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 param0);
             return {"power_iterative_tile_init();", fmt::format("power_iterative_tile({}, {});", idst, param0_raw)};
         case UnaryOpType::LEAKY_RELU:
+            // For unsigned inputs, leaky_relu is the identity. Emit an empty op so the tile is just copied.
+            if (input_dtype == DataType::UINT32 || input_dtype == DataType::UINT16 || input_dtype == DataType::UINT8) {
+                return {};
+            }
             return {
                 "leaky_relu_tile_init();",
                 fmt::format("leaky_relu_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
@@ -226,37 +295,59 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 "heaviside_tile_init();",
                 fmt::format("heaviside_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
         case UnaryOpType::BITWISE_XOR:
-            return {"bitwise_xor_tile_init();", fmt::format("bitwise_xor_tile({}, {}u);", idst, (uint)params[0])};
+            return {
+                "bitwise_xor_tile_init();",
+                fmt::format(
+                    "bitwise_xor_tile<DataFormat::{}>({}, {}u);",
+                    bitwise_shift_data_format_str(op_type, input_dtype),
+                    idst,
+                    (uint)params[0])};
         case UnaryOpType::BITWISE_AND:
-            return {"bitwise_and_tile_init();", fmt::format("bitwise_and_tile({}, {}u);", idst, (uint)params[0])};
+            return {
+                "bitwise_and_tile_init();",
+                fmt::format(
+                    "bitwise_and_tile<DataFormat::{}>({}, {}u);",
+                    bitwise_shift_data_format_str(op_type, input_dtype),
+                    idst,
+                    (uint)params[0])};
         case UnaryOpType::BITWISE_OR:
-            return {"bitwise_or_tile_init();", fmt::format("bitwise_or_tile({}, {}u);", idst, (uint)params[0])};
+            return {
+                "bitwise_or_tile_init();",
+                fmt::format(
+                    "bitwise_or_tile<DataFormat::{}>({}, {}u);",
+                    bitwise_shift_data_format_str(op_type, input_dtype),
+                    idst,
+                    (uint)params[0])};
         case UnaryOpType::RIGHT_SHIFT:
-            return {"right_shift_tile_init();", fmt::format("right_shift_tile({}, {}u);", idst, (uint)params[0])};
+            return {
+                "right_shift_tile_init();",
+                fmt::format(
+                    "right_shift_tile<DataFormat::{}>({}, {}u);",
+                    bitwise_shift_data_format_str(op_type, input_dtype),
+                    idst,
+                    (uint)params[0])};
         case UnaryOpType::LEFT_SHIFT:
-            return {"left_shift_tile_init();", fmt::format("left_shift_tile({}, {}u);", idst, (uint)params[0])};
+            return {
+                "left_shift_tile_init();",
+                fmt::format(
+                    "left_shift_tile<DataFormat::{}>({}, {}u);",
+                    bitwise_shift_data_format_str(op_type, input_dtype),
+                    idst,
+                    (uint)params[0])};
         case UnaryOpType::REMAINDER:
             return {
                 fmt::format(
                     "remainder_tile_init({:#x}u, {:#x}u);",
                     std::bit_cast<uint32_t>(param0),
                     std::bit_cast<uint32_t>(1.0f / param0)),
-                fmt::format(
-                    "remainder_tile({}, {:#x}u, {:#x}u);",
-                    idst,
-                    std::bit_cast<uint32_t>(param0),
-                    std::bit_cast<uint32_t>(1.0f / param0))};
+                fmt::format("remainder_tile({});", idst)};
         case UnaryOpType::FMOD:
             return {
                 fmt::format(
                     "fmod_tile_init({:#x}u, {:#x}u);",
                     std::bit_cast<uint32_t>(param0),
                     std::bit_cast<uint32_t>(1.0f / param0)),
-                fmt::format(
-                    "fmod_tile({}, {:#x}u, {:#x}u);",
-                    idst,
-                    std::bit_cast<uint32_t>(param0),
-                    std::bit_cast<uint32_t>(1.0f / param0))};
+                fmt::format("fmod_tile({});", idst)};
         case UnaryOpType::EXP:
             return {
                 fmt::format("exp_tile_init<{}u>();", (uint32_t)param0),
@@ -627,10 +718,14 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::RELU:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            // For unsigned inputs, relu is the identity. Emit an empty op so the tile is just copied.
+            if (input_dtype == DataType::UINT32 || input_dtype == DataType::UINT16 || input_dtype == DataType::UINT8) {
+                return {};
+            }
             if (input_dtype == DataType::INT32) {
                 return {"relu_tile_init();", fmt::format("relu_tile_int32({});", idst)};
             }
-            return {"relu_tile_init();", fmt::format("        relu_tile({});", idst)};
+            return {"relu_tile_init();", fmt::format("relu_tile({});", idst)};
 
         case UnaryOpType::SIGNBIT:
             TT_FATAL(
@@ -788,7 +883,21 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             return {"rounding_op_tile_init();", fmt::format("frac_tile({});", idst)};
-        case UnaryOpType::RELU6: return {"relu_max_tile_init();", fmt::format("relu_max_tile({}, 0x40c00000u);", idst)};
+        case UnaryOpType::RELU6:
+            if (input_dtype == DataType::UINT16) {
+                return {"relu_max_tile_init();", fmt::format("relu_max_tile_uint16({}, 6u);", idst)};
+            }
+            // UINT8 is zero-extended to 32 bits in DST by the unpacker (high bits = 0), so the
+            // U32-layout kernel clamps it correctly with the same unsigned compare logic.
+            if (input_dtype == DataType::UINT32 || input_dtype == DataType::UINT8) {
+                return {"relu_max_tile_init();", fmt::format("relu_max_tile_uint32({}, 6u);", idst)};
+            }
+            if (input_dtype == DataType::INT32) {
+                // 0x40c00000u == bit_cast<float>(6.0f); the _relu_max_ int32 path reinterprets the
+                // threshold via Converter::as_float, so this decodes back to the integer limit 6.
+                return {"relu_max_tile_init();", fmt::format("relu_max_tile_int32({}, 0x40c00000u);", idst)};
+            }
+            return {"relu_max_tile_init();", fmt::format("relu_max_tile({}, 0x40c00000u);", idst)};
         case UnaryOpType::NEG:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");

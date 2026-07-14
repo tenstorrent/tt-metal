@@ -5,7 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -25,13 +25,13 @@ void write_mean_rstd(
     using namespace tt::constants;
     constexpr uint32_t onetile = 1;
 
-    CircularBuffer cb(cb_id);
+    DataflowBuffer dfb(cb_id);
     const uint32_t cb_tile_bytes = get_tile_size(cb_id);
     const auto cb_dtype_bytes = cb_tile_bytes / (TILE_HEIGHT * TILE_WIDTH);
 
-    cb.wait_front(onetile);
+    dfb.wait_front(onetile);
 
-    uint32_t output_l1_write_addr = cb.get_read_ptr();
+    uint32_t output_l1_write_addr = dfb.get_read_ptr();
     CoreLocalMem<volatile uint16_t> l1_ptr(output_l1_write_addr);
 
     uint32_t output_tile_offset = tile_offset / num_inner;
@@ -55,7 +55,7 @@ void write_mean_rstd(
             auto src_idx = get_tilized_idx(0, src_h * FACE_WIDTH);
 
             noc.async_write(
-                cb,
+                dfb,
                 addrg,
                 cb_dtype_bytes * FACE_HEIGHT,
                 {.offset_bytes = src_idx * cb_dtype_bytes},
@@ -82,7 +82,7 @@ void write_mean_rstd(
         }
 
         noc.async_write(
-            cb,
+            dfb,
             addrg,
             cb_dtype_bytes,
             {.offset_bytes = tilized_idx * cb_dtype_bytes},
@@ -90,7 +90,7 @@ void write_mean_rstd(
         noc.async_write_barrier();
     }
 
-    cb.pop_front(onetile);
+    dfb.pop_front(onetile);
 }
 
 void kernel_main() {
@@ -133,7 +133,7 @@ void kernel_main() {
     uint32_t Ht = (mean_rstd_height + TILE_HEIGHT - 1) / TILE_HEIGHT;
 
     Noc noc;
-    CircularBuffer cb_output(cb_id_output);
+    DataflowBuffer dfb_output(cb_id_output);
 
     for (uint32_t outer_idx = 0; outer_idx < num_rows_per_core; outer_idx++) {
         if (mean_has_value) {
@@ -168,17 +168,17 @@ void kernel_main() {
 
         // output
         for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx += block_size) {
-            cb_output.wait_front(block_size);
+            dfb_output.wait_front(block_size);
             for (uint32_t r = 0; r < block_size; r++) {
                 noc.async_write(
-                    cb_output,
+                    dfb_output,
                     output_addrg,
                     output_tile_bytes,
                     {.offset_bytes = r * output_tile_bytes},
                     {.page_id = offs + inner_idx + r + tile_offset});
             }
             noc.async_write_barrier();
-            cb_output.pop_front(block_size);
+            dfb_output.pop_front(block_size);
         }  // num_inner loop
 
         offs += num_inner;

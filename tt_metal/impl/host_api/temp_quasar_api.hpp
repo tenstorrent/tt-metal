@@ -74,6 +74,7 @@ struct QuasarComputeConfig {
     bool bfp8_pack_precise = false;
     bool math_approx_mode = false;
     bool enable_2x_src_format = false;
+    bool unpack_to_dest_en = false;
 
     std::vector<uint32_t> compile_args;
 

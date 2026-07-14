@@ -3,20 +3,25 @@
 # Source MPI interface validation utility
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/utils/mpi_if_selection.sh"
+source "$SCRIPT_DIR/utils/host_utils.sh"
 
 # Function to display help
 show_help() {
     cat << EOF
 Usage: $0 --hosts <comma-separated-host-list> --image <docker-image> [OPTIONS]
 
-Run fabric tests on 4x8, 4x32, or 8x16 cluster configuration.
+Run fabric tests on 4x8, 4x8wh, 4x32, or 8x16 cluster configuration.
 
 Required Options:
-    --hosts <host-list>                 Comma-separated list of hosts (single host for 4x8)
+    --hosts <host-list>                 Comma-separated list of hosts (single host for 4x8/4x8wh)
     --image <docker-image>              Docker image to use ("none" to use local build)
 
 Optional:
-    --config <4x8|4x32|8x16|4x8z|2x4x4z|4x32z|<N>x32x4|8x4x4z>  Mesh configuration (default: 4x32)
+    --config <4x8|4x8wh|4x32|8x16|4x8z|2x4x4z|4x32z|<N>x32x4|8x4x4z>  Mesh configuration (default: 4x32)
+                                        4x8   = single BlackHole galaxy as one 8x4 2D torus (single host).
+                                        4x8wh = single Wormhole (WORMHOLE_B0) galaxy as one 8x4 2D torus
+                                                (single host); same single-mesh launch as 4x8 but with the
+                                                Wormhole galaxy descriptor and the WH neighbor-exchange config.
                                         <N>x32x4 (N in 2..9) is a multi-mesh config of N fully-connected
                                         32x4 torus meshes. Each 32x4 mesh is built from 4 BH galaxies
                                         (host_topology 4x1), one galaxy per host, so it needs 4*N hosts
@@ -34,6 +39,7 @@ Optional:
     --output <directory>                Output directory for log files (default: fabric_test_logs)
     --mesh-graph-desc-path <path>       Path to mesh graph descriptor file (overrides --config)
                                         4x8 default:   tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
+                                        4x8wh default: tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.textproto
                                         4x32 default:  tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto
                                         8x16 default:  tt_metal/fabric/mesh_graph_descriptors/16x8_quad_bh_galaxy_torus_xy_graph_descriptor.textproto
                                         4x8z default:  tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_4x4x2_z_graph_descriptor.textproto
@@ -50,9 +56,17 @@ Optional:
                                         (default: ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric)
     --test-config <path>                Path to test configuration file
                                         (default: tests/tt_metal/tt_fabric/test_infra/test_yamls/test_bh_glx_2d_torus_stability.yaml)
+                                        (4x8wh default: tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_wh_neighbor_exchange.yaml)
                                         (4x8z/2x4x4z/4x32z/8x4x4z default: test_fabric_multi_mesh_sanity_common.yaml, whose
                                          neighbor_exchange/all_to_all patterns route across mesh boundaries / Z links)
     --filter <pattern>                  Filter pattern passed to test_tt_fabric --filter
+    --num-packets <N>                   Number of packets each sender sends (test_tt_fabric --num-packets).
+                                        This is the knob to shorten a run: the heavy all_to_all tests
+                                        (the bulk of the runtime) scale ~linearly with it, and every
+                                        sender stays active so all cables are still exercised. The script
+                                        reads the config's baseline counts and prints what fraction of the
+                                        default per-sender packet volume you're running. e.g. 1000 for a
+                                        quick run.
     --mpi-if <interface>                Network interface for MPI TCP transport
                                         (auto-detected if not specified)
     --mpi-args <args>                   Extra arguments passed directly to mpirun (quoted string)
@@ -75,6 +89,8 @@ HOSTS=""
 DOCKER_IMAGE=""
 OUTPUT_DIR="fabric_test_logs"
 MESH_GRAPH_DESC_PATH_4x8="tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
+# 4x8wh: single Wormhole (WORMHOLE_B0) galaxy as one 8x4 2D torus, single host.
+MESH_GRAPH_DESC_PATH_4x8wh="tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.textproto"
 MESH_GRAPH_DESC_PATH_4x32="tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
 MESH_GRAPH_DESC_PATH_8x16="tt_metal/fabric/mesh_graph_descriptors/16x8_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
 MESH_GRAPH_DESC_PATH_4x8z="tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_4x4x2_z_graph_descriptor.textproto"
@@ -99,7 +115,11 @@ TEST_CONFIG_EXPLICIT=false
 # with an inter-mesh Z fabric (its Linear/Ring/Torus setups trip the tensix
 # datamover buffer-index assert), so it must not be the default here.
 TEST_CONFIG_Z="tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml"
+# 4x8wh uses the Wormhole neighbor-exchange sanity config by default (single 8x4
+# torus mesh), unless the user explicitly passes --test-config.
+TEST_CONFIG_4x8wh="tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_wh_neighbor_exchange.yaml"
 FILTER=""
+NUM_PACKETS=""
 MPI_IF=""
 MPI_IF_EXPLICIT=false
 MPI_EXTRA_ARGS=()
@@ -130,8 +150,8 @@ while [[ $# -gt 0 ]]; do
             fi
             CONFIG="$2"
             # The Nx32x4 family (2x32x4 .. 9x32x4) is matched by regex; everything else is an exact match.
-            if [[ "$CONFIG" != "4x8" && "$CONFIG" != "4x32" && "$CONFIG" != "8x16" && "$CONFIG" != "4x8z" && "$CONFIG" != "2x4x4z" && "$CONFIG" != "4x32z" && "$CONFIG" != "8x4x4z" && ! "$CONFIG" =~ ^[2-9]x32x4$ ]]; then
-                echo "Error: --config must be one of '4x8', '4x32', '8x16', '4x8z', '2x4x4z', '4x32z', '8x4x4z', or '<N>x32x4' (N in 2..9)"
+            if [[ "$CONFIG" != "4x8" && "$CONFIG" != "4x8wh" && "$CONFIG" != "4x32" && "$CONFIG" != "8x16" && "$CONFIG" != "4x8z" && "$CONFIG" != "2x4x4z" && "$CONFIG" != "4x32z" && "$CONFIG" != "8x4x4z" && ! "$CONFIG" =~ ^[2-9]x32x4$ ]]; then
+                echo "Error: --config must be one of '4x8', '4x8wh', '4x32', '8x16', '4x8z', '2x4x4z', '4x32z', '8x4x4z', or '<N>x32x4' (N in 2..9)"
                 echo ""
                 show_help
                 exit 1
@@ -180,6 +200,18 @@ while [[ $# -gt 0 ]]; do
             FILTER="$2"
             shift 2
             ;;
+        --num-packets)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --num-packets requires a non-empty value"
+                exit 1
+            fi
+            if [[ ! "$2" =~ ^[1-9][0-9]*$ ]]; then
+                echo "Error: --num-packets must be a positive integer (got '$2')"
+                exit 1
+            fi
+            NUM_PACKETS="$2"
+            shift 2
+            ;;
         --mpi-if)
             if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
                 echo "Error: --mpi-if requires a non-empty value"
@@ -223,6 +255,8 @@ if [[ -z "$HOSTS" ]]; then
     exit 1
 fi
 
+check_duplicate_hosts "$HOSTS" || exit 1
+
 if [[ -z "$DOCKER_IMAGE" ]]; then
     echo "Error: --image is required"
     echo ""
@@ -253,6 +287,8 @@ fi
 if [[ "$MESH_GRAPH_DESC_PATH_EXPLICIT" == false ]]; then
     if [[ "$CONFIG" == "4x8" ]]; then
         MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_4x8"
+    elif [[ "$CONFIG" == "4x8wh" ]]; then
+        MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_4x8wh"
     elif [[ "$CONFIG" == "4x32" ]]; then
         MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_4x32"
     elif [[ "$CONFIG" == "8x16" ]]; then
@@ -274,6 +310,12 @@ fi
 # multi-mesh sanity config unless the user explicitly passed --test-config.
 if [[ "$TEST_CONFIG_EXPLICIT" == false && ( "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || -n "$NX32X4_NUM_MESHES" || "$CONFIG" == "8x4x4z" ) ]]; then
     TEST_CONFIG="$TEST_CONFIG_Z"
+fi
+
+# 4x8wh is a single Wormhole galaxy torus; default it to the WH neighbor-exchange
+# sanity config unless the user explicitly passed --test-config.
+if [[ "$TEST_CONFIG_EXPLICIT" == false && "$CONFIG" == "4x8wh" ]]; then
+    TEST_CONFIG="$TEST_CONFIG_4x8wh"
 fi
 
 # ---------------------------------------------------------------------------
@@ -406,6 +448,22 @@ echo "Test config: $TEST_CONFIG"
 if [[ -n "$FILTER" ]]; then
     echo "Filter: $FILTER"
 fi
+if [[ -n "$NUM_PACKETS" ]]; then
+    echo "Num packets per sender: $NUM_PACKETS"
+    # Read the config's baseline num_packets so the operator sees how much shorter
+    # this run is. Counts are per-sender; sender/iteration counts are unchanged, so
+    # runtime scales ~linearly with the per-sender packet volume.
+    if [[ -f "$TEST_CONFIG" ]]; then
+        mapfile -t _baselines < <(grep -oE 'num_packets:[[:space:]]*[0-9]+' "$TEST_CONFIG" | grep -oE '[0-9]+$')
+        if [[ ${#_baselines[@]} -gt 0 ]]; then
+            _baseline_sum=0
+            for _b in "${_baselines[@]}"; do _baseline_sum=$((_baseline_sum + _b)); done
+            _new_sum=$((NUM_PACKETS * ${#_baselines[@]}))
+            _pct=$(awk -v n="$_new_sum" -v o="$_baseline_sum" 'BEGIN { if (o > 0) printf "%.1f", 100.0 * n / o; else printf "n/a" }')
+            echo "  -> ~${_pct}% of the default per-sender packet volume across ${#_baselines[@]} pattern group(s) (baseline sum ${_baseline_sum} -> ${_new_sum})"
+        fi
+    fi
+fi
 echo "MPI interface: $MPI_IF"
 if [[ "${#MPI_EXTRA_ARGS[@]}" -gt 0 ]]; then
     echo "MPI extra args: ${MPI_EXTRA_ARGS[*]}"
@@ -423,6 +481,9 @@ if [[ "$TEST_BINARY" == *test_tt_fabric ]]; then
 fi
 if [[ -n "$FILTER" ]]; then
     EXTRA_BINARY_ARGS+=(--filter "$FILTER")
+fi
+if [[ -n "$NUM_PACKETS" ]]; then
+    EXTRA_BINARY_ARGS+=(--num-packets "$NUM_PACKETS")
 fi
 
 # Non-Z multi-host configs are a single mesh (TT_MESH_ID=0) that spans several
@@ -961,9 +1022,9 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || -n
     fi
 elif [[ "$DOCKER_IMAGE" == "none" ]]; then
     # No-docker path: invoke mpirun-ulfm directly against the local build.
-    if [[ "$CONFIG" == "4x8" ]]; then
+    if [[ "$CONFIG" == "4x8" || "$CONFIG" == "4x8wh" ]]; then
         SINGLE_HOST="${HOSTS%%,*}"
-        echo "Running single-host 4x8 on: $SINGLE_HOST (no docker)"
+        echo "Running single-host $CONFIG on: $SINGLE_HOST (no docker)"
         echo ""
 
         mpirun-ulfm \
@@ -991,9 +1052,9 @@ elif [[ "$DOCKER_IMAGE" == "none" ]]; then
             --host "$HOSTS" \
             "${NONZ_SEGMENTS[@]}" |& tee "$LOG_FILE" | highlight_fabric_test_success
     fi
-elif [[ "$CONFIG" == "4x8" ]]; then
+elif [[ "$CONFIG" == "4x8" || "$CONFIG" == "4x8wh" ]]; then
     SINGLE_HOST="${HOSTS%%,*}"
-    echo "Running single-host 4x8 on: $SINGLE_HOST"
+    echo "Running single-host $CONFIG on: $SINGLE_HOST"
     echo ""
 
     ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \

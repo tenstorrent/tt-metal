@@ -32,7 +32,9 @@ enum class CommandQueueDeviceAddrType : uint8_t {
     REALTIME_PROFILER_MSG = 10,
     DISPATCH_TELEMETRY = 11,
     DISPATCH_TELEMETRY_CONTROL = 12,
-    UNRESERVED = 13,
+    // Completion counters for worker-done signalling on Quasar. Not used on WH/BH.
+    WORKER_COMPLETION_SEMAPHORES = 13,
+    UNRESERVED = 14,
 };
 
 // likely only used in impl
@@ -79,8 +81,5 @@ template <bool addr_16B>
 uint32_t get_cq_completion_rd_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
 
 uint32_t get_cq_dispatch_progress(ChipId chip_id, uint8_t cq_id);
-
-// Return the expected number of workers to be in the finished state
-uint32_t calculate_expected_workers_to_finish(const tt::tt_metal::IDevice* device, const SubDeviceId& sub_device_id, tt::tt_metal::HalProgrammableCoreType core_type);
 
 }  // namespace tt::tt_metal

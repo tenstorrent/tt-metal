@@ -64,7 +64,9 @@ pytestmark = run_for_blackhole("Tensor prefetcher requires Blackhole")
 def _require_tensor_prefetcher(device):
     """Skip unless programmable DRAM cores are available on this device."""
     if not ttnn.experimental.is_tensor_prefetcher_supported(device):
-        pytest.skip("programmable DRAM cores unavailable; set TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1")
+        pytest.skip(
+            "programmable DRAM cores unavailable (need Blackhole, firmware >= 19.12.0.0, and either no harvested DRAM channels or a single device)"
+        )
 
 
 def _select_num_dram_banks(available_banks: int) -> int:
@@ -479,9 +481,23 @@ def test_bench_dram_core_repeats(device, op_name, shape):
     indirect=True,
 )
 @pytest.mark.parametrize("op_name,shape", LLAMA_SHAPES)
-def test_bench_dram_core_repeats_recv_contig(device, op_name, shape):
+@pytest.mark.parametrize(
+    "distribution",
+    [ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D, ttnn.ShardDistributionStrategy.CONTIGUOUS_1D],
+    ids=["round_robin", "shard_contiguous"],
+)
+def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distribution):
     """Same matmul trace-replay bench as test_bench_dram_core_repeats, but the weight
     is in **receiver-contiguous** DRAM layout (NdShardSpec, num_shards = ring_size).
+
+    Parametrized on the shard distribution to A/B the ring-routing effect:
+      - round_robin: bank b feeds the STRIDED ring set [b, b+num_banks, ...] (column b
+        of receivers_per_y) -- each bank's writes fan out across the whole ring.
+      - shard-contiguous (CONTIGUOUS_1D): bank b feeds the CONTIGUOUS arc [b*R, b*R+R-1] (row b of
+        receivers_per_y) -- each bank's writes stay on a local ring segment.
+    The matmul topology (receiver cores, ring order, program config) is identical; only
+    the shard->bank placement and the GCB pairing change, so PCC holds for both. Compare
+    the logged GB/s across the two ids for the same shape.
 
     Why this is matmul-correct: in a gather_in0 matmul, ring core r computes output
     N-cols [r*per_core_N, (r+1)*per_core_N) and therefore needs weight[all K, those
@@ -551,7 +567,10 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape):
 
     # Receiver-contiguous weight: NdShardSpec, num_shards = ring_size, each shard (K_padded, n_per_recv).
     n_per_recv = _N // ring_size
-    tt_weight = _make_recv_contig_weight(device, pt_weight, num_dram_banks, ring_size, _DTYPE)
+    is_shard_contiguous = distribution == ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
+    tt_weight = _make_recv_contig_weight(
+        device, pt_weight, num_dram_banks, ring_size, _DTYPE, distribution_strategy=distribution
+    )
 
     K_per_shard = k_padded // ring_size
     act_mem_config = ttnn.create_sharded_memory_config(
@@ -575,24 +594,36 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape):
         num_global_cb_receivers=num_receivers_per_bank,
     )
 
-    # STRIDED bank_to_receivers: bank b feeds ring positions [b, b+num_banks, ...], i.e. the
-    # b-th receiver of each sorted y-row (column b of receivers_per_y). This matches the BDS
-    # round-robin placement so ring position r receives shard r (full K, N-cols [r*npr,...)).
-    bank_to_receivers = [
-        (
-            b,
-            ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(
-                        ttnn.CoreCoord(*receivers_per_y[s][b]),
-                        ttnn.CoreCoord(*receivers_per_y[s][b]),
-                    )
-                    for s in range(num_receivers_per_bank)
-                ]
-            ),
-        )
-        for b in range(num_dram_banks)
-    ]
+    # bank_to_receivers pairing must match the BDS placement so ring position r receives
+    # shard r (full K, N-cols [r*npr, ...)):
+    #   round_robin -> STRIDED: bank b feeds [b, b+num_banks, ...] = column b of receivers_per_y.
+    #   shard-contiguous -> CONTIGUOUS arc: bank b feeds [b*R, b*R+R-1] = row b of receivers_per_y.
+    if is_shard_contiguous:
+        bank_to_receivers = [
+            (
+                b,
+                ttnn.CoreRangeSet(
+                    [
+                        ttnn.CoreRange(ttnn.CoreCoord(*receivers_per_y[b][s]), ttnn.CoreCoord(*receivers_per_y[b][s]))
+                        for s in range(num_receivers_per_bank)
+                    ]
+                ),
+            )
+            for b in range(num_dram_banks)
+        ]
+    else:
+        bank_to_receivers = [
+            (
+                b,
+                ttnn.CoreRangeSet(
+                    [
+                        ttnn.CoreRange(ttnn.CoreCoord(*receivers_per_y[s][b]), ttnn.CoreCoord(*receivers_per_y[s][b]))
+                        for s in range(num_receivers_per_bank)
+                    ]
+                ),
+            )
+            for b in range(num_dram_banks)
+        ]
     dual_senders = os.environ.get("BENCH_DUAL_SENDERS", "0") == "1"
     # Centralized recv-contig GCB builder: validates the (program_config, weight, bank_to_receivers)
     # triple (num_shards == ring_size, K % ring_size == 0, per_core_N == per-receiver N) and sizes/builds
@@ -677,9 +708,14 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape):
 
     per_matmul_us = elapsed / trace_repeats * 1e6
     tflops = _flops_per_matmul(_K) * trace_repeats / elapsed / 1e12
+    # Effective weight-streaming bandwidth: the full weight (K_padded x N) crosses the
+    # ring once per matmul. This is the metric shard-contiguous distribution aims to improve.
+    weight_bytes = k_padded * _N * _DTYPE_BYTES
+    gbps = weight_bytes * trace_repeats / elapsed / 1e9
+    dist_id = "shard_contiguous" if is_shard_contiguous else "round_robin"
     logger.info(
-        f"[dram_core_rc][{op_name}] dual_senders={dual_senders} trace_elapsed={elapsed * 1e3:.2f}ms "
-        f"repeats={trace_repeats} per_matmul={per_matmul_us:.2f}us -> {tflops:.4f} TFLOP/s"
+        f"[dram_core_rc][{op_name}] dist={dist_id} dual_senders={dual_senders} trace_elapsed={elapsed * 1e3:.2f}ms "
+        f"repeats={trace_repeats} per_matmul={per_matmul_us:.2f}us -> {tflops:.4f} TFLOP/s, {gbps:.1f} GB/s"
     )
 
 

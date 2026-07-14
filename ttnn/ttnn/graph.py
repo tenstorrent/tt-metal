@@ -166,16 +166,20 @@ def _capture_python_stack_trace() -> list[str]:
     """
     frames = traceback.extract_stack()
     result = []
+
     for frame in frames:
-        path = pathlib.Path(frame.filename).resolve()
-        # Match against path relative to root so globs like **/_pytest/** work on absolute paths
         try:
-            path_for_match = path.relative_to(path.anchor)
-        except ValueError:
-            path_for_match = path
-        if any(path_for_match.match(p) for p in _STACK_TRACE_INTERNAL_PATTERNS):
+            filename = str(frame.filename)
+            path = pathlib.PurePath(filename)
+
+            # Match without filesystem resolution to avoid fragile behavior during capture
+            if any(path.match(p) for p in _STACK_TRACE_INTERNAL_PATTERNS):
+                continue
+
+            result.append(f'  File "{filename}", line {frame.lineno}, in {frame.name}\n    {frame.line}\n')
+        except Exception:
+            # Never let stack-trace capture break graph capture
             continue
-        result.append(f'  File "{frame.filename}", line {frame.lineno}, in {frame.name}\n    {frame.line}\n')
 
     return result[::-1]
 
@@ -202,7 +206,7 @@ def _collect_tensor_ids(value) -> list:
     return ids
 
 
-def begin_graph_capture(run_mode=None):
+def begin_graph_capture(run_mode=None, *, _internal=False):
     """Wrapper that clears Python I/O state before starting C++ capture.
 
     Automatically enables Python I/O recording so that
@@ -236,9 +240,15 @@ def begin_graph_capture(run_mode=None):
         import ttnn
 
         _python_io_data = []
-        # Preserve comparison records across per-op capture sessions (comparison mode
-        # without enable_graph_report). Only initialize once per test run.
-        if not _comparison_records_data:
+        # A user-initiated (non-internal) outermost capture starts a fresh comparison
+        # sidecar scope: any records left over from earlier comparison-mode activity
+        # in this process must not leak into this capture's sidecar. The per-op
+        # auto-capture inside the operation wrapper passes _internal=True so that
+        # comparison records still accumulate across per-op sessions (comparison mode
+        # without enable_graph_report, later drained by flush_comparison_records_to_db).
+        if not _internal:
+            _comparison_records_data = _new_comparison_records_data()
+        elif not _comparison_records_data:
             _comparison_records_data = _new_comparison_records_data()
         _python_io_recording_enabled = True
         _configure_python_stack_traces_for_outer_graph_capture(ttnn)
@@ -368,7 +378,10 @@ def record_python_operation(name, function_args, function_kwargs):
     }
 
     if _python_stack_traces_enabled:
-        record["python_stack_trace"] = _capture_python_stack_trace()
+        try:
+            record["python_stack_trace"] = _capture_python_stack_trace()
+        except Exception:
+            record["python_stack_trace"] = []
 
     _python_io_data.append(record)
 

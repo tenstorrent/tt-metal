@@ -21,8 +21,11 @@ class UnpackKernelGenerator:
         # Collect all unique headers from all operations
         all_headers = set()
         for op in self.config.pipeline:
-            for fused_compute in op.math.operations:
-                if fused_compute.unpacker is not None:
+            for fused_compute in op.math.math_nodes:
+                if (
+                    hasattr(fused_compute, "unpacker")
+                    and fused_compute.unpacker is not None
+                ):
                     all_headers.update(fused_compute.unpacker.get_headers())
 
         # Generate include statements

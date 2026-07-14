@@ -5,7 +5,7 @@
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .compute_node import ComputeNode
+    from .fpu_node import FpuNode
     from .fused_operation import FusedOperation
     from .fuser_config import GlobalConfig
     from .block_data import BlockData
@@ -19,7 +19,7 @@ class FusedLoop:
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         return ""
@@ -28,7 +28,7 @@ class FusedLoop:
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         return ""
@@ -70,7 +70,7 @@ class LoopBlock(FusedLoop):
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         code = ""
@@ -94,7 +94,7 @@ class LoopBlock(FusedLoop):
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         if config.perf_run_type == PerfRunType.PACK_ISOLATE:
@@ -118,7 +118,7 @@ class LoopBlockRow(FusedLoop):
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         code = ""
@@ -141,7 +141,7 @@ class LoopBlockRow(FusedLoop):
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         code = ""
@@ -170,7 +170,7 @@ class LoopTileByTile(FusedLoop):
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         code = ""
@@ -197,7 +197,7 @@ class LoopTileByTile(FusedLoop):
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         code = ""

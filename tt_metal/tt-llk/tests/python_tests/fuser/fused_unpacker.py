@@ -9,7 +9,7 @@ import torch
 if TYPE_CHECKING:
     from .fused_operation import FusedOperation
     from .fuser_config import GlobalConfig
-    from .compute_node import ComputeNode
+    from .fpu_node import FpuNode
     from .block_data import BlockData
 
 from .fused_loop import FusedLoop
@@ -48,7 +48,7 @@ class Unpacker:
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         """Return C++ code that initializes the unpacker.
@@ -64,7 +64,7 @@ class Unpacker:
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         """Return C++ code that unpacks a single tile (or tile group).
@@ -80,7 +80,7 @@ class Unpacker:
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         """Return C++ code that tears down the unpacker after the tile loop.
@@ -96,7 +96,7 @@ class Unpacker:
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         """Return C++ code that mocks unpacker output for MATH_ISOLATE perf runs.
@@ -110,7 +110,7 @@ class Unpacker:
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         """Return C++ code that mocks math consumption for UNPACK_ISOLATE perf runs.
@@ -135,7 +135,7 @@ class Unpacker:
         tensor_b: torch.Tensor,
         operation: "FusedOperation",
         config: "GlobalConfig",
-        compute_unit: "ComputeNode" = None,
+        compute_unit: "FpuNode" = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Compute the golden unpack transformation in Python.
 
@@ -143,7 +143,7 @@ class Unpacker:
         (transpose, broadcast, tilize, etc.). Set an output tensor to None
         to indicate that operand is unused by downstream math.
 
-        Called by ComputeNode.golden() before the math golden. The returned tensors
+        Called by FpuNode.golden() before the math golden. The returned tensors
         become the math unit's inputs.
         """
         return tensor_a, tensor_b

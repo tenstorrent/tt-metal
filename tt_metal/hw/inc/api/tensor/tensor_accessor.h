@@ -141,21 +141,22 @@ public:
     FORCE_INLINE
     std::uint64_t get_shard_noc_addr(
         const uint32_t shard_id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        const auto bank_shard = shard_to_bank(shard_id);
         PageMapping page_mapping{
-            .bank_id = shard_id % dspec().num_banks(),
-            .bank_page_offset = shard_id / dspec().num_banks() * dspec().shard_volume(),
+            .bank_id = bank_shard.bank_id,
+            .bank_page_offset = bank_shard.shard_in_bank * dspec().shard_volume(),
         };
         return get_noc_addr(page_mapping, offset, noc);
     }
 
     template <typename ArrType, std::enable_if_t<tensor_accessor::detail::has_subscript_operator_v<ArrType>, int> = 0>
     FORCE_INLINE std::uint64_t get_shard_noc_addr(
-        [[maybe_unused]] const ArrType shard_coord, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        const ArrType shard_coord, const uint32_t offset = 0, uint8_t noc = noc_index) const {
         uint32_t shard_id = 0;
         for (uint32_t i = 0; i < dspec().rank(); ++i) {
             // Check that shard_coord is within bounds
-            ASSERT(shard_coord[i] < dspec().shard_shape()[i]);
-            shard_id *= dspec().shard_grid_strides()[i];
+            ASSERT(shard_coord[i] < dspec().shard_grid()[i]);
+            shard_id += shard_coord[i] * dspec().shard_grid_strides()[i];
         }
         return get_shard_noc_addr(shard_id, offset, noc);
     }
@@ -212,13 +213,10 @@ public:
             page_offset_within_shard += (page_coord[i] % dspec().shard_shape()[i]) * dspec().shard_strides()[i];
         }
 
-        // NOTE: This assumes shards are round-robin assigned across banks
-        uint32_t bank_id = flattened_shard_id % dspec().num_banks();
-        uint32_t bank_shard_id = flattened_shard_id / dspec().num_banks();
+        const auto bank_shard = shard_to_bank(flattened_shard_id);
+        uint32_t bank_page_offset = (bank_shard.shard_in_bank * dspec().shard_volume()) + page_offset_within_shard;
 
-        uint32_t bank_page_offset = (bank_shard_id * dspec().shard_volume()) + page_offset_within_shard;
-
-        return {bank_id, bank_page_offset};
+        return {bank_shard.bank_id, bank_page_offset};
     }
 
     // Locality APIs
@@ -245,7 +243,7 @@ public:
 
     FORCE_INLINE
     bool is_local_shard(const uint32_t shard_id, uint8_t noc = noc_index) const {
-        uint32_t bank_id = shard_id % dspec().num_banks();
+        uint32_t bank_id = shard_to_bank(shard_id).bank_id;
 
         const auto& packed_xy_coords = dspec().packed_xy_coords();
         auto bank_x = get_bank_x(packed_xy_coords[bank_id]);
@@ -312,6 +310,41 @@ private:
         return bank_start + bank_base_address + (page_mapping.bank_page_offset * aligned_page_size) + offset;
     }
 
+    struct BankShard {
+        size_t bank_id = 0;
+        size_t shard_in_bank = 0;  // index of the shard within its bank
+    };
+
+    // Round-robin spreads consecutive shards across banks; shard-contiguous (CONTIGUOUS_1D) packs shards_per_bank
+    // consecutive shards into one bank before advancing.
+    FORCE_INLINE BankShard shard_contiguous_mapping(size_t flattened_shard_id) const {
+        const size_t shards_per_bank = dspec().num_shards() / dspec().num_banks();
+        return {flattened_shard_id / shards_per_bank, flattened_shard_id % shards_per_bank};
+    }
+    FORCE_INLINE BankShard round_robin_mapping(size_t flattened_shard_id) const {
+        return {flattened_shard_id % dspec().num_banks(), flattened_shard_id / dspec().num_banks()};
+    }
+
+    // Maps a flattened shard id to its bank and its slot within that bank, honoring the distribution
+    // strategy. When num_banks is compile-time, the strategy is too (DSpec::is_shard_contiguous) and the branch is
+    // resolved at compile time, keeping these accessors byte-identical to round-robin-only builds. When
+    // num_banks is runtime, the shard-contiguous flag rides in the runtime num_banks word and is read per dispatch.
+    // NOTE: keep the nested `if constexpr` rather than a single `resolve_shard_contiguous() ? ...` ternary --
+    // the ternary would ODR-use (instantiate) both mappings even for static round-robin accessors, losing
+    // that byte-identical guarantee.
+    FORCE_INLINE BankShard shard_to_bank(size_t flattened_shard_id) const {
+        if constexpr (DSpec::has_static_num_banks) {
+            if constexpr (DSpec::is_shard_contiguous) {
+                return shard_contiguous_mapping(flattened_shard_id);
+            } else {
+                return round_robin_mapping(flattened_shard_id);
+            }
+        } else {
+            return dspec().resolve_shard_contiguous() ? shard_contiguous_mapping(flattened_shard_id)
+                                                      : round_robin_mapping(flattened_shard_id);
+        }
+    }
+
     PageMapping get_bank_and_offset_from_page_id(uint32_t page_id) const {
         size_t flattened_shard_id = 0;
         size_t page_offset_within_shard = 0;
@@ -324,13 +357,10 @@ private:
             page_offset_within_shard += (page_coord % dspec().shard_shape()[i]) * dspec().shard_strides()[i];
         }
 
-        // NOTE: This assumes shards are round-robin assigned across banks
-        size_t bank_id = flattened_shard_id % dspec().num_banks();
-        size_t bank_shard_id = flattened_shard_id / dspec().num_banks();
+        const auto bank_shard = shard_to_bank(flattened_shard_id);
+        size_t bank_page_offset = (bank_shard.shard_in_bank * dspec().shard_volume()) + page_offset_within_shard;
 
-        size_t bank_page_offset = (bank_shard_id * dspec().shard_volume()) + page_offset_within_shard;
-
-        return {bank_id, bank_page_offset};
+        return {bank_shard.bank_id, bank_page_offset};
     }
 
     FORCE_INLINE
@@ -504,7 +534,8 @@ TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t)
             TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::BankCoordsCTAOffset,
             TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::NumBanksCT>::type,
         /* IsInterleaved */ !TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_sharded,
-        /* IsDram */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_dram>>;
+        /* IsDram */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_dram,
+        /* IsShardContiguous */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_shard_contiguous>>;
 
 // CTAD deduction guide for the Metal 2.0 binding-token ctor.
 // Mirrors the (args, size_t) guide above. The token's ADDR_CRTA_OFFSET marks the
@@ -531,7 +562,9 @@ TensorAccessor(tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>
             TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::BankCoordsCTAOffset,
             TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::NumBanksCT>::type,
         /* IsInterleaved */ !TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::is_sharded,
-        /* IsDram */ TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::is_dram>>;
+        /* IsDram */ TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::is_dram,
+        /* IsShardContiguous */
+        TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::is_shard_contiguous>>;
 
 template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
 TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t, uint32_t)
@@ -554,7 +587,8 @@ TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t, 
             TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::BankCoordsCTAOffset,
             TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::NumBanksCT>::type,
         /* IsInterleaved */ !TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_sharded,
-        /* IsDram */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_dram>>;
+        /* IsDram */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_dram,
+        /* IsShardContiguous */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_shard_contiguous>>;
 
 template <
     uint32_t RankCT,
@@ -563,7 +597,8 @@ template <
     typename ShardShapeWrapper,
     typename BankCoordsWrapper,
     bool IsInterleaved,
-    bool IsDram>
+    bool IsDram,
+    bool IsShardContiguous>
 TensorAccessor(
     tensor_accessor::DistributionSpec<
         RankCT,
@@ -572,7 +607,8 @@ TensorAccessor(
         ShardShapeWrapper,
         BankCoordsWrapper,
         IsInterleaved,
-        IsDram>,
+        IsDram,
+        IsShardContiguous>,
     size_t,
     uint32_t)
     -> TensorAccessor<tensor_accessor::DistributionSpec<
@@ -582,7 +618,8 @@ TensorAccessor(
         ShardShapeWrapper,
         BankCoordsWrapper,
         IsInterleaved,
-        IsDram>>;
+        IsDram,
+        IsShardContiguous>>;
 
 namespace tensor_accessor::detail {
 template <typename... Args, uint32_t... Indexes>

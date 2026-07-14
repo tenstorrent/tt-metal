@@ -31,9 +31,17 @@ kv_cache contract param is accepted but unused.
 """
 import math
 import os
+from typing import Mapping, Optional
 
 import torch
 from loguru import logger
+from vllm.model_executor.models.interfaces import SupportsMultiModal
+from vllm.model_executor.models.qwen3_5 import (
+    Qwen3_5ProcessingInfo,
+    Qwen3VLDummyInputsBuilder,
+    Qwen3VLMultiModalProcessor,
+)
+from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
 from models.demos.blackhole.qwen36.tt.common import create_tt_model
@@ -45,7 +53,15 @@ _PREFILL_WARMUP_BUCKET = 4096
 _BLOCK_SIZE = 64
 
 
-class Qwen36ForCausalLM(Generator):
+class TT_Qwen3_5ProcessingInfo(Qwen3_5ProcessingInfo):
+    def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
+        return {"image": 0, "video": 0}
+
+
+@MULTIMODAL_REGISTRY.register_processor(
+    Qwen3VLMultiModalProcessor, info=TT_Qwen3_5ProcessingInfo, dummy_inputs=Qwen3VLDummyInputsBuilder
+)
+class Qwen36ForCausalLM(Generator, SupportsMultiModal):
     """vLLM-compatible wrapper for Qwen3.5-9B on Blackhole P150."""
 
     model_capabilities = {"supports_prefix_caching": False, "supports_async_decode": False}
@@ -99,7 +115,10 @@ class Qwen36ForCausalLM(Generator):
         if name_or_path and not os.path.isdir(os.path.expanduser(name_or_path)):
             from huggingface_hub import snapshot_download
 
-            name_or_path = snapshot_download(name_or_path)
+            # When offline/CI, resolve from the local cache only so snapshot_download
+            # reads the cached refs instead of reaching the HF API (refused by HF_HUB_OFFLINE=1).
+            offline = os.getenv("HF_HUB_OFFLINE") == "1" or os.getenv("CI") == "true"
+            name_or_path = snapshot_download(name_or_path, local_files_only=offline)
         args, model, _ = create_tt_model(
             mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len, hf_model=name_or_path
         )

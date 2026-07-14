@@ -31,10 +31,7 @@ inline void hardmish() {
         sfpi::vFloat x = sfpi::dst_reg[0];
         sfpi::vFloat scale = x * 0.5f + 1.0f;
 
-        sfpi::vFloat low_bound = 0.0f;
-        sfpi::vFloat high_bound = 1.0f;
-        sfpi::vec_min_max(low_bound, scale);   // scale = max(scale, 0.0)
-        sfpi::vec_min_max(scale, high_bound);  // scale = min(scale, 1.0)
+        scale = sfpi::clamp(scale, 0.0f, 1.0f);
 
         sfpi::dst_reg[0] = x * scale;
         sfpi::dst_reg++;

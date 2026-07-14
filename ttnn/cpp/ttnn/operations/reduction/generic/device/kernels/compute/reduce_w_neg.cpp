@@ -105,7 +105,7 @@ void kernel_main() {
         PACK((llk_pack_reduce_mask_clear()));
         // The scaler tile is waited once and reused for the whole reduction; pop it at the
         // end so the CB is left balanced.
-        cb_pop_front(cb_scaler, onetile);
+        cb_scaler_obj.pop_front(onetile);
         return;
     }
 
@@ -150,6 +150,10 @@ void kernel_main() {
                 }
 
                 cb_ineg_obj.wait_front(onetile);
+                constexpr bool swap_operands = (REDUCE_DIM == ReduceDim::REDUCE_ROW) && (REDUCE_OP != PoolType::MAX);
+                if constexpr (swap_operands) {
+                    reconfig_data_format(cb_scaler, cb_ineg);
+                }
                 reduce_init<REDUCE_OP, REDUCE_DIM>(cb_ineg, cb_scaler, cb_acc);
                 reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_ineg, cb_scaler, 0, 0, dst_idx);
                 reduce_uninit();

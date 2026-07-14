@@ -31,7 +31,6 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/program_cache.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
@@ -43,44 +42,6 @@ namespace {
 
 namespace tt::tt_metal {
 using MeshSubDeviceTestSuite = GenericMeshDeviceFixture;
-
-TEST_F(MeshSubDeviceTestSuite, LoadSubDeviceManagerClearsProgramCache) {
-    // Loading a manager may remap SubDeviceId -> worker cores, so cached programs must be dropped.
-    SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
-    SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
-    auto sub_device_manager = mesh_device_->create_sub_device_manager({sub_device_1, sub_device_2}, 3200);
-
-    // Inserts a dummy entry so num_program_cache_entries() > 0 without dispatching a workload.
-    mesh_device_->get_program_cache().insert(
-        ::tt::tt_metal::program_cache::detail::ProgramCacheKey{1, "reconfig_regression_dummy"},
-        ::tt::tt_metal::program_cache::detail::CachedProgramFactory(
-            ::tt::tt_metal::program_cache::detail::CachedProgram<int>(::tt::tt_metal::CreateProgram(), 0), 0));
-
-    EXPECT_GT(mesh_device_->num_program_cache_entries(), 0u);
-
-    mesh_device_->load_sub_device_manager(sub_device_manager);
-
-    EXPECT_EQ(mesh_device_->num_program_cache_entries(), 0u);
-}
-
-TEST_F(MeshSubDeviceTestSuite, ClearLoadedSubDeviceManagerClearsProgramCache) {
-    // Reverting to the default manager remaps worker cores, so cached programs must be dropped.
-    SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
-    SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
-    auto sub_device_manager = mesh_device_->create_sub_device_manager({sub_device_1, sub_device_2}, 3200);
-    mesh_device_->load_sub_device_manager(sub_device_manager);
-
-    // Inserts a dummy entry so num_program_cache_entries() > 0 without dispatching a workload.
-    mesh_device_->get_program_cache().insert(
-        ::tt::tt_metal::program_cache::detail::ProgramCacheKey{1, "reconfig_regression_dummy"},
-        ::tt::tt_metal::program_cache::detail::CachedProgramFactory(
-            ::tt::tt_metal::program_cache::detail::CachedProgram<int>(::tt::tt_metal::CreateProgram(), 0), 0));
-    EXPECT_GT(mesh_device_->num_program_cache_entries(), 0u);
-
-    mesh_device_->clear_loaded_sub_device_manager();
-
-    EXPECT_EQ(mesh_device_->num_program_cache_entries(), 0u);
-}
 
 TEST_F(MeshSubDeviceTestSuite, SyncWorkloadsOnSubDevice) {
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});

@@ -11,8 +11,8 @@ on:
       test-category:
         required: false
         type: string
-        default: smoke
-        description: "Time-budget workflow key passed to verify_time_budget.py (smoke for merge-gate and N300 fabric)."
+        default: merge_gate
+        description: "Time-budget workflow key passed to verify_time_budget.py (merge_gate for merge-gate and N300 fabric)."
       build-artifact-name:
         required: true
         type: string
@@ -43,7 +43,7 @@ jobs:
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/fabric_smoke_merge_gate_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/fabric_merge_gate_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

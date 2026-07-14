@@ -102,6 +102,23 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
     // to. No valid-length bound is needed — reads are index-driven (indices < populated length, sentinels mark
     // unused slots), so the unpopulated suffix is never addressed.
     validate_non_hashed(attrs, t);
+    // Block-cyclic remap: indices are natural positions; the kernel maps them to physical pages with sp and
+    // chunk_local. seq_len_local = T/sp and slabs = seq_len_local/chunk_local must be integral. (sp and
+    // chunk_local were already resolved+cross-checked at the ttnn entry; these are the device-side backstops.)
+    // Miss-only is sufficient: sp, chunk_local AND T are all folded into the program hash (see
+    // compute_program_hash), so a cache HIT has identical values already validated by the miss that built it.
+    if (attrs.has_block_cyclic()) {
+        const auto& bc = attrs.block_cyclic.value();
+        const uint32_t T = kv.logical_shape()[2];
+        TT_FATAL(bc.sp > 0, "block_cyclic.sp must be > 0");
+        TT_FATAL(bc.chunk_local > 0, "block_cyclic.chunk_local must be > 0");
+        TT_FATAL(T % bc.sp == 0, "kv length T ({}) must be divisible by block_cyclic.sp ({})", T, bc.sp);
+        TT_FATAL(
+            (T / bc.sp) % bc.chunk_local == 0,
+            "seq_len_local (T/sp = {}) must be divisible by block_cyclic.chunk_local ({})",
+            T / bc.sp,
+            bc.chunk_local);
+    }
     TT_FATAL(is.rank() == 4 && is[0] == 1 && is[1] == 1 && is[2] == S, "indices must be [1,1,S,TOPK]");
     const uint32_t TOPK = is[3];
     TT_FATAL(S > 0 && TOPK > 0, "S/TOPK must be > 0");
@@ -191,12 +208,19 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         // kv.memory_config(): an ND-sharded kv produces different TensorAccessor compile-time args than an
         // interleaved one, so they must be distinct programs.
         t.kv.memory_config(),
-        // kv.logical_shape() only when sharded (see above); a fixed sentinel otherwise so interleaved T does
-        // not recompile.
-        t.kv.memory_config().is_sharded() ? t.kv.logical_shape() : tt::tt_metal::Shape{},
+        // kv.logical_shape() when sharded (see above) OR block-cyclic: the block-cyclic remap bakes its
+        // T-dependent stride gap as a compile-time argument, so the cache length T must be in the hash (a
+        // different cache size is a distinct program). A plain interleaved kv keeps T out of the hash (sentinel
+        // shape) so changing T does not recompile.
+        (t.kv.memory_config().is_sharded() || attrs.has_block_cyclic()) ? t.kv.logical_shape() : tt::tt_metal::Shape{},
         // Only whether kv is indexed (not which slot): cache_batch_idx's VALUE is a dynamic runtime arg
         // (see get_dynamic_runtime_args), so indexing into a different slot reuses the same program.
         attrs.has_indexed_kv_cache(),
+        // Block-cyclic remap configuration is compile-time; distinct sp/chunk_local/cache-size values produce
+        // distinct programs (T is hashed above). No runtime remap arg.
+        attrs.has_block_cyclic(),
+        attrs.block_cyclic.has_value() ? attrs.block_cyclic->sp : 0u,
+        attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
         t.indices.logical_shape(),
         t.indices.dtype());
 }
@@ -206,22 +230,23 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> SparseSDPAOperation::get_dynamic_ru
     const SparseSDPAInputs& t,
     Tensor& /*output*/,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // Non-indexed: the gather page offset is the baked 0 from create_descriptor (and the non-indexed program
-    // is never shared with an indexed one — has_indexed_kv_cache() is in the hash — so nothing to re-apply).
-    if (!attrs.has_indexed_kv_cache()) {
+    // kv_batch_page_offset = cache_batch_idx*T depends on the runtime SLOT (and T, which is NOT hashed for an
+    // interleaved kv), so the same program is reused across slots/T — create_descriptor bakes it at build time
+    // and on a program-cache HIT it would be STALE, so re-apply it from the current slot/T every dispatch. The
+    // Block-cyclic remap configuration is compile-time, so only indexed programs need dynamic patching.
+    const bool indexed = attrs.has_indexed_kv_cache();
+    if (!indexed) {
         return {};
     }
-    // Indexed: re-apply kv_batch_page_offset = cache_batch_idx * T to the reader (kernel 0, arg 5) and writer
-    // (kernel 1, arg 4) on every dispatch. The value is the same on every core but the slot is per-core, so
-    // emit one entry per core per kernel. The core partition mirrors the factory exactly.
     const uint32_t T = t.kv.logical_shape()[2];
     const uint32_t kv_batch_page_offset = attrs.cache_batch_idx.value() * T;
     const tt::tt_metal::CoreCoord grid = t.q.device()->compute_with_storage_grid_size();
     const uint32_t num_cores = grid.x * grid.y;
     // Arg slots/kernel indices are defined once in sparse_sdpa_rt (header), shared with the program factory's
-    // emit order so a reorder can't silently desync this re-apply path from the factory.
+    // emit order so a reorder can't silently desync this re-apply path from the factory. The value is the same
+    // on every core but the slot is per-core, so emit one entry per core per kernel.
     std::vector<tt::tt_metal::DynamicRuntimeArg> args;
-    args.reserve(2 * num_cores);
+    args.reserve(static_cast<size_t>(2) * num_cores);
     for (uint32_t i = 0; i < num_cores; ++i) {
         const tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
         args.push_back(
@@ -248,7 +273,8 @@ Tensor sparse_sdpa(
     uint32_t v_dim,
     uint32_t k_chunk_size,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<uint32_t> cache_batch_idx) {
+    std::optional<uint32_t> cache_batch_idx,
+    std::optional<BlockCyclicLayout> block_cyclic) {
     using OperationType = ttnn::prim::SparseSDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -257,6 +283,7 @@ Tensor sparse_sdpa(
             .k_chunk_size = k_chunk_size,
             .compute_kernel_config = compute_kernel_config,
             .cache_batch_idx = cache_batch_idx,
+            .block_cyclic = block_cyclic,
         },
         OperationType::tensor_args_t{
             .q = q,

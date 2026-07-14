@@ -148,17 +148,17 @@ KernelHandle create_kernel(
 void initialize_dummy_kernels(Program& program, const CoreRangeSet& cr_set) {
     CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/blank.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
         cr_set,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
     CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/blank.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
         cr_set,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", cr_set, ComputeConfig{});
+    CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", cr_set, ComputeConfig{});
 }
 
 void initialize_dummy_semaphores(
@@ -532,7 +532,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
     Program program;
     bool pass = true;
 
-    // TODO: this test would be better if it varied args across core ranges and kernel type
+    // This varies the unique arg count across the two core ranges; TODO: it could also vary the kernel type.
 
     CoreRangeSet cr_set = program_config.cr_set;
     constexpr uint32_t kCommonRTASeparation = 1024 * sizeof(uint32_t);
@@ -540,258 +540,121 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
     uint32_t rta_base_dm0 = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
     uint32_t rta_base_dm1 = rta_base_dm0 + (2048 * sizeof(uint32_t));
     uint32_t rta_base_compute = rta_base_dm1 + (4096 * sizeof(uint32_t));
-    // Copy max # runtime args in the kernel for simplicity
-    std::map<std::string, std::string> dm_defines0 = {
-        {"COMMON_RUNTIME_ARGS", "1"},
-        {"DATA_MOVEMENT", "1"},
-        {"NUM_RUNTIME_ARGS", std::to_string(256)},
-        {"RESULTS_ADDR", std::to_string(rta_base_dm0)}};
-    std::map<std::string, std::string> dm_defines1 = {
-        {"COMMON_RUNTIME_ARGS", "1"},
-        {"DATA_MOVEMENT", "1"},
-        {"NUM_RUNTIME_ARGS", std::to_string(256)},
-        {"RESULTS_ADDR", std::to_string(rta_base_dm1)}};
-    std::map<std::string, std::string> compute_defines = {
-        {"COMMON_RUNTIME_ARGS", "1"},
-        {"COMPUTE", "1"},
-        {"NUM_RUNTIME_ARGS", std::to_string(256)},
-        {"RESULTS_ADDR", std::to_string(rta_base_compute)}};
 
-    auto dummy_kernel0 = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
-        cr_set,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = dm_defines0});
-
-    auto dummy_kernel1 = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
-        cr_set,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .defines = dm_defines1});
-
-    auto dummy_compute_kernel = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
-        cr_set,
-        ComputeConfig{.defines = compute_defines});
-
-    vector<uint32_t> dummy_cr0_args;
-    vector<uint32_t> dummy_cr1_args;
-    vector<uint32_t> dummy_common_args;
-
-    auto it = program_config.cr_set.ranges().begin();
+    auto it = cr_set.ranges().begin();
     CoreRange core_range_0 = *it;
     std::advance(it, 1);
     CoreRange core_range_1 = *it;
 
-    uint32_t idx = 0;
+    // A single set of kernels runs on both core ranges. The ranges are given different unique-arg counts, so the
+    // kernel selects its per-core count from its logical y coordinate (cores at absolute logical y >= the second
+    // range's start belong to core_range_1) and reads exactly the args that were set, which keeps the watcher's
+    // runtime-arg bounds check satisfied. Common args are uniform across all cores.
     constexpr uint32_t num_common_runtime_args = 13;
+    const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp";
+    auto make_defines = [&](const char* role, uint32_t results_addr) {
+        return std::map<std::string, std::string>{
+            {"COMMON_RUNTIME_ARGS", "1"},
+            {role, "1"},
+            {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args_for_cr0)},
+            {"NUM_RUNTIME_ARGS_CR1", std::to_string(num_runtime_args_for_cr1)},
+            {"CR1_START_Y", std::to_string(core_range_1.start_coord.y)},
+            {"NUM_COMMON_RUNTIME_ARGS", std::to_string(num_common_runtime_args)},
+            {"RESULTS_ADDR", std::to_string(results_addr)}};
+    };
+    std::vector<KernelHandle> kernels = {
+        CreateKernel(
+            program,
+            kernel_path,
+            cr_set,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .defines = make_defines("DATA_MOVEMENT", rta_base_dm0)}),
+        CreateKernel(
+            program,
+            kernel_path,
+            cr_set,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = NOC::RISCV_1_default,
+                .defines = make_defines("DATA_MOVEMENT", rta_base_dm1)}),
+        CreateKernel(
+            program, kernel_path, cr_set, ComputeConfig{.defines = make_defines("COMPUTE", rta_base_compute)})};
+    const uint32_t rta_bases[] = {rta_base_dm0, rta_base_dm1, rta_base_compute};
+
+    uint32_t idx = 0;
     workload.add_program(device_range, std::move(program));
 
     for (uint32_t iter = 0; iter < num_iterations; iter++) {
         auto& program_ = workload.get_programs().at(device_range);
         SCOPED_TRACE(iter);
-        dummy_cr0_args.clear();
-        dummy_cr1_args.clear();
-        dummy_common_args.clear();
 
+        // cr0 cores are set num_runtime_args_for_cr0 unique args and cr1 cores num_runtime_args_for_cr1; the shared
+        // kernel reads the matching count per core from its coordinate. Common args are uniform. Values change each
+        // iteration to exercise in-place RTA/CRTA updates.
+        std::vector<uint32_t> cr0_args, cr1_args, common_args;
         for (uint32_t i = 0; i < num_runtime_args_for_cr0; i++) {
-            dummy_cr0_args.push_back(idx++);
+            cr0_args.push_back(idx++);
         }
-
         for (uint32_t i = 0; i < num_runtime_args_for_cr1; i++) {
-            dummy_cr1_args.push_back(idx++);
+            cr1_args.push_back(idx++);
         }
-
         for (uint32_t i = 0; i < num_common_runtime_args; i++) {
-            dummy_common_args.push_back(idx++);
+            common_args.push_back(idx++);
         }
 
-        bool first = true;
         for (const CoreCoord& core_coord : core_range_0) {
-            // Don't set RTAs on all cores
-            if (first) {
-                first = false;
-                continue;
+            for (KernelHandle k : kernels) {
+                SetRuntimeArgs(program_, k, core_coord, cr0_args);
             }
-
-            SetRuntimeArgs(program_, dummy_kernel0, core_coord, dummy_cr0_args);
-            SetRuntimeArgs(program_, dummy_kernel1, core_coord, dummy_cr0_args);
-            SetRuntimeArgs(program_, dummy_compute_kernel, core_coord, dummy_cr0_args);
         }
-
-        first = true;
         for (const CoreCoord& core_coord : core_range_1) {
-            // Don't set RTAs on all cores
-            if (first) {
-                first = false;
-                continue;
+            for (KernelHandle k : kernels) {
+                SetRuntimeArgs(program_, k, core_coord, cr1_args);
             }
-
-            SetRuntimeArgs(program_, dummy_kernel0, core_coord, dummy_cr1_args);
-            SetRuntimeArgs(program_, dummy_kernel1, core_coord, dummy_cr1_args);
-            SetRuntimeArgs(program_, dummy_compute_kernel, core_coord, dummy_cr1_args);
         }
 
         if (iter == 0) {
-            SetCommonRuntimeArgs(program_, dummy_kernel0, dummy_common_args);
-            SetCommonRuntimeArgs(program_, dummy_kernel1, dummy_common_args);
-            SetCommonRuntimeArgs(program_, dummy_compute_kernel, dummy_common_args);
+            for (KernelHandle k : kernels) {
+                SetCommonRuntimeArgs(program_, k, common_args);
+            }
         } else {
-            memcpy(
-                GetCommonRuntimeArgs(program_, dummy_kernel0).rt_args_data,
-                dummy_common_args.data(),
-                dummy_common_args.size() * sizeof(uint32_t));
-            memcpy(
-                GetCommonRuntimeArgs(program_, dummy_kernel1).rt_args_data,
-                dummy_common_args.data(),
-                dummy_common_args.size() * sizeof(uint32_t));
-            memcpy(
-                GetCommonRuntimeArgs(program_, dummy_compute_kernel).rt_args_data,
-                dummy_common_args.data(),
-                dummy_common_args.size() * sizeof(uint32_t));
+            for (KernelHandle k : kernels) {
+                memcpy(
+                    GetCommonRuntimeArgs(program_, k).rt_args_data,
+                    common_args.data(),
+                    common_args.size() * sizeof(uint32_t));
+            }
         }
 
         distributed::EnqueueMeshWorkload(cq, workload, false);
         Finish(cq);
 
-        first = true;
-        for (const CoreCoord& core_coord : core_range_0) {
-            // Don't test RTAs on first cores
-            if (first) {
-                first = false;
-                continue;
+        // Each of the three kernels on a core writes its own copy of the unique args to a distinct result address
+        // and the common args at kCommonRTASeparation past it; verify every core got its args back.
+        auto check_range = [&](const CoreRange& range, const std::vector<uint32_t>& unique_args) {
+            for (const CoreCoord& core_coord : range) {
+                for (uint32_t base : rta_bases) {
+                    std::vector<uint32_t> unique_readback;
+                    tt::tt_metal::detail::ReadFromDeviceL1(
+                        device, core_coord, base, unique_args.size() * sizeof(uint32_t), unique_readback);
+                    pass &= (unique_args == unique_readback);
+
+                    std::vector<uint32_t> common_readback;
+                    tt::tt_metal::detail::ReadFromDeviceL1(
+                        device,
+                        core_coord,
+                        base + kCommonRTASeparation,
+                        common_args.size() * sizeof(uint32_t),
+                        common_readback);
+                    EXPECT_EQ(common_args, common_readback);
+                    pass &= (common_args == common_readback);
+                }
             }
-            {
-                vector<uint32_t> dummy_kernel0_args_readback;
-                tt::tt_metal::detail::ReadFromDeviceL1(
-                    device,
-                    core_coord,
-                    rta_base_dm0,
-                    dummy_cr0_args.size() * sizeof(uint32_t),
-                    dummy_kernel0_args_readback);
-                pass &= (dummy_cr0_args == dummy_kernel0_args_readback);
-
-                vector<uint32_t> dummy_kernel1_args_readback;
-                tt::tt_metal::detail::ReadFromDeviceL1(
-                    device,
-                    core_coord,
-                    rta_base_dm1,
-                    dummy_cr0_args.size() * sizeof(uint32_t),
-                    dummy_kernel1_args_readback);
-                pass &= (dummy_cr0_args == dummy_kernel1_args_readback);
-
-                vector<uint32_t> dummy_compute_args_readback;
-                tt::tt_metal::detail::ReadFromDeviceL1(
-                    device,
-                    core_coord,
-                    rta_base_compute,
-                    dummy_cr0_args.size() * sizeof(uint32_t),
-                    dummy_compute_args_readback);
-                pass &= (dummy_cr0_args == dummy_compute_args_readback);
-            }
-            {
-                vector<uint32_t> dummy_kernel0_args_readback;
-                tt::tt_metal::detail::ReadFromDeviceL1(
-                    device,
-                    core_coord,
-                    rta_base_dm0 + kCommonRTASeparation,
-                    dummy_common_args.size() * sizeof(uint32_t),
-                    dummy_kernel0_args_readback);
-                EXPECT_EQ(dummy_common_args, dummy_kernel0_args_readback);
-                pass &= (dummy_common_args == dummy_kernel0_args_readback);
-
-                vector<uint32_t> dummy_kernel1_args_readback;
-                tt::tt_metal::detail::ReadFromDeviceL1(
-                    device,
-                    core_coord,
-                    rta_base_dm1 + kCommonRTASeparation,
-                    dummy_common_args.size() * sizeof(uint32_t),
-                    dummy_kernel1_args_readback);
-                EXPECT_EQ(dummy_common_args, dummy_kernel1_args_readback);
-                pass &= (dummy_common_args == dummy_kernel1_args_readback);
-
-                vector<uint32_t> dummy_compute_args_readback;
-                tt::tt_metal::detail::ReadFromDeviceL1(
-                    device,
-                    core_coord,
-                    rta_base_compute + kCommonRTASeparation,
-                    dummy_common_args.size() * sizeof(uint32_t),
-                    dummy_compute_args_readback);
-                EXPECT_EQ(dummy_common_args, dummy_compute_args_readback);
-                pass &= (dummy_common_args == dummy_compute_args_readback);
-            }
-        }
-
-        first = true;
-        for (const CoreCoord& core_coord : core_range_1) {
-            // Don't test RTAs on first cores
-            if (first) {
-                first = false;
-                continue;
-            }
-            {
-                vector<uint32_t> dummy_kernel0_args_readback;
-                tt::tt_metal::detail::ReadFromDeviceL1(
-                    device,
-                    core_coord,
-                    rta_base_dm0,
-                    dummy_cr1_args.size() * sizeof(uint32_t),
-                    dummy_kernel0_args_readback);
-                pass &= (dummy_cr1_args == dummy_kernel0_args_readback);
-
-                vector<uint32_t> dummy_kernel1_args_readback;
-                tt::tt_metal::detail::ReadFromDeviceL1(
-                    device,
-                    core_coord,
-                    rta_base_dm1,
-                    dummy_cr1_args.size() * sizeof(uint32_t),
-                    dummy_kernel1_args_readback);
-                pass &= (dummy_cr1_args == dummy_kernel1_args_readback);
-
-                vector<uint32_t> dummy_compute_args_readback;
-                tt::tt_metal::detail::ReadFromDeviceL1(
-                    device,
-                    core_coord,
-                    rta_base_compute,
-                    dummy_cr1_args.size() * sizeof(uint32_t),
-                    dummy_compute_args_readback);
-                pass &= (dummy_cr1_args == dummy_compute_args_readback);
-            }
-            {
-                vector<uint32_t> dummy_kernel0_args_readback;
-                tt::tt_metal::detail::ReadFromDeviceL1(
-                    device,
-                    core_coord,
-                    rta_base_dm0 + kCommonRTASeparation,
-                    dummy_common_args.size() * sizeof(uint32_t),
-                    dummy_kernel0_args_readback);
-                EXPECT_EQ(dummy_common_args, dummy_kernel0_args_readback);
-                pass &= (dummy_common_args == dummy_kernel0_args_readback);
-
-                vector<uint32_t> dummy_kernel1_args_readback;
-                tt::tt_metal::detail::ReadFromDeviceL1(
-                    device,
-                    core_coord,
-                    rta_base_dm1 + kCommonRTASeparation,
-                    dummy_common_args.size() * sizeof(uint32_t),
-                    dummy_kernel1_args_readback);
-                EXPECT_EQ(dummy_common_args, dummy_kernel1_args_readback);
-                pass &= (dummy_common_args == dummy_kernel1_args_readback);
-
-                vector<uint32_t> dummy_compute_args_readback;
-                tt::tt_metal::detail::ReadFromDeviceL1(
-                    device,
-                    core_coord,
-                    rta_base_compute + kCommonRTASeparation,
-                    dummy_common_args.size() * sizeof(uint32_t),
-                    dummy_compute_args_readback);
-                EXPECT_EQ(dummy_common_args, dummy_compute_args_readback);
-                pass &= (dummy_common_args == dummy_compute_args_readback);
-            }
-        }
+        };
+        check_range(core_range_0, cr0_args);
+        check_range(core_range_1, cr1_args);
     }
 
     return pass;
@@ -1272,7 +1135,7 @@ TEST_F(UnitMeshCQFixture, TensixTestAutoInsertedBlankBriscKernelInDeviceDispatch
         // added separately
         CreateKernel(
             program_,
-            "tt_metal/kernels/dataflow/blank.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
             cr_set,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
@@ -1771,6 +1634,109 @@ TEST_F(UnitMeshCQFixture, TensixIncrementRuntimeArgsSanityMultiCoreCompute_MaxRu
             0,
             tt::tt_metal::max_runtime_args,
             {HalProgrammableCoreType::TENSIX, HalProcessorClassType::COMPUTE, 0}));
+    }
+}
+
+// Unique RTAs whose per-core payload exceeds one 4096B dispatch page (> 1024 words) are dispatched via
+// CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST instead of the page-limited packed-write path. Uses the full
+// worker grid (> 35 cores) to also exercise the multi-command chunk boundary
+// (CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS = 35).
+TEST_F(UnitMeshCQFixture, TensixLargeUniqueRuntimeArgsLargeUnicast) {
+    for (const auto& device : devices_) {
+        CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
+        CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+        CoreRangeSet cr_set(cr);
+        DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
+        // 1100 words * 4 = 4400 B > 4096 B page. COMPUTE unique-arg L1 slot has 1280 words of headroom
+        // before the common-arg region (see get_args_addr), so 1100 unique + 0 common fits.
+        EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
+            device,
+            dummy_program_config,
+            1100,
+            0,
+            {HalProgrammableCoreType::TENSIX, HalProcessorClassType::COMPUTE, 0}));
+    }
+}
+
+// Large common (multicast) RTAs: > 341 words, sent via the multicast CQ_DISPATCH_CMD_WRITE_PACKED_LARGE
+// path (BatchedTransferGenerator). Confirms the raised RTA ceiling permits large common args and that they
+// are delivered correctly. Uses the full worker grid.
+TEST_F(UnitMeshCQFixture, TensixLargeCommonRuntimeArgsLargeMulticast) {
+    for (const auto& device : devices_) {
+        CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
+        CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+        CoreRangeSet cr_set(cr);
+        DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
+        // 0 unique, 1100 common words (> 341); COMPUTE common-arg L1 slot is offset well past the unique
+        // slot (see get_args_addr) so it does not overlap.
+        EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
+            device,
+            dummy_program_config,
+            0,
+            1100,
+            {HalProgrammableCoreType::TENSIX, HalProcessorClassType::COMPUTE, 0}));
+    }
+}
+
+// Patch large unique RTAs and re-run: after the first enqueue repoints RuntimeArgsData into the command
+// stream, a second SetRuntimeArgs must update the large-unicast payload in place so the next enqueue sends
+// the new values. Full grid (> 35 cores) so the update spans multiple LARGE_UNICAST commands.
+TEST_F(UnitMeshCQFixture, TensixLargeUniqueRuntimeArgsPatchedAcrossRuns) {
+    constexpr uint32_t kNumArgs = 1100;  // > 1024 words → large-unicast path
+    for (const auto& device : devices_) {
+        auto* dev = device->get_devices()[0];
+        CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
+        CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+        CoreRangeSet cr_set(cr);
+
+        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
+        distributed::MeshCoordinateRange device_range(zero_coord, zero_coord);
+
+        const uint32_t rta_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        Program program;
+        std::map<std::string, std::string> defines = {
+            {"DATA_MOVEMENT", "1"},
+            {"NUM_RUNTIME_ARGS", std::to_string(kNumArgs)},
+            {"RESULTS_ADDR", std::to_string(rta_base)}};
+        auto kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
+            cr_set,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
+
+        auto make_args = [](const CoreCoord& c, uint32_t phase) {
+            std::vector<uint32_t> args(kNumArgs);
+            const uint32_t base = (c.x * 100000) + (c.y * 1000) + (phase * 7);
+            for (uint32_t i = 0; i < kNumArgs; i++) {
+                args[i] = base + i;
+            }
+            return args;
+        };
+
+        distributed::MeshWorkload workload;
+        for (const CoreCoord& core : cr) {
+            SetRuntimeArgs(program, kernel, core, make_args(core, 0));
+        }
+        workload.add_program(device_range, std::move(program));
+
+        // Run twice: phase 0 initial, then patch in place with phase 1 values and re-run.
+        for (uint32_t phase = 0; phase < 2; phase++) {
+            auto& prog = workload.get_programs().at(device_range);
+            if (phase == 1) {
+                for (const CoreCoord& core : cr) {
+                    SetRuntimeArgs(prog, kernel, core, make_args(core, 1));
+                }
+            }
+            distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false);
+            Finish(device->mesh_command_queue());
+
+            for (const CoreCoord& core : cr) {
+                std::vector<uint32_t> readback;
+                tt::tt_metal::detail::ReadFromDeviceL1(dev, core, rta_base, kNumArgs * sizeof(uint32_t), readback);
+                EXPECT_EQ(readback, make_args(core, phase)) << "core " << core.str() << " phase " << phase;
+            }
+        }
     }
 }
 

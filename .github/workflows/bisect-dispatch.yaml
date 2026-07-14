@@ -23,6 +23,7 @@ on:
           - P100
           - config-t3000
           - BH-LoudBox
+          - BH-Quietbox-2
           - topology-6u
         description: "Runner Type Label"
       commit-range:
@@ -76,8 +77,8 @@ jobs:
 
           # Determine runs-on labels based on runner type
 
-          if [[ "$RUNNER_LABEL" == "topology-6u" ]] || [[ "$RUNNER_LABEL" == "BH-LoudBox" ]]; then
-            # Galaxy/topology-6u runners and BH-LoudBox require bare-metal (not cloud-virtual-machine)
+          if [[ "$RUNNER_LABEL" == "topology-6u" ]] || [[ "$RUNNER_LABEL" == "BH-LoudBox" ]] || [[ "$RUNNER_LABEL" == "BH-Quietbox-2" ]]; then
+            # Galaxy/topology-6u runners, BH-LoudBox, and BH-Quietbox-2 require bare-metal (not cloud-virtual-machine)
             RUNS_ON='["'$RUNNER_LABEL'", "in-service", "bare-metal"]'
           elif [[ "$RUNNER_LABEL" =~ ^(N150|N300|P150|P100|config-t3000)$ ]]; then
             # Standard single-card runners use cloud-virtual-machine
@@ -126,7 +127,11 @@ jobs:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /home/ubuntu/.ccache-ci:/github/home/.ccache # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
-        - /mnt/MLPerf:/mnt/MLPerf:ro
+        # BH-Quietbox-2 (qb2) exposes the model store at /mnt/models on the host rather than
+        # /mnt/MLPerf, so mount that into the container's /mnt/MLPerf. All other runners use the
+        # direct 1:1 /mnt/MLPerf mount. See .github/workflows/models-unit-tests-impl.yaml
+        # (yyz4-mnt-models cache mode) for the equivalent mapping.
+        - ${{ inputs.runner-label == 'BH-Quietbox-2' && '/mnt/models:/mnt/MLPerf:ro' || '/mnt/MLPerf:/mnt/MLPerf:ro' }}
       options: >
         --device /dev/tenstorrent
         --group-add 1457

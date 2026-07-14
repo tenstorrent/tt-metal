@@ -91,6 +91,13 @@ public:
     using HalJitBuildQueryBase::HalJitBuildQueryBase;
     std::string linker_flags(const Params& params) const override {
         std::string flags;
+        // Quasar XIP (QuasarDataMovementKernel::read_binaries -> ElfFile::Impl::XIPify) pairs each
+        // R_RISCV_HI20 with its R_RISCV_LO12 and throws "HI20 has no matching LO12" if it can't.
+        // Linker relaxation can orphan a crt0 TLS-init __tdata_lma HI20 (its LO12 lands past a JAL in a
+        // different basic block), which trips that check on essentially every kernel. Disable linker
+        // relaxation so HI20/LO12 stay paired/adjacent. The assembler still emits R_RISCV_RELAX relocs
+        // (which XIPify's check_relaxed expects); --no-relax only stops the linker from acting on them.
+        flags += "-Wl,--no-relax ";
         if (params.processor_class == HalProcessorClassType::DM) {
             if (params.is_fw) {
                 flags += fmt::format("-Wl,--defsym=__fw_text={} ", MEM_DM_FIRMWARE_BASE);

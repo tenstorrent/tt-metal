@@ -48,7 +48,7 @@ router_only:
   [0-2]
 
 worker_l1_size:
-  1499136
+  4194304
 
 dram_bank_size:
   1073741824

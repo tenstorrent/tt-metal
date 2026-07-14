@@ -168,6 +168,41 @@ completer = LlamaGRPOCompleter(
 Device setup (`enable_fabric`, `open_device`, `initialize_parallelism_context`)
 is performed inside the completer constructor.
 
+### Qwen3GRPOCompleter
+
+```python
+from utils.qwen3_completer import Qwen3GRPOCompleter, Qwen3CompletionCtx
+```
+
+Qwen3-specific implementation of `GRPOCompleter`. Drives the pure-Python ttml
+Qwen3 model (`ttml.models.qwen3.Qwen3`) and shards it across the `"fsdp"` mesh
+axis with `ttml.fsdp.fully_shard`. The model architecture is read from the
+HuggingFace config of `model_source`; only `max_sequence_length` is taken from
+`transformer_config` (to bound the generation horizon).
+
+```python
+completer = Qwen3GRPOCompleter(
+    ctx=Qwen3CompletionCtx(
+        max_tokens_to_complete=256,
+        temperature=1.0,
+        completions_per_prompt=8,
+    ),
+    transformer_config=transformer_config,   # max_sequence_length only
+    device_config={"enable_fsdp": True, "mesh_shape": [32, 1]},
+    model_source="Qwen/Qwen3-32B",
+)
+```
+
+Unlike the Llama completer, `setup_device` opens a **named** mesh via
+`ttml.open_device_mesh` so an `"fsdp"` axis exists. By default
+(`lazy_parameter_init=True`) the model is built lazily, each block plus the root
+model is wrapped with `fully_shard`, the parameters are materialized
+already-sharded, and the HuggingFace weights are then streamed in sharded (the
+full unsharded model is never materialized on one chip). With
+`lazy_parameter_init=False` it instead loads the (still replicated) weights
+first and then wraps with `fully_shard`. Either way, parameters, gradients, and
+optimizer state end up sharded `1/N` across the FSDP axis.
+
 ---
 
 ## GRPOConfig
@@ -378,11 +413,30 @@ device_config = {
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `enable_ddp` | `bool` | `False` | Enable distributed data-parallel training. |
+| `enable_ddp` | `bool` | `False` | Enable distributed data-parallel training (DDP). |
+| `enable_fsdp` | `bool` | `False` | Enable fully-sharded data parallel (FSDP). Supported by `Qwen3GRPOCompleter`. Shards params/grads/optimizer state across the `"fsdp"` mesh axis. |
 | `mesh_shape` | `list[int]` | `[1, 1]` | Shape of the device mesh `[rows, cols]`. Total devices = `rows * cols`. |
 | `device_ids` | `list[int] \| None` | `None` | Specific device IDs to use (default: auto-select). |
 
 Device setup is handled by the completer constructor, not the trainer.
+
+### FSDP
+
+When the completer opens a named mesh with an `"fsdp"` axis (size > 1), the
+`GRPOTrainer` automatically:
+
+1. Slices each micro-batch across the whole mesh (dim 0): the across-mesh
+   micro-batch is `per_device_train_batch_size * num_devices` completions, with
+   `per_device_train_batch_size` landing on each device.
+   `per_device_train_batch_size * num_devices` must be divisible by
+   `num_generations` so each prompt's GRPO group stays intact within the batch.
+2. Synchronizes gradients with `ttml.sync_gradients(params, axis_names=("dp", "fsdp"))`
+   each optimizer step. FSDP-managed parameters skip the `"fsdp"` axis (their
+   gradients were already reduce-scattered by the FSDP backward hook); any
+   replicated parameter is all-reduced across the axis.
+
+Checkpointing is unsupported under FSDP (the checkpoint would store per-rank
+shards rather than full tensors) — set `checkpointing: false`.
 
 ---
 
@@ -470,6 +524,13 @@ function, CSV logging via `GRPOMonitor` callback, and DDP on 2 devices.
 
 ```bash
 python3 boolq_training_example.py
+```
+
+To train Qwen3 32B sharded across all 32 galaxy cards with FSDP:
+
+```bash
+python3 boolq_training_example.py --model qwen3 \
+    --config ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/grpo_boolq_qwen3_32b_fsdp.yaml
 ```
 
 ### Accuracy Evaluation
