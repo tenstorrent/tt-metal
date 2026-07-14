@@ -81,7 +81,9 @@ ALWI void matmul_block_no_mop(
     uint32_t rt_dim,
     uint32_t kt_dim) {
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
-    MATH((llk_math_matmul_no_mop<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim)));
+    // Pass the operand cb ids so the math execute can re-derive the tile geometry and replay the
+    // geometry-correct length (16x32 tiny tiles use a shorter replay than full 32x32 tiles).
+    MATH((llk_math_matmul_no_mop<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, idst, ct_dim, rt_dim)));
 }
 
 // clang-format off
@@ -101,11 +103,9 @@ ALWI void mm_no_mop_reinit_short(
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
-#if defined(ARCH_BLACKHOLE)
-    MATH((llk_math_matmul_reinit_no_mop<MATH_FIDELITY, MM_THROTTLE>(transpose)));
-#else
+    // Both arches now re-derive operand tile geometry in reinit so 16x32 tiny-tile addrmods are
+    // restored (previously the Blackhole branch dropped the cb ids and reset to full-32x32 addrmods).
     MATH((llk_math_matmul_reinit_no_mop<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
-#endif
 }
 
 }  // namespace ckernel
