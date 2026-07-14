@@ -303,13 +303,13 @@ extern "C" uint32_t _start1() {
 
             WAYPOINT("GD");
 
+            uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
+            launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
             {
                 // Only include this iteration in the device profile if the launch message is valid. This is because all
                 // workers get a go signal regardless of whether they're running a kernel or not. We don't want to
                 // profile "invalid" iterations.
                 DeviceZoneScopedMainN("DM0-FW");
-                uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
-                launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
                 DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
                 DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
                 uint32_t enables = launch_msg_address->kernel_config.enables;
