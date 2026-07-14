@@ -119,8 +119,40 @@ def _run(mesh_device, *, kernel, padding, full_inner_dim, math_fidelity):
 
     tt_out = ttnn.to_torch(ttnn.from_device(out))
     tt_out = tt_out.reshape(batch_size, oh, ow, tt_out.shape[-1])[:, :, :, :out_channels]
-    tt_out = torch.permute(tt_out, (0, 3, 1, 2))
+    tt_out = torch.permute(tt_out, (0, 3, 1, 2))  # [1, C, oh, ow]
+    _report_error_pattern(torch_golden, tt_out.float(), oh, ow, out_channels)
     assert_with_pcc(torch_golden, tt_out.float(), pcc=PCC)
+
+
+def _pcc(a, b):
+    a = a.flatten().double() - a.flatten().double().mean()
+    b = b.flatten().double() - b.flatten().double().mean()
+    denom = a.norm() * b.norm()
+    return 1.0 if denom == 0 else float((a @ b) / denom)
+
+
+def _report_error_pattern(golden, tt, oh, ow, c):
+    """Localize where the conv error lives: per-output-row PCC (boundary rows bad => halo), per-channel
+    PCC (specific channels bad => weight/pack), and worst-element location. Printed always (cheap)."""
+    from loguru import logger
+
+    g = golden[0]  # [C, oh, ow]
+    t = tt[0]
+    logger.info(f"[BISECT] overall PCC = {_pcc(g, t):.6f}  shape C={c} oh={oh} ow={ow}")
+    # per output row (spatial H): halo bugs hit shard-boundary / first-last rows
+    row_pcc = [round(_pcc(g[:, r, :], t[:, r, :]), 4) for r in range(oh)]
+    logger.info(f"[BISECT] per-oh-row PCC (len {oh}): {row_pcc}")
+    # per channel: pack / weight-column bugs hit specific channels
+    ch_pcc = [round(_pcc(g[ch], t[ch]), 4) for ch in range(min(c, 64))]
+    logger.info(f"[BISECT] per-channel PCC (first {len(ch_pcc)}): {ch_pcc}")
+    # worst elements
+    err = (g - t).abs()
+    flat = err.flatten()
+    k = min(8, flat.numel())
+    top = torch.topk(flat, k)
+    locs = [tuple(int(x) for x in torch.unravel_index(i, err.shape)) for i in top.indices]  # (C, oh, ow)
+    logger.info(f"[BISECT] top-{k} abs-err {[round(float(v),3) for v in top.values]} at (C,row,col) {locs}")
+    logger.info(f"[BISECT] golden absmax={float(g.abs().max()):.3f} tt absmax={float(t.abs().max()):.3f}")
 
 
 @pytest.mark.timeout(600)
@@ -135,15 +167,17 @@ def _run(mesh_device, *, kernel, padding, full_inner_dim, math_fidelity):
 @pytest.mark.parametrize(
     "kernel, padding, full_inner_dim",
     [
-        # mm_1x1: base matmul path (no halo/tilize) -- is the base conv even correct on Quasar?
-        pytest.param((1, 1), 0, False, id="mm_1x1"),
-        # conv_3x3_p0_fidF: halo gather + tilize path. (full_inner_dim True/False and p0/p1 were already
-        # shown identical/near-identical at ~0.85, so full_inner_dim and halo zero-pad are NOT the cause.)
+        # conv_3x3_p0: halo gather + tilize path (conv_bmm_tilize). full_inner_dim True/False and p0/p1
+        # were already shown identical/near-identical at ~0.85, so full_inner_dim and halo zero-pad are
+        # NOT the cause; and WH passes this at BOTH LoFi and HiFi4, so ~0.85 on Quasar is a real bug.
+        # (The mm_1x1 base-matmul variant was removed: it uses the STANDALONE bmm_large_block matmul --
+        # not the conv's matmul -- and its factory pins in0_sender + in1_sender_writer both to NOC_0,
+        # which FATALs on WH and HANGS the device on Quasar, wedging the whole run. Tracked separately.)
         pytest.param((3, 3), 0, False, id="conv_3x3_p0"),
     ],
 )
 def test_conv2d_correctness_bisect(mesh_device, kernel, padding, full_inner_dim, math_fidelity):
-    # Prior Quasar run (LoFi): conv_3x3_p0 fidF==fidT==0.8547, p1==0.8552 -> full_inner_dim and halo
-    # zero-pad ruled out. Remaining questions: (1) mm_1x1 -- is the BASE matmul/output correct? (2) does
-    # HiFi4 lift 3x3 to ~0.99 (=> the ~0.85 was bf16-LoFi precision, NOT a logic bug)?
+    # WH: conv_3x3_p0 PASSES at LoFi and HiFi4. Quasar (prior LoFi): 0.8547. So a real Quasar conv bug.
+    # The _report_error_pattern output localizes it: boundary-row PCC dips => halo gather; uniform =>
+    # tilize / matmul_block / pack; specific channels => weight-column / pack addressing.
     _run(mesh_device, kernel=kernel, padding=padding, full_inner_dim=full_inner_dim, math_fidelity=math_fidelity)
