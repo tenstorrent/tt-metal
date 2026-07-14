@@ -55,6 +55,7 @@
 #include <string>
 #include <tuple>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <tt-metalium/allocator.hpp>
@@ -74,6 +75,8 @@
 #include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
 #include <tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::tt_metal;
 namespace m2 = tt::tt_metal::experimental;
@@ -443,7 +446,7 @@ ProgramArtifacts create_no_bcast_artifacts(
     // fp32_dest_acc_en is true). So set it only on compute-consumer DFBs whose format is Float32 (which
     // forces fp32_dest_acc_en true). A Float32 FPU consumer must still carry an explicit entry, which
     // is Default. compute consumers: in0(pre_lhs), in1(pre_rhs), post_lhs, post_rhs.
-    m2::ComputeHardwareConfig::UnpackToDestModes unpack_to_dest_mode;
+    m2::ComputeUnpackToDestModes unpack_to_dest_mode;
     auto set_unpack_mode = [&](const m2::DFBSpecName& dfb, tt::DataFormat df) {
         if (df == tt::DataFormat::Float32) {
             unpack_to_dest_mode.emplace(dfb, is_sfpu ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default);
@@ -511,7 +514,7 @@ ProgramArtifacts create_no_bcast_artifacts(
                   "n_stride_b",
                   "c_stride_b",
                   "src_num_tiles_b"}},
-        .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
     };
 
     m2::Group<m2::TensorBinding> writer_tensor_bindings;
@@ -528,7 +531,7 @@ ProgramArtifacts create_no_bcast_artifacts(
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"start_tile_id", "dst_num_tiles", "dst_shard_width", "D", "N", "C", "Ht", "Wt", "cND"}},
-        .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::WRITER},
+        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
     };
 
     // Compute: consumes pre_lhs/pre_rhs, produces out. When an operand has activations, the kernel both
@@ -551,6 +554,18 @@ ProgramArtifacts create_no_bcast_artifacts(
         compute_rt_names.push_back("atol_bits");
     }
 
+    // to_compute_hardware_config maps the common knobs and picks the arch's variant (ComputeGen1Config on
+    // Wormhole, ComputeGen2Config on Quasar); it deliberately leaves the per-DFB unpack_to_dest_mode
+    // default, so set it here via std::visit — the arch-agnostic pattern main's quasar untilize factories use.
+    auto compute_hw = ttnn::to_compute_hardware_config(
+        a.device()->arch(),
+        ttnn::ComputeKernelConfig{
+            .math_fidelity = MathFidelity::HiFi4,
+            .math_approx_mode = false,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+        });
+    std::visit([&](auto& cfg) { cfg.unpack_to_dest_mode = unpack_to_dest_mode; }, compute_hw);
+
     m2::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = std::filesystem::path(kernel_sources.compute),
@@ -561,12 +576,7 @@ ProgramArtifacts create_no_bcast_artifacts(
         .dfb_bindings = compute_dfb_bindings,
         .compile_time_args = {{"num_tiles_per_cycle", num_tiles_per_cycle}},
         .runtime_arg_schema = {.runtime_arg_names = compute_rt_names},
-        .hw_config =
-            m2::ComputeHardwareConfig{
-                .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .unpack_to_dest_mode = unpack_to_dest_mode,
-            },
+        .hw_config = compute_hw,
     };
 
     // --- Placement + per-core runtime args (mirrors the descriptor factory's per-core loop). Sharded:

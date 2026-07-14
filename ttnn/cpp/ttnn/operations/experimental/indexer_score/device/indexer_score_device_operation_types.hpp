@@ -79,7 +79,7 @@ struct operation_attributes_t {
     bool has_runtime_kv_len() const { return kv_len.has_value(); }
     // Resolved block-cyclic (per-SP-shard) K layout. When set, the reader remaps each logical k-tile to its
     // physical (permuted) tile, presenting K in natural token order. HASHED (sp/chunk_local shape the reader
-    // binary via compile-time defines, so the contiguous path stays byte-identical). nullopt == contiguous K
+    // binary via compile-time arguments). nullopt == contiguous K
     // (which is also what sp == 1 resolves to, since that is the identity permutation).
     std::optional<BlockCyclicLayout> block_cyclic{std::nullopt};
     bool has_block_cyclic() const { return block_cyclic.has_value(); }

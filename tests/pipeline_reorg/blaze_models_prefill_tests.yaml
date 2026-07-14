@@ -1,4 +1,4 @@
-# This file defines the test matrix for the Galaxy DeepSeek Prefill tests pipeline.
+# This file defines the test matrix for the Blaze Models Prefill tests pipeline.
 
 # Each entry represents a parallel job with the following keys:
 #   name: The display name for the job in GitHub Actions.
@@ -12,7 +12,7 @@
 # For max allowed timeout refer to .github/time_budget.yaml
 
 # Blackhole Galaxy DeepSeek Prefill tests
-- name: "(Galaxy) DeepSeek Prefill - MoE Gate"
+- name: "Blaze - MoE Gate"
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528 DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI TT_DS_PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI TT_DS_PREFILL_HOST_REF_CACHE=/tmp/deepseek_v3_transformer_ref_cache DEEPSEEK_V3_TRACE_DIR=/mnt/MLPerf/deepseek-prefill-cache MESH_DEVICE=TG
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
@@ -21,11 +21,11 @@
   test_group: module
   skus:
     bh_galaxy:
-      timeout: 30
+      timeout: 8
   owner_id: U08RL15T4N8
   team: models
 
-- name: "(Galaxy) DeepSeek Prefill - MLA"
+- name: "Blaze - MLA"
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528 DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI TT_DS_PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI TT_DS_PREFILL_HOST_REF_CACHE=/tmp/deepseek_v3_transformer_ref_cache DEEPSEEK_V3_TRACE_DIR=/mnt/MLPerf/deepseek-prefill-cache MESH_DEVICE=TG
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
@@ -35,11 +35,11 @@
   test_group: module
   skus:
     bh_galaxy:
-      timeout: 30
+      timeout: 12
   owner_id: U08RL15T4N8
   team: models
 
-- name: "(Galaxy) DeepSeek Prefill - MLA Chunked"
+- name: "Blaze - MLA Chunked"
   cmd: |
     export MESH_DEVICE=TG
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
@@ -48,11 +48,11 @@
   test_group: module
   skus:
     bh_galaxy:
-      timeout: 30
+      timeout: 8
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
 
-- name: "(Galaxy) DeepSeek Prefill - KV cache table"
+- name: "Blaze - KV cache table"
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528 DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI TT_DS_PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI TT_DS_PREFILL_HOST_REF_CACHE=/tmp/deepseek_v3_transformer_ref_cache DEEPSEEK_V3_TRACE_DIR=/mnt/MLPerf/deepseek-prefill-cache MESH_DEVICE=TG
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
@@ -62,11 +62,11 @@
   test_group: module
   skus:
     bh_galaxy:
-      timeout: 30
+      timeout: 8
   owner_id: U08RL15T4N8
   team: models
 
-- name: "(Galaxy) DeepSeek Prefill - Prefill Block"
+- name: "Blaze - Prefill Block"
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528 DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI TT_DS_PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI TT_DS_PREFILL_HOST_REF_CACHE=/tmp/deepseek_v3_transformer_ref_cache DEEPSEEK_V3_TRACE_DIR=/mnt/MLPerf/deepseek-prefill-cache MESH_DEVICE=TG
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
@@ -75,12 +75,12 @@
   test_group: module
   skus:
     bh_galaxy:
-      timeout: 30
+      timeout: 10
 
   owner_id: U08RL15T4N8
   team: models
 
-- name: "(Galaxy) DeepSeek Prefill - Transformer (Longbook 25k Trace)"
+- name: "Blaze - Transformer (Longbook 25k Trace)"
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528 DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI TT_DS_PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI TT_DS_PREFILL_HOST_REF_CACHE=/tmp/deepseek_v3_transformer_ref_cache DEEPSEEK_V3_TRACE_DIR=/mnt/MLPerf/deepseek-prefill-cache MESH_DEVICE=TG
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
@@ -93,7 +93,7 @@
   owner_id: U08RL15T4N8
   team: models
 
-- name: "(Galaxy) DeepSeek Prefill - Kimi MLA"
+- name: "Blaze - Kimi MLA"
   cmd: |
     export MESH_DEVICE=TG KIMI_MLA_REF_CACHE=/mnt/MLPerf/kimi-prefill-cache/test_mla_output
     pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_kimi_mla -k "8x4 and random and max_sl and check_pcc and sequential and line and (seq5k or seq25k)" -vvv --tb=short
@@ -101,11 +101,11 @@
   test_group: module
   skus:
     bh_galaxy:
-      timeout: 30
+      timeout: 8
   owner_id: U08RL15T4N8
   team: models
 
-- name: "(Galaxy) DeepSeek Prefill - DSA MLA (V3.2)"
+- name: "Blaze - DSA MLA (V3.2)"
   cmd: |
     export MESH_DEVICE=TG DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
     export DEEPSEEK_V32_MLA_REF_CACHE=/tmp/deepseek_v32_mla_ref_cache
@@ -125,7 +125,7 @@
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
 
-- name: "(Galaxy) DeepSeek Prefill - DSA MLA (GLM-5.1 + GLM-5.2 indexer reuse)"
+- name: "Blaze - DSA MLA (GLM-5.1 + GLM-5.2 indexer reuse)"
   cmd: |
     export MESH_DEVICE=TG
     export GLM51_MLA_REF_CACHE=/tmp/glm_5_1_mla_ref_cache
@@ -138,11 +138,11 @@
   test_group: module
   skus:
     bh_galaxy:
-      timeout: 8
+      timeout: 10
   owner_id: U09LK84G4TF  # Nikola Milicevic
   team: models
 
-- name: "(Galaxy) DeepSeek Prefill - GLM MoE"
+- name: "Blaze - GLM MoE"
   cmd: |
     export MESH_DEVICE=TG
     # GLM-5.1 256-expert MoE (device gate, DEVICE_FP32) vs the CPU MoE reference; random weights.
@@ -155,7 +155,7 @@
   owner_id: U09LK84G4TF  # Nikola Milicevic
   team: models
 
-- name: "(Galaxy) DeepSeek Prefill - GLM-5.1 Prefill Block"
+- name: "Blaze - GLM-5.1 Prefill Block"
   cmd: |
     export MESH_DEVICE=TG
     export DS_SPARSE_FABRIC=line
@@ -175,7 +175,7 @@
   owner_id: U09LK84G4TF  # Nikola Milicevic
   team: models
 
-- name: "(Galaxy) DeepSeek Prefill - Kimi MoE"
+- name: "Blaze - Kimi MoE"
   cmd: |
     export MESH_DEVICE=TG
     pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_moe -k "mesh-8x4 and (kimi-5k-pcc or kimi-25k-perf)" -vvv --tb=short
@@ -187,7 +187,7 @@
   owner_id: U08RL15T4N8
   team: models
 
-- name: "(Galaxy) DeepSeek Prefill - Kimi Prefill Block"
+- name: "Blaze - Kimi Prefill Block"
   cmd: |
     export MESH_DEVICE=TG
     export KIMI_K2_6_HF_MODEL=/mnt/MLPerf/huggingface/hub/Kimi-K2.6-dequantized
@@ -198,11 +198,11 @@
   test_group: module
   skus:
     bh_galaxy:
-      timeout: 90
+      timeout: 25
   owner_id: U08RL15T4N8
   team: models
 
-- name: "(Galaxy) DeepSeek Prefill - Prefill Block Determinism"
+- name: "Blaze - Prefill Block Determinism"
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528 DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI TT_DS_PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI TT_DS_PREFILL_HOST_REF_CACHE=/tmp/deepseek_v3_transformer_ref_cache DEEPSEEK_V3_TRACE_DIR=/mnt/MLPerf/deepseek-prefill-cache MESH_DEVICE=TG
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
@@ -211,11 +211,11 @@
   test_group: module
   skus:
     bh_galaxy:
-      timeout: 20
+      timeout: 12
   owner_id: U08RL15T4N8
   team: models
 
-- name: "(Galaxy) DeepSeek Prefill - Transformer Determinism"
+- name: "Blaze - Transformer Determinism"
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528 DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI TT_DS_PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI TT_DS_PREFILL_HOST_REF_CACHE=/tmp/deepseek_v3_transformer_ref_cache DEEPSEEK_V3_TRACE_DIR=/mnt/MLPerf/deepseek-prefill-cache MESH_DEVICE=TG
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
@@ -224,14 +224,14 @@
   test_group: module
   skus:
     bh_galaxy:
-      timeout: 30
+      timeout: 45
   owner_id: U08RL15T4N8
   team: models
 
 # Ring joint SDPA math-utilization perf checks (1 WAN, 1 MLA-100k, 1 Kimi chunked ring_mla).
 # Uses real-time device program records, so it runs on the plain build without ENABLE_TRACY.
 # sp/tp are auto-selected by MeshConfig.detect() on Galaxy (sp=8, tp=4).
-- name: "(Galaxy) Ring Joint SDPA - perf checks"
+- name: "Blaze - Ring Joint SDPA perf checks"
   # Run both perf checks unconditionally (so both report numbers) but fail the step if either
   # fails - the harness only propagates the last command's exit code, so aggregate it ourselves.
   cmd: |
@@ -249,7 +249,7 @@
   owner_id: U08RL15T4N8
   team: models
 
-- name: "(Galaxy) DeepSeek Prefill - Chunked Kimi (code_debug 55k)"
+- name: "Blaze - Chunked Kimi (code_debug 55k)"
   # 55k-ISL chunked-prefill perf/smoke for Kimi: full 61 layers, 11 chunks x 5120 = 56320 tokens
   # (the full code_debug trace), 10 iterations. No-PCC: it drives the real chunked-prefill path end to
   # end (build once, forward 10x) and passes on completion -- no golden readback, no accuracy compare.
