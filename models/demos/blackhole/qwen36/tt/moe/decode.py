@@ -64,16 +64,26 @@ def decode_forward(
 ):
     """hidden_states [1,1,S,H] (S=1 decode), routing_weights [1,1,S,E]. Returns [1,1,S,H/tp]."""
     batch_size = hidden_states.shape[2]
-    num_experts = config.num_experts
     top_k = config.top_k
     intermediate_size = weights.intermediate_size_per_device
+    # Expert-parallel: each device owns num_experts/num_devices experts (weights sharded dim=1).
+    num_experts = config.num_experts // num_devices if num_devices > 1 else config.num_experts
+
+    # Slice the replicated dense routing [1,1,S,E] into THIS device's contiguous expert columns
+    # [1,1,S,E/tp] (mesh_partition dim=3 along the 4-device cluster axis=1), matching the
+    # dim=1-sharded expert weights. nnz is then inferred (None): the selected experts split
+    # unevenly across devices, so a static count would deadlock the sparse_matmul mcast
+    # receivers (see gpt_oss #45943/#45052).
+    if num_devices > 1:
+        routing_weights = ttnn.mesh_partition(routing_weights, dim=3, cluster_axis=1)
+    nnz = None if num_devices > 1 else top_k
 
     sparsity = ttnn.to_layout(routing_weights, ttnn.ROW_MAJOR_LAYOUT)
     output_tile = ttnn.Tile([32, 32])
 
-    # gate/up fused into ONE sparse_matmul over concatenated weights (N = 2*intermediate),
-    # doubling the N-gridded core count (4 -> 8) vs two separate matmuls; the fused output is
-    # sliced back into gate | up halves (mathematically identical).
+    # gate/up fused into ONE sparse_matmul over concatenated weights (N = 2*full_intermediate),
+    # widening the N-gridded core count (8 -> 32) vs the old intermediate-parallel layout; the
+    # fused output is sliced back into gate | up halves (mathematically identical).
     gate_up_config = _build_sparse_matmul_config(batch_size, 2 * intermediate_size)
     down_config = _build_sparse_matmul_config(batch_size, config.hidden_size)
 
@@ -81,7 +91,7 @@ def decode_forward(
         hidden_states,
         weights.gate_up_proj,
         sparsity=sparsity,
-        nnz=top_k,
+        nnz=nnz,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
         program_config=gate_up_config,
@@ -104,7 +114,7 @@ def decode_forward(
         down_input,
         weights.down_proj,
         sparsity=sparsity,
-        nnz=top_k,
+        nnz=nnz,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
         program_config=down_config,
