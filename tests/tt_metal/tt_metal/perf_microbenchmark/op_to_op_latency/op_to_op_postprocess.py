@@ -76,6 +76,25 @@ def load_device_csv(log_path: Path) -> pd.DataFrame:
     return df
 
 
+def select_measured_trace_replay(df: pd.DataFrame) -> pd.DataFrame:
+    """Keep only the measured trace replay.
+
+    With trace warmup replays the device profiler accumulates every replay's
+    markers into one CSV, tagged by 'trace id counter' (1..R, incrementing per
+    replay); the final drain dumps them all at once. Warmup replays reuse the same
+    PROG_IDs as the measured replay, so they can't be separated by program id -- but
+    the measured replay is always the last one, i.e. the max trace-id-counter.
+    No-op for non-trace (FD back-to-back) runs, which have no trace id counter.
+    """
+    col = "trace id counter"
+    if col not in df.columns:
+        return df
+    counters = pd.to_numeric(df[col], errors="coerce")
+    if not counters.notna().any():
+        return df
+    return df[counters == counters.max()]
+
+
 def _median(xs) -> float:
     s = pd.Series([float(x) for x in xs if x is not None and x == x])
     return float(s.median()) if len(s) else float("nan")
@@ -205,6 +224,7 @@ def rt_gap_to_next_go_ns(rt_path: Path, min_prog_id: int):
 def compute_metrics(device_csv: Path, rt_csv: Path | None, min_prog_id: int) -> dict:
     freq_mhz = parse_chip_freq_mhz(device_csv)
     df = load_device_csv(device_csv)
+    df = select_measured_trace_replay(df)
 
     op2op_us, kdur_us = official_kernel_metrics(df, freq_mhz)
     pack_unpack_us = pack_to_unpack_op2op_us(df, freq_mhz, min_prog_id)
