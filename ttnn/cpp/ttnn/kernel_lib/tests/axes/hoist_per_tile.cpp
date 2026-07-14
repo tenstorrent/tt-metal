@@ -2,14 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Init-hoisting equality — PER-TILE side (G5 / init-hoisting).
-//
-// N separate eltwise_chain(EltwiseShape::single(), ...) calls, each emitting its own init for its single tile. This is
-// the NON-hoisted-across-tiles shape: the same op (Exp) is re-initialized N times instead of once.
-//
-// Paired with hoist_single_call.cpp (one call over N tiles, init hoisted once). For identical input
-// the two outputs must be bit-identical — proving the hoist (init once for N tiles) and the per-tile
-// init produce exactly the same result for same-format data.
+// Init-hoisting equality — PER-TILE side: N separate eltwise_chain(single()) calls, each re-emitting
+// its own init (Exp re-initialized N times). Paired with hoist_single_call.cpp (init hoisted once);
+// for identical input the two outputs must be bit-identical.
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"

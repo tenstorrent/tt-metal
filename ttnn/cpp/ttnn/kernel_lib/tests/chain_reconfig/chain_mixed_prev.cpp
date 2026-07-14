@@ -2,18 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Case C — mixed-prev fallback. srca has prev (from CopyTile), srcb is first-emit.
+// Mixed-prev reconfig fallback: at the BinaryFpu, srca has a prev (from CopyTile), srcb is first-emit.
 //
-// Chain shape: CopyTile(CbA, D0) -> BinaryFpu(CbB, CbC, D0) -> PackTile(CbOut).
-// At BinaryFpu (element 1): prev_a=CbA (set by element 0's CopyTile), curr_a=CbB → reconf_a=true,
-// prev_a known. prev_b=NO_PREV_DFB (element 0's CopyTile doesn't touch srcb), curr_b=CbC →
-// reconf_b=true, prev_b first-emit. emit_pre_element_transitions takes the mixed-prev branch:
-// reconfig_data_format_srca(prev_a, curr_a) (2-arg _with_dt) plus reconfig_data_format_srcb(curr_b) (1-arg).
-//
-// Note: BinaryFpu reads srca from CbB (not CbA) — CopyTile's result in D0 is overwritten because the
-// chain library doesn't pipeline D0 between elements unless DestReuse is used. Net semantic = CbB + CbC.
+// CopyTile(CbA->D0) -> BinaryFpu(CbB,CbC->D1) -> AddBinary(D0+D1->D0) -> PackTile(CbOut). At the
+// BinaryFpu, srca rotates CbA->CbB with prev set (2-arg _with_dt srca reconfig) while srcb is
+// first-emit CbC (1-arg srcb reconfig). Every element's result feeds the output — net =
+// CbA + (CbB + CbC) — so CbA is load-bearing and a botched srca reconfig (CbA->CbB) shows up as a
+// PCC drop. CbA/CbB/CbC carry distinct dtypes, so the reconfig actually fires (not elided).
 
 #include <cstdint>
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
 void kernel_main() {
@@ -26,9 +24,19 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_a, cb_b, cb_out);
 
-    compute_kernel_lib::eltwise_chain(
-        compute_kernel_lib::EltwiseShape::tiles(total_tiles),
-        compute_kernel_lib::CopyTile<cb_a>{},
-        compute_kernel_lib::BinaryFpu<cb_b, cb_c>{},
-        compute_kernel_lib::PackTile<cb_out>{});
+    using namespace compute_kernel_lib;
+    eltwise_chain(
+        EltwiseShape::tiles(total_tiles),
+        CopyTile<cb_a, Dst::D0>{},
+        BinaryFpu<
+            cb_b,
+            cb_c,
+            BinaryFpuOp::Add,
+            BroadcastDim::None,
+            InputLifecycle::Streaming,
+            InputLifecycle::Streaming,
+            BinaryDataFormatReconfig::Input,
+            Dst::D1>{},
+        AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
+        PackTile<cb_out, OutputLifecycle::Streaming, PackTileReconfig::Output, Dst::D0>{});
 }

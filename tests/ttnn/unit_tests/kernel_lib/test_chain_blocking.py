@@ -3,18 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Blocking — correctness + throughput for eltwise_chain (G4 block_size axis).
+Blocking — correctness + throughput for eltwise_chain (block_size axis).
 
-block_size processes multiple tiles per inner iter across DEST lanes
-(DEST[D0 + j*chain_lane_width]). It is a loop-structure optimization: it must NOT change the
-per-tile result, and larger blocks should reduce per-tile loop/DEST-sync overhead.
-
-  - test_blocking_correctness : block_size in {1,2,4,8} all produce bit-identical exp(x).
-  - test_blocking_throughput  : measures end-to-end time per block size on a larger workload,
-                                logs tiles/sec + speedup, and gross-regression-guards (block=8 must
-                                not be dramatically slower than block=1). NOTE: this is a host+device
-                                wall-clock smoke signal — cycle-accurate perf gating belongs in a
-                                device-profiler CI job, not a unit test.
+block_size processes multiple tiles per inner iter across DEST lanes. It is a loop-structure
+optimization: it must NOT change the per-tile result, only reduce loop/DEST-sync overhead.
+  - test_blocking_correctness : block_size {1,2,4,8} all produce bit-identical exp(x).
+  - test_blocking_throughput  : logs tiles/sec + speedup and guards against gross regression
+                                (block=8 not dramatically slower than block=1). Wall-clock smoke
+                                signal only — real perf gating belongs in a device-profiler job.
 """
 
 import time

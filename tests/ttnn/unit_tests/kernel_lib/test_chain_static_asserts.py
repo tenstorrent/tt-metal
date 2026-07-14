@@ -3,17 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-G2 — compile-time guard (negative) tests for eltwise_chain.
+Compile-time guard (negative) tests for eltwise_chain.
 
-Coverage spec: ttnn/cpp/ttnn/kernel_lib/docs/eltwise_helper_test_coverage.html (group G2).
-
-The helper carries static_asserts that REFUSE illegal chain configurations at compile time.
-A guard that has rotted into an always-true no-op is invisible until someone ships the footgun
-it was meant to stop. These tests prove each guard still fires: an illegal kernel must fail to
-build with the expected assert message (caught as an exception from ttnn.generic_op's JIT build).
-
-No device work happens — the build fails before launch — but generic_op needs a device handle
-to drive the build, so the `device` fixture is still requested.
+The helper's static_asserts REFUSE illegal chain configs at compile time. A guard that rots into an
+always-true no-op is invisible until someone ships the footgun. Each test proves a guard still fires:
+the illegal kernel must fail to build with the expected assert message (an exception from
+ttnn.generic_op's JIT build). No device work happens, but generic_op needs a device handle to build,
+so the `device` fixture is still requested.
 """
 
 import ttnn
@@ -45,45 +41,45 @@ def _expect_build_failure(device, expect_error, kernel_name, expected_msg):
     logger.info(f"{kernel_name}: correctly rejected at compile time ('{expected_msg}')")
 
 
-def test_sa03_block_streaming_illegal(device, expect_error):
-    """SA-03: Block index + Streaming lifecycle is the absolute-index footgun — must not compile."""
+def test_block_streaming_illegal(device, expect_error):
+    """Block index + Streaming lifecycle is the absolute-index footgun — must not compile."""
     _expect_build_failure(device, expect_error, "copytile_block_streaming.cpp", "is illegal for Block")
 
 
-def test_sa02_packtile_collision_illegal(device, expect_error):
-    """SA-02: two PackTile on the same (CB, DEST slot) — must not compile."""
+def test_packtile_collision_illegal(device, expect_error):
+    """Two PackTile on the same (CB, DEST slot) — must not compile."""
     _expect_build_failure(device, expect_error, "packtile_collision.cpp", "two PackTile elements collide")
 
 
-def test_sa04_row_streaming_illegal(device, expect_error):
-    """SA-04: Row/Col broadcast index + Streaming policy — must not compile."""
+def test_row_streaming_illegal(device, expect_error):
+    """Row/Col broadcast index + Streaming policy — must not compile."""
     _expect_build_failure(device, expect_error, "row_streaming.cpp", "non-streaming policy")
 
 
-def test_sa07_tile_offset_streaming_illegal(device, expect_error):
-    """SA-07: TileOffset::Set + Streaming (needs Bulk-family / CallerManaged) — must not compile."""
+def test_tile_offset_streaming_illegal(device, expect_error):
+    """TileOffset::Set + Streaming (needs Bulk-family / CallerManaged) — must not compile."""
     _expect_build_failure(device, expect_error, "tile_offset_streaming.cpp", "TileOffset::Set requires")
 
 
-def test_sa08_cba_cbb_index_mismatch_illegal(device, expect_error):
-    """SA-08: BinaryFpu same CB for both operands with mismatched indices — must not compile."""
+def test_cba_cbb_index_mismatch_illegal(device, expect_error):
+    """BinaryFpu same CB for both operands with mismatched indices — must not compile."""
     _expect_build_failure(device, expect_error, "cba_cbb_index_mismatch.cpp", "AIndex and BIndex must match")
 
 
-def test_sa09_setupowner_caller_not_hoistable_illegal(device, expect_error):
-    """SA-09: SetupOwner::Caller on a chain whose setup isn't fully boot-hoistable (non-uniform SFPU)
+def test_setupowner_caller_not_hoistable_illegal(device, expect_error):
+    """SetupOwner::Caller on a chain whose setup isn't fully boot-hoistable (non-uniform SFPU)
     — the caller can't own a once-before-the-loop setup that doesn't exist, so it must not compile."""
     _expect_build_failure(device, expect_error, "setupowner_caller_not_hoistable.cpp", "boot-hoistable")
 
 
-def test_sa10_setupowner_caller_reconfig_illegal(device, expect_error):
-    """SA-10: SetupOwner::Caller with a live (non-None) reconfig knob — under Caller the chain emits
+def test_setupowner_caller_reconfig_illegal(device, expect_error):
+    """SetupOwner::Caller with a live (non-None) reconfig knob — under Caller the chain emits
     no reconfig, so the knob is inert/deceptive; must not compile (force the caller to declare None)."""
     _expect_build_failure(device, expect_error, "setupowner_caller_reconfig.cpp", "non-None reconfig knob")
 
 
-def test_sa11_l1_accumulation_wrong_lifecycle_illegal(device, expect_error):
-    """SA-11: L1 accumulation cannot use a general-purpose output lifecycle."""
+def test_l1_accumulation_wrong_lifecycle_illegal(device, expect_error):
+    """L1 accumulation cannot use a general-purpose streaming output lifecycle."""
     _expect_build_failure(
         device,
         expect_error,
@@ -92,8 +88,8 @@ def test_sa11_l1_accumulation_wrong_lifecycle_illegal(device, expect_error):
     )
 
 
-def test_sa12_l1_lifecycle_without_accumulation_illegal(device, expect_error):
-    """SA-12: L1-purpose output lifecycles require an accumulating PackTile."""
+def test_l1_lifecycle_without_accumulation_illegal(device, expect_error):
+    """L1-purpose output lifecycles cannot silently run with accumulation disabled."""
     _expect_build_failure(
         device,
         expect_error,
@@ -102,8 +98,8 @@ def test_sa12_l1_lifecycle_without_accumulation_illegal(device, expect_error):
     )
 
 
-def test_sa13_l1_accumulation_multiple_output_cbs_illegal(device, expect_error):
-    """SA-13: The packer-global accumulation region may target only one output CB."""
+def test_l1_accumulation_multiple_output_cbs_illegal(device, expect_error):
+    """The packer-global accumulation bracket may target only one output CB."""
     _expect_build_failure(
         device,
         expect_error,
@@ -112,8 +108,8 @@ def test_sa13_l1_accumulation_multiple_output_cbs_illegal(device, expect_error):
     )
 
 
-def test_sa14_l1_accumulation_mixed_pack_modes_illegal(device, expect_error):
-    """SA-14: Ordinary packs cannot inherit chain-wide L1 accumulation mode."""
+def test_l1_accumulation_mixed_pack_modes_illegal(device, expect_error):
+    """Ordinary packs cannot inherit the chain-wide L1-accumulation mode."""
     _expect_build_failure(
         device,
         expect_error,
@@ -122,8 +118,8 @@ def test_sa14_l1_accumulation_mixed_pack_modes_illegal(device, expect_error):
     )
 
 
-def test_sa15_l1_accumulation_mixed_accumulation_modes_illegal(device, expect_error):
-    """SA-15: Preloaded and seed-first writers cannot share one accumulation region."""
+def test_l1_accumulation_mixed_accumulation_modes_illegal(device, expect_error):
+    """Preloaded and seed-first packs cannot share one packer-global accumulation region."""
     _expect_build_failure(
         device,
         expect_error,
@@ -132,11 +128,41 @@ def test_sa15_l1_accumulation_mixed_accumulation_modes_illegal(device, expect_er
     )
 
 
-def test_sa16_l1_accumulation_multiple_lifecycle_owners_illegal(device, expect_error):
-    """SA-16: Only one writer may reserve and publish the shared accumulator tile."""
+def test_l1_accumulation_multiple_lifecycle_owners_illegal(device, expect_error):
+    """Only one pack may reserve and publish the shared accumulator tile."""
     _expect_build_failure(
         device,
         expect_error,
         "l1_accumulation_multiple_lifecycle_owners.cpp",
         "only one PackTile may own the L1-accumulation",
+    )
+
+
+def test_dest_accumulation_wrong_lifecycle_illegal(device, expect_error):
+    """DEST accumulation cannot use an ordinary streaming output lifecycle."""
+    _expect_build_failure(
+        device,
+        expect_error,
+        "dest_accumulation_wrong_lifecycle.cpp",
+        "DEST accumulation requires OutputLifecycle::DestAccumulation",
+    )
+
+
+def test_dest_lifecycle_without_accumulation_illegal(device, expect_error):
+    """DEST-purpose output lifecycles cannot silently run without an accumulating BinaryFpu."""
+    _expect_build_failure(
+        device,
+        expect_error,
+        "dest_lifecycle_without_accumulation.cpp",
+        "those lifecycles require an accumulating BinaryFpu",
+    )
+
+
+def test_dest_accumulation_pack_mismatch_illegal(device, expect_error):
+    """The single final pack must read the sticky accumulator slot."""
+    _expect_build_failure(
+        device,
+        expect_error,
+        "dest_accumulation_pack_mismatch.cpp",
+        "PackTile must pack the sticky DEST slot",
     )
