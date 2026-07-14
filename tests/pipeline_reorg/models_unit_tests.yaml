@@ -463,6 +463,19 @@
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
 
+- name: Qwen3-32B unit tests (Blackhole Galaxy)
+  cmd: |
+    export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_mlp.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_attention.py
+  model: qwen3-32b-galaxy
+  skus:
+    bh_galaxy:
+      timeout: 20
+      tier: 1
+  owner_id: U053W15B6JF # Djordje Ivanovic
+  team: models
+
 # GPT-OSS unit tests: uses HF config only (no weights). parametrize_mesh_with_fabric()
 # picks the largest fitting mesh shape per SKU when CI=true, so one yaml entry
 # covers N150 (1x1), T3K/llmbox (1x8), and Galaxy (4x8) without per-SKU -k filters.
