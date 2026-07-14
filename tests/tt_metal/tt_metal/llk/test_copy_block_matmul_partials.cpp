@@ -248,6 +248,10 @@ void run_single_core_copy_block_matmul_partials(
     EXPECT_EQ(src_vec, result_vec);
 }
 
+// Compute kernel exercising the uniform copy_block + pack_block surface (shared by the
+// TensixComputeCopyPackBlock* cases below); the default kernel is the struct member initializer.
+constexpr const char* kBlockKernel = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_pack_block.cpp";
+
 }  // namespace unit_tests::compute::matmul_partials
 
 ////////////////////////////////////////////////////////////////////////////
@@ -316,8 +320,6 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeCopyBlockComputeBottleneck) {
 // (copy_block + pack_block) directly instead of the deprecated copy_block_matmul_partials /
 // pack_tile_block. The golden is an identity copy, so results must match bit-for-bit.
 TEST_F(LLKMeshDeviceFixture, TensixComputeCopyPackBlockMultiple) {
-    static constexpr const char* kBlockKernel =
-        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_pack_block.cpp";
     for (bool fp32_dest_acc_en : {true, false}) {
         for (bool dst_full_sync_en : {true, false}) {
             log_info(LogTest, "FP32DestAcc = {}, DstSyncFull = {}", fp32_dest_acc_en, dst_full_sync_en);
@@ -328,7 +330,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeCopyPackBlockMultiple) {
                 .compute_ublock = 4,  // compute_ublock must be <= get_dest_max_tiles (4 for SyncHalf+FP32)
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .dst_full_sync_en = dst_full_sync_en,
-                .compute_kernel = kBlockKernel};
+                .compute_kernel = unit_tests::compute::matmul_partials::kBlockKernel};
             unit_tests::compute::matmul_partials::run_single_core_copy_block_matmul_partials(
                 this->devices_.at(0), test_config);
             if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
@@ -340,8 +342,6 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeCopyPackBlockMultiple) {
 
 // copy_block + pack_block with a single tile per block (compute bottleneck shape).
 TEST_F(LLKMeshDeviceFixture, TensixComputeCopyPackBlockComputeBottleneck) {
-    static constexpr const char* kBlockKernel =
-        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_pack_block.cpp";
     for (bool fp32_dest_acc_en : {true, false}) {
         for (bool dst_full_sync_en : {true, false}) {
             log_info(LogTest, "FP32DestAcc = {}, DstSyncFull = {}", fp32_dest_acc_en, dst_full_sync_en);
@@ -352,7 +352,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeCopyPackBlockComputeBottleneck) {
                 .compute_ublock = 1,
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .dst_full_sync_en = dst_full_sync_en,
-                .compute_kernel = kBlockKernel};
+                .compute_kernel = unit_tests::compute::matmul_partials::kBlockKernel};
             unit_tests::compute::matmul_partials::run_single_core_copy_block_matmul_partials(
                 this->devices_.at(0), test_config);
             if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
