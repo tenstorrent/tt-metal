@@ -172,11 +172,11 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
     {
         // Always re-derive SrcAUnsigned from the new format so a reconfig cannot leave a stale signedness bit
         // (tt-metal#34499). For non-int8 formats this simply writes 0, which is exactly what a reconfig away
-        // from UInt8 needs. FP32 dest is required only when the new format actually drives int8/int32 math,
-        // so gate the assertion on the format value rather than at compile time.
+        // from UInt8 needs. FP32 dest is required only when the new register (dst) format drives int8/int32 math,
+        // so key the assertion on unpack_dst_format (matching math-side reconfig), not the L1 source: a supported
+        // dequant like Int8->Float16_b needs no FP32 dest.
         LLK_ASSERT(
-            is_fp32_dest_acc_en ||
-                !(masked_data_format(unpack_src_format) == to_underlying(DataFormat::Int8) || unpack_src_format == to_underlying(DataFormat::Int32)),
+            is_fp32_dest_acc_en || !is_int8_or_int32_format(unpack_dst_format),
             "Reconfiguring unpack to/from Int8/UInt8/Int32 formats requires FP32 Dest mode enabled");
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcAUnsigned_RMW>((unpack_src_format == to_underlying(DataFormat::UInt8)) ? 1 : 0);
     }
@@ -264,11 +264,11 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
     {
         // Always re-derive SrcBUnsigned from the new format so a reconfig cannot leave a stale signedness bit
         // (tt-metal#34499). For non-int8 formats this simply writes 0, which is exactly what a reconfig away
-        // from UInt8 needs. FP32 dest is required only when the new format actually drives int8/int32 math,
-        // so gate the assertion on the format value rather than at compile time.
+        // from UInt8 needs. FP32 dest is required only when the new register (dst) format drives int8/int32 math,
+        // so key the assertion on unpack_dst_format (matching math-side reconfig), not the L1 source: a supported
+        // dequant like Int8->Float16_b needs no FP32 dest.
         LLK_ASSERT(
-            is_fp32_dest_acc_en ||
-                !(masked_data_format(unpack_src_format) == to_underlying(DataFormat::Int8) || unpack_src_format == to_underlying(DataFormat::Int32)),
+            is_fp32_dest_acc_en || !is_int8_or_int32_format(unpack_dst_format),
             "Reconfiguring unpack to/from Int8/UInt8/Int32 formats requires FP32 Dest mode enabled");
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcBUnsigned_RMW>((unpack_src_format == to_underlying(DataFormat::UInt8)) ? 1 : 0);
     }

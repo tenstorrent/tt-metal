@@ -87,10 +87,11 @@ ALWI void reconfig_df_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_
 //   2. SrcOrder: the two-source reconfig now takes operands in natural (icb0, icb1) order and maps them onto
 //      SrcA/SrcB from a SrcOrder tag, so matmul no longer swaps operands by hand (mirrors compute_kernel_hw_startup).
 //
-// SrcOrder is added as a same-name overload with no default on src_order, so a plain reconfig_data_format(a, b) call
-// resolves to the functions below while an explicit reconfig_data_format<false, true>(...) still resolves to the
-// deprecated bool overloads (further down). Those bool overloads carry the removed to_from_int8 flag, are deprecated,
-// and work until 2026-08-20; the cleanup PR deletes them and their now-vestigial flag.
+// SrcOrder is added as a same-name overload whose template params all default, so a plain reconfig_data_format(a, b)
+// call resolves to the functions below -- the deprecated bool overloads (further down) have no template defaults, so
+// they cannot win a bare call. An explicit reconfig_data_format<false, true>(...) instead selects those deprecated
+// overloads because a bool cannot bind to the SrcOrder first param. Those bool overloads carry the removed to_from_int8
+// flag, are deprecated, and work until 2026-08-20; the cleanup PR deletes them and their now-vestigial flag.
 //
 // NOTE(ARCH_QUASAR): On Quasar, buffer descriptors are programmed into the unpack MOP at op init. reconfig_data_format
 // only reprograms THCON data formats (gasket), not the MOP. When operands or buffer descriptors change, call the op
