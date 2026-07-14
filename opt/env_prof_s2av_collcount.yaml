@@ -1,0 +1,11 @@
+TT_METAL_HOME: /home/smarton/tt-metal/.claude/worktrees/ltxperf-tip
+PYTHON_ENV_DIR: /home/smarton/tt-metal/.claude/worktrees/ltxperf-tip/python_env
+PYTHONPATH: /home/smarton/tt-metal/.claude/worktrees/ltxperf-tip/ttnn:/home/smarton/tt-metal/.claude/worktrees/ltxperf-tip:/home/smarton/tt-metal/.claude/worktrees/ltxperf-tip/tools
+TT_DIT_CACHE_DIR: /home/smarton/.cache/tt-dit-ltxrt
+TT_METAL_CACHE: /home/smarton/.cache/tt-metal-cache-ltxrt
+LTX_CHECKPOINT: /home/kevinmi/.cache/huggingface/hub/models--Lightricks--LTX-2.3/snapshots/76730e634e70a28f4e8d51f5e29c08e40e2d8e74/ltx-2.3-22b-distilled-1.1.safetensors
+TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES: "0"
+LTX_NUM_LINKS: "2"
+LTX_PROFILE_ITERS: "10"
+TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT: "3000"
+TT_METAL_PROFILER_CPP_POST_PROCESS: "1"
