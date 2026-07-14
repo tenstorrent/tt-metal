@@ -16,7 +16,7 @@ but `noc_async_writes_flushed` does NOT (it guarantees only DEPARTURE) — see t
 data-movement doc `data_movement_doc/general/posted_writes.md`. So a flush-but-no-
 barrier atomic is still flagged (never miss a real race) and TAGGED
 `safety="FLUSH_NOT_BARRIER"`; whether a same-VC unicast atomic is actually safe with
-only a flush is a VERDICT the /noc-sync skill grounds in `<arch>/NoC/Ordering.md` +
+only a flush is a VERDICT the /noc-sync-audit skill grounds in `<arch>/NoC/Ordering.md` +
 `posted_writes.md`, NOT an assumption the tool bakes. Flushes are recognized in BOTH the
 free-function and the modern `Noc`-method form (`noc.async_write_barrier()`) via
 registry.noc_op_of/noc_flush_kind.
@@ -30,7 +30,7 @@ tt-llk.
 
 Pure AUGMENTOR: the mechanical, in-one-function signal it recalls is a credit
 signal (`inc`/`set`/multicast) with NO write flush before it in the same function
-→ a data-before-credit candidate. The VERDICTS stay with the /noc-sync skill (see
+→ a data-before-credit candidate. The VERDICTS stay with the /noc-sync-audit skill (see
 blind_spots): which buffer the flush actually covers, cross-core/cross-kernel
 signal↔wait pairing, and multicast fan-out count vs destination count.
 """
@@ -54,7 +54,7 @@ class NocSync(Check):
         "transaction the signal credits, nor a flush supplied by a CALLER (shows as "
         "a candidate). It also does not model same-VC transit ordering, which can "
         "make even a missing flush safe for a write credit — so a set/mcast candidate "
-        "may be a false positive there (the /noc-sync skill checks it against the ISA "
+        "may be a false positive there (the /noc-sync-audit skill checks it against the ISA "
         "NoC Ordering doc). An atomic credit that HAS a preceding writes_flushed (but "
         "no barrier) is flagged with safety=FLUSH_NOT_BARRIER — surfaced for the skill "
         "to confirm against the NoC Ordering + data-movement docs, NOT pre-cleared as "
@@ -63,7 +63,7 @@ class NocSync(Check):
         "flagged safety=POSTED_FLUSH_ONLY: that flush drains only the posted-writes HW "
         "counter, so it is a no-op (no ordering) when the credited write/inc was issued "
         "non-posted — the tool cannot see a write's posted-ness (a constexpr/template "
-        "property), so the /noc-sync skill confirms it. NOTE this fires only when the "
+        "property), so the /noc-sync-audit skill confirms it. NOTE this fires only when the "
         "credit SIGNAL is visible in the kernel; a credit posted INSIDE a primitive "
         "(e.g. remote_cb_push_back_and_write_pages, whose internal write+inc are not "
         "kernel-level facts) is NOT surfaced — that posted/non-posted-flush pairing is "
@@ -75,11 +75,11 @@ class NocSync(Check):
         "consumer reads) — a different ordering domain (BabyRISC MemoryOrdering.md "
         "'Cross-core signalling') where a NoC barrier/flush is IRRELEVANT and the fix "
         "is load-back+consume, not a barrier. So a barrier-preceded signal that is "
-        "really guarding a RISC store is a false-clear here — the /noc-sync skill "
+        "really guarding a RISC store is a false-clear here — the /noc-sync-audit skill "
         "must check whether the producer is a RISC store. "
         "Cross-core / cross-kernel signal↔wait pairing (does a consumer actually "
         "wait on this semaphore?) and multicast fan-out (inc count == number of "
-        "destinations) are NOT decided here — the /noc-sync skill owns them. "
+        "destinations) are NOT decided here — the /noc-sync-audit skill owns them. "
         "File-scope signals outside any function are not attributed. A flush at "
         "the TOP of a loop precedes a later same-iteration signal textually but "
         "drains the PRIOR iteration's write, not this one's — the byte-offset "

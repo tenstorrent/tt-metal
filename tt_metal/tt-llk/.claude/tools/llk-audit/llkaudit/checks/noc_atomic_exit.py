@@ -44,7 +44,7 @@ class NocAtomicExit(Check):
         "It does not distinguish an atomic that is deliberately left for the NEXT "
         "kernel to drain (rare, and still violates the NOC-idle contract). Whether "
         "the missing drain actually matters (Watcher build vs release, program reuse) "
-        "is a severity call for the /noc-sync skill. Requires a KERNEL fact base; "
+        "is a severity call for the /noc-sync-audit skill. Requires a KERNEL fact base; "
         "empty over tt-llk."
     )
 
