@@ -13,6 +13,7 @@ set(TTNN_CORE_SRCS
     core/core.cpp
     core/device.cpp
     core/device_operation_detail.cpp
+    core/program_spec_hash.cpp
     cpp/tools/profiler/op_profiler_json.cpp
     core/distributed/api.cpp
     core/distributed/distributed_tensor.cpp

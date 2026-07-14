@@ -72,6 +72,8 @@ template <typename T>
 concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } || WorkloadDescriptorConcept<T>) &&
                                           !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T>;
 
+// === Temporary Solution to Unblock Quasar === op-porting concept owned elsewhere; keep as-is, to be
+// deleted once ports move to ProgramSpecFactoryConcept below.
 // Metal 2.0 op-porting stepping-stone factory concept: factories that return
 // ProgramArtifacts (a ProgramSpec + ProgramRunArgs + any op-owned tensors) from
 // create_program_artifacts. The framework adapter stamps a Program from the spec onto
@@ -90,6 +92,18 @@ concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } |
 template <typename T>
 concept MetalV2FactoryConcept = requires { &T::create_program_artifacts; } && !ProgramFactoryConcept<T> &&
                                 !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T>;
+
+// === Spec === keys the program cache on the ProgramSpec content (always hashed from the spec, never a
+// cheap attribute hash). Factory returns ProgramSpecArtifacts from create_program_spec.
+template <typename T>
+concept ProgramSpecFactoryConcept =
+    requires { &T::create_program_spec; } && !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T> &&
+    !ProgramDescriptorFactoryConcept<T> && !MetalV2FactoryConcept<T>;
+
+// === SpecWithOwnedTensors === a Spec factory that also allocates its own device tensors via
+// get_owned_tensors (scratch/config). Discouraged; prefer expressing every tensor as an io arg.
+template <typename T>
+concept ProgramSpecFactoryWithOwnedTensorsConcept = ProgramSpecFactoryConcept<T> && requires { &T::get_owned_tensors; };
 
 // Detect operations that put create_descriptor directly on the operation struct
 // (no program_factory_t wrapper needed for single-descriptor operations).
@@ -126,9 +140,8 @@ concept HasSelectProgramFactory = requires(
     } -> std::same_as<typename device_operation_t::program_factory_t>;
 };
 
-// Validate that all variant alternatives in a program_factory_t satisfy exactly one of
-// ProgramFactoryConcept, MeshWorkloadFactoryConcept, ProgramDescriptorFactoryConcept,
-// or MetalV2FactoryConcept.
+// Each variant alternative must satisfy exactly one factory concept. SpecWithOwnedTensors is a
+// refinement of ProgramSpecFactoryConcept, so it is not counted as a separate bucket.
 namespace detail {
 template <typename Variant, std::size_t... Is>
 consteval bool all_factories_valid(std::index_sequence<Is...>) {
@@ -136,7 +149,8 @@ consteval bool all_factories_valid(std::index_sequence<Is...>) {
         ((ProgramFactoryConcept<std::variant_alternative_t<Is, Variant>> +
           MeshWorkloadFactoryConcept<std::variant_alternative_t<Is, Variant>> +
           ProgramDescriptorFactoryConcept<std::variant_alternative_t<Is, Variant>> +
-          MetalV2FactoryConcept<std::variant_alternative_t<Is, Variant>>) == 1) &&
+          MetalV2FactoryConcept<std::variant_alternative_t<Is, Variant>> +
+          ProgramSpecFactoryConcept<std::variant_alternative_t<Is, Variant>>) == 1) &&
         ...);
 }
 }  // namespace detail

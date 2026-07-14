@@ -3,13 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gmock/gmock.h>
+#include <span>
 #include <type_traits>
+#include <vector>
 
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/program_spec_artifacts.hpp"
 #include "ttnn/operation_concepts.hpp"
 #include "ttnn/operations/examples/example/device/example_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -150,6 +153,55 @@ TEST(LaunchOperationTest, MetalV2AdapterCompiles) {
     [[maybe_unused]] auto create = &Adapter::create_mesh_workload;
     [[maybe_unused]] auto apply = &Adapter::apply_descriptor;
     [[maybe_unused]] auto resolve = &Adapter::resolve_bindings;
+    SUCCEED();
+}
+
+// === Spec (ProgramSpecFactoryConcept) compile-coverage ===
+// No real op uses create_program_spec yet, so force-instantiate the ProgramSpec adapter bodies here.
+// Runtime behavior (miss->hit re-bind, owned-tensor liveness) needs a real dispatched op.
+struct ProgramSpecFactory {
+    static ttnn::device_operation::ProgramSpecArtifacts create_program_spec(
+        const OperationAttributes& /*attrs*/, const Tensor& /*tensor_args*/, Tensor& /*tensor_return_value*/) {
+        return ttnn::device_operation::ProgramSpecArtifacts{};
+    }
+};
+
+// Spec factory that also owns tensors: get_owned_tensors + the span overload of create_program_spec.
+struct ProgramSpecOwnedFactory {
+    static std::vector<tt::tt_metal::MeshTensor> get_owned_tensors(
+        const OperationAttributes& /*attrs*/, const Tensor& /*tensor_args*/, Tensor& /*tensor_return_value*/) {
+        return {};
+    }
+    static ttnn::device_operation::ProgramSpecArtifacts create_program_spec(
+        const OperationAttributes& /*attrs*/,
+        const Tensor& /*tensor_args*/,
+        Tensor& /*tensor_return_value*/,
+        std::span<const tt::tt_metal::MeshTensor> /*owned*/) {
+        return ttnn::device_operation::ProgramSpecArtifacts{};
+    }
+};
+
+static_assert(ttnn::device_operation::ProgramSpecFactoryConcept<ProgramSpecFactory>);
+static_assert(!ttnn::device_operation::MetalV2FactoryConcept<ProgramSpecFactory>);
+static_assert(!ttnn::device_operation::ProgramFactoryConcept<ProgramSpecFactory>);
+static_assert(!ttnn::device_operation::ProgramDescriptorFactoryConcept<ProgramSpecFactory>);
+static_assert(!ttnn::device_operation::ProgramSpecFactoryWithOwnedTensorsConcept<ProgramSpecFactory>);
+static_assert(ttnn::device_operation::ProgramSpecFactoryConcept<ProgramSpecOwnedFactory>);
+static_assert(ttnn::device_operation::ProgramSpecFactoryWithOwnedTensorsConcept<ProgramSpecOwnedFactory>);
+
+TEST(LaunchOperationTest, ProgramSpecAdapterCompiles) {
+    using Adapter = device_operation::MeshDeviceOperationAdapter<
+        MetalV2MinimalOp>::ProgramSpecMeshWorkloadFactoryAdapter<ProgramSpecFactory>;
+    [[maybe_unused]] auto create_spec = &Adapter::create_spec;
+    [[maybe_unused]] auto cache_hash = &Adapter::cache_hash;
+    [[maybe_unused]] auto build = &Adapter::build_mesh_workload;
+    [[maybe_unused]] auto apply = &Adapter::apply_run_args;
+
+    using OwnedAdapter = device_operation::MeshDeviceOperationAdapter<
+        MetalV2MinimalOp>::ProgramSpecWithOwnedTensorsMeshWorkloadFactoryAdapter<ProgramSpecOwnedFactory>;
+    [[maybe_unused]] auto owned_create_spec = &OwnedAdapter::create_spec;
+    [[maybe_unused]] auto owned_build = &OwnedAdapter::build_mesh_workload;
+    [[maybe_unused]] auto owned_apply = &OwnedAdapter::apply_run_args;
     SUCCEED();
 }
 

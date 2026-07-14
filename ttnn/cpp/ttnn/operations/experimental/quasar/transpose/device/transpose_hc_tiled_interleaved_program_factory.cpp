@@ -41,7 +41,7 @@ const TensorParamName OUTPUT{"output"};
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFactory::create_program_artifacts(
+ttnn::device_operation::ProgramSpecArtifacts TransposeHCTiledInterleavedProgramFactory::create_program_spec(
     const TransposeParams& operation_attributes, const TransposeInputs& tensor_args, Tensor& output_tensor) {
     using namespace CMAKE_UNIQUE_NAMESPACE;  // resolve the file-local ids/helpers below
     const auto& input_tensor = tensor_args.input;
@@ -301,7 +301,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
     run_args.tensor_args.emplace(INPUT, input_mesh_tensor);
     run_args.tensor_args.emplace(OUTPUT, output_mesh_tensor);
 
-    return ttnn::device_operation::ProgramArtifacts{
+    return ttnn::device_operation::ProgramSpecArtifacts{
         .spec = std::move(spec),
         .run_params = std::move(run_args),
     };
