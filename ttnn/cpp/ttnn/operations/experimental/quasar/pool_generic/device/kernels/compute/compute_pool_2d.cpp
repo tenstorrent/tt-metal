@@ -421,10 +421,16 @@ void kernel_main() {
                 const uint32_t curr_scratch_cb_id = scratch_cb_id_0;
                 DataflowBuffer curr_scratch_cb = scratch_cb_0;
 #endif
-                // Reserve/push the WHOLE scratch CB (one full-tile write) so the single-tile scratch
-                // serializes per stick: stick N+1 can't reserve until the DM reader pops stick N's whole
-                // tile, so the full-tile pack never overlaps a still-unread tile.
-                curr_scratch_cb.reserve_back(scratch_npages);
+                // Model A (wide-reduction fix): the scratch CB holds ONE contiguous full-width (in_ntiles_c)
+                // output stick, so reserve it ONCE per stick (on the first c-block) -- NOT per c-block.
+                // Reserving/pushing a full stick per c-block advanced wr_entry_idx mid-stick, overran the
+                // 2-slot ring, and grew the packer's L1 base (base_l1 = wr_entry_idx * ...) past the buffer-
+                // descriptor limit -> Risc IB interrupt (0x19), with the fault address creeping run-to-run as
+                // base_l1 grew. Each c-block packs its channel slice into this shared stick below; the whole
+                // stick is pushed once on the last c-block so the DM reader consumes exactly one stick per pop.
+                if (first_c_block) {
+                    curr_scratch_cb.reserve_back(scratch_npages);
+                }
 #if DEBUG_PRINT == 1
                 // Which scratch CB and where does compute pack THIS stick? Compare wptr to the reader's
                 // rdptr: same address + reader reads 0 => reduce produced 0 (input); differ => routing.
@@ -456,18 +462,28 @@ void kernel_main() {
                         (uint32_t)(last_c_block ? partial_iter_output_tiles : max_tiles_per_iter),
                         (uint32_t)in_ntiles_c));
                 }
-                // The pack-untilize width MUST equal its init width (pack_untilize.h contract). tiles_to_reduce
-                // changes across c-blocks (4 then 2 for 6 tiles / 192c), so init AND pack must use the same
-                // current count per c-block -- init<4>/pack<2> desynced the packer -> Risc IB interrupt (0x19).
+                // Pack this c-block into its channel slice of the shared full-width stick. full_ct_dim =
+                // in_ntiles_c makes the untilize row stride span the whole in_ntiles_c-tile-wide stick
+                // (llk_pack_untilize stride_offset_0 = num_faces_c_dim * FULL_CT_DIM); block_c_index places the
+                // slice so the c-blocks tile contiguously (l1 tile offset = block_c_index * block_ct_dim):
+                //   c0 -> block_c_index 0            -> tiles 0..3
+                //   c1 -> block_c_index 4/2 = 2      -> tiles 4..5
+                // Init width must equal pack width per c-block (pack_untilize.h contract), so init per c-block.
                 if (last_c_block) {
-                    pack_untilize_dest_init<partial_iter_output_tiles>(curr_scratch_cb_id);
-                    pack_untilize_dest<partial_iter_output_tiles>(curr_scratch_cb_id, 1, 0);
+                    pack_untilize_dest_init<partial_iter_output_tiles, in_ntiles_c>(curr_scratch_cb_id);
+                    pack_untilize_dest<partial_iter_output_tiles, in_ntiles_c>(
+                        curr_scratch_cb_id, 1, (c_i * max_tiles_per_iter) / partial_iter_output_tiles);
                 } else {
-                    pack_untilize_dest_init<max_tiles_per_iter>(curr_scratch_cb_id);
-                    pack_untilize_dest<max_tiles_per_iter>(curr_scratch_cb_id, 1, 0);
+                    pack_untilize_dest_init<max_tiles_per_iter, in_ntiles_c>(curr_scratch_cb_id);
+                    pack_untilize_dest<max_tiles_per_iter, in_ntiles_c>(curr_scratch_cb_id, 1, c_i);
                 }
                 tile_regs_release();
-                curr_scratch_cb.push_back(scratch_npages);  // hand off to the DM reader, which writes the output
+                if (last_c_block) {
+                    // Push the whole stick once, after every c-block has packed its slice, so the DM reader
+                    // consumes exactly one full stick per wait_front/pop_front(scratch_npages) -- the previous
+                    // per-c-block push overran the ring (see the reserve note above).
+                    curr_scratch_cb.push_back(scratch_npages);  // hand off to the DM reader, which writes the output
+                }
 #else
                 // Production RM path: narrow pack straight into out_cb (already reserved above). Pair the
                 // pack-untilize init with a matching width per c-block (same contract as the scratch path).
