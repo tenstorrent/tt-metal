@@ -55,7 +55,7 @@ using TensorPrefetcherQueueTensor =
 // when start_tensor_prefetcher would otherwise raise.
 bool is_tensor_prefetcher_supported(tt::tt_metal::distributed::MeshDevice* mesh_device);
 
-void start_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device, bool dual_senders_per_bank = false);
+void start_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device);
 
 void queue_tensor_prefetcher_request(
     tt::tt_metal::distributed::MeshDevice* mesh_device,

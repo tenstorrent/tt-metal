@@ -414,7 +414,7 @@ def test_validator_dram_sender_recv_contig(device, K, N, dtype, recv_per_bank, n
     # prefetcher actually slices by the supplied rotation values rather than the bare ring index.
     # Empty == batched. The same rotation is handed to the validator so it expects the matching order.
     rotation = [(g + 1) % ring_size for g in range(ring_size)] if streaming else []
-    with tensor_prefetcher_session(device, dual_senders_per_bank=dual_senders):
+    with tensor_prefetcher_session(device):
         ttnn.experimental.queue_tensor_prefetcher_request(
             device, [(tt_weight, ring_size, rotation)] * num_layers, global_cb=gcb
         )
@@ -464,7 +464,7 @@ def test_validator_dram_sender_recv_contig_shard_contiguous(
     # Cyclic shift by 1 (empty == batched); same rotation handed to the validator so it expects the
     # matching contiguous-order delivery.
     rotation = [(g + 1) % ring_size for g in range(ring_size)] if streaming else []
-    with tensor_prefetcher_session(device, dual_senders_per_bank=dual_senders):
+    with tensor_prefetcher_session(device):
         ttnn.experimental.queue_tensor_prefetcher_request(
             device, [(tt_weight, ring_size, rotation)] * num_layers, global_cb=gcb
         )

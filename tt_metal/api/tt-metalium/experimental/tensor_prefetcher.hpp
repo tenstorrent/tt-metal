@@ -33,16 +33,8 @@ namespace experimental {
 
 class GlobalCircularBuffer;
 
-struct TensorPrefetcherConfig {
-    // When true, drive each DRAM bank with two DRISC sender cores instead of one:
-    // the free non-endpoint subchannel plus the bank's NOC1-endpoint subchannel
-    // (both write on NOC0). The bank's receivers are split ceil/floor across the two
-    // cores, adding a second DMA engine + NoC initiator per bank. Only supported for
-    // the receiver-contiguous DRAM layout. The GlobalCircularBuffer must be created
-    // with the matching `dual_senders_per_bank` flag so its sender cores agree with
-    // the prefetcher's; a mismatch is rejected at QueueTensorPrefetcherRequest.
-    bool dual_senders_per_bank = false;
-};
+// Reserved for future prefetcher-wide options.
+struct TensorPrefetcherConfig {};
 
 // Returns true if the Tensor prefetcher is supported on `mesh_device`, i.e.
 // programmable DRAM cores are available (Blackhole with firmware >= 19.12.0.0 and
@@ -90,10 +82,14 @@ struct TensorPrefetcherInput {
     std::vector<uint32_t> rotation = {};
 };
 
-// Build per-device Programs (one DRISC kernel per DRAM sender core), allocate
+// Build per-device Programs (two DRISC kernels per DRAM bank), allocate
 // the per-(device, sender) H2D sockets, and spawn the host worker thread that
 // drains the request queue. Returns immediately. No prefetch work is scheduled
 // yet — kernels park on socket_wait_for_pages.
+//
+// Each queued GCB selects which of the provisioned senders receive its PREFETCH
+// requests. Single-sender GCBs leave the second sender for each bank idle; dual-sender
+// GCBs use both.
 //
 // Receiver count is owned by each GCB (read from the per-GCB sender state
 // block on every request), so a single prefetcher can serve GCBs with
