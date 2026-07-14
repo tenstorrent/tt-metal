@@ -1,0 +1,33 @@
+{
+  "test": "test_optimized_decode_synthetic_layer31",
+  "weights": "synthetic",
+  "layer_idx": 31,
+  "batch": 32,
+  "cache_len": 128,
+  "cache_position": 127,
+  "pcc": 0.9990462064743042,
+  "pcc_threshold": 0.99,
+  "policy": {
+    "attention_weight_dtype": "DataType.BFLOAT8_B",
+    "mlp_weight_dtype": "DataType.BFLOAT8_B",
+    "output_weight_dtype": "DataType.BFLOAT8_B",
+    "norm_weight_dtype": "DataType.BFLOAT16",
+    "activation_dtype": "DataType.BFLOAT16",
+    "attention_math_fidelity": "MathFidelity.HiFi2",
+    "mlp_math_fidelity": "MathFidelity.HiFi2",
+    "qvk_in0_block_w": null,
+    "o_in0_block_w": null,
+    "gate_in0_block_w": null,
+    "up_in0_block_w": null,
+    "down_in0_block_w": null,
+    "qvk_l1_core_count": null,
+    "o_l1_core_count": null,
+    "gate_l1_core_count": null,
+    "up_l1_core_count": null,
+    "down_l1_core_count": null,
+    "use_dram_sharded_weights": true,
+    "use_decode_create_heads": false,
+    "use_explicit_sdpa_program_config": true,
+    "use_packed_gate_up_projection": true
+  }
+}

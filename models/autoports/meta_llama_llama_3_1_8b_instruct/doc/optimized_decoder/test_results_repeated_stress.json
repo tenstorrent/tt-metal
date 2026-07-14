@@ -1,0 +1,11 @@
+{
+  "test": "test_optimized_decode_repeated_stress",
+  "weights": "synthetic",
+  "iterations": 3,
+  "pccs": [
+    0.9990221858024597,
+    0.9990221858024597,
+    0.9990221858024597
+  ],
+  "pcc_threshold": 0.99
+}

@@ -1,0 +1,13 @@
+{
+  "weights": "synthetic",
+  "batch": 32,
+  "cache_len": 128,
+  "functional_eager_ms": 3.8332337513566017,
+  "optimized_eager_ms": 2.6933498680591583,
+  "optimized_traced_ms_per_replay": 2.688268944621086,
+  "optimized_vs_functional_eager_speedup": 1.423221615882696,
+  "optimized_traced_vs_functional_eager_speedup": 1.4259115551018275,
+  "optimized_pcc": 0.9990221858024597,
+  "optimized_key_cache_pcc": 0.9998999238014221,
+  "optimized_value_cache_pcc": 0.9999070763587952
+}

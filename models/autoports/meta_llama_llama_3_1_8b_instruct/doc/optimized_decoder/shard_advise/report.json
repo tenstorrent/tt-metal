@@ -1,0 +1,199 @@
+{
+  "function": "decode",
+  "optimization_level": 2,
+  "pipeline": "scoped",
+  "total_ops": 14,
+  "final_choices": 13,
+  "spill": {
+    "ran": true,
+    "total_spills": 0
+  },
+  "unfixable_ops": [],
+  "ops": [
+    {
+      "index": 0,
+      "op": "ttnn.reshape",
+      "layout": "dram/interleaved/1x1",
+      "program_config": ""
+    },
+    {
+      "index": 1,
+      "op": "ttnn.rms_norm",
+      "layout": "l1/width_sharded/1x64 cores=(0,0)-(7,7)",
+      "program_config": ""
+    },
+    {
+      "index": 2,
+      "op": "ttnn.matmul",
+      "layout": "l1/width_sharded/1x64 cores=(0,0)-(7,7)",
+      "program_config": "matmul_multi_core_reuse_multi_cast_1d @8x8"
+    },
+    {
+      "index": 3,
+      "op": "ttnn.slice_static",
+      "layout": "l1/interleaved/8x8",
+      "program_config": ""
+    },
+    {
+      "index": 4,
+      "op": "ttnn.matmul",
+      "layout": "l1/width_sharded/1x64 cores=(0,0)-(7,7)",
+      "program_config": "matmul_multi_core_reuse_multi_cast_1d @8x8"
+    },
+    {
+      "index": 5,
+      "op": "ttnn.add",
+      "layout": "l1/width_sharded/1x64 cores=(0,0)-(7,7)",
+      "program_config": ""
+    },
+    {
+      "index": 6,
+      "op": "ttnn.reshape",
+      "layout": "dram/interleaved/1x1",
+      "program_config": ""
+    },
+    {
+      "index": 7,
+      "op": "ttnn.rms_norm",
+      "layout": "l1/width_sharded/1x64 cores=(0,0)-(7,7)",
+      "program_config": ""
+    },
+    {
+      "index": 8,
+      "op": "ttnn.matmul",
+      "layout": "l1/width_sharded/1x64 cores=(0,0)-(7,7)",
+      "program_config": "matmul_multi_core_reuse_multi_cast_1d @8x8"
+    },
+    {
+      "index": 9,
+      "op": "ttnn.slice_static",
+      "layout": "l1/interleaved/8x8",
+      "program_config": ""
+    },
+    {
+      "index": 10,
+      "op": "ttnn.slice_static",
+      "layout": "l1/interleaved/8x8",
+      "program_config": ""
+    },
+    {
+      "index": 11,
+      "op": "ttnn.silu",
+      "layout": "l1/width_sharded/1x64 cores=(0,0)-(7,7)",
+      "program_config": ""
+    },
+    {
+      "index": 12,
+      "op": "ttnn.multiply",
+      "layout": "l1/width_sharded/1x64 cores=(0,0)-(7,7)",
+      "program_config": ""
+    },
+    {
+      "index": 13,
+      "op": "ttnn.matmul",
+      "layout": "l1/width_sharded/1x64 cores=(0,0)-(7,7)",
+      "program_config": "matmul_multi_core_reuse_multi_cast_1d @8x8"
+    },
+    {
+      "index": 14,
+      "op": "ttnn.add",
+      "layout": "l1/width_sharded/1x64 cores=(0,0)-(7,7)",
+      "program_config": ""
+    }
+  ],
+  "reshards": [
+    {
+      "kind": "to_layout",
+      "producer": "input",
+      "consumer": "to_memory_config",
+      "from": "dram/interleaved/1x1",
+      "to": "dram/interleaved/1x1",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "to_layout",
+      "consumer": "rms_norm",
+      "from": "dram/interleaved/1x1",
+      "to": "l1/width_sharded/1x64 cores=(0,0)-(7,7)",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "reshape",
+      "consumer": "rms_norm",
+      "from": "dram/interleaved/1x1",
+      "to": "l1/width_sharded/1x64 cores=(0,0)-(7,7)",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "matmul",
+      "consumer": "slice_static",
+      "from": "l1/width_sharded/1x64 cores=(0,0)-(7,7)",
+      "to": "l1/interleaved/8x8",
+      "output_revert": false
+    },
+    {
+      "kind": "to_layout",
+      "producer": "input",
+      "consumer": "to_memory_config",
+      "from": "dram/interleaved/1x1",
+      "to": "dram/interleaved/1x1",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "to_layout",
+      "consumer": "add",
+      "from": "dram/interleaved/1x1",
+      "to": "l1/width_sharded/1x64 cores=(0,0)-(7,7)",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "reshape",
+      "consumer": "rms_norm",
+      "from": "dram/interleaved/1x1",
+      "to": "l1/width_sharded/1x64 cores=(0,0)-(7,7)",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "matmul",
+      "consumer": "slice_static",
+      "from": "l1/width_sharded/1x64 cores=(0,0)-(7,7)",
+      "to": "l1/interleaved/8x8",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "matmul",
+      "consumer": "slice_static",
+      "from": "l1/width_sharded/1x64 cores=(0,0)-(7,7)",
+      "to": "l1/interleaved/8x8",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "multiply",
+      "consumer": "matmul",
+      "from": "l1/width_sharded/1x64 cores=(0,0)-(7,7)",
+      "to": "l1/width_sharded/1x56 cores=(0,0)-(7,6)",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "add",
+      "consumer": "return",
+      "from": "l1/width_sharded/1x64 cores=(0,0)-(7,7)",
+      "to": "dram/interleaved/1x1",
+      "output_revert": true
+    }
+  ],
+  "artifacts": {
+    "final_ir": "/tmp/llama31-8b-shard-advice/final_ir.mlir",
+    "report_txt": "/tmp/llama31-8b-shard-advice/report.txt",
+    "decision_trace": "/tmp/llama31-8b-shard-advice/decision_trace/decode_decision_trace.json"
+  }
+}

@@ -1,0 +1,942 @@
+{
+  "weights": "real",
+  "batch": 32,
+  "cache_len": 128,
+  "pcc_threshold": 0.99,
+  "candidates": {
+    "default_bfp8_hifi2_dram_sharded": {
+      "status": "pass",
+      "layers": {
+        "layer0": {
+          "eager_ms": 2.6968657970428467,
+          "pcc": 0.9998587369918823
+        },
+        "layer31": {
+          "eager_ms": 2.7000725269317627,
+          "pcc": 0.9988876581192017
+        }
+      },
+      "policy": {
+        "attention_weight_dtype": "DataType.BFLOAT8_B",
+        "mlp_weight_dtype": "DataType.BFLOAT8_B",
+        "output_weight_dtype": "DataType.BFLOAT8_B",
+        "activation_dtype": "DataType.BFLOAT16",
+        "attention_math_fidelity": "MathFidelity.HiFi2",
+        "mlp_math_fidelity": "MathFidelity.HiFi2",
+        "qvk_in0_block_w": null,
+        "o_in0_block_w": null,
+        "gate_in0_block_w": null,
+        "up_in0_block_w": null,
+        "down_in0_block_w": null,
+        "qvk_l1_core_count": null,
+        "o_l1_core_count": null,
+        "gate_l1_core_count": null,
+        "up_l1_core_count": null,
+        "down_l1_core_count": null,
+        "use_dram_sharded_weights": true,
+        "use_decode_create_heads": false,
+        "use_explicit_sdpa_program_config": true,
+        "use_packed_gate_up_projection": true
+      }
+    },
+    "split_gate_up_bfp8_hifi2": {
+      "status": "pass",
+      "layers": {
+        "layer0": {
+          "eager_ms": 2.7700455859303474,
+          "pcc": 0.9998587369918823
+        },
+        "layer31": {
+          "eager_ms": 2.727835066616535,
+          "pcc": 0.9988876581192017
+        }
+      },
+      "policy": {
+        "attention_weight_dtype": "DataType.BFLOAT8_B",
+        "mlp_weight_dtype": "DataType.BFLOAT8_B",
+        "output_weight_dtype": "DataType.BFLOAT8_B",
+        "activation_dtype": "DataType.BFLOAT16",
+        "attention_math_fidelity": "MathFidelity.HiFi2",
+        "mlp_math_fidelity": "MathFidelity.HiFi2",
+        "qvk_in0_block_w": null,
+        "o_in0_block_w": null,
+        "gate_in0_block_w": null,
+        "up_in0_block_w": null,
+        "down_in0_block_w": null,
+        "qvk_l1_core_count": null,
+        "o_l1_core_count": null,
+        "gate_l1_core_count": null,
+        "up_l1_core_count": null,
+        "down_l1_core_count": null,
+        "use_dram_sharded_weights": true,
+        "use_decode_create_heads": false,
+        "use_explicit_sdpa_program_config": true,
+        "use_packed_gate_up_projection": false
+      }
+    },
+    "mlp_bfp4_attention_bfp8": {
+      "status": "fail",
+      "layers": {
+        "layer0": {
+          "eager_ms": 2.5727450847625732,
+          "pcc": 0.9936819076538086
+        },
+        "layer31": {
+          "eager_ms": 2.5625046342611313,
+          "pcc": 0.9893350005149841
+        }
+      },
+      "policy": {
+        "attention_weight_dtype": "DataType.BFLOAT8_B",
+        "mlp_weight_dtype": "DataType.BFLOAT4_B",
+        "output_weight_dtype": "DataType.BFLOAT8_B",
+        "activation_dtype": "DataType.BFLOAT16",
+        "attention_math_fidelity": "MathFidelity.HiFi2",
+        "mlp_math_fidelity": "MathFidelity.HiFi2",
+        "qvk_in0_block_w": null,
+        "o_in0_block_w": null,
+        "gate_in0_block_w": null,
+        "up_in0_block_w": null,
+        "down_in0_block_w": null,
+        "qvk_l1_core_count": null,
+        "o_l1_core_count": null,
+        "gate_l1_core_count": null,
+        "up_l1_core_count": null,
+        "down_l1_core_count": null,
+        "use_dram_sharded_weights": true,
+        "use_decode_create_heads": false,
+        "use_explicit_sdpa_program_config": true,
+        "use_packed_gate_up_projection": true
+      }
+    },
+    "mlp_bfp4_lofi_attention_bfp8": {
+      "status": "fail",
+      "layers": {
+        "layer0": {
+          "eager_ms": 2.6321522891521454,
+          "pcc": 0.9936819076538086
+        },
+        "layer31": {
+          "eager_ms": 2.4430811405181885,
+          "pcc": 0.9893350005149841
+        }
+      },
+      "policy": {
+        "attention_weight_dtype": "DataType.BFLOAT8_B",
+        "mlp_weight_dtype": "DataType.BFLOAT4_B",
+        "output_weight_dtype": "DataType.BFLOAT8_B",
+        "activation_dtype": "DataType.BFLOAT16",
+        "attention_math_fidelity": "MathFidelity.HiFi2",
+        "mlp_math_fidelity": "MathFidelity.LoFi",
+        "qvk_in0_block_w": null,
+        "o_in0_block_w": null,
+        "gate_in0_block_w": null,
+        "up_in0_block_w": null,
+        "down_in0_block_w": null,
+        "qvk_l1_core_count": null,
+        "o_l1_core_count": null,
+        "gate_l1_core_count": null,
+        "up_l1_core_count": null,
+        "down_l1_core_count": null,
+        "use_dram_sharded_weights": true,
+        "use_decode_create_heads": false,
+        "use_explicit_sdpa_program_config": true,
+        "use_packed_gate_up_projection": true
+      }
+    },
+    "mlp_bfp4_hifi4_attention_bfp8": {
+      "status": "fail",
+      "layers": {
+        "layer0": {
+          "eager_ms": 3.022025153040886,
+          "pcc": 0.9936532974243164
+        },
+        "layer31": {
+          "eager_ms": 3.0280236154794693,
+          "pcc": 0.9892237782478333
+        }
+      },
+      "policy": {
+        "attention_weight_dtype": "DataType.BFLOAT8_B",
+        "mlp_weight_dtype": "DataType.BFLOAT4_B",
+        "output_weight_dtype": "DataType.BFLOAT8_B",
+        "activation_dtype": "DataType.BFLOAT16",
+        "attention_math_fidelity": "MathFidelity.HiFi2",
+        "mlp_math_fidelity": "MathFidelity.HiFi4",
+        "qvk_in0_block_w": null,
+        "o_in0_block_w": null,
+        "gate_in0_block_w": null,
+        "up_in0_block_w": null,
+        "down_in0_block_w": null,
+        "qvk_l1_core_count": null,
+        "o_l1_core_count": null,
+        "gate_l1_core_count": null,
+        "up_l1_core_count": null,
+        "down_l1_core_count": null,
+        "use_dram_sharded_weights": true,
+        "use_decode_create_heads": false,
+        "use_explicit_sdpa_program_config": true,
+        "use_packed_gate_up_projection": true
+      }
+    },
+    "all_linear_bfp4": {
+      "status": "fail",
+      "layers": {
+        "layer0": {
+          "eager_ms": 2.5535959750413895,
+          "pcc": 0.9932551980018616
+        },
+        "layer31": {
+          "eager_ms": 2.5560500100255013,
+          "pcc": 0.9733318090438843
+        }
+      },
+      "policy": {
+        "attention_weight_dtype": "DataType.BFLOAT4_B",
+        "mlp_weight_dtype": "DataType.BFLOAT4_B",
+        "output_weight_dtype": "DataType.BFLOAT4_B",
+        "activation_dtype": "DataType.BFLOAT16",
+        "attention_math_fidelity": "MathFidelity.HiFi2",
+        "mlp_math_fidelity": "MathFidelity.HiFi2",
+        "qvk_in0_block_w": null,
+        "o_in0_block_w": null,
+        "gate_in0_block_w": null,
+        "up_in0_block_w": null,
+        "down_in0_block_w": null,
+        "qvk_l1_core_count": null,
+        "o_l1_core_count": null,
+        "gate_l1_core_count": null,
+        "up_l1_core_count": null,
+        "down_l1_core_count": null,
+        "use_dram_sharded_weights": true,
+        "use_decode_create_heads": false,
+        "use_explicit_sdpa_program_config": true,
+        "use_packed_gate_up_projection": true
+      }
+    },
+    "all_linear_bfp4_lofi": {
+      "status": "fail",
+      "layers": {
+        "layer0": {
+          "eager_ms": 2.404213882982731,
+          "pcc": 0.9932551980018616
+        },
+        "layer31": {
+          "eager_ms": 2.377113699913025,
+          "pcc": 0.9733318090438843
+        }
+      },
+      "policy": {
+        "attention_weight_dtype": "DataType.BFLOAT4_B",
+        "mlp_weight_dtype": "DataType.BFLOAT4_B",
+        "output_weight_dtype": "DataType.BFLOAT4_B",
+        "activation_dtype": "DataType.BFLOAT16",
+        "attention_math_fidelity": "MathFidelity.LoFi",
+        "mlp_math_fidelity": "MathFidelity.LoFi",
+        "qvk_in0_block_w": null,
+        "o_in0_block_w": null,
+        "gate_in0_block_w": null,
+        "up_in0_block_w": null,
+        "down_in0_block_w": null,
+        "qvk_l1_core_count": null,
+        "o_l1_core_count": null,
+        "gate_l1_core_count": null,
+        "up_l1_core_count": null,
+        "down_l1_core_count": null,
+        "use_dram_sharded_weights": true,
+        "use_decode_create_heads": false,
+        "use_explicit_sdpa_program_config": true,
+        "use_packed_gate_up_projection": true
+      }
+    },
+    "interleaved_bfp8_no_dram_sharded_program": {
+      "status": "pass",
+      "layers": {
+        "layer0": {
+          "eager_ms": 2.900421619415283,
+          "pcc": 0.9998310208320618
+        },
+        "layer31": {
+          "eager_ms": 2.899954654276371,
+          "pcc": 0.9988491535186768
+        }
+      },
+      "policy": {
+        "attention_weight_dtype": "DataType.BFLOAT8_B",
+        "mlp_weight_dtype": "DataType.BFLOAT8_B",
+        "output_weight_dtype": "DataType.BFLOAT8_B",
+        "activation_dtype": "DataType.BFLOAT16",
+        "attention_math_fidelity": "MathFidelity.HiFi2",
+        "mlp_math_fidelity": "MathFidelity.HiFi2",
+        "qvk_in0_block_w": null,
+        "o_in0_block_w": null,
+        "gate_in0_block_w": null,
+        "up_in0_block_w": null,
+        "down_in0_block_w": null,
+        "qvk_l1_core_count": null,
+        "o_l1_core_count": null,
+        "gate_l1_core_count": null,
+        "up_l1_core_count": null,
+        "down_l1_core_count": null,
+        "use_dram_sharded_weights": false,
+        "use_decode_create_heads": false,
+        "use_explicit_sdpa_program_config": true,
+        "use_packed_gate_up_projection": true
+      }
+    },
+    "decode_create_heads_candidate": {
+      "status": "fail",
+      "error": "RuntimeError: TT_FATAL @ /localdev/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/rotary_embedding.cpp:67: cos_seq_len >= input_seq_len\ninfo:\nCosine cache must cover the input sequence length. Input sequence length: 8, Cos cache sequence length: 1.\nbacktrace:\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x41a52f) [0x7f5efbb6c52f]\n --- ttnn::experimental::rotary_embedding(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<unsigned int>, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<ttnn::ComputeKernelConfig const>)\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x552811) [0x7f5efbca4811]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x87b065) [0x7f5efbfcd065]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]\n --- python() [0x1811a20]\n --- python(_PyEval_EvalFrameDefault+0xf7ad) [0x1821b6d]\n --- python(PyEval_EvalCode+0xde) [0x187cd9e]\n --- python() [0x18bb609]\n --- python() [0x19f8885]\n --- python(_PyRun_SimpleFileObject+0x106) [0x19f8646]\n --- python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]\n --- python() [0x19f8350]\n --- python() [0x19f825d]\n --- python() [0x1ae65e3]\n --- python() [0x1972218]\n --- python() [0x197202c]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7f5f55f171ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7f5f55f1728b]\n --- python(_start+0x29) [0x19bf069]\n",
+      "policy": {
+        "attention_weight_dtype": "DataType.BFLOAT8_B",
+        "mlp_weight_dtype": "DataType.BFLOAT8_B",
+        "output_weight_dtype": "DataType.BFLOAT8_B",
+        "activation_dtype": "DataType.BFLOAT16",
+        "attention_math_fidelity": "MathFidelity.HiFi2",
+        "mlp_math_fidelity": "MathFidelity.HiFi2",
+        "qvk_in0_block_w": null,
+        "o_in0_block_w": null,
+        "gate_in0_block_w": null,
+        "up_in0_block_w": null,
+        "down_in0_block_w": null,
+        "qvk_l1_core_count": null,
+        "o_l1_core_count": null,
+        "gate_l1_core_count": null,
+        "up_l1_core_count": null,
+        "down_l1_core_count": null,
+        "use_dram_sharded_weights": true,
+        "use_decode_create_heads": true,
+        "use_explicit_sdpa_program_config": true,
+        "use_packed_gate_up_projection": true
+      }
+    },
+    "packed_gate_up_bfp8_hifi2": {
+      "status": "pass",
+      "layers": {
+        "layer0": {
+          "eager_ms": 2.7076398953795433,
+          "pcc": 0.9998587369918823
+        },
+        "layer31": {
+          "eager_ms": 2.7072155848145485,
+          "pcc": 0.9988876581192017
+        }
+      },
+      "policy": {
+        "attention_weight_dtype": "DataType.BFLOAT8_B",
+        "mlp_weight_dtype": "DataType.BFLOAT8_B",
+        "output_weight_dtype": "DataType.BFLOAT8_B",
+        "activation_dtype": "DataType.BFLOAT16",
+        "attention_math_fidelity": "MathFidelity.HiFi2",
+        "mlp_math_fidelity": "MathFidelity.HiFi2",
+        "qvk_in0_block_w": null,
+        "o_in0_block_w": null,
+        "gate_in0_block_w": null,
+        "up_in0_block_w": null,
+        "down_in0_block_w": null,
+        "qvk_l1_core_count": null,
+        "o_l1_core_count": null,
+        "gate_l1_core_count": null,
+        "up_l1_core_count": null,
+        "down_l1_core_count": null,
+        "use_dram_sharded_weights": true,
+        "use_decode_create_heads": false,
+        "use_explicit_sdpa_program_config": true,
+        "use_packed_gate_up_projection": true
+      }
+    }
+  },
+  "geometry_sweep": {
+    "in0_block_w_same_shard_shape": {
+      "qvk": {
+        "1": {
+          "status": "pass",
+          "eager_ms": 2.774955394367377,
+          "pcc": 0.999851405620575
+        },
+        "2": {
+          "status": "pass",
+          "eager_ms": 2.7227221677700677,
+          "pcc": 0.9998587369918823
+        },
+        "4": {
+          "status": "fail",
+          "error": "RuntimeError: TT_FATAL @ /localdev/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:1386: (shard_shape[1] / in0_tile.get_width()) % program_config.in0_block_w == 0\ninfo:\nshard_shape[1] / in0_tile.get_width() (2) must be divisible by in0_block_w (4)\nbacktrace:\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x9e2b38) [0x7f5efa353b38]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x17ef926) [0x7f5efb160926]\n --- ttnn::prim::MatmulDeviceOperation::validate_on_program_cache_miss(ttnn::prim::MatmulParams const&, ttnn::prim::MatmulInputs const&)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0x29) [0x7f5efb169499]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x16e) [0x7f5efb167fee]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x4ea) [0x7f5efb166eea]\n --- ttnn::prim::matmul(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x178b1ca) [0x7f5efb0fc1ca]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6matmulERKN2tt8tt_metal6TensorES6_bbRKSt8optionalIKNS3_12MemoryConfigEES7_IKNS3_8DataTypeEERKS7_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS7_IKSG_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES7_IKNS_19ComputeKernelConfigEES7_IKNS_5types8CoreGridEERKS7_IKNS3_4TileEES7_IS4_ERKS7_IKNS3_12experimental20GlobalCircularBufferEERKS7_IN4ttsl10StrongTypeIhNS3_14SubDeviceIdTagEEEE+0x373) [0x7f5efb0fb5b3]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532ff9) [0x7f5efbc84ff9]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532712) [0x7f5efbc84712]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x87b065) [0x7f5efbfcd065]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]\n --- python() [0x1811a20]\n --- python(_PyEval_EvalFrameDefault+0xf7ad) [0x1821b6d]\n --- python(PyEval_EvalCode+0xde) [0x187cd9e]\n --- python() [0x18bb609]\n --- python() [0x19f8885]\n --- python(_PyRun_SimpleFileObject+0x106) [0x19f8646]\n --- python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]\n --- python() [0x19f8350]\n --- python() [0x19f825d]\n --- python() [0x1ae65e3]\n --- python() [0x1972218]\n --- python() [0x197202c]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7f5f55f171ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7f5f55f1728b]\n --- python(_start+0x29) [0x19bf069]\n"
+        },
+        "8": {
+          "status": "fail",
+          "error": "RuntimeError: TT_FATAL @ /localdev/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:1386: (shard_shape[1] / in0_tile.get_width()) % program_config.in0_block_w == 0\ninfo:\nshard_shape[1] / in0_tile.get_width() (2) must be divisible by in0_block_w (8)\nbacktrace:\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x9e2b38) [0x7f5efa353b38]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x17ef926) [0x7f5efb160926]\n --- ttnn::prim::MatmulDeviceOperation::validate_on_program_cache_miss(ttnn::prim::MatmulParams const&, ttnn::prim::MatmulInputs const&)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0x29) [0x7f5efb169499]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x16e) [0x7f5efb167fee]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x4ea) [0x7f5efb166eea]\n --- ttnn::prim::matmul(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x178b1ca) [0x7f5efb0fc1ca]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6matmulERKN2tt8tt_metal6TensorES6_bbRKSt8optionalIKNS3_12MemoryConfigEES7_IKNS3_8DataTypeEERKS7_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS7_IKSG_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES7_IKNS_19ComputeKernelConfigEES7_IKNS_5types8CoreGridEERKS7_IKNS3_4TileEES7_IS4_ERKS7_IKNS3_12experimental20GlobalCircularBufferEERKS7_IN4ttsl10StrongTypeIhNS3_14SubDeviceIdTagEEEE+0x373) [0x7f5efb0fb5b3]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532ff9) [0x7f5efbc84ff9]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532712) [0x7f5efbc84712]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x87b065) [0x7f5efbfcd065]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]\n --- python() [0x1811a20]\n --- python(_PyEval_EvalFrameDefault+0xf7ad) [0x1821b6d]\n --- python(PyEval_EvalCode+0xde) [0x187cd9e]\n --- python() [0x18bb609]\n --- python() [0x19f8885]\n --- python(_PyRun_SimpleFileObject+0x106) [0x19f8646]\n --- python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]\n --- python() [0x19f8350]\n --- python() [0x19f825d]\n --- python() [0x1ae65e3]\n --- python() [0x1972218]\n --- python() [0x197202c]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7f5f55f171ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7f5f55f1728b]\n --- python(_start+0x29) [0x19bf069]\n"
+        },
+        "16": {
+          "status": "fail",
+          "error": "RuntimeError: TT_FATAL @ /localdev/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:1386: (shard_shape[1] / in0_tile.get_width()) % program_config.in0_block_w == 0\ninfo:\nshard_shape[1] / in0_tile.get_width() (2) must be divisible by in0_block_w (16)\nbacktrace:\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x9e2b38) [0x7f5efa353b38]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x17ef926) [0x7f5efb160926]\n --- ttnn::prim::MatmulDeviceOperation::validate_on_program_cache_miss(ttnn::prim::MatmulParams const&, ttnn::prim::MatmulInputs const&)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0x29) [0x7f5efb169499]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x16e) [0x7f5efb167fee]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x4ea) [0x7f5efb166eea]\n --- ttnn::prim::matmul(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x178b1ca) [0x7f5efb0fc1ca]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6matmulERKN2tt8tt_metal6TensorES6_bbRKSt8optionalIKNS3_12MemoryConfigEES7_IKNS3_8DataTypeEERKS7_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS7_IKSG_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES7_IKNS_19ComputeKernelConfigEES7_IKNS_5types8CoreGridEERKS7_IKNS3_4TileEES7_IS4_ERKS7_IKNS3_12experimental20GlobalCircularBufferEERKS7_IN4ttsl10StrongTypeIhNS3_14SubDeviceIdTagEEEE+0x373) [0x7f5efb0fb5b3]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532ff9) [0x7f5efbc84ff9]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532712) [0x7f5efbc84712]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x87b065) [0x7f5efbfcd065]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]\n --- python() [0x1811a20]\n --- python(_PyEval_EvalFrameDefault+0xf7ad) [0x1821b6d]\n --- python(PyEval_EvalCode+0xde) [0x187cd9e]\n --- python() [0x18bb609]\n --- python() [0x19f8885]\n --- python(_PyRun_SimpleFileObject+0x106) [0x19f8646]\n --- python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]\n --- python() [0x19f8350]\n --- python() [0x19f825d]\n --- python() [0x1ae65e3]\n --- python() [0x1972218]\n --- python() [0x197202c]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7f5f55f171ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7f5f55f1728b]\n --- python(_start+0x29) [0x19bf069]\n"
+        }
+      },
+      "o": {
+        "1": {
+          "status": "pass",
+          "eager_ms": 2.7845545361439386,
+          "pcc": 0.9998565912246704
+        },
+        "2": {
+          "status": "pass",
+          "eager_ms": 2.7215067918101945,
+          "pcc": 0.9998587369918823
+        },
+        "4": {
+          "status": "fail",
+          "error": "RuntimeError: TT_FATAL @ /localdev/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:1386: (shard_shape[1] / in0_tile.get_width()) % program_config.in0_block_w == 0\ninfo:\nshard_shape[1] / in0_tile.get_width() (2) must be divisible by in0_block_w (4)\nbacktrace:\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x9e2b38) [0x7f5efa353b38]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x17ef926) [0x7f5efb160926]\n --- ttnn::prim::MatmulDeviceOperation::validate_on_program_cache_miss(ttnn::prim::MatmulParams const&, ttnn::prim::MatmulInputs const&)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0x29) [0x7f5efb169499]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x16e) [0x7f5efb167fee]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x4ea) [0x7f5efb166eea]\n --- ttnn::prim::matmul(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x178b1ca) [0x7f5efb0fc1ca]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6matmulERKN2tt8tt_metal6TensorES6_bbRKSt8optionalIKNS3_12MemoryConfigEES7_IKNS3_8DataTypeEERKS7_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS7_IKSG_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES7_IKNS_19ComputeKernelConfigEES7_IKNS_5types8CoreGridEERKS7_IKNS3_4TileEES7_IS4_ERKS7_IKNS3_12experimental20GlobalCircularBufferEERKS7_IN4ttsl10StrongTypeIhNS3_14SubDeviceIdTagEEEE+0x373) [0x7f5efb0fb5b3]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532ff9) [0x7f5efbc84ff9]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532712) [0x7f5efbc84712]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x87b065) [0x7f5efbfcd065]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]\n --- python() [0x1811a20]\n --- python(_PyEval_EvalFrameDefault+0xf7ad) [0x1821b6d]\n --- python(PyEval_EvalCode+0xde) [0x187cd9e]\n --- python() [0x18bb609]\n --- python() [0x19f8885]\n --- python(_PyRun_SimpleFileObject+0x106) [0x19f8646]\n --- python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]\n --- python() [0x19f8350]\n --- python() [0x19f825d]\n --- python() [0x1ae65e3]\n --- python() [0x1972218]\n --- python() [0x197202c]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7f5f55f171ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7f5f55f1728b]\n --- python(_start+0x29) [0x19bf069]\n"
+        },
+        "8": {
+          "status": "fail",
+          "error": "RuntimeError: TT_FATAL @ /localdev/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:1386: (shard_shape[1] / in0_tile.get_width()) % program_config.in0_block_w == 0\ninfo:\nshard_shape[1] / in0_tile.get_width() (2) must be divisible by in0_block_w (8)\nbacktrace:\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x9e2b38) [0x7f5efa353b38]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x17ef926) [0x7f5efb160926]\n --- ttnn::prim::MatmulDeviceOperation::validate_on_program_cache_miss(ttnn::prim::MatmulParams const&, ttnn::prim::MatmulInputs const&)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0x29) [0x7f5efb169499]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x16e) [0x7f5efb167fee]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x4ea) [0x7f5efb166eea]\n --- ttnn::prim::matmul(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x178b1ca) [0x7f5efb0fc1ca]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6matmulERKN2tt8tt_metal6TensorES6_bbRKSt8optionalIKNS3_12MemoryConfigEES7_IKNS3_8DataTypeEERKS7_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS7_IKSG_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES7_IKNS_19ComputeKernelConfigEES7_IKNS_5types8CoreGridEERKS7_IKNS3_4TileEES7_IS4_ERKS7_IKNS3_12experimental20GlobalCircularBufferEERKS7_IN4ttsl10StrongTypeIhNS3_14SubDeviceIdTagEEEE+0x373) [0x7f5efb0fb5b3]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532ff9) [0x7f5efbc84ff9]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532712) [0x7f5efbc84712]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x87b065) [0x7f5efbfcd065]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]\n --- python() [0x1811a20]\n --- python(_PyEval_EvalFrameDefault+0xf7ad) [0x1821b6d]\n --- python(PyEval_EvalCode+0xde) [0x187cd9e]\n --- python() [0x18bb609]\n --- python() [0x19f8885]\n --- python(_PyRun_SimpleFileObject+0x106) [0x19f8646]\n --- python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]\n --- python() [0x19f8350]\n --- python() [0x19f825d]\n --- python() [0x1ae65e3]\n --- python() [0x1972218]\n --- python() [0x197202c]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7f5f55f171ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7f5f55f1728b]\n --- python(_start+0x29) [0x19bf069]\n"
+        },
+        "16": {
+          "status": "fail",
+          "error": "RuntimeError: TT_FATAL @ /localdev/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:1386: (shard_shape[1] / in0_tile.get_width()) % program_config.in0_block_w == 0\ninfo:\nshard_shape[1] / in0_tile.get_width() (2) must be divisible by in0_block_w (16)\nbacktrace:\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x9e2b38) [0x7f5efa353b38]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x17ef926) [0x7f5efb160926]\n --- ttnn::prim::MatmulDeviceOperation::validate_on_program_cache_miss(ttnn::prim::MatmulParams const&, ttnn::prim::MatmulInputs const&)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0x29) [0x7f5efb169499]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x16e) [0x7f5efb167fee]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x4ea) [0x7f5efb166eea]\n --- ttnn::prim::matmul(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x178b1ca) [0x7f5efb0fc1ca]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6matmulERKN2tt8tt_metal6TensorES6_bbRKSt8optionalIKNS3_12MemoryConfigEES7_IKNS3_8DataTypeEERKS7_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS7_IKSG_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES7_IKNS_19ComputeKernelConfigEES7_IKNS_5types8CoreGridEERKS7_IKNS3_4TileEES7_IS4_ERKS7_IKNS3_12experimental20GlobalCircularBufferEERKS7_IN4ttsl10StrongTypeIhNS3_14SubDeviceIdTagEEEE+0x373) [0x7f5efb0fb5b3]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532ff9) [0x7f5efbc84ff9]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532712) [0x7f5efbc84712]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x87b065) [0x7f5efbfcd065]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]\n --- python() [0x1811a20]\n --- python(_PyEval_EvalFrameDefault+0xf7ad) [0x1821b6d]\n --- python(PyEval_EvalCode+0xde) [0x187cd9e]\n --- python() [0x18bb609]\n --- python() [0x19f8885]\n --- python(_PyRun_SimpleFileObject+0x106) [0x19f8646]\n --- python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]\n --- python() [0x19f8350]\n --- python() [0x19f825d]\n --- python() [0x1ae65e3]\n --- python() [0x1972218]\n --- python() [0x197202c]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7f5f55f171ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7f5f55f1728b]\n --- python(_start+0x29) [0x19bf069]\n"
+        }
+      },
+      "packed_gate_up": {
+        "1": {
+          "status": "pass",
+          "eager_ms": 2.8557199984788895,
+          "pcc": 0.9998354911804199
+        },
+        "2": {
+          "status": "pass",
+          "eager_ms": 2.7231241886814437,
+          "pcc": 0.9998587369918823
+        },
+        "4": {
+          "status": "fail",
+          "error": "RuntimeError: TT_FATAL @ /localdev/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:1386: (shard_shape[1] / in0_tile.get_width()) % program_config.in0_block_w == 0\ninfo:\nshard_shape[1] / in0_tile.get_width() (2) must be divisible by in0_block_w (4)\nbacktrace:\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x9e2b38) [0x7f5efa353b38]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x17ef926) [0x7f5efb160926]\n --- ttnn::prim::MatmulDeviceOperation::validate_on_program_cache_miss(ttnn::prim::MatmulParams const&, ttnn::prim::MatmulInputs const&)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0x29) [0x7f5efb169499]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x16e) [0x7f5efb167fee]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x4ea) [0x7f5efb166eea]\n --- ttnn::prim::matmul(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x178b1ca) [0x7f5efb0fc1ca]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6matmulERKN2tt8tt_metal6TensorES6_bbRKSt8optionalIKNS3_12MemoryConfigEES7_IKNS3_8DataTypeEERKS7_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS7_IKSG_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES7_IKNS_19ComputeKernelConfigEES7_IKNS_5types8CoreGridEERKS7_IKNS3_4TileEES7_IS4_ERKS7_IKNS3_12experimental20GlobalCircularBufferEERKS7_IN4ttsl10StrongTypeIhNS3_14SubDeviceIdTagEEEE+0x373) [0x7f5efb0fb5b3]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532ff9) [0x7f5efbc84ff9]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532712) [0x7f5efbc84712]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x87b065) [0x7f5efbfcd065]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]\n --- python() [0x1811a20]\n --- python(_PyEval_EvalFrameDefault+0xf7ad) [0x1821b6d]\n --- python(PyEval_EvalCode+0xde) [0x187cd9e]\n --- python() [0x18bb609]\n --- python() [0x19f8885]\n --- python(_PyRun_SimpleFileObject+0x106) [0x19f8646]\n --- python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]\n --- python() [0x19f8350]\n --- python() [0x19f825d]\n --- python() [0x1ae65e3]\n --- python() [0x1972218]\n --- python() [0x197202c]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7f5f55f171ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7f5f55f1728b]\n --- python(_start+0x29) [0x19bf069]\n"
+        },
+        "8": {
+          "status": "fail",
+          "error": "RuntimeError: TT_FATAL @ /localdev/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:1386: (shard_shape[1] / in0_tile.get_width()) % program_config.in0_block_w == 0\ninfo:\nshard_shape[1] / in0_tile.get_width() (2) must be divisible by in0_block_w (8)\nbacktrace:\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x9e2b38) [0x7f5efa353b38]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x17ef926) [0x7f5efb160926]\n --- ttnn::prim::MatmulDeviceOperation::validate_on_program_cache_miss(ttnn::prim::MatmulParams const&, ttnn::prim::MatmulInputs const&)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0x29) [0x7f5efb169499]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x16e) [0x7f5efb167fee]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x4ea) [0x7f5efb166eea]\n --- ttnn::prim::matmul(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x178b1ca) [0x7f5efb0fc1ca]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6matmulERKN2tt8tt_metal6TensorES6_bbRKSt8optionalIKNS3_12MemoryConfigEES7_IKNS3_8DataTypeEERKS7_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS7_IKSG_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES7_IKNS_19ComputeKernelConfigEES7_IKNS_5types8CoreGridEERKS7_IKNS3_4TileEES7_IS4_ERKS7_IKNS3_12experimental20GlobalCircularBufferEERKS7_IN4ttsl10StrongTypeIhNS3_14SubDeviceIdTagEEEE+0x373) [0x7f5efb0fb5b3]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532ff9) [0x7f5efbc84ff9]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532712) [0x7f5efbc84712]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x87b065) [0x7f5efbfcd065]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]\n --- python() [0x1811a20]\n --- python(_PyEval_EvalFrameDefault+0xf7ad) [0x1821b6d]\n --- python(PyEval_EvalCode+0xde) [0x187cd9e]\n --- python() [0x18bb609]\n --- python() [0x19f8885]\n --- python(_PyRun_SimpleFileObject+0x106) [0x19f8646]\n --- python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]\n --- python() [0x19f8350]\n --- python() [0x19f825d]\n --- python() [0x1ae65e3]\n --- python() [0x1972218]\n --- python() [0x197202c]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7f5f55f171ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7f5f55f1728b]\n --- python(_start+0x29) [0x19bf069]\n"
+        },
+        "16": {
+          "status": "fail",
+          "error": "RuntimeError: TT_FATAL @ /localdev/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:1386: (shard_shape[1] / in0_tile.get_width()) % program_config.in0_block_w == 0\ninfo:\nshard_shape[1] / in0_tile.get_width() (2) must be divisible by in0_block_w (16)\nbacktrace:\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x9e2b38) [0x7f5efa353b38]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x17ef926) [0x7f5efb160926]\n --- ttnn::prim::MatmulDeviceOperation::validate_on_program_cache_miss(ttnn::prim::MatmulParams const&, ttnn::prim::MatmulInputs const&)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0x29) [0x7f5efb169499]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x16e) [0x7f5efb167fee]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x4ea) [0x7f5efb166eea]\n --- ttnn::prim::matmul(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x178b1ca) [0x7f5efb0fc1ca]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6matmulERKN2tt8tt_metal6TensorES6_bbRKSt8optionalIKNS3_12MemoryConfigEES7_IKNS3_8DataTypeEERKS7_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS7_IKSG_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES7_IKNS_19ComputeKernelConfigEES7_IKNS_5types8CoreGridEERKS7_IKNS3_4TileEES7_IS4_ERKS7_IKNS3_12experimental20GlobalCircularBufferEERKS7_IN4ttsl10StrongTypeIhNS3_14SubDeviceIdTagEEEE+0x373) [0x7f5efb0fb5b3]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532ff9) [0x7f5efbc84ff9]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532712) [0x7f5efbc84712]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x87b065) [0x7f5efbfcd065]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]\n --- python() [0x1811a20]\n --- python(_PyEval_EvalFrameDefault+0xf7ad) [0x1821b6d]\n --- python(PyEval_EvalCode+0xde) [0x187cd9e]\n --- python() [0x18bb609]\n --- python() [0x19f8885]\n --- python(_PyRun_SimpleFileObject+0x106) [0x19f8646]\n --- python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]\n --- python() [0x19f8350]\n --- python() [0x19f825d]\n --- python() [0x1ae65e3]\n --- python() [0x1972218]\n --- python() [0x197202c]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7f5f55f171ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7f5f55f1728b]\n --- python(_start+0x29) [0x19bf069]\n"
+        }
+      },
+      "down": {
+        "1": {
+          "status": "pass",
+          "eager_ms": 2.9668820401032767,
+          "pcc": 0.999774694442749
+        },
+        "2": {
+          "status": "fail",
+          "error": "RuntimeError: TT_FATAL @ /localdev/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:1386: (shard_shape[1] / in0_tile.get_width()) % program_config.in0_block_w == 0\ninfo:\nshard_shape[1] / in0_tile.get_width() (7) must be divisible by in0_block_w (2)\nbacktrace:\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x9e2b38) [0x7f5efa353b38]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x17ef926) [0x7f5efb160926]\n --- ttnn::prim::MatmulDeviceOperation::validate_on_program_cache_miss(ttnn::prim::MatmulParams const&, ttnn::prim::MatmulInputs const&)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0x29) [0x7f5efb169499]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x16e) [0x7f5efb167fee]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x4ea) [0x7f5efb166eea]\n --- ttnn::prim::matmul(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x178b1ca) [0x7f5efb0fc1ca]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6matmulERKN2tt8tt_metal6TensorES6_bbRKSt8optionalIKNS3_12MemoryConfigEES7_IKNS3_8DataTypeEERKS7_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS7_IKSG_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES7_IKNS_19ComputeKernelConfigEES7_IKNS_5types8CoreGridEERKS7_IKNS3_4TileEES7_IS4_ERKS7_IKNS3_12experimental20GlobalCircularBufferEERKS7_IN4ttsl10StrongTypeIhNS3_14SubDeviceIdTagEEEE+0x373) [0x7f5efb0fb5b3]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532ff9) [0x7f5efbc84ff9]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532712) [0x7f5efbc84712]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x87b065) [0x7f5efbfcd065]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]\n --- python() [0x1811a20]\n --- python(_PyEval_EvalFrameDefault+0xf7ad) [0x1821b6d]\n --- python(PyEval_EvalCode+0xde) [0x187cd9e]\n --- python() [0x18bb609]\n --- python() [0x19f8885]\n --- python(_PyRun_SimpleFileObject+0x106) [0x19f8646]\n --- python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]\n --- python() [0x19f8350]\n --- python() [0x19f825d]\n --- python() [0x1ae65e3]\n --- python() [0x1972218]\n --- python() [0x197202c]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7f5f55f171ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7f5f55f1728b]\n --- python(_start+0x29) [0x19bf069]\n"
+        },
+        "4": {
+          "status": "fail",
+          "error": "RuntimeError: TT_FATAL @ /localdev/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:1386: (shard_shape[1] / in0_tile.get_width()) % program_config.in0_block_w == 0\ninfo:\nshard_shape[1] / in0_tile.get_width() (7) must be divisible by in0_block_w (4)\nbacktrace:\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x9e2b38) [0x7f5efa353b38]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x17ef926) [0x7f5efb160926]\n --- ttnn::prim::MatmulDeviceOperation::validate_on_program_cache_miss(ttnn::prim::MatmulParams const&, ttnn::prim::MatmulInputs const&)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0x29) [0x7f5efb169499]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x16e) [0x7f5efb167fee]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x4ea) [0x7f5efb166eea]\n --- ttnn::prim::matmul(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x178b1ca) [0x7f5efb0fc1ca]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6matmulERKN2tt8tt_metal6TensorES6_bbRKSt8optionalIKNS3_12MemoryConfigEES7_IKNS3_8DataTypeEERKS7_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS7_IKSG_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES7_IKNS_19ComputeKernelConfigEES7_IKNS_5types8CoreGridEERKS7_IKNS3_4TileEES7_IS4_ERKS7_IKNS3_12experimental20GlobalCircularBufferEERKS7_IN4ttsl10StrongTypeIhNS3_14SubDeviceIdTagEEEE+0x373) [0x7f5efb0fb5b3]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532ff9) [0x7f5efbc84ff9]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532712) [0x7f5efbc84712]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x87b065) [0x7f5efbfcd065]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]\n --- python() [0x1811a20]\n --- python(_PyEval_EvalFrameDefault+0xf7ad) [0x1821b6d]\n --- python(PyEval_EvalCode+0xde) [0x187cd9e]\n --- python() [0x18bb609]\n --- python() [0x19f8885]\n --- python(_PyRun_SimpleFileObject+0x106) [0x19f8646]\n --- python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]\n --- python() [0x19f8350]\n --- python() [0x19f825d]\n --- python() [0x1ae65e3]\n --- python() [0x1972218]\n --- python() [0x197202c]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7f5f55f171ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7f5f55f1728b]\n --- python(_start+0x29) [0x19bf069]\n"
+        },
+        "7": {
+          "status": "pass",
+          "eager_ms": 2.708838631709417,
+          "pcc": 0.9998587369918823
+        },
+        "8": {
+          "status": "fail",
+          "error": "RuntimeError: TT_FATAL @ /localdev/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:1386: (shard_shape[1] / in0_tile.get_width()) % program_config.in0_block_w == 0\ninfo:\nshard_shape[1] / in0_tile.get_width() (7) must be divisible by in0_block_w (8)\nbacktrace:\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x9e2b38) [0x7f5efa353b38]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x17ef926) [0x7f5efb160926]\n --- ttnn::prim::MatmulDeviceOperation::validate_on_program_cache_miss(ttnn::prim::MatmulParams const&, ttnn::prim::MatmulInputs const&)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0x29) [0x7f5efb169499]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x16e) [0x7f5efb167fee]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x4ea) [0x7f5efb166eea]\n --- ttnn::prim::matmul(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x178b1ca) [0x7f5efb0fc1ca]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6matmulERKN2tt8tt_metal6TensorES6_bbRKSt8optionalIKNS3_12MemoryConfigEES7_IKNS3_8DataTypeEERKS7_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS7_IKSG_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES7_IKNS_19ComputeKernelConfigEES7_IKNS_5types8CoreGridEERKS7_IKNS3_4TileEES7_IS4_ERKS7_IKNS3_12experimental20GlobalCircularBufferEERKS7_IN4ttsl10StrongTypeIhNS3_14SubDeviceIdTagEEEE+0x373) [0x7f5efb0fb5b3]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532ff9) [0x7f5efbc84ff9]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532712) [0x7f5efbc84712]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x87b065) [0x7f5efbfcd065]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]\n --- python() [0x1811a20]\n --- python(_PyEval_EvalFrameDefault+0xf7ad) [0x1821b6d]\n --- python(PyEval_EvalCode+0xde) [0x187cd9e]\n --- python() [0x18bb609]\n --- python() [0x19f8885]\n --- python(_PyRun_SimpleFileObject+0x106) [0x19f8646]\n --- python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]\n --- python() [0x19f8350]\n --- python() [0x19f825d]\n --- python() [0x1ae65e3]\n --- python() [0x1972218]\n --- python() [0x197202c]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7f5f55f171ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7f5f55f1728b]\n --- python(_start+0x29) [0x19bf069]\n"
+        },
+        "16": {
+          "status": "fail",
+          "error": "RuntimeError: TT_FATAL @ /localdev/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:1386: (shard_shape[1] / in0_tile.get_width()) % program_config.in0_block_w == 0\ninfo:\nshard_shape[1] / in0_tile.get_width() (7) must be divisible by in0_block_w (16)\nbacktrace:\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x9e2b38) [0x7f5efa353b38]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x17ef926) [0x7f5efb160926]\n --- ttnn::prim::MatmulDeviceOperation::validate_on_program_cache_miss(ttnn::prim::MatmulParams const&, ttnn::prim::MatmulInputs const&)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0x29) [0x7f5efb169499]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x16e) [0x7f5efb167fee]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x4ea) [0x7f5efb166eea]\n --- ttnn::prim::matmul(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x178b1ca) [0x7f5efb0fc1ca]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6matmulERKN2tt8tt_metal6TensorES6_bbRKSt8optionalIKNS3_12MemoryConfigEES7_IKNS3_8DataTypeEERKS7_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS7_IKSG_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES7_IKNS_19ComputeKernelConfigEES7_IKNS_5types8CoreGridEERKS7_IKNS3_4TileEES7_IS4_ERKS7_IKNS3_12experimental20GlobalCircularBufferEERKS7_IN4ttsl10StrongTypeIhNS3_14SubDeviceIdTagEEEE+0x373) [0x7f5efb0fb5b3]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532ff9) [0x7f5efbc84ff9]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532712) [0x7f5efbc84712]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x87b065) [0x7f5efbfcd065]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]\n --- python() [0x1811a20]\n --- python(_PyEval_EvalFrameDefault+0xf7ad) [0x1821b6d]\n --- python(PyEval_EvalCode+0xde) [0x187cd9e]\n --- python() [0x18bb609]\n --- python() [0x19f8885]\n --- python(_PyRun_SimpleFileObject+0x106) [0x19f8646]\n --- python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]\n --- python() [0x19f8350]\n --- python() [0x19f825d]\n --- python() [0x1ae65e3]\n --- python() [0x1972218]\n --- python() [0x197202c]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7f5f55f171ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7f5f55f1728b]\n --- python(_start+0x29) [0x19bf069]\n"
+        }
+      }
+    },
+    "adapted_l1_core_count": {
+      "qvk": {
+        "cores32_in0auto": {
+          "status": "pass",
+          "eager_ms": 2.7044561381141343,
+          "pcc": 0.9998563528060913,
+          "policy": {
+            "attention_weight_dtype": "DataType.BFLOAT8_B",
+            "mlp_weight_dtype": "DataType.BFLOAT8_B",
+            "output_weight_dtype": "DataType.BFLOAT8_B",
+            "activation_dtype": "DataType.BFLOAT16",
+            "attention_math_fidelity": "MathFidelity.HiFi2",
+            "mlp_math_fidelity": "MathFidelity.HiFi2",
+            "qvk_in0_block_w": null,
+            "o_in0_block_w": null,
+            "gate_in0_block_w": null,
+            "up_in0_block_w": null,
+            "down_in0_block_w": null,
+            "qvk_l1_core_count": 32,
+            "o_l1_core_count": null,
+            "gate_l1_core_count": null,
+            "up_l1_core_count": null,
+            "down_l1_core_count": null,
+            "use_dram_sharded_weights": true,
+            "use_decode_create_heads": false,
+            "use_explicit_sdpa_program_config": true,
+            "use_packed_gate_up_projection": true
+          }
+        },
+        "cores32_in04": {
+          "status": "pass",
+          "eager_ms": 2.70633182177941,
+          "pcc": 0.9998563528060913,
+          "policy": {
+            "attention_weight_dtype": "DataType.BFLOAT8_B",
+            "mlp_weight_dtype": "DataType.BFLOAT8_B",
+            "output_weight_dtype": "DataType.BFLOAT8_B",
+            "activation_dtype": "DataType.BFLOAT16",
+            "attention_math_fidelity": "MathFidelity.HiFi2",
+            "mlp_math_fidelity": "MathFidelity.HiFi2",
+            "qvk_in0_block_w": 4,
+            "o_in0_block_w": null,
+            "gate_in0_block_w": null,
+            "up_in0_block_w": null,
+            "down_in0_block_w": null,
+            "qvk_l1_core_count": 32,
+            "o_l1_core_count": null,
+            "gate_l1_core_count": null,
+            "up_l1_core_count": null,
+            "down_l1_core_count": null,
+            "use_dram_sharded_weights": true,
+            "use_decode_create_heads": false,
+            "use_explicit_sdpa_program_config": true,
+            "use_packed_gate_up_projection": true
+          }
+        },
+        "cores16_in0auto": {
+          "status": "pass",
+          "eager_ms": 2.718064313133558,
+          "pcc": 0.9998606443405151,
+          "policy": {
+            "attention_weight_dtype": "DataType.BFLOAT8_B",
+            "mlp_weight_dtype": "DataType.BFLOAT8_B",
+            "output_weight_dtype": "DataType.BFLOAT8_B",
+            "activation_dtype": "DataType.BFLOAT16",
+            "attention_math_fidelity": "MathFidelity.HiFi2",
+            "mlp_math_fidelity": "MathFidelity.HiFi2",
+            "qvk_in0_block_w": null,
+            "o_in0_block_w": null,
+            "gate_in0_block_w": null,
+            "up_in0_block_w": null,
+            "down_in0_block_w": null,
+            "qvk_l1_core_count": 16,
+            "o_l1_core_count": null,
+            "gate_l1_core_count": null,
+            "up_l1_core_count": null,
+            "down_l1_core_count": null,
+            "use_dram_sharded_weights": true,
+            "use_decode_create_heads": false,
+            "use_explicit_sdpa_program_config": true,
+            "use_packed_gate_up_projection": true
+          }
+        },
+        "cores16_in08": {
+          "status": "pass",
+          "eager_ms": 2.705403914054235,
+          "pcc": 0.9998606443405151,
+          "policy": {
+            "attention_weight_dtype": "DataType.BFLOAT8_B",
+            "mlp_weight_dtype": "DataType.BFLOAT8_B",
+            "output_weight_dtype": "DataType.BFLOAT8_B",
+            "activation_dtype": "DataType.BFLOAT16",
+            "attention_math_fidelity": "MathFidelity.HiFi2",
+            "mlp_math_fidelity": "MathFidelity.HiFi2",
+            "qvk_in0_block_w": 8,
+            "o_in0_block_w": null,
+            "gate_in0_block_w": null,
+            "up_in0_block_w": null,
+            "down_in0_block_w": null,
+            "qvk_l1_core_count": 16,
+            "o_l1_core_count": null,
+            "gate_l1_core_count": null,
+            "up_l1_core_count": null,
+            "down_l1_core_count": null,
+            "use_dram_sharded_weights": true,
+            "use_decode_create_heads": false,
+            "use_explicit_sdpa_program_config": true,
+            "use_packed_gate_up_projection": true
+          }
+        }
+      },
+      "o": {
+        "cores32_in0auto": {
+          "status": "pass",
+          "eager_ms": 2.694830298423767,
+          "pcc": 0.9998599290847778,
+          "policy": {
+            "attention_weight_dtype": "DataType.BFLOAT8_B",
+            "mlp_weight_dtype": "DataType.BFLOAT8_B",
+            "output_weight_dtype": "DataType.BFLOAT8_B",
+            "activation_dtype": "DataType.BFLOAT16",
+            "attention_math_fidelity": "MathFidelity.HiFi2",
+            "mlp_math_fidelity": "MathFidelity.HiFi2",
+            "qvk_in0_block_w": null,
+            "o_in0_block_w": null,
+            "gate_in0_block_w": null,
+            "up_in0_block_w": null,
+            "down_in0_block_w": null,
+            "qvk_l1_core_count": null,
+            "o_l1_core_count": 32,
+            "gate_l1_core_count": null,
+            "up_l1_core_count": null,
+            "down_l1_core_count": null,
+            "use_dram_sharded_weights": true,
+            "use_decode_create_heads": false,
+            "use_explicit_sdpa_program_config": true,
+            "use_packed_gate_up_projection": true
+          }
+        },
+        "cores32_in04": {
+          "status": "pass",
+          "eager_ms": 2.7126247684160867,
+          "pcc": 0.9998599290847778,
+          "policy": {
+            "attention_weight_dtype": "DataType.BFLOAT8_B",
+            "mlp_weight_dtype": "DataType.BFLOAT8_B",
+            "output_weight_dtype": "DataType.BFLOAT8_B",
+            "activation_dtype": "DataType.BFLOAT16",
+            "attention_math_fidelity": "MathFidelity.HiFi2",
+            "mlp_math_fidelity": "MathFidelity.HiFi2",
+            "qvk_in0_block_w": null,
+            "o_in0_block_w": 4,
+            "gate_in0_block_w": null,
+            "up_in0_block_w": null,
+            "down_in0_block_w": null,
+            "qvk_l1_core_count": null,
+            "o_l1_core_count": 32,
+            "gate_l1_core_count": null,
+            "up_l1_core_count": null,
+            "down_l1_core_count": null,
+            "use_dram_sharded_weights": true,
+            "use_decode_create_heads": false,
+            "use_explicit_sdpa_program_config": true,
+            "use_packed_gate_up_projection": true
+          }
+        },
+        "cores16_in0auto": {
+          "status": "pass",
+          "eager_ms": 2.726981726785501,
+          "pcc": 0.9998589158058167,
+          "policy": {
+            "attention_weight_dtype": "DataType.BFLOAT8_B",
+            "mlp_weight_dtype": "DataType.BFLOAT8_B",
+            "output_weight_dtype": "DataType.BFLOAT8_B",
+            "activation_dtype": "DataType.BFLOAT16",
+            "attention_math_fidelity": "MathFidelity.HiFi2",
+            "mlp_math_fidelity": "MathFidelity.HiFi2",
+            "qvk_in0_block_w": null,
+            "o_in0_block_w": null,
+            "gate_in0_block_w": null,
+            "up_in0_block_w": null,
+            "down_in0_block_w": null,
+            "qvk_l1_core_count": null,
+            "o_l1_core_count": 16,
+            "gate_l1_core_count": null,
+            "up_l1_core_count": null,
+            "down_l1_core_count": null,
+            "use_dram_sharded_weights": true,
+            "use_decode_create_heads": false,
+            "use_explicit_sdpa_program_config": true,
+            "use_packed_gate_up_projection": true
+          }
+        },
+        "cores16_in08": {
+          "status": "pass",
+          "eager_ms": 2.712548399964968,
+          "pcc": 0.9998589158058167,
+          "policy": {
+            "attention_weight_dtype": "DataType.BFLOAT8_B",
+            "mlp_weight_dtype": "DataType.BFLOAT8_B",
+            "output_weight_dtype": "DataType.BFLOAT8_B",
+            "activation_dtype": "DataType.BFLOAT16",
+            "attention_math_fidelity": "MathFidelity.HiFi2",
+            "mlp_math_fidelity": "MathFidelity.HiFi2",
+            "qvk_in0_block_w": null,
+            "o_in0_block_w": 8,
+            "gate_in0_block_w": null,
+            "up_in0_block_w": null,
+            "down_in0_block_w": null,
+            "qvk_l1_core_count": null,
+            "o_l1_core_count": 16,
+            "gate_l1_core_count": null,
+            "up_l1_core_count": null,
+            "down_l1_core_count": null,
+            "use_dram_sharded_weights": true,
+            "use_decode_create_heads": false,
+            "use_explicit_sdpa_program_config": true,
+            "use_packed_gate_up_projection": true
+          }
+        }
+      },
+      "packed_gate_up": {
+        "cores32_in0auto": {
+          "status": "pass",
+          "eager_ms": 2.7200235053896904,
+          "pcc": 0.999854564666748,
+          "policy": {
+            "attention_weight_dtype": "DataType.BFLOAT8_B",
+            "mlp_weight_dtype": "DataType.BFLOAT8_B",
+            "output_weight_dtype": "DataType.BFLOAT8_B",
+            "activation_dtype": "DataType.BFLOAT16",
+            "attention_math_fidelity": "MathFidelity.HiFi2",
+            "mlp_math_fidelity": "MathFidelity.HiFi2",
+            "qvk_in0_block_w": null,
+            "o_in0_block_w": null,
+            "gate_in0_block_w": null,
+            "up_in0_block_w": null,
+            "down_in0_block_w": null,
+            "qvk_l1_core_count": null,
+            "o_l1_core_count": null,
+            "gate_l1_core_count": 32,
+            "up_l1_core_count": null,
+            "down_l1_core_count": null,
+            "use_dram_sharded_weights": true,
+            "use_decode_create_heads": false,
+            "use_explicit_sdpa_program_config": true,
+            "use_packed_gate_up_projection": true
+          }
+        },
+        "cores32_in04": {
+          "status": "pass",
+          "eager_ms": 2.727882626156012,
+          "pcc": 0.999854564666748,
+          "policy": {
+            "attention_weight_dtype": "DataType.BFLOAT8_B",
+            "mlp_weight_dtype": "DataType.BFLOAT8_B",
+            "output_weight_dtype": "DataType.BFLOAT8_B",
+            "activation_dtype": "DataType.BFLOAT16",
+            "attention_math_fidelity": "MathFidelity.HiFi2",
+            "mlp_math_fidelity": "MathFidelity.HiFi2",
+            "qvk_in0_block_w": null,
+            "o_in0_block_w": null,
+            "gate_in0_block_w": 4,
+            "up_in0_block_w": null,
+            "down_in0_block_w": null,
+            "qvk_l1_core_count": null,
+            "o_l1_core_count": null,
+            "gate_l1_core_count": 32,
+            "up_l1_core_count": null,
+            "down_l1_core_count": null,
+            "use_dram_sharded_weights": true,
+            "use_decode_create_heads": false,
+            "use_explicit_sdpa_program_config": true,
+            "use_packed_gate_up_projection": true
+          }
+        },
+        "cores16_in0auto": {
+          "status": "fail",
+          "error": "RuntimeError: TT_THROW @ /localdev/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\ninfo:\nStatically allocated circular buffers on core range [0-0 - 7-7] grow to 2259232 B which is beyond max L1 size of 1499136 B\nbacktrace:\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x164f03a) [0x7f5efafc003a]\n --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x3de) [0x7f5efb169dae]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x18066a8) [0x7f5efb1776a8]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xe6) [0x7f5efb169556]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x16e) [0x7f5efb167fee]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x4ea) [0x7f5efb166eea]\n --- ttnn::prim::matmul(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x178b1ca) [0x7f5efb0fc1ca]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6matmulERKN2tt8tt_metal6TensorES6_bbRKSt8optionalIKNS3_12MemoryConfigEES7_IKNS3_8DataTypeEERKS7_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS7_IKSG_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES7_IKNS_19ComputeKernelConfigEES7_IKNS_5types8CoreGridEERKS7_IKNS3_4TileEES7_IS4_ERKS7_IKNS3_12experimental20GlobalCircularBufferEERKS7_IN4ttsl10StrongTypeIhNS3_14SubDeviceIdTagEEEE+0x373) [0x7f5efb0fb5b3]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532ff9) [0x7f5efbc84ff9]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532712) [0x7f5efbc84712]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x87b065) [0x7f5efbfcd065]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]\n --- python() [0x1811a20]\n --- python(_PyEval_EvalFrameDefault+0xf7ad) [0x1821b6d]\n --- python(PyEval_EvalCode+0xde) [0x187cd9e]\n --- python() [0x18bb609]\n --- python() [0x19f8885]\n --- python(_PyRun_SimpleFileObject+0x106) [0x19f8646]\n --- python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]\n --- python() [0x19f8350]\n --- python() [0x19f825d]\n --- python() [0x1ae65e3]\n --- python() [0x1972218]\n --- python() [0x197202c]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7f5f55f171ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7f5f55f1728b]\n --- python(_start+0x29) [0x19bf069]\n",
+          "policy": {
+            "attention_weight_dtype": "DataType.BFLOAT8_B",
+            "mlp_weight_dtype": "DataType.BFLOAT8_B",
+            "output_weight_dtype": "DataType.BFLOAT8_B",
+            "activation_dtype": "DataType.BFLOAT16",
+            "attention_math_fidelity": "MathFidelity.HiFi2",
+            "mlp_math_fidelity": "MathFidelity.HiFi2",
+            "qvk_in0_block_w": null,
+            "o_in0_block_w": null,
+            "gate_in0_block_w": null,
+            "up_in0_block_w": null,
+            "down_in0_block_w": null,
+            "qvk_l1_core_count": null,
+            "o_l1_core_count": null,
+            "gate_l1_core_count": 16,
+            "up_l1_core_count": null,
+            "down_l1_core_count": null,
+            "use_dram_sharded_weights": true,
+            "use_decode_create_heads": false,
+            "use_explicit_sdpa_program_config": true,
+            "use_packed_gate_up_projection": true
+          }
+        },
+        "cores16_in08": {
+          "status": "fail",
+          "error": "RuntimeError: TT_THROW @ /localdev/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\ninfo:\nStatically allocated circular buffers on core range [0-0 - 7-7] grow to 2259232 B which is beyond max L1 size of 1499136 B\nbacktrace:\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x164f03a) [0x7f5efafc003a]\n --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x3de) [0x7f5efb169dae]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29handle_mesh_adapter_cache_hitITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xa6) [0x7f5efb169416]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x153) [0x7f5efb167fd3]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x4ea) [0x7f5efb166eea]\n --- ttnn::prim::matmul(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x178b1ca) [0x7f5efb0fc1ca]\n --- /localdev/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6matmulERKN2tt8tt_metal6TensorES6_bbRKSt8optionalIKNS3_12MemoryConfigEES7_IKNS3_8DataTypeEERKS7_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS7_IKSG_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES7_IKNS_19ComputeKernelConfigEES7_IKNS_5types8CoreGridEERKS7_IKNS3_4TileEES7_IS4_ERKS7_IKNS3_12experimental20GlobalCircularBufferEERKS7_IN4ttsl10StrongTypeIhNS3_14SubDeviceIdTagEEEE+0x373) [0x7f5efb0fb5b3]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532ff9) [0x7f5efbc84ff9]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x532712) [0x7f5efbc84712]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x87b065) [0x7f5efbfcd065]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]\n --- python() [0x1811a20]\n --- python(_PyEval_EvalFrameDefault+0xf7ad) [0x1821b6d]\n --- python(PyEval_EvalCode+0xde) [0x187cd9e]\n --- python() [0x18bb609]\n --- python() [0x19f8885]\n --- python(_PyRun_SimpleFileObject+0x106) [0x19f8646]\n --- python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]\n --- python() [0x19f8350]\n --- python() [0x19f825d]\n --- python() [0x1ae65e3]\n --- python() [0x1972218]\n --- python() [0x197202c]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7f5f55f171ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7f5f55f1728b]\n --- python(_start+0x29) [0x19bf069]\n",
+          "policy": {
+            "attention_weight_dtype": "DataType.BFLOAT8_B",
+            "mlp_weight_dtype": "DataType.BFLOAT8_B",
+            "output_weight_dtype": "DataType.BFLOAT8_B",
+            "activation_dtype": "DataType.BFLOAT16",
+            "attention_math_fidelity": "MathFidelity.HiFi2",
+            "mlp_math_fidelity": "MathFidelity.HiFi2",
+            "qvk_in0_block_w": null,
+            "o_in0_block_w": null,
+            "gate_in0_block_w": 8,
+            "up_in0_block_w": null,
+            "down_in0_block_w": null,
+            "qvk_l1_core_count": null,
+            "o_l1_core_count": null,
+            "gate_l1_core_count": 16,
+            "up_l1_core_count": null,
+            "down_l1_core_count": null,
+            "use_dram_sharded_weights": true,
+            "use_decode_create_heads": false,
+            "use_explicit_sdpa_program_config": true,
+            "use_packed_gate_up_projection": true
+          }
+        }
+      },
+      "down": {
+        "cores32_in0auto": {
+          "status": "pass",
+          "eager_ms": 2.7417270466685295,
+          "pcc": 0.9998356699943542,
+          "policy": {
+            "attention_weight_dtype": "DataType.BFLOAT8_B",
+            "mlp_weight_dtype": "DataType.BFLOAT8_B",
+            "output_weight_dtype": "DataType.BFLOAT8_B",
+            "activation_dtype": "DataType.BFLOAT16",
+            "attention_math_fidelity": "MathFidelity.HiFi2",
+            "mlp_math_fidelity": "MathFidelity.HiFi2",
+            "qvk_in0_block_w": null,
+            "o_in0_block_w": null,
+            "gate_in0_block_w": null,
+            "up_in0_block_w": null,
+            "down_in0_block_w": null,
+            "qvk_l1_core_count": null,
+            "o_l1_core_count": null,
+            "gate_l1_core_count": null,
+            "up_l1_core_count": null,
+            "down_l1_core_count": 32,
+            "use_dram_sharded_weights": true,
+            "use_decode_create_heads": false,
+            "use_explicit_sdpa_program_config": true,
+            "use_packed_gate_up_projection": true
+          }
+        },
+        "cores32_in07": {
+          "status": "pass",
+          "eager_ms": 2.708412396411101,
+          "pcc": 0.9998587369918823,
+          "policy": {
+            "attention_weight_dtype": "DataType.BFLOAT8_B",
+            "mlp_weight_dtype": "DataType.BFLOAT8_B",
+            "output_weight_dtype": "DataType.BFLOAT8_B",
+            "activation_dtype": "DataType.BFLOAT16",
+            "attention_math_fidelity": "MathFidelity.HiFi2",
+            "mlp_math_fidelity": "MathFidelity.HiFi2",
+            "qvk_in0_block_w": null,
+            "o_in0_block_w": null,
+            "gate_in0_block_w": null,
+            "up_in0_block_w": null,
+            "down_in0_block_w": 7,
+            "qvk_l1_core_count": null,
+            "o_l1_core_count": null,
+            "gate_l1_core_count": null,
+            "up_l1_core_count": null,
+            "down_l1_core_count": 32,
+            "use_dram_sharded_weights": true,
+            "use_decode_create_heads": false,
+            "use_explicit_sdpa_program_config": true,
+            "use_packed_gate_up_projection": true
+          }
+        },
+        "cores32_in014": {
+          "status": "pass",
+          "eager_ms": 2.731353354950746,
+          "pcc": 0.9998356699943542,
+          "policy": {
+            "attention_weight_dtype": "DataType.BFLOAT8_B",
+            "mlp_weight_dtype": "DataType.BFLOAT8_B",
+            "output_weight_dtype": "DataType.BFLOAT8_B",
+            "activation_dtype": "DataType.BFLOAT16",
+            "attention_math_fidelity": "MathFidelity.HiFi2",
+            "mlp_math_fidelity": "MathFidelity.HiFi2",
+            "qvk_in0_block_w": null,
+            "o_in0_block_w": null,
+            "gate_in0_block_w": null,
+            "up_in0_block_w": null,
+            "down_in0_block_w": 14,
+            "qvk_l1_core_count": null,
+            "o_l1_core_count": null,
+            "gate_l1_core_count": null,
+            "up_l1_core_count": null,
+            "down_l1_core_count": 32,
+            "use_dram_sharded_weights": true,
+            "use_decode_create_heads": false,
+            "use_explicit_sdpa_program_config": true,
+            "use_packed_gate_up_projection": true
+          }
+        },
+        "cores16_in0auto": {
+          "status": "pass",
+          "eager_ms": 2.7118890235821405,
+          "pcc": 0.9998356699943542,
+          "policy": {
+            "attention_weight_dtype": "DataType.BFLOAT8_B",
+            "mlp_weight_dtype": "DataType.BFLOAT8_B",
+            "output_weight_dtype": "DataType.BFLOAT8_B",
+            "activation_dtype": "DataType.BFLOAT16",
+            "attention_math_fidelity": "MathFidelity.HiFi2",
+            "mlp_math_fidelity": "MathFidelity.HiFi2",
+            "qvk_in0_block_w": null,
+            "o_in0_block_w": null,
+            "gate_in0_block_w": null,
+            "up_in0_block_w": null,
+            "down_in0_block_w": null,
+            "qvk_l1_core_count": null,
+            "o_l1_core_count": null,
+            "gate_l1_core_count": null,
+            "up_l1_core_count": null,
+            "down_l1_core_count": 16,
+            "use_dram_sharded_weights": true,
+            "use_decode_create_heads": false,
+            "use_explicit_sdpa_program_config": true,
+            "use_packed_gate_up_projection": true
+          }
+        },
+        "cores16_in014": {
+          "status": "pass",
+          "eager_ms": 2.7412554870049157,
+          "pcc": 0.9998356699943542,
+          "policy": {
+            "attention_weight_dtype": "DataType.BFLOAT8_B",
+            "mlp_weight_dtype": "DataType.BFLOAT8_B",
+            "output_weight_dtype": "DataType.BFLOAT8_B",
+            "activation_dtype": "DataType.BFLOAT16",
+            "attention_math_fidelity": "MathFidelity.HiFi2",
+            "mlp_math_fidelity": "MathFidelity.HiFi2",
+            "qvk_in0_block_w": null,
+            "o_in0_block_w": null,
+            "gate_in0_block_w": null,
+            "up_in0_block_w": null,
+            "down_in0_block_w": 14,
+            "qvk_l1_core_count": null,
+            "o_l1_core_count": null,
+            "gate_l1_core_count": null,
+            "up_l1_core_count": null,
+            "down_l1_core_count": 16,
+            "use_dram_sharded_weights": true,
+            "use_decode_create_heads": false,
+            "use_explicit_sdpa_program_config": true,
+            "use_packed_gate_up_projection": true
+          }
+        }
+      }
+    }
+  },
+  "synthetic_layer_kind_checks": {
+    "mlp_bfp4_attention_bfp8_layer0": {
+      "status": "fail",
+      "pcc": 0.9808579087257385
+    },
+    "mlp_bfp4_attention_bfp8_layer31": {
+      "status": "fail",
+      "pcc": 0.9811000823974609
+    },
+    "all_linear_bfp4_layer0": {
+      "status": "fail",
+      "pcc": 0.9698596596717834
+    },
+    "all_linear_bfp4_layer31": {
+      "status": "fail",
+      "pcc": 0.9703057408332825
+    },
+    "decode_create_heads_layer31": {
+      "status": "fail",
+      "error": "RuntimeError: TT_FATAL @ /localdev/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/rotary_embedding.cpp:67: cos_seq_len >= input_seq_len\ninfo:\nCosine cache must cover the input sequence length. Input sequence length: 8, Cos cache sequence length: 1.\nbacktrace:\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x41a52f) [0x7f5efbb6c52f]\n --- ttnn::experimental::rotary_embedding(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<unsigned int>, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<ttnn::ComputeKernelConfig const>)\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x552811) [0x7f5efbca4811]\n --- /localdev/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x87b065) [0x7f5efbfcd065]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]\n --- python() [0x1ac2cf8]\n --- python() [0x1890366]\n --- python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]\n --- python() [0x1811a20]\n --- python(_PyEval_EvalFrameDefault+0xf7ad) [0x1821b6d]\n --- python(PyEval_EvalCode+0xde) [0x187cd9e]\n --- python() [0x18bb609]\n --- python() [0x19f8885]\n --- python(_PyRun_SimpleFileObject+0x106) [0x19f8646]\n --- python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]\n --- python() [0x19f8350]\n --- python() [0x19f825d]\n --- python() [0x1ae65e3]\n --- python() [0x1972218]\n --- python() [0x197202c]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7f5f55f171ca]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7f5f55f1728b]\n --- python(_start+0x29) [0x19bf069]\n"
+    }
+  }
+}
