@@ -102,9 +102,10 @@ consumed-before-barrier hazard expressed via the object API produces no finding.
 ### X2 — `noc-l1-invalidate` `has_noc` scope misses the object NoC API
 `noc-l1-invalidate` scopes a candidate poll to a dataflow kernel via
 `has_noc = any(name.startswith("noc_")) or any(noc_op_of(c))`. Object-API call names are bare methods
-(`async_read`, …) that don't start with `noc_`, and `noc_op_of` returns non-None only for write-flush
-methods — so an object-API pure-reader Blackhole kernel whose poll pointer is not `get_semaphore`
-provenance reads `has_noc == False` and its poll is dropped.
+(`async_read`, …) that don't start with `noc_`, and `noc_op_of` recognizes an object method only if it
+is a flush / full-barrier or a Semaphore signal — NOT an object-method READ (`async_read`) — so an
+object-API pure-reader Blackhole kernel whose poll pointer is not `get_semaphore` provenance reads
+`has_noc == False` and its poll is dropped.
 - **Risk:** CAP-REDUCTION — a kernel-tier, Blackhole-only false-negative. Materially the same as the
   checker's own `blind_spots` ("a poll whose function has no NoC call is MISSED").
 - **Live today:** none (candidate kernels carry a free `noc_` call or a `get_semaphore` poll).
