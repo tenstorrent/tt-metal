@@ -128,7 +128,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     {
         ZONE_SCOPED("INIT")
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+        // PACK_ISOLATE measures pack alone (WH/BH style): skip FPU→PACK dest-dvalid.
+        if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
+        {
+            set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+        }
 
         DataFormat src_format = static_cast<DataFormat>(formats.math);
         _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, is_int_fpu_en>(src_format, src_format);
@@ -205,7 +209,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+        // Match WH/BH PACK_ISOLATE: no math↔pack handshake; pack from whatever is in dest.
+        // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+            auto cfg = (std::uint32_t volatile *)TENSIX_CFG_BASE;
+            cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
+        }
+        else
+        {
+            set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+        }
 
         const auto tensor_shape_A = tensor_shape_from_face_dims(TEST_FACE_R_DIM, TEST_FACE_C_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
 
@@ -224,7 +238,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+            // No dest-dvalid section_done: WH/BH isolate packs without math handshake.
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                _llk_pack_(DST_INDEX, 0, tensor_shape_A);
+            }
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {

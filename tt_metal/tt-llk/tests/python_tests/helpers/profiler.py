@@ -503,6 +503,15 @@ class Profiler:
                             f"'{start_row['marker']}' (id={start_row['marker_id']}) "
                             f"on thread '{thread}'. Possible nested zone mismatch."
                         )
+                    if timestamp == 0 and start_row["timestamp"] != 0:
+                        logger.warning(
+                            "Profiler {}: ZONE_END '{}' timestamp is 0 (START was {}); "
+                            "this produces a negative duration — likely wall-clock or "
+                            "L1 buffer coherency corruption on this thread",
+                            thread,
+                            marker.marker,
+                            start_row["timestamp"],
+                        )
                     rows.append(start_row)
                     rows.append(
                         Profiler._row(thread, "ZONE_END", marker, timestamp, pd.NA)

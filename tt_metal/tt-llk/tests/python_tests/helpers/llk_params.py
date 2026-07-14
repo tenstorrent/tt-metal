@@ -565,6 +565,7 @@ PERF_RUN_TYPES_QUASAR = [
         PerfRunType.UNPACK_ISOLATE,
         PerfRunType.MATH_ISOLATE,
         PerfRunType.PACK_ISOLATE,
+        PerfRunType.L1_CONGESTION,
     ],
 ]
 

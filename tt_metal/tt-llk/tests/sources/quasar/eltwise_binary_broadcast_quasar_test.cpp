@@ -75,9 +75,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            _perf_unpack_loop_set_valid<true, true>(LOOP_FACTOR * num_faces);
+            _perf_unpack_loop_set_valid<true, true>(LOOP_FACTOR * TILE_CNT * num_faces);
         }
-        else
+        else // UNPACK_ISOLATE, L1_CONGESTION, L1_TO_L1
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
@@ -110,6 +110,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     {
         ZONE_SCOPED("INIT")
+
         set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
         DataFormat math_format     = static_cast<DataFormat>(formats.math);
@@ -130,10 +131,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
+            _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             _perf_math_loop_clear_valid<true, true>(LOOP_FACTOR * TILE_CNT * num_faces);
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            _perf_math_loop_clear_valid<true, true>(TILE_CNT * num_faces);
+            _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+            _perf_math_loop_clear_valid<true, true>((LOOP_FACTOR - 1) * TILE_CNT * num_faces);
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
@@ -186,6 +194,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
+
         set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
         buffer_descriptor_u bd_val = {0};
@@ -208,16 +217,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
+
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
+            // No dest-dvalid section_done: WH/BH isolate packs without math handshake.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 _llk_pack_(0, 0, ckernel::DEFAULT_TENSOR_SHAPE);
-                _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
+            _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }
         else
         {
@@ -227,6 +238,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
         }
+
         PROFILER_SYNC();
     }
 }

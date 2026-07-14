@@ -144,7 +144,13 @@ __attribute__((always_inline)) inline bool is_buffer_full()
 
 __attribute__((always_inline)) inline void write_entry(EntryType type, std::uint16_t id16)
 {
-    std::uint64_t timestamp      = ckernel::read_wall_clock();
+    std::uint64_t timestamp = ckernel::read_wall_clock();
+    // Mid-run zero timestamps produce negative zone durations (END - START < 0).
+    // Retry once; a true wall-clock of 0 is only plausible at the very start of a run.
+    if (timestamp == 0 && write_idx > 0)
+    {
+        timestamp = ckernel::read_wall_clock();
+    }
     std::uint32_t timestamp_high = static_cast<std::uint32_t>(timestamp >> 32);
 
     std::uint32_t type_numeric = static_cast<std::uint32_t>(type);

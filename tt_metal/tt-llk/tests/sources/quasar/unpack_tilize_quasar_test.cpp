@@ -106,18 +106,27 @@ void run_kernel(RUNTIME_PARAMETERS params)
         constexpr ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE;
         std::uint32_t y_stride_external             = FULL_CT_DIM * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
 
+        // Quasar fused tilize emits 1 SrcA dvalid per `_llk_unpack_tilize_` call (BLOCK_RT_DIM
+        // calls per outer loop). With is_fp32_dest_acc_en it also pulses SrcB via UNPACR_NOP
+        // because FP32 datacopy uses ELWADD on SrcA+SrcB.
+        const std::uint32_t total_tilize_dvalids = LOOP_FACTOR * BLOCK_RT_DIM;
+
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            if constexpr (DATA_COPY_TYPE == DataCopyType::A2D)
+            if constexpr (is_fp32_dest_acc_en)
             {
-                _perf_unpack_loop_set_valid<true, false>(LOOP_FACTOR);
+                _perf_unpack_loop_set_valid<true, true>(total_tilize_dvalids);
+            }
+            else if constexpr (DATA_COPY_TYPE == DataCopyType::A2D)
+            {
+                _perf_unpack_loop_set_valid<true, false>(total_tilize_dvalids);
             }
             else
             {
-                _perf_unpack_loop_set_valid<false, true>(LOOP_FACTOR);
+                _perf_unpack_loop_set_valid<false, true>(total_tilize_dvalids);
             }
         }
         else
@@ -176,7 +185,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         {
             ZONE_SCOPED("INIT")
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            // PACK_ISOLATE / L1_CONGESTION: skip FPU→PACK dest-dvalid (math is src-clear only
+            // in congestion; pulsing never happens — matches WH/BH unpack_tilize_perf).
+            if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
+            {
+                set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            }
 
             DataFormat src_format = static_cast<DataFormat>(formats.math);
             _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, is_int_fpu_en>(src_format, src_format);
@@ -192,13 +206,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
             else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
             {
-                if constexpr (DATA_COPY_TYPE == DataCopyType::A2D)
+                // Match tilize producer: SrcA only, or SrcA+SrcB when FP32 dest uses ELWADD.
+                const std::uint32_t total_tilize_dvalids = LOOP_FACTOR * TILE_CNT;
+                if constexpr (is_fp32_dest_acc_en)
                 {
-                    _perf_math_loop_clear_valid<true, false>(LOOP_FACTOR * TILE_CNT);
+                    _perf_math_loop_clear_valid<true, true>(total_tilize_dvalids);
+                }
+                else if constexpr (DATA_COPY_TYPE == DataCopyType::A2D)
+                {
+                    _perf_math_loop_clear_valid<true, false>(total_tilize_dvalids);
                 }
                 else
                 {
-                    _perf_math_loop_clear_valid<false, true>(LOOP_FACTOR * TILE_CNT);
+                    _perf_math_loop_clear_valid<false, true>(total_tilize_dvalids);
                 }
             }
             else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -253,8 +273,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-        constexpr auto dest_producer = unpack_to_dest ? dest_dvalid_client::UNPACK : dest_dvalid_client::FPU;
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_producer, dest_dvalid_client::PACK});
+        // PACK_ISOLATE / L1_CONGESTION: no math↔pack dest-dvalid handshake (WH/BH tilize perf).
+        // Math only clears src dvalids in L1_CONGESTION, so waiting on section_done times out
+        // (~28k/iter) and leaves dest-dvalid CFG wedged for later L1_TO_L1 on the same simulator.
+        // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            auto cfg = (std::uint32_t volatile *)TENSIX_CFG_BASE;
+            cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
+        }
+        else
+        {
+            constexpr auto dest_producer = unpack_to_dest ? dest_dvalid_client::UNPACK : dest_dvalid_client::FPU;
+            set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_producer, dest_dvalid_client::PACK});
+        }
 
         buffer_descriptor_u bd_val = {0};
         bd_val.f.l1_addr_16B       = buffer_Res[0] / 16;
@@ -280,10 +312,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
+            // No dest-dvalid section_done: WH/BH L1_CONGESTION packs without math handshake
+            // (math is only a src-clear mock). Per-iter section_done was causing ~28k stalls and
+            // poisoning subsequent L1_TO_L1 on the persistent Quasar simulator.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 _llk_pack_(0, 0, ckernel::DEFAULT_TENSOR_SHAPE);
-                _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
         }
         else

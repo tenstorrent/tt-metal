@@ -170,7 +170,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         {
             ZONE_SCOPED("INIT")
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            // PACK_ISOLATE measures pack alone (WH/BH style): skip FPU→PACK dest-dvalid.
+            if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
+            {
+                set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            }
 
             const auto tensor_shape = tensor_shape_from_face_dims(TEST_FACE_R_DIM, TEST_FACE_C_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
 
@@ -251,13 +255,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-        if (unpack_to_dest)
+        // Match WH/BH PACK_ISOLATE: no math↔pack handshake; pack from whatever is in dest.
+        // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
+            auto cfg = (std::uint32_t volatile *)TENSIX_CFG_BASE;
+            cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
         }
         else
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            if (unpack_to_dest)
+            {
+                set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
+            }
+            else
+            {
+                set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            }
         }
 
         const auto tensor_shape = tensor_shape_from_face_dims(TEST_FACE_R_DIM, TEST_FACE_C_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
@@ -280,7 +294,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+            // No dest-dvalid section_done: WH/BH isolate packs without math handshake.
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t block = 0; block < output_num_blocks; block++)
+                {
+                    for (std::uint32_t tile = 0; tile < output_tiles_in_block; tile++)
+                    {
+                        const std::uint32_t res_tile_idx = (block * output_tiles_in_block) + tile;
+                        _llk_pack_(tile, res_tile_idx, tensor_shape);
+                    }
+                }
+            }
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {

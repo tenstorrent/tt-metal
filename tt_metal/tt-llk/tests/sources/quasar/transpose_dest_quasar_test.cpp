@@ -140,13 +140,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     {
         ZONE_SCOPED("INIT")
-        if constexpr (!unpack_to_dest)
+        // PACK_ISOLATE measures pack alone (WH/BH style): skip dest-dvalid setup.
+        if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
-        }
-        else
-        {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::UNPACK, dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            if constexpr (!unpack_to_dest)
+            {
+                set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            }
+            else
+            {
+                set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>(
+                    {dest_dvalid_client::UNPACK, dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            }
         }
 
         DataFormat math_format     = static_cast<DataFormat>(formats.math);
@@ -250,13 +255,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-        if constexpr (unpack_to_dest)
+        // Match WH/BH PACK_ISOLATE: no math↔pack handshake; pack from whatever is in dest.
+        // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            auto cfg = (std::uint32_t volatile *)TENSIX_CFG_BASE;
+            cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
         }
         else
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            if constexpr (unpack_to_dest)
+            {
+                set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            }
+            else
+            {
+                set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            }
         }
 
         buffer_descriptor_u bd_val = {0};
@@ -282,7 +297,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+            // No dest-dvalid section_done: WH/BH isolate packs without math handshake.
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                _llk_pack_(DST_INDEX, 0, ckernel::DEFAULT_TENSOR_SHAPE);
+            }
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
