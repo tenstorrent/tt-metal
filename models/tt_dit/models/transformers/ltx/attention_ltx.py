@@ -34,24 +34,50 @@ def gate_merge_enabled() -> bool:
     (see its attribute_names) and guarded by
     test_ltx_merged_mm_configs.py::test_same_shape_different_chunks_do_not_alias.
 
-    It still defaults OFF, and NOT for the reason this docstring used to give. The old claim — that
-    the merged gate logits fall out of a differently-blocked matmul and the sampler merely amplifies
-    that bf16 rounding — was MEASURED AND REFUTED (2026-07-14):
+    It still defaults OFF, but the merge is NOT numerically wrong. Every claim this docstring used to
+    make about it — that min 0.868 / mean 0.923 sat "50x outside the noise floor" and therefore
+    "injects a real, systematic numerical deviation" — was MEASURED AND REFUTED (2026-07-14). The
+    merge is arithmetically exact; what is wrong is the noise floor it was priced against.
 
-      * The gate's K-reduction order does not change. The merge moves S2 to_qkv from
-        (4864,4096,3072)->(10,4,12) to (4864,4096,4096)->(5,8,16), so the only K_block change in the
-        whole model is 4->8 on to_qkv, i.e. on Q/K/V — not on the gate (K_block=8 in both arms).
-      * That reblocking is nearly free. Held alone (TT_DIT_MM_REBLOCK forces the standalone-gate arm
-        onto the merged arm's exact to_qkv blocking: same math, same weights, different fp reduction
-        order) a full 11-step gen still lands at frame-PCC min 0.9978 / mean 0.9985 vs baseline.
-        These matmuls run fp32_dest_acc_en + packer_l1_acc, so reduction order costs ~nothing, and
-        the sampler does NOT amplify it. THAT is the precision noise floor.
+    The merge is exact, at every level anyone can test:
+      * Gate logits are BIT-EXACT vs the standalone gate on real block-0 weights, all six gated
+        attentions (max_abs 0.0, least-squares gain 1.000000000); the 2*sigmoid gate is bit-identical.
+        math_approx_mode — the one config that differs between the arms — is measurably INERT on this
+        matmul (approx=True vs approx=False: 0.0). See test_gate_logit_precision.
+      * Q/K/V are BIT-IDENTICAL to what TT_DIT_MM_REBLOCK produces on the standalone weights, so the
+        merge IS its reblocking and nothing more. See test_merge_is_not_the_reblock.
+      * One gated block is bit-identical at stage-1 shapes, and so are FORTY-EIGHT chained with no
+        host sync (test_gate_merge_survives_depth). The .gm weight cache is bit-identical to a fresh
+        fold (verify_gm_cache.py), and byte-identical to the baseline cache on all 2266 tensors the
+        fold does not touch. The AG-matmul census (LTX_OP_CENSUS) is exactly as expected.
+      * In the PIPELINE, the first THREE 48-block forwards are bit-identical (LTX_STEP_FP: stage-1
+        latent sha1 matches at steps 1, 2, 3). At step 4 a LAST-BIT difference appears (~6e-7
+        relative in sumsq) and then grows ~10x per step across the big sigma jumps
+        (0.975 -> 0.909 -> 0.725 -> 0.422 -> 0), reaching 1.4% by step 8.
 
-    So min 0.868 / mean 0.923 sits ~50x outside the noise floor: the merge injects a real, systematic
-    numerical deviation, not rounding. It also shows up as an absolute (reference-free) quality
-    signal — the merged decode loses 4.5% of its high-frequency detail (mean Laplacian variance 51.4
-    vs 53.9), where the same-math reblocking loses 0.0%. Root-cause that before turning this on; it
-    buys only ~0.2s of an 8.4s gen (2.4%), which does not pay for an unexplained change in output.
+    So the deviation is chaotic amplification of a 1-ULP difference, injected during STAGE 1. And
+    THAT is what the old noise floor never measured: TT_DIT_MM_REBLOCK was only ever pointed at
+    (4864,4096,3072) — the STAGE-2 to_qkv. Stage 2 is 3 steps at the END of the trajectory, where
+    there is no room left to amplify; stage 1 is 8 steps at high sigma, where there is. Priced by
+    stage, the floor is not one number:
+
+        stage-2 K_block reblock (the old "floor")    frame-PCC 0.9978   detail  53.90  (-0.0%)
+        stage-1 N_block reblock                      BIT-IDENTICAL      (no perturbation at all)
+        THE GATE MERGE                               frame-PCC 0.868    detail  51.44  (-4.5%)
+        stage-1 K_block reblock, NO MERGE AT ALL     frame-PCC 0.755    detail  50.16  (-7.0%)
+
+    The last row is the whole story: a pure, provably-equivalent change of fp reduction order at
+    stage 1, with the standalone gate and not one folded weight, deviates MORE than the merge does
+    and loses MORE high-frequency detail. The 4.5% "detail loss" is not damage the merge did — it is
+    what landing on a different sample looks like, and the merge lands closer to the baseline than
+    plain reblocking does.
+
+    Which means the >0.99 frame-PCC-vs-baseline gate CANNOT be the acceptance test for this (or any)
+    lever that perturbs stage-1 arithmetic: a bit-legal reblocking fails it at 0.755. Turning the
+    merge on is therefore not a correctness call — it is a product call about accepting a different
+    (not worse) sample for ~0.3s of denoise (S1 2.7s vs 2.9s, S2 3.3s vs 3.4s). It stays OFF until
+    someone makes that call against a gate that can actually express it (a reference-free quality
+    metric over several prompts/seeds, not frame-PCC against one blessed decode).
 
     LTX_NO_GATE_MERGE still forces it off. The transformer cache is keyed on the result (the merge
     widens the Q/QKV weights), so either flag also selects the matching cache — which makes this a
