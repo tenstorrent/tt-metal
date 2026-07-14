@@ -50,6 +50,21 @@ def _ttnn_embed_dtype(ref: ttnn.Tensor) -> ttnn.DataType:
         )
     return ref.dtype
 
+try:
+    from tracy import signpost
+except ImportError:
+
+    def signpost(header="", message=None):
+        pass
+
+
+# Tracy region markers for HunyuanTtDenoiseStep.__call__. Filter CSV with:
+#   python models/tt_transformers/scripts/op_perf_results.py ops_perf_results_*.csv \
+#     --signpost start_patch_embed
+# Regions: start_patch_embed … stop_patch_embed, start_scatter … stop_scatter,
+# start_backbone … stop_backbone, start_final_layer … stop_final_layer,
+# start_denoise_step … stop_denoise_step (whole step).
+
 
 class HunyuanTtDenoiseStep:
     """One on-device diffusion step: latent + conditioning -> velocity prediction.
@@ -147,32 +162,41 @@ class HunyuanTtDenoiseStep:
 
         verbose = os.environ.get("HY_VERBOSE", "1") != "0"
 
+        signpost("start_denoise_step")
+
         # 1) patch_embed: noised latent -> image tokens [1,1,n_img,H]
         if verbose:
             print("[denoise_step] patch_embed ...", flush=True)
+        signpost("start_patch_embed")
         img_tok, th, tw = self.patch_embed(latent_bchw, t_emb1)
+        signpost("stop_patch_embed")
         assert (th, tw) == (self.token_h, self.token_w), f"grid mismatch: got {th}x{tw}"
 
         # 2) scatter into the sequence, run the backbone (NO ln_f)
+        signpost("start_scatter")
         if base_embeds is not None:
             seq = self._scatter_from_base(img_tok, base_embeds)
         else:
             seq = self._scatter(img_tok, text_pre, text_post)
+        signpost("stop_scatter")
         ttnn.deallocate(img_tok)
         if verbose:
             print(f"[denoise_step] backbone forward seq_len={self.seq_len} ...", flush=True)
+        signpost("start_backbone")
         hidden = self.backbone.forward(
             inputs_embeds=seq,
             seq_len=self.seq_len,
             image_infos=image_infos,
             attention_mask=attention_mask,
         )
+        signpost("stop_backbone")
         ttnn.deallocate(seq)
 
         # 3) final_layer: image-span hidden -> velocity prediction (NHWC flat)
         if verbose:
             print("[denoise_step] final_layer ...", flush=True)
         H = self.backbone.hidden_size
+        signpost("start_final_layer")
         img_out = ttnn.slice(
             hidden,
             [0, self.img_slice.start, 0],
@@ -182,6 +206,8 @@ class HunyuanTtDenoiseStep:
         img_out = ttnn.reshape(img_out, [1, 1, self.n_img, H])
         pred, _, _ = self.final_layer(img_out, t_emb2, th, tw, B=batch)
         ttnn.deallocate(img_out)
+        signpost("stop_final_layer")
+        signpost("stop_denoise_step")
         return pred  # ttnn NHWC flat [1,1,B*h*w,latent_ch]
 
     def forward_device(

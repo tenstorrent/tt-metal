@@ -15,6 +15,8 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
+from .matmul_utils import l1_sharded_linear, to_interleaved_if_sharded
+
 
 class HunyuanTtLMHead(LightweightModule):
     """Vocabulary projection: hidden [B, S, H] -> logits [B, S, V] (no bias).
@@ -62,13 +64,13 @@ class HunyuanTtLMHead(LightweightModule):
             B, S, H = hidden.shape
             x = ttnn.slice(hidden, [0, S - 1, 0], [B, S, H])
             sliced = True
-        logits = ttnn.linear(
+        logits = l1_sharded_linear(
             x,
             self.weight,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
+        logits = to_interleaved_if_sharded(logits)
         if sliced:
             ttnn.deallocate(x)
         return logits
