@@ -52,7 +52,14 @@ class CbSync(Check):
         "a NESTED scope (an op in an outer function paired inside a lambda groups "
         "under two different `function` keys); (c) a CB reserved via the FREE API but "
         "pushed via the OBJECT API (or vice versa) keys on arg0 vs the receiver, so "
-        "the two land in different cbid buckets. Requires a KERNEL fact base (the "
+        "the two land in different cbid buckets; (d) the object-form receiver TYPE gate "
+        "is a text heuristic (extractor `recvTypeFromText`) — in a dependent/template "
+        "parse it types a capitalized FACTORY-CALL receiver "
+        "(`MakeCircularBufferThing(id).push_back(n)`) the same as a constructor, and the "
+        "SUBSTRING `_CB_RECV_TYPES` gate then admits it as a false CB push (the same "
+        'mechanism applies to the `"Noc"`/`"Semaphore"` substring gates in noc-sync). '
+        "Dormant — 0 such sites; the canonical object receivers are the only live ones. "
+        "Requires a KERNEL fact base (the "
         "on-request capture); empty over tt-llk."
     )
 
