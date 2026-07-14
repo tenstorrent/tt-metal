@@ -143,7 +143,8 @@ def _timestep_run(device, prefix: str, *, seed: int = 0) -> tuple[float, float, 
         ref_out = ref(t)
 
     tt = HunyuanTtTimestepEmbedder(device, h, {f"{prefix}.{k}": v for k, v in sd.items()}, prefix)
-    out_tt = tt(t)
+    # PCC compares logical [N,H]; skip resident M=32 pad used by the denoise path.
+    out_tt = tt.forward(t, keep_resident=False)
     tt_out = ttnn.to_torch(out_tt)[..., :h]
     tt.deallocate()
     out_tt.deallocate()
@@ -214,7 +215,7 @@ def test_timestep_embedder_full_schedule_pcc(device, prefix):
         ref_out = ref(t)
 
     tt = HunyuanTtTimestepEmbedder(device, h, {f"{prefix}.{k}": v for k, v in sd.items()}, prefix)
-    out_tt = tt(t)
+    out_tt = tt.forward(t, keep_resident=False)
     tt_out = ttnn.to_torch(out_tt)[..., :h]
     tt.deallocate()
     out_tt.deallocate()
