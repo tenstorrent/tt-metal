@@ -190,7 +190,11 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     // Zeros only: the bank-major coalesced path handles the interior + zero fill, not replicate's
     // edge-outward slice replication, so replicate stays on the per-stick direct path.
     uint32_t h_coalesce_n = 0;
-    if (op.np_padding_h == 1 && is_padding_zeros) {
+    // The bank-major gather assumes each of the 8 DRAM banks receives the same number of row sticks; when
+    // W_dev is not a multiple of 8 the trailing banks get fewer, and the writer's un-scatter mis-places
+    // them, scrambling the H-halo row. Keep coalescing only for 8-aligned W_dev; else use the direct path.
+    constexpr uint32_t np_num_dram_banks = 8;  // BH DRAM bank count (matches NP_NUM_DRAM_BANKS in kernels)
+    if (op.np_padding_h == 1 && is_padding_zeros && (num_sticks_per_halo_dim % np_num_dram_banks == 0)) {
         h_coalesce_n = max_coalesce_sticks;
         if (h_coalesce_n < 2) {
             h_coalesce_n = 0;

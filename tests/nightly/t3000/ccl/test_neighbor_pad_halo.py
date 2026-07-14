@@ -217,7 +217,11 @@ def run_neighbor_pad_halo_2d(mesh_device, input_shape, h_dim, w_dim, h_axis, w_a
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], ids=["4x8"], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-@pytest.mark.parametrize("input_shape", [[1, 8, 144, 256, 128]], ids=["s3ish"])
+@pytest.mark.parametrize(
+    "input_shape",
+    [[1, 8, 144, 256, 128], [1, 1, 92, 160, 128], [1, 2, 92, 160, 128]],
+    ids=["s3ish", "conv0ish", "conv0ish_t2"],
+)
 def test_neighbor_pad_halo_fold(mesh_device, device_params, input_shape):
     """Full fold (deletes halo_scatter): neighbor_pad_halo with padded_output writes the ENTIRE padded
     [outer,H+2pH,W+2pW,C] buffer itself — interior overlaps the exchange on free cores, border scatters
@@ -272,7 +276,7 @@ def test_neighbor_pad_halo_fold(mesh_device, device_params, input_shape):
         [h_axis, w_axis],
         [h_sem, w_sem],
         [barrier_sem],
-        num_links=[num_links, num_links],
+        num_links=[min(B * T, num_links), min(B * T * Hf, num_links)],
         memory_config=mem,
         topology=ttnn.Topology.Linear,
         persistent_output_buffer=persist,
@@ -304,7 +308,7 @@ def test_neighbor_pad_halo_fold(mesh_device, device_params, input_shape):
         np_padding_h=pH,
         np_padding_w=pW,
         np_cluster_axis=h_axis,
-        np_num_links=num_links,
+        np_num_links=min(B * T, num_links),
         np_topology=ttnn.Topology.Linear,
         h_neighbor_semaphore=h_sem,
         barrier_semaphore=barrier_sem,
@@ -313,7 +317,7 @@ def test_neighbor_pad_halo_fold(mesh_device, device_params, input_shape):
         np_pad2_left=pW,
         np_pad2_right=pW,
         np_pad2_cluster_axis=w_axis,
-        np_pad2_num_links=num_links,
+        np_pad2_num_links=min(B * T * Hf, num_links),
         padding_mode="zeros",
         padded_output=padded,
         logical_h=logical_h,
