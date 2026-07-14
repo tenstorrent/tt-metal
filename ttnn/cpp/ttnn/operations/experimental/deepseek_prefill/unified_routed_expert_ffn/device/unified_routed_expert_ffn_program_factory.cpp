@@ -272,12 +272,15 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const tt::DataFormat up_df = tt::tt_metal::datatype_to_dataformat_converter(t.up_proj.dtype());
     const tt::DataFormat down_df = tt::tt_metal::datatype_to_dataformat_converter(t.down_proj.dtype());
     const tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(tensor_return_value.dtype());
-    // Intermediate and partials share the same format — required by the
-    // compute kernel's mm_init pattern (mm_init's 3rd arg drives the packer's
-    // data-format config; mismatched formats need explicit pack reconfig that
-    // the kernel doesn't do). Use bfp8_b for both: 1KB/tile is half the bf16
-    // cost so we fit in L1 with both intermediates and partials sized to the
-    // full per-core block.
+    // Partials vs intermediates deliberately differ in format; the compute
+    // kernel pack-reconfigs between them (partials <-> intermed) explicitly.
+    //   * partials_gu/partials_d are Float16_b: they hold the K-loop matmul
+    //     accumulator (PACKER_L1_ACC adds each K-block's result into the same L1
+    //     tiles), so block-float bf8 would lose precision across K-blocks. bf16
+    //     keeps a per-element mantissa for the running sum.
+    //   * intermediates (gate/up_intermed, activated) are Bfp8_b: post-activation
+    //     per-element values feeding the next matmul, not accumulators, so
+    //     1KB/tile (half the bf16 cost) is enough and saves L1.
     const tt::DataFormat intermed_df = tt::DataFormat::Bfp8_b;
     const tt::DataFormat partials_gu_df = tt::DataFormat::Float16_b;
     const tt::DataFormat partials_d_df = tt::DataFormat::Float16_b;
@@ -682,6 +685,12 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         static_cast<uint32_t>(op.x_is_row_major),
         // CB_X_RM — row-major bf16 staging (only allocated/used in row-major mode).
         CB_X_RM,
+        // TILE_HEIGHT — rows (token-row sticks) per tile-row; sizes the reader's
+        // row-major x reads and its token-count -> tile-row conversion.
+        TILE,
+        // X_RM_ELEM_BYTES — byte size of one row-major x element (x is bf16 in
+        // the row-major path).
+        tt::datum_size(tt::DataFormat::Float16_b),
     };
     tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_ct_args);

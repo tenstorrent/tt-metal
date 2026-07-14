@@ -413,8 +413,15 @@ class TtRoutedExpert(LightweightModule):
         logger.debug(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
 
         if is_blackhole():
-            # Fused path: the op consumes the ROW_MAJOR bf16 buffer directly,
-            # tilizing x and packing bf8 internally, and returns a fresh output.
+            # Fused path. The composite op selects its strategy from the input
+            # layout: a ROW_MAJOR bf16 buffer is consumed directly (x tilized and
+            # bf8-packed internally, fresh output); a TILE buffer takes the
+            # non-fused read path and is written in place. TILE mode requires x to
+            # be bf8, so cast a mismatched TILE input; the ROW_MAJOR fast path is
+            # left untouched.
+            if dispatched_buffer.layout == ttnn.TILE_LAYOUT and dispatched_buffer.dtype != self.activations_dtype:
+                logger.warning(f"{dispatched_buffer.dtype=} typecasting to {self.activations_dtype}")
+                dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
             signpost(header="UnifiedRoutedExpertMoe")
             expert_outputs = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
                 dispatched_buffer,
@@ -431,10 +438,17 @@ class TtRoutedExpert(LightweightModule):
             logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
             return expert_outputs
 
-        # Wormhole fallback: tile to the activation dtype for the per-expert
-        # extract → FFN → insert loop. expert_outputs aliases this buffer; the
-        # insert writes each expert's result back in place.
-        dispatched_buffer = ttnn.to_layout(dispatched_buffer, ttnn.TILE_LAYOUT, dtype=self.activations_dtype)
+        # Wormhole fallback: the per-expert extract → FFN → insert loop needs a
+        # TILE activations_dtype buffer. A ROW_MAJOR input is tilized and cast in
+        # one to_layout; an already-TILE input only needs the dtype cast (to_layout
+        # would not cast a TILE→TILE tensor). expert_outputs aliases this buffer;
+        # the insert writes each expert's result back in place.
+        if dispatched_buffer.layout == ttnn.TILE_LAYOUT:
+            if dispatched_buffer.dtype != self.activations_dtype:
+                logger.warning(f"{dispatched_buffer.dtype=} typecasting to {self.activations_dtype}")
+                dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
+        else:
+            dispatched_buffer = ttnn.to_layout(dispatched_buffer, ttnn.TILE_LAYOUT, dtype=self.activations_dtype)
         expert_outputs = dispatched_buffer
         for local_expert in range(self.experts_per_chip):
             signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")
