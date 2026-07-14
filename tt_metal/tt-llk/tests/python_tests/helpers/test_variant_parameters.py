@@ -450,6 +450,14 @@ class ADD_TOP_ROW(TemplateParameter):
 
 
 @dataclass
+class TO_FROM_INT8(TemplateParameter):
+    to_from_int8: bool
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool TO_FROM_INT8 = {str(self.to_from_int8).lower()};"
+
+
+@dataclass
 class IS_MAX_OP(TemplateParameter):
     """Compile-time flag: true for element-wise max, false for min."""
 

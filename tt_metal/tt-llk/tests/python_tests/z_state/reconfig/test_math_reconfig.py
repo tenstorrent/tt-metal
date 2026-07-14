@@ -106,9 +106,13 @@ def generate_int8_boundary_formats() -> (
 
 @parametrize(
     formats=generate_int8_boundary_formats(),
+    dest_acc=lambda formats: [
+        DestAccumulation.Yes
+    ],  # int8/int32 math requires FP32 dest accumulation
 )
 def test_math_reconfig_skip_int8(
     formats,
+    dest_acc,
 ):
     prev_a, prev_b, next_a, next_b = formats
 
@@ -119,7 +123,7 @@ def test_math_reconfig_skip_int8(
         "sources/state/reconfig/math_reconfig_test.cpp",
         FormatConfig(prev_a, prev_b, next_a, next_b, DataFormat.Float32),
         runtimes=[CONFIGURE_TEST_RUN_IDX(1)],
-        dest_acc=DestAccumulation.Yes,  # int8/int32 math requires FP32 dest accumulation
+        dest_acc=dest_acc,
     )
 
     configuration.run()
