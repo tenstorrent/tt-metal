@@ -1,0 +1,83 @@
+# This file defines the test matrix for the multi-card sanity tests pipeline.
+
+# Each entry represents a parallel job with the following keys:
+#   id: Stable slug for workflow_dispatch / jq filtering (must match pipeline-select-galaxy).
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run for the test.
+#   skus: A mapping of SKU names to their configuration.
+#     Each SKU entry contains:
+#       timeout: The maximum allowed runtime for this job in minutes on that SKU.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+
+- name: fabric fast unit tests (1D, 2D, single erisc)
+  cmd: |
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*FabricMuxV2Smoke*Fixture.*"
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+  skus:
+    bh_quietbox_2:
+      timeout: 15
+    bh_p300:
+      timeout: 15
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+  team: scaleout
+
+- name: ttnn ops fast unit tests (ccl, DRAM prefetcher)
+  cmd: |
+    pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit
+    # Disabled due to issue https://github.com/tenstorrent/tt-metal/issues/41040
+    # pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH.py
+  skus:
+    bh_quietbox_2:
+      timeout: 15
+    bh_p300:
+      timeout: 15
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: ttnn
+
+- name: Host IO fast unit test (viommu only)
+  cmd: TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
+  skus:
+    bh_p300:
+      timeout: 10
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: sdpa nightly tests (QB2 IOMMU only)
+  cmd: pytest tests/nightly/blackhole/sdpa/ -svv
+  skus:
+    bh_quietbox_2_iommu:
+      timeout: 20
+  owner_id: U05ACKAJTHS # Naif Tarafdar
+  team: ttnn
+
+- name: ring sdpa PERF tests (QB2 IOMMU only)
+  # These perf checks measure device kernel duration via the realtime device profiler. On Blackhole
+  # the RT profiler's D2H socket uses 64-bit PCIe addressing, which requires host IOMMU (there is no
+  # hugepage fallback) — see evaluate_realtime_profiler_eligibility in realtime_profiler_manager.cpp.
+  # Without IOMMU the profiler never activates and the tests fail the guard (issue #49665), so this
+  # job must run on the IOMMU-enabled runner, matching the sdpa nightly job above.
+  cmd: |
+    pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_perf_check -svv
+    pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_perf_check -svv
+    pytest tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py::test_exp_ring_joint_attention_perf_check -svv
+  skus:
+    bh_quietbox_2_iommu:
+      timeout: 10
+  owner_id: U05ACKAJTHS # Naif Tarafdar
+  team: ttnn
+
+- name: indexer_score multi-device tests (QB2 only)
+  # The per-device chunk_start (SP=4 and SP=2xTP=2) mesh tests; single-chip cases in the same
+  # file run in tt-metal-l2-nightly. -k selects only the multi-device functions.
+  cmd: pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_indexer_score.py -k indexer_score_qb -svv
+  skus:
+    bh_quietbox_2:
+      timeout: 10
+  owner_id: U05ACKAJTHS # Naif Tarafdar
+  team: ttnn

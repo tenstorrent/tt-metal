@@ -149,7 +149,8 @@ Tensor convert_tensor(const Tensor& input_tensor, const Fn& compute, const Tenso
     TT_FATAL(is_cpu_tensor(input_tensor), "convert_tensor only supports cpu tensors");
     auto transformed_buffer = input_tensor.host_storage().buffer().transform(
         compute, tt::tt_metal::DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
-    return Tensor(tt::tt_metal::HostTensor(std::move(transformed_buffer), output_spec, input_tensor.tensor_topology()));
+    return Tensor(tt::tt_metal::HostTensor::from_buffer(
+        std::move(transformed_buffer), output_spec, input_tensor.tensor_topology()));
 }
 
 template <typename Func, typename... Args>
@@ -672,13 +673,13 @@ static Tensor conv_group_weight_zero_pad_helper(
                     for (int m = 0; m < original_weight_shape[3]; m++) {
                         // Get value from original weight tensor
                         auto value_flat_input_index = tt::tt_metal::compute_flat_indices(
-                            ttnn::SmallVector<uint32_t>{curr_batch_idx, j, k, m}, original_strides);
+                            ttsl::SmallVector<uint32_t>{curr_batch_idx, j, k, m}, original_strides);
                         auto value = conv_weight_tensor_buffer[value_flat_input_index];
 
                         // Copy value to output tensor at the adjusted position
                         auto new_channel_idx = new_channel_start_idx + j;
                         auto output_flat_input_index = tt::tt_metal::compute_flat_indices(
-                            ttnn::SmallVector<uint32_t>{new_batch_idx, new_channel_idx, k, m}, output_strides);
+                            ttsl::SmallVector<uint32_t>{new_batch_idx, new_channel_idx, k, m}, output_strides);
                         output_buffer[output_flat_input_index] = value;
                     }
                 }
@@ -740,10 +741,10 @@ static Tensor conv_depthwise_weight_bcast_helper(
                         const uint32_t k = tap_index / window_w;
                         const uint32_t l = tap_index % window_w;
                         auto value_flat_input_index = tt::tt_metal::compute_flat_indices(
-                            ttnn::SmallVector<uint32_t>{i, 0, k, l}, original_strides);
+                            ttsl::SmallVector<uint32_t>{i, 0, k, l}, original_strides);
                         auto value = conv_weight_tensor_buffer[value_flat_input_index];
                         auto output_flat_input_index = tt::tt_metal::compute_flat_indices(
-                            ttnn::SmallVector<uint32_t>{i, j, 0u, 0u}, output_strides);
+                            ttsl::SmallVector<uint32_t>{i, j, 0u, 0u}, output_strides);
                         output_buffer[output_flat_input_index] = value;
                     }
                 }
@@ -843,12 +844,12 @@ static Tensor conv_transpose2d_group_weight_zero_pad_helper(
                     for (int w = 0; w < original_weight_shape[3]; w++) {
                         // Get value from original weight tensor
                         auto value_flat_input_index = tt::tt_metal::compute_flat_indices(
-                            ttnn::SmallVector<uint32_t>{i, c, h, w}, original_weight_strides);
+                            ttsl::SmallVector<uint32_t>{i, c, h, w}, original_weight_strides);
                         auto value = conv_weight_tensor_buffer[value_flat_input_index];
 
                         // Copy value to output tensor at the adjusted position
                         auto output_flat_input_index = tt::tt_metal::compute_flat_indices(
-                            ttnn::SmallVector<uint32_t>{i, global_out_channel, h, w}, output_weight_strides);
+                            ttsl::SmallVector<uint32_t>{i, global_out_channel, h, w}, output_weight_strides);
                         output_buffer[output_flat_input_index] = value;
                     }
                 }
@@ -1023,7 +1024,7 @@ static Tensor to_folded_weight_layout(const Tensor& conv_weight_tensor, std::arr
                 return tt::tt_metal::HostBuffer(std::move(output_buffer));
             },
             tt::tt_metal::DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
-        return Tensor(tt::tt_metal::HostTensor(
+        return Tensor(tt::tt_metal::HostTensor::from_buffer(
             std::move(folded_buffer),
             TensorSpec(
                 output_shape,

@@ -59,8 +59,9 @@ inline void llk_pack_fast_untilize_block_strided(
     const std::uint32_t output_row_address =
         get_output_tile_address<true, PackMode::Default>(output_id, output_tile_index);
     const std::uint32_t chunk_offset = SCALE_DATUM_SIZE(pack_dst_format[output_id], tile_offset * TILE_C_DIM) / 16;
+    const std::uint32_t output_row_stride = SCALE_DATUM_SIZE(pack_dst_format[output_id], full_ct_dim * TILE_C_DIM) / 16;
     ckernel::_llk_pack_fast_untilize_block_strided_<block_ct_dim, full_ct_dim>(
-        output_row_address + chunk_offset, unit_dim, prev_unit_dim);
+        output_row_address + chunk_offset, unit_dim, prev_unit_dim, output_row_stride);
 }
 
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim>

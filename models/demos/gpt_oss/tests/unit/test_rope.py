@@ -907,7 +907,9 @@ def test_rope_yarn_values_match_hf(mesh_device, device_params, reset_seeds):
     rope_ours = rotary_embedding_factory(
         dim=hf_config.head_dim,
         max_position_embeddings=hf_config.max_position_embeddings,
-        base=hf_config.rope_theta,
+        # transformers 5.x folds rope_theta into rope_parameters (GptOssConfig has no rope_theta attr).
+        base=getattr(hf_config, "rope_theta", None)
+        or (getattr(hf_config, "rope_parameters", None) or {}).get("rope_theta", 150000.0),
         rope_scaling=rope_scaling,
     )
 

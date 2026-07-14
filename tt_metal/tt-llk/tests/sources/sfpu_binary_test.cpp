@@ -33,7 +33,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_A_<BROADCAST_TYPE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
             L1_ADDRESS(params.buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
     }
-    _llk_unpack_A_uninit_<BROADCAST_TYPE>(FACE_R_DIM);
+    _llk_unpack_A_uninit_<BROADCAST_TYPE>();
 }
 
 #endif
@@ -51,7 +51,7 @@ using namespace ckernel::sfpu;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-    const bool is_int_fpu_en = false;
+    const bool is_int_fpu_en         = false;
     constexpr DataCopyType copy_type = (BROADCAST_TYPE == BroadcastType::NONE || unpack_to_dest) ? DataCopyType::A2D : DataCopyType::B2D;
 
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

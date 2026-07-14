@@ -362,7 +362,8 @@ void py_module(nb::module_& mod) {
                CoreRangeSet hop_cores,
                std::size_t num_global_cb_receivers,
                bool untilize_out,
-               std::optional<CoreRangeSet> allowed_worker_cores) {
+               std::optional<CoreRangeSet> allowed_worker_cores,
+               bool stream_in1) {
                 std::size_t actual_out_block_h = out_block_h.value_or(per_core_M);
                 std::size_t actual_out_block_w = out_block_w.value_or(per_core_N);
 
@@ -382,7 +383,8 @@ void py_module(nb::module_& mod) {
                     std::move(hop_cores),
                     num_global_cb_receivers,
                     untilize_out,
-                    std::move(allowed_worker_cores)};
+                    std::move(allowed_worker_cores),
+                    stream_in1};
             },
             nb::kw_only(),
             nb::arg("compute_with_storage_grid_size"),
@@ -400,7 +402,8 @@ void py_module(nb::module_& mod) {
             nb::arg("hop_cores").noconvert() = nb::cast(CoreRangeSet()),
             nb::arg("num_global_cb_receivers").noconvert() = 1,
             nb::arg("untilize_out").noconvert() = false,
-            nb::arg("allowed_worker_cores") = nb::none())
+            nb::arg("allowed_worker_cores") = nb::none(),
+            nb::arg("stream_in1").noconvert() = false)
         .def_rw(
             "compute_with_storage_grid_size",
             &MatmulMultiCoreReuseMultiCast1DProgramConfig::compute_with_storage_grid_size,
@@ -518,12 +521,20 @@ void py_module(nb::module_& mod) {
             When set, overrides ``compute_with_storage_grid_size`` for determining the active
             compute grid. Accepts a ``CoreRangeSet`` describing the exact cores to use.
         )doc")
+        .def_rw("stream_in1", &MatmulMultiCoreReuseMultiCast1DProgramConfig::stream_in1, R"doc(
+            Stream in1 weights from the GCB in ring-rotated FIFO order (gather_in0 + DRAM-sender
+            GCB only). When true, each weight block is consumed as it arrives instead of waiting
+            for the whole tensor, so the GCB can be sized to a small live window. The weight MUST
+            be queued for streaming (the ``(weight, block_count, rotation)`` form of
+            ``queue_tensor_prefetcher_request``, passing the per-receiver ring-rotation list) to
+            match, else the matmul deadlocks. Defaults to false.
+        )doc")
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCast1DProgramConfig& config) {
             return fmt::format(
                 "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size={}, in0_block_w={}, "
                 "out_block_h={}, out_block_w={}, out_subblock_h={}, out_subblock_w={}, per_core_M={}, per_core_N={}, "
                 "fuse_batch={}, fused_activation={}, mcast_in0={}, gather_in0={}, hop_cores={}, "
-                "num_global_cb_receivers={}, untilize_out={}, allowed_worker_cores={})",
+                "num_global_cb_receivers={}, untilize_out={}, allowed_worker_cores={}, stream_in1={})",
                 config.compute_with_storage_grid_size,
                 config.in0_block_w,
                 config.out_block_h,
@@ -540,7 +551,8 @@ void py_module(nb::module_& mod) {
                 config.num_global_cb_receivers,
                 config.untilize_out,
                 config.allowed_worker_cores.has_value() ? fmt::format("{}", config.allowed_worker_cores.value())
-                                                        : "None");
+                                                        : "None",
+                config.stream_in1);
         });
 
     auto matmul_multi_core_reuse_multicast_dram_sharded_program_config =
@@ -673,9 +685,11 @@ void py_module(nb::module_& mod) {
           then the second input is broadcasted to align appropriately with the first
           input.
 
-        - Matrix multiplication will not work if the first input has batch
-          dimensions that are all of size 1 and the second input has batch dimensions
-          that are not all of size 1.
+        - If the first input has batch dimensions that are all of size 1 and the
+          second input has batch dimensions that are not all of size 1, the first
+          input is reused across all batches of the second input. Both inputs must
+          be rank 3 or higher with matching ranks, interleaved (L1 or DRAM), and
+          non-sharded.
 
         - Note: In general, the number of dimensions between the two inputs should
           match. There may be cases where they don't. In that case, if the inputs
@@ -1048,7 +1062,7 @@ void py_module(nb::module_& mod) {
         Keyword Args:
             sparsity (ttnn.Tensor): the sparsity tensor containing the mask values. Needs to be on the device. The data type must be bfloat16.
             program_config (ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig): the program configuration for the matmul operation. Only this config type is supported. ``mcast_in0`` must be set to True.
-            nnz (int, optional): the number of non-zero values in the sparsity tensor. If not provided, it will be inferred from the sparsity tensor at runtime.
+            nnz (int, optional): the number of non-zero values in the sparsity tensor. If not provided, it will be inferred from the sparsity tensor at runtime. If provided, it **must** be exactly equal to the number of non-zero entries in `sparsity` (i.e. `nnz == count_nonzero(sparsity)`). It is the user's responsibility to set this value correctly. If the equality condition is not met, the kernel will hang (deadlock) on device, since the receiver and compute kernels loop exactly `nnz` times while the sender only multicasts once per non-zero sparsity entry. Because `count_nonzero(sparsity)` is data-dependent and only known at runtime, this cannot be validated on the host; the mismatch is asserted on-device (failing loudly under watcher) but otherwise results in a hang.
             is_input_a_sparse (bool, optional): boolean indicating whether `input_tensor_a` is sparse. Defaults to `False`. Together with `is_input_b_sparse`, it determines how the sparsity tensor is interpreted. See the supported modes table below.
             is_input_b_sparse (bool, optional): boolean indicating whether `input_tensor_b` is sparse. Defaults to `True`. Together with `is_input_a_sparse`, it determines how the sparsity tensor is interpreted. See the supported modes table below.
             memory_config (ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using ttnn.DRAM_MEMORY_CONFIG.
@@ -1100,6 +1114,15 @@ void py_module(nb::module_& mod) {
                   - --
                   - --
                   - --
+
+        .. warning::
+            When `nnz` is provided, it **must** equal `count_nonzero(sparsity)` exactly. Passing an `nnz`
+            that does not match the actual number of non-zero entries in `sparsity` will cause the kernel to
+            **hang (deadlock)** on device. Setting `nnz` correctly is the user's responsibility. This
+            condition cannot be checked on the host because `count_nonzero(sparsity)` is data-dependent and
+            only known at runtime; it is validated on-device and will fail loudly (assert) when watcher is
+            enabled, but otherwise manifests as a hang. If you cannot guarantee the exact count, omit `nnz`
+            so it is inferred from the sparsity tensor at runtime.
 
         Note:
             The input tensors support the following data types and layouts:
@@ -1189,6 +1212,11 @@ void py_module(nb::module_& mod) {
         .def_static(
             "compute_output_specs",
             &ttnn::prim::MatmulDeviceOperation::compute_output_specs,
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"))
+        .def_static(
+            "compute_program_hash",
+            &ttnn::prim::MatmulDeviceOperation::compute_program_hash,
             nb::arg("operation_attributes"),
             nb::arg("tensor_args"));
 

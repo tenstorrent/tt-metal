@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       models-to-run:
-        description: "List of requested models as JSON array, for example: [\"common_models\", \"functional_unet\"]. Default is 'all'"
+        description: 'List of requested models as JSON array, for example: ["common_models", "functional_unet"]. Default is ''all'''
         default: "all"
         type: string
       enable-ops-recording:
@@ -41,7 +41,7 @@ on:
         required: false
         type: string
         default: "all"
-        description: "List of requested models as JSON array, for example: [\"common_models\", \"functional_unet\"]. Default is 'all'"
+        description: 'List of requested models as JSON array, for example: ["common_models", "functional_unet"]. Default is ''all'''
       enable-ops-recording:
         required: false
         type: boolean
@@ -63,12 +63,17 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
-    - cron: "0 5,14,23 * * *"
+    - cron: "0 5 * * *"
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
@@ -78,7 +83,7 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       tracy: ${{ inputs.enable-ops-recording || false }}
   fd-nightly:
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     uses: ./.github/workflows/fast-dispatch-full-regressions-and-models-impl.yaml
     secrets: inherit
     with:

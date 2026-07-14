@@ -45,8 +45,8 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
 #ifdef ARCH_QUASAR
-        // Noc::TxnIdMode::ENABLED is only declared on Quasar.
-        noc.async_write<Noc::TxnIdMode::ENABLED>(dfb, dst_dram, {}, {.bank_id = dst_bank_id, .addr = tlocal_dst_addr});
+        // NocOptions::TXN_ID uses the DFB-integrated trid path on Quasar.
+        noc.async_write<NocOptions::TXN_ID>(dfb, dst_dram, {}, {.bank_id = dst_bank_id, .addr = tlocal_dst_addr});
 #else
         dfb.wait_front(ublock_size_tiles);
         noc.async_write(dfb, dst_dram, ublock_size_bytes, {}, {.bank_id = dst_bank_id, .addr = tlocal_dst_addr});
@@ -60,7 +60,7 @@ void kernel_main() {
 
 #ifdef ARCH_QUASAR
     // write_barrier is required on Quasar to flush transactions enqueued via
-    // Noc::TxnIdMode::ENABLED before the kernel exits.
+    // NocOptions::TXN_ID before the kernel exits.
     dfb.write_barrier(noc);
 #endif
 }

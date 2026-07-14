@@ -44,6 +44,40 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal
 )
 
+# Runtime tensor tests build into their own executable (mirrors unit_tests_ttnn_tensor)
+# so they stay out of the tt-metalium smoke binary. They run via unit_tests_tensor in
+# build-and-unit-tests and the t3k unit-test suite.
+add_library(unit_tests_tensor_lib OBJECT)
+add_library(TT::Metalium::Test::Tensor ALIAS unit_tests_tensor_lib)
+target_sources(unit_tests_tensor_lib PRIVATE ${UNIT_TESTS_API_TENSOR_SOURCES})
+target_include_directories(
+    unit_tests_tensor_lib
+    BEFORE
+    PRIVATE
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/common
+)
+target_link_libraries(
+    unit_tests_tensor_lib
+    PRIVATE
+        test_metal_common_libs
+        Boost::smart_ptr
+)
+TT_ENABLE_UNITY_BUILD(unit_tests_tensor_lib)
+target_precompile_headers(unit_tests_tensor_lib REUSE_FROM metal_common_pch)
+
+add_executable(unit_tests_tensor)
+target_link_libraries(unit_tests_tensor PRIVATE unit_tests_tensor_lib)
+set_target_properties(
+    unit_tests_tensor
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal
+)
+
 # Per-core allocation tests need their own binary so TT_METAL_ALLOCATOR_MODE_HYBRID
 # env var is set before the RunTimeOptions singleton caches it.
 add_executable(unit_tests_per_core_allocation allocator/test_per_core_allocation.cpp)

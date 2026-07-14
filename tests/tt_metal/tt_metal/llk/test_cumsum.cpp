@@ -123,8 +123,8 @@ void run_single_core_cumsum(
     std::vector<uint32_t> compile_args = {};
 
     if (test_config.rowwise) {
-        reader_kernel_name = "tt_metal/kernels/dataflow/reader_unary.cpp";
-        writer_kernel_name = "tt_metal/kernels/dataflow/writer_unary.cpp";
+        reader_kernel_name = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary.cpp";
+        writer_kernel_name = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp";
         compile_args = {test_config.Wt, test_config.Ht, test_config.N};
         defines["ROWWISE"] = "1";
     } else {

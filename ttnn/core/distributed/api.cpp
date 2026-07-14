@@ -104,7 +104,8 @@ Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShap
     }
 
     TensorTopology topology = TensorTopology::create_sharded_tensor_topology(mesh_shape, shard_dim);
-    return Tensor(HostTensor(std::move(distributed_host_buffer), reference_shard.tensor_spec(), std::move(topology)));
+    return Tensor(HostTensor::from_buffer(
+        std::move(distributed_host_buffer), reference_shard.tensor_spec(), std::move(topology)));
 }
 
 Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards, int shard_dim) {

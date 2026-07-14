@@ -73,7 +73,7 @@ static void RunTest(
     CoreCoord logical_core, virtual_core;
     // Set up the kernel on the correct risc
     KernelHandle assert_kernel = 0;
-    constexpr const char* ASSERT_KERNEL_NAME = "assert_kernel";
+    const experimental::KernelSpecName ASSERT_KERNEL_NAME{"assert_kernel"};
     auto processor_idx =
         hal.get_processor_index(processor.core_type, processor.processor_class, processor.processor_type);
     std::string risc = hal.get_processor_class_name(processor.core_type, processor_idx, false);
@@ -81,10 +81,10 @@ static void RunTest(
         case HalProgrammableCoreType::TENSIX: {
             logical_core = {0, 0};
             virtual_core = device->worker_core_from_logical_core(logical_core);
-            experimental::metal2_host_api::KernelSpec assert_kernel_spec{
+            experimental::KernelSpec assert_kernel_spec{
                 .unique_id = ASSERT_KERNEL_NAME,
                 .source = kernel,
-                .runtime_arguments_schema = {.named_runtime_args = {"a", "b", "assert_type", "hw_assert_cause"}},
+                .runtime_arg_schema = {.runtime_arg_names = {"a", "b", "assert_type", "hw_assert_cause"}},
             };
             switch (processor.processor_class) {
                 case HalProcessorClassType::DM: {
@@ -98,26 +98,22 @@ static void RunTest(
                     auto gen1_noc = (gen1_processor == tt::tt_metal::DataMovementProcessor::RISCV_1)
                                         ? tt_metal::NOC::RISCV_1_default
                                         : tt_metal::NOC::RISCV_0_default;
+                    // Provide both gen1 and gen2 configs so the same KernelSpec runs on either arch.
                     if (is_quasar) {
                         // processor.processor_type is the absolute DM index (2..7 for DM2..DM7).
                         // Map to kernel-local thread id (0..5) since the kernel launches on the 6 user DMs.
                         constexpr uint32_t kFirstUserDm = 2;
                         uint32_t target_thread_id = static_cast<uint32_t>(processor.processor_type) - kFirstUserDm;
                         assert_kernel_spec.num_threads = 6;
-                        assert_kernel_spec.compile_time_arg_bindings = {{"target_thread_id", target_thread_id}};
+                        assert_kernel_spec.compile_time_args = {{"target_thread_id", target_thread_id}};
+                        assert_kernel_spec.hw_config = experimental::DataMovementGen2Config{};
                     } else {
                         assert_kernel_spec.num_threads = 1;
+                        assert_kernel_spec.hw_config = experimental::DataMovementGen1Config{
+                            .processor = gen1_processor,
+                            .noc = gen1_noc,
+                        };
                     }
-                    // Provide both gen1 and gen2 configs so the same KernelSpec runs on either arch.
-                    assert_kernel_spec.config_spec = experimental::metal2_host_api::DataMovementConfiguration{
-                        .gen1_data_movement_config =
-                            experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
-                                .processor = gen1_processor,
-                                .noc = gen1_noc,
-                            },
-                        .gen2_data_movement_config =
-                            experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{},
-                    };
                     break;
                 }
                 case HalProcessorClassType::COMPUTE: {
@@ -127,23 +123,27 @@ static void RunTest(
                         .defines = {{fmt::format("TRISC{}", trisc_id), "1"}}};
                     // Bind trisc_id so the kernel can early-return on TRISCs that aren't the target
                     // of a Quasar compute HW-fault test.
-                    assert_kernel_spec.compile_time_arg_bindings = {{"trisc_id", trisc_id}};
-                    assert_kernel_spec.config_spec = experimental::metal2_host_api::ComputeConfiguration{};
+                    assert_kernel_spec.compile_time_args = {{"trisc_id", trisc_id}};
+                    if (is_quasar) {
+                        assert_kernel_spec.hw_config = experimental::ComputeGen2Config{};
+                    } else {
+                        assert_kernel_spec.hw_config = experimental::ComputeGen1Config{};
+                    }
                     break;
                 }
                 default: TT_THROW("Unsupported processor class type for TENSIX");
             }
-            experimental::metal2_host_api::WorkUnitSpec wu{
-                .unique_id = "main",
+            experimental::WorkUnitSpec wu{
+                .name = "main",
                 .kernels = {ASSERT_KERNEL_NAME},
-                .target_nodes = experimental::metal2_host_api::NodeCoord{logical_core},
+                .target_nodes = experimental::NodeCoord{logical_core},
             };
-            experimental::metal2_host_api::ProgramSpec spec{
-                .program_id = "watcher_assert",
+            experimental::ProgramSpec spec{
+                .name = "watcher_assert",
                 .kernels = {assert_kernel_spec},
                 .work_units = {wu},
             };
-            program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+            program = experimental::MakeProgramFromSpec(*mesh_device, spec);
             break;
         }
         case HalProgrammableCoreType::ACTIVE_ETH:
@@ -172,7 +172,8 @@ static void RunTest(
                 log_info(LogTest, "Skipping: DRAM programmable cores not available on this architecture.");
                 GTEST_SKIP();
             }
-            logical_core = {0, 0};
+            // Subchannel 0 is the syseng-owned NOC0 DRAM endpoint (no DRISC firmware); use subchannel 1.
+            logical_core = {0, 1};
             virtual_core = device->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
             assert_kernel = CreateKernel(program, kernel, logical_core, DramConfig{.noc = tt_metal::NOC::NOC_0});
             risc = "drisc";
@@ -188,15 +189,14 @@ static void RunTest(
         if (use_legacy_api) {
             SetRuntimeArgs(prog, assert_kernel, logical_core, args);
         } else {
-            experimental::metal2_host_api::ProgramRunParams params;
-            params.kernel_run_params = {{
-                .kernel_spec_name = ASSERT_KERNEL_NAME,
-                .named_runtime_args =
-                    {{.node = experimental::metal2_host_api::NodeCoord{logical_core},
-                      .args =
-                          {{"a", args[0]}, {"b", args[1]}, {"assert_type", args[2]}, {"hw_assert_cause", args[3]}}}},
+            experimental::ProgramRunArgs params;
+            params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+                .kernel = ASSERT_KERNEL_NAME,
+                .runtime_arg_values =
+                    {{experimental::NodeCoord{logical_core},
+                      {{"a", args[0]}, {"b", args[1]}, {"assert_type", args[2]}, {"hw_assert_cause", args[3]}}}},
             }};
-            experimental::metal2_host_api::SetProgramRunParameters(prog, params);
+            experimental::SetProgramRunArgs(prog, params);
         }
     };
 

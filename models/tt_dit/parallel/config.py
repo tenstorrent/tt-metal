@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 from typing import NamedTuple
 
 import ttnn
@@ -17,24 +19,84 @@ class DiTParallelConfig(NamedTuple):
     tensor_parallel: ParallelFactor
     sequence_parallel: ParallelFactor
 
+    @classmethod
+    def from_tuples(cls, *, cfg: tuple[int, int], sp: tuple[int, int], tp: tuple[int, int]) -> DiTParallelConfig:
+        return cls(
+            cfg_parallel=ParallelFactor(*cfg),
+            sequence_parallel=ParallelFactor(*sp),
+            tensor_parallel=ParallelFactor(*tp),
+        )
+
 
 class EncoderParallelConfig(NamedTuple):
     tensor_parallel: ParallelFactor
+    sequence_parallel: ParallelFactor | None = None
+
+    @classmethod
+    def from_tuple(cls, tp: tuple[int, int]) -> EncoderParallelConfig:
+        return cls(tensor_parallel=ParallelFactor(*tp))
 
 
 class VAEParallelConfig(NamedTuple):
     tensor_parallel: ParallelFactor
+
+    @classmethod
+    def from_tuple(cls, tp: tuple[int, int]) -> VAEParallelConfig:
+        return cls(tensor_parallel=ParallelFactor(*tp))
 
 
 class VaeHWParallelConfig(NamedTuple):
     height_parallel: ParallelFactor
     width_parallel: ParallelFactor
 
+    @classmethod
+    def from_tuples(cls, *, height: tuple[int, int], width: tuple[int, int]) -> VaeHWParallelConfig:
+        return cls(
+            height_parallel=ParallelFactor(*height),
+            width_parallel=ParallelFactor(*width),
+        )
+
+
+class AudioTParallelConfig(NamedTuple):
+    axis0: ParallelFactor
+    axis1: ParallelFactor
+
+    @property
+    def factor(self) -> int:
+        return self.axis0.factor * self.axis1.factor
+
+
+class AudioTCParallelConfig(NamedTuple):
+    time_parallel: ParallelFactor
+    channel_parallel: ParallelFactor
+
+    @property
+    def factor(self) -> int:
+        return self.time_parallel.factor
+
+    @property
+    def mesh_axis(self) -> int:
+        return self.time_parallel.mesh_axis
+
 
 class MochiVAEParallelConfig(NamedTuple):
     time_parallel: ParallelFactor
     h_parallel: ParallelFactor
     w_parallel: ParallelFactor
+
+    @classmethod
+    def from_tuples(
+        cls,
+        *,
+        time: tuple[int, int],
+        h: tuple[int, int],
+        w: tuple[int, int],
+    ) -> MochiVAEParallelConfig:
+        return cls(
+            time_parallel=ParallelFactor(*time),
+            h_parallel=ParallelFactor(*h),
+            w_parallel=ParallelFactor(*w),
+        )
 
 
 class OldParallelConfig(NamedTuple):

@@ -675,6 +675,99 @@ def test_dram_reshard_with_program_cache(
     assert device.num_program_cache_entries() == 1
 
 
+def _height_sharded_reshard_configs(channels, input_buffer_type, output_buffer_type):
+    """Build (input_mem_config, output_mem_config) for a (64,C)->(32,C) HEIGHT_SHARDED reshard."""
+    input_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))})
+
+    input_shard_spec = ttnn.ShardSpec(input_shard_grid, (64, channels), ttnn.ShardOrientation.ROW_MAJOR)
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, input_buffer_type, input_shard_spec)
+    output_shard_spec = ttnn.ShardSpec(output_shard_grid, (32, channels), ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, output_buffer_type, output_shard_spec)
+    return input_mem_config, output_mem_config
+
+
+@pytest.mark.parametrize("channels", [8, 16])
+@pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("input_buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM])
+@pytest.mark.parametrize("output_buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM])
+def test_reshard_aligned_channels_height_sharded(device, channels, tt_dtype, input_buffer_type, output_buffer_type):
+    """
+    Row-major HEIGHT_SHARDED reshard across all four L1/DRAM input x output combinations;
+    verify the data round-trips. In bf16 the shard row is channels * 2 bytes, so channels
+    that are multiples of 8 give 16-byte (L1-aligned) input rows.
+
+    When at least one buffer is in L1 this uses the height->height same-width factory (reader
+    path when the output is in L1, writer path otherwise); with both buffers in DRAM it uses the
+    ND copy-pages path. Whether a same-width transfer lands on the contiguous fast path or the
+    row-by-row re-stride path depends on the buffer alignments (L1 is 16B; DRAM is 32B on
+    Wormhole, 64B on Blackhole) -- e.g. a 16-byte row is not DRAM-aligned, so it re-strides --
+    but all paths produce correct data.
+    """
+    grid_size = device.compute_with_storage_grid_size()
+    if grid_size.x < 3:
+        pytest.skip("Test requires at least 3 cores in the x dimension")
+
+    input_mem_config, output_mem_config = _height_sharded_reshard_configs(
+        channels, input_buffer_type, output_buffer_type
+    )
+
+    torch_tensor = random_torch_tensor(tt_dtype, [1, 1, 64, channels])
+    input_tensor = ttnn.Tensor(
+        torch_tensor, tt_dtype, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, mem_config=input_mem_config
+    )
+
+    output_tensor = ttnn.reshard(input_tensor, output_mem_config)
+    torch_tensor_after_round_trip = ttnn.to_torch(output_tensor)
+
+    assert torch_tensor.shape == torch_tensor_after_round_trip.shape
+    passing, output = comp_equal(torch_tensor, torch_tensor_after_round_trip)
+    assert passing, output
+
+
+@pytest.mark.parametrize("channels", [1, 2, 3, 4, 5, 6, 7, 9, 10, 17, 33, 65])
+@pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("input_buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM])
+@pytest.mark.parametrize("output_buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM])
+def test_reshard_unaligned_channels_height_sharded(device, channels, tt_dtype, input_buffer_type, output_buffer_type):
+    """
+    Row-major HEIGHT_SHARDED reshard with an unaligned shard page size, across all four
+    L1/DRAM input x output combinations. The shard row (shard_width * elem_size) is NOT a
+    multiple of the 16-byte L1 alignment: in bf16, 1..7 channels give 2..14-byte rows (smaller
+    than one aligned page), while 9/10/17/33/65 give 18/20/34/66/130-byte rows (one or more
+    aligned pages plus a partial remainder).
+
+    The height->height same-width factory handles these unaligned widths whenever at least one
+    buffer is in L1: the reader path (output in L1) stages rows through a scratch buffer, and
+    the writer path (output not in L1) re-strides row by row -- reading each row from the local
+    shard at its aligned page stride and writing only the unit_size real bytes to the remote
+    shard at the remote's aligned page stride, preserving the per-row padding to_torch expects.
+
+    With both buffers in DRAM the reshard routes to the ND copy-pages path, which copies each
+    page whole at its aligned_page_size, so the per-row DRAM padding is carried along and the
+    unaligned width is handled transparently.
+    """
+    grid_size = device.compute_with_storage_grid_size()
+    if grid_size.x < 3:
+        pytest.skip("Test requires at least 3 cores in the x dimension")
+
+    input_mem_config, output_mem_config = _height_sharded_reshard_configs(
+        channels, input_buffer_type, output_buffer_type
+    )
+
+    torch_tensor = random_torch_tensor(tt_dtype, [1, 1, 64, channels])
+    input_tensor = ttnn.Tensor(
+        torch_tensor, tt_dtype, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, mem_config=input_mem_config
+    )
+
+    output_tensor = ttnn.reshard(input_tensor, output_mem_config)
+    torch_tensor_after_round_trip = ttnn.to_torch(output_tensor)
+
+    assert torch_tensor.shape == torch_tensor_after_round_trip.shape
+    passing, output = comp_equal(torch_tensor, torch_tensor_after_round_trip)
+    assert passing, output
+
+
 @pytest.mark.parametrize(
     "input_shape, input_layout, input_shard_grid,  input_shard_shape, input_shard_orientation, input_sharding_scheme, output_shard_grid, output_shard_shape, output_shard_orientation, output_sharding_scheme",
     [

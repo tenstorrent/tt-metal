@@ -128,9 +128,14 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Asinh: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
-    # atanh: domain |x| < 1; stay away from ±1 to avoid ±inf
+    # atanh: domain |x| < 1. The log1p reformulation is stable across the whole
+    # interior including the small-x region (catastrophic cancellation in the old
+    # form) and close to ±1, so sweep nearer the boundary; stay just inside ±1 to
+    # avoid the exact ±inf endpoints (covered separately by special-case tests).
     MathOperation.Atanh: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-0.95, high=0.95)
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-0.999, high=0.999
+        )
     ),
     # celu: exercises both the exponential branch (x < 0) and linear (x >= 0)
     MathOperation.Celu: OperandSpecs(
@@ -146,6 +151,14 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Elu: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
+    # erfinv: domain |x| < 1; stay just inside ±1 to avoid the ±inf endpoints.
+    MathOperation.Erfinv: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-0.99, high=0.99)
+    ),
+    # heaviside: cover both the negative (->0) and positive (->1) branches.
+    MathOperation.Heaviside: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
     # exp: format-specific overflow threshold
     MathOperation.Exp: _exp_spec,
     # exp2: format-specific overflow threshold
@@ -154,8 +167,19 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Fill: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=1.0)
     ),
-    # gelu: Gaussian activation — gaussian distribution naturally exercises tails
+    # gelu: gaussian-sampled (mean=0, std=3) — most inputs near 0, but still some large ones.
     MathOperation.Gelu: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.GAUSSIAN,
+            mean=0.0,
+            std=3.0,
+            low=-5.0,
+            high=5.0,
+        )
+    ),
+    # gelu_tanh: tanh approximation of gelu — same Gaussian spread exercises both
+    # tails (saturation) and values near 0 (the +-0 sign path).
+    MathOperation.GeluTanh: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.GAUSSIAN, mean=0.0, std=3.0)
     ),
     # hardsigmoid: linear region between -3 and 3, clipped outside
@@ -190,6 +214,11 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.ReluMin: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
+    # lrelu: leaky ReLU with slope 0.1; span both signs so the negative
+    # (scaled) branch and the positive (pass-through) branch are exercised.
+    MathOperation.Lrelu: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
     MathOperation.Threshold: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
@@ -206,6 +235,56 @@ _OP_DOMAIN_REGISTRY: Dict[
     # silu: silu(x) = x * sigmoid(x); cover saturation + linear regions
     MathOperation.Silu: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # softshrink: piecewise around ±lambda (0.5); span both shrink branches and the zero band
+    MathOperation.Softshrink: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # softsign: softsign(x) = x / (1 + |x|); defined for all reals
+    MathOperation.Softsign: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # mish: mish(x) = x * tanh(softplus(x)); defined for all reals, cover saturation
+    MathOperation.Mish: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # selu: piecewise at x==0; span both the linear (x>=0) and exp (x<0) branches
+    MathOperation.Selu: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # i0: modified Bessel I0; kernel poly approx is only valid on |x| <= 3.75
+    MathOperation.I0: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-3.75, high=3.75)
+    ),
+    # comparison-to-zero: span both signs so the </<=/>/>= branches are exercised
+    MathOperation.EqualZero: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    MathOperation.NotEqualZero: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    MathOperation.LessThanZero: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    MathOperation.GreaterThanZero: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    MathOperation.LessThanEqualZero: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    MathOperation.GreaterThanEqualZero: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    # rdiv: value / x; keep x away from 0 to avoid the reciprocal blow-up
+    MathOperation.Rdiv: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=1.0, high=8.0)
+    ),
+    # clamp/hardtanh: bounds fixed to [-1, 1]; span past both bounds to exercise clamping
+    MathOperation.Clamp: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
+    ),
+    MathOperation.Hardtanh: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-2.0, high=2.0)
     ),
     # sin: cover the full unit circle
     MathOperation.Sin: OperandSpecs(
@@ -314,6 +393,8 @@ _OP_DOMAIN_REGISTRY: Dict[
 def for_op(
     op: MathOperation,
     data_format: DataFormat = DataFormat.Float16_b,
+    distribution_a: Optional[Union[DistributionKind, Callable]] = None,
+    distribution_b: Optional[Union[DistributionKind, Callable]] = None,
 ) -> OperandSpecs:
     """Return OperandSpecs with safe input domains for *op* and *data_format*.
 
@@ -322,12 +403,28 @@ def for_op(
         data_format: Input data format; controls the numeric range and
             precision used to choose safe per-op input domains (e.g. tighter
             ranges for narrower MX/BFP formats).
+        distribution_a: Optional override for spec_A. When None (default),
+            spec_A uses the per-op default from the registry — typically
+            UNIFORM, but some ops use LOG_UNIFORM, GAUSSIAN, or interval
+            uniforms. When set, only the distribution is overridden; all
+            other fields on the returned spec stay unchanged, so the safe
+            per-op domain is preserved. Some fields may become unused for
+            the new distribution, but they are kept as-is. The caller may
+            pass either a DistributionKind or a callable accepted by
+            StimuliSpec.distribution.
+        distribution_b: Same as distribution_a, applied to spec_B. To
+            apply the same override to both operands, pass it explicitly
+            on both arguments.
 
     Returns:
         OperandSpecs with per-operand domain specs.
 
     Raises:
         KeyError: If *op* is not in the registry.
+        TypeError: If any distribution argument is neither a DistributionKind
+            member nor a callable.
+        ValueError: If overriding to LOG_UNIFORM or LOG_UNIFORM_LINSPACE
+            while the spec's domain includes non-positive values.
     """
     entry = _OP_DOMAIN_REGISTRY.get(op)
     if entry is None:
@@ -338,8 +435,68 @@ def for_op(
             f"Currently registered ({len(registered)}): {registered}"
         )
     if callable(entry):
-        return copy.deepcopy(entry(data_format))
-    return copy.deepcopy(entry)
+        result = copy.deepcopy(entry(data_format))
+    else:
+        result = copy.deepcopy(entry)
+
+    if distribution_a is not None:
+        _validate_distribution_override(distribution_a, result.spec_A)
+        result.spec_A.distribution = distribution_a
+    if distribution_b is not None:
+        if result.spec_B is None:
+            raise ValueError(
+                f"distribution_b={distribution_b!r} was given but "
+                f"MathOperation.{op.name} has no spec_B (single-operand op). "
+                f"Drop distribution_b, or override distribution_a instead."
+            )
+        _validate_distribution_override(distribution_b, result.spec_B)
+        result.spec_B.distribution = distribution_b
+
+    return result
+
+
+def _validate_distribution_override(
+    distribution: Union[DistributionKind, Callable],
+    spec: StimuliSpec,
+) -> None:
+    """Catch the obvious incompatibilities between *distribution* and *spec*'s
+    existing fields early, instead of letting them fail deep inside
+    generate_face / generate_stimuli.
+
+    Currently checked:
+      - distribution must be a DistributionKind member or a callable
+      - LOG_UNIFORM / LOG_UNIFORM_LINSPACE requires strictly positive bounds
+        across spec.low/spec.high or every interval in spec.intervals
+      - GAUSSIAN_LINSPACE does not support spec.intervals at all
+    """
+    if not (callable(distribution) or isinstance(distribution, DistributionKind)):
+        raise TypeError(
+            f"distribution must be DistributionKind or callable, got "
+            f"{type(distribution).__name__!r}: {distribution!r}"
+        )
+
+    if distribution == DistributionKind.GAUSSIAN_LINSPACE and spec.intervals:
+        raise ValueError(
+            f"Cannot override to GAUSSIAN_LINSPACE: spec carries intervals "
+            f"{spec.intervals!r}, which gaussian_linspace does not support."
+        )
+
+    if distribution in (
+        DistributionKind.LOG_UNIFORM,
+        DistributionKind.LOG_UNIFORM_LINSPACE,
+    ):
+        if spec.intervals:
+            for lo, hi in spec.intervals:
+                if lo <= 0 or hi <= 0:
+                    raise ValueError(
+                        f"Cannot override to {distribution.name}: "
+                        f"spec intervals include non-positive bounds {spec.intervals!r}"
+                    )
+        elif spec.low <= 0 or spec.high <= 0:
+            raise ValueError(
+                f"Cannot override to {distribution.name}: spec range "
+                f"[{spec.low}, {spec.high}] includes non-positive values"
+            )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -360,6 +517,10 @@ _SFPU_UNDEFINED_RANGES: Dict[
     MathOperation.Log1p: {Operand.A: [(-float("inf"), -1.0 + 1e-6)]},
     MathOperation.Rsqrt: {Operand.A: [(-float("inf"), 1e-6)]},
     MathOperation.Acosh: {Operand.A: [(-float("inf"), 1.0)]},
+    # erfinv: defined only on the open interval (-1, 1)
+    MathOperation.Erfinv: {
+        Operand.A: [(-float("inf"), -1.0 + 1e-6), (1.0 - 1e-6, float("inf"))]
+    },
     # ── Binary: per-operand holes ────────────────────────────────────────────
     # div: divisor (srcB) must avoid 0
     MathOperation.SfpuElwdiv: {Operand.B: [(-1e-6, 1e-6)]},

@@ -67,10 +67,21 @@ void DispatchKernelInitializer::init(
     devices_ = devices;
 
     bool is_galaxy_cluster = descriptor_->cluster().is_galaxy_cluster();
+    bool are_fd_kernels_on_same_core = descriptor_->cluster().arch() == tt::ARCH::QUASAR && descriptor_->num_cqs() == 1;
     dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
-        CoreType::WORKER, descriptor_->num_cqs(), descriptor_->hal(), is_galaxy_cluster, descriptor_->rtoptions());
+        CoreType::WORKER,
+        descriptor_->num_cqs(),
+        descriptor_->hal(),
+        is_galaxy_cluster,
+        are_fd_kernels_on_same_core,
+        descriptor_->rtoptions());
     dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
-        CoreType::ETH, descriptor_->num_cqs(), descriptor_->hal(), is_galaxy_cluster, descriptor_->rtoptions());
+        CoreType::ETH,
+        descriptor_->num_cqs(),
+        descriptor_->hal(),
+        is_galaxy_cluster,
+        /*are_fd_kernels_on_same_core=*/false,
+        descriptor_->rtoptions());
 
     // Skip firmware initialization for mock devices
     if (descriptor_->is_mock_device()) {
@@ -239,7 +250,11 @@ void DispatchKernelInitializer::wait_for_dispatch_cores() const {
         // This allows the device handles to be properly released, enabling subsequent
         // device opens and tt-smi resets to succeed.
         try {
-            tt::llrt::internal_::wait_until_cores_done(dev->id(), dev_msgs::RUN_MSG_GO, dispatch_cores, 0);
+            const auto teardown_timeout_ms =
+                std::chrono::duration_cast<std::chrono::milliseconds>(rtoptions_.get_timeout_duration_for_operations())
+                    .count();
+            tt::llrt::internal_::wait_until_cores_done(
+                dev->id(), dev_msgs::RUN_MSG_GO, dispatch_cores, static_cast<int>(teardown_timeout_ms));
         } catch (const std::exception& e) {
             log_warning(
                 LogMetal,

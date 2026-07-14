@@ -69,7 +69,7 @@ ALWI void fast_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
     } else {
         MATH((llk_math_fast_untilize_init_skip_remap()));
     }
-    PACK((llk_pack_reconfig_data_format_disaggregated<DST_ACCUM_MODE>(ocb, FACE_R_DIM, FAST_UNTILIZE_NUM_FACES)));
+    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_fast_untilize_init<FAST_UNTILIZE_MAX_UNIT_DIM, full_ct_dim>(ocb)));
     PACK((_llk_init_packer_dest_offset_registers_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE>()));
 #else

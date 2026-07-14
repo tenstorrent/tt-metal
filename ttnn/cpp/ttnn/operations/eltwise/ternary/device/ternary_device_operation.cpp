@@ -109,7 +109,7 @@ static ttnn::Shape compute_broadcasted_output_binary(const ttnn::Shape& a_shape,
     const int rank_a = a_shape.rank();
     const int rank_b = b_shape.rank();
     const int largest_rank = std::max(rank_a, rank_b);
-    SmallVector<uint32_t> output_shape(largest_rank, 1);
+    ttsl::SmallVector<uint32_t> output_shape(largest_rank, 1);
 
     for (int i = -1; i >= -largest_rank; --i) {
         auto a_dim = (i >= -rank_a) ? a_shape[i] : 1;
@@ -548,6 +548,10 @@ Tensor TernaryDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor_a.device());
 }
 
+// Kept (not attribute_names): coarsens the input to its VOLUME (ternary is elementwise — program
+// depends on tile count, not shape). attribute_names can't express that — it only controls the attrs
+// struct, while the input shape is hashed from tensor_args. scalar_input_a/b are excluded here and
+// re-applied via get_dynamic_runtime_args.
 ttsl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_a = tensor_args.input_tensor_a;
@@ -711,7 +715,8 @@ ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary
         .input_dtype = input_a.dtype(),
         .worker_grid = ttnn::operations::ternary::get_worker_grid(
             input_a, &input_b, &input_c, optional_output_tensor, memory_config, sub_core_grids, mem_config_actual),
-        .dtype = output_dtype.value_or(input_b.dtype()),
+        .dtype = op_type == ttnn::operations::ternary::TernaryOpType::WHERE ? output_dtype.value_or(input_b.dtype())
+                                                                            : output_dtype.value_or(input_a.dtype()),
         .compute_kernel_config = std::nullopt,
         .sub_core_grids = sub_core_grids,
         .scalar_input_a = std::nullopt,
@@ -760,7 +765,8 @@ ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary
         .input_dtype = input_a.dtype(),
         .worker_grid = ttnn::operations::ternary::get_worker_grid(
             input_a, &input_b, &input_c, optional_output_tensor, memory_config, sub_core_grids, mem_config_actual),
-        .dtype = output_dtype.value_or(input_b.dtype()),
+        .dtype = op_type == ttnn::operations::ternary::TernaryOpType::WHERE ? output_dtype.value_or(input_b.dtype())
+                                                                            : output_dtype.value_or(input_a.dtype()),
         .compute_kernel_config = std::nullopt,
         .sub_core_grids = sub_core_grids,
         .scalar_input_a = scalar,

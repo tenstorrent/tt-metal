@@ -7,6 +7,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
@@ -23,12 +24,19 @@ void kernel_main() {
 
     constexpr uint32_t scaler_bits = get_compile_time_arg_val(3);
     constexpr bool use_welford = get_compile_time_arg_val(4) != 0;
+    constexpr auto fp32_mode = get_compile_time_arg_val(5) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
+
+    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
+
     // Welford must process one column at a time because the SFPU can only maintain
     // a single running mean/M2 state. DEST_AUTO_LIMIT interleaves multiple columns
     // per chunk, which would feed the Welford kernel tiles from the wrong columns.
-    constexpr uint32_t row_chunk = use_welford ? 1 : compute_kernel_lib::DEST_AUTO_LIMIT;
-
-    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
+    // Int32 SFPU max keeps one acc DST per column plus one shared work DST (DEST_AUTO_LIMIT - 1).
+    constexpr DataFormat reduce_format = get_dataformat(cb_id_in0);
+    constexpr bool use_sfpu_reduce_path = is_sfpu_reduce_path<REDUCE_OP, REDUCE_DIM, reduce_format, fp32_mode>();
+    constexpr uint32_t row_chunk = use_welford ? 1
+                                               : (use_sfpu_reduce_path ? (compute_kernel_lib::DEST_AUTO_LIMIT - 1)
+                                                                       : compute_kernel_lib::DEST_AUTO_LIMIT);
 
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_in0);
@@ -37,7 +45,7 @@ void kernel_main() {
     float scaler_f = __builtin_bit_cast(float, scaler_bits);
     dataflow_kernel_lib::prepare_reduce_scaler<cb_id_in2, REDUCE_OP, REDUCE_DIM>(scaler_f);
 
-    constexpr auto tensor_args = TensorAccessorArgs<5>();
+    constexpr auto tensor_args = TensorAccessorArgs<6>();
     auto tensor_accessor = TensorAccessor(tensor_args, src_addr);
 
     Noc noc;

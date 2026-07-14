@@ -24,7 +24,7 @@ void kernel_main() {
     const uint32_t entry_size = dfb.get_entry_size();
 #endif
 
-    const auto s = TensorAccessor(ta::dst);
+    const auto s = TensorAccessor(tensor::dst);
 
     Noc noc;
 
@@ -37,7 +37,7 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
                     // Quasar: implicit-sync write. The DFB credit advances via the per-trid
                     // completion ISR; no wait_front / barrier / pop_front required.
-                    noc.async_write<Noc::TxnIdMode::ENABLED>(dfb, s, {}, {.page_id = itileC});
+                    noc.async_write<NocOptions::TXN_ID>(dfb, s, {}, {.page_id = itileC});
 #else
                     dfb.wait_front(onetile);
                     noc.async_write(dfb, s, entry_size, {}, {.page_id = itileC});

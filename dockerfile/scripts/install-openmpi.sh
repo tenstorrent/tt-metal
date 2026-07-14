@@ -1,0 +1,88 @@
+#!/bin/bash
+# Build OpenMPI from source with ULFM (User Level Fault Mitigation) support.
+# Used by Dockerfile.tools to produce a pre-built OpenMPI layer for manylinux.
+# Output is installed under ${OMPI_PREFIX} (default /opt/openmpi-<tag>-ulfm).
+set -euo pipefail
+
+OMPI_VERSION="${OMPI_VERSION:-v5.0.7}"
+INSTALL_DIR="${INSTALL_DIR:-/opt}"
+OMPI_PREFIX="${INSTALL_DIR}/openmpi-${OMPI_VERSION}-ulfm"
+
+echo "Building OpenMPI ${OMPI_VERSION} (from git) with ULFM to ${OMPI_PREFIX}..."
+
+WORKDIR="/tmp/ompi-src"
+rm -rf "${WORKDIR}"
+mkdir -p "${WORKDIR}"
+
+if [ -n "${OMPI_COMMIT_SHA:-}" ]; then
+    echo "Fetching OpenMPI commit ${OMPI_COMMIT_SHA} from GitHub..."
+    git init "${WORKDIR}"
+    git -C "${WORKDIR}" remote add origin https://github.com/open-mpi/ompi.git
+    git -C "${WORKDIR}" fetch --depth 1 origin "${OMPI_COMMIT_SHA}"
+    git -C "${WORKDIR}" checkout FETCH_HEAD
+    git -C "${WORKDIR}" submodule update --init --recursive
+else
+    echo "WARNING: OMPI_COMMIT_SHA not set, cloning by tag ${OMPI_VERSION} (less secure)"
+    git clone --branch "${OMPI_VERSION}" --depth 1 --recursive https://github.com/open-mpi/ompi.git "${WORKDIR}"
+fi
+
+cd "${WORKDIR}"
+
+# Run autogen.pl to generate configure script (required when building from git)
+echo "Running autogen.pl..."
+./autogen.pl
+
+# NOTE: OpenMPI configure options for ULFM fault tolerance and HPC environment compatibility.
+# The --with-slurm=/opt/slurm option enables SLURM process management support for multi-host jobs.
+# --disable-mca-dso and --disable-dlopen create a static build for portability.
+# These settings were validated for the current manylinux-based environment.
+# If issues arise with different MPI runtimes or cluster configurations, review with the scaleout team.
+# See: https://github.com/open-mpi/ompi/blob/main/docs/features/ulfm.rst
+#
+# CFLAGS: force C17 (-std=gnu17). GCC 14 auto-selects C23 (gnu23) which promotes
+# certain OpenMPI _Bool->volatile void* assignments to hard errors. GCC uses the
+# last -std flag on the command line, so this overrides the gnu23 embedded in CC.
+CFLAGS="-std=gnu17" ./configure \
+    --prefix="${OMPI_PREFIX}" \
+    --with-ft=ulfm \
+    --enable-wrapper-rpath \
+    --enable-mpirun-prefix-by-default \
+    --disable-mca-dso \
+    --disable-dlopen \
+    --enable-static \
+    --with-slurm=/opt/slurm \
+    --without-munge \
+    --with-pic
+
+make -j"$(nproc)"
+make install -j"$(nproc)"
+cd /
+rm -rf "${WORKDIR}"
+
+# Create mpirun-ulfm wrapper for compatibility with scripts expecting this name.
+# The wrapper calls mpirun with --with-ft ulfm and forwards all remaining arguments.
+if [ -e "${OMPI_PREFIX}/bin/mpirun-ulfm" ]; then
+    echo "[WARNING] mpirun-ulfm already exists at ${OMPI_PREFIX}/bin/mpirun-ulfm, skipping wrapper creation"
+elif [ ! -x "${OMPI_PREFIX}/bin/mpirun" ]; then
+    echo "[ERROR] mpirun not found or not executable at ${OMPI_PREFIX}/bin/mpirun, cannot create mpirun-ulfm wrapper" >&2
+    exit 1
+else
+    cat > "${OMPI_PREFIX}/bin/mpirun-ulfm" <<'EOF'
+#!/bin/bash
+exec "$(dirname "$0")/mpirun" --with-ft ulfm "$@"
+EOF
+    chmod +x "${OMPI_PREFIX}/bin/mpirun-ulfm"
+fi
+
+# Guard: ensure no munge runtime dependency leaked into libmpi.so.
+# munge-devel must not be present in the builder image; this catches it if it ever is.
+if ldd "${OMPI_PREFIX}/lib/libmpi.so" 2>/dev/null | grep -q munge; then
+    echo "[ERROR] libmpi.so links against libmunge — runtime containers will fail to load." >&2
+    exit 1
+fi
+echo "==> Verified: libmpi.so has no munge runtime dependency"
+
+echo "OpenMPI ${OMPI_VERSION} installed to ${OMPI_PREFIX}"
+if [ -x "${OMPI_PREFIX}/bin/mpicc" ]; then
+    "${OMPI_PREFIX}/bin/mpicc" --version || true
+fi

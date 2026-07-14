@@ -164,19 +164,18 @@ def run_topk_router_component(
 
     # Extract reference TopK router from reference layer
     reference_router = reference_layer.mlp.router
-    router_scores, router_indices = reference_router(hidden_states)
-    if decoder_layer.mlp.use_throughput_experts:
-        # When using throughput experts, we return a dense tensor of router_scores. Convert sparse reference router_scores to dense router_weights (note: this requires reorder the weights to match the order of the indices)
-        dense_router_scores = torch.concat(
-            [
-                torch.tensor(
-                    [router_scores[user, router_indices[user, i]] for i in range(router_indices.shape[1])]
-                ).reshape(1, -1)
-                for user in range(router_scores.shape[0])
-            ],
-            dim=0,
-        )
-        router_scores = dense_router_scores
+    # transformers 5.x GptOssTopKRouter.forward returns (router_logits, router_scores, router_indices) with
+    # router_scores already SPARSE [num_tokens, top_k] (softmax over the top_k logits, in top-k order);
+    # <5 returned (router_scores_dense, router_indices) with router_scores DENSE [num_tokens, num_experts].
+    # GptOssMLP flattens (batch,seq,hidden) -> (num_tokens, hidden) before the router, so flatten here too
+    # (also matches the TT router, which operates on flattened tokens) and normalise both versions to a
+    # sparse [num_tokens, top_k] weight tensor aligned to router_indices.
+    _router_out = reference_router(hidden_states.reshape(-1, hidden_size))
+    if len(_router_out) == 3:
+        router_scores, router_indices = _router_out[1], _router_out[2]
+    else:
+        router_scores_dense, router_indices = _router_out
+        router_scores = torch.gather(router_scores_dense, 1, router_indices)
 
     # Convert to TTNN tensors
     mesh_mapper = (
@@ -197,8 +196,17 @@ def run_topk_router_component(
     tt_router = decoder_layer.mlp.router
     tt_router_indices, tt_router_weights = tt_router(tt_hidden_states, decoder_layer.mlp.use_throughput_experts)
     mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=tuple(mesh_device.shape))
-    tt_router_indices_torch = ttnn.to_torch(tt_router_indices, mesh_composer=mesh_composer)[:batch, :4]
-    tt_router_weights_torch = ttnn.to_torch(tt_router_weights, mesh_composer=mesh_composer)[:batch, :4]
+    top_k = router_indices.shape[1]
+    tt_router_indices_torch = ttnn.to_torch(tt_router_indices, mesh_composer=mesh_composer)[:batch, :top_k]
+    tt_router_weights_full = ttnn.to_torch(tt_router_weights, mesh_composer=mesh_composer)[:batch]
+    if decoder_layer.mlp.use_throughput_experts:
+        # throughput path returns sparse [batch, top_k] weights (top-k order)
+        tt_router_weights_torch = tt_router_weights_full[:, :top_k]
+    else:
+        # non-throughput path returns DENSE [batch, num_experts] (ttnn.scatter of the top_k weights at the
+        # selected expert ids); gather the weights at the selected indices so both sides are sparse
+        # [batch, top_k] aligned to their indices. Reading [:, :top_k] here would grab unselected experts.
+        tt_router_weights_torch = torch.gather(tt_router_weights_full, 1, tt_router_indices_torch.long())
 
     # Compare outputs
     # We will sort the indices here as the order of the indices is not guaranteed to be the same in the reference and TT implementation.
@@ -207,11 +215,13 @@ def run_topk_router_component(
     indices_passing, indices_output = compare_tensors(
         sorted_tt_indices, sorted_ref_indices, mesh_device, pcc_threshold=pcc_threshold
     )
+    # Reorder each token's weights into ascending-expert-id order so the two sides line up even when
+    # TT (bf16) and the reference (fp32) emit the same top-k experts in a different (value-sorted) order.
+    # gather along the top_k axis is the correct reorder; `weights.squeeze()[order]` indexes dim 0 and
+    # mangles the comparison for batch > 1.
     weights_passing, weights_output = compare_tensors(
-        tt_router_weights_torch.squeeze()[
-            sorted_tt_indices_order
-        ],  # we have to squeeze here because it breaks the indexing otherwise
-        router_scores.squeeze()[sorted_ref_indices_order],
+        torch.gather(tt_router_weights_torch, -1, sorted_tt_indices_order),
+        torch.gather(router_scores, -1, sorted_ref_indices_order),
         mesh_device,
         pcc_threshold=pcc_threshold,
     )
@@ -247,8 +257,16 @@ def run_throughput_experts_component(
     )
     # Extract reference experts from reference layer
     reference_experts = reference_layer.mlp.experts.eval()  # Set to eval mode for inference
+    # transformers 5.x GptOssExperts.forward indexes `hidden_states[token_idx]` over a flattened
+    # [num_tokens, hidden] token axis and `routing_weights[token_idx, top_k_pos]` over a by-position
+    # [num_tokens, top_k] layout. Passing the unflattened 4-D `hidden_states` ([1,1,num_tokens,hidden])
+    # or the dense [num_tokens, num_experts] `routing_weights` raises
+    # "IndexError: index N out of bounds for dimension 0 with size 1" at modeling_gpt_oss.py. Flatten the
+    # hidden states and pass the by-position weights (`topk_weights_dense`), matching run_experts_component.
     reference_output = reference_experts(
-        hidden_states, router_indices=router_indices.squeeze(), routing_weights=routing_weights.squeeze()
+        hidden_states.reshape(-1, hidden_size),
+        router_indices=router_indices.squeeze(),
+        routing_weights=topk_weights_dense,
     )
 
     # Convert to TTNN tensors
@@ -343,15 +361,12 @@ def run_fused_throughput_experts_component(
     indices_list = []
     scores_list = []
 
-    routing_weights = torch.zeros(num_tokens, config.num_local_experts, dtype=torch.float32)
-
-    for tok_idx in range(num_tokens):
+    for _ in range(num_tokens):
         selected = torch.randperm(total_experts)[:num_experts_per_tok].sort().values
         indices_list.append(selected.to(torch.int64))
         scores = torch.rand(num_experts_per_tok, dtype=torch.float32) + 1e-5
         scores = scores / scores.sum()
         scores_list.append(scores)
-        routing_weights[tok_idx, selected] = scores
     indices_torch = torch.stack(indices_list, dim=0).reshape(num_tokens, 1, 1, num_experts_per_tok)
     scores_torch = torch.stack(scores_list, dim=0).reshape(num_tokens, 1, 1, num_experts_per_tok)
 
@@ -363,10 +378,15 @@ def run_fused_throughput_experts_component(
     with torch.no_grad():
         reference_experts.gate_up_proj_bias.zero_()
         reference_experts.down_proj_bias.zero_()
+        # transformers 5.x GptOssExperts.forward indexes hidden_states[token_idx] over a flattened
+        # [num_tokens, hidden] axis and routing_weights[token_idx, top_k_pos] over a by-position
+        # [num_tokens, top_k] layout. Pass the flattened hidden states and the by-position scores
+        # (aligned to indices_torch) instead of the 4-D tensor + dense [num_tokens, num_experts] weights,
+        # which raised "IndexError: index N out of bounds for dimension 0 with size 1" at modeling_gpt_oss.py.
         reference_output = reference_experts(
-            hidden_states_torch.reshape(1, 1, num_tokens, hidden_size),
+            hidden_states_torch.reshape(-1, hidden_size),
             router_indices=indices_torch.squeeze(),
-            routing_weights=routing_weights,
+            routing_weights=scores_torch.reshape(num_tokens, num_experts_per_tok),
         )
 
     # Upload to device: shard tokens (dim 0) across mesh rows, replicate across cols
@@ -459,17 +479,29 @@ def run_experts_component(mesh_device, hidden_shape, config, reference_layer, de
 
     router_indices = torch.zeros(batch_size * seq_len, config.num_experts_per_tok, dtype=torch.long)
     routing_weights = torch.zeros(batch_size * seq_len, config.num_local_experts)
+    # transformers 5.x GptOssExperts indexes routing_weights[token_idx, top_k_pos] — i.e. it expects a
+    # by-position [num_tokens, top_k] layout, not the dense [num_tokens, num_experts] by-expert layout.
+    # Build both: the dense one for the TT experts (unchanged), the by-position one for the 5.x reference.
+    routing_weights_topk = torch.zeros(batch_size * seq_len, config.num_experts_per_tok)
 
     for b, s in itertools.product(range(batch_size), range(seq_len)):
         active_experts = torch.randperm(config.num_local_experts)[: config.num_experts_per_tok]
         router_indices[b * seq_len + s, :] = active_experts
         weights = torch.rand(config.num_experts_per_tok)
         weights = weights / weights.sum()  # Normalize
-        routing_weights[b * seq_len + s, active_experts] = weights
+        routing_weights[b * seq_len + s, active_experts] = weights  # dense, by expert id (TT)
+        routing_weights_topk[b * seq_len + s, :] = weights  # by top-k position (5.x reference)
 
     # Extract reference experts from reference layer
     reference_experts = reference_layer.mlp.experts.eval()  # Set to eval mode for inference
-    reference_output = reference_experts(hidden_states, router_indices=router_indices, routing_weights=routing_weights)
+    # transformers 5.x GptOssExperts expects flattened [num_tokens, hidden] (GptOssMLP reshapes
+    # (batch,seq,hidden)->(-1,hidden) before calling experts), and indexes hidden_states[token_idx] and
+    # routing_weights[token_idx, top_k_pos]. Flatten hidden_states and pass by-position routing weights;
+    # output is then [batch*seq, hidden], matching the flat tt_output below. For transformers <5 the
+    # reference used the dense by-expert layout — GPT-OSS is now unpinned to 5.x so we target 5.x.
+    reference_output = reference_experts(
+        hidden_states.reshape(-1, hidden_size), router_indices=router_indices, routing_weights=routing_weights_topk
+    )
 
     # Convert to TTNN tensors
     tt_hidden_states = ttnn.from_torch(
@@ -549,11 +581,23 @@ def setup_reference_layer(setup, layer_idx=0):
     logger.info("Setting up reference layer...")
     from transformers.models.gpt_oss.modeling_gpt_oss import GptOssDecoderLayer
 
+    # transformers 5.x dispatches MoE experts via config._experts_implementation; a standalone layer
+    # leaves it None, so GptOssExperts uses the default flat-token forward that indexes
+    # hidden_states[token_idx] and IndexErrors on batched hidden_states. Pin it to eager (mirrors the
+    # existing _attn_implementation="eager" the decoder setup uses).
+    setup["config"]._experts_implementation = "eager"
     reference_layer = GptOssDecoderLayer(setup["config"], layer_idx=layer_idx)
+    # Initialize random weights at the model's real scale (config.initializer_range, 0.02 for GPT-OSS)
+    # rather than the unit-normal default. The router gate is the reason this matters: at std=1 the
+    # router logits reach ~±150 (logit_std ≈ sqrt(hidden_size) ≈ 54), a magnitude where the bf16-only
+    # ttnn.topk ties adjacent top experts and the gate softmax collapses to ~0.5/0.5 — a pure artifact
+    # of the unrealistic weight scale, not a real-model issue. At the real scale logits are ~±3, well
+    # within bf16 resolution, so the gate matches the fp32 reference. (See #47970.)
+    init_std = getattr(setup["config"], "initializer_range", 0.02)
     with torch.no_grad():
         for name, param in reference_layer.named_parameters():
             if any(proj in name for proj in ["router", "experts", "sinks"]):
-                param.data.normal_(0, 1)
+                param.data.normal_(0, init_std)
     return reference_layer
 
 
@@ -684,6 +728,8 @@ def test_decoder(
     # Set attention implementation for transformers compatibility
     config = setup["config"]
     config._attn_implementation = "eager"
+    # transformers 5.x also needs the MoE experts dispatch pinned for standalone reference layers.
+    config._experts_implementation = "eager"
 
     if batch_size > 32:
         if mesh_device.shape[0] == 1:

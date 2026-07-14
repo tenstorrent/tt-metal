@@ -33,7 +33,7 @@ uint32_t tile_size(const ttnn::Tensor& input_tensor) {
 ttnn::Shape get_tiled_shape(const ttnn::Tensor& input_tensor) {
     const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     const auto& shape = input_tensor.padded_shape();
-    ttnn::SmallVector<uint32_t> tiled_shape;
+    ttsl::SmallVector<uint32_t> tiled_shape;
     tiled_shape.reserve(shape.rank());
     for (int i = 0; i < shape.rank(); i++) {
         uint32_t dim = 0;
@@ -50,8 +50,8 @@ ttnn::Shape get_tiled_shape(const ttnn::Tensor& input_tensor) {
     return res;
 }
 
-ttnn::SmallVector<uint32_t> get_strides(const ttnn::Shape& shape) {
-    ttnn::SmallVector<uint32_t> strides(shape.rank());
+ttsl::SmallVector<uint32_t> get_strides(const ttnn::Shape& shape) {
+    ttsl::SmallVector<uint32_t> strides(shape.rank());
     strides[shape.rank() - 1] = 1;
     for (int i = shape.rank() - 2; i >= 0; i--) {
         strides[i] = strides[i + 1] * shape[i + 1];
@@ -60,15 +60,15 @@ ttnn::SmallVector<uint32_t> get_strides(const ttnn::Shape& shape) {
 }
 
 // Function to compute the inverse of a permutation
-ttnn::SmallVector<uint32_t> get_inverse_permutation(const ttnn::SmallVector<uint32_t>& perm) {
+ttsl::SmallVector<uint32_t> get_inverse_permutation(const ttsl::SmallVector<uint32_t>& perm) {
     // Get the size of the permutation
     size_t n = perm.size();
 
     // Create a vector for the inverse permutation
-    ttnn::SmallVector<uint32_t> inverse_permutation(n);
+    ttsl::SmallVector<uint32_t> inverse_permutation(n);
 
     // Validate the input permutation
-    ttnn::SmallVector<bool> seen(n, false);
+    ttsl::SmallVector<bool> seen(n, false);
     for (size_t i = 0; i < n; ++i) {
         if (perm[i] >= n || seen[perm[i]]) {
             TT_FATAL(false, "Invalid permutation: duplicate or out of range value");
@@ -206,13 +206,12 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreTileInvariant::
     // we also need the inverse permutation to map back to input tensor
     auto inv_perm = detail::get_inverse_permutation(operation_attributes.dims);
 
-    std::vector<uint32_t> reader_runtime_args = {src_buffer->address(), 0, 0};
-
-    reader_runtime_args.insert(reader_runtime_args.end(), output_shape_view.begin(), output_shape_view.end());
-    reader_runtime_args.insert(reader_runtime_args.end(), inv_perm.begin(), inv_perm.end());
-    reader_runtime_args.insert(reader_runtime_args.end(), input_tile_strides.begin(), input_tile_strides.end());
-
-    std::vector<uint32_t> writer_runtime_args = {dst_buffer->address(), 0, 0};
+    // Constant reader tail shared by every core: output shape, inverse permutation, input strides.
+    // The src buffer binding and per-core scalar slots are prepended per core in the loop below.
+    std::vector<uint32_t> reader_common_args;
+    reader_common_args.insert(reader_common_args.end(), output_shape_view.begin(), output_shape_view.end());
+    reader_common_args.insert(reader_common_args.end(), inv_perm.begin(), inv_perm.end());
+    reader_common_args.insert(reader_common_args.end(), input_tile_strides.begin(), input_tile_strides.end());
 
     std::vector<uint32_t> compute_runtime_args = {0};
 
@@ -234,14 +233,17 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreTileInvariant::
             num_tiles_per_core = 0;
         }
         uint32_t end_tile = start_tile + num_tiles_per_core;
-        reader_runtime_args[1] = start_tile;
-        reader_runtime_args[2] = end_tile;
 
-        writer_runtime_args[1] = num_tiles_per_core;  // for some reason num_tiles comes first in writer unary
-        writer_runtime_args[2] = start_tile;          // start tile is second in writer unary
+        KernelDescriptor::RTArgList reader_runtime_args;
+        reader_runtime_args.reserve(3 + reader_common_args.size());
+        reader_runtime_args.push_back(src_buffer);
+        reader_runtime_args.push_back(start_tile);
+        reader_runtime_args.push_back(end_tile);
+        reader_runtime_args.append(reader_common_args);
+        reader_desc.emplace_runtime_args(core, reader_runtime_args);
 
-        reader_desc.runtime_args.emplace_back(core, reader_runtime_args);
-        writer_desc.runtime_args.emplace_back(core, writer_runtime_args);
+        // writer unary: num_tiles comes first, then start_tile
+        writer_desc.emplace_runtime_args(core, {dst_buffer, num_tiles_per_core, start_tile});
         if (swap_hw) {
             compute_runtime_args[0] = num_tiles_per_core;  // number of tiles transposed
             compute_desc.runtime_args.emplace_back(core, compute_runtime_args);
@@ -371,7 +373,7 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreTileRowInvarian
         uint32_t num_packed_values = sizeof(uint32_t) / element_size;
         num_writes = face_shape[1] / num_packed_values;
         switch (input_tensor.dtype()) {
-            case DataType::INT32:
+            case DataType::INT32: padding_val_packed = std::bit_cast<uint32_t>(pad_value); break;
             case DataType::UINT32: padding_val_packed = pad_value; break;
             case DataType::BFLOAT16:
                 padding_val_packed = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
@@ -482,11 +484,11 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreTileRowInvarian
 
     auto input_shape_view = input_shape.view();
 
-    std::vector<uint32_t> reader_runtime_args = {src_buffer->address(), 0, 0};
-
-    std::vector<uint32_t> writer_runtime_args = {dst_buffer->address(), 0, 0, 0, 0};
-    writer_runtime_args.insert(writer_runtime_args.end(), input_shape_view.begin(), input_shape_view.end());
-    writer_runtime_args.insert(writer_runtime_args.end(), dims.begin(), dims.end());
+    // Constant writer tail shared by every core: input shape then permutation dims.
+    // The dst buffer binding and per-core scalar slots are prepended per core in the loop below.
+    std::vector<uint32_t> writer_common_args;
+    writer_common_args.insert(writer_common_args.end(), input_shape_view.begin(), input_shape_view.end());
+    writer_common_args.insert(writer_common_args.end(), dims.begin(), dims.end());
 
     std::vector<uint32_t> compute_runtime_args = {0};
 
@@ -521,23 +523,28 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreTileRowInvarian
             }
         }
         uint32_t end_tile = start_tile + num_tiles_per_core;
-        reader_runtime_args[1] = num_tiles_per_core;
-        reader_runtime_args[2] = start_tile;
-
-        writer_runtime_args[1] = start_tile;  // for some reason num_tiles comes first in writer unary
-        writer_runtime_args[2] = end_tile;    // start tile is second in writer unary
         if (needs_padding) {
             end_tile_padding = start_tile_padding + num_tiles_per_core_padding;
-            writer_runtime_args[3] = start_tile_padding;
-            writer_runtime_args[4] = end_tile_padding;
         }
         if (swap_hw) {
             compute_runtime_args[0] = num_tiles_per_core;  // number of tiles transposed
             compute_desc.runtime_args.emplace_back(core, compute_runtime_args);
         }
 
-        reader_desc.runtime_args.emplace_back(core, reader_runtime_args);
-        writer_desc.runtime_args.emplace_back(core, writer_runtime_args);
+        // reader unary: num_tiles comes first, then start_tile
+        reader_desc.emplace_runtime_args(core, {src_buffer, num_tiles_per_core, start_tile});
+
+        // writer unary: {dst, start_tile, end_tile, start_tile_padding, end_tile_padding, <tail>}.
+        // Padding slots stay zero when padding is not needed (matching the legacy layout).
+        KernelDescriptor::RTArgList writer_runtime_args;
+        writer_runtime_args.reserve(5 + writer_common_args.size());
+        writer_runtime_args.push_back(dst_buffer);
+        writer_runtime_args.push_back(start_tile);
+        writer_runtime_args.push_back(end_tile);
+        writer_runtime_args.push_back(start_tile_padding);
+        writer_runtime_args.push_back(end_tile_padding);
+        writer_runtime_args.append(writer_common_args);
+        writer_desc.emplace_runtime_args(core, writer_runtime_args);
 
         start_tile = end_tile;
         start_tile_padding = end_tile_padding;
@@ -655,7 +662,7 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreTiledGeneric::c
         num_writes = face_shape[1] / num_packed_values;
 
         switch (input_tensor.dtype()) {
-            case DataType::INT32:
+            case DataType::INT32: padding_val_packed = std::bit_cast<uint32_t>(pad_value); break;
             case DataType::UINT32: padding_val_packed = pad_value; break;
             case DataType::BFLOAT16:
                 padding_val_packed = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
@@ -858,15 +865,13 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreTiledGeneric::c
 
     auto input_shape_view = input_shape.view();
 
-    std::vector<uint32_t> reader_runtime_args = {src_buffer->address(), 0, 0};
-    reader_runtime_args.insert(reader_runtime_args.end(), input_shape_view.begin(), input_shape_view.end());
-    reader_runtime_args.insert(reader_runtime_args.end(), dims.begin(), dims.end());
+    // Constant tail shared by reader and writer on every core: input shape then permutation dims.
+    // Each kernel's buffer binding and per-core scalar slots are prepended per core in the loop below.
+    std::vector<uint32_t> common_args;
+    common_args.insert(common_args.end(), input_shape_view.begin(), input_shape_view.end());
+    common_args.insert(common_args.end(), dims.begin(), dims.end());
 
     std::vector<uint32_t> compute_runtime_args = {0, 0};
-
-    std::vector<uint32_t> writer_runtime_args = {dst_buffer->address(), 0, 0, 0, 0};
-    writer_runtime_args.insert(writer_runtime_args.end(), input_shape_view.begin(), input_shape_view.end());
-    writer_runtime_args.insert(writer_runtime_args.end(), dims.begin(), dims.end());
 
     auto cores = corerange_to_cores(all_cores, std::nullopt);
     uint32_t start_block = 0;
@@ -897,24 +902,37 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreTiledGeneric::c
         }
 
         uint32_t end_block = start_block + num_blocks_per_core;
-        reader_runtime_args[1] = start_block;
-        reader_runtime_args[2] = end_block;
 
         compute_runtime_args[0] = start_block;
         compute_runtime_args[1] = end_block;
 
-        writer_runtime_args[1] = start_block;
-        writer_runtime_args[2] = end_block;
-
+        // Padding slots stay zero when padding is not needed (matching the legacy layout).
+        uint32_t start_tile_padding_arg = 0;
+        uint32_t end_tile_padding_arg = 0;
         if (needs_padding) {
-            uint32_t end_tile_padding = start_tile_padding + num_tiles_per_core_padding;
-            writer_runtime_args[3] = start_tile_padding;
-            writer_runtime_args[4] = end_tile_padding;
-            start_tile_padding = end_tile_padding;
+            start_tile_padding_arg = start_tile_padding;
+            end_tile_padding_arg = start_tile_padding + num_tiles_per_core_padding;
+            start_tile_padding = end_tile_padding_arg;
         }
 
-        reader_desc.runtime_args.emplace_back(core, reader_runtime_args);
-        writer_desc.runtime_args.emplace_back(core, writer_runtime_args);
+        KernelDescriptor::RTArgList reader_runtime_args;
+        reader_runtime_args.reserve(3 + common_args.size());
+        reader_runtime_args.push_back(src_buffer);
+        reader_runtime_args.push_back(start_block);
+        reader_runtime_args.push_back(end_block);
+        reader_runtime_args.append(common_args);
+        reader_desc.emplace_runtime_args(core, reader_runtime_args);
+
+        KernelDescriptor::RTArgList writer_runtime_args;
+        writer_runtime_args.reserve(5 + common_args.size());
+        writer_runtime_args.push_back(dst_buffer);
+        writer_runtime_args.push_back(start_block);
+        writer_runtime_args.push_back(end_block);
+        writer_runtime_args.push_back(start_tile_padding_arg);
+        writer_runtime_args.push_back(end_tile_padding_arg);
+        writer_runtime_args.append(common_args);
+        writer_desc.emplace_runtime_args(core, writer_runtime_args);
+
         compute_desc.runtime_args.emplace_back(core, compute_runtime_args);
 
         start_block = end_block;

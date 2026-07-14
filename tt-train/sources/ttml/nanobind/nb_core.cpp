@@ -36,6 +36,7 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 #include "core/distributed/socket_manager.hpp"
 #include "core/tt_profiler.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
+#include "ttnn_fixed/distributed/ttnn_ops.hpp"
 #include "utils/memory_utils.hpp"
 
 namespace ttml::nanobind::core {
@@ -132,6 +133,11 @@ void py_module(nb::module_& m) {
     {
         auto py_distributed = static_cast<nb::module_>(m.attr("distributed"));
         py_distributed.def("enable_fabric", &ttnn_fixed::distributed::enable_fabric);
+        py_distributed.def(
+            "disable_fabric",
+            &ttnn_fixed::distributed::disable_fabric,
+            "Tear down the process-global fabric config (SetFabricConfig(DISABLED)). "
+            "Safe to call only when no devices are open; close the mesh device first.");
 
         // Returns std::unique_ptr<TensorToMesh>
         py_distributed.def(
@@ -142,6 +148,12 @@ void py_module(nb::module_& m) {
             nb::arg("device"),
             nb::arg("dim"),
             nb::arg("cluster_axis") = nb::none());
+
+        py_distributed.def(
+            "replicate_tensor_to_mesh_mapper",
+            static_cast<std::unique_ptr<ttnn::distributed::TensorToMesh> (*)(ttnn::distributed::MeshDevice&)>(
+                &ttnn::distributed::replicate_tensor_to_mesh_mapper),
+            nb::arg("device"));
 
         // Returns std::unique_ptr<MeshToTensor> - composer for combining distributed tensors
         py_distributed.def(
@@ -178,6 +190,30 @@ void py_module(nb::module_& m) {
                 &ttml::core::distributed::synchronize_gradients),
             nb::arg("parameters"),
             nb::arg("cluster_axes"));
+
+        // Raw (non-autograd) CCL collectives on ttnn tensors.
+        // Unlike ttml.ops.distributed.* these do NOT register graph nodes, so they can be
+        // freely invoked from FSDP pre/post hooks without polluting the autograd graph.
+        py_distributed.def(
+            "all_gather",
+            &ttml::ttnn_fixed::distributed::all_gather,
+            nb::arg("tensor"),
+            nb::arg("dim"),
+            nb::arg("cluster_axis") = nb::none(),
+            "Raw all_gather without autograd tracking. Returns a new tt::tt_metal::Tensor.");
+        py_distributed.def(
+            "reduce_scatter",
+            &ttml::ttnn_fixed::distributed::reduce_scatter,
+            nb::arg("tensor"),
+            nb::arg("dim"),
+            nb::arg("cluster_axis") = nb::none(),
+            "Raw reduce_scatter without autograd tracking. Returns a new tt::tt_metal::Tensor.");
+        py_distributed.def(
+            "all_reduce",
+            &ttml::ttnn_fixed::distributed::all_reduce,
+            nb::arg("tensor"),
+            nb::arg("cluster_axis") = nb::none(),
+            "Raw all_reduce without autograd tracking. Returns a new tt::tt_metal::Tensor.");
 
         // Bind DistributedContext methods
         using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;

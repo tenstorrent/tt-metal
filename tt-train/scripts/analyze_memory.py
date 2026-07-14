@@ -34,26 +34,37 @@ def bytes_to_mb(bytes_val: float) -> float:
 
 
 def extract_number_of_parameters(content: str, start_pos: int) -> Optional[int]:
-    """Extract number of parameters from logs before the memory summary"""
-    # Search forward from a reasonable position before start
+    """Extract number of parameters from the logs.
+
+    Supports both the legacy "Total parameters: N" line and the current training-header
+    "params  N" row (printed by print_header in train.py). The header is emitted once at
+    startup, far above the per-step memory summary, so fall back to a whole-file search
+    when the windowed lookup before `start_pos` comes up empty.
+    """
     search_start = max(0, start_pos - 1000)
-    text_before = content[search_start:start_pos]
-    text_before = text_before.replace(",", "")
-    match = re.search(r"Total parameters:\s*(\d+)", text_before)
-    if match:
-        return int(match.group(1))
+    for text in (content[search_start:start_pos], content):
+        text = text.replace(",", "")
+        match = re.search(r"Total parameters:\s*(\d+)", text) or re.search(r"\bparams\s+(\d+)", text)
+        if match:
+            return int(match.group(1))
     return None
 
 
-def extract_available_device_memory_mb(content: str, start_pos: int) -> Optional[int]:
-    """Extract the available device memory from logs before the memory summary"""
-    # Search forward from a reasonable position before start
+def extract_available_device_memory_mb(content: str, start_pos: int) -> Optional[float]:
+    """Extract the available device memory from the logs.
+
+    Supports both the legacy "Available Device Memory: N MB" line and the current
+    training-header "memory  N MB" row. Falls back to a whole-file search like
+    extract_number_of_parameters, for the same reason.
+    """
     search_start = max(0, start_pos - 1000)
-    text_before = content[search_start:start_pos]
-    text_before = text_before.replace(",", "")
-    match = re.search(r"Available Device Memory:\s+([\d.]+)\s*MB", text_before)
-    if match:
-        return float(match.group(1))
+    for text in (content[search_start:start_pos], content):
+        text = text.replace(",", "")
+        match = re.search(r"Available Device Memory:\s+([\d.]+)\s*MB", text) or re.search(
+            r"\bmemory\s+([\d.]+)\s*MB", text
+        )
+        if match:
+            return float(match.group(1))
     return None
 
 

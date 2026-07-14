@@ -67,7 +67,7 @@ constexpr static std::uint32_t get_dram_backed_command_queues_base(std::uint32_t
     return get_dram_device_print_dispatch_base(dram_profiler_size) + DRAM_DEVICE_PRINT_DISPATCH_SIZE;
 }
 constexpr static std::uint32_t get_dram_backed_command_queues_size(bool enable_dram_backed_cq) {
-    return enable_dram_backed_cq ? (1 << 28)  // 256 MB
+    return enable_dram_backed_cq ? (16u << 20)  // 16 MB
                                  : 0;
 }
 constexpr static std::uint32_t get_dram_unreserved_base(std::uint32_t dram_profiler_size, bool enable_dram_backed_cq) {
@@ -357,6 +357,7 @@ void Hal::initialize_wh(
     this->noc_node_id_ = NOC_NODE_ID;
     this->noc_node_id_mask_ = NOC_NODE_ID_MASK;
     this->noc_addr_node_id_bits_ = NOC_ADDR_NODE_ID_BITS;
+    this->noc_max_burst_size_bytes_ = NOC_MAX_BURST_SIZE;
     this->noc_encoding_reg_ = COORDINATE_VIRTUALIZATION_ENABLED ? NOC_CFG(NOC_ID_LOGICAL) : NOC_NODE_ID;
     this->noc_coord_reg_offset_ = NOC_COORD_REG_OFFSET;
     this->noc_overlay_start_addr_ = NOC_OVERLAY_START_ADDR;

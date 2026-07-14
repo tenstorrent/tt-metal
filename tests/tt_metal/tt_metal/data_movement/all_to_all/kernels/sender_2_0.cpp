@@ -2,45 +2,47 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <array>
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
 #include "api/dataflow/endpoints.h"
+#include "experimental/kernel_args.h"
 
+// L1 to L1 all-to-all send (Metal 2.0)
 void kernel_main() {
-    // Compile-time arguments
-    const uint32_t test_id = get_compile_time_arg_val(0);
-    const uint32_t mst_l1_base_address = get_compile_time_arg_val(1);
-    const uint32_t sub_l1_base_address = get_compile_time_arg_val(2);
-    const uint32_t num_of_transactions = get_compile_time_arg_val(3);
-    const uint32_t bytes_per_transaction_per_master = get_compile_time_arg_val(4);
-    const uint32_t num_subordinates = get_compile_time_arg_val(5);
-    const uint32_t num_virtual_channels = get_compile_time_arg_val(6);
+    constexpr uint32_t test_id = get_arg(args::test_id);
+    constexpr uint32_t mst_l1_base_address = get_arg(args::mst_l1_addr);
+    constexpr uint32_t sub_l1_base_address = get_arg(args::sub_l1_addr);
+    constexpr uint32_t num_subordinates = get_arg(args::num_subordinates);
+    constexpr uint32_t num_virtual_channels = get_arg(args::num_vc);
 
-    // Derivative values
+    const uint32_t num_of_transactions = get_arg(args::num_of_transactions);
+    const uint32_t bytes_per_transaction_per_master = get_arg(args::bytes_per_transaction);
+
+    // Truly variadic: one (x,y) pair per subordinate via varargs after named RTAs.
+    std::array<std::array<uint32_t, 2>, num_subordinates> subordinate_coords;
+    uint32_t rt_args_idx = 0;
+    for (uint32_t i = 0; i < num_subordinates; i++) {
+        subordinate_coords[i][0] = get_vararg(rt_args_idx++);
+        subordinate_coords[i][1] = get_vararg(rt_args_idx++);
+    }
+
     uint32_t master_l1_local_address = mst_l1_base_address;
     uint32_t subordinate_l1_local_address = sub_l1_base_address;
 
     Noc noc(noc_index);
     UnicastEndpoint unicast_endpoint;
 
-    uint32_t subordinate_x_coord;
-    uint32_t subordinate_y_coord;
-
     {
         DeviceZoneScopedN("RISCV0");
         for (uint32_t j = 0; j < num_subordinates; j++) {
-            // Subordinate coordinates are stored in the runtime arguments starting at index 1
-            // Each x coordinate is stores in an odd index
-            // Each y coordinate is stored in the next even index
-            // The first subordinate's coordinates are at indices 1 and 2, the second at indices 3 and 4, etc.
-            subordinate_x_coord = get_arg_val<uint32_t>(j * 2);
-            subordinate_y_coord = get_arg_val<uint32_t>(j * 2 + 1);
+            uint32_t subordinate_x_coord = subordinate_coords[j][0];
+            uint32_t subordinate_y_coord = subordinate_coords[j][1];
 
             for (uint32_t i = 0; i < num_of_transactions; i++) {
-                // Cycle through virtual channels 0 to (num_virtual_channels - 1)
                 uint32_t current_virtual_channel = i % num_virtual_channels;
 
-                noc.async_write(
+                noc.async_write<NocOptions::CUSTOM_VC>(
                     unicast_endpoint,
                     unicast_endpoint,
                     bytes_per_transaction_per_master,
@@ -52,7 +54,7 @@ void kernel_main() {
                         .noc_y = subordinate_y_coord,
                         .addr = subordinate_l1_local_address,
                     },
-                    current_virtual_channel);
+                    NocOptVals{.vc = current_virtual_channel});
             }
         }
         noc.async_write_barrier();

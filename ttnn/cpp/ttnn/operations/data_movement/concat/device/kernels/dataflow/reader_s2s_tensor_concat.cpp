@@ -3,7 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     constexpr uint32_t output_cb_id = get_compile_time_arg_val(0);
@@ -11,6 +16,7 @@ void kernel_main() {
     constexpr uint32_t output_stride = get_compile_time_arg_val(2);
     constexpr uint32_t num_input_tensors = get_compile_time_arg_val(3);
 
+    Noc noc;
     CircularBuffer output_cb(output_cb_id);
     const uint32_t base_l1_write_addr = output_cb.get_write_ptr();
 
@@ -24,16 +30,30 @@ void kernel_main() {
         CircularBuffer input_cb(input_id);
         uint32_t l1_write_addr = base_l1_write_addr + input_write_offset;
         uint32_t l1_read_addr = input_cb.get_read_ptr() + input_read_offset;
-        noc_async_read_one_packet_set_state(get_noc_addr(l1_read_addr), page_size);
+
+        noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+            UnicastEndpoint{},
+            page_size,
+            {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+             .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+             .addr = l1_read_addr});
 
         for (uint32_t stick_idx = 0; stick_idx < input_num_sticks; stick_idx++) {
             for (uint32_t page_idx = 0; page_idx < input_num_pages_per_stick; page_idx++) {
-                noc_async_read_one_packet_with_state<true>(l1_read_addr, l1_write_addr + page_size * page_idx);
+                CoreLocalMem<uint32_t> dst(l1_write_addr + page_size * page_idx);
+                noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                    UnicastEndpoint{},
+                    dst,
+                    page_size,
+                    {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                     .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                     .addr = l1_read_addr},
+                    {.offset_bytes = 0});
                 l1_read_addr += page_size;
             }
             l1_write_addr += output_stride;
         }
     }
 
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 }

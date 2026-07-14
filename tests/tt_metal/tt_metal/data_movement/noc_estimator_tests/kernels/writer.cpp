@@ -156,13 +156,12 @@ void kernel_main() {
             mcast_end_y = tmp;
         }
 
-        constexpr Noc::McastMode mcast_mode =
-            loopback ? Noc::McastMode::INCLUDE_SRC : Noc::McastMode::EXCLUDE_SRC;
+        constexpr NocOptions mcast_opts = loopback ? NocOptions::MCAST_INCL_SRC : NocOptions::DEFAULT;
 
         {
             DeviceZoneScopedN("RISCV0");
             for (uint32_t i = 0; i < num_of_transactions; i++) {
-                noc.async_write_multicast<mcast_mode>(
+                noc.async_write_multicast<mcast_opts>(
                     unicast_ep,
                     multicast_ep,
                     bytes_per_transaction,
@@ -202,14 +201,13 @@ void kernel_main() {
             mcast_end_y = tmp;
         }
 
-        constexpr Noc::McastMode mcast_mode =
-            loopback ? Noc::McastMode::INCLUDE_SRC : Noc::McastMode::EXCLUDE_SRC;
+        constexpr NocOptions mcast_opts = loopback ? NocOptions::MCAST_INCL_SRC : NocOptions::DEFAULT;
 
         {
             DeviceZoneScopedN("RISCV0");
             // All but the last packet: linked=true to reserve the VC path
             for (uint32_t i = 0; i < num_of_transactions - 1; i++) {
-                noc.async_write_multicast<mcast_mode>(
+                noc.async_write_multicast<mcast_opts>(
                     unicast_ep,
                     multicast_ep,
                     bytes_per_transaction,
@@ -223,7 +221,7 @@ void kernel_main() {
                     true);  // linked
             }
             // Last packet: unlinked to release the VC
-            noc.async_write_multicast<mcast_mode>(
+            noc.async_write_multicast<mcast_opts>(
                 unicast_ep,
                 multicast_ep,
                 bytes_per_transaction,

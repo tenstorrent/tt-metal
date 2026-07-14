@@ -49,11 +49,24 @@ protected:
         }
 
         this->DetectDispatchMode();
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        this->arch_ = tt::tt_metal::MetalContext::instance().get_cluster().arch();
         init_max_cbs();
     }
 
     void TearDown() override {
+        // Reset idle eth cores that tests intentionally tripped into watcher sanitize hang loop.
+        // UMD topology discovery probes heartbeats on any eth core whose reset bit is deasserted,
+        // and a hung core will fail that check. Tensix/DRAM cores don't need this.
+        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        for (auto& [device_id, device] : id_to_device_) {
+            for (const auto& logical_core : device->get_devices()[0]->get_inactive_ethernet_cores()) {
+                CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
+                    device->get_devices()[0]->id(), logical_core, CoreType::ETH);
+                cluster.assert_risc_reset_at_core(
+                    tt_cxy_pair(device->get_devices()[0]->id(), virtual_core), tt::umd::RiscType::ALL);
+            }
+        }
+
         for (auto& [device_id, device] : id_to_device_) {
             device->close();
             device.reset();
@@ -124,9 +137,9 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noinline(true);
         tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(true);
 
-        const auto detected_arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        const auto detected_arch = tt::tt_metal::MetalContext::instance().get_cluster().arch();
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noc_sanitize_linked_transaction(
-            detected_arch == tt::ARCH::BLACKHOLE || detected_arch == tt::ARCH::QUASAR);
+            detected_arch == tt::ARCH::BLACKHOLE || (detected_arch == tt::ARCH::QUASAR));
 
         // Parent class initializes devices and any necessary flags
         DebugToolsMeshFixture::SetUp();
@@ -203,6 +216,37 @@ protected:
     void SetUp() override {
         MeshWatcherFixture::SetUp();
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_dump_all(true);
+    }
+};
+
+// Fixture for tile counter watcher tests.
+class MeshWatcherTileCounterFixture : public MeshWatcherDumpAllFixture {
+protected:
+    bool watcher_previous_assert_disabled_{};
+
+    void SetUp() override {
+        // Save before the skip check: TearDown() runs even when SetUp() skips, so the
+        // restore must be based on the real previous state regardless of skip.
+        watcher_previous_assert_disabled_ = MetalContext::instance().rtoptions().watcher_assert_disabled();
+        if (!MetalContext::instance().hal().has_tile_counter_registers()) {
+            GTEST_SKIP() << "Tile counters are only used on Quasar";
+        }
+        // Must be set before parent SetUp: the TRISC HW fault ISR (handle_interrupt in
+        // risc_common.h, compiled as part of trisc.cc firmware) calls ASSERT on a
+        // TILE_COUNTERS fault, which writes to the watcher mailbox and hangs. Disabling
+        // assert here makes ASSERT a no-op so the ISR clears the interrupt and returns,
+        // allowing the test to verify that watcher logs the TC mismatch correctly.
+        if (!watcher_previous_assert_disabled_) {
+            MetalContext::instance().rtoptions().disable_watcher_assert();
+        }
+        MeshWatcherDumpAllFixture::SetUp();
+    }
+
+    void TearDown() override {
+        MeshWatcherDumpAllFixture::TearDown();
+        if (!watcher_previous_assert_disabled_) {
+            MetalContext::instance().rtoptions().enable_watcher_assert();
+        }
     }
 };
 
@@ -295,8 +339,9 @@ public:
 
         int riscv_id = static_cast<std::underlying_type_t<tt::tt_metal::DataMovementProcessor>>(config.processor);
 
-        const auto& build_state = tt::tt_metal::BuildEnvManager::get_instance().get_kernel_build_state(
-            device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
+        const auto& build_state =
+            tt::tt_metal::BuildEnvManager::get_instance(extract_context_id(device))
+                .get_kernel_build_state(device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
 
         const auto& kernel = program_.impl().get_kernel(kernel_handle);
         const std::string full_kernel_name = kernel->get_full_kernel_name();

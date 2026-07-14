@@ -92,8 +92,10 @@ TEST_F(TensorSerializationFlatbufferTest, WithMemoryConfig) {
 
     Tensor original_tensor = Tensor::from_vector(
         test_data,
-        get_tensor_spec(ttnn::Shape{1, 2, 3, 1}, DataType::FLOAT32)
-            .with_memory_config(MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1}));
+        TensorSpec(
+            ttnn::Shape{1, 2, 3, 1},
+            TensorLayout(
+                DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1})));
 
     EXPECT_TRUE(original_tensor.storage_type() == StorageType::HOST);
 
@@ -361,7 +363,7 @@ TEST_F(TensorSerializationFlatbuffer2x4Test, FullyReplicatedRoundtrip) {
     Tensor replicated_tensor = ttnn::distributed::distribute_tensor(input_tensor, *mapper);
 
     MeshShape expected_shape = MeshShape(mesh_device_->num_devices());
-    tt::stl::SmallVector<ttnn::distributed::MeshMapperConfig::Placement> expected_placements;
+    ttsl::SmallVector<ttnn::distributed::MeshMapperConfig::Placement> expected_placements;
     expected_placements.emplace_back(ttnn::distributed::MeshMapperConfig::Replicate{});
 
     EXPECT_EQ(replicated_tensor.tensor_topology().distribution_shape(), expected_shape);
