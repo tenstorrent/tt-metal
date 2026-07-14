@@ -5,6 +5,37 @@ headless process. You have **NO prior conversation context** — all state is on
 Working dir: `/home/smarton/tt-metal/.claude/worktrees/ltxperf-tip` (you are already in it).
 Do exactly ONE lap, print a 2-line summary, then EXIT. Never loop forever.
 
+
+## NEXT ACTION (read this first — it supersedes the queue)
+
+**The device is DEAD** (all 32 chips off the PCIe bus; `lspci -d 1e52: | wc -l` = 0). No software reset
+can fix it — they all need `/dev/tenstorrent`, which is empty. It needs a **cold power-cycle by a human**.
+If chips are still 0, that is a REAL mechanical block: log it and exit. Do not thrash.
+
+**THE MOMENT `lspci -d 1e52: | wc -l` IS NON-ZERO, run this and nothing else first:**
+
+`opt/w1verdict/` — the experiment that convicts or clears **W1** (`8016104c27e`, `LTX_DEDUP_GATE_GATHER`,
+the −248 ms win) as the cause of the 1080p prompt-adherence regression. Read `opt/w1verdict/PLAN.md`.
+
+Two broker jobs, **no `timeout_sec`** (leave the 600s default):
+- `env_w1_on.yaml`  (LTX_DEDUP_GATE_GATHER=1, the shipping default) — expect no guitar
+- `env_w1_off.yaml` (=0, W1 disabled) — **if the guitar returns, W1 is the regression and must be reverted**
+
+Score CLIP on the HOST from the dumped frames, and **LOOK AT THE FRAME** — a bisect step scored CLIP 27.43
+(below the 28.0 gate) while clearly showing the guitar; a speckle artifact was depressing it. **The guitar is
+ground truth; CLIP only corroborates.**
+
+Why W1 is the suspect: the 1080p failure was measured 07:55; W1 landed 01:53. The two cache commits are
+EXONERATED by timeline (08:43/08:57, after the failure). All C++ changes are exonerated by construction (the
+bisect staged only `models/` against the tip `_ttnn.so`, so they were live in the run that scored 30.85 WITH
+a guitar). That leaves W1 and the all-zero guard (`be06ca2c222`) as the only default-on `models/` changes
+predating the failure.
+
+**CAVEAT (do not lose this):** every CLIP number so far (good 30.85 / bad 18.71) was taken at `LTX_TRACED=0`.
+The staged arms run `LTX_TRACED=1` + `LTX_VIDEO_ONLY=1` (traced denoise is fast; no audio decode ⇒ no cold
+vocoder build). The A/B delta is valid because both arms are traced — but the ABSOLUTE CLIP is not comparable
+across the traced boundary until traced==untraced is measured once. Do not report "18.7 → 31" as one scale.
+
 ## Lap steps (in order)
 1. **HALT CHECK.** If `./STOP` or `./DONE` exists → print "HALTED (<which>)" and exit 0. Do nothing else.
 2. **READ STATE.** Read `opt/PROGRESS.md` — the live plan, lever table, and LIVE LOG (newest last). It tells you the goal, the current experiment, and what is in flight.
