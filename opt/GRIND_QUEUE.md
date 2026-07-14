@@ -1089,3 +1089,26 @@ regression a live outcome if the gathers are already overlapped. **Both landed i
 - [ ] **NEXT: the cross-attn `to_kv`/a2v/v2a SDPA inputs are still bf16** — `_quant_cross_attn` never sets `_sdpa_input_dtype`
       (SDPAQuantConfig is documented self-attn-only). The v2a ring-cross gathers video K/V across SP ⇒ another fabric payload
       the same cast would shrink. Un-measured.
+
+## QUALITY GATE — the instrument, and why every earlier one was wrong
+
+**A few flipped bits completely re-roll the generation.** Swapping `addcmul(t,t1,t2)` for the algebraically
+identical `add(t, multiply(t1,t2))` — same math, only different bf16 rounding, a provable no-op — moves the
+final S2 latents to **PCC 87.7 / RMSE 49.6%** and the decoded pixels to **PCC ~0.83**. The path is 48 blocks ×
+11 sampler steps with feedback, so rounding-scale perturbations amplify super-linearly (~133×).
+
+⇒ **NEVER gate on scene equality: latent PCC, pixel PCC, SSIM, PSNR, "is it the same video".** Those measure
+re-roll, not quality. A correct optimization looks catastrophic on every one of them, and a gate built on them
+rejects every valid change.
+
+⇒ **Gate on REFERENCE-FREE attributes:**
+| purpose | instrument | notes |
+|---|---|---|
+| video quality | **VBench** (`utils/vbench.py::assert_vbench_quality`) | subject/background consistency, motion smoothness, dynamic degree, imaging quality. Per-height floors already calibrated (1088: 0.92/0.93/0.955/1.0/0.645). Was dark because vbench was never installed + `RUN_VBENCH=0` everywhere. |
+| prompt adherence | **CLIP** (video-vs-prompt) | reference-free. Proven power: the poisoned-cache (unconditional) render scores 6.98 vs baseline 18.58. |
+| audio | **intrinsic** properties (peak, % clipped, spectral flatness, noise floor) | NOT waveform PCC — it is phase-sensitive and two valid renditions score ~0. |
+| numerics (1 layer only) | in-process A/B + bit-exact noise floor + a MUTANT proving the gate goes red | RMSE/σ is the limb that catches bugs; a wrong-tensor mutant PASSED a 99.99% PCC bound. |
+
+**Installed:** `vbench==0.1.5`, `decord==0.6.0`. ⚠️ **`pip install vbench` pins `transformers==4.33.2`, which
+DELETES `transformers.models.gemma3` and breaks the pipeline.** Re-pin `transformers==5.10.2` after any
+vbench install, and re-verify `from transformers.models.gemma3 import Gemma3ForCausalLM`.
