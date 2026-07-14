@@ -170,4 +170,5 @@ void kernel_main() {
             in1_tensor_start_tile_id += KtNt;
         }
     }
+    noc_async_atomic_barrier();
 }

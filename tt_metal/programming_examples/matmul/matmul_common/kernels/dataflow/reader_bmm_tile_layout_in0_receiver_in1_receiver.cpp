@@ -104,4 +104,5 @@ void kernel_main() {
             cb_push_back(cb_id_in1, in1_block_num_tiles);
         }
     }
+    noc_async_atomic_barrier();
 }

@@ -174,5 +174,6 @@ void kernel_main() {
         fabric_connection.close_finish();
     }
 
+    noc_obj.async_atomic_barrier();
     noc_obj.async_write_barrier();
 }

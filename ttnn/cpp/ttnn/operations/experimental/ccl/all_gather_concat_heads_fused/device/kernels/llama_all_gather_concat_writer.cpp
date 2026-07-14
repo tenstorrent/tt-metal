@@ -219,5 +219,6 @@ void kernel_main() {
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.close_finish();
     }
+    noc_obj.async_atomic_barrier();
     noc_obj.async_write_barrier();
 }

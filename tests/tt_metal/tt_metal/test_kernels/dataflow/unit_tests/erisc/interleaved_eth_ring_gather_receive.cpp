@@ -46,4 +46,5 @@ void kernel_main() {
         noc_semaphore_set(receiver_semaphore_addr_ptr, 0);
         eth_receiver_done();
     }
+    noc_async_atomic_barrier();
 }

@@ -203,6 +203,7 @@ void kernel_main() {
             mcast_dest_noc_end_x,
             mcast_dest_noc_end_y,
             num_mcast_dests);
+        noc_obj.async_atomic_barrier();
         noc_obj.async_write_barrier();
         fabric_connection.close_finish();  // Includes a noc async write barrier
     } else {

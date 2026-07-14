@@ -35,4 +35,5 @@ void kernel_main() {
 
     uint64_t sem_addr = get_noc_addr(dest_x, dest_y, semaphore);
     noc_semaphore_inc(sem_addr, 1);
+    noc_async_atomic_barrier();
 }

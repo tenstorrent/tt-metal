@@ -94,4 +94,5 @@ void kernel_main() {
         cb_read_offset += tile_bytes;
     }
     cb.pop_front(num_tiles);
+    noc.async_atomic_barrier();
 }

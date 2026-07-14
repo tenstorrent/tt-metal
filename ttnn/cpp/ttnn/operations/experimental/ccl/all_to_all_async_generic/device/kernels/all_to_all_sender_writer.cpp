@@ -325,6 +325,7 @@ void kernel_main() {
         cb0.pop_front(1);
     }
 
+    noc_obj.async_atomic_barrier();
     noc_obj.async_write_barrier();
     fabric_connection.close();
     if (core_id == 0 && link_id == 0) {

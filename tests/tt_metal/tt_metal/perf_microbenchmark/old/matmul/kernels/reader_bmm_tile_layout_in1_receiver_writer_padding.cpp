@@ -183,4 +183,5 @@ void kernel_main() {
         cb_pop_front(cb_id_out0, padded_block_tiles_h_skip);
         out_tensor_start_tile_id += MtNt;
     }
+    noc_async_atomic_barrier();
 }

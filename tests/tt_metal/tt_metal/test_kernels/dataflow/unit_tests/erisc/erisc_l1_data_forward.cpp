@@ -53,4 +53,5 @@ void kernel_main() {
     eth_send_bytes(
         local_eth_l1_src_addr, remote_eth_l1_dst_addr, num_bytes, num_bytes_per_send, num_bytes_per_send_word_size);
     eth_wait_for_receiver_done();
+    noc_async_atomic_barrier();
 }
