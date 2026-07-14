@@ -1269,8 +1269,12 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
  * Must be paired with a subsequent call_binary_sfpu_operation() for the calculate step.
  * Uses SFPU_BINARY_INIT* macros from llk_math_eltwise_binary_sfpu_macros.h, which
  * wrap `ckernel::llk_math_eltwise_binary_sfpu_init<::SfpuType::OP>(...)`.
+ *
+ * DST_ACCUM_MODE (is_fp32_dest_acc_en) must match the value passed to the paired
+ * call_binary_sfpu_operation(): ops such as atan2 load an fp32- vs bf16-specific
+ * reciprocal polynomial at init time that the calculate step then relies on.
  */
-template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 32, std::uint32_t MATH_FORMAT = 0>
+template <bool APPROXIMATION_MODE, bool DST_ACCUM_MODE, BinaryOp BINOP, int ITERATIONS = 32, std::uint32_t MATH_FORMAT = 0>
 void call_binary_sfpu_operation_init()
 {
     if constexpr (
@@ -1341,8 +1345,9 @@ void call_binary_sfpu_operation_init()
     {
         // atan2 has no dedicated SfpuType, so use the baseline add1 addrmod. Its init
         // just loads the reciprocal polynomial; the is_fp32_dest_acc_en variant selects
-        // the fp32 vs bf16 reciprocal (matching the minimax branch in the kernel).
-        SFPU_BINARY_INIT_FN(add1, sfpu::calculate_sfpu_atan2_init, (APPROXIMATION_MODE, is_fp32_dest_acc_en));
+        // the fp32 vs bf16 reciprocal (matching the minimax branch in the kernel), so it
+        // must match DST_ACCUM_MODE used by the paired call_binary_sfpu_operation().
+        SFPU_BINARY_INIT_FN(add1, sfpu::calculate_sfpu_atan2_init, (APPROXIMATION_MODE, DST_ACCUM_MODE));
     }
     else if constexpr (BINOP == BinaryOp::MUL_INT32)
     {
