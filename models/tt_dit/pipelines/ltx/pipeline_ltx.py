@@ -99,6 +99,26 @@ def _ensure_ltx_reference_on_path() -> None:
             sys.path.insert(0, path)
 
 
+def _assert_prompt_embeds_live(results: list[tuple[torch.Tensor, torch.Tensor | None]], source: str) -> None:
+    """Reject an all-zero prompt embedding, whichever side of the cache it came from.
+
+    Zeros are exactly the DiT's unconditional input, so they do not fail — they render a plausible
+    clip that silently ignores the prompt, identically for every prompt. Nothing downstream can
+    tell that apart from a working render, so this is the only place it can be caught.
+    """
+    for i, (video, audio) in enumerate(results):
+        for name, t in (("video", video), ("audio", audio)):
+            if t is None:
+                continue
+            if not torch.any(t):
+                msg = (
+                    f"{source}: prompt[{i}] {name} embedding is all zeros — the DiT would denoise "
+                    f"unconditionally and ignore the prompt"
+                )
+                raise RuntimeError(msg)
+        logger.debug(f"prompt[{i}] embeds live ({source}): video |max|={video.abs().max().item():.3f}")
+
+
 @dataclass
 class TransformerState:
     model: LTXTransformerModel
@@ -921,10 +941,18 @@ class LTXPipeline:
         cache_path = self._device_embed_cache_path(prompts)
         if use_cache and os.path.exists(cache_path):
             logger.info(f"Loading cached device embeddings from {cache_path}")
-            return torch.load(cache_path, weights_only=False)
+            results = torch.load(cache_path, weights_only=False)
+            _assert_prompt_embeds_live(results, f"cache {os.path.basename(cache_path)}")
+            return results
 
         with Watchdog("gemma text-encode"):
             results = self.gemma_encoder_pair.encode(prompts)
+
+        # An all-zero embedding is the DiT's unconditional input: it denoises to a generic clip
+        # that matches no prompt, and every prompt yields that same clip. Caching one poisons the
+        # prompt forever (the cache is keyed only on the text), so refuse it at the boundary
+        # rather than write it to disk.
+        _assert_prompt_embeds_live(results, "device encode")
 
         if use_cache:
             torch.save(results, cache_path)
