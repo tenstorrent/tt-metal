@@ -297,7 +297,7 @@ On **1×4**, look for prefill matmuls with batch **128** and decode ops (`SdpaDe
 | `e2e token matching sweep (BH-QB 1x4)` | QuietBox 2 | 1×4 |
 | `e2e WER sweep (BH-QB 1x4)` | QuietBox 2 | 1×4 |
 
-**Note:** Job timeouts are capped by the shared `models.demo` time budget (`bh_p150b_civ2`: 360 min, `bh_quietbox_2`: 480 min). Full ISL sweeps (32→4096) can exceed the per-job allotment for logit / token / WER on P150 especially, so some CI jobs may fail due to time-budget constraints even when the underlying tests are correct.
+**Note:** Job timeouts are capped by the shared `models.demo` time budget (`bh_p150b_civ2`: 360 min, `bh_quietbox_2`: 480 min). Full ISL sweeps (32→4096) can exceed the per-job allotment for logit / token / WER on P150 especially, so some CI jobs may fail due to time-budget constraints even when the underlying tests are correct. The CI for e2e WER test fails on P150 (`seamless-m4t-v2-large e2e WER sweep (P150 1x1) [bh_p150b_civ2]`) as it to unable to fetch the test audio from the internet because of the CI proxy settings.
 
 Weights: `facebook/seamless-m4t-v2-large` (~10 GB). The demo and pytest entry points call `ensure_seamless_m4t_v2_large_weights()` on first use (`HF_TOKEN` from CI secrets).
 

@@ -10,9 +10,9 @@ Sequence lengths double **32 → 4096** (text = source tokens; speech = mel fram
 Sweep timing vs `demo.py`:
 
 - Untimed warmups match the demo (text=1, speech=2).
-- **1 timed iter** per task (demo uses 2 timed iters for T2ST/S2ST).
-- No vocoder `post_warmup_fn` in the sweep (demo prewarms vocoder convs after speech warmups).
-- At mel **≥ 1024**, **S2TT / S2ST / ASR** warmups run on a throwaway mesh device; the timed session still prewarms the speech encoder. T2ST does not use split warmups.
+- **2 timed iters** for T2ST and for S2ST when mel **< 1024** (report min); **1 timed iter** for other tasks and for S2ST at mel ≥ 1024.
+- T2ST/S2ST use the vocoder post-warmup (weight prep after same-session warmups; at mel ≥ 1024, S2ST also runs untimed `vocode_units` on the timed device using throwaway unit ids).
+- At mel **≥ 1024**, **S2TT / S2ST / ASR** warmups run on a throwaway mesh; the timed session prewarms the speech encoder. T2ST does not use split warmups.
 
 Metrics follow the TT model catalog (Whisper / LLM / Qwen3-TTS style):
 
@@ -198,137 +198,138 @@ Four-chip QuietBox (`MeshShape(1, 4)`, batch-1, TP=4). Tables from `scripts/outp
 
 ## Demo wall timings (Blackhole P150, 2CQ + decode trace)
 
-Single-chip P150 (`MeshShape(1, 1)`). Tables from `scripts/outputs/perf_sweep.txt` (2026-07-13).
+Single-chip P150 (`MeshShape(1, 1)`). Tables from `scripts/outputs/perf_sweep.txt`.
 
-**Note:** Several S2ST vocoder times can be cold JIT / first-shape compile outliers; compare against shorter lengths for steady-state. T2ST vocoder is closer to steady across lengths.
+**Note:** T2ST vocoder is steady across lengths (~1.4–3.4 s). S2ST still shows cold JIT on new unit/`t_audio` buckets — **256** (vocoder ~62 s) and **4096** (vocoder ~66 s, T2U ~11 s). Treat those points as compile outliers; warm S2ST vocoder is ~1.5–2.5 s (e.g. 1024 / 2048).
 
 ### Sequence length: 32
 
-| Task | TTFT     | Encoder  | Prefill | decode t/s/u | ms/tok (steady) | E2E       | Output                     |
-| ---- | -------- | -------- | ------- | ------------ | --------------- | --------- | -------------------------- |
-| T2TT | 784.7 ms | 30.0 ms | 82.4 ms | 78.4 | 12.8 | 1118.5 ms | 27 tok |
-| T2ST | 908.5 ms | 66.1 ms | 103.3 ms | 62.7 | 15.9 | 4729.6 ms | 103360 smp (RTF **0.73×**) |
-| S2TT | 902.4 ms | 177.9 ms | 77.7 ms | 13.5 | 74.2 | 1051.7 ms | 3 tok (32 mel) |
-| S2ST | 2648.7 ms | 1677.5 ms | 160.9 ms | 16.2 | 61.6 | 82707.0 ms | 20800 smp (RTF **63.62×**) |
-| ASR | 901.2 ms | 174.4 ms | 81.0 ms | 42.7 | 23.4 | 1113.5 ms | 10 tok (32 mel) |
+| Task | TTFT      | Encoder   | Prefill  | decode t/s/u | ms/tok (steady) | E2E        | Output                     |
+| ---- | --------- | --------- | -------- | ------------ | --------------- | ---------- | -------------------------- |
+| T2TT | 847.6 ms  | 29.1 ms   | 75.9 ms  | 78.6         | 12.7            | 1180.9 ms  | 27 tok                     |
+| T2ST | 841.2 ms  | 54.6 ms   | 100.7 ms | 67.3         | 14.8            | 4578.9 ms  | 103360 smp (RTF **0.71×**) |
+| S2TT | 952.4 ms  | 172.3 ms  | 82.5 ms  | 12.4         | 80.9            | 1114.9 ms  | 3 tok (32 mel)             |
+| S2ST | 2409.8 ms | 1558.4 ms | 113.1 ms | 18.3         | 54.6            | 6623.4 ms  | 20800 smp (RTF **5.09×**)  |
+| ASR  | 945.0 ms  | 166.0 ms  | 79.2 ms  | 43.3         | 23.1            | 1154.4 ms  | 10 tok (32 mel)            |
 
 
-| Task | T2U    | Vocoder | RTF   |
-| ---- | ------ | ------- | ----- |
-| T2ST | 1943 ms | 1348 ms | 0.73× |
-| S2ST | 5138 ms | 72052 ms | 63.62× |
+| Task | T2U     | Vocoder | RTF   |
+| ---- | ------- | ------- | ----- |
+| T2ST | 1866 ms | 1391 ms | 0.71× |
+| S2ST | 2295 ms | 1571 ms | 5.09× |
 
 ### Sequence length: 64
 
-| Task | TTFT     | Encoder  | Prefill | decode t/s/u | ms/tok (steady) | E2E       | Output                     |
-| ---- | -------- | -------- | ------- | ------------ | --------------- | --------- | -------------------------- |
-| T2TT | 883.3 ms | 71.7 ms | 82.1 ms | 95.4 | 10.5 | 1443.7 ms | 54 tok |
-| T2ST | 907.3 ms | 101.2 ms | 109.6 ms | 89.5 | 11.2 | 5392.3 ms | 196800 smp (RTF **0.44×**) |
-| S2TT | 913.5 ms | 166.2 ms | 78.7 ms | 29.4 | 34.1 | 1084.9 ms | 6 tok (64 mel) |
-| S2ST | 2515.8 ms | 1649.6 ms | 114.2 ms | 29.0 | 34.5 | 81478.8 ms | 29120 smp (RTF **44.77×**) |
-| ASR | 930.4 ms | 170.5 ms | 77.9 ms | 23.9 | 41.9 | 1099.1 ms | 5 tok (64 mel) |
+| Task | TTFT      | Encoder   | Prefill  | decode t/s/u | ms/tok (steady) | E2E        | Output                     |
+| ---- | --------- | --------- | -------- | ------------ | --------------- | ---------- | -------------------------- |
+| T2TT | 853.6 ms  | 71.2 ms   | 80.5 ms  | 96.3         | 10.4            | 1407.6 ms  | 54 tok                     |
+| T2ST | 901.9 ms  | 98.0 ms   | 109.3 ms | 87.5         | 11.4            | 5281.1 ms  | 196800 smp (RTF **0.43×**) |
+| S2TT | 914.8 ms  | 166.0 ms  | 77.3 ms  | 28.5         | 35.1            | 1091.3 ms  | 6 tok (64 mel)             |
+| S2ST | 2291.8 ms | 1525.7 ms | 106.1 ms | 19.4         | 51.4            | 6360.8 ms  | 26240 smp (RTF **3.88×**)  |
+| ASR  | 968.7 ms  | 214.0 ms  | 95.5 ms  | 21.1         | 47.4            | 1159.5 ms  | 5 tok (64 mel)             |
 
 
-| Task | T2U    | Vocoder | RTF   |
-| ---- | ------ | ------- | ----- |
-| T2ST | 2265 ms | 1531 ms | 0.44× |
-| S2ST | 4340 ms | 71713 ms | 44.77× |
+| Task | T2U     | Vocoder | RTF   |
+| ---- | ------- | ------- | ----- |
+| T2ST | 2152 ms | 1528 ms | 0.43× |
+| S2ST | 2185 ms | 1571 ms | 3.88× |
 
 ### Sequence length: 128
 
-| Task | TTFT     | Encoder  | Prefill | decode t/s/u | ms/tok (steady) | E2E       | Output                     |
-| ---- | -------- | -------- | ------- | ------------ | --------------- | --------- | -------------------------- |
-| T2TT | 860.5 ms | 115.7 ms | 84.1 ms | 107.6 | 9.3 | 1966.3 ms | 119 tok |
-| T2ST | 970.2 ms | 154.4 ms | 117.3 ms | 103.2 | 9.7 | 14196.2 ms | 406400 smp (RTF **0.56×**) |
-| S2TT | 888.4 ms | 174.1 ms | 78.1 ms | 50.4 | 19.8 | 1108.2 ms | 12 tok (128 mel) |
-| S2ST | 2371.2 ms | 1531.5 ms | 108.6 ms | 42.4 | 23.6 | 53503.7 ms | 47360 smp (RTF **18.08×**) |
-| ASR | 921.0 ms | 178.3 ms | 79.8 ms | 45.8 | 21.8 | 1141.2 ms | 11 tok (128 mel) |
+| Task | TTFT      | Encoder   | Prefill  | decode t/s/u | ms/tok (steady) | E2E        | Output                     |
+| ---- | --------- | --------- | -------- | ------------ | --------------- | ---------- | -------------------------- |
+| T2TT | 910.2 ms  | 115.8 ms  | 83.0 ms  | 108.0        | 9.3             | 2012.0 ms  | 119 tok                    |
+| T2ST | 964.4 ms  | 154.1 ms  | 109.6 ms | 104.4        | 9.6             | 6604.3 ms  | 406400 smp (RTF **0.26×**) |
+| S2TT | 922.8 ms  | 169.5 ms  | 79.6 ms  | 50.2         | 19.9            | 1143.6 ms  | 12 tok (128 mel)           |
+| S2ST | 2472.3 ms | 1600.1 ms | 113.5 ms | 40.6         | 24.6            | 6734.6 ms  | 47360 smp (RTF **2.28×**)  |
+| ASR  | 936.0 ms  | 170.3 ms  | 79.1 ms  | 45.6         | 21.9            | 1157.2 ms  | 11 tok (128 mel)           |
 
 
-| Task | T2U    | Vocoder | RTF   |
-| ---- | ------ | ------- | ----- |
-| T2ST | 2341 ms | 9610 ms | 0.56× |
-| S2ST | 2166 ms | 48566 ms | 18.08× |
+| Task | T2U     | Vocoder | RTF   |
+| ---- | ------- | ------- | ----- |
+| T2ST | 2305 ms | 2050 ms | 0.26× |
+| S2ST | 2256 ms | 1537 ms | 2.28× |
 
 ### Sequence length: 256
 
-| Task | TTFT     | Encoder  | Prefill | decode t/s/u | ms/tok (steady) | E2E       | Output                     |
-| ---- | -------- | -------- | ------- | ------------ | --------------- | --------- | -------------------------- |
-| T2TT | 1035.8 ms | 239.9 ms | 85.7 ms | 113.4 | 8.8 | 3301.4 ms | 256 tok |
-| T2ST | 1171.6 ms | 285.9 ms | 123.4 ms | 109.3 | 9.1 | 60920.7 ms | 853440 smp (RTF **1.14×**) |
-| S2TT | 911.7 ms | 170.3 ms | 83.1 ms | 74.4 | 13.4 | 1250.4 ms | 26 tok (256 mel) |
-| S2ST | 2507.1 ms | 1605.2 ms | 127.1 ms | 65.5 | 15.3 | 82800.7 ms | 91200 smp (RTF **14.53×**) |
-| ASR | 878.1 ms | 176.1 ms | 82.8 ms | 66.4 | 15.1 | 1181.8 ms | 21 tok (256 mel) |
+| Task | TTFT      | Encoder   | Prefill  | decode t/s/u | ms/tok (steady) | E2E         | Output                     |
+| ---- | --------- | --------- | -------- | ------------ | --------------- | ----------- | -------------------------- |
+| T2TT | 1023.9 ms | 227.9 ms  | 83.5 ms  | 112.5        | 8.9             | 3311.4 ms   | 256 tok                    |
+| T2ST | 1209.0 ms | 295.4 ms  | 111.0 ms | 112.2        | 8.9             | 9666.2 ms   | 853440 smp (RTF **0.18×**) |
+| S2TT | 925.7 ms  | 163.4 ms  | 81.2 ms  | 74.6         | 13.4            | 1263.7 ms   | 26 tok (256 mel)           |
+| S2ST | 2512.7 ms | 1594.0 ms | 131.3 ms | 63.6         | 15.7            | 15096.7 ms  | 91200 smp (RTF **2.65×**)  |
+| ASR  | 944.7 ms  | 199.1 ms  | 96.1 ms  | 69.4         | 14.4            | 1234.9 ms   | 21 tok (256 mel)           |
 
 
-| Task | T2U    | Vocoder | RTF   |
-| ---- | ------ | ------- | ----- |
-| T2ST | 2615 ms | 54609 ms | 1.14× |
-| S2ST | 11010 ms | 66121 ms | 14.53× |
+| Task | T2U     | Vocoder | RTF   |
+| ---- | ------- | ------- | ----- |
+| T2ST | 2677 ms | 3343 ms | 0.18× |
+| S2ST | 4078 ms | 5404 ms | 2.65× |
 
 ### Sequence length: 512
 
-| Task | TTFT     | Encoder  | Prefill | decode t/s/u | ms/tok (steady) | E2E       | Output                     |
-| ---- | -------- | -------- | ------- | ------------ | --------------- | --------- | -------------------------- |
-| T2TT | 1246.5 ms | 420.1 ms | 82.5 ms | 111.0 | 9.0 | 3563.4 ms | 256 tok |
-| T2ST | 1469.4 ms | 510.2 ms | 116.9 ms | 108.8 | 9.2 | 60699.8 ms | 802880 smp (RTF **1.21×**) |
-| S2TT | 876.2 ms | 110.4 ms | 82.2 ms | 89.7 | 11.1 | 1348.2 ms | 43 tok (512 mel) |
-| S2ST | 2437.4 ms | 1532.1 ms | 131.6 ms | 75.8 | 13.2 | 81922.2 ms | 135680 smp (RTF **9.66×**) |
-| ASR | 871.9 ms | 116.8 ms | 82.4 ms | 82.5 | 12.1 | 1275.3 ms | 34 tok (512 mel) |
+| Task | TTFT      | Encoder   | Prefill  | decode t/s/u | ms/tok (steady) | E2E         | Output                     |
+| ---- | --------- | --------- | -------- | ------------ | --------------- | ----------- | -------------------------- |
+| T2TT | 1254.8 ms | 437.8 ms  | 89.2 ms  | 110.6        | 9.0             | 3575.0 ms   | 256 tok                    |
+| T2ST | 1554.2 ms | 632.9 ms  | 121.7 ms | 108.4        | 9.2             | 10009.9 ms  | 802880 smp (RTF **0.20×**) |
+| S2TT | 842.7 ms  | 115.6 ms  | 86.0 ms  | 87.4         | 11.4            | 1327.9 ms   | 43 tok (512 mel)           |
+| S2ST | 2294.2 ms | 1511.5 ms | 124.2 ms | 72.2         | 13.8            | 7651.1 ms   | 135680 smp (RTF **0.90×**) |
+| ASR  | 847.9 ms  | 115.1 ms  | 86.2 ms  | 81.4         | 12.3            | 1257.1 ms   | 34 tok (512 mel)           |
 
 
-| Task | T2U    | Vocoder | RTF   |
-| ---- | ------ | ------- | ----- |
-| T2ST | 2668 ms | 54052 ms | 1.21× |
-| S2ST | 8914 ms | 67285 ms | 9.66× |
+| Task | T2U     | Vocoder | RTF   |
+| ---- | ------- | ------- | ----- |
+| T2ST | 2638 ms | 3296 ms | 0.20× |
+| S2ST | 2756 ms | 1944 ms | 0.90× |
 
 ### Sequence length: 1024
 
-| Task | TTFT     | Encoder  | Prefill | decode t/s/u | ms/tok (steady) | E2E       | Output                     |
-| ---- | -------- | -------- | ------- | ------------ | --------------- | --------- | -------------------------- |
-| T2TT | 2046.0 ms | 1074.3 ms | 88.0 ms | 105.9 | 9.4 | 4470.4 ms | 256 tok |
-| T2ST | 1983.8 ms | 971.2 ms | 137.1 ms | 103.5 | 9.7 | 71897.4 ms | 772800 smp (RTF **1.49×**) |
-| S2TT | 1073.1 ms | 208.1 ms | 129.6 ms | 92.8 | 10.8 | 1898.5 ms | 77 tok (1024 mel) |
-| S2ST | 1042.3 ms | 207.0 ms | 122.2 ms | 92.5 | 10.8 | 6206.7 ms | 263360 smp (RTF **0.38×**) |
-| ASR | 1122.4 ms | 208.4 ms | 146.5 ms | 88.8 | 11.3 | 1894.9 ms | 69 tok (1024 mel) |
+| Task | TTFT      | Encoder   | Prefill  | decode t/s/u | ms/tok (steady) | E2E         | Output                     |
+| ---- | --------- | --------- | -------- | ------------ | --------------- | ----------- | -------------------------- |
+| T2TT | 1738.1 ms | 819.2 ms  | 85.4 ms  | 106.1        | 9.4             | 4160.3 ms   | 256 tok                    |
+| T2ST | 2029.4 ms | 969.6 ms  | 123.6 ms | 103.5        | 9.7             | 10504.7 ms  | 772800 smp (RTF **0.22×**) |
+| S2TT | 1046.8 ms | 206.6 ms  | 118.0 ms | 94.2         | 10.6            | 1860.6 ms   | 77 tok (1024 mel)          |
+| S2ST | 1072.1 ms | 206.9 ms  | 119.5 ms | 93.2         | 10.7            | 6243.7 ms   | 263360 smp (RTF **0.38×**) |
+| ASR  | 1073.6 ms | 206.3 ms  | 117.9 ms | 91.3         | 11.0            | 1822.2 ms   | 69 tok (1024 mel)          |
 
 
-| Task | T2U    | Vocoder | RTF   |
-| ---- | ------ | ------- | ----- |
-| T2ST | 2548 ms | 64725 ms | 1.49× |
-| S2ST | 2334 ms | 1961 ms | 0.38× |
+| Task | T2U     | Vocoder | RTF   |
+| ---- | ------- | ------- | ----- |
+| T2ST | 2560 ms | 3270 ms | 0.22× |
+| S2ST | 2366 ms | 1936 ms | 0.38× |
 
 ### Sequence length: 2048
 
-| Task | TTFT     | Encoder  | Prefill | decode t/s/u | ms/tok (steady) | E2E       | Output                     |
-| ---- | -------- | -------- | ------- | ------------ | --------------- | --------- | -------------------------- |
-| T2TT | 2781.8 ms | 1698.2 ms | 85.2 ms | 95.2 | 10.5 | 5484.3 ms | 256 tok |
-| T2ST | 3048.3 ms | 1868.4 ms | 121.0 ms | 94.2 | 10.6 | 11543.2 ms | 767360 smp (RTF **0.24×**) |
-| S2TT | 2830.4 ms | 1946.2 ms | 140.1 ms | 97.9 | 10.2 | 3973.9 ms | 112 tok (2048 mel) |
-| S2ST | 2889.6 ms | 1988.9 ms | 133.8 ms | 102.7 | 9.7 | 9256.3 ms | 425600 smp (RTF **0.35×**) |
-| ASR | 2826.1 ms | 1978.6 ms | 119.5 ms | 102.7 | 9.7 | 4167.3 ms | 138 tok (2048 mel) |
+| Task | TTFT      | Encoder   | Prefill  | decode t/s/u | ms/tok (steady) | E2E         | Output                     |
+| ---- | --------- | --------- | -------- | ------------ | --------------- | ----------- | -------------------------- |
+| T2TT | 2694.2 ms | 1600.4 ms | 84.6 ms  | 96.1         | 10.4            | 5366.4 ms   | 256 tok                    |
+| T2ST | 2940.6 ms | 1792.4 ms | 114.3 ms | 93.5         | 10.7            | 11334.4 ms  | 767360 smp (RTF **0.24×**) |
+| S2TT | 2928.8 ms | 1936.5 ms | 156.1 ms | 100.7        | 9.9             | 4037.6 ms   | 112 tok (2048 mel)         |
+| S2ST | 2932.0 ms | 2054.3 ms | 118.5 ms | 102.5        | 9.8             | 9256.4 ms   | 425600 smp (RTF **0.35×**) |
+| ASR  | 2853.0 ms | 1990.5 ms | 124.9 ms | 102.7        | 9.7             | 4194.5 ms   | 138 tok (2048 mel)         |
 
 
-| Task | T2U    | Vocoder | RTF   |
-| ---- | ------ | ------- | ----- |
-| T2ST | 2632 ms | 2964 ms | 0.24× |
-| S2ST | 2478 ms | 2421 ms | 0.35× |
+| Task | T2U     | Vocoder | RTF   |
+| ---- | ------- | ------- | ----- |
+| T2ST | 2531 ms | 2957 ms | 0.24× |
+| S2ST | 2448 ms | 2427 ms | 0.35× |
 
 ### Sequence length: 4096
 
-| Task | TTFT     | Encoder  | Prefill | decode t/s/u | ms/tok (steady) | E2E       | Output                     |
-| ---- | -------- | -------- | ------- | ------------ | --------------- | --------- | -------------------------- |
-| T2TT | 4681.9 ms | 3391.3 ms | 92.2 ms | 81.1 | 12.3 | 7842.1 ms | 256 tok |
-| T2ST | 5462.2 ms | 4091.8 ms | 119.4 ms | 79.8 | 12.5 | 14229.9 ms | 663680 smp (RTF **0.34×**) |
-| S2TT | 3315.1 ms | 2382.2 ms | 127.1 ms | 104.7 | 9.6 | 5358.3 ms | 213 tok (4096 mel) |
-| S2ST | 3286.3 ms | 2378.5 ms | 116.5 ms | 104.5 | 9.6 | 104615.3 ms | 592000 smp (RTF **2.83×**) |
-| ASR | 3305.0 ms | 2378.6 ms | 139.4 ms | 102.8 | 9.7 | 5170.1 ms | 191 tok (4096 mel) |
+| Task | TTFT      | Encoder   | Prefill  | decode t/s/u | ms/tok (steady) | E2E         | Output                     |
+| ---- | --------- | --------- | -------- | ------------ | --------------- | ----------- | -------------------------- |
+| T2TT | 4643.5 ms | 3406.3 ms | 85.5 ms  | 81.0         | 12.3            | 7810.4 ms   | 256 tok                    |
+| T2ST | 4969.3 ms | 3617.5 ms | 116.8 ms | 79.5         | 12.6            | 13808.3 ms  | 663680 smp (RTF **0.33×**) |
+| S2TT | 3387.7 ms | 2379.5 ms | 156.1 ms | 104.6        | 9.6             | 5352.7 ms   | 205 tok (4096 mel)         |
+| S2ST | 3314.6 ms | 2378.6 ms | 139.6 ms | 100.5        | 9.9             | 86669.8 ms  | 552640 smp (RTF **2.51×**) † |
+| ASR  | 3313.4 ms | 2378.7 ms | 118.1 ms | 103.0        | 9.7             | 5046.0 ms   | 178 tok (4096 mel)         |
 
 
-| Task | T2U    | Vocoder | RTF   |
-| ---- | ------ | ------- | ----- |
-| T2ST | 2585 ms | 2751 ms | 0.34× |
-| S2ST | 14462 ms | 81141 ms | 2.83× |
+| Task | T2U      | Vocoder  | RTF   |
+| ---- | -------- | -------- | ----- |
+| T2ST | 2609 ms  | 2823 ms  | 0.33× |
+| S2ST | 10680 ms | 66326 ms | 2.51× † |
+
 
 ---
 
@@ -340,4 +341,4 @@ Task notes:
 - **S2TT / ASR** — speech encoder dominates TTFT; **decode t/s/u** isolates the text-decoder steady rate.
 - **S2ST** — speech encoder + decoder + T2U + vocoder.
 
-**Cold start:** the first timed speech-synthesis call in a **brand-new process** with a cold on-disk JIT cache can still pay a one-time vocoder compile outlier (~15–20 s on BH QB; often larger on P150 when a new unit-length bucket is hit). Subsequent timed iters in the same session and later demo invocations (warm disk cache) report steady vocoder times (~1.1–1.6 s on BH QB; ~2–6 s on P150 when warm). Speech warmups + vocoder prewarm (in `demo.py`) keep the **reported** timed iter near steady state.
+**Cold start:** a new unit-length / `t_audio` bucket can still pay a one-time Metal compile on the timed S2ST path (~60 s vocoder on P150 in this sweep at mel 256 and 4096). Warm steady vocoder is ~1.4–3.4 s (T2ST) and ~1.5–2.5 s (S2ST). Speech warmups + vocoder post-warmup / split-path `vocode_units` JIT keep most reported points near steady state; BH QB cold outliers are typically smaller (~15–20 s) when the on-disk cache is empty.
