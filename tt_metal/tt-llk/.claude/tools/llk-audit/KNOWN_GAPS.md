@@ -37,7 +37,9 @@ the status leads with `ok`, `bootstrap.sh`'s anchored HOLE grep never counts it,
 does not reach the audit-JSON `degraded`.
 - **Risk:** CAP-REDUCTION — a kernel that *should* have contributed facts but failed to parse can
   read as coverage-clean to a JSON consumer.
-- **Scope:** opt-in `--full-jit` tier only.
+- **Live today:** none observed (opt-in `--full-jit` tier only; not exercised on the default path).
+- **Fix:** in `tu_ledger_status`, give a `parse_errors>0 && 0-kept` TU a HOLE-leading status so
+  bootstrap's grep counts it.
 
 ### L3 — no committed golden baseline / real-tree count assertion
 `out/` is gitignored, so there is no committed golden fact base / per-arch count manifest and no
@@ -45,22 +47,32 @@ automated real-tree count assertion. A real recall regression (an extractor edit
 change, or a tt-llk header refactor dropping e.g. mmio 91→60) passes all unit tests and leaves no
 artifact to diff.
 - **Risk:** CAP-REDUCTION — a silent recall drop.
+- **Live today:** N/A — structural (the guard is simply absent), not a per-site latent case.
 - **Fix:** commit a `ground_truth.json` (per-arch, per-checker counts + sub-buckets) and add a
   CI/test step asserting `run.sh` output equals it; treat any intended change as a manifest edit.
 
-### L4 — template-dependent cfg/mmio writes are surfaced but not classified
-A template-dependent cfg/mmio write is emitted as `unresolved` (visible, never silently dropped) but
-is not resolved to a config word; a full fix needs template-instantiation visiting in the extractor.
-- **Risk:** partial recall (surfaced, not a silent miss).
-- **Status:** deferred as risky.
+### L4 — template-dependent cfg/mmio writes reach no checker (silent miss)
+A cfg/mmio write whose base pointer is template-dependent gets `provenance_kind="unresolved"` from the
+extractor, so `classify_write` returns `(None, None)` and ALL THREE pointer_write consumers drop it
+with no Finding: mmio-race (`if kind:`), reconfig-stall (`kind in CFG_WRITE_KINDS`), and cfg-word
+(`is_cfg_looking_unrecognized` gates on `provenance_kind in ("call","var","cast")`, excluding
+`"unresolved"`). The write stays in `facts.<arch>.jsonl` but produces no audit Finding — so to the
+skill/LLM worklist it is a SILENT miss. (Distinct from a RECOGNIZED cfg write with an unresolvable
+INDEX, e.g. `cfg[runtime_var]=`, which DOES emit a `hint=UNRESOLVED` Finding.)
+- **Risk:** CAP-REDUCTION (silent — no Finding emitted).
+- **Live today:** none — every `unresolved` pointer_write over tt-llk is a local staging-struct write
+  (`config.val[i]=`, `tile_descriptor.val[i]=`), not a direct cfg-pointer write; the real cfg write is
+  separately routed through a recognized `TTI_WRCFG`/`REG2FLOP`.
+- **Fix:** extractor template-instantiation visiting to resolve the base word; deferred as risky.
 
 ### X1 — object-method `async_read_with_state` not recalled by `noc_is_read`
 `noc_is_read` recalls the whole free-function `noc_async_read*` family by prefix, but its
 object-method branch matches only the exact name `async_read` — so the object form
 `noc.async_read_with_state<...>(...)` is not recalled. `noc-read-barrier` gates on `noc_is_read`, so a
 consumed-before-barrier hazard expressed via the object API produces no finding.
-- **Risk:** CAP-REDUCTION — a kernel-tier `noc-read-barrier` false-negative over ~19 ttnn object-API
-  reader kernels (matmul dataflow).
+- **Risk:** CAP-REDUCTION — a kernel-tier `noc-read-barrier` false-negative over ~26 object-API reader
+  files (≈20 under ttnn/cpp, the rest test kernels) spanning matmul, concat, transpose, untilize,
+  sdpa, pool, topk — only ~6 are matmul.
 - **Live today:** none — every live site is batched-safe (`set_state → read → barrier → push`).
 - **Fix:** broaden the object branch to `startswith("async_read")` minus barrier/flush forms, gated
   on the `Noc` receiver type (mirrors the free-fn branch). No object `async_read_set_state` exists to
@@ -88,7 +100,12 @@ provenance reads `has_noc == False` and its poll is dropped.
 `cfg`/`mop`/`base` target). A MOP-buffer write in a reconfig-named function is not a unit-sampled
 config register, so it would draw a spurious `NO_UNIT_DRAIN`.
 - **Risk:** FALSE-FLAG.
-- **Live today:** none (the only `mop_cfg` site is a non-reconfig MOP template).
+- **Live today:** none — no `mop_cfg`/cast write sits in a reconfig-named function. (The `mop_cfg`
+  sites — `ckernel_template::program`/`program_unpack` across all three arches, and the experimental
+  BH pack helpers `_llk_pack_block_contiguous_` / `_llk_pack_fast_untilize_*` — are not
+  `RECONFIG_FN_SUBSTR` names, so `is_reconfig_fn` skips them.)
+- **Fix:** give reconfig-stall its own kind set excluding `mmio_ptr` (distinguishing mop- from
+  cfg-provenance — see Fix hazard).
 - **Fix hazard:** **CAP-REDUCTION TRAP** — a genuine `reinterpret_cast<volatile …>`-to-cfg write in a
   reconfig fn is *also* `mmio_ptr`, so blunt removal of `mmio_ptr` creates a false-negative. A correct
   fix must distinguish mop- vs cfg-provenance `mmio_ptr`.
