@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
 from enum import Enum
 from pathlib import Path
@@ -74,6 +75,14 @@ PREFILL_TIME_TO_FIRST_TOKEN_KEY = "prefill_time_to_first_token"
 # forcing artifacts (not real perf), and eval runs do not measure token accuracy.
 ACCURACY_TARGET_METRIC_NAMES = {"top1", "top5"}
 ACCURACY_MEASUREMENT_NAMES = {"top1_token_accuracy", "top5_token_accuracy"}
+
+# Reverse lookup from a benchmark (step_name, measurement_name) pair back to a canonical
+# target metric name. Used to report measured values that have no matching target entry so
+# the summary can still surface them. The first key wins for pairs shared by multiple metric
+# names (e.g. prefill_time_to_token / prefill_time_to_first_token both map to time_to_token).
+_MEASUREMENT_TO_METRIC_NAME: dict[tuple[str, str], str] = {}
+for _metric_name, _pair in METRIC_NAME_MAP.items():
+    _MEASUREMENT_TO_METRIC_NAME.setdefault(_pair, _metric_name)
 
 
 def _is_number(value: Any) -> bool:
@@ -211,6 +220,56 @@ def _check_metric(
         f"{metric_name}: measured={measured_value} < lower_bound={lower_bound} "
         f"(expected={expected_value}, tolerance={tolerance}) [{note}]"
     )
+
+
+def _display_values(
+    metric_name: str,
+    measured: float | None,
+    expected: float | None,
+) -> tuple[float | None, float | None, str]:
+    """Return (display_measured, display_expected, unit) for the human summary.
+
+    `prefill_time_to_first_token` targets are normalized to seconds for comparison, so both
+    measured and expected are converted back to milliseconds here to match how the target is
+    authored and read. Every other metric is reported in its raw benchmark unit.
+    """
+    if metric_name == PREFILL_TIME_TO_FIRST_TOKEN_KEY:
+        disp_measured = round(measured * 1000.0, 4) if measured is not None else None
+        disp_expected = round(expected * 1000.0, 4) if expected is not None else None
+        return disp_measured, disp_expected, "ms"
+
+    unit = METRIC_NAME_MAP.get(metric_name, (None, ""))[1]
+    disp_measured = round(measured, 4) if measured is not None else None
+    disp_expected = round(expected, 4) if expected is not None else None
+    return disp_measured, disp_expected, unit
+
+
+def _make_report_record(
+    *,
+    model_name: str,
+    sku: str,
+    batch_size: int | None,
+    seq_len: int | None,
+    metric_name: str,
+    measured: float | None,
+    expected: float | None,
+    tolerance: float | None,
+    status: str,
+) -> dict[str, Any]:
+    """Build one row of the perf/accuracy report."""
+    disp_measured, disp_expected, unit = _display_values(metric_name, measured, expected)
+    return {
+        "model": model_name,
+        "sku": sku,
+        "batch_size": batch_size,
+        "seq_len": seq_len,
+        "metric_name": metric_name,
+        "measured": disp_measured,
+        "expected": disp_expected,
+        "tolerance": tolerance,
+        "unit": unit,
+        "status": status,
+    }
 
 
 def _benchmark_files(benchmark_dir: Path) -> list[Path]:
@@ -416,6 +475,7 @@ class ValidationResult:
         self.gap_warnings: list[str] = []
         self.hard_failures: list[str] = []
         self.missing_entries: list[str] = []
+        self.reported_metrics: list[dict[str, Any]] = []
         self.num_benchmark_files: int = 0
 
 
@@ -517,6 +577,9 @@ def validate(
             f"{benchmark_file.name}, model={model_name}, sku={sku}, batch_size={batch_size}, seq_len={seq_len}"
         )
 
+        # Benchmark measurement pairs already covered by a target so the no-target pass below
+        # does not re-report them.
+        covered_pairs: set[tuple[str, str]] = set()
         for metric_name, expected in thresholds.items():
             if model_targets.is_tolerance_key(metric_name):
                 continue
@@ -528,6 +591,13 @@ def validate(
             # targets (and vice versa).
             if (metric_name in ACCURACY_TARGET_METRIC_NAMES) != is_accuracy_run:
                 continue
+            if metric_name in METRIC_NAME_MAP:
+                covered_pairs.add(METRIC_NAME_MAP[metric_name])
+            tolerance = model_targets.resolve_metric_tolerance(
+                metric_name=metric_name,
+                thresholds=thresholds,
+                default_tolerance=model_targets.DEFAULT_PERF_TOLERANCE,
+            )
             try:
                 measured_value = _extract_metric_value(metric_name, measured)
             except ValueError as exc:
@@ -537,12 +607,20 @@ def validate(
                 result.hard_failures.append(
                     f"{hard_failures_prefix}: metric '{metric_name}' missing in benchmark payload for measured={measured}"
                 )
+                result.reported_metrics.append(
+                    _make_report_record(
+                        model_name=model_name,
+                        sku=sku,
+                        batch_size=batch_size,
+                        seq_len=seq_len,
+                        metric_name=metric_name,
+                        measured=None,
+                        expected=float(expected),
+                        tolerance=tolerance,
+                        status="missing-measurement",
+                    )
+                )
                 continue
-            tolerance = model_targets.resolve_metric_tolerance(
-                metric_name=metric_name,
-                thresholds=thresholds,
-                default_tolerance=model_targets.DEFAULT_PERF_TOLERANCE,
-            )
             metric_failure = _check_metric(
                 metric_name=metric_name,
                 expected_value=float(expected),
@@ -551,8 +629,102 @@ def validate(
             )
             if metric_failure:
                 result.hard_failures.append(f"{hard_failures_prefix}: {metric_failure}")
+            result.reported_metrics.append(
+                _make_report_record(
+                    model_name=model_name,
+                    sku=sku,
+                    batch_size=batch_size,
+                    seq_len=seq_len,
+                    metric_name=metric_name,
+                    measured=float(measured_value),
+                    expected=float(expected),
+                    tolerance=tolerance,
+                    status="fail" if metric_failure else "pass",
+                )
+            )
+
+        # Always surface measured e2e numbers, even when no target exists for them, so the
+        # report is a single place to read results. Only known metrics are reported (service
+        # measurements are skipped), and the accuracy/perf run split is respected.
+        for pair, value in measured.items():
+            if pair in covered_pairs:
+                continue
+            metric_name = _MEASUREMENT_TO_METRIC_NAME.get(pair)
+            if metric_name is None:
+                continue
+            if (metric_name in ACCURACY_TARGET_METRIC_NAMES) != is_accuracy_run:
+                continue
+            covered_pairs.add(pair)
+            result.reported_metrics.append(
+                _make_report_record(
+                    model_name=model_name,
+                    sku=sku,
+                    batch_size=batch_size,
+                    seq_len=seq_len,
+                    metric_name=metric_name,
+                    measured=float(value),
+                    expected=None,
+                    tolerance=None,
+                    status="no-target",
+                )
+            )
 
     return result
+
+
+_SUMMARY_HEADER = "| Model | SKU | batch | seq | Metric | Measured | Target | Tolerance | Unit | Status |"
+_SUMMARY_SEPARATOR = "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+
+
+def _render_summary(result: ValidationResult) -> str:
+    """Render measured perf/accuracy numbers (and targets, when present) as a Markdown table.
+
+    Always includes every reported metric so results are readable from a single CI step
+    instead of scanning the full run log. Deterministically ordered for stable output.
+    """
+    lines = ["## Report and Validate Perf and Accuracy targets", ""]
+    if not result.reported_metrics:
+        lines.append("_No perf/accuracy measurements reported._")
+        return "\n".join(lines) + "\n"
+
+    def _fmt(value: Any) -> str:
+        return "-" if value is None else str(value)
+
+    lines.append(_SUMMARY_HEADER)
+    lines.append(_SUMMARY_SEPARATOR)
+    for record in sorted(
+        result.reported_metrics,
+        key=lambda r: (str(r["model"]), str(r["sku"]), str(r["metric_name"])),
+    ):
+        tolerance = record["tolerance"]
+        tolerance_disp = "-" if tolerance is None else f"±{round(float(tolerance) * 100, 2)}%"
+        lines.append(
+            "| {model} | {sku} | {batch} | {seq} | {metric} | {measured} | {target} | {tol} | {unit} | {status} |".format(
+                model=_fmt(record["model"]),
+                sku=_fmt(record["sku"]),
+                batch=_fmt(record["batch_size"]),
+                seq=_fmt(record["seq_len"]),
+                metric=record["metric_name"],
+                measured=_fmt(record["measured"]),
+                target=_fmt(record["expected"]),
+                tol=tolerance_disp,
+                unit=_fmt(record["unit"]),
+                status=record["status"],
+            )
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _write_step_summary(summary: str) -> None:
+    """Append the summary to the GitHub Actions step summary file when running in CI."""
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary_path:
+        return
+    try:
+        with open(summary_path, "a", encoding="utf-8") as summary_file:
+            summary_file.write(summary)
+    except OSError as exc:
+        print(f"::warning::Failed to write GITHUB_STEP_SUMMARY: {exc}")
 
 
 def main() -> int:
@@ -575,6 +747,12 @@ def main() -> int:
 
     for warning in result.gap_warnings:
         print(f"::warning::{warning}")
+
+    # Always report measured perf/accuracy numbers so they are visible directly in the CI
+    # step output (and the GitHub step summary) without scanning the full run log.
+    summary = _render_summary(result)
+    print(summary)
+    _write_step_summary(summary)
 
     if result.num_benchmark_files == 0:
         print(f"::warning::No benchmark JSON files found under {benchmark_dir}")
