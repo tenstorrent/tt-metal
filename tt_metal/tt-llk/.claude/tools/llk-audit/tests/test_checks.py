@@ -294,6 +294,32 @@ def test_semaphore_real_imbalance_flagged():
 
 
 @case
+def test_semaphore_mutex_release_path():
+    # Exercise the mutex-balance RELEASE side: the per_fn["rel"] append + the balanced
+    # equality + the release-only anchor fallback — none reached by the acquire-only
+    # imbalance test above.
+    F = "tt_llk_wormhole_b0/llk_lib/llk_pack_common.h"
+    # balanced 1 acquire / 1 release in a normal (non-wrapper, non-RAII) fn -> NO finding
+    # (this is the fail-without proof that releases are counted: if the release weren't
+    # tallied, this would falsely flag 1-acquire-vs-0-release).
+    balanced = [
+        fn("use", F, 200, 260),
+        call(F, 210, "t6_mutex_acquire", func="use"),
+        call(F, 250, "t6_mutex_release", func="use"),
+    ]
+    assert SemaphoreHandshake().run(FactBase("wormhole", balanced)) == []
+    # release-heavy imbalance (0 acquire / 1 release) -> MUTEX_IMBALANCE anchored on the
+    # release (the `d["acq"] or d["rel"]` fallback).
+    rel_heavy = [
+        fn("use", F, 200, 260),
+        call(F, 250, "t6_mutex_release", func="use"),
+    ]
+    out = SemaphoreHandshake().run(FactBase("wormhole", rel_heavy))
+    assert len(out) == 1 and out[0].hint == "MUTEX_IMBALANCE", out
+    assert "0 acquire vs 1 release" in out[0].detail, out[0].detail
+
+
+@case
 def test_reconfig_setdmareg_not_the_write_and_latched_allowlist():
     # program_packer_destination: SETDMAREG (GPR) first, then latched L1_Dest_addr
     # REG2FLOP -> must NOT be flagged.
