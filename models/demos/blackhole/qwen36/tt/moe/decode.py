@@ -71,12 +71,15 @@ def decode_forward(
     sparsity = ttnn.to_layout(routing_weights, ttnn.ROW_MAJOR_LAYOUT)
     output_tile = ttnn.Tile([32, 32])
 
-    gate_up_config = _build_sparse_matmul_config(batch_size, intermediate_size)
+    # gate/up fused into ONE sparse_matmul over concatenated weights (N = 2*intermediate),
+    # doubling the N-gridded core count (4 -> 8) vs two separate matmuls; the fused output is
+    # sliced back into gate | up halves (mathematically identical).
+    gate_up_config = _build_sparse_matmul_config(batch_size, 2 * intermediate_size)
     down_config = _build_sparse_matmul_config(batch_size, config.hidden_size)
 
-    gate = ttnn.sparse_matmul(
+    gate_up = ttnn.sparse_matmul(
         hidden_states,
-        weights.gate_proj,
+        weights.gate_up_proj,
         sparsity=sparsity,
         nnz=top_k,
         memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -84,29 +87,18 @@ def decode_forward(
         program_config=gate_up_config,
         dtype=ttnn.bfloat16,
     )
-    sm_intermediate = gate.shape[-1]
-    gate = ttnn.reshape(gate, (batch_size, num_experts, 1, sm_intermediate))
-    gate = ttnn.transpose(gate, 1, 2)
-    gate = ttnn.reshape(gate, (batch_size, num_experts, sm_intermediate))
-
-    up = ttnn.sparse_matmul(
-        hidden_states,
-        weights.up_proj,
-        sparsity=sparsity,
-        nnz=top_k,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        output_tile=output_tile,
-        program_config=gate_up_config,
-        dtype=ttnn.bfloat16,
-    )
-    up = ttnn.reshape(up, (batch_size, num_experts, 1, sm_intermediate))
-    up = ttnn.transpose(up, 1, 2)
-    up = ttnn.reshape(up, (batch_size, num_experts, sm_intermediate))
+    sm2 = gate_up.shape[-1]  # 2 * intermediate
+    gate_up = ttnn.reshape(gate_up, (batch_size, num_experts, 1, sm2))
+    gate_up = ttnn.transpose(gate_up, 1, 2)
+    gate_up = ttnn.reshape(gate_up, (batch_size, num_experts, sm2))
+    gate = ttnn.slice(gate_up, (0, 0, 0), (batch_size, num_experts, intermediate_size))
+    up = ttnn.slice(gate_up, (0, 0, intermediate_size), (batch_size, num_experts, 2 * intermediate_size))
+    gate_up.deallocate(True)
 
     down_input = apply_swiglu(gate, up)
 
     down_input = ttnn.transpose(down_input, 1, 0)
-    down_input = ttnn.reshape(down_input, (1, num_experts, batch_size, sm_intermediate))
+    down_input = ttnn.reshape(down_input, (1, num_experts, batch_size, intermediate_size))
 
     down = ttnn.sparse_matmul(
         down_input,
