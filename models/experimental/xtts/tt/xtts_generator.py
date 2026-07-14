@@ -42,7 +42,14 @@ class TtXttsGenerator:
         return int(ttnn.to_torch(idx).flatten()[0].item())
 
     def generate(
-        self, text_ids, cond_latents, max_new_tokens=MAX_AUDIO_TOKENS, temperature=0.0, top_k=0, repetition_penalty=1.0
+        self,
+        text_ids,
+        cond_latents,
+        max_new_tokens=MAX_AUDIO_TOKENS,
+        temperature=0.0,
+        top_k=0,
+        repetition_penalty=1.0,
+        top_p=1.0,
     ):
         """Free-running decode.
 
@@ -51,9 +58,9 @@ class TtXttsGenerator:
                 and, for tile-clean prefill, padded to a multiple of 32).
             cond_latents: ttnn ``[1, n_cond, hidden]`` conditioning prompt (TILE).
             max_new_tokens: cap on generated codes.
-            temperature/top_k/repetition_penalty: on-device sampling (``TtSampler``).
+            temperature/top_k/repetition_penalty/top_p: on-device sampling (``TtSampler``).
                 ``temperature <= 0`` selects greedy argmax (deterministic, testable);
-                XTTS's natural setting is temp 0.75 / top_k 50 / rep 5.0.
+                XTTS's natural setting is temp 0.75 / top_k 50 / top_p 0.85 / rep 5.0.
 
         Returns:
             codes: torch long ``[1, T]`` audio codes (stop token excluded).
@@ -61,7 +68,7 @@ class TtXttsGenerator:
         """
         sampler = None
         if temperature and temperature > 0.0:
-            sampler = TtSampler(self.model.device, NUM_AUDIO_TOKENS, temperature, top_k, repetition_penalty)
+            sampler = TtSampler(self.model.device, NUM_AUDIO_TOKENS, temperature, top_k, repetition_penalty, top_p)
         pick = sampler.pick if sampler else self._argmax
 
         kv = self.model.prefill(text_ids, cond_latents)
