@@ -351,7 +351,10 @@ def _sdpa_chunks_for_seq_len(seq_len, batch_size=None):
         # direct perf.py runs. Tested in-model: q512/k128=4489, q256/k256=4056(best),
         # q256/k128=4596. k_chunk=256 is the sweet spot.
         if seq_len == 8192:
-            return 512, 256
+            # Sequence-parallel: local Sq=4096, gathered Sk=8192. Lower L1
+            # pressure (halved Sq) lets k_chunk=512 fit, halving the number of
+            # k-passes and the online-softmax rescaling overhead.
+            return 512, 512
         # B8: q=256 k=256 (swept q{64..512} x k{128,256,512}; 256x256 is the min,
         # ~0.27ms under the B32-inherited 256x512). B32 keeps 256x512.
         # B16: q=256 k=256 (swept; 256x256 ~0.25ms under 256x512, same as B8).
