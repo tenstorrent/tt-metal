@@ -20,6 +20,19 @@ from ....utils.matmul import get_matmul_config
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 
+# to_gate_logits and to_q/to_qkv are both ColParallelLinear fed the SAME activation, and each fuses
+# its own TP all-gather of it (all_gather_minimal_matmul_async) — the activation crosses the fabric
+# twice. The fused gather barely overlaps its matmul, so gathering once explicitly and running both
+# projections as plain matmuls on the gathered tensor is the same math for one gather less.
+# Set to 0 to restore the double gather for an A/B.
+LTX_DEDUP_GATE_GATHER = os.environ.get("LTX_DEDUP_GATE_GATHER", "1") in ("1", "true", "True")
+
+# TEST ONLY: corrupt the gate's copy of the gathered activation, so the gate reads a wrong-but-
+# right-shaped tensor while Q/QKV reads the correct one. That is the failure the dedup introduces
+# silently if the two consumers end up wired to different tensors; the equivalence gate must catch
+# it. A green gate that has never been shown to go red proves nothing.
+LTX_DEDUP_GATE_MUTANT = os.environ.get("LTX_DEDUP_GATE_MUTANT", "0") in ("1", "true", "True")
+
 
 class LTXAttention(Module):
     # Map from (is_blackhole, sp_factor, tp_factor) -> (q_chunk_size, k_chunk_size)
@@ -363,11 +376,24 @@ class LTXAttention(Module):
             )
         return output
 
+    def _gate_is_live(self) -> bool:
+        """True when the gate projection will actually run (and so will gather its input)."""
+        return self.apply_gated_attention and self.to_gate_logits.weight._data is not None
+
+    def _corrupt_gate_input(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """TEST ONLY (LTX_DEDUP_GATE_MUTANT): a wrong-but-right-shaped gathered activation.
+
+        Stands in for the dedup miswiring where the gate reads something other than the tensor
+        Q/QKV reads. A scalar rescale, not a shard permute: slicing the CCL's persistent gather
+        buffer to permute it deadlocks the fabric, and a mutant must not be able to hang the box.
+        """
+        return ttnn.multiply(x, 0.5)
+
     def _compute_gate(
         self, spatial_1BND: ttnn.Tensor, qkv_parallel_config: DiTParallelConfig | None
     ) -> ttnn.Tensor | None:
         """Per-head gate 2 * sigmoid(to_gate_logits(x)); returns (B, H_local, N, 1) or None."""
-        if not self.apply_gated_attention or self.to_gate_logits.weight._data is None:
+        if not self._gate_is_live():
             return None
 
         gate_logits = self.to_gate_logits(spatial_1BND, parallel_config=qkv_parallel_config)
@@ -405,15 +431,26 @@ class LTXAttention(Module):
         use_nonfused_agmm = (self.ccl_manager.topology == ttnn.Topology.Linear) and (
             self.parallel_config.tensor_parallel.factor > 1
         )
-        if use_nonfused_agmm:
+        # With the gate on, the gate and Q/QKV projections would each fuse a gather of the same
+        # activation; hoisting one explicit gather feeds both and halves the fabric traffic here.
+        dedup_gate_gather = (
+            LTX_DEDUP_GATE_GATHER
+            and not use_nonfused_agmm
+            and self._gate_is_live()
+            and self.parallel_config.tensor_parallel.factor > 1
+        )
+        if use_nonfused_agmm or dedup_gate_gather:
             spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
                 spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
 
-        qkv_parallel_config = None if use_nonfused_agmm else self.parallel_config
+        qkv_parallel_config = None if (use_nonfused_agmm or dedup_gate_gather) else self.parallel_config
 
         # Per-head gate, computed before QKV consumes spatial_1BND.
-        gate_bhne = self._compute_gate(spatial_1BND, qkv_parallel_config)
+        gate_input = spatial_1BND
+        if dedup_gate_gather and LTX_DEDUP_GATE_MUTANT:
+            gate_input = self._corrupt_gate_input(spatial_1BND)
+        gate_bhne = self._compute_gate(gate_input, qkv_parallel_config)
 
         if self.is_self:
             q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
