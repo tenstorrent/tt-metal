@@ -205,21 +205,20 @@ class Ideogram4TransformerBlock(Module):
         self.norm_k = DistributedRMSNorm(**_qk_norm_kwargs)
 
         # --- the four block RMSNorms (weight only, no bias) ---
-        # DistributedRMSNorm operates on the TP-fractured hidden dim, computing the
-        # RMS statistic across devices via a small stats all-gather (Wan scheme). When
-        # tp_factor == 1 this degrades to a single-device RMSNorm (one no-op AG).
+        # DistributedRMSNorm operates on the TP-fractured hidden dim, computing the RMS
+        # statistic across devices via a small stats all-gather (Wan scheme); at tp_factor == 1
+        # it degrades to a single-device norm (no-op AG). Always the fused op so the norm1
+        # adaLN scale can be folded in via dynamic_weight (see forward).
         def _block_norm():
-            if self.tp_factor > 1:
-                return DistributedRMSNorm(
-                    embedding_dim=hidden_size,
-                    norm_eps=norm_eps,
-                    norm_elementwise_affine=True,
-                    bias=False,
-                    mesh_axis=self.tp_axis,
-                    mesh_device=mesh_device,
-                    ccl_manager=ccl_manager,
-                )
-            return RMSNorm(embedding_dim=hidden_size, norm_eps=norm_eps, bias=False, mesh_device=mesh_device)
+            return DistributedRMSNorm(
+                embedding_dim=hidden_size,
+                norm_eps=norm_eps,
+                norm_elementwise_affine=True,
+                bias=False,
+                mesh_axis=self.tp_axis,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+            )
 
         self.attention_norm1 = _block_norm()
         self.attention_norm2 = _block_norm()
@@ -478,13 +477,13 @@ class Ideogram4TransformerBlock(Module):
             return t
         return self.ccl_manager.all_gather_persistent_buffer(t, dim=2, mesh_axis=self.tp_axis, use_hyperparams=True)
 
-    def _block_norm(self, norm, x: ttnn.Tensor) -> ttnn.Tensor:
-        """Apply a block RMSNorm. DistributedRMSNorm (tp>1) requires 4-D input, so
-        unsqueeze [B, L, D/tp] -> [1, B, L, D/tp] around it and squeeze back."""
-        if self.tp_factor <= 1:
-            return norm(x)
+    def _block_norm(self, norm, x: ttnn.Tensor, dynamic_weight: ttnn.Tensor | None = None) -> ttnn.Tensor:
+        """Apply a block RMSNorm. DistributedRMSNorm requires 4-D input, so unsqueeze
+        [B, L, D/tp] -> [1, B, L, D/tp] around it and squeeze back. When dynamic_weight is
+        given (an adaLN (1 + scale) factor), it is folded into the norm's affine in-op,
+        replacing a separate elementwise scale multiply."""
         x = ttnn.unsqueeze(x, 0)
-        x = norm(x)
+        x = norm(x, dynamic_weight=dynamic_weight)
         return ttnn.squeeze(x, 0)
 
     def forward(
@@ -526,17 +525,17 @@ class Ideogram4TransformerBlock(Module):
         scale_msa, gate_msa, scale_mlp, gate_mlp = ttnn.chunk(mod, 4, -1)
         gate_msa = ttnn.tanh(gate_msa, fast_and_approximate_mode=False)
         gate_mlp = ttnn.tanh(gate_mlp, fast_and_approximate_mode=False)
-        # scale_* keep the RAW (pre-+1) value; the reference `norm(x) * (1 + scale)`
-        # is applied as a single fused addcmul below (norm_x + norm_x * scale), which
-        # folds the `+1.0` and the scale-multiply into one element-wise op per branch.
+        # The reference applies `norm(x) * (1 + scale)`. Rather than a separate elementwise
+        # multiply, fold (1 + scale) into the norm1 affine via dynamic_weight so the fused
+        # RMSNorm applies it in-op (fp32 internals). scale_* are per-sample [B, 1, hidden/tp],
+        # so (1 + scale) is a small tensor the norm multiplies its static weight by.
+        one_plus_scale_msa = ttnn.add(scale_msa, 1.0)
+        one_plus_scale_mlp = ttnn.add(scale_mlp, 1.0)
 
         # ----------------- attention sub-block -----------------
-        # norm1(x): DistributedRMSNorm on fractured hidden (cross-device RMS stats) ->
-        # fractured out. * scale_msa (fractured). Reference applies the affine-weighted
-        # RMSNorm THEN the adaLN scale, so scale is a separate elementwise multiply.
-        # norm(x) * (1 + scale_msa) fused: norm_x + norm_x * scale_msa (one addcmul).
-        norm1_x = self._block_norm(self.attention_norm1, x)
-        attn_in = ttnn.addcmul(norm1_x, norm1_x, scale_msa, value=1.0)
+        # norm1(x): DistributedRMSNorm on fractured hidden (cross-device RMS stats), with the
+        # adaLN (1 + scale_msa) folded into its affine -> fractured out (no separate scale op).
+        attn_in = self._block_norm(self.attention_norm1, x, dynamic_weight=one_plus_scale_msa)
         attn_out = self._attention(
             attn_in, cos=cos, sin=sin, attn_mask=attn_mask, spatial_sequence_length=spatial_sequence_length
         )  # fractured on hidden
@@ -544,9 +543,8 @@ class Ideogram4TransformerBlock(Module):
         x = ttnn.addcmul(x, gate_msa, self._block_norm(self.attention_norm2, attn_out), value=1.0)
 
         # ----------------- feed-forward sub-block -----------------
-        # norm(x) * (1 + scale_mlp) fused: norm_x + norm_x * scale_mlp (one addcmul).
-        norm1_ff = self._block_norm(self.ffn_norm1, x)
-        ff_in = ttnn.addcmul(norm1_ff, norm1_ff, scale_mlp, value=1.0)  # fractured
+        # norm(x) * (1 + scale_mlp): (1 + scale_mlp) folded into the ffn_norm1 affine.
+        ff_in = self._block_norm(self.ffn_norm1, x, dynamic_weight=one_plus_scale_mlp)
         ff_in = self._all_gather_hidden(ff_in)  # fractured -> replicated for ColParallel ff1
         ff_hidden = self.ff1(ff_in, compute_kernel_config=self.matmul_compute_kernel_config)  # fractured on inner
         ff_hidden = self._all_gather_hidden(ff_hidden)  # inner fractured -> replicated for ColParallel ff2

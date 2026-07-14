@@ -202,6 +202,7 @@ class DistributedRMSNorm(Module):
         rope_sin=None,
         trans_mat=None,
         dtype=None,
+        dynamic_weight=None,
     ) -> ttnn.Tensor:
         expected_dim = self.embedding_dim // self.mesh_width
         if x.shape[-1] != expected_dim:
@@ -210,6 +211,15 @@ class DistributedRMSNorm(Module):
                 f"embedding_dim / mesh_width = {expected_dim}"
             )
             raise ValueError(msg)
+
+        # Effective affine weight: the static per-channel weight, optionally modulated by a
+        # per-sample dynamic weight (e.g. an adaLN (1 + scale) factor). Folding it in here
+        # applies the modulation inside the fused op (fp32 internals) and removes the separate
+        # elementwise scale op the caller would otherwise need. RMSNorm has no bias term.
+        weight = self.weight.data if self.weight is not None else None
+        if dynamic_weight is not None:
+            weight = dynamic_weight if weight is None else ttnn.multiply(weight, dynamic_weight)
+        weight_key = tuple(weight.shape) if weight is not None else None
 
         # Fused distributed RMSNorm device op (PRE sum-of-squares + fabric ring AG + POST
         # normalize, with optional fused RoPE / per-head norm).
@@ -225,14 +235,14 @@ class DistributedRMSNorm(Module):
                 # forwarded to create_stats_buffer and affects its sizing). Guards against
                 # a shared-cache collision between two same-shape modules differing only
                 # in affine geometry.
-                ("rms", tuple(x.shape), num_heads_per_device, rope_cos is not None, self.weight is not None),
+                ("rms", tuple(x.shape), num_heads_per_device, rope_cos is not None, weight_key),
                 lambda: ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
                     x,
                     self.mesh_axis,
                     self.mesh_device,
                     num_heads_per_device=num_heads_per_device,
                     num_links=self.ccl_manager.num_links,
-                    weight=self.weight.data if self.weight is not None else None,
+                    weight=weight,
                     transformation_mat=trans_mat,
                     rope_cos=rope_cos,
                     rope_sin=rope_sin,
@@ -240,7 +250,7 @@ class DistributedRMSNorm(Module):
             ),
             epsilon=self.norm_eps,
             num_heads_per_device=num_heads_per_device,
-            weight=self.weight.data if self.weight is not None else None,
+            weight=weight,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
             num_preferred_links=self.ccl_manager.num_links,  # must match create_stats_buffer above
             transformation_mat=trans_mat,
