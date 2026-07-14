@@ -6,6 +6,7 @@ from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, DestSync, format_dict
 from helpers.param_config import (
+    get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
 )
@@ -15,7 +16,9 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     IN_TILE_DIMS,
+    NUM_BLOCKS,
     NUM_FACES,
+    NUM_TILES_IN_BLOCK,
     generate_input_dim,
 )
 from helpers.utils import passed_test
@@ -73,7 +76,7 @@ def print_stimuli_and_golden(src_A, golden, input_dimensions, r_dim):
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b]),
     dest_acc=[DestAccumulation.No],
-    input_dimensions=[[32, 32], [32, 64], [32, 128], [32, 256]],
+    input_dimensions=[[32, 32], [32, 64], [32, 128], [32, 256], [128, 256]],
     r_dim=[1, 2, 4, 8, 16],
     dest_sync=[DestSync.Half],
 )
@@ -96,8 +99,21 @@ def test_pack_untilize(
     )
 
     # src_A = generate_specific_stimuli(input_dimensions, r_dim, formats.input_format)
-    golden_tensor = generate_golden_output(
-        src_A, input_dimensions, r_dim, formats.input_format
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        dest_sync, dest_acc, formats, input_dimensions
+    )
+    elements_per_block = num_tiles_in_block * 32 * 32
+    block_dimensions = [32, input_dimensions[1]]
+    golden_tensor = torch.cat(
+        [
+            generate_golden_output(
+                src_A[block * elements_per_block : (block + 1) * elements_per_block],
+                block_dimensions,
+                r_dim,
+                formats.input_format,
+            )
+            for block in range(num_blocks)
+        ]
     )
     # print_stimuli_and_golden(src_A, golden_tensor, input_dimensions, r_dim)
 
@@ -111,7 +127,12 @@ def test_pack_untilize(
             ),
             DEST_SYNC(dest_sync),
         ],
-        runtimes=[NUM_FACES(4), IN_TILE_DIMS(r_dim, 32, 32, 32)],
+        runtimes=[
+            NUM_FACES(4),
+            IN_TILE_DIMS(r_dim, 32, 32, 32),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,
@@ -131,7 +152,18 @@ def test_pack_untilize(
     # Since input and output shapes are identical we always specify r_dim of 16 for stimulus
     # because stimulus must have 4 faces and 16 is only valid r_dim for 4 faces
     # In output for smaller actual r_dims lower portion is unused and therefore truncated
-    res_from_L1 = res_from_L1[0 : r_dim * input_dimensions[1] * 2]
+    valid_elements_per_block = r_dim * input_dimensions[1] * 2
+    res_from_L1 = torch.cat(
+        [
+            torch.tensor(
+                res_from_L1[
+                    block * elements_per_block : block * elements_per_block
+                    + valid_elements_per_block
+                ]
+            )
+            for block in range(num_blocks)
+        ]
+    ).tolist()
 
     assert len(res_from_L1) == len(
         golden_tensor
