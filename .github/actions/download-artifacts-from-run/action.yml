@@ -9,25 +9,19 @@ inputs:
     required: false
     default: "/work"
     description: "Directory to extract artifacts to"
-  tracy:
-    required: false
-    default: "true"
-    description: "Whether to look for profiler-enabled artifacts. Only used by the pattern-matching fallback."
   build-artifact-name:
-    required: false
-    default: ""
+    required: true
     description: >
-      Exact name of the C++ build artifact to download. When set, download this
-      artifact directly instead of pattern-matching the run's artifact list.
-      Empty selects the manual-override fallback path (see workflow_run_id).
+      Exact name of the C++ build artifact to download, as resolved by
+      find-build-for-sha.
   wheel-artifact-name:
     required: false
     default: ""
-    description: "Exact name of the wheel to download. Only honored in exact-name mode; empty means no wheel expected."
+    description: "Exact name of the wheel to download; empty means no wheel expected."
   packages-artifact-name:
     required: false
     default: ""
-    description: "Exact name of the packages (.deb) artifact. Only honored in exact-name mode; empty means none expected."
+    description: "Exact name of the packages (.deb) artifact; empty means none expected."
 
 outputs:
   build-artifact-name:
@@ -80,93 +74,26 @@ runs:
 
         echo "Workflow run conclusion: $CONCLUSION"
 
-    - name: List available artifacts
-      id: list-artifacts
-      # Only the pattern-matching fallback needs the listing; exact-name mode
-      # downloads by name.
-      if: ${{ inputs.build-artifact-name == '' }}
-      shell: bash
-      run: |
-        WORKFLOW_RUN_ID="${{ inputs.workflow_run_id }}"
-        ARTIFACTS=$(gh api --paginate repos/${{ github.repository }}/actions/runs/"$WORKFLOW_RUN_ID"/artifacts --jq '.artifacts[].name' 2>&1)
-
-        if [ $? -ne 0 ]; then
-          echo "ERROR: Failed to list artifacts for run $WORKFLOW_RUN_ID"
-          echo "$ARTIFACTS"
-          exit 1
-        fi
-
-        echo "Available artifacts:"
-        echo "$ARTIFACTS"
-        echo "artifacts<<EOF" >> $GITHUB_OUTPUT
-        echo "$ARTIFACTS" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-
     - name: Download artifacts
       id: download
       shell: bash
       run: |
         WORKFLOW_RUN_ID="${{ inputs.workflow_run_id }}"
         WORK_DIR="${{ inputs.working-directory }}"
-        TRACY_ENABLED="${{ inputs.tracy }}"
 
-        EXACT_BUILD="${{ inputs.build-artifact-name }}"
-        EXACT_WHEEL="${{ inputs.wheel-artifact-name }}"
-        EXACT_PACKAGES="${{ inputs.packages-artifact-name }}"
+        # Exact-name mode only: find-build-for-sha resolved the precise names, so
+        # download exactly those rather than grep+head-1 over the run, which
+        # could pick the wrong same-run artifact.
+        BUILD_ARTIFACT="${{ inputs.build-artifact-name }}"
+        WHEEL_ARTIFACT="${{ inputs.wheel-artifact-name }}"
+        PACKAGES_ARTIFACT="${{ inputs.packages-artifact-name }}"
 
         mkdir -p "$WORK_DIR"
         cd "$WORK_DIR"
 
-        if [ -n "$EXACT_BUILD" ]; then
-          # Exact-name mode: find-build-for-sha resolved the precise names, so
-          # download exactly those rather than grep+head-1 over the run, which
-          # could pick the wrong same-run artifact.
-          echo "Exact-name mode: names supplied by find-build-for-sha."
-          BUILD_ARTIFACT="$EXACT_BUILD"
-          WHEEL_ARTIFACT="$EXACT_WHEEL"
-          PACKAGES_ARTIFACT="$EXACT_PACKAGES"
-        else
-          # Fallback: reached only via use-artifacts-from-run, where a human
-          # named a run to reuse and no exact name is known, so infer by pattern.
-          echo "Fallback mode: no exact build-artifact-name given; matching by pattern."
-          ARTIFACTS="${{ steps.list-artifacts.outputs.artifacts }}"
-
-          # Find build artifact (ttm_any.tar.zst)
-          BUILD_ARTIFACT=""
-          if [ "$TRACY_ENABLED" = "true" ]; then
-            BUILD_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "TTMetal_build_any.*_profiler_" | head -1 || true)
-          else
-            BUILD_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "TTMetal_build_any" | grep -v "_profiler_" | head -1 || true)
-          fi
-
-          # Find wheel artifact
-          WHEEL_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "ttnn-dist|ttnn" | head -1 || true)
-
-          # Find packages artifact (optional)
-          PACKAGES_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "packages-" | head -1 || true)
-
-          if [ -z "$BUILD_ARTIFACT" ]; then
-            echo "ERROR: Could not find build artifact matching expected pattern"
-            echo "TRACY_ENABLED (requested): $TRACY_ENABLED"
-
-            # Check if only the opposite tracy variant exists to give a clear hint
-            PROFILER_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "TTMetal_build_any.*_profiler_" | head -1 || true)
-            NON_PROFILER_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "TTMetal_build_any" | grep -v "_profiler_" | head -1 || true)
-
-            if [ "$TRACY_ENABLED" = "true" ] && [ -n "$NON_PROFILER_ARTIFACT" ]; then
-              echo "HINT: Found non-profiler build artifact: $NON_PROFILER_ARTIFACT"
-              echo "      But tracy=true was requested, so a profiler-enabled artifact was expected."
-              echo "      You may have triggered this workflow with tracy=true while reusing a run built without tracy."
-            elif [ "$TRACY_ENABLED" != "true" ] && [ -n "$PROFILER_ARTIFACT" ]; then
-              echo "HINT: Found profiler-enabled build artifact: $PROFILER_ARTIFACT"
-              echo "      But tracy=false was requested, so a non-profiler artifact was expected."
-              echo "      You may have triggered this workflow with tracy=false while reusing a run built with tracy enabled."
-            fi
-
-            echo "Available artifacts:"
-            echo "$ARTIFACTS"
-            exit 1
-          fi
+        if [ -z "$BUILD_ARTIFACT" ]; then
+          echo "ERROR: build-artifact-name is required but was empty"
+          exit 1
         fi
 
         echo "Found build artifact: $BUILD_ARTIFACT"

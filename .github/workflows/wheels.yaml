@@ -205,7 +205,11 @@ jobs:
       - name: Set wheel artifact name
         id: set_artifact_name
         run: |
-          # Use full sanitized ref/SHA and workflow run ID to ensure uniqueness across parallel builds
+          # Name is a deterministic function of SHA + content-affecting config, so
+          # the same (SHA, config) always yields the same name and find-build-for-sha
+          # can reuse it across runs. No run ID: a same-run name collision would be a
+          # same-name upload conflict — an intentional loud failure, not something the
+          # naming scheme should paper over.
           # Sanitize ref/SHA by replacing invalid characters with hyphens
           RAW_REF="${{ inputs.ref || github.sha }}"
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
@@ -214,7 +218,7 @@ jobs:
           # otherwise lto=true and lto=false wheels for the same SHA/build-type/
           # python collide and the matcher could reuse the wrong binaries.
           LTO_SUFFIX="${{ (inputs.enable-lto && '-lto') || '' }}"
-          ARTIFACT_NAME="ttnn-dist-cp${{ steps.format_python_version.outputs.python_version_nodot }}-${{ inputs.build-type }}${TRACY_SUFFIX}${LTO_SUFFIX}-${SANITIZED_REF}-${{ github.run_id }}"
+          ARTIFACT_NAME="ttnn-dist-cp${{ steps.format_python_version.outputs.python_version_nodot }}-${{ inputs.build-type }}${TRACY_SUFFIX}${LTO_SUFFIX}-${SANITIZED_REF}"
           echo "artifact_name=${ARTIFACT_NAME}" >> $GITHUB_OUTPUT
           echo "artifact_name=${ARTIFACT_NAME}" >> "$GITHUB_ENV"
 

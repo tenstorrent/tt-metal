@@ -52,6 +52,14 @@ inputs:
     description: "Toolchain file path to match; the cmake/ prefix and -toolchain.cmake suffix are stripped."
     required: false
     default: 'cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake'
+  distro:
+    description: "Distro to match; part of the packages artifact name (e.g. 'ubuntu')."
+    required: false
+    default: 'ubuntu'
+  version:
+    description: "Distro version to match; part of the build and packages artifact names (e.g. '22.04')."
+    required: false
+    default: '22.04'
   github-token:
     description: GitHub token for API access (needs actions:read)
     required: false
@@ -100,87 +108,72 @@ runs:
           const arch = '${{ inputs.architecture }}' || 'amd64';
           const toolchainCleaned = ('${{ inputs.toolchain }}' || 'cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake')
             .replace(/^cmake\//, '').replace(/-toolchain\.cmake$/, '');
+          const distro = '${{ inputs.distro }}' || 'ubuntu';
+          const version = '${{ inputs.version }}' || '22.04';
 
           console.log(`Searching for existing build artifacts for SHA: ${sha}`);
           console.log(`Config: build-type=${buildType}, tracy=${tracy}, distributed=${distributed}, lto=${lto}, check-wheel=${checkWheel}`);
           console.log(`Config: expect-tt-train=${expectTtTrain}, build-umd-tests=${buildUmdTests}`);
-          console.log(`Config: arch=${arch}, toolchain=${toolchainCleaned}, python-version=${pythonVersion}`);
+          console.log(`Config: distro=${distro}, version=${version}, arch=${arch}, toolchain=${toolchainCleaned}, python-version=${pythonVersion}`);
 
           // Scan runs for this SHA and their artifacts, rather than all repo
           // artifacts (millions) which can't be paginated deep enough.
           // When check-wheel=true the C++ build and wheel must come from the
           // SAME run, so a run with only a C++ build is skipped.
           //
+          // Names are deterministic (SHA + config, no run ID), so we compute the
+          // exact expected names here — mirroring the shell formulas in
+          // build-artifact.yaml / wheels.yaml exactly (same separators, same
+          // suffix order) — and match with `===`. Exact match can't have a
+          // partial/superset overlap, so no boundary reasoning is needed.
+          //
           // Artifact name patterns (underscores for build, hyphens for wheel/packages):
-          //   TTMetal_build_any_{VERSION}_{ARCH}_{TOOLCHAIN}[_profiler][_no_distributed][_lto][_with_tt_train][_umd_tests]_{BUILD_TYPE}_{SHA}_{RUN_ID}
-          //   ttnn-dist-cp{PYVER}-{BUILD_TYPE}[-profiler][-lto]-{SHA}-{RUN_ID}
-          //   packages-{DISTRO}-{VERSION}-{ARCH}-{BUILD_TYPE}-{TOOLCHAIN}[-profiler][-no-distributed][-lto][-with-tt-train][-umd-tests]-{SHA}-{RUN_ID}
+          //   TTMetal_build_any_{VERSION}_{ARCH}_{TOOLCHAIN}[_profiler][_no_distributed][_lto][_with_tt_train][_umd_tests]_{BUILD_TYPE}_{SHA}
+          //   ttnn-dist-cp{PYVER}-{BUILD_TYPE}[-profiler][-lto]-{SHA}
+          //   packages-{DISTRO}-{VERSION}-{ARCH}-{BUILD_TYPE}-{TOOLCHAIN}[-profiler][-no-distributed][-lto][-with-tt-train][-umd-tests]-{SHA}
+
+          // Content-affecting suffixes, in the exact order the shell appends them.
+          // Underscore-separated for the build tarball name.
+          const buildConfigSuffix =
+            (tracy ? '_profiler' : '') +
+            (distributed ? '' : '_no_distributed') +
+            (lto ? '_lto' : '') +
+            (expectTtTrain ? '_with_tt_train' : '') +
+            (buildUmdTests ? '_umd_tests' : '');
+          // Hyphen-separated for the packages name.
+          const packagesConfigSuffix =
+            (tracy ? '-profiler' : '') +
+            (distributed ? '' : '-no-distributed') +
+            (lto ? '-lto' : '') +
+            (expectTtTrain ? '-with-tt-train' : '') +
+            (buildUmdTests ? '-umd-tests' : '');
+
+          const expectedBuildName =
+            `TTMetal_build_any_${version}_${arch}_${toolchainCleaned}${buildConfigSuffix}_${buildType}_${sha}`;
+          const expectedPackagesName =
+            `packages-${distro}-${version}-${arch}-${buildType}-${toolchainCleaned}${packagesConfigSuffix}-${sha}`;
+          // Wheel name only carries python + build-type + tracy + lto (+ SHA).
+          let expectedWheelName = null;
+          if (checkWheel) {
+            const pythonTag = pythonVersion ? `cp${pythonVersion.replace('.', '')}` : '';
+            const wheelConfigSuffix = (tracy ? '-profiler' : '') + (lto ? '-lto' : '');
+            expectedWheelName =
+              `ttnn-dist-${pythonTag}-${buildType}${wheelConfigSuffix}-${sha}`;
+          }
+
+          console.log(`Expected build artifact name:    ${expectedBuildName}`);
+          if (checkWheel) console.log(`Expected wheel artifact name:    ${expectedWheelName}`);
+          console.log(`Expected packages artifact name: ${expectedPackagesName}`);
 
           let foundRunId = null;
           let foundBuildName = null;
           let foundWheelName = null;
           let foundPackagesName = null;
 
-          function matchBuild(artifact) {
-            if (!artifact.name.startsWith('TTMetal_build_any')) return false;
-            // Boundary-safe matches: build names use underscores as separators.
-            if (!artifact.name.includes(`_${sha}_`)) return false;
-            if (!artifact.name.includes(`_${arch}_`)) return false;
-            if (!artifact.name.includes(`_${toolchainCleaned}`)) return false;
-            // Exact build-type tag to prevent e.g. Release/ASan cross-reuse.
-            if (!artifact.name.includes(`_${buildType}_`)) return false;
-            const hasProfiler = artifact.name.includes('_profiler');
-            if (tracy !== hasProfiler) return false;
-            const hasNoDistributed = artifact.name.includes('_no_distributed');
-            if (distributed === hasNoDistributed) return false;
-            const hasLto = artifact.name.includes('_lto');
-            if (lto !== hasLto) return false;
-            // tt-train and UMD tests change the tarball contents; require them
-            // to match so a differently-populated tarball is never reused.
-            const hasTtTrain = artifact.name.includes('_with_tt_train');
-            if (expectTtTrain !== hasTtTrain) return false;
-            const hasUmdTests = artifact.name.includes('_umd_tests');
-            if (buildUmdTests !== hasUmdTests) return false;
-            return true;
-          }
-
-          function matchWheel(artifact) {
-            if (!artifact.name.startsWith('ttnn-dist-cp')) return false;
-            if (pythonVersion) {
-              const pythonTag = `cp${pythonVersion.replace('.', '')}`;
-              if (!artifact.name.includes(pythonTag)) return false;
-            }
-            // Boundary-safe matches: wheel names use hyphens as separators.
-            if (!artifact.name.includes(`-${sha}-`)) return false;
-            if (!artifact.name.includes(`-${buildType}-`)) return false;
-            const wheelHasProfiler = artifact.name.includes('-profiler-');
-            if (tracy !== wheelHasProfiler) return false;
-            // LTO changes the wheel binary, so it's part of the wheel name too.
-            const wheelHasLto = artifact.name.includes('-lto');
-            if (lto !== wheelHasLto) return false;
-            return true;
-          }
-
+          const matchBuild = (artifact) => artifact.name === expectedBuildName;
+          const matchWheel = (artifact) => artifact.name === expectedWheelName;
           // Packages (.deb) are optional; capture a same-run match if present.
-          // Match the same content-affecting dimensions as the build tarball.
-          function matchPackages(artifact) {
-            if (!artifact.name.startsWith('packages-')) return false;
-            if (!artifact.name.includes(`-${sha}-`)) return false;
-            if (!artifact.name.includes(`-${arch}-`)) return false;
-            if (!artifact.name.includes(`-${toolchainCleaned}`)) return false;
-            if (!artifact.name.includes(`-${buildType}-`)) return false;
-            const hasProfiler = artifact.name.includes('-profiler');
-            if (tracy !== hasProfiler) return false;
-            const hasNoDistributed = artifact.name.includes('-no-distributed');
-            if (distributed === hasNoDistributed) return false;
-            const hasLto = artifact.name.includes('-lto');
-            if (lto !== hasLto) return false;
-            const hasTtTrain = artifact.name.includes('-with-tt-train');
-            if (expectTtTrain !== hasTtTrain) return false;
-            const hasUmdTests = artifact.name.includes('-umd-tests');
-            if (buildUmdTests !== hasUmdTests) return false;
-            return true;
-          }
+          const matchPackages = (artifact) => artifact.name === expectedPackagesName;
 
           try {
             const runsResp = await github.rest.actions.listWorkflowRunsForRepo({

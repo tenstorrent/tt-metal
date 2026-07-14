@@ -94,11 +94,6 @@ on:
         type: string
         default: ""
         description: "Git ref used only for wheel checkout/versioning"
-      use-artifacts-from-run:
-        required: false
-        type: string
-        default: ""
-        description: "Workflow run ID to download artifacts from (skips build)"
       # Pre-built Docker image tags (optional - if provided, skips docker build)
       ci-build-docker-image:
         required: false
@@ -295,12 +290,11 @@ jobs:
   # ARCHITECTURE NOTE: Artifact Reuse by Commit SHA
   # =============================================================================
   # Look for artifacts from a prior run of the same commit SHA; if found, the
-  # build/wheel jobs skip and download-artifacts reuses them. Skipped when
-  # use-artifacts-from-run is set (the caller already named a run to reuse).
+  # build/wheel jobs skip and download-artifacts reuses them. Always runs — the
+  # SHA-based search is fully automatic and needs no caller opt-in.
   # =============================================================================
 
   find-existing-build:
-    if: ${{ inputs.use-artifacts-from-run == '' }}
     needs: [parse-platform]
     name: "🔍 Find existing build for this SHA"
     runs-on: ubuntu-latest
@@ -331,6 +325,8 @@ jobs:
           python-version: ${{ needs.parse-platform.outputs.python-version }}
           architecture: ${{ inputs.architecture }}
           toolchain: ${{ inputs.toolchain || needs.parse-platform.outputs.toolchain }}
+          distro: ${{ needs.parse-platform.outputs.distro }}
+          version: ${{ needs.parse-platform.outputs.version }}
 
   # =============================================================================
   # ARCHITECTURE NOTE: Docker Image Caching
@@ -358,11 +354,10 @@ jobs:
       harbor-prefix: ${{ inputs.harbor-prefix }}
   download-artifacts:
     needs: find-existing-build
-    # always() so this still runs when find-existing-build is skipped (explicit run ID provided)
-    if: >-
-      ${{ always() && !failure() && !cancelled() &&
-          (inputs.use-artifacts-from-run != '' ||
-           needs.find-existing-build.outputs.found == 'true') }}
+    # find-existing-build always runs, so the default success() gate is right:
+    # reuse only when it succeeded and found a match. A failed/cancelled search
+    # yields no match and we fall through to a fresh build.
+    if: ${{ needs.find-existing-build.outputs.found == 'true' }}
     runs-on: ubuntu-latest
     outputs:
       build_artifact_name: ${{ steps.download.outputs.build-artifact-name }}
@@ -381,13 +376,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         uses: ./.github/actions/download-artifacts-from-run
         with:
-          workflow_run_id: >-
-            ${{ inputs.use-artifacts-from-run ||
-                needs.find-existing-build.outputs.run-id }}
+          workflow_run_id: ${{ needs.find-existing-build.outputs.run-id }}
           working-directory: ${{ github.workspace }}/artifacts
-          tracy: ${{ inputs.tracy }}
-          # Empty on the override path (find-existing-build skipped), where the
-          # action falls back to pattern matching.
           build-artifact-name: ${{ needs.find-existing-build.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.find-existing-build.outputs.wheel-artifact-name }}
           packages-artifact-name: ${{ needs.find-existing-build.outputs.packages-artifact-name }}
@@ -416,10 +406,9 @@ jobs:
           retention-days: 1
   build-artifact:
     # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
-    # Skip when a prior run's artifacts are available (explicit input or found by find-existing-build)
+    # Skip when find-existing-build located reusable artifacts for this SHA + config.
     if: >-
       ${{ always() && !failure() && !cancelled() &&
-          inputs.use-artifacts-from-run == '' &&
           needs.find-existing-build.outputs.found != 'true' }}
     name: >-
       🛠️ Build ${{ inputs.build-type }}
@@ -557,7 +546,12 @@ jobs:
         id: set-artifact-name
         run: |
           TOOLCHAIN_CLEANED=$(echo "${{ env.TOOLCHAIN }}" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
-          # Use full sanitized ref/SHA and workflow run ID to ensure uniqueness
+          # Name is a deterministic function of SHA + content-affecting config, so
+          # the same (SHA, config) always yields the same name and find-build-for-sha
+          # can reuse it across runs. No run ID: a same-run name collision (two jobs
+          # producing this identical name) would be a same-name upload conflict — an
+          # intentional loud failure surfacing an authoring bug, not something the
+          # naming scheme should paper over.
           # Sanitize ref/SHA by replacing invalid characters with hyphens
           RAW_REF="${{ inputs.ref || github.sha }}"
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
@@ -573,7 +567,6 @@ jobs:
           VERSION="${{ env.VERSION }}"
           ARCH="${{ inputs.architecture }}"
           BUILD_TYPE="${{ inputs.build-type }}"
-          RUN_ID="${{ github.run_id }}"
           ARTIFACT_PARTS=(
             "packages"
             "${DISTRO}"
@@ -582,7 +575,6 @@ jobs:
             "${BUILD_TYPE}"
             "${TOOLCHAIN_CLEANED}${TRACY_SUFFIX}${DIST_SUFFIX}${LTO_SUFFIX}${TT_TRAIN_SUFFIX}${UMD_TESTS_SUFFIX}"
             "${SANITIZED_REF}"
-            "${RUN_ID}"
           )
           ARTIFACT_NAME=$(IFS='-'; echo "${ARTIFACT_PARTS[*]}")
 
@@ -773,7 +765,12 @@ jobs:
         id: set_build_artifact_name
         run: |
           TOOLCHAIN_CLEANED=$(echo "${{ env.TOOLCHAIN }}" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
-          # Use full sanitized ref/SHA and workflow run ID to ensure uniqueness
+          # Name is a deterministic function of SHA + content-affecting config, so
+          # the same (SHA, config) always yields the same name and find-build-for-sha
+          # can reuse it across runs. No run ID: a same-run name collision (two jobs
+          # producing this identical name) would be a same-name upload conflict — an
+          # intentional loud failure surfacing an authoring bug, not something the
+          # naming scheme should paper over.
           # Sanitize ref/SHA by replacing invalid characters with hyphens
           RAW_REF="${{ inputs.ref || github.sha }}"
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
@@ -790,7 +787,6 @@ jobs:
           VERSION="${{ env.VERSION }}"
           ARCH="${{ inputs.architecture }}"
           BUILD_TYPE="${{ inputs.build-type }}"
-          RUN_ID="${{ github.run_id }}"
           BUILD_ARTIFACT_PARTS=(
             "TTMetal_build_any"
             "${VERSION}"
@@ -798,7 +794,6 @@ jobs:
             "${TOOLCHAIN_CLEANED}${TRACY_SUFFIX}${DIST_SUFFIX}${LTO_SUFFIX}${TT_TRAIN_SUFFIX}${UMD_TESTS_SUFFIX}"
             "${BUILD_TYPE}"
             "${SANITIZED_REF}"
-            "${RUN_ID}"
           )
           BUILD_ARTIFACT_NAME=$(IFS='_'; echo "${BUILD_ARTIFACT_PARTS[*]}")
           echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_ENV"
@@ -819,7 +814,6 @@ jobs:
     # Skip when found=true: with check-wheel=true that guarantees a matching wheel in the same run as the C++ build.
     if: >-
       ${{ always() && !failure() && !cancelled() && inputs.build-wheel &&
-          inputs.use-artifacts-from-run == '' &&
           needs.find-existing-build.outputs.found != 'true' }}
     name: 🐍 Build wheel (Python ${{ needs.parse-platform.outputs.python-version }})
     uses: ./.github/workflows/wheels.yaml
