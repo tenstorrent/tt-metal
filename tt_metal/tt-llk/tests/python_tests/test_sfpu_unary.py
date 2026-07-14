@@ -455,6 +455,9 @@ DOMAIN_CUSTOM_TOLERANCES = {
 }
 
 
+# Large matrix (2 formats x ~52 ops x 2 dest_acc); gated to nightly so it does not
+# slow down presubmit CI.
+@pytest.mark.nightly
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
     approx_mode=[ApproximationMode.No],

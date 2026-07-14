@@ -55,8 +55,11 @@ from helpers.utils import passed_test
         MathOperation.SfpuElwrsub,
         MathOperation.SfpuElwpow,
         MathOperation.SfpuXlogy,
-        MathOperation.SfpuElwEq,
-        MathOperation.SfpuElwNe,
+        # Eq/Ne moved to the dedicated test_sfpu_binary_eq_ne: on this default sweep
+        # in0/in1 are two independent random draws in [0.1, 1.1], so they are
+        # essentially never equal and the Eq golden is a constant 0.0 (Ne constant
+        # 1.0) — an always-0 Eq / always-1 Ne kernel would pass. They need crafted
+        # paired stimuli (like isclose/mask) to actually exercise the equal branch.
         # Disabled: failing due to very small differences in generated stimuli
         # MathOperation.SfpuElwLt,
         # MathOperation.SfpuElwGt,
@@ -83,17 +86,14 @@ def test_sfpu_binary_float(
             "Float16_a isn't supported for SFPU on Blackhole without being converted to 32-bit intermediate format in dest register"
         )
 
-    # POW/XLOGY/EQ/NE are only covered on the float formats: under Bfp8_b the
-    # coarse quantization pushes small operands to values that produce
-    # -inf/NaN (log/pow) or straddle the comparison threshold, so Bfp8_b
-    # coverage for these ops is intentionally skipped.
+    # POW/XLOGY are only covered on the float formats: under Bfp8_b the coarse
+    # quantization pushes small operands to values that produce -inf/NaN (log/pow),
+    # so Bfp8_b coverage for these ops is intentionally skipped.
     if formats.input_format == DataFormat.Bfp8_b and mathop in (
         MathOperation.SfpuElwpow,
         MathOperation.SfpuXlogy,
-        MathOperation.SfpuElwEq,
-        MathOperation.SfpuElwNe,
     ):
-        pytest.skip("Bfp8_b is not supported for POW/XLOGY/EQ/NE coverage")
+        pytest.skip("Bfp8_b is not supported for POW/XLOGY coverage")
 
     if bcast_dim == LlkBroadcastType.Row and (
         dest_acc == DestAccumulation.Yes
@@ -428,6 +428,28 @@ def test_sfpu_binary_bitwise(formats, dest_acc, mathop):
 
 @parametrize(
     formats=input_output_formats([DataFormat.Int32]),
+    mathop=[MathOperation.SfpuDivInt32],
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_sfpu_binary_div_int32(formats, dest_acc, mathop):
+    # int32 truncating division (rounds toward zero) via calculate_div_int32. Same
+    # in-DST harness and positive-only constraint as div_int32_floor: the quotient is
+    # formed through an fp32 reciprocal (operands must stay below 2**24 to convert
+    # exactly), and the harness' sign-magnitude int32 pack path can't round-trip the
+    # two's-complement negatives these divide kernels emit — so stimuli are strictly
+    # positive, where truncation and floor coincide and every value round-trips.
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=1.0, high=8_000_000.0
+        ),
+    )
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
     mathop=[MathOperation.SfpuDivInt32Floor],
     dest_acc=[DestAccumulation.Yes],
 )
@@ -503,17 +525,49 @@ def test_sfpu_binary_rsub_int32(formats, dest_acc, mathop):
     sfpu_binary(formats, dest_acc, mathop)
 
 
-def _mask_stimuli_spec():
-    # mask zeroes the data wherever the mask tile is 0. On a plain sweep the mask
-    # would (almost) never be exactly 0, so the zeroing branch would never fire and
-    # the output would equal the input. Force a regular subset to exactly 0 with a
-    # small integer ramp so ~20% of the mask tile is zero and the output is a real,
-    # non-trivial mix of passthrough and zeroed values.
-    def dist(size, dtype, generator):
-        idx = torch.arange(size, dtype=torch.float32)
-        return ((idx % 5) - 2.0).to(dtype)  # {-2,-1,0,1,2}: exact zeros, no fp16 flush
+# Number of faces per tile for the [64, 32] two-tile binary harness layout
+# (a 32x32 tile is 4 faces of 16x16, and input_dimensions=[64, 32] is 8 faces).
+_FACES_PER_TILE = 4
 
-    return StimuliSpec(distribution=dist, seed=0)
+
+def _paired_two_tile_spec(a_face, b_face):
+    """Build a StimuliSpec that fills operand tile0 (in0) and tile1 (in1) from
+    *different* per-position data.
+
+    The in-DST binary harness draws both operands from the two tiles of src_A and
+    applies a single per-face distribution to every face — so a plain callable
+    makes in0 == in1 everywhere (every face identical). To drive a genuine in0 !=
+    in1 relationship we keep `a_face` for the tile0 faces (0..3) and override the
+    tile1 faces (4..7) with `b_face` via face_specs. `a_face`/`b_face` take the
+    per-face element count (256) and return the same values for every face, so
+    position p of in0 pairs with position p of in1 as (a_face[p], b_face[p]).
+    tilize permutes both tiles identically, so the per-position pairing survives.
+    """
+    return StimuliSpec(
+        distribution=a_face,
+        seed=0,
+        face_specs=[None] * _FACES_PER_TILE
+        + [StimuliSpec(distribution=b_face, seed=0)] * _FACES_PER_TILE,
+    )
+
+
+def _mask_stimuli_spec():
+    # mask zeroes the data (in0) wherever the mask (in1) is 0. Data and mask are
+    # *separate* tiles, so they must be filled from different data: keep the data
+    # tile strictly non-zero (1..8) and zero out a regular ~1/3 subset of the mask
+    # tile. This exercises the real behavior — zeroing a *non-zero* data element
+    # where its mask is 0 — instead of the degenerate mask == data case (where the
+    # only zeroed elements are ones that were already zero and a passthrough kernel
+    # would pass too).
+    def data_face(size, dtype, generator):
+        j = torch.arange(size, dtype=torch.float32)
+        return (1.0 + (j % 8)).to(dtype)  # 1..8, always non-zero
+
+    def mask_face(size, dtype, generator):
+        j = torch.arange(size, dtype=torch.float32)
+        return torch.where(j % 3 == 0, 0.0, 1.0).to(dtype)  # ~1/3 exact zeros
+
+    return _paired_two_tile_spec(data_face, mask_face)
 
 
 @parametrize(
@@ -581,23 +635,26 @@ def test_sfpu_binary_mul_int32(formats, dest_acc, mathop):
 
 
 def _isclose_stimuli_spec():
-    # isclose is a boolean predicate on paired operands (a = tile0, b = tile1). A plain
-    # random sweep almost never lands two independent draws within tolerance, so the
-    # output would be all-zero (PCC undefined). Craft the two tiles so element p of
-    # tile0 pairs with element p of tile1 with a controlled gap: even p -> identical
-    # (isclose = 1), odd p -> differ by 2.0 (isclose = 0). tilize permutes both tiles
-    # identically, so the per-position pairing (and thus the ~50/50 mix) is preserved.
-    # The 2.0 gap dwarfs the tolerance (atol + rtol*|b| <= ~1e-4 for |b| <= 8), so the
-    # decision is unambiguous regardless of fp32-vs-bf16 rounding.
-    def dist(size, dtype, generator):
-        n = size // 2
-        idx = torch.arange(n)
-        base = 1.0 + (idx % 8).to(torch.float32)  # 1..8, strictly positive
-        t0 = base
-        t1 = base + torch.where(idx % 2 == 0, 0.0, 2.0).to(torch.float32)
-        return torch.cat([t0, t1]).to(dtype)
+    # isclose is a boolean predicate on paired operands (a = in0/tile0, b = in1/tile1),
+    # which are *separate* tiles. A plain random sweep almost never lands two
+    # independent draws within tolerance, so the output would be all-zero; filling
+    # both tiles from one per-face spec makes a == b everywhere (isclose always 1).
+    # Instead fill the two tiles from different data so element p of a pairs with
+    # element p of b with a controlled gap: even p -> identical (isclose = 1), odd p
+    # -> differ by 2.0 (isclose = 0), giving a ~50/50 mix. tilize permutes both tiles
+    # identically, so the per-position pairing is preserved. The 2.0 gap dwarfs the
+    # tolerance (atol + rtol*|b| <= ~1e-4 for |b| <= 8), so the decision is
+    # unambiguous regardless of fp32-vs-bf16 rounding.
+    def a_face(size, dtype, generator):
+        j = torch.arange(size, dtype=torch.float32)
+        return (1.0 + (j % 8)).to(dtype)  # 1..8, strictly positive
 
-    return StimuliSpec(distribution=dist, seed=0)
+    def b_face(size, dtype, generator):
+        j = torch.arange(size, dtype=torch.float32)
+        base = 1.0 + (j % 8)
+        return (base + torch.where(j % 2 == 0, 0.0, 2.0)).to(dtype)
+
+    return _paired_two_tile_spec(a_face, b_face)
 
 
 @parametrize(
@@ -618,6 +675,46 @@ def test_sfpu_binary_isclose(formats, dest_acc, mathop):
         dest_acc,
         mathop,
         spec_A=_isclose_stimuli_spec(),
+    )
+
+
+def _eq_ne_stimuli_spec():
+    # Eq/Ne compare paired operands (a = in0/tile0, b = in1/tile1), which are
+    # *separate* tiles. Independent random draws are essentially never equal (for
+    # Float32, never), so the Eq golden collapses to a constant 0.0 (Ne to 1.0).
+    # Craft the two tiles so element p of a pairs with element p of b: even p ->
+    # identical (Eq = 1, Ne = 0), odd p -> differ by 1.0 (Eq = 0, Ne = 1), a clean
+    # ~50/50 mix. tilize permutes both tiles identically, preserving the pairing.
+    def a_face(size, dtype, generator):
+        j = torch.arange(size, dtype=torch.float32)
+        return (1.0 + (j % 8)).to(dtype)  # 1..8
+
+    def b_face(size, dtype, generator):
+        j = torch.arange(size, dtype=torch.float32)
+        base = 1.0 + (j % 8)
+        return (base + torch.where(j % 2 == 0, 0.0, 1.0)).to(dtype)
+
+    return _paired_two_tile_spec(a_face, b_face)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    mathop=[MathOperation.SfpuElwEq, MathOperation.SfpuElwNe],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_sfpu_binary_eq_ne(formats, dest_acc, mathop):
+    # Eq/Ne(a, b) with a = tile0 (in0), b = tile1 (in1), both from src_A. Crafted
+    # paired stimuli give a non-constant 0/1 golden (~50/50 equal vs differ) so the
+    # equal branch is actually exercised — unlike the default random sweep where the
+    # operands are never equal.
+    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
+        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=_eq_ne_stimuli_spec(),
     )
 
 
