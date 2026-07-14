@@ -39,6 +39,14 @@ class MmioRace(Check):
         "AUTOTTSYNC_ORDERED (TTSync HW-orders the write->consume direction); this "
         "does NOT cover an MMIO *read* that depends on a multi-cycle instruction "
         "result (needs wait_*_idle), nor the EN_SUBDIVIDED cross-unpacker corner. "
+        "It also does NOT account for the TTSync RQ EXCEPTIONS: MOP_CFG / "
+        "REPLAY(load=1) / RESOURCEDECL / post-load-replay instructions are not "
+        "RQ-tracked (Confluence 1340276980), so a write CONSUMED by one is not "
+        "auto-ordered; and TTSync tracks only CFG/GPR/TDMA, not other MMIO spaces "
+        "(e.g. the replay unit's replay_mmap[], ordered by fence+wait_replay_idle+"
+        "mutex, not TTSync). For those the blanket AUTOTTSYNC_ORDERED over-clears — "
+        "the LLM must confirm the consumer is RQ-tracked and the target is CFG/GPR "
+        "(see KNOWN_GAPS L7). "
         "MOP/REPLAY are treated as OPAQUE consumers (one consumer, stall-before): "
         "the tool does not see the instructions inside a MOP, does not distinguish "
         "TTI_REPLAY record (load) vs execute mode, does not model the "
@@ -107,11 +115,16 @@ class MmioRace(Check):
                         consumer_after = p.get("line", 0)
 
             hint = "LOCALLY_ORDERED" if local_ordering else "NO_LOCAL_ORDERING"
-            # Quasar: the per-RISC TTSync (AutoTTSync) HW-orders every RISC MMIO
-            # CFG/GPR write against the consuming Tensix instruction at ISSUE
-            # (Confluence "Every Conceivable TTSync Detail", page 1340276980), so
-            # the manual STALLWAIT(TRISC_CFG)/REG2FLOP discipline WH/BH need is not
-            # required. An unguarded write is therefore NOT a race candidate here.
+            # Quasar ENABLES Auto TTSync (set_ttsync_enables<TRACK_ALL> in
+            # llk_math_common.h), so the per-RISC TTSync HW-orders a TRACKED CFG/GPR
+            # MMIO write against the consuming Tensix instruction at ISSUE (Confluence
+            # "Every Conceivable TTSync Detail", page 1340276980) — the manual
+            # STALLWAIT(TRISC_CFG)/REG2FLOP discipline WH/BH need is not required, so a
+            # CFG/GPR write with an RQ-tracked consumer is NOT a race candidate here.
+            # OVER-BROAD CAVEAT (see blind_spots + KNOWN_GAPS L7): this blanket tag also
+            # clears writes consumed by an RQ-EXCEPTED instruction (MOP_CFG/REPLAY/
+            # RESOURCEDECL) or targeting a non-CFG/GPR MMIO space (e.g. replay_mmap),
+            # which TTSync does NOT order — the LLM confirms those.
             if fb.arch == "quasar" and hint == "NO_LOCAL_ORDERING":
                 hint = "AUTOTTSYNC_ORDERED"
             ev = []
