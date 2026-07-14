@@ -20,7 +20,6 @@
     export TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure
     export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
     export DEEPSEEK_V3_TRACE_DIR=/mnt/models/deepseek-prefill-cache
-    export TT_METAL_ALLOCATOR_MODE_HYBRID=1
 
     mpirun --pernode --tag-output bash -lc '
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
@@ -43,7 +42,6 @@
     export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
     export DEEPSEEK_V3_TRACE_DIR=/mnt/models/deepseek-prefill-cache
     export DEEPSEEK_V3_MLA_REF_CACHE=/mnt/models/deepseek-prefill-cache/test_mla_output
-    export TT_METAL_ALLOCATOR_MODE_HYBRID=1
 
     mpirun --pernode --tag-output bash -lc '
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
@@ -60,7 +58,6 @@
 
 - name: "Blaze - MLA Chunked"
   cmd: |
-    export TT_METAL_ALLOCATOR_MODE_HYBRID=1
 
     mpirun --pernode --tag-output bash -lc '
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
@@ -82,7 +79,6 @@
     export TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure
     export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
     export DEEPSEEK_V3_TRACE_DIR=/mnt/models/deepseek-prefill-cache
-    export TT_METAL_ALLOCATOR_MODE_HYBRID=1
 
     mpirun --pernode --tag-output bash -lc '
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
@@ -105,7 +101,6 @@
     export TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure
     export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
     export DEEPSEEK_V3_TRACE_DIR=/mnt/models/deepseek-prefill-cache
-    export TT_METAL_ALLOCATOR_MODE_HYBRID=1
 
     mpirun --pernode --tag-output bash -lc '
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
@@ -128,7 +123,6 @@
     export TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure
     export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
     export DEEPSEEK_V3_TRACE_DIR=/mnt/models/deepseek-prefill-cache
-    export TT_METAL_ALLOCATOR_MODE_HYBRID=1
 
     mpirun --pernode --tag-output bash -lc '
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
@@ -146,7 +140,6 @@
 - name: "Blaze - Kimi MLA"
   cmd: |
     export KIMI_MLA_REF_CACHE=/mnt/models/kimi-prefill-cache/test_mla_output
-    export TT_METAL_ALLOCATOR_MODE_HYBRID=1
 
     mpirun --pernode --tag-output bash -lc '
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_kimi_mla -k "8x4 and random and max_sl and check_pcc and sequential and line and (seq5k or seq25k)" -vvv --tb=short
@@ -165,7 +158,6 @@
     export DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528
     export DEEPSEEK_V32_MLA_REF_CACHE=/tmp/deepseek_v32_mla_ref_cache
     export DS_SPARSE_FABRIC=line
-    export TT_METAL_ALLOCATOR_MODE_HYBRID=1
 
     mpirun --pernode --tag-output bash -lc '
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "deepseek_v32 and 8x4 and line" -vvv --tb=short
@@ -217,7 +209,6 @@
 
 - name: "Blaze - GLM-5.1 Prefill Block"
   cmd: |
-    export TT_METAL_ALLOCATOR_MODE_HYBRID=1
     export MESH_DEVICE=TG
     export DS_SPARSE_FABRIC=line
     export GLM51_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.1-FP8/
@@ -242,7 +233,6 @@
 
 - name: "Blaze - Kimi MoE"
   cmd: |
-    export TT_METAL_ALLOCATOR_MODE_HYBRID=1
 
     mpirun --pernode --tag-output bash -lc '
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_moe -k "mesh-8x4 and (kimi-5k-pcc or kimi-25k-perf)" -vvv --tb=short
@@ -258,7 +248,6 @@
 
 - name: "Blaze - Kimi Prefill Block"
   cmd: |
-    export TT_METAL_ALLOCATOR_MODE_HYBRID=1
     export MESH_DEVICE=TG
     export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2.6-dequantized
     export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2.6-Cache/CI
@@ -284,7 +273,6 @@
     export TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure
     export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
     export DEEPSEEK_V3_TRACE_DIR=/mnt/models/deepseek-prefill-cache
-    export TT_METAL_ALLOCATOR_MODE_HYBRID=1
     export MESH_DEVICE=TG
 
     mpirun --pernode --tag-output bash -lc '
@@ -308,7 +296,6 @@
     export TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure
     export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
     export DEEPSEEK_V3_TRACE_DIR=/mnt/models/deepseek-prefill-cache
-    export TT_METAL_ALLOCATOR_MODE_HYBRID=1
 
     mpirun --pernode --tag-output bash -lc '
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
