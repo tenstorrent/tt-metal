@@ -750,3 +750,168 @@ def test_merge_is_not_the_reblock(mesh_device, sp_axis, tp_axis, num_links, topo
         logger.info("  " + _fmt(f"{nm}  P->R  (reblock control)", _err_stats(P[i], R[i])))
         logger.info("  " + _fmt(f"{nm}  P->M  (the merge)", _err_stats(P[i], Mg[i])))
         logger.info("  " + _fmt(f"{nm}  R->M  (is the merge the reblock?)", _err_stats(R[i], Mg[i])))
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology"),
+    [pytest.param((4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, id="ring_bh_4x8sp1tp0")],
+    indirect=["mesh_device", "device_params"],
+)
+def test_gate_merge_survives_depth(mesh_device, sp_axis, tp_axis, num_links, topology, reset_seeds):
+    """One merged block is bit-identical to one standalone block. Are FORTY-EIGHT?
+
+    At stage-1 shapes a single gated block is bit-identical merged vs standalone (measured: every
+    attention, 0.000e+00 — the merge's only reduction-order change, attn1 to_qkv K_block 4->8, does
+    not exist at stage 1). Pure functions compose: 48 bit-identical blocks chained must stay
+    bit-identical. The PIPELINE says otherwise — its stage-1 latent diverges grossly (video sum
+    -5902 vs -2559) — while its weights are byte-identical outside the fold, its op census is
+    exactly as expected, and its result is bit-stable across runs and unaffected by tracing.
+
+    So either the pipeline is not running what this harness runs, or these ops are not pure at
+    depth. This chains one real block into itself LTX_CHAIN_DEPTH times (48 by default) with no host
+    sync in between — the same uninterrupted CCL stream the pipeline issues — and asks whether
+    bit-identity survives. If it does, the divergence is not in the block stack and the search moves
+    outside it. If it does not, the merge has perturbed something stateful and shared (the AG
+    ping-pong buffer/semaphore rotation is the only candidate left: it is keyed per-shape for
+    buffers but globally per-axis for semaphores, and the merge deletes one all-gather per gated
+    attention, shifting their relative parity).
+    """
+    checkpoint = _resolve_checkpoint_22b("fast")
+    if not os.path.exists(checkpoint):
+        pytest.skip(f"22B checkpoint not found at {checkpoint}")
+
+    depth = int(os.environ.get("LTX_CHAIN_DEPTH", "48"))
+    F, H, W = 19, 17, 30  # stage 1
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    video_N_real = F * H * W
+    video_N = _sp_pad_len(video_N_real, sp_factor)
+    audio_N, audio_N_real = _audio_seq_lens(F, sp_factor)
+
+    ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
+    parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
+    block_kwargs = dict(
+        video_dim=DIM,
+        video_ffn_dim=DIM * 4,
+        video_num_heads=NUM_HEADS,
+        video_cross_attention_dim=CTX_DIM,
+        audio_dim=AUDIO_DIM,
+        audio_ffn_dim=AUDIO_DIM * 4,
+        audio_num_heads=NUM_HEADS,
+        audio_cross_attention_dim=AUDIO_CTX_DIM,
+        eps=EPS,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        is_fsdp=False,
+        has_audio=True,
+        apply_gated_attention=True,
+        cross_attention_adaln=True,
+    )
+    merged = _build_block(set(_ATTN_ORDER), **block_kwargs)
+    plain = _build_block(set(), **block_kwargs)
+
+    state = _block0_state_dict(checkpoint)
+    merged.load_torch_state_dict({k: v.clone() for k, v in state.items()}, strict=False)
+    plain.load_torch_state_dict({k: v.clone() for k, v in state.items()}, strict=False)
+
+    torch.manual_seed(INPUT_SEED)
+    x = torch.randn(1, video_N_real, DIM, dtype=torch.float32)
+    context = torch.randn(1, PROMPT_LEN, CTX_DIM, dtype=torch.float32)
+    temb = torch.randn(1, 1, 9 * DIM, dtype=torch.float32)
+    prompt_temb = torch.randn(1, 1, 2 * DIM, dtype=torch.float32)
+    a_x = torch.zeros(1, audio_N, AUDIO_DIM, dtype=torch.float32)
+    a_x[:, :audio_N_real, :] = torch.randn(1, audio_N_real, AUDIO_DIM, dtype=torch.float32)
+    a_ctx = torch.randn(1, PROMPT_LEN, AUDIO_CTX_DIM, dtype=torch.float32)
+    a_temb = torch.randn(1, 1, 9 * AUDIO_DIM, dtype=torch.float32)
+    a_prompt_temb = torch.randn(1, 1, 2 * AUDIO_DIM, dtype=torch.float32)
+    av_ca_v = torch.randn(1, 1, 5 * DIM, dtype=torch.float32)
+    av_ca_a = torch.randn(1, 1, 5 * AUDIO_DIM, dtype=torch.float32)
+
+    v_cos, v_sin = _tt_rope(
+        _video_rope_freqs, F, H, W, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis, pad_to=video_N
+    )
+    a_cos, a_sin = _tt_rope(_audio_rope_freqs, audio_N, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis)
+    vx_cos, vx_sin = _tt_rope(
+        _video_cross_pe_freqs, F, H, W, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis, pad_to=video_N
+    )
+    ax_cos, ax_sin = _tt_rope(_audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis)
+    ax_cos_full, ax_sin_full = _tt_rope_full(_audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, tp_axis=tp_axis)
+    a_attn_mask, a_pad_sp, a_pad_full = build_audio_masks(
+        audio_N, audio_N_real, mesh_device=mesh_device, sp_axis=sp_axis
+    )
+    v_pad_sp = build_video_pad_mask(video_N, video_N_real, mesh_device=mesh_device, sp_axis=sp_axis)
+    tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
+
+    def static_kwargs():
+        return dict(
+            video_prompt=bf16_tensor(context.unsqueeze(0), device=mesh_device),
+            video_temb=bf16_tensor(
+                temb.reshape(9, DIM).unsqueeze(1).unsqueeze(1), device=mesh_device, mesh_axis=tp_axis, shard_dim=3
+            ),
+            video_N=video_N_real,
+            video_rope_cos=v_cos,
+            video_rope_sin=v_sin,
+            trans_mat=tt_trans_mat,
+            video_prompt_temb=bf16_tensor(prompt_temb.reshape(2, DIM).unsqueeze(1).unsqueeze(1), device=mesh_device),
+            audio_prompt=bf16_tensor(a_ctx.unsqueeze(0), device=mesh_device),
+            audio_temb=bf16_tensor(
+                a_temb.reshape(9, AUDIO_DIM).unsqueeze(1).unsqueeze(1),
+                device=mesh_device,
+                mesh_axis=tp_axis,
+                shard_dim=3,
+            ),
+            audio_prompt_temb=bf16_tensor(
+                a_prompt_temb.reshape(2, AUDIO_DIM).unsqueeze(1).unsqueeze(1), device=mesh_device
+            ),
+            av_ca_temb=bf16_tensor(
+                av_ca_v.reshape(5, DIM).unsqueeze(1).unsqueeze(1), device=mesh_device, mesh_axis=tp_axis, shard_dim=3
+            ),
+            av_ca_audio_temb=bf16_tensor(
+                av_ca_a.reshape(5, AUDIO_DIM).unsqueeze(1).unsqueeze(1),
+                device=mesh_device,
+                mesh_axis=tp_axis,
+                shard_dim=3,
+            ),
+            audio_N=audio_N,
+            audio_rope_cos=a_cos,
+            audio_rope_sin=a_sin,
+            video_cross_pe_cos=vx_cos,
+            video_cross_pe_sin=vx_sin,
+            audio_cross_pe_cos=ax_cos,
+            audio_cross_pe_sin=ax_sin,
+            audio_cross_pe_cos_full=ax_cos_full,
+            audio_cross_pe_sin_full=ax_sin_full,
+            audio_attn_mask=a_attn_mask,
+            audio_padding_mask=a_pad_sp,
+            audio_padding_mask_full=a_pad_full,
+            video_padding_mask=v_pad_sp,
+        )
+
+    concat = [None, None]
+    concat[sp_axis] = 2
+    concat[tp_axis] = 3
+    to_t = lambda t: ttnn.to_torch(  # noqa: E731
+        t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat, mesh_shape=tuple(mesh_device.shape))
+    ).squeeze(0)
+
+    def chain(block, tag):
+        """Chain the block into itself `depth` times with NO host sync — the pipeline's CCL stream."""
+        v = bf16_tensor_2dshard(
+            _pad_seq_dim(x, video_N, dim=1).unsqueeze(0), device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3}
+        )
+        a = bf16_tensor_2dshard(a_x.unsqueeze(0), device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3})
+        for _ in range(depth):
+            v, a = block(video_1BND=v, audio_1BND=a, **static_kwargs())
+        ttnn.synchronize_device(mesh_device)
+        vt, at = to_t(v)[:, :video_N_real, :], to_t(a)[:, :audio_N_real, :]
+        logger.info(f"{tag}: video finite={torch.isfinite(vt).all().item()} absmax={vt.abs().max().item():.4g}")
+        return vt, at
+
+    v_p, a_p = chain(plain, "plain")
+    v_m, a_m = chain(merged, "merged")
+
+    logger.info(f"===== {depth} CHAINED BLOCKS, stage 1 (one block is bit-identical here) =====")
+    for tag, p, m in (("video", v_p, v_m), ("audio", a_p, a_m)):
+        s = _err_stats(p, m)
+        logger.info("  " + _fmt(f"{tag} merged vs standalone", s))
+        logger.info(f"  {tag} bit-identical: {torch.equal(p, m)}")
