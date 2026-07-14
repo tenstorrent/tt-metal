@@ -10,6 +10,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
@@ -86,7 +87,7 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyPagesFactory::create_progr
                 {"page_size", aligned_page_size},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"start_page", "end_page"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(input.device()->arch()),
     };
 
     KernelSpec writer{
@@ -107,7 +108,7 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyPagesFactory::create_progr
                 {"page_size", aligned_page_size},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"start_page", "end_page"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config = ttnn::create_writer_datamovement_config(input.device()->arch()),
     };
 
     // Work split: per-core page ranges.

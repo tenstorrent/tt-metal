@@ -223,5 +223,9 @@ set(JITAPI_FILES
     impl/dispatch/kernels/device_print_dispatch.h
     fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp
     fabric/impl/kernels/tt_fabric_mux.cpp
+    fabric/impl/kernels/tt_fabric_mux_v2.cpp
+    fabric/impl/kernels/tt_fabric_mux_v2_forwarder.hpp
+    fabric/impl/kernels/tt_fabric_mux_v2_manager.hpp
+    fabric/impl/kernels/tt_fabric_mux_v2_kernel_common.hpp
     sfpi-version
 )

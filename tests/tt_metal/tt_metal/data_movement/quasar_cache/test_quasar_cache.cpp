@@ -61,9 +61,7 @@ bool run_l2_flush_test(
                 .runtime_arg_names = {"base_addr", "test_mode"},
                 .common_runtime_arg_names = {"value", "num_words"},
             },
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::WorkUnitSpec main_wu{
@@ -149,9 +147,7 @@ bool run_l1_dcache_test(
                 .runtime_arg_names = {"base_addr", "test_mode"},
                 .common_runtime_arg_names = {"value", "num_words"},
             },
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::WorkUnitSpec main_wu{

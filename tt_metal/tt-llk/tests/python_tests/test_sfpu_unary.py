@@ -29,7 +29,7 @@ from helpers.param_config import (
 )
 from helpers.sfpu_domains import exclude_undefined, for_op
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
@@ -67,6 +67,11 @@ ALL_MATHOPS = [
     MathOperation.Tanh,
     MathOperation.Celu,
     MathOperation.Silu,
+    MathOperation.Tanhshrink,
+    MathOperation.Floor,
+    MathOperation.Ceil,
+    MathOperation.Trunc,
+    MathOperation.Frac,
     MathOperation.Gelu,
     MathOperation.GeluTanh,
     MathOperation.Neg,
@@ -438,6 +443,42 @@ def test_eltwise_unary_sfpu_domain(
         dest_acc,
         approx_mode,
         mathop,
+        FastMode.No,
+        input_dimensions,
+        spec_A=spec_A,
+    )
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    approx_mode=[ApproximationMode.No],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_dimensions=[[64, 64]],
+)
+def test_eltwise_unary_sfpu_signbit(
+    formats: list[InputOutputFormat],
+    approx_mode: ApproximationMode,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    if (
+        dest_acc == DestAccumulation.No
+        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+    ):
+        # Only Float32->Float32 is supported on BH with dest_acc=No; skip the rest.
+        if formats != InputOutputFormat(DataFormat.Float32, DataFormat.Float32):
+            pytest.skip(reason="This combination is not supported on BH architecture")
+
+    # signbit depends purely on the sign bit, so sample a symmetric range spanning
+    # both signs (staying away from 0 to sidestep -0.0 / rounding ambiguity).
+    spec_A = StimuliSpec.uniform(intervals=[(-100.0, -0.5), (0.5, 100.0)])
+
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        approx_mode,
+        MathOperation.Signbit,
         FastMode.No,
         input_dimensions,
         spec_A=spec_A,

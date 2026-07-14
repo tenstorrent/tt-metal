@@ -124,21 +124,22 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const AllFro
 
     const uint32_t num_coord_varargs = (uint32_t)(num_subordinates * 2);
 
+    DataMovementHardwareConfig requestor_hw_config;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        requestor_hw_config = DataMovementGen2Config{};
+    } else {
+        requestor_hw_config = DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = test_config.noc_id,
+        };
+    }
     KernelSpec requestor_spec{
         .unique_id = KernelSpecName{"requestor"},
         .source = "tests/tt_metal/tt_metal/data_movement/all_from_all/kernels/requestor_2_0.cpp",
         .num_threads = 1,
         .compile_time_args = cta_bindings,
         .runtime_arg_schema = {.runtime_arg_names = {"num_of_transactions", "bytes_per_transaction"}},
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config =
-                    DataMovementHardwareConfig::Gen1Config{
-                        .processor = DataMovementProcessor::RISCV_1,
-                        .noc = test_config.noc_id,
-                    },
-                .gen2_config = DataMovementHardwareConfig::Gen2Config{},
-            },
+        .hw_config = requestor_hw_config,
         .advanced_options = {.num_runtime_varargs = num_coord_varargs},
     };
 

@@ -4,6 +4,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/tt_align.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -53,7 +54,12 @@ compute_width_sharding_reshard_segments(
 
     const uint32_t total_num_sticks = local_shard_height;
     const uint32_t local_stride_bytes = element_size * local_shard_width;
-    const uint32_t remote_stride_bytes = element_size * remote_shard_width;
+    // Row-major shards place each stick (row) at the remote buffer's aligned page size, which can
+    // exceed the raw stick bytes: DRAM alignment is 64B on Blackhole vs 32B on Wormhole, so a
+    // 32B-wide u8 shard row is padded to 64B on Blackhole. Advance the remote address by the
+    // aligned stride, otherwise consecutive sticks overlap and the data is scrambled.
+    const uint32_t remote_alignment = device->allocator()->get_alignment(remote_buffer_type);
+    const uint32_t remote_stride_bytes = tt::align(element_size * remote_shard_width, remote_alignment);
 
     std::vector<WidthShardingReshardSegmentForSingleCore> runtime_args_for_each_core;
 
