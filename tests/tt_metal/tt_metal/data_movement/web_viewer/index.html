@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="styles.css">
     <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.3/plotly.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
 </head>
 <body>
     <header>
@@ -65,6 +66,11 @@
 
                 <div class="chart-container">
                     <div id="chart"></div>
+                </div>
+
+                <div id="faq-section" class="faq-section" style="display: none;">
+                    <h3 class="faq-title">FAQ</h3>
+                    <div id="faq-list" class="faq-list"></div>
                 </div>
             </div>
         </main>
