@@ -624,6 +624,11 @@ no gate does not ship.** Measure on the block harness (`test_ltx_transformer_blo
       Most promising next shape: give the gather real compute to hide behind by fusing gate+QKV into ONE wide AG-mm
       (concatenated weights, one gather, ~309 µs of matmul to overlap) — the natural successor now that W1 has already
       hoisted the gather out and left it standalone/fully-exposed by construction.
+  - [~] **PRICE the gate+QKV fusion before authoring it in the model (job 568, 2026-07-14 23:30Z).** `test_ccl_census.py`
+    +`gateqkv_v = col_linear(VIDEO_DIM, NUM_HEADS+3*VIDEO_DIM)` + rows `agmm_gateqkv_video_s1/s2` & `mm_gateqkv_video_*_gathered`,
+    `LTX_CCL_VARIANTS`-filtered to the fused pair + its post-W1 baseline (`ag_activation`+`mm_gate`+`mm_qkv`, `cut1b_new_attn1_v_s1`).
+    Decision rule: exposed = agmm_gateqkv − mm_gateqkv_gathered; if it approaches qkv's 23–32% hidden (not gate's ~0%) the
+    weight-concat fusion is a fund-worthy WARM `attention_ltx.py` session; if it nets ~0 like route-2a, this variant is dead.
 - [x] **W3 — the ~90 µs per-op fixed SETUP cost → NO NEW LEVER (the one candidate is receipt-DEAD; the rest have no API).**
       Off-device source attribution (2026-07-13 23:17Z lap), citations re-verified in-tree. The census-priced 89.9 µs is
       **100% on-device replay command-stream time, NOT host program-setup** — traced `enqueue_trace` emits one fixed-size

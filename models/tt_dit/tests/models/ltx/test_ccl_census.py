@@ -191,6 +191,10 @@ def test_ccl_census(mesh_device: ttnn.MeshDevice) -> None:
     # ---- modules ----
     gate_v = col_linear(VIDEO_DIM, NUM_HEADS)  # attn.to_gate_logits (video)
     qkv_v = col_linear(VIDEO_DIM, 3 * VIDEO_DIM, chunks=3)  # attn1.to_qkv (video)
+    # W2: gate+QKV weights concatenated into one wide AG-mm. W1 hoisted the shared gather out and
+    # left it standalone/fully-exposed; re-fusing it into QKV's matmul gives the gather compute to
+    # hide behind, and folds gate's separate matmul into ~0.3% more columns of QKV's.
+    gateqkv_v = col_linear(VIDEO_DIM, NUM_HEADS + 3 * VIDEO_DIM)
     gate_a = col_linear(AUDIO_DIM, NUM_HEADS)  # attn.to_gate_logits (audio)
     qkv_a = col_linear(AUDIO_DIM, 3 * AUDIO_DIM, chunks=3)  # audio_attn1.to_qkv
     out_v = col_linear(VIDEO_DIM, VIDEO_DIM)  # attn.to_out (video)
@@ -386,6 +390,10 @@ def test_ccl_census(mesh_device: ttnn.MeshDevice) -> None:
         ("ag_activation_video_s1", lambda: ccl.all_gather_persistent_buffer(x_v1, dim=3, mesh_axis=tp_axis), False),
         ("mm_gate_video_gathered", lambda: gate_v(x_v1_full), True),
         ("mm_qkv_video_gathered", lambda: qkv_v(x_v1_full), True),
+        # W2 fused gate+QKV: exposed gather = agmm_gateqkv - mm_gateqkv_gathered, vs the post-W1
+        # baseline ag_activation + mm_gate + mm_qkv (or cut1b_new_attn1_v_s1) it would replace.
+        ("agmm_gateqkv_video_s1", lambda: gateqkv_v(x_v1, parallel_config=pc), True),
+        ("mm_gateqkv_video_gathered", lambda: gateqkv_v(x_v1_full), True),
         ("agmm_gate_audio", lambda: gate_a(x_a, parallel_config=pc), True),
         ("agmm_qkv_audio", lambda: qkv_a(x_a, parallel_config=pc), True),
         ("ag_activation_audio", lambda: ccl.all_gather_persistent_buffer(x_a, dim=3, mesh_axis=tp_axis), False),
@@ -429,6 +437,8 @@ def test_ccl_census(mesh_device: ttnn.MeshDevice) -> None:
         ("agmm_qkv_video_s2", lambda: qkv_v(x_v2, parallel_config=pc), True),
         ("mm_gate_video_s2_gathered", lambda: gate_v(x_v2_full), True),
         ("mm_qkv_video_s2_gathered", lambda: qkv_v(x_v2_full), True),
+        ("agmm_gateqkv_video_s2", lambda: gateqkv_v(x_v2, parallel_config=pc), True),
+        ("mm_gateqkv_video_s2_gathered", lambda: gateqkv_v(x_v2_full), True),
     ]
 
     variants += cut1c
