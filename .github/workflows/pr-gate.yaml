@@ -380,7 +380,9 @@ jobs:
   # on open, using the GitHub Copilot CLI.
   #
   # Job-level permissions (following the llk-label-pr convention above) — the
-  # composite action needs contents:read, pull-requests:write, copilot-requests:write.
+  # composite action needs contents:read, pull-requests:write, copilot-requests:write,
+  # plus issues:write for the `gh label create` fallback when a type label doesn't
+  # already exist in the repo.
   copilot-pr-labeler:
     # Only act on newly opened PRs. The workflow also triggers on reopened,
     # synchronize and ready_for_review, so gate on 'opened' to avoid running
@@ -388,11 +390,12 @@ jobs:
     if: ${{ github.event_name == 'pull_request' && github.event.action == 'opened' }}
     permissions:
       contents: read
+      issues: write
       pull-requests: write
       copilot-requests: write
     runs-on: ubuntu-latest
     steps:
-      - uses: tenstorrent/tt-github-actions/.github/actions/copilot-pr-labeler@main
+      - uses: tenstorrent/tt-github-actions/.github/actions/copilot-pr-labeler@629b4727fa0dff3d43895601dd538e303880ecbc # main (tt-github-actions#144)
 
   # PR-gate LLK python_tests matrix (tests/pipeline_reorg/llk_pr_gate_tests.yaml).
   # SKU coverage is narrowed below based on find-changed-files outputs.
