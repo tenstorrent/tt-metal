@@ -65,7 +65,7 @@ void kernel_main() {
         uint32_t total = num_tile_rows * Wt;
         for (uint32_t i = 0; i < total; ++i) {
             cb_wait_front(cb_output_tiles, 1);
-            noc_async_write_tile(base_tile + i, acc, get_read_ptr(cb_output_tiles));
+            noc_async_write_page(base_tile + i, acc, get_read_ptr(cb_output_tiles));
             noc_async_write_barrier();
             cb_pop_front(cb_output_tiles, 1);
         }

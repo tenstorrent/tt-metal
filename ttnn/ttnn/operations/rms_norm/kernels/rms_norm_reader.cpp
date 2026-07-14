@@ -174,7 +174,7 @@ void kernel_main() {
                     for (uint32_t wt = 0; wt < W_BLOCK_TILES; ++wt) {
                         uint32_t tile_id = tr * Wt + b * W_BLOCK_TILES + wt;
                         cb_reserve_back(cb_input_tiles, 1);
-                        noc_async_read_tile(tile_id, in_acc, get_write_ptr(cb_input_tiles));
+                        noc_async_read_page(tile_id, in_acc, get_write_ptr(cb_input_tiles));
                         noc_async_read_barrier();
                         cb_push_back(cb_input_tiles, 1);
                     }
