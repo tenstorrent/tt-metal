@@ -7,6 +7,7 @@
 #   2. run the selected Python checkers over the merged fact base.
 #
 #   run.sh <wormhole|blackhole|quasar> [--checks a,b] [--changed [BASE]] [--full-jit] [out_dir]
+#   run.sh --kernel-tier-status                        (probe the kernel-tier capability)
 #
 # Produces <out_dir>/facts.<arch>.jsonl (raw fact base) and
 #          <out_dir>/audit.<arch>.json  (advisory findings). Prints a summary.
@@ -57,7 +58,7 @@ if [ ! -x "$EXTRACT" ] || [ "$HERE/extractor/llk_extract.cpp" -nt "$EXTRACT" ]; 
   fi
 fi
 
-ARCH="${1:?usage: run.sh <wormhole|blackhole|quasar> [--checks a,b] [--changed [BASE]] [--full-jit] [out_dir]}"; shift || true
+ARCH="${1:?usage: run.sh <wormhole|blackhole|quasar> [--checks a,b] [--changed [BASE]] [--full-jit] [out_dir]  (or: run.sh --kernel-tier-status)}"; shift || true
 CHECKS="all"
 OUT="$HERE/out"
 CHANGED=0
