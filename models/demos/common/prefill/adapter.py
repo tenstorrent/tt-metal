@@ -150,6 +150,15 @@ class PrefillModelAdapter(ABC):
         The engine OWNS the returned caches' lifetime — see ``KvCaches``. ``params`` carries the
         per-rank knobs (max_seq_len, mesh_shape, this rank's num_layers, num_users, …)."""
 
+    def layer_split_boundaries(self, num_layers: int) -> Optional[set]:
+        """Layer indices at which a pipeline rank may START (its ``first_layer_idx`` must be one of
+        these). ``None`` => unconstrained (dense models — any split is fine). A DSA cross-layer-reuse
+        model returns its ``full`` layer indices: each rank must begin on a layer that seeds that rank's
+        indexer-reuse chain (a rank starting on a ``shared`` layer has no prior top-k — see
+        ``tt_prefill_transformer``). The runner (``compute_layer_split``) snaps the default even split
+        onto these and rejects any split whose rank starts fall off them."""
+        return None
+
     @abstractmethod
     def build_runtime(self, *, mesh_device: "ttnn.MeshDevice", hf_config, params: PrefillRunParams):
         """Construct the model for this rank and return a runtime handle. The runtime
