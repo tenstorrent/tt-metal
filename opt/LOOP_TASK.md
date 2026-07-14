@@ -37,8 +37,10 @@ this file + `w1verdict/PLAN.md`, never a run output. So the evidence supports NO
 **resolution adherence CEILING** (704p 27.42 renders the guitar; 1080p-high 18.71 does not; same tree/embedding).
 **The regression hunt is CLOSED. Do NOT bisect, do NOT revert `models/` for adherence — no revert raises 1080p.**
 
-**NEXT (a design decision + the real goal — none is a cron fire-and-exit device job, so it is CORRECT to hold the
-device idle and surface this to the human):**
+**NEXT — and note RULE ZERO overrides any 'hold' below: if the device is idle and the goal is open, DISPATCH.
+There is always a measurable next thing (a perf arm, a re-measure on ltx-rt, a queued GRIND_QUEUE item). An
+earlier lap wrote that it was 'correct to hold the device idle' pending a human decision — that was WRONG and
+is retracted: a human decision on quality does NOT block the perf north-star, and the box is shared.**
 1. **Quality decision (human):** accept **704p** as the quality-passing config, OR fund a deliberate 1080p-high
    quality intervention (CFG scale / step schedule / upsampler — a design task, NOT a commit bisect). If asked to
    verify a 1080p quality change, use the protocol below (traced gen#0 capture + eyes-on-guitar).
