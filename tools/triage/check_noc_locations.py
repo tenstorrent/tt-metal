@@ -16,7 +16,7 @@ Owner:
 
 from ttexalens.coordinate import OnChipCoordinate
 from run_checks import run as get_run_checks
-from ttexalens.context import Context
+from ttexalens.context import Context, NocId
 from triage import ScriptConfig, log_check_location, run_script
 
 script_config = ScriptConfig(
@@ -24,9 +24,9 @@ script_config = ScriptConfig(
 )
 
 
-def check_noc_location(location: OnChipCoordinate, noc_id: int):
-    noc_str = f"noc{noc_id}"
-    noc_block = location._device.get_block(location)
+def check_noc_location(location: OnChipCoordinate, noc_id: NocId):
+    noc_str = f"noc{noc_id.value}"
+    noc_block = location.device.get_block(location)
     register_store = noc_block.get_register_store(noc_id)
     data = register_store.read_register("NOC_NODE_ID")
     n_x = data & 0x3F
@@ -42,12 +42,10 @@ def check_noc_location(location: OnChipCoordinate, noc_id: int):
 def run(args, context: Context):
     BLOCK_TYPES_TO_CHECK = ["tensix", "eth"]
     run_checks = get_run_checks(args, context)
-    run_checks.run_per_block_check(
-        lambda location: check_noc_location(location, noc_id=0), block_filter=BLOCK_TYPES_TO_CHECK
-    )
-    run_checks.run_per_block_check(
-        lambda location: check_noc_location(location, noc_id=1), block_filter=BLOCK_TYPES_TO_CHECK
-    )
+    for noc_id in run_checks.devices[0].available_nocs:
+        run_checks.run_per_block_check(
+            lambda location: check_noc_location(location, noc_id), block_filter=BLOCK_TYPES_TO_CHECK
+        )
 
 
 if __name__ == "__main__":
