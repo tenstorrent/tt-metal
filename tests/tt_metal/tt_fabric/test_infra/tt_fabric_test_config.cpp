@@ -428,7 +428,11 @@ TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fabric_se
     }
 
     if (fabric_setup_yaml["num_links"]) {
-        fabric_setup.num_links = parse_scalar<uint32_t>(fabric_setup_yaml["num_links"]);
+        if (parse_scalar<std::string>(fabric_setup_yaml["num_links"]) == "max") {
+            fabric_setup.num_links_max = true;
+        } else {
+            fabric_setup.num_links = parse_scalar<uint32_t>(fabric_setup_yaml["num_links"]);
+        }
     } else {
         fabric_setup.num_links = 1;
     }
@@ -1033,6 +1037,13 @@ ParametrizationOptionsMap YamlConfigParser::parse_parametrization_params(const Y
     for (const auto& it : params_yaml) {
         std::string key = parse_scalar<std::string>(it.first);
         const auto& node = it.second;
+
+        // num_links: all expands to [1 .. platform max] at build time.
+        if (key == "num_links" && node.IsScalar() && parse_scalar<std::string>(node) == "all") {
+            options[key] = std::vector<uint32_t>{kNumLinksAll};
+            continue;
+        }
+
         TT_FATAL(node.IsSequence(), "Parametrization option '{}' must be a sequence of values.", key);
 
         if (key == "ftype" || key == "ntype") {
@@ -1529,8 +1540,24 @@ std::vector<ParsedTestConfig> TestConfigBuilder::expand_parametrizations(const P
     std::vector<ParsedTestConfig> parametrized_configs;
     parametrized_configs.push_back(raw_config);
 
+    // Resolve fabric_setup.num_links: max now that the cluster is available.
+    if (parametrized_configs.back().fabric_setup.num_links_max) {
+        parametrized_configs.back().fabric_setup.num_links = route_manager_.get_max_num_links();
+    }
+
     if (raw_config.parametrization_params.has_value()) {
-        for (const auto& [param_name, values_variant] : raw_config.parametrization_params.value()) {
+        // Resolve parametrization_params.num_links: all to [1 .. platform max] now that the cluster is available.
+        ParametrizationOptionsMap resolved_params = raw_config.parametrization_params.value();
+        if (auto it = resolved_params.find("num_links"); it != resolved_params.end()) {
+            auto& values = std::get<std::vector<uint32_t>>(it->second);
+            if (values.size() == 1 && values.front() == kNumLinksAll) {
+                values.clear();
+                for (uint32_t n = 1; n <= route_manager_.get_max_num_links(); ++n) {
+                    values.push_back(n);
+                }
+            }
+        }
+        for (const auto& [param_name, values_variant] : resolved_params) {
             std::vector<ParsedTestConfig> next_level_configs;
 
             // Pre-calculate total size to avoid reallocations
