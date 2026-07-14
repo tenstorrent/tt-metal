@@ -10,6 +10,8 @@
 
 import ttnn
 
+from ..matmul_utils import l1_sharded_matmul, to_interleaved_if_sharded
+
 # Large negative additive value for masked positions (representable in bf16).
 _NEG = -1.0e30
 
@@ -83,7 +85,8 @@ def _build_one(device, S, spans, dtype):
             ttnn.deallocate(lt)
 
             v_col = ttnn.reshape(v_s, [1, 1, S, 1])
-            block = ttnn.matmul(v_col, v_s)  # [1,1,S,1] @ [1,1,1,S] -> [1,1,S,S]
+            block = l1_sharded_matmul(v_col, v_s)  # [1,1,S,1] @ [1,1,1,S] -> [1,1,S,S]
+            block = to_interleaved_if_sharded(block)
             ttnn.deallocate(v_col)
             ttnn.deallocate(v_s)
 

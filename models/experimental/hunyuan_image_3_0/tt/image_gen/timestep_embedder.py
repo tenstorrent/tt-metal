@@ -19,12 +19,18 @@
 #     mlp.0.weight : [hidden, frequency_embedding_size]   mlp.0.bias : [hidden]
 #     mlp.2.weight : [out, hidden]                        mlp.2.bias : [out]
 # ttnn.linear computes x @ W, so we store the transposes [in, out].
+#
+# Matmuls use act_width_sharded_linear: WIDTH_SHARDED L1 activations with
+# interleaved DRAM weights (resnet50-linear pattern) so Tracy shows
+# in0:width_sharded without the PCC loss seen on WIDTH_SHARDED weight upload.
 
 import math
 
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+
+from ..matmul_utils import act_width_sharded_linear
 
 
 class HunyuanTtTimestepEmbedder(LightweightModule):
@@ -73,7 +79,7 @@ class HunyuanTtTimestepEmbedder(LightweightModule):
         self.freqs = ttnn.exp(exponent)
         ttnn.deallocate(exponent)
 
-        # --- MLP weights ------------------------------------------------------
+        # --- MLP weights (interleaved DRAM — sharded at activation for matmul) -
         w0 = state_dict[f"{prefix}.mlp.0.weight"]  # [hidden, freq]
         b0 = state_dict[f"{prefix}.mlp.0.bias"]  # [hidden]
         w2 = state_dict[f"{prefix}.mlp.2.weight"]  # [out, hidden]
@@ -91,7 +97,6 @@ class HunyuanTtTimestepEmbedder(LightweightModule):
             dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self.w_down = ttnn.from_torch(
             w2.transpose(0, 1).contiguous(),  # [hidden, out]
@@ -105,7 +110,6 @@ class HunyuanTtTimestepEmbedder(LightweightModule):
             dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -162,9 +166,12 @@ class HunyuanTtTimestepEmbedder(LightweightModule):
             elif rank == 2:
                 n = int(t.shape[-1])
                 t = ttnn.reshape(t, (1, 1, n, 1))
-            elif rank == 4 and int(t.shape[-1]) != 1:
+            elif rank == 4:
                 n = int(t.shape[2])
-                t = ttnn.reshape(t, (1, 1, n, 1))
+                if int(t.shape[-1]) != 1:
+                    t = ttnn.reshape(t, (1, 1, n, 1))
+            else:
+                raise ValueError(f"unsupported timestep rank {rank}")
             if t.layout != ttnn.TILE_LAYOUT:
                 t = ttnn.to_layout(t, ttnn.TILE_LAYOUT)
             if t.dtype != ttnn.float32:
@@ -174,24 +181,24 @@ class HunyuanTtTimestepEmbedder(LightweightModule):
         x = ttnn.typecast(freq, ttnn.bfloat16)  # match ref cast to MLP weight dtype
         ttnn.deallocate(freq)
 
-        h = ttnn.linear(
+        h = act_width_sharded_linear(
             x,
             self.w_up,
             bias=self.b_up,
+            batch_rows=n,
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [1,1,N,hidden]
         ttnn.deallocate(x)
 
         act = ttnn.gelu(h, fast_and_approximate_mode=False)  # exact (erf) GELU
         ttnn.deallocate(h)
 
-        out = ttnn.linear(
+        out = act_width_sharded_linear(
             act,
             self.w_down,
             bias=self.b_down,
+            batch_rows=n,
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [1,1,N,out]
         ttnn.deallocate(act)
         return out

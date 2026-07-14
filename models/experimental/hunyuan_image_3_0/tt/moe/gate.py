@@ -23,6 +23,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 
 from ..cache import cache_file
+from ..matmul_utils import l1_sharded_linear, to_interleaved_if_sharded
 
 
 class HunyuanTtTopKGate(LightweightModule):
@@ -92,12 +93,17 @@ class HunyuanTtTopKGate(LightweightModule):
               topk_weight: [B, S, moe_topk]  routed probabilities (normalised)
               topk_index:  [B, S, moe_topk]  selected expert ids (uint)
         """
-        logits = ttnn.linear(
+        # Upcast activations to match the fp32 router weight (mirrors the
+        # reference, which casts hidden states to fp32 before the projection).
+        if self.weight_dtype == ttnn.float32 and x.get_dtype() != ttnn.float32:
+            x = ttnn.typecast(x, ttnn.float32)
+
+        logits = l1_sharded_linear(
             x,
             self.wg,
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [B, S, num_experts]
+        logits = to_interleaved_if_sharded(logits)
 
         gates = ttnn.softmax(logits, dim=-1)
         ttnn.deallocate(logits)

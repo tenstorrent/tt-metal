@@ -28,6 +28,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 
 from ..cache import cache_file
+from ..matmul_utils import l1_sharded_linear, to_interleaved_if_sharded
 from .rms_norm import HunyuanTtRMSNorm
 from .rope_2d import HunyuanTtRoPE2D
 
@@ -284,13 +285,13 @@ class HunyuanTtAttention(LightweightModule):
 
         # ---- 1. Fused QKV projection ----------------------------------------
         # x: [B, S, H]  →  xqkv: [B, S, Q_dim + 2*KV_dim]
-        xqkv = ttnn.linear(
+        xqkv = l1_sharded_linear(
             x,
             self.qkv_proj,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
+        xqkv = to_interleaved_if_sharded(xqkv)
 
         # ---- 2. Split into Q / K / V heads (GQA-aware) ---------------------
         # nlp_create_qkv_heads expects [B, 1, S, QKV_dim] (4D).
@@ -419,13 +420,13 @@ class HunyuanTtAttention(LightweightModule):
         # Row-parallel under TP: each device multiplies its head-shard's concat
         # output [B,S,Q_dim/tp] by its o_proj rows [Q_dim/tp, H] to get a PARTIAL
         # [B,S,H], then we all-reduce the partials over tp_axis for the full output.
-        out = ttnn.linear(
+        out = l1_sharded_linear(
             attn_out,
             self.o_proj,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
+        out = to_interleaved_if_sharded(out)
         attn_out.deallocate(True)
 
         if self.tp_factor > 1:
