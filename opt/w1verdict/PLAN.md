@@ -35,3 +35,14 @@ there is no audio decode, so no cold-vocoder build — the tax that made untrace
 ## Run it (no timeout_sec — leave the broker default)
 LTX_TRACED=1 + LTX_VIDEO_ONLY=1 is the config that should have been used from the start: the untraced
 denoise is ~40x slower on-device and the eager vocoder costs ~172 s/run, for audio nobody scores.
+
+## VERDICT UPDATE — 2026-07-14 18:12Z: the first run was INVALID (scored the wrong pass)
+The dumped `frames_w1{on,off}` are gen #1 = the traced REPLAY pass. At 1080p that pass is a
+temporally-static degenerate (all 145 frames identical, 4 color bands, CLIP ~10.5) and is
+BYTE-identical across both arms — so the flag changed nothing in the scored output. The CAVEAT
+above was right: traced replay is broken here, not just "absolute-CLIP not comparable."
+
+**The real render is gen #0 = the trace CAPTURE pass** (`ltx_av_fast_{W}x{H}_0.mp4`): a genuine
+woman-singing render, CLIP ~21.8. **Score the gen #0 CAPTURE mp4, never the frames dump.**
+Preserved: `cap_w1off.mp4` (W1 off capture). Re-running the W1-on arm to get `cap_w1on.mp4`.
+Then: CLIP both + LOOK for the guitar in both. Do NOT trust any traced-replay pixels.
