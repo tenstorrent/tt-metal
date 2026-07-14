@@ -7,7 +7,7 @@ SDPA-related failures and posts a digest to Slack on a cron schedule.
 - **Red pipelines** get a full block: every failing in-scope test, a short cause for each, and a likely-cause commit if attributable.
 - **Out-of-scope failures** (anything not SDPA-related) are completely ignored, no count, no mention.
 
-Currently watches 7 pipelines (see `config.sh`). Cron currently fires every hour.
+Currently watches 9 pipelines (see `config.sh`). Cron currently fires every hour.
 
 ---
 
