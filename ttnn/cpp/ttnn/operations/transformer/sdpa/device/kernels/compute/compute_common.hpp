@@ -645,7 +645,9 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
 
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 
-template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16>
+// vector_mode selects the column face-row traversal: VectorMode::C spans Face0+Face2 (both face-rows of a
+// full 32x32 tile); VectorMode::None spans Face0 only (the single face-row of a 16x32 tiny tile).
+template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16, VectorMode vector_mode = VectorMode::C>
 void exp_tile_first_column(uint32_t idst) {
     SFPU_UNARY_CALL(
         DST_SYNC_MODE,
@@ -653,7 +655,7 @@ void exp_tile_first_column(uint32_t idst) {
         calculate_exponential_first_column,
         (SDPA_EXP_APPROX_MODE, scale_bf16),
         idst,
-        VectorMode::C);
+        vector_mode);
 }
 #endif  // defined(TRISC_MATH) || defined(TRISC_PACK)
 
