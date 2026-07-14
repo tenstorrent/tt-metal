@@ -343,20 +343,19 @@ def test_fibo_transformer(*, mesh_device):
     assert_quality(ref_out, tt_output_torch, pcc=0.99)
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=["mesh_device"])
+@pytest.mark.parametrize("mesh_device", [(2, 2), (4, 8)], indirect=["mesh_device"])
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 8192}],
     indirect=True,
 )
 def test_fibo_transformer_mesh(*, mesh_device):
-    """Full ``BriaFiboTransformer`` on the 2x2 Blackhole mesh (sp=2, tp=2) vs the HF reference.
+    """Full ``BriaFiboTransformer`` on the mesh (sp=rows, tp=cols) vs the HF reference.
 
-    This exercises the tensor-parallel ``inject_text`` path: on the mesh, ``prompt`` (after
-    ``context_embedder``) is feature-sharded on ``tp_axis`` so that at tp=2 the concat-halves'
-    1536 boundary equals the per-device feature-shard boundary. The injection therefore becomes
-    a shard-aligned select (device 0 keeps its half, device 1 gets the projected text), done with
-    a per-device mask -- no all-gather.
+    Runs on the 2x2 (sp=2, tp=2) and 4x8 Galaxy (sp=4, tp=8) Blackhole meshes. Exercises the
+    TP-general ``inject_text``: on the mesh ``prompt`` (after ``context_embedder``) is
+    feature-sharded on ``tp_axis``; the injection all-gathers it to the full inner_dim, does
+    the concat-halves against the replicated per-block projection, then reshards on ``tp_axis``.
 
     Reduced depth via ``FIBO_DUAL`` / ``FIBO_SINGLE`` env knobs (default 2/2). Set both to the
     full config (8/38) to run the whole model on the mesh.
