@@ -56,7 +56,7 @@ void kernel_main() {
     using namespace ttnn::operations::ccl::common;
 
     // ===== Compile-time args =====
-    constexpr uint32_t output_pages = get_compile_time_arg_val(0);
+    [[maybe_unused]] constexpr uint32_t output_pages = get_compile_time_arg_val(0);  // page idx now from slot
     constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(1);
     constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(2);
     constexpr uint32_t l1_alignment = get_compile_time_arg_val(3);
@@ -99,10 +99,17 @@ void kernel_main() {
     const uint32_t self_phys_noc0_y = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t self_noc1_x = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t self_noc1_y = get_arg_val<uint32_t>(rt_args_idx++);
+    // sender->relay pipe args (owning sender NOC coords + 3 flow-control sem ids). Read BEFORE the fabric
+    // args, matching the factory append order. Used by the CB consumer loop below.
+    const uint32_t sender_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t sender_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t relay_data_ready_sem_id = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t relay_credits_sem_id = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t relay_buf_addr_sem_id = get_arg_val<uint32_t>(rt_args_idx++);
     // fabric-connection args are appended after this by append_fabric_connection_rt_args (read below).
 
     // [debug] BW + per-token gap histogram (mirrors writer_combine so relay send perf is comparable).
-    uint64_t bw_total_payload_bytes = 0;
+    [[maybe_unused]] uint64_t bw_total_payload_bytes = 0;
     uint64_t hist_last_ts = 0;
     uint32_t hist_buckets[7] = {0, 0, 0, 0, 0, 0, 0};
     auto hist_record = [&hist_last_ts, &hist_buckets](uint64_t now) {
@@ -168,6 +175,13 @@ void kernel_main() {
     noc_semaphore_set(init_sem_ptr, 0);
     DPRINT_COMBINE("Relay fabric setup complete\n");
 
+    // Publish our c_24 base to the owning sender (into its relay_buf_addr sem L1) so it knows where to
+    // NOC-write tokens. Done AFTER the init handshake; the sender spins on this until non-zero.
+    const uint32_t relay_buf_base = get_write_ptr(cb_relay_buf);
+    noc_inline_dw_write<InlineWriteDst::L1>(
+        get_noc_addr(sender_noc_x, sender_noc_y, get_semaphore(relay_buf_addr_sem_id)), relay_buf_base);
+    noc_async_writes_flushed();
+
     // [debug] START marker in each connected eth router's telemetry scratch[0] (same scheme as sender).
     constexpr uint32_t combine_marker_l1_addr = MEM_AERISC_FABRIC_TELEMETRY_BASE + offsetof(FabricTelemetry, scratch);
     const uint32_t combine_marker_value = 100 + src_chip_id * 10 + relay_index;
@@ -216,42 +230,58 @@ void kernel_main() {
     const uint32_t overlap_hdr_pool_base = packet_header_buffer_address + 2u * sizeof(PACKET_HEADER_TYPE);
     uint32_t overlap_slot = 0;
 
-    // ===== MOCK writer-only synthetic fabric send loop (CB-free) =====
+    // ===== CB consumer: read sender-produced tokens from c_24 and forward to fabric =====
+    // The sender (writer_combine) mock-produces route_info + payload into our c_24 ring, credit-flow-
+    // controlled. We read each slot's route_info (route dir, distance, page idx) into registers, then
+    // fabric-send its payload, then return the slot's credit. No-tear guarantee: RELAY_SLOTS (ring depth)
+    // must exceed OVERLAP_POOL_DEPTH (max in-flight sends) so a slot's non-blocking payload read always
+    // completes long before the sender can wrap around and reuse that slot.
+    static_assert(
+        RELAY_SLOTS > OVERLAP_POOL_DEPTH, "RELAY_SLOTS must exceed OVERLAP_POOL_DEPTH to avoid torn payloads");
     {
-        // (route direction, distance-in-hops) for every peer on the 1D combine line, out of the hot loop.
-        uint8_t mock_route[total_mesh_devices];
-        uint16_t mock_distance[total_mesh_devices];
-        uint32_t mock_num_peers = 0;
+        const uint32_t relay_slot_size = l1_alignment + aligned_output_page_size;
+        const uint32_t relay_buf_base_c = get_write_ptr(cb_relay_buf);
+        volatile tt_l1_ptr uint32_t* data_ready_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(relay_data_ready_sem_id));
+        const uint64_t sender_credits_noc_addr =
+            get_noc_addr(sender_noc_x, sender_noc_y, get_semaphore(relay_credits_sem_id));
+
+        // Token count must match what the sender produces: (#peers) * MOCK_COMBINE_TOKENS_PER_DEST.
+        uint32_t num_peers = 0;
         for (uint32_t dst = 0; dst < total_mesh_devices; dst++) {
-            if (dst == linearized_mesh_coord) {
-                continue;  // never send to self
+            if (dst != linearized_mesh_coord) {
+                num_peers++;
             }
-            mock_route[mock_num_peers] =
-                static_cast<uint8_t>(get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst));
-            mock_distance[mock_num_peers] =
-                static_cast<uint16_t>(manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst));
-            mock_num_peers++;
         }
+        const uint32_t total_tokens = num_peers * MOCK_COMBINE_TOKENS_PER_DEST;
 
-        // Payload scratch: reuse the relay's own c_24 buffer (its first slot's data region) as a fixed
-        // 14 KB source. Content is never refreshed (garbage, perf only) so nothing overwrites it while
-        // the non-blocking overlapped reads are in flight -> race-free.
-        const uint32_t mock_payload_addr = get_write_ptr(cb_relay_buf) + l1_alignment;
-        const uint32_t mock_total_tokens = mock_num_peers * MOCK_COMBINE_TOKENS_PER_DEST;
+        uint32_t consumed = 0;
+        for (uint32_t i = 0; i < total_tokens; i++) {
+            // Wait until slot `consumed` is filled: the producer monotonically ++ data_ready per token.
+            while (true) {
+                invalidate_l1_cache();
+                if (*data_ready_ptr > consumed) {
+                    break;
+                }
+            }
+            const uint32_t r = consumed % RELAY_SLOTS;
+            const uint32_t slot_base = relay_buf_base_c + r * relay_slot_size;
+            volatile tt_l1_ptr uint32_t* ri = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_base);
+            const uint32_t route = ri[0];  // captured into a register before the send
+            const uint32_t distance = ri[1];
+            const uint32_t output_page_idx = ri[2];
+            const uint32_t payload_addr = slot_base + l1_alignment;
 
-        uint32_t peer = 0;
-        for (uint32_t i = 0; i < mock_total_tokens; i++) {
             ccl_routing_utils::line_unicast_route_info_t pkt_route_info{};
-            pkt_route_info.distance_in_hops = mock_distance[peer];
-            auto& payload_sender = fabric_connections[mock_route[peer]];
-            const uint32_t output_page_idx = i % output_pages;
+            pkt_route_info.distance_in_hops = static_cast<uint16_t>(distance);
+            auto& payload_sender = fabric_connections[route];
 
             auto* overlap_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(
                 overlap_hdr_pool_base + overlap_slot * sizeof(PACKET_HEADER_TYPE));
             const uint32_t overlap_trid = overlap_slot + 1;  // 1..OVERLAP_POOL_DEPTH (trid 0 reserved)
 
             const uint64_t t0 = get_timestamp();
-            wait_on_flush_for_trid(overlap_trid);  // LAGGED: free this slot's DEPTH-ago use before reuse
+            wait_on_flush_for_trid(overlap_trid);  // LAGGED: free this trid's DEPTH-ago use before reuse
             const uint64_t t1 = get_timestamp();
 
             ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_for_route_helper(overlap_hdr), pkt_route_info);
@@ -259,20 +289,23 @@ void kernel_main() {
                 output_addr_gen,
                 payload_sender,
                 overlap_hdr,
-                mock_payload_addr,
+                payload_addr,
                 output_page_idx,
                 (int)aligned_output_page_size,
                 l1_alignment,
                 overlap_trid);
             const uint64_t t2 = get_timestamp();
 
-            mock_bin(mock_wait_buckets, t1 - t0);  // lagged trid-completion wait (want ~0)
-            mock_bin(mock_send_buckets, t2 - t1);  // issue + wait_for_empty_write_slot (fabric slot)
+            mock_bin(mock_wait_buckets, t1 - t0);
+            mock_bin(mock_send_buckets, t2 - t1);
             hist_record(t2);
-
             bw_total_payload_bytes += aligned_output_page_size;
+
+            // Return the slot's credit so the sender can refill it (ring depth >> overlap depth, so the
+            // in-flight payload read has completed well before the sender wraps back to this slot).
+            noc_semaphore_inc<true>(sender_credits_noc_addr, 1);
             overlap_slot = (overlap_slot + 1 == OVERLAP_POOL_DEPTH) ? 0u : overlap_slot + 1u;
-            peer = (peer + 1 == mock_num_peers) ? 0u : peer + 1u;
+            consumed++;
         }
     }
 

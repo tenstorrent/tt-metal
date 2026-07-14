@@ -503,6 +503,25 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     uint32_t output_init_complete_semaphore_id = add_sema(sender_core_grid);
     uint32_t output_init_barrier_semaphore_id = add_sema(sender_core_grid);
 
+#if USE_RELAY
+    // sender->relay CB flow-control semaphores (1:1 sender:relay), created on the pair grid so each id is
+    // reserved on BOTH cores (unambiguous L1 offset for cross-core inc). Mirrors the untilizer->sender
+    // receive_buf handshake:
+    //   relay_data_ready (on relay): sender ++ after writing a slot; relay waits (monotonic consumed ctr).
+    //   relay_credits    (on sender, init RELAY_SLOTS): relay ++ when it frees a slot; sender local ctr.
+    //   relay_buf_addr   (on sender, init 0): relay publishes get_write_ptr(c_24) here so the sender knows
+    //                     where to NOC-write (CB addresses are framework-assigned, not host-knowable).
+    std::vector<uint32_t> relay_data_ready_sem_ids(num_cores);
+    std::vector<uint32_t> relay_credits_sem_ids(num_cores);
+    std::vector<uint32_t> relay_buf_addr_sem_ids(num_cores);
+    for (uint32_t s = 0; s < num_cores; s++) {
+        CoreRangeSet pair_grid(std::set<CoreRange>{CoreRange(sender_cores[s]), CoreRange(relay_cores[s])});
+        relay_data_ready_sem_ids[s] = add_sema(pair_grid, 0);
+        relay_credits_sem_ids[s] = add_sema(pair_grid, RELAY_SLOTS);
+        relay_buf_addr_sem_ids[s] = add_sema(pair_grid, 0);
+    }
+#endif
+
     // Rows per untilize batch.  Both layouts route through the untilizer pipeline and share the
     // same receive_buf ring / sender polling loop, so ROW_MAJOR uses the same batch size as TILE
     // (tile height = 32) rather than diverging.
@@ -1441,6 +1460,15 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         };
         push_worker_coord_quad(relay_rt_raw, relay_core);  // 4..11: coord quad
 
+        // 12..16: sender->relay pipe args (owning sender NOC coords + the 3 flow-control sem ids). Read
+        // by the relay BEFORE open_direction_connections, so they must precede the fabric-connection args.
+        auto sender_v = mesh_device->virtual_core_from_logical_core(sender_cores[s], tt::CoreType::WORKER);
+        relay_rt_raw.push_back((uint32_t)sender_v.x);
+        relay_rt_raw.push_back((uint32_t)sender_v.y);
+        relay_rt_raw.push_back(relay_data_ready_sem_ids[s]);
+        relay_rt_raw.push_back(relay_credits_sem_ids[s]);
+        relay_rt_raw.push_back(relay_buf_addr_sem_ids[s]);
+
         if (num_links > 0) {
             std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
             for (const auto& neighbor_coordinate : neighbors) {
@@ -1617,6 +1645,20 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         // top of its DEST_CHIP_ID block (right after combine_sender_index), before opening fabric
         // connections, so it must NOT sit after the fabric args (order is alignment-critical).
         push_worker_coord_quad(writer_runtime_args_raw, sender_core);
+
+#if USE_RELAY
+        // sender->relay pipe args (owning relay NOC coords + the 3 flow-control sem ids). Appended right
+        // after the quad; the sender reads them in its USE_RELAY producer block. No fabric-connection args
+        // follow (the sender is not the endpoint), so these are the last of the sender's RT args.
+        {
+            auto relay_v = mesh_device->virtual_core_from_logical_core(relay_cores[core_idx], tt::CoreType::WORKER);
+            writer_runtime_args_raw.push_back((uint32_t)relay_v.x);
+            writer_runtime_args_raw.push_back((uint32_t)relay_v.y);
+            writer_runtime_args_raw.push_back(relay_data_ready_sem_ids[core_idx]);
+            writer_runtime_args_raw.push_back(relay_credits_sem_ids[core_idx]);
+            writer_runtime_args_raw.push_back(relay_buf_addr_sem_ids[core_idx]);
+        }
+#endif
 
         // USE_RELAY: the relay is the fabric endpoint, so the SENDER registers no fabric connection and
         // gets no fabric-connection RT args (writer_combine returns before it would read them). The relay's

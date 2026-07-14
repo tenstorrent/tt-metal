@@ -279,31 +279,109 @@ void kernel_main() {
 #endif
 
 #if USE_RELAY
-    // USE_RELAY: the relay core is the fabric endpoint now — it opens the eth connection, runs the
-    // cross-chip init/exit handshake, and sends all tokens (see writer_relay.cpp). The sender opens NO
-    // fabric connection and sends nothing to anyone; it just reports its placement and exits. The whole
-    // fabric section below is compiled but never reached on the sender (keeps USE_RELAY=0 byte-identical).
-    // NOTE: INIT_ZEROS + USE_RELAY is not a validated combo — our runs use init_zeros=False, so the
-    // INIT_ZEROS reader-barrier signal below (which the sender would otherwise emit post-handshake) is
-    // compiled out. Revisit if INIT_ZEROS is ever enabled with the relay.
-    DEVICE_PRINT(
-        "[cmb-place sender] idx={} logical=({},{}) virt=({},{}) phys_noc0=({},{}) noc1=({},{}) | "
-        "dev_virt=({},{}) dev_logical=({},{}) send_noc={} (idle: fabric endpoint moved to relay)\n",
-        combine_sender_index,
-        self_logical_x,
-        self_logical_y,
-        self_virt_x,
-        self_virt_y,
-        self_phys_noc0_x,
-        self_phys_noc0_y,
-        self_noc1_x,
-        self_noc1_y,
-        (uint32_t)my_x[noc_index],
-        (uint32_t)my_y[noc_index],
-        (uint32_t)get_absolute_logical_x(),
-        (uint32_t)get_absolute_logical_y(),
-        (uint32_t)noc_index);
-    return;
+    {  // scope the producer's locals (total_mesh_devices, etc.) — the fabric block below is compiled
+        // USE_RELAY: the sender is no longer the fabric endpoint (the relay is). It MOCK-generates synthetic
+        // tokens (route_info + garbage payload) and writes them into the relay's c_24 receive buffer over NOC,
+        // credit-flow-controlled; the relay reads them and forwards to fabric. Only the traffic SOURCE is
+        // mocked — the sender->relay->eth data path is real. No fabric connection / handshake here (relay owns
+        // it). INIT_ZEROS + USE_RELAY is not a validated combo (our runs use init_zeros=False).
+        //
+        // Pipe RT args, appended by the factory right after the coord quad (see combine_program_factory):
+        uint32_t relay_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
+        uint32_t relay_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
+        uint32_t relay_data_ready_sem_id = get_arg_val<uint32_t>(rt_args_idx++);
+        uint32_t relay_credits_sem_id = get_arg_val<uint32_t>(rt_args_idx++);
+        uint32_t relay_buf_addr_sem_id = get_arg_val<uint32_t>(rt_args_idx++);
+
+        DEVICE_PRINT(
+            "[cmb-place sender] idx={} logical=({},{}) virt=({},{}) phys_noc0=({},{}) noc1=({},{}) | "
+            "dev_virt=({},{}) dev_logical=({},{}) send_noc={} (mock producer -> relay)\n",
+            combine_sender_index,
+            self_logical_x,
+            self_logical_y,
+            self_virt_x,
+            self_virt_y,
+            self_phys_noc0_x,
+            self_phys_noc0_y,
+            self_noc1_x,
+            self_noc1_y,
+            (uint32_t)my_x[noc_index],
+            (uint32_t)my_y[noc_index],
+            (uint32_t)get_absolute_logical_x(),
+            (uint32_t)get_absolute_logical_y(),
+            (uint32_t)noc_index);
+
+        // Discover the relay's c_24 base (published by the relay into relay_buf_addr after its init handshake).
+        volatile tt_l1_ptr uint32_t* relay_buf_addr_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(relay_buf_addr_sem_id));
+        do {
+            invalidate_l1_cache();
+        } while (*relay_buf_addr_ptr == 0);
+        const uint32_t relay_c24_base = *relay_buf_addr_ptr;
+
+        // Credit-based flow control (mirrors the untilizer->sender producer): local counter, refilled by
+        // sucking the credits sem the relay increments as it frees slots.
+        const uint32_t relay_slot_size = l1_alignment + aligned_output_page_size;
+        const uint64_t relay_data_ready_noc_addr =
+            get_noc_addr(relay_noc_x, relay_noc_y, get_semaphore(relay_data_ready_sem_id));
+        const uint32_t relay_credits_l1 = get_semaphore(relay_credits_sem_id);
+        volatile tt_l1_ptr uint32_t* relay_credits_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(relay_credits_l1);
+        const uint64_t self_relay_credits_noc_addr = get_noc_addr(my_x[noc_index], my_y[noc_index], relay_credits_l1);
+        uint32_t local_credits = RELAY_SLOTS;
+
+        // Mock route precompute (1D): route direction + distance-in-hops per peer, out of the hot loop.
+        constexpr uint32_t total_mesh_devices = mesh_rows * mesh_cols;
+        uint8_t mock_route[total_mesh_devices];
+        uint16_t mock_distance[total_mesh_devices];
+        uint32_t mock_num_peers = 0;
+        for (uint32_t dst = 0; dst < total_mesh_devices; dst++) {
+            if (dst == linearized_mesh_coord) {
+                continue;
+            }
+            mock_route[mock_num_peers] =
+                static_cast<uint8_t>(get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst));
+            mock_distance[mock_num_peers] =
+                static_cast<uint16_t>(manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst));
+            mock_num_peers++;
+        }
+        const uint32_t mock_total_tokens = mock_num_peers * MOCK_COMBINE_TOKENS_PER_DEST;
+
+        // Local staging slot (reuse c_3): its layout [route_info | payload] matches the relay slot, so we set
+        // route_info here (payload stays garbage) and blast the whole slot in one contiguous NOC write.
+        const uint32_t stage_base = get_write_ptr(cb_route_info_id);
+        volatile tt_l1_ptr uint32_t* stage_route_info = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage_base);
+
+        uint32_t w = 0, peer = 0;
+        for (uint32_t i = 0; i < mock_total_tokens; i++) {
+            if (local_credits == 0) {
+                // Wait for the relay to return credits, then atomically suck the value.
+                while (true) {
+                    invalidate_l1_cache();
+                    if (*relay_credits_ptr > 0) {
+                        break;
+                    }
+                }
+                uint32_t n = *relay_credits_ptr;
+                noc_semaphore_inc(self_relay_credits_noc_addr, (uint32_t)(-(int32_t)n));
+                noc_async_atomic_barrier();
+                local_credits += n;
+            }
+            stage_route_info[0] = mock_route[peer];
+            stage_route_info[1] = mock_distance[peer];
+            stage_route_info[2] = i % output_pages;  // output_page_idx
+            const uint32_t relay_slot_l1 = relay_c24_base + w * relay_slot_size;
+            const uint64_t relay_slot_noc = get_noc_addr(relay_noc_x, relay_noc_y, relay_slot_l1);
+            noc_async_write(stage_base, relay_slot_noc, relay_slot_size);
+            noc_async_writes_flushed();  // full flush: whole slot landed before signaling (option 2)
+            noc_semaphore_inc<true>(relay_data_ready_noc_addr, 1);
+            local_credits--;
+            w = (w + 1 == RELAY_SLOTS) ? 0u : w + 1u;
+            peer = (peer + 1 == mock_num_peers) ? 0u : peer + 1u;
+        }
+        // The relay owns the exit handshake + teardown; the sender is done once all tokens are queued.
+        return;
+    }
 #endif
 
 #ifdef DEST_CHIP_ID
