@@ -92,35 +92,32 @@ private:
     uint32_t page_id_, byte_off_, chunk_in_stripe_, sent_, count_, phase_, stripe_jump_;
 };
 
-// Unicasts pages one hop to the single neighbor. Handles packetization (pack several pages into one
-// scatter-write packet when they fit, else split a big page across packets).
-//
-// Templated on the sender type (SenderT*) so the same writer drives either a direct WorkerToFabricEdmSender
-// (one worker per direction) or a FabricMuxV2Sender (workers sharing a fabric mux). The send calls are
-// base sender-pointer overloads that accept either; for 1D-linear all routing is to_chip_unicast(1) set via
-// set_state, so no route-manager is needed. FabricWriter owns its two packet headers directly.
-template <uint32_t page_size, uint32_t packet_size, typename SenderT>
+// Unicasts pages one hop to the neighbor over the V2 stateful send lane: pack several pages per scatter packet,
+// or split a page too big for one packet. Drives either sender type (direct EDM or mux); both share the lane.
+// setup_stateful_send_cmd_bufs() programs the cmd bufs once so each send just patches address/size.
+// Requires DM_DEDICATED_NOC: the stateful data/sync cmd bufs must not alias the caller's local-copy write buf.
+// eager_staging (mux, no init barrier): drain a full staging ring before waiting, else the slot wait deadlocks.
+template <uint32_t page_size, uint32_t packet_size, bool eager_staging, typename SenderT>
 class FabricWriter {
 public:
-    FabricWriter(const Noc& noc, SenderT* sender) :
-        noc{noc},
+    explicit FabricWriter(SenderT* sender) :
         sender{sender},
         scatter_packet_header{PacketHeaderPool::allocate_header(1)},
         unicast_packet_header{PacketHeaderPool::allocate_header(1)},
+        sem_packet_header{PacketHeaderPool::allocate_header(1)},
         scatter_header({}, {}),
         chunk_count{0} {
-        std::array<uint64_t, max_pages_per_packet> dummy_addrs{};  // init to 0s
-        std::array<uint16_t, max_pages_per_packet - 1> chunk_sizes{};
-        chunk_sizes.fill(page_size);
         constexpr uint8_t num_hops = 1;  // store-and-forward: always the immediate neighbor
-
-        fabric_api::fabric_unicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::ChunkSizes>(
-            scatter_packet_header,
-            num_hops,
-            NocUnicastScatterCommandHeader(dummy_addrs.data(), chunk_sizes.data(), pages_per_packet));
-
-        fabric_api::fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
-            unicast_packet_header, num_hops);
+        scatter_packet_header->to_chip_unicast(num_hops);
+        unicast_packet_header->to_chip_unicast(num_hops);
+        sem_packet_header->to_chip_unicast(num_hops);
+        if constexpr (use_scatter_write) {
+            // Uniform, fixed chunk sizes; only dst addresses + count change per packet.
+            for (uint32_t i = 0; i < max_pages_per_packet - 1; ++i) {
+                scatter_header.chunk_size[i] = page_size;
+            }
+        }
+        sender->setup_stateful_send_cmd_bufs();
     }
 
     ~FabricWriter() {
@@ -129,36 +126,35 @@ public:
 
     void async_write(uint32_t l1_addr, uint64_t remote_noc_addr) {
         if constexpr (use_scatter_write) {
-            // Queue up multiple pages to send in a single packet.
-            // Assumption: pages are contiguous in local memory (L1).
-            // Note: currently, scatter_write necessitates chunk_count >= 2.
+            // Queue up multiple pages (contiguous in L1) to send in a single scatter packet.
             if (chunk_count == 0) {
                 start_l1_addr = l1_addr;
             }
             scatter_header.noc_address[chunk_count++] = remote_noc_addr;
             if (chunk_count == pages_per_packet) {
-                noc.async_writes_flushed();
                 scatter_header.chunk_count = chunk_count;
-                fabric_api::fabric_unicast_noc_scatter_write_with_state<
-                    UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::PayloadSize>(
-                    sender, scatter_packet_header, start_l1_addr, scatter_header, payload_size);
+                send_scatter(start_l1_addr, payload_size);
                 chunk_count = 0;
             }
         } else {
             // Page larger than a packet: split across packets.
             for (uint32_t packet = 0; packet < packets_per_page; ++packet) {
-                noc.async_writes_flushed();
-                fabric_api::fabric_unicast_noc_unicast_write_with_state<
-                    UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
-                    sender,
-                    unicast_packet_header,
-                    l1_addr,
-                    tt::tt_fabric::NocUnicastCommandHeader{remote_noc_addr},
-                    (packet < packets_per_page - 1) ? payload_size : last_payload_size);
+                send_unicast(
+                    l1_addr, remote_noc_addr, (packet < packets_per_page - 1) ? payload_size : last_payload_size);
                 l1_addr += payload_size;
                 remote_noc_addr += payload_size;
             }
         }
+    }
+
+    // Barrier + data_valid incs, on the stateful lane too (a non-stateful inline write would clobber the SYNC
+    // cmd buf). flush (default on) keeps a data_valid inc ordered after its payload.
+    void atomic_inc(uint64_t noc_addr, uint32_t val) {
+        noc_async_writes_flushed();
+        sem_packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{noc_addr, val});
+        wait_for_slot();
+        sender->send_current_slot_stateful_non_blocking_from_address(
+            (uint32_t)sem_packet_header, sizeof(PACKET_HEADER_TYPE));
     }
 
     // Call this before popping CB entry
@@ -166,33 +162,46 @@ public:
         if constexpr (use_scatter_write) {
             static_assert(min_pages_per_packet == 2, "hardcoded to assume scatter_write min_pages_per_packet == 2");
             if (chunk_count > 0) {
-                noc.async_writes_flushed();
                 if (chunk_count == 1) {
-                    // Note: currently, scatter_write necessitates chunk_count >= 2, so we use unicast_write
-                    // for chunk_count == 1.
-                    // Note: this is hardcoded assuming NOC_SCATTER_WRITE_MIN_CHUNKS == 2. Else need to put
-                    // the below unicast_write in a loop.
-                    fabric_api::fabric_unicast_noc_unicast_write_with_state<
-                        UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
-                        sender,
-                        unicast_packet_header,
-                        start_l1_addr,
-                        tt::tt_fabric::NocUnicastCommandHeader{scatter_header.noc_address[0]},
-                        page_size);
+                    // scatter_write needs chunk_count >= 2, so send a lone trailing chunk as a unicast write.
+                    send_unicast(start_l1_addr, scatter_header.noc_address[0], page_size);
                 } else {
                     scatter_header.chunk_count = chunk_count;
-                    fabric_api::fabric_unicast_noc_scatter_write_with_state<
-                        UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::PayloadSize>(
-                        sender, scatter_packet_header, start_l1_addr, scatter_header, chunk_count * page_size);
+                    send_scatter(start_l1_addr, chunk_count * page_size);
                 }
                 chunk_count = 0;
             }
         }
-        // Wait for Fabric writes to be sent out before popping CB entry
-        noc.async_writes_flushed();
+        // Wait for Fabric writes to be sent out before popping CB entry.
+        noc_async_writes_flushed();
     }
 
 private:
+    // Eager: drain a full staging ring first, else the slot wait spins on a ring nothing frees.
+    FORCE_INLINE void wait_for_slot() {
+        if constexpr (eager_staging) {
+            if (sender->is_staging_ring_full()) {
+                sender->template flush<true>();
+            }
+        }
+        sender->wait_for_empty_write_slot();
+    }
+
+    // Flush first: the previous send's header write must land before we overwrite the reusable header.
+    FORCE_INLINE void send_scatter(uint32_t l1_addr, uint32_t size) {
+        noc_async_writes_flushed();
+        scatter_packet_header->to_noc_unicast_scatter_write(scatter_header, size);
+        wait_for_slot();
+        sender->send_current_slot_stateful_non_blocking(l1_addr, size, (uint32_t)scatter_packet_header);
+    }
+
+    FORCE_INLINE void send_unicast(uint32_t l1_addr, uint64_t remote_noc_addr, uint32_t size) {
+        noc_async_writes_flushed();
+        unicast_packet_header->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{remote_noc_addr}, size);
+        wait_for_slot();
+        sender->send_current_slot_stateful_non_blocking(l1_addr, size, (uint32_t)unicast_packet_header);
+    }
+
     // Fabric limits
     static constexpr uint32_t max_pages_per_packet = NOC_SCATTER_WRITE_MAX_CHUNKS;
     static constexpr uint32_t min_pages_per_packet = NOC_SCATTER_WRITE_MIN_CHUNKS;
@@ -207,10 +216,10 @@ private:
     // Last payload for the page_size >= packet_size case (a page sent as multiple packets).
     static constexpr uint32_t last_payload_size = page_size - ((packets_per_page - 1) * packet_size);
 
-    const Noc& noc;
     SenderT* sender;  // direct or mux sender
     volatile tt_l1_ptr PACKET_HEADER_TYPE* scatter_packet_header;
     volatile tt_l1_ptr PACKET_HEADER_TYPE* unicast_packet_header;
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* sem_packet_header;
     NocUnicastScatterCommandHeader scatter_header;
     uint8_t chunk_count;     // accumulated chunks not yet sent in a packet
     uint32_t start_l1_addr;  // start address of the accumulated contiguous chunks

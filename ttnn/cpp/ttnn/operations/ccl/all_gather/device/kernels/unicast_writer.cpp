@@ -79,43 +79,34 @@ void kernel_main() {
     ///////////////////////////////////////////////////
 
 #ifdef USE_WORKER_MUX
-    // Workers per direction share one fabric link through a V2 mux. build_from_args reads the 11 host-appended
-    // connection args; open() blocks until the mux is ready, then routes our channel to the neighbor's ERISC.
-    using SenderT = tt::tt_fabric::FabricMuxV2Sender<false>;
+    // Workers per direction share one link through a V2 mux (build_from_args reads the connection args).
+    // Eager staging only without an init barrier: else the reader waits on a barrier the writer hasn't
+    // forwarded (still staged) -> deadlock. open() stages or blocks on mux-ready per that.
+    constexpr bool eager_staging = !do_init_barrier;
+    using SenderT = tt::tt_fabric::FabricMuxV2Sender<eager_staging>;
     SenderT mux_connection = SenderT::build_from_args(arg_for_fab);
     mux_connection.open();
     SenderT* sender = &mux_connection;
 #else
     // Single worker per direction: connect directly to the neighbor's ERISC.
+    constexpr bool eager_staging = false;
     tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
     open_connections(fabric_connection, 1, arg_for_fab);
     using SenderT = tt::tt_fabric::WorkerToFabricEdmSender;
     SenderT* sender = &fabric_connection.get(0).sender;
 #endif
 
-    FabricWriter<output_chunk_size, packet_size, SenderT> fabric(noc, sender);
-
-    // One 1-hop atomic-inc header for both the "alive" barrier inc and the data_valid signals; destination and
-    // value (chunks) are set per send. Flush keeps a data_valid inc ordered after the payload it announces.
-    auto sem_packet_header = PacketHeaderPool::allocate_header(1);
-    fabric_api::fabric_unicast_noc_unicast_atomic_inc_set_state<
-        UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-        sem_packet_header, /*num_hops=*/1, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0u, 1u});
-    auto atomic_inc = [&](uint64_t addr, uint32_t val) {
-        fabric_api::fabric_unicast_noc_unicast_atomic_inc_with_state<
-            UnicastAtomicIncUpdateMask::DstAddr | UnicastAtomicIncUpdateMask::Val>(
-            sender, sem_packet_header, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{addr, val});
-    };
+    FabricWriter<output_chunk_size, packet_size, eager_staging, SenderT> fabric(sender);
 
     // Init handshake (send only): tell the neighbor's opposite-direction reader we're alive, so it lets its
     // paired writer start writing into our output. Our own reader does the matching wait.
     if constexpr (do_init_barrier) {
-        atomic_inc(safe_get_noc_addr(barrier_sem_noc_x, barrier_sem_noc_y, barrier_sem, 0), 1);
+        fabric.atomic_inc(safe_get_noc_addr(barrier_sem_noc_x, barrier_sem_noc_y, barrier_sem, 0), 1);
     }
 
     const uint64_t downstream_data_valid_addr =
         safe_get_noc_addr(data_valid_sem_noc_x, data_valid_sem_noc_y, data_valid_sem, 0);
-    auto signal = [&](uint32_t chunks) { atomic_inc(downstream_data_valid_addr, chunks); };
+    auto signal = [&](uint32_t chunks) { fabric.atomic_inc(downstream_data_valid_addr, chunks); };
 
     ///////////////////////////////////////////////////
     // MAIN
@@ -187,8 +178,8 @@ void kernel_main() {
     noc_async_atomic_barrier();
 
 #ifdef USE_WORKER_MUX
-    // close() doesn't flush; the barriers above ensure our writes into the mux buffer landed first. The mux
-    // drains buffered packets and self-terminates once every channel has closed.
+    // Barriers above land our writes into the mux. close() flushes any staged tail + tears down; the mux
+    // drains and self-terminates once every channel closes.
     mux_connection.close();
 #else
     close_connections(fabric_connection);

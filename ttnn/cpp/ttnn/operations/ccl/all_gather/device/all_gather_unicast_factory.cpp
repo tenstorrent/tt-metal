@@ -225,16 +225,15 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     }
     const CoreRangeSet worker_core_range(worker_core_set);
 
-    // Fabric Mux V2 config (one mux per active direction per link; kernels created below with the RT args).
-    constexpr uint8_t num_buffers_per_channel = 8;  // TODO(perf): V2 default; not swept for AllGather.
-    // TODO(perf): forwarder NOC is a V2 knob; sweep RISCV_0 vs RISCV_1 once we have data.
+    // Fabric Mux V2 config.
+    // TODO(perf): sweep, not tuned for AllGather. num_buffers {2,4,8,16} (pow2).
+    constexpr uint8_t num_buffers_per_channel = 8;
+    // TODO(perf): sweep forwarder NOC {RISCV_0, RISCV_1}.
     constexpr tt::tt_metal::NOC mux_forwarder_noc = tt::tt_metal::NOC::RISCV_0_default;
     tt::tt_fabric::FabricMuxV2Config mux_config(
         /*num_channels=*/workers_per_dir,
         /*num_buffers_per_channel=*/num_buffers_per_channel,
-        // TODO(perf/L1): fabric max channel buffer (= header + max payload); with num_buffers=8 this is 4x V1's
-        // per-channel L1. Leaner alternative if L1-bound: align_up(packet_header_size + packet_size, l1_align),
-        // which is >= the payload FabricWriter actually sends and still <= the fabric max.
+        // TODO(perf/L1): using the fabric max. Leaner if L1-bound: align_up(header + packet_size, l1_align).
         /*channel_buffer_size_bytes=*/tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(),
         /*base_l1_address=*/mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
 
@@ -390,8 +389,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
 
-    // When multiple workers share a fabric mux, the writer connects through it on its USE_WORKER_MUX path.
-    // V2 workers read all mux-connection params from RT args (build_from_args), so no mux CT args are needed.
+    // V2 mux workers read their connection params from RT args (build_from_args), so no mux CT args here.
     std::map<std::string, std::string> writer_defines;
     if (use_mux) {
         writer_defines["USE_WORKER_MUX"] = "1";
@@ -421,9 +419,8 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     const uint32_t input_addr = input_tensor.buffer()->address();
     const uint32_t output_addr = output_tensor.buffer()->address();
 
-    // One V2 mux per active direction per link, forwarding to that direction's neighbor; the direction's
-    // workers feed its channels. The mux self-terminates only after all num_channels (== workers_per_dir)
-    // channels close, so every worker of an active direction must connect (holds: num_iters is per-direction).
+    // One V2 mux per active direction per link. It self-terminates only once all workers_per_dir channels
+    // close, so every worker of an active direction must connect (num_iters is per-direction, so they do).
     if (use_mux) {
         for (uint32_t link = 0; link < num_links; ++link) {
             for (uint32_t dir = 0; dir < num_directions; ++dir) {
