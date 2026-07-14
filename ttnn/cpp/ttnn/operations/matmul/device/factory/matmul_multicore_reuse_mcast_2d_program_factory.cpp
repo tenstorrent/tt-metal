@@ -2420,16 +2420,30 @@ create_program_mcast_in0_in1(
         compute_named_compile_args["activation_param2"] = params.param2;
     }
 
-    // fp32 K-partials (cb_intermed0) are reloaded into DEST between blocks; mark the CB
-    // UnpackToDestFp32 so the reload goes directly to DEST instead of through SrcA (which would
-    // truncate the fp32 partial to TF32). See the descriptor path above for the full rationale.
-    // This classic path does not build the alias CB that lets the fused bias add keep an unmarked
-    // SrcA view, so the flag is only set when there is no bias; the live descriptor path handles
-    // the bias case via the alias.
+    // The fused bias add reads the partials CB as an FPU operand (SrcA), so UnpackToDestFp32 cannot be
+    // set on cb_intermed0 directly when bias is present. In that case the cross-block reload instead
+    // copies through cb_intermed0_alias, a second buffer index over the same SRAM carrying
+    // UnpackToDestFp32, while the bias add keeps reading cb_intermed0 via SrcA. The alias index is
+    // handed to the compute kernel through the MM_PARTIALS_RELOAD_ALIAS_CB define, which selects the
+    // alias reload path there. Without bias the reload reads cb_intermed0 and the flag is set on it.
+    constexpr auto cb_intermed0_alias = tt::CBIndex::c_7;
+    const bool bias_reload_alias =
+        fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32 && bias_mesh.has_value();
+    if (bias_reload_alias) {
+        mm_kernel_defines["MM_PARTIALS_RELOAD_ALIAS_CB"] = std::to_string(static_cast<uint32_t>(cb_intermed0_alias));
+    }
+    // When accumulating in fp32 with the K reduction split across blocks, the intermediate
+    // partials CB holds Float32 and is reloaded into DEST between blocks by copy_block_matmul_partials.
+    // Unless the reload's CB view is marked UnpackToDestFp32, that reload is routed through SrcA and
+    // rounded to TF32 (10 mantissa bits), so the fp32 partial loses precision on every block boundary
+    // and accuracy degrades as the number of K-blocks grows. The flag is set on the alias when bias
+    // forces a separate SrcA view of cb_intermed0 (see above), else on cb_intermed0 itself.
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32 && !bias_mesh.has_value()) {
-        unpack_to_dest_mode[static_cast<uint32_t>(cb_intermed0)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
+        const uint32_t cb_to_mark =
+            bias_reload_alias ? static_cast<uint32_t>(cb_intermed0_alias) : static_cast<uint32_t>(cb_intermed0);
+        unpack_to_dest_mode[cb_to_mark] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
     // Create compute kernel
@@ -2530,9 +2544,18 @@ create_program_mcast_in0_in1(
         std::map<uint8_t, tt::DataFormat> interm0_cb_data_format_spec{
             {interm0_cb_index, interm0_data_format},
         };
+        // Alias over the same SRAM, marked UnpackToDestFp32, for the bias reload (see above).
+        if (bias_reload_alias) {
+            interm0_cb_data_format_spec[static_cast<uint8_t>(cb_intermed0_alias)] = interm0_data_format;
+        }
         interm0_cb_config = tt_metal::CircularBufferConfig(interm0_CB_size, interm0_cb_data_format_spec)
                                 .set_page_size(interm0_cb_index, interm0_single_tile_size)
                                 .set_tile_dims(interm0_cb_index, output_tile);
+        if (bias_reload_alias) {
+            interm0_cb_config =
+                interm0_cb_config.set_page_size(static_cast<uint8_t>(cb_intermed0_alias), interm0_single_tile_size)
+                    .set_tile_dims(static_cast<uint8_t>(cb_intermed0_alias), output_tile);
+        }
 
         tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
         log_debug(
@@ -2546,11 +2569,20 @@ create_program_mcast_in0_in1(
         // share buffer
         std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
             {output_cb_index, output_data_format}, {interm0_cb_index, interm0_data_format}};
+        // Alias over the same SRAM, marked UnpackToDestFp32, for the bias reload (see above).
+        if (bias_reload_alias) {
+            output_cb_data_format_spec[static_cast<uint8_t>(cb_intermed0_alias)] = interm0_data_format;
+        }
         output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
                                .set_page_size(output_cb_index, output_single_tile_size)
                                .set_page_size(interm0_cb_index, interm0_single_tile_size)
                                .set_tile_dims(output_cb_index, output_tile)
                                .set_tile_dims(interm0_cb_index, output_tile);
+        if (bias_reload_alias) {
+            output_cb_config =
+                output_cb_config.set_page_size(static_cast<uint8_t>(cb_intermed0_alias), interm0_single_tile_size)
+                    .set_tile_dims(static_cast<uint8_t>(cb_intermed0_alias), output_tile);
+        }
     }
 
     if (output_is_sharded) {
