@@ -4014,7 +4014,7 @@ def test_matmul_kt_not_divisible_by_in0_block_w_rejected(device, expect_error):
 
 def _offset_cancellation_inputs(m, k, n, offset, seed=0):
     """Matrix A is a small random signal plus a large constant offset. Matrix B has each column that
-    sums to zero, so the offset contributes nothing to the true product A @ B, and the correct result
+    sums to zero, so the constant offset from A contributes nothing to A @ B, and the correct result
     is small. But the partial sums during the K reduction are large (~offset in magnitude), so any
     loss of precision mid-reduction destroys the small true result."""
     torch.manual_seed(seed)
@@ -4059,17 +4059,17 @@ _CROSSBLOCK_RELOAD_FACTORY_CONFIGS = {
 
 
 @pytest.mark.parametrize("factory", list(_CROSSBLOCK_RELOAD_FACTORY_CONFIGS))
-@pytest.mark.parametrize("packer_l1_acc", [False, True], ids=["reload", "packer_l1_acc"])
-@pytest.mark.parametrize("has_bias", [False, True], ids=["no_bias", "bias"])
+@pytest.mark.parametrize("packer_l1_acc", [False, True])
+@pytest.mark.parametrize("has_bias", [False, True])
 def test_matmul_fp32_crossblock_reload_precision(device, factory, packer_l1_acc, has_bias):
     """Precision of fp32 accumulation over a long K reduction in the multicast matmul factories.
 
     Matrix A (M x K) holds a large constant offset plus a small random signal. Matrix B (K x N) has
-    every column summing to zero over K, causing the offset to contribute nothing to the true product
+    every column summing to zero over K, causing the constant offset from A to contribute nothing to
     A @ B once all the components are summed, so the correct result is small. However, partway through
-    the K reduction the running sum is dominated by the offset and is large. If the accumulator
-    silently loses precision mid-reduction, rounding those large partial sums destroys the small true
-    result and PCC collapses.
+    the K reduction the running sum is dominated by the constant offset and is large. If the
+    accumulator silently loses precision mid-reduction, rounding those large partial sums destroys
+    the small true result and PCC collapses.
 
     The matmul runs with fp32 accumulation enabled (see compute_kernel_config below) and a small
     in0_block_w so K is split into many blocks. Cross-block accumulation takes one of two paths
@@ -4146,26 +4146,17 @@ def test_matmul_fp32_crossblock_reload_precision(device, factory, packer_l1_acc,
 
 
 @pytest.mark.xfail(
-    reason=(
-        "The untilize_out reblock stage loses precision independently of the K accumulation: with an "
-        "ill-conditioned offset-cancellation input, even exact fp32 accumulation (packer_l1_acc=True, "
-        "which uses no reload) only reaches PCC ~0.13. Fixing the fp32 reload therefore cannot lift "
-        "this above threshold; the untilize precision loss is a separate issue from the cross-block "
-        "reload precision this test family targets."
-    ),
-    strict=False,
+    reason=("Fused matmul untilize_out loses fp32 precision. Issue #49836"),
+    strict=True,
 )
-@pytest.mark.parametrize("packer_l1_acc", [False, True], ids=["reload", "packer_l1_acc"])
+@pytest.mark.parametrize("packer_l1_acc", [False, True])
 def test_matmul_fp32_crossblock_reload_untilize_precision(device, packer_l1_acc):
     """fp32 accumulation precision with untilize_out=True, where the untilize/reblock stage is a
     second reader of the intermediate partials CB alongside the cross-block accumulation.
 
-    Same ill-conditioned offset-cancellation setup as test_matmul_fp32_crossblock_reload_precision,
-    on the 1D multicast factory, no bias. Parametrized over the two accumulation paths so the reload
+    Same offset-cancellation setup as test_matmul_fp32_crossblock_reload_precision above,
+    on the 1D multicast factory, no bias. Parameterized over the two accumulation paths so the reload
     (packer_l1_acc=False) can be compared against the reload-free packer path (packer_l1_acc=True).
-
-    Marked xfail: the untilize_out path has a precision loss unrelated to the reload fix (see the
-    xfail reason), so both parametrizations currently land at PCC ~0.12-0.13.
     """
     m, k, n = 64, 8192, 64
     in0_block_w = 2  # tiles per K-block; Kt=256 -> 128 blocks, so the K reduction spans many blocks

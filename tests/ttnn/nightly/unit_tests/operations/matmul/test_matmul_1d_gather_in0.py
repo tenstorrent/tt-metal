@@ -1247,7 +1247,7 @@ def test_matmul_gather_in0_fp32_crossblock_reload_precision(device):
     """Precision of fp32 accumulation over a long K reduction in the gather_in0 1D matmul.
 
     Matrix A (M x K) holds a large constant offset plus a small random signal. Matrix B (K x N) has
-    every column summing to zero over K, causing the offset to contribute nothing to the true product
+    every column summing to zero over K, causing the constant offset from A to contribute nothing to
     A @ B once all the components are summed, so the correct result is small. However, partway through
     the K reduction the running sum is dominated by the offset and is large. If the accumulator
     silently loses precision mid-reduction, rounding those large partial sums destroys the small true
