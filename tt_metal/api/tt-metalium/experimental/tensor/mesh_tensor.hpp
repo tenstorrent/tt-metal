@@ -172,13 +172,6 @@ public:
      */
     void update_tensor_topology(TensorTopology tensor_topology);
 
-    /**
-     * Access to the implementation.
-     *
-     * pre-condition: The MeshTensor must not be in a moved-from (valueless) state.
-     */
-    using PimplBase::impl;
-
 private:
     // Internal constructor for transition. Use the from_buffer factory or allocate_on_device
     // to build a MeshTensor.

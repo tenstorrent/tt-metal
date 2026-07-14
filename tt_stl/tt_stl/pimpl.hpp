@@ -85,11 +85,7 @@ public:
      * Copy constructor: copy-constructs a new indirect<T> by allocating a new T and copying the contents of
      * `other` (or propagates valuelessness). Requires T to be copy-constructible.
      */
-    indirect(const indirect& other) {
-        if (other.p) {
-            p = std::make_unique<T>(*other.p);
-        }
-    }
+    indirect(const indirect& other) : p(other.p ? std::make_unique<T>(*other.p) : nullptr) {}
 
     /*
      * Copy assignment: replaces the contents by allocating a new T and copying the contents of `other` (or
@@ -150,7 +146,7 @@ private:
 /*
  * `PimplBase<Impl>` is a base class that implements the pimpl idiom for a derived class. It holds the
  * implementation object in a value-semantic ttsl::indirect<Impl> and exposes it to the derived class through
- * the protected impl() accessor, which the derived class's public API forwards to.
+ * the public impl() accessor.
  *
  * Impl needs to be COMPLETE only in the translation unit that instantiates PimplBase's special members
  * (indirect<Impl>'s copy/move/destroy). It may stay INCOMPLETE (forward-declared) in the header and in every
@@ -170,9 +166,6 @@ private:
  *       Widget(Widget&&) noexcept;
  *       Widget& operator=(Widget&&) noexcept;
  *       int value() const;
- *       // impl() is protected; re-expose it as public API if desired (valueless_after_move() is
- *       // already public):
- *       using PimplBase::impl;
  *   };
  *
  *   // widget.cpp -- WidgetImpl is COMPLETE here, so the defaulted members can be instantiated.
@@ -194,6 +187,16 @@ public:
      * assigned to; all other access will TT_FATAL.
      */
     bool valueless_after_move() const noexcept { return impl_.valueless_after_move(); }
+
+    /*
+     * Access the internal Impl object by reference. TT_FATALs if the object is in a valueless (moved-from) state.
+     */
+    Impl& impl() { return *impl_; }
+
+    /*
+     * Access the internal Impl object by reference. TT_FATALs if the object is in a valueless (moved-from) state.
+     */
+    const Impl& impl() const { return *impl_; }
 
 protected:
     /* Forwarding constructor: build the Impl in place (forwards to indirect's in_place ctor). */
@@ -236,16 +239,6 @@ protected:
      * out-of-line, since destroying the Impl requires it to be complete.
      */
     ~PimplBase() = default;
-
-    /*
-     * Access the internal Impl object by reference. TT_FATALs if the object is in a valueless (moved-from) state.
-     */
-    Impl& impl() { return *impl_; }
-
-    /*
-     * Access the internal Impl object by reference. TT_FATALs if the object is in a valueless (moved-from) state.
-     */
-    const Impl& impl() const { return *impl_; }
 
 private:
     ttsl::indirect<Impl> impl_;
