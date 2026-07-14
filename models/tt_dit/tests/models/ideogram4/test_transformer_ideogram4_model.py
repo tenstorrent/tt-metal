@@ -16,7 +16,7 @@ from loguru import logger
 
 import ttnn
 
-from ....models.transformers.transformer_ideogram4 import Ideogram4Transformer
+from ....models.transformers.transformer_ideogram4 import Ideogram4Transformer, rope_halfsplit_to_interleaved
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....reference.ideogram4 import modeling_ideogram4
@@ -137,12 +137,15 @@ def test_transformer_model(
     output_image_mask = (indicator == OUTPUT_IMAGE_INDICATOR).to(torch.float32).unsqueeze(-1)
     image_idx = (indicator == OUTPUT_IMAGE_INDICATOR).to(torch.long)
 
+    _cos_il, _sin_il = rope_halfsplit_to_interleaved(
+        cos.unsqueeze(1), sin.unsqueeze(1), config.emb_dim // config.num_heads
+    )
     tt_out = tt_model(
         x=bf16_tensor(x, device=mesh_device),
         llm_features=bf16_tensor(llm_features, device=mesh_device),
         t_sin=bf16_tensor(t_sin.unsqueeze(1), device=mesh_device),
-        cos=bf16_tensor(cos.unsqueeze(1), device=mesh_device),
-        sin=bf16_tensor(sin.unsqueeze(1), device=mesh_device),
+        cos=bf16_tensor(_cos_il, device=mesh_device),
+        sin=bf16_tensor(_sin_il, device=mesh_device),
         image_indicator_index=tensor.from_torch(image_idx, device=mesh_device, dtype=ttnn.uint32),
         llm_token_mask=bf16_tensor(llm_token_mask, device=mesh_device),
         output_image_mask=bf16_tensor(output_image_mask, device=mesh_device),
@@ -272,12 +275,15 @@ def test_transformer_model_parallel(
     padded_len = _sp_padded_len(seq_len, sp_factor)
 
     dev = submesh_device
+    _cos_il, _sin_il = rope_halfsplit_to_interleaved(
+        cos.unsqueeze(1), sin.unsqueeze(1), config.emb_dim // config.num_heads
+    )
     tt_out = tt_model(
         x=_seq_shard(x, 1, padded_len, sp_factor, sp_axis, dev, dtype=ttnn.bfloat16),
         llm_features=_seq_shard(llm_features, 1, padded_len, sp_factor, sp_axis, dev, dtype=ttnn.bfloat16),
         t_sin=bf16_tensor(t_sin.unsqueeze(1), device=dev),
-        cos=_seq_shard(cos.unsqueeze(1), 2, padded_len, sp_factor, sp_axis, dev, dtype=ttnn.bfloat16),
-        sin=_seq_shard(sin.unsqueeze(1), 2, padded_len, sp_factor, sp_axis, dev, dtype=ttnn.bfloat16),
+        cos=_seq_shard(_cos_il, 2, padded_len, sp_factor, sp_axis, dev, dtype=ttnn.bfloat16),
+        sin=_seq_shard(_sin_il, 2, padded_len, sp_factor, sp_axis, dev, dtype=ttnn.bfloat16),
         image_indicator_index=_seq_shard(image_idx, 1, padded_len, sp_factor, sp_axis, dev, dtype=ttnn.uint32),
         llm_token_mask=_seq_shard(llm_token_mask, 1, padded_len, sp_factor, sp_axis, dev, dtype=ttnn.bfloat16),
         output_image_mask=_seq_shard(output_image_mask, 1, padded_len, sp_factor, sp_axis, dev, dtype=ttnn.bfloat16),

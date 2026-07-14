@@ -19,7 +19,7 @@ from safetensors.torch import load_file
 import ttnn
 
 from ....encoders.qwen3vl.model_qwen3vl import Qwen3VlTextEncoder, create_rope_tensors
-from ....models.transformers.transformer_ideogram4 import Ideogram4Transformer
+from ....models.transformers.transformer_ideogram4 import Ideogram4Transformer, rope_halfsplit_to_interleaved
 from ....models.vae.vae_ideogram4 import Ideogram4VAEDecoder
 from ....parallel.config import DiTParallelConfig, ParallelFactor, VAEParallelConfig
 from ....parallel.manager import CCLManager
@@ -80,12 +80,15 @@ def test_transformer_real_weights(*, mesh_device: ttnn.MeshDevice) -> None:
     img_mask = (indicator == OUTPUT_IMAGE_INDICATOR).to(torch.float32).unsqueeze(-1)
     image_idx = (indicator == OUTPUT_IMAGE_INDICATOR).to(torch.int32)
 
+    _cos_il, _sin_il = rope_halfsplit_to_interleaved(
+        cos.unsqueeze(1), sin.unsqueeze(1), config.emb_dim // config.num_heads
+    )
     tt_out = tt(
         x=bf16_tensor(x, device=mesh_device),
         llm_features=bf16_tensor(llm_features, device=mesh_device),
         t_sin=bf16_tensor(t_sin.unsqueeze(1), device=mesh_device),
-        cos=bf16_tensor(cos.unsqueeze(1), device=mesh_device),
-        sin=bf16_tensor(sin.unsqueeze(1), device=mesh_device),
+        cos=bf16_tensor(_cos_il, device=mesh_device),
+        sin=bf16_tensor(_sin_il, device=mesh_device),
         image_indicator_index=tensor.from_torch(image_idx, device=mesh_device, dtype=ttnn.uint32),
         llm_token_mask=bf16_tensor(llm_mask, device=mesh_device),
         output_image_mask=bf16_tensor(img_mask, device=mesh_device),
@@ -294,12 +297,15 @@ def test_transformer_real_inputs(*, mesh_device: ttnn.MeshDevice) -> None:
     llm_mask = (indicator == LLM_TOKEN_INDICATOR).to(torch.float32).unsqueeze(-1)
     img_mask = (indicator == OUTPUT_IMAGE_INDICATOR).to(torch.float32).unsqueeze(-1)
     image_idx = (indicator == OUTPUT_IMAGE_INDICATOR).to(torch.int32)
+    _cos_il, _sin_il = rope_halfsplit_to_interleaved(
+        cos.unsqueeze(1), sin.unsqueeze(1), config.emb_dim // config.num_heads
+    )
     tt_out = tt(
         x=bf16_tensor(x, device=mesh_device),
         llm_features=bf16_tensor(llm_features, device=mesh_device),
         t_sin=bf16_tensor(t_sin.unsqueeze(1), device=mesh_device),
-        cos=bf16_tensor(cos.unsqueeze(1), device=mesh_device),
-        sin=bf16_tensor(sin.unsqueeze(1), device=mesh_device),
+        cos=bf16_tensor(_cos_il, device=mesh_device),
+        sin=bf16_tensor(_sin_il, device=mesh_device),
         image_indicator_index=tensor.from_torch(image_idx, device=mesh_device, dtype=ttnn.uint32),
         llm_token_mask=bf16_tensor(llm_mask, device=mesh_device),
         output_image_mask=bf16_tensor(img_mask, device=mesh_device),
@@ -415,12 +421,15 @@ def test_transformer_real_inputs_by_seq(*, mesh_device: ttnn.MeshDevice, grid: i
     llm_mask = (indicator == LLM_TOKEN_INDICATOR).float().unsqueeze(-1)
     img_mask = (indicator == OUTPUT_IMAGE_INDICATOR).float().unsqueeze(-1)
     image_idx = (indicator == OUTPUT_IMAGE_INDICATOR).to(torch.int32)
+    _cos_il, _sin_il = rope_halfsplit_to_interleaved(
+        cos.unsqueeze(1), sin.unsqueeze(1), config.emb_dim // config.num_heads
+    )
     tt_out = tt(
         x=bf16_tensor(x, device=mesh_device),
         llm_features=bf16_tensor(llm_features, device=mesh_device),
         t_sin=bf16_tensor(t_sin.unsqueeze(1), device=mesh_device),
-        cos=bf16_tensor(cos.unsqueeze(1), device=mesh_device),
-        sin=bf16_tensor(sin.unsqueeze(1), device=mesh_device),
+        cos=bf16_tensor(_cos_il, device=mesh_device),
+        sin=bf16_tensor(_sin_il, device=mesh_device),
         image_indicator_index=tensor.from_torch(image_idx, device=mesh_device, dtype=ttnn.uint32),
         llm_token_mask=bf16_tensor(llm_mask, device=mesh_device),
         output_image_mask=bf16_tensor(img_mask, device=mesh_device),

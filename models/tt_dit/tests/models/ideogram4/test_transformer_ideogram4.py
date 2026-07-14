@@ -28,7 +28,7 @@ from loguru import logger
 
 import ttnn
 
-from ....models.transformers.transformer_ideogram4 import Ideogram4TransformerBlock
+from ....models.transformers.transformer_ideogram4 import Ideogram4TransformerBlock, rope_halfsplit_to_interleaved
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....reference.ideogram4 import modeling_ideogram4
@@ -238,8 +238,11 @@ def test_transformer_block(
     # cos/sin rope tables on the sequence dim across the SP axis. The hidden dim stays
     # replicated (TP only shards inside the matmuls), so a single-axis shard suffices.
     padded_len = _sp_padded_len(seq_len, sp_factor)
-    cos4 = cos.unsqueeze(1)  # (B, 1, L, head_dim) to broadcast over heads in _apply_rope
+    cos4 = cos.unsqueeze(1)  # (B, 1, L, head_dim) to broadcast over heads
     sin4 = sin.unsqueeze(1)
+    # tt block uses interleaved RoPE (rotary_embedding_llama); permute cos/sin to match.
+    # The torch reference above keeps the original half-split tables (unchanged).
+    cos4, sin4 = rope_halfsplit_to_interleaved(cos4, sin4, HEAD_DIM)
     # The residual stream is FRACTURED on hidden (TP axis) and sharded on sequence (SP).
     # Shard x on both axes when tp>1: SP on the sequence dim, TP on the hidden dim.
     if sp_factor > 1:

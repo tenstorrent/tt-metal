@@ -31,8 +31,30 @@ from ...layers.module import Module, ModuleList
 from ...layers.normalization import DistributedRMSNorm, LayerNorm, RMSNorm
 from ...parallel.config import DiTParallelConfig
 from ...parallel.manager import CCLManager
+from ...utils.mochi import get_rot_transformation_mat
 from ...utils.padding import pad_weight_tensor
 from ...utils.substate import pop_substate
+from ...utils.tensor import bf16_tensor
+
+
+def rope_halfsplit_to_interleaved_perm(head_dim: int) -> torch.Tensor:
+    """Index permutation mapping the reference half-split RoPE layout to the interleaved
+    (adjacent-pair) layout that ``ttnn.experimental.rotary_embedding_llama`` + the 32x32
+    transformation matrix consume: ``out[2i] = in[i]``, ``out[2i+1] = in[i + head_dim/2]``.
+
+    Applied identically to the Q/K projection output channels, the QK-norm affine weights,
+    and the cos/sin tables. Because it is a SHARED permutation of head_dim on Q and K (and V/O
+    are untouched), attention Q·Kᵀ is invariant -> the layout swap is numerically neutral.
+    """
+    h = head_dim // 2
+    return torch.stack([torch.arange(h), torch.arange(h) + h], dim=1).flatten()
+
+
+def rope_halfsplit_to_interleaved(cos: torch.Tensor, sin: torch.Tensor, head_dim: int):
+    """Permute half-split cos/sin tables (cat(freqs,freqs)) into the interleaved
+    [f0,f0,f1,f1,...] layout expected by rotary_embedding_llama. Host-side helper for callers."""
+    perm = rope_halfsplit_to_interleaved_perm(head_dim)
+    return cos[..., perm], sin[..., perm]
 
 # Per-token role indicators (mirrors reference src/ideogram4/constants.py).
 OUTPUT_IMAGE_INDICATOR = 2
@@ -43,34 +65,13 @@ MATH_FIDELITY_HIFI2 = ttnn.MathFidelity.HiFi2
 MATH_FIDELITY_HIFI4 = ttnn.MathFidelity.HiFi4
 
 
-def _rotate_half(x: ttnn.Tensor) -> ttnn.Tensor:
-    """Half-split rotate, matching reference _rotate_half: [-x2, x1].
-
-    Reference (modeling_ideogram4.py): x1=x[..., :half], x2=x[..., half:],
-    returns cat((-x2, x1)). NOT the interleaved alt_complex_rotate90 convention.
-
-    NOTE: ttnn.experimental.rotate_half fuses slice+neg+concat into one op with the
-    identical half-split convention, but on the (4,2) loudbox it runs on far fewer
-    cores than the 120-wide elementwise slice/neg/concat and MEASURED ~20% SLOWER at
-    2048px (traced denoise 28.9s -> 35.1s). So keep the multi-core elementwise form.
-    """
-    half = x.shape[-1] // 2
-    x1 = x[..., :half]
-    x2 = x[..., half:]
-    return ttnn.concat([ttnn.neg(x2), x1], dim=-1)
-
-
-def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
-    """q_embed = q * cos + rotate_half(q) * sin (reference _apply_rotary_pos_emb).
-
-    Re-associated to fold the final `x*cos + rot*sin` add into one addcmul:
-        rot_sin = rotate_half(x) * sin  # 1 mul (plus the rotate_half slice/neg/concat)
-        out = x * cos + rot_sin         # 1 addcmul (was mul + add = 2 ops)
-    Saves one op vs `x*cos + rotate_half(x)*sin`. Element-wise throughout — no
-    fidelity/precision change vs the reference math.
-    """
-    rot_sin = _rotate_half(x) * sin
-    return ttnn.addcmul(rot_sin, x, cos, value=1.0)
+# RoPE is applied with ttnn.experimental.rotary_embedding_llama (the INTERLEAVED
+# adjacent-pair convention, rotate via the 32x32 transformation matrix). The reference
+# MRoPE is half-split; we permute Q/K channels + cos/sin into the interleaved layout
+# (rope_halfsplit_to_interleaved*) so this fused op applies -- a shared head_dim
+# permutation on Q and K, so attention Q·Kᵀ is unchanged. This lets Ideogram reuse the
+# standard rope fusion (and, later, the fused-norm+RoPE op). The old decomposed
+# half-split _rotate_half/_apply_rope were removed in favour of this.
 
 
 class Ideogram4TransformerBlock(Module):
@@ -326,6 +327,16 @@ class Ideogram4TransformerBlock(Module):
         self.sdpa_compute_kernel_config = self.sdpa_hifi2_config
         self.adaln_compute_kernel_config = self.hifi4_config
 
+        # RoPE (interleaved): the 32x32 transformation matrix that rotary_embedding_llama
+        # uses to rotate adjacent channel pairs; replicated across the mesh. HiFi4, but
+        # fp32_dest_acc_en MUST be False because head_dim (256) > 128 (op constraint).
+        self.rope_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
+        self.rope_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=MATH_FIDELITY_HIFI4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+        )
+
     def _get_ring_sdpa_program_config(self, local_seq_len):
         """Ring-SDPA program config (fixed q_chunk=128).
 
@@ -368,7 +379,12 @@ class Ideogram4TransformerBlock(Module):
                 w = pad_weight_tensor(w, self.padding_config, pad_output_dim=True)  # -> [hidden, padded_H*hd]
             return w.reshape(hidden, n_dev, self.n_local_heads, self.head_dim)
 
-        qkv = torch.cat([_shape(q), _shape(k), _shape(v)], dim=2)  # [hidden, n_dev, 3*n_local_heads, hd]
+        # Permute Q and K head_dim channels half-split -> interleaved (NOT V) so the projected
+        # q/k match the interleaved RoPE convention; V/O are untouched (attention Q·Kᵀ invariant).
+        rope_perm = rope_halfsplit_to_interleaved_perm(self.head_dim)
+        qkv = torch.cat(
+            [_shape(q)[..., rope_perm], _shape(k)[..., rope_perm], _shape(v)], dim=2
+        )  # [hidden, n_dev, 3*n_local_heads, hd]
         qkv = qkv.reshape(hidden, 3 * self.padded_heads * self.head_dim)
         return qkv.T  # nn.Linear layout [3*padded_inner, hidden]; ColParallel transposes + shards output
 
@@ -390,10 +406,13 @@ class Ideogram4TransformerBlock(Module):
             if self.padding_config is not None:
                 o_weight = pad_weight_tensor(o_weight, self.padding_config, pad_input_dim=False, pad_output_dim=True)
             state["o.weight"] = o_weight
+        # QK-norm affine weights are per-head_dim and applied before RoPE, so permute them by the
+        # same half-split -> interleaved perm as the Q/K projection channels.
+        rope_perm = rope_halfsplit_to_interleaved_perm(self.head_dim)
         if "norm_q.weight" in attn:
-            state["norm_q.weight"] = attn["norm_q.weight"]
+            state["norm_q.weight"] = attn["norm_q.weight"][..., rope_perm]
         if "norm_k.weight" in attn:
-            state["norm_k.weight"] = attn["norm_k.weight"]
+            state["norm_k.weight"] = attn["norm_k.weight"][..., rope_perm]
 
         # SwiGLU: reference is w2(silu(w1(x)) * w3(x)).
         # ff1 (ColParallel, swiglu) computes: chunk(ff1_out,2) -> a, gate; a * silu(gate).
@@ -543,8 +562,15 @@ class Ideogram4TransformerBlock(Module):
         q = self.norm_q(q)
         k = self.norm_k(k)
 
-        q = _apply_rope(q, cos, sin)
-        k = _apply_rope(k, cos, sin)
+        # Interleaved RoPE via the fused rotary op + 32x32 transformation matrix. cos/sin arrive
+        # in the interleaved layout; Q/K channels were permuted to match (in the QKV weight), and
+        # norm_q/k weights likewise, so this is numerically the reference half-split RoPE.
+        q = ttnn.experimental.rotary_embedding_llama(
+            q, cos, sin, self.rope_trans_mat, compute_kernel_config=self.rope_compute_kernel_config
+        )
+        k = ttnn.experimental.rotary_embedding_llama(
+            k, cos, sin, self.rope_trans_mat, compute_kernel_config=self.rope_compute_kernel_config
+        )
 
         if self.sp_factor > 1 and attn_mask is None:
             # Sequence parallel, unmasked (full attention): ring SDPA all-gathers K/V

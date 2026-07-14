@@ -116,6 +116,9 @@ def test_transformer_block_perf(
     padded_len = _sp_padded_len(seq_len, sp_factor)
     cos4 = cos.unsqueeze(1)
     sin4 = sin.unsqueeze(1)
+    from ....models.transformers.transformer_ideogram4 import rope_halfsplit_to_interleaved
+
+    cos4, sin4 = rope_halfsplit_to_interleaved(cos4, sin4, HEAD_DIM)  # block uses interleaved RoPE
     # Residual is TP-fractured on hidden + SP-sharded on sequence (Wan-style layout).
     if sp_factor > 1:
         x = torch.nn.functional.pad(x, (0, 0, 0, padded_len - seq_len))

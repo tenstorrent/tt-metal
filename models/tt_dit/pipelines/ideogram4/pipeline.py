@@ -149,7 +149,7 @@ from safetensors.torch import load_file as _load_file
 from safetensors.torch import save_file as _save_file
 
 from ...encoders.qwen3vl.model_qwen3vl import Qwen3VlTextEncoder, create_rope_tensors
-from ...models.transformers.transformer_ideogram4 import Ideogram4Transformer
+from ...models.transformers.transformer_ideogram4 import Ideogram4Transformer, rope_halfsplit_to_interleaved
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
 from ...parallel.manager import CCLManager
 from ...reference.ideogram4 import modeling_ideogram4
@@ -525,6 +525,8 @@ class Ideogram4Pipeline:
         cos, sin = rope(pos)
         cos4 = cos.unsqueeze(1).to(torch.bfloat16)  # [1, 1, L, head_dim]
         sin4 = sin.unsqueeze(1).to(torch.bfloat16)
+        # Denoiser uses interleaved RoPE (rotary_embedding_llama); permute cos/sin to match.
+        cos4, sin4 = rope_halfsplit_to_interleaved(cos4, sin4, cfg.emb_dim // cfg.num_heads)
         llm_mask = (ind == LLM_TOKEN_INDICATOR).float().unsqueeze(-1)  # [1, L, 1]
         img_mask = (ind == OUTPUT_IMAGE_INDICATOR).float().unsqueeze(-1)
         idx = (ind == OUTPUT_IMAGE_INDICATOR).to(torch.int32)  # [1, L]
