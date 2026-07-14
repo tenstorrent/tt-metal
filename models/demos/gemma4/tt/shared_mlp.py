@@ -14,11 +14,20 @@ HF weight shapes:
   down_proj.weight: [hidden_size, intermediate_size] = [2816, 2112]
 """
 
+import os
+
 import torch
 
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
+from models.demos.gemma4.tt.dram_sharded import DramShardedLinear
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
+
+# DRAM-width-sharded decode matmuls for the shared MLP. On by default for
+# multi-device (tp>1); the single width-sharded weight is the same size as the
+# interleaved one, so there is no memory cost. Set GEMMA4_MLP_DRAM_SHARD=0 to
+# fall back to plain interleaved matmuls.
+_DRAM_SHARD_MLP = os.environ.get("GEMMA4_MLP_DRAM_SHARD", "1") != "0"
 
 
 class SharedMLP:
@@ -78,26 +87,57 @@ class SharedMLP:
             gate_up_weight = None
             down_proj_weight = None
 
-        # gate_up: column-parallel (shard fused output dim across TP devices)
-        self.gate_up_proj = ttnn.as_tensor(
-            gate_up_weight,
-            device=mesh_device,
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=col_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_up_proj.weight{tp_suffix}{dtype_suffix}"),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        # down: row-parallel (shard input dim, allreduce after)
-        self.down_proj = ttnn.as_tensor(
-            down_proj_weight,
-            device=mesh_device,
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=row_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, f"down_proj.weight{tp_suffix}{dtype_suffix}"),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        self._dram_shard = _DRAM_SHARD_MLP and tp > 1
+        gu_n = 2 * self.intermediate_size // tp
+        down_k = self.intermediate_size // tp
+
+        if self._dram_shard:
+            # Single DRAM-width-sharded weight per projection (same size as the
+            # interleaved weight) serves both the decode DRAM-sharded kernel and
+            # the prefill 2D matmul — no extra memory vs interleaved.
+            self.gate_up_proj = DramShardedLinear(
+                gate_up_weight,
+                mesh_device,
+                col_mapper,
+                k=self.hidden_size,
+                n=gu_n,
+                dtype=dtype,
+                cache_file_name=get_cache_file_name(
+                    tensor_cache_path, f"gate_up_proj.weight.ws{tp_suffix}{dtype_suffix}"
+                ),
+            )
+            self.down_proj = DramShardedLinear(
+                down_proj_weight,
+                mesh_device,
+                row_mapper,
+                k=down_k,
+                n=self.hidden_size,
+                dtype=dtype,
+                cache_file_name=get_cache_file_name(tensor_cache_path, f"down_proj.weight.ws{tp_suffix}{dtype_suffix}"),
+            )
+        else:
+            # gate_up: column-parallel (shard fused output dim across TP devices)
+            gate_up_proj = ttnn.as_tensor(
+                gate_up_weight,
+                device=mesh_device,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=col_mapper,
+                cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_up_proj.weight{tp_suffix}{dtype_suffix}"),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            # down: row-parallel (shard input dim, allreduce after)
+            down_proj = ttnn.as_tensor(
+                down_proj_weight,
+                device=mesh_device,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=row_mapper,
+                cache_file_name=get_cache_file_name(tensor_cache_path, f"down_proj.weight{tp_suffix}{dtype_suffix}"),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self.gate_up_proj = lambda x: ttnn.linear(x, gate_up_proj)
+            self.down_proj = lambda x: ttnn.linear(x, down_proj)
 
     def __call__(self, hidden_states):
         """
@@ -107,12 +147,12 @@ class SharedMLP:
         """
         # Fused gate/up projection: one matmul produces [.., 2*inter/tp] per
         # device laid out as [up_i | gate_i]. A single wide matmul beats two
-        # narrow ones (fewer op launches, better core packing), which is the win
-        # even though we split the result back out below. ``ttnn.geglu`` would
-        # save the split ops but currently breaks the batch-1 decode trace, so we
-        # split manually and reuse the original (fast-approx GELU) math — keeping
-        # numerics identical to the unfused baseline.
-        gate_up = ttnn.linear(hidden_states, self.gate_up_proj)
+        # narrow ones (fewer op launches, better core packing). For multi-device
+        # the weight is DRAM-width-sharded so the decode (M<=32) matmul is
+        # weight-read-optimal; prefill uses a 2D program config on the same
+        # weight (see DramShardedLinear). We split the result back out and reuse
+        # the original (fast-approx GELU) math — numerics identical to baseline.
+        gate_up = self.gate_up_proj(hidden_states)
         shard = gate_up.shape[-1] // 2
         s = gate_up.shape[-2]
         up = ttnn.slice(gate_up, [0, 0, 0, 0], [1, 1, s, shard])
@@ -125,7 +165,7 @@ class SharedMLP:
         up.deallocate(True)
 
         # output = hidden @ down_proj
-        output = ttnn.linear(hidden, self.down_proj)
+        output = self.down_proj(hidden)
         hidden.deallocate(True)
 
         # Allreduce after row-parallel down_proj
