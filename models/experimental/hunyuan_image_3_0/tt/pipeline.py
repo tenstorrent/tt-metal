@@ -4,7 +4,7 @@
 # TTNN diffusion pipeline for HunyuanImage-3.0 — composes the already-ported,
 # individually-PCC-gated blocks into a denoise step and a multi-step loop.
 #
-# This is the "next milestone" referenced in tests/pcc/test_denoise_step.py:
+# Host-routed composition is in tests/pcc/test_denoise.py; on-device step in test_pipeline.py:
 # that test proves a single step end to end but round-trips every module
 # hand-off through host. Here the hand-offs stay ON DEVICE — the image-token
 # scatter into the [text | image | text] sequence is a device-side concat, and

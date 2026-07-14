@@ -16,25 +16,45 @@
 # `apply_final_norm` (default True for a standalone LM backbone; pass False to
 # match the image-gen call site).
 #
-# Memory: with stream_experts=True each HunyuanTtDecoderLayer keeps a host-RAM
-# reference to its layer's torch expert weights and rebuilds experts from them
-# every forward. Holding all 32 layers resident is therefore ~150GB of host
-# RAM. For the full 32-layer model this loader must be backed by on-demand disk
-# streaming (a future change); the small-stack PCC test holds only a few layers
-# and fits comfortably. `layer_loader(i)` returns the state_dict for layer i,
-# keyed `model.layers.{i}.*`.
+# Memory: with stream_experts=True each MoE rebuilds experts from host weights
+# every forward. Retaining those tensors for all 32 layers pins ~150–200GB and
+# gets OOM-killed mid-load; HunyuanTtModel therefore binds an on-demand disk
+# expert loader per layer and drops the retained host tensors after upload of
+# gate/shared/attention weights. `layer_loader(i)` returns the state_dict for
+# layer i, keyed `model.layers.{i}.*`.
 
 import gc
 import os
 import time
 
+import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+
+from models.experimental.hunyuan_image_3_0.ref.weights import load_tensors, resolve_base_model_dir
 
 from .transformer_layer import HunyuanTtDecoderLayer
 from .attention.rms_norm import HunyuanTtRMSNorm
 from .parallel_utils import sp_gather, sp_shard
 from .cache import cache_file, resolve_transformer_cache
+
+
+def _disk_expert_loader(layer_idx: int, moe_prefix: str):
+    """Return ``loader(expert_idx) -> state_dict`` reading one expert from safetensors.
+
+    Cast to float32 to match ``load_prefixed_state_dict`` (the path used for
+    gate/shared/attention upload); native bf16→as_tensor can diverge enough to
+    flip MoE top-k on single-token decode.
+    """
+
+    def load_one(expert_idx: int) -> dict:
+        keys = [
+            f"{moe_prefix}.experts.{expert_idx}.gate_and_up_proj.weight",
+            f"{moe_prefix}.experts.{expert_idx}.down_proj.weight",
+        ]
+        return {k: v.to(torch.float32) for k, v in load_tensors(resolve_base_model_dir(), keys).items()}
+
+    return load_one
 
 
 def default_bf16_layers(num_layers: int) -> set[int]:
@@ -163,32 +183,36 @@ class HunyuanTtModel(LightweightModule):
             t_layer = time.time()
             sd = layer_loader(i)
             layer_dtype = ttnn.bfloat16 if i in bf16_layers else weight_dtype
-            self.layers.append(
-                HunyuanTtDecoderLayer(
-                    device,
-                    sd,
-                    layer_num=i,
-                    hidden_size=hidden_size,
-                    num_heads=num_heads,
-                    num_kv_heads=num_kv_heads,
-                    head_dim=head_dim,
-                    num_experts=num_experts,
-                    moe_topk=moe_topk,
-                    use_qk_norm=use_qk_norm,
-                    use_mixed_mlp_moe=use_mixed_mlp_moe,
-                    norm_topk_prob=norm_topk_prob,
-                    rms_norm_eps=rms_norm_eps,
-                    weight_dtype=layer_dtype,
-                    stream_experts=stream_experts,
-                    ccl_manager=ccl_manager,
-                    expert_mesh_axis=expert_mesh_axis,
-                    tp_axis=tp_axis,
-                    tp_factor=tp_factor,
-                    sp_axis=sp_axis,
-                    sp_factor=sp_factor,
-                    weight_cache_path=self.weight_cache_path,
-                )
+            layer = HunyuanTtDecoderLayer(
+                device,
+                sd,
+                layer_num=i,
+                hidden_size=hidden_size,
+                num_heads=num_heads,
+                num_kv_heads=num_kv_heads,
+                head_dim=head_dim,
+                num_experts=num_experts,
+                moe_topk=moe_topk,
+                use_qk_norm=use_qk_norm,
+                use_mixed_mlp_moe=use_mixed_mlp_moe,
+                norm_topk_prob=norm_topk_prob,
+                rms_norm_eps=rms_norm_eps,
+                weight_dtype=layer_dtype,
+                stream_experts=stream_experts,
+                ccl_manager=ccl_manager,
+                expert_mesh_axis=expert_mesh_axis,
+                tp_axis=tp_axis,
+                tp_factor=tp_factor,
+                sp_axis=sp_axis,
+                sp_factor=sp_factor,
+                weight_cache_path=self.weight_cache_path,
             )
+            # Single-device streaming MoE: drop ~layer-sized host expert pack and
+            # reload one expert at a time from disk on forward (avoids ~200GB RSS).
+            if stream_experts and ccl_manager is None and hasattr(layer.mlp, "bind_expert_loader"):
+                moe_prefix = f"model.layers.{i}.mlp"
+                layer.mlp.bind_expert_loader(_disk_expert_loader(i, moe_prefix))
+            self.layers.append(layer)
             del sd
             gc.collect()
             if verbose:
