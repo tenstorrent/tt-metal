@@ -737,7 +737,7 @@ def _attention_qkv_minimal_matmul_config(mesh_device, max_seq_len, max_batch_siz
         if g.x >= 8 and g.y >= 8:
             return ttnn.MinimalMatmulConfig(
                 M_block_size=16,
-                K_block_size=4,
+                K_block_size=8,
                 N_block_size=4,
                 subblock_h=4,
                 subblock_w=2,
