@@ -250,6 +250,12 @@ def _perf_breakdown(
         pipe.release_traces()
 
 
+# Run the 4x8 Galaxy wall-clock breakdown (-k "mesh_device1" selects the 4x8 mesh; append
+# ' and traced' or ' and untraced' to -k for a single variant). Use -s to print the per-stage table:
+#   HF_HUB_OFFLINE=1 TT_METAL_HOME=$PWD PYTHONPATH=$PWD ARCH_NAME=blackhole \
+#     python_env/bin/python -m pytest \
+#     models/tt_dit/tests/models/bria_fibo/test_performance_bria_fibo.py::test_fibo_pipeline_perf_breakdown \
+#     -k "mesh_device1" -v -s --timeout=1800
 @pytest.mark.parametrize("mesh_device", [(2, 2), (4, 8)], indirect=["mesh_device"])
 @pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=["device_params"])
 @pytest.mark.parametrize("height, width, num_inference_steps, num_measured_runs", [(1024, 1024, 30, 3)])
@@ -278,6 +284,12 @@ def test_fibo_pipeline_perf_breakdown(*, mesh_device, height, width, num_inferen
     )
 
 
+# Run the 4x8 Galaxy wall-clock breakdown for the JSON prompt (-k "mesh_device1" selects the 4x8 mesh;
+# append ' and traced' or ' and untraced' to -k for a single variant). Use -s to print the per-stage table:
+#   HF_HUB_OFFLINE=1 TT_METAL_HOME=$PWD PYTHONPATH=$PWD ARCH_NAME=blackhole \
+#     python_env/bin/python -m pytest \
+#     models/tt_dit/tests/models/bria_fibo/test_performance_bria_fibo.py::test_fibo_pipeline_perf_breakdown_json \
+#     -k "mesh_device1" -v -s --timeout=1800
 @pytest.mark.parametrize("mesh_device", [(2, 2), (4, 8)], indirect=["mesh_device"])
 @pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=["device_params"])
 @pytest.mark.parametrize("height, width, num_inference_steps, num_measured_runs", [(1024, 1024, 30, 3)])
@@ -312,6 +324,13 @@ def test_fibo_pipeline_perf_breakdown_json(
     )
 
 
+# Run the 4x8 whole-pipeline device-op CSV (Tracy build required; -k "mesh_device1" selects the 4x8 mesh):
+#   TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=24000 \
+#     HF_HUB_OFFLINE=1 TT_METAL_HOME=$PWD PYTHONPATH=$PWD ARCH_NAME=blackhole \
+#     python_env/bin/python -m tracy -r -p -v --dump-device-data-mid-run -m pytest \
+#     models/tt_dit/tests/models/bria_fibo/test_performance_bria_fibo.py::test_fibo_pipeline_device_profile \
+#     -k "mesh_device1" --timeout=1800
+#   tt-perf-report generated/profiler/reports/<ts>/ops_perf_results_<ts>.csv --ignore-signposts
 @pytest.mark.parametrize("mesh_device", [(2, 2), (4, 8)], indirect=["mesh_device"])
 @pytest.mark.parametrize("device_params", [_PROFILE_DEVICE_PARAMS], indirect=["device_params"])
 @pytest.mark.parametrize("height, width, num_inference_steps", [(1024, 1024, 1)])
@@ -469,6 +488,15 @@ def _profile_forward(mesh_device, header, forward):
     return out
 
 
+# Run the 4x8 encode per-op report (Tracy build required; -k "mesh_device1" selects the 4x8 mesh):
+#   TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=6000 \
+#     HF_HUB_OFFLINE=1 TT_METAL_HOME=$PWD PYTHONPATH=$PWD ARCH_NAME=blackhole \
+#     python_env/bin/python -m tracy -r -p -v --dump-device-data-mid-run -m pytest \
+#     models/tt_dit/tests/models/bria_fibo/test_performance_bria_fibo.py::test_fibo_encode_device_profile \
+#     -k "mesh_device1" --timeout=1800
+#   mkdir -p encode_report_4x8
+#   tt-perf-report generated/profiler/reports/<ts>/ops_perf_results_<ts>.csv \
+#     --start-signpost "fibo encode" --end-signpost "fibo encode" --csv encode_report_4x8/ops.csv
 @pytest.mark.parametrize("mesh_device", [(2, 2), (4, 8)], indirect=["mesh_device"])
 @pytest.mark.parametrize("device_params", [_PROFILE_DEVICE_PARAMS], indirect=["device_params"])
 def test_fibo_encode_device_profile(*, mesh_device):
@@ -496,6 +524,15 @@ def test_fibo_encode_device_profile(*, mesh_device):
     assert prompt_embeds is not None and len(hidden_states) > 0
 
 
+# Run the 4x8 denoise per-op report (Tracy build required; -k "mesh_device1" selects the 4x8 mesh):
+#   TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=6000 \
+#     HF_HUB_OFFLINE=1 TT_METAL_HOME=$PWD PYTHONPATH=$PWD ARCH_NAME=blackhole \
+#     python_env/bin/python -m tracy -r -p -v --dump-device-data-mid-run -m pytest \
+#     models/tt_dit/tests/models/bria_fibo/test_performance_bria_fibo.py::test_fibo_denoise_device_profile \
+#     -k "mesh_device1" --timeout=1800
+#   mkdir -p denoise_report_4x8
+#   tt-perf-report generated/profiler/reports/<ts>/ops_perf_results_<ts>.csv \
+#     --start-signpost "fibo denoise" --end-signpost "fibo denoise" --csv denoise_report_4x8/ops.csv
 @pytest.mark.parametrize("mesh_device", [(2, 2), (4, 8)], indirect=["mesh_device"])
 @pytest.mark.parametrize("device_params", [_PROFILE_DEVICE_PARAMS], indirect=["device_params"])
 @pytest.mark.parametrize("height, width", [(1024, 1024)])
@@ -574,6 +611,15 @@ def test_fibo_denoise_device_profile(*, mesh_device, height, width):
     assert out is not None
 
 
+# Run the 4x8 decode per-op report (Tracy build required; -k "mesh_device1" selects the 4x8 mesh):
+#   TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=6000 \
+#     HF_HUB_OFFLINE=1 TT_METAL_HOME=$PWD PYTHONPATH=$PWD ARCH_NAME=blackhole \
+#     python_env/bin/python -m tracy -r -p -v --dump-device-data-mid-run -m pytest \
+#     models/tt_dit/tests/models/bria_fibo/test_performance_bria_fibo.py::test_fibo_decode_device_profile \
+#     -k "mesh_device1" --timeout=1800
+#   mkdir -p decode_report_4x8
+#   tt-perf-report generated/profiler/reports/<ts>/ops_perf_results_<ts>.csv \
+#     --start-signpost "fibo decode" --end-signpost "fibo decode" --csv decode_report_4x8/ops.csv
 @pytest.mark.parametrize("mesh_device", [(2, 2), (4, 8)], indirect=["mesh_device"])
 @pytest.mark.parametrize("device_params", [_PROFILE_DEVICE_PARAMS], indirect=["device_params"])
 @pytest.mark.parametrize("height, width", [(1024, 1024)])
