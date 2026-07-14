@@ -505,7 +505,6 @@ void kernel_main() {
                     // per-block hw_configure; llk_pack_init repoints the pack BD (the per-use-safe call the pool
                     // relies on per c-block). If this regresses to the earlier t=1 tilize OOB (stale BD base),
                     // the proper fix is to set the pack BD base ONCE in tilize.h's Quasar tilize_init.
-                    // See ~/QuasarProgrammingQuirks.md quirk #1.
                     // Quasar-only: re-seed the MATH<->PACK DEST semaphore + dest-bank phase for the tilize.
                     // Quasar's DEST handshake is a MATH_PACK-semaphore workaround (dest-dvalid gap); the plain
                     // Quasar tilize_init omits llk_math_pack_sync_init, so the tilize inherits the matmul's
@@ -515,11 +514,10 @@ void kernel_main() {
                     // MATH-side partner of the llk_pack_init/llk_pack_dest_init re-issued just below; runs once
                     // per tilize group, NO per-block hw_configure. Same Quasar gap the pool hit --
                     // tilizeA_B_reduce_init_short adds llk_math_pack_sync_init for exactly this reason.
-                    // NB: the residual DEST-bank race is fixed in the LLK primitive llk_pack_common.h
-                    // (_llk_packer_set_math_semaphore_<p_stall::MATH>: drains the bank-clear ZEROACC on the
-                    // MATH/FPU unit before the SEMGET releases MATH). That header-only LLK change only takes
-                    // effect on a JIT recompile -- editing an included LLK header does NOT bump this kernel's
-                    // JIT cache key, so this note also bumps the kernel source hash to force the rebuild.
+                    // NB: this seeds the MATH side; a RESIDUAL Quasar DEST-handshake race in the per-tile
+                    // tilize_block datacopy<->pack loop (ERROR_TRISC1 0x19, fault tile/core move with DPRINT
+                    // latency) survives even with correct init -- it is an LLK-team issue, see
+                    // ~/llk_conv_tilize_issue.md.
                     MATH((llk_math_pack_sync_init()));
                     PACK((llk_pack_init(tilized_in0_cb_id)));
                     // A/B RESULT: disabling this moved the tilize fault EARLIER (t=4 -> t=1), so dest_init
@@ -623,7 +621,7 @@ void kernel_main() {
                 // write -> PACR0_TILE_INC / ERROR_TRISC1 fault. Repoint the pack BD to the actual output CB
                 // here (once per K-block; the reload path at 539+ doesn't touch pack config). WH/BH don't
                 // need this (they recompute the full L1 addr from fifo_wr_ptr each pack). Mirrors
-                // compute_pool_2d.cpp's llk_pack_init re-init. See ~/QuasarProgrammingQuirks.md quirk #1.
+                // compute_pool_2d.cpp's llk_pack_init re-init.
                 PACK((llk_pack_init(curr_matmul_out_cb)));
 #endif
                 // DEBUG (op localizer): marks the matmul pack for this height block. Printed BEFORE the packs
@@ -833,8 +831,7 @@ void kernel_main() {
                 // buffer descriptor. The pack BD is still pointed at matmul_partials (from the matmul-block
                 // pack_init); pack_tile below targets untilize_mode_out_cb_id -> stale base + new offset ->
                 // OOB PACR0_TILE_INC / ERROR_TRISC1 (this is the fault that surfaced after the matmul-pack
-                // fix, at a higher L1 addr). Repoint the pack BD to the actual pack target CB. See
-                // ~/QuasarProgrammingQuirks.md quirk #1.
+                // fix, at a higher L1 addr). Repoint the pack BD to the actual pack target CB.
                 PACK((llk_pack_init(untilize_mode_out_cb_id)));
 #endif
                 reconfig_data_format(in1_cb_id, matmul_partials_cb, mm_in0_cb_id, bias_cb_id);
