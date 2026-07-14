@@ -124,7 +124,8 @@ ChunkedParams compute_chunked_params(
     const std::optional<int64_t>& chunk_start_idx,
     const std::optional<Tensor>& page_table,
     uint32_t k_seq_dim,
-    std::size_t q_chunk_size) {
+    std::size_t q_chunk_size,
+    uint32_t input_tile_height) {
     ChunkedParams p;
     if (!is_chunked) {
         return p;
@@ -134,7 +135,7 @@ ChunkedParams compute_chunked_params(
     }
     const auto& page_table_tensor = page_table.value();
     p.block_size = k_seq_dim;
-    p.block_size_t = p.block_size / TILE_HEIGHT;
+    p.block_size_t = p.block_size / input_tile_height;
     if (flexible_chunked) {
         p.max_blocks_per_seq = page_table_tensor.padded_shape()[1];
         p.page_table_stick_size = p.max_blocks_per_seq * sizeof(int32_t);
@@ -180,6 +181,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const uint32_t head_dim_v = operation_attributes.head_dim_v.value_or(input_tensor_q.logical_shape()[3]);
     const auto& sliding_window_size = operation_attributes.sliding_window_size;
 
+    const auto input_tile = input_tensor_q.tensor_spec().tile();
+    const auto input_tile_height = input_tile.get_height();
+    const auto input_tile_width = input_tile.get_width();
     std::size_t q_chunk_size =
         operation_attributes.program_config ? operation_attributes.program_config->q_chunk_size : 32;
     std::size_t k_chunk_size =
@@ -234,13 +238,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const uint32_t padded_Sq = std::ceil(static_cast<float>(Sq) / q_chunk_size) * q_chunk_size;
     const uint32_t padded_Sk = std::ceil(static_cast<float>(Sk) / k_chunk_size) * k_chunk_size;
 
-    const uint32_t Sqt = padded_Sq / TILE_HEIGHT;
-    const uint32_t Skt = padded_Sk / TILE_HEIGHT;
-    const uint32_t DHt = DH / TILE_WIDTH;
-    const uint32_t vDHt = use_mla ? head_dim_v / TILE_WIDTH : DHt;
+    const uint32_t Sqt = padded_Sq / input_tile_height;
+    const uint32_t Skt = padded_Sk / input_tile_height;
+    const uint32_t DHt = DH / input_tile_width;
+    const uint32_t vDHt = use_mla ? head_dim_v / input_tile_width : DHt;
 
-    const uint32_t valid_Sqt = std::ceil(static_cast<float>(Sq) / TILE_HEIGHT);
-    const uint32_t valid_Skt = std::ceil(static_cast<float>(Sk) / TILE_HEIGHT);
+    const uint32_t valid_Sqt = std::ceil(static_cast<float>(Sq) / input_tile_height);
+    const uint32_t valid_Skt = std::ceil(static_cast<float>(Sk) / input_tile_height);
     /*
     For non-causal case with Q/K padding:
     - If user provides a mask: reader reads unpadded mask and fills padded K positions with -inf
@@ -249,8 +253,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     */
     const bool use_padded_mask = (!is_causal) && ((padded_Sk != Sk) || (padded_Sq != Sq));
 
-    const uint32_t Sq_chunk_t = q_chunk_size / TILE_HEIGHT;
-    const uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
+    const uint32_t Sq_chunk_t = q_chunk_size / input_tile_height;
+    const uint32_t Sk_chunk_t = k_chunk_size / input_tile_height;
     const uint32_t q_num_chunks = padded_Sq / q_chunk_size;
     const uint32_t k_num_chunks = padded_Sk / k_chunk_size;
     const bool use_provided_mask = attn_mask.has_value();
@@ -288,7 +292,14 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     log_debug(tt::LogOp, "sliding_window_size: {}", sliding_window_size.has_value() ? sliding_window_size.value() : 0);
 
     const auto chunked = compute_chunked_params(
-        is_chunked, is_chunked_legacy, flexible_chunked, chunk_start_idx, page_table, k_shape[2], q_chunk_size);
+        is_chunked,
+        is_chunked_legacy,
+        flexible_chunked,
+        chunk_start_idx,
+        page_table,
+        k_shape[2],
+        q_chunk_size,
+        input_tile_height);
     const uint32_t chunked_q_chunk_offset = chunked.chunked_q_chunk_offset;
     const uint32_t block_size = chunked.block_size;
     const uint32_t block_size_t = chunked.block_size_t;
@@ -366,8 +377,16 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
     const uint32_t qk_in0_block_w = DHt;
 
+    // Tiny / non-square tiles (e.g. 16x32) have a partial face in the row dimension. The matmul LLK
+    // math path always indexes dest as DstTileShape::Tile32x32 and has a partial_face mismatch between
+    // unpack and math when ct_dim > 1, which causes the 2nd+ width tile in a subblock to pack as zeros.
+    // Force subblock_w == 1 for partial-face tiles so only one output column-tile is produced per
+    // subblock, sidestepping the broken multi-width dest path.
+    const bool partial_face_tile = input_tile_height < tt::constants::TILE_HEIGHT;
+    const uint32_t subblock_w_cap = partial_face_tile ? 1u : UINT32_MAX;
+
     auto [qk_out_subblock_h, qk_out_subblock_w] =
-        detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
+        detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size, UINT32_MAX, subblock_w_cap);
 
     const bool use_streaming_compute = can_use_streaming_compute(fp32_dest_acc_en);
 
@@ -383,8 +402,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // Non-causal partial-tile K (Sk % TILE != 0) needs a partial-tile mask in cb_mask_in.
     // Not used for a dense provided mask (the reader neginf-fills padded positions in the mask).
     const uint32_t k_partial_col =
-        (use_streaming_compute && generated_padding_mask && !use_provided_mask && (Sk % TILE_HEIGHT != 0))
-            ? (Sk % TILE_HEIGHT)
+        (use_streaming_compute && generated_padding_mask && !use_provided_mask && (Sk % input_tile_height != 0))
+            ? (Sk % input_tile_height)
             : 0;
     const bool lw_partial_active = (k_partial_col > 0);
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
@@ -418,8 +437,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // now for out0
     const uint32_t out_in0_block_w = Sk_chunk_t;
 
-    auto [out_out_subblock_h, out_out_subblock_w] =
-        detail::determine_largest_subblock_size(Sq_chunk_t, vDHt, dst_size, use_streaming_compute ? 2 : UINT32_MAX);
+    auto [out_out_subblock_h, out_out_subblock_w] = detail::determine_largest_subblock_size(
+        Sq_chunk_t, vDHt, dst_size, use_streaming_compute ? 2 : UINT32_MAX, subblock_w_cap);
 
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
@@ -661,13 +680,15 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // both must share the same data format for the unpack config to be correct.
     TT_ASSERT(im_df == stats_df, "SDPA fused SALAD correction requires out and sum CBs to share data format");
 
-    uint32_t q_tile_size = tt::tile_size(q_df);
-    uint32_t k_tile_size = tt::tile_size(k_df);
-    uint32_t v_tile_size = tt::tile_size(v_df);
-    uint32_t out_tile_size = tt::tile_size(out_df);
-    uint32_t scalar_tile_size = tt::tile_size(scalar_df);
-    uint32_t im_tile_size = tt::tile_size(im_df);
-    uint32_t stats_tile_size = tt::tile_size(stats_df);
+    const tt::tt_metal::Tile scores_tile({input_tile_height, input_tile_height});
+
+    uint32_t q_tile_size = input_tile.get_tile_size(q_df);
+    uint32_t k_tile_size = input_tile.get_tile_size(k_df);
+    uint32_t v_tile_size = input_tile.get_tile_size(v_df);
+    uint32_t out_tile_size = input_tile.get_tile_size(out_df);
+    uint32_t scalar_tile_size = input_tile.get_tile_size(scalar_df);
+    uint32_t im_tile_size = input_tile.get_tile_size(im_df);
+    uint32_t stats_tile_size = input_tile.get_tile_size(stats_df);
 
     log_debug(tt::LogOp, "q_data_format: {}", q_df);
     log_debug(tt::LogOp, "k_data_format: {}", k_df);
@@ -689,6 +710,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
                 .buffer_index = static_cast<uint8_t>(cb_index),
                 .data_format = data_format,
                 .page_size = page_size_bytes,
+                .tile = input_tile,
             }}},
         });
         return cb_index;
@@ -708,7 +730,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         // Lightweight mask: Float16_b, mask_tiles already computed (1 for padding, 2 for causal).
         // Legacy: full Sq×Sk double-buffered matrix in Bfp4_b.
         tt::DataFormat actual_mask_df = lightweight_mask ? tt::DataFormat::Float16_b : mask_df;
-        uint32_t actual_mask_tile_size = tt::tile_size(actual_mask_df);
+        uint32_t actual_mask_tile_size = input_tile.get_tile_size(actual_mask_df);
         cb_ids.mask_in = allocate_tile_cb(mask_tiles, actual_mask_tile_size, actual_mask_df);
     }
 
@@ -722,7 +744,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     if (is_windowed) {
         const auto& cu = tensor_args.cu_window_seqlens.value();
         tt::DataFormat cu_df = tt::tt_metal::datatype_to_dataformat_converter(cu.dtype());
-        cb_ids.cu_window_seqlens = allocate_tile_cb(1, tt::tile_size(cu_df), cu_df);
+        cb_ids.cu_window_seqlens = allocate_tile_cb(1, input_tile.get_tile_size(cu_df), cu_df);
         cu_window_buffer = cu.buffer();
         cu_window_seqlens_eles = cu.logical_shape()[-1];
     }
@@ -741,7 +763,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
     if (use_attention_sink) {
         tt::DataFormat sink_df = tt::tt_metal::datatype_to_dataformat_converter(attention_sink.value().dtype());
-        uint32_t sink_tile_size = tt::tile_size(sink_df);
+        uint32_t sink_tile_size = input_tile.get_tile_size(sink_df);
         log_debug(tt::LogOp, "attention_sink_tiles: {}", attention_sink_tiles);
         log_debug(tt::LogOp, "sink_tile_size: {}", sink_tile_size);
         log_debug(tt::LogOp, "sink_df: {}", sink_df);
