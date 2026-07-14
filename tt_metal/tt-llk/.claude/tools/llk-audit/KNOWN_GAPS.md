@@ -107,6 +107,25 @@ raw `facts.<arch>.jsonl` inspection (L4's writes ARE emitted, just unrouted).
   tag (see mmio-race `blind_spots`) over-clears the excepted/non-CFG-GPR subset these MOP writes belong
   to — even if captured they'd need the exception-aware tagging, not a blanket auto-order.
 
+### L7 — QSR `AUTOTTSYNC_ORDERED` blanket tag ignores TTSync's RQ exceptions + non-CFG/GPR MMIO
+`mmio_race.py` converts every unguarded QSR write `NO_LOCAL_ORDERING → AUTOTTSYNC_ORDERED` (pre-cleared,
+"not a race candidate"). QSR genuinely enables Auto TTSync (`set_ttsync_enables<TRACK_ALL>`,
+`llk_math_common.h:32`), so this is CORRECT for a tracked CFG/GPR write with an RQ-tracked consumer. But
+per Confluence "Every Conceivable TTSync Detail" 1340276980, the RQ EXCEPTS `RESOURCEDECL`, `MOP_CFG`,
+`REPLAY(load=1)`, and post-load-replay instructions — a write consumed by one of those is NOT
+auto-ordered — and TTSync tracks only CFG/GPR/TDMA, not other MMIO spaces (e.g. the replay unit
+`replay_mmap[...]`). The blanket tag over-clears both.
+- **Risk:** CAP-REDUCTION — pre-clears (marks non-candidate) a write TTSync does not actually order.
+- **Live today:** 10 `replay_mmap[...]` writes in `start/finish_using_replay_mmio_load` (replay-unit
+  MMIO, in a REPLAY-load context) are tagged `AUTOTTSYNC_ORDERED`. They are NOT a live race — ordered by
+  an explicit `fence`+CSR chicken-bit + `wait_replay_idle()` + mutex (ref TEN-2139) — but the tag's
+  *reasoning* is wrong (attributes safety to TTSync). Disclosed in mmio-race `blind_spots`.
+- **Fix:** tag by consumer/target — auto-clear only a CFG/GPR write whose consumer is RQ-tracked;
+  SURFACE (not pre-clear) a write consumed by MOP_CFG/REPLAY/RESOURCEDECL or targeting non-CFG/GPR MMIO.
+- **Fix hazard:** FALSE-FLAG if narrowed bluntly — QSR MOP/replay writes are generally safe (bank
+  backpressure / fence-mutex), so surfacing them all would over-flag; a correct fix needs consumer-type
+  + target-space discrimination the tool does not have today → deferred.
+
 ### X1 — object-method `async_read_with_state` not recalled by `noc_is_read`
 `noc_is_read` recalls the whole free-function `noc_async_read*` family by prefix, but its
 object-method branch matches only the exact name `async_read` — so the object form
