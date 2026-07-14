@@ -60,6 +60,7 @@
 #include "tt_metal/impl/dispatch/realtime_profiler_tracy_handler.hpp"
 #include "tt_metal/impl/profiler/profiler.hpp"                // tt::tt_metal::SyncInfo, DeviceProfiler
 #include "tt_metal/impl/profiler/profiler_state_manager.hpp"  // ProfilerStateManager
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -330,25 +331,32 @@ void RealtimeProfilerManager::publish_pages(
     const uint32_t chip_id = dev_state.chip_id;
     const double sync_frequency = dev_state.sync_frequency;
     const DataCollector* const data_collector = data_collector_;
-    for (uint32_t page = 0; page < num_pages; ++page) {
-        const uint32_t* rp = page_buf + page * kPageWords;
-        if (!is_record(rp)) {
-            continue;
+    {
+        TTZoneScopedDN(RT_PROFILER, "BuildRecords");
+        for (uint32_t page = 0; page < num_pages; ++page) {
+            const uint32_t* rp = page_buf + page * kPageWords;
+            if (!is_record(rp)) {
+                continue;
+            }
+            records.emplace_back(
+                rp[2],
+                chip_id,
+                (static_cast<uint64_t>(rp[0]) << 32) | rp[1],
+                (static_cast<uint64_t>(rp[4]) << 32) | rp[5],
+                sync_frequency,
+                data_collector->GetKernelSourcesForRuntimeId(static_cast<uint16_t>(rp[2])));
         }
-        records.emplace_back(
-            rp[2],
-            chip_id,
-            (static_cast<uint64_t>(rp[0]) << 32) | rp[1],
-            (static_cast<uint64_t>(rp[4]) << 32) | rp[5],
-            sync_frequency,
-            data_collector->GetKernelSourcesForRuntimeId(static_cast<uint16_t>(rp[2])));
     }
     if (records.empty()) {
         return;
     }
     num_published_records_.fetch_add(records.size(), std::memory_order_relaxed);
     num_published_batches_.fetch_add(1, std::memory_order_relaxed);
-    ring_->writer().publish_batch(std::span<const tt::ProgramRealtimeRecord>(records));
+    {
+        TTZoneScopedDN(RT_PROFILER, "PublishBatch");
+        TTZoneValueD(RT_PROFILER, records.size());
+        ring_->writer().publish_batch(std::span<const tt::ProgramRealtimeRecord>(records));
+    }
 }
 
 bool RealtimeProfilerManager::has_active_finish_sync() const {
@@ -930,7 +938,12 @@ uint32_t RealtimeProfilerManager::drain_device_pages(
         return 0;
     }
     const uint32_t num_pages_to_read = std::min(available, kMaxSocketPagesPerRead);
-    dev_state.socket->read(page_buf.data(), num_pages_to_read);
+    TTZoneScopedDN(RT_PROFILER, "DrainDevice");
+    TTZoneValueD(RT_PROFILER, num_pages_to_read);
+    {
+        TTZoneScopedDN(RT_PROFILER, "SocketRead");
+        dev_state.socket->read(page_buf.data(), num_pages_to_read);
+    }
 
     if (scan_sync_marker && dev_state.finish_sync_phase == DeviceState::FinishSyncPhase::AwaitingResponse) {
         for (uint32_t page = 0; page < num_pages_to_read; ++page) {
@@ -1052,6 +1065,8 @@ void RealtimeProfilerManager::run_consumer(Consumer& consumer) {
     uint64_t reported_dropped = 0;
 
     auto deliver_batch = [&](std::span<const tt::ProgramRealtimeRecord> batch, uint64_t dropped_total) {
+        TTZoneScopedDNC(RT_PROFILER, "Callback", 0xF032E6);
+        TTZoneValueD(RT_PROFILER, batch.size());
         const tt::ProgramRealtimeRecordBatch arg{batch, dropped_total - reported_dropped};
         reported_dropped = dropped_total;
         try {
@@ -1067,7 +1082,11 @@ void RealtimeProfilerManager::run_consumer(Consumer& consumer) {
         // stop_consumer sets the stop mode then wakes, so waiting on a token sampled only inside wait() could miss that
         // wake and hang
         const auto token = consumer.reader.wait_token();
-        const auto batch = consumer.reader.read_batch(records);
+        std::span<tt::ProgramRealtimeRecord> batch;
+        {
+            TTZoneScopedDN(RT_PROFILER, "ReadBatch");
+            batch = consumer.reader.read_batch(records);
+        }
         const uint64_t dropped_total = consumer.reader.dropped();
         const ConsumerStopMode stop_mode = consumer.stop_mode.load(std::memory_order_acquire);
         if (stop_mode == ConsumerStopMode::StopWithoutDrain) {
@@ -1078,6 +1097,7 @@ void RealtimeProfilerManager::run_consumer(Consumer& consumer) {
         } else if (stop_mode == ConsumerStopMode::DrainThenStop) {
             break;
         } else {
+            TTZoneScopedDN(RT_PROFILER, "Wait");
             consumer.reader.wait(token);
         }
     }
