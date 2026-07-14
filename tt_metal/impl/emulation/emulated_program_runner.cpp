@@ -2542,15 +2542,38 @@ static void __emule_fabric_deliver(
             }
             break;
         }
-        case 4: {  // NOC_UNICAST_SCATTER_WRITE: noc_address[4]@0, chunk_size[3]@32, chunk_count@38
+        case 4: {  // NOC_UNICAST_SCATTER_WRITE: noc_address[4]@0, chunk_size[3]@32, chunk_count@38, chunk_encoding@39
+            // Also carries the fused scatter-write + atomic-inc: chunk_encoding holds a 2-bit code per chunk
+            // (silicon NocScatterWriteChunkEncoding: 0 = NOP, 1 = unicast write, 2/3 = semaphore increment).
+            // On silicon a scatter write is NOT left at 0 — to_noc_unicast_scatter_write fills every chunk with
+            // encoding 1, and a fused packet marks its trailing chunk as a seminc (2/3) with the writes at 1.
+            // Encoding 0 is CHUNK_ENCODING_NOP on the wire, so the write branch below handling enc 0 the same
+            // as enc 1 is an emulator compatibility fallback only: emule's own NocUnicastScatterCommandHeader
+            // defaults chunk_encoding to 0 for a plain scatter write. For a seminc chunk, fetch_add the value
+            // stored in that chunk's size slot instead of copying payload (the seminc chunk carries no bytes).
             const uint64_t* na = reinterpret_cast<const uint64_t*>(h + 0);
             const uint16_t* cs = reinterpret_cast<const uint16_t*>(h + 32);
             uint8_t chunk_count = *(h + 38);
+            uint8_t chunk_encoding = *(h + 39);
             uint32_t off = 0;
-            for (uint8_t i = 0; i < chunk_count && payload != nullptr; ++i) {
-                uint32_t csz = (i + 1 < chunk_count) ? cs[i] : (size - off);
+            for (uint8_t i = 0; i < chunk_count; ++i) {
+                const uint8_t enc = (chunk_encoding >> (i * 2)) & 0x3;
                 uint8_t* d = __emule_fabric_resolve_remote(dst_chip, na[i]);
-                if (d != nullptr && csz > 0) {
+                if (enc == 2 /*SEMINC_NO_FLUSH*/ || enc == 3 /*SEMINC_FLUSH*/) {
+                    uint32_t val = cs[i];  // seminc value packed into this chunk's size slot
+                    if (d != nullptr) {
+                        reinterpret_cast<std::atomic<uint32_t>*>(d)->fetch_add(val, std::memory_order_release);
+                        if (dbg) {
+                            fprintf(stderr, "[EMULE_FABRIC]   scatter_seminc chip=%u dst=%p val=%u\n",
+                                    dst_chip, (void*)d, val);
+                        }
+                        __emule_fiber_wake(d);
+                    }
+                    continue;  // no payload advance for a seminc chunk
+                }
+                // Write chunk. The last write chunk's size is implicit (remaining payload).
+                uint32_t csz = (i + 1 < chunk_count) ? cs[i] : (size - off);
+                if (payload != nullptr && d != nullptr && csz > 0) {
                     std::memcpy(d, static_cast<const uint8_t*>(payload) + off, csz);
                     __emule_fiber_wake(d);
                 }
