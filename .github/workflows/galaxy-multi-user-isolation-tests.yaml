@@ -158,9 +158,12 @@ jobs:
         timeout-minutes: 10
         run: |
           HEALTH_CHECK=./build/test/tt_metal/tt_fabric/test_system_health
+          # tt-smi lives in the runner provisioning venv, not on the default PATH.
+          ACTIVATE=/opt/tt_metal_infra/provisioning/provisioning_env/bin/activate
+          reset_cluster() { ( if [ -f "$ACTIVATE" ]; then source "$ACTIVATE"; fi; tt-smi -glx_reset_auto ); }
           for i in $(seq 1 10); do
             echo "Reset/health-check attempt $i"
-            if tt-smi -glx_reset_auto; then
+            if reset_cluster; then
               if [ ! -x "$HEALTH_CHECK" ]; then
                 echo "Reset succeeded; test_system_health binary not present, skipping link verification"
                 exit 0
@@ -181,6 +184,10 @@ jobs:
         # pass), so automate that recovery instead of failing the whole job.
         timeout-minutes: 10
         run: |
+          # tt-smi is in the provisioning venv; activate in a subshell only so the
+          # python3 below keeps using the setup-python env with the ttnn wheel.
+          ACTIVATE=/opt/tt_metal_infra/provisioning/provisioning_env/bin/activate
+          reset_cluster() { ( if [ -f "$ACTIVATE" ]; then source "$ACTIVATE"; fi; tt-smi -glx_reset_auto ); }
           attempts=3
           for i in $(seq 1 $attempts); do
             echo "generate_tray_mapping attempt $i of $attempts"
@@ -191,7 +198,7 @@ jobs:
             echo "generate_tray_mapping failed on attempt $i"
             if [ "$i" -lt "$attempts" ]; then
               echo "Resetting cluster before retry..."
-              tt-smi -glx_reset_auto || true
+              reset_cluster || true
               sleep 10
             fi
           done
