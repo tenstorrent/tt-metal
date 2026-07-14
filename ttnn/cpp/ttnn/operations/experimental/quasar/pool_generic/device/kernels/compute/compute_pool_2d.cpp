@@ -250,28 +250,18 @@ void kernel_main() {
                 out_cb.reserve_back(output_faces);
             }
 #endif
-            if constexpr (tilize_reconfig) {
-                if (first_c_block || last_c_block) {
-                    UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-                        in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce)));
-                    // QSR fix: the RM path re-inits only UNPACK per c-block, leaving MATH's reduce config from
-                    // the top-of-kernel tilizeA_B_reduce_init stale when tiles_to_reduce changes across
-                    // c-blocks (e.g. 4 then 2 for 6 tiles / 192c post-cap). The tilize reprograms the FPU, so
-                    // MATH must be re-init'd for reduce too -- omitting it desyncs UNPACK/MATH and trips a Risc
-                    // IB interrupt (watcher code 0x19) on the wide multi-c-block config. Mirror the
-                    // OUTPUT_TILED path's math re-init (below).
-                    MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>(
-                        in_cb_id_0, in_scalar_cb_id_0)));
-                }
-            }
-            // QSR fix (split-reader second stream): the top-of-kernel tilizeA_B_reduce_init binds the
-            // unpack-tilize descriptor to in_cb_0. Odd (reader1) sticks unpack in_cb_1, but without a
-            // per-stick re-init the unpacker kept reading in_cb_0's address, so reader1 reduced reader0's
-            // window -> every odd output stick duplicated the preceding even stick on non-constant input
-            // (invisible to the constant-per-channel probe). Re-bind the unpack-tilize to THIS stick's
-            // input CB so each stream reduces its own window.
-            UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-                curr_in_cb_id, curr_scalar_cb_id, tiles_to_reduce)));
+            // Re-init the fused tilize+reduce for THIS stick/c-block through the compute API rather than
+            // hand-issuing individual UNPACK/MATH/PACK llk_* calls. One call re-programs all three engines
+            // together, which is required because both change per iteration:
+            //   (a) split-reader: even sticks read in_cb_0, odd sticks read in_cb_1 -- the unpack-tilize
+            //       descriptor must re-bind to THIS stick's input CB, else reader1 re-reduces reader0's window;
+            //   (b) tiles_to_reduce changes across c-blocks (e.g. 4 then 2 for 6 tiles / 192c) -- UNPACK, MATH
+            //       and PACK must all be re-programmed for the new count.
+            // Re-initing only some engines (the previous per-engine llk_* approach) desynced them and tripped a
+            // Risc IB interrupt (watcher code 0x19) -- first on MATH, then on PACK -- on the wide multi-c-block
+            // config. The compute API keeps them in lockstep.
+            tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
+                curr_in_cb_id, curr_scalar_cb_id, tiles_to_reduce, pack_target_cb_id);
             MATH(WATCHER_RING_BUFFER_PUSH(0xC0FFEE11u));
             tile_regs_acquire();
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
@@ -464,19 +454,26 @@ void kernel_main() {
                         (uint32_t)(last_c_block ? partial_iter_output_tiles : max_tiles_per_iter),
                         (uint32_t)in_ntiles_c));
                 }
-                pack_untilize_dest_init<max_tiles_per_iter>(curr_scratch_cb_id);
+                // The pack-untilize width MUST equal its init width (pack_untilize.h contract). tiles_to_reduce
+                // changes across c-blocks (4 then 2 for 6 tiles / 192c), so init AND pack must use the same
+                // current count per c-block -- init<4>/pack<2> desynced the packer -> Risc IB interrupt (0x19).
                 if (last_c_block) {
+                    pack_untilize_dest_init<partial_iter_output_tiles>(curr_scratch_cb_id);
                     pack_untilize_dest<partial_iter_output_tiles>(curr_scratch_cb_id, 1, 0);
                 } else {
+                    pack_untilize_dest_init<max_tiles_per_iter>(curr_scratch_cb_id);
                     pack_untilize_dest<max_tiles_per_iter>(curr_scratch_cb_id, 1, 0);
                 }
                 tile_regs_release();
                 curr_scratch_cb.push_back(scratch_npages);  // hand off to the DM reader, which writes the output
 #else
-                // Production RM path: narrow pack straight into out_cb (already reserved above).
+                // Production RM path: narrow pack straight into out_cb (already reserved above). Pair the
+                // pack-untilize init with a matching width per c-block (same contract as the scratch path).
                 if (last_c_block) {
+                    pack_untilize_dest_init<partial_iter_output_tiles>(out_cb_id);
                     pack_untilize_dest<partial_iter_output_tiles>(out_cb_id, 1, 0);
                 } else {
+                    pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id);
                     pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0);
                 }
                 tile_regs_release();
