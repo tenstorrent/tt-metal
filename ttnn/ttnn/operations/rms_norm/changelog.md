@@ -41,3 +41,42 @@
     `prepare_partial_reduce_scalers()` kernel_lib wrappers (advisory logged for kernel_lib owners).
 - **Tests added**: `test_rms_norm_precision_baseline.py` (PCC / abs / rel-RMS / got-true-ratio,
   fp32-wide xfail). Existing `test_rms_norm.py` (86) + `test_rms_norm_debug.py` (10) all pass.
+
+## Refinement 1 — Fix the fp32 Σx² reduce scale bug (BLOCKING)
+- **Date**: 2026-07-14
+- **What was done**: Routed the **fp32 tile-aligned** Σx² reduce through
+  `ReduceAlgorithm::AccumulateViaAdd` instead of the default `ReduceTile` cross-call accumulate.
+  The AccumulateViaAdd datapath keeps the **raw element-wise Σx² tile** in the fp32 accumulator
+  CB (folded natively per W-block with `add_tiles`) and reduces it **once** (`sfpu_reduce`) on the
+  last block, applying `1/W` (the mean) via the last-block `post_reduce_op` hook (SUM carries no
+  scaler tile). This removes the per-block reduced-partial reload of the ReduceTile path — the
+  fp32 roundtrip that undercounted `mean(x²)` linearly in W (got/true ≈ 1 + 2.5e-6·W). After the
+  loop `cb_sumsq` holds `mean(x²)` — identical contract to ReduceTile — so the rsqrt finalize and
+  pass 2 are unchanged/shared.
+  - **Reused**: the existing `reduce()` helper (only its template knobs turned:
+    `ReduceInputPolicy::BulkWaitBulkPop` + `ReduceAlgorithm::AccumulateViaAdd`), the existing
+    `cb_sumsq` accumulator (already fp32 for fp32 input — no CB/descriptor size change), the shared
+    `transform_in_place` finalizer, and the whole pass-2 normalize path.
+  - **Added**: a compile-time branch in the compute kernel gated on `IS_FP32 && !HAS_PARTIAL_W`,
+    and two compute CT args (`RECIP_W_BITS` = 1/W float bits for the post-op mean; `IS_FP32`).
+  - **Non-regression guards**: bf16 stays on the unchanged ReduceTile path (its `cb_sumsq` is bf16;
+    a raw-sum accumulator in bf16 would re-introduce the same truncation) → gate on `IS_FP32`.
+    fp32 non-tile-aligned stays on ReduceTile + partial scaler (AccumulateViaAdd cross-call cannot
+    express the masked partial tile) → gate on `!HAS_PARTIAL_W`. All 9 failing cells are W=8192
+    (tile-aligned) and every non-aligned golden shape is small-W, so no failing cell is left behind.
+  - **No SUPPORTED axis changes** (as the refinement specified) — this is a datapath bug fix.
+- **Accuracy achieved** (got/true median ratio, fp32, `(1,1,32,W)`, probe_010):
+  - W=8192: **1.02087 → 1.00057**; W=16384: **1.04346 → 1.00186** (Done-when: within noise of 1.0,
+    not 1.04 ✓); W=32768: **1.00505** (tiny residual from the growing element-wise fp32 sum, rms
+    ~0.005 « 0.02). fp32 W≤4096 tightened to ≈1.0000. Precision-baseline `wide-fp32` PCC ≥ 0.999,
+    rel-RMS < 0.02, scale-guard |ratio−1| < 0.015 all pass; xfail removed (now an ordinary cell).
+  - bf16 unchanged (byte-identical datapath) — ratios remain within the prior precision-noise band.
+- **Golden test progress**: `test_golden.py` **420 passed / 0 failed / 0 xpassed / 7986 xfailed**
+  (was 411 passed + 9 fp32-W=8192 failed → now 420 passed + 0 failed); `test_translated.py` +
+  `test_regression.py` **67 passed / 0 failed / 32 xfailed**. Unit dir: **106 passed** (--dev + non-dev).
+- **Issues encountered**: None. AccumulateViaAdd's cross-call-accumulate restrictions (SUM only,
+  BulkWaitBulkPop, tile-aligned) matched the tile-aligned fp32 path exactly; the partial and bf16
+  paths were kept on ReduceTile by the compile-time gate.
+- **Tests added**: none new — `test_rms_norm_precision_baseline.py::...[wide-fp32]` xfail removed
+  (now a passing cell, guarded by the existing got/true scale-bug assertion). `probes/probe_010.py`
+  regenerates the fp32/bf16 got/true ratio-vs-W table post-fix.

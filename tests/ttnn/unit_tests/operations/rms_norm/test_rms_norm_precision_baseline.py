@@ -49,20 +49,19 @@ def pytorch_rms_norm(x, gamma=None, epsilon=1e-6):
     return out.to(x.dtype)
 
 
-# (shape, dtype, pcc_floor, rms_ceiling). The wide-fp32 row is xfail'd: it
-# exposes a STRUCTURAL scale bug in the fp32 Σx² reduce (got/true ratio is a
-# tight cluster ~1 + 2.5e-6·W, not precision noise) tracked as Refinement 1 in
-# op_requirements.md. The xfail alerts (xpass) the moment Refinement 1 lands.
-_FP32_WIDE_BUG = pytest.mark.xfail(
-    reason="Refinement 1: fp32 Σx² reduce has a scale bias linear in W (ratio ~1+2.5e-6·W)",
-    strict=True,
-)
+# (shape, dtype, pcc_floor, rms_ceiling). The wide-fp32 row previously exposed a
+# STRUCTURAL scale bug in the fp32 Σx² reduce (got/true ratio a tight cluster
+# ~1 + 2.5e-6·W, not precision noise), tracked as Refinement 1 in
+# op_requirements.md. Refinement 1 fixed it by routing the fp32 tile-aligned Σx²
+# reduce through ReduceAlgorithm::AccumulateViaAdd (raw fp32 accumulator, single
+# finalize), so the xfail is removed — the row is now an ordinary passing cell and
+# the got/true scale-bug guard below (median ≈ 1.0) protects against regression.
 CASES = [
     pytest.param((1, 1, 32, 64), ttnn.bfloat16, 0.995, 0.05, id="small-bf16"),
     pytest.param((2, 4, 128, 512), ttnn.bfloat16, 0.995, 0.05, id="med-bf16"),
     pytest.param((1, 1, 32, 8192), ttnn.bfloat16, 0.995, 0.05, id="wide-bf16"),
     pytest.param((1, 1, 32, 4096), ttnn.float32, 0.999, 0.02, id="mid-fp32"),
-    pytest.param((1, 1, 32, 8192), ttnn.float32, 0.999, 0.02, id="wide-fp32", marks=_FP32_WIDE_BUG),
+    pytest.param((1, 1, 32, 8192), ttnn.float32, 0.999, 0.02, id="wide-fp32"),
 ]
 
 

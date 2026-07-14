@@ -62,7 +62,7 @@ gap maps to a refinement below.
 - **Compute config**: `compute_kernel_config` exposed; `default_compute_kernel_config()` = HiFi4 + fp32_dest_acc_en=True
 - **Golden baseline**: **463 / 472 supported cells passing** (9 supported_fail = fp32 W=8192 → Refinement 1). xpass_drift=0, xfail_wrong_mode=0.
 
-### [ ] Refinement 1 — Fix the fp32 Σx² reduce scale bug (BLOCKING)
+### [x] Refinement 1 — Fix the fp32 Σx² reduce scale bug (BLOCKING)
 
 **Goal**: move the 9 `float32 + W=8192` cells (ranks 2/3/4, gamma & no_gamma) out of `supported_fail`
 into passing. The fp32 reduce has a **structural scale bias linear in W** (got/true ratio

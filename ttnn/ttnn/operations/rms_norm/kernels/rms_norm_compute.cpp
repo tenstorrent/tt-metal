@@ -30,6 +30,22 @@
 // (same behaviour the wrapper documents: Accumulate::at(cb, b) each block, and
 // the partial scaler routed only to the last block). transform_in_place, which
 // does not touch reduce(), is used as-is.
+//
+// REDUCE DATAPATH (Refinement 1 — fp32 Σx² scale bug). The Σx² reduce runs on
+// one of two reduce() datapaths, picked at compile time:
+//   * fp32 tile-aligned (IS_FP32 && !HAS_PARTIAL_W): ReduceAlgorithm::AccumulateViaAdd.
+//     The cb_sumsq accumulator holds the RAW element-wise Σx² tile (fp32), folded
+//     natively per block with add_tiles and reduced ONCE (sfpu_reduce) on the last
+//     block. SUM has no scaler tile, so 1/W (the mean) is applied on the last block
+//     via the post_reduce_op hook. This removes the per-block reduced-partial reload
+//     of the ReduceTile path, whose fp32 roundtrip undercounted mean(x²) linearly in
+//     W (got/true ≈ 1 + 2.5e-6·W). cb_sumsq holds mean(x²) after the loop — identical
+//     contract to the ReduceTile path, so the finalize + pass 2 are shared.
+//   * bf16 (any alignment) and fp32 non-tile-aligned: the unchanged ReduceTile
+//     matmul-with-ones path + partial scaler on the last block's last tile. bf16's
+//     accumulator is bf16, where a RAW-sum accumulator would re-introduce the same
+//     truncation bug; AccumulateViaAdd's cross-call accumulate cannot express the
+//     masked partial tile — both keep ReduceTile.
 
 #include <cstdint>
 
@@ -68,6 +84,8 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(5);
     constexpr uint32_t W_BLOCK_TILES = get_compile_time_arg_val(6);
     constexpr uint32_t num_w_blocks = get_compile_time_arg_val(7);
+    constexpr uint32_t RECIP_W_BITS = get_compile_time_arg_val(8);  // 1/W float bits (mean scaler)
+    constexpr uint32_t IS_FP32 = get_compile_time_arg_val(9);
     (void)Wt;
 
     uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
@@ -90,17 +108,39 @@ void kernel_main() {
                 ckl::tilize<W_BLOCK_TILES, cb_input_rm, cb_input_tiles>(1, TILE_H);
             }
             ckl::square<cb_input_tiles, cb_xsq>(wshape);
-            // Accumulating SUM reduce over W: fresh at b==0, reload+add after; the partial
-            // scaler zeros the non-tile-aligned W tail only on the last block's last tile.
+            // Accumulating SUM reduce over W: fresh at b==0, reload+add after.
             const bool is_last = (b + 1 == num_w_blocks);
-            ckl::ReducePartialScaler part = (HAS_PARTIAL_W && is_last) ? ckl::ReducePartialScaler::last_tile_at(1)
-                                                                       : ckl::ReducePartialScaler::none();
-            ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, cb_xsq, cb_scaler, cb_sumsq>(
-                reduce_shape,
-                ckl::ReduceInputMemoryLayout::contiguous(),
-                ckl::Accumulate::at(cb_sumsq, b),
-                ckl::NoOp{},
-                part);
+            if constexpr (IS_FP32 && !HAS_PARTIAL_W) {
+                // fp32-accurate datapath: fold the RAW Σx² tile in the fp32 accumulator
+                // (add_tiles), reduce once on the last block, and apply 1/W (the mean) via
+                // the last-block post_reduce_op — SUM carries no scaler tile. RECIP_W_BITS
+                // is a compile-time constant so the lambda needs no capture.
+                const auto acc = is_last ? ckl::Accumulate::at_last(cb_sumsq, b) : ckl::Accumulate::at(cb_sumsq, b);
+                ckl::reduce<
+                    ckernel::PoolType::SUM,
+                    ckernel::ReduceDim::REDUCE_ROW,
+                    cb_xsq,
+                    cb_scaler,
+                    cb_sumsq,
+                    ckl::ReduceInputPolicy::BulkWaitBulkPop,
+                    ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                    ckl::ReduceAlgorithm::AccumulateViaAdd>(
+                    reduce_shape, ckl::ReduceInputMemoryLayout::contiguous(), acc, [](uint32_t dst) {
+                        binop_with_scalar_tile_init();
+                        mul_unary_tile(dst, RECIP_W_BITS);  // × 1/W → mean(x²)
+                    });
+            } else {
+                // ReduceTile matmul-with-ones + partial scaler on the last block's last tile
+                // (the partial scaler zeros the non-tile-aligned W tail; the scaler carries 1/W).
+                ckl::ReducePartialScaler part = (HAS_PARTIAL_W && is_last) ? ckl::ReducePartialScaler::last_tile_at(1)
+                                                                           : ckl::ReducePartialScaler::none();
+                ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, cb_xsq, cb_scaler, cb_sumsq>(
+                    reduce_shape,
+                    ckl::ReduceInputMemoryLayout::contiguous(),
+                    ckl::Accumulate::at(cb_sumsq, b),
+                    ckl::NoOp{},
+                    part);
+            }
         }
 
         // ---------- Finalize: 1/sqrt(mean + eps), in place ----------

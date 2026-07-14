@@ -208,6 +208,13 @@ def create_program_descriptor(
         Wt,
         W_BLOCK_TILES,
         num_w_blocks,
+        # 1/W as float bits: the mean scaler. For the fp32 tile-aligned reduce path
+        # (AccumulateViaAdd, SUM has no scaler tile) this is applied as the last-chunk
+        # post_reduce_op; the ReduceTile path applies it via the bf16 scaler CB instead.
+        scaler_bits,
+        # IS_FP32 selects the fp32-accurate reduce datapath (AccumulateViaAdd) — see
+        # the compute kernel. Keeps bf16 on the unchanged ReduceTile path.
+        1 if in_dtype == ttnn.float32 else 0,
     ]
     compute_rt_args = ttnn.RuntimeArgs()
     compute_rt_args[core.x][core.y] = [num_tile_rows, start_tile_row, eps_bits]
