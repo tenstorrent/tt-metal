@@ -24,13 +24,20 @@ Getting to the compute kernel on the emulator required threading three needles:
      conv1 the fold output; reshard_if_not_optimal lets the conv fix the shard to its optimal layout.
   2. Single K-block: the Option C factory gate needs in0_num_blocks_w == 1, so conv_config.full_inner_dim
      = True (keep the whole reduction dim in one block, same lever the stem's force_conv_no_spill uses).
-  3. >=2 height blocks: act_block_h_override = 32 (1 tile) => num_blocks_act_h = per_core_out_height_tiles
-     (>=2 on any core count), so the fused kernel does many tilize<->matmul transitions and Option C
-     collapses them to one. padding=0 avoids the Quasar halo zero-pad stub (MEM_ZEROS is unported).
+  3. >=2 height blocks: act_block_h_override = 128 (4 tiles, stem-like) => num_blocks_act_h =
+     per_core_out_height_tiles/4 (>=2 on any core count), so the fused kernel does several tilize<->matmul
+     transitions and Option C collapses them to one. padding=0 avoids the Quasar halo zero-pad stub
+     (MEM_ZEROS is unported).
 
 Ring-fit (the constraint the stem violated): Option C sizes ACT_TILIZED to hold ALL blocks =
-per_core_out_height_tiles * K_tiles * 128 units, must stay < 65536. Here out 32x32 = 32 out-h tiles,
-K = in_channels(32)*3*3/32 = 9 tiles => worst case (1 core) 32*9*128 = 36864 < 65536 (fits).
+per_core_out_height_tiles * K_tiles * 128 units, must stay < 65536. Here out 16x32 = 16 out-h tiles,
+K = in_channels(32)*4*4/32 = 16 tiles => worst case (1 core) 16*16*128 = 32768 < 65536 (fits).
+
+NOTE on the first run of this test (3x3 in=32 out=64, 32x32): fused and split gave BYTE-IDENTICAL output
+(same PCC to 9 digits) -> the split reorder is numerically faithful. But neither faulted (too small to
+trigger the race) AND the shared output was wrong (PCC 0.42) -> a SEPARATE pre-existing Quasar conv
+correctness bug (halo gather / full_inner_dim), visible now that the conv runs to completion. This 4x4/
+K=16 variant pushes closer to the stem's fault trigger; the correctness bug is tracked separately.
 
 HOW TO READ THE RESULT (run BOTH variants -- the `fused` and `split` params):
   - fused faults/times-out/mismatches AND split passes => hypothesis VALIDATED: isolating the tilize
@@ -60,16 +67,21 @@ def _run(mesh_device, *, use_split):
     device = mesh_device
     torch.manual_seed(0)
 
-    # Small stem-like tilize-path conv: 3x3 / s1 / p0, in=32 (K=9 tiles), out=64, RELU + bias + packer_l1_acc.
+    # Stem-like tilize-path conv, shrunk to fit the ring: 4x4 / s1 / p0, in=32 (K = 32*4*4/32 = 16 tiles,
+    # same K as the folded stem), out=64, RELU + bias + packer_l1_acc. Matching the stem's 4x4 / K=16 /
+    # packer_l1_acc / fuse_bias is the best shot at reproducing the stem's timing fault at a ring-fitting size.
     batch_size = 1
     in_channels = 32
     out_channels = 64
-    kernel_size = (3, 3)
+    kernel_size = (4, 4)
     stride = (1, 1)
     padding = (0, 0)
-    out_h = out_w = 32  # 32x32 = 1024 sticks = 32 out-height tiles (tile-aligned)
-    input_height = out_h + kernel_size[0] - 1  # s1/p0 => in = out + (k-1) = 34
-    input_width = out_w + kernel_size[1] - 1
+    out_h, out_w = (
+        16,
+        32,
+    )  # 16x32 = 512 sticks = 16 out-height tiles; ring (1 core): 16*K(16)=256 tiles=32768 units < 65536
+    input_height = out_h + kernel_size[0] - 1  # s1/p0 => in = out + (k-1) = 19
+    input_width = out_w + kernel_size[1] - 1  # 35
 
     torch_input_nchw = torch.randn((batch_size, in_channels, input_height, input_width), dtype=torch.bfloat16).float()
     torch_weight = torch.randn((out_channels, in_channels, *kernel_size), dtype=torch.bfloat16).float()
@@ -105,7 +117,7 @@ def _run(mesh_device, *, use_split):
         activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         full_inner_dim=True,  # single K-block => in0_num_blocks_w == 1 (Option C gate)
-        act_block_h_override=32,  # 1-tile blocks => many height blocks (>=2 on any core count)
+        act_block_h_override=128,  # 4-tile blocks (stem-like) => >=2 height blocks on any core count
         reshard_if_not_optimal=True,  # let the conv fix the input shard to its optimal height-sharded layout
     )
     compute_config = ttnn.init_device_compute_kernel_config(
