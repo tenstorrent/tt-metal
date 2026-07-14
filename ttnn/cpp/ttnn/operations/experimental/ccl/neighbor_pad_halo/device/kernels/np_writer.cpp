@@ -80,7 +80,7 @@ void kernel_main() {
     const address_t output_tensor_address = get_common_arg_val<address_t>(1);
     const size_t neighbor_sem = get_common_arg_val<uint32_t>(2);
     const size_t barrier_sem = get_common_arg_val<uint32_t>(3);
-    // Number of conv3d reader cores to signal and their NOC (x,y) coordinates.
+    // Per-batch consumer cores to signal (0 in this op) and their NOC (x,y) coordinates.
     // Packed as: [num_reader_cores, x0, y0, x1, y1, ...]
     const uint32_t num_reader_cores = get_common_arg_val<uint32_t>(4);
     // Reader core NOC coords start at CRTA index 5: x0=5, y0=6, x1=7, y1=8, ...
@@ -125,7 +125,7 @@ void kernel_main() {
 
     const uint32_t outer_dim_offset_start_t = get_arg_val<uint32_t>(static_cast<uint32_t>(arg_for_fab));
     // This (direction,link)'s H-region sem (H-top/H-bot), signalled per-batch from
-    // handle_incoming_writes so the W-reader corner gate + conv3d H-edge tiles ramp without a barrier.
+    // handle_incoming_writes when a per-batch consumer exists. Inert in this op (progress==0).
     uint32_t h_region_sem_addr = 0;
     if constexpr (progress_t_batch_size > 0) {
         h_region_sem_addr = get_arg_val<uint32_t>(static_cast<uint32_t>(arg_for_fab) + 1);
@@ -293,9 +293,9 @@ void kernel_main() {
     uint32_t pad2_left_sticks = 0;
     uint32_t pad2_right_sticks = 0;
     if constexpr (use_l1_intermediate && !is_w_fabric_writer) {
-        // Use padding_left for corner count (not stick_start_id) so it works when stick_start_id=0
-        // (fabric_only mode). In fabric_only: stick_start_id=0 but padding_left=W/2=104,
-        // giving pad2_left_sticks=104, pad2_right_sticks=104 → overlap case → all sticks are corners.
+        // Use padding_left for the corner count (not stick_start_id) so it still works when
+        // stick_start_id=0 (the compact-buffer case): stick_start_id=0 but padding_left can be W/2,
+        // so pad2_left_sticks == pad2_right_sticks → overlap case → all sticks are corners.
         pad2_left_sticks = (padding_left > 0) ? padding_left : stick_start_id;
         uint32_t w_overhead = num_sticks_per_halo_dim - num_sticks_to_read;
         pad2_right_sticks = (w_overhead >= pad2_left_sticks) ? (w_overhead - pad2_left_sticks) : pad2_left_sticks;
@@ -448,8 +448,8 @@ void kernel_main() {
         if (!is_last_chip) {
             bool did_corner_first = false;
             // H writer, corners-only, padding==1: the neighbor's H reader recv-commit pulls only the
-            // corner sticks; the bulk middle sticks go straight to its output DRAM for conv (gated far
-            // later by w_region_sem). So send the few corners first and raise the recv sem BEFORE the
+            // corner sticks; the bulk middle sticks go straight to its halo-buffer DRAM, read later by
+            // its W-reader. So send the few corners first and raise the recv sem BEFORE the
             // middle bulk — the neighbor clears its recv-wait after ~pad2 sticks instead of the whole
             // row, taking the full-row send off the H-recv critical path. The single send_cb row holds
             // both passes, so no extra read. padding!=1 needs all pad rows resident before the sem inc
@@ -586,9 +586,9 @@ void kernel_main() {
         outer_dim_offset += (num_sticks_per_halo_dim * output_halo_dim_size);
 
         // Per-batch H-commit: commit this od's incoming H-halo (pushed by the paired reader from the
-        // L1 recv buffer as soon as the sender link delivered it), then signal HT/HB per batch — so
-        // the W-reader corner gate + conv3d H-edge tiles ramp this batch rather than after the whole
-        // send pass.  One producer per (region,link) -> monotonic.
+        // L1 recv buffer as soon as the sender link delivered it), then signal HT/HB per batch so a
+        // per-batch consumer could ramp this batch rather than after the whole send pass (inert here,
+        // progress==0). One producer per (region,link) -> monotonic.
         if constexpr (handle_incoming_writes) {
             if (!is_first_chip) {
                 for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {

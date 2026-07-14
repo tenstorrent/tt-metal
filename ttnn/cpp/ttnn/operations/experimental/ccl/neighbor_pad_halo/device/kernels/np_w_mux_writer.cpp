@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Fabric-MUX W writer for neighbor_pad_halo (reach fabric link BW; see PLAN_NP_FABRIC_MUX_IMPL.md).
+// Fabric-MUX W writer for neighbor_pad_halo.
 //
 // Purpose: the single-worker-per-link W send caps at ~1.4 GB/s/link because the EDM exposes only one
 // direct local-worker sender channel per link (fabric.cpp:226). To saturate the eth link (~12.5 GB/s
@@ -11,10 +11,11 @@
 // and the W recv-sem atomic-inc) through the mux connection, mirroring the all_gather worker-mux pattern
 // (ttnn/.../all_gather_async/device/kernels/minimal_default_writer.cpp, USE_WORKER_MUX path).
 //
-// Scope (v1, middle W devices, coalesced path): each (link,direction) is served by N workers + 1 mux
-// core; each worker owns a contiguous sub-range of this direction's W rows (split host-side). Bank-major
-// coalescing is identical to np_writer's W-coalesce send (base+r, base+r+8, ... contiguous on one bank).
-// Edge-device per-stick + corner handling is TODO before this replaces np_writer for all W cores.
+// Scope: the coalesced W path across all W devices (edges included — a no-send direction is gated off
+// in-kernel via has_send_neighbor). Each (link,direction) is served by N workers + 1 mux core; each
+// worker owns a contiguous sub-range of this direction's W rows (split host-side). Bank-major coalescing
+// matches np_writer's W-coalesce send (base+r, base+r+8, ... contiguous on one bank). Non-coalesced
+// (per-stick) shapes use np_writer instead.
 
 #include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/buffer_types.hpp>

@@ -68,8 +68,8 @@ NpHaloMeshWorkloadFactory::cached_mesh_workload_t NpHaloMeshWorkloadFactory::cre
 }
 
 // ============================================================================
-// create_at — the heart of the fusion: NP fabric kernels + conv3d kernels in
-//             one program, sharing a progress semaphore for pipelining.
+// create_at — builds the H-fabric and W-fabric halo-exchange kernels (and, in
+//             padded-output mode, the concurrent interior-copy scatter).
 // ============================================================================
 NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at(
     const NpHaloParams& op,
@@ -86,7 +86,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     CoreRangeSet occ_hw_workers, occ_hmux, occ_w_workers, occ_wmux;
 
     // =========================================================================
-    // PART 1: NP FABRIC KERNELS (fabric_only H-dim path, dim=1 for BTHWC)
+    // PART 1: H-DIM FABRIC HALO EXCHANGE (H is index 2 in BTHWC)
     // =========================================================================
 
     // Use MeshCoordinates to find forward and backward devices along H axis
@@ -127,8 +127,8 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         input_halo_dim_size -= 2 * op.input_pad_h;      // -> interior H_dev
     }
 
-    // In fabric_only mode output is a compact halo buffer
-    uint32_t output_halo_dim_size = op.np_padding_h + op.np_padding_h;  // padding_left + padding_right
+    // Total H-halo rows the compact buffer holds per frame (top + bottom).
+    uint32_t output_halo_dim_size = op.np_padding_h + op.np_padding_h;
 
     // outer_dim_size = B * T (all dims before H)
     uint32_t outer_dim_size = 1;
@@ -139,10 +139,9 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     bool is_first_device = !backward_coord.has_value();
     bool is_last_device = !forward_coord.has_value();
     bool is_padding_zeros = op.padding_mode == "zeros";
-    // The fused op is always 2D (H+W padding) — validate() enforces np_pad_dim2.has_value(). The
-    // H-only (1D) path is removed; is_2d is kept as a named constant for readability where the W-phase
-    // setup is gated.
-    TT_FATAL(op.np_pad_dim2.has_value(), "NpConv3d: fused op requires 2D padding (H+W).");
+    // This op is always 2D (H+W padding) — validate() enforces np_pad_dim2.has_value(). is_2d is kept
+    // as a named constant for readability where the W-phase setup is gated.
+    TT_FATAL(op.np_pad_dim2.has_value(), "neighbor_pad_halo requires 2D padding (H+W).");
     const bool is_2d = true;
 
     // Fabric-mux buffers per channel. 4 is the measured sweet spot on BH-LB 2x4 (+~3pp vs 1; 8 regresses
@@ -154,15 +153,13 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     // H corner-first (PCC-neutral): the H-writer sends the W-boundary corner sticks to the neighbor's L1
     // recv buffer + raises the recv sem BEFORE the bulk middle row, so the neighbor's H recv-wait clears
     // after ~2 sticks instead of the full row. Requires padding==1 (the kernel's corner-first path).
-    // W two-pass is the progress>0 conv gate; the halo op uses its own interior-first reorder (below)
-    // instead, so keep this OFF here.
+    // W two-pass is the progress>0 gate; this op uses its own interior-first reorder (below)
+    // instead, so keep it OFF here.
     const uint32_t use_corner_first = (op.np_padding_h == 1) ? 1u : 0u;
     const uint32_t use_w_two_pass = 0u;
 
-    // For the compact halo buffer, H-section rows are exactly W_dev wide.
-    // W-padding is handled in a separate W-section, so no extra columns in H rows.
-    // (The standalone NP factory widens rows to W+pad for padded-tensor output,
-    //  but the compact buffer layout keeps H and W sections independent.)
+    // Compact H-section rows are exactly W_dev wide: W-padding lives in a separate W-section, so
+    // H rows carry no extra columns and the H and W sections stay independent.
     uint32_t output_num_sticks_per_halo_dim = num_sticks_per_halo_dim;
     uint32_t writer_stick_start_id = 0;
     uint32_t writer_num_sticks_to_read = num_sticks_per_halo_dim;
@@ -265,8 +262,8 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     }
 
     // H fabric cores occupy column 0, rows [0, num_h_fabric_cores). W fabric cores
-    // follow in the same column. This gives conv3d a clean rectangular grid
-    // (cols [1, grid.x)) instead of the L-shape produced by a first-row layout.
+    // follow in the same column, leaving cols [1, grid.x) as a clean rectangular grid
+    // for the interior-copy scatter — instead of the L-shape a first-row layout would produce.
     CoreCoord np_core_grid(1, num_h_fabric_cores);
     auto
         [num_np_cores,
@@ -368,7 +365,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         w_fabric_core_range =
             CoreRangeSet(CoreRange({0, num_h_fabric_cores}, {0, num_h_fabric_cores + num_w_fabric_cores - 1}));
 
-        // fabric_only: W exchange covers all H_dev + 2*ph rows per T
+        // W exchange covers all H_dev + 2*ph rows per T (the H-halo is already in place by then).
         uint32_t h_total = input_halo_dim_size + 2 * op.np_padding_h;
         w_outer_dim_size = outer_dim_size * h_total;
 
@@ -406,7 +403,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
 
     // Mux gating + W worker/mux core coords, computed HERE (before the H-writer setup) so the H->W
     // barrier signal can target the relocated mux W-reader cores. TT_NP_W_MUX forces the mux path at any
-    // worker count (bring-up). See PLAN_NP_FABRIC_MUX_IMPL.md.
+    // worker count (bring-up).
     const bool w_force_mux = std::getenv("TT_NP_W_MUX") != nullptr;
     // Uniform mux across ALL W devices (edges too) so the recv-sem targeting is consistent along the whole
     // W chain (mixed mux/standard breaks edge<->middle recv). Edge devices' no-send direction is handled
@@ -444,7 +441,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
 
     // H-mux: mirror the W-mux (N workers per (link,dir) feed the H-axis eth link through a mux). Gated on
     // TT_NP_H_MUX during bring-up; auto num_h_workers by heuristic (capped 2), zeros-only. H cores placed
-    // in columns after the W-mux block. See PLAN_NP_FABRIC_MUX_IMPL.md.
+    // in columns after the W-mux block.
     // Auto-engage like W-mux: 2 H workers for zeros+coalesce (validated 8/8 PCC). Replicate stays on the
     // direct path (pre-existing W-mux edge-outward bug). TT_NP_H_MUX forces on; TT_NP_H_WORKERS overrides.
     const bool h_force_mux = std::getenv("TT_NP_H_MUX") != nullptr;
@@ -544,9 +541,9 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                 halo_buffer->address(),
                 op.h_neighbor_semaphore.address(),
                 op.barrier_semaphore.address(),
-                // CRTA[4]: number of conv3d reader cores to signal
+                // CRTA[4]: number of per-batch consumer cores to signal (0 in this op)
                 static_cast<uint32_t>(reader_noc_coords.size()),
-                // CRTA[5+]: interleaved (x, y) NOC coords for each reader core
+                // CRTA[5+]: interleaved (x, y) NOC coords for each such core
             };
             for (const auto& [x, y] : reader_noc_coords) {
                 h_writer_crta.push_back(x);
@@ -662,7 +659,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                     }
                     writer_rt_args.push_back(false);
                 }
-                // fabric_only mode: override writer rt_args to index into the compact halo buffer
+                // Override the H-writer rt_args to index into the compact halo buffer's H-sections.
                 {
                     uint32_t link_t_start = (output_num_sticks_per_halo_dim > 0)
                                                 ? (writer_link_offset_start_id / output_num_sticks_per_halo_dim)
@@ -1128,13 +1125,12 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
             }
             w_fabric_core_range = worker_crset;
         } else {
-            // W reader kernel — fused-owned copy: always fabric-only, always per-batch
-            // progress-sem signalling.
+            // W reader kernel (non-mux, single-worker path).
             auto w_reader_kernel_config = ReaderDataMovementConfig{};
             w_reader_kernel_config.compile_args = {sender_cb_index, is_padding_zeros, page_size};
             TensorAccessorArgs(*halo_buffer).append_to(w_reader_kernel_config.compile_args);
             TensorAccessorArgs(*input_buffer).append_to(w_reader_kernel_config.compile_args);
-            // Per-batch signal granularity (matches conv3d reader's progress_t_batch_size CT arg).
+            // Per-batch signal granularity (0 here — no consumer to signal per batch).
             w_reader_kernel_config.compile_args.push_back(progress_t_batch_size);
             w_reader_kernel_config.compile_args.push_back(use_w_two_pass);  // global two-pass gate (lockstep w/ writer)
             w_reader_kernel_config.compile_args.push_back(w_coalesce_n);    // W-send bank-major coalesce factor (0=off)
@@ -1202,9 +1198,9 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                  static_cast<uint32_t>(op.np_padding_h)});  // [4],[5]: W-writer per-batch two-pass reorder dims
 
             // Per-core W fabric runtime args.
-            // When pipelining (progress_t_batch_size>0), align each link to whole T-batches so the
-            // per-(region,link) progress sem counts batches 1:1 and the conv3d reader can map a batch to
-            // its owning link by integer division (no per-link boundary table).
+            // When pipelining (progress_t_batch_size>0; inert here), align each link to whole T-batches
+            // so the per-(region,link) progress sem counts batches 1:1 and the per-batch consumer can map
+            // a batch to its owning link by integer division (no per-link boundary table).
             const uint32_t w_h_total = input_halo_dim_size + 2 * op.np_padding_h;
             const uint32_t w_sticks_per_batch = progress_t_batch_size * w_h_total;
             const uint32_t total_w_batches =
@@ -1245,7 +1241,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                     w_reader_rt_args.push_back(w_direction ? is_last_w_device : is_first_w_device);
                     w_reader_rt_args.push_back(w_direction ? is_first_w_device : is_last_w_device);
                     w_reader_rt_args.push_back(w_direction);
-                    // fabric_only: pass input buffer address for interior row reads
+                    // Input buffer address for the W-edge interior row reads.
                     w_reader_rt_args.push_back(input_buffer->address());
                     w_reader_rt_args.push_back(input_halo_dim_size);
                     w_reader_rt_args.push_back(op.np_padding_h);
@@ -1315,7 +1311,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                         }
                         w_writer_rt_args.push_back(false);
                     }
-                    // fabric_only: override W writer rt_args to index into compact halo buffer W section
+                    // Override the W-writer rt_args to index into the compact halo buffer's W-sections.
                     {
                         const uint32_t h_total = input_halo_dim_size + 2 * op.np_padding_h;
                         const uint32_t wleft_base = outer_dim_size * 2u * op.np_padding_h * num_sticks_per_halo_dim;

@@ -12,11 +12,9 @@
 
 namespace ttnn::experimental::prim {
 
-// Standalone halo-only neighbor-pad: the fabric H+W halo exchange from the fused
-// neighbor_pad_conv3d op with the conv3d stage removed. It writes ONLY the compact halo
-// buffer [H-top | H-bot | W-left | W-right]; there is no interior copy and no conv. All
-// conv params (weights, blocking, kernel/stride/dilation, output channels) are gone —
-// this op is pure fabric transport, benchmarked toward DRAM + fabric bandwidth.
+// Fabric H+W halo neighbor-pad. In the default (compact) mode it writes ONLY the compact halo
+// buffer [H-top | H-bot | W-left | W-right] — pure fabric transport, bounded by DRAM + fabric
+// bandwidth. The opt-in padded-output mode (below) additionally scatters the full padded result.
 struct NpHaloParams {
     // NP topology: H-fabric and W-fabric halo exchange
     uint32_t np_padding_h;     // H padding per side (1 for k333)
@@ -37,8 +35,8 @@ struct NpHaloParams {
     std::string padding_mode;
     // Padded-input mode (opt-in, default 0 = contiguous input). When >0 the input tensor is a padded
     // [.., H+2*input_pad_h, W+2*input_pad_w, C] buffer and the readers exchange the halo of its INTERIOR
-    // (offset by input_pad_h/w, row stride = padded W, frame stride = padded H*W). Lets the copy-free
-    // decode feed conv3d's padded-output buffer straight into the exchange with no interior repack.
+    // (offset by input_pad_h/w, row stride = padded W, frame stride = padded H*W). Lets a caller feed an
+    // already-padded producer buffer straight into the exchange with no interior repack.
     uint32_t input_pad_h = 0;
     uint32_t input_pad_w = 0;
 

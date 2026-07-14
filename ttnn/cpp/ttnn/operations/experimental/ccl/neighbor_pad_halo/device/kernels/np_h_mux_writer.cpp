@@ -49,7 +49,7 @@ void kernel_main() {
     uint32_t arg_idx = 0;
     // Compact-buffer H-section base for this worker's first frame (h_top or h_bot section base +
     // outer_dim_start*padding*num_sticks_per_halo_dim). The compact buffer stores H-top and H-bot as
-    // SEPARATE sections (stride padding, not output_halo_dim_size) — see np_writer's fabric_only override.
+    // SEPARATE sections (stride padding, not output_halo_dim_size) — matches np_writer's H-section override.
     const uint32_t h_base = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t outer_dim_count = get_arg_val<uint32_t>(arg_idx++);  // frames this worker owns
     const uint32_t padding = get_arg_val<uint32_t>(arg_idx++);

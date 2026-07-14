@@ -15,16 +15,22 @@
 
 namespace ttnn::experimental {
 
-// Standalone halo-only neighbor-pad (no conv, no interior copy).
+// Fabric halo neighbor-pad: exchanges the H+W boundary rows between H/W-parallel mesh neighbors.
 //
-// Launches the fabric NP writer/reader kernels on boundary cores to exchange halo rows into
-// `halo_buffer` (compact DRAM, pre-allocated by the caller), and returns that buffer. This is the
-// fabric H+W halo exchange from neighbor_pad_conv3d with the conv3d stage stripped — pure transport,
-// benchmarked toward DRAM read + fabric bandwidth.
+// Default (compact) mode: writes only the exchanged halo into `halo_buffer` (compact DRAM,
+// pre-allocated by the caller) as [H-top | H-bot | W-left | W-right] and returns it — pure
+// transport, bounded by DRAM read + fabric bandwidth.
+//
+// Padded-output (fold) mode: pass `padded_output` to additionally scatter the full padded
+// [.., H+2pH, W+2pW, C] result in the same dispatch — the interior copy overlaps the fabric
+// exchange and the border is scattered from the compact staging buffer. This folds what would
+// otherwise be a separate scatter op into one launch; the op returns `padded_output`.
 //
 // Args:
-//   input        : unpadded input tensor [B, T, H, W, C] row-major bfloat16/float32
-//   halo_buffer  : pre-allocated compact DRAM halo buffer [H-top | H-bot | W-left | W-right]
+//   input        : input tensor [B, T, H, W, C] row-major bfloat16/float32 (interior; may itself
+//                  carry padding — see input_pad_h/w)
+//   halo_buffer  : pre-allocated compact DRAM halo buffer [H-top | H-bot | W-left | W-right].
+//                  In fold mode this is the internal staging buffer, not the returned tensor.
 //   np_padding_h : halo rows per side in the H dimension (typically 1 for k=3)
 //   np_padding_w : halo columns per side in the W dimension
 //   np_cluster_axis : mesh axis for H-parallel devices
@@ -37,8 +43,14 @@ namespace ttnn::experimental {
 //   np_pad2_num_links    : links for the secondary dim
 //   padding_mode         : "zeros" or "replicate"
 //   memory_config        : optional output memory config (defaults to the halo_buffer's)
+//   input_pad_h/w        : padding already present on `input`; the reader strides over it and the
+//                          halo geometry is reduced to the interior (H_dev, W_dev).
+//   padded_output        : opt-in fold-mode target buffer (see above); std::nullopt = compact mode
+//   border_only          : fold mode only — scatter just the border, skip the interior copy
+//   logical_h/w          : logical extent per device; rows/cols at or beyond it are masked to zero
+//                          in-kernel (0 = no masking)
 //
-// Returns: the compact halo buffer (written in place).
+// Returns: `padded_output` in fold mode, else the compact halo buffer (written in place).
 ttnn::Tensor neighbor_pad_halo(
     const ttnn::Tensor& input,
     const ttnn::Tensor& halo_buffer,

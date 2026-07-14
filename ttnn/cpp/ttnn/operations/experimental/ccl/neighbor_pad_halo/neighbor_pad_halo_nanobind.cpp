@@ -23,17 +23,19 @@ void bind_neighbor_pad_halo(nb::module_& mod) {
     ttnn::bind_function<"neighbor_pad_halo", "ttnn.experimental.">(
         mod,
         R"doc(
-        Standalone halo-only neighbor-pad (no conv, no interior copy).
+        Fabric halo neighbor-pad: exchanges the H+W boundary rows between H/W-parallel mesh neighbors.
 
-        Exchanges halo rows between neighboring devices via fabric into a compact
-        pre-allocated DRAM halo buffer [H-top | H-bot | W-left | W-right], and returns
-        that buffer. This is the fabric H+W exchange from neighbor_pad_conv3d with the
-        conv3d stage removed — pure transport, benchmarked toward DRAM + fabric bandwidth.
-        The caller must pre-allocate `halo_buffer` with the correct size (see NP design docs).
+        Default (compact) mode: writes only the exchanged halo into a pre-allocated compact DRAM
+        buffer [H-top | H-bot | W-left | W-right] and returns it — pure transport, bounded by DRAM
+        read + fabric bandwidth. Pass `padded_output` for fold mode, which additionally scatters the
+        full padded result in the same dispatch (interior copy overlaps the exchange) and returns it.
+        The caller must pre-allocate `halo_buffer` (and `padded_output`, in fold mode) at the correct size.
 
         Args:
-            input (ttnn.Tensor): Unpadded activation tensor [B, T, H, W, C] row-major.
-            halo_buffer (ttnn.Tensor): Pre-allocated compact DRAM halo buffer (also the output).
+            input (ttnn.Tensor): Activation tensor [B, T, H, W, C] row-major (interior; may itself
+                carry padding — see input_pad_h/w).
+            halo_buffer (ttnn.Tensor): Pre-allocated compact DRAM halo buffer. In compact mode this is
+                the returned tensor; in fold mode it is the internal staging buffer.
             np_padding_h (int): H-halo rows per side (typically 1 for k=3).
             np_padding_w (int): W-halo columns per side.
             np_cluster_axis (int): Mesh axis for H-parallel devices.
@@ -51,9 +53,17 @@ void bind_neighbor_pad_halo(nb::module_& mod) {
         Keyword Args:
             padding_mode (str): "zeros" or "replicate". Defaults to "zeros".
             memory_config (ttnn.MemoryConfig, optional): Output memory config.
+            input_pad_h (int): H-padding already present on `input`; the reader strides over it and the
+                halo geometry reduces to the interior. Defaults to 0.
+            input_pad_w (int): W-padding already present on `input`. Defaults to 0.
+            padded_output (ttnn.Tensor, optional): Fold-mode target buffer; enables fold mode. Defaults to None.
+            border_only (bool): Fold mode only — scatter just the border, skip the interior copy. Defaults to False.
+            logical_h (int): Logical H extent per device; rows at or beyond it are masked to zero in-kernel
+                (0 = no masking). Defaults to 0.
+            logical_w (int): Logical W extent per device; cols at or beyond it are masked to zero. Defaults to 0.
 
         Returns:
-            ttnn.Tensor: The compact halo buffer (written in place).
+            ttnn.Tensor: `padded_output` in fold mode, else the compact halo buffer (written in place).
         )doc",
         &ttnn::experimental::neighbor_pad_halo,
         nb::arg("input"),
