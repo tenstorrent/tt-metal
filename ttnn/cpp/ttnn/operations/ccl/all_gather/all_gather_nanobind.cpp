@@ -36,7 +36,7 @@ using AllGatherFn = ttnn::Tensor (*)(
 
 void bind_all_gather(nb::module_& mod) {
     const auto* doc = R"doc(
-        Performs an all-gather collective operation that gathers data from all devices into a new output tensor, concatenated along the specified :attr:`dim`. It automatically specializes for the active Fabric configuration (topology, packet size, etc.). If the :attr:`input_tensor` has unaligned row-major pages or padded tiles on the gather :attr:`dim`, a slower composite all-gather implementation is used.
+        Performs an all-gather collective operation that gathers data from all devices into a new output tensor, concatenated along the specified :attr:`dim`. If the :attr:`input_tensor` has unaligned row-major pages or padded tiles on the gather :attr:`dim`, a slower composite all-gather implementation is used.
 
         Args:
             input_tensor (ttnn.Tensor): Input tensor to be gathered.

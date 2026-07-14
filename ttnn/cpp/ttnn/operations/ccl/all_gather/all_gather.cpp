@@ -71,7 +71,7 @@ ttnn::Tensor all_gather(
         num_workers_per_link.has_value() || num_buffers_per_channel.has_value() || use_l1_small_for_semaphores) {
         log_warning(
             tt::LogOp,
-            "The following ttnn.all_gather args are deprecated and will be removed in a future update: num_links, "
+            "The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, "
             "topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores.");
     }
 
