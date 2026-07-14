@@ -269,7 +269,9 @@ def _resolve(variant, dim, num_tiles):
     return variant
 
 
-def create_program_descriptor(input_tensor, output_tensor, *, variant, dim, num_tiles, accum="fp32", kernel_iters=1):
+def create_program_descriptor(
+    input_tensor, output_tensor, *, variant, dim, num_tiles, accum="fp32", kernel_iters=1, math_fidelity=None
+):
     if variant not in VARIANTS:
         raise ValueError(f"variant must be one of {VARIANTS}, got {variant!r}")
     if dim not in _DIM_ID:
@@ -284,6 +286,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, variant, dim, num_
     path = _resolve(variant, dim, num_tiles)
     dim_id = _DIM_ID[dim]
     fp32_dest = accum == "fp32"
+    fidelity = math_fidelity or ttnn.MathFidelity.HiFi4  # default HiFi4; pass to sweep the fidelity axis
 
     cbs = [
         ttnn.cb_descriptor_from_sharded_tensor(CB_IN, input_tensor),
@@ -297,7 +300,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, variant, dim, num_
             source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
             core_ranges=_single_core(),
             compile_time_args=[num_tiles, dim_id, kernel_iters, int(fp32_dest), scaler_bits],
-            config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=fp32_dest),
+            config=ttnn.ComputeConfigDescriptor(math_fidelity=fidelity, fp32_dest_acc_en=fp32_dest),
         )
         return ttnn.ProgramDescriptor(kernels=[compute], semaphores=[], cbs=cbs)
 
@@ -308,7 +311,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, variant, dim, num_
         source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
         core_ranges=_single_core(),
         compile_time_args=[num_tiles, dim_id, kernel_iters],
-        config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=fp32_dest),
+        config=ttnn.ComputeConfigDescriptor(math_fidelity=fidelity, fp32_dest_acc_en=fp32_dest),
     )
     scaler = ttnn.KernelDescriptor(
         kernel_source=_SCALER_KERNEL,
@@ -321,7 +324,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, variant, dim, num_
     return ttnn.ProgramDescriptor(kernels=[scaler, compute], semaphores=[], cbs=cbs)
 
 
-def run_op(input_tensor, *, variant, dim, num_tiles, accum="fp32", kernel_iters=1):
+def run_op(input_tensor, *, variant, dim, num_tiles, accum="fp32", kernel_iters=1, math_fidelity=None):
     output = ttnn.allocate_tensor_on_device(
         ttnn.Shape([TILE, TILE]),
         ttnn.float32,
@@ -330,6 +333,13 @@ def run_op(input_tensor, *, variant, dim, num_tiles, accum="fp32", kernel_iters=
         create_sharded_memory_config((TILE, TILE)),
     )
     descriptor = create_program_descriptor(
-        input_tensor, output, variant=variant, dim=dim, num_tiles=num_tiles, accum=accum, kernel_iters=kernel_iters
+        input_tensor,
+        output,
+        variant=variant,
+        dim=dim,
+        num_tiles=num_tiles,
+        accum=accum,
+        kernel_iters=kernel_iters,
+        math_fidelity=math_fidelity,
     )
     return ttnn.generic_op([input_tensor, output], descriptor)
