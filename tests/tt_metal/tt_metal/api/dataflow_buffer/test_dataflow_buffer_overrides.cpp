@@ -8,7 +8,6 @@
 
 namespace tt::tt_metal {
 
-
 // size/num-entries override + re-entry harness
 struct DfbSizeOverride {
     std::optional<uint32_t> entry_size = std::nullopt;
@@ -43,18 +42,17 @@ static void run_dfb_size_override_test(
     MeshTensor in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
     MeshTensor out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
 
-    const experimental::DataMovementHardwareConfig dm_producer_cfg{
-        .gen1_config =
-            experimental::DataMovementHardwareConfig::Gen1Config{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0},
-        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
-    };
-    const experimental::DataMovementHardwareConfig dm_consumer_cfg{
-        .gen1_config =
-            experimental::DataMovementHardwareConfig::Gen1Config{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::NOC_1},
-        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
-    };
+    experimental::DataMovementHardwareConfig dm_producer_cfg;
+    experimental::DataMovementHardwareConfig dm_consumer_cfg;
+    if (device->arch() == ARCH::QUASAR) {
+        dm_producer_cfg = experimental::DataMovementGen2Config{};
+        dm_consumer_cfg = experimental::DataMovementGen2Config{};
+    } else {
+        dm_producer_cfg =
+            experimental::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0};
+        dm_consumer_cfg = experimental::DataMovementGen1Config{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::NOC_1};
+    }
 
     experimental::KernelSpec producer_spec{
         .unique_id = PRODUCER,
@@ -88,11 +86,14 @@ static void run_dfb_size_override_test(
         .runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}},
         .hw_config = dm_consumer_cfg,
     };
-    if (!implicit_sync) {
-        std::get<experimental::DataMovementHardwareConfig>(producer_spec.hw_config)
-            .gen2_config->disable_dfb_implicit_sync_for_all = true;
-        std::get<experimental::DataMovementHardwareConfig>(consumer_spec.hw_config)
-            .gen2_config->disable_dfb_implicit_sync_for_all = true;
+    // Implicit sync is gen2 only
+    if (device->arch() == ARCH::QUASAR && !implicit_sync) {
+        auto& producer_hw_config = std::get<experimental::DataMovementGen2Config>(
+            std::get<experimental::DataMovementHardwareConfig>(producer_spec.hw_config));
+        auto& consumer_hw_config = std::get<experimental::DataMovementGen2Config>(
+            std::get<experimental::DataMovementHardwareConfig>(consumer_spec.hw_config));
+        producer_hw_config.disable_dfb_implicit_sync_for_all = true;
+        consumer_hw_config.disable_dfb_implicit_sync_for_all = true;
     }
 
     const CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));

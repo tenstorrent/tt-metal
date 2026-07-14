@@ -79,6 +79,15 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
         test_config.read ? DataMovementProcessor::RISCV_1 : DataMovementProcessor::RISCV_0;
     const NOC noc = test_config.read ? NOC::RISCV_1_default : NOC::RISCV_0_default;
 
+    DataMovementHardwareConfig kspec_hw_config;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        kspec_hw_config = DataMovementGen2Config{};
+    } else {
+        kspec_hw_config = DataMovementGen1Config{
+            .processor = proc,
+            .noc = noc,
+        };
+    }
     KernelSpec kspec{
         .unique_id = KernelSpecName{"one_packet_kernel"},
         .source = std::filesystem::path{kernel_path},
@@ -94,15 +103,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
                      "responder_x",
                      "responder_y"},
             },
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config =
-                    DataMovementHardwareConfig::Gen1Config{
-                        .processor = proc,
-                        .noc = noc,
-                    },
-                .gen2_config = DataMovementHardwareConfig::Gen2Config{},
-            },
+        .hw_config = kspec_hw_config,
     };
 
     ProgramSpec spec{

@@ -112,6 +112,13 @@ void run_single_core_copy_block_matmul_partials(
         .data_format_metadata = data_format,
     };
 
+    experimental::DataMovementHardwareConfig reader_hw_config;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+    } else {
+        reader_hw_config = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+    }
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
         .source =
@@ -121,15 +128,16 @@ void run_single_core_copy_block_matmul_partials(
         .dfb_bindings = {experimental::ProducerOf(SRC0_DFB, "out")},
         .runtime_arg_schema =
             {.runtime_arg_names = {"src_addr", "src_dram_bank_id", "num_tiles", "ublock_size_tiles", "reader_only"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
+        .hw_config = reader_hw_config,
     };
 
+    experimental::DataMovementHardwareConfig writer_hw_config;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+    } else {
+        writer_hw_config = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+    }
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
@@ -139,13 +147,7 @@ void run_single_core_copy_block_matmul_partials(
         .dfb_bindings = {experimental::ConsumerOf(DST_DFB, "in")},
         .runtime_arg_schema =
             {.runtime_arg_names = {"dst_addr", "dst_dram_bank_id", "num_tiles", "ublock_size_tiles", "writer_only"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
+        .hw_config = writer_hw_config,
     };
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
@@ -153,6 +155,29 @@ void run_single_core_copy_block_matmul_partials(
         compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
 
+    experimental::ComputeHardwareConfig compute_hw_config;
+    {
+        // When fp32_dest_acc_en is true the src DFB is Float32 and the compute kernel
+        // consumes it, so the Metal 2.0 host API requires an explicit unpack_to_dest_mode entry.
+        // Default is unpack via SrcA/B, ~19-bit precision.
+        experimental::ComputeUnpackToDestModes unpack_modes{};
+        if (test_config.fp32_dest_acc_en) {
+            unpack_modes = {{SRC0_DFB, tt::tt_metal::UnpackToDestMode::Default}};
+        }
+        if (mesh_device->arch() == tt::ARCH::QUASAR) {
+            compute_hw_config = experimental::ComputeGen2Config{
+                .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
+                .dst_full_sync_en = test_config.dst_full_sync_en,
+                .unpack_to_dest_mode = unpack_modes,
+            };
+        } else {
+            compute_hw_config = experimental::ComputeGen1Config{
+                .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
+                .dst_full_sync_en = test_config.dst_full_sync_en,
+                .unpack_to_dest_mode = unpack_modes,
+            };
+        }
+    }
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
@@ -174,18 +199,7 @@ void run_single_core_copy_block_matmul_partials(
                  .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"num_tiles", num_tiles}, {"num_single_transfer", test_config.compute_ublock}},
-        .hw_config =
-            experimental::ComputeHardwareConfig{
-                .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-                .dst_full_sync_en = test_config.dst_full_sync_en,
-                // When fp32_dest_acc_en is true the src DFB is Float32 and the compute kernel
-                // consumes it, so the Metal 2.0 host API requires an explicit unpack_to_dest_mode entry.
-                // Default is unpack via SrcA/B, ~19-bit precision.
-                .unpack_to_dest_mode = test_config.fp32_dest_acc_en
-                                           ? experimental::ComputeHardwareConfig::
-                                                 UnpackToDestModes{{SRC0_DFB, tt::tt_metal::UnpackToDestMode::Default}}
-                                           : experimental::ComputeHardwareConfig::UnpackToDestModes{},
-            },
+        .hw_config = compute_hw_config,
     };
 
     experimental::WorkUnitSpec wu{

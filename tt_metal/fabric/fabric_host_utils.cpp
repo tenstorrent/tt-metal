@@ -11,12 +11,12 @@
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include <tt_stl/assert.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
-#include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "erisc_datamover_builder.hpp"
 #include <set>
 #include <vector>
 #include <algorithm>
+#include <cctype>
 #include "fabric_context.hpp"
 #include <queue>
 #include <unordered_map>
@@ -26,8 +26,36 @@
 #include <yaml-cpp/yaml.h>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
+#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_fabric {
+
+namespace {
+
+// Mock cluster mapping export uses cluster descriptor filenames (basename). Strip MPI-rank uniquifier
+// suffix appended during PSD discovery when multiple ranks share the same descriptor basename.
+HostName hostname_for_mapping_export(const HostName& hostname) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_mock_enabled()) {
+        return hostname;
+    }
+    constexpr std::string_view cluster_desc_suffix = ".yaml";
+    const auto pos = hostname.rfind(cluster_desc_suffix);
+    if (pos == std::string::npos || pos + cluster_desc_suffix.size() >= hostname.size()) {
+        return hostname;
+    }
+    const std::string tail = hostname.substr(pos + cluster_desc_suffix.size());
+    if (tail.size() <= 1 || tail.front() != '_') {
+        return hostname;
+    }
+    for (char c : tail.substr(1)) {
+        if (!std::isdigit(static_cast<unsigned char>(c))) {
+            return hostname;
+        }
+    }
+    return hostname.substr(0, pos + cluster_desc_suffix.size());
+}
+
+}  // namespace
 
 bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
     return is_1d_fabric_config(fabric_config) || is_2d_fabric_config(fabric_config);
@@ -222,8 +250,9 @@ void serialize_asic_to_fabric_node_mapping_to_file(
                 tt::tt_metal::TrayID tray_id = physical_system_descriptor.get_tray_id(asic_id);
                 tt::tt_metal::ASICLocation asic_location = physical_system_descriptor.get_asic_location(asic_id);
 
-                // Get hostname for this fabric node
-                HostName hostname = topology_mapper.get_hostname_for_fabric_node_id(fabric_node_id);
+                // Get hostname for this fabric node (mock: cluster descriptor filename)
+                HostName hostname =
+                    hostname_for_mapping_export(topology_mapper.get_hostname_for_fabric_node_id(fabric_node_id));
 
                 // Add to the mapping structure, indexed by umd_chip_id (physical chip ID)
                 AsicMapping mapping{tray_id, asic_location, fabric_node_id, asic_id};
