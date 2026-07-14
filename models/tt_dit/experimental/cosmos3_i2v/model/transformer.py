@@ -188,14 +188,14 @@ class Cosmos3OmniTransformer(Module):
         (not per layer), amortized across the 64-layer stack.
         """
         # When proj_in is on-device, gen_seq enters as raw patches [N_gen, patch_latent_dim].
-        # Project to hidden, then broadcast-add the per-step timestep embedding (masked by
-        # noisy_mask_gen). The omni pipeline emits scalar-broadcast vision_timesteps, so the
-        # post-time_embedder vector is a single [hidden] row replicated across noisy positions —
-        # the scatter-add collapses to a masked broadcast-add.
+        # Project to hidden, then add the per-step timestep embedding to noisy rows only.
+        # noisy_mask_gen [N,1] @ time_embed [1,hidden] → [N,hidden] outer product: clean rows
+        # multiply by 0, noisy rows by 1. Uses matmul (K=1) instead of ttnn.multiply because
+        # ttnn.multiply's 2D broadcast ([1,1,1,H] × [1,1,N,1]) corrupts tile boundaries.
         if self.proj_in is not None:
             gen_seq = self.proj_in(gen_seq)
             if time_embed is not None and noisy_mask_gen is not None:
-                gen_seq = ttnn.add(gen_seq, ttnn.multiply(time_embed, noisy_mask_gen))
+                gen_seq = ttnn.add(gen_seq, ttnn.matmul(noisy_mask_gen, time_embed))
 
         import os as _os
 
