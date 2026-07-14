@@ -335,7 +335,7 @@ def _derive_topology_env(args, model_dir):
     if chips <= 1:
         os.environ["TT_PERF_MESH_ROWS"] = "1"
         os.environ["TT_PERF_MESH_COLS"] = "1"
-        print("  [optimize] topology: single chip -> mesh 1x1")
+        print("  topology : single chip -> mesh 1x1")
         return
     rows, cols, tag = 1, chips, "1D default"
     model_id = None if model_dir else getattr(args, "target", None)
@@ -349,7 +349,7 @@ def _derive_topology_env(args, model_dir):
         rows, cols, tag = pc.dp, pc.tp, "kernel-viable"
     os.environ["TT_PERF_MESH_ROWS"] = str(rows)
     os.environ["TT_PERF_MESH_COLS"] = str(cols)
-    print(f"  [optimize] topology: {chips}-chip -> mesh {rows}x{cols} (TP={cols} DP={rows}) [{tag}]")
+    print(f"  topology : {chips}-chip -> mesh {rows}x{cols} (TP={cols} DP={rows}) [{tag}]")
 
 
 def cmd_optimize(args) -> int:
@@ -379,10 +379,13 @@ def cmd_optimize(args) -> int:
     if model_dir and engine != "cc":
         print("  [optimize] --model-dir / --pcc-test is supported only on the cc engine.")
         return 2
-    print(f"  [optimize] {target} -> {demo_dir} ({kind})")
+    _sep = "=" * 78
+    _hitl = " · HITL" if getattr(args, "hitl", False) else ""
+    print(f"\n{_sep}\n  Optimize (perf) — {target}{_hitl}\n{_sep}")
+    print(f"  model    : {demo_dir} ({kind})")
+    print(f"  engine   : {engine} · devices {args.devices} · mesh {args.mesh or '-'} · metric {args.metric}")
     if pcc_test:
-        print(f"  [optimize] pcc gate: {pcc_test} (perf test auto-generated from it)")
-    print(f"  [optimize] engine={engine} devices={args.devices} mesh={args.mesh or '-'} metric={args.metric}")
+        print(f"  pcc gate : {pcc_test} (perf test auto-generated from it)")
     _derive_topology_env(args, model_dir)
     if engine == "cc":
         run_cc = _load_cc_runner(repo_root)

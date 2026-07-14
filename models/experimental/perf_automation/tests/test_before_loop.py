@@ -168,7 +168,10 @@ def test_manifest_written_even_when_tracy_fails(tmp_path, model_root):
 def test_devices_single_recorded_in_manifest(tmp_path, model_root):
     result = _run(tmp_path, model_root, config_extra={"devices": "single"})
     manifest = json.loads((Path(result["run_dir"]) / "manifest.json").read_text())
-    assert manifest["config"]["visible_devices"] == "0"
+    # devices spec is recorded, but visibility is NEVER restricted (a chip-subset pin crashes fabric
+    # auto-discovery on multi-chip boards): 'single' leaves TT_VISIBLE_DEVICES unset -> visible_devices None.
+    assert manifest["config"]["devices"] == "single"
+    assert manifest["config"]["visible_devices"] is None
 
 
 def test_default_metric_is_device_time(tmp_path, model_root):

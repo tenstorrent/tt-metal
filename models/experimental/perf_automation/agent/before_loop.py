@@ -81,12 +81,12 @@ class _Stages:
         self._n += 1
         self._name = name
         self._t0 = time.monotonic()
-        print(f"[{self._n}/{N_STAGES}] {name:<18} {detail}", file=sys.stderr, flush=True)
+        print(f"  Step {self._n}/{N_STAGES}  {detail or name}", file=sys.stderr, flush=True)
         self._event("start", detail)
 
     def done(self, detail: str = "") -> None:
         dt = time.monotonic() - self._t0
-        print(f"      ✔ {self._name}: {detail}  ({dt:.1f}s)", file=sys.stderr, flush=True)
+        print(f"      ✔ {detail} ({dt:.1f}s)" if detail else f"      ✔ done ({dt:.1f}s)", file=sys.stderr, flush=True)
         self._event("done", detail, dt)
 
     def _event(self, kind: str, detail: str, dt: float | None = None) -> None:
@@ -199,8 +199,10 @@ def before_loop(
     run = Run.create(runs_root, config=None)
     stages = _Stages(run.dir / "events.jsonl")
     print(f"run: {run.run_id}  ->  {run.dir}", file=sys.stderr, flush=True)
+    _sep = "=" * 78
+    print(f"\n{_sep}\n  Setup & discovery — {model_root.name}\n{_sep}", file=sys.stderr, flush=True)
 
-    stages.start("environment_check")
+    stages.start("environment_check", "Checking the Tenstorrent device")
     env = environment_check(env_probe)
     box = config.get("box")
     if box:
@@ -243,7 +245,7 @@ def before_loop(
     # committed HEAD before baselining. SCOPED to model_root (never touches unrelated repo changes);
     # disable with AGENT_NO_STARTUP_RESET=1.
     if os.environ.get("AGENT_NO_STARTUP_RESET", "").lower() not in ("1", "true", "yes"):
-        stages.start("startup_reset", "restore model demo to clean git state")
+        stages.start("startup_reset", "Resetting the model demo to a clean state")
         try:
             from . import gitio
 
@@ -258,7 +260,7 @@ def before_loop(
         except Exception as exc:  # never block the run on the restore
             stages.done(f"skipped: {exc}")
 
-    stages.start("cache_playbook", str(playbook_dir))
+    stages.start("cache_playbook", "Loading the optimization playbook")
     cache_playbook(playbook_dir, cache_path)
     index = build_index(playbook_dir)
     stages.done(f"{len(index)} sections indexed")
@@ -267,7 +269,7 @@ def before_loop(
     # python claude-agent-sdk, after which EVERY agent call fails ("error result: success").
     # Detect that here (a trivial call in a clean subprocess) and, by default, auto-upgrade +
     # re-test BEFORE the first in-process SDK import (discover), so the run picks up the fix.
-    stages.start("agent_sdk_health", "verify claude-agent-sdk <-> CLI compatibility")
+    stages.start("agent_sdk_health", "Checking the agent toolchain")
     from .sdk_health import ensure_compatible
 
     sdk_status = ensure_compatible()
@@ -287,7 +289,7 @@ def before_loop(
             f"  fix: {installer_hint()} -U claude-agent-sdk  (or set AGENT_SDK_AUTOSYNC=1 to auto-fix)"
         )
 
-    stages.start("ensure_tt_lang", "install the tt-lang kernel toolchain if missing (--no-deps, ttnn verified)")
+    stages.start("ensure_tt_lang", "Verifying the kernel toolchain (tt-lang)")
     try:
         from .ttlang import ensure_ttl
 
@@ -302,7 +304,7 @@ def before_loop(
             "the run HALTS later only if a material op actually reaches the tt-lang rung"
         )
 
-    stages.start("discover", f"sub-agent mapping {model_root}")
+    stages.start("discover", "Mapping the model's pipelines & building perf tests")
     agent_calls_path = run.dir / "agent_calls.jsonl"
     agent_totals = {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0}
 
@@ -427,16 +429,16 @@ def before_loop(
         print(f"      ⚠ {msg}", file=sys.stderr, flush=True)
         stages._event("note", msg)
 
-    stages.start("lead_review", "lead agent reviewing discovery evidence")
+    stages.start("lead_review", "Reviewing the discovery plan")
     verdict = review(pathmap)
     usage_suffix = record_agent_call("lead_review", "lead", verdict.get("model", "?"), verdict.get("usage"))
     stages.done(f"{verdict['decision']}: {verdict['reasoning'][:90]}" + usage_suffix)
 
-    stages.start("preflight", f"pytest --collect-only -k {case}")
+    stages.start("preflight", "Final checks before optimizing")
     n_selected = preflight(tt_root, perf_rel, case, env=sub_env)
     stages.done(f"{n_selected} test(s) selected")
 
-    stages.start("resolve_signposts", f"scan {model_root.name}/tests/ for tracy signposts")
+    stages.start("resolve_signposts", "Locating profiler signposts")
     from .probes import resolve_signposts
 
     sp = resolve_signposts(model_root / "tests")
@@ -459,7 +461,7 @@ def before_loop(
     }
     run.manifest.write(manifest)
 
-    stages.start("tracy_baseline", f"runs={config.get('runs', 1)} · tail -f {run.profiles_dir}/run0_tracy.log")
+    stages.start("tracy_baseline", "Measuring the baseline latency (trace+2CQ)")
 
     def _run_baseline():
         return profile_model(
