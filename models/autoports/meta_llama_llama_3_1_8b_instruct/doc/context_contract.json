@@ -1,0 +1,45 @@
+{
+  "hf_model_id": "meta-llama/Llama-3.1-8B-Instruct",
+  "hf_advertised_context": 131072,
+  "current_supported_context": 128,
+  "validated_context": 128,
+  "validated_context_evidence": {
+    "path": "decode",
+    "cache_len": 128,
+    "cache_position": 127,
+    "tests": [
+      "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/functional_decoder/test_results_decode_synthetic.json",
+      "models/autoports/meta_llama_llama_3_1_8b_instruct/doc/functional_decoder/test_results_decode_real.json"
+    ]
+  },
+  "limiting_reason": "device_dram_capacity",
+  "capacity_evidence": {
+    "validated_cache_len": 128,
+    "full_context_cache_len": 131072,
+    "batch": 32,
+    "num_key_value_heads": 8,
+    "head_dim": 128,
+    "dtype_bytes": 2,
+    "kv_cache_bytes_per_tensor_at_full_context": 8589934592,
+    "kv_cache_bytes_key_plus_value_at_full_context": 17179869184,
+    "note": "At the emitted batch 32, a full 131072-token BF16 key+value cache for one layer is 16 GiB before allocator overhead, activations, weights, and temporary buffers. This exceeds the local single-chip DRAM budget used by this functional decoder validation, so this stage validates the forge-emitted cache length 128 and defers larger-context cache work to later stages."
+  },
+  "paths": {
+    "prefill": {
+      "status": "stubbed",
+      "reason": "The forge emit does not contain a TTNN prefill graph. model_pt.py performs CPU prefill to populate StaticCache before the emitted TTNN workload."
+    },
+    "decode": {
+      "status": "translated",
+      "batch": 32,
+      "tokens_per_sample": 1,
+      "cache_len": 128,
+      "reason": "main.py sets NUM_TOKENS_PER_SAMPLE=1 and passes input_ids, cache_position, and persistent per-layer key/value caches into ModelTTNN."
+    }
+  },
+  "notes": [
+    "This is a forge-seeded functional starting point, not optimized-decoder, multichip, full-model, or vLLM.",
+    "The emitted workload validates decode at the forge static cache length 128. Larger cache lengths are deferred to later stages and are not claimed as measured evidence here.",
+    "Runtime forwards contain no torch, ttnn.from_torch, or ttnn.to_torch host fallback."
+  ]
+}

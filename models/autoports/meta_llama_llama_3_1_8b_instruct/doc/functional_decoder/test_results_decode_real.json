@@ -1,0 +1,9 @@
+{
+  "test": "test_decode_forward_real_weights",
+  "weights": "real",
+  "batch": 32,
+  "cache_len": 128,
+  "cache_position": 127,
+  "pcc": 0.9998582005500793,
+  "pcc_threshold": 0.99
+}

@@ -1,0 +1,9 @@
+{
+  "test": "test_decode_forward_synthetic_weights",
+  "weights": "synthetic",
+  "batch": 32,
+  "cache_len": 128,
+  "cache_position": 127,
+  "pcc": 0.9990842342376709,
+  "pcc_threshold": 0.99
+}
