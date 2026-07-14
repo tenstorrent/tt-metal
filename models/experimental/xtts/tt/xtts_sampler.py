@@ -11,9 +11,13 @@ on device (no host fallback in the tensor path):
     repetition penalty  (seen-token mask, `ttnn.scatter`)
     -> temperature       (`ttnn.mul`)
     -> top-k truncation  (`ttnn.topk`, mask below the k-th value to -inf)
+    -> top-p / nucleus    (softmax over the sorted top-k window -> exclusive cumsum
+                          `ttnn.cumsum` < p -> smallest kept logit = nucleus threshold,
+                          combined with the top-k threshold via `ttnn.maximum`)
     -> categorical draw   via the Gumbel-max trick: argmax(logits + Gumbel noise),
                           since ttnn has no multinomial. Gumbel = -log(-log(U)),
-                          U ~ uniform(0,1) from `ttnn.rand`.
+                          U ~ uniform(0,1) from `ttnn.rand` (drawn in fp32 — bf16 is
+                          too coarse near 0/1 and biases the draw toward greedy).
 
 Only the final sampled id crosses to host (loop control + next embedding index) —
 the same one-int-per-step read greedy already needs.
@@ -29,12 +33,15 @@ class TtSampler:
     """Repetition-penalty / temperature / top-k / Gumbel-max sampler. Holds the
     per-generation repetition ``seen`` mask; call :meth:`reset` between generations."""
 
-    def __init__(self, device, vocab_size, temperature, top_k=0, repetition_penalty=1.0):
+    def __init__(self, device, vocab_size, temperature, top_k=0, repetition_penalty=1.0, top_p=1.0):
         self.device = device
         self.v = vocab_size
         self.temperature = float(temperature)
         self.top_k = int(top_k) if top_k and top_k < vocab_size else 0
         self.rep = float(repetition_penalty)
+        self.top_p = float(top_p)
+        # nucleus needs a top-k window to sort/cumsum over; without one it is a no-op.
+        self._nucleus = 0.0 < self.top_p < 1.0 and self.top_k > 0
         # bf16 throughout — ttnn.topk requires bf16, and the GPT logits are bf16 anyway.
         self._neg = ttnn.from_torch(
             torch.full((1, vocab_size), NEG_INF), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
@@ -67,13 +74,26 @@ class TtSampler:
 
         if self.top_k:
             vals = ttnn.topk(L, self.top_k, dim=-1, largest=True, sorted=True)[0]  # [1, k] desc
-            kth = ttnn.slice(vals, [0, self.top_k - 1], [1, self.top_k])  # [1, 1]
-            L = ttnn.where(ttnn.ge(L, kth), L, self._neg)
+            kth = ttnn.slice(vals, [0, self.top_k - 1], [1, self.top_k])  # [1, 1] top-k threshold
+            thr = kth
+            if self._nucleus:
+                # Nucleus over the sorted top-k window: keep the shortest prefix whose
+                # cumulative prob first exceeds top_p (the token that crosses is kept).
+                probs = ttnn.softmax(vals, dim=-1)  # [1, k] descending probabilities
+                excl = ttnn.subtract(ttnn.cumsum(probs, dim=-1), probs)  # exclusive prefix sum
+                keep = ttnn.lt(excl, self.top_p)  # [1, k] bool: positions inside the nucleus
+                # smallest logit still kept = nucleus threshold (mask dropped to +inf, row-min).
+                pos_inf = ttnn.add(ttnn.multiply(vals, 0.0), -NEG_INF)
+                nuc = ttnn.min(ttnn.where(keep, vals, pos_inf), dim=-1, keepdim=True)  # [1, 1]
+                thr = ttnn.maximum(nuc, kth)
+            L = ttnn.where(ttnn.ge(L, thr), L, self._neg)
 
-        # Gumbel-max: argmax(L + g), g = -log(-log(U)), U ~ uniform(0,1).
-        u = ttnn.clamp(ttnn.rand([1, self.v], device=self.device, dtype=ttnn.bfloat16), 1e-4, 1.0 - 1e-3)
+        # Gumbel-max: argmax(L + g), g = -log(-log(U)), U ~ uniform(0,1). Draw/compute the
+        # noise in fp32 (bf16 U is too coarse near 0/1 and biases the draw toward greedy).
+        u = ttnn.clamp(ttnn.rand([1, self.v], device=self.device, dtype=ttnn.float32), 1e-4, 1.0 - 1e-3)
         g = ttnn.multiply(ttnn.log(ttnn.multiply(ttnn.log(u), -1.0)), -1.0)
-        tok = ttnn.argmax(ttnn.to_layout(ttnn.add(L, g), ttnn.ROW_MAJOR_LAYOUT), dim=-1)
+        noisy = ttnn.add(ttnn.typecast(L, ttnn.float32), g)
+        tok = ttnn.argmax(ttnn.to_layout(noisy, ttnn.ROW_MAJOR_LAYOUT), dim=-1)
         token = int(ttnn.to_torch(tok).flatten()[0].item())
 
         if self.rep != 1.0:

@@ -70,7 +70,7 @@ def main():
     ap = argparse.ArgumentParser(description="XTTS-v2 on-device text-to-speech demo")
     ap.add_argument(
         "--text",
-        default="voice synthesis has come a long way in recent years. modern systems can now generate natural sounding speech from text with remarkable accuracy. the key challenge is capturing the unique characteristics of a speaker's voice, including their tone, rhythm, pitch, and emotional expression.",
+        default="Voice synthesis has come a long way, and modern systems can now generate natural sounding speech with remarkable accuracy.",
     )
     ap.add_argument("--lang", default="en")
     ap.add_argument("--ref-audio", default="en_sample.wav", help="local WAV path or HF sample name")
@@ -78,7 +78,19 @@ def main():
     ap.add_argument("--max-tokens", type=int, default=400, help="cap on audio codes (sampling usually stops earlier)")
     ap.add_argument("--temperature", type=float, default=0.75, help="sampling temperature; 0 = greedy")
     ap.add_argument("--top-k", type=int, default=50, help="top-k sampling cutoff")
+    ap.add_argument(
+        "--top-p",
+        type=float,
+        default=0.85,
+        help="nucleus (top-p) cutoff; XTTS uses 0.85. 1.0 disables it. Improves text alignment/intelligibility.",
+    )
     ap.add_argument("--repetition-penalty", type=float, default=5.0, help="repetition penalty (XTTS uses 5.0)")
+    ap.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="seed for on-device sampling (ttnn.manual_seed) so a run is reproducible; omit for random",
+    )
     ap.add_argument("--output", default="generated/xtts_demo/xtts_demo.wav")
     ap.add_argument(
         "--write-torch-ref",
@@ -118,8 +130,11 @@ def main():
         mode = (
             "greedy"
             if args.temperature <= 0
-            else f"sampled (temp={args.temperature}, top_k={args.top_k}, rep={args.repetition_penalty})"
+            else f"sampled (temp={args.temperature}, top_k={args.top_k}, top_p={args.top_p}, rep={args.repetition_penalty})"
         )
+        if args.seed is not None:
+            ttnn.manual_seed(args.seed, device=device)
+            logger.info(f"seeded on-device sampling with {args.seed}")
         logger.info(f"generating on device [{mode}], up to {args.max_tokens} codes ...")
         t0 = time.time()
         wav_tt_dev, codes = tt.inference(
@@ -130,6 +145,7 @@ def main():
             temperature=args.temperature,
             top_k=args.top_k,
             repetition_penalty=args.repetition_penalty,
+            top_p=args.top_p,
         )
         wav_tt = ttnn.to_torch(wav_tt_dev).float().reshape(-1).numpy()  # [T_out]
         dt = time.time() - t0
