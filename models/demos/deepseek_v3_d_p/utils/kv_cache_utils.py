@@ -226,6 +226,57 @@ def create_kv_chunk_address_table_kimi(
     # The merged table spans ALL layers (not just this rank's), so size the table to the global total.
     config.num_layers = effective_num_layers
     lookup_table = ttnn.experimental.disaggregation.KvChunkAddressTable(config)
+    return populate_kv_chunk_address_table_kimi(
+        lookup_table=lookup_table,
+        config=config,
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        seq_len=seq_len,
+        sp_axis=sp_axis,
+        tt_kvpe_cache=tt_kvpe_cache,
+        chunk_size_bytes=chunk_size_bytes,
+        num_users=num_users,
+        config_id=0,
+        stage_layout=stage_layout,
+    )
+
+
+def populate_kv_chunk_address_table_kimi(
+    lookup_table,
+    config,
+    mesh_device,
+    mesh_shape,
+    seq_len,
+    sp_axis,
+    tt_kvpe_cache,
+    chunk_size_bytes,
+    num_users=1,
+    config_id=0,
+    stage_layout=None,
+):
+    """
+    Populate ONE config (``config_id``) of an existing KvChunkAddressTable from a device cache tensor.
+
+    Factored out of create_kv_chunk_address_table_kimi so a single multi-config table can hold several
+    caches at once (the serving convention is config 0 = the MLA KVPE cache, config 1 = the block-cyclic
+    index-key cache); each config carries its own grid + chunk_size_bytes and is addressed by config_id.
+    The device-group
+    side table and fabric-node host map are SHARED across configs — re-registering them here per config is
+    safe (add_device_group dedups identical replica sets; set_fabric_node_host is idempotent).
+
+    Args:
+        lookup_table: an existing KvChunkAddressTable (single- or multi-config).
+        config: the KvChunkAddressTableConfig for THIS config_id (read for num_layers).
+        config_id: which config of the table to populate (default 0, the single-config case).
+        (remaining args as in create_kv_chunk_address_table_kimi)
+
+    Returns:
+        lookup_table: the same table, with config_id populated.
+    """
+    # Per-stage device groups + host tags are built inside the stage loop below (one group per
+    # (stage, SP row)); no rank-local single-stage device-group pass here — the multi-stage merge
+    # supersedes it, and a rank-local set_fabric_node_host(localhost) would fight the per-stage host.
+    rows = mesh_shape[0]
 
     tokens_per_chunk_local = PREFILL_CHUNK_OUTPUT_TOKENS // mesh_shape[sp_axis]  # 640 for 5k chunks
     num_chunks_per_seq_len = seq_len // PREFILL_CHUNK_OUTPUT_TOKENS  # number of 5k chunks in the seq len
@@ -269,12 +320,12 @@ def create_kv_chunk_address_table_kimi(
                             location.noc_addr = (curr_bank_id << 32) | (dram_bank_base_addr + curr_bank_offset)
                             location.size_bytes = chunk_size_bytes
                             location.device_group_index = group_idx
-                            lookup_table.set(global_layer, position, slot, location)
+                            lookup_table.set(global_layer, position, slot, location, config_id)
 
                             curr_bank_id = (curr_bank_id + 1) % num_dram_banks
                             if curr_bank_id == 0:
                                 curr_bank_offset += chunk_size_bytes
-
+    # Must match the bank count the cache was ND-sharded across (see get_num_dram_banks).
     return lookup_table
 
 

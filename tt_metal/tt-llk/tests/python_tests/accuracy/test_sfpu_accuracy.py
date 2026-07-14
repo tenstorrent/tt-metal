@@ -44,6 +44,7 @@ TRANSCENDENTAL_OPS = [
     MathOperation.Asinh,
     MathOperation.Acosh,
     MathOperation.Hardsigmoid,
+    MathOperation.Erfinv,
 ]
 
 # Ops that support FastMode.
