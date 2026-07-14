@@ -11,31 +11,33 @@ and the matmul pipeline once PER height block. That transition has a Quasar MATH
 race (watcher 0x19 / ERROR_TRISC1). Option C (conv_bmm_split_tilize_metal2.cpp) tilizes ALL height
 blocks first, then matmuls them, so the engine transitions tilize->matmul exactly ONCE.
 
-Option C can't run the real stem: its full per-core tilized activation is 3.67 MB, over the 1 MB uint16
-DFB ring (dataflow_buffer.cpp:645 ring_trisc_units < 65536). So we can't test the hypothesis at stem
-scale. This test instead uses a SMALL height-sharded conv whose WHOLE tilized activation fits the ring
-(so Option C can actually run) while still having >=2 height blocks each with enough K to rotate DEST
-banks (so the fused kernel still has a chance to hit the race).
+Option C can't run the real stem: its full per-core tilized activation (3.67 MB) blows past the 1 MB
+uint16 DFB ring. This test uses a SMALL height-sharded conv whose WHOLE tilized activation fits the ring
+(so Option C can run) while still having MANY height blocks each with enough K to rotate DEST banks (so
+the fused kernel still has a chance to hit the race).
 
-Ring-fit math (the constraint the stem violated): total tilized ring units = per_core_out_height_tiles *
-act_block_w_ntiles * 128, and Option C resizes ACT_TILIZED to hold ALL blocks, so that product must stay
-< 65536 (=> per_core_out_height_tiles * act_block_w_ntiles < 512). Here:
-  - 4x4 conv, in_channels=8  => K = 8*4*4/32 = 4 tiles (act_block_w_ntiles = 4)
-  - out 32x32 = 1024 sticks = 32 out-height tiles; act_block_h_override = 128 rows = 4 tiles/block
-  - per-core split over C cores: per_core_out_height_tiles = 32/C, num_blocks = (32/C)/4
-      C=1: 32 tiles, ring = 32*4 = 128 tiles = 16384 units (fits), 8 blocks
-      C=2: 16 tiles, ring = 64 tiles = 8192 units (fits), 4 blocks
-      C=4: 8 tiles,  ring = 32 tiles = 4096 units (fits), 2 blocks
-So it fits the ring and keeps >=2 blocks for any plausible emulator core count. 4x4 + packer_l1_acc +
-fused bias + RELU mirror the stem's kernel path (tilize + matmul-partials + bias pack).
+Getting to the compute kernel on the emulator required threading three needles:
+  1. L1 path, not DRAM: conv2d routes to the DRAM-slicing path unless the input is already in L1
+     (determine_conv2d_execution_path: L1 iff input.is_l1() and no slice_config). The single-slice DRAM
+     writeback goes through sharded_to_interleaved, which is UNPORTED on Quasar (legacy DataMovementKernel
+     -> TT_FATAL). So we pre-shard the activation into L1 (height-sharded) exactly like the model feeds
+     conv1 the fold output; reshard_if_not_optimal lets the conv fix the shard to its optimal layout.
+  2. Single K-block: the Option C factory gate needs in0_num_blocks_w == 1, so conv_config.full_inner_dim
+     = True (keep the whole reduction dim in one block, same lever the stem's force_conv_no_spill uses).
+  3. >=2 height blocks: act_block_h_override = 32 (1 tile) => num_blocks_act_h = per_core_out_height_tiles
+     (>=2 on any core count), so the fused kernel does many tilize<->matmul transitions and Option C
+     collapses them to one. padding=0 avoids the Quasar halo zero-pad stub (MEM_ZEROS is unported).
 
-HOW TO READ THE RESULT (run BOTH variants):
-  - fused faults/timeouts/mismatches AND split passes  => hypothesis VALIDATED: isolating the tilize
+Ring-fit (the constraint the stem violated): Option C sizes ACT_TILIZED to hold ALL blocks =
+per_core_out_height_tiles * K_tiles * 128 units, must stay < 65536. Here out 32x32 = 32 out-h tiles,
+K = in_channels(32)*3*3/32 = 9 tiles => worst case (1 core) 32*9*128 = 36864 < 65536 (fits).
+
+HOW TO READ THE RESULT (run BOTH variants -- the `fused` and `split` params):
+  - fused faults/times-out/mismatches AND split passes => hypothesis VALIDATED: isolating the tilize
     phase avoids the race. Build Option B (tilized activation as a real tensor -> no ring limit).
-  - both pass                                          => this shape is too small to trigger the race;
-    scale SHAPES up (bigger out / K / act_block_h) until fused breaks, keeping the ring-fit inequality.
-  - both fault                                         => the race is intrinsic to a SINGLE tilize->matmul
-    transition; Option B won't help either -> escalate to the LLK team (~/llk_conv_tilize_issue.md).
+  - both pass  => shape too small to trigger; raise in_channels / out size / act_block_h (keep ring-fit).
+  - both fault => race is intrinsic to a SINGLE tilize->matmul transition; Option B won't help ->
+    escalate to the LLK team (~/llk_conv_tilize_issue.md).
 
 Run (craq-sim / emulator, slow dispatch + forced JIT):
   TT_METAL_SIMULATOR=~/sim/libttsim.so \
@@ -54,20 +56,20 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 PCC = 0.97
 
 
-def _run(mesh_device, *, use_split, out_hw, act_block_h_override):
+def _run(mesh_device, *, use_split):
     device = mesh_device
     torch.manual_seed(0)
 
-    # Small stem-like conv: 4x4 / s1 / p0, in=8 (K=4 tiles), out=64, RELU + bias + packer_l1_acc.
+    # Small stem-like tilize-path conv: 3x3 / s1 / p0, in=32 (K=9 tiles), out=64, RELU + bias + packer_l1_acc.
     batch_size = 1
-    in_channels = 8
+    in_channels = 32
     out_channels = 64
-    kernel_size = (4, 4)
+    kernel_size = (3, 3)
     stride = (1, 1)
     padding = (0, 0)
-    out_h_want, out_w_want = out_hw
-    input_height = out_h_want + kernel_size[0] - 1  # s1/p0 => out = in - (k-1)
-    input_width = out_w_want + kernel_size[1] - 1
+    out_h = out_w = 32  # 32x32 = 1024 sticks = 32 out-height tiles (tile-aligned)
+    input_height = out_h + kernel_size[0] - 1  # s1/p0 => in = out + (k-1) = 34
+    input_width = out_w + kernel_size[1] - 1
 
     torch_input_nchw = torch.randn((batch_size, in_channels, input_height, input_width), dtype=torch.bfloat16).float()
     torch_weight = torch.randn((out_channels, in_channels, *kernel_size), dtype=torch.bfloat16).float()
@@ -78,8 +80,23 @@ def _run(mesh_device, *, use_split, out_hw, act_block_h_override):
         )
     )
 
-    torch_input_nhwc = torch.permute(torch_input_nchw, (0, 2, 3, 1))
-    tt_input = ttnn.from_torch(torch_input_nhwc, dtype=ttnn.bfloat16)
+    # --- pre-shard the activation into L1 (height-sharded) so conv2d takes the L1 path (not DRAM slicing) ---
+    nhw = batch_size * input_height * input_width
+    flat = torch.permute(torch_input_nchw, (0, 2, 3, 1)).reshape(1, 1, nhw, in_channels).contiguous()
+    grid = device.compute_with_storage_grid_size()
+    max_cores = grid.x * grid.y
+    num_cores = max(c for c in range(1, max_cores + 1) if nhw % c == 0)
+    shard_h = nhw // num_cores
+    core_grid = ttnn.num_cores_to_corerangeset(num_cores, grid, True)
+    in_mem = ttnn.create_sharded_memory_config(
+        shape=(1, 1, shard_h, in_channels),
+        core_grid=core_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_input = ttnn.from_torch(flat, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tt_input = tt_input.to(device, in_mem)
     tt_weight = ttnn.from_torch(torch_weight, dtype=ttnn.bfloat16)
     tt_bias = ttnn.from_torch(torch_bias, dtype=ttnn.bfloat16)
 
@@ -87,8 +104,9 @@ def _run(mesh_device, *, use_split, out_hw, act_block_h_override):
         weights_dtype=ttnn.bfloat16,
         activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        act_block_h_override=act_block_h_override,
-        reshard_if_not_optimal=False,
+        full_inner_dim=True,  # single K-block => in0_num_blocks_w == 1 (Option C gate)
+        act_block_h_override=32,  # 1-tile blocks => many height blocks (>=2 on any core count)
+        reshard_if_not_optimal=True,  # let the conv fix the input shard to its optimal height-sharded layout
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -102,7 +120,7 @@ def _run(mesh_device, *, use_split, out_hw, act_block_h_override):
     elif prev is not None:
         del os.environ["TT_METAL_QSR_CONV_SPLIT_TILIZE"]
     try:
-        out, [out_h, out_w], [tt_weight, tt_bias] = ttnn.experimental.quasar.conv2d(
+        out, [oh, ow], [tt_weight, tt_bias] = ttnn.experimental.quasar.conv2d(
             input_tensor=tt_input,
             weight_tensor=tt_weight,
             bias_tensor=tt_bias,
@@ -130,25 +148,15 @@ def _run(mesh_device, *, use_split, out_hw, act_block_h_override):
             os.environ["TT_METAL_QSR_CONV_SPLIT_TILIZE"] = prev
 
     tt_out = ttnn.to_torch(ttnn.from_device(out))
-    tt_out = tt_out.reshape(batch_size, out_h, out_w, tt_out.shape[-1])
+    tt_out = tt_out.reshape(batch_size, oh, ow, tt_out.shape[-1])
     tt_out = tt_out[:, :, :, :out_channels]
     tt_out = torch.permute(tt_out, (0, 3, 1, 2))
 
     assert_with_pcc(torch_golden, tt_out.float(), pcc=PCC)
 
 
-# Scale ladder: (out_h, out_w, act_block_h_override[rows]) -- all keep the ring-fit inequality on 1/2/4
-# cores. Start small; if neither variant breaks, the larger rungs push more tiles/block through the
-# tilize<->matmul transition. If a rung overflows the ring on this core count it FATALs clearly (nudge down).
-_SHAPES = [
-    pytest.param((32, 32), 128, id="out32x32_abh4t"),  # 32 out-h tiles, 4-tile blocks
-    pytest.param((48, 48), 256, id="out48x48_abh8t"),  # bigger: more tiles/block (watch ring on 1 core)
-]
-
-
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize("out_hw, act_block_h_override", _SHAPES)
 @pytest.mark.parametrize("use_split", [False, True], ids=["fused", "split"])
-def test_conv2d_split_tilize_hypothesis(mesh_device, use_split, out_hw, act_block_h_override):
-    _run(mesh_device, use_split=use_split, out_hw=out_hw, act_block_h_override=act_block_h_override)
+def test_conv2d_split_tilize_hypothesis(mesh_device, use_split):
+    _run(mesh_device, use_split=use_split)
