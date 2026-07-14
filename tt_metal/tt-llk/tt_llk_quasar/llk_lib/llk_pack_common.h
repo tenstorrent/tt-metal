@@ -325,20 +325,8 @@ inline void _llk_pack_dest_semaphore_section_done_()
         TT_ZEROACC(p_zeroacc::CLR_HALF, EN_32BIT_DEST, 0, ADDR_MOD_7, dest_register_offset != 0);
     }
 
-    // Tell math that it can write again. QSR FIX: stall on MATH first so the bank-clear ZEROACC above drains
-    // BEFORE the SEMGET releases MATH. The ZEROACC is a DEST/accumulator op that retires on the MATH/FPU unit
-    // (NOT PACK -- the symmetric MATH->PACK post drains its FPU datacopy under p_stall::MATH+WAIT_SFPU at
-    // _llk_math_dest_section_done_, and the dvalid ZEROACC sibling runs "from the math thread"). The SEMGET
-    // decrements MATH_PACK, releasing MATH's _llk_math_wait_for_dest_available_ SEMWAIT; without the drain MATH
-    // issues tile t+1's datacopy MOP into the bank while this ZEROACC is still in flight -> backend rejects the
-    // overlapping MOP -> ERROR_TRISC1 / 0x19 (Risc IB interrupt). p_stall::PACK was the WRONG unit (line 307
-    // already waited PACK before the ZEROACC, and PACK doesn't drain a ZEROACC -> byte-identical fault, no
-    // timing shift). WH/BH use the HW dest-dvalid interlock; the Quasar semaphore workaround omitted this
-    // PACK->MATH drain. Exposed by the conv 16-tile tilize_block (fast full-tile datacopy reuses DEST banks
-    // faster than the clear drains); matmul/pool hide it via longer per-tile compute. No deadlock: MATH is
-    // parked in its SEMWAIT here, so the only in-flight MATH-unit op is this ZEROACC. Correctness-safe (strictly
-    // more ordering); backs every Quasar semaphore-synced DEST op.
-    _llk_packer_set_math_semaphore_<p_stall::MATH>();
+    // Tell math that it can write again
+    _llk_packer_set_math_semaphore_();
 
     if constexpr (DST == DstSync::SyncHalf)
     {
