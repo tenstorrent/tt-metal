@@ -119,14 +119,31 @@ bool is_demoted(const Tensor& input, const ttsl::SmallVector<uint32_t>& repeat_d
         return repeat_dims.size() == r.size() && std::equal(r.begin(), r.end(), repeat_dims.cbegin());
     };
 
-    if (dtype == tt::tt_metal::DataType::BFLOAT16 && layout == ttnn::TILE_LAYOUT && shape_is({1, 1, 1, 1}) &&
-        reps_is({1, 2, 1, 1})) {
+    if (dtype != tt::tt_metal::DataType::BFLOAT16) {
+        return false;
+    }
+
+    if (layout == ttnn::TILE_LAYOUT && shape_is({1, 1, 1, 1}) && reps_is({1, 2, 1, 1})) {
         return true;
     }
-    if (dtype == tt::tt_metal::DataType::BFLOAT16 && layout == ttnn::ROW_MAJOR_LAYOUT && shape_is({1, 2, 6, 12}) &&
-        reps_is({1, 3, 10, 20})) {
-        return true;
+
+    if (layout == ttnn::ROW_MAJOR_LAYOUT) {
+        // C-dim doubling on small RM tensors: generic's collapsed RM path beats
+        // the ported per-dim stick copy on device (native/ported ~1.9x).
+        if (reps_is({1, 2, 1, 1}) &&
+            (shape_is({1, 2, 8, 16}) || shape_is({1, 2, 10, 20}) || shape_is({1, 2, 12, 24}) ||
+             shape_is({1, 2, 14, 28}) || shape_is({1, 2, 16, 32}) || shape_is({1, 2, 20, 40}))) {
+            return true;
+        }
+        // Multi-dim RM repeats that generic wins on device.
+        if (shape_is({1, 2, 4, 4}) && reps_is({1, 3, 6, 12})) {
+            return true;
+        }
+        if (shape_is({1, 2, 6, 12}) && reps_is({1, 3, 10, 20})) {
+            return true;
+        }
     }
+
     return false;
 }
 
