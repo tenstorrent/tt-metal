@@ -5,6 +5,7 @@
 #include "ttnn/operations/experimental/transformer/concat_heads_matmul/device/concat_heads_matmul_program_factory.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 
@@ -65,11 +66,26 @@ ConcatHeadsMatmulProgramFactory::cached_program_t ConcatHeadsMatmulProgramFactor
         std::holds_alternative<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(cfg),
         "concat_heads_matmul: expected a 1D-mcast program config for this shape");
 
-    auto params = make_params(operation_attributes, cfg);
-    auto inputs = make_inputs(in0, weight);
     std::vector<Tensor> out_vec = {tensor_return_value};
 
-    auto mm = ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory::create(params, inputs, out_vec);
+    // Build the program via the stock 1D-mcast matmul helper. Main refactored the matmul
+    // program-factory API: the old static ::create returning a cached_program_t was replaced
+    // by this free helper that populates a caller-owned Program and returns a CachedProgram.
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> fused_op_signaler = std::nullopt;
+    auto mm = ttnn::prim::matmul_multi_core_reuse_mcast_1d_optimized_helper(
+        program,
+        in0,
+        {weight},
+        /*bias=*/std::nullopt,
+        out_vec,
+        /*broadcast_batch=*/true,
+        operation_attributes.compute_kernel_config,
+        cfg,
+        /*untilize_out=*/false,
+        fused_op_signaler,
+        /*global_cb=*/std::nullopt,
+        /*sub_device_id=*/std::nullopt);
 
     return cached_program_t{
         std::move(mm.program),
@@ -103,9 +119,10 @@ void ConcatHeadsMatmulProgramFactory::override_runtime_arguments(
     auto inputs = make_inputs(in0, weight);
     std::vector<Tensor> out_vec = {tensor_return_value};
 
-    auto proxy = ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory::cached_program_t::proxy(
-        cached_program.program, sv.mm_shared);
-    ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(proxy, params, inputs, out_vec);
+    // New override API: takes the Program + shared_variables directly (the old
+    // cached_program_t::proxy indirection was removed in the matmul refactor).
+    ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
+        cached_program.program, sv.mm_shared, params, inputs, out_vec);
 }
 
 }  // namespace ttnn::experimental::prim
