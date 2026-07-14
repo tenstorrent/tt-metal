@@ -115,6 +115,21 @@ uint32_t append_routing_plane_connection_manager_rt_args(
 std::vector<uint32_t> get_forwarding_link_indices(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id);
 
+struct FabricRouteInfo {
+    FabricNodeId connection_node_id;
+    eth_chan_directions direction;
+    uint32_t link_index;
+    uint32_t hop_count;
+};
+
+// Resolves the adjacent connection node, direction, link, and physical hop
+// count through the active control-plane routing tables. When link_index is
+// unspecified, the first available forwarding link is selected.
+FabricRouteInfo get_fabric_route_info(
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
+    std::optional<uint32_t> link_index = std::nullopt);
+
 FabricNodeId get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id);
 
 std::vector<chan_id_t> get_active_fabric_eth_routing_planes_in_direction(

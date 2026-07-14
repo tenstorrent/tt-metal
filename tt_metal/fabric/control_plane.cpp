@@ -1437,11 +1437,6 @@ std::vector<chan_id_t> ControlPlane::get_intramesh_facing_eth_chans(FabricNodeId
 
 std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
     FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id, chan_id_t src_chan_id) const {
-    // Query the mesh coord range owned by the current host
-    auto host_local_coord_range = this->get_coord_range(this->get_local_mesh_id_bindings()[0], MeshScope::LOCAL);
-    auto src_mesh_coord = this->mesh_graph_->chip_to_coordinate(src_fabric_node_id.mesh_id, src_fabric_node_id.chip_id);
-    auto dst_mesh_coord = this->mesh_graph_->chip_to_coordinate(dst_fabric_node_id.mesh_id, dst_fabric_node_id.chip_id);
-
     std::vector<std::pair<FabricNodeId, chan_id_t>> route;
     int i = 0;
     while (src_fabric_node_id != dst_fabric_node_id) {

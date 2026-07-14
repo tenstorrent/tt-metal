@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/fmt.hpp>
+#include <algorithm>
 #include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include "erisc_datamover_builder.hpp"
@@ -53,6 +54,42 @@ bool is_TG_gateway_connection(
     // both of the chips should have the same associated mmio device and
     // one of the chips should be the mmio device itself
     return mmio_chip_id1 == mmio_chip_id2 && (mmio_chip_id1 == src_chip_id || mmio_chip_id2 == dst_chip_id);
+}
+
+struct ResolvedFabricLink {
+    uint32_t link_index;
+    tt::tt_fabric::chan_id_t channel;
+};
+
+// Link indices address a direction-specific channel list. Resolve both values
+// together so every caller applies the same end-to-end route validation.
+ResolvedFabricLink resolve_fabric_link(
+    const tt::tt_fabric::ControlPlane& control_plane,
+    const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+    const tt::tt_fabric::FabricNodeId& dst_fabric_node_id,
+    tt::tt_fabric::RoutingDirection direction,
+    std::optional<uint32_t> link_index) {
+    const auto forwarding_link_indices = tt::tt_fabric::get_forwarding_link_indices_in_direction(
+        control_plane, src_fabric_node_id, dst_fabric_node_id, direction);
+    TT_FATAL(
+        !forwarding_link_indices.empty(),
+        "No forwarding links available from {} to {}",
+        src_fabric_node_id,
+        dst_fabric_node_id);
+
+    const uint32_t selected_link_index = link_index.value_or(forwarding_link_indices.front());
+    TT_FATAL(
+        std::find(forwarding_link_indices.begin(), forwarding_link_indices.end(), selected_link_index) !=
+            forwarding_link_indices.end(),
+        "Requested link index {} cannot be used for forwarding from {} to {}. Valid forwarding links are {}",
+        selected_link_index,
+        src_fabric_node_id,
+        dst_fabric_node_id,
+        forwarding_link_indices);
+
+    const auto candidate_channels =
+        control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, direction);
+    return ResolvedFabricLink{.link_index = selected_link_index, .channel = candidate_channels[selected_link_index]};
 }
 
 }  // namespace
@@ -160,27 +197,9 @@ void append_fabric_connection_rt_args(
         src_fabric_node_id,
         dst_fabric_node_id);
 
-    const auto candidate_eth_chans =
-        control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, forwarding_direction.value());
-    TT_FATAL(
-        link_idx < candidate_eth_chans.size(),
-        "Requested link index {} is out of bounds. {} ethernet channels available to forward b/w src {} and dst {}",
-        link_idx,
-        candidate_eth_chans.size(),
-        src_fabric_node_id,
-        dst_fabric_node_id);
-
-    const auto forwarding_links = get_forwarding_link_indices_in_direction(
-        control_plane, src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
-    TT_FATAL(
-        std::find(forwarding_links.begin(), forwarding_links.end(), link_idx) != forwarding_links.end(),
-        "Requested link index {} cannot be used for forwarding b/w src {} and dst {}. Valid forwarding links are {}",
-        link_idx,
-        src_fabric_node_id,
-        dst_fabric_node_id,
-        forwarding_links);
-
-    const auto fabric_router_channel = candidate_eth_chans[link_idx];
+    const auto resolved_link = resolve_fabric_link(
+        control_plane, src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value(), link_idx);
+    const auto fabric_router_channel = resolved_link.channel;
 
     uint32_t worker_teardown_semaphore_id;
     uint32_t worker_buffer_index_semaphore_id;
@@ -491,6 +510,52 @@ std::vector<uint32_t> get_forwarding_link_indices(
         control_plane, src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
 }
 
+FabricRouteInfo get_fabric_route_info(
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
+    std::optional<uint32_t> link_index) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+    TT_FATAL(
+        forwarding_direction.has_value(),
+        "Could not determine forwarding direction from {} to {}",
+        src_fabric_node_id,
+        dst_fabric_node_id);
+
+    const auto resolved_link = resolve_fabric_link(
+        control_plane, src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value(), link_index);
+    const auto route = control_plane.get_fabric_route(src_fabric_node_id, dst_fabric_node_id, resolved_link.channel);
+    TT_FATAL(!route.empty(), "Could not resolve a fabric route from {} to {}", src_fabric_node_id, dst_fabric_node_id);
+
+    FabricNodeId current_node = src_fabric_node_id;
+    std::optional<FabricNodeId> connection_node_id;
+    uint32_t hop_count = 0;
+    for (const auto& route_entry : route) {
+        const auto& route_node = route_entry.first;
+        if (route_node == current_node) {
+            continue;
+        }
+        if (!connection_node_id.has_value()) {
+            connection_node_id = route_node;
+        }
+        current_node = route_node;
+        ++hop_count;
+    }
+    TT_FATAL(connection_node_id.has_value(), "Resolved fabric route from {} has no hops", src_fabric_node_id);
+    TT_FATAL(
+        current_node == dst_fabric_node_id,
+        "Resolved fabric route from {} ended at {} instead of {}",
+        src_fabric_node_id,
+        current_node,
+        dst_fabric_node_id);
+
+    return FabricRouteInfo{
+        .connection_node_id = connection_node_id.value(),
+        .direction = control_plane.routing_direction_to_eth_direction(forwarding_direction.value()),
+        .link_index = resolved_link.link_index,
+        .hop_count = hop_count};
+}
+
 tt::tt_fabric::Topology get_fabric_topology() {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     return control_plane.get_fabric_context().get_fabric_topology();
@@ -697,38 +762,30 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
 
     std::vector<uint32_t> worker_args;
 
-    for (size_t i = 0; i < dst_nodes.size(); i++) {
-        const auto& dst_node = dst_nodes[i];
-
-        // Direction tag
-        auto dir_opt = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_node);
+    for (size_t connection_index = 0; connection_index < dst_nodes.size(); connection_index++) {
+        const auto& dst_node = dst_nodes[connection_index];
+        const auto forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_node);
         TT_FATAL(
-            dir_opt.has_value(),
+            forwarding_direction.has_value(),
             "Could not determine forwarding direction from src {} to first hop {}",
             src_fabric_node_id,
             dst_node);
-        worker_args.push_back(static_cast<uint32_t>(dir_opt.value()));
+        worker_args.push_back(
+            static_cast<uint32_t>(control_plane.routing_direction_to_eth_direction(forwarding_direction.value())));
 
-        // ETH channel
-        uint32_t link_idx = 0;
+        std::optional<uint32_t> link_index;
         if (!connection_link_indices.empty()) {
-            link_idx = (connection_link_indices.size() == 1) ? connection_link_indices[0] : connection_link_indices[i];
-        } else {
-            const auto links = tt::tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dst_node);
-            TT_FATAL(!links.empty(), "No forwarding links available from {} to {}", src_fabric_node_id, dst_node);
-            link_idx = links[0];
+            link_index = connection_link_indices.size() == 1 ? connection_link_indices.front()
+                                                             : connection_link_indices[connection_index];
         }
 
-        auto forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_node);
-        const auto candidate_eth_chans =
-            control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, forwarding_direction.value());
-        TT_FATAL(link_idx < candidate_eth_chans.size(), "Link index {} out of bounds", link_idx);
-        const auto fabric_router_channel = candidate_eth_chans[link_idx];
-
-        // Per-connection RT args: [eth_channel, teardown_sem, buffer_idx_sem]
-        worker_args.push_back(fabric_router_channel);
-        worker_args.push_back(teardown_sem_ids[i]);
-        worker_args.push_back(buffer_index_sem_ids[i]);
+        const auto resolved_link =
+            resolve_fabric_link(control_plane, src_fabric_node_id, dst_node, forwarding_direction.value(), link_index);
+        tt::tt_fabric::append_worker_to_fabric_edm_sender_rt_args(
+            resolved_link.channel,
+            teardown_sem_ids[connection_index],
+            buffer_index_sem_ids[connection_index],
+            worker_args);
     }
 
     // 2D metadata

@@ -4,8 +4,10 @@
 
 #include <gtest/gtest.h>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
+#include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <filesystem>
@@ -70,6 +72,37 @@ std::vector<std::pair<FabricNodeId, FabricNodeId>> get_all_intramesh_connections
         }
     }
     return all_intramesh_connections;
+}
+
+bool is_local_fabric_node(const ControlPlane& control_plane, FabricNodeId fabric_node_id) {
+    const auto local_mesh_ids = control_plane.get_local_mesh_id_bindings();
+    if (std::find(local_mesh_ids.begin(), local_mesh_ids.end(), fabric_node_id.mesh_id) == local_mesh_ids.end()) {
+        return false;
+    }
+
+    const auto local_coord_range = control_plane.get_coord_range(fabric_node_id.mesh_id, MeshScope::LOCAL);
+    const auto mesh_coord =
+        control_plane.get_mesh_graph().chip_to_coordinate(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+    return local_coord_range.contains(mesh_coord);
+}
+
+void expect_remote_route_info(
+    const ControlPlane& control_plane, const std::vector<std::pair<FabricNodeId, FabricNodeId>>& connections) {
+    bool checked_remote_destination = false;
+    for (const auto& [src_node_id, dst_node_id] : connections) {
+        if (!is_local_fabric_node(control_plane, src_node_id) || is_local_fabric_node(control_plane, dst_node_id)) {
+            continue;
+        }
+
+        const auto direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
+        ASSERT_TRUE(direction.has_value());
+        const auto route_info = get_fabric_route_info(src_node_id, dst_node_id);
+        EXPECT_EQ(route_info.direction, control_plane.routing_direction_to_eth_direction(*direction));
+        EXPECT_EQ(route_info.connection_node_id, dst_node_id);
+        EXPECT_EQ(route_info.hop_count, 1u);
+        checked_remote_destination = true;
+    }
+    EXPECT_TRUE(checked_remote_destination);
 }
 
 std::unique_ptr<ControlPlane> make_control_plane(
@@ -188,6 +221,7 @@ TEST(MultiHost, TestDualGalaxyFabric2DSanity) {
         const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id);
         EXPECT_TRUE(!eth_chans.empty());
     }
+    expect_remote_route_info(control_plane, intramesh_connections);
 }
 
 TEST(MultiHost, TestDualGalaxyFabric1DSanity) {
@@ -1048,6 +1082,7 @@ TEST(MultiHost, BHDualGalaxyFabric2DSanity) {
     }
     // Verify that we found exactly 8 Z channels (channels 8 and 9, 2 chips per mesh, bidirectional = 8 total)
     EXPECT_EQ(z_channel_count, 8) << "Expected 8 Z channels (channels 8 and 9, 2 chips per mesh, bidirectional = 8 total)";
+    expect_remote_route_info(control_plane, get_all_intermesh_connections(control_plane));
 }
 
 TEST(MultiHost, T3K2x2AssignZDirectionControlPlaneInit) {

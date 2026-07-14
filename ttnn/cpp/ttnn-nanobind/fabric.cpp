@@ -54,6 +54,26 @@ void bind_fabric_api(nb::module_& mod) {
             return fmt::format("FabricNodeId(M{}, D{})", *id.mesh_id, id.chip_id);
         });
 
+    nb::class_<tt::tt_fabric::FabricRouteInfo>(mod, "FabricRouteInfo", R"(
+        Control-plane-resolved route information for one fabric connection.
+    )")
+        .def_ro("connection_node_id", &tt::tt_fabric::FabricRouteInfo::connection_node_id)
+        .def_prop_ro(
+            "direction",
+            [](const tt::tt_fabric::FabricRouteInfo& info) { return static_cast<uint32_t>(info.direction); })
+        .def_ro("link_index", &tt::tt_fabric::FabricRouteInfo::link_index)
+        .def_ro("hop_count", &tt::tt_fabric::FabricRouteInfo::hop_count)
+        .def("__repr__", [](const tt::tt_fabric::FabricRouteInfo& info) {
+            return fmt::format(
+                "FabricRouteInfo(connection_node_id=FabricNodeId(M{}, D{}), direction={}, link_index={}, "
+                "hop_count={})",
+                *info.connection_node_id.mesh_id,
+                info.connection_node_id.chip_id,
+                static_cast<uint32_t>(info.direction),
+                info.link_index,
+                info.hop_count);
+        });
+
     // custom mapping here for interface stability
     nb::enum_<tt::tt_fabric::FabricConfig>(mod, "FabricConfig")
         .value("DISABLED", tt::tt_fabric::FabricConfig::DISABLED)
@@ -139,6 +159,20 @@ void bind_fabric_api(nb::module_& mod) {
         &tt::tt_fabric::GetFabricConfig,
         R"(
             Returns the currently active global fabric configuration.
+        )");
+
+    mod.def(
+        "get_fabric_route_info",
+        &tt::tt_fabric::get_fabric_route_info,
+        nb::arg("src_fabric_node_id"),
+        nb::arg("dst_fabric_node_id"),
+        nb::arg("link_index") = nb::none(),
+        R"(
+            Resolves a fabric connection through the active control plane.
+
+            Returns the adjacent connection node, selected forwarding
+            direction and link index, and the number of physical inter-node
+            hops in the resolved route.
         )");
 
     mod.def(

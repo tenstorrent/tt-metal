@@ -22,6 +22,8 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/internal/fabric.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
@@ -169,6 +171,113 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
         }
     }
 }
+
+void RunGetFabricRouteInfoTest(BaseFabricFixture* fixture) {
+    const auto& devices = fixture->get_devices();
+    if (devices.size() < 2) {
+        GTEST_SKIP() << "Test requires at least 2 devices, found " << devices.size();
+    }
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    bool checked_rejected_link = false;
+    for (const auto& src_device : devices) {
+        const auto src_node =
+            control_plane.get_fabric_node_id_from_physical_chip_id(src_device->get_devices()[0]->id());
+        for (const auto& dst_device : devices) {
+            const auto dst_node =
+                control_plane.get_fabric_node_id_from_physical_chip_id(dst_device->get_devices()[0]->id());
+            if (src_node == dst_node) {
+                continue;
+            }
+
+            const auto forwarding_direction = control_plane.get_forwarding_direction(src_node, dst_node);
+            ASSERT_TRUE(forwarding_direction.has_value());
+            const auto forwarding_links = get_forwarding_link_indices(src_node, dst_node);
+            ASSERT_FALSE(forwarding_links.empty());
+
+            const auto default_route_info = get_fabric_route_info(src_node, dst_node);
+            const auto first_route_info = get_fabric_route_info(src_node, dst_node, forwarding_links.front());
+            EXPECT_EQ(default_route_info.connection_node_id, first_route_info.connection_node_id);
+            EXPECT_EQ(default_route_info.direction, first_route_info.direction);
+            EXPECT_EQ(default_route_info.link_index, first_route_info.link_index);
+            EXPECT_EQ(default_route_info.hop_count, first_route_info.hop_count);
+
+            const auto candidate_channels =
+                control_plane.get_active_fabric_eth_channels_in_direction(src_node, forwarding_direction.value());
+            constexpr uint32_t teardown_semaphore_id = 5;
+            constexpr uint32_t buffer_index_semaphore_id = 6;
+            if (!checked_rejected_link) {
+                const auto expect_link_rejected = [&](uint32_t rejected_link_index) {
+                    EXPECT_ANY_THROW(get_fabric_route_info(src_node, dst_node, rejected_link_index));
+                    EXPECT_ANY_THROW(tt::tt_metal::internal::compute_fabric_connection_rt_args(
+                        src_node,
+                        {dst_node},
+                        {rejected_link_index},
+                        {teardown_semaphore_id},
+                        {buffer_index_semaphore_id}));
+                };
+
+                expect_link_rejected(static_cast<uint32_t>(candidate_channels.size()));
+                for (uint32_t candidate_link_index = 0; candidate_link_index < candidate_channels.size();
+                     ++candidate_link_index) {
+                    if (std::find(forwarding_links.begin(), forwarding_links.end(), candidate_link_index) ==
+                        forwarding_links.end()) {
+                        expect_link_rejected(candidate_link_index);
+                        break;
+                    }
+                }
+                checked_rejected_link = true;
+            }
+
+            const auto default_connection_args = tt::tt_metal::internal::compute_fabric_connection_rt_args(
+                src_node,
+                {default_route_info.connection_node_id},
+                {},
+                {teardown_semaphore_id},
+                {buffer_index_semaphore_id});
+            const auto explicit_connection_args = tt::tt_metal::internal::compute_fabric_connection_rt_args(
+                src_node,
+                {default_route_info.connection_node_id},
+                {default_route_info.link_index},
+                {teardown_semaphore_id},
+                {buffer_index_semaphore_id});
+            EXPECT_EQ(default_connection_args, explicit_connection_args);
+            ASSERT_GE(default_connection_args.size(), 4);
+            EXPECT_EQ(default_connection_args[0], static_cast<uint32_t>(default_route_info.direction));
+            EXPECT_EQ(default_connection_args[1], candidate_channels[default_route_info.link_index]);
+            EXPECT_EQ(default_connection_args[2], teardown_semaphore_id);
+            EXPECT_EQ(default_connection_args[3], buffer_index_semaphore_id);
+
+            for (const uint32_t link_index : forwarding_links) {
+                const auto route_info = get_fabric_route_info(src_node, dst_node, link_index);
+                EXPECT_EQ(
+                    route_info.direction, control_plane.routing_direction_to_eth_direction(*forwarding_direction));
+                EXPECT_EQ(route_info.link_index, link_index);
+
+                const auto route = control_plane.get_fabric_route(src_node, dst_node, candidate_channels[link_index]);
+                ASSERT_FALSE(route.empty());
+                auto first_hop_channel = candidate_channels[link_index];
+                for (const auto& route_entry : route) {
+                    if (route_entry.first != src_node) {
+                        break;
+                    }
+                    first_hop_channel = route_entry.second;
+                }
+
+                const auto expected_connection_node =
+                    control_plane.get_connected_mesh_chip_chan_ids(src_node, first_hop_channel).first;
+                EXPECT_EQ(route_info.connection_node_id, expected_connection_node);
+                EXPECT_EQ(route.back().first, dst_node);
+                if (expected_connection_node == dst_node) {
+                    EXPECT_EQ(route_info.hop_count, 1u);
+                } else {
+                    EXPECT_GT(route_info.hop_count, 1u);
+                }
+            }
+        }
+    }
+}
+
 void RunSetUnicastRouteTest(
     BaseFabricFixture* fixture,
     bool is_multi_mesh = false,
@@ -1705,6 +1814,8 @@ TEST_F(NightlyFabric2DFixture, TestLinearFabricMulticastNocFusedAtomicIncWithSta
 // 1D Routing Validation Test
 TEST_F(Fabric1DFixture, TestGetNextHopRouterDirection1D) { RunGetNextHopRouterDirectionTest(this, false); }
 
+TEST_F(Fabric1DFixture, TestGetFabricRouteInfo) { RunGetFabricRouteInfoTest(this); }
+
 // 2D Dynamic Routing Unicast Tests
 TEST_P(T3kCustomMeshGraphFabric2DFixture, TestUnicastRaw) {
     auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
@@ -1721,6 +1832,8 @@ TEST_F(Fabric2DFixture, TestGetNextHopRouterDirection1MeshAllToAll) {
     }
     RunGetNextHopRouterDirectionTest(this, false);
 }
+
+TEST_F(Fabric2DFixture, TestGetFabricRouteInfo) { RunGetFabricRouteInfoTest(this); }
 
 // Multi-Mesh Test - Using parameterized test with connected mesh descriptor
 TEST_P(T3kCustomMeshGraphFabric2DFixture, TestGetNextHopRouterDirectionMultiMesh) {
