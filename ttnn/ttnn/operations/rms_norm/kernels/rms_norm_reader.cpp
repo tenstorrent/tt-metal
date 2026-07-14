@@ -205,13 +205,22 @@ void kernel_main() {
             uint32_t tr = start_tile_row + t;
             for (uint32_t pass = 0; pass < 2; ++pass) {
                 for (uint32_t b = 0; b < num_w_blocks; ++b) {
+                    // DOUBLE_BUFFER (Refinement 3): reserve the whole W-block, issue
+                    // all W_BLOCK_TILES async reads, then ONE barrier — instead of
+                    // read-one/barrier/push per tile. The dominant win is coarsening
+                    // the reader->compute CB handshake W_BLOCK_TILES-fold (the op was
+                    // sync-bound on per-tile CB ping-pong, not NoC-bandwidth-bound).
+                    // cb_input_tiles is 2*W_BLOCK_TILES deep and both push and the
+                    // consumer's block wait are W_BLOCK_TILES-granular, so the reserved
+                    // run at the CB write pointer never wraps.
+                    cb_reserve_back(cb_input_tiles, W_BLOCK_TILES);
+                    uint32_t wp = get_write_ptr(cb_input_tiles);
+                    uint32_t base_tile = tr * Wt + b * W_BLOCK_TILES;
                     for (uint32_t wt = 0; wt < W_BLOCK_TILES; ++wt) {
-                        uint32_t tile_id = tr * Wt + b * W_BLOCK_TILES + wt;
-                        cb_reserve_back(cb_input_tiles, 1);
-                        noc_async_read_page(tile_id, in_acc, get_write_ptr(cb_input_tiles));
-                        noc_async_read_barrier();
-                        cb_push_back(cb_input_tiles, 1);
+                        noc_async_read_page(base_tile + wt, in_acc, wp + wt * tile_bytes);
                     }
+                    noc_async_read_barrier();
+                    cb_push_back(cb_input_tiles, W_BLOCK_TILES);
                     if constexpr (HAS_GAMMA) {
                         if (pass == 1) {
                             uint32_t cols = origin_W - b * wblock_cols;

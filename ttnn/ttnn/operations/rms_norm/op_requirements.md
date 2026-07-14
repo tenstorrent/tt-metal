@@ -155,7 +155,7 @@ triage from R1 (`probes/probe_010.py`); `reduce_helpers_compute.hpp` `Accumulate
 the 12 `test_rms_norm_row_major[*-False-*-4096-*]` translated cells pass, and no regression on
 the bf16/fp32 cartesian set.
 
-### [ ] Refinement 3 — Data-movement co-tune (PERF)
+### [x] Refinement 3 — Data-movement co-tune (PERF)
 
 **Type**: perf
 

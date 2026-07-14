@@ -6,7 +6,7 @@
 Parameterized row-parallel streaming reduction (see kernels/*.cpp). Every block
 factor and buffer depth is a knob derived from one source of truth:
 
-  * W_BLOCK_TILES  — W-tiles streamed per reduce chunk (phase-1: 1).
+  * W_BLOCK_TARGET  — desired W-tiles per reduce chunk (Refinement 3 co-tune).
   * ROW_BLOCK_TILES — tile-rows per outer pass (phase-1: 1).
 
 CB page counts and loop trip counts are computed FROM those knobs and the input
@@ -14,6 +14,28 @@ shape — never sized to Wt / W / sequence length, so per-core L1 stays bounded
 for arbitrarily wide W. Phase-1 grid = single core owning all tile-rows; going
 multi-core is a runtime-arg change (start_tile_row / num_tile_rows) with no
 loop-nest change.
+
+Refinement 3 (Data-movement co-tune, PERF). The real bottleneck (found by
+on-device measurement, not the design's assumption) was NOT NoC bandwidth but
+per-tile SYNCHRONIZATION: with W_BLOCK_TILES=1 the reader/writer ping-pong the
+input/output CBs one tile at a time (reserve/read/barrier/push per tile), and the
+compute runs each helper on a single tile — so the per-tile CB handshake + barrier
++ per-helper init/reconfig overhead dominates. (A DM-payload ablation — stubbing
+the NoC reads while KEEPING the per-tile CB signaling — moved device-ns by 0%,
+i.e. reads are hidden; the cost is the signaling GRANULARITY, not the transfer.)
+The co-tune raises the block to W_BLOCK_TILES tiles, which compounds three levers:
+  * compute_block_size — each square/reduce/mul/tilize/untilize helper runs on
+    W_BLOCK_TILES tiles per call, amortizing init/reconfig/pipeline fill-drain.
+  * double_buffer (reader + writer) — issue a whole block of async reads/writes
+    then ONE barrier, and coarsen the reader->compute and compute->writer CB
+    handshake W_BLOCK_TILES-fold (this is the dominant win).
+  * transfer size (RM regime) — a W_BLOCK_TILES-wide stick slice is one big read
+    instead of W_BLOCK_TILES narrow ones.
+Measured (median device-ns, W_BLOCK_TARGET 1->8, WH B0, 1 core): TILE bf16
+(1,1,32,8192) 283.5us -> 88.1us = 3.22x; RM bf16 same shape 6.43ms -> 0.85ms =
+7.5x. Every guard-set path (TILE/RM x gamma/no_gamma x bf16/fp32) improved
+2.0x-7.7x, none regressed. reader_placement (row_wise) is deferred to Refinement 4
+(needs the multi-core reader). See changelog for the full before/after table.
 """
 
 import math
@@ -26,9 +48,28 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 
 TILE_DIM = 32
 
-# --- Blocking-model knobs (tunable from day 1; single source of truth) ---
-W_BLOCK_TILES = 1  # W-tiles streamed per reduce chunk
-ROW_BLOCK_TILES = 1  # tile-rows processed per outer pass
+# --- Blocking-model knobs (single source of truth) ---
+# W_BLOCK_TARGET is the DESIRED reduce-chunk width in W-tiles. The effective
+# W_BLOCK_TILES is derived per invocation (below) as the largest divisor of Wt
+# that is <= this target, so every W-block is uniformly W_BLOCK_TILES tiles (no
+# partial last W-block) in BOTH layout regimes and BOTH passes — the templated
+# tilize/untilize<W_BLOCK_TILES> and the reader/writer block loops all stay
+# uniform, and Wt % W_BLOCK_TILES == 0 holds by construction. Wide-W perf targets
+# (Wt=128/256) get the full target; prime/awkward Wt degrade to a smaller divisor
+# (small shapes where per-helper overhead is not the bottleneck anyway).
+W_BLOCK_TARGET = 8  # phase-1 was 1; Refinement 3 co-tuned to 8 (measured sweet spot)
+ROW_BLOCK_TILES = 1  # tile-rows per outer pass; see the assert in the body —
+# NOT yet threaded into the compute row-loop (raising it needs a multi-row reduce
+# + per-row cb_sumsq expansion). Left at 1 and guarded so it is not a silent
+# half-wired knob; a follow-up refinement threads it through.
+
+
+def _largest_divisor_leq(n: int, cap: int) -> int:
+    """Largest divisor of n that is <= cap (>= 1). Keeps W-blocks uniform."""
+    k = max(1, min(cap, n))
+    while k > 1 and n % k != 0:
+        k -= 1
+    return k
 
 
 def _f32_bits(value: float) -> int:
@@ -72,10 +113,16 @@ def create_program_descriptor(
     Wt = math.ceil(origin_W / TILE_DIM)
     tiles_per_image = math.ceil(origin_H / TILE_DIM)
     total_tile_rows = leading * tiles_per_image
-    # Phase-1: W_BLOCK_TILES == 1 divides every Wt. (A knob > 1 that does not
-    # divide Wt would need partial-last-W-block handling — a later refinement.)
-    assert Wt % W_BLOCK_TILES == 0, "W_BLOCK_TILES must divide Wt (phase-1 uses 1)"
+    # Refinement 3 co-tune: pick the largest divisor of Wt that is <= the target
+    # so every W-block is uniformly W_BLOCK_TILES tiles (no partial last W-block).
+    # This is the single source of truth for the block factor; every dependent
+    # (CB page counts, loop trip counts, num_w_blocks) derives from it below.
+    W_BLOCK_TILES = _largest_divisor_leq(Wt, W_BLOCK_TARGET)
+    assert Wt % W_BLOCK_TILES == 0, "W_BLOCK_TILES must divide Wt (holds by construction)"
     num_w_blocks = Wt // W_BLOCK_TILES
+    # ROW_BLOCK_TILES>1 would need a multi-row reduce + per-row cb_sumsq expansion
+    # in the compute row-loop, which is not implemented; guard so it is explicit.
+    assert ROW_BLOCK_TILES == 1, "ROW_BLOCK_TILES>1 not yet threaded into the compute row-loop"
 
     partial_w = origin_W % TILE_DIM
     has_partial_w = partial_w != 0

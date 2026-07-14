@@ -59,15 +59,27 @@ void kernel_main() {
             }
         }
     } else {
+        // TILE regime. The compute pushes W_BLOCK_TILES output tiles per W-block
+        // (in global page order). DOUBLE_BUFFER (Refinement 3): drain a whole
+        // block with ONE barrier instead of write-one/barrier-per-tile — the
+        // per-tile write+barrier was ~24% of device time (not hidden by compute;
+        // it back-pressures the pass-2 mul through cb_output_tiles). cb_output_tiles
+        // is 2*W_BLOCK_TILES deep, and both compute-push and writer-pop granularity
+        // are W_BLOCK_TILES, so the W_BLOCK_TILES-run at the CB front never wraps.
         uint32_t tile_bytes = get_tile_size(cb_output_tiles);
         const auto acc = TensorAccessor(dst_args, dst_addr, tile_bytes);
-        uint32_t base_tile = start_tile_row * Wt;
-        uint32_t total = num_tile_rows * Wt;
-        for (uint32_t i = 0; i < total; ++i) {
-            cb_wait_front(cb_output_tiles, 1);
-            noc_async_write_page(base_tile + i, acc, get_read_ptr(cb_output_tiles));
-            noc_async_write_barrier();
-            cb_pop_front(cb_output_tiles, 1);
+        for (uint32_t t = 0; t < num_tile_rows; ++t) {
+            uint32_t tr = start_tile_row + t;
+            for (uint32_t b = 0; b < num_w_blocks; ++b) {
+                cb_wait_front(cb_output_tiles, W_BLOCK_TILES);
+                uint32_t rp = get_read_ptr(cb_output_tiles);
+                uint32_t base_tile = tr * Wt + b * W_BLOCK_TILES;
+                for (uint32_t wt = 0; wt < W_BLOCK_TILES; ++wt) {
+                    noc_async_write_page(base_tile + wt, acc, rp + wt * tile_bytes);
+                }
+                noc_async_write_barrier();
+                cb_pop_front(cb_output_tiles, W_BLOCK_TILES);
+            }
         }
     }
 }

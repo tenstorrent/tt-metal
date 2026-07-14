@@ -186,3 +186,85 @@
   `test_r2a_bf16_false_wide_uniform` covering the case-2 bf16+False wide-uniform regime
   (relative-Frobenius guard). probes `probe_019.py`/`probe_020.py` capture the before/after
   case-1 + case-2 metrics.
+
+## Refinement 3 — Data-movement co-tune (PERF)
+- Date: 2026-07-14
+- What was done: Co-tuned the block/buffer knobs the planner already exposed to
+  turn the single-tile streaming pipeline into a block-streaming one. Raised the
+  reduce/eltwise chunk from 1 tile to `W_BLOCK_TILES` tiles and batched the
+  reader and writer NoC transfers a whole block per barrier.
+  - **Bottleneck first (per /perf-measure).** A DM-payload ablation (stub the
+    reader's NoC reads, KEEP the per-tile CB signaling) moved device-ns by **0%**
+    — the reads are already hidden, so the op is NOT NoC-bandwidth-bound. The real
+    cost is per-tile SYNCHRONIZATION: at `W_BLOCK_TILES=1` the reader/writer
+    ping-pong the input/output CB one tile at a time and each compute helper runs
+    on one tile, so the CB handshake + barrier + per-helper init/reconfig overhead
+    dominates. The design's "reader is latency-bound" framing was the wrong axis;
+    the fix is coarser work units, which is what the two levers deliver.
+  - **Levers (compound, all measured + kept):**
+    * `compute_block_size` — each `square`/`reduce`/`mul`/`tilize`/`untilize`
+      helper now runs on `W_BLOCK_TILES` tiles per call (amortizes init/reconfig/
+      pipeline fill-drain). Alone: ~1.11x (TILE bf16 W=8192).
+    * `double_buffer` (reader + writer) — issue a whole block of async reads/writes
+      then ONE barrier, coarsening the reader->compute and compute->writer CB
+      handshake `W_BLOCK_TILES`-fold. This is the dominant win (the reader batch
+      alone took TILE bf16 W=8192 from 244us -> 88us = 2.77x). Writer batch cut
+      the writer's exposed per-tile cost ~70us -> ~29us.
+    * transfer size (RM regime) — a `W_BLOCK_TILES`-wide stick slice is one big
+      read instead of `W_BLOCK_TILES` narrow ones (why RM improved most).
+  - **W_BLOCK_TILES generalization (single source of truth).** `W_BLOCK_TARGET=8`
+    is the desired chunk; the effective `W_BLOCK_TILES` is derived per invocation
+    as the largest divisor of `Wt` that is `<= W_BLOCK_TARGET`, so every W-block is
+    uniformly `W_BLOCK_TILES` tiles (no partial last W-block) in BOTH layout regimes
+    and BOTH passes — `Wt % W_BLOCK_TILES == 0` holds by construction, so the
+    templated `tilize/untilize<W_BLOCK_TILES>` and the reader/writer block loops
+    stay uniform and the partial scaler still routes to the true last W-tile of the
+    last block (unchanged). Wide-W perf targets (Wt=128/256) get the full 8;
+    prime/awkward Wt degrade to a smaller divisor (small shapes where per-helper
+    overhead isn't the bottleneck anyway). Every dependent (CB page counts, loop
+    trip counts, num_w_blocks) derives from this one value; no hardcoded counts.
+  - **Reused:** the existing streaming reduce datapath (AccumulateViaAdd/ReduceTile
+    selector, cb_sumsq accumulator, transform_in_place finalizer), the existing CB
+    set + their `2*W_BLOCK_TILES` / `W_BLOCK_TILES` sizing formulas (already knob-
+    derived from Phase 0), and all four registry declarations + validate() (frozen).
+    No new kernel file, no parallel datapath, no SUPPORTED change.
+  - **Added:** `W_BLOCK_TARGET` knob + `_largest_divisor_leq()` derivation; per-block
+    batched read (reader TILE) and batched write (writer TILE); a guard
+    `assert ROW_BLOCK_TILES == 1` making that half-wired knob explicit (raising it
+    needs a multi-row reduce + per-row cb_sumsq expansion — a follow-up).
+  - `reader_placement` (row_wise) is deferred to Refinement 4 as the refinement's
+    own Goal states ("once Refinement 4 makes the reader multi-core") — it needs
+    the multi-core reader line that R4 introduces; nothing to measure on one core.
+- Accuracy achieved: no numerical change (pure data-movement/blocking co-tune) —
+  golden `test_golden.py` **1683 passed / 0 failed / 6723 xfailed / 31920 skipped**
+  (identical to the R2a baseline; 0 xpass-drift). PCC/rtol/atol unchanged from R2a
+  across all cells; the wide loose cases (W=16384/32768/12288) still pass.
+- Perf (median device-ns, WH B0, 1 core, W_BLOCK_TARGET 1 -> 8; before -> after):
+  | path | 1x1x32x4096 | 1x1x32x8192 | 1x1x64x8192 |
+  |------|-------------|-------------|-------------|
+  | TILE bf16 no_gamma | 143.6us -> 46.6us (3.08x) | 283.5 -> 88.1 (3.22x) | 563.5 -> 173.2 (3.25x) |
+  | TILE bf16 gamma    | 199.1 -> 70.2 (2.84x) | 393.1 -> 135.0 (2.91x) | 786.1 -> 267.5 (2.94x) |
+  | TILE fp32 no_gamma | 158.6 -> 72.4 (2.19x) | 313.6 -> 139.3 (2.25x) | 624.7 -> 273.9 (2.28x) |
+  | TILE fp32 gamma    | 205.4 -> 100.2 (2.05x) | 407.5 -> 194.2 (2.10x) | 811.7 -> 384.5 (2.11x) |
+  | RM bf16 no_gamma   | 3217 -> 430us (7.49x) | 6435 -> 853 (7.54x) | 12716 -> 1685 (7.55x) |
+  | RM bf16 gamma      | 3249 -> 427 (7.61x) | 6494 -> 845 (7.68x) | 13165 -> 1735 (7.59x) |
+  | RM fp32 no_gamma   | 3274 -> 461 (7.11x) | 6547 -> 915 (7.15x) | 12875 -> 1786 (7.21x) |
+  | RM fp32 gamma      | 3263 -> 458 (7.12x) | 6524 -> 905 (7.21x) | 13317 -> 1855 (7.18x) |
+  Every guard-set path (TILE/RM x gamma/no_gamma x bf16/fp32, interleaved) improved
+  2.0x-7.7x; none regressed. std/CV under ~0.5% (11 post-warmup trials/point).
+  W_BLOCK sweep {4,8,16} at W=8192 TILE: 244.8/244.3/245.1us — flat past 4, so 8 is
+  the sweet spot (best at W=4096 too, less L1 than 16). Matches the master.md
+  `double_buffer`/`compute_block_size` 4-8 sweet spot.
+- Golden test progress: 1683/1683 supported cells passing (unchanged from R2a);
+  test_regression.py + test_translated.py 99 passed. Unit dir 122 passed (--dev) /
+  110 passed (non-dev). No regression.
+- Issues encountered: The design's stated "reader is latency-bound" assumption was
+  wrong — measurement showed the op sync-bound (per-tile CB ping-pong), not NoC-
+  bound. The DM-payload ablation looked like a null result for the reader (reads
+  hidden) but batching the reader's CB HANDSHAKE (not just its transfers) was the
+  single biggest lever (2.77x). Classified correctly per /perf-measure's
+  "sync-overhead-bound: too many tiny work units -> fix the structure" case.
+- Tests added: `tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_perf.py`
+  (perf harness: wide-W / few-tile-row shapes x {TILE,RM} x {gamma,no_gamma} x
+  {bf16,fp32}, N-iter device-ns via --profile; not a correctness gate). Preserved
+  as a reusable perf measurement harness for future refinements.
