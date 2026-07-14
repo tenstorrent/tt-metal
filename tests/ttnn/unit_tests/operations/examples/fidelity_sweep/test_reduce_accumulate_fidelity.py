@@ -33,7 +33,7 @@ _DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
 
 FIDELITIES = ("LoFi", "HiFi2", "HiFi3", "HiFi4")
 _FID = {f: getattr(ttnn.MathFidelity, f) for f in FIDELITIES}
-VARIANTS = ("helper", "fast")  # dispatch is just routing between these two
+VARIANTS = ("helper", "fast", "dispatch")  # dispatch routes helper<->fast per (dim, tiles) threshold
 DIMS = ("row", "col", "scalar")
 ACCUMS = ("fp32", "bf16")  # DEST mode: fp32 = fp32_dest_acc_en on, bf16 = off
 WIDTHS = (1, 2, 4, 8, 16, 32)
@@ -161,19 +161,26 @@ def test_reduce_accumulate_fidelity(device):
     }
     samples = _measure(device, runners, TRIALS, KERNEL_ITERS)
 
-    def med(key):
-        return statistics.median(samples[key])
+    def med(variant, dim, fid, accum, w):
+        return statistics.median(samples[(variant, dim, fid, accum, w)])
+
+    def std_pct(variant, dim, fid, accum, w):
+        vals = samples[(variant, dim, fid, accum, w)]
+        m = statistics.median(vals)
+        return (statistics.pstdev(vals) / m * 100) if (len(vals) > 1 and m) else 0.0
 
     # ---- report ----
     lines = [
-        "# reduce_accumulate — math-fidelity x DEST sweep (single core)",
+        "# reduce_accumulate — math-fidelity x tiles x reduce-dim x DEST perf sweep (single core)",
         "",
         f"box={socket.gethostname()}  arch={_arch_label(device)}  cores=1  N={TRIALS} (median)  "
         f"kernel-iters={KERNEL_ITERS}",
         "input=bf16, output=fp32. DEST: fp32 = fp32_dest_acc_en ON, bf16 = OFF. fidelity in {LoFi,HiFi2,HiFi3,HiFi4}.",
-        "variants: helper (reduce library, FPU matmul-with-ones) | fast (add_tiles accumulate + SFPU finalize).",
+        "variants: helper (reduce library, FPU matmul-with-ones) | fast (add_tiles accumulate + SFPU finalize) | "
+        "dispatch (helper below the per-dim tile threshold, fast at/above).",
+        "cell = median ns ±std% (x vs helper at the same dim+fidelity+tiles).",
         "",
-        "## Perf — median ns per reduce (rows: variant x fidelity; one block per dim x DEST)",
+        "## Perf — median ns per reduce (rows: variant x fidelity; one block per reduce-dim x DEST)",
         "",
     ]
     for dim in DIMS:
@@ -186,9 +193,33 @@ def test_reduce_accumulate_fidelity(device):
             ]
             for variant in VARIANTS:
                 for fid in FIDELITIES:
-                    cells = [f"{med((variant, dim, fid, accum, w)):.0f}" for w in WIDTHS]
+                    cells = []
+                    for w in WIDTHS:
+                        m = med(variant, dim, fid, accum, w)
+                        spd = ""
+                        if variant != "helper":
+                            base = med("helper", dim, fid, accum, w)
+                            spd = f"  ({base / m:.2f}x)" if base else ""
+                        cells.append(f"{m:.0f}±{std_pct(variant, dim, fid, accum, w):.0f}%{spd}")
                     lines.append(f"| {variant}.{fid} | " + " | ".join(cells) + " |")
             lines.append("")
+
+    # Fidelity tax: HiFi4 / LoFi ns ratio (how much fidelity costs) at the widest row, per variant x dim.
+    wmax = WIDTHS[-1]
+    lines += [
+        f"## Fidelity tax — HiFi4 / LoFi ns ratio at {wmax}t (DEST=fp32); >1 = HiFi4 is that much slower",
+        "",
+        "| variant | " + " | ".join(DIMS) + " |",
+        "|---|" + "---|" * len(DIMS),
+    ]
+    for variant in VARIANTS:
+        ratios = []
+        for dim in DIMS:
+            lo = med(variant, dim, "LoFi", "fp32", wmax)
+            hi = med(variant, dim, "HiFi4", "fp32", wmax)
+            ratios.append(f"{hi / lo:.2f}x" if lo else "—")
+        lines.append(f"| {variant} | " + " | ".join(ratios) + " |")
+    lines.append("")
 
     lines += [
         "## Accuracy — error vs fp64 mean (cell = max_abs | max ULP_bf16); rows: variant x fidelity",
