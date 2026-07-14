@@ -381,14 +381,15 @@
   # (the full code_debug trace), 10 iterations. No-PCC: it drives the real chunked-prefill path end to
   # end (build once, forward 10x) and passes on completion -- no golden readback, no accuracy compare.
   #
-  # Paths (CI mounts /mnt/MLPerf:ro):
-  #   KIMI_K2_6_HF_MODEL  -> dequantized Kimi HF checkpoint (config.json + safetensors.index.json)
-  #   TT_KIMI_PREFILL_TTNN_CACHE is intentionally NOT set; the conftest falls back to the
-  #     shared cache path under KIMI_K2_6_HF_MODEL/tensor_cache_bh_32dev/8x4.
-  #   PREFILL_TRACE_DIR   -> code_debug (56320) golden trace; metadata.json token_ids feed the prefill.
+  # Paths:
+  #   KIMI_K2_6_HF_MODEL         -> HF checkpoint (config + safetensors index; needed by weight_cache_path fixture)
+  #   TT_KIMI_PREFILL_TTNN_CACHE -> prebuilt .tensorbin cache (…/kimi_k2_6_bh_32dev/8x4); required —
+  #     without it, conftest falls back under model_path and CI may invent HF hub downloads
+  #   PREFILL_TRACE_DIR          -> code_debug (56320) golden trace; metadata.json token_ids feed the prefill
   cmd: |
     export MESH_DEVICE=TG
     export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2.6-dequantized
+    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2.6-Cache/CI
     export PREFILL_TRACE_DIR=/mnt/models/kimi-prefill-cache/vllm-kimi-k26-codedebug-56320
     mpirun --pernode --tag-output bash -lc '
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_no_pcc[blackhole-kimi-mesh-8x4-L61-chunks_eleven-ten_iters-margin5pct] -xvs
