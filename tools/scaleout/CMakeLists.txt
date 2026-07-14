@@ -302,7 +302,7 @@ if(ENABLE_DISTRIBUTED)
                 COMPONENT metalium-runtime
         )
 
-        # PGDs used by generate_rank_bindings find_and_load_pgd() (default + arch/cluster-specific under
+        # PGDs used by find_and_load_physical_grouping_descriptor() in fabric_host_utils (default + arch/cluster-specific under
         # TT_METAL_HOME/tests/tt_metal/tt_fabric/physical_groupings/). Mirror that tree under the install datadir.
         file(
             GLOB _generate_rank_bindings_pgd_files
