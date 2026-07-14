@@ -507,12 +507,19 @@ public:
                 for (auto& [device_range, desc] : programs) {
                     tt::tt_metal::Program program{desc};
                     auto collected = collect_tensor_buffers(tensor_args, tensor_return_value, workload_descriptor);
+                    // The WorkloadDescriptor variant has NO slow-path rebuild (apply_descriptor only
+                    // re-applies resolved bindings + dynamic args), so it must ALWAYS allow the in-place
+                    // output_tensor alias — otherwise resolve_bindings bails to an EMPTY ResolvedBindings
+                    // and the fast path skips address patching, leaving stale addresses on a cache hit
+                    // (breaks supported cross-device p2p where output_tensor aliases input). This restores
+                    // the pre-opt-in behavior for this branch; the unsafe_optin gate only applies to the
+                    // ProgramDescriptor branch below, which CAN fall back to a safe slow-path rebuild.
                     auto bindings = tt::tt_metal::resolve_bindings(
                         program,
                         desc,
                         collected.buffers,
                         collected.num_input_buffers,
-                        unsafe_optin_inplace_program_cache_alias());
+                        /*allow_inplace_output_tensor_alias=*/true);
                     mesh_workload.add_program(device_range, std::move(program));
                     shared_variables[device_range] = shared_variables_t{
                         .workload_descriptor = workload_descriptor, .resolved_bindings = std::move(bindings)};
