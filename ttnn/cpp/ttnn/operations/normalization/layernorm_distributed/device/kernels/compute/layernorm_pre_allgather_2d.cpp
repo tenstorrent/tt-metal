@@ -27,8 +27,6 @@ void kernel_main() {
     constexpr uint32_t num_cores_y = get_compile_time_arg_val(3);
     bool is_merge_core = get_arg_val<uint32_t>(0);
 
-    constexpr uint32_t onetile = 1;
-
     constexpr uint32_t cb_in0_id = tt::CBIndex::c_0;
     constexpr uint32_t cb_reduce_id = tt::CBIndex::c_1;
 
@@ -50,7 +48,6 @@ void kernel_main() {
     CircularBuffer cb_inp(cb_inp_id);
     CircularBuffer cb_x2(cb_x2_id);
     CircularBuffer cb_reduce(cb_reduce_id);
-    CircularBuffer cb_zero(cb_zero_id);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         if constexpr (FUSE_PRE_ADD) {
@@ -114,35 +111,29 @@ void kernel_main() {
     if (is_merge_core) {
         constexpr uint32_t cb_x2_merge_id = tt::CBIndex::c_15;
         constexpr uint32_t cb_out_final_id = tt::CBIndex::c_14;
-        CircularBuffer cb_x2_merge(cb_x2_merge_id);
-        CircularBuffer cb_out_final(cb_out_final_id);
-        constexpr int dst0 = 0;
-
-        // Wait for all num_cores_y tiles
-        cb_x2_merge.wait_front(num_cores_y);
-        cb_zero.wait_front(1);
 
         // Initialize accumulation
         binary_op_init_common(cb_x2_merge_id, cb_zero_id, cb_out_final_id);
-        reconfig_data_format(cb_x2_merge_id, cb_zero_id);
-        pack_reconfig_data_format(cb_out_final_id);
-        add_tiles_init(cb_x2_merge_id, cb_zero_id, true);
+        using Accumulate = ckl::BinaryFpu<
+            cb_x2_merge_id,
+            cb_zero_id,
+            ckl::BinaryFpuOp::Add,
+            ckl::BroadcastDim::None,
+            ckl::InputLifecycle::Bulk,
+            ckl::InputLifecycle::Bulk,
+            ckl::BinaryDataFormatReconfig::Input,
+            ckl::Dst::D0,
+            ckl::OperandKind::Block,
+            ckl::OperandKind::Scalar,
+            ckl::TileOffset::Unset,
+            ckl::TileOffset::Unset,
+            ckl::DestAccumulation::Enabled>;
+        using Pack = ckl::PackTile<
+            cb_out_final_id,
+            ckl::OutputLifecycle::DestAccumulation,
+            ckl::PackTileReconfig::Output,
+            ckl::Dst::D0>;
 
-        tile_regs_acquire();
-        // Add all 8 tiles together
-        for (uint32_t i = 0; i < num_cores_y; i++) {
-            add_tiles(cb_x2_merge_id, cb_zero_id, i, 0, dst0);
-        }
-        tile_regs_commit();
-
-        cb_x2_merge.pop_front(num_cores_y);
-
-        cb_out_final.reserve_back(onetile);
-
-        tile_regs_wait();
-        pack_tile(dst0, cb_out_final_id);
-        tile_regs_release();
-
-        cb_out_final.push_back(onetile);
+        ckl::eltwise_chain(ckl::EltwiseShape::tiles(num_cores_y, num_cores_y), Accumulate{}, Pack{});
     }
 }

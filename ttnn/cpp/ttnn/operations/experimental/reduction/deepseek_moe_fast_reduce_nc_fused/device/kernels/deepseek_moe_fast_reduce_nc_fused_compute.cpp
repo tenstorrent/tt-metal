@@ -11,16 +11,13 @@
 // The reader pre-loads all reduction_dim_size score tiles before signalling compute_scores.
 // Score tiles are kept resident and accessed by index throughout the loop.
 //
-// Initialization:
-//   init_bcast<ELWMUL, COL> handles PACK + UNPACK + hw_configure.
-//   We then override the MATH init with acc_to_dest=1 so that every
-//   mul_tiles_bcast_cols call accumulates into dst rather than replacing it.
-//
-// After tile_regs_acquire(), dst0 is zero-initialized by hardware, so the
-// first MAC (expert 0) correctly seeds the accumulator.
+// The eltwise-chain helper owns the input/output lifecycle and configures the
+// broadcast multiply with acc_to_dest enabled. Each output row uses D0 as its
+// sticky accumulator, while block_size controls the transient parallel lanes.
 
-#include "api/compute/bcast.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/compute/common.h"
+#include "api/compute/eltwise_binary.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
 using namespace ckernel;
 
@@ -32,52 +29,23 @@ constexpr uint32_t compute_input_cb_id_1 = get_compile_time_arg_val(4);
 constexpr uint32_t compute_output_cb_id = get_compile_time_arg_val(5);
 
 void kernel_main() {
-    CircularBuffer cb_in0(compute_input_cb_id_0);
-    CircularBuffer cb_in1(compute_input_cb_id_1);
-    CircularBuffer cb_out(compute_output_cb_id);
+    binary_op_init_common(compute_input_cb_id_0, compute_input_cb_id_1, compute_output_cb_id);
+    using namespace compute_kernel_lib;
+    using Accumulate = BinaryFpu<
+        compute_input_cb_id_0,
+        compute_input_cb_id_1,
+        BinaryFpuOp::Mul,
+        BroadcastDim::Col,
+        InputLifecycle::Chunked,
+        InputLifecycle::Bulk,
+        BinaryDataFormatReconfig::Input,
+        Dst::D0,
+        OperandKind::Block,
+        OperandKind::Row,
+        TileOffset::Unset,
+        TileOffset::Unset,
+        DestAccumulation::Enabled>;
+    using Pack = PackTile<compute_output_cb_id, OutputLifecycle::DestAccumulation, PackTileReconfig::Output, Dst::D0>;
 
-    constexpr uint32_t dst0 = 0;
-    constexpr uint32_t one_tile = 1;
-    constexpr uint32_t num_input_tiles_iter = reduction_dim_size / input_granularity;
-
-    // Full PACK + UNPACK + hw_configure init for ELWMUL + COL-broadcast
-    init_bcast<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(
-        compute_input_cb_id_0, compute_input_cb_id_1, compute_output_cb_id);
-
-    // Override MATH init to enable acc_to_dest=1 (hardware accumulate mode)
-    // This makes each mul_tiles_bcast_cols call do: dst0 += act * score  (MAC)
-    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL, MATH_FIDELITY>(
-        compute_input_cb_id_0, compute_input_cb_id_1, 1 /*acc_to_dest*/)));
-
-    reconfig_data_format(compute_input_cb_id_0, compute_input_cb_id_1);
-
-    // Wait for all score tiles — they are pre-loaded once by the reader prologue
-    // and remain resident for the entire kernel invocation.
-    cb_in1.wait_front(reduction_dim_size);
-    for (uint32_t i = 0; i < num_output_tiles; ++i) {
-        tile_regs_acquire();
-
-        for (uint32_t j = 0; j < num_input_tiles_iter; ++j) {
-            cb_in0.wait_front(input_granularity);
-
-            for (uint32_t k = 0; k < input_granularity; ++k) {
-                // expert_tile = linear expert index for this tile
-                const uint32_t expert_tile = j * input_granularity + k;
-                // dst0 += act_tile[k] * score_col[expert_tile]  (single MAC)
-                mul_tiles_bcast_cols(compute_input_cb_id_0, compute_input_cb_id_1, k, expert_tile, dst0);
-            }
-            cb_in0.pop_front(input_granularity);
-        }
-
-        tile_regs_commit();
-        cb_out.reserve_back(one_tile);
-        pack_reconfig_data_format(compute_output_cb_id);
-        tile_regs_wait();
-        pack_tile(dst0, compute_output_cb_id);
-        tile_regs_release();
-        cb_out.push_back(one_tile);
-    }
-
-    // Release all score tiles
-    cb_in1.pop_front(reduction_dim_size);
+    eltwise_chain(EltwiseShape::grid(num_output_tiles, reduction_dim_size, input_granularity), Accumulate{}, Pack{});
 }

@@ -15,6 +15,7 @@ For rmsnorm it computes E(x**2) and returns it as a one tile wide output
 #include "api/compute/layernorm.h"
 #include "api/debug/dprint.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 ALWI void ACQ() {
@@ -34,8 +35,6 @@ void kernel_main() {
     // Note: get_compile_time_arg_val(4) is FLOAT32_REDUCTION - unused after library migration
     // Library auto-detects FP32 from ENABLE_FP32_DEST_ACC define
     bool is_merge_core = get_arg_val<uint32_t>(0);
-
-    constexpr uint32_t onetile = 1;
 
     constexpr uint32_t cb_inp_idx = tt::CBIndex::c_0;
     constexpr uint32_t cb_reduce_idx = tt::CBIndex::c_1;
@@ -93,39 +92,26 @@ void kernel_main() {
     if (is_merge_core) {
         constexpr uint32_t cb_x2_merge_idx = tt::CBIndex::c_15;
         constexpr uint32_t cb_out_final_idx = tt::CBIndex::c_14;
-        constexpr int dst0 = 0;
-
-        CircularBuffer cb_x2_merge(cb_x2_merge_idx);
-        CircularBuffer cb_zero(cb_zero_idx);
-        CircularBuffer cb_out_final(cb_out_final_idx);
-
-        // Wait for all num_cores_y tiles
-        cb_x2_merge.wait_front(num_cores_y);
-        cb_zero.wait_front(1);
-
-        // Reserve output space
-        cb_out_final.reserve_back(onetile);
 
         // Initialize accumulation
         binary_op_init_common(cb_x2_merge_idx, cb_zero_idx, cb_out_final_idx);
-        reconfig_data_format(cb_x2_merge_idx, cb_zero_idx);
-        pack_reconfig_data_format(cb_out_final_idx);
-        add_tiles_init(cb_x2_merge_idx, cb_zero_idx, true);
+        using namespace compute_kernel_lib;
+        using Accumulate = BinaryFpu<
+            cb_x2_merge_idx,
+            cb_zero_idx,
+            BinaryFpuOp::Add,
+            BroadcastDim::None,
+            InputLifecycle::Bulk,
+            InputLifecycle::Bulk,
+            BinaryDataFormatReconfig::Input,
+            Dst::D0,
+            OperandKind::Block,
+            OperandKind::Scalar,
+            TileOffset::Unset,
+            TileOffset::Unset,
+            DestAccumulation::Enabled>;
+        using Pack = PackTile<cb_out_final_idx, OutputLifecycle::DestAccumulation, PackTileReconfig::Output, Dst::D0>;
 
-        // Acquire registers
-        ACQ();
-
-        // Add all 8 tiles together
-        for (uint32_t i = 0; i < num_cores_y; i++) {
-            add_tiles(cb_x2_merge_idx, cb_zero_idx, i, 0, dst0);
-        }
-
-        // Pack result
-        pack_tile(dst0, cb_out_final_idx);
-        REL();
-
-        // Push output and pop input
-        cb_out_final.push_back(onetile);
-        cb_x2_merge.pop_front(num_cores_y);
+        eltwise_chain(EltwiseShape::tiles(num_cores_y, num_cores_y), Accumulate{}, Pack{});
     }
 }

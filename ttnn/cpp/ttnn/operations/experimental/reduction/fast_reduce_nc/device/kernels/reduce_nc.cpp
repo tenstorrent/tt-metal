@@ -4,7 +4,7 @@
 
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary.h"
-#include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
 void kernel_main() {
     // compile-time args
@@ -15,44 +15,24 @@ void kernel_main() {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_in1 = tt::CBIndex::c_1;
     constexpr auto cb_out0 = tt::CBIndex::c_16;
-    constexpr uint32_t onetile = 1;
-    constexpr uint32_t dst0 = 0;
-    constexpr uint32_t dst1 = 1;
-    constexpr uint32_t first_tile = 0;
-
-    CircularBuffer cb_in0_obj(cb_in0);
-    CircularBuffer cb_in1_obj(cb_in1);
-    CircularBuffer cb_out0_obj(cb_out0);
-
-    constexpr uint32_t num_input_tiles_iter = num_input_tiles / input_granularity;
-
     binary_op_init_common(cb_in0, cb_in1, cb_out0);
-    cb_in1_obj.wait_front(onetile);
 
-    // For each assigned output tile, process the input tiles in a doubly nested
-    // loop. The inner loop processes the number of tiles specified by
-    // input_granularity. The outer loop executes num_input_tiles / input_granularity
-    // times.
-    for (uint32_t i = 0; i < num_output_tiles; i++) {
-        add_tiles_init(cb_in0, cb_in1, true);
-        reconfig_data_format(cb_in0, cb_in1);
-        tile_regs_acquire();
-        for (uint32_t j = 0; j < num_input_tiles_iter; ++j) {
-            cb_in0_obj.wait_front(input_granularity);
-            for (uint32_t k = 0; k < input_granularity; k++) {
-                add_tiles(cb_in0, cb_in1, k, first_tile, dst0);
-            }
-            cb_in0_obj.pop_front(input_granularity);
-        }
-        tile_regs_commit();
-        cb_out0_obj.reserve_back(onetile);
-        pack_reconfig_data_format(cb_out0);
-        tile_regs_wait();
-        pack_tile(dst0, cb_out0);
-        tile_regs_release();
-        cb_out0_obj.push_back(onetile);
-    }
-    // cb_in1 holds a single broadcast tile waited once and reused across all output tiles;
-    // pop it at the end so the CB is left balanced.
-    cb_in1_obj.pop_front(onetile);
+    using namespace compute_kernel_lib;
+    using Accumulate = BinaryFpu<
+        cb_in0,
+        cb_in1,
+        BinaryFpuOp::Add,
+        BroadcastDim::None,
+        InputLifecycle::Chunked,
+        InputLifecycle::Bulk,
+        BinaryDataFormatReconfig::Input,
+        Dst::D0,
+        OperandKind::Block,
+        OperandKind::Scalar,
+        TileOffset::Unset,
+        TileOffset::Unset,
+        DestAccumulation::Enabled>;
+    using Pack = PackTile<cb_out0, OutputLifecycle::DestAccumulation, PackTileReconfig::Output, Dst::D0>;
+
+    eltwise_chain(EltwiseShape::grid(num_output_tiles, num_input_tiles, input_granularity), Accumulate{}, Pack{});
 }

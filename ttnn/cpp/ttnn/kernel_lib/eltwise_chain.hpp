@@ -245,6 +245,7 @@ enum class ReservePolicy : uint8_t {
     None,
     PerTile,
     PerChunk,
+    PerOuter,  // reserve one accumulated output at each outer-row entry
     Upfront,
     OneUpfront,  // reserve one accumulator tile once at chain entry
 };
@@ -253,6 +254,7 @@ enum class PushPolicy : uint8_t {
     None,
     PerTile,
     PerChunk,
+    PerOuter,  // push one accumulated output at each outer-row exit
     AtEnd,
     OneAtEnd,  // push one accumulator tile once at chain exit
 };
@@ -260,6 +262,7 @@ enum class PushPolicy : uint8_t {
 enum class OutputLifecyclePurpose : uint8_t {
     General,
     L1Accumulation,
+    DestAccumulation,
 };
 
 struct OutputLifecycle {
@@ -277,7 +280,8 @@ struct OutputLifecycle {
     // reserve and push move together; the asymmetric cells spell BOTH axes literally as
     // Reserve<rate>Push<rate> (e.g. ReserveAllPushPerTile = reserve all upfront, push one per tile).
     static const OutputLifecycle Streaming, Chunked, Bulk, ReserveAllPushPerTile, ReserveAllPushPerChunk, CallerManaged,
-        ReserveNonePushEnd, L1Accumulation, L1AccumulationCallerManaged;
+        ReserveNonePushEnd, L1Accumulation, L1AccumulationCallerManaged, DestAccumulation,
+        DestAccumulationCallerManaged;
 };
 
 // Default: reserve and push 1 output tile each step.
@@ -304,16 +308,29 @@ inline constexpr OutputLifecycle OutputLifecycle::L1Accumulation = {
 // into the caller's already-reserved tile; the caller decides when to publish it.
 inline constexpr OutputLifecycle OutputLifecycle::L1AccumulationCallerManaged = {
     ReservePolicy::None, PushPolicy::None, OutputLifecyclePurpose::L1Accumulation};
+// DEST accumulation keeps one sticky DEST tile live across each outer row, then packs and
+// publishes one result per row. A 1D shape has one row and therefore produces one result.
+inline constexpr OutputLifecycle OutputLifecycle::DestAccumulation = {
+    ReservePolicy::PerOuter, PushPolicy::PerOuter, OutputLifecyclePurpose::DestAccumulation};
+// DEST accumulation with reserve/push owned by the caller. The caller provides one output
+// slot per outer row.
+inline constexpr OutputLifecycle OutputLifecycle::DestAccumulationCallerManaged = {
+    ReservePolicy::None, PushPolicy::None, OutputLifecyclePurpose::DestAccumulation};
 
 constexpr bool is_legal_output_lifecycle(OutputLifecycle lc) noexcept {
     return lc == OutputLifecycle::Streaming || lc == OutputLifecycle::Chunked || lc == OutputLifecycle::Bulk ||
            lc == OutputLifecycle::ReserveAllPushPerTile || lc == OutputLifecycle::ReserveAllPushPerChunk ||
            lc == OutputLifecycle::CallerManaged || lc == OutputLifecycle::ReserveNonePushEnd ||
-           lc == OutputLifecycle::L1Accumulation || lc == OutputLifecycle::L1AccumulationCallerManaged;
+           lc == OutputLifecycle::L1Accumulation || lc == OutputLifecycle::L1AccumulationCallerManaged ||
+           lc == OutputLifecycle::DestAccumulation || lc == OutputLifecycle::DestAccumulationCallerManaged;
 }
 
 constexpr bool is_l1_accumulation_output_lifecycle(OutputLifecycle lc) noexcept {
     return lc == OutputLifecycle::L1Accumulation || lc == OutputLifecycle::L1AccumulationCallerManaged;
+}
+
+constexpr bool is_dest_accumulation_output_lifecycle(OutputLifecycle lc) noexcept {
+    return lc == OutputLifecycle::DestAccumulation || lc == OutputLifecycle::DestAccumulationCallerManaged;
 }
 
 /// Which tile of an input operand to read at each step of the (Ht x Wt) walk.
@@ -398,7 +415,8 @@ constexpr bool is_legal_input_lifecycle_with_base(InputLifecycle lc) noexcept {
 /// Lifecycle compatibility check for `TileBase != None` on output elements.
 constexpr bool is_legal_output_lifecycle_with_base(OutputLifecycle lc) noexcept {
     return lc == OutputLifecycle::Bulk || lc == OutputLifecycle::ReserveNonePushEnd ||
-           lc == OutputLifecycle::CallerManaged || lc == OutputLifecycle::L1AccumulationCallerManaged;
+           lc == OutputLifecycle::CallerManaged || lc == OutputLifecycle::L1AccumulationCallerManaged ||
+           lc == OutputLifecycle::DestAccumulationCallerManaged;
 }
 
 // =============================================================================
@@ -477,6 +495,14 @@ enum class CopyTileReconfig : uint8_t {
 
 /// FPU binary op selector.
 enum class BinaryFpuOp : uint8_t { Add, Sub, Mul };
+
+/// Whether an FPU binary result overwrites its lane-relative DEST tile or accumulates every
+/// logical input into the chain's single sticky DEST tile. The enabled mode is a type property:
+/// it selects a compile-time-specialized chain schedule with no per-tile mode branch.
+enum class DestAccumulation : uint8_t {
+    Disabled,
+    Enabled,
+};
 
 /// FPU binary dtype-reconfig. Input-side only — pack-side reconfig is owned by
 /// the downstream `PackTile` element (`PackTileReconfig::Output`). BinaryFpu writes
@@ -598,7 +624,8 @@ template <
     OperandKind AIndex = OperandKind::Scalar,
     OperandKind BIndex = AIndex,
     TileOffset OffsetA = TileOffset::Unset,
-    TileOffset OffsetB = TileOffset::Unset>
+    TileOffset OffsetB = TileOffset::Unset,
+    DestAccumulation Accumulation = DestAccumulation::Disabled>
 struct BinaryFpu;
 
 template <

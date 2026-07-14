@@ -136,3 +136,33 @@ def test_l1_accumulation_multiple_lifecycle_owners_illegal(device, expect_error)
         "l1_accumulation_multiple_lifecycle_owners.cpp",
         "only one PackTile may own the L1-accumulation",
     )
+
+
+def test_dest_accumulation_wrong_lifecycle_illegal(device, expect_error):
+    """DEST accumulation cannot use an ordinary streaming output lifecycle."""
+    _expect_build_failure(
+        device,
+        expect_error,
+        "dest_accumulation_wrong_lifecycle.cpp",
+        "DEST accumulation requires OutputLifecycle::DestAccumulation",
+    )
+
+
+def test_dest_lifecycle_without_accumulation_illegal(device, expect_error):
+    """DEST-purpose output lifecycles cannot silently run without an accumulating BinaryFpu."""
+    _expect_build_failure(
+        device,
+        expect_error,
+        "dest_lifecycle_without_accumulation.cpp",
+        "those lifecycles require an accumulating BinaryFpu",
+    )
+
+
+def test_dest_accumulation_pack_mismatch_illegal(device, expect_error):
+    """The single final pack must read the sticky accumulator slot."""
+    _expect_build_failure(
+        device,
+        expect_error,
+        "dest_accumulation_pack_mismatch.cpp",
+        "PackTile must pack the sticky DEST slot",
+    )
