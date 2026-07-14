@@ -64,17 +64,25 @@ INPUT_TAGGERS = {
 # 2. SUPPORTED — per-axis accepted values (phase-0: narrow but axis-complete).
 # ---------------------------------------------------------------------------
 SUPPORTED = {
-    "dtype": [ttnn.float32, ttnn.bfloat16],
-    # Two-axis precision model (dtype x fp32_dest_acc_en). Both values are known;
-    # phase-0 builds only the fp32_dest_acc_en=True corner (see EXCLUSIONS).
+    # R2 added bfloat8_b (TILE input only — bf8b + ROW_MAJOR is structurally
+    # INVALID, skipped by the harness). bf8b's low-precision reduce rides the
+    # R1-fixed reduce datapath via bf16 intermediate CBs (see program descriptor).
+    "dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
+    # Two-axis precision model (dtype x fp32_dest_acc_en). R2 dropped the
+    # {bf16, False} EXCLUSION (bf16 without fp32 dest-acc is a supported target);
+    # {float32, False} stays EXCLUDED (permanent — fp32 requires fp32 accumulation).
     "fp32_dest_acc_en": [True, False],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "rank": [2, 3, 4],
     "gamma_mode": ["gamma", "no_gamma"],
-    # "none" sentinel == "no weight" and is ALWAYS legal.
-    "gamma_dtype": [ttnn.float32, ttnn.bfloat16, "none"],
-    "gamma_layout": [ttnn.ROW_MAJOR_LAYOUT, "none"],
+    # "none" sentinel == "no weight" and is ALWAYS legal. R2 added bfloat8_b
+    # (block-quantized gamma; TILE-only since bf8b + ROW_MAJOR is INVALID).
+    "gamma_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, "none"],
+    # R2 added TILE_LAYOUT: gamma read as tiles directly (no RM->tilize) — a
+    # second gamma reader leg alongside the RM one, required for bf8b gamma and
+    # independently useful for mixed-precision (bf16 acts + fp32/bf8b TILE weights).
+    "gamma_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, "none"],
     "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
 }
 
@@ -83,11 +91,15 @@ SUPPORTED = {
 # 3. EXCLUSIONS — cells inside SUPPORTED refused for now (refinement candidates).
 # ---------------------------------------------------------------------------
 EXCLUSIONS = [
-    # Phase-0 is the maxed-out precision corner (fp32_dest_acc_en=True).
-    # float32 + False: legal config, refused (fp32 requires fp32 accumulation).
+    # float32 + False: legal config, permanently refused (fp32 requires fp32
+    # accumulation — see references/precision_convention.md). NOT a refinement.
     {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
-    # bfloat16 + False: a later refinement, not phase-0.
-    {"dtype": ttnn.bfloat16, "fp32_dest_acc_en": False},
+    # NOTE: R2 anticipated a {bfloat8_b, non-tile-aligned} exclusion, but on-device
+    # verification (golden check_output, PCC>=0.99 & rel-RMS<=0.10) showed every
+    # bf8b non-tile-aligned shape passes: bf8b input is TILE-only, so ttnn's
+    # zero-padding keeps the block-float shared exponent clean, the masked
+    # partial-W reduce zeros the W-tail, and H-padding rows reduce to 0 and are
+    # dropped by the writer. So bf8b is FULLY supported — no exclusion added.
 ]
 
 

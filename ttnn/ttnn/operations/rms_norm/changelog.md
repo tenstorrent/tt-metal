@@ -80,3 +80,54 @@
 - **Tests added**: none new — `test_rms_norm_precision_baseline.py::...[wide-fp32]` xfail removed
   (now a passing cell, guarded by the existing got/true scale-bug assertion). `probes/probe_010.py`
   regenerates the fp32/bf16 got/true ratio-vs-W table post-fix.
+
+## Refinement 2 — Numerical configurability + gamma format flexibility (partial)
+- **Date**: 2026-07-14
+- **What was done**: Grew the precision/weight surface. All named R2 axes landed in SUPPORTED:
+  - Added `ttnn.bfloat8_b` to `SUPPORTED["dtype"]` (TILE input only; `bf8b + ROW_MAJOR` is INVALID).
+  - Added `ttnn.bfloat8_b` to `SUPPORTED["gamma_dtype"]`.
+  - Added `ttnn.TILE_LAYOUT` to `SUPPORTED["gamma_layout"]` — a **second gamma reader leg**
+    (read gamma tiles directly, no RM→tilize), alongside the existing RM+tilize one.
+  - Dropped the `{bfloat16, fp32_dest_acc_en=False}` EXCLUSION (kept `{float32, False}` permanent).
+  - Wired `compute_kernel_config` fully: intermediate-CB formats made dtype-aware (bf8b input →
+    bf16 intermediates; fp32/bf16 unchanged, byte-identical); documented that **no CB qualifies for
+    `UnpackToDestFp32`** (every fp32 intermediate — cb_xsq, cb_sumsq — feeds an FPU op: the reduce
+    or the AccumulateViaAdd `add_tiles` fold; UnpackToDestFp32 is exclusive with FPU consumers).
+  - **Reused**: the shared reader/compute kernels (extended via a `GAMMA_IS_ROW_MAJOR` CT-arg
+    branch — the TILE-gamma leg reuses `cb_gamma_tiles`, skipping the tilize; single-producer holds
+    per build since the two legs are separate compiled programs); the existing streaming reduce,
+    `transform_in_place` finalizer, and pass-2 normalize path (all untouched).
+  - **Added**: `_elt()` guard in the descriptor (bf8b `element_size()` raises — block formats have
+    no per-element size; the value only feeds RM-page math that bf8b never allocates, so a
+    stand-in of 1 is safe); `read_gamma_block<...>` reader helper (dispatches RM vs TILE gamma);
+    `GAMMA_IS_ROW_MAJOR` CT arg in reader + compute.
+- **Accuracy achieved**:
+  - bf8b (TILE) — fully supported **including non-tile-aligned**: the R2 prompt anticipated a
+    `{bf8b, non-aligned}` EXCLUSION, but on-device verification (golden `check_output`, PCC≥0.99 &
+    rel-RMS≤0.10) showed all 9 non-aligned golden shapes pass (bf8b input is TILE-only → ttnn's
+    zero-padding keeps the block-float shared exponent clean; masked partial-W reduce zeros the
+    W-tail; H-padding rows reduce to 0 and are dropped). No exclusion added. bf8b PCC ≈ 0.9999,
+    rel-RMS well under 0.10 across small/wide/non-aligned; bf8b gamma (TILE) and bf16-input +
+    bf8b-gamma likewise pass.
+  - TILE gamma (bf16/fp32/bf8b), mixed-precision (bf16 acts + fp32/bf8b TILE weights), and
+    RM-input + TILE-gamma cross-layout: PCC ≈ 1.0.
+  - bf16 + `fp32_dest_acc_en=False`: PCC=0.99999 on small/normal shapes; golden **cartesian**
+    (normal data, rms≤0.04) green at every W≤8192.
+- **Golden test progress**: whole golden dir **1769 passed / 13 failed / 6723 xfailed / 31920
+  skipped** (test_golden.py cartesian: 1682 passed, up from R1's 420; test_regression.py green).
+  The 13 failures are all one class — **bf16 wide-W reduce-accumulation precision** (the R1-analog
+  bf16 datapath, out of R2's config-wiring scope): 1 loose case `1x1x32x32768` (bf16+True, rms 0.404,
+  a scale drift) and 12 `test_rms_norm_row_major` (bf16+False, W=4096, uniform data, Frobenius 0.05225
+  vs 0.052). Both were xfail before R2 (gamma_layout=TILE / {bf16,False} unsupported) and became live
+  by delivering the named R2 axes. **Left failing (not silenced)** per the partial-outcome protocol —
+  filed as **Refinement 2a**.
+- **Issues encountered**:
+  - bf8b `element_size()` raises `ValueError: datum for bfp8 is invalid` → `_elt()` guard.
+  - Measured **null result**: forcing `cb_sumsq` to fp32 when `fp32_dest_acc_en=True`
+    (numeric-formats-metal §4) is a **net regression** on the wide loose cases — it removes the bf16
+    accumulator cliff but exposes the smooth `∝W` ReduceTile bias, flipping `W=16384` from 0.037 pass
+    → 0.044 fail while `W=32768` still fails. Reverted byte-for-byte (no cartesian W≤8192 cell needs
+    it). The real fix is the R1-analog AccumulateViaAdd fp32-accumulator datapath for bf16 → R2a.
+- **Tests added**: none new (regression handled by the existing golden suite + unit tests). Debug
+  probes `probes/probe_012.py`–`probe_015.py` capture the bf8b / TILE-gamma / bf16+False /
+  wide-W verification and the fp32-cb_sumsq null-result measurement. Unit dir: **106 passed**.

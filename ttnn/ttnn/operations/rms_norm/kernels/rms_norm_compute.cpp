@@ -86,6 +86,10 @@ void kernel_main() {
     constexpr uint32_t num_w_blocks = get_compile_time_arg_val(7);
     constexpr uint32_t RECIP_W_BITS = get_compile_time_arg_val(8);  // 1/W float bits (mean scaler)
     constexpr uint32_t IS_FP32 = get_compile_time_arg_val(9);
+    // Gamma layout leg: RM gamma is tilized here; TILE gamma arrives already
+    // tiled from the reader (skip the gamma-tilize step). Independent of the
+    // input layout (IS_ROW_MAJOR).
+    constexpr uint32_t GAMMA_IS_ROW_MAJOR = get_compile_time_arg_val(10);
     (void)Wt;
 
     uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
@@ -157,8 +161,11 @@ void kernel_main() {
                 ckl::tilize<W_BLOCK_TILES, cb_input_rm, cb_input_tiles>(1, TILE_H);
             }
             if constexpr (HAS_GAMMA) {
-                // gamma is one ROW_MAJOR stick -> a row-0-valid tile (asymmetric tilize, 1 input page).
-                ckl::tilize<W_BLOCK_TILES, cb_gamma_rm, cb_gamma_tiles>(1, 1);
+                if constexpr (GAMMA_IS_ROW_MAJOR) {
+                    // RM gamma: one stick -> a row-0-valid tile (asymmetric tilize, 1 input page).
+                    ckl::tilize<W_BLOCK_TILES, cb_gamma_rm, cb_gamma_tiles>(1, 1);
+                }
+                // TILE gamma: reader already pushed row-0-valid tiles into cb_gamma_tiles.
                 // x * (1/rms): B (cb_sumsq) is a per-row scalar valid in col 0, held across the whole
                 // row (HeldBulk, never popped here), broadcast across columns (Col).
                 ckl::mul<

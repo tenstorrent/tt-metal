@@ -91,7 +91,7 @@ partial path needs the masked-last-tile handling the docstring describes). Repro
 the `test_rms_norm_precision_baseline.py::...[wide-fp32]` xfail flips to xpass (then un-mark it), and
 the got/true ratio at W=16384 fp32 is within precision noise of 1.0 (not `1.04`).
 
-### [ ] Refinement 2 — Numerical configurability + gamma format flexibility
+### [~] Refinement 2 — Numerical configurability + gamma format flexibility
 
 **Goal**: grow the precision/weight surface:
 - add `ttnn.bfloat8_b` to `SUPPORTED["dtype"]` (TILE input only — `bf8b + ROW_MAJOR` is INVALID);
@@ -114,6 +114,46 @@ kernel changes when helpers are wired") and owns the dtype set + config + interm
 `/memory-layouts` owns the **TILE-gamma reader path** (a second gamma leg alongside the existing
 RM+tilize one — the CB single-producer rule applies). Once this lands, the 3 WIDE loose cases
 (`gamma_layout=TILE`) flip from `xfail_expected` to `supported_pass`.
+
+### [ ] Refinement 2a — bf16 wide-W reduce-accumulation precision (R1-analog for bf16)
+
+**Goal**: close the two bf16 reduce-accumulation precision misses that Refinement 2
+exposed (both left failing, not silenced — they are this refinement's baseline):
+- **`bfloat16 + fp32_dest_acc_en=True`, extreme W** — loose case `1x1x32x32768`
+  (`test_op_loose`): `pcc=0.999987` but `rms=0.404` ≫ 0.04 (a pure scale drift). `W=16384`
+  passes (`rms≈0.037`); `W=32768` falls off the cliff. Root cause is the same one R1 fixed
+  for fp32: the ReduceTile matmul-with-ones path parks the running `Σx²` reduced-partial in a
+  bf16 `cb_sumsq` between W-blocks and carries a residual `∝W` bias. R1 fixed fp32 by moving
+  to `ReduceAlgorithm::AccumulateViaAdd` (raw element-wise fp32 accumulator, reduced once) but
+  explicitly kept **bf16 on ReduceTile**. **Measured null result (R2)**: forcing `cb_sumsq`
+  to fp32 on the ReduceTile path is a **net regression** — it removes the bf16 cliff but leaves
+  the smooth `∝W` bias, so `W=16384` flips 0.037→0.044 (fail) while `W=32768` (0.092) still
+  fails; reverted byte-for-byte. The real lever is **extending R1's AccumulateViaAdd fp32-raw-
+  accumulator datapath to the bf16 tile-aligned path** (gate widened from `IS_FP32` to
+  `(IS_FP32 || bf16) && !HAS_PARTIAL_W`, with an fp32 accumulator CB so the raw sum doesn't
+  truncate). This case is also a designated Refinement-5 W-split forcing case; either the R1-
+  analog datapath or the R5 cross-core W-split resolves it.
+- **`bfloat16 + fp32_dest_acc_en=False`, wide W** — 12 `test_translated.py::test_rms_norm_row_major`
+  cells (`w=4096`, uniform `torch.rand`): relative Frobenius `0.05225` vs the reference-derived
+  `0.052` (a 0.5% overshoot; PCC + allclose pass). The golden **cartesian** suite (normal
+  `torch.randn`, `rms≤0.04`) passes bf16+False at every `W≤8192`, so bf16+False is genuinely
+  supported — this is a distribution-sensitive precision floor of running the accumulation in
+  **bf16 dest** (there is no fp32 dest to lean on). The R1-analog fp32 accumulator CB helps the
+  parked-value precision but the per-block reduce still runs in bf16 dest; investigate whether
+  an fp32 `cb_sumsq` + accumulate-in-CB (reload-add pattern) recovers the 0.5%, or whether this
+  is an inherent `fp32_dest_acc_en=False` limitation to be documented as a tighter-than-golden
+  translated threshold.
+
+**Verifier notes**: standalone datapath refinement, the bf16 sibling of Refinement 1 (blocking
+for fp32). Do **not** silence via a `shape_size` tagger / EXCLUSIONS (same reasoning as R1: it
+would leave bf16 quietly wrong for wide hidden dims — the LLM regime). No SUPPORTED axis change
+(bf16 and `fp32_dest_acc_en=False` are already supported). `/debug-ttnn-op` + the got/true-ratio
+triage from R1 (`probes/probe_010.py`); `reduce_helpers_compute.hpp` `AccumulateViaAdd` (SUM /
+`BulkWaitBulkPop` / tile-aligned only — matches the tile-aligned wide-W target).
+
+**Done when**: `test_op_loose[1x1x32x32768…]` passes the golden suite (or is resolved by R5),
+the 12 `test_rms_norm_row_major[*-False-*-4096-*]` translated cells pass, and no regression on
+the bf16/fp32 cartesian set.
 
 ### [ ] Refinement 3 — Data-movement co-tune (PERF)
 

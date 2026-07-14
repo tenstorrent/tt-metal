@@ -35,6 +35,20 @@ def _f32_bits(value: float) -> int:
     return struct.unpack("I", struct.pack("f", float(value)))[0]
 
 
+def _elt(tensor) -> int:
+    """Per-element byte size, tolerant of block formats.
+
+    bfloat8_b / bfloat4_b have no well-defined per-element size (16 values share
+    one exponent) and `element_size()` raises for them. They are TILE-only, so
+    the byte size only ever feeds ROW_MAJOR-stick page math that is never
+    allocated for a block-format tensor — return a harmless stand-in of 1.
+    """
+    try:
+        return tensor.element_size()
+    except (ValueError, RuntimeError):
+        return 1
+
+
 def create_program_descriptor(
     input_tensor: ttnn.Tensor,
     output_tensor: ttnn.Tensor,
@@ -52,6 +66,7 @@ def create_program_descriptor(
 
     is_row_major = input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
     has_gamma = gamma is not None
+    gamma_is_row_major = has_gamma and gamma.layout == ttnn.ROW_MAJOR_LAYOUT
 
     # --- Derived geometry (all from the knobs + shape) ---
     Wt = math.ceil(origin_W / TILE_DIM)
@@ -67,16 +82,43 @@ def create_program_descriptor(
     scaler_bits = _f32_bits(1.0 / float(origin_W))
     eps_bits = _f32_bits(epsilon)
 
-    input_elt = input_tensor.element_size()
-    output_elt = output_tensor.element_size()
-    gamma_elt = gamma.element_size() if has_gamma else input_elt
+    input_elt = _elt(input_tensor)
+    output_elt = _elt(output_tensor)
+    gamma_elt = _elt(gamma) if has_gamma else input_elt
 
     in_dtype = input_tensor.dtype
     out_dtype = output_tensor.dtype
     gamma_dtype = gamma.dtype if has_gamma else in_dtype
 
+    # Intermediate (accumulator/scratch) CB format. fp32 input keeps fp32
+    # intermediates (fp32 dest-acc path); bf16 keeps bf16; bf8b uses bf16 — a
+    # block-float accumulator/scratch would be far too lossy for Sum(x^2) and the
+    # x*(1/rms) scratch. This is identity for fp32/bf16 (byte-identical to prior
+    # passing cells) and only lifts bf8b's intermediates off the block format.
+    interm_dtype = ttnn.bfloat16 if in_dtype == ttnn.bfloat8_b else in_dtype
+
+    # NOTE (R2, null result): forcing cb_sumsq to Float32 when fp32_dest_acc_en=True
+    # (numeric-formats-metal §4) was measured on the wide-W bf16 loose cases and
+    # REVERTED — it is a net regression, not a win. The bf16 accumulator has a
+    # cliff (fine <=W=16384, catastrophic at 32768: rel-RMS 0.40); the fp32
+    # accumulator instead grows SMOOTHLY with W (the residual ReduceTile
+    # matmul-with-ones bias R1 fixed for fp32 via AccumulateViaAdd but left on the
+    # bf16 path), so fp32-sumsq pushes W=16384 from 0.037 pass -> 0.044 fail while
+    # W=32768 (0.092) still fails. No single-core config passes both wide cases;
+    # the real fix is the R1-analog AccumulateViaAdd fp32-raw-accumulator datapath
+    # for bf16 — a follow-up refinement (see op_requirements Refinement 2a). No
+    # cartesian SUPPORTED cell (W<=8192) needs it, so cb_sumsq stays interm_dtype.
+
+    # Gamma tiles: TILE gamma is a raw tile copy (reader writes the on-disk bytes,
+    # so the CB MUST carry gamma_dtype); RM gamma is tilized by compute (which
+    # converts format), so pack it at the intermediate precision (== in_dtype for
+    # fp32/bf16 — unchanged; bf16 for bf8b input).
+    gamma_tiles_dtype = gamma_dtype if (has_gamma and not gamma_is_row_major) else interm_dtype
+
     in_tile = ttnn.tile_size(in_dtype)
     out_tile = ttnn.tile_size(out_dtype)
+    interm_tile = ttnn.tile_size(interm_dtype)
+    gamma_tiles_tile = ttnn.tile_size(gamma_tiles_dtype)
     scaler_tile = ttnn.tile_size(ttnn.bfloat16)
 
     wblock_cols = W_BLOCK_TILES * TILE_DIM
@@ -121,19 +163,24 @@ def create_program_descriptor(
         # normalized output tiles (mul -> writer in TILE / -> untilize in RM)
         cb(CB_OUTPUT_TILES, out_dtype, out_tile, double * W_BLOCK_TILES),
         # x^2 scratch (pass 1) — compute->compute, single-depth full block
-        cb(CB_XSQ, in_dtype, in_tile, W_BLOCK_TILES),
+        cb(CB_XSQ, interm_dtype, interm_tile, W_BLOCK_TILES),
         # Sum(x^2)/W accumulator -> 1/rms (held across pass 2)
-        cb(CB_SUMSQ, in_dtype, in_tile, max(double * ROW_BLOCK_TILES, 2)),
+        cb(CB_SUMSQ, interm_dtype, interm_tile, max(double * ROW_BLOCK_TILES, 2)),
     ]
     if is_row_major:
         # RM input sticks -> tilize; RM output sticks <- untilize
         cbs.append(cb(CB_INPUT_RM, in_dtype, in_rm_page, double * STICK_BLOCK))
         cbs.append(cb(CB_OUTPUT_RM, out_dtype, out_rm_page, double * W_BLOCK_TILES))
     if has_gamma:
-        cbs.append(cb(CB_GAMMA_RM, gamma_dtype, gamma_rm_page, double))
-        cbs.append(cb(CB_GAMMA_TILES, in_dtype, in_tile, double * W_BLOCK_TILES))
+        # cb_gamma_rm only exists on the RM-gamma leg (reader sticks -> compute
+        # tilize). TILE gamma skips it: the reader writes tiles straight into
+        # cb_gamma_tiles (single producer per build — the two legs are separate
+        # compiled programs, so the one-producer rule holds per build).
+        if gamma_is_row_major:
+            cbs.append(cb(CB_GAMMA_RM, gamma_dtype, gamma_rm_page, double))
+        cbs.append(cb(CB_GAMMA_TILES, gamma_tiles_dtype, gamma_tiles_tile, double * W_BLOCK_TILES))
         # normalize scratch (x*(1/rms)) before gamma mul — compute->compute
-        cbs.append(cb(CB_NORM, in_dtype, in_tile, W_BLOCK_TILES))
+        cbs.append(cb(CB_NORM, interm_dtype, interm_tile, W_BLOCK_TILES))
 
     # ================= Reader =================
     reader_ct_args = [
@@ -150,6 +197,8 @@ def create_program_descriptor(
         num_w_blocks,
         input_elt,
         gamma_elt,
+        # RM gamma -> stick-read + compute tilize; TILE gamma -> read tiles direct.
+        1 if gamma_is_row_major else 0,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct_args.extend(
@@ -213,11 +262,20 @@ def create_program_descriptor(
         # post_reduce_op; the ReduceTile path applies it via the bf16 scaler CB instead.
         scaler_bits,
         # IS_FP32 selects the fp32-accurate reduce datapath (AccumulateViaAdd) — see
-        # the compute kernel. Keeps bf16 on the unchanged ReduceTile path.
+        # the compute kernel. Keeps bf16/bf8b on the unchanged ReduceTile path.
         1 if in_dtype == ttnn.float32 else 0,
+        # GAMMA_IS_ROW_MAJOR: RM gamma is tilized by compute; TILE gamma arrives
+        # already tiled from the reader (skip the gamma-tilize step).
+        1 if gamma_is_row_major else 0,
     ]
     compute_rt_args = ttnn.RuntimeArgs()
     compute_rt_args[core.x][core.y] = [num_tile_rows, start_tile_row, eps_bits]
+    # compute_kernel_config is threaded through as-is (math_fidelity /
+    # fp32_dest_acc_en / math_approx_mode / dst_full_sync_en all honored by the
+    # kernel's helpers). No CB is tagged UnpackToDestFp32: every fp32 intermediate
+    # here (cb_xsq, cb_sumsq) feeds an FPU op — the reduce, or the AccumulateViaAdd
+    # add_tiles fold — and UnpackToDestFp32 is exclusive with any FPU consumer
+    # (numeric-formats-metal §1.5). So no CB qualifies; tagging would break math.
     compute_config = compute_kernel_config if compute_kernel_config is not None else ttnn.ComputeConfigDescriptor()
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),

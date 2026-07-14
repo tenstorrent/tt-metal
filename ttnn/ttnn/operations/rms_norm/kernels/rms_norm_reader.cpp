@@ -33,6 +33,7 @@ constexpr uint32_t cb_input_rm = 0;
 constexpr uint32_t cb_input_tiles = 1;
 constexpr uint32_t cb_scaler = 2;
 constexpr uint32_t cb_gamma_rm = 3;
+constexpr uint32_t cb_gamma_tiles = 4;
 constexpr uint32_t TILE_H = 32;
 constexpr uint32_t TILE_W = 32;
 
@@ -77,6 +78,36 @@ FORCE_INLINE void read_wblock(
         cb_push_back(cb, 1);
     }
 }
+
+// Read one gamma W-block, dispatching on the gamma LAYOUT (independent of the
+// input layout). Two legs, one per build:
+//   * RM gamma  -> one stick into cb_gamma_rm (compute tilizes it, row-0 valid).
+//   * TILE gamma -> WBT tiles straight into cb_gamma_tiles (already row-0-valid
+//                   tiles from ttnn's [1,1,1,W] padded-to-[1,1,32,W] storage;
+//                   compute skips the tilize). Raw page copy preserves the
+//                   on-disk dtype, so cb_gamma_tiles carries gamma_dtype.
+template <
+    bool GAMMA_RM,
+    uint32_t GAMMA_ELT,
+    uint32_t WBLOCK_COLS,
+    uint32_t GAMMA_PADDED_BYTES,
+    uint32_t WBT,
+    typename GArgs>
+FORCE_INLINE void read_gamma_block(const GArgs& gamma_args, uint32_t gamma_addr, uint32_t b, uint32_t cols) {
+    if constexpr (GAMMA_RM) {
+        const auto g_acc = TensorAccessor(gamma_args, gamma_addr);
+        read_wblock<cb_gamma_rm>(g_acc, 1, 1, 0, cols * GAMMA_ELT, GAMMA_PADDED_BYTES, b * WBLOCK_COLS * GAMMA_ELT);
+    } else {
+        const auto g_acc = TensorAccessor(gamma_args, gamma_addr, get_tile_size(cb_gamma_tiles));
+        for (uint32_t wt = 0; wt < WBT; ++wt) {
+            uint32_t tile_id = b * WBT + wt;
+            cb_reserve_back(cb_gamma_tiles, 1);
+            noc_async_read_page(tile_id, g_acc, get_write_ptr(cb_gamma_tiles));
+            noc_async_read_barrier();
+            cb_push_back(cb_gamma_tiles, 1);
+        }
+    }
+}
 }  // namespace
 
 void kernel_main() {
@@ -93,7 +124,8 @@ void kernel_main() {
     constexpr uint32_t num_w_blocks = get_compile_time_arg_val(10);
     constexpr uint32_t input_elt = get_compile_time_arg_val(11);
     constexpr uint32_t gamma_elt = get_compile_time_arg_val(12);
-    constexpr auto input_args = TensorAccessorArgs<13>();
+    constexpr uint32_t GAMMA_IS_ROW_MAJOR = get_compile_time_arg_val(13);
+    constexpr auto input_args = TensorAccessorArgs<14>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 
     uint32_t input_addr = get_arg_val<uint32_t>(0);
@@ -154,10 +186,12 @@ void kernel_main() {
 
                     if constexpr (HAS_GAMMA) {
                         if (pass == 1) {
-                            const auto g_acc = TensorAccessor(gamma_args, gamma_addr);
-                            // gamma is a single stick -> 1 page (only row 0 used by the Row broadcast).
-                            read_wblock<cb_gamma_rm>(
-                                g_acc, 1, 1, 0, cols * gamma_elt, gamma_padded_bytes, b * wblock_cols * gamma_elt);
+                            read_gamma_block<
+                                GAMMA_IS_ROW_MAJOR,
+                                gamma_elt,
+                                wblock_cols,
+                                gamma_padded_bytes,
+                                W_BLOCK_TILES>(gamma_args, gamma_addr, b, cols);
                         }
                     }
                 }
@@ -180,13 +214,16 @@ void kernel_main() {
                     }
                     if constexpr (HAS_GAMMA) {
                         if (pass == 1) {
-                            const auto g_acc = TensorAccessor(gamma_args, gamma_addr);
                             uint32_t cols = origin_W - b * wblock_cols;
                             if (cols > wblock_cols) {
                                 cols = wblock_cols;
                             }
-                            read_wblock<cb_gamma_rm>(
-                                g_acc, 1, 1, 0, cols * gamma_elt, gamma_padded_bytes, b * wblock_cols * gamma_elt);
+                            read_gamma_block<
+                                GAMMA_IS_ROW_MAJOR,
+                                gamma_elt,
+                                wblock_cols,
+                                gamma_padded_bytes,
+                                W_BLOCK_TILES>(gamma_args, gamma_addr, b, cols);
                         }
                     }
                 }
