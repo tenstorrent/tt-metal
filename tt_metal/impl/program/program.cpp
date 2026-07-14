@@ -6,7 +6,7 @@
 #include <circular_buffer.hpp>
 #include <circular_buffer_config.hpp>
 #include <device.hpp>
-#include <graph_tracking.hpp>
+#include <tt-metalium/internal/graph_tracking.hpp>
 #include <enchantum/enchantum.hpp>
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "impl/buffers/semaphore.hpp"

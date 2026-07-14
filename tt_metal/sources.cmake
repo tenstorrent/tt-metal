@@ -111,13 +111,13 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/face_geometry.hpp
     api/tt-metalium/global_circular_buffer.hpp
     api/tt-metalium/global_semaphore.hpp
-    api/tt-metalium/graph_tracking.hpp
     api/tt-metalium/hal.hpp
     api/tt-metalium/hal_types.hpp
     api/tt-metalium/host_api.hpp
     api/tt-metalium/host_buffer.hpp
     api/tt-metalium/internal/cluster.hpp
     api/tt-metalium/internal/disaggregation/kv_chunk_address_table.hpp
+    api/tt-metalium/internal/graph_tracking.hpp
     api/tt-metalium/kernel_types.hpp
     api/tt-metalium/math.hpp
     api/tt-metalium/maybe_remote.hpp

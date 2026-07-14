@@ -8,7 +8,7 @@
 #include <buffer_types.hpp>
 #include <core_coord.hpp>
 #include <device.hpp>
-#include <graph_tracking.hpp>
+#include <tt-metalium/internal/graph_tracking.hpp>
 #include <enchantum/enchantum.hpp>
 #include <math.hpp>
 #include <nlohmann/json.hpp>

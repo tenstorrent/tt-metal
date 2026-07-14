@@ -13,7 +13,7 @@
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/graph_tracking.hpp>
+#include <tt-metalium/internal/graph_tracking.hpp>
 #ifdef TT_METAL_USE_EMULE
 #include "tt_metal/impl/emulation/emulated_program_runner.hpp"  // emule mesh register/run split
 #endif

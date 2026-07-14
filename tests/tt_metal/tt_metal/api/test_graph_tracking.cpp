@@ -16,7 +16,7 @@
 #include <string_view>
 #include <thread>
 
-#include <tt-metalium/graph_tracking.hpp>
+#include <tt-metalium/internal/graph_tracking.hpp>
 
 namespace tt::tt_metal::graph_tracking_test {
 

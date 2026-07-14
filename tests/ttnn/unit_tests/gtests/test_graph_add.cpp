@@ -19,7 +19,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/graph_tracking.hpp>
+#include <tt-metalium/internal/graph_tracking.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/shape.hpp>
 #include "ttnn/graph/graph_operation_queries.hpp"

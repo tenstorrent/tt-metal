@@ -17,7 +17,7 @@
 #include <functional>
 
 #include <tt_stl/reflection.hpp>
-#include <tt-metalium/graph_tracking.hpp>
+#include <tt-metalium/internal/graph_tracking.hpp>
 
 namespace tt::tt_metal {
 namespace graph_detail {

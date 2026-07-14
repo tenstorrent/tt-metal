@@ -7,7 +7,7 @@
 #include <optional>
 #include <vector>
 
-#include <tt-metalium/graph_tracking.hpp>
+#include <tt-metalium/internal/graph_tracking.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/shape.hpp>
 #include "ttnn/graph/graph_processor.hpp"

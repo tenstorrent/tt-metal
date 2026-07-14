@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/graph_tracking.hpp>
+#include <tt-metalium/internal/graph_tracking.hpp>
 #include <mutex>
 
 namespace tt::tt_metal {

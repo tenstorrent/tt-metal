@@ -12,7 +12,7 @@
 #include <variant>
 
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/graph_tracking.hpp>
+#include <tt-metalium/internal/graph_tracking.hpp>
 #include <tt-metalium/program_cache.hpp>
 
 #include <cstdint>

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <graph_tracking.hpp>
+#include <tt-metalium/internal/graph_tracking.hpp>
 
 #include <algorithm>
 #include <nlohmann/json.hpp>

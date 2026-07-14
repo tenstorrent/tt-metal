@@ -41,7 +41,7 @@
 #include "program/program_impl.hpp"
 #include "memory_tracking/memory_stats_shm.hpp"
 #include "memory_tracking/shm_tracking_processor.hpp"
-#include <tt-metalium/graph_tracking.hpp>
+#include <tt-metalium/internal/graph_tracking.hpp>
 #include "core_coord.hpp"
 #include "device.hpp"
 #include "dispatch/dispatch_settings.hpp"
