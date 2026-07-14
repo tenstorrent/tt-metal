@@ -285,7 +285,7 @@ AnalysisResults parse_duration(
     std::unordered_map<experimental::ProgramExecutionUID, experimental::ProgramSingleAnalysisResult>&
         results_per_program_execution_uid = analysis_results.results_per_program_execution_uid;
     ChipId device_id = -1;
-    std::unordered_map<experimental::ProgramExecutionUID, tracy::RiscType> start_risc_per_program_execution_uid;
+    tracy::RiscType zone_start_risc = tracy::RiscType::NONE;
 
     for (uint32_t i = 0; i < markers.size(); ++i) {
         const auto& marker_ref = markers[i];
@@ -299,7 +299,9 @@ AnalysisResults parse_duration(
         if (matches_start_end_config(marker, analysis_config.start_config)) {
             if (program_results == PROGRAM_INVALID_SINGLE_ANALYSIS_RESULT) {
                 program_results.start_timestamp = marker.timestamp;
-                start_risc_per_program_execution_uid[program_execution_uid] = marker.risc;
+                if (zone_start_risc == tracy::RiscType::NONE) {
+                    zone_start_risc = marker.risc;
+                }
             }
         }
         if (matches_start_end_config(marker, analysis_config.end_config)) {
@@ -314,13 +316,12 @@ AnalysisResults parse_duration(
         TT_ASSERT(device_id == marker.chip_id);
     }
 
-    for (auto& [program_execution_uid, result] : results_per_program_execution_uid) {
+    for (auto& [_, result] : results_per_program_execution_uid) {
         if (result != PROGRAM_INVALID_SINGLE_ANALYSIS_RESULT) {
             TT_ASSERT(result.start_timestamp <= result.end_timestamp);
-            // A Quasar DM/TRISC zone converts with its fixed processor clock; everything else uses the
-            // runtime device aiclk.
+            // Quasar DM/TRISC use hardcoded clock frequencies for now
             const int chip_frequency_mhz =
-                quasar_processor_clock_mhz(start_risc_per_program_execution_uid.at(program_execution_uid))
+                quasar_processor_clock_mhz(zone_start_risc)
                     .value_or(tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id));
             result.duration = static_cast<uint64_t>(
                 std::round((result.end_timestamp - result.start_timestamp) * 1000.0 / chip_frequency_mhz));
