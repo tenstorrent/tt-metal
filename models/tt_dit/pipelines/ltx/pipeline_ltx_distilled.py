@@ -809,6 +809,7 @@ class LTXDistilledPipeline(LTXPipeline):
             tt_i2v_mask, tt_i2v_clean = state.tt_i2v_mask, state.tt_i2v_clean
 
         for step_idx in range(num_steps):
+            _t_step = time.perf_counter()
             sigma = sigmas[step_idx].item()
             sigma_next = sigmas[step_idx + 1].item()
             state._tt_timestep.update(
@@ -887,7 +888,10 @@ class LTXDistilledPipeline(LTXPipeline):
             ttnn.multiply_(a_vel, dt)
             ttnn.add_(state.tt_audio_lat, a_vel)
             ttnn.multiply_(state.tt_audio_lat, state.tt_audio_pad_mask)
-            logger.info(f"  Step {step_idx + 1}/{num_steps}: σ {sigma:.4f} → {sigma_next:.4f}")
+            # STEP_MS covers the step body only. A delta between successive log lines would fold the
+            # host-side profiler drain into the step wall and corrupt the measurement.
+            _step_ms = (time.perf_counter() - _t_step) * 1000.0
+            logger.info(f"  Step {step_idx + 1}/{num_steps}: σ {sigma:.4f} → {sigma_next:.4f} STEP_MS={_step_ms:.1f}")
 
         v_final = LTXTransformerModel.device_to_host(
             state.tt_video_lat,
@@ -1125,6 +1129,16 @@ class LTXDistilledPipeline(LTXPipeline):
         timings.append(("Stage 2 denoise", t_stage2))
         logger.info(f"Stage 2 denoise: {t_stage2:.1f}s")
 
+        if os.environ.get("LTX_PROFILE_DENOISE_ONLY", "0") in ("1", "true", "True"):
+            # Profiling-only: stop before VAE/audio so the device reservation is spent on the traced
+            # denoise, which is the only thing STEP_MS scores.
+            self.last_timings = list(timings)
+            for _label, _secs in timings:
+                if "denoise" in _label.lower():
+                    walltime.record("gen", _label, _secs)
+            logger.info(f"LTX_PROFILE_DENOISE_ONLY=1: denoise-only total {sum(s for _, s in timings):.1f}s")
+            return None, None
+
         t0 = time.time()
         self._ensure_vae_decoder_frames(num_frames)  # tail-pad decodes one extra latent frame
         self._prepare_vae()
@@ -1143,8 +1157,15 @@ class LTXDistilledPipeline(LTXPipeline):
         timings.append(("VAE decode", t_vae_decode))
         logger.info(f"VAE decode (forward): {t_vae_decode:.1f}s — {tuple(video_pixels.shape)}")
 
+        # The vocoder decodes s2_audio, a latent distinct from the s2_video that produced video_pixels
+        # above, so LTX_VIDEO_ONLY cannot perturb a single pixel — it only drops the eager vocoder
+        # decode, which is trace-hidden in production but costs minutes untraced.
         t0 = time.time()
-        audio_obj = self.decode_audio(s2_audio, num_frames_out, fps=fps)  # trim padded waveform to requested length
+        if os.environ.get("LTX_VIDEO_ONLY", "0") in ("1", "true", "True"):
+            audio_obj = None
+            logger.info("LTX_VIDEO_ONLY=1: skipping audio decode (video pixels unaffected)")
+        else:
+            audio_obj = self.decode_audio(s2_audio, num_frames_out, fps=fps)  # trim padded waveform to length
         t_audio_decode = time.time() - t0
         timings.append(("Audio decode", t_audio_decode))
         logger.info(f"Audio decode: {t_audio_decode:.1f}s")
