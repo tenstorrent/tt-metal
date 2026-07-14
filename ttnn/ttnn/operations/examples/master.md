@@ -164,6 +164,31 @@ markedly more accurate for scalar. But it's a **dispatched fast path, not a repl
 (dim-dependent) crossover, benefits least on col, and the win is compute-only/single-core (most real reductions
 are data-movement-bound, where it won't show).
 
+## ⭐⭐ T2 — [`reduce_block`](reduce_block/README.md)
+**Concept:** the accumulate + SFPU-finalize reduce, applied **per output tile** over a full 2-D `(Ht, Wt, NC)`
+block (many output tiles), vs the matmul-reduce library — with a per-dim, per-width dispatch. Single core, pure
+compute.
+**Situation:** the fast reduce (accumulate the tiles, finalize once on the SFPU) is easy when a strip collapses
+to *one* output tile; a real reduce runs over a 2-D block and emits *many* output tiles, and you wonder if the
+fast path still wins there — and whether it clears the library's `REDUCE_COL` DST/chunk limit.
+**Measured win (BH, 1 core, bf16 in / fp32 acc, reducing R tiles into one output):** the fast path becomes a
+**loop over output tiles** (one DEST each → no chunk limit) and each output costs the same as the single-strip
+reduce, so a block ≈ `out_tiles × single-output`. It wins past a dim-dependent crossover: **row from ~4 reduced
+tiles → 5.35× @32t; scalar → 4.88× @32t; col → 3.37× @32t** (col wins least — the FPU `REDUCE_COL` datapath is
+already cheap). Below the crossover the single matmul-reduce is faster, so `dispatch` (row≥4, col≥8, scalar≥8)
+falls back and is **never slower than the library**. Accuracy: equal in fp32, lower error in bf16 (SFPU collapses
+columns in fp32 before one rounding).
+**Gist:** to reduce a wide 2-D block along one dim, don't fold it into the matmul-reduce — loop over the output
+tiles, and for each accumulate its input subset (`add_tiles(acc_to_dest)`, one DEST) then finalize on the SFPU
+(`sfpu_reduce` + `mul_unary_tile` 1/N). One DEST per output also sidesteps the `REDUCE_COL` DST/chunk limit. It's
+a **dispatched fast path, not a replacement**: it loses below the (dim-dependent) crossover, wins least on col,
+and the win is compute-only / single-core (most real reductions are data-movement-bound, where it won't show).
+The same `AccumulateViaAdd` datapath also (correctness-validated in the bench, not part of the perf table)
+handles **partial** (non-tile-aligned) row/col via a masked bcast-mul on the last tile, **streaming**
+(`WaitAndPopPerTile` — DST is the accumulator, ~2 tiles resident), and **cross-call accumulate** (a raw
+partial-sum CB tile folded into the pairwise add natively by parity — no `binary_dest_reuse` — finalized only on
+the last chunk).
+
 ## ⭐⭐⭐ T3 — [`tensix_all_reduce_ring_transport`](tensix_all_reduce_ring_transport/README.md)
 **Concepts:** neighbor semaphore cost and direction-sensitive NoC contention in serpentine rings.
 **Situation:** a reduce-and-forward ring is much slower when a rectangular group spans two rows.
