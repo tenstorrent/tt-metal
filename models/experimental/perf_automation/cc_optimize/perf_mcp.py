@@ -685,12 +685,12 @@ def _run_full_pipeline_ms():
         )
         sys.stderr.flush()
     if per_tokens:
-        return statistics.median(per_tokens), "trace", None
+        return statistics.median(per_tokens), "trace", None, decode_path
     if walls:
-        return statistics.median(walls), "eager", None
+        return statistics.median(walls), "eager", None, None
     if last_err:
-        return None, None, last_err
-    return None, None, "no TRACE_PER_TOKEN_MS or FORWARD_WALL_MS in output (workload did not run full-pipeline)"
+        return None, None, last_err, None
+    return None, None, "no TRACE_PER_TOKEN_MS or FORWARD_WALL_MS in output (workload did not run full-pipeline)", None
 
 
 _FULLPIPE_GATE_LOG = Path(tempfile.gettempdir()) / "perf_mcp_fullpipe_gate.log"
@@ -724,6 +724,20 @@ def _emit_fullpipe(result: dict) -> dict:
     return result
 
 
+_FULLPIPE_MODE_RANK = {"eager": 0, "trace": 1, "trace+1cq": 1, "trace+2cq": 2}
+
+
+def _fullpipe_mode(method: str, path: str | None) -> str:
+    if method != "trace":
+        return "eager"
+    p = (path or "").strip()
+    return p if p in ("trace+2cq", "trace+1cq") else "trace"
+
+
+def _mode_rank(mode: str) -> int:
+    return _FULLPIPE_MODE_RANK.get(mode, 1)
+
+
 @mcp.tool()
 def check_full_pipeline_latency() -> dict:
     """Measure end-to-end latency and gate it as a CONVERGENCE gate toward the target (a GPU number if
@@ -742,10 +756,11 @@ def check_full_pipeline_latency() -> dict:
     $TMPDIR/perf_mcp_fullpipe_gate.log so the gated end-to-end time is visible every iteration.
     Returns {status, full_pipeline_ms, method, metric, best_ms?, delta_pct?, target_ms?,
     gap_to_target_ms?, reached_target?}."""
-    ms, method, err = _run_full_pipeline_ms()
+    ms, method, err, path = _run_full_pipeline_ms()
     if ms is None:
         return _emit_fullpipe({"status": "crash", "error": err})
     metric = "trace_per_token_ms" if method == "trace" else "eager_full_pipeline_ms"
+    mode = _fullpipe_mode(method, path)
     tgt = _FULLPIPE_TARGET_MS if _FULLPIPE_TARGET_MS > 0 else None
     tgt_fields = {}
     if tgt is not None:
@@ -761,14 +776,32 @@ def check_full_pipeline_latency() -> dict:
         except Exception:  # noqa: BLE001
             base = {}
     best = float(base.get("full_pipeline_ms", 0.0) or 0.0)
-    if base.get("method", "eager") != method or best <= 0:
-        _FULLPIPE_BASELINE_PATH.write_text(json.dumps({"full_pipeline_ms": ms, "method": method}))
+    base_mode = base.get("mode") or _fullpipe_mode(base.get("method", "eager"), None)
+    if best > 0 and _mode_rank(mode) < _mode_rank(base_mode):
+        return _emit_fullpipe(
+            {
+                "status": "degraded",
+                "full_pipeline_ms": round(ms, 4),
+                "method": method,
+                "metric": metric,
+                "mode": mode,
+                "baseline_mode": base_mode,
+                "error": (
+                    "trace fidelity degraded %s -> %s at this bookend; before/after not comparable — "
+                    "fix the 2CQ path or revert (delta NOT banked, baseline NOT downgraded)" % (base_mode, mode)
+                ),
+                **tgt_fields,
+            }
+        )
+    if base_mode != mode or best <= 0:
+        _FULLPIPE_BASELINE_PATH.write_text(json.dumps({"full_pipeline_ms": ms, "method": method, "mode": mode}))
         return _emit_fullpipe(
             {
                 "status": "ok",
                 "full_pipeline_ms": round(ms, 4),
                 "method": method,
                 "metric": metric,
+                "mode": mode,
                 "note": "best-so-far recorded",
                 **tgt_fields,
             }
@@ -776,7 +809,7 @@ def check_full_pipeline_latency() -> dict:
     delta_pct = round((ms - best) / best * 100.0, 2) if best > 0 else None
     diverged = ms > best * (1.0 + _FULLPIPE_TOL)
     if ms < best:
-        _FULLPIPE_BASELINE_PATH.write_text(json.dumps({"full_pipeline_ms": ms, "method": method}))
+        _FULLPIPE_BASELINE_PATH.write_text(json.dumps({"full_pipeline_ms": ms, "method": method, "mode": mode}))
     return _emit_fullpipe(
         {
             "status": "diverged" if diverged else "ok",
@@ -785,6 +818,7 @@ def check_full_pipeline_latency() -> dict:
             "delta_pct": delta_pct,
             "method": method,
             "metric": metric,
+            "mode": mode,
             **tgt_fields,
         }
     )
@@ -896,6 +930,30 @@ def record_kernel_attempt(
 
 
 @mcp.tool()
+def _trace_budget_facts():
+    if os.environ.get("TT_PERF_TRACE", "1") != "1":
+        return None
+    try:
+        ncq = int(os.environ.get("TT_PERF_NUM_CQ", "2") or "2")
+    except ValueError:
+        ncq = 2
+    if ncq < 2:
+        return None
+    try:
+        tr = int(os.environ.get("TT_PERF_TRACE_REGION", "23887872") or "23887872")
+    except ValueError:
+        tr = 23887872
+    return {
+        "num_command_queues": ncq,
+        "trace_region_size": tr,
+        "note": (
+            "2-CQ + trace region are reserved at device-open. Size L1 shards/grids to leave headroom so "
+            "the candidate fits 2 command queues; filling all of L1 OOMs under 2 CQs and forces a "
+            "trace+1cq fallback — a fidelity downgrade check_full_pipeline_latency flags (delta not banked)."
+        ),
+    }
+
+
 def recall_knobs(op_class: str, grid: str = "", bound_by: str = "") -> dict:
     """REUSE-FIRST: return the tested/known knobs already catalogued for this op_class, so you
     APPLY/ADAPT a proven one BEFORE improvising from scratch. Routed deterministically from the
@@ -980,6 +1038,7 @@ def recall_knobs(op_class: str, grid: str = "", bound_by: str = "") -> dict:
             "narrowed_by": {k: v for k, v in q.items() if k != "op_class"},
             "known_knobs": out,
             "count": len(out),
+            "budget": _trace_budget_facts(),
         }
     except Exception as exc:  # noqa: BLE001 — advisory tool: never raise into the loop
         return {"op_class": op_class, "known_knobs": [], "count": 0, "error": str(exc)[-200:]}

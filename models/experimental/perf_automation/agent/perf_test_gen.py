@@ -10,9 +10,11 @@ demo (the reliable input), not something we require to pre-exist. Idempotent.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 # Structural reference handed to the LLM (the seamless bounded-perf pattern, generic-ized).
@@ -33,6 +35,10 @@ os.environ.setdefault("TT_PERF_LAYERS", "2")
 _PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"
 _DEV_PARAMS = {"l1_small_size": 24576}
 if _PERF_TRACE:
+    # Reserve the trace + 2-CQ budget at device-open, ONCE, for baseline and every candidate: the
+    # second queue and the trace region exist before any candidate runs, so trace+2CQ is the fixed
+    # measurement mode (never a per-candidate downgrade for lack of a queue). A device/config that
+    # genuinely can't open 2 CQs still degrades gracefully in measure_adapter; override with TT_PERF_NUM_CQ.
     _DEV_PARAMS["trace_region_size"] = int(os.environ.get("TT_PERF_TRACE_REGION", "23887872"))
     _DEV_PARAMS["num_command_queues"] = int(os.environ.get("TT_PERF_NUM_CQ", "2"))
 
@@ -162,6 +168,69 @@ def _claude(prompt: str, timeout_s: int = 600) -> str | None:
     return r.stdout if r.returncode == 0 else None
 
 
+_DEVICE_UNAVAILABLE = (
+    "no devices",
+    "no available devices",
+    "failed to open device",
+    "cannot open device",
+    "no such device",
+    "no module named 'ttnn'",
+    "no module named ttnn",
+)
+
+
+def _parse_trace_path(text: str) -> str | None:
+    m = re.search(r"TRACE_REPLAY_PATH=(\S+)", text or "")
+    return m.group(1) if m else None
+
+
+def _run_perf_node(node_abs: str, extra_env: dict, timeout_s: int = 2400):
+    env = dict(os.environ)
+    env["TT_PERF_TRACE"] = "1"
+    env.setdefault("TT_PERF_MAX_NEW_TOKENS", "4")
+    env.pop("TT_METAL_DEVICE_PROFILER", None)
+    env.update(extra_env)
+    cmd = [sys.executable, "-m", "pytest", "-o", "timeout=0", "-s", node_abs]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s, env=env)
+    except Exception as exc:  # noqa: BLE001
+        return None, f"run failed: {str(exc)[-300:]}"
+    return r.returncode, (r.stdout or "") + "\n" + (r.stderr or "")
+
+
+def _write_trace_caps(out_path: Path, caps: dict) -> None:
+    try:
+        (out_path.parent / (out_path.name + ".trace_caps.json")).write_text(json.dumps(caps, indent=2))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def validate_generated_perf_test(out_path: Path, task: str) -> tuple[str, str]:
+    node_abs = f"{out_path}::test_{task}_perf"
+    rc1, out1 = _run_perf_node(node_abs, {"TT_PERF_NUM_CQ": "1"})
+    if rc1 is None:
+        return "skip", out1
+    low = out1.lower()
+    if any(s in low for s in _DEVICE_UNAVAILABLE):
+        return "skip", "device/ttnn unavailable during generation-time validation"
+    has_marker = ("TRACE_PER_TOKEN_MS=" in out1) or ("FORWARD_WALL_MS=" in out1)
+    if rc1 != 0 or not has_marker:
+        return "invalid", "perf test did not run the full pipeline (no TRACE_PER_TOKEN_MS / FORWARD_WALL_MS marker)"
+    caps = {
+        "trace_1cq": "TRACE_PER_TOKEN_MS=" in out1,
+        "trace_1cq_path": _parse_trace_path(out1),
+        "trace_2cq": False,
+        "trace_2cq_path": None,
+    }
+    rc2, out2 = _run_perf_node(node_abs, {"TT_PERF_NUM_CQ": "2"})
+    if rc2 == 0 and "TRACE_PER_TOKEN_MS=" in out2:
+        path2 = _parse_trace_path(out2)
+        caps["trace_2cq_path"] = path2
+        caps["trace_2cq"] = path2 == "trace+2cq"
+    _write_trace_caps(out_path, caps)
+    return "ok", ""
+
+
 def generate_perf_test(
     model_root: str | Path,
     task: str,
@@ -171,6 +240,7 @@ def generate_perf_test(
     force: bool = False,
     source_abs: str | Path | None = None,
     source_kind: str = "demo",
+    validate: bool | None = None,
 ) -> str | None:
     """Write tests/e2e/test_<task>_perf.py by lifting build+run from a source — the WHOLE pipeline
     forward (prefill + a capped decode loop when the source has one). Returns the node id
@@ -309,6 +379,8 @@ def generate_perf_test(
         for k in ("max_new_tokens", "generate(", ".generate", "next_token", "decode_step", "for _ in range")
     )
     gen = runner or _claude
+    if validate is None:
+        validate = runner is None
     # retry so a transient bad/partial draft is recomputed rather than dropped; never reuse existing.
     for _attempt in range(3):
         content = _strip_fence(gen(prompt) or "")
@@ -324,5 +396,10 @@ def generate_perf_test(
             continue
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(content)
+        if validate:
+            verdict, reason = validate_generated_perf_test(out_path, task)
+            if verdict == "invalid":
+                print(f"[perf_test_gen] draft rejected (regenerating): {reason}", flush=True)
+                continue
         return node
     return None

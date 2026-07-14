@@ -13,8 +13,18 @@ DECODE CONTRACT (duck-typed on the built pipeline object):
                                           next id back into `state`. NO host reads (to_torch/.item()).
     decode_prefill(input_ids) -> state    OPTIONAL. Process the prompt once, return the initial cache/
                                           state. If absent, `state` starts as None (fixed-input loop).
-    decode_write_inputs(state) -> None    OPTIONAL. Stage the next step's inputs (issued on CQ1). Its
-                                          presence flips measure_adapter's auto mode into the 2CQ path.
+    decode_input_buffer(state) -> Tensor  OPTIONAL (preferred, model+hardware agnostic). Return the
+                                          PERSISTENT on-device input tensor that decode_step reads. The
+                                          adapter pins it and stages every step's write in-place into
+                                          THAT tensor on CQ1 (copy_host_to_device_tensor), so the address
+                                          the captured trace baked in never goes stale across candidates.
+                                          The pipeline owns the buffer (it alone knows the correct
+                                          shape/dtype/layout/sharding for this model on this device); the
+                                          adapter only pins + writes it, so one code path covers every
+                                          model and board. Its presence flips auto mode into 2CQ.
+    decode_write_inputs(state) -> None    OPTIONAL (fallback). Model-authored staging of the next step's
+                                          inputs on CQ1. Used only when decode_input_buffer is absent.
+                                          Also flips auto mode into 2CQ.
 
 A pipeline WITHOUT decode_step (repeat-prefill / host-argmax decode) raises AttributeError in setup;
 the perf test's guard then falls back to FORWARD_WALL_MS and the detector reports 'repeat_prefill'.
@@ -52,9 +62,31 @@ class PipelineDecodeAdapter:
             )
         prefill = getattr(self._pipe, "decode_prefill", None)
         self._state = prefill(self._prompt) if callable(prefill) else None
+        if self._bind_persistent_write(self._state):
+            return
         wi = getattr(self._pipe, "decode_write_inputs", None)
         if callable(wi):
             self.write_inputs = lambda: wi(self._state)
+
+    def _bind_persistent_write(self, state) -> bool:
+        buf_fn = getattr(self._pipe, "decode_input_buffer", None)
+        if not callable(buf_fn):
+            return False
+        try:
+            import ttnn
+
+            buf = buf_fn(state)
+            if buf is None:
+                return False
+            host_seed = ttnn.from_device(buf)
+
+            def _write():
+                ttnn.copy_host_to_device_tensor(host_seed, buf, cq_id=1)
+
+            self.write_inputs = _write
+            return True
+        except Exception:  # noqa: BLE001
+            return False
 
     def step(self):
         self._state = self._pipe.decode_step(self._state)
