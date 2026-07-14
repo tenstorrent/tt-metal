@@ -106,11 +106,12 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             auto gen1_noc = (gen1_proc == tt::tt_metal::DataMovementProcessor::RISCV_1)
                                 ? tt::tt_metal::NOC::RISCV_1_default
                                 : tt::tt_metal::NOC::RISCV_0_default;
-            experimental::DataMovementHardwareConfig dm_cfg{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{.processor = gen1_proc, .noc = gen1_noc},
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
-            };
+            experimental::DataMovementHardwareConfig dm_cfg;
+            if (is_quasar) {
+                dm_cfg = experimental::DataMovementGen2Config{};
+            } else {
+                dm_cfg = experimental::DataMovementGen1Config{.processor = gen1_proc, .noc = gen1_noc};
+            }
             kernel_specs.push_back(experimental::KernelSpec{
                 .unique_id = experimental::KernelSpecName{name},
                 .source = kernel_path_metal2,
@@ -126,12 +127,15 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         };
 
     const experimental::KernelSpecName COMPUTE_KERNEL_NAME{"wp_compute"};
+    experimental::ComputeHardwareConfig compute_config;
     if (is_quasar) {
         constexpr uint32_t kQuasarUserDmCores = 6;
         add_dm_kernel("wp_dm", kQuasarUserDmCores, std::nullopt);
+        compute_config = experimental::ComputeGen2Config{};
     } else {
         add_dm_kernel("wp_brisc", 1, tt::tt_metal::DataMovementProcessor::RISCV_0);
         add_dm_kernel("wp_ncrisc", 1, tt::tt_metal::DataMovementProcessor::RISCV_1);
+        compute_config = experimental::ComputeGen1Config{};
     }
     kernel_specs.push_back(experimental::KernelSpec{
         .unique_id = COMPUTE_KERNEL_NAME,
@@ -139,7 +143,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         // Quasar Tensix has 4 Neos so the compute kernel fans out across all of them; WH/BH has 1 TRISC group.
         .num_threads = is_quasar ? 4u : 1u,
         .runtime_arg_schema = {.common_runtime_arg_names = {"sync_flag_addr"}},
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = compute_config,
     });
     kernel_names.emplace_back(COMPUTE_KERNEL_NAME);
     params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
