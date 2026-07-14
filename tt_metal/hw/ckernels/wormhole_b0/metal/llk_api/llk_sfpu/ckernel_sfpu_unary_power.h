@@ -247,7 +247,6 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
 
     // Transform to z = (m - 1) / (m + 1)
     sfpi::vFloat m_plus_1 = m + 1.0f;  // t in [1.707, 2.414] since m in [sqrt(2)/2, sqrt(2)]
-    sfpi::vFloat m_minus_1 = m - 1.0f;
     // 1/t: initial guess 1.003f - 0.244f*t (linear interp on [1.7,2.4]), then Newton-Raphson y = y*(2 - t*y).
     sfpi::vFloat recip = 1.003f - 0.244f * m_plus_1;
     recip = recip * (2.0f - m_plus_1 * recip);  // 1st NR
@@ -256,7 +255,9 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
     // atanh(z) log series and pow*log2 multiply, is the floor keeping 2.5 at 4 ULP.
     // One more quadratically-convergent step drives 1/(m+1) to full fp32 precision.
     recip = recip * (2.0f - m_plus_1 * recip);  // 3rd NR for float32
-    sfpi::vFloat z = m_minus_1 * recip;
+    // z = (m-1)*recip written as a single fused multiply-add (m*recip - recip), one
+    // instruction instead of a separate (m-1) subtract plus a multiply.
+    sfpi::vFloat z = m * recip - recip;
 
     // Compute z**2 for polynomial evaluation
     sfpi::vFloat z2 = z * z;
