@@ -8,9 +8,8 @@
 
 namespace tt::tt_metal {
 
-
 HostTensor::HostTensor(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology) :
-    impl_(std::make_unique<HostTensorImpl>(std::move(buffer), std::move(spec), std::move(topology))) {}
+    PimplBase(std::in_place, std::move(buffer), std::move(spec), std::move(topology)) {}
 
 HostTensor HostTensor::from_buffer(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology) {
     return HostTensor(std::move(buffer), std::move(spec), std::move(topology));
@@ -26,41 +25,21 @@ HostTensor HostTensor::from_buffer(HostBuffer buffer, TensorSpec spec, TensorTop
     return HostTensor(std::move(distributed_buffer), std::move(spec), std::move(topology));
 }
 
-HostTensor::HostTensor(const HostTensor& other) :
-    impl_(other.impl_ ? std::make_unique<HostTensorImpl>(*other.impl_) : nullptr) {}
+HostTensor::HostTensor(const HostTensor& other) = default;
 
-HostTensor& HostTensor::operator=(const HostTensor& other) {
-    if (this == &other) {
-        return *this;
-    }
-    impl_ = other.impl_ ? std::make_unique<HostTensorImpl>(*other.impl_) : nullptr;
-    return *this;
-}
+HostTensor& HostTensor::operator=(const HostTensor& other) = default;
 
-HostTensor::HostTensor(HostTensor&& other) noexcept : impl_(std::move(other.impl_)) {}
+HostTensor::HostTensor(HostTensor&& other) noexcept = default;
 
-HostTensor& HostTensor::operator=(HostTensor&& other) noexcept {
-    impl_ = std::move(other.impl_);
-    return *this;
-}
+HostTensor& HostTensor::operator=(HostTensor&& other) noexcept = default;
 
 HostTensor::~HostTensor() = default;
-
-HostTensorImpl& HostTensor::impl() {
-    TT_FATAL(impl_ != nullptr, "HostTensor is in a moved-from state.");
-    return *impl_;
-}
-
-const HostTensorImpl& HostTensor::impl() const {
-    TT_FATAL(impl_ != nullptr, "HostTensor is in a moved-from state.");
-    return *impl_;
-}
 
 const TensorSpec& HostTensor::tensor_spec() const { return impl().spec(); }
 
 const TensorTopology& HostTensor::tensor_topology() const { return impl().topology(); }
 
-bool HostTensor::is_valueless_after_move() const { return impl_ == nullptr; }
+bool HostTensor::is_valueless_after_move() const { return valueless_after_move(); }
 
 const DistributedHostBuffer& HostTensor::buffer() const { return impl().buffer(); }
 
