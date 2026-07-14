@@ -13,12 +13,47 @@ Usage:
 import os
 
 import ttnn
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.assistant.model import Gemma4AssistantModel
 from models.demos.gemma4.tt.ccl import CCLManager
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4AssistantArgs, Gemma4ModelArgs
 from models.demos.gemma4.tt.precision import Gemma4Precision
+
+# Gemma4-31B all-user KV-cache pool cap, on the configs it is validated for:
+# WH-T3K (8 devices) and BH-QB2/P150x4 (4 devices). With hybrid KV cache groups
+# off (see GEMMA4_HYBRID_KV_CACHE_GROUPS in generator_vllm.py) every layer
+# allocates a full-length KV buffer, so the generic ~131K default pool OOMs DRAM;
+# 32768 is validated to fit. Distinct from --max_model_len: this is the DRAM lever.
+#
+# DELETE this cap once hybrid KV cache groups become the default — the sliding
+# layers then allocate only their window and the generic default fits. Tracked
+# for removal in tt-metal #49745 (the enablement blocker is documented on
+# Gemma4ForCausalLM). It lives here, not in a CI env var, because the limit holds
+# on every run of these configs, not just in CI.
+_GEMMA4_31B_MAX_TOKENS_ALL_USERS = 32_768
+
+
+def gemma4_max_tokens_all_users(model_name: str, num_devices: int, tt_data_parallel: int):
+    """Gemma4-specific all-user KV-cache token cap, or None if no cap applies.
+
+    Kept vllm-free (and out of ``generator_vllm``) so it is exercised by the
+    Gemma-4 models-unit-tests pipeline, which has no vllm. ``None`` means the
+    caller should fall back to the generic default.
+    """
+    # GEMMA4_MAX_TOKENS_ALL_USERS lets tt-inference-server (or a benchmark) retune
+    # the pool per deployment without a code change.
+    override = os.environ.get("GEMMA4_MAX_TOKENS_ALL_USERS")
+    if override:
+        return int(override)
+
+    devices_per_dp_cache = num_devices // tt_data_parallel
+    if "gemma-4-31B" in model_name and (
+        (devices_per_dp_cache == 8 and is_wormhole_b0()) or (devices_per_dp_cache == 4 and is_blackhole())
+    ):
+        return _GEMMA4_31B_MAX_TOKENS_ALL_USERS
+    return None
 
 
 def create_tt_model(

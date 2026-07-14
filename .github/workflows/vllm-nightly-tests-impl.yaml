@@ -569,27 +569,6 @@ jobs:
             export TT_MM_THROTTLE_PERF="${{ matrix.test-group.tt_mm_throttle_perf }}"
           fi
 
-          # Gemma4 trace-region tuning for this benchmark (random-input-len 100,
-          # single-stream max_num_seqs=1):
-          #   * The prefill trace bucket sweep (128..4096) is the dominant trace
-          #     consumer — the 4096 bucket alone is ~0.5 GB on 26B-A4B — yet a
-          #     100-token prompt only ever replays the 128 bucket. Limit it so the
-          #     trace region stays small and startup is fast.
-          #   * Decode warmup captures one resident trace per sampling-param
-          #     permutation; the full penalties×logprobs sweep is unused by the
-          #     default-sampling benchmark. Warm only plain/greedy/None.
-          # Both shrink the required trace_region_size (validated to fit <200 MB
-          # on 26B-A4B P150x4, vs >1 GB unbounded).
-          # (The 31B all-user KV-pool cap that used to be exported here now lives
-          # in Gemma4ForCausalLM.get_max_tokens_all_users — it is a model/device
-          # constraint, not a CI setting. See tt-metal #49745.)
-          case "$HF_MODEL" in
-            google/gemma-4-*)
-              export TT_LEAN_DECODE_WARMUP=1
-              export GEMMA4_TRACE_PREFILL_SEQ_LENS=128
-              ;;
-          esac
-
           # Build the VLLM server arguments array
           declare -a VLLM_SERVER_ARGS
           VLLM_SERVER_ARGS+=(--model "$HF_MODEL")

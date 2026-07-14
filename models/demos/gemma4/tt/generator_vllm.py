@@ -7,8 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_blackhole, is_wormhole_b0
-from models.demos.gemma4.tt.common import create_tt_model
+from models.demos.gemma4.tt.common import create_tt_model, gemma4_max_tokens_all_users
 from models.demos.gemma4.tt.generator import ChunkedPrefillPageTableGuardMixin
 from models.demos.gemma4.tt.generator_trace import (
     maybe_disable_pli_prefill_trace,
@@ -170,33 +169,9 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         tt_data_parallel: int = 1,
         **kwargs,
     ) -> int:
-        # The all-user KV-cache pool size is a per-device / per-model tuning knob,
-        # not a model constant: with hybrid KV groups disabled (the default, see
-        # ``_HYBRID_KV_CACHE_GROUPS_ENABLED``) every layer allocates a full-length
-        # KV buffer, so the default ~131K pool OOMs DRAM on the larger configs.
-        # The value that fits is hardware-specific, so it belongs here alongside
-        # the model code (mirrors the per-config rules the other model classes
-        # keep in tt_transformers ``get_max_tokens_all_users``) rather than in a
-        # CI/deploy env var. ``GEMMA4_MAX_TOKENS_ALL_USERS`` remains an override so
-        # tt-inference-server (or a benchmark) can retune per deployment.
-        override = os.environ.get("GEMMA4_MAX_TOKENS_ALL_USERS")
-        if override:
-            return int(override)
-
-        devices_per_dp_cache = num_devices // tt_data_parallel
-
-        # Gemma4-31B: WH-T3K (8 devices) and BH-QB2/P150x4 (4 devices). With hybrid
-        # KV groups off (no true vLLM chunked prefill yet), every layer allocates a
-        # full-length KV buffer and the default pool OOMs DRAM; 32768 is validated
-        # to fit. The cap is the real DRAM lever, distinct from ``--max_model_len``.
-        # See tt-metal #49745 / #49257 / #49083. Lifts automatically once hybrid KV
-        # groups can be enabled (the sliding layers then allocate only their window).
-        if (
-            not cls._HYBRID_KV_CACHE_GROUPS_ENABLED
-            and "gemma-4-31B" in model_name
-            and ((devices_per_dp_cache == 8 and is_wormhole_b0()) or (devices_per_dp_cache == 4 and is_blackhole()))
-        ):
-            return 32_768
+        capped = gemma4_max_tokens_all_users(model_name, num_devices, tt_data_parallel)
+        if capped is not None:
+            return capped
 
         return super().get_max_tokens_all_users(
             model_name=model_name,
