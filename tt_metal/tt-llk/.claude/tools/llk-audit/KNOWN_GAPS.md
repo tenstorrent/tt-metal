@@ -188,6 +188,25 @@ config register, so it would draw a spurious `NO_UNIT_DRAIN`.
   reconfig fn is *also* `mmio_ptr`, so blunt removal of `mmio_ptr` creates a false-negative. A correct
   fix must distinguish mop- vs cfg-provenance `mmio_ptr`.
 
+### X4 — `noc_op_of` does not recall `DataflowBuffer::write_barrier(const Noc&)` (Metal 2.0 per-buffer flush)
+`noc_op_of` recognizes a NoC write-flush only as a free function (`noc_async_write_barrier`/…) or a
+`Noc`-method (gated on `_NOC_RECV_TYPES = ("Noc",)`). The Metal 2.0 `DataflowBuffer` object exposes a
+per-buffer flush `write_barrier(const Noc&)` (`tt_metal/hw/inc/api/dataflow/dataflow_buffer.h:226`) whose
+callee name (`write_barrier`) is NOT in `NOC_METHOD_FLUSH` and whose `recv_type` (`DataflowBuffer`) is NOT
+in `_NOC_RECV_TYPES` — so empirically `noc_op_of(...) == None`. noc-sync / noc-atomic-exit therefore do
+not see `dfb.write_barrier(noc)` as a flush. (Sibling of the F3 cb-sync gap on the SAME object, different
+gate — the credit quartet is now recalled via `_CB_RECV_TYPES`; this is the NoC-flush twin.)
+- **Risk:** FALSE-FLAG — a credit/atomic preceded only by `dfb.write_barrier(noc)` would over-report
+  `NOC_SIGNAL_NO_FLUSH` / atomic-in-flight (opposite direction to the cap-reductions).
+- **Live today:** none — 0 `dfb.write_barrier(` call sites in ttnn/tt_metal (grep); the header itself
+  (dataflow_buffer.h:225) redirects callers to `noc.async_write_barrier<…>(…)`, which IS recalled.
+  Kernel-tier only; empty over tt-llk.
+- **Fix:** recognize `write_barrier` as a flush in `noc_op_of` when `recv_type ∈ {DataflowBuffer,
+  DFBInterface}` (mirror the `Noc`-method flush branch, gated on the receiver type); widen the noc-sync
+  skill grep in step.
+- **Fix hazard:** `write_barrier` is a GENERIC name — it must be gated on the DataflowBuffer/DFBInterface
+  recv_type, NOT added to `NOC_METHOD_FLUSH` globally, or it would over-match unrelated `.write_barrier()`.
+
 ## How to add an entry
 Append a `### <id> — <one-line title>` block with **Risk** (CAP-REDUCTION / FALSE-FLAG), **Live
 today**, **Fix**, and any **Fix hazard**. Link the relevant checker `blind_spots` rather than
