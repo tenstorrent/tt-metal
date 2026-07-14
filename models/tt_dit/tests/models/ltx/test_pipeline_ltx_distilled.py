@@ -1315,3 +1315,24 @@ def test_kf_fringe_repro(
         + ",".join(f"{jerk[i]:.1f}" for i in range(max(0, mid_pixel - 2), min(nj, mid_pixel + 11))),
         flush=True,
     )
+
+    # HARD GATE — pinned-frame degeneracy. A softened append-token anchor leaves the held reference
+    # mostly noise, and the frames that converge on it decode to a high-frequency checkerboard. That
+    # blows up the Laplacian at the pinned frames while KF_FRINGE stays ~1.0x (it measures chromatic
+    # fringing, not structure) — so fringe alone scored a destroyed 720p clip as clean and shipped it.
+    # Ratio vs the clip's own clean frames: healthy ~1.0-1.15x, checkerboard ~2.9x.
+    def _sharpness(i):
+        f = lum[i]
+        return float(np.abs(4.0 * f[1:-1, 1:-1] - f[:-2, 1:-1] - f[2:, 1:-1] - f[1:-1, :-2] - f[1:-1, 2:]).mean())
+
+    clean = [i for i in (20, 40, 60, 90, 120) if i < nfr]
+    base_sharp = float(np.mean([_sharpness(i) for i in clean]))
+    for pin in (mid_pixel, last_pixel):
+        if pin >= nfr:
+            continue
+        ratio = _sharpness(pin) / base_sharp
+        print(f"KF_PIN_STRUCTURE f{pin}: {ratio:.2f}x clean-frame sharpness (checkerboard ~2.9x)", flush=True)
+        assert ratio < 1.6, (
+            f"pinned frame f{pin} is {ratio:.2f}x the clean-frame sharpness — the pinned frame decoded to "
+            f"high-frequency garbage (anchor reference degenerate), not a real image"
+        )
