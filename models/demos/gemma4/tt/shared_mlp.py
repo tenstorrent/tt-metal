@@ -135,6 +135,16 @@ class SharedMLP:
         self.padded_split = ((split + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
         self._intermediate_pad = self.padded_split - split if tp > 1 else 0
 
+        # The per-device intermediate width (padded_split) is baked into the
+        # gate_up/down weight shapes. ``ttnn.as_tensor`` keys its on-disk cache
+        # only by filename + dtype + layout — NOT by shape — so a stale cache
+        # written before the tile-padding change (unpadded K, e.g. 528 for tp=4)
+        # would silently reload and mismatch the padded runtime split (544),
+        # tripping the down_proj matmul's a[-1]==b[-2] check. Tag the filename
+        # with the padded width so any change to the padding/dimension forces a
+        # cache miss and a correct rebuild.
+        shape_suffix = f"_i{self.padded_split}" if tp > 1 else ""
+
         # Tag the cache filenames with the weight dtype so that flipping a
         # SharedMLP weight's dtype (e.g. bf16 → bfp8 for DRAM-pressure relief)
         # doesn't collide with a previously-cached file that holds the same
@@ -193,7 +203,9 @@ class SharedMLP:
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=col_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_up_proj.weight{tp_suffix}{dtype_suffix}"),
+            cache_file_name=get_cache_file_name(
+                tensor_cache_path, f"gate_up_proj.weight{tp_suffix}{shape_suffix}{dtype_suffix}"
+            ),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         # down: row-parallel (shard input dim, allreduce after)
@@ -203,7 +215,9 @@ class SharedMLP:
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=row_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, f"down_proj.weight{tp_suffix}{dtype_suffix}"),
+            cache_file_name=get_cache_file_name(
+                tensor_cache_path, f"down_proj.weight{tp_suffix}{shape_suffix}{dtype_suffix}"
+            ),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
