@@ -347,9 +347,10 @@ def test_zone_id_budget():
     collisions = {zid: s for zid, s in id_to_strings.items() if len(s) > 1}
     assert not collisions, f"zone id collisions detected: {collisions}"
 
-    # Cross-TU: the run spans many translation units (per-RISC firmware + kernels), each its own
-    # file_id partition -- exercises structural ids across >=10 TUs.
-    assert len(ids_per_file) >= 10, f"expected zones from >=10 translation units, got {len(ids_per_file)}"
+    # Cross-TU: the run spans multiple translation units (per-RISC firmware + the kernel), each its own
+    # file_id partition -- exercises structural ids across distinct TUs. The floor of 6 (>=5 Tensix
+    # firmware TUs + the kernel TU) is guaranteed on any arch; real runs typically span more.
+    assert len(ids_per_file) >= 6, f"expected zones from several translation units, got {len(ids_per_file)}"
 
     # One TU (the zone_budget kernel) holds ~120 zones -- confirms high per-TU counts really work,
     # not just that the run did not crash.
