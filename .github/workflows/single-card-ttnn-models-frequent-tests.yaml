@@ -82,9 +82,9 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       tracy: ${{ inputs.enable-ops-recording || false }}
-  fd-nightly:
+  single-card-ttnn-models-frequent-tests:
     needs: [check-harbor, build-artifact]
-    uses: ./.github/workflows/fast-dispatch-full-regressions-and-models-impl.yaml
+    uses: ./.github/workflows/single-card-ttnn-models-frequent-tests-impl.yaml
     secrets: inherit
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
