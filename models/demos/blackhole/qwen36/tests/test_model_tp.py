@@ -178,23 +178,14 @@ def test_model_tp_long_prefill_traced(mesh_device, T, reset_seeds, ensure_gc):
 
 @parametrize_mesh_tp()
 def test_prefill_warmup_no_recompile(mesh_device, reset_seeds, ensure_gc):
-    """capture_prefill_trace_chunked must pre-compile every program a request-time masked-bucket
-    prefill can need, so nothing compiles after the trace is parked (a post-park compile clobbers
-    the trace -> second-request hang, #48536).
+    """After capture_prefill_trace_chunked parks the trace, a request-time masked-bucket prefill
+    must reuse warmed programs only -- a post-park compile clobbers the trace (#48536).
 
-    warmup_prefill_masked_buckets runs a full forward only for the distinct (bucket, is_full)
-    programs and warms the per-fill-width slice + paged_fill_cache directly via
-    _warmup_paged_fill_widths (no full forward). This guards that split: after capture, sweep
-    prefill_masked_bucket across EVERY fill width a request can hit (1..32, spanning mask buckets
-    128/256/512/1024/2048), and assert the program cache does not grow. A sample would not suffice:
-    each fill width has its own paged_fill_cache program-cache key, so a warm-loop regression that
-    skips one width is only caught if that exact width is exercised here. If a future
-    width-dependent op is added to the attention fill sub-path without warming it, this fails here
-    (op-named, via set_program_cache_misses_allowed) instead of hanging in serving.
-
-    8 layers is enough: the warmed programs are layer-count-independent (the fill warm keys off
-    _paged_kv_caches[0]), and layers 0..7 include the full-attention layers (idx 3, 7) that own
-    the paged KV fill path.
+    paged_fill_cache is keyed per fill width, so sweep EVERY width (1..32, across mask buckets
+    128..2048) with program-cache misses disallowed and assert the cache does not grow. A sample
+    would miss a regression that skips one width in _warmup_paged_fill_widths; here it fails
+    op-named instead of hanging in serving. 8 layers suffices: warmed programs are layer-independent
+    and layers 0..7 include the full-attention layers (3, 7) that own the fill path.
     """
     model = Qwen36Model.from_pretrained(mesh_device, max_batch_size=1, max_seq_len=2048, n_layers=8)
     args = model.args
@@ -212,9 +203,8 @@ def test_prefill_warmup_no_recompile(mesh_device, reset_seeds, ensure_gc):
     before = mesh_device.num_program_cache_entries()
     mesh_device.set_program_cache_misses_allowed(False)
     try:
-        # Sweep every fill width 1..32 (one mid-block length per width, so ceil(len/64) == width
-        # and the length stays masked below its bucket): actual_len = (width-1)*64 + 33 lands in
-        # width's block and auto-selects the smallest covering mask bucket (128/256/512/1024/2048).
+        # One length per fill width 1..32: (width-1)*64 + 33 lands mid-block, so ceil(len/64) ==
+        # width and the length stays masked below its auto-selected mask bucket.
         block_size = 64
         for width in range(1, 2048 // block_size + 1):
             actual_len = (width - 1) * block_size + 33
@@ -227,8 +217,8 @@ def test_prefill_warmup_no_recompile(mesh_device, reset_seeds, ensure_gc):
 
     logger.info(f"prefill-warmup no-recompile: program cache before={before} after={after} delta={after - before}")
     assert after == before, (
-        f"{after - before} program(s) compiled by prefill_masked_bucket after the trace was parked -> "
-        f"warmup_prefill_masked_buckets missed a fill-width-dependent program (add it to "
-        f"_warmup_paged_fill_widths); at request time this would clobber the parked trace (hang)."
+        f"{after - before} program(s) compiled after the trace was parked -> warmup missed a "
+        f"fill-width-dependent program (add it to _warmup_paged_fill_widths); at request time this "
+        f"clobbers the parked trace (hang)."
     )
     logger.info("PASSED: masked-bucket warmup pre-compiles every fill width (no post-capture recompile)")

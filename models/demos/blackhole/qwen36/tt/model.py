@@ -1047,25 +1047,17 @@ class Qwen36Model:
         return ttnn.reshape(logits, (1, 1, logits.shape[-1]))
 
     def warmup_prefill_masked_buckets(self, page_table, buckets=None):
-        """Compile every masked-bucket prefill program up front so short prompts never compile
-        at request time (which clobbers parked decode/chunk traces -> second-request hang, #48536).
+        """Compile every masked-bucket prefill program up front, so a request never compiles after
+        a trace is parked (a post-park compile clobbers the trace -> second-request hang, #48536).
 
-        Two kinds of program are compiled here:
-          * BUCKET-keyed programs (SDPA / GDN mask / logit-select / norm / MLP-or-MoE): one per
-            (bucket, is_full_bucket). Warmed with a real dummy forward at each bucket, once masked
-            (actual_len < bucket) and once no-mask (actual_len == bucket).
-          * FILL-WIDTH-keyed program (paged_fill_cache): its program hash includes the fill tensor
-            shape (seq = fill_blocks * block_size), so it recompiles per fill width. A tail/short
-            prompt can land on ANY width in 1..ceil(max_bucket/block_size); each is warmed DIRECTLY
-            by _warmup_paged_fill_widths, without a full-model forward.
+        Two program kinds:
+          * bucket-keyed (SDPA / GDN mask / norm / MLP-or-MoE): one per (bucket, is_full). Warmed
+            by a dummy forward at each bucket, once masked (actual_len < bucket) and once full (==).
+          * fill-width-keyed (paged_fill_cache): hashes on the fill shape, so it recompiles per
+            fill width. Warmed directly by _warmup_paged_fill_widths (no full forward).
 
-        The direct fill warm replaces an older sweep that re-ran a whole all-layer forward once per
-        fill width purely to reach paged_fill_cache — at block_size 64 that was ~67 forwards (the
-        33 at the 2048 bucket dominated capture).
-
-        MUST run while the GDN is in serving state mode and BEFORE any trace is parked;
-        capture_prefill_trace_chunked calls this just before begin_trace_capture. page_table must
-        cover the largest bucket."""
+        MUST run in GDN serving state, before any trace is parked (capture_prefill_trace_chunked
+        calls this just before begin_trace_capture). page_table must cover the largest bucket."""
         if buckets is None:
             buckets = self._PREFILL_MASK_BUCKETS
         block_size = get_block_size(self._paged_kv_caches)
@@ -1086,19 +1078,14 @@ class Qwen36Model:
         ttnn.synchronize_device(self.device)
 
     def _warmup_paged_fill_widths(self, page_table, buckets, block_size):
-        """Compile the per-fill-width programs in TPAttention.forward_prefill_paged's KV-fill
-        sub-path WITHOUT a full-model forward. Both the `ttnn.slice` that cuts k/v down to the
-        real block span AND `ttnn.experimental.paged_fill_cache` hash on the fill tensor shape
-        (seq = fill_blocks * block_size), so each recompiles per width; a real short prompt / tail
-        at an un-warmed width would compile after the trace is parked and clobber it (hang).
+        """Warm the per-fill-width programs in TPAttention.forward_prefill_paged's KV-fill sub-path
+        (ttnn.slice + paged_fill_cache) without a full-model forward. Both hash on the fill shape
+        (seq = fill_blocks * block_size), so each width is a fresh program; an un-warmed width would
+        compile after the trace is parked and clobber it (hang).
 
-        Reproduce the exact sub-path — slice a full [1, n_local_kv_heads, bucket, head_dim] bf16
-        TILE DRAM tensor to [.., page_len, ..] then paged_fill_cache into the first attention
-        layer's cache — for every (bucket, fill_width) a request can hit. The 40-layer body is
-        NOT run: these ops are shape-keyed, so warming them once serves every layer, and this is
-        far cheaper than the legacy per-width all-layer forward. batch_idx is runtime-only (out of
-        the hash). This must cover EVERY fill-width-dependent op in the fill sub-path — verify after
-        changes with set_program_cache_misses_allowed(False) + a prefill width sweep after capture."""
+        The ops are shape-keyed, so warming one layer's cache serves every layer -- far cheaper than
+        the old per-width all-layer forward. Cover EVERY fill-width-dependent op here; a new one is
+        caught by test_prefill_warmup_no_recompile (width sweep under misses-disallowed)."""
         if not self._paged_kv_caches:
             return
         k_cache, v_cache = self._paged_kv_caches[0]
