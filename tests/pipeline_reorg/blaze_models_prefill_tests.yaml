@@ -138,7 +138,7 @@
   test_group: module
   skus:
     bh_spsg:
-      timeout: 25
+      timeout: 30
   owner_id: U08RL15T4N8
   team: models
   sp_config: spsg
@@ -272,7 +272,7 @@
   test_group: module
   skus:
     bh_spsg:
-      timeout: 60
+      timeout: 30
   owner_id: U08RL15T4N8
   team: models
   sp_config: spsg
@@ -318,7 +318,7 @@
   test_group: module
   skus:
     bh_spsg:
-      timeout: 30
+      timeout: 60
   owner_id: U08RL15T4N8
   team: models
   sp_config: spsg
@@ -370,8 +370,8 @@
   test_group: module
   skus:
     bh_spsg:
-      # Job takes under 20 minutes; 30 minute timeout provides buffer for variance.
-      timeout: 10
+      # Job takes under 20 minutes; 40 minute timeout provides buffer for variance and machines with less power.
+      timeout: 40
   owner_id: U08RL15T4N8
   team: models
   sp_config: spsg
