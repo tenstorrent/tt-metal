@@ -53,11 +53,18 @@ Config knobs (all in tiles / slice counts): `k_slices` (Pk, split-K depth), `n_s
 - Blackhole only; `Mt = ceil(M/32)` in 1..8 is the tuned range (works beyond, less optimal).
 - bf16 in/out, HiFi2, fp32 accumulation. No bias / activation / transpose / fusion / batching.
 - `in1` must be DRAM width-shardable across 8 banks (device must expose ≥ 8 DRAM banks).
-- **Non-divisible dims**: currently handled by padding the inputs to bank alignment (K→mult-of-8 tiles,
-  N→mult-of-8 tiles) with zeros — correct (PCC ≥ 0.999) but reads the pad tiles. The efficient
-  **balanced floor/ceil tail** (read only valid tiles, local zero-fill; recovers the ~5% padding-waste
-  gap measured on the non-divisible oracle shape) is the main planned follow-up. The planner already
-  computes per-core valid extents (`CorePlan.valid_k/valid_m/valid_n`) for this.
+- **Non-divisible dims — balanced tails (implemented):** pass **logical** `M×K` and `K×N` tensors (no
+  manual padding); output is logical `M×N`. The planner assigns balanced floor/ceil ownership
+  (`CorePlan.k_start/valid_k`, `m_start/valid_m`, `n_start/valid_n`) and separates physical strides
+  (from the tensor layout) from schedule capacities (uniform kernel blocks). The kernels read **only
+  valid tiles** — the in1 reader skips pad-K rows and wholly-pad-N subblocks (no DRAM read); the writer
+  zeros in0's small K/M tail (so `0×garbage=0` kills the K-tail term) and writes only `valid_m×valid_n`
+  output tiles. No wholly-padded tile is ever read or written. Correct for all tested corners
+  (Kt%Pk, Nt%8, Mt%Sm, fully sub-tile element dims), PCC ≥ 0.999.
+  - Effective BW on a non-divisible N is bounded by **8-bank quantization**: N shards as `ceil(Nt/8)`
+    tiles per bank, so the fully-loaded banks set the wall-clock. For Nt=145 the ceiling is
+    `145/152 ≈ 95%` of delivered; balanced tails remove the pad DRAM traffic but cannot move that
+    structural ceiling (the imbalance is across banks, and reader==consumer fixes each bank).
 
 ## Tests
 

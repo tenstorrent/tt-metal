@@ -116,37 +116,39 @@ def test_regime_a_matmul_column_dependent_layout(device):
     assert_with_pcc(ref, got.float(), 0.999)
 
 
-@pytest.mark.skipif(not is_blackhole(), reason="Regime-A matmul is Blackhole-only")
-def test_regime_a_matmul_nondivisible(device):
-    # Kt=190, Nt=145 (neither 8-tile-aligned). v1 correctness path: the caller pads in0's K and
-    # in1's K/N up to bank alignment (8 tiles) with zeros; the zero-pad K contributes nothing and the
-    # pad-N output columns are sliced off. (Balanced floor/ceil tails to avoid the expanded pad reads
-    # are the deferred efficiency step.)
-    import torch.nn.functional as F
-
-    M, K, N, Ns, Pk, Sm, kb, nsb = 32, 6080, 4640, 1, 12, 1, 2, 1
-    TILE = 32
-
-    def rup(x, y):
-        return ((x + y - 1) // y) * y
-
-    K_pad = rup((K + TILE - 1) // TILE, 8) * TILE  # 6144
-    N_pad = rup((N + TILE - 1) // TILE, 8) * TILE  # 4864
-
+def _run_regime_a_auto(device, M, K, N, Ns=None, Pk=None, Sm=None, kb=None, nsb=None, pcc=0.999):
+    # Balanced-tail path: LOGICAL M×K and K×N tensors (no manual padding). config=None auto-selects
+    # unless a manual config is given. Output is logical M×N.
     torch.manual_seed(0)
-    torch_in0 = torch.randn(1, 1, M, K, dtype=torch.bfloat16)
-    torch_in1 = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
-    torch_ref = (torch_in0.float() @ torch_in1.float())[0, 0]
+    t0 = torch.randn(1, 1, M, K, dtype=torch.bfloat16)
+    t1 = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
+    ref = (t0.float() @ t1.float())[0, 0]
+    in0 = ttnn.from_torch(t0, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    wcfg = ttnn.create_regime_a_weight_memory_config(list(t1.shape), ttnn.bfloat16, device)
+    in1 = ttnn.from_torch(t1, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=wcfg)
+    cfg = None
+    if Pk is not None:
+        cfg = ttnn.RegimeAMatmulConfig(k_slices=Pk, n_slices=Ns, m_slices=Sm, k_block_tiles=kb, n_subblock_tiles=nsb)
+    out = ttnn.experimental.regime_a_matmul(in0, in1, config=cfg)
+    got = ttnn.to_torch(ttnn.from_device(out))[0, 0]
+    assert tuple(got.shape) == tuple(ref.shape), f"shape {tuple(got.shape)} != {tuple(ref.shape)}"
+    assert_with_pcc(ref, got.float(), pcc)
 
-    in0_pad = F.pad(torch_in0, (0, K_pad - K))  # pad K (last dim of activation)
-    in1_pad = F.pad(torch_in1, (0, N_pad - N, 0, K_pad - K))  # pad N then K
 
-    in0 = ttnn.from_torch(in0_pad, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
-    wcfg = ttnn.create_regime_a_weight_memory_config([1, 1, K_pad, N_pad], ttnn.bfloat16, device)
-    in1 = ttnn.from_torch(in1_pad, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=wcfg)
+# Balanced-tail corner cases (LOGICAL inputs, config=None auto-select). Covers the BT-4 matrix:
+# Kt%Pk!=0 / valid_k%kb!=0 (6080=190t), Nt%8!=0 (4640=145t), Mt%Sm!=0 (M=96 Mt=3),
+# non-tile-aligned element dims (48/6100/4600), and combinations.
+NONDIV = [
+    ("kt_not_div", 32, 6080, 4608),  # Kt=190 not divisible by Pk (balanced K tails, valid_k%kb!=0)
+    ("nt_not_8", 32, 6144, 4640),  # Nt=145 not multiple of 8 (bank-7 N tail)
+    ("kt_and_nt", 32, 6080, 4640),  # both
+    ("mt_not_div_sm", 96, 6144, 4608),  # Mt=3 (M-split tail when Sm>1 is chosen)
+    ("subtile_dims", 48, 6100, 4600),  # none of M/K/N tile-aligned (sub-32 tail elements)
+    ("mt2_nondiv", 80, 6080, 4640),  # M=80 (Mt=3, sub-tile), Kt=190, Nt=145
+]
 
-    config = ttnn.RegimeAMatmulConfig(k_slices=Pk, n_slices=Ns, m_slices=Sm, k_block_tiles=kb, n_subblock_tiles=nsb)
-    out = ttnn.experimental.regime_a_matmul(in0, in1, config=config)
-    out_torch = ttnn.to_torch(ttnn.from_device(out))[0, 0][:M, :N]  # slice valid region
 
-    assert_with_pcc(torch_ref, out_torch.float(), 0.999)
+@pytest.mark.skipif(not is_blackhole(), reason="Regime-A matmul is Blackhole-only")
+@pytest.mark.parametrize("label,M,K,N", NONDIV, ids=[c[0] for c in NONDIV])
+def test_regime_a_matmul_balanced_tails(device, label, M, K, N):
+    _run_regime_a_auto(device, M, K, N)

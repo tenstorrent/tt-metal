@@ -123,16 +123,16 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     // ---- Kernels ----
     // in1 reader == consumer. compile args (in1_reader.cpp order). No TensorAccessorArgs.
     std::vector<uint32_t> rct = {
-        kb,              // 0 K_block
-        geo.N_sub,       // 1 N_block
-        geo.W,           // 2 W
-        geo.G,           // 3 G (=8)
-        kTileBytesBf16,  // 4 tile_bytes
-        geo.N_bpc,       // 5 N_bpc
-        geo.N_band_s,    // 6 N_band
-        in1valid_sem,    // 7
-        in1ready_sem,    // 8
-        0u};             // 9 in1_mcast (0 for v1: unicast forward)
+        kb,                      // 0 K_block
+        geo.N_sub,               // 1 N_block
+        geo.W,                   // 2 W
+        geo.G,                   // 3 G (=8)
+        kTileBytesBf16,          // 4 tile_bytes
+        geo.N_bpc,               // 5 N_bpc
+        geo.in1_shard_stride_n,  // 6 in1_shard_stride_n (physical per-bank width)
+        in1valid_sem,            // 7
+        in1ready_sem,            // 8
+        0u};                     // 9 in1_mcast (0 for v1: unicast forward)
 
     auto mk = [&](const char* src,
                   const CoreRangeSet& g,
@@ -147,13 +147,13 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
 
     // writer compile args (in0_ring_reduce_writer.cpp order). TensorAccessorArgs(in0) then (out).
     std::vector<uint32_t> wct = {
-        geo.M_block,           // 0
+        geo.M_block_capacity,  // 0
         kb,                    // 1 K_block
         geo.N_sub,             // 2 N_block
         geo.K_num_blocks_eff,  // 3 K_num_blocks
         kTileBytesBf16,        // 4 tile_bytes
-        geo.Kt_s,              // 5 Kt
-        geo.Nt_s,              // 6 Nt
+        geo.in0_stride_k,      // 5 in0 row stride (physical = Kt)
+        geo.out_stride_n,      // 6 out row stride (physical = Nt)
         geo.W,                 // 7 W
         geo.G,                 // 8 G
         fwd_sem,               // 9
@@ -173,11 +173,11 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     KernelHandle writerB = mk(kWriterKernel, g1, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default, wct);
 
     // compute (spec §6c). fp32 DST limit: subblock_h * subblock_w <= 4.
-    const uint32_t sbh = largest_div(geo.M_block, 2u);
+    const uint32_t sbh = largest_div(geo.M_block_capacity, 2u);
     const uint32_t sbw = largest_div(geo.N_sub, 4u / sbh);
     std::vector<uint32_t> cct = {
         geo.K_num_blocks_eff,  // 0 K_num_blocks
-        geo.M_block,           // 1 M_block_tiles
+        geo.M_block_capacity,  // 1 M_block_tiles
         kb,                    // 2 K_block_tiles
         geo.N_sub,             // 3 N_block_tiles
         1u,                    // 4 M_blocks_per_core
@@ -217,8 +217,10 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
             in1_addr,     // 0
             cp.bank,      // 1
             cp.ring_pos,  // 2
-            cp.k_start,   // 3
-            cp.nn_off};   // 4 n_base
+            cp.k_start,   // 3 first logical K tile (balanced)
+            cp.n_local,   // 4 within-bank column offset
+            cp.valid_k,   // 5 valid K tiles (rest of capacity zero-filled)
+            cp.valid_n};  // 6 valid N tiles this core owns
         if (Sm == 1u) {
             ra.push_back(2u);  // 5 mrole = solo
             ra.push_back(0u);  // 6 mpeers
@@ -248,9 +250,9 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         std::vector<uint32_t> wa = {
             in0_addr,                // 0
             out_addr,                // 1
-            cp.m0,                   // 2
-            cp.bank_n0,              // 3 n0
-            cp.k_start,              // 4
+            cp.m_start,              // 2 first logical M tile (balanced)
+            cp.n_start,              // 3 first logical (global) N tile (output addressing)
+            cp.k_start,              // 4 first logical K tile (balanced)
             cp.ring_pos,             // 5
             fwd_next.x,              // 6
             fwd_next.y,              // 7
@@ -259,12 +261,16 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
             cp.is_bottom ? 1u : 0u,  // 10
             cp.is_top ? 1u : 0u,     // 11
             red_prev.x,              // 12
-            red_prev.y};             // 13
+            red_prev.y,              // 13
+            cp.valid_k,              // 14 valid K tiles (rest of capacity zero)
+            cp.valid_m,              // 15 valid M tiles (rest zero / not written)
+            cp.valid_n};             // 16 valid N tiles (rest zero / not written)
         SetRuntimeArgs(program, wh, cores[i], wa);
 
-        // compute runtime args: N_end spans ALL N_bpc sub-blocks (see spec §7).
+        // compute runtime args: fixed rectangular block over the schedule capacities. N_end spans ALL
+        // N_bpc sub-blocks (spec §7); zero-filled tail positions contribute zero.
         SetRuntimeArgs(
-            program, compute, cores[i], {0u, geo.M_block, 0u, geo.N_bpc * geo.N_sub, cp.is_bottom ? 1u : 0u});
+            program, compute, cores[i], {0u, geo.M_block_capacity, 0u, geo.N_bpc * geo.N_sub, cp.is_bottom ? 1u : 0u});
     }
 
     return cached_program_t{

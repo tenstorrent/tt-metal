@@ -54,11 +54,34 @@ void RegimeAMatmulDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(K == K_w, "regime_a_matmul inner dimensions must match, got K={} and K_w={}", K, K_w);
     TT_FATAL(a_logical[-2] > 0 && K > 0 && w_logical[-1] > 0, "regime_a_matmul dimensions must be positive");
 
-    // in1 must be DRAM width-sharded (built via create_regime_a_weight_memory_config).
+    // in1 must be DRAM width-sharded (built via create_regime_a_weight_memory_config): exactly 8 banks,
+    // ROW_MAJOR, shard width == ceil(Nt/8) tiles, and enough K rows to cover the logical Kt.
     const auto& w_mem = weight.memory_config();
     TT_FATAL(
         w_mem.buffer_type() == BufferType::DRAM && w_mem.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
         "regime_a_matmul weight must be DRAM WIDTH_SHARDED (use create_regime_a_weight_memory_config)");
+    const auto shard = w_mem.shard_spec();
+    TT_FATAL(shard.has_value(), "regime_a_matmul weight must carry a shard spec");
+    auto cdiv32 = [](uint32_t v) { return (v + 31u) / 32u; };
+    const uint32_t Kt = cdiv32(K);
+    const uint32_t Nt = cdiv32(static_cast<uint32_t>(w_logical[-1]));
+    const uint32_t exp_shard_cols = ((Nt + 7u) / 8u) * 32u;  // ceil(Nt/8) tiles, in elements
+    TT_FATAL(
+        shard->grid.num_cores() == 8u,
+        "regime_a_matmul weight shard must span exactly 8 DRAM banks, got {}",
+        shard->grid.num_cores());
+    TT_FATAL(shard->orientation == ShardOrientation::ROW_MAJOR, "regime_a_matmul weight shard must be ROW_MAJOR");
+    TT_FATAL(
+        shard->shape[1] == exp_shard_cols,
+        "regime_a_matmul weight shard width must be ceil(Nt/8)*32 = {} elements, got {}",
+        exp_shard_cols,
+        shard->shape[1]);
+    TT_FATAL(
+        shard->shape[0] >= Kt * 32u,
+        "regime_a_matmul weight shard height must cover K ({} tiles / {} elements), got {} rows",
+        Kt,
+        Kt * 32u,
+        shard->shape[0]);
 
     // config is optional: nullopt -> the program factory auto-selects via auto_select_config (ported
     // FLUX/LTX picker). An explicit RegimeAMatmulConfig overrides for reproducibility.

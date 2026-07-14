@@ -196,13 +196,13 @@ MemoryConfig create_regime_a_weight_memory_config(
     const uint32_t Kt = cdiv(K, TILE_HEIGHT);
     const uint32_t Nt = cdiv(N, TILE_WIDTH);
 
-    // CONFIG-INDEPENDENT padding: K rounded up to 8 tiles, N rounded up to 8 tiles. The shard spec is a
-    // function of (K, N) only — no Pk/kb/Ns/nsb padding is baked into storage (see header note).
-    const uint32_t Kt_pad = rup(Kt, kNumBanks);
+    // Config-independent + minimal padding: K is NOT padded (shard height = the tile-aligned K rows;
+    // the balanced-tail reader never reads beyond valid K). N is padded up to a multiple of 8 tiles so
+    // the width shard divides evenly across the 8 banks. Shard spec depends only on (K, N).
     const uint32_t Nt_pad = rup(Nt, kNumBanks);
 
-    // Shard shape in ELEMENTS: full K rows, N/8 columns per bank (width sharding across 8 banks).
-    const std::array<uint32_t, 2> shard_shape = {Kt_pad * TILE_HEIGHT, (Nt_pad / kNumBanks) * TILE_WIDTH};
+    // Shard shape in ELEMENTS: Kt rows, ceil(Nt/8) columns per bank (width sharding across 8 banks).
+    const std::array<uint32_t, 2> shard_shape = {Kt * TILE_HEIGHT, (Nt_pad / kNumBanks) * TILE_WIDTH};
 
     // Shard grid = the first 8 DRAM banks (Regime-A fixes G=8). NOTE: this assumes the target device
     // exposes >= 8 DRAM banks along the DRAM grid row (BH p150b = 8). Guard against smaller grids.

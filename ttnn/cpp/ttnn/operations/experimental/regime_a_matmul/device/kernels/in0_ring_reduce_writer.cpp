@@ -26,8 +26,8 @@ void kernel_main() {
     constexpr uint32_t N_block = get_compile_time_arg_val(2);       // N_sub
     constexpr uint32_t K_num_blocks = get_compile_time_arg_val(3);  // G*W (full k-slice)
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(4);
-    constexpr uint32_t Kt = get_compile_time_arg_val(5);               // padded K row stride (in0 addressing)
-    constexpr uint32_t Nt = get_compile_time_arg_val(6);               // padded N col stride (out addressing)
+    constexpr uint32_t Kt = get_compile_time_arg_val(5);               // in0 physical row stride (= logical Kt)
+    constexpr uint32_t Nt = get_compile_time_arg_val(6);               // out physical row stride (= logical Nt)
     constexpr uint32_t W = get_compile_time_arg_val(7);                // blocks per shard
     constexpr uint32_t G = get_compile_time_arg_val(8);                // ring size (8)
     constexpr uint32_t fwd_sem_id = get_compile_time_arg_val(9);       // in0 ring recv semaphore
@@ -40,9 +40,9 @@ void kernel_main() {
 
     const uint32_t in0_addr = get_arg_val<uint32_t>(0);
     const uint32_t out_addr = get_arg_val<uint32_t>(1);
-    const uint32_t m0 = get_arg_val<uint32_t>(2);
-    const uint32_t n0 = get_arg_val<uint32_t>(3);
-    const uint32_t k_start = get_arg_val<uint32_t>(4);
+    const uint32_t m_start = get_arg_val<uint32_t>(2);  // first logical M tile (balanced)
+    const uint32_t n_start = get_arg_val<uint32_t>(3);  // first logical (global) N tile (output addressing)
+    const uint32_t k_start = get_arg_val<uint32_t>(4);  // first logical K tile (balanced)
     const uint32_t ring_pos = get_arg_val<uint32_t>(5);
     const uint32_t fwd_next_x = get_arg_val<uint32_t>(6);
     const uint32_t fwd_next_y = get_arg_val<uint32_t>(7);
@@ -52,6 +52,9 @@ void kernel_main() {
     const uint32_t is_top = get_arg_val<uint32_t>(11);
     const uint32_t red_prev_x = get_arg_val<uint32_t>(12);
     const uint32_t red_prev_y = get_arg_val<uint32_t>(13);
+    const uint32_t valid_k = get_arg_val<uint32_t>(14);  // valid K tiles (rest of capacity zero-filled)
+    const uint32_t valid_m = get_arg_val<uint32_t>(15);  // valid M tiles (rest zero / not written)
+    const uint32_t valid_n = get_arg_val<uint32_t>(16);  // valid N tiles (rest zero / not written)
 
     const auto in0 = TensorAccessor(in0_args, in0_addr, tile_bytes);
     const auto out = TensorAccessor(out_args, out_addr, tile_bytes);
@@ -62,8 +65,15 @@ void kernel_main() {
     constexpr uint32_t out_blk = M_block * N_block;
     const uint32_t fwd_addr = get_semaphore(fwd_sem_id);
     volatile tt_l1_ptr uint32_t* fwd_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_addr);
+    constexpr uint32_t words_per_tile = tile_bytes / 4u;
+    auto zero_tile = [](uint32_t addr) {
+        volatile tt_l1_ptr uint32_t* q = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
+        for (uint32_t i = 0; i < words_per_tile; ++i) {
+            q[i] = 0;
+        }
+    };
 
-    // ---- PHASE 1: in0 ring all-gather ----
+    // ---- PHASE 1: in0 ring all-gather (balanced tails: read only valid M rows / valid K, else zero) ----
     cb_reserve_back(in0_cb, K_num_blocks * in0_blk);
     const uint32_t base0 = get_write_ptr(in0_cb);
     for (uint32_t step = 0; step < G; ++step) {
@@ -72,10 +82,15 @@ void kernel_main() {
             // read our OWN shard (shard index = ring_pos) into slot 0
             uint32_t p = slot;
             for (uint32_t wb = 0; wb < W; ++wb) {
-                uint32_t sb = ring_pos * W + wb;  // slice-block index of own shard
+                uint32_t sb = ring_pos * W + wb;  // capacity-local block index of own shard
                 for (uint32_t m = 0; m < M_block; ++m) {
                     for (uint32_t k = 0; k < K_block; ++k) {
-                        noc_async_read_page((m0 + m) * Kt + (k_start + sb * K_block + k), in0, p);
+                        const uint32_t l = sb * K_block + k;  // capacity-local K index within the slice
+                        if (m < valid_m && l < valid_k) {
+                            noc_async_read_page((m_start + m) * Kt + (k_start + l), in0, p);
+                        } else {
+                            zero_tile(p);  // pad M row or K tail -> local zero (no DRAM read)
+                        }
                         p += tile_bytes;
                     }
                 }
@@ -101,10 +116,12 @@ void kernel_main() {
         for (uint32_t nb = 0; nb < N_bpc; ++nb) {
             cb_wait_front(out_cb, out_blk);
             uint32_t r = get_read_ptr(out_cb);
-            uint32_t n_off = n0 + nb * N_block;
+            const uint32_t n_off = n_start + nb * N_block;  // global N tile of this subblock
             for (uint32_t m = 0; m < M_block; ++m) {
                 for (uint32_t n = 0; n < N_block; ++n) {
-                    noc_async_write_page((m0 + m) * Nt + (n_off + n), out, r + (m * N_block + n) * tile_bytes);
+                    if (m < valid_m && (nb * N_block + n) < valid_n) {  // write only valid_m x valid_n
+                        noc_async_write_page((m_start + m) * Nt + (n_off + n), out, r + (m * N_block + n) * tile_bytes);
+                    }
                 }
             }
             noc_async_write_barrier();
@@ -139,10 +156,12 @@ void kernel_main() {
             noc_async_write_barrier();
             noc_semaphore_inc(next_recv, 1);  // block nb delivered
         } else {
-            uint32_t n_off = n0 + nb * N_block;
+            const uint32_t n_off = n_start + nb * N_block;  // global N tile of this subblock
             for (uint32_t m = 0; m < M_block; ++m) {
                 for (uint32_t n = 0; n < N_block; ++n) {
-                    noc_async_write_page((m0 + m) * Nt + (n_off + n), out, r + (m * N_block + n) * tile_bytes);
+                    if (m < valid_m && (nb * N_block + n) < valid_n) {  // write only valid_m x valid_n
+                        noc_async_write_page((m_start + m) * Nt + (n_off + n), out, r + (m * N_block + n) * tile_bytes);
+                    }
                 }
             }
             noc_async_write_barrier();
