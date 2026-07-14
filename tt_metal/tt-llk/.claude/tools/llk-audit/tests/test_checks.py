@@ -2011,9 +2011,14 @@ def test_capture_tu_ledger_one_row_per_tu():
 
     dev = {"file": "ttnn/cpp/x/kernels/reader.cpp"}  # device kernel surface
     host = {"file": "tt_metal/impl/buffers/semaphore.hpp"}  # host tree
-    HOLE = re.compile(
-        r"\[(PARSE-FAIL|EMPTY-OUT|EXEC-FAIL|SKIP-noparse|SKIP-nosrc|HOST-LEAK|NON-KERNEL-CMD)"
-    )
+    # Single-source the HOLE-marker pattern from bootstrap.sh's actual `grep -cE` rather
+    # than redeclaring it here: a mirrored copy DRIFTS — dropping a marker from
+    # bootstrap.sh would still pass a hardcoded copy, silently disabling hole detection.
+    # Extracting the shell's own pattern makes such a drop break THIS test.
+    with open(os.path.join(kt_dir, "bootstrap.sh")) as fh:
+        _bs = re.search(r"grep -cE '([^']*)'", fh.read())
+    assert _bs, "no HOLE-marker `grep -cE` in bootstrap.sh (test/shell drift)"
+    HOLE = re.compile(_bs.group(1))
 
     # clean TU: one "ok" row, all facts kept.
     kept, status, nf, hl = capture.tu_ledger_status([dev, dev], 0)
