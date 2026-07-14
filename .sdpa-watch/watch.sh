@@ -19,6 +19,16 @@ DRY_RUN="${DRY_RUN:-0}"
 ts()  { date -u +'%Y-%m-%dT%H:%M:%SZ'; }
 log() { echo "[$(ts)] $*" >&2; }
 
+# Serialize runs: prevent overlapping invocations (a stray second cron daemon,
+# or a manual run coinciding with a scheduled tick) from double-posting to Slack
+# or racing on the shared ~/.claude/.credentials.json OAuth refresh. Non-blocking
+# — if another instance already holds the lock, log once and exit cleanly.
+exec 200>"$SDPA_HOME/.watch.lock"
+if ! flock -n 200; then
+  log "another watch.sh instance holds the lock — skipping this tick"
+  exit 0
+fi
+
 # Extract failure markers from a failed run's job logs. Outputs a single
 # multi-job blob suitable for inclusion in the agent prompt.
 # Reads $job_pattern from caller's scope: if non-empty, only failed jobs
