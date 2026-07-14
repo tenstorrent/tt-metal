@@ -310,6 +310,14 @@ void kernel_main() {
             (uint32_t)get_absolute_logical_x(),
             (uint32_t)get_absolute_logical_y(),
             (uint32_t)noc_index);
+        // Downstream: the core this sender writes tokens to (the relay) and the NOC used. Replaces the old
+        // downstream_eth lines (the sender no longer touches eth; it feeds the relay's c_24 over noc_index).
+        DEVICE_PRINT(
+            "[cmb-place sender]   idx={} downstream_relay_virt=({},{}) send_noc={}\n",
+            combine_sender_index,
+            relay_noc_x,
+            relay_noc_y,
+            (uint32_t)noc_index);
 
         // Discover the relay's c_24 base (published by the relay into relay_buf_addr after its init handshake).
         volatile tt_l1_ptr uint32_t* relay_buf_addr_ptr =
