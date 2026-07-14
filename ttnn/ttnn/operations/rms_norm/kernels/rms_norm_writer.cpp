@@ -35,6 +35,11 @@ void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t start_tile_row = get_arg_val<uint32_t>(1);
     uint32_t num_tile_rows = get_arg_val<uint32_t>(2);
+    // R5: W-tile offset of this core's local W-slice within the GLOBAL row (tiled
+    // stride is `Wt`). 0 for interleaved/HEIGHT (full-W core); the W/BLOCK-sharded
+    // cross-core path passes the core's w_tile_start so tiles land in the right
+    // global output page (own local shard). num_w_blocks is the LOCAL W-block count.
+    uint32_t w_tile_start = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t wblock_cols = W_BLOCK_TILES * TILE_W;
 
@@ -73,7 +78,7 @@ void kernel_main() {
             for (uint32_t b = 0; b < num_w_blocks; ++b) {
                 cb_wait_front(cb_output_tiles, W_BLOCK_TILES);
                 uint32_t rp = get_read_ptr(cb_output_tiles);
-                uint32_t base_tile = tr * Wt + b * W_BLOCK_TILES;
+                uint32_t base_tile = tr * Wt + w_tile_start + b * W_BLOCK_TILES;
                 for (uint32_t wt = 0; wt < W_BLOCK_TILES; ++wt) {
                     noc_async_write_page(base_tile + wt, acc, rp + wt * tile_bytes);
                 }

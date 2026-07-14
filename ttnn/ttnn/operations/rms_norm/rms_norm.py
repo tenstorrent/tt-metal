@@ -85,9 +85,18 @@ SUPPORTED = {
     "gamma_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, "none"],
     # R4 added HEIGHT_SHARDED: the Row-axis knob-turn. Each core owns a contiguous
     # span of tile-rows (pinned by the shard spec) and computes their RMS locally —
-    # the reduction stays LOCAL per core, no cross-core communication. WIDTH/BLOCK
-    # (cross-core Σx² combine) remain a scheme-change → Refinement 5.
-    "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.TensorMemoryLayout.HEIGHT_SHARDED],
+    # the reduction stays LOCAL per core, no cross-core communication.
+    # R5 added WIDTH_SHARDED + BLOCK_SHARDED: the dependent-axis scheme-change. The
+    # hidden W is split across cores, so each core computes a partial Σx² over its
+    # W-slice; the partials are combined cross-core (reduce-root gather + mcast
+    # broadcast-back of 1/rms). See rms_norm_program_descriptor.py + the sharded
+    # reader/compute kernels.
+    "memory_layout": [
+        ttnn.TensorMemoryLayout.INTERLEAVED,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    ],
 }
 
 

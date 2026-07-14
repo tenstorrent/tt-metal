@@ -67,6 +67,17 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/streaming_reduce_helpers.hpp"
 
+// CROSS-CORE COMBINE (Refinement 5 — WIDTH_SHARDED / BLOCK_SHARDED). When
+// IS_CROSS_CORE is set the hidden W is split across a reduction GROUP of cores,
+// so pass 1 produces this core's PARTIAL mean contribution (local Σx²/W_global)
+// into cb_partial instead of finalizing locally. The dataflow reader gathers the
+// group's partials into cb_gather on the group's ROOT; the root folds them with
+// the SAME reduce<AccumulateViaAdd> helper (element-wise sum of the col-0-valid
+// partials, then the single column-collapse = global mean(x²)), rsqrt-finalizes
+// into cb_rms_src, and the reader broadcasts the result into cb_sumsq on every
+// group member (loopback fills the root's own). Non-root cores skip the fold —
+// their cb_sumsq is filled by the reader's ReceiverPipe. Pass 2 (normalize) is
+// shared, reading the per-row 1/rms from cb_sumsq exactly as the local path.
 namespace {
 constexpr uint32_t cb_input_rm = 0;
 constexpr uint32_t cb_input_tiles = 1;
@@ -78,6 +89,10 @@ constexpr uint32_t cb_output_rm = 17;
 constexpr uint32_t cb_xsq = 24;
 constexpr uint32_t cb_sumsq = 25;
 constexpr uint32_t cb_norm = 26;
+constexpr uint32_t cb_partial = 27;  // R5: this core's local partial Σx²/W_global (cross-core)
+constexpr uint32_t cb_gather = 28;   // R5: group partials gathered on the root
+constexpr uint32_t cb_rms_src = 29;  // R5: root's finalized 1/rms, source of the broadcast (ONE clean push)
+constexpr uint32_t cb_combine = 30;  // R5: root's combine accumulator (churns per fold block)
 constexpr uint32_t TILE_H = 32;
 }  // namespace
 
@@ -101,11 +116,20 @@ void kernel_main() {
     // tiled from the reader (skip the gamma-tilize step). Independent of the
     // input layout (IS_ROW_MAJOR).
     constexpr uint32_t GAMMA_IS_ROW_MAJOR = get_compile_time_arg_val(10);
+    // R5 cross-core: split-W scheme-change. When set, pass 1 writes a PARTIAL
+    // (cb_partial) that the root folds across the group; GROUP_SIZE is the group's
+    // core count (only the root's fold loop reads it).
+    constexpr uint32_t IS_CROSS_CORE = get_compile_time_arg_val(11);
+    constexpr uint32_t GROUP_SIZE = get_compile_time_arg_val(12);
     (void)Wt;
+    // Pass-1 reduce target: the cross-core path accumulates into cb_partial (later
+    // gathered + folded); the local path accumulates straight into cb_sumsq.
+    constexpr uint32_t cb_reduce_out = (IS_CROSS_CORE != 0) ? cb_partial : cb_sumsq;
 
     uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
     uint32_t start_tile_row = get_arg_val<uint32_t>(1);
     uint32_t eps_bits = get_arg_val<uint32_t>(2);
+    uint32_t is_root = get_arg_val<uint32_t>(3);  // R5: group root flag (cross-core only)
 
     compute_kernel_hw_startup(cb_input_tiles, cb_scaler, cb_output_tiles);
 
@@ -133,41 +157,87 @@ void kernel_main() {
                 // capture. cb_sumsq is fp32 here (set host-side) so the raw running sum
                 // does not truncate; the reduce helper folds the bf16 cb_xsq into it
                 // natively (SRCB/SRCA reconfig around the acc-add).
-                const auto acc = is_last ? ckl::Accumulate::at_last(cb_sumsq, b) : ckl::Accumulate::at(cb_sumsq, b);
+                const auto acc =
+                    is_last ? ckl::Accumulate::at_last(cb_reduce_out, b) : ckl::Accumulate::at(cb_reduce_out, b);
                 ckl::reduce<
                     ckernel::PoolType::SUM,
                     ckernel::ReduceDim::REDUCE_ROW,
                     cb_xsq,
                     cb_scaler,
-                    cb_sumsq,
+                    cb_reduce_out,
                     ckl::ReduceInputPolicy::BulkWaitBulkPop,
                     ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
                     ckl::ReduceAlgorithm::AccumulateViaAdd>(
                     reduce_shape, ckl::ReduceInputMemoryLayout::contiguous(), acc, [](uint32_t dst) {
                         binop_with_scalar_tile_init();
-                        mul_unary_tile(dst, RECIP_W_BITS);  // × 1/W → mean(x²)
+                        mul_unary_tile(dst, RECIP_W_BITS);  // × 1/W_global → (partial) mean(x²)
                     });
             } else {
                 // ReduceTile matmul-with-ones + partial scaler on the last block's last tile
                 // (the partial scaler zeros the non-tile-aligned W tail; the scaler carries 1/W).
                 ckl::ReducePartialScaler part = (HAS_PARTIAL_W && is_last) ? ckl::ReducePartialScaler::last_tile_at(1)
                                                                            : ckl::ReducePartialScaler::none();
-                ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, cb_xsq, cb_scaler, cb_sumsq>(
+                ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, cb_xsq, cb_scaler, cb_reduce_out>(
                     reduce_shape,
                     ckl::ReduceInputMemoryLayout::contiguous(),
-                    ckl::Accumulate::at(cb_sumsq, b),
+                    ckl::Accumulate::at(cb_reduce_out, b),
                     ckl::NoOp{},
                     part);
             }
         }
 
-        // ---------- Finalize: 1/sqrt(mean + eps), in place ----------
-        ckl::transform_in_place(cb_sumsq, [eps_bits](uint32_t dst) {
-            binop_with_scalar_tile_init();
-            add_unary_tile(dst, eps_bits);
-            rsqrt_tile_init();
-            rsqrt_tile(dst);
-        });
+        // ---------- Finalize: 1/sqrt(mean + eps) → cb_sumsq (held across pass 2) ----------
+        if constexpr (IS_CROSS_CORE) {
+            // Cross-core combine (root only): fold the group's GROUP_SIZE partial tiles
+            // (cb_gather) into cb_rms_src with reduce<AccumulateViaAdd> — add_tiles
+            // element-wise sum, then one REDUCE_ROW column-collapse — then rsqrt-finalize.
+            // The reader broadcasts the result to the group's cb_sumsq. Non-root cores:
+            // their cb_sumsq is filled by the reader's ReceiverPipe; nothing to do here.
+            //
+            // Correctness relies on pass 1 producing col-0-ONLY partials (ReduceTile
+            // matmul-with-ones zeros the other columns), so the combine's column-collapse
+            // is idempotent (sums 0s). USE_ACC_VIA_ADD is 0 on the cross-core path for
+            // exactly this reason (AccumulateViaAdd's sfpu finalize leaves the other
+            // columns unspecified, which the collapse would fold into col 0 — a scale bug).
+            //
+            // The fold accumulates into cb_combine (which the reduce push/pops PER block),
+            // then rsqrt-finalizes in place, then a SINGLE `copy` emits cb_rms_src with
+            // exactly ONE push. cb_rms_src must have one clean lifetime push so the reader's
+            // cb_wait_front(cb_rms_src, 1) cannot race and grab a mid-fold intermediate
+            // (that bug shipped a partial as the broadcast value — DEVICE_PRINT-confirmed).
+            if (is_root) {
+                constexpr auto combine_shape = ckl::ReduceInputBlockShape::row(1);
+                for (uint32_t g = 0; g < GROUP_SIZE; ++g) {
+                    const bool g_last = (g + 1 == GROUP_SIZE);
+                    const auto gacc =
+                        g_last ? ckl::Accumulate::at_last(cb_combine, g) : ckl::Accumulate::at(cb_combine, g);
+                    ckl::reduce<
+                        ckernel::PoolType::SUM,
+                        ckernel::ReduceDim::REDUCE_ROW,
+                        cb_gather,
+                        cb_scaler,
+                        cb_combine,
+                        ckl::ReduceInputPolicy::BulkWaitBulkPop,
+                        ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                        ckl::ReduceAlgorithm::AccumulateViaAdd>(
+                        combine_shape, ckl::ReduceInputMemoryLayout::contiguous(), gacc, ckl::NoOp{});
+                }
+                ckl::transform_in_place(cb_combine, [eps_bits](uint32_t dst) {
+                    binop_with_scalar_tile_init();
+                    add_unary_tile(dst, eps_bits);
+                    rsqrt_tile_init();
+                    rsqrt_tile(dst);
+                });
+                ckl::copy<cb_combine, cb_rms_src>(ckl::EltwiseShape::single());
+            }
+        } else {
+            ckl::transform_in_place(cb_sumsq, [eps_bits](uint32_t dst) {
+                binop_with_scalar_tile_init();
+                add_unary_tile(dst, eps_bits);
+                rsqrt_tile_init();
+                rsqrt_tile(dst);
+            });
+        }
 
         // ---------- Pass 2: x * (1/rms) * gamma ----------
         for (uint32_t b = 0; b < num_w_blocks; ++b) {
