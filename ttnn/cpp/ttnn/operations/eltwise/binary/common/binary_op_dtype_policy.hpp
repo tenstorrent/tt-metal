@@ -26,12 +26,12 @@ inline constexpr std::array float_and_int32_uint32{
 inline constexpr std::array int32_only{DT::INT32};
 
 // Allowed input (tensor A) dtypes for REQUANT/DEQUANT: an int32 quantized tile,
-// or a uint8 quantized tile that the unpacker widens to int32 in DST before the
+// or an int8/uint8 quantized tile that the unpacker widens to int32 in DST before the
 // SFPU casts it to fp32. QUANT is intentionally NOT mapped to this set: its
 // input A is the original floating-point tensor (float_only), and only its
-// *output* can be uint8 (narrowed by the packer / FP32_TO_UINT8 rounding). Do
-// not add BinaryOpType::QUANT here - that would wrongly accept integer inputs.
-inline constexpr std::array requant_dequant{DT::INT32, DT::UINT8};
+// *output* can be int8/uint8 (narrowed by the packer; uint8 also uses FP32_TO_UINT8
+// rounding). Do not add BinaryOpType::QUANT here - that would wrongly accept integer inputs.
+inline constexpr std::array requant_dequant{DT::INT32, DT::UINT8, DT::INT8};
 
 inline constexpr std::array bitwise_shift{DT::UINT32, DT::UINT16, DT::INT32};
 

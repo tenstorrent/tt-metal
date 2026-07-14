@@ -52,6 +52,7 @@ bool can_exec_ops_on_device(DataType type) {
         case DataType::UINT16:
             // Tilize doesn't support uint16.
         case DataType::UINT8:
+        case DataType::INT8:
             // https://github.com/tenstorrent/tt-metal/issues/21682 (typecast doesn't support uint8)
         case DataType::INT8:
             // https://github.com/tenstorrent/tt-metal/issues/50401 (int8 device typecast/tilize not yet supported)
@@ -348,6 +349,7 @@ DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype, 
             case ttnn::PyDType::INT8: return DataType::INT8;
             case ttnn::PyDType::UINT32: return DataType::UINT32;
             case ttnn::PyDType::UINT8: return DataType::UINT8;
+            case ttnn::PyDType::INT8: return DataType::INT8;
             case ttnn::PyDType::UINT16: return DataType::UINT16;
             case ttnn::PyDType::BOOL: return DataType::UINT8;
             case ttnn::PyDType::UINT64:

@@ -403,6 +403,7 @@ HostBuffer convert_py_tensor_to_host_buffer(const nb::ndarray<nb::array_api>& py
             case DataType::FLOAT32: return to_host_buffer_impl.operator()<float>(contiguous_py_tensor);
             case DataType::UINT32: return to_host_buffer_impl.operator()<uint32_t>(contiguous_py_tensor);
             case DataType::UINT8: return to_host_buffer_impl.operator()<uint8_t>(contiguous_py_tensor);
+            case DataType::INT8: return to_host_buffer_impl.operator()<int8_t>(contiguous_py_tensor);
             case DataType::UINT16: return to_host_buffer_impl.operator()<uint16_t>(contiguous_py_tensor);
             case DataType::INT32: return to_host_buffer_impl.operator()<int32_t>(contiguous_py_tensor);
             case DataType::INT8: return to_host_buffer_impl.operator()<int8_t>(contiguous_py_tensor);
@@ -904,6 +905,7 @@ void pytensor_module(nb::module_& mod) {
                         case DataType::UINT32: return self.to_vector<uint32_t>()[0];
                         case DataType::UINT16: return self.to_vector<uint16_t>()[0];
                         case DataType::UINT8: return self.to_vector<uint8_t>()[0];
+                        case DataType::INT8: return self.to_vector<int8_t>()[0];
                         case DataType::FP8_E4M3: TT_THROW("FP8_E4M3 item() is not supported");
                         case DataType::INVALID: TT_THROW("Unsupported DataType");
                     }

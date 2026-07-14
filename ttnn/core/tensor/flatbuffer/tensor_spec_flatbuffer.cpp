@@ -56,6 +56,7 @@ flatbuffer::DataType to_flatbuffer(tt::tt_metal::DataType type) {
         case tt::tt_metal::DataType::BFLOAT8_B: return flatbuffer::DataType::BFloat8B;
         case tt::tt_metal::DataType::BFLOAT4_B: return flatbuffer::DataType::BFloat4B;
         case tt::tt_metal::DataType::UINT8: return flatbuffer::DataType::UInt8;
+        case tt::tt_metal::DataType::INT8: TT_THROW("INT8 cannot be serialized to flatbuffer");
         case tt::tt_metal::DataType::UINT16: return flatbuffer::DataType::UInt16;
         case tt::tt_metal::DataType::INT32: return flatbuffer::DataType::Int32;
         case tt::tt_metal::DataType::INT8: return flatbuffer::DataType::Int8;

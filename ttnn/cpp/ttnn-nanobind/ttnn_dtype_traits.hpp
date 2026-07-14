@@ -165,6 +165,11 @@ struct py_to_<DtypeID::UINT8> {
 };
 
 template <>
+struct py_to_<DtypeID::INT8> {
+    constexpr static auto ttnn_DataType = DataType::INT8;
+};
+
+template <>
 struct py_to_<DtypeID::UINT32> {
     constexpr static auto ttnn_DataType = DataType::UINT32;
 };
