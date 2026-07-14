@@ -184,6 +184,9 @@ void kernel_main() {
         const uint32_t cb_base = get_write_ptr(cb_in);
 
         if constexpr (READER_MODE == 1) {
+            // Batch: issue the whole chunk, then a single barrier, then push. The
+            // barrier must be outside the per-tile loop or every read serializes
+            // (which would defeat the point of batch mode).
             for (uint32_t i = 0; i < chunk; ++i) {
                 const uint32_t tid = tile_id + i;
                 const uint32_t l1_write_addr = cb_base + i * tile_bytes;
@@ -191,10 +194,10 @@ void kernel_main() {
                     DeviceTimestampedData("READ_BEFORE_BARRIER", tid);
                 }
                 noc_async_read_tile(tid, src, l1_write_addr);
-                noc_async_read_barrier();
-                if (tid == effective_start_tile_id) {
-                    DeviceTimestampedData("READ_AFTER_BARRIER", tid);
-                }
+            }
+            noc_async_read_barrier();
+            if (tile_id == effective_start_tile_id) {
+                DeviceTimestampedData("READ_AFTER_BARRIER", tile_id);
             }
             cb_push_back(cb_in, chunk);
         } else {

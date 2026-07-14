@@ -89,6 +89,13 @@ void kernel_main() {
             if (flush_every_page || flush_on_pressure) {
                 noc_async_writes_flushed();
                 writes_since_flush = 0;
+            } else {
+                // Pressure mode skipped the periodic flush this iteration. The NoC only
+                // guarantees a write source has departed after noc_async_writes_flushed(),
+                // so flush before cb_pop_front returns this L1 slot to the producer --
+                // otherwise compute can overwrite an in-flight write source and corrupt
+                // the DRAM output when the CB is full.
+                noc_async_writes_flushed();
             }
         }
         cb_pop_front(cb_out, tiles_per_page);
