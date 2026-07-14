@@ -3,8 +3,15 @@
 
 """
 TTNN native Sam2PromptEncoder matching HuggingFace modeling_sam2.py.
-Handles point, box, and mask prompt embeddings using ttnn ops.
-Architecture verified against /tmp/modeling_sam2.py (transformers main).
+Handles point, box, and mask prompt embeddings.
+
+CURRENT LIMITATIONS:
+- Mask embedding runs on CPU via torch.nn.functional (needs ttnn.conv2d with
+  conv_config/compute_config, which requires model-specific config not yet created)
+- Point/box embedding coordinate encoding runs on CPU (tiny tensors, negligible cost)
+- LayerNorm and GELU for mask embedding on CPU
+- Weight upload assumes TILE_LAYOUT for linear weights; conv weights need NHWC layout
+  validation on hardware
 """
 
 from typing import Optional, Tuple
@@ -14,168 +21,101 @@ import math
 
 
 class TtnnSam2PositionalEmbedding:
-    """Matches HF Sam2PositionalEmbedding — learned [2,128] pos encoding buffer."""
+    """Matches HF Sam2PositionalEmbedding — learned [2,128] pos encoding buffer.
+    Operates on CPU (tiny tensor, input preprocessing only)."""
 
     def __init__(self, config: dict, device: ttnn.Device):
         self.device = device
         self.scale = config.get("scale", 1.0)
         self.hidden_size = config.get("hidden_size", 256)
 
-        # Learned positional embedding buffer: [2, hidden_size//2]
         pos_emb = self.scale * torch.randn(2, self.hidden_size // 2)
-        self.positional_embedding = ttnn.from_torch(
-            pos_emb.float(),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-        )
+        # Keep on CPU as reference; upload to device when/if needed for fused ops
+        self.positional_embedding = pos_emb.float()
 
     def __call__(self, coords: torch.Tensor, input_shape: Optional[Tuple[int, int]] = None) -> torch.Tensor:
         return self.forward(coords, input_shape)
 
     def forward(self, coords: torch.Tensor, input_shape: Optional[Tuple[int, int]] = None) -> torch.Tensor:
         """Positionally encode normalized [0,1] coordinates.
+        CPU-only — tiny tensors, input preprocessing boundary.
         Args:
             coords: [B, P, N, 2] or [B, P, 2] float coords
         Returns:
-            [B, P, N, hidden_size] positional encoding (still on CPU as torch tensor)
+            [B, P, N, hidden_size] positional encoding
         """
         coords = coords.clone().float()
         if input_shape is not None:
             coords[..., 0] = coords[..., 0] / input_shape[1]
             coords[..., 1] = coords[..., 1] / input_shape[0]
 
-        coords = 2 * coords - 1  # scale to [-1, 1]
-
-        # matmul with learned embedding: coords @ pos_embed
-        pos_pt = self.positional_embedding
-        # pos_emb is [2, 128] on device
-        # coords is [B, P, N, 2] on CPU
-        # We do this on CPU since it's small and only runs at prompt entry
-        # (Matches HF implementation which does this on CPU too)
-        coords_np = coords.cpu().numpy()
-        pos_np = pos_pt.cpu().numpy() if hasattr(pos_pt, 'cpu') else None
-        
-        # Fallback to torch for coordinate encoding
-        encoded = coords @ pos_pt.to(coords.dtype)
+        coords = 2 * coords - 1
+        encoded = coords @ self.positional_embedding.to(coords.dtype)
         encoded = 2 * math.pi * encoded
-        result = torch.cat([torch.sin(encoded), torch.cos(encoded)], dim=-1)
-        return result
+        return torch.cat([torch.sin(encoded), torch.cos(encoded)], dim=-1)
 
 
 class TtnnSam2MaskEmbedding:
-    """Matches HF Sam2MaskEmbedding — 3x conv2d + layernorm + GELU for mask downscaling."""
+    """Matches HF Sam2MaskEmbedding — 3x conv2d + layernorm + GELU for mask downscaling.
+    
+    NOTE: Runs on CPU via torch.nn.functional.
+    TODO: Port to ttnn.conv2d with prepare_conv_params pattern once hardware CI is available.
+    ttnn.conv2d requires NHWC layout, conv_config, compute_config, and returns
+    [result, [H, W], [weights, bias]] — not a single tensor.
+    See models/demos/stable_diffusion_xl_base/tt/tt_downsample2d.py for reference pattern.
+    """
 
     def __init__(self, config: dict, device: ttnn.Device, state_dict: Optional[dict] = None):
         self.device = device
         self.activation_name = config.get("hidden_act", "gelu")
-        self.mask_input_channels = config.get("mask_input_channels", 16) // 4  # = 4
+        self.mask_input_channels = config.get("mask_input_channels", 16) // 4
 
         def _load_or_rand(prefix, shape):
             if state_dict and prefix in state_dict:
                 return state_dict[prefix]
             return torch.randn(shape, dtype=torch.float32)
 
-        # conv1: 1 -> mask_input_channels(4), k=2, s=2
-        w1 = _load_or_rand("mask_embed.conv1.weight", (4, 1, 2, 2))
-        b1 = _load_or_rand("mask_embed.conv1.bias", (4,))
-        # conv2: 4 -> mask_input_channels(16), k=2, s=2
-        w2 = _load_or_rand("mask_embed.conv2.weight", (16, 4, 2, 2))
-        b2 = _load_or_rand("mask_embed.conv2.bias", (16,))
-        # conv3: 16 -> hidden_size(256), k=1, s=1
-        w3 = _load_or_rand("mask_embed.conv3.weight", (256, 16, 1, 1))
-        b3 = _load_or_rand("mask_embed.conv3.bias", (256,))
-
-        # LayerNorms
-        ln1_w = _load_or_rand("mask_embed.layer_norm1.weight", (4,))
-        ln1_b = _load_or_rand("mask_embed.layer_norm1.bias", (4,))
-        ln2_w = _load_or_rand("mask_embed.layer_norm2.weight", (16,))
-        ln2_b = _load_or_rand("mask_embed.layer_norm2.bias", (16,))
-
-        # Upload to device
-        self.conv1_w = ttnn.from_torch(w1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        self.conv1_b = ttnn.from_torch(b1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        self.conv2_w = ttnn.from_torch(w2, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        self.conv2_b = ttnn.from_torch(b2, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        self.conv3_w = ttnn.from_torch(w3, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        self.conv3_b = ttnn.from_torch(b3, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        self.ln1_w = ttnn.from_torch(ln1_w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        self.ln1_b = ttnn.from_torch(ln1_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        self.ln2_w = ttnn.from_torch(ln2_w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        self.ln2_b = ttnn.from_torch(ln2_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        # Keep weights as torch tensors (CPU ops for now)
+        self.conv1_w = _load_or_rand("mask_embed.conv1.weight", (4, 1, 2, 2))
+        self.conv1_b = _load_or_rand("mask_embed.conv1.bias", (4,))
+        self.conv2_w = _load_or_rand("mask_embed.conv2.weight", (16, 4, 2, 2))
+        self.conv2_b = _load_or_rand("mask_embed.conv2.bias", (16,))
+        self.conv3_w = _load_or_rand("mask_embed.conv3.weight", (256, 16, 1, 1))
+        self.conv3_b = _load_or_rand("mask_embed.conv3.bias", (256,))
+        self.ln1_w = _load_or_rand("mask_embed.layer_norm1.weight", (4,))
+        self.ln1_b = _load_or_rand("mask_embed.layer_norm1.bias", (4,))
+        self.ln2_w = _load_or_rand("mask_embed.layer_norm2.weight", (16,))
+        self.ln2_b = _load_or_rand("mask_embed.layer_norm2.bias", (16,))
 
     def forward(self, masks: torch.Tensor) -> torch.Tensor:
         """Downscale mask input to dense prompt embeddings.
+        CPU-only (ttnn.conv2d port pending hardware validation).
         Args:
             masks: [B, 1, H, W] input masks
         Returns:
             [B, 256, H', W'] dense embeddings
         """
-        tt_masks = ttnn.from_torch(masks, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
-
-        x = ttnn.conv2d(
-            input_tensor=tt_masks,
-            weight_tensor=self.conv1_w,
-            bias_tensor=self.conv1_b,
-            in_channels=1,
-            out_channels=4,
-            kernel_size=(2, 2),
-            stride=(2, 2),
-            padding=(0, 0),
-            device=self.device,
-        )
-        ttnn.deallocate(tt_masks)
-
-        # NOTE: LayerNorm + GELU on device; for simplicity in prototype we do on CPU
-        # since ttnn.layernorm + ttnn.gelu has quirks that need testing on hardware
-        x = ttnn.to_torch(x)
-        # layernorm1
-        x = torch.nn.functional.layer_norm(x.permute(0, 2, 3, 1), (4,),
-            self.ln1_w.to(torch.float32) if hasattr(self.ln1_w, 'to') else None,
-            self.ln1_b.to(torch.float32) if hasattr(self.ln1_b, 'to') else None).permute(0, 3, 1, 2)
+        x = masks
+        # conv1 + layernorm1 + gelu
+        x = torch.nn.functional.conv2d(x, self.conv1_w, bias=self.conv1_b, stride=2, padding=0)
+        x = torch.nn.functional.layer_norm(x.permute(0, 2, 3, 1), (4,), self.ln1_w, self.ln1_b).permute(0, 3, 1, 2)
         x = torch.nn.functional.gelu(x)
-        tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
-
-        x = ttnn.conv2d(
-            input_tensor=tt_x,
-            weight_tensor=self.conv2_w,
-            bias_tensor=self.conv2_b,
-            in_channels=4,
-            out_channels=16,
-            kernel_size=(2, 2),
-            stride=(2, 2),
-            padding=(0, 0),
-            device=self.device,
-        )
-        ttnn.deallocate(tt_x)
-
-        x = ttnn.to_torch(x)
-        x = torch.nn.functional.layer_norm(x.permute(0, 2, 3, 1), (16,),
-            self.ln2_w.to(torch.float32) if hasattr(self.ln2_w, 'to') else None,
-            self.ln2_b.to(torch.float32) if hasattr(self.ln2_b, 'to') else None).permute(0, 3, 1, 2)
+        # conv2 + layernorm2 + gelu
+        x = torch.nn.functional.conv2d(x, self.conv2_w, bias=self.conv2_b, stride=2, padding=0)
+        x = torch.nn.functional.layer_norm(x.permute(0, 2, 3, 1), (16,), self.ln2_w, self.ln2_b).permute(0, 3, 1, 2)
         x = torch.nn.functional.gelu(x)
-        tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
-
-        dense = ttnn.conv2d(
-            input_tensor=tt_x,
-            weight_tensor=self.conv3_w,
-            bias_tensor=self.conv3_b,
-            in_channels=16,
-            out_channels=256,
-            kernel_size=(1, 1),
-            stride=(1, 1),
-            padding=(0, 0),
-            device=self.device,
-        )
-        ttnn.deallocate(tt_x)
-        out = ttnn.to_torch(dense)
-        ttnn.deallocate(dense)
-        return out
+        # conv3 (1x1) -> hidden_size
+        x = torch.nn.functional.conv2d(x, self.conv3_w, bias=self.conv3_b, stride=1, padding=0)
+        return x
 
 
 class TtnnSam2PromptEncoder:
     """TTNN native prompt encoder matching HF Sam2PromptEncoder.
-    Handles point, box, and mask prompt embedding generation."""
+    Handles point, box, and mask prompt embedding generation.
+
+    CPU: Coordinate encoding, mask embedding (preprocessing boundary).
+    Device: ttnn.linear for unused paths, weight storage.
+    """
 
     def __init__(
         self,
@@ -188,14 +128,11 @@ class TtnnSam2PromptEncoder:
         self.image_size = config.get("image_size", 1024)
         self.patch_size = config.get("patch_size", 16)
         self.image_embedding_size = (self.image_size // self.patch_size, self.image_size // self.patch_size)
+        self.mask_input_size = (4 * self.image_size // self.patch_size, 4 * self.image_size // self.patch_size)
+        self.input_image_size = self.image_size
 
         self.shared_embedding = TtnnSam2PositionalEmbedding(config, device)
         self.mask_embed = TtnnSam2MaskEmbedding(config, device, state_dict)
-
-        # Learned embeddings
-        self.image_embedding_size = (self.image_size // self.patch_size, self.image_size // self.patch_size)
-        self.mask_input_size = (4 * self.image_size // self.patch_size, 4 * self.image_size // self.patch_size)
-        self.input_image_size = self.image_size
 
         def _load_or_rand(prefix, shape):
             if state_dict and prefix in state_dict:
@@ -207,15 +144,10 @@ class TtnnSam2PromptEncoder:
         no_point_emb = _load_or_rand("prompt_encoder.not_a_point_embed.weight", (1, self.hidden_size))
         no_mask_emb = _load_or_rand("prompt_encoder.no_mask_embed.weight", (1, self.hidden_size))
 
-        self.point_embed = ttnn.from_torch(
-            point_emb, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-        )
-        self.not_a_point_embed = ttnn.from_torch(
-            no_point_emb, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-        )
-        self.no_mask_embed = ttnn.from_torch(
-            no_mask_emb, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-        )
+        # Keep learned embeddings as torch tensors (CPU lookups, tiny)
+        self.point_embed = point_emb
+        self.not_a_point_embed = no_point_emb
+        self.no_mask_embed = no_mask_emb
 
     def _embed_points(self, points: torch.Tensor, labels: torch.Tensor, pad: bool) -> torch.Tensor:
         """Embed points following HF Sam2PromptEncoder._embed_points."""
@@ -226,27 +158,19 @@ class TtnnSam2PromptEncoder:
 
         point_embedding = self.shared_embedding(points, (self.image_size, self.image_size))
 
-        # Handle labels: -1 -> not_a_point_embed, -10 -> zeros, >=0 -> point_embed[label]
-        not_a_point = self.not_a_point_embed
-        pt_emb = self.point_embed
-
-        # where(labels==-1, not_a_point, point_embedding)
         point_embedding = torch.where(
             labels.unsqueeze(-1) == -1,
-            not_a_point.to(point_embedding.dtype),
+            self.not_a_point_embed.to(point_embedding.dtype),
             point_embedding,
         )
-        # where(labels==-10, zeros, same)
         point_embedding = torch.where(
             labels.unsqueeze(-1) == -10,
             torch.zeros_like(point_embedding),
             point_embedding,
         )
-        # Add point_embed[label] for labels >= 0
         labels_clamped = labels.clamp(min=0).long()
-        label_embeds = pt_emb[labels_clamped].to(point_embedding.dtype)
+        label_embeds = self.point_embed[labels_clamped].to(point_embedding.dtype)
         point_embedding = point_embedding + label_embeds * (labels >= 0).unsqueeze(-1).float()
-
         return point_embedding
 
     def _embed_boxes(self, boxes: torch.Tensor) -> torch.Tensor:
@@ -256,10 +180,8 @@ class TtnnSam2PromptEncoder:
         coords = torch.nn.functional.pad(coords, (0, 0, 0, 1), mode="constant", value=0)
         corner_embedding = self.shared_embedding(coords, (self.image_size, self.image_size))
 
-        # Add corner label embeddings
-        pt_emb = self.point_embed
-        corner_embedding[:, :, 0, :] = corner_embedding[:, :, 0, :] + pt_emb[2].to(corner_embedding.dtype)
-        corner_embedding[:, :, 1, :] = corner_embedding[:, :, 1, :] + pt_emb[3].to(corner_embedding.dtype)
+        corner_embedding[:, :, 0, :] += self.point_embed[2].to(corner_embedding.dtype)
+        corner_embedding[:, :, 1, :] += self.point_embed[3].to(corner_embedding.dtype)
         corner_embedding[:, :, 2, :] = self.not_a_point_embed.to(corner_embedding.dtype).expand_as(
             corner_embedding[:, :, 2, :]
         )
@@ -273,7 +195,10 @@ class TtnnSam2PromptEncoder:
         input_masks: Optional[torch.Tensor] = None,
     ) -> Tuple[Optional[torch.Tensor], torch.Tensor]:
         """Embed prompts. Returns (sparse_embeddings, dense_embeddings).
-        Matches HF Sam2PromptEncoder.forward() exactly."""
+        Matches HF Sam2PromptEncoder.forward().
+        
+        CPU: All prompt embedding logic (preprocessing boundary).
+        Output tensors are moved to device by the orchestrator before decoder."""
         sparse_embeddings = None
         batch_size = 1
 
@@ -295,8 +220,7 @@ class TtnnSam2PromptEncoder:
         if input_masks is not None:
             dense_embeddings = self.mask_embed.forward(input_masks)
         else:
-            no_mask = self.no_mask_embed
-            dense_embeddings = no_mask.reshape(1, -1, 1, 1).expand(
+            dense_embeddings = self.no_mask_embed.reshape(1, -1, 1, 1).expand(
                 batch_size, -1, self.image_embedding_size[0], self.image_embedding_size[1]
             )
 

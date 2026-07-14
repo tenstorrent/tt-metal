@@ -3,8 +3,16 @@
 
 """
 TTNN native Sam2HieraImageEncoder matching HuggingFace modeling_sam2.py.
-Implements 12 Sam2MultiScaleBlock with windowed/global attention, multi-scale attention,
-and query pooling for stage transitions. Architecture matches exact HF reference.
+Implements 12 Sam2MultiScaleBlock with windowed/global attention, query pooling.
+Architecture matches exact HF reference.
+
+CURRENT LIMITATIONS:
+- Patch embedding (ttnn.conv2d) port pending: requires conv_config/compute_config
+  setup similar to models/demos/stable_diffusion_xl_base/tt/sdxl_utility.py
+- LayerNorm on CPU (needs ttnn.layer_norm tested on hardware)
+- GELU on CPU (needs ttnn.gelu tested on hardware)
+- MaxPool2d for query pooling on CPU (needs ttnn.max_pool2d tested on hardware)
+- Attention math on CPU via torch (ttnn SDPA needs hardware to validate)
 """
 
 from typing import Dict, List, Optional, Tuple
@@ -15,16 +23,13 @@ import numpy as np
 
 
 def do_pool(x: torch.Tensor, query_stride: Optional[Tuple[int, int]]) -> torch.Tensor:
-    """Max pool for query pooling at stage transitions. (B,H,W,C) -> (B,H',W',C) on CPU.
-    NOTE: For production use ttnn.max_pool2d; here on CPU since shapes vary."""
+    """Max pool for query pooling at stage transitions. (B,H,W,C) -> (B,H',W',C).
+    TODO: Replace with ttnn.max_pool2d once hardware CI available."""
     if query_stride is None:
         return x
-    # (B, H, W, C) -> (B, C, H, W)
-    x = x.permute(0, 3, 1, 2)
+    x = x.permute(0, 3, 1, 2)                    # NHWC -> NCHW
     x = torch.nn.functional.max_pool2d(x, kernel_size=query_stride, stride=query_stride, ceil_mode=False)
-    # (B, C, H', W') -> (B, H', W', C)
-    x = x.permute(0, 2, 3, 1)
-    return x
+    return x.permute(0, 2, 3, 1)                  # NCHW -> NHWC
 
 
 def window_partition(hidden_state: torch.Tensor, window_size: int) -> Tuple[torch.Tensor, Tuple[int, int]]:
@@ -56,7 +61,13 @@ def window_unpartition(windows: torch.Tensor, window_size: int, pad_hw: Tuple[in
 
 
 class TtnnMultiScaleAttention:
-    """Matches HF Sam2MultiScaleAttention — qkv linear + SDPA + optional query pooling."""
+    """Matches HF Sam2MultiScaleAttention — qkv linear + SDPA + optional query pooling.
+    
+    NOTE: Attention math runs on CPU for now.
+    TODO: Port to ttnn.transformer.scaled_dot_product_attention once hardware CI available.
+    The ttnn SDPA API (from qwen3_vl) is: 
+      ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=False, scale=scale)
+    """
 
     def __init__(self, dim: int, dim_out: int, num_heads: int,
                  query_stride: Optional[Tuple[int, int]], device: ttnn.Device,
@@ -75,61 +86,44 @@ class TtnnMultiScaleAttention:
                 return state_dict[key]
             return torch.randn(shape)
 
-        self.qkv_w = ttnn.from_torch(
-            _load("qkv.weight", (dim_out * 3, dim)).T.contiguous(),
-            dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
-        )
-        self.qkv_b = ttnn.from_torch(
-            _load("qkv.bias", (dim_out * 3,)),
-            dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
-        )
-        self.proj_w = ttnn.from_torch(
-            _load("proj.weight", (dim_out, dim_out)).T.contiguous(),
-            dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
-        )
-        self.proj_b = ttnn.from_torch(
-            _load("proj.bias", (dim_out,)),
-            dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
-        )
+        self.qkv_w = _load("qkv.weight", (dim_out * 3, dim)).T.contiguous()
+        self.qkv_b = _load("qkv.bias", (dim_out * 3,))
+        self.proj_w = _load("proj.weight", (dim_out, dim_out)).T.contiguous()
+        self.proj_b = _load("proj.bias", (dim_out,))
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        """Forward on device. Returns attn_output [B,H,W,C]."""
-        B, H, W, C = hidden_states.shape
-        tt_x = ttnn.from_torch(hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+        """Forward. Input/Output: [B, N, C] flattened.
+        Currently on CPU — TODO: port to device with ttnn.linear + ttnn.SDPA."""
+        B, N, C = hidden_states.shape
+        H = W = int(math.sqrt(N))
 
-        # qkv projection
-        qkv = ttnn.linear(tt_x, self.qkv_w, bias=self.qkv_b, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(tt_x)
+        # QKV projection (torch for now)
+        qkv = hidden_states @ self.qkv_w.to(hidden_states.dtype) + self.qkv_b.to(hidden_states.dtype)
+        qkv = qkv.view(B, H, W, 3, self.num_heads, -1)
+        q, k, v = qkv[:, :, :, 0, :, :], qkv[:, :, :, 1, :, :], qkv[:, :, :, 2, :, :]
 
-        # Reshape qkv on CPU for now (ttnn reshape limitations)
-        qkv_pt = ttnn.to_torch(qkv)
-        ttnn.deallocate(qkv)
-        qkv_pt = qkv_pt.view(B, H * W, 3, self.num_heads, -1)
-        q, k, v = qkv_pt[:, :, 0, :, :], qkv_pt[:, :, 1, :, :], qkv_pt[:, :, 2, :, :]
-
-        # SDPA on CPU for now (matching HF eager path exactly)
+        # Attention
         attn = (q * self.scale) @ k.transpose(-2, -1)
         attn = torch.nn.functional.softmax(attn, dtype=torch.float32, dim=-1)
-        out = attn.to(q.dtype) @ v  # [B, H*W, nH, head_dim]
-        out = out.transpose(1, 2).reshape(B, H, W, -1)
+        out = (attn.to(q.dtype) @ v).transpose(2, 3)  # [B, H, W, nH, hd]
 
         # Query pooling
+        out_2d = out.reshape(B, H, W, -1)
         if self.query_stride is not None:
-            out = do_pool(out.reshape(B, H, W, -1), self.query_stride)
+            out_2d = do_pool(out_2d, self.query_stride)
+            H_new, W_new = out_2d.shape[1], out_2d.shape[2]
         else:
-            out = out.reshape(B, H, W, -1)
+            H_new, W_new = H, W
 
         # Output projection
-        tt_out = ttnn.from_torch(out.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
-        result = ttnn.linear(tt_out, self.proj_w, bias=self.proj_b, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(tt_out)
-        result_pt = ttnn.to_torch(result)
-        ttnn.deallocate(result)
-        return result_pt
+        out = out_2d.reshape(B, H_new * W_new, -1)
+        out = out @ self.proj_w.to(out.dtype) + self.proj_b.to(out.dtype)
+        return out
 
 
 class TtnnFeedForward:
-    """Matches HF Sam2FeedForward — proj_in + GELU + proj_out (2 layer MLP)."""
+    """Matches HF Sam2FeedForward — proj_in + GELU + proj_out (2 layer MLP).
+    TODO: Port to ttnn.linear + ttnn.gelu once tested on hardware."""
 
     def __init__(self, input_dim: int, hidden_dim: int, output_dim: int, activation: str = "gelu",
                  device: ttnn.Device = None, state_dict: Optional[dict] = None, prefix: str = ""):
@@ -142,42 +136,17 @@ class TtnnFeedForward:
                 return state_dict[key]
             return torch.randn(shape)
 
-        self.in_w = ttnn.from_torch(
-            _load("mlp.proj_in.weight", (hidden_dim, input_dim)).T.contiguous(),
-            dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
-        )
-        self.in_b = ttnn.from_torch(
-            _load("mlp.proj_in.bias", (hidden_dim,)),
-            dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
-        )
-        self.out_w = ttnn.from_torch(
-            _load("mlp.proj_out.weight", (output_dim, hidden_dim)).T.contiguous(),
-            dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
-        )
-        self.out_b = ttnn.from_torch(
-            _load("mlp.proj_out.bias", (output_dim,)),
-            dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
-        )
+        self.in_w = _load("mlp.proj_in.weight", (hidden_dim, input_dim)).T.contiguous()
+        self.in_b = _load("mlp.proj_in.bias", (hidden_dim,))
+        self.out_w = _load("mlp.proj_out.weight", (output_dim, hidden_dim)).T.contiguous()
+        self.out_b = _load("mlp.proj_out.bias", (output_dim,))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward through MLP. Input/Output on CPU."""
-        tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
-
-        x = ttnn.linear(tt_x, self.in_w, bias=self.in_b, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(tt_x)
-
-        # GELU on CPU (ttnn.gelu exists but needs testing)
-        x_pt = ttnn.to_torch(x)
-        ttnn.deallocate(x)
-        x_pt = torch.nn.functional.gelu(x_pt)
-
-        tt_x2 = ttnn.from_torch(x_pt, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
-        out = ttnn.linear(tt_x2, self.out_w, bias=self.out_b, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(tt_x2)
-
-        result = ttnn.to_torch(out)
-        ttnn.deallocate(out)
-        return result
+        """Forward through MLP on CPU."""
+        x = x @ self.in_w.to(x.dtype) + self.in_b.to(x.dtype)
+        x = torch.nn.functional.gelu(x)
+        x = x @ self.out_w.to(x.dtype) + self.out_b.to(x.dtype)
+        return x
 
 
 class TtnnMultiScaleBlock:
@@ -198,55 +167,32 @@ class TtnnMultiScaleBlock:
                 return state_dict[key]
             return torch.randn(shape)
 
-        # LayerNorms
-        ln1_w = _load("layer_norm1.weight", (dim,))
-        ln1_b = _load("layer_norm1.bias", (dim,))
-        ln2_w = _load("layer_norm2.weight", (dim_out,))
-        ln2_b = _load("layer_norm2.bias", (dim_out,))
-        self.ln1_w = ttnn.from_torch(ln1_w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        self.ln1_b = ttnn.from_torch(ln1_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        self.ln2_w = ttnn.from_torch(ln2_w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        self.ln2_b = ttnn.from_torch(ln2_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        self.ln1_w = _load("layer_norm1.weight", (dim,))
+        self.ln1_b = _load("layer_norm1.bias", (dim,))
+        self.ln2_w = _load("layer_norm2.weight", (dim_out,))
+        self.ln2_b = _load("layer_norm2.bias", (dim_out,))
 
-        # Attention
         self.attn = TtnnMultiScaleAttention(dim, dim_out, num_heads, query_stride, device, state_dict, prefix)
-
-        # MLP
         mlp_hidden = int(dim_out * mlp_ratio)
         self.mlp = TtnnFeedForward(dim_out, mlp_hidden, dim_out, activation, device, state_dict, prefix)
 
-        # Proj (skip connection dim mismatch)
         if dim != dim_out:
-            self.proj_w = ttnn.from_torch(
-                _load("proj.weight", (dim_out, dim)).T.contiguous(),
-                dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
-            )
-            self.proj_b = ttnn.from_torch(
-                _load("proj.bias", (dim_out,)),
-                dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
-            )
+            self.proj_w = _load("proj.weight", (dim_out, dim)).T.contiguous()
+            self.proj_b = _load("proj.bias", (dim_out,))
 
     def forward(self, hidden_states: torch.Tensor, H: int, W: int) -> torch.Tensor:
-        """Forward with (B, N, C) flattened input, returns (B, N', C) flattened output."""
-        # LayerNorm1 on CPU
+        """Forward with (B, N, C) flattened input, returns (B, N', C) flattened output.
+        All on CPU — TODO: port to device operations."""
+        # LayerNorm1
         hidden_states = torch.nn.functional.layer_norm(
-            hidden_states, (self.dim,),
-            self.ln1_w.to(torch.float32) if hasattr(self.ln1_w, 'to') else torch.ones(self.dim),
-            self.ln1_b.to(torch.float32) if hasattr(self.ln1_b, 'to') else torch.zeros(self.dim),
-        )
+            hidden_states, (self.dim,), self.ln1_w, self.ln1_b)
         hidden_states_2d = hidden_states.view(-1, H, W, self.dim)
 
         # Residual projection
         residual = hidden_states_2d
         if self.dim != self.dim_out:
-            # proj + pool on CPU
-            tt_r = ttnn.from_torch(hidden_states_2d.contiguous(), dtype=ttnn.bfloat16,
-                                    layout=ttnn.TILE_LAYOUT, device=self.device)
-            r = ttnn.linear(tt_r, self.proj_w, bias=self.proj_b, memory_config=ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(tt_r)
-            r_pt = ttnn.to_torch(r)
-            ttnn.deallocate(r)
-            residual = do_pool(r_pt, self.query_stride)
+            r = hidden_states_2d @ self.proj_w.to(hidden_states_2d.dtype) + self.proj_b.to(hidden_states_2d.dtype)
+            residual = do_pool(r, self.query_stride)
 
         # Window partition
         ws = self.window_size
@@ -254,39 +200,29 @@ class TtnnMultiScaleBlock:
         if ws > 0:
             hidden_states_2d, pad_hw = window_partition(hidden_states_2d, ws)
             sh = hidden_states_2d.shape
-            hidden_states_pt = hidden_states_2d.view(sh[0], -1, sh[3])
+            hidden_states_pt = hidden_states_2d.view(sh[0], sh[1] * sh[2], sh[3])
         else:
             hidden_states_pt = hidden_states_2d.view(-1, H * W, self.dim)
 
-        # Attention (will reshape internally)
-        # Flatten windows for attn: [B*nW, ws, ws, C] -> [B*nW, ws*ws, C]
-        if ws > 0:
-            sh = hidden_states_2d.shape
-            attn_in = hidden_states_2d.view(sh[0], sh[1] * sh[2], sh[3])
-        else:
-            attn_in = hidden_states_pt
-
-        attn_out_flat = self.attn.forward(attn_in)
-        B_total = attn_out_flat.shape[0]
+        # Attention
+        attn_out = self.attn.forward(hidden_states_pt)
 
         # Window unpartition
+        B_total = attn_out.shape[0]
         if ws > 0:
-            # Reshape attn output back to windows
-            attn_out_windows = attn_out_flat.view(B_total, ws, ws, -1)
+            attn_out_windows = attn_out.view(B_total, ws, ws, -1)
             hidden_states = window_unpartition(attn_out_windows, ws, pad_hw, (H, W))
         else:
-            hidden_states = attn_out_flat.view(-1, H, W, attn_out_flat.shape[-1])
+            new_dim = attn_out.shape[-1]
+            new_H, new_W = H, W
+            hidden_states = attn_out.view(-1, new_H, new_W, new_dim)
 
-        # Residual 1
         new_H, new_W = hidden_states.shape[1], hidden_states.shape[2]
         hidden_states = residual + hidden_states
 
         # LayerNorm2 + MLP + Residual2
         ln_out = torch.nn.functional.layer_norm(
-            hidden_states, (self.dim_out,),
-            self.ln2_w.to(torch.float32) if hasattr(self.ln2_w, 'to') else torch.ones(self.dim_out),
-            self.ln2_b.to(torch.float32) if hasattr(self.ln2_b, 'to') else torch.zeros(self.dim_out),
-        )
+            hidden_states, (self.dim_out,), self.ln2_w, self.ln2_b)
         mlp_out = self.mlp.forward(ln_out.reshape(-1, new_H * new_W, self.dim_out))
         hidden_states = hidden_states + mlp_out.reshape(-1, new_H, new_W, self.dim_out)
 
@@ -295,7 +231,12 @@ class TtnnMultiScaleBlock:
 
 class Sam2HieraImageEncoderTT:
     """TTNN native Hiera image encoder matching Sam2HieraDetModel.
-    12 blocks, windowed/global attention, 4 stages, query pooling at stage boundaries."""
+    12 blocks, windowed/global attention, 4 stages, query pooling at stage boundaries.
+    
+    NOTE: Currently runs on CPU via torch for correctness validation.
+    TODO: Port each block to TTNN ops (ttnn.linear, ttnn.SDPA, ttnn.layer_norm, ttnn.gelu)
+    once hardware CI is available for validation.
+    """
 
     def __init__(
         self,
@@ -318,7 +259,6 @@ class Sam2HieraImageEncoderTT:
         num_channels = config.get("num_channels", 3)
         hidden_size = config.get("hidden_size", 96)
 
-        # Patch embedding: Conv2d(num_channels→hidden_size, k=7,s=4,p=3)
         patch_kernel = config.get("patch_kernel_size", [7, 7])
         patch_stride = config.get("patch_stride", [4, 4])
         patch_padding = config.get("patch_padding", [3, 3])
@@ -328,24 +268,24 @@ class Sam2HieraImageEncoderTT:
                 return state_dict[prefix]
             return torch.randn(shape)
 
-        self.patch_conv_w = ttnn.from_torch(
-            _load("vision_encoder.backbone.patch_embed.projection.weight", (hidden_size, num_channels, patch_kernel[0], patch_kernel[1])),
-            dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
-        )
-        self.patch_conv_b = ttnn.from_torch(
-            _load("vision_encoder.backbone.patch_embed.projection.bias", (hidden_size,)),
-            dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
-        )
-        self.patch_kernel = patch_kernel
+        # Patch embedding weights (CPU ops for now)
+        # TODO: Port to ttnn.conv2d with prepare_conv_params pattern
+        # See models/demos/stable_diffusion_xl_base/tt/tt_downsample2d.py for reference.
+        # ttnn.conv2d expects NHWC input ([B,H,W,C]), returns [result, [H,W], [weights,bias]],
+        # and requires conv_config + compute_config from model_config.
+        self.patch_w = _load("vision_encoder.backbone.patch_embed.projection.weight",
+                             (hidden_size, num_channels, patch_kernel[0], patch_kernel[1]))
+        self.patch_b = _load("vision_encoder.backbone.patch_embed.projection.bias", (hidden_size,))
         self.patch_stride = patch_stride
         self.patch_padding = patch_padding
+        self.patch_kernel = patch_kernel
         self.hidden_size = hidden_size
 
-        # Positional embeddings
+        # Positional embeddings (CPU torch tensors — only used at init, uploaded to device)
         pos_embed = _load("vision_encoder.backbone.pos_embed", (1, hidden_size, 7, 7))
         pos_embed_window = _load("vision_encoder.backbone.pos_embed_window", (1, hidden_size, 8, 8))
-        self.pos_embed = ttnn.from_torch(pos_embed, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        self.pos_embed_window = ttnn.from_torch(pos_embed_window, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        self.pos_embed = pos_embed
+        self.pos_embed_window = pos_embed_window
 
         # Build 12 blocks
         self.blocks = []
@@ -354,28 +294,25 @@ class Sam2HieraImageEncoderTT:
 
         for stage_idx, bps in enumerate(blocks_per_stage):
             for block_idx in range(bps):
-                # dim logic: first block of stage takes dim from prev stage
                 if stage_idx > 0 and block_idx == 0:
                     dim = embed_dim_per_stage[stage_idx - 1]
                 else:
                     dim = embed_dim_per_stage[stage_idx]
                 dim_out = embed_dim_per_stage[stage_idx]
 
-                # window size: 0 for global attention blocks
                 if stage_idx > 0 and block_idx == 0:
                     ws = window_size_per_stage[stage_idx - 1]
                 else:
                     ws = window_size_per_stage[stage_idx]
                 ws = 0 if total_block_idx in global_attention_blocks else ws
 
-                # query stride: first block of stage 1,2,3 (not stage 0 which has no pool)
                 qs = (query_stride if 0 < stage_idx <= num_query_pool_stages and block_idx == 0 else None)
 
                 prefix = f"vision_encoder.backbone.blocks.{total_block_idx}"
                 block = TtnnMultiScaleBlock(
                     dim=dim, dim_out=dim_out,
                     num_heads=num_heads_per_stage[stage_idx],
-                    window_size=ws, query_stride=qs,
+                    window_size=ws, query_stride=tuple(qs) if qs else None,
                     mlp_ratio=mlp_ratio, activation=hidden_act,
                     device=device, state_dict=state_dict, prefix=prefix,
                 )
@@ -384,58 +321,41 @@ class Sam2HieraImageEncoderTT:
 
     def _get_pos_embed(self, H: int, W: int) -> torch.Tensor:
         """Interpolate positional embedding to target spatial size (on CPU)."""
-        pos = self.pos_embed
-        pos_win = self.pos_embed_window
-        # ttnn.interpolate doesn't exist, do on CPU
-        pos_pt = ttnn.to_torch(pos)
-        pos_win_pt = ttnn.to_torch(pos_win)
-        pos_interp = torch.nn.functional.interpolate(pos_pt, size=(H, W), mode="bicubic")
-        # tile window embedding
-        tile_h = H // pos_win_pt.shape[2]
-        tile_w = W // pos_win_pt.shape[3]
-        tiled = pos_win_pt.repeat(1, 1, tile_h, tile_w)
+        pos_interp = torch.nn.functional.interpolate(self.pos_embed, size=(H, W), mode="bicubic")
+        tile_h = H // self.pos_embed_window.shape[2]
+        tile_w = W // self.pos_embed_window.shape[3]
+        tiled = self.pos_embed_window.repeat(1, 1, tile_h, tile_w)
         pos_interp = pos_interp + tiled[:, :, :H, :W]
         return pos_interp  # [B, C, H, W]
 
     def forward(self, pixel_values: torch.Tensor) -> Dict:
         """Forward through backbone. Returns dict with 'last_hidden_state' and 'intermediate_hidden_states'.
+        CPU-only — TODO: port to TTNN ops.
         Matches HF Sam2HieraDetModel.forward()."""
-        # Patch embedding via ttnn.conv2d
-        tt_pv = ttnn.from_torch(pixel_values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
-        hidden_states = ttnn.conv2d(
-            input_tensor=tt_pv,
-            weight_tensor=self.patch_conv_w,
-            bias_tensor=self.patch_conv_b,
-            in_channels=3,
-            out_channels=self.hidden_size,
-            kernel_size=tuple(self.patch_kernel),
-            stride=tuple(self.patch_stride),
-            padding=tuple(self.patch_padding),
-            device=self.device,
-        )
-        ttnn.deallocate(tt_pv)
-        # Conv2d output is [B, C, H, W]; HF expects [B, H, W, C]
-        hs_pt = ttnn.to_torch(hidden_states)
-        ttnn.deallocate(hidden_states)
-        hs_pt = hs_pt.permute(0, 2, 3, 1)  # -> [B, H, W, C]
+        # Patch embedding via torch conv2d
+        # TODO: Replace with ttnn.conv2d with NHWC layout and prepare_conv_params
+        hs = torch.nn.functional.conv2d(
+            pixel_values, self.patch_w, bias=self.patch_b,
+            stride=self.patch_stride, padding=self.patch_padding,
+        )  # [B, C, H, W]
+        hs = hs.permute(0, 2, 3, 1)  # NCHW -> NHWC: [B, H, W, C]
 
         # Add position embedding
-        B, H, W, C = hs_pt.shape
-        pos_emb = self._get_pos_embed(H, W).permute(0, 2, 3, 1)  # [B, H, W, C]
-        hs_pt = hs_pt + pos_emb.to(hs_pt.device, hs_pt.dtype)
+        B, H, W, C = hs.shape
+        pos_emb = self._get_pos_embed(H, W).permute(0, 2, 3, 1)
+        hs = hs + pos_emb.to(hs.device, hs.dtype)
 
         intermediate_hidden_states = []
         for i, block in enumerate(self.blocks):
-            hs_pt = block.forward(hs_pt, H, W)
-            # After block, shape may have changed due to query pooling
-            new_n = hs_pt.shape[1]
+            hs = block.forward(hs, H, W)
+            new_n = hs.shape[1]
             new_h = int(math.sqrt(new_n))
             H, W = new_h, new_h
 
             if i in self.stage_ends:
-                intermediate_hidden_states.append(hs_pt.view(-1, H, W, hs_pt.shape[-1]))
+                intermediate_hidden_states.append(hs.view(-1, H, W, hs.shape[-1]))
 
         return {
-            "last_hidden_state": hs_pt.view(-1, H, W, hs_pt.shape[-1]),
+            "last_hidden_state": hs.view(-1, H, W, hs.shape[-1]),
             "intermediate_hidden_states": tuple(intermediate_hidden_states),
         }
