@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Focused CCL microbenchmarks for the exact GLM sparse-MLA tensor shapes.
+"""Galaxy CCL microbenchmarks for the exact GLM sparse-MLA tensor shapes.
 
 Run individual nodes through ``scripts/run_safe_pytest.sh --profile`` to collect
 device-kernel timings.
@@ -14,8 +14,18 @@ import torch
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
 
-LOUD_BOX_MESH = (2, 4)
+GALAXY_MESH_SHAPE = (8, 4)  # SP=8 x TP=4
+GALAXY_MESH = pytest.param(
+    GALAXY_MESH_SHAPE,
+    marks=pytest.mark.requires_mesh_topology(mesh_shape=GALAXY_MESH_SHAPE, topology="mesh-8x4"),
+    id="galaxy_sp8_tp4",
+)
 FABRIC_2D_DEVICE_PARAMS = {"trace_region_size": 100000, "fabric_config": ttnn.FabricConfig.FABRIC_2D}
+
+GLM_HEADS = 64
+GLM_LOCAL_SP_SEQUENCE = 640
+GLM_QK_HEAD_DIM = 576
+GLM_V_HEAD_DIM = 512
 
 
 def _global_semaphores(mesh_device):
@@ -28,7 +38,7 @@ def _global_semaphores(mesh_device):
     return gather_semaphores, barrier_semaphore
 
 
-@pytest.mark.parametrize("mesh_device", [LOUD_BOX_MESH], indirect=True)
+@pytest.mark.parametrize("mesh_device", [GALAXY_MESH], indirect=True)
 @pytest.mark.parametrize("device_params", [FABRIC_2D_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize(
     "local_tokens,check_values",
@@ -36,7 +46,9 @@ def _global_semaphores(mesh_device):
 )
 def test_kvpe_all_gather_perf(mesh_device, local_tokens, check_values):
     """Profile the SP all-gather used for the GLM KVPE prefix."""
-    global_shape = [1, 1, local_tokens * 2, 576]
+    sp, tp = mesh_device.shape
+    assert (sp, tp) == GALAXY_MESH_SHAPE
+    global_shape = [1, 1, local_tokens * sp, GLM_QK_HEAD_DIM]
     torch_input = (
         torch.rand(global_shape, dtype=torch.bfloat16)
         if check_values
@@ -80,7 +92,7 @@ def test_kvpe_all_gather_perf(mesh_device, local_tokens, check_values):
         ttnn.deallocate(tt_output)
 
 
-def _run_glm_all_to_all(mesh_device, logical_shape, in_dim, out_dim):
+def _run_glm_all_to_all(mesh_device, logical_shape, in_dim, out_dim, expected_input_shape, expected_output_shape):
     torch_input = torch.rand(logical_shape, dtype=torch.bfloat16)
     mesh_mapper = ttnn.MeshMapperConfig(
         [ttnn.PlacementShard(out_dim), ttnn.PlacementShard(in_dim)],
@@ -94,6 +106,7 @@ def _run_glm_all_to_all(mesh_device, logical_shape, in_dim, out_dim):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.create_mesh_mapper(mesh_device, mesh_mapper),
     )
+    assert list(ttnn.get_device_tensors(tt_input)[0].shape) == expected_input_shape
 
     for iteration in range(2):
         tt_output = ttnn.experimental.all_to_all_async_2d(
@@ -105,6 +118,7 @@ def _run_glm_all_to_all(mesh_device, logical_shape, in_dim, out_dim):
             cluster_axis=1,
         )
         ttnn.synchronize_device(mesh_device)
+        assert list(ttnn.get_device_tensors(tt_output)[0].shape) == expected_output_shape
         if iteration == 1:
             actual = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=out_dim))
             equal, message = comp_equal(torch_input, actual)
@@ -112,15 +126,31 @@ def _run_glm_all_to_all(mesh_device, logical_shape, in_dim, out_dim):
         ttnn.deallocate(tt_output)
 
 
-@pytest.mark.parametrize("mesh_device", [LOUD_BOX_MESH], indirect=True)
+@pytest.mark.parametrize("mesh_device", [GALAXY_MESH], indirect=True)
 @pytest.mark.parametrize("device_params", [FABRIC_2D_DEVICE_PARAMS], indirect=True)
 def test_glm_head_to_sequence_all_to_all_perf(mesh_device):
     """Profile ``[1,16,640,576] -> [1,64,160,576]`` across TP=4."""
-    _run_glm_all_to_all(mesh_device, [1, 64, 1280, 576], in_dim=1, out_dim=2)
+    _run_glm_all_to_all(
+        mesh_device,
+        [1, GLM_HEADS, GLM_LOCAL_SP_SEQUENCE * GALAXY_MESH_SHAPE[0], GLM_QK_HEAD_DIM],
+        in_dim=1,
+        out_dim=2,
+        expected_input_shape=[1, 16, 640, 576],
+        expected_output_shape=[1, 64, 160, 576],
+    )
 
 
-@pytest.mark.parametrize("mesh_device", [LOUD_BOX_MESH], indirect=True)
+@pytest.mark.parametrize("mesh_device", [GALAXY_MESH], indirect=True)
 @pytest.mark.parametrize("device_params", [FABRIC_2D_DEVICE_PARAMS], indirect=True)
 def test_glm_sequence_to_head_all_to_all_perf(mesh_device):
     """Profile ``[1,64,160,512] -> [1,16,640,512]`` across TP=4."""
-    _run_glm_all_to_all(mesh_device, [1, 128, 640, 512], in_dim=2, out_dim=1)
+    # SP replicas are represented as distinct synthetic head shards so concatenating all 32 outputs
+    # reconstructs one exact golden tensor while preserving the production per-device shape.
+    _run_glm_all_to_all(
+        mesh_device,
+        [1, GLM_HEADS * GALAXY_MESH_SHAPE[0], GLM_LOCAL_SP_SEQUENCE, GLM_V_HEAD_DIM],
+        in_dim=2,
+        out_dim=1,
+        expected_input_shape=[1, 64, 160, 512],
+        expected_output_shape=[1, 16, 640, 512],
+    )
