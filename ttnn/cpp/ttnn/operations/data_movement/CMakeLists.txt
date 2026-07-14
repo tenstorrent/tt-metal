@@ -20,6 +20,7 @@ file(
     concat/device/kernels/*.cpp
     common/kernels/*.hpp
     fill_pad/device/kernels/*.cpp
+    fill_pad/device/kernels/*.hpp
     fill_rm/device/kernels/*.cpp
     fold/device/kernels/*.cpp
     gather/device/kernels/*.cpp
