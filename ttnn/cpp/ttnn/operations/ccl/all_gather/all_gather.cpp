@@ -21,10 +21,47 @@ std::pair<bool, std::string> use_composite_all_gather(
     const int32_t gather_dim = (dim < 0) ? rank + dim : dim;
     const bool is_last_dim = (gather_dim == rank - 1);
 
-    // Row-major, last-dim gather, unaligned pages.
-    if (input_tensor.layout() == ttnn::Layout::ROW_MAJOR && is_last_dim &&
-        input_tensor.buffer()->page_size() != input_tensor.buffer()->aligned_page_size()) {
-        return {true, "last-dim gather on unaligned row-major pages"};
+    // A row-major gather whose output page differs in size from the input page (wider = concat,
+    // narrower = split) moves data with aligned NoC writes. That requires both pages to be un-padded;
+    // padded ones go to composite. Tile pages are always aligned, so this never fires for tile.
+    if (input_tensor.layout() == ttnn::Layout::ROW_MAJOR) {
+        const uint32_t element_size = input_tensor.element_size();
+        const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
+        const uint32_t input_unaligned_page_size = input_tensor.buffer()->page_size();
+        const bool input_padded = input_unaligned_page_size != input_page_size;
+
+        // Output page size. Interleaved output = full row (only grows vs input -> concat, never
+        // split); sharded output page = one shard width.
+        const ttnn::MemoryConfig output_mem_config = memory_config.value_or(input_tensor.memory_config());
+        bool concat = false;
+        bool split = false;
+        uint32_t output_unaligned_page_size = 0;
+        if (output_mem_config.is_sharded()) {
+            output_unaligned_page_size = output_mem_config.shard_spec()->shape[1] * element_size;
+            concat = output_unaligned_page_size > input_unaligned_page_size;
+            split = input_unaligned_page_size > output_unaligned_page_size;
+        } else {
+            concat = input_tensor.memory_config().is_sharded() || is_last_dim;
+        }
+
+        if ((concat || split) && input_padded) {
+            return {
+                true,
+                fmt::format(
+                    "row-major input page ({} B) is not a multiple of the {} B page alignment",
+                    input_unaligned_page_size,
+                    input_tensor.buffer()->alignment())};
+        }
+        // NoC write alignment (NOC_{L1,DRAM}_WRITE_ALIGNMENT_BYTES = 16 B on Wormhole/Blackhole).
+        constexpr uint32_t noc_write_alignment = 16;
+        if (split && output_unaligned_page_size % noc_write_alignment != 0) {
+            return {
+                true,
+                fmt::format(
+                    "row-major output page ({} B) is not a multiple of the {} B NoC write alignment",
+                    output_unaligned_page_size,
+                    noc_write_alignment)};
+        }
     }
 
     // Tiled, padded on the gather dim.

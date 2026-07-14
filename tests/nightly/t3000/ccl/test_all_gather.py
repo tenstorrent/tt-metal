@@ -923,6 +923,16 @@ def _l1_width_sharded(shard_height, shard_width, num_cores):
     )
 
 
+# Width-sharded RM DRAM config; coarse DRAM page alignment lets a narrow shard have a padded page.
+def _dram_width_sharded(shard_height, shard_width, num_cores):
+    grid = ttnn.num_cores_to_corerangeset(num_cores, ttnn.CoreCoord(8, 8), row_wise=True)
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(grid, (shard_height, shard_width), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("layout, ag_input_dtype", [(ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16)], ids=["rm_bf16"])
@@ -961,6 +971,8 @@ def _l1_width_sharded(shard_height, shard_width, num_cores):
         ([1, 1, 32, 512], -1, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
         # non-last-dim gather (m=1,s=1,k from extents), RM interleaved both sides: gather along height.
         ([1, 1, 256, 64], 2, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+        # split, padded output (m=1,s=2,k=1): DRAM shard content 16B pads to 32B, so split uses content.
+        ([8, 1, 32, 16], 0, _dram_width_sharded(32, 16, 1), _dram_width_sharded(256, 8, 2)),
     ],
     ids=[
         "matched",
@@ -974,6 +986,7 @@ def _l1_width_sharded(shard_height, shard_width, num_cores):
         "multishard_concat_straddle_multipage",
         "rm_interleaved_last_dim",
         "non_last_dim_interleaved",
+        "split_padded_output",
     ],
 )
 @pytest.mark.parametrize(

@@ -181,7 +181,6 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     ////////////////////////////////////////////////////////////////
 
     const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
-    const uint32_t output_page_size = output_tensor.buffer()->aligned_page_size();
 
     auto input_shape = input_tensor.padded_shape();
     uint32_t rank = input_shape.rank();
@@ -191,11 +190,24 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     }
 
     // --- Copy mode ---
-    // output_chunks_per_page > 1 in concat mode; split_factor > 1 in split mode; both
-    // = 1 in matched mode (output_chunk_size == input_page_size == output_page_size).
-    const uint32_t output_chunk_size = std::min(input_page_size, output_page_size);  // NOC write size
-    const uint32_t output_chunks_per_page = std::max(1u, output_page_size / input_page_size);
-    const uint32_t split_factor = std::max(1u, input_page_size / output_page_size);
+    // The kernel always reads whole *aligned* input pages into L1 (required by the input's NoC
+    // read alignment, DRAM or L1) but writes at output *content* (unaligned) granularity, so
+    // chunk sizing differs by mode:
+    //   matched (in == out): 1 chunk per input page, output_chunks_per_page = 1.
+    //   concat  (out > in) : 1 chunk per input page, output_chunks_per_page > 1; each chunk
+    //                        lands at a byte offset within a shared output page.
+    //   split   (in > out) : split_factor chunks per input page, output_chunks_per_page = 1.
+    const uint32_t input_unaligned_page_size = input_tensor.buffer()->page_size();
+    const uint32_t output_unaligned_page_size = output_tensor.buffer()->page_size();
+    // matched/concat write a whole aligned input page (== L1 read stride) into an output slot;
+    // split writes output-content-sized pieces to separate output page bases.
+    const bool is_split = input_unaligned_page_size > output_unaligned_page_size;
+    const uint32_t output_chunk_size = is_split ? output_unaligned_page_size : input_page_size;
+    const uint32_t output_chunks_per_page = is_split ? 1u : output_unaligned_page_size / input_unaligned_page_size;
+    const uint32_t split_factor = is_split ? input_unaligned_page_size / output_unaligned_page_size : 1u;
+    TT_FATAL(
+        output_chunks_per_page == 1 || input_page_size == input_unaligned_page_size,
+        "concat requires an unpadded input page");  // so slots align to content
 
     const uint32_t num_input_pages = input_tensor.buffer()->num_pages();
     const uint32_t num_output_chunks = num_input_pages * split_factor;
@@ -241,7 +253,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
                 extent = input_shape[i] / tile_spec.get_width();
             } else {
                 // This is a page count, so divide by the unaligned page size, not aligned
-                extent = (input_shape[i] * input_tensor.element_size()) / input_tensor.buffer()->page_size();
+                extent = (input_shape[i] * input_tensor.element_size()) / input_unaligned_page_size;
             }
         } else if (input_tensor.layout() == ttnn::TILE_LAYOUT && i == rank - 2) {
             extent = input_shape[i] / tile_spec.get_height();
