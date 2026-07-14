@@ -250,8 +250,9 @@ def test_pipeline_distilled(
 
             from models.tt_dit.tests.dataset_eval.clip_encoder import CLIPEncoder
         except ImportError as e:
-            logger.warning(f"CLIP deps unavailable ({e}), skipping CLIP score check")
-            return
+            # Never silently pass: a requested quality gate with no CLIP deps must surface, not
+            # no-op, or a green run means only that decord was missing. RUN_CLIP=0 skips on purpose.
+            raise RuntimeError(f"CLIP prompt-alignment gate requested but its deps are not installed: {e}") from e
 
         # LTX baseline mean ~31.3 (vs wan2.2's ~37): the LTX prompt exceeds CLIP's 77-token limit
         # so only its head is scored, and frames are read back re-encoded (CRF=25). 28.0 leaves
