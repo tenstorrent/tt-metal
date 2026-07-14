@@ -40,12 +40,6 @@
 #define DEVICE_PRINT_IS_KERNEL 0
 #endif
 
-// FD kernels (cq_*) define FD_CORE_TYPE to the ProgrammableCoreType index of the core they run
-// on (e.g. DISPATCH on Quasar). Ordinary kernels leave it undefined; default to TENSIX.
-#ifndef FD_CORE_TYPE
-#define FD_CORE_TYPE ProgrammableCoreType::TENSIX
-#endif
-
 #define DEVICE_PRINT_STRINGS_SECTION_NAME ".device_print_strings"
 #define DEVICE_PRINT_STRINGS_INFO_SECTION_NAME ".device_print_strings_info"
 
@@ -118,8 +112,9 @@ struct dp_top_callstack_t {
 #if DEVICE_PRINT_IS_KERNEL
         const std::uint32_t launch_index = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
         const auto config = GET_MAILBOX_ADDRESS_DEV(launch[launch_index])->kernel_config;
-        // kernel_config_base[] is indexed by ProgrammableCoreType (see FD_CORE_TYPE default above).
-        kernel_offset = config.kernel_config_base[FD_CORE_TYPE] +
+        // kernel_config_base[] is indexed by ProgrammableCoreType. PROGRAMMABLE_CORE_TYPE is set by
+        // the HAL JIT defines from the build's HalProgrammableCoreType.
+        kernel_offset = config.kernel_config_base[PROGRAMMABLE_CORE_TYPE] +
                         config.kernel_text_offset[internal_::get_hw_thread_idx()];
 #endif
 

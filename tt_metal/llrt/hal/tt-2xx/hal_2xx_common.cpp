@@ -84,6 +84,12 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
                 enchantum::to_string(params.core_type));
             break;
     }
+
+    // Index into kernel_config_base[] / mailboxes for the core type of this build.
+    defines.push_back(fmt::format(
+        "PROGRAMMABLE_CORE_TYPE={}",
+        static_cast<int>(hal_.get_programmable_core_type_index(params.core_type))));
+
     return defines;
 }
 

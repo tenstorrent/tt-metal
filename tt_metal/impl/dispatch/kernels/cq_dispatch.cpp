@@ -150,7 +150,7 @@ constexpr uint32_t completion_queue_base_addr_16B = completion_queue_base_addr >
 constexpr uint32_t dispatch_cb_size = dispatch_cb_page_size * dispatch_cb_pages;
 constexpr uintptr_t dispatch_cb_end = dispatch_cb_base + dispatch_cb_size;
 constexpr uint32_t downstream_cb_end = downstream_cb_base + downstream_cb_size;
-constexpr uint32_t fd_core_type_idx = static_cast<uint32_t>(fd_core_type);
+constexpr uint32_t programmable_core_type_idx = static_cast<uint32_t>(programmable_core_type);
 
 constexpr bool dispatch_s_enabled = dispatch_d_shutdown_sem_id != 0;
 #ifdef ARCH_QUASAR
@@ -193,9 +193,9 @@ struct NocReleasePolicy {
     template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id>
     static FORCE_INLINE void release(uint32_t pages) {
 #ifdef ARCH_QUASAR
-        Semaphore<fd_core_type>(sem_id).up(pages);
+        Semaphore<programmable_core_type>(sem_id).up(pages);
 #else
-        uint32_t sem_addr = get_semaphore<fd_core_type>(sem_id);
+        uint32_t sem_addr = get_semaphore<programmable_core_type>(sem_id);
         noc_semaphore_inc(get_noc_addr_helper(noc_xy, sem_addr), pages, noc_idx);
 #endif
     }
@@ -418,7 +418,7 @@ void process_exec_buf_end_h() {
     if constexpr (split_prefetch) {
         invalidate_l1_cache();
         volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-            get_semaphore<fd_core_type>(prefetch_h_local_downstream_sem_addr));
+            get_semaphore<programmable_core_type>(prefetch_h_local_downstream_sem_addr));
 
         noc_semaphore_inc(
             get_noc_addr_helper(prefetch_h_noc_xy, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(sem_addr))),
@@ -1080,10 +1080,10 @@ static void process_wait() {
     }
     if (notify_prefetch) {
 #ifdef ARCH_QUASAR
-        Semaphore<fd_core_type>(upstream_sync_sem).up(1);
+        Semaphore<programmable_core_type>(upstream_sync_sem).up(1);
 #else
         noc_semaphore_inc(
-            get_noc_addr_helper(upstream_noc_xy, get_semaphore<fd_core_type>(upstream_sync_sem)),
+            get_noc_addr_helper(upstream_noc_xy, get_semaphore<programmable_core_type>(upstream_sync_sem)),
             1,
             upstream_noc_index);
 #endif
@@ -1514,7 +1514,7 @@ void publish_dispatch_d_noc_count(const NocCounterSnapshot& snapshot) {
     set_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(
         upstream_noc_index, posted_writes_delta);
 
-    Semaphore<fd_core_type>(dispatch_d_shutdown_sem_id).set(1);
+    Semaphore<programmable_core_type>(dispatch_d_shutdown_sem_id).set(1);
 }
 
 void kernel_main() {
