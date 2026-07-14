@@ -175,6 +175,12 @@ def test_ccl_census(mesh_device: ttnn.MeshDevice) -> None:
     )  # half the gather payload
     x_v2 = _bf16(torch.randn(1, 1, V_ROWS_S2, v_loc), mesh_device)  # S2: 4x the tokens
     x_v2_full = _bf16(torch.randn(1, 1, V_ROWS_S2, VIDEO_DIM), mesh_device)
+    x_v2_bf8 = ttnn.from_torch(
+        torch.randn(1, 1, V_ROWS_S2, v_loc),
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        device=mesh_device,
+    )  # S2 bf8: half the gather payload, where the out-proj gather is exposed
     ff_v1 = _bf16(torch.randn(1, 1, V_ROWS_S1, 4 * VIDEO_DIM // tp), mesh_device)  # ff2 input (TP-sharded)
     gate_col = _bf16(torch.randn(1, 1, 1, v_loc), mesh_device)  # AdaLN gate slice
     # Row-parallel gate candidate: partials (N,32) all-gathered to (N,128), then one tiny matmul
@@ -433,6 +439,11 @@ def test_ccl_census(mesh_device: ttnn.MeshDevice) -> None:
         ("cut1b_new_attn2_a", new_pair(gate_a, q_a, x_a), False),
         # S2 (4x tokens): separates a collective's fixed cost from its bandwidth cost
         ("ag_activation_video_s2", lambda: ccl.all_gather_persistent_buffer(x_v2, dim=3, mesh_axis=tp_axis), False),
+        (
+            "ag_activation_video_s2_bf8",
+            lambda: ccl.all_gather_persistent_buffer(x_v2_bf8, dim=3, mesh_axis=tp_axis),
+            False,
+        ),
         ("agmm_gate_video_s2", lambda: gate_v(x_v2, parallel_config=pc), True),
         ("agmm_qkv_video_s2", lambda: qkv_v(x_v2, parallel_config=pc), True),
         ("mm_gate_video_s2_gathered", lambda: gate_v(x_v2_full), True),
