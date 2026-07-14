@@ -1,3 +1,7 @@
+> **RESOLVED 2026-07-14 18:48Z — W1 CLEARED.** Guitar absent in BOTH dedup arms at 1080p (w1on 18.71 / w1off
+> 21.83, eyes-on gen#0 captures). Root cause is RESOLUTION-GATED (704p renders the guitar, 27.42; 1080p does not),
+> not W1. Keep the −248 ms win. Do NOT re-run this experiment. See `opt/PROGRESS.md` 18:48Z entry.
+
 # W1 verdict — the one experiment that convicts or clears the dedup
 
 ## Question

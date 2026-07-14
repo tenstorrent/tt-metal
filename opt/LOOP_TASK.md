@@ -8,33 +8,31 @@ Do exactly ONE lap, print a 2-line summary, then EXIT. Never loop forever.
 
 ## NEXT ACTION (read this first — it supersedes the queue)
 
-**The device is DEAD** (all 32 chips off the PCIe bus; `lspci -d 1e52: | wc -l` = 0). No software reset
-can fix it — they all need `/dev/tenstorrent`, which is empty. It needs a **cold power-cycle by a human**.
-If chips are still 0, that is a REAL mechanical block: log it and exit. Do not thrash.
+**The guitar-loss root cause is LOCALIZED (2026-07-14 18:48Z lap): it is RESOLUTION-GATED, not a shared-denoise
+commit.** Same tree, same healthy prompt embedding, only resolution differs: **704p → guitar renders, CLIP 27.42;
+1080p-high → no guitar, CLIP 18.71** (both eyes-on-verified from the gen #0 CAPTURE mp4). W1 (`8016104c27e`), the
+gated-residual fold (`LTX_FOLD_GATED_RESIDUAL`), the all-zero guard (`be06ca2c222`, fail-loud, never fired), and
+the device-embed cache (`/home/smarton/.cache/tt-dit-ltxrt/…`, |max|28.6 std1.0 = healthy) are **ALL EXONERATED**
+— see the 18:48Z LIVE LOG entry in `opt/PROGRESS.md` and the artifacts under `opt/foldverdict/` + `opt/w1verdict/`.
+**Do NOT re-run the W1 verdict or bisect shared-denoise commits — those are closed.**
 
-**THE MOMENT `lspci -d 1e52: | wc -l` IS NON-ZERO, run this and nothing else first:**
+**NEXT, in order:**
+1. **Archaeology first (device-free, host/git):** pin the resolution AND commit of the historical "good 30.85 WITH
+   guitar" anchor. If it was a **704p** render, there was never a 1080p guitar — the "1080p regression" is a
+   cross-resolution confound (704p-guitar 27.42 vs 1080p-no-guitar 18.71), NOT a revertable commit, and the hunt is
+   DONE (record it, pivot the loop back to the 6.0s perf goal). Grep prior logs/PROGRESS for where 30.85 was measured.
+2. **Only if a true 1080p guitar once existed:** the culprit is in the **1080p-high-ONLY path** (spatial upsampler /
+   quality preset), never the shared denoise. A/B that path (upsampler on/off, or bisect only high-res-path commits)
+   with the protocol below.
 
-`opt/w1verdict/` — the experiment that convicts or clears **W1** (`8016104c27e`, `LTX_DEDUP_GATE_GATHER`,
-the −248 ms win) as the cause of the 1080p prompt-adherence regression. Read `opt/w1verdict/PLAN.md`.
-
-Two broker jobs, **no `timeout_sec`** (leave the 600s default):
-- `env_w1_on.yaml`  (LTX_DEDUP_GATE_GATHER=1, the shipping default) — expect no guitar
-- `env_w1_off.yaml` (=0, W1 disabled) — **if the guitar returns, W1 is the regression and must be reverted**
-
-Score CLIP on the HOST from the dumped frames, and **LOOK AT THE FRAME** — a bisect step scored CLIP 27.43
-(below the 28.0 gate) while clearly showing the guitar; a speckle artifact was depressing it. **The guitar is
-ground truth; CLIP only corroborates.**
-
-Why W1 is the suspect: the 1080p failure was measured 07:55; W1 landed 01:53. The two cache commits are
-EXONERATED by timeline (08:43/08:57, after the failure). All C++ changes are exonerated by construction (the
-bisect staged only `models/` against the tip `_ttnn.so`, so they were live in the run that scored 30.85 WITH
-a guitar). That leaves W1 and the all-zero guard (`be06ca2c222`) as the only default-on `models/` changes
-predating the failure.
-
-**CAVEAT (do not lose this):** every CLIP number so far (good 30.85 / bad 18.71) was taken at `LTX_TRACED=0`.
-The staged arms run `LTX_TRACED=1` + `LTX_VIDEO_ONLY=1` (traced denoise is fast; no audio decode ⇒ no cold
-vocoder build). The A/B delta is valid because both arms are traced — but the ABSOLUTE CLIP is not comparable
-across the traced boundary until traced==untraced is measured once. Do not report "18.7 → 31" as one scale.
+**Protocol (hard-won — do not relearn):**
+- Score the **gen #0 CAPTURE mp4** (`ltx_av_fast_{W}x{H}_0.mp4`), NEVER the traced-REPLAY frames dump (gen #1 is a
+  temporally-static degenerate at 1080p). Host scorer: `opt/w1verdict/score_w1_mp4.py <cap.mp4> <ref.mp4>` (imageio
+  + the test's CLIPEncoder) — and **LOOK AT THE FRAME. The guitar is ground truth; CLIP only corroborates.**
+- Run **`LTX_TRACED=1` + `LTX_VIDEO_ONLY=1`** (traced==untraced confirmed for the shipping config: both 18.71).
+  **NEVER `LTX_TRACED=0` at 1080p** — untraced is ~40x slower on-device, blows the 600s cap, SIGKILL wedges fabric.
+- Broker jobs: **no `timeout_sec`** (leave 600s default), owner `[claude]smarton`, workspace = this worktree.
+  Reusable env template: `opt/foldverdict/env_fold_off.yaml` (traced, video-only, 1080p) — edit resolution/flags.
 
 ## Lap steps (in order)
 1. **HALT CHECK.** If `./STOP` or `./DONE` exists → print "HALTED (<which>)" and exit 0. Do nothing else.
