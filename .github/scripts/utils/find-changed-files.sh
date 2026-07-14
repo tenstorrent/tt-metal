@@ -37,7 +37,7 @@ WORKFLOWS_CHANGED=false
 
 while IFS= read -r FILE; do
     case "$FILE" in
-        CMakeLists.txt|**/CMakeLists.txt|**/*.cmake|CMakePresets.json)
+        CMakeLists.txt|**/CMakeLists.txt|**/*.cmake|*.cmake.in|**/*.cmake.in|CMakePresets.json)
             CMAKE_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
