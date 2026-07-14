@@ -2,13 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// SA: SetupOwner::Caller with a chain that still requests reconfig — must not compile.
+// Negative compile test: SetupOwner::Caller with a chain that still requests reconfig.
 //
-// This chain IS fully boot-hoistable (uniform: one CopyTile math-MOP + one Exp SFPU + one pack),
-// so the boot-hoistable guard passes. But CopyTile's default reconfig is Input (and PackTile's is
-// Output), i.e. the element asks the chain to emit a reconfig. Under SetupOwner::Caller the chain
-// emits NO reconfig — the caller owns the setup — so a non-None reconfig knob is inert and lies
-// about what runs inside the helper. The helper must reject it and force the caller to declare None.
+// The chain is fully boot-hoistable so that guard passes, but CopyTile/PackTile default to
+// reconfig Input/Output. Under Caller the chain emits no reconfig, so a non-None reconfig knob is
+// inert and misleading — the helper rejects it and forces the caller to declare None.
+// MUST fail to compile with "non-None reconfig knob".
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"

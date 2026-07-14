@@ -3,9 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-G4 — DEST multi-slot independence for eltwise_chain.
-
-Coverage spec: ttnn/cpp/ttnn/kernel_lib/docs/eltwise_helper_test_coverage.html (group G4, DB-01/02).
+DEST multi-slot independence for eltwise_chain.
 
 dest_multislot.cpp keeps two independent results live in DEST (D0=A+B, D1=C+E) inside one
 tile_regs window, then combines them (D0=D0+D1) and packs. out = A+B+C+E. If the second FPU add
@@ -46,5 +44,5 @@ def test_dest_multislot_independence(device, fp32_dest_acc_en):
     golden = (ta + tb + tc + te).to(torch.float32)
     out = ttnn.to_torch(output).to(torch.float32)
     pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([dt]))
-    logger.info(f"G4 DEST multi-slot fp32_acc={fp32_dest_acc_en} | {msg}")
+    logger.info(f"DEST multi-slot fp32_acc={fp32_dest_acc_en} | {msg}")
     assert pcc_ok, f"D0/D1 not independent (fp32_acc={fp32_dest_acc_en}): {msg}"

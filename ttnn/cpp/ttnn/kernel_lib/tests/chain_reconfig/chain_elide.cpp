@@ -2,15 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Case F — compile-time elision. Same CB across consecutive chain elements on srca; fold's `if constexpr`
-// guard elides every srca-side emission past element 0. Output PackTile is the only emission point.
+// Compile-time reconfig elision: same CB on srca across consecutive elements.
 //
-// Chain shape: CopyTile(CbA, D0) -> CopyTile(CbA, D0) -> CopyTile(CbA, D0) -> PackTile(CbOut).
-// At each CopyTile past element 0: curr_a == prev_a == CbA, reconf_a evaluates to false at compile
-// time, no LLK call emitted. This kernel verifies the refactored fold preserves the elision path.
-//
-// Same-dtype here is fine — the case has no format delta to exercise. Net semantic = CbA (each CopyTile
-// overwrites D0 with the same value).
+// CopyTile(CbA) x3 -> PackTile(CbOut). Past element 0, curr_a == prev_a == CbA so reconf_a is
+// false at compile time and no srca reconfig is emitted; the pack is the only emission point.
+// Net semantic = CbA. Verifies the fold preserves the elision path.
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"

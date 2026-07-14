@@ -5,9 +5,8 @@
 // Feeds the OuterStream toy chain (test_outer_stream.py):
 //   cb_a (c_0): the full Ht*Wt walk, one tile per (ht, wt), pushed in order.
 //   cb_b (c_1): ONE tile per row (b[ht]), pushed at the top of each row so it is present when
-//               the compute kernel begins that row. Mirrors bcast_w's per-row broadcast feed,
-//               but generic. cb_b stays shallow (2-deep) — the producer never stages the whole
-//               column, which is the point of InputLifecycle::OuterStream.
+//               the compute kernel starts that row. cb_b stays shallow (2-deep) — the producer
+//               never stages the whole column, which is the point of OuterStream.
 // Runtime args: a_addr, b_addr, Ht, Wt. Page bytes come from each CB's configured page size.
 
 #include <stdint.h>
