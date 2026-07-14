@@ -376,6 +376,18 @@ jobs:
               ));
             }
 
+  # Copilot PR type labeler — auto-label PRs by change type (feat/fix/docs/etc.)
+  copilot-pr-labeler:
+    if: ${{ github.event_name == 'pull_request' && github.event.action == 'opened' }}
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      copilot-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: tenstorrent/tt-github-actions/.github/actions/copilot-pr-labeler@629b4727fa0dff3d43895601dd538e303880ecbc # main (tt-github-actions#144)
+
   # PR-gate LLK python_tests matrix (tests/pipeline_reorg/llk_pr_gate_tests.yaml).
   # SKU coverage is narrowed below based on find-changed-files outputs.
   llk-smoke-tests:
