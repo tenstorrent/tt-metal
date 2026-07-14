@@ -1,7 +1,8 @@
 # `generate_rank_bindings` — enumerate rank bindings for *all* solutions
 
-Status: **design / plan** (this PR adds documentation only; the CLI flags and
-plumbing described below are implemented in a follow-up PR).
+Status: **implemented**. The `generate_rank_bindings` CLI flags, the
+`map_multi_mesh_to_physical_n` mapper, and the per-solution writers described
+below are in the tree; CPU-only unit tests cover the hashing and index writers.
 
 Tracking: epic [#49514](https://github.com/tenstorrent/tt-metal/issues/49514) ·
 ticket [#49515](https://github.com/tenstorrent/tt-metal/issues/49515) — *Build
@@ -93,7 +94,7 @@ generated/ttrun/<cache_id>/
     rank_bindings.yaml
     rankfile
     solution_meta.yaml          # hosts used, mapping summary, solver stats
-    .solution_key               # full 64-hex signature (collision disambiguation)
+    .solution_key               # full canonical signature string (collision disambiguation)
   <solution_hash>/              # e.g. 8e77d0b4
     rank_bindings.yaml
     rankfile
@@ -110,11 +111,16 @@ generated/ttrun/<cache_id>/
 
 ### Directory naming — content hash of host-set + mapping
 
-Each `<solution_hash>` is the first **8 hex characters** of a SHA-256 over a
-**canonical signature** of the solution:
+Each `<solution_hash>` is a **16-hex-character FNV-1a** hash of a **canonical
+signature** of the solution:
 
 1. the **sorted set of hostnames** the solution occupies, followed by
-2. the **sorted `(fabric_node_id → physical ASIC uid)` mapping** pairs.
+2. the **sorted per-`(mesh_id, mesh_host_rank)` assignment** — which host and
+   which `TT_VISIBLE_DEVICES` each logical mesh host maps to.
+
+(FNV-1a is a fast, deterministic, non-cryptographic hash — chosen over SHA-256
+to avoid a crypto dependency; the full signature string in `.solution_key`
+remains the source of truth for exact comparison.)
 
 Properties this gives us:
 
@@ -128,10 +134,11 @@ Properties this gives us:
   directories (they are genuinely different solutions). With
   `--distinct-host-sets` those variants are never generated, so the host set
   effectively dominates the hash.
-- **Collision-safe** — the full 64-hex signature is written to `.solution_key`.
-  If two distinct signatures ever share the same 8-hex prefix, the second falls
-  back to a full-length-hex directory name (same scheme tt-run uses for
-  `.phase1_cache_key`).
+- **Collision-detectable** — the full canonical signature string is written to
+  `.solution_key` in each solution directory, so a short-hash collision (two
+  distinct signatures hashing to the same 16-hex id) is detectable by comparing
+  `.solution_key`. With a 64-bit hash over a handful of solutions this is
+  vanishingly unlikely in practice.
 
 > Why not `sol_00` / `sol_01`? Sequential names are readable but **unstable** —
 > they depend on solver enumeration order, so the "same" solution can land in a
@@ -158,7 +165,6 @@ solutions:
     host_set: [host-a, host-b, host-c, host-d]
     rank_bindings: 3f9c1a20/rank_bindings.yaml
     rankfile: 3f9c1a20/rankfile
-    solver: { elapsed_us: 12043, preferred_satisfied: 6, preferred_total: 6 }
   - id: 8e77d0b4
     dir: 8e77d0b4
     num_hosts: 4
@@ -166,7 +172,6 @@ solutions:
     host_set: [host-a, host-b, host-c, host-e]
     rank_bindings: 8e77d0b4/rank_bindings.yaml
     rankfile: 8e77d0b4/rankfile
-    solver: { elapsed_us: 15992, preferred_satisfied: 6, preferred_total: 6 }
 ```
 
 `solutions` is ordered by the solver's preference ranking (best first); `id`
@@ -175,44 +180,54 @@ without depending on order.
 
 ---
 
-## Implementation plan (follow-up PR)
+## Implementation
 
-The solver-level enumeration already exists; the work is to **surface it through
+The solver-level enumeration already existed; this feature **surfaces it through
 the multi-mesh layer and the CLI**.
 
 1. **`topology_mapper_utils` — multi-solution entry point.**
-   Add `std::vector<TopologyMappingResult> map_multi_mesh_to_physical_n(...,
-   size_t max_solutions, bool unique_shapes)` alongside the existing single-result
-   `map_multi_mesh_to_physical`. The multi-mesh path already drives
-   `TopologyMappingEnumerationSession` / `MeshEnumState` to pack conflict-free
-   placements; extend it to yield **multiple complete packings** rather than
-   returning after the first. `max_solutions` and `unique_shapes` thread down to
-   the per-shape `session.next(...)` calls. The single-result function stays as a
-   thin wrapper (`_n(..., 1, ...).front()`), so no existing caller changes.
+   `std::vector<TopologyMappingResult> map_multi_mesh_to_physical_n(...,
+   size_t max_solutions, bool unique_shapes)` sits alongside the untouched
+   single-result `map_multi_mesh_to_physical` (zero regression risk for existing
+   callers). It **enumerates distinct inter-mesh placements** — which physical
+   meshes / hosts host each logical mesh — via `solve_topology_mapping_n`
+   (the proven blocking-clause search), passing `max_solutions` and
+   `unique_shapes` straight through. Each placement is then completed with the
+   same per-mesh intra-mesh (fabric-node → ASIC) solve the single-result path
+   uses; placements whose intra-mesh mapping is infeasible are skipped, and
+   results are deduplicated by their full fabric-node → ASIC assignment.
+
+   > **Enumeration granularity:** distinctness is currently driven by the
+   > **inter-mesh placement** (which physical meshes / hosts). This fully covers
+   > `--distinct-host-sets` and `--max-solutions`. Enumerating additional
+   > intra-mesh permutations *within a fixed placement* (finer-grained "all") is
+   > a bounded follow-up; the plumbing (`unique_shapes`, per-mesh
+   > `solve_topology_mapping_n`) is already in place to extend it.
 
 2. **`generate_rank_bindings.cpp` — CLI + write loop.**
-   - Add `--all-solutions` / `--max-solutions` / `--distinct-host-sets` to
-     `ProgramArgs` and `parse_arguments`.
-   - When enabled, `run_topology_mapping` calls the `_n` variant.
-   - Loop over results: run `extract_rank_bindings` per solution, compute the
-     solution signature hash, create `<output-dir>/<solution_hash>/`, and write
-     `rank_bindings.yaml` + `rankfile` (+ `phase2_mock_mapping.yaml` in mock mode)
-     + `solution_meta.yaml` + `.solution_key`.
-   - Write `solutions_index.yaml` at `--output-dir`.
-   - Keep the rank-0-only + `fsync` + MPI-barrier discipline already in `main()`;
-     fsync every file and each solution subdir before the barrier.
+   `--all-solutions` / `--max-solutions` / `--distinct-host-sets` are parsed into
+   `ProgramArgs`; the shared setup is factored into `build_topology_mapping_inputs`
+   so `run_topology_mapping` (single) and `run_topology_mapping_n` (all) share it.
+   In the rank-0 path, the default writes one solution flat (unchanged); with
+   `--all-solutions` it loops the results, runs `extract_rank_bindings` per
+   solution, computes the signature hash, writes `<output-dir>/<solution_hash>/`
+   (`rank_bindings.yaml` + `rankfile` + `phase2_mock_mapping.yaml` in mock mode
+   + `solution_meta.yaml` + `.solution_key`), then writes `solutions_index.yaml`.
+   The existing rank-0-only + `fsync` + MPI-barrier discipline is preserved (every
+   file and subdir is fsync'd before the barrier).
 
 3. **`generate_rank_bindings_helpers.hpp` — writers + hashing.**
-   Add `compute_solution_signature_hash(rank_bindings)`,
-   `write_solution_meta_yaml(...)`, and `write_solutions_index_yaml(...)`
-   next to the existing `write_rank_bindings_yaml` / `write_rankfile`.
+   `compute_solution_signature_hash` / `compute_solution_signature_string`,
+   `write_solution_meta_yaml`, and `write_solutions_index_yaml` (plus the
+   `SolutionIndexEntry` struct) sit next to the existing
+   `write_rank_bindings_yaml` / `write_rankfile`.
 
-4. **Tests** (`tools/tests/scaleout/test_generate_rank_bindings.cpp`, CPU-only,
-   mock cluster descriptors): enumerate N solutions and assert distinct
-   subdirectories; hash stability across two runs; `solutions_index.yaml`
-   correctness (`found`, `truncated`, per-solution `host_set`); and that
-   `--distinct-host-sets` collapses same-host permutations while the default does
-   not. Cover `--max-solutions` truncation and the zero-solution case.
+4. **Tests** (`tools/tests/scaleout/test_generate_rank_bindings.cpp`, CPU-only):
+   hash stability / order-independence; same-hosts-different-mapping → different
+   hash; `solutions_index.yaml` field correctness (`mode`, `max_solutions`,
+   `found`, `truncated`, per-solution `host_set`); and `solution_meta.yaml`
+   contents. (End-to-end enumeration on real/mock clusters runs under MPI and is
+   exercised via the tt-run flows.)
 
 ### Edge cases / decisions
 
