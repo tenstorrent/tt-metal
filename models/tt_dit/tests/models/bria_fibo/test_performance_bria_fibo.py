@@ -85,6 +85,15 @@ def _fibo_local():
         pytest.skip(f"FIBO not cached: {e}")
 
 
+def _num_links(mesh_device):
+    """Ethernet links available per hop for CCL on this mesh (matches the pipeline's shape-driven pick).
+
+    The 4x8 Blackhole Galaxy exposes only 2 channels per hop (num_links=4 -> fabric 'link index out of
+    bounds' fatal); the 2x2 dev mesh supports 4. Unknown shapes fall back to the safe minimum of 1.
+    """
+    return {(2, 2): 4, (4, 8): 2}.get(tuple(mesh_device.shape), 1)
+
+
 def _build_pipe(mesh_device, height, width):
     from models.tt_dit.pipelines.bria_fibo.pipeline_bria_fibo import BriaFiboPipeline, BriaFiboPipelineConfig
 
@@ -269,7 +278,7 @@ def test_fibo_pipeline_perf_breakdown(*, mesh_device, height, width, num_inferen
     )
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=["mesh_device"])
+@pytest.mark.parametrize("mesh_device", [(2, 2), (4, 8)], indirect=["mesh_device"])
 @pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=["device_params"])
 @pytest.mark.parametrize("height, width, num_inference_steps, num_measured_runs", [(1024, 1024, 30, 3)])
 @pytest.mark.parametrize("traced", [False, True], ids=["untraced", "traced"])
@@ -303,7 +312,7 @@ def test_fibo_pipeline_perf_breakdown_json(
     )
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=["mesh_device"])
+@pytest.mark.parametrize("mesh_device", [(2, 2), (4, 8)], indirect=["mesh_device"])
 @pytest.mark.parametrize("device_params", [_PROFILE_DEVICE_PARAMS], indirect=["device_params"])
 @pytest.mark.parametrize("height, width, num_inference_steps", [(1024, 1024, 1)])
 def test_fibo_pipeline_device_profile(*, mesh_device, height, width, num_inference_steps):
@@ -460,7 +469,7 @@ def _profile_forward(mesh_device, header, forward):
     return out
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=["mesh_device"])
+@pytest.mark.parametrize("mesh_device", [(2, 2), (4, 8)], indirect=["mesh_device"])
 @pytest.mark.parametrize("device_params", [_PROFILE_DEVICE_PARAMS], indirect=["device_params"])
 def test_fibo_encode_device_profile(*, mesh_device):
     """Device-op profile of ONLY the SmolLM3 text encoder (encode stage), 2x2 mesh, replicated (as in the pipeline).
@@ -475,7 +484,7 @@ def test_fibo_encode_device_profile(*, mesh_device):
     from models.tt_dit.pipelines.bria_fibo.text_encoder import SmolLM3TextEncoderWrapper
 
     ckpt = _fibo_local()
-    ccl = CCLManager(mesh_device, num_links=4, topology=ttnn.Topology.Linear)
+    ccl = CCLManager(mesh_device, num_links=_num_links(mesh_device), topology=ttnn.Topology.Linear)
     # tp factor 1 -> fully replicated across the mesh (matches the pipeline's encoder_parallel_config).
     encoder = SmolLM3TextEncoderWrapper(
         ckpt, device=mesh_device, ccl_manager=ccl, parallel_config=EncoderParallelConfig.from_tuple((1, 1))
@@ -487,7 +496,7 @@ def test_fibo_encode_device_profile(*, mesh_device):
     assert prompt_embeds is not None and len(hidden_states) > 0
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=["mesh_device"])
+@pytest.mark.parametrize("mesh_device", [(2, 2), (4, 8)], indirect=["mesh_device"])
 @pytest.mark.parametrize("device_params", [_PROFILE_DEVICE_PARAMS], indirect=["device_params"])
 @pytest.mark.parametrize("height, width", [(1024, 1024)])
 def test_fibo_denoise_device_profile(*, mesh_device, height, width):
@@ -512,7 +521,7 @@ def test_fibo_denoise_device_profile(*, mesh_device, height, width):
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     tp_factor = tuple(mesh_device.shape)[tp_axis]
 
-    ccl = CCLManager(mesh_device, num_links=4, topology=ttnn.Topology.Linear)
+    ccl = CCLManager(mesh_device, num_links=_num_links(mesh_device), topology=ttnn.Topology.Linear)
     parallel_config = DiTParallelConfig.from_tuples(cfg=(1, 0), sp=(sp_factor, sp_axis), tp=(tp_factor, tp_axis))
 
     checkpoint = BriaFiboCheckpoint(_fibo_local())
@@ -565,7 +574,7 @@ def test_fibo_denoise_device_profile(*, mesh_device, height, width):
     assert out is not None
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=["mesh_device"])
+@pytest.mark.parametrize("mesh_device", [(2, 2), (4, 8)], indirect=["mesh_device"])
 @pytest.mark.parametrize("device_params", [_PROFILE_DEVICE_PARAMS], indirect=["device_params"])
 @pytest.mark.parametrize("height, width", [(1024, 1024)])
 def test_fibo_decode_device_profile(*, mesh_device, height, width):
@@ -585,7 +594,7 @@ def test_fibo_decode_device_profile(*, mesh_device, height, width):
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     tp_factor = tuple(mesh_device.shape)[tp_axis]
 
-    ccl = CCLManager(mesh_device, num_links=4, topology=ttnn.Topology.Linear)
+    ccl = CCLManager(mesh_device, num_links=_num_links(mesh_device), topology=ttnn.Topology.Linear)
     # Height on the tp axis, width on the sp axis (matches the pipeline's vae_parallel_config).
     parallel_config = VaeHWParallelConfig.from_tuples(height=(tp_factor, tp_axis), width=(sp_factor, sp_axis))
     vae = WanVAEDecoderAdapter(
