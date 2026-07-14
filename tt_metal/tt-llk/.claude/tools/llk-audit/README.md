@@ -228,8 +228,10 @@ Then `python3 tests/test_checks.py` to confirm nothing regressed.
   surfaces **1 `UNRESOLVED_COWRITER`** candidate: `RISC_DEST_ACCESS_CTRL` (word 3), a
   template `set_dest_fmt<t>` writing `SEC0/1/2_fmt` whose thread(s) it cannot statically
   resolve — HW-safe by disjoint masked SEC fields, surfaced for the LLM to confirm, not a
-  confirmed race; mmio-race's 169 unguarded writes are
-  correctly `AUTOTTSYNC_ORDERED`; reconfig recall works via `cfg_rmw`.
+  confirmed race; mmio-race's 126 unguarded writes are
+  correctly `AUTOTTSYNC_ORDERED` (the instruction-issue `INSTRN_BUF` / sync `PC_BUF`
+  FIFO casts — MMIO but not config, per the ISA — are excluded, not mis-flagged as
+  config writes); reconfig recall works via `cfg_rmw`.
 
 The HW claims the checkers encode are grounded in the tt-isa-docs
 (`BackendConfiguration.md`: the `Config` vs `ThreadConfig` split and that `SETC16`

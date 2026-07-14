@@ -116,24 +116,52 @@ raw `facts.<arch>.jsonl` inspection (L4's writes ARE emitted, just unrouted).
   tag (see mmio-race `blind_spots`) over-clears the excepted/non-CFG-GPR subset these MOP writes belong
   to — even if captured they'd need the exception-aware tagging, not a blanket auto-order.
 
-### L7 — QSR `AUTOTTSYNC_ORDERED` blanket tag ignores TTSync's RQ exceptions + non-CFG/GPR MMIO
+### L7 — QSR `AUTOTTSYNC_ORDERED` blanket tag ignores TTSync's RQ *consumer* exceptions
 `mmio_race.py` converts every unguarded QSR write `NO_LOCAL_ORDERING → AUTOTTSYNC_ORDERED` (pre-cleared,
 "not a race candidate"). QSR genuinely enables Auto TTSync (`set_ttsync_enables<TRACK_ALL>`,
 `llk_math_common.h:32`), so this is CORRECT for a tracked CFG/GPR write with an RQ-tracked consumer. But
 per Confluence "Every Conceivable TTSync Detail" 1340276980, the RQ EXCEPTS `RESOURCEDECL`, `MOP_CFG`,
-`REPLAY(load=1)`, and post-load-replay instructions — a write consumed by one of those is NOT
-auto-ordered — and TTSync tracks only CFG/GPR/TDMA, not other MMIO spaces (e.g. the replay unit
-`replay_mmap[...]`). The blanket tag over-clears both.
-- **Risk:** CAP-REDUCTION — pre-clears (marks non-candidate) a write TTSync does not actually order.
-- **Live today:** 10 `replay_mmap[...]` writes in `start/finish_using_replay_mmio_load` (replay-unit
-  MMIO, in a REPLAY-load context) are tagged `AUTOTTSYNC_ORDERED`. They are NOT a live race — ordered by
-  an explicit `fence`+CSR chicken-bit + `wait_replay_idle()` + mutex (ref TEN-2139) — but the tag's
-  *reasoning* is wrong (attributes safety to TTSync). Disclosed in mmio-race `blind_spots`.
-- **Fix:** tag by consumer/target — auto-clear only a CFG/GPR write whose consumer is RQ-tracked;
-  SURFACE (not pre-clear) a write consumed by MOP_CFG/REPLAY/RESOURCEDECL or targeting non-CFG/GPR MMIO.
+`REPLAY(load=1)`, and post-load-replay instructions — a write CONSUMED by one of those is NOT
+auto-ordered, yet the blanket tag pre-clears it anyway.
+- **Non-CFG/GPR MMIO arm — RESOLVED.** TTSync tracks only CFG/GPR/TDMA, so a write to another MMIO space
+  (the replay unit's `replay_mmap[...]`, the `INSTRN_BUF` instruction-issue / `PC_BUF` sync FIFOs) was
+  also wrongly tagged. `registry.classify_write` now classifies a `reinterpret_cast<…>(BASE)` by REGION
+  (ISA-grounded): the `INSTRN_BUF`/`PC_BUF` FIFO casts (which `replay_mmap` resolves to —
+  `INSTRN_BUF_BASE + (1<<10)`) are EXCLUDED at classify, so they never reach mmio-race and are no longer
+  mis-tagged. Only the RQ *consumer*-exception arm below remains.
+- **Risk:** CAP-REDUCTION — pre-clears (marks non-candidate) a CFG/GPR write whose RQ-EXCEPTED consumer
+  TTSync does not actually order.
+- **Live today:** none mechanically identifiable — the former `replay_mmap` example is now excluded (see
+  above), and whether one of the 126 QSR `AUTOTTSYNC_ORDERED` CFG/GPR writes is consumed by an
+  RQ-excepted instruction (MOP_CFG/REPLAY/RESOURCEDECL) is the skill's interprocedural verdict, not a
+  fact the tool decides. Disclosed in mmio-race `blind_spots`.
+- **Fix:** tag by consumer — auto-clear only a CFG/GPR write whose consumer is RQ-tracked; SURFACE (not
+  pre-clear) a write consumed by MOP_CFG/REPLAY/RESOURCEDECL.
 - **Fix hazard:** FALSE-FLAG if narrowed bluntly — QSR MOP/replay writes are generally safe (bank
   backpressure / fence-mutex), so surfacing them all would over-flag; a correct fix needs consumer-type
-  + target-space discrimination the tool does not have today → deferred.
+  discrimination the tool does not have today → deferred.
+
+### L8 — XMOV/Mover TDMA-RISC param & command registers under-recalled (only `_L1_BASE` caught)
+`classify_write` recalls a `reinterpret_cast<volatile*>(RISCV_TDMA_REG_XMOV_L1_BASE_ADDR)` write (in
+`ckernel_xmov.h::xmov_set_base`) as an `mmio_ptr` config write — matched via the `"base"` hint — because
+per ISA `TDMA-RISC.md` the `RISCV_TDMA_REG_*` block is "config/MMIO registers written by RISC-V and
+consumed by the Mover." But the **sibling** Mover registers written in the same header lack `"base"` and
+are NOT recalled: `RISCV_TDMA_REG_XMOV_SRC_ADDR` / `_DST_ADDR` / `_XMOV_SIZE` / `_XMOV_DIRECTION` (params,
+`xmov_l1_to_l1_non_compact`) and `RISCV_TDMA_REG_COMMAND_ADDR` (the enqueue that triggers the Mover,
+`xmov_cfg_program` / `xmov_cfg_instr_program` / `xmov_l1_to_l1_non_compact`). WH + BH each (`ckernel_xmov.h`).
+- **Risk:** CAP-REDUCTION — recall INCONSISTENCY: the tool surfaces 1 of the 6 XMOV register-write types
+  as a config-write candidate and silently drops the other 5 of the same class.
+- **Live today:** unclear whether any is a real hazard. The sequence is same-core param-writes-then-
+  COMMAND-write to one MMIO block; the Mover is a **TDMA engine**, not a Tensix-FIFO instruction, so it
+  sits OUTSIDE mmio-race's Tensix-instruction consumer model — whether the param→command ordering needs
+  a fence (vs being HW-ordered by same-core posted-write order) is UNVERIFIED (not yet grounded in the
+  ISA memory-ordering pages). The `_L1_BASE` write is already surfaced, so this is about consistency.
+- **Fix:** a region hint for the XMOV/Mover command block — but a bare `"tdma"`/`"xmov"` substring
+  over-reached in trials (it also pulls in `RISCV_TDMA_REG_STATUS`, which `xmov_wait_till_idle` only
+  READS), and expanding recall here changes the WH/BH ground-truth baseline (+writes) — a recall change
+  that must be verified against the Mover-ordering semantics first, not folded into a false-flag fix.
+- **Fix hazard:** FALSE-FLAG / baseline churn — surfacing 5 more XMOV writes per arch as config-write
+  candidates when the Mover-ordering hazard is unconfirmed would over-flag; ground the ordering first → deferred.
 
 ### X1 — object-method `async_read_with_state` not recalled by `noc_is_read`
 `noc_is_read` recalls the whole free-function `noc_async_read*` family by prefix, but its
