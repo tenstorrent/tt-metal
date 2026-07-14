@@ -201,7 +201,7 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.experimental.topk_large_indices">
-<span class="sig-prename descclassname"><span class="pre">ttnn.experimental.</span></span><span class="sig-name descname"><span class="pre">topk_large_indices</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">k</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.experimental.topk_large_indices" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.experimental.</span></span><span class="sig-name descname"><span class="pre">topk_large_indices</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">k</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">valid_length</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.experimental.topk_large_indices" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Experimental Top-K over the last dimension of a row-major BFLOAT16 tensor.
@@ -233,6 +233,16 @@ survive into the final top-k result.</p>
 <li><p>the last dimension must be &gt;= k and &lt;= 1,073,741,824 elements.</p></li>
 </ul>
 </dd>
+<dt>valid_length (optional):</dt>
+<dd>
+<ul class="simple">
+<li><p>restricts the search to the first <code class="docutils literal notranslate"><span class="pre">valid_length</span></code> columns of each row;</p></li>
+<li><p>the remaining columns are ignored – neither read nor ranked – so an
+over-allocated row whose tail is stale can be searched without slicing it;</p></li>
+<li><p>must be in [k, last dimension]; defaults to the full last dimension;</p></li>
+<li><p>applied at runtime (no recompile), so a loop growing valid_length reuses one program.</p></li>
+</ul>
+</dd>
 </dl>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
@@ -241,6 +251,7 @@ survive into the final top-k result.</p>
 <ul class="simple">
 <li><p><strong>input_tensor</strong> – device tensor with ROW_MAJOR layout and BFLOAT16 dtype.</p></li>
 <li><p><strong>k</strong> – required number of indices to return.</p></li>
+<li><p><strong>valid_length</strong> – optional number of leading columns to search (default: full width).</p></li>
 </ul>
 </dd>
 </dl>

@@ -635,25 +635,23 @@ references without parsing the kernel source.</p>
 <span class="linenos">108</span><span class="w">            </span><span class="n">TT_ASSERT</span><span class="p">(</span><span class="nb">false</span><span class="p">,</span><span class="w"> </span><span class="s">"Core not in specified core ranges"</span><span class="p">);</span>
 <span class="linenos">109</span><span class="w">        </span><span class="p">}</span>
 <span class="linenos">110</span>
-<span class="linenos">111</span><span class="w">        </span><span class="n">reader_desc</span><span class="p">.</span><span class="n">runtime_args</span><span class="p">.</span><span class="n">emplace_back</span><span class="p">(</span>
-<span class="linenos">112</span><span class="w">            </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">KernelDescriptor</span><span class="o">::</span><span class="n">CoreRuntimeArgs</span><span class="p">{</span><span class="n">src_buffer</span><span class="o">-&gt;</span><span class="n">address</span><span class="p">(),</span><span class="w"> </span><span class="n">num_tiles_per_core</span><span class="p">,</span><span class="w"> </span><span class="n">num_tiles_written</span><span class="p">});</span>
-<span class="linenos">113</span>
-<span class="linenos">114</span><span class="w">        </span><span class="n">writer_desc</span><span class="p">.</span><span class="n">runtime_args</span><span class="p">.</span><span class="n">emplace_back</span><span class="p">(</span>
-<span class="linenos">115</span><span class="w">            </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">KernelDescriptor</span><span class="o">::</span><span class="n">CoreRuntimeArgs</span><span class="p">{</span><span class="n">dst_buffer</span><span class="o">-&gt;</span><span class="n">address</span><span class="p">(),</span><span class="w"> </span><span class="n">num_tiles_per_core</span><span class="p">,</span><span class="w"> </span><span class="n">num_tiles_written</span><span class="p">});</span>
+<span class="linenos">111</span><span class="w">        </span><span class="n">reader_desc</span><span class="p">.</span><span class="n">emplace_runtime_args</span><span class="p">(</span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="n">src_buffer</span><span class="p">,</span><span class="w"> </span><span class="n">num_tiles_per_core</span><span class="p">,</span><span class="w"> </span><span class="n">num_tiles_written</span><span class="p">});</span>
+<span class="linenos">112</span>
+<span class="linenos">113</span><span class="w">        </span><span class="n">writer_desc</span><span class="p">.</span><span class="n">emplace_runtime_args</span><span class="p">(</span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="n">dst_buffer</span><span class="p">,</span><span class="w"> </span><span class="n">num_tiles_per_core</span><span class="p">,</span><span class="w"> </span><span class="n">num_tiles_written</span><span class="p">});</span>
+<span class="linenos">114</span>
+<span class="linenos">115</span><span class="w">        </span><span class="n">compute_desc</span><span class="p">.</span><span class="n">runtime_args</span><span class="p">.</span><span class="n">emplace_back</span><span class="p">(</span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">KernelDescriptor</span><span class="o">::</span><span class="n">CoreRuntimeArgs</span><span class="p">{</span><span class="n">num_tiles_per_core</span><span class="p">});</span>
 <span class="linenos">116</span>
-<span class="linenos">117</span><span class="w">        </span><span class="n">compute_desc</span><span class="p">.</span><span class="n">runtime_args</span><span class="p">.</span><span class="n">emplace_back</span><span class="p">(</span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">KernelDescriptor</span><span class="o">::</span><span class="n">CoreRuntimeArgs</span><span class="p">{</span><span class="n">num_tiles_per_core</span><span class="p">});</span>
-<span class="linenos">118</span>
-<span class="linenos">119</span><span class="w">        </span><span class="n">num_tiles_written</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">num_tiles_per_core</span><span class="p">;</span>
-<span class="linenos">120</span><span class="w">    </span><span class="p">}</span>
-<span class="linenos">121</span>
-<span class="linenos">122</span><span class="w">    </span><span class="n">desc</span><span class="p">.</span><span class="n">kernels</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">reader_desc</span><span class="p">));</span>
-<span class="linenos">123</span><span class="w">    </span><span class="n">desc</span><span class="p">.</span><span class="n">kernels</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">writer_desc</span><span class="p">));</span>
-<span class="linenos">124</span><span class="w">    </span><span class="n">desc</span><span class="p">.</span><span class="n">kernels</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">compute_desc</span><span class="p">));</span>
-<span class="linenos">125</span>
-<span class="linenos">126</span><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">desc</span><span class="p">;</span>
-<span class="linenos">127</span><span class="p">}</span>
-<span class="linenos">128</span>
-<span class="linenos">129</span><span class="p">}</span><span class="w">  </span><span class="c1">// namespace ttnn::operations::examples</span>
+<span class="linenos">117</span><span class="w">        </span><span class="n">num_tiles_written</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">num_tiles_per_core</span><span class="p">;</span>
+<span class="linenos">118</span><span class="w">    </span><span class="p">}</span>
+<span class="linenos">119</span>
+<span class="linenos">120</span><span class="w">    </span><span class="n">desc</span><span class="p">.</span><span class="n">kernels</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">reader_desc</span><span class="p">));</span>
+<span class="linenos">121</span><span class="w">    </span><span class="n">desc</span><span class="p">.</span><span class="n">kernels</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">writer_desc</span><span class="p">));</span>
+<span class="linenos">122</span><span class="w">    </span><span class="n">desc</span><span class="p">.</span><span class="n">kernels</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">compute_desc</span><span class="p">));</span>
+<span class="linenos">123</span>
+<span class="linenos">124</span><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">desc</span><span class="p">;</span>
+<span class="linenos">125</span><span class="p">}</span>
+<span class="linenos">126</span>
+<span class="linenos">127</span><span class="p">}</span><span class="w">  </span><span class="c1">// namespace ttnn::operations::examples</span>
 </pre></div>
 </div>
 </div>
@@ -770,25 +768,23 @@ references without parsing the kernel source.</p>
 <span class="linenos">106</span><span class="w">            </span><span class="n">TT_ASSERT</span><span class="p">(</span><span class="nb">false</span><span class="p">,</span><span class="w"> </span><span class="s">"Core not in specified core ranges"</span><span class="p">);</span>
 <span class="linenos">107</span><span class="w">        </span><span class="p">}</span>
 <span class="linenos">108</span>
-<span class="linenos">109</span><span class="w">        </span><span class="n">reader_desc</span><span class="p">.</span><span class="n">runtime_args</span><span class="p">.</span><span class="n">emplace_back</span><span class="p">(</span>
-<span class="linenos">110</span><span class="w">            </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">KernelDescriptor</span><span class="o">::</span><span class="n">CoreRuntimeArgs</span><span class="p">{</span><span class="n">src_buffer</span><span class="o">-&gt;</span><span class="n">address</span><span class="p">(),</span><span class="w"> </span><span class="n">num_tiles_per_core</span><span class="p">,</span><span class="w"> </span><span class="n">num_tiles_written</span><span class="p">});</span>
-<span class="linenos">111</span>
-<span class="linenos">112</span><span class="w">        </span><span class="n">writer_desc</span><span class="p">.</span><span class="n">runtime_args</span><span class="p">.</span><span class="n">emplace_back</span><span class="p">(</span>
-<span class="linenos">113</span><span class="w">            </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">KernelDescriptor</span><span class="o">::</span><span class="n">CoreRuntimeArgs</span><span class="p">{</span><span class="n">dst_buffer</span><span class="o">-&gt;</span><span class="n">address</span><span class="p">(),</span><span class="w"> </span><span class="n">num_tiles_per_core</span><span class="p">,</span><span class="w"> </span><span class="n">num_tiles_written</span><span class="p">});</span>
+<span class="linenos">109</span><span class="w">        </span><span class="n">reader_desc</span><span class="p">.</span><span class="n">emplace_runtime_args</span><span class="p">(</span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="n">src_buffer</span><span class="p">,</span><span class="w"> </span><span class="n">num_tiles_per_core</span><span class="p">,</span><span class="w"> </span><span class="n">num_tiles_written</span><span class="p">});</span>
+<span class="linenos">110</span>
+<span class="linenos">111</span><span class="w">        </span><span class="n">writer_desc</span><span class="p">.</span><span class="n">emplace_runtime_args</span><span class="p">(</span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="n">dst_buffer</span><span class="p">,</span><span class="w"> </span><span class="n">num_tiles_per_core</span><span class="p">,</span><span class="w"> </span><span class="n">num_tiles_written</span><span class="p">});</span>
+<span class="linenos">112</span>
+<span class="linenos">113</span><span class="w">        </span><span class="n">compute_desc</span><span class="p">.</span><span class="n">runtime_args</span><span class="p">.</span><span class="n">emplace_back</span><span class="p">(</span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">KernelDescriptor</span><span class="o">::</span><span class="n">CoreRuntimeArgs</span><span class="p">{</span><span class="n">num_tiles_per_core</span><span class="p">});</span>
 <span class="linenos">114</span>
-<span class="linenos">115</span><span class="w">        </span><span class="n">compute_desc</span><span class="p">.</span><span class="n">runtime_args</span><span class="p">.</span><span class="n">emplace_back</span><span class="p">(</span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">KernelDescriptor</span><span class="o">::</span><span class="n">CoreRuntimeArgs</span><span class="p">{</span><span class="n">num_tiles_per_core</span><span class="p">});</span>
-<span class="linenos">116</span>
-<span class="linenos">117</span><span class="w">        </span><span class="n">num_tiles_written</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">num_tiles_per_core</span><span class="p">;</span>
-<span class="linenos">118</span><span class="w">    </span><span class="p">}</span>
-<span class="linenos">119</span>
-<span class="linenos">120</span><span class="w">    </span><span class="n">desc</span><span class="p">.</span><span class="n">kernels</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">reader_desc</span><span class="p">));</span>
-<span class="linenos">121</span><span class="w">    </span><span class="n">desc</span><span class="p">.</span><span class="n">kernels</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">writer_desc</span><span class="p">));</span>
-<span class="linenos">122</span><span class="w">    </span><span class="n">desc</span><span class="p">.</span><span class="n">kernels</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">compute_desc</span><span class="p">));</span>
-<span class="linenos">123</span>
-<span class="linenos">124</span><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">desc</span><span class="p">;</span>
-<span class="linenos">125</span><span class="p">}</span>
-<span class="linenos">126</span>
-<span class="linenos">127</span><span class="p">}</span><span class="w">  </span><span class="c1">// namespace ttnn::operations::examples</span>
+<span class="linenos">115</span><span class="w">        </span><span class="n">num_tiles_written</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">num_tiles_per_core</span><span class="p">;</span>
+<span class="linenos">116</span><span class="w">    </span><span class="p">}</span>
+<span class="linenos">117</span>
+<span class="linenos">118</span><span class="w">    </span><span class="n">desc</span><span class="p">.</span><span class="n">kernels</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">reader_desc</span><span class="p">));</span>
+<span class="linenos">119</span><span class="w">    </span><span class="n">desc</span><span class="p">.</span><span class="n">kernels</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">writer_desc</span><span class="p">));</span>
+<span class="linenos">120</span><span class="w">    </span><span class="n">desc</span><span class="p">.</span><span class="n">kernels</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">compute_desc</span><span class="p">));</span>
+<span class="linenos">121</span>
+<span class="linenos">122</span><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">desc</span><span class="p">;</span>
+<span class="linenos">123</span><span class="p">}</span>
+<span class="linenos">124</span>
+<span class="linenos">125</span><span class="p">}</span><span class="w">  </span><span class="c1">// namespace ttnn::operations::examples</span>
 </pre></div>
 </div>
 </div>
