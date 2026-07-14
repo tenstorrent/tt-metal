@@ -151,12 +151,7 @@ def pytest_collection_modifyitems(config, items):
     native there, and galaxy-only torus configs can't be collected on it anyway (device count).
     None of this fires off CI, so a subtorus-wired host (CI unset) still runs everything.
     """
-    on_ci = (
-        os.getenv("CI") == "true"
-        or "TT_GH_CI_INFRA" in os.environ
-        or os.getenv("TT_EXABOX") == "1"
-        or os.path.isfile("/etc/ttop/hostfile")
-    )
+    on_ci = os.getenv("CI") == "true" or "TT_GH_CI_INFRA" in os.environ
     ring_or_torus_fabrics = {
         ttnn.FabricConfig.FABRIC_2D_TORUS_X,
         ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
