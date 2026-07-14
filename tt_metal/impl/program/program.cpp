@@ -87,6 +87,7 @@
 #include "impl/allocator/allocator.hpp"
 #include <internal/service/service_core_manager.hpp>
 #include "impl/internal/service/service_core_manager_impl.hpp"
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 namespace tt {
 enum CBIndex : std::uint8_t;
@@ -1336,7 +1337,7 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
 }
 
 void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
-    // ZoneScoped;
+    TTZoneScopedD(PROGRAM);
 
     // If device is a MeshDevice, we need to track all its sub-devices
     std::vector<const IDevice*> devices_to_track;
@@ -1504,7 +1505,7 @@ void detail::ProgramImpl::deallocate_circular_buffers() {
 }
 
 void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device) {
-    // ZoneScoped;
+    TTZoneScopedD(PROGRAM);
 
     // TODO: Circular buffer allocation and validation could be better optimized by determining usage per sub-device
     std::optional<DeviceAddr> lowest_address =
@@ -1808,7 +1809,7 @@ void detail::ProgramImpl::set_remote_circular_buffer_init(const std::shared_ptr<
 
 void detail::ProgramImpl::set_cb_data_fmt_and_tile(
     const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const {
-    // ZoneScoped;
+    TTZoneScopedD(PROGRAM);
     for (const auto& logical_cr : crs) {
         const auto& cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
         for (const auto& circular_buffer : cbs_on_core) {
@@ -2158,7 +2159,7 @@ void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh
 }
 
 void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
-    // ZoneScoped;
+    TTZoneScopedD(PROGRAM);
     const auto& build_env =
         BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id());
 

@@ -16,6 +16,7 @@
 #include <map>
 #include <set>
 #include <vector>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -417,7 +418,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCShardedProgramFactory::creat
                       "num_sticks_per_shard_core",
                       "num_cores_read",
                       "read_stick_stride"}},
-            .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+            .hw_config = ttnn::create_reader_datamovement_config(input_tensor.device()->arch()),
         };
         reader_spec.compiler_options.defines = {{"USE_SPECIAL_CASE", "1"}};
         reader_spec.advanced_options.num_runtime_varargs = max_reader_varargs;
@@ -436,7 +437,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCShardedProgramFactory::creat
                       "read_stick_stride",
                       "src_read_stick_offset",
                       "dst_write_stick_offset"}},
-            .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+            .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device()->arch()),
         };
         writer_spec.advanced_options.num_runtime_varargs = max_writer_varargs;
 
@@ -500,7 +501,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCShardedProgramFactory::creat
                  {"num_cores_y", num_cores_y}},
             .runtime_arg_schema =
                 {.runtime_arg_names = {"num_sticks_per_core", "start_id", "curr_c", "curr_h", "curr_n"}},
-            .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+            .hw_config = ttnn::create_reader_datamovement_config(input_tensor.device()->arch()),
         };
         reader_spec.advanced_options.num_runtime_varargs = num_cores_x + num_cores_y;
 

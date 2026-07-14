@@ -141,14 +141,15 @@ User Visible Constants
 
 Constant registers are implemented as objects which can be referenced wherever a vector can be used. On Wormhole and Blackhole the following variables are defined:
 
-  * ``vConst0``
-  * ``vConst1``
-  * ``vConst0p8373``
-  * ``vConstNeg1``
   * ``vConstTileId``, counts by two through the vector elements: [0, 2, 4..62]
   * ``vConstFloatPrgm0``, ``vConstIntPrgm0``
   * ``vConstFloatPrgm1``, ``vConstIntPrgm1``
   * ``vConstFloatPrgm2``, ``vConstIntPrgm2``
+
+Note: previously the vector constants ``1.0f``, ``0.0f``, ``-1.0f``
+and ``0.8373f`` were also available as named constants. Just use the
+floating literals (possibly converted to ``vFloat``), the compiler
+knows what to do.
 
 User Visible Objects
 ^^^^^^^^^^^^^^^^^^^^

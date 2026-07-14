@@ -61,6 +61,7 @@ enum watcher_features_t {
     SanitizeNOCMulticastInvalidRange,
     SanitizeNOCWriteWithStateBadCoord,
     SanitizeNOCInlineWriteFromState,
+    SanitizeNOCInlineWriteWithState,
 };
 
 tt::tt_metal::HalMemType get_buffer_mem_type_for_test(watcher_features_t feature) {
@@ -111,10 +112,10 @@ void RunTestOnCore(
         GTEST_SKIP();
     }
 
-    // IDLE_ETH cores only support SD (FD not yet implemented)
-    // TENSIX/ACTIVE_ETH cores: SD only used for Quasar watcher tests (TODO: Remove once FD enabled on Quasar)
-    if (fixture->IsSlowDispatch() && !is_idle_eth_core && !is_quasar) {
-        GTEST_SKIP() << "Slow Dispatch tests only run on Quasar or IDLE_ETH cores";
+    // IDLE_ETH cores only support slow dispatch (FD not yet implemented for them).
+    // All other cores (TENSIX/ACTIVE_ETH, including Quasar) run under fast dispatch.
+    if (fixture->IsSlowDispatch() && !is_idle_eth_core) {
+        GTEST_SKIP() << "Slow Dispatch only runs IDLE_ETH core tests";
     }
     if (multi_dm_race && !is_quasar) {
         GTEST_SKIP() << "Multi-DM race test only runs on Quasar";
@@ -230,16 +231,16 @@ void RunTestOnCore(
         }
         // (gen1 path: no CTA bindings needed; the kernel runs on exactly one DM processor.)
 
-        // Provide both gen1 and gen2 DM configs so the same KernelSpec runs on either arch; the
-        // runtime selects the one matching the current architecture.
+        // Select the DM config variant matching the current architecture (Gen2 on Quasar, Gen1 otherwise).
         auto gen1_processor =
             use_ncrisc ? tt::tt_metal::DataMovementProcessor::RISCV_1 : tt::tt_metal::DataMovementProcessor::RISCV_0;
         auto gen1_noc = use_ncrisc ? tt_metal::NOC::RISCV_1_default : tt_metal::NOC::RISCV_0_default;
-        experimental::DataMovementHardwareConfig dm_cfg{
-            .gen1_config =
-                experimental::DataMovementHardwareConfig::Gen1Config{.processor = gen1_processor, .noc = gen1_noc},
-            .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
-        };
+        experimental::DataMovementHardwareConfig dm_cfg;
+        if (is_quasar) {
+            dm_cfg = experimental::DataMovementGen2Config{};
+        } else {
+            dm_cfg = experimental::DataMovementGen1Config{.processor = gen1_processor, .noc = gen1_noc};
+        }
         uint32_t num_threads = is_quasar ? 6u : 1u;
         if (!is_quasar) {
             noc = static_cast<int>(gen1_noc);
@@ -269,7 +270,8 @@ void RunTestOnCore(
                       "mcast_dst_end_x",
                       "mcast_dst_end_y",
                       "use_write_with_state",
-                      "use_inline_dw_write_from_state"}},
+                      "use_inline_dw_write_from_state",
+                      "use_inline_dw_write_with_state"}},
             .hw_config = dm_cfg,
         };
         experimental::WorkUnitSpec wu{
@@ -307,6 +309,7 @@ void RunTestOnCore(
     uint32_t mcast_dst_end_y = 0;
     bool use_write_with_state = false;
     bool use_inline_dw_write_from_state = false;
+    bool use_inline_dw_write_with_state = false;
     switch (feature) {
         case SanitizeNOCAddress:
             output_buf_noc_xy.x = 26;
@@ -375,12 +378,20 @@ void RunTestOnCore(
             break;
         case SanitizeNOCInlineWriteFromState:
             // Bad destination coordinate, but keep the (nonzero) destination offset: this exercises
-            // DEBUG_SANITIZE_NOC_ADDR_FROM_STATE the way cq_noc_inline_dw_write_with_state does, and the
-            // reported offset discriminates the low-bits bug (the fixed sanitizer reports the real offset,
-            // whereas dropping NOC_TARG_ADDR_LO would report offset 0).
+            // DEBUG_SANITIZE_NOC_ADDR_FROM_STATE after noc_inline_dw_write_set_state. The reported offset
+            // discriminates low-bits bugs: dropping NOC_TARG_ADDR_LO on tt-1xx or NOC_RET_ADDR_LO on tt-2xx
+            // would report offset 0 instead of the real destination offset.
             output_buf_noc_xy.x = 26;
             output_buf_noc_xy.y = 18;
             use_inline_dw_write_from_state = true;
+            break;
+        case SanitizeNOCInlineWriteWithState:
+            if (hal.get_arch() == tt::ARCH::BLACKHOLE) {
+                GTEST_SKIP() << "cq_noc_inline_dw_write_with_state-style helper is not exposed on Blackhole";
+            }
+            output_buf_noc_xy.x = 26;
+            output_buf_noc_xy.y = 18;
+            use_inline_dw_write_with_state = true;
             break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
@@ -406,7 +417,8 @@ void RunTestOnCore(
         mcast_dst_end_x,
         mcast_dst_end_y,
         use_write_with_state,
-        use_inline_dw_write_from_state};
+        use_inline_dw_write_from_state,
+        use_inline_dw_write_with_state};
 
     if (is_eth_core) {
         // ETH cores still go through the legacy API.
@@ -434,22 +446,23 @@ void RunTestOnCore(
                    {"mcast_dst_end_x", mcast_dst_end_x},
                    {"mcast_dst_end_y", mcast_dst_end_y},
                    {"use_write_with_state", use_write_with_state},
-                   {"use_inline_dw_write_from_state", use_inline_dw_write_from_state}}}},
+                   {"use_inline_dw_write_from_state", use_inline_dw_write_from_state},
+                   {"use_inline_dw_write_with_state", use_inline_dw_write_with_state}}}},
         }};
         experimental::SetProgramRunArgs(program, params);
     }
     workload.add_program(device_range, std::move(program));
 
-    // Run the kernel, expect an exception here
+    // Run the kernel; its illegal NoC transaction trips watcher test mode. Whether that reaches the
+    // host as an exception here is a race with the watcher poll (fires on the slow Quasar sim via
+    // #48842's fast-dispatch rethrow; usually not on fast HW), so this catch is best-effort. The
+    // watcher-log check below always runs (regardless of this catch) and is the real verification.
     try {
         fixture->RunProgram(mesh_device, workload);
     } catch (std::runtime_error& e) {
-        std::string expected =
-            "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.\n";
-        expected += MetalContext::instance().watcher_server()->log_file_name();
         const std::string error = std::string(e.what());
         log_info(tt::LogTest, "Caught exception (one is expected in this test)");
-        EXPECT_TRUE(error.find(expected) != std::string::npos);
+        EXPECT_TRUE(error.find("Aborting wait due to watcher error") != std::string::npos) << error;
     }
 
     // We should be able to find the expected watcher error in the log as well.
@@ -637,6 +650,7 @@ void RunTestOnCore(
                 (eth_dest_overflow_addr_words << 4));
         } break;
         case SanitizeNOCInlineWriteFromState:
+        case SanitizeNOCInlineWriteWithState:
             // Inline dw write sanitized straight from the command-buffer state (DEBUG_SANITIZE_NOC_ADDR_FROM_STATE
             // uses read semantics with l1_addr 0). The destination coordinate is invalid; [addr=...] is the
             // reconstructed destination offset, which must be the real offset rather than 0.
@@ -944,16 +958,26 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCWriteWithState) {
         this->devices_[0]);
 }
 
-// Regression test for the inline-dw-write NOC sanitizer, exercised the way cq_noc_inline_dw_write_with_state
-// does: the destination is programmed into the WR_REG command buffer and then sanitized via
-// DEBUG_SANITIZE_NOC_ADDR_FROM_STATE. That macro had dropped NOC_TARG_ADDR_LO (the destination offset), so it
-// reconstructed offset 0; this test programs a nonzero offset and checks the reported [addr=...] is the real
-// offset, not 0.
+// Regression test for the inline-dw-write NOC sanitizer, exercised through noc_inline_dw_write_set_state:
+// the destination is programmed into the inline command buffer and then sanitized via
+// DEBUG_SANITIZE_NOC_ADDR_FROM_STATE.
 TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCInlineWriteFromState) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCInlineWriteFromState);
+        },
+        this->devices_[0]);
+}
+
+// Regression test for the inline-dw-write NOC sanitizer, exercised the way cq_noc_inline_dw_write_with_state
+// does: the destination is programmed into the WR_REG command buffer and then sanitized via
+// DEBUG_SANITIZE_NOC_ADDR_FROM_STATE.
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCInlineWriteWithState) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCInlineWriteWithState);
         },
         this->devices_[0]);
 }

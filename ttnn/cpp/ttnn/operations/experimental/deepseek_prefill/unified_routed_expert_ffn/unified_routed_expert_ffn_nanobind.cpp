@@ -69,10 +69,14 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
                 start[global_id]/TILE tile-rows (direct-write mode), fusing the
                 ttnn::insert step. Requires ``output`` to be set. Defaults to
                 None (standalone per-expert output, rows start at 0).
+            input_m_tiles (int, optional): this expert's M in tiles. Defaults to
+                x's allocated M. Supply it when x is a shared buffer wider than
+                one expert's region so the op sizes its work to this expert.
+            read_x_at_offset (bool, optional): when True, x is a shared buffer
+                and the reader offsets x reads by expert_region_offsets[global_id]
+                (fusing ttnn::extract). Requires expert_region_offsets. Default False.
             activation (ttnn.RoutedExpertActivation, optional):
-                Silu (default) = plain SiLU SwiGLU (DeepSeek). SwiGluOai = clamped
-                swigluoai (MiniMax-M3 / gpt-oss): (clamp(up,+/-L)+1)*clamp(gate,max=L)*
-                sigmoid(alpha*clamp(gate,max=L)), alpha=1.702/L=7.0 baked in.
+                Silu (default, DeepSeek) or SwiGluOai (clamped, MiniMax-M3 / gpt-oss).
 
         Returns:
             ttnn.Tensor: (M_max, K=emb).
@@ -89,6 +93,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("output") = nb::none(),
         nb::arg("expert_region_offsets") = nb::none(),
+        nb::arg("input_m_tiles") = nb::none(),
+        nb::arg("read_x_at_offset") = false,
         nb::arg("activation") = RoutedExpertActivation::Silu);
 
     ttnn::bind_function<"unified_routed_expert_moe", "ttnn.experimental.deepseek_prefill.">(

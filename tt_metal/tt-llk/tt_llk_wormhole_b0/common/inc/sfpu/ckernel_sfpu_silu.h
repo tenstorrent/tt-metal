@@ -29,6 +29,7 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _calculate_silu_()
 {
     // SFPU microcode
+#pragma GCC unroll 2
     for (int d = 0; d < ITERATIONS; d++)
     {
         sfpi::vFloat val    = sfpi::dst_reg[0];
