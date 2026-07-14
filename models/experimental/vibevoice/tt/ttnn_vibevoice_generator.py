@@ -22,10 +22,23 @@ import ttnn
 # Optional env-gated diagnostics for generate():
 #   VV_PROFILE=1 — device-synced timing breakdown per phase
 #   VV_DEBUG=1   — per-AR-step token + phase logs (also set by demo_ttnn.py --debug)
+#   VV_PROFILE_SPEECH_FRAME=N — Tracy signposts ``start``/``stop`` around eager speech
+#     frame N (1-based diffusion frame index): neg LM + diffusion + post + pos LM.
+#     Requires VV_TRACE_SEGMENT=0 (eager). Use with ``python -m tracy …`` then
+#     ``tt-perf-report <csv> --start-signpost start --end-signpost stop``.
+#   VV_PROFILE_SPEECH_FRAME_EXIT=1 — stop generate() right after that profiled frame.
 
 
 def _vv_profile_enabled() -> bool:
     return os.environ.get("VV_PROFILE", "0") == "1"
+
+
+def _vv_profile_speech_frame_n() -> int:
+    """1-based diffusion frame to wrap with Tracy signposts; 0 = disabled."""
+    try:
+        return int(os.environ.get("VV_PROFILE_SPEECH_FRAME", "0"))
+    except ValueError:
+        return 0
 
 
 def _vv_debug_enabled() -> bool:
@@ -612,7 +625,7 @@ class TTVibeVoiceGenerator:
         def _frame():
             cond_pos = _condition_from_hidden(self._sf_hidden_buf)
             _, neg_hidden = lm.forward_decode_traced_embeds_dev_rope(
-                self._sf_neg_embed, self._sf_neg_pos, kv_neg, return_last_hidden=True
+                self._sf_neg_embed, self._sf_neg_pos, kv_neg, return_last_hidden=True, need_logits=False
             )
             cond_neg = _condition_from_hidden(neg_hidden)
             latent = sample_speech_latents(
@@ -742,7 +755,9 @@ class TTVibeVoiceGenerator:
             return 1, self._ref_lm.reset_neg(self.speech_start_id)
         neg_ids = torch.tensor([[self.speech_start_id]], dtype=torch.long)
         neg_embeds = self.lm._embed(neg_ids)
-        _, neg_hidden = self.lm.forward(neg_embeds, start_pos=0, kv_cache=kv_cache_neg, return_last_hidden=True)
+        _, neg_hidden = self.lm.forward(
+            neg_embeds, start_pos=0, kv_cache=kv_cache_neg, return_last_hidden=True, need_logits=False
+        )
         return 1, neg_hidden
 
     def _lm_prefill(
@@ -787,7 +802,7 @@ class TTVibeVoiceGenerator:
         if self._ref_lm is not None:
             return self._ref_lm.neg_step_token(token_id)
         neg_ids = torch.tensor([[token_id]], dtype=torch.long)
-        _, neg_hidden = self.lm.decode_step(neg_ids, neg_pos, kv_cache_neg, return_last_hidden=True)
+        _, neg_hidden = self.lm.decode_step(neg_ids, neg_pos, kv_cache_neg, return_last_hidden=True, need_logits=False)
         return neg_hidden
 
     def generate(
@@ -928,6 +943,9 @@ class TTVibeVoiceGenerator:
         # trace-replay frames — warmup and capture frames are not timed.
         _steady_decode_s = 0.0
         _steady_decode_frames = 0
+        _profile_frame_n = _vv_profile_speech_frame_n()
+        _spf_profiling = False  # True while inside Tracy start/stop for one speech frame
+        _spf_audio_deferred = None
         _t_decode_start = time.perf_counter()
         for step in range(max_steps):
             current_token = next_token
@@ -969,6 +987,17 @@ class TTVibeVoiceGenerator:
 
             if current_token == self.speech_diffusion_id:
                 diffusion_frames += 1
+                # Profile a warm eager speech frame (frame N≥2 recommended so neg LM runs).
+                _spf_profiling = (
+                    _profile_frame_n > 0 and diffusion_frames == _profile_frame_n and not self._trace_segment
+                )
+                if _spf_profiling:
+                    import tracy
+
+                    ttnn.synchronize_device(device)
+                    tracy.signpost("start")
+                    _vv_debug(f"Tracy signpost start: speech frame {diffusion_frames}")
+
                 cond_pos = _condition_from_hidden(step_hidden)
                 # Negative CFG: reference processes the PREVIOUS speech_diffusion_id
                 # at each step (the current one is appended to negative_input_ids
@@ -993,18 +1022,22 @@ class TTVibeVoiceGenerator:
                 # On-device streaming: fused next-step embed + this frame's audio chunk.
                 with prof.section("post_diffusion (decode+sem_enc+conn)"):
                     pending_embeds, audio_chunk = self._post_diffusion_embeds(speech_latent)
-                with prof.section("audio_chunk -> host"):
-                    _chunk = (
-                        audio_chunk.to(torch.float32).reshape(-1)
-                        if isinstance(audio_chunk, torch.Tensor)
-                        else ttnn.to_torch(audio_chunk).to(torch.float32).reshape(-1)
+                if _spf_profiling:
+                    # Defer D2H audio readback until after signpost stop (keeps window on-device).
+                    _spf_audio_deferred = audio_chunk
+                else:
+                    with prof.section("audio_chunk -> host"):
+                        _chunk = (
+                            audio_chunk.to(torch.float32).reshape(-1)
+                            if isinstance(audio_chunk, torch.Tensor)
+                            else ttnn.to_torch(audio_chunk).to(torch.float32).reshape(-1)
+                        )
+                        _emit_audio(_chunk)
+                    chunk_samples = _chunk.numel()
+                    _vv_debug(
+                        f"  diffusion frame {diffusion_frames}: audio_chunk={chunk_samples} samples "
+                        f"({chunk_samples / 24000:.3f}s)"
                     )
-                    _emit_audio(_chunk)
-                chunk_samples = _chunk.numel()
-                _vv_debug(
-                    f"  diffusion frame {diffusion_frames}: audio_chunk={chunk_samples} samples "
-                    f"({chunk_samples / 24000:.3f}s)"
-                )
 
             if current_token == self.eos_token_id:
                 _vv_debug(f"EOS at step {step + 1}")
@@ -1017,6 +1050,30 @@ class TTVibeVoiceGenerator:
                     pending_embeds = None
                 else:
                     logits, step_hidden = self._lm_decode_token(current_token, start_pos, kv_cache_pos)
+
+            if _spf_profiling:
+                import tracy
+
+                ttnn.synchronize_device(device)
+                tracy.signpost("stop")
+                _vv_debug(f"Tracy signpost stop: speech frame {_profile_frame_n}")
+                if _spf_audio_deferred is not None:
+                    _audio = _spf_audio_deferred
+                    _spf_audio_deferred = None
+                    _chunk = (
+                        _audio.to(torch.float32).reshape(-1)
+                        if isinstance(_audio, torch.Tensor)
+                        else ttnn.to_torch(_audio).to(torch.float32).reshape(-1)
+                    )
+                    _emit_audio(_chunk)
+                    _vv_debug(
+                        f"  diffusion frame {_profile_frame_n}: audio_chunk={_chunk.numel()} samples "
+                        f"({_chunk.numel() / 24000:.3f}s)"
+                    )
+                _spf_profiling = False
+                if os.environ.get("VV_PROFILE_SPEECH_FRAME_EXIT", "0") == "1":
+                    _vv_debug("VV_PROFILE_SPEECH_FRAME_EXIT=1 — ending generate after profiled frame")
+                    break
 
             if current_token == self.speech_start_id:
                 if self._trace_segment:

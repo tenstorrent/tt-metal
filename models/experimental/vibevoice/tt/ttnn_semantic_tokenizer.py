@@ -60,6 +60,33 @@ _HIFI2 = ttnn.WormholeComputeKernelConfig(
 )
 
 
+# ── FFN down-proj (linear2) decode program configs ─────────────────────────────
+# The deepest tokenizer stages (dim 2048 / 1024) run one latent frame => T<=32 rows
+# (M_tiles=1), and their down-proj (linear2, K=4*dim deep) is the biggest post-phase
+# matmul on the AUTO config: dim-2048 8192x2048 = 145us / 46% DRAM x16 = 2.3ms.  These
+# swept 1D mcast_in0 configs (per_core_M=1) recover ~1.8x/1.5x.  Precision-neutral
+# (PCC vs auto ~1.0); validated in tests/perf/post_ffn_progcfg_probe.py.  Keyed by dim
+# and gated on T<=32 (the up-proj is already DRAM-BW-bound at auto, so it stays auto).
+def _mm1d_post(cx, cy, in0_block_w, per_core_n):
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(cx, cy),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=2,
+        per_core_M=1,
+        per_core_N=per_core_n,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
+_FFN_DOWN_PROGCFG = {
+    2048: _mm1d_post(8, 4, 8, 2),  # 8192x2048  145 -> 81 us (1.8x)
+    1024: _mm1d_post(8, 2, 8, 2),  # 4096x1024   60 -> 40 us (1.5x)
+}
+
+
 # ──────────────────────────────────────────────────────────────
 # Host-side weight containers (torch tensors, not TTNN)
 # ──────────────────────────────────────────────────────────────
@@ -482,6 +509,8 @@ class TTBlock1DDevice:
             l2_w_host = l2_w_host * fg.view(-1, 1)
             l2_b_host = (l2_b_host * fg) if l2_b_host is not None else None
         self.linear2_w = _tile_linear(l2_w_host.contiguous(), device, dtype=compute_dtype)
+        # Tuned down-proj config for the deep (dim 2048/1024) stages; auto otherwise.
+        self._l2_progcfg = _FFN_DOWN_PROGCFG.get(self.dim)
 
         def _bias(b: Optional[torch.Tensor]) -> Optional[ttnn.Tensor]:
             if b is None:
@@ -531,8 +560,15 @@ class TTBlock1DDevice:
             x, self.linear1_w, bias=self.linear1_b, compute_kernel_config=_HIFI2, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         x = ttnn.gelu(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # per_core_M=1 config valid only when T<=32 rows (M_tiles=1); else auto.
+        l2_pc = self._l2_progcfg if (self._l2_progcfg is not None and x.shape[2] <= 32) else None
         x = ttnn.linear(
-            x, self.linear2_w, bias=self.linear2_b, compute_kernel_config=_HIFI2, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            x,
+            self.linear2_w,
+            bias=self.linear2_b,
+            compute_kernel_config=_HIFI2,
+            program_config=l2_pc,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         if self.ffn_gamma is not None:
             x = ttnn.mul(x, self.ffn_gamma, memory_config=ttnn.DRAM_MEMORY_CONFIG)

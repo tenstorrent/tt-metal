@@ -9,6 +9,8 @@ import os
 from typing import NamedTuple
 
 import torch
+import tracy
+import ttnn
 from transformers.cache_utils import DynamicCache
 
 from models.experimental.vibevoice.tests.pcc.lm_pcc_common import (
@@ -16,9 +18,11 @@ from models.experimental.vibevoice.tests.pcc.lm_pcc_common import (
     PCC_THRESHOLD,
     _TTVibeVoiceLMLayerProbe,
     _get_hf_reference_model,
+    _tt_tensor_to_hidden_torch,
     as_layer_probe,
     build_tt_lm,
     compare_decode_hidden_pcc,
+    hidden_torch_to_tt,
     print_decode_pcc_summary,
 )
 
@@ -81,9 +85,22 @@ def tt_decoder_layer_decode_forward(
     position: int,
     kv_cache,
     layer_idx: int = DECODE_LAYER_IDX,
+    profile: bool = False,
 ) -> torch.Tensor:
-    """Single decode step on TT decoder layer (``hidden`` [B, 1, H] bf16)."""
-    return probe.forward_decoder_layer_hidden(hidden, position, kv_cache, layer_idx=layer_idx)
+    """Single decode step on TT decoder layer (``hidden`` [B, 1, H] bf16).
+
+    When ``profile`` is True, Tracy signposts ``start``/``stop`` wrap only the on-device
+    ``_transformer_layer`` (not host upload / PCC readback).
+    """
+    x = hidden_torch_to_tt(hidden, probe.device)
+    if profile:
+        # Drain any prior async host readback so it cannot land inside the window.
+        ttnn.synchronize_device(probe.device)
+        tracy.signpost("start")
+    x = probe._transformer_layer(x, layer_idx, (probe._cos_tt, probe._sin_tt), kv_cache, position)
+    if profile:
+        tracy.signpost("stop")
+    return _tt_tensor_to_hidden_torch(x)
 
 
 def run_decoder_layer_decode_pcc_sweep(
@@ -109,6 +126,10 @@ def run_decoder_layer_decode_pcc_sweep(
         f"(no prefill, random hiddens)"
     )
 
+    # Profile the last step as the warm window (step 0 JIT-compiles new kernels).
+    # tt-perf-report --start-signpost start --end-signpost stop isolates that step.
+    warm_step = max(num_steps - 1, 0)
+
     for step in range(num_steps):
         hidden = (torch.rand(DECODE_BATCH_SIZE, 1, ctx.hidden_size, dtype=torch.bfloat16) * 2) - 1
 
@@ -124,6 +145,7 @@ def run_decoder_layer_decode_pcc_sweep(
             hidden,
             position=step,
             kv_cache=kv_cache,
+            profile=(step == warm_step),
         )
 
         passed_d, pcc_d = compare_decode_hidden_pcc(ref_out, tt_out)

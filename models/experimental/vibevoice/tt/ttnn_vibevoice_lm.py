@@ -69,9 +69,10 @@ _QO_DECODE_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     fused_activation=None,
     mcast_in0=True,
 )
-# Width-sharded L1 output (the winning layout); the shard spec is derived from the
-# program config.  Downstream ops that need interleaved input reshard automatically.
-_QO_DECODE_OUT_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
+# Decode wo/w2 output: L1 interleaved.  Width-sharded L1 was previously used so the
+# matmul wrote sharded and downstream ops auto-resharded; isolation showed interleaved
+# L1 out + L1 residual add is faster end-to-end (avoids S2I on the residual path).
+_QO_DECODE_OUT_MEMCFG = ttnn.L1_MEMORY_CONFIG
 
 # Decode-only program config for the fused QKV projection (1536x2048, single-token
 # step).  Fusing wq/wk/wv into one matmul + one bias collapses 7 ops (3 linear + 3
@@ -98,8 +99,8 @@ _QKV_DECODE_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
 # shape as _QO, but in0_block_w=8 (K=8960 is deep, wider block amortizes) -> 6.6us
 # vs 14.2us auto baseline (2.15x).  The gate/up matmuls (32x1536x8960) are already
 # DRAM-BW-bound under the auto config, so no config beats them and they stay auto.
-# per_core_M=1 makes this valid ONLY for S==1 decode.  Output reuses the _QO width-
-# sharded spec (same N=1536, same grid).
+# per_core_M=1 makes this valid ONLY for S==1 decode.  Output reuses _QO_DECODE_OUT_MEMCFG
+# (L1 interleaved, same N=1536).
 _W2_DECODE_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     compute_with_storage_grid_size=ttnn.CoreCoord(8, 3),
     in0_block_w=8,
@@ -330,40 +331,45 @@ def _build_rope_cache_tt(
     device,
     rope_theta: float = 1_000_000.0,
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
-    """Build RoPE cos/sin on device. Returns [1, 1, seq_len, head_dim] TILE."""
-    cos, sin = _build_rope_cache(seq_len, head_dim, rope_theta)  # numpy [S, hd]
+    """Build RoPE cos/sin on device. Returns [1, 1, seq_len, head_dim] TILE bf16.
+
+    bf16 matches ``ttnn.experimental.rotary_embedding_hf`` (and the on-device embedding
+    tables used by the traced decode path).  Isolated PCC vs the fp32 sinusoid is
+    ~0.999995–0.999999 at decode/prefill shapes used here.
+    """
+    cos, sin = _build_rope_cache(seq_len, head_dim, rope_theta)  # numpy [S, hd] fp32
     cos_4d = cos[np.newaxis, np.newaxis, :, :]  # [1, 1, S, head_dim]
     sin_4d = sin[np.newaxis, np.newaxis, :, :]
     cos_tt = ttnn.as_tensor(
-        cos_4d, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        cos_4d, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     sin_tt = ttnn.as_tensor(
-        sin_4d, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        sin_4d, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     return cos_tt, sin_tt
 
 
-def _rotate_half_ttnn(x: ttnn.Tensor) -> ttnn.Tensor:
-    """Rotate half: [B, n, S, hd] → [-x2, x1] where x = [x1 | x2], hd split in half."""
-    sh = x.shape
-    B, n, S, hd = sh[0], sh[1], sh[2], sh[3]
-    half = hd // 2
-    x1 = ttnn.slice(x, [0, 0, 0, 0], [B, n, S, half], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    x2 = ttnn.slice(x, [0, 0, 0, half], [B, n, S, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    return ttnn.concat(
-        [ttnn.neg(x2, memory_config=ttnn.DRAM_MEMORY_CONFIG), x1], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-
-
 def _apply_rope_ttnn(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
-    """Apply RoPE in float32 (matches reference fp32 RoPE numerics)."""
-    x_f32 = ttnn.typecast(x, ttnn.float32)
-    rotated = ttnn.add(
-        ttnn.mul(x_f32, cos, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-        ttnn.mul(_rotate_half_ttnn(x_f32), sin, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+    """Apply HF-style RoPE via fused ``rotary_embedding_hf`` (prefill-mode layout).
+
+    Replaces the previous ~9-op fp32 typecast/mul/rotate_half/concat path.  Input is
+    ``[B, n_heads, S, head_dim]`` with cos/sin ``[1, 1, S, head_dim]`` (same layout the
+    op's prefill mode expects).  Decode uses S==1 after slicing the position row.
+    """
+    if x.dtype != ttnn.bfloat16:
+        x = ttnn.typecast(x, ttnn.bfloat16)
+    if cos.dtype != ttnn.bfloat16:
+        cos = ttnn.typecast(cos, ttnn.bfloat16)
+    if sin.dtype != ttnn.bfloat16:
+        sin = ttnn.typecast(sin, ttnn.bfloat16)
+    return ttnn.experimental.rotary_embedding_hf(
+        x,
+        cos,
+        sin,
+        is_decode_mode=False,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        compute_kernel_config=_HIFI4,
     )
-    return ttnn.typecast(rotated, ttnn.bfloat16)
 
 
 def _reshape_tt(x: ttnn.Tensor, shape: list) -> ttnn.Tensor:
@@ -484,6 +490,20 @@ class TTVibeVoiceLM:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        # Eager-decode RoPE rows: persistent TILE [1,1,1,hd] buffers filled via
+        # copy_host_to_device each step (avoids embedding→Tilize, ~12 μs device).
+        _hd = self.cfg.head_dim
+        _z = torch.zeros(1, 1, 1, _hd, dtype=torch.bfloat16)
+        self._cos_row_tt = ttnn.from_torch(
+            _z, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        self._sin_row_tt = ttnn.from_torch(
+            _z.clone(),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         # Height-sharded L1 memcfg for the paged_update_cache input [1,1,n_kv,hd]
         # (heads tile-padded to 32, one batch row => one core).  paged_update_cache
         # takes a device-tensor write index so the KV write position varies per replay.
@@ -575,12 +595,11 @@ class TTVibeVoiceLM:
         qkv = ttnn.linear(
             _matmul_in_l1(x, decode),
             layer_w.wqkv,
+            bias=layer_w.qkv_bias,
             compute_kernel_config=_HIFI4,
             program_config=_QKV_DECODE_PROGCFG if S == 1 else None,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        if layer_w.qkv_bias is not None:
-            qkv = ttnn.add(qkv, layer_w.qkv_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # Split into per-head tensors: [B, 1, S, *] → [B, n, S, hd] in one data-movement
         # op (matches PyTorch view(B, S, n, hd).transpose(1, 2)).
@@ -592,15 +611,27 @@ class TTVibeVoiceLM:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Apply RoPE on device (validated fp32 path); cos/sin sliced [start_pos : start_pos+S].
+        # Apply RoPE on device (fused HF-style op).
+        # Decode (S==1): gather the position row via embedding — avoids unaligned
+        # ttnn.slice on the TILE cos/sin table (which untilize→slice→tilize's).
+        # Prefill (S>1): slice the TILE tables (chunk starts are tile-aligned).
         if cos_sin_tt is not None:
-            cos_tt, sin_tt = cos_sin_tt
-            c = ttnn.slice(
-                cos_tt, [0, 0, start_pos, 0], [1, 1, start_pos + S, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
-            s = ttnn.slice(
-                sin_tt, [0, 0, start_pos, 0], [1, 1, start_pos + S, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
+            if S == 1:
+                c, s = self._rope_rows_from_pos_int(start_pos)
+            else:
+                cos_tt, sin_tt = cos_sin_tt
+                c = ttnn.slice(
+                    cos_tt,
+                    [0, 0, start_pos, 0],
+                    [1, 1, start_pos + S, head_dim],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                s = ttnn.slice(
+                    sin_tt,
+                    [0, 0, start_pos, 0],
+                    [1, 1, start_pos + S, head_dim],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
             q = _apply_rope_ttnn(q, c, s)
             k = _apply_rope_ttnn(k, c, s)
 
@@ -712,8 +743,10 @@ class TTVibeVoiceLM:
                 # Merge heads → [B, 1, S, n*hd] in one shuffle (was untilize→reshape→
                 # tilize).  permute lands SDPA's [1, B, n, hd] as [B, n, 1, hd] for the
                 # concat op.  Bit-exact; ~1.9x faster incl. the permute.  Hot path.
+                # Decode: L1 so wo's _matmul_in_l1 is a no-op (skips DRAM→L1 Copy).
                 out = ttnn.experimental.nlp_concat_heads(
-                    ttnn.permute(attn, (0, 2, 1, 3)), memory_config=ttnn.DRAM_MEMORY_CONFIG
+                    ttnn.permute(attn, (0, 2, 1, 3)),
+                    memory_config=ttnn.L1_MEMORY_CONFIG if decode else ttnn.DRAM_MEMORY_CONFIG,
                 )
             else:
                 # Fallback: fp32 manual GQA decode over cache prefix (slower but no hang).
@@ -760,7 +793,9 @@ class TTVibeVoiceLM:
                 out = ttnn.typecast(out, ttnn.bfloat16)
                 # Merge heads [B, n, 1, hd] → [B, 1, 1, n*hd] in one shuffle (was
                 # untilize→reshape→tilize).  Bit-exact; ~4x faster.
-                out = ttnn.experimental.nlp_concat_heads(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                out = ttnn.experimental.nlp_concat_heads(
+                    out, memory_config=ttnn.L1_MEMORY_CONFIG if decode else ttnn.DRAM_MEMORY_CONFIG
+                )
 
         # Output projection (1536x1536; swept decode config, see _QO_DECODE_PROGCFG).
         out = ttnn.linear(
@@ -779,9 +814,9 @@ class TTVibeVoiceLM:
         act_mc = ttnn.L1_MEMORY_CONFIG if decode else ttnn.DRAM_MEMORY_CONFIG
         x_mm = _matmul_in_l1(x, decode)
         # gate/up use bfp8_b weights → HiFi2 (see _HIFI2); w2 stays HiFi4 (bf16 weight).
-        gate = ttnn.linear(x_mm, layer_w.w1, compute_kernel_config=_HIFI2, memory_config=act_mc)
+        # Fuse silu into the gate matmul (drops a separate Unary op on decode).
+        gate = ttnn.linear(x_mm, layer_w.w1, activation="silu", compute_kernel_config=_HIFI2, memory_config=act_mc)
         up = ttnn.linear(x_mm, layer_w.w3, compute_kernel_config=_HIFI2, memory_config=act_mc)
-        gate = ttnn.silu(gate, memory_config=act_mc)
         hidden = ttnn.mul(gate, up, memory_config=act_mc)
         # Down proj: on a single-token decode step use the swept fast config (2.15x);
         # prefill (S>1) keeps the auto config.
@@ -804,6 +839,10 @@ class TTVibeVoiceLM:
     ) -> ttnn.Tensor:
         """Full transformer layer with pre-norm residuals."""
         lw = self.w.layers[layer_idx]
+        # Decode keeps residual + rms outputs in L1 interleaved so wo/w2 L1 outs
+        # add without DRAM round-trips; prefill stays DRAM.
+        decode = x.shape[2] == 1
+        res_mc = ttnn.L1_MEMORY_CONFIG if decode else ttnn.DRAM_MEMORY_CONFIG
 
         # Pre-norm + attention
         x_norm = ttnn.rms_norm(
@@ -811,10 +850,10 @@ class TTVibeVoiceLM:
             weight=lw.attn_norm_w,
             epsilon=self.cfg.rms_norm_eps,
             compute_kernel_config=_HIFI4,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=res_mc,
         )
         attn_out = self._attention_layer(x_norm, lw, cos_sin_tt, kv_cache, layer_idx, start_pos)
-        x = ttnn.add(x, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.add(x, attn_out, memory_config=res_mc)
 
         # Pre-norm + FFN
         x_norm = ttnn.rms_norm(
@@ -822,10 +861,10 @@ class TTVibeVoiceLM:
             weight=lw.ffn_norm_w,
             epsilon=self.cfg.rms_norm_eps,
             compute_kernel_config=_HIFI4,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=res_mc,
         )
         ffn_out = self._ffn_layer(x_norm, lw)
-        x = ttnn.add(x, ffn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.add(x, ffn_out, memory_config=res_mc)
         return x
 
     def forward(
@@ -834,7 +873,8 @@ class TTVibeVoiceLM:
         start_pos: int = 0,
         kv_cache: Optional[KVCache] = None,
         return_last_hidden: bool = False,
-    ) -> Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
+        need_logits: bool = True,
+    ) -> Tuple[Optional[ttnn.Tensor], Optional[ttnn.Tensor]]:
         """Run transformer forward pass.
 
         Args:
@@ -842,9 +882,11 @@ class TTVibeVoiceLM:
             start_pos: position offset for RoPE (for decode mode)
             kv_cache: optional KVCache for decode
             return_last_hidden: if True, return (last_hidden, logits) else (logits, None)
+            need_logits: if False, skip the lm_head projection (return logits=None) —
+                for the negative-CFG forward whose logits are discarded.
 
         Returns:
-            (logits [B, 1, S, vocab], last_hidden or None)
+            (logits [B, 1, S, vocab] or None, last_hidden or None)
         """
         B = inputs_embeds.shape[0]
         S = inputs_embeds.shape[2]
@@ -859,33 +901,35 @@ class TTVibeVoiceLM:
         for layer_idx in range(cfg.num_hidden_layers):
             x = self._transformer_layer(x, layer_idx, (cos_tt, sin_tt), kv_cache, start_pos)
 
-        # Final norm
+        # Final norm (L1 on decode so lm_head skips DRAM→L1 copy)
         x = ttnn.rms_norm(
             x,
             weight=self.w.norm_w,
             epsilon=cfg.rms_norm_eps,
             compute_kernel_config=_HIFI4,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG if S == 1 else ttnn.DRAM_MEMORY_CONFIG,
         )
 
         last_hidden = ttnn.typecast(x, ttnn.float32) if return_last_hidden else None
 
-        # LM head projection → logits
-        logits = ttnn.linear(
-            _matmul_in_l1(x, S == 1),
-            self.w.lm_head_w,
-            compute_kernel_config=_HIFI4,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # LM head projection → logits (skipped when the caller discards logits, e.g. neg-CFG)
+        logits = None
+        if need_logits:
+            logits = ttnn.linear(
+                _matmul_in_l1(x, S == 1),
+                self.w.lm_head_w,
+                compute_kernel_config=_HIFI4,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         return logits, last_hidden
 
     # ── Trace-safe decode (Phase C) ────────────────────────────────────────
-    # Mirrors the eager S==1 decode but is fully driven by device tensors so the
-    # 28-layer step can be captured once and replayed: KV write position and the
-    # SDPA read bound come from ``cur_pos`` (a device int32 tensor) via
-    # paged_update_cache / sdpa cur_pos_tensor, and RoPE comes from a host-written
-    # per-position [1,1,1,hd] row.  Numerically equivalent to the eager fused path.
+    # Mirrors the eager S==1 decode (fused QKV + SDPA decode) but is fully driven
+    # by device tensors so the 28-layer step can be captured once and replayed: KV
+    # write position and the SDPA read bound come from ``cur_pos`` (a device int32
+    # tensor) via paged_update_cache / sdpa cur_pos_tensor; RoPE rows come from
+    # embedding on ``cur_pos`` (or a host-supplied row).
     def _attention_decode_traced(
         self,
         x: ttnn.Tensor,
@@ -902,26 +946,21 @@ class TTVibeVoiceLM:
         n_heads = cfg.num_attention_heads
         n_kv = cfg.num_key_value_heads
 
-        x_mm = _matmul_in_l1(x, True)
-        q = ttnn.linear(
-            x_mm,
-            layer_w.wq,
+        qkv = ttnn.linear(
+            _matmul_in_l1(x, True),
+            layer_w.wqkv,
+            bias=layer_w.qkv_bias,
             compute_kernel_config=_HIFI4,
-            program_config=_QO_DECODE_PROGCFG,
-            memory_config=_QO_DECODE_OUT_MEMCFG,
+            program_config=_QKV_DECODE_PROGCFG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        k = ttnn.linear(x_mm, layer_w.wk, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        v = ttnn.linear(x_mm, layer_w.wv, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if layer_w.q_bias is not None:
-            q = ttnn.add(q, layer_w.q_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if layer_w.k_bias is not None:
-            k = ttnn.add(k, layer_w.k_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if layer_w.v_bias is not None:
-            v = ttnn.add(v, layer_w.v_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        q = ttnn.permute(_reshape_tt(q, [B, S, n_heads, head_dim]), (0, 2, 1, 3))  # [1, n_heads, 1, hd]
-        k = ttnn.permute(_reshape_tt(k, [B, S, n_kv, head_dim]), (0, 2, 1, 3))  # [1, n_kv, 1, hd]
-        v = ttnn.permute(_reshape_tt(v, [B, S, n_kv, head_dim]), (0, 2, 1, 3))
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv,
+            num_heads=n_heads,
+            num_kv_heads=n_kv,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [B, n, S, hd] with B=S=1
 
         # RoPE via the per-position row (broadcasts over the head dim; same numerics
         # as the eager sliced-table path).
@@ -968,24 +1007,26 @@ class TTVibeVoiceLM:
         kv_cache: KVCache,
     ) -> ttnn.Tensor:
         lw = self.w.layers[layer_idx]
+        # Traced path is decode-only (S==1); keep residual/rms in L1 like eager decode.
+        res_mc = ttnn.L1_MEMORY_CONFIG
         x_norm = ttnn.rms_norm(
             x,
             weight=lw.attn_norm_w,
             epsilon=self.cfg.rms_norm_eps,
             compute_kernel_config=_HIFI4,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=res_mc,
         )
         attn_out = self._attention_decode_traced(x_norm, lw, cos_row, sin_row, cur_pos, kv_cache, layer_idx)
-        x = ttnn.add(x, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.add(x, attn_out, memory_config=res_mc)
         x_norm = ttnn.rms_norm(
             x,
             weight=lw.ffn_norm_w,
             epsilon=self.cfg.rms_norm_eps,
             compute_kernel_config=_HIFI4,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=res_mc,
         )
         ffn_out = self._ffn_layer(x_norm, lw)
-        x = ttnn.add(x, ffn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.add(x, ffn_out, memory_config=res_mc)
         return x
 
     def forward_decode_traced_embeds(
@@ -996,8 +1037,14 @@ class TTVibeVoiceLM:
         cur_pos: ttnn.Tensor,
         kv_cache: KVCache,
         return_last_hidden: bool = False,
-    ) -> Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
-        """Capturable single-token decode over an already-embedded input [1,1,1,hidden]."""
+        need_logits: bool = True,
+    ) -> Tuple[Optional[ttnn.Tensor], Optional[ttnn.Tensor]]:
+        """Capturable single-token decode over an already-embedded input [1,1,1,hidden].
+
+        ``need_logits=False`` skips the lm_head projection (1536x151936, ~1.85 ms) and
+        returns logits=None — used by the negative-CFG forward, whose logits are discarded
+        (only ``last_hidden`` feeds the diffusion condition; the reference likewise runs the
+        negative pass with logits_to_keep=0)."""
         cfg = self.cfg
         x = inputs_embeds
         if x.dtype == ttnn.float32:
@@ -1009,15 +1056,17 @@ class TTVibeVoiceLM:
             weight=self.w.norm_w,
             epsilon=cfg.rms_norm_eps,
             compute_kernel_config=_HIFI4,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         last_hidden = ttnn.typecast(x, ttnn.float32) if return_last_hidden else None
-        logits = ttnn.linear(
-            _matmul_in_l1(x, True),
-            self.w.lm_head_w,
-            compute_kernel_config=_HIFI4,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        logits = None
+        if need_logits:
+            logits = ttnn.linear(
+                _matmul_in_l1(x, True),
+                self.w.lm_head_w,
+                compute_kernel_config=_HIFI4,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         return logits, last_hidden
 
     def _rope_rows_from_pos(self, cur_pos: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -1033,18 +1082,43 @@ class TTVibeVoiceLM:
         sin = ttnn.embedding(idx, self._sin_emb, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return ttnn.reshape(cos, [1, 1, 1, hd]), ttnn.reshape(sin, [1, 1, 1, hd])
 
+    def _rope_rows_from_pos_int(self, start_pos: int) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Eager-decode RoPE rows: host TILE write into persistent device buffers.
+
+        Avoids ``embedding`` (RM) → ``TilizeWithValPadding`` that the on-device gather
+        path pays (~12 μs device / 4 ops).  Traced decode keeps ``_rope_rows_from_pos``
+        (device embedding) so position can advance on-device.
+        """
+        hd = self.cfg.head_dim
+        host_c = ttnn.from_torch(
+            torch.from_numpy(self._cos_np[start_pos : start_pos + 1]).to(torch.bfloat16).reshape(1, 1, 1, hd),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        host_s = ttnn.from_torch(
+            torch.from_numpy(self._sin_np[start_pos : start_pos + 1]).to(torch.bfloat16).reshape(1, 1, 1, hd),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        ttnn.copy_host_to_device_tensor(host_c, self._cos_row_tt)
+        ttnn.copy_host_to_device_tensor(host_s, self._sin_row_tt)
+        return self._cos_row_tt, self._sin_row_tt
+
     def forward_decode_traced_embeds_dev_rope(
         self,
         inputs_embeds: ttnn.Tensor,
         cur_pos: ttnn.Tensor,
         kv_cache: KVCache,
         return_last_hidden: bool = False,
-    ) -> Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
+        need_logits: bool = True,
+    ) -> Tuple[Optional[ttnn.Tensor], Optional[ttnn.Tensor]]:
         """Like forward_decode_traced_embeds but the RoPE rows are gathered ON DEVICE from
         cur_pos (bf16) instead of supplied as host-written fp32 rows — so the whole step,
         including RoPE-row selection, is driven by the device position tensor (llama pattern)."""
         cos_row, sin_row = self._rope_rows_from_pos(cur_pos)
-        return self.forward_decode_traced_embeds(inputs_embeds, cos_row, sin_row, cur_pos, kv_cache, return_last_hidden)
+        return self.forward_decode_traced_embeds(
+            inputs_embeds, cos_row, sin_row, cur_pos, kv_cache, return_last_hidden, need_logits
+        )
 
     def prefill(
         self,
@@ -1104,10 +1178,12 @@ class TTVibeVoiceLM:
         start_pos: int,
         kv_cache: KVCache,
         return_last_hidden: bool = False,
+        need_logits: bool = True,
     ):
         """Single decode step.
 
         Returns logits [B, 1, 1, vocab], or (logits, last_hidden) when return_last_hidden=True.
+        ``need_logits=False`` skips the lm_head (negative-CFG forward; logits discarded).
         """
         inputs_embeds = self._embed(input_id)
         logits, last_hidden = self.forward(
@@ -1115,6 +1191,7 @@ class TTVibeVoiceLM:
             start_pos=start_pos,
             kv_cache=kv_cache,
             return_last_hidden=return_last_hidden,
+            need_logits=need_logits,
         )
         if return_last_hidden:
             return logits, last_hidden

@@ -29,6 +29,39 @@ _COMPUTE_KERNEL_FP32 = ttnn.WormholeComputeKernelConfig(
 )
 
 
+# ── Decode program configs (CFG batch-2 only) ──────────────────────────────────
+# The head runs on the CFG-batched input [2,1,1,*] (B=2), so M_tiles=2 (each batch is
+# padded to its own tile).  The stock auto config leaves the hot matmuls at ~20-40% DRAM
+# BW; these swept 1D mcast_in0 configs (per_core_M=2) match the LM decode configs' shape
+# family and recover 1.5-3.8x device time.  Precision-neutral (PCC vs auto ~1.0);
+# validated in tests/perf/diffusion_progcfg_probe.py.  per_core_M=2 makes each config
+# valid ONLY for the B=2 path — callers gate on input.shape[0]==2 (else auto).
+def _mm1d(cx, cy, in0_block_w, per_core_n):
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(cx, cy),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=2,
+        per_core_M=2,
+        per_core_N=per_core_n,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
+_MM_DOWN = _mm1d(8, 3, 8, 2)  # ffn down_proj   [.,4608]@[4608,1536]  146->38us (3.8x)
+_MM_ADALN = _mm1d(8, 9, 4, 2)  # layer adaLN     [.,1536]@[1536,4608]  73->40us  (1.9x)
+_MM_GATEUP = _mm1d(8, 9, 6, 2)  # ffn gate/up bf8 [.,1536]@[1536,4608]  61->35us  (1.7x)
+_MM_HSQ = _mm1d(8, 3, 12, 2)  # cond_proj/t_mlp2[.,1536]@[1536,1536]  50->33us  (1.5x)
+_MM_FADALN = _mm1d(8, 6, 12, 2)  # final adaLN     [.,1536]@[1536,3072]  70->34us  (2.0x)
+
+
+def _pc(x: ttnn.Tensor, cfg):
+    """Tuned config only on the B=2 CFG path (per_core_M=2); auto otherwise."""
+    return cfg if x.shape[0] == 2 else None
+
+
 @dataclass
 class DiffusionHeadWeights:
     """All device tensors for VibeVoiceDiffusionHead."""
@@ -201,6 +234,7 @@ class TTDiffusionHead:
             h,
             w.t_mlp2_w,
             compute_kernel_config=_COMPUTE_KERNEL_FP32,
+            program_config=_pc(h, _MM_HSQ),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         return h  # [B, 1, 1, hidden_size]
@@ -212,12 +246,14 @@ class TTDiffusionHead:
             x,
             w.layer_ffn_gate_w[layer_idx],
             compute_kernel_config=_COMPUTE_KERNEL_FP32,
+            program_config=_pc(x, _MM_GATEUP),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         up = ttnn.linear(
             x,
             w.layer_ffn_up_w[layer_idx],
             compute_kernel_config=_COMPUTE_KERNEL_FP32,
+            program_config=_pc(x, _MM_GATEUP),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         gate = ttnn.silu(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -226,6 +262,7 @@ class TTDiffusionHead:
             hidden,
             w.layer_ffn_down_w[layer_idx],
             compute_kernel_config=_COMPUTE_KERNEL_FP32,
+            program_config=_pc(hidden, _MM_DOWN),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         return out
@@ -242,6 +279,7 @@ class TTDiffusionHead:
             ttnn.silu(c, memory_config=ttnn.DRAM_MEMORY_CONFIG),
             w.layer_adaLN_w[layer_idx],
             compute_kernel_config=_COMPUTE_KERNEL_FP32,
+            program_config=_pc(c, _MM_ADALN),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         # chunk into 3 parts along last dim
@@ -282,6 +320,7 @@ class TTDiffusionHead:
             ttnn.silu(c, memory_config=ttnn.DRAM_MEMORY_CONFIG),
             w.final_adaLN_w,
             compute_kernel_config=_COMPUTE_KERNEL_FP32,
+            program_config=_pc(c, _MM_FADALN),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         hidden_size = w.hidden_size
@@ -346,6 +385,7 @@ class TTDiffusionHead:
             condition,
             w.cond_proj_w,
             compute_kernel_config=_COMPUTE_KERNEL_FP32,
+            program_config=_pc(condition, _MM_HSQ),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
