@@ -8,10 +8,14 @@ The 35B-A3B checkpoint stores experts FUSED as 3D nn.Parameters (no `.weight`):
 Older per-expert checkpoints (`{i}.gate_proj.weight` etc.) are stacked into the same
 fused layout up front, so a single code path handles both.
 
-TP sharding across the (1,4) mesh: gate/up are column-parallel (shard the intermediate
-dim), down is row-parallel (shard the intermediate dim); the expert dim (dim=1) is
-REPLICATED. A reduce-scatter after down_proj (in decode/prefill) recombines the
-row-parallel partials. gate/up are bfloat4_b, down is bfloat8_b (matching Qwen36MLP).
+EXPERT-PARALLEL sharding across the (1,4) mesh: the expert dim (dim=1) is SHARDED
+(num_experts/tp experts per device); the intermediate dim is FULL on every device. So
+gate/up run one sparse_matmul with N = 2*full_intermediate (wider N -> more output tiles
+-> more cores: 8 -> 32 on the 512-wide intermediate), and each device only computes its
+own expert shard (constant per-device FLOP vs the old intermediate-parallel layout). down
+produces the FULL hidden per expert; the reduce-scatter after down_proj (in decode/prefill)
+then sums each device's expert-partial across the mesh (mathematically identical to the old
+intermediate-partial sum, sum being associative). gate/up are bfloat4_b, down is bfloat8_b.
 """
 
 from dataclasses import dataclass
@@ -74,29 +78,26 @@ def load_expert_weights(
         # down: [E, H, I] -> [1, E, I, H]
         down_proj = state_dict["down_proj"].to(torch.bfloat16).transpose(-2, -1).unsqueeze(0).contiguous()
 
-        # Pad the intermediate dim so each device's shard is a whole number of tiles.
-        if tp > 1:
-            per_device = I // tp
-            padded_per_device = ((per_device + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
-            pad_amount = padded_per_device * tp - I
-            if pad_amount > 0:
-                gate_proj = torch.nn.functional.pad(gate_proj, (0, pad_amount))  # last dim (I)
-                up_proj = torch.nn.functional.pad(up_proj, (0, pad_amount))
-                down_proj = torch.nn.functional.pad(down_proj, (0, 0, 0, pad_amount))  # dim -2 (I)
+    if tp > 1:
+        assert E % tp == 0, f"expert-parallel needs num_experts ({E}) divisible by tp ({tp})"
 
-    per_device_intermediate = ((I // tp + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE if tp > 1 else I
+    # Intermediate stays FULL on every device (expert-parallel shards the expert dim, not
+    # the intermediate), so no per-device intermediate tile-padding is needed (I is already
+    # a tile multiple for the supported checkpoints).
+    per_device_intermediate = I
 
-    # column-parallel gate/up (shard last dim = intermediate), row-parallel down
-    # (shard dim -2 = intermediate). Expert dim (1) stays replicated.
+    # Expert-parallel: shard the EXPERT dim (dim=1) for gate/up AND down; intermediate is
+    # full on every device. (Old intermediate-parallel layout used dim=-1 / dim=-2.)
     if is_mesh and tp > 1:
-        col_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
-        row_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-2)
+        col_mapper = row_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=1)
     elif is_mesh:
         col_mapper = row_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     else:
         col_mapper = row_mapper = None
 
-    tp_suffix = f"_tp{tp}" if tp > 1 else ""
+    # `_ep` marks the expert-parallel cache layout so it never collides with the older
+    # intermediate-parallel (`_tp`) cached tensors on disk (different sharding = different bytes).
+    tp_suffix = f"_ep{tp}" if tp > 1 else ""
 
     def _cache(name):
         return str(tensor_cache_path / f"moe.experts.{name}{tp_suffix}") if tensor_cache_path else None
@@ -129,10 +130,10 @@ def load_expert_weights(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    # Fused gate|up along N (each device already holds the SAME intermediate slice of both,
-    # so a local concat yields [gate_slice | up_slice]). Prefill runs gate+up as ONE
-    # sparse_matmul with N = 2*I_per_device, doubling the N-gridded core count (4->8), then
-    # slices the two halves back apart — mathematically identical to two separate matmuls.
+    # Fused gate|up along N. Each device holds its expert shard of both at FULL intermediate,
+    # so a local concat yields [gate | up] with N = 2*full_intermediate. gate+up run as ONE
+    # sparse_matmul over that wide N (32 N-tiles -> 32 cores vs 8), then the two halves are
+    # sliced back apart — mathematically identical to two separate matmuls.
     gate_up_proj_tt = ttnn.concat([gate_proj_tt, up_proj_tt], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     return ExpertWeights(
