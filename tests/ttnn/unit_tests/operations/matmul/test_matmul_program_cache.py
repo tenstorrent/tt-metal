@@ -11,13 +11,27 @@ detects it and instead keys the program cache on the default hash (all
 attributes + tensor_args). The renamed helper is retained only for the
 experimental descriptor interface via the pybind name "compute_program_hash".
 
-The default hash keys on the same distinctions the old custom hash did (whole
-MatmulParams struct + each input/optional tensor's TensorSpec = logical shape)
-minus the redundant factory.index() (a pure function of the hashed
-attributes+tensors), so cache-entry counts are unchanged:
+For the standard two-input matmul path the default hash keys on exactly the
+same distinctions the old custom hash did (whole MatmulParams struct + each
+input/optional tensor's TensorSpec = logical shape) minus the redundant
+factory.index() (a pure function of the hashed attributes+tensors), so
+cache-entry counts on this path are unchanged:
 
 - Same config -> reuse (1 entry); different data alone must NOT re-key.
 - Different shape (N) / dtype -> distinct entries.
+
+The default hash is, however, strictly MORE precise on the multi-weight
+`matmul_batched_weights` path (one activation + N weights, i.e.
+input_tensors = [a, w0, .., w_{N-1}]). The old custom hash only hashed
+input_tensors.at(0) and .at(1) (matmul_device_operation.cpp:2549-2564), so it
+ignored N and every weight beyond the first, risking a stale-program cache hit
+across different compiled batch counts. The default hash keys on the entire
+tensor_args (the whole input_tensors vector), so N -- baked into the kernel
+compile args -- is now keyed by construction. That path is a DRAM-prefetcher
+matmul requiring a global circular buffer + sub-device manager + DRAM
+width-sharded weights + HW-specific core topology, so it is not exercised in
+this lightweight file (no existing harness); the distinct-N guarantee is
+structural (default hash traverses the full input_tensors vector).
 """
 
 import pytest
@@ -60,8 +74,11 @@ def test_matmul_cache_reuse_same_config(device, isolate_program_cache):
     ref2, out2 = run_matmul(device, 128, 256, 192, seed=42)
     assert_with_pcc(ref2, out2, 0.99)
 
-    assert device.cache_entries_counter.total == 1
-    assert not torch.equal(out1, out2)
+    count = device.cache_entries_counter.total
+    assert count == 1, f"same config twice must reuse 1 cache entry, got {count} (cache-key regression)"
+    assert not torch.equal(
+        out1, out2
+    ), "different input data (seed 0 vs 42) must yield different outputs; equal outputs mean a stale cached result was reused"
 
 
 def test_matmul_cache_miss_different_shape(device, isolate_program_cache):
@@ -71,7 +88,8 @@ def test_matmul_cache_miss_different_shape(device, isolate_program_cache):
     ref2, out2 = run_matmul(device, 128, 256, 256)
     assert_with_pcc(ref2, out2, 0.99)
 
-    assert device.cache_entries_counter.total == 2
+    count = device.cache_entries_counter.total
+    assert count == 2, f"different N (192 vs 256) must produce 2 distinct cache entries, got {count} (shape not keyed)"
 
 
 def test_matmul_cache_miss_different_dtype(device, isolate_program_cache):
@@ -81,4 +99,7 @@ def test_matmul_cache_miss_different_dtype(device, isolate_program_cache):
     ref2, out2 = run_matmul(device, 128, 256, 192, dtype=ttnn.float32)
     assert_with_pcc(ref2, out2, 0.99)
 
-    assert device.cache_entries_counter.total == 2
+    count = device.cache_entries_counter.total
+    assert (
+        count == 2
+    ), f"different dtype (bfloat16 vs float32) must produce 2 distinct cache entries, got {count} (dtype not keyed)"
