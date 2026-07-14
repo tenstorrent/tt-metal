@@ -764,15 +764,41 @@ and exactly why the num_links bandwidth slope leaks into the fused op. **Not a m
 (the contraction), partial K-shards DO accumulate in L1, and the compute kernel already streams per-K-block
 (`compute.cpp:421-459`). The structure is right; the core assignment is wrong.
 
-- [ ] **W2-next — UNBURDEN THE RELAY CORES (the one fix the evidence points at).** Give the 2 fabric rows a smaller
-  (or zero) share of N so they have slack to absorb the wire, and let the other 7 rows absorb their matmul work.
-  Arithmetic (T_unit = mm_wall x 9 = time for one row to do all of N; wire = 105.4):
-  - **qkv_s1**: balance at f_fab=0.075/f_oth=0.122 -> **274 us vs 331 today = -56 us/site**.
-  - **gate_s1**: wire dominates -> f_fab=0 -> max(105.4, 58.4x9/7=75) = **105 us vs 166 today = -61 us/site**.
-  Scale: ~3 big video sites/block x 48 blocks. Also lifts `agmm_out`/`agmm_ff1` for free.
-  **RISK/BLOCKER:** `N_blocks_per_core` is a COMPILE-TIME arg shared by all cores, so a non-uniform N split needs the
-  per-core N loop bounds reworked (`current_N_block_tiles = n_tile_end - n_tile` underflows if a core gets 0 tiles).
-  This is a program-factory redesign, not a knob — needs a warm authoring session, not a cron lap.
+- [x] **W2-next — UNBURDEN THE RELAY CORES — SHIPPED, but SMALL. The lever is RETIRED: it was NOT the biggest one.**
+  Commit `agmm: shrink the fabric-relay cores' N share`. Give the 2 fabric rows the smallest N share the other 7
+  can absorb; they then have less matmul to starve while the inline relay blocks on the wire.
+
+  **THE BLOCKER WAS MIS-SCOPED — no kernel change was needed at all.** The real constraint is not
+  `current_N_block_tiles` underflow, it is the **in0 mcast chain handshake**: the chain runs ALONG the N axis
+  (`build_core_order_for_axis`, chain index == in1_idx == the core's N slice) and hands one block per (m,n,k) with a
+  request/ack (`dm_in0_sender.cpp:422-432`), so a core that iterated a different number of N BLOCKS would leave its
+  neighbour waiting on a request that never comes → deadlock. But the N **loop bound** (`N_blocks_per_core`) need not
+  change to move N: only the tile count INSIDE the last block moves. That pins every core to the same loop count and
+  bounds `N_i` to `((B-1)*N_block_tiles, B*N_block_tiles]`. The kernels ALREADY run a partial last N block (today
+  every core does 11 of 12 tiles), so this is **program-factory only, zero kernel edits**.
+  Free lunch: because `subblock_w` rounds up, the 7 absorbing rows do the SAME number of MAC columns at 12 tiles as
+  at 11 → they pay **+0%** compute; the relay rows drop 33% (qkv) / 50% (out, ff1) / 88% (qkv_audio).
+
+  **MEASURED (traced, drift-controlled, `test_pipeline_ltx_distilled.py`, jobs 200/203/205 + 209/210):**
+  STEP_MS **S1 346.7 → 344.7/345.2 (−1.4 to −2.1 ms)**, **S2 1089.9 → 1086.4 (−3.5 ms)**. Drift control: the two
+  bracketing baselines agreed to **0.03 ms** (S1) / 0.50 ms (S2); S1 σ=0.13 ⇒ the effect is ~11-16σ. Default ON;
+  `TT_AGMM_FABRIC_N_PCT=0` restores uniform.
+  Census (jobs 170/171/172, drift-controlled): every fused AG-mm site −2% to −6% (qkv_s1 332.4→325.4, out 177.8→173.2,
+  ff1 438.5→417.6, ff1_v_s2 1402→1316); one small regression (`ff1_audio` +3.4%). **`gate` moved +0.02 µs (0.0%)** —
+  the perfect internal control: its N is ONE tile, so the split provably has no room and falls back to uniform.
+
+  **⇒ THE MECHANISM IN THE W2 DIAGNOSIS IS REFUTED. The relay cores do NOT pay "full compute PLUS wire".**
+  The predicted −35..−45 ms/step assumed the relay core's time is `compute + wire` (additive), so halving its matmul
+  should have returned half its compute. It did not: cutting relay compute by 33-50% returned only **2-6%** of the op
+  (qkv_s1 −7.0 µs of the 81 µs exposed gather, not −56). The relay RISC pushes the block to the compute CB BEFORE it
+  relays (`dm_in0_sender.cpp:429`, "push data to compute before mcasting"), so per K-block the core costs
+  **max(relay, compute)**, not the sum — the relay core's matmul was ALREADY hidden behind the wire, and what is
+  exposed is **wire time**, on BH's HARDWARE-CAPPED 2 eth links. This is the same conclusion the CB-depth-3 null and
+  the packet-header-rotation null were already pointing at, and it is now confirmed by moving compute directly.
+  **Corollary: gate_s1's 108 µs exposed gather (≈ a full standalone AG) is NOT recoverable by core assignment** —
+  gate has no N to give away, and even with zero matmul the relay cores would still pay the wire.
+  **What WOULD move it:** less wire (bf8 activation gather — `ag_activation_video_s1_bf8` is 62.3 µs vs 105.5 bf16,
+  already in the census), or fewer gathers (W1's dedup), NOT better core assignment. Do not re-open this lever.
 
 ## Batch W6 — DE-FUSE the AG-matmuls whose fusion is a measured LOSS — **DEAD. Sign INVERTED end-to-end: +6.63 ms/step at S1 (+2.0%, 66σ). Reverted. And it burns the op-level census as a tool for signing a fusion cut.**
 
