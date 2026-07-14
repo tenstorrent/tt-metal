@@ -6,12 +6,14 @@ from itertools import product
 import torch
 from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import (
+    TILE_DIMENSIONS,
     DataCopyGolden,
     TransposeGolden,
     get_golden_generator,
 )
-from helpers.llk_params import DestAccumulation, Transpose, format_dict
+from helpers.llk_params import DestAccumulation, DestSync, Transpose, format_dict
 from helpers.param_config import (
+    get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
 )
@@ -20,7 +22,9 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     MATH_TRANSPOSE_FACES,
+    NUM_BLOCKS,
     NUM_FACES,
+    NUM_TILES_IN_BLOCK,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
@@ -257,7 +261,10 @@ def transpose_dest_int8(
 
 def transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest):
 
-    input_dimensions = [64, 64]
+    # 16 tiles (4x4) forces the input to span several destination-register banks
+    # for both 16-bit (8 tiles/bank -> 2 banks) and 32-bit (4 tiles/bank -> 4 banks)
+    # dest modes, so the kernel's DEST bank switching is exercised.
+    input_dimensions = [128, 128]
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -295,6 +302,17 @@ def transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest):
     else:
         golden_tensor = []
 
+    # Partition the tiles into destination-register banks. transpose is applied
+    # per tile, so the block size only controls how many tiles share a DEST bank
+    # before it is packed out and reused.
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+    )
+
     configuration = TestConfig(
         "sources/transpose_dest_test.cpp",
         formats,
@@ -312,6 +330,8 @@ def transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest):
             ),
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
         ],
         variant_stimuli=StimuliConfig(
             src_A,
