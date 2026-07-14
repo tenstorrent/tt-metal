@@ -106,18 +106,29 @@ struct ResolvedBindings {
 //   - the SAME buffer appearing twice WITHIN the inputs (e.g. matmul(X, X)) is ambiguous —
 //     a future call with distinct same-shape tensors would miscompute — so we bail to the
 //     slow path.
-//   - an OUTPUT buffer that aliases an INPUT buffer (an in-place op writing back into its
-//     input) is safe: every binding for that buffer resolves to the one shared address,
-//     which is correct on every dispatch — so we keep the fast path.
+//   - an OUTPUT buffer (from the output/workload region) that aliases an INPUT buffer (an
+//     in-place op writing back into its input) is safe: every binding for that buffer resolves
+//     to the one shared address, correct on every dispatch — so we keep the fast path.
 // num_input_buffers defaults to SIZE_MAX, which treats every entry as an input (the original
 // conservative behavior: bail on any duplicate).
+//
+// allow_inplace_output_tensor_alias (default false): when an op carries its own output INSIDE
+// tensor_args (an optional output_tensor in the INPUT region) and it aliases an input, the output
+// buffer appears in the input region.  That looks like the ambiguous matmul(X, X) duplicate, so by
+// default we BAIL to the slow-path rebuild (correct for every op).  An op may set this true ONLY if
+// it re-applies EVERY cache-hit-varying runtime arg itself (via get_dynamic_runtime_args + Buffer*
+// bindings) so reusing the cached program for a differently-shaped/-allocated in-place call is
+// correct.  binary_ng qualifies (its get_dynamic re-derives all per-core args).  unary/ternary/
+// moreh_* do NOT — their get_dynamic is partial, so they must keep bailing (see #49573, #48928,
+// SDXL in-place silu / MorehAdamW).  The op opts in via the adapter, keyed on a static trait.
 //
 // Call immediately after Program{desc} on cache miss; store in shared_variables.
 ResolvedBindings resolve_bindings(
     Program& program,
     const ProgramDescriptor& desc,
     std::span<Buffer* const> tensor_buffers,
-    size_t num_input_buffers = std::numeric_limits<size_t>::max());
+    size_t num_input_buffers = std::numeric_limits<size_t>::max(),
+    bool allow_inplace_output_tensor_alias = false);
 
 // Apply resolved bindings to the cached program on a cache hit.
 // current_buffers must be the output of collect_tensor_buffers() for the
