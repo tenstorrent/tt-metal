@@ -118,6 +118,7 @@ their surface lives*:
 ./run.sh --kernel-tier-status      # probe the kernel-tier capability ("available"/"unavailable")
 extractor/build.sh                 # optional: build the extractor manually
 python3 tests/test_checks.py       # hermetic unit tests (no clang/repo needed)
+python -m pytest tests/            # same suite via pytest (pytest.ini pins the rootdir)
 ```
 
 The `/*-audit` skills invoke `run.sh` in their "Recall preflight", so simply
