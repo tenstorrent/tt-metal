@@ -338,8 +338,122 @@ The end-to-end latent PCC is measured against a full-precision (fp32) diffusers 
 
 ### Out of Scope / Deferred
 
-- **Perf** (functional-first, untraced): productionizing tracing into `__call__` — a prototype measured **1.28×** on the denoise step (634→494 ms/step; 30-step 19.0→14.8 s). The denoise is compute-bound (8B transformer over 4096 tokens), so tracing's host-dispatch savings are modest; the trace region needs ≥71 MB (vs the default 50 MB). Larger levers: batched+masked CFG (~2× by halving the per-step forwards; needs transformer attention-mask support) and matmul-config tuning (the run logs many `No known best blocking` warnings).
+- **Perf**: the bringup above was functional-first (untraced, DRAM-interleaved). A subsequent optimization pass (opt-in denoise tracing, per-shape matmul + conv3d blockings, `num_links=4` CCL, CFG gating) is documented in its own section — see **[Performance Optimization History](#performance-optimization-history)** — and took the traced pipeline to ~13.84 s. The remaining large lever is **batched+masked CFG** (~2× by halving the per-step forwards; needs transformer attention-mask support), still deferred.
 - **On-demand golden tests**: `test_fibo_pipeline_vae_decode_on_device` (native-res 1024² VAE golden vs host) and `test_fibo_pipeline_e2e_image_golden` (reduced-res image golden vs the diffusers reference) are committed but slow (host reference decode), so they run on-demand rather than in fast CI.
+
+---
+
+## Sharding & Parallelism
+
+FIBO runs on the **2×2 Blackhole mesh as a single CFG submesh** (`cfg=(1,0)`) spanning both axes: `sp` (sequence-parallel) on mesh axis 0, `tp` (tensor-parallel) on mesh axis 1. The three stages use **three different sharding regimes** on that same mesh:
+
+| Stage | Regime | What is split | What is replicated |
+|---|---|---|---|
+| **Encoder** (SmolLM3) | fully replicated (`tp` factor 1) | nothing | the whole encoder — every device runs it, no CCL |
+| **Transformer** (denoise) | `sp=2` × `tp=2` | spatial sequence (sp) + feature/hidden dim + weights (tp) | prompt tokens (across sp), prompt RoPE |
+| **VAE decode** (Wan 2.2) | hw-parallel `(2,2)` | image height (tp axis) + width (sp axis) — a spatial quadrant per device | — |
+
+### Transformer sharding (`sp=2` × `tp=2`)
+
+- **Sequence parallel (`sp=2`, axis 0):** the spatial latent `(1, h·w, 48)` is sequence-sharded on dim 1 (`mesh_axes=[None, sp_axis, None]`) — each sp device holds *half the spatial tokens*. FeedForward and the per-token ops run independently on each half. The spatial RoPE tables are sharded the same way (`mesh_axes=[sp_axis, None]`).
+- **Tensor parallel (`tp=2`, axis 1):** the `inner_dim=3072` (= 24 heads × 128) feature dimension and the block weights are fractured across the tp axis — each tp device holds a *1536-wide feature shard*. `context_embedder`/`x_embedder` are `ColParallelLinear` (output feature-sharded on tp); attention/FF gather and scatter activations across the tp axis with `all_gather`/`reduce_scatter`. Ring attention (`RingJointSDPA`) overlaps the KV all-gather with compute.
+- **Replicated:** the prompt tokens and prompt RoPE are not sharded across sp (attention needs the full prompt on every sequence shard).
+- At the end of the forward, the tp-sharded spatial activation is `all_gather`-ed across the tp axis (dim 2) before the final `proj_out`.
+
+### The `tp=2` injection masking (splitting the concat across two devices)
+
+This is the masking that arose from splitting work over the two tp devices. Before every block, FIBO's "concat-halves" injection replaces the **upper half** of the context features (`[1536:3072]`) with the per-block projected text, keeping the lower half (`[0:1536]`) as the running prompt:
+
+```
+out[..., :1536] = context[..., :1536]     # kept prompt half
+out[..., 1536:] = projected_text          # replaced half
+```
+
+At **tp=2 the 3072 feature dim is sharded exactly at the 1536 boundary**, so tp-device 0 owns `[0:1536]` (the kept half) and tp-device 1 owns `[1536:3072]` (the replaced half). A naive concat across a *sharded* feature dim has no cheap primitive (it would need an all-gather). Instead FIBO precomputes two per-device `bf16` masks once (`_InjectionMask`):
+
+- `keep` — `1` on the kept-prompt features, `0` elsewhere; sharded on the tp axis → all-ones on device 0, all-zeros on device 1.
+- `take` — the complement → all-zeros on device 0, all-ones on device 1.
+
+The injection is then a **gather-free, per-device select** — `context_local * keep + projected * take` (`inject_text`) — with **no CCL**. `projected` comes from a *replicated* `Linear`, so it's the full 1536-wide vector on every device; the `take` mask keeps only the slice that device owns. This is only valid at `tp==2` (asserted), because it requires the per-device feature-shard width (1536) to equal exactly half the inner dim. At `tp=1` the injection falls back to a plain `ttnn.concat`.
+
+### VAE hw-parallel decode `(2,2)` + halo exchange
+
+The Wan 2.2 residual decoder is **height/width parallel** (`VaeHWParallelConfig`: height on the tp axis, width on the sp axis), so the 64×64→1024×1024 spatial decode is split into **quadrants across all 4 devices** — each device decodes ~1/4 of the spatial extent. It uses its **own** `CCLManager` (`_vae_ccl_manager`, separate from the transformer's so it can't disturb the resident denoise trace). Each conv only needs its neighbors' boundary pixels, so instead of gathering full activations the decoder does a **halo exchange** (`neighbor_pad_persistent_buffer` → `NeighborPadAsync`): it swaps only the `kernel//2`-wide border rows (H) / columns (W) with neighbor devices. Two kinds of padding-masking keep this correct at shard edges:
+
+- **Height padding** — zeroing rows at/beyond `logical_h` is *fused into* `neighbor_pad` via the `logical_h` parameter (no separate mul-mask op).
+- **Width padding** — a pre-conv `mul` by `_get_w_mask` zeros the width-padding columns before the halo (no C++ fusion for `logical_w` yet), so the exchange doesn't propagate non-zero padding.
+
+### Why the Wan 2.2 VAE decode is fast
+
+The decode dropped to **0.33 s** (from 2.33 s) for five compounding reasons:
+
+1. **Single-frame (`T=1`) path.** Wan is a *video* VAE, but FIBO decodes one latent frame, so the expensive temporal machinery (multi-frame chunking, causal-T convolutions, temporal upsample) degenerates to `T=1` — the real temporal-upsample convs emit a single output frame.
+2. **hw-parallel `(2,2)` quadrant split.** Each of the 4 devices does only ~1/4 of the spatial work (see above).
+3. **Halo exchange instead of full-activation gather.** Only the thin conv borders cross device boundaries, and that halo is bandwidth-bound so it rides `num_links=4` (the W-halo uses all 4 links; the H-halo self-caps to 1 since its upper dims `B·T=1`). This makes the spatial parallelism nearly free — CCL is only ~5% of decode.
+4. **Cheap, mostly-fused padding masking** (fused H-mask, single W pre-mask) — no per-conv mask overhead.
+5. **Per-shape conv3d blocking tuning — the dominant win.** This is the actual optimization (see *Performance Optimization History → Conv3d blocking tuning*): all 13 decode conv3d shapes were missing the `_BLOCKINGS` table and fell back to `H_block=W_block=1` (one output pixel per core). The tuned blockings tile the output across the full compute grid, giving **15–86× per-op** and driving the 2.33 s → 0.33 s result.
+
+---
+
+## Performance Optimization History
+
+Sub-projects 1–4 above were **functional-first**: correct on the 2×2 Blackhole mesh, but untraced and DRAM-interleaved. This section records the optimization work layered on top afterwards. All numbers are the 1024×1024, 30-step, `guidance_scale=5.0` pipeline on the 2×2 Blackhole (P150) mesh unless noted; commit hashes reference the `fibo-pipeline` branch.
+
+**Net effect of the shipped work: traced end-to-end pipeline ~15.84 s → ~13.84 s, with VAE decode 2.33 s → 0.33 s and denoise 2.00 → 2.33 it/s — all PCC-neutral.**
+
+### What FIBO inherits from Flux1 (the shared DiT baseline)
+
+The FIBO transformer was built *on top of* the existing tt_dit Flux1 DiT (`BriaFiboTransformer` is "adapted from `transformer_flux1.Flux1Transformer`"), so most of the heavy device-side performance machinery is **reused, not re-written**. What is reused unchanged vs. overridden/added:
+
+| Component | Source | FIBO treatment |
+|---|---|---|
+| Single transformer block (×38) | `transformers/transformer_flux1.py::Flux1SingleTransformerBlock` | **reused unchanged** (imported directly) |
+| Dual transformer block (×8) | `blocks/transformer_block.py::TransformerBlock` | **reused unchanged** (shared MMDiT dual block, also used by SD3.5 etc.) |
+| Top-level DiT | `transformer_flux1.py::Flux1Transformer` | **adapted** → `BriaFiboTransformer` (deltas below) |
+| Sequence-parallel + tensor-parallel scheme | `parallel/` config + blocks | **reused**; FIBO selects `cfg=(1,0) sp=(2,0) tp=(2,1)` |
+| Ring attention / `RingJointSDPA` (overlaps KV all-gather with compute) | inside the shared blocks | **reused**; FIBO adds one `(is_blackhole, sp, tp)` chunk-size entry `(True,2,2)→(128,512)` |
+| CCL collectives (`all_gather_persistent_buffer`, `reduce_scatter_minimal_async`) + `CCLManager` | shared `parallel/manager.py` | **reused** (persistent pre-allocated buffers) |
+| `minimal_matmul` fast path (via `Linear`/`ColParallelLinear`) | shared `layers/linear.py` | **reused**; FIBO registers per-shape block configs (below) |
+| `Tracer` (capture/replay a resident device trace) | `utils/tracing.py` | **reused** (opt-in denoise trace; below) |
+| Timestep embedding | Flux uses pooled + guidance embeds | **overridden** → `BriaFiboTimestepEmbed` (timestep-only) |
+| `context_embedder` / `x_embedder` dims | Flux dims | **overridden** (4096→3072 / 48→3072) |
+| Per-block text injection | none in Flux | **net-new** → `inject_text` + `_InjectionMask` (concat-halves) |
+| `caption_projection` (46× `Linear(2048→1536)`) | none in Flux | **net-new** |
+
+Contrast worth noting: the Flux1 pipeline traces **all three** stages (denoise + VAE + encoder) and defaults `num_links=2` on its (Wormhole) 2×4 mesh; FIBO traces **only denoise** (encoder tracing corrupts the image, VAE decode is compute-bound — see *Tried and reverted*) and defaults `num_links=4` (the Blackhole 2×2 hardware max). Flux also avoids CFG entirely via learned guidance embeds, whereas FIBO runs real CFG — which is why the *CFG gating* optimization below is FIBO-specific.
+
+### Shipped optimizations (committed on `fibo-pipeline`)
+
+Denoise (~95% of the pipeline):
+
+- **Per-shape matmul block-size tuning** (`efc2dd2d586`, `1b829d82ae3`). Every FIBO block matmul takes the non-AGMM `minimal_matmul` path, which was falling back to a generic `(8,8,8)` blocking. Added a `bh_2x2` device config + FIBO's 19 matmul shapes to `utils/sweep_mm_block_sizes.py`, swept on the profiler, and registered the winners as per-`(M,K,N)` `MinimalMatmulConfig`s at import (`transformer_bria_fibo.py::_register_fibo_matmul_configs`, keyed under grid `12x10`, additive so other models are unaffected). → matmul device-time **91.4 → 86.2 ms (−5.8%)**, whole forward 235 → 230 ms (−2.2%), PCC 99.53% (unchanged).
+- **Denoise transformer tracing** (`f642cd95d6e`, `1eef9fcd8a5`, opt-in `traced=`). Capture one resident device trace of the transformer forward and replay it each of the 30 steps, removing per-step host dispatch. Prototype measured ~1.28× on the denoise step; the follow-up fix verified it captures exactly one trace/step. Trace region needs ≥71 MB (default 50 MB).
+- **CCL `num_links` 1 → 4** (`bc8db8971ed`, `e07c05a65a3`). The sp/tp collectives are bandwidth-bound; striping each across all 4 physical ethernet links (the 2×2 P150 hardware max) sped denoise **2.00 → 2.33 it/s** and total pipeline **15.84 → 13.84 s (−13%)**, correctness-neutral (transport-only). Set as the default in `BriaFiboPipelineConfig`.
+
+VAE decode (was ~98% on-device Wan-VAE conv3d):
+
+- **Conv3d blocking tuning** (`fbaac226ef6`). All 13 decode conv3d shapes were *missing* the `utils/conv3d.py::_BLOCKINGS` table and fell back to a pathological `H_block=W_block=1` (one spatial element per core). Swept each shape (`tests/models/wan2_2/bruteforce_conv3d_sweep.py`) and registered tuned blockings → **decode 2.33 s → 0.33 s (−86%)**, PCC 0.99997; per-op speedups 15–86×.
+- **Temporal-upsample conv3d blockings** (`191756ca539`). The last 2 `(3,1,1)` tconvs were still on the fallback; registered their blockings (per-op 61–80×). End-to-end decode already dominated by other stages, so this was for table completeness/consistency.
+
+Pipeline-level:
+
+- **CFG gating on `guidance_scale > 1`** (`5d78fcf398f`). At `gs ≤ 1` the uncond branch is mathematically dead (`noise = uncond + 1·(cond − uncond) = cond`), so the uncond encode/prepare/forward are skipped → **~2× cheaper denoise on the `gs ≤ 1` path**; the default `gs=5` path is byte-for-byte unchanged. Mirrors the diffusers reference.
+- **Tokenizer `max_length=3000` clamp** (`dc8aece0110`). Correctness fix (matches the diffusers reference default) that also bounds encoder input length instead of the tokenizer's 131072 default.
+
+Measurement infrastructure (enabled everything above):
+
+- **Tracy per-op device-profiling tests + per-stage wall-clock harness** (`77e42dca28e`, `874654575d5`, `e447f3d265e`, `2dbf3e5e563`). Profile the **DIT transformer** test for per-forward denoise cost (not the full pipeline — that overflows the profiler marker buffer and asserts on device asymmetry). Recipe and profiler knobs are in the team's profiling notes.
+
+### Tried, measured, and reverted — do NOT redo
+
+These represent real spent effort; each was reverted (not in git) after measurement:
+
+- **L1 activation residency ("put everything in L1")** — reverted. The forward is only ~15.7% of DRAM roofline (compute-bound, not bandwidth-bound). SDPA is hardware DRAM-only; interleaved L1 clashes with static CBs; the subset that *fits* is bit-exact but perf-neutral. Broad L1 would need a full sharded-matmul rewrite for a capped payoff.
+- **Op-count fusion (spatial+prompt stream-concat)** — reverted. Cut matmul ops 398 → 322 (−15.6% matmul time) but only −5.1% whole denoise; the added concat/slice TM ops ate most of the win.
+- **`RingJointSDPA` chunk-size tuning** — dead end. Best valid config was ~noise-floor (+0.5%) and drifted the image to PCC 0.97 (accumulation-order change compounds over 30×46 SDPA applications).
+- **Encoder (SmolLM3) tracing** — reverted. Real −20% on encode, but a naive 2nd resident trace corrupts the image (PCC 0.18); correct multi-trace pre-allocation is real work, and encode is only ~2.6% of the pipeline.
+- **Small-M matmul core-grid fix** — empirically refuted; the full 12×10 grid is already optimal (smaller grids 34–369% slower).
+- **Full-spatial conv3d re-sweep** — found 5–8% per-op gains but no measurable end-to-end decode gain (decode already below the noise floor); reverted.
 
 ---
 

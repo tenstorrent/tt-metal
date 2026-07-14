@@ -272,7 +272,10 @@ def test_fibo_pipeline_perf_breakdown(*, mesh_device, height, width, num_inferen
 @pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=["mesh_device"])
 @pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=["device_params"])
 @pytest.mark.parametrize("height, width, num_inference_steps, num_measured_runs", [(1024, 1024, 30, 3)])
-def test_fibo_pipeline_perf_breakdown_json(*, mesh_device, height, width, num_inference_steps, num_measured_runs):
+@pytest.mark.parametrize("traced", [False, True], ids=["untraced", "traced"])
+def test_fibo_pipeline_perf_breakdown_json(
+    *, mesh_device, height, width, num_inference_steps, num_measured_runs, traced
+):
     """Per-stage wall-clock breakdown for FIBO's intended structured-JSON prompt (gs=5.0, production CFG).
 
     Reads the committed ``fibo_vlm_prompt.json`` (a real VLM text->JSON caption) and feeds it to the
@@ -289,12 +292,14 @@ def test_fibo_pipeline_perf_breakdown_json(*, mesh_device, height, width, num_in
         pipe,
         label="json",
         prompt=json_prompt,
+        negative_prompt="blurry, low quality, distorted, watermark, text",
         guidance_scale=5.0,
         seed=0,
         height=height,
         width=width,
         num_inference_steps=num_inference_steps,
         num_measured_runs=num_measured_runs,
+        traced=traced,
     )
 
 
