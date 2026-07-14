@@ -180,7 +180,7 @@ def run_all_gather_impl(
                 ttnn.from_torch(
                     torch.zeros(ag_output_shape),
                     device=mesh_device,
-                    layout=ttnn.TILE_LAYOUT,
+                    layout=layout,
                     dtype=ag_input_dtype,
                     memory_config=mem_config_ag,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -191,7 +191,7 @@ def run_all_gather_impl(
                 ttnn.from_torch(
                     torch.zeros(ag_output_shape),
                     device=mesh_device,
-                    layout=ttnn.TILE_LAYOUT,
+                    layout=layout,
                     dtype=ag_input_dtype,
                     memory_config=mem_config_ag,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),

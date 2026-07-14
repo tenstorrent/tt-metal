@@ -287,6 +287,7 @@ def test_all_gather_ring_nightly(
 
 @skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(3)
+@pytest.mark.parametrize("num_links", [1, 2], ids=["1_link", "2_links"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout",
     [
@@ -345,11 +346,11 @@ def test_all_gather_ring_nightly(
     ],
 )
 @pytest.mark.parametrize(
-    "device_params",
+    "device_params, all_gather_topology",
     [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
-    indirect=True,
+    indirect=["device_params"],
 )
 @pytest.mark.parametrize("cluster_axis", [0])
 def test_all_gather_broken(
@@ -357,15 +358,17 @@ def test_all_gather_broken(
     num_devices,
     ag_output_shape,
     dim,
+    num_links,
     ag_input_dtype,
     layout,
     mem_config_input,
     mem_config_ag,
     enable_trace,
+    all_gather_topology,
     num_iters,
     cluster_axis,
 ):
-    validate_test(num_devices, None, bh_2d_mesh_device.shape, cluster_axis)
+    validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, cluster_axis)
     if cluster_axis == 0:
         submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     else:
@@ -378,6 +381,7 @@ def test_all_gather_broken(
         layout,
         mem_config_input,
         mem_config_ag,
+        num_links=num_links,
         use_persistent_buffers=False,
         enable_trace=enable_trace,
         num_iters=num_iters,
@@ -385,7 +389,7 @@ def test_all_gather_broken(
         allowed_pcc=0.9999,
         all_gather_function=ttnn.experimental.all_gather_async,
         use_barrier=True,
-        all_gather_topology=ttnn.Topology.Linear,
+        all_gather_topology=all_gather_topology,
         chunks_per_sync=20,
         num_workers_per_link=2,
         num_buffers_per_channel=2,
