@@ -466,26 +466,52 @@ inline void fabric_dbg_ringbuf_push_txrx_counts() {
 #endif
 }
 
-// [PKTMODE-PROBE] Snapshot of the eth queue packet-mode config, pushed to the watcher ring buffer once
-// per successful retrain (on the link down->up edge, from recover_eth_link_if_down) -- edge-triggered,
-// so exactly one 3-word entry per retrain. Purpose: check whether a retrain clears packet-resend mode
-// (TXQ_CTRL[0]) / rxq packet mode (RXQ_CTRL[1]) -- which the router only sets once at init and never
-// re-arms in recovery -- since that would explain silent in-flight drops on an otherwise-UP link.
-// Register addresses per fabric_txq_setup.h. Read via a direct volatile load (same as PCS_STATUS above)
-// to avoid pulling in the eth_txq API headers here.
-//   entry[0] = codeword 0x5E5EDA00
-//   entry[1] = TX: low16 = TXQ0_CTRL, high16 = TXQ1_CTRL   (packet_resend_mode = bit 0 of each)
-//   entry[2] = RX: low16 = RXQ0_CTRL, high16 = RXQ1_CTRL   (packet_mode          = bit 1 of each)
-constexpr uint32_t FABRIC_DBG_PKTMODE_CODEWORD = 0x5E5EDA00;
-inline void fabric_dbg_ringbuf_push_pktmode_snapshot() {
-#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
-    const uint32_t txq0 = *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(0xFFB90000);  // ETH_TXQ0 CTRL
-    const uint32_t txq1 = *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(0xFFB91000);  // ETH_TXQ1 CTRL
-    const uint32_t rxq0 = *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(0xFFB94000);  // ETH_RXQ0 CTRL
-    const uint32_t rxq1 = *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(0xFFB95000);  // ETH_RXQ1 CTRL
-    WATCHER_RING_BUFFER_PUSH(FABRIC_DBG_PKTMODE_CODEWORD);
-    WATCHER_RING_BUFFER_PUSH((txq0 & 0xFFFF) | ((txq1 & 0xFFFF) << 16));
-    WATCHER_RING_BUFFER_PUSH((rxq0 & 0xFFFF) | ((rxq1 & 0xFFFF) << 16));
+// Tiny local reader (direct volatile load, same technique as the PCS_STATUS read above) so we don't
+// pull in the eth_txq API headers here.
+inline uint32_t fabric_dbg_rd_reg(uint32_t addr) { return *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(addr); }
+
+// [PKTMODE-PROBE] FULL eth-queue config snapshot, pushed to the watcher ring buffer once per successful
+// retrain (link down->up edge, from recover_eth_link_if_down) -- edge-triggered, so exactly one 9-word
+// entry per retrain. Captures every config register eth_enable_packet_mode() sets at init
+// (fabric_txq_setup.h) -- which the router sets ONCE and never re-arms in recovery -- so we can see
+// which (if any) a retrain clears. Register addresses per fabric_txq_setup.h / tt_eth_ss_regs.h.
+//
+// The watcher displays the ring buffer NEWEST-FIRST, and we push codeword-first, so in the log a
+// snapshot reads as [ ...word8, word7, ..., word1, CODEWORD ] (codeword last). Push order after codeword:
+//   [1] TXQ_CTRL           low16 = TXQ0 (0xFFB90000), high16 = TXQ1 (0xFFB91000)  packet_resend = bit0
+//   [2] RXQ_CTRL           low16 = RXQ0 (0xFFB94000), high16 = RXQ1 (0xFFB95000)  packet_mode   = bit1
+//   [3] MAC_RX_ADDR_ROUTING (0xFFB98154) raw   -- type->RXQ steering (prime suspect)
+//   [4] MAC_RX_ROUTING      (0xFFB98150) raw
+//   [5] TXPKT_CFG_SEL_SW    low16 = TXQ0 (0xFFB90080), high16 = TXQ1 (0xFFB91080)
+//   [6] TXPKT_CFG_SEL_HW    low16 = TXQ0 (0xFFB90084), high16 = TXQ1 (0xFFB91084)
+//   [7] TXQ1 dest MAC HI    (0xFFB9829C) raw
+//   [8] TXQ1 dest MAC LO    (0xFFB98298) raw
+// Expected post-init values: [1] bit0 set; [2] bit1 set; [3] routing bits (bcast->RXQ0, mcast->RXQ1);
+// [4] 0; [5] TXQ0=0, TXQ1=0x111; [6] TXQ0=0, TXQ1=1; [7]/[8] TXQ1 mcast MAC (0x0100/0x00000001).
+// NOTE: guarded on COMPILE_FOR_AERISC only (not PHYSICAL_AERISC_ID==0), so it fires on whichever ERISC
+// calls it -- the retrain-edge call is in ERISC0-only code, but the init call (txq1-active-mode setup)
+// runs on the receiver ERISC (ERISC1). The eth queue CTRL/routing regs are shared per-core, so either
+// ERISC reads the same values; call sites ensure a single writer at a time.
+// Distinct codewords so init-time and retrain-time snapshots can be told apart in the same log.
+constexpr uint32_t FABRIC_DBG_PKTMODE_CODEWORD_INIT = 0x5E5EDA02;     // snapshot taken at init (baseline)
+constexpr uint32_t FABRIC_DBG_PKTMODE_CODEWORD_RETRAIN = 0x5E5EDA03;  // snapshot taken at retrain-complete edge
+inline void fabric_dbg_ringbuf_push_pktmode_snapshot([[maybe_unused]] uint32_t codeword) {
+#if defined(COMPILE_FOR_AERISC)
+    WATCHER_RING_BUFFER_PUSH(codeword);
+    WATCHER_RING_BUFFER_PUSH(
+        (fabric_dbg_rd_reg(0xFFB90000) & 0xFFFF) | ((fabric_dbg_rd_reg(0xFFB91000) & 0xFFFF) << 16));  // [1] TXQ CTRL
+    WATCHER_RING_BUFFER_PUSH(
+        (fabric_dbg_rd_reg(0xFFB94000) & 0xFFFF) | ((fabric_dbg_rd_reg(0xFFB95000) & 0xFFFF) << 16));  // [2] RXQ CTRL
+    WATCHER_RING_BUFFER_PUSH(fabric_dbg_rd_reg(0xFFB98154));  // [3] MAC_RX_ADDR_ROUTING
+    WATCHER_RING_BUFFER_PUSH(fabric_dbg_rd_reg(0xFFB98150));  // [4] MAC_RX_ROUTING
+    WATCHER_RING_BUFFER_PUSH(
+        (fabric_dbg_rd_reg(0xFFB90080) & 0xFFFF) |
+        ((fabric_dbg_rd_reg(0xFFB91080) & 0xFFFF) << 16));  // [5] TXPKT_CFG_SEL_SW
+    WATCHER_RING_BUFFER_PUSH(
+        (fabric_dbg_rd_reg(0xFFB90084) & 0xFFFF) |
+        ((fabric_dbg_rd_reg(0xFFB91084) & 0xFFFF) << 16));    // [6] TXPKT_CFG_SEL_HW
+    WATCHER_RING_BUFFER_PUSH(fabric_dbg_rd_reg(0xFFB9829C));  // [7] TXQ1 dest MAC HI
+    WATCHER_RING_BUFFER_PUSH(fabric_dbg_rd_reg(0xFFB98298));  // [8] TXQ1 dest MAC LO
 #endif
 }
 
@@ -515,6 +541,9 @@ static void recover_eth_link_if_down() {
     // Per-core down/up edge state (single firmware TU -> one instance per eth core). Constant-
     // initialized to false, so no static-init guard variable is emitted.
     static bool eth_link_was_down = false;
+    // [CONFIG-RESTORE] One-shot: armed on the retrain (down->up) edge, applied once AFTER the FW recovery
+    // call below to restore the eth-queue config regs that the retrain mutates back to their init values.
+    static bool restore_config_after_retrain = false;
     // [WAS_RETRAINED] Independent rising-edge detector for a *successful* retrain: PCS link observed
     // UP after having been seen DOWN. Reads PCS_STATUS directly (no is_link_up() debounce, whose
     // ERISC0 down-path burns billions of cycles). Sets was_retrained=1 exactly once on the down->up
@@ -530,22 +559,12 @@ static void recover_eth_link_if_down() {
             if (was_retrained == 0) {
                 was_retrained = 1;  // edge-triggered: retrain succeeded
             }
-            // [PKTMODE-PROBE] One packet-mode snapshot per retrain-complete (down->up) edge.
-            fabric_dbg_ringbuf_push_pktmode_snapshot();
+            // [CONFIG-RESTORE] Arm the one-shot restore. The retrain config snapshot is taken AFTER the
+            // restore (in the block below), not here, so init-vs-retrain directly verifies the fix.
+            restore_config_after_retrain = true;
         }
     }
-    // if (!is_link_up()) {
     if (true) {
-        // volatile eth_status_t* eth_status = (volatile eth_status_t*)(MEM_SYSENG_ETH_STATUS);
-        // invalidate_l1_cache();  // train_status is FW-written; read a fresh value, not a stale cache line
-        // if (eth_status->train_status == link_train_status_e::LINK_TRAIN_REQUESTED_DOWN) {  //
-        // LINK_TRAIN_REQUESTED_DOWN
-        //     // Convert an administrative down into a recoverable training-failure state so the FW recovery
-        //     // path below isn't precluded from running.
-        //     eth_status->train_status =
-        //         link_train_status_e::LINK_TRAIN_TIMEOUT_MANUAL_EQ;  // LINK_TRAIN_TIMEOUT_MANUAL_EQ
-        //     eth_status->port_status = port_status_e::PORT_UP;
-        // }
         eth_link_was_down = true;
         // The link-recovery entry point is optional in the FW API table: base/older FW may leave it
         // null. Gate on a non-zero pointer -- calling through a null here would jump to address 0 and
@@ -561,6 +580,25 @@ static void recover_eth_link_if_down() {
         }
     } else if (eth_link_was_down) {
         eth_link_was_down = false;
+    }
+    // [CONFIG-RESTORE] Once per completed retrain (down->up edge), restore the eth-queue config bits the
+    // retrain mutated back to their init values. Applied AFTER the FW recovery call so this call's recovery
+    // can't clobber it. Starting with TXQ1 dest MAC LO (0xFFB98298): init writes 0x00000001; the retrain
+    // clears it to 0. Idempotent -- the (higher-id) end the retrain left untouched just re-writes 1.
+    if (restore_config_after_retrain) {
+        restore_config_after_retrain = false;
+        *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(0xFFB98298) = 0x00000001;  // TXQ1 dest MAC LO -> 1
+        // [CONFIG-RESTORE] Clear disable_remote_drop_notification (TXQ_CTRL bit3) that the retrain sets on
+        // the lower-id end -> restore init value 0x1 (packet_resend on, dis_drop off) on both TX queues.
+        // Idempotent: the untouched (higher-id) end already reads 0x1 and just re-writes it.
+        *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(0xFFB90000) =
+            0x00000001;  // TXQ0_CTRL -> resend on, dis_drop off
+        *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(0xFFB91000) =
+            0x00000001;  // TXQ1_CTRL -> resend on, dis_drop off
+        // [PKTMODE-PROBE] config snapshot temporarily DISABLED -- collecting TX/RX counters instead (the
+        // config snapshots and the TX/RX ring-buffer stream can't share the 32-word ring buffer). The
+        // CONFIG-RESTORE write above stays ACTIVE -- this run measures TX/RX with the fix applied.
+        // fabric_dbg_ringbuf_push_pktmode_snapshot(FABRIC_DBG_PKTMODE_CODEWORD_RETRAIN);
     }
 #endif
 }

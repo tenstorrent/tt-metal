@@ -64,10 +64,11 @@ inline __attribute__((always_inline)) void risc_context_switch_without_noc_sync(
     // its shadow counters after. (TEST-ONLY: this makes the "without_noc_sync" path do a full sync.)
     update_boot_results_eth_link_status_check();
     recover_eth_link_if_down();
-    // [PKTMODE-PROBE] Temporarily disabled: instead of the per-context-switch TX/RX counter push, we now
-    // push a one-shot packet-mode snapshot on the retrain-complete edge (see
-    // fabric_dbg_ringbuf_push_pktmode_snapshot(), called from recover_eth_link_if_down above).
-    // fabric_dbg_ringbuf_push_txrx_counts();
+    // On every context switch, log the live TX and RX packet counts to the watcher ring buffer (tagged
+    // 0xA=TX, 0xB=RX in the top nibble; count in low 28 bits). The one-shot packet-mode config snapshots
+    // are temporarily disabled while we collect TX/RX -- the two can't share the 32-word ring buffer
+    // (the continuous TX/RX stream would evict the one-shot snapshots).
+    fabric_dbg_ringbuf_push_txrx_counts();
 #endif
 #endif
 }
