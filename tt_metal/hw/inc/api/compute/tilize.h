@@ -243,7 +243,7 @@ ALWI void tilize_block(
         // on Quasar; the fault tile/core moved with DPRINT latency across every prior fix). Slower but correct;
         // no-op on t=0 (packer idle). PACK's wait_for_math_done keys off the MATH_PACK semaphore (posted by
         // dest_section_done), not this stall, so there is no circular wait / deadlock.
-        MATH((TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::NOTHING, p_stall::PACK)));
+        MATH(TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::NOTHING, p_stall::PACK));
         MATH((llk_math_eltwise_unary_datacopy(0 /*dst index*/, icb)));
         // DEBUG: print immediately BEFORE the tilize pack; last TZPK before the fault = the faulting tile.
         PACK(DPRINT("TZPK t={} l1idx={}\n", (uint32_t)t, (uint32_t)(t + output_tile_index)));
