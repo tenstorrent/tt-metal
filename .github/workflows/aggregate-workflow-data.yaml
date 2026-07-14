@@ -98,7 +98,6 @@ jobs:
               ".github/workflows/single-card-demo-tests.yaml",
               ".github/workflows/tt-metal-l2-nightly.yaml",
               ".github/workflows/ttnn-run-sweeps.yaml",
-              ".github/workflows/ttnn-stress-tests.yaml",
               ".github/workflows/vllm-nightly-tests.yaml",
               ".github/workflows/metal-run-microbenchmarks.yaml",
               ".github/workflows/sanity-tests-debug.yaml",
