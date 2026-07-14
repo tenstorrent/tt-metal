@@ -4,6 +4,13 @@
 """Qwen3.5-9B e2e text generation on Blackhole P150 (128-256k ISL, traced/paged).
 
 Run: pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s [-k "traced_128"]
+
+GDN prefill runs the fast fused path by DEFAULT — no env vars needed: chunk-parallel phase-split
+(PREP fanned across the grid + V-block SCAN), fp32 o output, fp32 state, and flat token-major q/k/v
+with in-kernel L2-norm (eliminates the head-split relayouts + host l2_norm — the bulk of the
+preprocessing cost). Two opt-out flags exist only for benchmarking/debug:
+  QWEN_GDN_PHASED=0    fall back to the monolithic single-kernel fused op (no phase split).
+  QWEN_GDN_FLAT_QKV=0  fall back to head-split q/k/v + host l2_norm (no flat token-major reads).
 """
 
 import hashlib
@@ -461,12 +468,17 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
         return d * _per_shard + int(idxs[d].item())
 
     def _update(token, position):
+        # page_table is a constant identity table for the whole sequence; it was uploaded once into
+        # dev[3] by prepare_inputs_decode (init) and the trace bakes in its address, so it never needs
+        # to change per token. Rebuilding it from torch every token was O(num_blocks) redundant host
+        # work that grows with context (~1056 blocks at 64k). Update only the per-token inputs
+        # (tokens, cur_pos, rope) and leave dev[3] as-is.
         host = model.prepare_decode_inputs_host(
             torch.tensor([[token]], dtype=torch.int32),
             torch.tensor([position], dtype=torch.int32),
-            page_table=page_table,
+            page_table=None,
         )
-        copy_host_to_device(host, device_tensors=dev)
+        copy_host_to_device(host[:3], device_tensors=dev[:3])
 
     # Snapshot/restore GDN state across all TP ranks (ttnn.copy preserves trace buffer addresses)
     _gdn = [layer.attention for layer in model.layers if not layer.is_full_attention]
