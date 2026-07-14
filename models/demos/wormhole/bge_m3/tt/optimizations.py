@@ -594,10 +594,11 @@ def _mlp_wi_minimal_matmul_config(mesh_device, max_seq_len, max_batch_size, *, h
     if max_seq_len == 8192 and mesh_device is not None and not ttnn_is_blackhole(mesh_device):
         g = mesh_device.compute_with_storage_grid_size()
         if g.x >= 8 and g.y >= 8:
+            # Seq-parallel M=49152 sweep winner: N_block 4->8 (vs single-chip n4).
             return ttnn.MinimalMatmulConfig(
                 M_block_size=16,
                 K_block_size=16,
-                N_block_size=4,
+                N_block_size=8,
                 subblock_h=4,
                 subblock_w=2,
                 compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
@@ -629,9 +630,10 @@ def _mlp_wo_minimal_matmul_config(mesh_device, max_seq_len, max_batch_size, *, h
     if max_seq_len == 8192 and mesh_device is not None and not ttnn_is_blackhole(mesh_device):
         g = mesh_device.compute_with_storage_grid_size()
         if g.x >= 8 and g.y >= 8:
+            # Seq-parallel M=49152 sweep winner: m8/k32 (vs single-chip m16/k16).
             return ttnn.MinimalMatmulConfig(
-                M_block_size=16,
-                K_block_size=16,
+                M_block_size=8,
+                K_block_size=32,
                 N_block_size=4,
                 subblock_h=4,
                 subblock_w=2,
