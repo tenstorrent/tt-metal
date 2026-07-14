@@ -1189,7 +1189,6 @@ public:
         const std::map<std::string, std::string> prefetch_defines = {
             {"DISPATCH_NOC_X", std::to_string(phys_disp.x)},
             {"DISPATCH_NOC_Y", std::to_string(phys_disp.y)},
-            {"FD_CORE_TYPE", std::to_string(tt::tt_metal::detail::fd_core_type_define_value(this->device_))},
         };
 
         const tt_metal::KernelHandle sp = Common::create_sd_cq_kernel(

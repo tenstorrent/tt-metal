@@ -238,13 +238,6 @@ bool sd_cq_kernel_tests_should_skip(const tt::tt_metal::IDevice* device) {
     return get_sd_cq_dispatch_cores(device).empty();
 }
 
-uint32_t fd_core_type_define_value(const tt::tt_metal::IDevice* device) {
-    if (resolve_sd_cq_kernel_core_type(device) == CoreType::DISPATCH) {
-        return static_cast<uint32_t>(HalProgrammableCoreType::DISPATCH);
-    }
-    return static_cast<uint32_t>(HalProgrammableCoreType::TENSIX);
-}
-
 DataMovementProcessor prefetch_dm_processor() { return DataMovementProcessor::RISCV_0; }
 
 DataMovementProcessor dispatch_dm_processor() { return DataMovementProcessor::RISCV_1; }

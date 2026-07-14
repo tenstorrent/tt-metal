@@ -1490,7 +1490,6 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
         {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual.y)},
         {"DOWNSTREAM_SUBORDINATE_NOC_X", "255"},
         {"DOWNSTREAM_SUBORDINATE_NOC_Y", "255"},
-        {"FD_CORE_TYPE", std::to_string(tt::tt_metal::detail::fd_core_type_define_value(device_))},
         {"IS_D_VARIANT", "1"},
         {"IS_H_VARIANT", "1"},
     };
@@ -1597,7 +1596,6 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         {"OFFSETOF_TO_DEV_ID", "1"},
         {"OFFSETOF_ROUTER_DIRECTION", "2"},
         {"DISPATCH_KERNEL", "1"},
-        {"FD_CORE_TYPE", std::to_string(tt::tt_metal::detail::fd_core_type_define_value(device))},
         {"PREFETCH_Q_ENTRY_BITS", std::to_string(entry_size * 8)},
         // FABRIC_RELAY intentionally omitted - must be undefined for #if defined(FABRIC_RELAY) to be false
     };

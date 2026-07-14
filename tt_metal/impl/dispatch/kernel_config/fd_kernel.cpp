@@ -244,28 +244,6 @@ FDKernel* FDKernel::Generate(
     }
 }
 
-uint32_t FDKernel::get_programmable_core_type_index(
-    const ContextDescriptor& descriptor, CoreType dispatch_core_type, bool is_active_eth_core) {
-    // TODO(#22895): Too many core types. Consolidate programmable_core_type_index with ProgrammableCoreType and
-    // CoreType
-    uint32_t programmable_core_type_index;
-    if (dispatch_core_type == CoreType::WORKER) {
-        programmable_core_type_index =
-            descriptor.hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-    } else if (dispatch_core_type == CoreType::DISPATCH) {
-        programmable_core_type_index =
-            descriptor.hal().get_programmable_core_type_index(HalProgrammableCoreType::DISPATCH);
-    } else if (is_active_eth_core) {
-        programmable_core_type_index =
-            descriptor.hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
-    } else {
-        programmable_core_type_index =
-            descriptor.hal().get_programmable_core_type_index(HalProgrammableCoreType::IDLE_ETH);
-    }
-
-    return programmable_core_type_index;
-}
-
 CoreCoord FDKernel::get_virtual_core_coord(
     const ContextDescriptor& descriptor, const tt_cxy_pair& logical_cxy, const CoreType& core_type) {
     return descriptor.cluster().get_virtual_coordinate_from_logical_coordinates(logical_cxy, core_type);
@@ -276,11 +254,8 @@ KernelHandle FDKernel::configure_kernel_variant(
     const std::vector<uint32_t>& compile_args,
     std::map<std::string, std::string> defines_in,
     KernelBuildOptLevel opt_level) {
-    uint32_t programmable_core_type_index = get_programmable_core_type_index(descriptor_, GetCoreType());
-
     std::map<std::string, std::string> defines = {
         {"DISPATCH_KERNEL", "1"},
-        {"FD_CORE_TYPE", std::to_string(programmable_core_type_index)},
     };
     if (force_watcher_no_inline_) {
         defines.insert({"WATCHER_NOINLINE", std::to_string(force_watcher_no_inline_)});

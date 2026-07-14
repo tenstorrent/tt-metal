@@ -172,10 +172,6 @@ public:
         const GetMaxNumEthCoresFn& get_max_num_eth_cores = {},
         const GetReadsDispatchCoresFn& get_reads_dispatch_cores = {});
 
-    // Translate DispatchCoreType to programmable core type index
-    static uint32_t get_programmable_core_type_index(
-        const ContextDescriptor& descriptor, CoreType dispatch_core_type, bool is_active_eth_core = false);
-
     // Translate core coord using the chip_id from the logical_cxy
     //
     // IDevice::virtual_core_from_logical_core uses the chip_id of the device instance whereas this function uses the
