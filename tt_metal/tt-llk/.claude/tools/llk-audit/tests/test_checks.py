@@ -2446,6 +2446,25 @@ def test_cfg_word_runtime_offset_surfaces_unresolved():
 
 
 @case
+def test_resolve_word_signed_literal_offset():
+    # A NEGATIVE literal offset `FIELD_ADDR32 - N` must resolve to base-N, symmetric
+    # with `+ N` -> base+N — NOT silently reduce to the base word (that would drop a
+    # real shared-word overlap at base-N). A non-literal signed offset (`- i`) still
+    # routes to has_runtime_word_offset -> UNRESOLVED, not a base-word reduction.
+    from llkaudit import registry
+
+    a = {"FIELD_ADDR32": 7}
+    assert registry.resolve_word("cfg[FIELD_ADDR32]", a) == (7, "FIELD_ADDR32")
+    assert registry.resolve_word("cfg[FIELD_ADDR32 + 2]", a) == (9, "FIELD_ADDR32")
+    assert registry.resolve_word("cfg[FIELD_ADDR32 - 2]", a) == (5, "FIELD_ADDR32")
+    assert registry.resolve_word("cfg[FIELD_ADDR32 - 0x2]", a) == (5, "FIELD_ADDR32")
+    # a runtime (non-literal) signed offset is NOT a literal reduction:
+    assert registry.has_runtime_word_offset("cfg[FIELD_ADDR32 - i]")
+    assert not registry.has_runtime_word_offset("cfg[FIELD_ADDR32 - 2]")
+    assert not registry.has_runtime_word_offset("cfg[FIELD_ADDR32 + 2]")
+
+
+@case
 def test_cfg_word_drift_producer_surfaces_unresolved():
     # A renamed/unrecognized producer whose NAME looks like a cfg accessor
     # (get_cfg_pointer_v2) -> UNRESOLVED signature-drift guard, not a silent drop.
