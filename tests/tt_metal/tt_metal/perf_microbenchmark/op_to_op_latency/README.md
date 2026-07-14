@@ -6,9 +6,16 @@ microbenchmark suite ([issue #46305](https://github.com/tenstorrent/tt-metal/iss
 
 This is the CI/regression packaging of the op-to-op work. It runs **one pinned
 steady-state config**, captures profiler data, post-processes it in Python, and
-gates a single metric against a per-arch golden. (The broader op-to-op
-optimization study — buffer tuning, NoC sweeps, gap decomposition — lives in the
-research benchmark PR and is intentionally not part of this CI test.)
+gates a single metric against a per-arch golden.
+
+The buffer-sizing auto-search (`--buffer-tune`) and the broader gap-decomposition
+study live in the research benchmark PR
+([#44048](https://github.com/tenstorrent/tt-metal/pull/44048)) and are intentionally
+not part of this CI binary — an auto-search doesn't yield a stable number to gate on.
+The binary does keep a few *fixed-config* knobs (NoC assignment, active-core count,
+`--read-only`, CB depths, reader batch/double-buffer modes) that are unused by the
+default config above but can seed future pinned CI entries (e.g. a DRAM read-BW or
+NoC-direction metric with its own golden).
 
 ## Files
 
