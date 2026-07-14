@@ -52,7 +52,7 @@
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
 #include "tt_metal/impl/device/dispatch.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include "llrt/tt_cluster.hpp"
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
@@ -110,6 +110,40 @@ void record_program_sub_device_for_range(
     TT_THROW("No local device found for range");
 }
 
+dispatch_telemetry_types::SMCDispatchCoreCoords build_smc_dispatch_core_coords(Device& device, uint8_t cq_id) {
+    auto& context = MetalContext::instance(device.get_context_id());
+
+    auto pack_logical_dispatch_core = [&](const tt_cxy_pair& logical_cxy) {
+        const CoreType core_type = context.get_dispatch_core_manager().get_dispatch_core_type();
+        const CoreCoord virtual_core =
+            device.virtual_core_from_logical_core(CoreCoord{logical_cxy.x, logical_cxy.y}, core_type);
+        return dispatch_telemetry_types::pack_smc_dispatch_core_xy(
+            static_cast<uint16_t>(virtual_core.x), static_cast<uint16_t>(virtual_core.y));
+    };
+
+    auto& dcm = context.get_dispatch_core_manager();
+    const uint16_t channel = context.get_cluster().get_assigned_channel_for_device(device.id());
+    const ChipId chip = device.id();
+
+    // dcm getters are not read only, they allocate new cores as a side effect. Verify that a core
+    // is allocated before retrieving its coordinates.
+    dispatch_telemetry_types::SMCDispatchCoreCoords coords;
+    if (dcm.is_prefetcher_core_allocated(chip, channel, cq_id)) {
+        coords.prefetch_xy = pack_logical_dispatch_core(dcm.prefetcher_core(chip, channel, cq_id));
+    } else if (dcm.is_prefetcher_d_core_allocated(chip, channel, cq_id)) {
+        coords.prefetch_xy = pack_logical_dispatch_core(dcm.prefetcher_d_core(chip, channel, cq_id));
+    }
+    if (dcm.is_dispatcher_core_allocated(chip, channel, cq_id)) {
+        coords.dispatch_xy = pack_logical_dispatch_core(dcm.dispatcher_core(chip, channel, cq_id));
+    } else if (dcm.is_dispatcher_d_core_allocated(chip, channel, cq_id)) {
+        coords.dispatch_xy = pack_logical_dispatch_core(dcm.dispatcher_d_core(chip, channel, cq_id));
+    }
+    coords.dispatch_s_xy = dcm.is_dispatcher_s_core_allocated(chip, channel, cq_id)
+                               ? pack_logical_dispatch_core(dcm.dispatcher_s_core(chip, channel, cq_id))
+                               : dispatch_telemetry_types::INVALID_SMC_DISPATCH_CORE_COORDS;
+    return coords;
+}
+
 }  // namespace
 
 struct MeshReadEventDescriptor {
@@ -165,6 +199,14 @@ FDMeshCommandQueue::FDMeshCommandQueue(
         DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
         mesh_device_->allocator_impl()->get_config().l1_unreserved_base);
     this->populate_virtual_program_dispatch_core();
+
+    for (auto* device : mesh_device_->get_devices()) {
+        if (auto* physical_device = dynamic_cast<Device*>(device)) {
+            physical_device->update_smc_dispatch_telemetry_for_fast_dispatch(
+                this->id_, build_smc_dispatch_core_coords(*physical_device, this->id_));
+        }
+    }
+
     this->populate_read_descriptor_queue();
     completion_queue_reader_thread_ = std::thread(&FDMeshCommandQueue::read_completion_queue, this);
 }
@@ -524,7 +566,7 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
     uint32_t size_bytes,
     bool blocking,
     ttsl::Span<const SubDeviceId> sub_device_ids) {
-    ZoneScoped;
+    TTZoneScopedD(DISPATCH);
 
     auto lock = lock_api_function_();
     if (!mesh_device_->impl().is_local(address.device_coord)) {
@@ -559,7 +601,7 @@ void FDMeshCommandQueue::enqueue_write_dram_core_counter(
     uint32_t value,
     bool blocking,
     ttsl::Span<const SubDeviceId> sub_device_ids) {
-    ZoneScoped;
+    TTZoneScopedD(DISPATCH);
 
     // No lock_api_function_() here: the caller (TensorPrefetcherManager) already holds
     // the MeshDevice api lock across the counter bump + WAIT_CQ enqueue, and that lock is
@@ -606,7 +648,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
     uint32_t size_bytes,
     bool blocking,
     ttsl::Span<const SubDeviceId> sub_device_ids) {
-    ZoneScoped;
+    TTZoneScopedD(DISPATCH);
     auto lock = lock_api_function_();
 
     if (this->get_target_device_type() == tt::TargetDevice::Mock ||
@@ -692,7 +734,7 @@ void FDMeshCommandQueue::finish(ttsl::Span<const SubDeviceId> sub_device_ids) {
     this->finish_nolock(sub_device_ids);
 
     {
-        ZoneScopedN("RealtimeProfilerSyncCheck");
+        TTZoneScopedDN(RT_PROFILER, "RealtimeProfilerSyncCheck");
         mesh_device_->impl().trigger_realtime_profiler_sync_check();
     }
 

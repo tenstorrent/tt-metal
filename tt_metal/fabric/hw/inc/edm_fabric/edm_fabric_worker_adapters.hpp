@@ -408,6 +408,24 @@ struct WorkerToFabricEdmSenderBase {
         this->post_send_payload_increment_pointers</*stateful_api=*/true>(noc);
     }
 
+    template <bool posted = false>
+    FORCE_INLINE void send_current_slot_stateful_non_blocking_from_address_with_trid(
+        uint32_t packet_source_l1_addr,
+        uint32_t packet_size_bytes,
+        uint32_t trid,
+        uint8_t noc = get_fabric_worker_noc()) {
+        ASSERT(packet_size_bytes <= this->buffer_size_bytes);
+        ASSERT(tt::tt_fabric::is_valid(
+            *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_source_l1_addr))));
+
+        const uint32_t slot_l1_addr = this->current_buffer_slot_l1_addr();
+        noc_async_write_one_packet_with_trid_with_state</*update_counter=*/true, posted>(
+            packet_source_l1_addr, slot_l1_addr, packet_size_bytes, trid, this->data_noc_cmd_buf, noc);
+        this->post_send_payload_increment_pointers</*stateful_api=*/true>(noc);
+    }
+
+    FORCE_INLINE uint8_t get_stateful_send_data_noc_cmd_buf() const { return this->data_noc_cmd_buf; }
+
     static constexpr size_t edm_sender_channel_field_stride_bytes = 16;
 
     // Advanced usage API:
