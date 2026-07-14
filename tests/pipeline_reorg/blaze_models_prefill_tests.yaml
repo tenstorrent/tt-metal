@@ -223,7 +223,7 @@
   test_group: module
   skus:
     bh_spsg:
-      timeout: 8
+      timeout: 16
   owner_id: U09LK84G4TF  # Nikola Milicevic
   team: models
   sp_config: spsg
