@@ -702,8 +702,6 @@
 
 # ── Stable Diffusion XL ────────────────────────────────────────────
 
-# WH/BH split kept separate so env stays faithful to the original frequent job:
-# WH sets TT_MM_THROTTLE_PERF=5, BH runs without it.
 - name: Stable Diffusion XL UNet-loop e2e tests (WH)
   cmd: |
     export HF_HUB_OFFLINE=0
@@ -738,8 +736,6 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
-# Nightly SDXL, consolidated from tt-metal-l2-nightly (shield_sdxl_tests.yaml) and the
-# single-card-demo pipeline, split into smaller per-component jobs.
 - name: ttnn nightly sdxl base unet-loop (wormhole)
   cmd: |
     export HF_HUB_OFFLINE=0
@@ -801,22 +797,53 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
-# From single-card-demo (run_sdxl_func, N150): the 4 no_cfg demos + lora demo.
-- name: ttnn nightly sdxl demo tests (wormhole N150)
+- name: ttnn nightly sdxl demo tests (base + lora)
   cmd: |
     export HF_HUB_OFFLINE=0
-    export TT_MM_THROTTLE_PERF=5
     exit_code=0
     pytest models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
-    pytest models/demos/stable_diffusion_xl_base/demo/demo_base_and_refiner.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
-    pytest models/demos/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
-    pytest models/demos/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
     pytest models/demos/stable_diffusion_xl_base/demo/demo_lora.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
     exit $exit_code
   model: sdxl-demo
   skus:
     wh_n150:
-      timeout: 70
+      timeout: 40
+      tier: 2
+    bh_p150:
+      timeout: 30
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: ttnn nightly sdxl demo tests (base + refiner)
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest models/demos/stable_diffusion_xl_base/demo/demo_base_and_refiner.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
+  model: sdxl-demo
+  skus:
+    wh_n150:
+      timeout: 35
+      tier: 2
+    bh_p150:
+      timeout: 30
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: ttnn nightly sdxl demo tests (img2img + inpainting)
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    exit_code=0
+    pytest models/demos/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
+    pytest models/demos/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
+    exit $exit_code
+  model: sdxl-demo
+  skus:
+    wh_n150:
+      timeout: 30
+      tier: 2
+    bh_p150:
+      timeout: 25
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
@@ -829,25 +856,7 @@
   model: sdxl-demo
   skus:
     wh_n300:
-      timeout: 15
-      tier: 2
-  owner_id: U08SXRPCTJ5 # Janko Mitrovic
-  team: shield
-
-- name: ttnn nightly sdxl demo tests (blackhole)
-  cmd: |
-    export HF_HUB_OFFLINE=0
-    export TT_MM_THROTTLE_PERF=0
-    exit_code=0
-    pytest models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
-    pytest models/demos/stable_diffusion_xl_base/demo/demo_base_and_refiner.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
-    pytest models/demos/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
-    pytest models/demos/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
-    exit $exit_code
-  model: sdxl-demo
-  skus:
-    bh_p150:
-      timeout: 30
+      timeout: 20
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
