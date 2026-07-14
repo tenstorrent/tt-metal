@@ -130,37 +130,20 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                         bf16_t(sv[3]));
                 }
 #endif
-#ifdef ARCH_QUASAR
-                // Quasar sim: a local self-loopback NOC read (self_ep, src_coord==dst_coord) into in_cb drops
-                // data / reads stale SRAM -- the same sim limitation the clear-path below works around with
-                // async_write_zeros (see the ~287-312 comments). It's what the LLK team saw as "all zeros in
-                // curr_in_cb before unpack_tilizeA_B". The window gather is a same-core L1->L1 copy, so do it
-                // with a direct RISC copy (no NOC loopback) for reliable data. read_offset and the in_cb write
-                // ptr are L1-aligned (>=16B) and read_bytes is L1-aligned, so a uint32 word copy is safe.
-                {
-                    volatile tt_l1_ptr uint32_t* rp_src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(read_offset);
-                    volatile tt_l1_ptr uint32_t* rp_dst =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in_cb.get_write_ptr() + write_offset);
-                    const uint32_t rp_nwords = (read_bytes * w_multiple) >> 2;
-                    for (uint32_t rp_i = 0; rp_i < rp_nwords; ++rp_i) {
-                        rp_dst[rp_i] = rp_src[rp_i];
-                    }
-                    // Write-back the DM cache to TL1: the compute unpack reads in_cb directly from TL1 (not
-                    // through this DM core's L1/L2 cache — see the SCRATCH2OUT coherency note below), so the
-                    // CPU-store copy above is invisible to compute until flushed. The original noc.async_read
-                    // wrote TL1 directly and needed no flush; the CPU copy does. Without this, compute reduces
-                    // stale/zero in_cb (the per-stick-inconsistent zeros in the const-channel test).
-                    flush_l2_cache_range(
-                        reinterpret_cast<uintptr_t>(rp_dst), static_cast<size_t>(read_bytes * w_multiple));
-                }
-#else
+                // Window gather via the NOC read (TL1-direct, coherent) on ALL arches. QSR emulator coherency
+                // fix (64c reconfig escape): the prior ARCH_QUASAR DM CPU-copy was a craq-SIM workaround (the
+                // sim's local self-loopback NOC read dropped data). On the physical emulator that CPU read
+                // returns L1-cache-STALE input across ops -- after 32c it reads 32c's leftover (POOLSRC=0.4375)
+                // even though base is correct, and invalidate_l2 doesn't clear it (Quasar DM L1-D$ is not
+                // invalidatable). The NOC engine reads/writes TL1 directly (non-caching), so it always sees
+                // this run's freshly-uploaded input and needs no flush. NOTE: if craq-sim regresses (self-
+                // loopback drop / "all zeros in curr_in_cb"), gate the CPU-copy back for the sim only.
                 noc.async_read(
                     self_ep,
                     in_cb,
                     read_bytes * w_multiple,
                     experimental::local_addr(read_offset),
                     {.offset_bytes = write_offset});
-#endif
                 // if compute is using tilize_reconfig we will only untilize the needed number of tiles rather
                 // than the entire MAX_TILES_PER_REDUCTION, thus we use a different offset for the write address
                 if constexpr (tilize_reconfig) {
