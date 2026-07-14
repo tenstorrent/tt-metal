@@ -377,16 +377,7 @@ jobs:
             }
 
   # Copilot PR type labeler — auto-label PRs by change type (feat/fix/docs/etc.)
-  # on open, using the GitHub Copilot CLI.
-  #
-  # Job-level permissions (following the llk-label-pr convention above) — the
-  # composite action needs contents:read, pull-requests:write, copilot-requests:write,
-  # plus issues:write for the `gh label create` fallback when a type label doesn't
-  # already exist in the repo.
   copilot-pr-labeler:
-    # Only act on newly opened PRs. The workflow also triggers on reopened,
-    # synchronize and ready_for_review, so gate on 'opened' to avoid running
-    # this labeler redundantly on every push.
     if: ${{ github.event_name == 'pull_request' && github.event.action == 'opened' }}
     permissions:
       contents: read
