@@ -13,7 +13,15 @@ The porting recipes are available on the branch `akertesz/metal2-documentation` 
 
 Please familiarize yourself with Metal 2.0 by reading the introduction to `metal2_migration_guide.md`, and by browsing the (self-documenting) header files in `tt_metal/api/tt-metalium/experimental/metal2_host_api/`.
 
-## Initial setup
+## Google Drive MCP setup
+
+The porting recipe relies on data stored in Google Sheets. For your Claude to access it, you must first authorize the Google Drive MCP.
+
+ 1. Go to the claude.ai website.
+ 2. Open Settings (click the bottom-left Tenstorrent logo).
+ 3. Connectors → Google Drive → Connect.
+
+## Workspace setup
 
 You must supply the `tt-metal` workspace for op porting. You'll launch the audit and port from the root of your checkout.
 
