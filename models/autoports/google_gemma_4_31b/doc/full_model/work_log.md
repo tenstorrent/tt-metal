@@ -158,4 +158,6 @@ No vLLM implementation or registration work was performed.
 
 The first independent `$stage-review` returned `more-work-needed`. Its findings were fixed: mixed-prompt device-logit prefill now preserves per-row state; profiler evidence was recollected from the source-current path; the Stage 05 decoder-stack lower bound and physical batch envelope were added; trace-warning documentation was reconciled; and the short-prompt tensor-ownership defect was repaired.
 
-A fresh independent rereview returned `clean-pass` with no required work and no blocking hard-check gaps. The implementation checkpoint SHA will be appended after the stage-owned commit; no push will be performed.
+A fresh independent rereview returned `clean-pass` with no required work and no blocking hard-check gaps.
+
+Stage implementation checkpoint: `cc5b46623f0` (`Complete Gemma 4 31B full-model stage`). The following audit-only commit records this checkpoint; no push was performed.
