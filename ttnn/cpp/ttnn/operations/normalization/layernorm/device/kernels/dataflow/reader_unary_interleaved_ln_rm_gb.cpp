@@ -51,7 +51,7 @@ void kernel_main() {
     constexpr auto src0_args = TensorAccessorArgs<3>();
     constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();
-    constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
     const auto src_a = TensorAccessor(src0_args, src_addr);
 

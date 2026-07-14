@@ -127,8 +127,9 @@ class TestConfig:
     CHIP_ARCH: ClassVar[ChipArchitecture]
     DATA_FORMAT_ENUM: ClassVar[dict]
 
-    # Artefact directories
-    DEFAULT_ARTEFACTS_PATH: ClassVar[Path] = Path("/tmp/tt-llk-build/")
+    # Artefact directories. Prefer GHA RUNNER_TEMP (disk) over /tmp (often tmpfs)
+    # so compile artefacts do not accumulate in RAM and OOM the runner (exit 137).
+    DEFAULT_ARTEFACTS_PATH: ClassVar[Path] = Path("/tmp/tt-llk-build")
     ARTEFACTS_DIR: ClassVar[Path]
     SHARED_DIR: ClassVar[str]
     SHARED_OBJ_DIR: ClassVar[str]
@@ -366,8 +367,16 @@ class TestConfig:
                 )
 
     @staticmethod
+    def resolve_artefacts_path() -> Path:
+        """Build artefact root: $RUNNER_TEMP/tt-llk-build in GHA, else /tmp/tt-llk-build."""
+        runner_temp = os.environ.get("RUNNER_TEMP")
+        if runner_temp:
+            return Path(runner_temp) / "tt-llk-build"
+        return TestConfig.DEFAULT_ARTEFACTS_PATH
+
+    @staticmethod
     def setup_paths(sources_path: Path):
-        TestConfig.ARTEFACTS_DIR = TestConfig.DEFAULT_ARTEFACTS_PATH
+        TestConfig.ARTEFACTS_DIR = TestConfig.resolve_artefacts_path()
 
         TestConfig.LLK_ROOT = sources_path
         TestConfig.TESTS_WORKING_DIR = TestConfig.LLK_ROOT / "tests"
@@ -1288,7 +1297,9 @@ class TestConfig:
                     f"-I{TestConfig.RISCV_SOURCES} -I{VARIANT_DIR} {local_options_compile} {optional_kernel_flags} "
                     f"-DLLK_TRISC_{trisc_define} {device_print_flags}{TestConfig.OPTIONS_LINK} {COVERAGES_DEPS} "
                     f"-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / name}.ld -T{TestConfig.LINKER_SCRIPTS}/sections.ld "
-                    f"-x c++ - -lc -o {VARIANT_ELF_DIR / name}.elf"
+                    # -lgcc pulls in libgcc soft-float/integer helpers (e.g. __mulsf3) that
+                    # -nostdlib drops; only referenced helpers are linked, so it's a no-op otherwise.
+                    f"-x c++ - -lc -lgcc -o {VARIANT_ELF_DIR / name}.elf"
                 )
 
                 logger.trace(compile_command)

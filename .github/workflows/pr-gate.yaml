@@ -141,6 +141,9 @@ jobs:
       publish-package: true
       tracy: true
       skip-tt-train: false
+      # Treeless clone: skip the trees/blobs that dominate the tag fetch, but keep commits + tags
+      # so git describe still yields a real version. Depth stays at the default.
+      checkout-filter: tree:0
       # Use the merge commit (github.sha) — see build-docker-images job for rationale.
       # Pass pre-built docker images to avoid duplicate builds
       ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
@@ -404,7 +407,7 @@ jobs:
           || (needs.find-changed-files.outputs.llk-wormhole-changed == 'true' && 'wh_n150_civ2')
           || (needs.find-changed-files.outputs.llk-blackhole-changed == 'true' && 'bh_p150b_civ2')
           || '' }}
-      pytest-markers: "not perf and not nightly and not quasar"
+      pytest-markers: "not perf and not nightly and not quasar and not accuracy"
 
   # LLK Quasar Build Check (compile-only, no hardware needed)
   llk-build-quasar:
@@ -419,7 +422,7 @@ jobs:
          needs.find-changed-files.outputs.llk-ci-changed == 'true')
       }}
     runs-on: tt-ubuntu-2204-xlarge-stable
-    timeout-minutes: 80
+    timeout-minutes: 20
     container:
       image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
     steps:

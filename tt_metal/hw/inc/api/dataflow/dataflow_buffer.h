@@ -76,8 +76,11 @@ public:
 
     uint16_t get_id() const { return logical_dfb_id_; }
 
+    // Returns the size of each entry in the DFB
     uint32_t get_entry_size() const;
     uint32_t get_stride_size() const;
+    // Returns the total number of entries that can be stored in the DFB
+    uint32_t get_total_num_entries() const;
 
     // Explicit sync APIs
     void reserve_back(uint16_t num_entries) { reserve_back_impl(num_entries); }
@@ -85,6 +88,15 @@ public:
     void wait_front(uint16_t num_entries) { wait_front_impl(num_entries); }
     void pop_front(uint16_t num_entries) { pop_front_impl(num_entries); }
     // Explicit sync APIs end
+
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
+    // Test-only free helpers (defined in internal/tt-2xx/dataflow_buffer_test_helpers.h,
+    // NOT part of the public DFB API). Granted friend access to advance the
+    // implicit-sync shadow state alongside the HW counter. See that header for
+    // semantics + usage rules.
+    friend void preload_posted_counter(DataflowBuffer&, uint16_t);
+    friend void preload_acked_counter(DataflowBuffer&, uint16_t);
+#endif
 
 #ifndef COMPILE_FOR_TRISC
 #ifndef ARCH_QUASAR
@@ -200,9 +212,16 @@ public:
 #endif // DFB_DESCRIPTORS_DEFINED
 
 #ifdef COMPILE_FOR_TRISC
+// This can be enabled on Quasar once GH issue #49608 is resolved.
 #ifndef ARCH_QUASAR
     uint32_t get_tile_address(uint32_t tile_index);
-    uint32_t read_tile_value(uint32_t tile_index, uint32_t element_offset);
+
+    // Reads one scalar element from a tile at specified tile_index. element_offset is an index into the tile as a T[]
+    // array from its L1 base address (not a byte offset); each step is sizeof(T) bytes
+    // (default T=uint32_t → 4-byte words).
+    // Values are mailbox-broadcast to all TRISC threads as a zero-extended uint32_t; MATH/PACK cast back to T.
+    template <typename T = uint32_t>
+    T read_tile_value(uint32_t tile_index, uint32_t element_offset);
 #endif
 #endif
 
@@ -253,8 +272,14 @@ private:
         // TODO: Unregister with the debugger
     }
 
-    DFBInterface& local_dfb_interface_;
     uint16_t logical_dfb_id_;
+
+    // MATH TRISC does not own fifo state (see trisc firmware: cb_interface / g_dfb_interface
+    // exist only on UNPACK/PACK). Compute kernels still construct DataflowBuffer on all TRISC
+    // threads; MATH carries logical_dfb_id_ only and no-ops sync / runtime-interface accessors.
+#if !(defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_MATH))
+    DFBInterface& local_dfb_interface_;
+#endif
 
 #ifdef ARCH_QUASAR
     // Metadata for implicit sync

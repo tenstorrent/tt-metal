@@ -149,7 +149,7 @@ std::vector<OverlappedTensorView> load_overlapped_tensors(
         "Tensor data pointer must be 8-byte aligned!");
 
     auto views =
-        ttnn::overlapped_tensors_from_flatbuffer(fb_root, tt::stl::Span<std::byte>(data_region, data_size), memory_pin);
+        ttnn::overlapped_tensors_from_flatbuffer(fb_root, ttsl::Span<std::byte>(data_region, data_size), memory_pin);
 
     if (device != nullptr) {
         auto& fused = views[0].fused_tensor;

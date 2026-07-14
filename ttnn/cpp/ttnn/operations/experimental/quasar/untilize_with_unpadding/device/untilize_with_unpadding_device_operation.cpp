@@ -214,7 +214,7 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
 
 TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& input) {
-    SmallVector<uint32_t> out_shape;
+    ttsl::SmallVector<uint32_t> out_shape;
     const auto& input_tensor_a = input;
     size_t rank = input_tensor_a.logical_shape().rank();
     out_shape.reserve(rank);

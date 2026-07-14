@@ -403,13 +403,13 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
 std::vector<ttnn::Tensor> unpad_output_tensor(
     const std::vector<ttnn::Tensor>& output_tensor,
     const uint32_t num_devices,
-    const ttnn::SmallVector<uint32_t>& unpad_elements,
+    const ttsl::SmallVector<uint32_t>& unpad_elements,
     const int dim) {
     std::vector<ttnn::Tensor> combined_tensors;
 
-    ttnn::SmallVector<uint32_t> begins = {0, 0, 0, 0};
-    ttnn::SmallVector<uint32_t> ends = {1, 1, 1, 1};
-    ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
+    ttsl::SmallVector<uint32_t> begins = {0, 0, 0, 0};
+    ttsl::SmallVector<uint32_t> ends = {1, 1, 1, 1};
+    ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
     ends = unpad_elements;
 
     for (int i = 0; i < num_devices; ++i) {
@@ -1965,8 +1965,8 @@ double lookup_fabric_link_bw(tt::ARCH arch) {
     switch (arch) {
         // WH: 100 Gbps per link = 12.5 GB/s
         case tt::ARCH::WORMHOLE_B0: return 12.5;
-        // BH: 400 Gbps per link = 50 GB/s
-        case tt::ARCH::BLACKHOLE: return 50.0;
+        // ~~BH: 400 Gbps per link = 50 GB/s~~ TODO (AM) currently devices limited to half BW: 25.0 GB/s
+        case tt::ARCH::BLACKHOLE: return 25.0;
         default: TT_FATAL(false, "Fabric perf model: unsupported arch {}", arch);
     }
 }
