@@ -597,81 +597,24 @@ def test_ttnn_routed_expert_models(
 @pytest.mark.parametrize(
     "mesh_device, device_params", [ROUTED_EXPERT_MESH_PARAMS[0]], indirect=["mesh_device", "device_params"]
 )
-def test_ttnn_routed_expert_ffn_row_major(mesh_device, device_params):
-    """Direct unified_routed_expert_ffn test for x_is_row_major.
+@pytest.mark.parametrize("offset_tiles", [0, 2], ids=["no_offset", "offset2"])
+def test_ttnn_routed_expert_ffn_row_major(mesh_device, device_params, offset_tiles):
+    """Row-major x read (x_is_row_major), optionally at a region offset.
 
-    Feeds a ROW_MAJOR bf16 per-expert x; the op tilizes it internally (bf16 ->
-    bf8_b) before the gate/up matmul, fusing the standalone to_layout. One
-    expert, all rows valid, no region offset — isolates the row-major read +
-    compute tilize from the composite / insert-offset path. Output is TILE bf16
-    (must match x dtype per the op contract).
+    Models the fused MoE path: x is a shared ROW_MAJOR bf16 buffer whose region
+    for this expert starts at start[global_id] = offset_tiles * 32. The reader
+    reads that region (row-major) and the op tilizes it internally (bf16 ->
+    bf8_b) before the gate/up matmul, fusing the standalone to_layout; the writer
+    places the bf8 TILE result back at the same offset (direct-write). Also
+    exercises the D2 relaxation — bf8 TILE output while x is bf16 ROW_MAJOR.
+
+    offset_tiles=0 degenerates to a single-expert, no-padding buffer read at row
+    0; offset_tiles=2 puts the region behind 64 rows of padding.
     """
     torch.manual_seed(0)
     emb = 1024  # K_gate_tiles = 32 -> 2 gate/up K-blocks
     hidden = 512
-    max_tokens = 64  # 2 tile-rows
-
-    # Torch reference: silu(x @ gate) * (x @ up) @ down.
-    x = torch.randn(max_tokens, emb, dtype=torch.bfloat16)
-    scale = 0.05
-    gate = (torch.randn(emb, hidden) * scale).bfloat16()
-    up = (torch.randn(emb, hidden) * scale).bfloat16()
-    down = (torch.randn(hidden, emb) * scale).bfloat16()
-    xf = x.float()
-    ref = (torch.nn.functional.silu(xf @ gate.float()) * (xf @ up.float())) @ down.float()
-
-    dram = ttnn.DRAM_MEMORY_CONFIG
-
-    def to_tt(t, layout, dtype):
-        return ttnn.from_torch(t, layout=layout, dtype=dtype, device=mesh_device, memory_config=dram)
-
-    x_tt = to_tt(x, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16)
-    gate_tt = to_tt(gate, ttnn.TILE_LAYOUT, ttnn.bfloat8_b)
-    up_tt = to_tt(up, ttnn.TILE_LAYOUT, ttnn.bfloat8_b)
-    down_tt = to_tt(down, ttnn.TILE_LAYOUT, ttnn.bfloat8_b)
-    counts_tt = to_tt(torch.tensor([max_tokens], dtype=torch.int32), ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32)
-    idx_tt = to_tt(torch.tensor([0], dtype=torch.int32), ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32)
-    out_tt = to_tt(torch.zeros(max_tokens, emb, dtype=torch.bfloat16), ttnn.TILE_LAYOUT, ttnn.bfloat16)
-
-    ttnn.experimental.deepseek_prefill.unified_routed_expert_ffn(
-        x_tt,
-        gate_tt,
-        up_tt,
-        down_tt,
-        counts_tt,
-        idx_tt,
-        0,  # local_expert_id
-        output=out_tt,
-        input_m_tiles=max_tokens // 32,
-        x_is_row_major=True,
-    )
-
-    out = ttnn.to_torch(out_tt).float()[:max_tokens, :]
-    passing, pcc = comp_pcc(ref.float(), out, 0.97)
-    logger.info(f"[row-major FFN] PCC: {pcc}")
-    assert passing, f"row-major FFN PCC {pcc} below 0.97"
-
-
-@torch.no_grad()
-# unified_routed_expert_ffn requires an 11x8 compute grid; only Blackhole (13x10) has it.
-@pytest.mark.skipif(not is_blackhole(), reason="unified_routed_expert_ffn is Blackhole-only (needs 11x8 grid)")
-@pytest.mark.parametrize(
-    "mesh_device, device_params", [ROUTED_EXPERT_MESH_PARAMS[0]], indirect=["mesh_device", "device_params"]
-)
-def test_ttnn_routed_expert_ffn_row_major_offset(mesh_device, device_params):
-    """Row-major x read at a region offset (x_is_row_major + read_x_at_offset).
-
-    Models the fused MoE path: x is a shared ROW_MAJOR bf16 buffer whose region
-    for this expert starts at start[global_id]; the reader reads that region
-    (row-major), tilizes, and the writer places the bf8 TILE result back at the
-    same offset (direct-write). Also exercises the D2 relaxation — bf8 TILE
-    output while x is bf16 ROW_MAJOR.
-    """
-    torch.manual_seed(0)
-    emb = 1024
-    hidden = 512
     max_tokens = 64  # this expert's region: 2 tile-rows
-    offset_tiles = 2  # region starts at token row 64
     start_row = offset_tiles * 32
     buf_rows = start_row + max_tokens  # shared buffer holds offset padding + region
 
@@ -685,6 +628,7 @@ def test_ttnn_routed_expert_ffn_row_major_offset(mesh_device, device_params):
     ref = (torch.nn.functional.silu(xf @ gate.float()) * (xf @ up.float())) @ down.float()
 
     # Shared row-major buffer: expert's rows live at [start_row, start_row+max_tokens).
+    # When offset_tiles=0 this is just the region itself (no padding).
     x_full = torch.randn(buf_rows, emb, dtype=torch.bfloat16)
     x_full[start_row : start_row + max_tokens] = x_region
 
@@ -720,5 +664,5 @@ def test_ttnn_routed_expert_ffn_row_major_offset(mesh_device, device_params):
 
     out = ttnn.to_torch(out_tt).float()[start_row : start_row + max_tokens, :]
     passing, pcc = comp_pcc(ref.float(), out, 0.97)
-    logger.info(f"[row-major FFN offset] PCC: {pcc}")
-    assert passing, f"row-major FFN offset PCC {pcc} below 0.97"
+    logger.info(f"[row-major FFN offset_tiles={offset_tiles}] PCC: {pcc}")
+    assert passing, f"row-major FFN (offset_tiles={offset_tiles}) PCC {pcc} below 0.97"
