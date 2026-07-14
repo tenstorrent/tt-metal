@@ -24,6 +24,19 @@ SECTIONS
   PROVIDE (__global_pointer$ = __firmware_global_pointer);
   PROVIDE (__erisc_jump_table = ORIGIN(ERISC_JUMPTABLE));
 
+  /* KERNEL_PROFILER zone source-location table - file-only section, VMA = 0x6600000.
+     Active-ERISC firmware (active_erisc.cc) emits profiler zones, so it needs the same
+     non-loaded (INFO) placement as the other toolchain scripts; otherwise .tt_zone_meta
+     is an orphan allocatable section that consumes constrained ERISC memory. No region/PHDR
+     assignment keeps it out of any PT_LOAD segment. */
+  .tt_zone_meta 0x6600000 (INFO) :
+  {
+    __tt_zone_meta_start = .;
+    KEEP(*(.tt_zone_meta))
+    __tt_zone_meta_end = .;
+    . = ALIGN(4);
+  }
+
   .text :
   {
     *(.start)

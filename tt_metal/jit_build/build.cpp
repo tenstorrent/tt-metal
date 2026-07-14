@@ -100,45 +100,73 @@ uint32_t get_or_assign_profiler_file_id(const std::string& registry_path, const 
     static std::mutex mtx;
     std::lock_guard<std::mutex> lk(mtx);
 
-    int fd = ::open(registry_path.c_str(), O_RDWR | O_CREAT, 0644);
-    if (fd < 0) {
-        return 0;
-    }
-    ::flock(fd, LOCK_EX);
+    // RAII exclusive lock held (and fd closed) for the whole read-modify-write, so parallel builds --
+    // even across processes sharing the cache -- assign disjoint ids. I/O/lock failure is a hard build
+    // error, never a silent (possibly colliding) fallback id.
+    struct RegistryLock {
+        int fd;
+        explicit RegistryLock(const std::string& path) : fd(::open(path.c_str(), O_RDWR | O_CREAT, 0644)) {
+            TT_FATAL(fd >= 0, "Failed to open profiler file-id registry '{}': {}", path, std::strerror(errno));
+            if (::flock(fd, LOCK_EX) != 0) {
+                int err = errno;
+                ::close(fd);
+                TT_THROW("Failed to lock profiler file-id registry '{}': {}", path, std::strerror(err));
+            }
+        }
+        ~RegistryLock() {
+            ::flock(fd, LOCK_UN);
+            ::close(fd);
+        }
+    } registry_lock(registry_path);
 
-    std::unordered_map<std::string, uint32_t> table;
-    uint32_t next_id = 0;
-    {
-        std::ifstream in(registry_path);
-        std::string line;
-        while (std::getline(in, line)) {
-            auto tab = line.rfind('\t');
-            if (tab == std::string::npos) {
-                continue;
-            }
-            try {
-                uint32_t id = static_cast<uint32_t>(std::stoul(line.substr(tab + 1)));
-                table.emplace(line.substr(0, tab), id);
-                if (id + 1 > next_id) {
-                    next_id = id + 1;
-                }
-            } catch (const std::exception&) {
-                // ignore malformed lines
-            }
+    // 16-bit zone id = (file_id << KERNEL_PROFILER_LOCAL_BITS) | local, so file_id has this many values.
+    constexpr uint32_t max_file_id = 1u << (16 - KERNEL_PROFILER_LOCAL_BITS);
+    std::vector<bool> reserved(max_file_id, false);  // ids owned by a still-present translation unit
+
+    std::ifstream in(registry_path);
+    std::string line;
+    while (std::getline(in, line)) {
+        auto tab = line.rfind('\t');
+        if (tab == std::string::npos) {
+            continue;
+        }
+        const std::string entry_key = line.substr(0, tab);
+        uint32_t entry_id = 0;
+        try {
+            entry_id = static_cast<uint32_t>(std::stoul(line.substr(tab + 1)));
+        } catch (const std::exception&) {
+            continue;  // ignore malformed lines
+        }
+        if (entry_id >= max_file_id) {
+            continue;
+        }
+        if (entry_key == key) {
+            // This TU already has a stable id and is being (re)built now, so reuse it.
+            return entry_id;
+        }
+        // Reserve the id only while the owning TU's build directory is still cached; once that dir is
+        // evicted the binary (and its baked id) is gone, so the id can be reclaimed without a live
+        // collision. This bounds the id space against stale build keys / kernels / failed builds.
+        if (std::filesystem::exists(std::filesystem::path(entry_key).parent_path())) {
+            reserved[entry_id] = true;
         }
     }
 
-    uint32_t id = next_id;
-    auto it = table.find(key);
-    if (it != table.end()) {
-        id = it->second;
-    } else {
-        std::ofstream out(registry_path, std::ios::app);
-        out << key << '\t' << id << '\n';
+    uint32_t id = 0;
+    while (id < max_file_id && reserved[id]) {
+        ++id;
     }
+    TT_FATAL(
+        id < max_file_id,
+        "Profiler file-id space ({} ids) is exhausted by still-present translation units; clear the "
+        "profiler cache to reclaim ids. Registry: {}",
+        max_file_id,
+        registry_path);
 
-    ::flock(fd, LOCK_UN);
-    ::close(fd);
+    std::ofstream out(registry_path, std::ios::app);
+    out << key << '\t' << id << '\n';
+    out.flush();
+    TT_FATAL(out.good(), "Failed to persist profiler file-id registry entry to '{}'", registry_path);
     return id;
 }
 
