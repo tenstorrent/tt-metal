@@ -229,23 +229,23 @@ void run_single_core_copy_block_matmul_partials(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values =
-                {{node,
-                  {{"src_addr", src_dram_buffer->address()},
-                   {"src_dram_bank_id", 0u},
-                   {"num_tiles", num_tiles},
-                   {"ublock_size_tiles", test_config.reader_ublock},
-                   {"reader_only", 0u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src_addr", src_dram_buffer->address()},
+                 {"src_dram_bank_id", 0u},
+                 {"num_tiles", num_tiles},
+                 {"ublock_size_tiles", test_config.reader_ublock},
+                 {"reader_only", 0u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values =
-                {{node,
-                  {{"dst_addr", dst_dram_buffer->address()},
-                   {"dst_dram_bank_id", 0u},
-                   {"num_tiles", num_tiles},
-                   {"ublock_size_tiles", test_config.writer_ublock},
-                   {"writer_only", 0u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dst_addr", dst_dram_buffer->address()},
+                 {"dst_dram_bank_id", 0u},
+                 {"num_tiles", num_tiles},
+                 {"ublock_size_tiles", test_config.writer_ublock},
+                 {"writer_only", 0u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };

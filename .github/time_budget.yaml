@@ -284,6 +284,12 @@ models:
     wh_n300_civ2: 5
     bh_p150b_civ2_viommu: 110
     bh_p300: 10
+  frequent:
+    wh_n150: 765
+    wh_n300: 765
+    wh_n150_civ2: 30
+    wh_n300_civ2: 30
+    bh_p150b_civ2: 120
   stress:
     wh_galaxy_perf: 500
   e2e:

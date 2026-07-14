@@ -399,17 +399,17 @@ void run_single_core_unary_broadcast_quasar(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values =
-                {{node,
-                  {{"src_addr", src_dram_addr},
-                   {"src_dram_bank_id", 0u},
-                   {"num_tiles", num_tiles},
-                   {"ublock_size_tiles", 1u},
-                   {"reader_only", 0u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src_addr", src_dram_addr},
+                 {"src_dram_bank_id", 0u},
+                 {"num_tiles", num_tiles},
+                 {"ublock_size_tiles", 1u},
+                 {"reader_only", 0u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = {{node, {{"num_tiles", num_tiles}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"num_tiles", num_tiles}}),
         },
     };
     params.tensor_args = {{OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{out_tensor}}};

@@ -14,13 +14,12 @@ from typing import Optional
 import ttml
 from ttml.modules import AbstractModuleBase, LinearLayer, Parameter
 
-from .autograd_ops import ConcatLastDim, RMSNormFunction
+from .autograd_ops import ConcatLastDim
 from .attention import Qwen3Attention
 
 # Re-export for callers that import from transformer
 __all__ = [
     "ConcatLastDim",
-    "RMSNormFunction",
     "Qwen3RMSNorm",
     "Qwen3MLP",
     "Qwen3Block",
@@ -28,7 +27,7 @@ __all__ = [
 
 
 class Qwen3RMSNorm(AbstractModuleBase):
-    """RMSNorm using the custom autograd function for device compatibility."""
+    """RMSNorm using the fused ``ttml.ops.rmsnorm.rmsnorm`` device op."""
 
     def __init__(self, hidden_size: int, eps: float = 1e-6):
         super().__init__()
@@ -37,7 +36,7 @@ class Qwen3RMSNorm(AbstractModuleBase):
         self.weight = Parameter(ttml.init.ones()((1, 1, 1, hidden_size)))
 
     def forward(self, hidden_states):
-        return RMSNormFunction.apply(hidden_states, self.weight.tensor, self.eps)
+        return ttml.ops.rmsnorm.rmsnorm(hidden_states, self.weight.tensor, self.eps)
 
 
 class Qwen3MLP(AbstractModuleBase):
