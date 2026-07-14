@@ -1008,3 +1008,84 @@ cost). Null criterion: |ΔS1| < 3 ms ⇒ quant is a true null and the space clos
   it must not be used to price ANY device-time lever. **Every axis previously closed on `WARM_FWD_MS` alone
   (math fidelity, dest-acc, weight dtype — Batches H/J/N, and arguably the VAE fidelity work in K/O) is
   UN-closed and deserves re-measurement on traced `STEP_MS`.**
+
+## Batch QA — ACTIVATION quant: the dead `activation_dtype` field was the biggest untapped lever. **SHIP.**
+
+**The premise, verified.** `activation_dtype` (LinearQuantConfig) had **zero consumers** anywhere in `models/tt_dit/`
+— declared in every preset, read by nobody. `_sdpa_input_dtype` is **NOT** dead in general: `wan2_2/attention_wan.py:378-420`
+consumes it. It was dead **in LTX only** (`attention_ltx.py` never read it), and no LTX preset ever set it.
+So the shipped `all_bf8_lofi` was matmul-internal only: **weights bf8, activations bf16, collectives moving bf16 bytes.**
+
+**WHERE the cast must go (the whole lever is in the placement).** Source-verified mechanism:
+- `all_gather_minimal_matmul_async_device_operation.cpp:66-72` validates act and weight dtypes **independently** ⇒ a bf8
+  activation composes with the bf16-weight carve-out the fused addcmul epilogue needs (`:574` ties ternary_a's tile size
+  to **in1/weight**, not in0/act). The carve-out is not an obstacle.
+- `..._program_factory.cpp:365` `in0_data_format = ag_output_tensor.dtype()` (= the persistent output buffer,
+  `device_operation.cpp:371-373`), and `:721` `l1_scratch_cb_page_size_bytes = in0_tile_size` ⇒ **the fabric page size IS
+  the gathered dtype's tile size.** bf8_b tile 1088 B vs bf16 2048 B ⇒ **−47% fabric bytes.**
+- `manager.py:152-180` keys the AG ping-pong buffer on dtype **and allocates at it**; every call site already passes
+  `dtype=x.get_dtype()` ⇒ a bf8 input gets a bf8 buffer for free. No plumbing change needed.
+- ⇒ cast at `ColParallelLinear.forward` (to_qkv/to_q/to_kv/ff1) + `_to_out_fused_addcmul` (to_out), and — the trap —
+  **BEFORE** the explicit `all_gather_persistent_buffer` on the dedup-gate path. Casting at the linear there would hit the
+  already-gathered tensor and shrink nothing. NOT wired on RowParallel/replicated Linear: their input never crosses the
+  fabric, and RowParallel's input is the 4×-wide FFN intermediate ⇒ pure cost.
+
+**⚠ THE BUG THIS EXPOSED (would have silently poisoned the residual stream).** The matmuls default their output dtype to
+the **input's**: `output_dtype.value_or(in0_input_tensor.dtype())` (`minimal_matmul_device_operation.cpp:222`,
+`all_gather_minimal_matmul_async_device_operation.cpp:333`). So quantizing the input pushes bf8 **downstream** — first
+crash was `FusedRMSNormPreAllGather` TT_FATAL "Input tensor must be BFLOAT16, got BFLOAT8_B" (norm_q/norm_k), and left
+unfixed it would have made the **residual stream bf8**. Fix = `resolve_output_dtype()`: pin the output back to bf16 when
+the input is block-float. **The lever is input-side and must stop at the output.**
+
+**PRE-REGISTERED PREDICTION (before any run):** ΔS1 −10 ms (range −4..−16), ΔS2 −40 ms (range −15..−60); null if |ΔS1|<3 ms;
+regression a live outcome if the gathers are already overlapped. **Both landed inside the range.**
+
+- [x] **QA1 — `LTX_QUANT_ACTIVATIONS=1` (linear activations bf8): −14.2/S1, −59.2/S2. SHIP.**
+- [x] **QA2 — `+ LTX_QUANT_SDPA_BF8=1` (also cast ring-SDPA Q/K/V): −15.2/S1, −96.7/S2. STRICTLY BETTER. SHIP BOTH.**
+      Traced `STEP_MS`, prod 4x8 Ring, SEED=10, `LTX_PROFILE_DENOISE_ONLY=1`, on top of the shipped `all_bf8_lofi`.
+      Logs `opt/actq_traced_{P_ctrl,Q_act,R_actsdpa,P2_drift,P3_drift}.log`; jobs 218/225/234/230/236.
+      | arm | S1 (n=15) | ΔS1 | S2 (n=5) | ΔS2 |
+      | control ×3 (P/P′/P″) | 310.21 / 310.19 / 310.16 | — | 988.86 / 988.74 / 988.50 | — |
+      | **pooled control** | **310.19** | — | **988.70** | — |
+      | **Q: + activations** | **295.95** | **−14.24 (−4.59%)** | **929.48** | **−59.22 (−5.99%)** |
+      | **R: + activations + SDPA** | **295.00** | **−15.19 (−4.90%)** | **892.02** | **−96.68 (−9.78%)** |
+      **E2E denoise (8×S1 + 3×S2): 5447.6 → 5036.1 ms = −411.5 ms (−7.55%)** for R (Q alone: −291.6 ms, −5.35%).
+      **DRIFT: three controls spread S1 0.05 ms / S2 0.36 ms** — the effect is ~300× the drift, and the arm ranges
+      (294.9–296.5) never approach the control's (310.0–310.4). σ≈0.05–0.2 ⇒ −15.2 ms is ~75σ, −96.7 ms is ~250σ.
+      `_ttnn.so` mtime **04:59:18 unchanged across all five arms**.
+      **⚠ RE-BASELINE WAS MANDATORY:** the sibling's quant receipt (S1 312.06 / S2 992.78) was taken on a `.so` from
+      03:31:16; a C++ rebuild landed at **04:59:18**. Measuring against their number would have manufactured a fake
+      +1.9/+3.9 ms of "win". Every arm here is on the current binary.
+      **MECHANISM — it really is bandwidth.** ΔS2/ΔS1 = 59.22/14.24 = **4.16× against a 4.0× token ratio** ⇒ the saving
+      scales linearly with tokens, the signature of a byte-count lever (a fixed-overhead or launch lever cannot).
+      The SDPA cast splits the same way and harder: it adds −37.5 ms at S2 but only −0.95 ms at S1, because ring-SDPA's
+      K/V gather is the SP-axis payload and grows with seq. Magnitude check: the census's standalone bf8-vs-bf16 AG
+      (62.5 vs 105.5 µs @S1, −43 µs) over 8 video TP-gathers × 48 blocks bounds S1 at −16.5 ms if fully exposed; measured
+      −14.24 ms = **86% of the gather-only budget** ⇒ the win is predominantly fabric, and matmul-internal in0 reads can
+      account for at most the remainder. (HONEST: I did not separate the two terms; the bound is what I can defend.)
+      **PCC — PASSES, and better than weight-quant alone** (AV oracle, 1-layer, `ring_bh_4x8sp1tp0`, gate pcc≥0.992 /
+      rmse≤0.15; jobs 216/231/235, logs `opt/actq_pcc_{A_act,B_sdpa,C_combined}.log`):
+      | arm | S1 video PCC / RMSE | S2 video PCC / RMSE | S1 audio | S2 audio |
+      | `all_bf8_lofi` (weights only) | 99.9967% / 2.0% | 99.9966% / 2.2% | 99.9967% | 99.9967% |
+      | + activations | 99.9972% / 1.9% | 99.9970% / 2.1% | 99.9965% | 99.9966% |
+      | + SDPA inputs only | 99.9970% / 1.9% | 99.9968% / 2.1% | 99.9968% | 99.9968% |
+      | **+ activations + SDPA (R)** | **99.9973% / 1.8%** | **99.9972% / 2.0%** | **99.9967%** | **99.9967%** |
+      Activation quant costs **no measurable accuracy** on top of weight quant. Coherent: with LoFi math + bf8 weights
+      already in place the mantissa is truncated regardless, so bf8 activations add negligible marginal error. The gate is
+      NOT asleep — it moved 0.6%→2.2% RMSE for the weight quant, and it caught the bf8-into-RMSNorm crash first.
+      **The `_sdpa_input_dtype` scare was a category error:** the prior "SDPA-LoFi FAILS PCC at 98.57%" receipt is about math
+      **fidelity**, a different knob. The **input dtype** is safe; fidelity is not. Both live in SDPAQuantConfig — do not conflate.
+      **HONEST LIMITS:** (1) the AV oracle is 1-LAYER and cannot see 48-layer compounding — needs the 1080p decoded-video
+      gate a sibling is building (coordinate, do not duplicate); (2) the OFF path is unchanged **by source argument**, not
+      by measurement (both helpers are identity when `activation_dtype is None` and x is bf16, so the op sequence is
+      byte-identical) — no pre-change run exists on the current `.so` to prove it; (3) `all_bf8_lofi_sdpa_bf8` as a *preset*
+      is un-measurable on the pipeline: the tensorbin cache is keyed on the preset NAME, so it cache-misses and
+      re-materialises the 22B checkpoint despite byte-identical weights. Hence `LTX_QUANT_SDPA_BF8` as an env flag. **A
+      real cleanup is available: key the transformer cache on the weight dtypes, not the preset name** (`pipeline_ltx.py:672`).
+      **Cold-JIT note:** the bf8-in0 matmul variants are new kernels. `prewarm_and_submit.sh -c` alone did NOT suffice
+      (arm Q still timed out at 298s); what worked was run → offline `kernel_prewarm` → re-run (2nd run 218s, JIT 100%).
+- [ ] **NEXT: make `LTX_QUALITY=medium/fast` carry both flags** once the 1080p decoded-video gate signs off — `utils/ltx.py`
+      `FAST_QUANT` sets the preset but not these env flags, so the served tiers do NOT yet get this −411 ms.
+- [ ] **NEXT: the cross-attn `to_kv`/a2v/v2a SDPA inputs are still bf16** — `_quant_cross_attn` never sets `_sdpa_input_dtype`
+      (SDPAQuantConfig is documented self-attn-only). The v2a ring-cross gathers video K/V across SP ⇒ another fabric payload
+      the same cast would shrink. Un-measured.

@@ -11,7 +11,7 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 
-from ....layers.linear import ColParallelLinear
+from ....layers.linear import ColParallelLinear, maybe_cast_activation, resolve_output_dtype
 from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
@@ -316,6 +316,12 @@ class LTXAttention(Module):
     ) -> ttnn.Tensor:
         """Fused to_out projection + addcmul: output = residual + (matmul(x, W) + bias) * gate."""
         to_out = self.to_out
+        # to_out inlines the AG-matmul rather than calling ColParallelLinear.forward, so it has to
+        # honour the activation cast itself. The addcmul residual/gate stay bf16 — the kernel ties
+        # their tile size to the weight's, not the activation's — and the output is the residual
+        # stream, so it must be pinned back to bf16 rather than inheriting the bf8 activation.
+        x = maybe_cast_activation(x, to_out.activation_dtype)
+        dtype = resolve_output_dtype(dtype, x)
 
         if to_out.fsdp_mesh_axis is not None and to_out.mesh_device.shape[to_out.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(to_out.weight.data)
@@ -440,6 +446,11 @@ class LTXAttention(Module):
             and self.parallel_config.tensor_parallel.factor > 1
         )
         if use_nonfused_agmm or dedup_gate_gather:
+            # Cast BEFORE the gather, not inside the linears downstream of it: this path hoists the
+            # gather out so Q/QKV (and the gate) can share it, so the fabric payload is this tensor.
+            # Casting it at the linear would happen on the already-gathered result and shrink nothing.
+            qkv_linear = self.to_qkv if self.is_self else self.to_q
+            spatial_1BND = maybe_cast_activation(spatial_1BND, qkv_linear.activation_dtype)
             spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
                 spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
@@ -526,6 +537,19 @@ class LTXAttention(Module):
                 k_BHNE, _k_cos, _k_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
             )
 
+        # SDPA input quant, applied after RoPE so the rotation still runs at full precision. On the
+        # ring paths K/V are the fabric payload (SDPA fuses their SP gather), so this shrinks a
+        # collective as well as the QK^T/PV matmuls; dummy_joint is a real SDPA input and must carry
+        # the same dtype. Kept separate from the linear activation cast: SDPA inputs have the widest
+        # dynamic range in the block and are the likeliest place for bf8 to break accuracy.
+        sdpa_input_dtype = getattr(self, "_sdpa_input_dtype", None)
+        dummy_joint = self.dummy_joint_input
+        if sdpa_input_dtype is not None:
+            q_BHNE = maybe_cast_activation(q_BHNE, sdpa_input_dtype)
+            k_BHNE = maybe_cast_activation(k_BHNE, sdpa_input_dtype)
+            v_BHNE = maybe_cast_activation(v_BHNE, sdpa_input_dtype)
+            dummy_joint = maybe_cast_activation(dummy_joint, sdpa_input_dtype)
+
         if skip_qk:
             # STG perturbation: skip Q/K attention, use V passthrough.
             spatial_BHNE = v_BHNE
@@ -535,14 +559,16 @@ class LTXAttention(Module):
                     q_BHNE,
                     k_BHNE,
                     v_BHNE,
-                    self.dummy_joint_input,
-                    self.dummy_joint_input,
-                    self.dummy_joint_input,
+                    dummy_joint,
+                    dummy_joint,
+                    dummy_joint,
+                    # The gather buffer must be allocated at the gathered tensor's dtype: the fabric
+                    # writes raw tiles into it, so a dtype mismatch is silent corruption, not a cast.
                     persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
-                        k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
+                        k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=k_BHNE.get_dtype()
                     ),
                     persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
-                        v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
+                        v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=v_BHNE.get_dtype()
                     ),
                     joint_strategy="rear",
                     logical_n=N,
@@ -592,11 +618,15 @@ class LTXAttention(Module):
                 q_BHNE,
                 k_BHNE,
                 v_BHNE,
-                self.dummy_joint_input,
-                self.dummy_joint_input,
-                self.dummy_joint_input,
-                persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(k_BHNE.shape, 2, sp_mesh_axis),
-                persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(v_BHNE.shape, 2, sp_mesh_axis),
+                dummy_joint,
+                dummy_joint,
+                dummy_joint,
+                persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
+                    k_BHNE.shape, 2, sp_mesh_axis, dtype=k_BHNE.get_dtype()
+                ),
+                persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
+                    v_BHNE.shape, 2, sp_mesh_axis, dtype=v_BHNE.get_dtype()
+                ),
                 joint_strategy="rear",
                 logical_n=kv_logical_n,
                 is_cross=True,
@@ -635,6 +665,8 @@ class LTXAttention(Module):
         addcmul_fused = addcmul_residual is not None and addcmul_gate is not None
         to_out_explicit_ag = self.parallel_config.tensor_parallel.factor > 1 and use_nonfused_agmm
         if to_out_explicit_ag:
+            # Same ordering rule as the QKV gather above: shrink the tensor before it crosses.
+            spatial_1BND = maybe_cast_activation(spatial_1BND, self.to_out.activation_dtype)
             spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
                 spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
