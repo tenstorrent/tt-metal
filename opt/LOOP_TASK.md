@@ -16,14 +16,21 @@ the device-embed cache (`/home/smarton/.cache/tt-dit-ltxrt/…`, |max|28.6 std1.
 — see the 18:48Z LIVE LOG entry in `opt/PROGRESS.md` and the artifacts under `opt/foldverdict/` + `opt/w1verdict/`.
 **Do NOT re-run the W1 verdict or bisect shared-denoise commits — those are closed.**
 
-**NEXT, in order:**
-1. **Archaeology first (device-free, host/git):** pin the resolution AND commit of the historical "good 30.85 WITH
-   guitar" anchor. If it was a **704p** render, there was never a 1080p guitar — the "1080p regression" is a
-   cross-resolution confound (704p-guitar 27.42 vs 1080p-no-guitar 18.71), NOT a revertable commit, and the hunt is
-   DONE (record it, pivot the loop back to the 6.0s perf goal). Grep prior logs/PROGRESS for where 30.85 was measured.
-2. **Only if a true 1080p guitar once existed:** the culprit is in the **1080p-high-ONLY path** (spatial upsampler /
-   quality preset), never the shared denoise. A/B that path (upsampler on/off, or bisect only high-res-path commits)
-   with the protocol below.
+**Archaeology DONE (18:51Z): the "30.85 WITH guitar" anchor is UNSUBSTANTIATED** — no measurement exists (broker
+logs `grep 30.85` = timestamp substrings only; `git -S 30.85` = nothing prior; opt/ logs = zero). It is prose in
+this file + `w1verdict/PLAN.md`, never a run output. So the evidence supports NO 1080p regression — it supports a
+**resolution adherence CEILING** (704p 27.42 renders the guitar; 1080p-high 18.71 does not; same tree/embedding).
+**The regression hunt is CLOSED. Do NOT bisect, do NOT revert `models/` for adherence — no revert raises 1080p.**
+
+**NEXT (a design decision + the real goal — none is a cron fire-and-exit device job, so it is CORRECT to hold the
+device idle and surface this to the human):**
+1. **Quality decision (human):** accept **704p** as the quality-passing config, OR fund a deliberate 1080p-high
+   quality intervention (CFG scale / step schedule / upsampler — a design task, NOT a commit bisect). If asked to
+   verify a 1080p quality change, use the protocol below (traced gen#0 capture + eyes-on-guitar).
+2. **Return to the 6.0s perf north-star** (see "The goal" below): the actual open goal is collective-COUNT
+   reduction in the traced denoise. Every such lever (W2/W5 folds) is a WARM source+`build_metal` authoring
+   session, not a cron tail — so a cron lap holds unless a queued in-budget block/op harness exists in
+   `opt/GRIND_QUEUE.md`. Dispatch that if present; otherwise heartbeat-and-hold with this state named.
 
 **Protocol (hard-won — do not relearn):**
 - Score the **gen #0 CAPTURE mp4** (`ltx_av_fast_{W}x{H}_0.mp4`), NEVER the traced-REPLAY frames dump (gen #1 is a
