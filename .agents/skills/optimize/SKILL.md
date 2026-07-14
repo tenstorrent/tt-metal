@@ -15,10 +15,10 @@ Roughly in priority order. Treat them as inspiration, not mandates: aim for each
 
 1. Fix topology before tuning knobs: run `$graph-rewrite`, then the operation-topology audit.
 2. Check the modules in "Code Paths Worth Reading": if one is close or expected to be similar, reuse it, or copy its decisions into your hand-rolled path.
-3. [layout seed] Run `$shard-advise` once on the rewritten dense attention+MLP block for a first-candidate L1 layout + 1D program configs (OPT-015; setup/recipe in `.agents/skills/shard-advise/SETUP.md`). Apply as a first candidate onto the rewritten graph, then re-tune per "Optimization Recommendations" below. The shard-advise matmul config is one candidate for the OPT-004 DRAM-sharded sweep, not a replacement, and it only covers dense linears (not `sparse_matmul`/SSM).
-4. DRAM-shard dominant decode matmuls (OPT-004; "Matmul Choices").
-5. Where the model allows, chain L1-resident ops on one consistent shard spec (e.g. the decode residual stream: norm -> attn -> residual -> MLP -> output) so material ops don't fall back to interleaved/1-core; evaluate a feasible chain as a unit, not op-by-op (OPT-003).
-6. Sweep precision and fidelity per tensor group, and verify the chosen policy in the measured `tt-perf-report` rows (OPT-007, OPT-013, OPT-014; "Precision And Fidelity").
+3. Sweep precision and fidelity per tensor group, and verify the chosen policy in the measured `tt-perf-report` rows (OPT-007, OPT-013, OPT-014; "Precision And Fidelity"). Settle data formats before sharding, since dtype changes shard sizes and program configs.
+4. [layout seed] Run `$shard-advise` once on the rewritten dense attention+MLP block for a first-candidate L1 layout + 1D program configs (OPT-015; setup/recipe in `.agents/skills/shard-advise/SETUP.md`). Apply as a first candidate onto the rewritten graph, then re-tune per "Optimization Recommendations" below. The shard-advise matmul config is one candidate for the OPT-004 DRAM-sharded sweep, not a replacement, and it only covers dense linears (not `sparse_matmul`/SSM).
+5. DRAM-shard dominant decode matmuls (OPT-004; "Matmul Choices").
+6. Where the model allows, chain L1-resident ops on one consistent shard spec (e.g. the decode residual stream: norm -> attn -> residual -> MLP -> output) so material ops don't fall back to interleaved/1-core; evaluate a feasible chain as a unit, not op-by-op (OPT-003).
 7. Reconcile roofline vs device-time vs end-to-end decode from one traced run ("Performance Accounting").
 
 ## Scope and ground rules
