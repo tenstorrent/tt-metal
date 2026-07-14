@@ -335,7 +335,8 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
             if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
                 extent = input_shape[i] / tile_spec.get_width();
             } else {
-                extent = (input_shape[i] * input_tensor.element_size()) / input_page_size;
+                // This is a page count, so divide by the unaligned page size, not aligned
+                extent = (input_shape[i] * input_tensor.element_size()) / input_tensor.buffer()->page_size();
             }
         } else if (input_tensor.layout() == ttnn::TILE_LAYOUT && i == rank - 2) {
             extent = input_shape[i] / tile_spec.get_height();
