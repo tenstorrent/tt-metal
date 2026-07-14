@@ -115,7 +115,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         }
 
         uint32_t num_rows_per_packet = (max_packet_size / buffer_page_size >= 2) ? 2 : 1;
-        cb_total_size = 3 * buffer_page_size * num_rows_per_packet;
+        cb_total_size = 8 * buffer_page_size * num_rows_per_packet;
         cb_page_size = buffer_page_size;
     }
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{

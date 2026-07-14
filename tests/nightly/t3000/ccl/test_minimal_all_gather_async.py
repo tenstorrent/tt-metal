@@ -1471,3 +1471,71 @@ def test_all_gather_async_2x4_non_flat_mesh(mesh_device, input_shape):
 
     output_placements = tt_output.tensor_topology().placements()
     assert len(output_placements) == 1, f"Expected 1 placement, got {len(output_placements)}"
+
+
+# Exact ROW_MAJOR BF16 KVPE prefix shapes from GLM sparse MLA on LoudBox. The tensor is sequence-sharded
+# over SP=2 and replicated over TP=4; _gather_kvpe_prefix gathers dim 2 over SP using the composite
+# all-gather (AllBroadcast + Concat) path. Profile this node through run_safe_pytest.sh --profile.
+GLM_KVPE_ALL_GATHER_CASES = [
+    pytest.param(7040, True, id="warm"),
+    pytest.param(64640, False, id="long"),
+]
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"trace_region_size": 100000, "fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+@pytest.mark.parametrize("local_tokens,do_check", GLM_KVPE_ALL_GATHER_CASES)
+def test_all_gather_async_glm_kvpe_perf(mesh_device, local_tokens, do_check):
+    """Profile the exact SP gather used by GLM/DeepSeek sparse-attention KVPE prefixes."""
+    sp = 2
+    global_tokens = local_tokens * sp
+    global_shape = [1, 1, global_tokens, 576]
+    torch_input = (
+        torch.rand(global_shape, dtype=torch.bfloat16) if do_check else torch.zeros(global_shape, dtype=torch.bfloat16)
+    )
+    mesh_mapper = ttnn.MeshMapperConfig(
+        [ttnn.PlacementShard(2), ttnn.PlacementReplicate()],
+        mesh_device.shape,
+    )
+    tt_input = ttnn.from_torch(
+        torch_input,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.create_mesh_mapper(mesh_device, mesh_mapper),
+    )
+
+    compute_grid = mesh_device.compute_with_storage_grid_size()
+    semaphore_cores = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1))}
+    )
+    ag_semaphores = create_global_semaphores(mesh_device, mesh_device.get_num_devices(), semaphore_cores, 0)
+    barrier_semaphore = ttnn.create_global_semaphore(mesh_device, semaphore_cores, 0)
+
+    for iteration in range(2):
+        tt_output = ttnn.experimental.all_gather_async(
+            tt_input,
+            dim=2,
+            multi_device_global_semaphore=ag_semaphores,
+            barrier_semaphore=barrier_semaphore,
+            num_links=2,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+            cluster_axis=0,
+        )
+        ttnn.synchronize_device(mesh_device)
+        assert list(tt_output.shape) == global_shape
+        assert tt_output.tensor_topology().placements() == [
+            ttnn.PlacementReplicate(),
+            ttnn.PlacementReplicate(),
+        ]
+        if do_check and iteration == 1:
+            for device_tensor in ttnn.get_device_tensors(tt_output):
+                equal, message = comp_equal(torch_input, ttnn.to_torch(device_tensor))
+                assert equal, message
+        ttnn.deallocate(tt_output)
