@@ -86,7 +86,14 @@ class NocSync(Check):
         "heuristic can't see that (LLM must widen). A credit posted via "
         "noc_inline_dw_write (a direct dword write to a remote semaphore) is NOT "
         "recognized as a signal (it is also used for non-credit register writes, "
-        "so including it would over-flag). Requires a KERNEL fact base (the "
+        "so including it would over-flag). "
+        "Facts are grouped by the (file, function-NAME) string, so two "
+        "lexically-distinct bodies that share a name in one file — multiple "
+        "lambdas (each `operator()`) or C++ overloads — merge into one bucket, and "
+        "a flush/barrier in ONE body then clears a signal in the OTHER (a "
+        "cross-scope false-clear); the tool has no per-lambda / per-overload "
+        "identity (semaphore-handshake and cb-sync note the same grouping "
+        "limitation). Requires a KERNEL fact base (the "
         "on-request capture); empty over tt-llk."
     )
 
