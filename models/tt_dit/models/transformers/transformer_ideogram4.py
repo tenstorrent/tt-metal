@@ -56,6 +56,7 @@ def rope_halfsplit_to_interleaved(cos: torch.Tensor, sin: torch.Tensor, head_dim
     perm = rope_halfsplit_to_interleaved_perm(head_dim)
     return cos[..., perm], sin[..., perm]
 
+
 # Per-token role indicators (mirrors reference src/ideogram4/constants.py).
 OUTPUT_IMAGE_INDICATOR = 2
 LLM_TOKEN_INDICATOR = 3
@@ -179,9 +180,39 @@ class Ideogram4TransformerBlock(Module):
         )
 
         # QK-RMSNorm over head_dim (reference norm_q / norm_k = Ideogram4RMSNorm, eps=1e-5).
-        # head_dim is never sharded, so these stay replicated regular RMSNorms.
-        self.norm_q = RMSNorm(embedding_dim=self.head_dim, norm_eps=attention_eps, bias=False, mesh_device=mesh_device)
-        self.norm_k = RMSNorm(embedding_dim=self.head_dim, norm_eps=attention_eps, bias=False, mesh_device=mesh_device)
+        # Win B: when a CCLManager is present, fuse the per-head QK-norm + head-split +
+        # interleaved RoPE into ONE op via DistributedRMSNorm in per-head mode
+        # (num_heads_per_device). head_dim is fully on-device, so the per-head RMS reduction
+        # needs no all-gather; embedding_dim = padded_inner_dim so the per-device weight slice
+        # covers n_local_heads * head_dim. Falls back to a plain replicated RMSNorm (+ a
+        # separate rotary op in _attention) only when there is no CCLManager (single device).
+        self._fused_qk = ccl_manager is not None
+        if self._fused_qk:
+            self.norm_q = DistributedRMSNorm(
+                embedding_dim=padded_inner_dim,
+                norm_eps=attention_eps,
+                norm_elementwise_affine=True,
+                bias=False,
+                mesh_axis=self.tp_axis,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+            )
+            self.norm_k = DistributedRMSNorm(
+                embedding_dim=padded_inner_dim,
+                norm_eps=attention_eps,
+                norm_elementwise_affine=True,
+                bias=False,
+                mesh_axis=self.tp_axis,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+            )
+        else:
+            self.norm_q = RMSNorm(
+                embedding_dim=self.head_dim, norm_eps=attention_eps, bias=False, mesh_device=mesh_device
+            )
+            self.norm_k = RMSNorm(
+                embedding_dim=self.head_dim, norm_eps=attention_eps, bias=False, mesh_device=mesh_device
+            )
 
         # --- the four block RMSNorms (weight only, no bias) ---
         # DistributedRMSNorm operates on the TP-fractured hidden dim, computing the
@@ -407,12 +438,20 @@ class Ideogram4TransformerBlock(Module):
                 o_weight = pad_weight_tensor(o_weight, self.padding_config, pad_input_dim=False, pad_output_dim=True)
             state["o.weight"] = o_weight
         # QK-norm affine weights are per-head_dim and applied before RoPE, so permute them by the
-        # same half-split -> interleaved perm as the Q/K projection channels.
+        # same half-split -> interleaved perm as the Q/K projection channels. For the fused
+        # per-head QK-norm (Win B) the DistributedRMSNorm weight spans padded_inner_dim
+        # (= padded_heads * head_dim), so tile the single per-head_dim weight across all
+        # padded heads; TP-sharding then hands each device its n_local_heads' worth.
         rope_perm = rope_halfsplit_to_interleaved_perm(self.head_dim)
+
+        def _qk_norm_weight(w):  # w: [head_dim]
+            w = w[..., rope_perm]
+            return w.repeat(self.padded_heads) if self._fused_qk else w
+
         if "norm_q.weight" in attn:
-            state["norm_q.weight"] = attn["norm_q.weight"][..., rope_perm]
+            state["norm_q.weight"] = _qk_norm_weight(attn["norm_q.weight"])
         if "norm_k.weight" in attn:
-            state["norm_k.weight"] = attn["norm_k.weight"][..., rope_perm]
+            state["norm_k.weight"] = _qk_norm_weight(attn["norm_k.weight"])
 
         # SwiGLU: reference is w2(silu(w1(x)) * w3(x)).
         # ff1 (ColParallel, swiglu) computes: chunk(ff1_out,2) -> a, gate; a * silu(gate).
@@ -550,27 +589,47 @@ class Ideogram4TransformerBlock(Module):
         qkv = self.qkv(
             x, compute_kernel_config=self.matmul_compute_kernel_config
         )  # [B, L/sp, 3*n_local_heads*head_dim]
-        q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
-            qkv,
-            num_heads=self.n_local_heads,
-            transpose_key=False,
-            memory_config=qkv.memory_config(),
-        )  # each [B, n_local_heads, L/sp, head_dim]
+        if self._fused_qk:
+            # Win B: split qkv into q/k/v WITHOUT head-split (each per-device slice is
+            # [q_local | k_local | v_local], n_local_heads*head_dim wide), unsqueeze to the
+            # [1, B, L/sp, F] layout the fused op consumes. norm_q/k then norm each head over
+            # head_dim AND apply interleaved RoPE in one op, emitting head-split
+            # [B, n_local_heads, L/sp, head_dim]; v is only head-split (no norm/RoPE).
+            q_f, k_f, v_f = ttnn.chunk(qkv, 3, dim=-1)  # each [B, L/sp, n_local*hd]
+            q_f = ttnn.unsqueeze(q_f, 0)
+            k_f = ttnn.unsqueeze(k_f, 0)
+            v_f = ttnn.unsqueeze(v_f, 0)
+            q = self.norm_q(
+                q_f, num_heads_per_device=self.n_local_heads, rope_cos=cos, rope_sin=sin, trans_mat=self.rope_trans_mat
+            )
+            k = self.norm_k(
+                k_f, num_heads_per_device=self.n_local_heads, rope_cos=cos, rope_sin=sin, trans_mat=self.rope_trans_mat
+            )
+            v, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+                v_f, num_heads=self.n_local_heads, num_kv_heads=0, transpose_k_heads=False
+            )
+        else:
+            q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
+                qkv,
+                num_heads=self.n_local_heads,
+                transpose_key=False,
+                memory_config=qkv.memory_config(),
+            )  # each [B, n_local_heads, L/sp, head_dim]
 
-        # QK-RMSNorm over head_dim (applied per-head, before RoPE — matches reference,
-        # which norms q/k of shape [..., hd] then transposes then applies rope).
-        q = self.norm_q(q)
-        k = self.norm_k(k)
+            # QK-RMSNorm over head_dim (applied per-head, before RoPE — matches reference,
+            # which norms q/k of shape [..., hd] then transposes then applies rope).
+            q = self.norm_q(q)
+            k = self.norm_k(k)
 
-        # Interleaved RoPE via the fused rotary op + 32x32 transformation matrix. cos/sin arrive
-        # in the interleaved layout; Q/K channels were permuted to match (in the QKV weight), and
-        # norm_q/k weights likewise, so this is numerically the reference half-split RoPE.
-        q = ttnn.experimental.rotary_embedding_llama(
-            q, cos, sin, self.rope_trans_mat, compute_kernel_config=self.rope_compute_kernel_config
-        )
-        k = ttnn.experimental.rotary_embedding_llama(
-            k, cos, sin, self.rope_trans_mat, compute_kernel_config=self.rope_compute_kernel_config
-        )
+            # Interleaved RoPE via the fused rotary op + 32x32 transformation matrix. cos/sin arrive
+            # in the interleaved layout; Q/K channels were permuted to match (in the QKV weight), and
+            # norm_q/k weights likewise, so this is numerically the reference half-split RoPE.
+            q = ttnn.experimental.rotary_embedding_llama(
+                q, cos, sin, self.rope_trans_mat, compute_kernel_config=self.rope_compute_kernel_config
+            )
+            k = ttnn.experimental.rotary_embedding_llama(
+                k, cos, sin, self.rope_trans_mat, compute_kernel_config=self.rope_compute_kernel_config
+            )
 
         if self.sp_factor > 1 and attn_mask is None:
             # Sequence parallel, unmasked (full attention): ring SDPA all-gathers K/V
