@@ -99,13 +99,7 @@ string GetRiscName(
     tt::tt_metal::CoreCoord virtual_core =
         cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core.coord, logical_core.type);
     auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
-    const std::string& risc_name = hal.get_processor_class_name(programmable_core_type, risc_id, abbreviated);
-    // Mark dispatch-engine (DE) cores in the prefix so they're distinguishable from Tensix DMs without
-    // having to bake the distinction into each DPRINT message (e.g. "DE-DM4" vs "DM4").
-    if (programmable_core_type == tt_metal::HalProgrammableCoreType::DISPATCH) {
-        return "DE-" + risc_name;
-    }
-    return risc_name;
+    return hal.get_processor_class_name(programmable_core_type, risc_id, abbreviated);
 }
 
 inline bool RiscEnabled(

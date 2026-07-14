@@ -64,15 +64,17 @@ HalCoreInfoType create_dispatch_mem_map() {
         });
     }
 
+    // Prefix with DE- so dispatch-engine DMs are distinguishable from Tensix DMs in DPRINT/watcher
+    // output (e.g. "DE-DM4" vs "DM4"). Abbreviated and full names match so both GetRiscName paths agree.
     std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names = {
-        {{"DM0", "DM0"},
-         {"DM1", "DM1"},
-         {"DM2", "DM2"},
-         {"DM3", "DM3"},
-         {"DM4", "DM4"},
-         {"DM5", "DM5"},
-         {"DM6", "DM6"},
-         {"DM7", "DM7"}},
+        {{"DE-DM0", "DE-DM0"},
+         {"DE-DM1", "DE-DM1"},
+         {"DE-DM2", "DE-DM2"},
+         {"DE-DM3", "DE-DM3"},
+         {"DE-DM4", "DE-DM4"},
+         {"DE-DM5", "DE-DM5"},
+         {"DE-DM6", "DE-DM6"},
+         {"DE-DM7", "DE-DM7"}},
     };
 
     auto mem_map_bases = tensix_mem_map.mem_map_bases();
