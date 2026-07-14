@@ -1,0 +1,4 @@
+# Local, ephemeral copy of the live "TTNN Operations analysis" sheet, fetched via
+# the Google Drive MCP per ttnn_op_porting_readiness.md. Never commit it: a
+# checked-in copy goes stale, which is the whole reason we fetch it live each run.
+ttnn_op_porting_readiness.csv
