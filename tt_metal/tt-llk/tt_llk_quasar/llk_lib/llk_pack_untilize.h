@@ -100,14 +100,14 @@ inline void _llk_pack_untilize_(const std::uint32_t dest_idx, const std::uint32_
  *        stored in the buffer descriptor table, values = 16 - 31
  * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc.
  */
-template <std::uint32_t FULL_CT_DIM, std::uint32_t FACE_R_DIM>
+template <std::uint32_t FULL_CT_DIM /*std::uint32_t FACE_R_DIM*/>
 inline void _llk_pack_untilize_strided_mop_config_(const std::uint8_t buf_desc_id, const TensorShape& tensor_shape)
 {
     constexpr std::uint32_t ROWS_READ      = 4;
     constexpr std::uint32_t MOP_OUTER_LOOP = 1;
-    constexpr std::uint32_t MOP_INNER_LOOP = FACE_R_DIM == 16 ? 3 : 1;
+    const std::uint32_t MOP_INNER_LOOP     = tensor_shape.face_r_dim == 16 ? 3 : 1;
 
-    std::uint32_t pack_instrn           = TT_OP_PACR_STRIDE(1, 1, 0, 0, 0, buf_desc_id, 0 /*pck0 sel*/, 0 /*dvalid*/);
+    std::uint32_t pack_instrn = TT_OP_PACR_STRIDE(1, 1, 0, 0, 0, buf_desc_id, 0 /*pck0 sel*/, 0 /*dvalid*/);
     const std::uint32_t incr_L1_ptr =
         TT_OP_INC_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, ROWS_READ * tensor_shape.num_faces_c_dim * FULL_CT_DIM);
     ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, pack_instrn, incr_L1_ptr);
@@ -197,6 +197,36 @@ inline void _llk_pack_untilize_strided_1x32_mop_config_(const std::uint8_t buf_d
 }
 
 /**
+ * @brief Builds the MOP for partial pack of a face for 4x32, 2x32, and 1x32 tiles, using strided reads to untilize.
+ *
+ * @tparam FULL_CT_DIM: Number of tiles per block in c_dim * number of blocks = full c_dim size of the tensor.
+ * @tparam NUM_TILES_PER_BLOCK: Number of tiles processed per MOP run.
+ * @param buf_desc_id: The buffer descriptor ID where the buffer information is
+ *        stored in the buffer descriptor table, values = 16 - 31
+ */
+template <std::uint32_t FULL_CT_DIM, std::uint32_t NUM_TILES_PER_BLOCK>
+inline void _llk_pack_untilize_strided_sparse_mop_config_(const std::uint8_t buf_desc_id)
+{
+    constexpr std::uint32_t MOP_OUTER_LOOP = 1;
+    constexpr std::uint32_t MOP_INNER_LOOP = NUM_TILES_PER_BLOCK;
+    constexpr std::uint32_t replay_buf_len = 2;
+
+    load_replay_buf<0, replay_buf_len>(
+        [buf_desc_id]
+        {
+            // packs Face 0: columns 0-15 in tile (L1_16datums_Row_Index=0)
+            TT_PACR_STRIDE(2, 1, 0, 0, 0, buf_desc_id, 0 /*pck0 sel*/, 0 /*dvalid*/);
+            // packs Face 1: columns 16-31 in tile (L1_16datums_Row_Index=1)
+            TT_PACR_STRIDE(2, 1, 0, 1, 1, buf_desc_id, 0 /*pck0 sel*/, 0 /*dvalid*/);
+        });
+
+    constexpr std::uint32_t reset_src_row = TT_OP_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::ROW_SEL, p_pacr::PACK0, 0);
+    ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0));
+    temp.set_start_op(reset_src_row);
+    temp.program_bank0_sw_cntl(instrn_buffer);
+}
+
+/**
  * @brief Initializes the packer for pack untilize of contiguous tiles using strided pack.
  *
  * Sets up the cfg registers with tile and tensor shape parameters which inform how TT_OP_PACR_STRIDE
@@ -210,37 +240,25 @@ inline void _llk_pack_untilize_strided_1x32_mop_config_(const std::uint8_t buf_d
  * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc.
  * @note @ref _llk_pack_untilize_strided_ is the matching execute call on this thread.
  */
-template <std::uint32_t FULL_CT_DIM, std::uint32_t FACE_R_DIM, std::uint32_t NUM_TILES_PER_BLOCK>
+template <std::uint32_t FULL_CT_DIM, /*std::uint32_t FACE_R_DIM,*/ std::uint32_t NUM_TILES_PER_BLOCK>
 inline void _llk_pack_untilize_strided_init_(const std::uint8_t buf_desc_id, const TensorShape& tensor_shape)
 {
-    static_assert(
-        FACE_R_DIM == 1 || FACE_R_DIM == 2 || FACE_R_DIM == 4 || FACE_R_DIM == 8 || FACE_R_DIM == 16,
-        "FACE_R_DIM must be 1, 2, 4, 8, or 16 for strided pack untilize");
     cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_VAL_SOURCE_RMW, 0); // sel STRIDE_OFFSET_0
-    if constexpr (FACE_R_DIM != 1)
-    {
-        ckernel::pack::pack_untilize_stride_cfg_u stride_cfg = {};
-        stride_cfg.f.stride_offset_0 = tensor_shape.num_faces_c_dim * FULL_CT_DIM; // stride each row by 2*FULL_CT_DIM 16-datum rows
-        cfg[THCON_PACKER0_REG1_PACK_STRIDE_OFFSET_0_ADDR32] = stride_cfg.val[1];
-    }
 
-    if constexpr (FACE_R_DIM >= 8) // 32x32, 16x32, 8x32
+    ckernel::pack::pack_untilize_stride_cfg_u stride_cfg = {};
+    stride_cfg.f.stride_offset_0                         = tensor_shape.num_faces_c_dim * FULL_CT_DIM; // stride each row by 2*FULL_CT_DIM 16-datum rows
+    cfg[THCON_PACKER0_REG1_PACK_STRIDE_OFFSET_0_ADDR32]  = stride_cfg.val[1];
+
+    if (tensor_shape.face_r_dim >= 8) // 32x32, 16x32, 8x32
     {
-        _llk_pack_untilize_strided_mop_config_<FULL_CT_DIM, FACE_R_DIM>(buf_desc_id, tensor_shape);
+        _llk_pack_untilize_strided_mop_config_<FULL_CT_DIM>(buf_desc_id, tensor_shape);
     }
-    else if constexpr (FACE_R_DIM == 4) // 4x32
+    else // 4x32, 2x32, and 1x32
     {
-        _llk_pack_untilize_strided_4x32_mop_config_<FULL_CT_DIM, NUM_TILES_PER_BLOCK>(buf_desc_id);
-    }
-    else if constexpr (FACE_R_DIM == 2) // 2x32
-    {
-        cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_NO_WRITE_RMW, 1); // mask off last 2 rows
-        cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_ROW_MASK_RMW, 0x1100);
-        _llk_pack_untilize_strided_2x32_mop_config_<FULL_CT_DIM, NUM_TILES_PER_BLOCK>(buf_desc_id);
-    }
-    else // 1x32
-    {
-        _llk_pack_untilize_strided_1x32_mop_config_<FULL_CT_DIM, NUM_TILES_PER_BLOCK>(buf_desc_id);
+        const std::uint32_t row_mask = (0xF << tensor_shape.face_r_dim) & 0xF;
+        cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_NO_WRITE_RMW, 1);
+        cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_ROW_MASK_RMW, row_mask);
+        _llk_pack_untilize_strided_sparse_mop_config_<FULL_CT_DIM, NUM_TILES_PER_BLOCK>(buf_desc_id);
     }
 }
 
@@ -259,43 +277,49 @@ template <std::uint32_t FULL_CT_DIM>
 inline void _llk_pack_untilize_strided_(
     const std::uint8_t buf_desc_id, const TensorShape& tensor_shape, const std::uint32_t l1_tile_idx, const std::uint32_t src_tile_idx)
 {
-    const std::uint32_t f1_row_idx = (tensor_shape.num_faces_c_dim == 1)
-                                         ? l1_tile_idx * tensor_shape.num_faces_c_dim + tensor_shape.num_faces_c_dim * tensor_shape.face_r_dim * FULL_CT_DIM
-                                         : l1_tile_idx * tensor_shape.num_faces_c_dim + 1;
-
     TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, src_tile_idx * tensor_shape.face_r_dim * tensor_shape.total_num_faces());
     TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, l1_tile_idx * tensor_shape.num_faces_c_dim);
-
-    // Face 0
-    ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
-    TT_PACR_STRIDE(1, 1, 0, 0, 0, buf_desc_id, 0 /*pck0 sel*/, 0 /*dvalid*/);
-
-    // Face 1
-    TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, f1_row_idx);
-    ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
-
-    if (tensor_shape.total_num_faces() == ckernel::trisc::NUM_FACES)
+    if (tensor_shape.face_r_dim >= 8)
     {
-        TT_PACR_STRIDE(1, 1, 0, 0, 0, buf_desc_id, 0 /*pck0 sel*/, 0 /*dvalid*/);
-        // Face 2
-        TT_SET_DST_TILE_FACE_ROW_IDX(
-            p_set_inc_sel::TILE_SEL,
-            p_pacr::PACK0,
-            l1_tile_idx * tensor_shape.num_faces_c_dim + tensor_shape.num_faces_c_dim * tensor_shape.face_r_dim * FULL_CT_DIM);
+        const std::uint32_t f1_row_idx = (tensor_shape.num_faces_c_dim == 1)
+                                             ? l1_tile_idx * tensor_shape.num_faces_c_dim + tensor_shape.num_faces_c_dim * tensor_shape.face_r_dim * FULL_CT_DIM
+                                             : l1_tile_idx * tensor_shape.num_faces_c_dim + 1;
+
+        // Face 0
         ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
         TT_PACR_STRIDE(1, 1, 0, 0, 0, buf_desc_id, 0 /*pck0 sel*/, 0 /*dvalid*/);
 
-        // Face 3
-        TT_SET_DST_TILE_FACE_ROW_IDX(
-            p_set_inc_sel::TILE_SEL,
-            p_pacr::PACK0,
-            l1_tile_idx * tensor_shape.num_faces_c_dim + tensor_shape.num_faces_c_dim * tensor_shape.face_r_dim * FULL_CT_DIM + 1);
+        // Face 1
+        TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, f1_row_idx);
         ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
-        TT_PACR_STRIDE(0, 1, 0, 0, 0, buf_desc_id, 0 /*pck0 sel*/, 0 /*dvalid*/);
+
+        if (tensor_shape.total_num_faces() == ckernel::trisc::NUM_FACES)
+        {
+            TT_PACR_STRIDE(1, 1, 0, 0, 0, buf_desc_id, 0 /*pck0 sel*/, 0 /*dvalid*/);
+            // Face 2
+            TT_SET_DST_TILE_FACE_ROW_IDX(
+                p_set_inc_sel::TILE_SEL,
+                p_pacr::PACK0,
+                l1_tile_idx * tensor_shape.num_faces_c_dim + tensor_shape.num_faces_c_dim * tensor_shape.face_r_dim * FULL_CT_DIM);
+            ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
+            TT_PACR_STRIDE(1, 1, 0, 0, 0, buf_desc_id, 0 /*pck0 sel*/, 0 /*dvalid*/);
+
+            // Face 3
+            TT_SET_DST_TILE_FACE_ROW_IDX(
+                p_set_inc_sel::TILE_SEL,
+                p_pacr::PACK0,
+                l1_tile_idx * tensor_shape.num_faces_c_dim + tensor_shape.num_faces_c_dim * tensor_shape.face_r_dim * FULL_CT_DIM + 1);
+            ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
+            TT_PACR_STRIDE(0, 1, 0, 0, 0, buf_desc_id, 0 /*pck0 sel*/, 0 /*dvalid*/);
+        }
+        else
+        {
+            TT_PACR_STRIDE(0, 1, 0, 0, 0, buf_desc_id, 0 /*pck0 sel*/, 0 /*dvalid*/);
+        }
     }
     else
     {
-        TT_PACR_STRIDE(0, 1, 0, 0, 0, buf_desc_id, 0 /*pck0 sel*/, 0 /*dvalid*/);
+        ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
     }
 }
 
