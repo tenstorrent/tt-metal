@@ -212,9 +212,16 @@ public:
 #endif // DFB_DESCRIPTORS_DEFINED
 
 #ifdef COMPILE_FOR_TRISC
+// This can be enabled on Quasar once GH issue #49608 is resolved.
 #ifndef ARCH_QUASAR
     uint32_t get_tile_address(uint32_t tile_index);
-    uint32_t read_tile_value(uint32_t tile_index, uint32_t element_offset);
+
+    // Reads one scalar element from a tile at specified tile_index. element_offset is an index into the tile as a T[]
+    // array from its L1 base address (not a byte offset); each step is sizeof(T) bytes
+    // (default T=uint32_t → 4-byte words).
+    // Values are mailbox-broadcast to all TRISC threads as a zero-extended uint32_t; MATH/PACK cast back to T.
+    template <typename T = uint32_t>
+    T read_tile_value(uint32_t tile_index, uint32_t element_offset);
 #endif
 #endif
 
