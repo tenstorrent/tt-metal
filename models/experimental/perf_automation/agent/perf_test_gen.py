@@ -184,18 +184,47 @@ def _parse_trace_path(text: str) -> str | None:
     return m.group(1) if m else None
 
 
+_TRACE_REGION_NEED_RE = re.compile(r"Creating trace buffers of size (\d+)B.*?only (\d+)B is allocated")
+_TRACE_REGION_GROW_ROUNDS = 6
+
+
+def _needed_trace_region(text: str):
+    # a multi-stage trace grows the region cumulatively, so each failing capture reports a bigger need;
+    # take the MAX over-allocation seen in this run so the next attempt jumps past it.
+    over = [int(n) for n, alloc in _TRACE_REGION_NEED_RE.findall(text or "") if int(n) > int(alloc)]
+    return int(max(over) * 1.25) if over else None
+
+
 def _run_perf_node(node_abs: str, extra_env: dict, timeout_s: int = 2400):
-    env = dict(os.environ)
-    env["TT_PERF_TRACE"] = "1"
-    env.setdefault("TT_PERF_MAX_NEW_TOKENS", "4")
-    env.pop("TT_METAL_DEVICE_PROFILER", None)
-    env.update(extra_env)
-    cmd = [sys.executable, "-m", "pytest", "-o", "timeout=0", "-s", node_abs]
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s, env=env)
-    except Exception as exc:  # noqa: BLE001
-        return None, f"run failed: {str(exc)[-300:]}"
-    return r.returncode, (r.stdout or "") + "\n" + (r.stderr or "")
+    def _once(ev):
+        env = dict(os.environ)
+        env["TT_PERF_TRACE"] = "1"
+        env.setdefault("TT_PERF_MAX_NEW_TOKENS", "4")
+        env.pop("TT_METAL_DEVICE_PROFILER", None)
+        env.update(ev)
+        cmd = [sys.executable, "-m", "pytest", "-o", "timeout=0", "-s", node_abs]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s, env=env)
+        except Exception as exc:  # noqa: BLE001
+            return None, f"run failed: {str(exc)[-300:]}"
+        return r.returncode, (r.stdout or "") + "\n" + (r.stderr or "")
+
+    ev = dict(extra_env)
+    rc, out = _once(ev)
+    # model/hardware-agnostic trace region: never a fixed guess. The device reports the EXACT bytes a
+    # capture needs when the region is too small; grow to that (doubling to cover a multi-stage trace's
+    # cumulative growth) and re-run, until every stage's capture fits or the grow budget is exhausted.
+    for _ in range(_TRACE_REGION_GROW_ROUNDS):
+        need = _needed_trace_region(out)
+        if need is None:
+            break
+        cur = int(ev.get("TT_PERF_TRACE_REGION") or os.environ.get("TT_PERF_TRACE_REGION") or 0)
+        target = max(need, cur * 2)
+        if target <= cur:
+            break
+        ev["TT_PERF_TRACE_REGION"] = str(target)
+        rc, out = _once(ev)
+    return rc, out
 
 
 def _write_trace_caps(out_path: Path, caps: dict) -> None:

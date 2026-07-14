@@ -118,6 +118,55 @@ def test_validation_skips_when_device_unavailable(tmp_path, monkeypatch):
     assert node is not None
 
 
+def test_needed_trace_region_grows_to_device_reported_max():
+    """Model/hardware-agnostic trace region: parse the device-reported required bytes (max over a
+    multi-stage trace's cumulative captures), never a fixed guess; None when nothing is over-allocated."""
+    from agent.perf_test_gen import _needed_trace_region
+
+    assert _needed_trace_region("nothing here") is None
+    one = "Creating trace buffers of size 100B on MeshDevice 1, but only 50B is allocated for trace region."
+    assert _needed_trace_region(one) == 125  # 100 * 1.25
+    multi = one + "\nCreating trace buffers of size 200B on MeshDevice 1, but only 125B is allocated for trace region."
+    assert _needed_trace_region(multi) == 250  # MAX(100,200) * 1.25 — covers the biggest stage
+    assert _needed_trace_region("Creating trace buffers of size 40B ... only 50B is allocated") is None  # fits
+
+
+def test_run_perf_node_grows_trace_region_until_it_fits(monkeypatch):
+    """_run_perf_node re-runs with the device-reported size (doubling) until no capture is too small."""
+    import agent.perf_test_gen as m
+
+    sizes_used = []
+
+    def fake_once_seq(ev):
+        region = int(ev.get("TT_PERF_TRACE_REGION", "23887872"))
+        sizes_used.append(region)
+        # cumulative multi-stage need: fits only once region >= 800
+        if region < 800:
+            need = 200 if region < 300 else 800
+            return (
+                1,
+                f"Creating trace buffers of size {need}B on MeshDevice 1, but only {region}B is allocated for trace region.",
+            )
+        return 0, "TRACE_STAGE_MS[vocode]=1.0 path=trace+2cq"
+
+    # patch the inner subprocess runner by swapping _run_perf_node's _once via subprocess.run stub
+    def fake_run(cmd, capture_output, text, timeout, env):
+        rc, out = fake_once_seq(env)
+
+        class R:
+            returncode = rc
+            stdout = out
+            stderr = ""
+
+        return R()
+
+    monkeypatch.setattr(m.subprocess, "run", fake_run)
+    monkeypatch.delenv("TT_PERF_TRACE_REGION", raising=False)
+    rc, out = m._run_perf_node("some_node::t", {"TT_PERF_NUM_CQ": "2"})
+    assert rc == 0 and "path=trace+2cq" in out
+    assert sizes_used[0] == 23887872 and sizes_used[-1] >= 800  # started at default, grew until it fit
+
+
 def test_injected_runner_defaults_to_no_execution(tmp_path, monkeypatch):
     """validate defaults to (runner is None): an injected runner (unit/test path) must NOT execute pytest."""
     demo_rel = _demo(tmp_path)
