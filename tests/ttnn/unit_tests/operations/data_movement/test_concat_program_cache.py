@@ -74,13 +74,20 @@ def test_concat_cache_miss_different_dim(device, isolate_program_cache):
     assert device.cache_entries_counter.total == 2
 
 
-def test_concat_cache_miss_different_shape(device, isolate_program_cache):
-    """Same dim, different input shapes -> 2 entries."""
-    ref1, out1 = run_concat(device, [(1, 1, 32, 64), (1, 1, 32, 64)], dim=3)
+def test_concat_cache_miss_different_input_partition_same_output(device, isolate_program_cache):
+    """Different input partitioning, SAME concatenated output shape -> 2 entries.
+
+    Both invocations concat along dim=3 to the identical output (1, 1, 32, 128),
+    but partition the inputs differently: [96]+[32] vs [64]+[64]. A key derived
+    only from the output spec would collide here; distinct entries prove each
+    input TensorSpec (per-input geometry) is part of the cache key.
+    """
+    ref1, out1 = run_concat(device, [(1, 1, 32, 96), (1, 1, 32, 32)], dim=3)
     assert_with_pcc(ref1, out1, 0.9999)
-    ref2, out2 = run_concat(device, [(1, 1, 64, 64), (1, 1, 64, 64)], dim=3)
+    ref2, out2 = run_concat(device, [(1, 1, 32, 64), (1, 1, 32, 64)], dim=3)
     assert_with_pcc(ref2, out2, 0.9999)
 
+    assert out1.shape == out2.shape  # identical output spec
     assert device.cache_entries_counter.total == 2
 
 
@@ -96,11 +103,19 @@ def test_concat_cache_miss_different_dtype(device, isolate_program_cache):
     assert device.cache_entries_counter.total == 2
 
 
-def test_concat_cache_miss_different_num_inputs(device, isolate_program_cache):
-    """Different number of input tensors -> 2 entries (input_tensors vector length keyed)."""
+def test_concat_cache_miss_different_num_inputs_same_output(device, isolate_program_cache):
+    """Different input COUNT, SAME concatenated output shape -> 2 entries.
+
+    Both invocations concat along dim=3 to the identical output (1, 1, 32, 128),
+    but differ only in the number of inputs: 2 tensors ([64]+[64]) vs 3 tensors
+    ([32]+[32]+[64]). Holding the output constant isolates input-vector LENGTH:
+    distinct entries prove the full input_tensors vector (including its size) is
+    keyed, not just the derived output.
+    """
     ref1, out1 = run_concat(device, [(1, 1, 32, 64), (1, 1, 32, 64)], dim=3)
     assert_with_pcc(ref1, out1, 0.9999)
-    ref2, out2 = run_concat(device, [(1, 1, 32, 64), (1, 1, 32, 64), (1, 1, 32, 64)], dim=3)
+    ref2, out2 = run_concat(device, [(1, 1, 32, 32), (1, 1, 32, 32), (1, 1, 32, 64)], dim=3)
     assert_with_pcc(ref2, out2, 0.9999)
 
+    assert out1.shape == out2.shape  # identical output spec
     assert device.cache_entries_counter.total == 2
