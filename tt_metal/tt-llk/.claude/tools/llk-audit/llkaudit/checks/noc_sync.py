@@ -17,7 +17,9 @@ data-movement doc `data_movement_doc/general/posted_writes.md`. So a flush-but-n
 barrier atomic is still flagged (never miss a real race) and TAGGED
 `safety="FLUSH_NOT_BARRIER"`; whether a same-VC unicast atomic is actually safe with
 only a flush is a VERDICT the /noc-sync-audit skill grounds in `<arch>/NoC/Ordering.md` +
-`posted_writes.md`, NOT an assumption the tool bakes. Flushes are recognized in BOTH the
+`posted_writes.md`, NOT an assumption the tool bakes. A credit whose ONLY preceding flush is a
+posted-writes flush is instead tagged `safety="POSTED_FLUSH_ONLY"` (it drains the posted HW
+counter — a no-op for a non-posted write/inc). Flushes are recognized in BOTH the
 free-function and the modern `Noc`-method form (`noc.async_write_barrier()`) via
 registry.noc_op_of/noc_flush_kind.
 Signals are recognized in both forms too: the free functions AND the `Semaphore`
