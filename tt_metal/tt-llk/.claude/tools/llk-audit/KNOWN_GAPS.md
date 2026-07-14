@@ -60,9 +60,15 @@ with no Finding: mmio-race (`if kind:`), reconfig-stall (`kind in CFG_WRITE_KIND
 skill/LLM worklist it is a SILENT miss. (Distinct from a RECOGNIZED cfg write with an unresolvable
 INDEX, e.g. `cfg[runtime_var]=`, which DOES emit a `hint=UNRESOLVED` Finding.)
 - **Risk:** CAP-REDUCTION (silent — no Finding emitted).
-- **Live today:** none — every `unresolved` pointer_write over tt-llk is a local staging-struct write
-  (`config.val[i]=`, `tile_descriptor.val[i]=`), not a direct cfg-pointer write; the real cfg write is
-  separately routed through a recognized `TTI_WRCFG`/`REG2FLOP`.
+- **Live today:** none — every `unresolved` pointer_write over tt-llk is (a) a local staging-struct
+  write (`config.val[i]=` / `tile_descriptor.val[i]=`; QSR `alu_config.val[i]=`), (b) a RISC↔RISC
+  mailbox-FIFO write (`mailbox_base[thread][i]=`), or (c) a QSR buffer-descriptor-table /
+  TRISC-sync-enable write (`bd_table[…].words[i]=` / `t6dbg->TENSIX_TRISC_SYNC[i]=`, the
+  `set_ttsync_enables` store) — NONE a direct unit-sampled cfg-pointer write, so the `(None,None)` is
+  not a real cfg write being dropped (a real cfg write is separately routed through a recognized
+  `TTI_WRCFG`/`REG2FLOP`/`cfg[]=`). Reproduced counts: WH 19 (13 `config.val` + 5 `tile_descriptor.val`
+  + 1 mailbox), BH 17 (11 + 5 + 1), QSR 6 (2 `alu_config.val` + 2 `t6dbg`-TRISC_SYNC + 1 `bd_table`
+  + 1 mailbox).
 - **Fix:** extractor template-instantiation visiting to resolve the base word; deferred as risky.
 
 ### L5 — diff-scope and the degrade-guard match changed files by BASENAME
