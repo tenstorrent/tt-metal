@@ -705,3 +705,71 @@ no gate does not ship.** Measure on the block harness (`test_ltx_transformer_blo
       then immediately re-sharded. Each is a free cut.
 - [ ] **W3 — fuse a collective into an adjacent op's epilogue** (same trick as the gated-residual fold, applied to a
       collective rather than an elementwise op).
+
+## Batch W2 — hide the activation all-gather behind the big matmul — **CLOSED: the exposed gather is NOT a tunable, it is the fused kernel's core-assignment structure. Two named fixes REFUTED by measurement; one prescriptive fix left, and it is a program-factory redesign, not a knob.**
+
+**The op already materializes the gathered activation — and it is 1/4 GARBAGE.** `compute_output_specs`
+(`all_gather_minimal_matmul_async_device_operation.cpp:336-341`) gives output slot 0 the shape `in0 * ring_size`, and
+the caller even supplies the buffer (`linear.py:214 persistent_output_buffer=ag_persistent_buffer`). The host wrapper
+then throws it away (`device_operation.cpp:487-488`: `strip_count = 1 + fsdp; return {begin()+strip_count, end()}`).
+**But it is not a valid all-gather.** `read_in0_block_sync` under `READ_FROM_LOCAL_INPUT` sources the device's OWN
+K-slice from the unsharded input (`in3`) straight into the compute CB and never writes it back to the gather buffer,
+so that slice is never written — and the buffer is `torch.empty` (`manager.py:176`), so the hole reads as
+uninitialized garbage, not zeros. **MEASURED** (`test_agmm_gathered_out.py`, jobs 138/152, rows=256 and 1216):
+remote K-slices **PCC = 1.000000** (bit-exact, all 96 cells), own K-slice **PCC = -0.004 .. +0.004 (pure noise)**,
+matmul output **PCC 0.99999** (correct — proving the local data reaches compute via in3 and is never written back).
+=> Route 2a ("just read the gathered buffer") **silently reads garbage today** and needs a local-slice writeback.
+
+**And route 2a is not worth fixing on its own.** Its entire value is the overlap the fused op already achieves:
+S1/site today `AG(105.5)+mm_gate(58.3)+mm_qkv(251.2)=415.0` vs `agmm_qkv(332.6)+mm_gate(58.3)=390.9` = **-24 us/site**
+— and the local-slice writeback (a 2.49 MB L1->DRAM write per device) must be paid out of exactly that. Nets ~0.
+**The whole prize is the overlap itself** (-105 us/site if the gather fully hid), which would ALSO speed up
+`agmm_out` (177.6) and `agmm_ff1` (438.4). Do not ship 2a without the overlap fix.
+
+**The overlap is ~ZERO today, not 25%** (census, job 152 post-reset): exposed gather = fused - pure_mm:
+gate_s1 108.2 of 105.5 (**-3% hidden**), qkv_s1 81.0 of 105.5 (23%), gate_audio 22.5 of 12.3 (**-82%**),
+qkv_audio 19.4 of 12.3 (**-57%**). On small shapes the fused op's own gather costs *more* than a standalone
+all-gather. NOTE: the old `agmm_qkv_video_s2=1060.79` census row is **BAD** — it implies W1 was a wash at S2, which
+contradicts W1's measured -44.56 ms/step. Back-solving W1 gives agmm_qkv_s2 ~1342 (=23% hidden, same as S1). Row is
+noisy across runs (1008-1093); do not price S2 off it.
+
+- [x] **CB depth (in0_cb depth 2, `program_factory.cpp:366`) — REFUTED.** The comment there says the depth-8 in0_cb
+  was an upstream *perf* change reverted for an L1 OOM, so it looked like the fix. Depth 4 **OOMs L1 by 6,912 B**
+  (1,579,776 vs 1,572,864 max — one in0 block = 64 tiles x 2048 B = 131,072 B). Depth 3 fits and **moves nothing**
+  (job 142): agmm_qkv_s1 331.91->330.31 (-0.5%, noise), agmm_out +0.1%, agmm_ff1 +0.3%, agmm_gate -0.1%.
+  **Why it cannot work:** the in0 loop fills exactly ONE block per iteration and then enters the blocking fabric
+  send, so the reader can never run more than one block ahead *no matter how deep the CB is*. Depth is not the slack.
+- [x] **Per-packet flush amortization (packet-header rotation) — REFUTED.** `forward_half_block_to_fabric_neighbor`
+  calls `noc.async_writes_flushed()` after EVERY packet (`matmul_dataflow_common.hpp:262`), and it is load-bearing:
+  `fabric_unicast_noc_scatter_write_with_state` mutates a shared packet header then NOC-writes payload+header
+  *non-blocking*. At 2 tiles/packet (`num_tiles_to_write_per_packet = min(4, 4KB/2KB) = 2`) a sender core takes ~128
+  blocking flushes per K-block-loop, ~= the whole exposed gather by arithmetic. Implemented header rotation
+  (rotate N scatter headers, flush once per N, plus a mandatory flush before the ready-semaphore packet so it cannot
+  overtake a payload). **Correct but worthless**: at FWD_PKT_HDRS=4 (job 153) PCC stays 1.000000/0.99999 and
+  agmm_qkv_s1 330.61->334.50 (**+1.2%, if anything worse**), agmm_gate flat, agmm_ff1 +2.1%. Cutting flushes 4x moved
+  zero time => the sender is **not** stalled on local NOC-flush latency; it is stalled in `wait_for_empty_write_slot()`
+  on **wire backpressure**. Both knobs REVERTED (they were env-gated, default = current behavior).
+  WARNING **TRAP (cost a hang + a board reset, jobs 144/146/148):** the BH packet-header pool is `144 B x (6*2*2) = 3456 B`
+  -> **12 headers per RISC**, and `dm_in0_sender` allocates a full set for EACH of its two Ring directions. Allocating
+  >12 silently overflows (`allocate_header` only `ASSERT`s, compiled out in release), corrupts L1 and **wedges an eth
+  core** — the ARC-heartbeat health gate does NOT catch this; it takes a full board reset via the broker.
+  Budget `2*(hdrs+2) <= 12`.
+
+**=> THE MECHANISM (by elimination + source).** The 24 fabric-relay cores are also COMPUTE cores. The relay is issued
+inline on the in0-feed RISC (`dm_in0_sender.cpp:520,542`; senders are chain indices `size-1`/`size-2` = grid rows
+y=7,8 of each of the 12 columns), and that RISC is the ONLY thing that refills its own core's in0 compute CB. So
+while it blocks on wire backpressure, its core's matmul starves — and the op's wall time is the max over cores.
+Those 24 of 108 cores therefore pay (full compute share) + (wire time), which is exactly "gather adds, does not hide",
+and exactly why the num_links bandwidth slope leaks into the fused op. **Not a math limit:** the gather IS along K
+(the contraction), partial K-shards DO accumulate in L1, and the compute kernel already streams per-K-block
+(`compute.cpp:421-459`). The structure is right; the core assignment is wrong.
+
+- [ ] **W2-next — UNBURDEN THE RELAY CORES (the one fix the evidence points at).** Give the 2 fabric rows a smaller
+  (or zero) share of N so they have slack to absorb the wire, and let the other 7 rows absorb their matmul work.
+  Arithmetic (T_unit = mm_wall x 9 = time for one row to do all of N; wire = 105.4):
+  - **qkv_s1**: balance at f_fab=0.075/f_oth=0.122 -> **274 us vs 331 today = -56 us/site**.
+  - **gate_s1**: wire dominates -> f_fab=0 -> max(105.4, 58.4x9/7=75) = **105 us vs 166 today = -61 us/site**.
+  Scale: ~3 big video sites/block x 48 blocks. Also lifts `agmm_out`/`agmm_ff1` for free.
+  **RISK/BLOCKER:** `N_blocks_per_core` is a COMPILE-TIME arg shared by all cores, so a non-uniform N split needs the
+  per-core N loop bounds reworked (`current_N_block_tiles = n_tile_end - n_tile` underflows if a core gets 0 tiles).
+  This is a program-factory redesign, not a knob — needs a warm authoring session, not a cron lap.
