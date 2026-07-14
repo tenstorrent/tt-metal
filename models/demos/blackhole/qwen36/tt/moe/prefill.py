@@ -43,20 +43,32 @@ def create_prefill_sparsity(mesh_device, num_experts):
 
 
 def _process_prefill_chunk(hidden_states, routing_weights, weights: ExpertWeights, config, prefill_sparsity):
-    """One chunk: hidden [1,1,chunk,H], routing [1,1,chunk,E] -> [1,1,chunk,H] (pre-allreduce)."""
+    """One chunk: hidden [1,1,chunk,H], routing [1,1,chunk,E_local] -> [1,1,chunk,H] (pre-allreduce).
+
+    Expert-parallel: routing_weights is already this device's expert-column slice (E_local =
+    num_experts/tp); prefill_sparsity is all-ones over the same E_local experts."""
     chunk_len = hidden_states.shape[2]
-    num_experts = config.num_experts
+    # Per-device expert count (weights + sparsity are already sharded to E_local).
+    num_experts = prefill_sparsity.shape[-1]
     hidden_size = config.hidden_size
 
     group_size = chunk_len // TILE_SIZE
     hidden_grouped = ttnn.reshape(hidden_states, (1, group_size, TILE_SIZE, hidden_size))
-    sparsity = ttnn.repeat(prefill_sparsity, (1, 1, group_size, 1))
-    nnz = num_experts * group_size
+    # Per-tile sparsity for gate/up: compute an expert for a 32-token tile only if some token in
+    # the tile routes to it (max routing weight over the tile > 0). Real prefill routing is
+    # concentrated (~21 of 64 local experts hit per 32-tok tile), so this skips ~2/3 of the
+    # all-ones overcompute. nnz varies per tile -> infer (None); a static nnz would deadlock the
+    # sparse_matmul mcast receivers (same reason decode uses nnz=None).
+    routing_tiled = ttnn.reshape(routing_weights, (1, group_size, TILE_SIZE, num_experts))
+    tile_mask = ttnn.max(routing_tiled, dim=2, keepdim=True)  # [1, group, 1, E_local]
+    tile_mask = ttnn.to_layout(tile_mask, ttnn.ROW_MAJOR_LAYOUT)
+    sparsity = ttnn.reshape(tile_mask, (1, 1, group_size, num_experts))
+    nnz = None
 
     output_tile = ttnn.Tile([32, 32])
     intermediate_size = weights.intermediate_size_per_device
-    # gate/up fused into ONE sparse_matmul: N = 2*intermediate (gate|up concatenated), so
-    # the N-gridded core count doubles (4 -> 8) vs running gate and up separately. M is one
+    # gate/up fused into ONE sparse_matmul: N = 2*full_intermediate (gate|up concatenated), so
+    # the N-gridded core count is 32 (vs 8 for the old intermediate-parallel N=256). M is one
     # 32-row tile per group (group_size folded into the sparse batch dim), per_core_M stays 1.
     # down: M is the full chunk_len, so its per_core_M reflects the real M (= chunk_len/32).
     gate_up_config = _build_sparse_matmul_config(TILE_SIZE, 2 * intermediate_size)
@@ -121,6 +133,12 @@ def prefill_forward(
     """hidden_states [1,1,S,H] (S multiple of 32), routing_weights [1,1,S,E]. Returns [1,1,S,H/tp]."""
     seq_len = hidden_states.shape[2]
     assert seq_len % TILE_SIZE == 0, f"Prefill seq_len must be multiple of {TILE_SIZE}, got {seq_len}"
+
+    # Expert-parallel: slice the replicated dense routing [1,1,S,E] into this device's
+    # contiguous expert columns [1,1,S,E/tp] (matching the dim=1-sharded expert weights),
+    # once for the whole sequence before chunking.
+    if num_devices > 1:
+        routing_weights = ttnn.mesh_partition(routing_weights, dim=3, cluster_axis=1)
 
     if seq_len > PREFILL_CHUNK_SIZE:
         hidden_chunks = ttnn.split(hidden_states, PREFILL_CHUNK_SIZE, dim=2)

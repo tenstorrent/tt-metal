@@ -16,7 +16,10 @@ class Qwen36Experts:
         self.tt_ccl = tt_ccl
         self.topology = topology
         self.weights = load_expert_weights(mesh_device, config, state_dict, tensor_cache_path)
-        self.prefill_sparsity = create_prefill_sparsity(mesh_device, config.num_experts)
+        # Expert-parallel: each device computes only its expert shard, so the all-ones prefill
+        # sparsity is sized to the per-device expert count (num_experts / num_devices).
+        experts_per_device = config.num_experts // self.num_devices if self.num_devices > 1 else config.num_experts
+        self.prefill_sparsity = create_prefill_sparsity(mesh_device, experts_per_device)
 
     def __call__(self, hidden_states, dense_routing):
         """hidden_states [1,1,S,H], dense_routing [1,1,S,E] -> [1,1,S,H/tp]."""
