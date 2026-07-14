@@ -56,9 +56,6 @@ _ENV = _MANIFEST.get("env", {})
 # where profile_model stashes the current baseline so measure_candidate can compare structurally
 _BASELINE_PATH = Path(tempfile.gettempdir()) / "perf_mcp_baseline.json"
 _FULLPIPE_BASELINE_PATH = Path(tempfile.gettempdir()) / "perf_mcp_full_pipeline_baseline.json"
-# Separate best-so-far per command-queue track so the robust trace+1cq per-iteration signal is NEVER
-# compared against the trace+2cq bookend baseline (that cross-mode compare would falsely read as a
-# fidelity "degrade"). 1cq = per-iteration gate; 2cq = start/end ship-metric anchor.
 _FULLPIPE_BASELINE_1CQ_PATH = Path(tempfile.gettempdir()) / "perf_mcp_full_pipeline_baseline_1cq.json"
 _FULLPIPE_TOL = float(os.environ.get("PERF_MCP_FULLPIPE_TOL", "0.08"))
 _FULLPIPE_SAMPLES = max(1, int(os.environ.get("PERF_MCP_FULLPIPE_SAMPLES", "1")))
@@ -652,8 +649,6 @@ def _run_full_pipeline_ms():
     env["TT_PERF_MAX_NEW_TOKENS"] = os.environ.get("PERF_MCP_FULLPIPE_TOKENS", "1")
     env.setdefault("TT_PERF_TRACE", "1")
     env["TT_PERF_PREFILL_TRACE"] = "1"
-    # CQ selector: mid-loop forces 1 (robust trace+1cq — no 2-CQ reservation, so no OOM/downgrade), the
-    # start/end bookend forces 2 (trace+2cq ship metric). Unset -> the perf test's own default (2).
     _cq = os.environ.get("PERF_MCP_FULLPIPE_CQ")
     if _cq and _cq.isdigit():
         env["TT_PERF_NUM_CQ"] = _cq
@@ -805,8 +800,6 @@ def _infer_block_count(counts: dict) -> int:
 
 
 def _block_starts(sequence: list, n_blocks: int | None = None) -> tuple:
-    # PREFER the real per-block signposts the probe emits (exact boundaries); fall back to inferring a
-    # once-per-block anchor op only when the model has no detectable repeated ModuleList to signpost.
     seq = sequence or []
     sp = [i for i, s in enumerate(seq) if isinstance(s, str) and s.startswith(_SIGNPOST_PREFIX)]
     if sp:
@@ -890,7 +883,7 @@ def _full_depth_op_probe():
     env = dict(os.environ)
     env["TT_METAL_HOME"] = repo
     env["PYTHONPATH"] = repo
-    env["TT_PERF_LAYERS"] = "0"  # ALL layers — no tracy in this probe, so no marker buffer to overflow
+    env["TT_PERF_LAYERS"] = "0"
     env["TT_PERF_MAX_NEW_TOKENS"] = "1"
     env.pop("TT_METAL_DEVICE_PROFILER", None)
     cmd = [sys.executable, str(Path(__file__).parent / "_op_sig_probe.py"), node]
@@ -961,8 +954,6 @@ def check_full_pipeline_latency() -> dict:
         return _emit_fullpipe({"status": "crash", "error": err, "cq": cq})
     metric = "trace_per_token_ms" if method == "trace" else "eager_full_pipeline_ms"
     mode = _fullpipe_mode(method, path)
-    # 1cq and 2cq are tracked against SEPARATE best-so-far baselines: the trace+1cq per-iteration gate
-    # never compares against the trace+2cq bookend anchor (that would falsely flag a fidelity "degrade").
     base_path = _FULLPIPE_BASELINE_PATH if cq >= 2 else _FULLPIPE_BASELINE_1CQ_PATH
     cq_note = (
         "trace+1cq (robust per-iteration signal): validate/bank compute-op wins here — it always engages "

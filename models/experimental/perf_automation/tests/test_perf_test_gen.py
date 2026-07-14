@@ -149,39 +149,53 @@ def test_needed_trace_region_grows_to_device_reported_max():
 
 
 def test_run_perf_node_grows_trace_region_until_it_fits(monkeypatch):
-    """_run_perf_node re-runs with the device-reported size (doubling) until no capture is too small."""
+    """_run_perf_node re-runs with the device-reported size (doubling) until no capture is too small.
+    The perf test now runs through the wedge-safe probes._execute (own process group, tree-kill on
+    stall), so the grow-loop is driven by patching that seam, not subprocess.run."""
     import agent.perf_test_gen as m
+    from agent import probes
 
     sizes_used = []
 
-    def fake_once_seq(ev):
-        region = int(ev.get("TT_PERF_TRACE_REGION", "23887872"))
+    def fake_execute(cmd, cwd, env, timeout_s, log_path, stall_timeout_s=300):
+        region = int(env.get("TT_PERF_TRACE_REGION", "23887872"))
         sizes_used.append(region)
-        # cumulative multi-stage need: fits only once region >= 800
-        if region < 800:
-            need = 200 if region < 300 else 800
-            return (
-                1,
-                f"Creating trace buffers of size {need}B on MeshDevice 1, but only {region}B is allocated for trace region.",
+        # cumulative multi-stage need: fits only once region >= 40_000_000 (forces the grow-loop)
+        if region < 40_000_000:
+            need = 30_000_000 if region < 25_000_000 else 40_000_000
+            log_path.write_text(
+                f"Creating trace buffers of size {need}B on MeshDevice 1, but only {region}B is allocated for trace region."
             )
-        return 0, "TRACE_STAGE_MS[vocode]=1.0 path=trace+2cq"
+            return 1
+        log_path.write_text("TRACE_STAGE_MS[vocode]=1.0 path=trace+2cq")
+        return 0
 
-    # patch the inner subprocess runner by swapping _run_perf_node's _once via subprocess.run stub
-    def fake_run(cmd, capture_output, text, timeout, env):
-        rc, out = fake_once_seq(env)
-
-        class R:
-            returncode = rc
-            stdout = out
-            stderr = ""
-
-        return R()
-
-    monkeypatch.setattr(m.subprocess, "run", fake_run)
+    monkeypatch.setattr(probes, "_execute", fake_execute)
     monkeypatch.delenv("TT_PERF_TRACE_REGION", raising=False)
     rc, out = m._run_perf_node("some_node::t", {"TT_PERF_NUM_CQ": "2"})
     assert rc == 0 and "path=trace+2cq" in out
-    assert sizes_used[0] == 23887872 and sizes_used[-1] >= 800  # started at default, grew until it fit
+    assert sizes_used[0] == 23887872 and sizes_used[-1] >= 40_000_000  # started at default, grew until it fit
+
+
+def test_run_perf_node_wedge_is_caught_reset_and_reported(monkeypatch):
+    """A wedging test (trace-capture fatal -> device teardown hang) must NOT hang or orphan: the tree is
+    killed, the board is reset, and the partial output (with the fatal) is returned so the loop can
+    correct — rc=124, never a silent hang."""
+    import agent.perf_test_gen as m
+    from agent import probes
+
+    reset_calls = []
+
+    def hang_execute(cmd, cwd, env, timeout_s, log_path, stall_timeout_s=300):
+        log_path.write_text("TT_FATAL: Event Synchronization is not supported during trace capture.\n")
+        raise probes.TracyHangError("made no forward progress; process group killed")
+
+    monkeypatch.setattr(probes, "_execute", hang_execute)
+    monkeypatch.setattr(probes, "_device_reset", lambda: reset_calls.append(True) or True)
+    rc, out = m._run_perf_node("some_node::t", {"TT_PERF_NUM_CQ": "2"})
+    assert rc == 124  # wedge signalled as a failure, not a hang
+    assert "Event Synchronization" in out and "tt-smi -r" in out  # fatal fed back + board reset noted
+    assert reset_calls == [True]  # device was reset for the next correction attempt
 
 
 def test_injected_runner_defaults_to_no_execution(tmp_path, monkeypatch):

@@ -24,7 +24,7 @@ sys.path.insert(0, str(_PKG.parent.parent.parent))
 sys.path.insert(0, str(_PKG))
 
 _SIGS = set()
-_SEQ = []  # ordered op-signature stream — lets a consumer segment the run into repeated blocks
+_SEQ = []
 
 
 def _shape_sig(args):
@@ -37,8 +37,6 @@ def _shape_sig(args):
             dims = tuple(int(d) for d in s)
         except Exception:  # noqa: BLE001
             dims = str(s)
-        # dtype is part of the signature: a dtype knob (bf16->bf8_b) leaves shapes identical, so without
-        # dtype the probe could not tell whether a lever actually changed an op — coverage would be blind.
         dt = getattr(getattr(x, "dtype", None), "name", None) or str(getattr(x, "dtype", "") or "")
         out.append((dims, dt) if dt else dims)
     return tuple(out)
@@ -105,7 +103,7 @@ def _install_block_signposts():
     def wrapped(self, *a, **k):
         if not state["tagged"]:
             try:
-                if sum(1 for _ in self.modules()) > 8:  # first call on a real (root) model
+                if sum(1 for _ in self.modules()) > 8:
                     state["tagged"] = _tag(self)
             except Exception:  # noqa: BLE001
                 pass
@@ -134,7 +132,6 @@ def main(node: str, case: str | None = None) -> None:
         pass
     print("PERF_OP_SIGS=" + json.dumps(sorted(_SIGS)), flush=True)
     print("PERF_OP_SIG_COUNTS=" + json.dumps(Counter(_SEQ)), flush=True)
-    # ordered stream (capped) so a consumer can infer per-block boundaries and attribute each op to a block
     print("PERF_OP_SIG_SEQUENCE=" + json.dumps(_SEQ[:50000]), flush=True)
 
 

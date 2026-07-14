@@ -13,8 +13,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 # Structural reference handed to the LLM (the seamless bounded-perf pattern, generic-ized).
@@ -203,11 +205,24 @@ def _run_perf_node(node_abs: str, extra_env: dict, timeout_s: int = 2400):
         env.pop("TT_METAL_DEVICE_PROFILER", None)
         env.update(ev)
         cmd = [sys.executable, "-m", "pytest", "-o", "timeout=0", "-s", node_abs]
+        from . import probes as _pr
+
+        log = Path(tempfile.mkdtemp(prefix="perf_node_")) / "run.log"
+        stall = int(os.environ.get("PERF_MCP_VALIDATE_STALL_SEC", "300") or "300")
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s, env=env)
+            rc = _pr._execute([str(c) for c in cmd], Path.cwd(), env, timeout_s, log, stall_timeout_s=stall)
+            return rc, (log.read_text(errors="ignore") if log.exists() else "")
+        except _pr.TracyHangError as exc:
+            out = log.read_text(errors="ignore") if log.exists() else ""
+            ok = _pr._device_reset()
+            return 124, out + "\n[perf_test_gen] WEDGE: %s; killed process group + tt-smi -r (reset_ok=%s)\n" % (
+                exc,
+                ok,
+            )
         except Exception as exc:  # noqa: BLE001
             return None, f"run failed: {str(exc)[-300:]}"
-        return r.returncode, (r.stdout or "") + "\n" + (r.stderr or "")
+        finally:
+            shutil.rmtree(log.parent, ignore_errors=True)
 
     ev = dict(extra_env)
     rc, out = _once(ev)
@@ -267,6 +282,8 @@ def _extract_error(out: str) -> str:
             or "ERROR collecting" in ln
             or re.match(r"^\s*[A-Za-z_][\w.]*Error\b", ln)
             or "Traceback (most recent call last)" in ln
+            or "FATAL" in ln
+            or "WEDGE" in ln
             or "assert" in s
             or "cannot import" in s
             or "has no attribute" in s
@@ -354,7 +371,8 @@ def validate_generated_perf_test(out_path: Path, task: str) -> tuple[str, str]:
     a test that can't hold trace+2cq here is rejected NOW rather than silently downgraded later. Records
     what it saw in the trace_caps sidecar either way. Second return value is the failure detail fed back."""
     node_abs = f"{out_path}::test_{task}_perf"
-    rc1, out1 = _run_perf_node(node_abs, {"TT_PERF_NUM_CQ": "1"})
+    vt = int(os.environ.get("PERF_MCP_VALIDATE_TIMEOUT", "900") or "900")
+    rc1, out1 = _run_perf_node(node_abs, {"TT_PERF_NUM_CQ": "1"}, timeout_s=vt)
     if rc1 is None:
         return "skip", out1
     low = out1.lower()
@@ -377,7 +395,7 @@ def validate_generated_perf_test(out_path: Path, task: str) -> tuple[str, str]:
     if eager:
         _write_trace_caps(out_path, caps)
         return "ok_marker", ""
-    rc2, out2 = _run_perf_node(node_abs, {"TT_PERF_NUM_CQ": "2"})
+    rc2, out2 = _run_perf_node(node_abs, {"TT_PERF_NUM_CQ": "2"}, timeout_s=vt)
     path2 = _parse_trace_path(out2) if rc2 == 0 and "TRACE_PER_TOKEN_MS=" in out2 else None
     caps["trace_2cq_path"] = path2
     caps["trace_2cq"] = path2 == "trace+2cq"

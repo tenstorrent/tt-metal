@@ -185,8 +185,6 @@ def _mcp_config(repo_root: Path, manifest_path: str, pipe: dict, devices: str, k
         "TT_METAL_HOME": str(repo_root),
         "PYTHONPATH": str(repo_root),
         "PATH": f"{repo_root / 'python_env' / 'bin'}{os.pathsep}/usr/bin:/bin",
-        # Mid-loop check_full_pipeline_latency runs the ROBUST trace+1cq gate (always engages, no 2-CQ
-        # OOM/downgrade); the trace+2cq ship number is measured only at the start/end bookend.
         "PERF_MCP_FULLPIPE_CQ": "1",
     }
     if pipe.get("case"):
@@ -261,7 +259,7 @@ def _fullpipe_e2e(repo_root: Path, mcp_env: dict, devices: str, label: str) -> f
     )
     env = cc_env(repo_root, devices)
     env.update(mcp_env)
-    env["PERF_MCP_FULLPIPE_CQ"] = "2"  # bookend = the trace+2cq production ship metric
+    env["PERF_MCP_FULLPIPE_CQ"] = "2"
     env.setdefault("PERF_MCP_FULLPIPE_SAMPLES", "3")
     print(
         f"  [optimize/cc] measuring FULL-model end-to-end ({label}) — ALL 52 layers, no tracy (one slow run, minutes)..."
