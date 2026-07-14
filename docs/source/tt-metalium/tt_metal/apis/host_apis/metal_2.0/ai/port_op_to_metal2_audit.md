@@ -73,6 +73,8 @@ For the op in scope, work through the audit in eight subjects, in order: **[Prer
 - **Yellow** — requires user judgment (ambiguous signal, or a supported-but-trade-off construct). Ask the user; respect the answer.
 - **Red** — record the reason in the audit report and continue the audit. A RED outcome means the port is blocked on this finding; it does not mean stop auditing. Always complete the remaining checks and steps so the report captures everything the port will eventually need to clear, not just the first blocker.
 
+**Reference data (recommended).** Before working the subjects, fetch Diego's per-factory porting-readiness data (his *"Operations analysis"* sheet) and grep out your op's rows — it pre-classifies several of the signals you're about to check (factory concept, custom hash, RTA-smuggled pointers, pybind-of-internals, custom override-runtime-args). Treat it as an informative **prior, not ground truth**: let it orient your search, but your own `file:line` evidence decides every finding, and you note any place the sheet and your evidence disagree. Fetch procedure + column legend: [`../analyses/ttnn_op_porting_readiness.md`](../analyses/ttnn_op_porting_readiness.md).
+
 **Scope of the audit.**
 
 - **Follow kernel references, not directory boundaries.** Audit every kernel referenced by any `KernelDescriptor::kernel_source` in the op's program factories — cross-op kernels living in adjacent directories (e.g. `eltwise/`, `data_movement/`, `kernels/dataflow/`) are in scope when the op uses them.
@@ -345,6 +347,8 @@ Metal 2.0 **supports** RTA varargs via the kernel-side vararg mechanism, so this
 ### TTNN factory concept analysis
 
 **This subject is analysis, not a decision.** Ops port to a single Metal 2.0 factory concept (`MetalV2FactoryConcept`); this subject does **not** re-decide that and does **not** itself gate. Your job is to answer six questions about the op's TTNN-side shape and record each with `file:line` evidence; the downstream port (see [`port_op_to_metal2_ttnn_factory.md`](port_op_to_metal2_ttnn_factory.md)) consumes them to confirm the op fits that concept and to surface any residual blocker (genuine multi-program, op-owned `GlobalSemaphore`s). Run this subject **last**, after the other subjects have produced their findings — op-owned-tensor recognition draws on the [TensorAccessor-handling](#tensoraccessor-handling) per-binding inventory.
+
+**Cross-reference — Diego's readiness sheet.** Several of these questions map straight onto columns in Diego's [readiness sheet](../analyses/ttnn_op_porting_readiness.md): Q3/Q4 ↔ *Pybind descriptor*, Q5 ↔ *Custom hash*, Q6 ↔ *Runtime-args update*, plus *Concept*. If you fetched it at the start, cross-check your answers against it — but still record your own `file:line` evidence for each; the sheet is a prior, not a substitute for the check.
 
 **Scope reminder.** Throughout, *"does this op …"* means *"do **any** of this op's ProgramFactories …"* — inspect every ProgramFactory the op defines; a yes on any one is a yes for the op, and you attribute the finding to the factory (and DeviceOperation, when bundled) where it appears.
 
