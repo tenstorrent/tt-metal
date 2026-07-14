@@ -1033,6 +1033,8 @@ def build_cosmos3_i2v_native_pipeline(
         _cache_subfolder = "transformer-native-proj-in-out"
     elif enable_device_proj_out:
         _cache_subfolder = "transformer-native-proj-out"
+    elif enable_device_proj_in:
+        _cache_subfolder = "transformer-native-proj-in"
     else:
         _cache_subfolder = "transformer-native"
     cache.load_model(
