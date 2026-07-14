@@ -552,6 +552,11 @@ no gate does not ship.** Measure on the block harness (`test_ltx_transformer_blo
       remaining win is the halved fabric *bandwidth* (activation crosses once, not twice), real only if this attn is
       bandwidth-bound; if latency-bound the exposed standalone gather can make it a WASH or a LOSS. −83.9µs is a
       compute-model estimate that omits the exposed-latency term — **measure the A/B, don't assume the sign.**
+      **✅ SIGN NOW MEASURED POSITIVE (2026-07-14 00:10Z, job 060 chain probe): the gate gather is fully exposed
+      (~0% overlap, agmm_gate 166.8 ≈ mm_gate 56.1 + gather 110µs) ⇒ it has ZERO overlap to sacrifice; dedup is a
+      pure gate-side win.** Net ≈ 110µs gate saving − ~25µs qkv-overlap loss ≈ −85µs/attn, matching the −83.9µs
+      estimate. W2's "wash-lean-loss if latency-bound" caveat is refuted. Still driver-owned + AV-only (needs the
+      absent 22B ckpt to run the `av` block harness here); the video-path receipt validates the premise.
 - [x] **W2 — the fused AG-matmul ALREADY overlaps → DEAD (no ≈−1.0s ceiling; it's already banked).** Off-device
       kernel-source read (2026-07-13 22:30Z), citations independently re-verified in-tree. The gathered dim IS the
       matmul contraction (K) dim (`linear.py:207,212-214`; `..._program_factory.cpp:245-246`), K is ring-sharded, and
@@ -560,6 +565,12 @@ no gate does not ship.** Measure on the block harness (`test_ltx_transformer_blo
       (`compute.cpp:329,404,405,440`), sender pushes each K-block to compute BEFORE mcasting ("frees sender to start
       next read earlier", `dm_in0_sender.cpp:403-404`). No full-tensor barrier. **⇒ overlap already exploited; W2
       lever DEAD.** ⚠ **REFUTES the W1 premise** ("the fused gather barely overlaps its matmul") — see W1 note.
+      **⚠ MEASURED CORRECTION (2026-07-14 00:10Z, job 060 `test_agmm_chain_probe.py`, video-path/ckpt-free): the
+      "already overlaps" conclusion is WRONG FOR THE GATE.** Slope-priced fused agmm_gate=166.8µs ≈ mm_gate=56.1µs +
+      gather≈110µs @grid.y=9 ⇒ the gate's gather is **fully exposed (~0% hidden)** — the per-K-shard streaming exists
+      structurally but the N_tiles=1 gate matmul (56µs) is too small to hide the 110µs gather. W2 holds only for WIDE
+      matmuls (qkv hides ~23% per W0); it is REFUTED for tiny-N matmuls (gate). This RE-OPENS the exposed-gather term
+      that W1's dedup eliminates (see W1).
 - [x] **W3 — the ~90 µs per-op fixed SETUP cost → NO NEW LEVER (the one candidate is receipt-DEAD; the rest have no API).**
       Off-device source attribution (2026-07-13 23:17Z lap), citations re-verified in-tree. The census-priced 89.9 µs is
       **100% on-device replay command-stream time, NOT host program-setup** — traced `enqueue_trace` emits one fixed-size
@@ -621,6 +632,11 @@ no gate does not ship.** Measure on the block harness (`test_ltx_transformer_blo
 - **`norm3` twice/block is NOT redundant** — the residual is updated between the two calls. No cut.
 - **TP-replicated residual stream:** trades a 105 µs AG for an all-reduce (RS+AG ≈ 300 µs). Strictly worse.
 - **num_links=4:** physically impossible on BH (2 eth channels). 1→2 already gives 184.2 → 105.5 µs. Maxed.
+- **Shortening the in0 store-and-forward chain (grid.y / force_transpose routing): DEAD, measured.** Job 060
+  (`test_agmm_chain_probe.py`, 2026-07-14 00:10Z) slope-priced the AG-mm gate at grid.y ∈ {9,7,5,4}: the gather
+  portion (agmm−mm) is FLAT ~110µs (110.74→110.24) across a 2.25× chain-length range. The ~110µs exposed gather is
+  intrinsic ring-hop fabric bandwidth, NOT on-chip chain traversal ⇒ no chain-length lever. (Consistent with W0
+  bandwidth-bound ~72 GB/s.)
 - ~~[ ] **W0 — CENSUS + measured per-collective cost.**~~ Exact table of every collective in one AV block (type /
       file:line / mesh axis / payload shape / count), split **stat-sized** (RMSNorm stats — tiny payload, pure
       latency) vs **activation-sized** (bandwidth-bound). Then the MEASURED fixed latency per collective from
