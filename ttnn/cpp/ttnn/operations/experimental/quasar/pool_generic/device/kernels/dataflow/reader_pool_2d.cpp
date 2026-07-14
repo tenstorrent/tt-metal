@@ -409,7 +409,16 @@ void kernel_main() {
     }
     const uint32_t core_nhw_index = get_arg(args::core_nhw_index);
 
-    const uint32_t in_l1_read_base_addr = in_shard_cb.get_read_ptr();
+    // Borrowed input: read the DFB RING BASE (base_addr), NOT get_read_ptr(). On the DM core get_read_ptr()
+    // returns tc_slots[tc_idx].rd_ptr (the read cursor) -- for a borrowed, never-pop_front'd input that's a
+    // leftover/unreset cursor after a prior op (32c) and lands ~447 sticks into the tensor -> the 64c
+    // reconfig escape (out_stick0 reads row13 instead of row0). base_addr is re-resolved to tensor.address()
+    // every enqueue (set_borrowed_memory_base_addr), so it is always this run's stick 0. rd_ptr == base_addr
+    // for the passing 32c/128c/192c, so reading base_addr is safe for them too. (Same DM asymmetry as
+    // get_write_ptr()->wr_ptr; this is the Metal-2.0 DFB base, per-run-patched, unlike the stale Metal-1.0
+    // get_local_cb_interface getters.)
+    const auto& in_shard_ifc = get_local_dfb_interface(in_shard_cb_id);
+    const uint32_t in_l1_read_base_addr = in_shard_ifc.tc_slots[in_shard_ifc.tc_idx].base_addr;
     if constexpr (config_in_dram) {
         if (reader_id == 0) {
             // Inlined load_config_tensor_if_in_dram: the reader-indices tensor flows in via its
