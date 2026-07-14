@@ -482,6 +482,18 @@ def test_gate_merge_block_matches_standalone_gate(
     assert_quality(v_p1, v_m, pcc=0.99, relative_rmse=0.05)
     assert_quality(a_p1, a_m, pcc=0.99, relative_rmse=0.05)
 
+    # assert_quality cannot answer the question this test exists to answer. PCC is scale-invariant,
+    # so a merged block that is uniformly 1.005x the standalone one scores a perfect PCC; RMSE/sigma
+    # is printed to one decimal place and asserted at 5%. Both would call that "identical", and the
+    # pipeline would then compound it over 48 blocks x 11 steps. So report the error in terms that
+    # can actually see it, with the run-to-run control (plain#1 vs plain#2, which must be exactly 0)
+    # as the floor. merge_sel attributes any error to the individual attention that causes it.
+    sel = ",".join(sorted(merge_sel))
+    logger.info(f"===== BLOCK ERROR  merge_sel={{{sel}}}  stage={F}x{H}x{W} =====")
+    for tag, p1, p2, m in (("video", v_p1, v_p2, v_m), ("audio", a_p1, a_p2, a_m)):
+        logger.info("  " + _fmt(f"{tag} control plain#1 vs plain#2", _err_stats(p1, p2)))
+        logger.info("  " + _fmt(f"{tag} MERGED vs standalone", _err_stats(p1, m)))
+
 
 # ---------------------------------------------------------------------------
 # Full-precision gate-logit diagnostic
