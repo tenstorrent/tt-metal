@@ -1340,8 +1340,8 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         num_cores,                    // num_dispatch_cores
     };
 
-    // Reader-only: padding_config base address sits at fixed index 13 and is promoted to a Buffer*
-    // so its BufferBinding refreshes on cache hit. The writer's index 13 is its exit_semaphore
+    // Reader-only: padding_config base address sits at fixed index 12 and is promoted to a Buffer*
+    // so its BufferBinding refreshes on cache hit. The writer's index 12 is its exit_semaphore
     // (stable GlobalSemaphore address) and must stay a plain uint32_t.
     auto promote_rt_args_with_buffer_bindings = [&](const std::vector<uint32_t>& raw_args, bool is_reader) {
         tt::tt_metal::KernelDescriptor::RTArgList args;
@@ -1352,8 +1352,8 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         args.push_back(output_tensor.buffer());
         args.push_back(metadata_tensor.buffer());
         args.push_back(dispatch_table_tensor.buffer());
-        for (size_t i = 7; i < raw_args.size(); ++i) {
-            if (is_reader && has_padding_config && i == 13) {
+        for (size_t i = 6; i < raw_args.size(); ++i) {
+            if (is_reader && has_padding_config && i == 12) {
                 args.push_back(tensor_args.padding_config.value().buffer());
             } else {
                 args.push_back(raw_args[i]);
@@ -1370,13 +1370,13 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         reader_runtime_args[10] = core_idx;
         writer_runtime_args[10] = core_idx;
 
-        // Reader-only: padding_config address at index 13 (right after the 13 base args). The
+        // Reader-only: padding_config address at index 12 (right after the 12 base args). The
         // promote helper rebinds it to a Buffer* so it refreshes on cache hit.
         if (has_padding_config) {
             reader_runtime_args.push_back((uint32_t)tensor_args.padding_config.value()
                                               .buffer()
                                               ->address());  // smuggled-rta-ok: promoted to a Buffer* binding at reader
-                                                             // index 13 below — refreshes on cache hit
+                                                             // index 12 below — refreshes on cache hit
         }
 
         // Writer-only: exit semaphore address (separate from init_semaphore to avoid
