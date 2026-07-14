@@ -241,12 +241,12 @@ def _perf_breakdown(
         pipe.release_traces()
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=["mesh_device"])
+@pytest.mark.parametrize("mesh_device", [(2, 2), (4, 8)], indirect=["mesh_device"])
 @pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=["device_params"])
 @pytest.mark.parametrize("height, width, num_inference_steps, num_measured_runs", [(1024, 1024, 30, 3)])
 @pytest.mark.parametrize("traced", [False, True], ids=["untraced", "traced"])
 def test_fibo_pipeline_perf_breakdown(*, mesh_device, height, width, num_inference_steps, num_measured_runs, traced):
-    """Per-stage wall-clock breakdown for a short free-text prompt on the 2x2 mesh (gs=5.0 -> CFG on).
+    """Per-stage wall-clock breakdown for a short free-text prompt on the mesh (2x2 or 4x8; gs=5.0 -> CFG on).
 
     Runs both untraced and traced (parametrized) so the denoise it/s delta from tracing is visible in
     one command. Sanity-asserts the produced image is valid + non-degenerate (proves the timed path
