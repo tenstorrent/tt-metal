@@ -139,6 +139,17 @@ def _report_error_pattern(golden, tt, oh, ow, c):
     g = golden[0]  # [C, oh, ow]
     t = tt[0]
     logger.info(f"[BISECT] overall PCC = {_pcc(g, t):.6f}  shape C={c} oh={oh} ow={ow}")
+    # DECISIVE: are the VALUES right but misplaced (layout/placement bug) or genuinely wrong (arithmetic)?
+    # sorted-PCC ~1.0 => the multiset of outputs is correct, only positions are scrambled (tilize face order
+    # / pack tile-index / reader gather order). sorted-PCC also ~0.85 => the math itself is wrong.
+    gs = g.flatten().double().sort().values
+    ts = t.flatten().double().sort().values
+    logger.info(f"[BISECT] sorted-values PCC = {_pcc(gs, ts):.6f}  (~1.0 => right values, WRONG PLACEMENT)")
+    # histogram overlap of the sorted values (independent of PCC): max abs diff between the two sorted vectors
+    logger.info(
+        f"[BISECT] sorted max|g-t| = {float((gs - ts).abs().max()):.4f}  "
+        f"mean|g-t| = {float((gs - ts).abs().mean()):.4f}  (small => same value distribution)"
+    )
     # per output row (spatial H): halo bugs hit shard-boundary / first-last rows
     row_pcc = [round(_pcc(g[:, r, :], t[:, r, :]), 4) for r in range(oh)]
     logger.info(f"[BISECT] per-oh-row PCC (len {oh}): {row_pcc}")
