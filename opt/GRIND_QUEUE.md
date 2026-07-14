@@ -773,3 +773,80 @@ and exactly why the num_links bandwidth slope leaks into the fused op. **Not a m
   **RISK/BLOCKER:** `N_blocks_per_core` is a COMPILE-TIME arg shared by all cores, so a non-uniform N split needs the
   per-core N loop bounds reworked (`current_N_block_tiles = n_tile_end - n_tile` underflows if a core gets 0 tiles).
   This is a program-factory redesign, not a knob — needs a warm authoring session, not a cron lap.
+
+## Batch W6 — DE-FUSE the AG-matmuls whose fusion is a measured LOSS — **DEAD. Sign INVERTED end-to-end: +6.63 ms/step at S1 (+2.0%, 66σ). Reverted. And it burns the op-level census as a tool for signing a fusion cut.**
+
+**The idea (from the W2 census).** The fused `all_gather_minimal_matmul_async` only pays when its matmul is
+big enough to hide the gather behind; W2 measured `gate_s1` and the one-tile audio AG-mms costing MORE fused
+than a standalone `all_gather` + a plain matmul. W1 had already harvested exactly that for `to_gate_logits` +
+`to_q`/`to_qkv` (−14.26 ms/step S1). W6 extends it to every AG-mm W1 did not touch.
+
+**Enumeration (post-W1, 10 fused AG-mm sites/block).** W1's dedup (`LTX_DEDUP_GATE_GATHER`, default on) already
+de-fuses gate + Q/QKV in all 6 attentions, so those are GONE — do not double-count them. What is left:
+6× `to_out` (`attention_ltx.py:341`, fuses the gated residual too), `a2v.to_kv` + `v2a.to_kv` (fused only
+because their cross-attn context is TP-sharded; the text prompt is replicated so `attn2`/`audio_attn2` to_kv
+is already a plain matmul), and 2× `ffn.ff1` (`linear.py:207`). `ff2` is a different op (matmul+reduce-scatter)
+and its collective is an epilogue, not a prologue — not a de-fuse candidate.
+
+- [x] **W6a — per-site fused-vs-defused pricing (job 154, `opt/census_defuse.log`).** Extended `test_ccl_census.py`
+      with paired bodies (`c1c_*`): each site priced as ONE traced body per arm, so the de-fused arm carries its
+      own extra program launch + intermediate buffer. Drift-clean (`prog_launch_ref` 5.84, `ag_activation_video_s1`
+      105.40, `mm_gate_video_s2_gathered` 180.38 — all match prior runs to <0.1%); in-run replicate
+      (`agmm_ff1_video_s1` 447.49 vs `c1c_fused_ff1_v_s1` 449.76, same op) pins within-run noise at ~0.5%.
+      S1, µs/op: | site | ×/blk | pure_mm | AG | fused | AG+mm | Δ | exposure |
+      | audio ff1 | 1 | 49.73 | 12.33 | 72.08 | **58.38** | −13.70 | 181% |
+      | audio to_out | 3 | 25.64 | 12.33 | 40.74 | **36.09** | −4.65 | 122% |
+      | video ff1 | 1 | 334.84 | 105.40 | 449.76 | **416.41** | −33.35 | 109% |
+      | a2v to_kv | 1 | — | — | 52.18 | 51.89 | −0.29 | wash |
+      | video to_out | 2 | 108.34 | 105.40 | **184.66** | 211.22 | +26.56 | 72% |
+      | a2v to_out | 1 | — | — | **108.42** | 127.15 | +18.73 | — |
+      | v2a to_kv | 1 | — | — | **179.44** | 199.62 | +20.18 | — |
+      S2: video ff1 **1435.88 fused vs 1508.05 de-fused = +72.17 ⇒ THE SIGN FLIPS WITH THE MATMUL'S SIZE**;
+      video to_out +54.21; a2v to_out +32.32; v2a to_kv +31.66.
+      **The predictive rule is exposure = (fused − pure_mm)/AG > 100%, NOT "small matmul"** — it calls the sign
+      4/4 where pure_mm is measured. **⚠ CORRECTS THE W0 BRIEF: `agmm_out` does NOT de-fuse favourably.** Its
+      "91% exposed" is a num_links BANDWIDTH-SLOPE, a different quantity from the level comparison that decides a
+      de-fuse; on levels it is 72% exposed and de-fusing it COSTS 26.6 µs/site. to_out stays fused.
+- [x] **W6b — PCC gate: BIT-EXACT, and the gate PROVABLY BITES.** `test_ltx_defuse_small_agmm` (job 156,
+      `opt/defuse_pcc.log`): 1-layer AV instrument, real 22B weights, module-global flag flipped between forwards
+      in ONE process. De-fused vs fused **PCC 100.0000% / RMSE 0.0% — bit-identical** (same K-order, fp32 dest acc),
+      *tighter* than W1's dedup (99.9997%/0.2%). Same-path noise floor also bit-exact. A once-per-shape log line
+      proves the cut FIRED on all three shapes — a green gate on a path that never ran proves nothing.
+      **Mutant (job 157, `opt/defuse_mutant.log`, `LTX_DEFUSE_AGMM_MUTANT=1` feeds the hoisted gather's consumer a
+      0.5× copy): FAILS at PCC 94.84% / RMSE 34.2%.** The mutant's CONTROL arm still passed bit-exact, which also
+      proves the in-process flag flip really takes effect — the failure mode that would have made the bit-exactness
+      meaningless.
+- [x] **W6c — TRACED END-TO-END: REFUTED, sign inverted.** `test_pipeline_ltx_distilled`, LTX_TRACED=1,
+      denoise-only, SEED=10 (`opt/defuse_traced_{off,on,off_drift}.log`, jobs 159/161/165). Baseline = W1-ON (the
+      shipped default), so this stacks on top of W1.
+        **S1: 332.73 ±0.10 (n=15) → 339.36 ±0.10 (n=15) = +6.63 ms/step, +1.99% [66σ] SLOWER.** Predicted −2.46.
+        **S2: 1046.06 ±0.38 (n=5) → 1045.84 ±0.32 (n=5) = −0.22 ms, −0.02% = NULL.** Predicted −1.11.
+      **DRIFT CONTROL:** OFF re-run after the ON arm = 332.79 (+0.06 ms, +0.02% vs the first OFF) ⇒ board stable.
+      **INTERNAL CONTROL (stronger, and free):** across the same three jobs S2 is FLAT (1046.06/1045.84/1045.78)
+      while S1 moved +6.63 — board drift would have moved both. The regression is the flag.
+      **S2 IS the audio-only arm** (the video-ff1 shape key `(4864,4096,4096)` never fires; only `(32,2048,512)`
+      and `(32,2048,2048)` do) ⇒ **the audio de-fuse on its own delivers −0.22 of a predicted −1.33 ms/step = a
+      NULL, not a small win.** Back-solving S1: audio ≈ −4.6 µs/blk (stage-independent) ⇒ **the video-ff1 de-fuse
+      costs ≈ +143 µs/block on the real critical path, against the census's −33 µs — a 176 µs/block error on ONE
+      site.** Source REVERTED (`linear.py`, `attention_ltx.py`, `test_transformer_ltx.py`); the census rows are
+      kept as the receipt, carrying the warning below.
+
+### ⚠ METHODOLOGICAL RECEIPT — THE OP-LEVEL SLOPE CANNOT SIGN A FUSION CUT (this is the durable finding)
+**K back-to-back copies of a MULTI-OP body pipeline across iterations; a SINGLE fused op cannot pipeline with
+itself.** Copy i's matmul overlaps copy i+1's all-gather (fabric and compute are different engines), so a
+(AG + matmul) body's slope understates what that AG costs on a real dependency chain, where it has nothing to
+hide behind. **The bias was visible in the census's own numbers and I discounted it:** every de-fused paired body
+priced CHEAPER than its separately-priced parts summed (ff1_v 416.41 vs 440.24; out_v 211.22 vs 213.74; ff1_a
+58.38 vs 62.06; out_a 36.09 vs 37.97). That −24 µs internal inconsistency is only a LOWER BOUND on the real bias,
+which came back at 176 µs/block. **Use the census to RANK ops and to price a DELETION (W1 removed a gather — that
+transferred at 84%). Do NOT use it to price a RE-ARRANGEMENT that moves a collective onto the critical path;
+that must be measured traced, end-to-end.** This is the same lesson as the eager-harness receipt (W1: eager
+overstated 5×), one level up: a harness that is honest for one class of change silently lies about another.
+
+**Leading hypothesis for the extra ≈143 µs/block (NOT measured — a next experiment, not a claim):** the AG
+ping-pong buffer is keyed on (shape, dim, mesh_axis) (`manager.py get_ag_ping_pong_buffer`), and the de-fused
+video-ff1 gather has the SAME key `(1,1,1216,1024)/dim=3/tp` as the activation gather W1 already hoists in all 6
+attentions. That puts 7 gathers/block on ONE ping-pong PAIR, so a gather can find both buffers still live in a
+downstream consumer and stall. If true, the cost is a *collision with W1*, not a property of de-fusing, and it
+would also explain why the audio sites (whose gathers likewise collide with the hoisted audio attention gather)
+came back null rather than winning. Testable by giving the de-fused gather its own buffer key.

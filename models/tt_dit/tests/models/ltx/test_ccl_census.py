@@ -17,6 +17,16 @@ Shapes are production 1080p-high on BH Galaxy 4x8, SP=8 (axis 1) × TP=4 (axis 0
 / 38912 (S2) → 1216 / 4864 rows per device; audio_N=256 → 32 rows (ONE tile) per device; prompt
 L=32. Audio is identical in both stages — both use F=19 latent frames — so every audio op is
 work-independent.
+
+⚠ THE SLOPE FLATTERS A MULTI-OP BODY AGAINST A SINGLE-OP ONE. K back-to-back copies of a body let
+consecutive iterations pipeline: copy i's matmul overlaps copy i+1's all-gather, because a gather
+(fabric) and a matmul (compute) occupy different engines. A body that is ONE fused op cannot
+overlap with itself that way. So a 2-op body's slope understates what it costs on a real dependency
+chain, where its gather has nothing to hide behind. The bias is visible in the rows themselves —
+every (AG + matmul) body below prices ~2-24 us CHEAPER than the same AG and matmul priced
+separately and added. It is only a lower bound on the real bias: de-fusing the video ff1 priced
+33 us/site CHEAPER here and came back +143 us/site WORSE in the traced pipeline (see CUT 1c).
+Compare a fused op to a de-fused one ONLY end-to-end; use these slopes to RANK, not to sign a cut.
 """
 
 from __future__ import annotations
@@ -29,9 +39,11 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.tt_dit.layers.linear import ColParallelLinear, Linear, RowParallelLinear
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
+from models.tt_dit.utils.matmul import get_matmul_config
 from models.tt_dit.utils.test import ring_params
 
 VIDEO_DIM = 4096
@@ -227,6 +239,133 @@ def test_ccl_census(mesh_device: ttnn.MeshDevice) -> None:
 
         return body
 
+    # CUT 1c: every AG-matmul W1 did NOT touch, priced BOTH ways — fused, versus a standalone
+    # all-gather feeding a plain matmul.
+    #
+    # ⚠ THE CUT THESE ROWS ARGUE FOR IS REFUTED END-TO-END. DO NOT SIGN IT OFF THESE NUMBERS.
+    # They say de-fusing audio to_out / audio ff1 / video ff1 (stage 1) wins 4-33 us a site. The
+    # traced pipeline says otherwise: de-fusing them is +6.63 ms/step at S1 (332.73 -> 339.36,
+    # n=15, 66 sigma), and the audio sites alone are a null (-0.22 +/- 0.35 ms/step at S2, where
+    # the video ff1 shape does not fire). The rows are kept because the shapes they price are real
+    # and the LOSSES they show are trustworthy — to_out and v2a's to_kv must stay fused, and that
+    # is worth knowing — but the WINS are an artifact of the harness (see the module docstring).
+    #
+    # Each site is priced as ONE traced body per arm, so the de-fused arm at least carries its own
+    # extra program launch and intermediate buffer. That was not enough to make it honest.
+    out_a2v = col_linear(AUDIO_DIM, VIDEO_DIM)  # audio_to_video_attn.to_out (audio heads -> video dim)
+    out_a = col_linear(AUDIO_DIM, AUDIO_DIM)  # audio_attn1/audio_attn2/v2a .to_out
+    kv_a2v = col_linear(AUDIO_DIM, 2 * AUDIO_DIM, chunks=2)  # audio_to_video_attn.to_kv (audio context)
+    kv_v2a = col_linear(VIDEO_DIM, 2 * AUDIO_DIM, chunks=2)  # video_to_audio_attn.to_kv (video context)
+    ff1_a = col_linear(AUDIO_DIM, 4 * AUDIO_DIM)  # audio_ff.ff1
+
+    # to_out inputs are the concatenated-heads SDPA output: TP-sharded on the head dim, so the
+    # gather payload matches the attention's own dim, not the residual stream's.
+    o_a2v_s1 = _bf16(torch.randn(1, 1, V_ROWS_S1, a_loc), mesh_device)  # a2v: video rows, audio dim
+    o_a2v_s2 = _bf16(torch.randn(1, 1, V_ROWS_S2, a_loc), mesh_device)
+    kv_a2v_in = _bf16(torch.randn(1, 1, A_ROWS * sp, a_loc), mesh_device)  # SP-gathered audio, TP-sharded
+    res_v1 = _bf16(torch.randn(1, 1, V_ROWS_S1, v_loc), mesh_device)  # gated-residual operands of the
+    res_v2 = _bf16(torch.randn(1, 1, V_ROWS_S2, v_loc), mesh_device)  # fused to_out epilogue
+    res_a = _bf16(torch.randn(1, 1, A_ROWS, a_loc), mesh_device)
+    gate_a_col = _bf16(torch.randn(1, 1, 1, a_loc), mesh_device)
+
+    full_grid = mesh_device.compute_with_storage_grid_size()
+    ag_grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1)  # the AG-mm reserves one row for CCL workers
+
+    def fused_addcmul(lin, x, residual, gate):
+        """to_out today: gather + matmul + gated residual in one op (attention_ltx.py:341)."""
+
+        def body():
+            w = lin.weight.data
+            out = ttnn.experimental.all_gather_minimal_matmul_async(
+                input_tensor=x,
+                weight_tensor=w,
+                bias_tensor=lin.bias.data,
+                config=get_matmul_config(x.padded_shape[-2], w.padded_shape[-2], w.padded_shape[-1], ag_grid),
+                compute_kernel_config=lin.compute_config,
+                persistent_output_buffer=ccl.get_ag_ping_pong_buffer(x.shape, 3, tp_axis, dtype=x.get_dtype()),
+                multi_device_global_semaphore=ccl.get_ag_ping_pong_semaphore(tp_axis),
+                num_links=ccl.num_links,
+                topology=ccl.topology,
+                cluster_axis=tp_axis,
+                barrier_semaphore=None,
+                force_transpose=True,
+                num_workers_per_link=full_grid.x // ccl.num_links,
+                num_buffers_per_channel=48 if not is_blackhole() else 24,
+                scalar=1.0,
+                addcmul_input_tensor1=residual,
+                addcmul_input_tensor2=gate,
+            )[0]
+            _dealloc(out)
+
+        return body
+
+    def defused_addcmul(lin, x, residual, gate):
+        """CUT 1c: standalone gather, then the matmul+addcmul kernel the Linear path already uses."""
+
+        def body():
+            xg = ccl.all_gather_persistent_buffer(x, dim=3, mesh_axis=tp_axis)
+            w = lin.weight.data
+            out = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+                xg,
+                w,
+                1.0,
+                residual,
+                gate,
+                bias_tensor=lin.bias.data,
+                config=get_matmul_config(xg.padded_shape[-2], xg.padded_shape[-1], w.padded_shape[-1], full_grid),
+                compute_kernel_config=lin.compute_config,
+            )
+            _dealloc(out)
+
+        return body
+
+    def fused_plain(lin, x):
+        def body():
+            _dealloc(lin(x, parallel_config=pc))
+
+        return body
+
+    def defused_plain(lin, x):
+        def body():
+            xg = ccl.all_gather_persistent_buffer(x, dim=3, mesh_axis=tp_axis)
+            _dealloc(lin(xg))
+
+        return body
+
+    cut1c = [
+        # to_out x3 shapes (fused epilogue carries the gated residual, so the de-fused arm must too)
+        ("c1c_fused_out_v_s1", fused_addcmul(out_v, x_v1, res_v1, gate_col), False),
+        ("c1c_defused_out_v_s1", defused_addcmul(out_v, x_v1, res_v1, gate_col), False),
+        ("c1c_fused_out_a2v_s1", fused_addcmul(out_a2v, o_a2v_s1, res_v1, gate_col), False),
+        ("c1c_defused_out_a2v_s1", defused_addcmul(out_a2v, o_a2v_s1, res_v1, gate_col), False),
+        ("c1c_fused_out_audio", fused_addcmul(out_a, x_a, res_a, gate_a_col), False),
+        ("c1c_defused_out_audio", defused_addcmul(out_a, x_a, res_a, gate_a_col), False),
+        # cross-attn K/V projections whose context is TP-sharded (a2v: audio, v2a: video)
+        ("c1c_fused_kv_a2v", fused_plain(kv_a2v, kv_a2v_in), False),
+        ("c1c_defused_kv_a2v", defused_plain(kv_a2v, kv_a2v_in), False),
+        ("c1c_fused_kv_v2a_s1", fused_plain(kv_v2a, x_v1), False),
+        ("c1c_defused_kv_v2a_s1", defused_plain(kv_v2a, x_v1), False),
+        # FFN ff1 (ff2's matmul+reduce-scatter is a separate op and is left fused)
+        ("c1c_fused_ff1_v_s1", fused_plain(ff1_v, x_v1), False),
+        ("c1c_defused_ff1_v_s1", defused_plain(ff1_v, x_v1), False),
+        ("c1c_fused_ff1_audio", fused_plain(ff1_a, x_a), False),
+        ("c1c_defused_ff1_audio", defused_plain(ff1_a, x_a), False),
+        # pure matmuls: the term that decides the sign (fusion pays only if this is big)
+        ("c1c_mm_out_v_s1_gathered", lambda: out_v(x_v1_full), True),
+        ("c1c_mm_ff1_v_s1_gathered", lambda: ff1_v(x_v1_full), True),
+        ("c1c_mm_out_audio_gathered", lambda: out_a(x_a_full), True),
+        ("c1c_mm_ff1_audio_gathered", lambda: ff1_a(x_a_full), True),
+        # S2 (4x video tokens): the video sites' sign can flip with the matmul's size
+        ("c1c_fused_out_v_s2", fused_addcmul(out_v, x_v2, res_v2, gate_col), False),
+        ("c1c_defused_out_v_s2", defused_addcmul(out_v, x_v2, res_v2, gate_col), False),
+        ("c1c_fused_out_a2v_s2", fused_addcmul(out_a2v, o_a2v_s2, res_v2, gate_col), False),
+        ("c1c_defused_out_a2v_s2", defused_addcmul(out_a2v, o_a2v_s2, res_v2, gate_col), False),
+        ("c1c_fused_kv_v2a_s2", fused_plain(kv_v2a, x_v2), False),
+        ("c1c_defused_kv_v2a_s2", defused_plain(kv_v2a, x_v2), False),
+        ("c1c_fused_ff1_v_s2", fused_plain(ff1_v, x_v2), False),
+        ("c1c_defused_ff1_v_s2", defused_plain(ff1_v, x_v2), False),
+    ]
+
     # ---- variants, priority-ordered (each logs as soon as it is measured) ----
     # (name, body, dealloc-output?) — see _free() for why CCL outputs must not be deallocated.
     variants = [
@@ -291,6 +430,8 @@ def test_ccl_census(mesh_device: ttnn.MeshDevice) -> None:
         ("mm_gate_video_s2_gathered", lambda: gate_v(x_v2_full), True),
         ("mm_qkv_video_s2_gathered", lambda: qkv_v(x_v2_full), True),
     ]
+
+    variants += cut1c
 
     only = {v.strip() for v in os.environ.get("LTX_CCL_VARIANTS", "").split(",") if v.strip()}
     for name, body, dealloc in variants:
