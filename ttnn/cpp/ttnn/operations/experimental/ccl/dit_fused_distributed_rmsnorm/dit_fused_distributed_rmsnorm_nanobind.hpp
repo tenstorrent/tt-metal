@@ -4,12 +4,11 @@
 
 #pragma once
 
-#include <nanobind/nanobind.h>
-
-namespace nb = nanobind;
+#include "ttnn-nanobind/nanobind_fwd.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
+namespace nb = nanobind;
 void bind_dit_fused_distributed_rmsnorm(nb::module_& mod);
 
 }  // namespace ttnn::operations::experimental::ccl
