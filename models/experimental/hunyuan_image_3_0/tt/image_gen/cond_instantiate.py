@@ -48,7 +48,7 @@ def _tokens_from_latents_one(
     latents_bthwc: ttnn.Tensor,
 ) -> ttnn.Tensor:
     """``[1,1,H,W,Z]`` -> ``[1,n,H]`` TILE. ResBlock adaGN only supports ``B=1``."""
-    te_tt = time_embed.forward(_zero_timestep(1))
+    te_tt = time_embed.forward(_zero_timestep(1), keep_resident=False)
     x_flat, b, h, w = latent_bthwc_to_patch_input(latents_bthwc)
     assert b == 1, f"expected batch-1 latent slice, got B={b}"
     tok_flat, _, _ = patch_embed.forward_latent(x_flat, te_tt, 1, h, w)
@@ -179,7 +179,8 @@ def instantiate_continuous_tokens_tt(
 
     def _scatter_row(row: int, t_vec) -> None:
         nonlocal out
-        te = timestep_emb.forward(_timestep_for_embed(t_vec))
+        # Logical [1,1,1,H] — not M=32 resident padding used by denoise ResBlocks.
+        te = timestep_emb.forward(_timestep_for_embed(t_vec), keep_resident=False)
         emb = ttnn.reshape(te, [1, 1, hidden_size])
         ttnn.deallocate(te, force=False)
         positions = _index_row(timesteps_index, row)

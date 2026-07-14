@@ -18,6 +18,7 @@ from models.experimental.hunyuan_image_3_0.ref.attention.mask import build_atten
 from models.experimental.hunyuan_image_3_0.ref.image_gen.timestep_embedder import TimestepEmbedder as RefTimeEmbed
 from models.experimental.hunyuan_image_3_0.ref.weights import ensure_base_weights
 from models.experimental.hunyuan_image_3_0.tt.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
+from models.experimental.hunyuan_image_3_0.tt.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
 from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel
 from models.experimental.hunyuan_image_3_0.tt.pipeline import HunyuanTtDenoiseStep
 from models.tt_dit.parallel.manager import CCLManager
@@ -50,6 +51,11 @@ def denoise_perf_iters() -> int:
 
 def denoise_perf_warmup() -> int:
     return env_int("HY_DENOISE_PERF_WARMUP", 1)
+
+
+def denoise_resident_temb() -> bool:
+    """Use TimestepEmbedder WIDTH_SHARDED M=32 t_emb (HY_DENOISE_RESIDENT_TEMB=0 to disable)."""
+    return os.environ.get("HY_DENOISE_RESIDENT_TEMB", "1") != "0"
 
 
 class _Checkpoint:
@@ -159,8 +165,6 @@ def build_denoise_perf_runtime(mesh_device) -> DenoisePerfRuntime:
     latent = torch.randn(batch, latent_ch, grid, grid)
     text_embeds = torch.randn(batch, seq_len, hidden) * 0.02
     timesteps = torch.rand(batch)
-    t1 = host_time_embed(ckpt, "time_embed", hidden, timesteps)
-    t2 = host_time_embed(ckpt, "time_embed_2", hidden, timesteps)
 
     def _rep(t: torch.Tensor) -> ttnn.Tensor:
         return ttnn.from_torch(
@@ -188,6 +192,34 @@ def build_denoise_perf_runtime(mesh_device) -> DenoisePerfRuntime:
         hidden_channels=hid_ch,
         out_channels=latent_ch,
     )
+
+    if denoise_resident_temb():
+        # Match pipeline.py: WIDTH_SHARDED M=32 t_emb sharded for ResBlock emb_layers.
+        te_sd = lambda p: {f"{p}.{k}": v for k, v in ckpt.load_prefix(p).items()}
+        time_embed = HunyuanTtTimestepEmbedder(mesh_device, hidden, te_sd("time_embed"), "time_embed")
+        time_embed_2 = HunyuanTtTimestepEmbedder(mesh_device, hidden, te_sd("time_embed_2"), "time_embed_2")
+        tvec = ttnn.from_torch(
+            timesteps.reshape(1, 1, batch, 1).float(),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        t_emb1 = time_embed.forward(tvec, keep_resident=True, resident_next_n=2 * patch_embed.resblock.out_channels)
+        t_emb2 = time_embed_2.forward(tvec, keep_resident=True, resident_next_n=2 * final_layer.resblock.out_channels)
+        ttnn.deallocate(tvec)
+        logger.info(
+            f"[denoise perf] resident t_emb: sharded={ttnn.is_sharded(t_emb1)} "
+            f"shape={list(t_emb1.shape)} next_n=({2 * patch_embed.resblock.out_channels}, "
+            f"{2 * final_layer.resblock.out_channels})"
+        )
+    else:
+        t1 = host_time_embed(ckpt, "time_embed", hidden, timesteps)
+        t2 = host_time_embed(ckpt, "time_embed_2", hidden, timesteps)
+        t_emb1 = _rep(t1.reshape(1, 1, batch, hidden))
+        t_emb2 = _rep(t2.reshape(1, 1, batch, hidden))
+        logger.info("[denoise perf] interleaved host t_emb (HY_DENOISE_RESIDENT_TEMB=0)")
     ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
     layer_loader = lambda i, _c=ckpt: {
         f"model.layers.{i}.{k}": v for k, v in _c.load_prefix(f"model.layers.{i}").items()
@@ -247,8 +279,8 @@ def build_denoise_perf_runtime(mesh_device) -> DenoisePerfRuntime:
         final_layer=final_layer,
         backbone=backbone,
         step=step,
-        t_emb1=_rep(t1.reshape(1, 1, batch, hidden)),
-        t_emb2=_rep(t2.reshape(1, 1, batch, hidden)),
+        t_emb1=t_emb1,
+        t_emb2=t_emb2,
         text_pre=_rep(text_embeds[:, :img_start, :]),
         text_post=_rep(text_embeds[:, img_start + n_img :, :]),
         attention_mask=_rep(mask_add.reshape(batch, 1, seq_len, seq_len)),

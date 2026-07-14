@@ -15,6 +15,7 @@ import torch
 import ttnn
 
 from models.experimental.hunyuan_image_3_0.tt.ar_dual_cq import COMPUTE_CQ, IO_CQ
+from models.experimental.hunyuan_image_3_0.tt.matmul_utils import spill_resident_emb_to_dram
 from models.experimental.hunyuan_image_3_0.tt.pipeline import (
     HunyuanTtDenoiseStep,
     classifier_free_guidance_tt,
@@ -159,9 +160,22 @@ class DenoiseStepTracer:
             kwargs["text_post"] = c.get("text_post")
         return self.step.forward_device(self._latent_tt, cos_sin=self._cos_sin, **kwargs)
 
+    def _make_step_temb(self) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """M=32-padded t_emb for ResBlocks; DRAM-spilled so backbone MoE keeps L1 free."""
+        te1 = self.time_embed.forward(
+            self._tvec_tt,
+            keep_resident=True,
+            resident_next_n=2 * self.step.patch_embed.resblock.out_channels,
+        )
+        te2 = self.time_embed_2.forward(
+            self._tvec_tt,
+            keep_resident=True,
+            resident_next_n=2 * self.step.final_layer.resblock.out_channels,
+        )
+        return spill_resident_emb_to_dram(te1), spill_resident_emb_to_dram(te2)
+
     def _cfg_forward(self) -> ttnn.Tensor:
-        te1 = self.time_embed.forward(self._tvec_tt)
-        te2 = self.time_embed_2.forward(self._tvec_tt)
+        te1, te2 = self._make_step_temb()
         pred_c = self._one_forward(self.cond, te1, te2)
         pred_u = self._one_forward(self.uncond, te1, te2)
         pred = classifier_free_guidance_tt(pred_c, pred_u, self.guidance_scale)
@@ -174,8 +188,7 @@ class DenoiseStepTracer:
     def _step_forward(self) -> ttnn.Tensor:
         if self.do_cfg:
             return self._cfg_forward()
-        te1 = self.time_embed.forward(self._tvec_tt)
-        te2 = self.time_embed_2.forward(self._tvec_tt)
+        te1, te2 = self._make_step_temb()
         pred = self._one_forward(self.cond, te1, te2)
         ttnn.deallocate(te1)
         ttnn.deallocate(te2)
