@@ -580,6 +580,84 @@ def test_sfpu_binary_mul_int32(formats, dest_acc, mathop):
     )
 
 
+def _isclose_stimuli_spec():
+    # isclose is a boolean predicate on paired operands (a = tile0, b = tile1). A plain
+    # random sweep almost never lands two independent draws within tolerance, so the
+    # output would be all-zero (PCC undefined). Craft the two tiles so element p of
+    # tile0 pairs with element p of tile1 with a controlled gap: even p -> identical
+    # (isclose = 1), odd p -> differ by 2.0 (isclose = 0). tilize permutes both tiles
+    # identically, so the per-position pairing (and thus the ~50/50 mix) is preserved.
+    # The 2.0 gap dwarfs the tolerance (atol + rtol*|b| <= ~1e-4 for |b| <= 8), so the
+    # decision is unambiguous regardless of fp32-vs-bf16 rounding.
+    def dist(size, dtype, generator):
+        n = size // 2
+        idx = torch.arange(n)
+        base = 1.0 + (idx % 8).to(torch.float32)  # 1..8, strictly positive
+        t0 = base
+        t1 = base + torch.where(idx % 2 == 0, 0.0, 2.0).to(torch.float32)
+        return torch.cat([t0, t1]).to(dtype)
+
+    return StimuliSpec(distribution=dist, seed=0)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    mathop=[MathOperation.SfpuIsclose],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_sfpu_binary_isclose(formats, dest_acc, mathop):
+    # isclose(a, b) = |a - b| <= atol + rtol*|b|, a = tile0 (in0), b = tile1 (in1), both
+    # from src_A. Tolerances are torch's defaults (rtol=1e-5, atol=1e-8), fixed in the
+    # C++ dispatch as fp32 bit patterns; equal_nan=False. Crafted stimuli give a clean
+    # mix of close (equal) and far (gap 2.0) pairs so the 0/1 output is non-constant.
+    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
+        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=_isclose_stimuli_spec(),
+    )
+
+
+def _logsigmoid_stimuli_spec():
+    # logsigmoid(x) = -softplus(-x). The kernel is nominally a two-operand op (in0 = x,
+    # in1 = exp(-x)), but it only *reads* in1 in the x > 4 branch (result = -exp(-x));
+    # for x <= -4 it passes x through and for -4 < x < 4 it uses an x-only polynomial.
+    # The 2-tile binary harness fills both operand tiles from one per-face spec, so we
+    # can't supply a distinct exp(-x) tile — instead we restrict x to [-8, 3.9] so in1
+    # is never used, and sweep x across the passthrough (x < -4) and polynomial
+    # (-4 < x < 4) branches. (The distribution callable is invoked per 16x16 face, so it
+    # returns `size` == 256 values.)
+    def dist(size, dtype, generator):
+        return torch.linspace(-8.0, 3.9, size).to(dtype)
+
+    return StimuliSpec(distribution=dist, seed=0)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    mathop=[MathOperation.SfpuLogsigmoid],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_sfpu_binary_logsigmoid(formats, dest_acc, mathop):
+    # logsigmoid(x) with x = tile0 (in0). Piecewise poly/passthrough approximation
+    # matched under PCC. x is swept over [-8, 3.9] to exercise the passthrough and
+    # polynomial branches; the x > 4 (-exp(-x)) branch needs a device-computed exp(-x)
+    # second operand, which the shared same-spec binary harness can't provide, so it is
+    # left to a future dedicated driver.
+    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
+        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=_logsigmoid_stimuli_spec(),
+    )
+
+
 @parametrize(
     formats=input_output_formats(
         [

@@ -3261,6 +3261,8 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuMask: self._mask,
                 MathOperation.SfpuAtan2: self._atan2,
                 MathOperation.SfpuMulInt32: self._mul_int32,
+                MathOperation.SfpuIsclose: self._isclose,
+                MathOperation.SfpuLogsigmoid: self._logsigmoid,
             }
         )
 
@@ -3505,6 +3507,28 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         # sign-magnitude packer; the test keeps operands positive with product < 2^31.
         # Widen to int64 for the multiply so the intermediate can't overflow.
         return (t1.to(torch.int64) * t2.to(torch.int64)).to(torch.int32)
+
+    def _isclose(self, t1, t2):
+        # isclose(a, b) = |a - b| <= atol + rtol * |b|, returned as 1.0 / 0.0. Uses
+        # torch's default tolerances (rtol=1e-5, atol=1e-8), matching the fp32 bit
+        # patterns hard-coded in the ISCLOSE dispatch. equal_nan=False (torch default).
+        # Evaluated in fp32; the test's large-margin stimuli keep the result robust to
+        # tolerance precision.
+        close = torch.isclose(
+            t1.to(torch.float32),
+            t2.to(torch.float32),
+            rtol=1e-5,
+            atol=1e-8,
+            equal_nan=False,
+        )
+        return 1.0 if bool(close) else 0.0
+
+    def _logsigmoid(self, t1, t2):
+        # logsigmoid(x) = log(sigmoid(x)) = -softplus(-x), with x = t1. The kernel takes
+        # exp(-x) as its second operand (t2), which the test bakes into the paired
+        # stimuli; the golden only needs x. It is a piecewise (poly + exp) approximation,
+        # so it is matched under the PCC tolerance. Evaluated in fp32.
+        return torch.nn.functional.logsigmoid(t1.to(torch.float32))
 
     def _add_top_row(
         self,

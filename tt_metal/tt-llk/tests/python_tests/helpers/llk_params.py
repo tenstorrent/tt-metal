@@ -233,6 +233,8 @@ class MathOperation(Enum):
     SfpuMask = OpSpec("MASK", MathOpType.SFPU_BINARY)
     SfpuAtan2 = OpSpec("ATAN2", MathOpType.SFPU_BINARY)
     SfpuMulInt32 = OpSpec("MUL_INT32", MathOpType.SFPU_BINARY)
+    SfpuIsclose = OpSpec("ISCLOSE", MathOpType.SFPU_BINARY)
+    SfpuLogsigmoid = OpSpec("LOGSIGMOID", MathOpType.SFPU_BINARY)
 
     # =============================================================================
     # SFPU TERNARY OPERATIONS

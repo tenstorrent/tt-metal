@@ -320,6 +320,8 @@ enum class BinaryOp : std::uint8_t
     MASK            = 29,
     ATAN2           = 30,
     MUL_INT32       = 31,
+    ISCLOSE         = 32,
+    LOGSIGMOID      = 33,
 };
 
 enum class PackMode : std::uint8_t
