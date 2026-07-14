@@ -39,7 +39,15 @@ class TtXttsGptStack(LightweightModule):
         self.ln_f_bias = _to_device(state_dict["gpt.gpt.ln_f.bias"], device)
 
     def _ln_f(self, x):
-        return ttnn.layer_norm(x, weight=self.ln_f_weight, bias=self.ln_f_bias, epsilon=LAYER_NORM_EPS)
+        # Blocks run their activations in L1; ln_f exits the stack back to DRAM so
+        # the downstream model (heads, big vocab matmuls) gets a clean DRAM tensor.
+        return ttnn.layer_norm(
+            x,
+            weight=self.ln_f_weight,
+            bias=self.ln_f_bias,
+            epsilon=LAYER_NORM_EPS,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     def forward(self, x):
         """Run the full stack, stateless. ``x`` is ``[batch, seq, hidden]`` on device."""

@@ -112,3 +112,59 @@ class TtXttsGptModel(LightweightModule):
         text_logits = ttnn.linear(text_part, self.text_head_weight, bias=self.text_head_bias)
         mel_logits = ttnn.linear(mel_part, self.mel_head_weight, bias=self.mel_head_bias)
         return text_logits, mel_logits
+
+    def forward_kv_cache(self, text_ids, mel_ids, cond_latents=None):
+        """KV-cached equivalent of :meth:`forward`.
+
+        Runs the GPT stack (30 blocks + ln_f) with a KV cache instead of one
+        stateless full-sequence pass: the ``[(cond) | text]`` prompt is prefilled,
+        then each mel/audio position is decoded one at a time (appending to every
+        block's cache) — the real autoregressive decode order. Everything downstream
+        of the blocks (strip prompt -> final_norm -> text/mel heads) is unchanged, so
+        the returned ``(text_logits, mel_logits)`` match :meth:`forward` (and the
+        stateless reference) within bf16 tolerance.
+
+        Everything stays on device: the prompt is prefilled once, each decode step
+        slices its single token from the on-device embedding and its output is
+        concatenated on device — no per-step host round-trips.
+        """
+        text_len, mel_len = text_ids.shape[1], mel_ids.shape[1]
+
+        text_emb = self._embed(text_ids, self.text_emb_weight, self.text_pos_weight)
+        mel_emb = self._embed(mel_ids, self.mel_emb_weight, self.mel_pos_weight)
+
+        parts, offset = [text_emb, mel_emb], 0
+        if cond_latents is not None:
+            parts = [cond_latents] + parts
+            offset = cond_latents.shape[1]
+
+        emb = ttnn.concat(parts, dim=1)  # [b, (n_cond +) text_len + mel_len, hidden]
+        b, total = emb.shape[0], emb.shape[1]
+
+        # Prompt = everything up to the mel stream: (cond) + text. Decode the mel
+        # positions one at a time, exactly as the model would generate them.
+        prefill_len = total - mel_len
+
+        # Collect the prefill output + each decode step, then concat once at the end
+        # (avoids an O(n^2) running concat of the growing stack output).
+        chunks = [self.stack.forward_prefill(ttnn.slice(emb, [0, 0, 0], [b, prefill_len, HIDDEN_SIZE]))]
+        for t in range(prefill_len, total):
+            step = ttnn.slice(emb, [0, t, 0], [b, t + 1, HIDDEN_SIZE])  # [b, 1, hidden]
+            chunks.append(self.stack.forward_decode(step))  # [b, 1, hidden], stays on device
+        if len(chunks) > 1:
+            enc = ttnn.concat(chunks, dim=1)
+            for c in chunks:
+                ttnn.deallocate(c)
+        else:
+            enc = chunks[0]
+
+        if offset:
+            enc = ttnn.slice(enc, [0, offset, 0], [enc.shape[0], enc.shape[1], HIDDEN_SIZE])  # strip prompt
+        enc = ttnn.layer_norm(enc, weight=self.final_norm_weight, bias=self.final_norm_bias, epsilon=LAYER_NORM_EPS)
+
+        text_part = ttnn.slice(enc, [0, 0, 0], [b, text_len, HIDDEN_SIZE])
+        mel_part = ttnn.slice(enc, [0, text_len, 0], [b, text_len + mel_len, HIDDEN_SIZE])
+
+        text_logits = ttnn.linear(text_part, self.text_head_weight, bias=self.text_head_bias)
+        mel_logits = ttnn.linear(mel_part, self.mel_head_weight, bias=self.mel_head_bias)
+        return text_logits, mel_logits

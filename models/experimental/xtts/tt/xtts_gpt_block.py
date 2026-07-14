@@ -49,6 +49,15 @@ def _to_device(torch_tensor, device):
     )
 
 
+# Activation memory placement. Per-op intermediates (the "inputs" flowing through
+# the block: layer-norm/linear/gelu/add/SDPA outputs) live in L1 for fast on-chip
+# reuse. Weights stay in DRAM (loaded via _to_device, the default), and the KV
+# cache stays in DRAM too — it grows to ~250 MB across the 30 blocks, far beyond
+# the ~195 MB of on-chip L1, so it cannot be resident there.
+L1 = ttnn.L1_MEMORY_CONFIG
+DRAM = ttnn.DRAM_MEMORY_CONFIG
+
+
 class TtXttsGptBlock(LightweightModule):
     def __init__(
         self,
@@ -84,52 +93,53 @@ class TtXttsGptBlock(LightweightModule):
         self.k_cache = None
         self.v_cache = None
 
-    def _split_heads(self, x):  # [b, s, hidden] -> [b, heads, s, head_dim]
+    def _split_heads(self, x, mem):  # [b, s, hidden] -> [b, heads, s, head_dim]
         b, s, _ = x.shape
         x = ttnn.reshape(x, (b, s, NUM_HEADS, HEAD_DIM))
-        return ttnn.permute(x, (0, 2, 1, 3))
+        return ttnn.permute(x, (0, 2, 1, 3), memory_config=mem)
 
-    def _merge_heads(self, x):  # [b, heads, s, head_dim] -> [b, s, hidden]
+    def _merge_heads(self, x):  # [b, heads, s, head_dim] -> [b, s, hidden] (L1)
         b, _, s, _ = x.shape
-        x = ttnn.permute(x, (0, 2, 1, 3))
+        x = ttnn.permute(x, (0, 2, 1, 3), memory_config=L1)
         return ttnn.reshape(x, (b, s, HIDDEN_SIZE))
 
     def _qkv(self, x):  # ln_1'd hidden -> per-head (q, k, v), each [b, heads, s, head_dim]
-        qkv = ttnn.linear(x, self.attn_c_attn_weight, bias=self.attn_c_attn_bias)
+        # q flows straight into SDPA -> L1; k/v become the KV cache -> DRAM.
+        qkv = ttnn.linear(x, self.attn_c_attn_weight, bias=self.attn_c_attn_bias, memory_config=L1)
         b, s = qkv.shape[0], qkv.shape[1]
-        q = ttnn.slice(qkv, [0, 0, 0], [b, s, HIDDEN_SIZE])
-        k = ttnn.slice(qkv, [0, 0, HIDDEN_SIZE], [b, s, 2 * HIDDEN_SIZE])
-        v = ttnn.slice(qkv, [0, 0, 2 * HIDDEN_SIZE], [b, s, 3 * HIDDEN_SIZE])
+        q = ttnn.slice(qkv, [0, 0, 0], [b, s, HIDDEN_SIZE], memory_config=L1)
+        k = ttnn.slice(qkv, [0, 0, HIDDEN_SIZE], [b, s, 2 * HIDDEN_SIZE], memory_config=DRAM)
+        v = ttnn.slice(qkv, [0, 0, 2 * HIDDEN_SIZE], [b, s, 3 * HIDDEN_SIZE], memory_config=DRAM)
         ttnn.deallocate(qkv)
-        return self._split_heads(q), self._split_heads(k), self._split_heads(v)
+        return self._split_heads(q, L1), self._split_heads(k, DRAM), self._split_heads(v, DRAM)
 
-    def _attn_out(self, attn):  # [b, heads, s, head_dim] -> [b, s, hidden] after c_proj
+    def _attn_out(self, attn):  # [b, heads, s, head_dim] -> [b, s, hidden] after c_proj (L1)
         out = self._merge_heads(attn)
-        return ttnn.linear(out, self.attn_c_proj_weight, bias=self.attn_c_proj_bias)
+        return ttnn.linear(out, self.attn_c_proj_weight, bias=self.attn_c_proj_bias, memory_config=L1)
 
     def _attention(self, x):
         q, k, v = self._qkv(x)
-        attn = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=True)
+        attn = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=True, memory_config=L1)
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
         return self._attn_out(attn)
 
     def _attention_prefill(self, x):
-        """Like ``_attention`` but stores the per-head K/V into the KV cache."""
+        """Like ``_attention`` but stores the per-head K/V (DRAM) into the KV cache."""
         q, k, v = self._qkv(x)
-        self.k_cache, self.v_cache = k, v  # kept alive as the cache; do NOT deallocate
-        attn = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=True)
+        self.k_cache, self.v_cache = k, v  # DRAM cache; kept alive, do NOT deallocate
+        attn = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=True, memory_config=L1)
         ttnn.deallocate(q)
         return self._attn_out(attn)
 
     def _attention_decode(self, x):
         """Attention for one new token: append its K/V to the cache, attend over all of it."""
-        q, k, v = self._qkv(x)  # each [b, heads, 1, head_dim]
+        q, k, v = self._qkv(x)  # q in L1; k, v in DRAM
 
-        # Grow the cache by one position along the sequence dim.
-        new_k = ttnn.concat([self.k_cache, k], dim=2)
-        new_v = ttnn.concat([self.v_cache, v], dim=2)
+        # Grow the DRAM cache by one position along the sequence dim.
+        new_k = ttnn.concat([self.k_cache, k], dim=2, memory_config=DRAM)
+        new_v = ttnn.concat([self.v_cache, v], dim=2, memory_config=DRAM)
         ttnn.deallocate(self.k_cache)
         ttnn.deallocate(self.v_cache)
         ttnn.deallocate(k)
@@ -138,24 +148,26 @@ class TtXttsGptBlock(LightweightModule):
 
         # Single query attends to the whole cached history; every cached key is a
         # past (<=current) position, so no causal masking is needed here.
-        attn = ttnn.transformer.scaled_dot_product_attention(q, self.k_cache, self.v_cache, is_causal=False)
+        attn = ttnn.transformer.scaled_dot_product_attention(
+            q, self.k_cache, self.v_cache, is_causal=False, memory_config=L1
+        )
         ttnn.deallocate(q)
         return self._attn_out(attn)
 
     def _mlp(self, x):
-        h = ttnn.linear(x, self.mlp_c_fc_weight, bias=self.mlp_c_fc_bias)
-        h = ttnn.gelu(h)  # tanh-approx GELU ~= GPT-2 "gelu_new" (validated by PCC)
-        return ttnn.linear(h, self.mlp_c_proj_weight, bias=self.mlp_c_proj_bias)
+        h = ttnn.linear(x, self.mlp_c_fc_weight, bias=self.mlp_c_fc_bias, memory_config=L1)
+        h = ttnn.gelu(h, memory_config=L1)  # tanh-approx GELU ~= GPT-2 "gelu_new" (validated by PCC)
+        return ttnn.linear(h, self.mlp_c_proj_weight, bias=self.mlp_c_proj_bias, memory_config=L1)
 
     def _residual_ffn(self, x, attn_out):
-        """Shared post-attention residual + MLP tail of the block."""
-        x = ttnn.add(x, attn_out)
-        h = ttnn.layer_norm(x, weight=self.ln_2_weight, bias=self.ln_2_bias, epsilon=LAYER_NORM_EPS)
-        return ttnn.add(x, self._mlp(h))
+        """Shared post-attention residual + MLP tail of the block (activations in L1)."""
+        x = ttnn.add(x, attn_out, memory_config=L1)
+        h = ttnn.layer_norm(x, weight=self.ln_2_weight, bias=self.ln_2_bias, epsilon=LAYER_NORM_EPS, memory_config=L1)
+        return ttnn.add(x, self._mlp(h), memory_config=L1)
 
     def forward(self, x):
         """Run one XTTS GPT decoder block, stateless. ``x`` is ``[batch, seq, hidden]``."""
-        h = ttnn.layer_norm(x, weight=self.ln_1_weight, bias=self.ln_1_bias, epsilon=LAYER_NORM_EPS)
+        h = ttnn.layer_norm(x, weight=self.ln_1_weight, bias=self.ln_1_bias, epsilon=LAYER_NORM_EPS, memory_config=L1)
         return self._residual_ffn(x, self._attention(h))
 
     def forward_prefill(self, x):
@@ -164,7 +176,7 @@ class TtXttsGptBlock(LightweightModule):
         ``x`` is ``[batch, seq, hidden]``; identical output to ``forward`` but the
         K/V computed here are retained for subsequent ``forward_decode`` steps.
         """
-        h = ttnn.layer_norm(x, weight=self.ln_1_weight, bias=self.ln_1_bias, epsilon=LAYER_NORM_EPS)
+        h = ttnn.layer_norm(x, weight=self.ln_1_weight, bias=self.ln_1_bias, epsilon=LAYER_NORM_EPS, memory_config=L1)
         return self._residual_ffn(x, self._attention_prefill(h))
 
     def forward_decode(self, x):
@@ -173,5 +185,5 @@ class TtXttsGptBlock(LightweightModule):
         Requires ``forward_prefill`` to have been called first. Appends the new
         token's K/V to the cache and attends over the full history.
         """
-        h = ttnn.layer_norm(x, weight=self.ln_1_weight, bias=self.ln_1_bias, epsilon=LAYER_NORM_EPS)
+        h = ttnn.layer_norm(x, weight=self.ln_1_weight, bias=self.ln_1_bias, epsilon=LAYER_NORM_EPS, memory_config=L1)
         return self._residual_ffn(x, self._attention_decode(h))
