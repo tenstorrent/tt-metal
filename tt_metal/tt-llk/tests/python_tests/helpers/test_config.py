@@ -127,8 +127,9 @@ class TestConfig:
     CHIP_ARCH: ClassVar[ChipArchitecture]
     DATA_FORMAT_ENUM: ClassVar[dict]
 
-    # Artefact directories
-    DEFAULT_ARTEFACTS_PATH: ClassVar[Path] = Path("/tmp/tt-llk-build/")
+    # Artefact directories. Prefer GHA RUNNER_TEMP (disk) over /tmp (often tmpfs)
+    # so compile artefacts do not accumulate in RAM and OOM the runner (exit 137).
+    DEFAULT_ARTEFACTS_PATH: ClassVar[Path] = Path("/tmp/tt-llk-build")
     ARTEFACTS_DIR: ClassVar[Path]
     SHARED_DIR: ClassVar[str]
     SHARED_OBJ_DIR: ClassVar[str]
@@ -366,8 +367,16 @@ class TestConfig:
                 )
 
     @staticmethod
+    def resolve_artefacts_path() -> Path:
+        """Build artefact root: $RUNNER_TEMP/tt-llk-build in GHA, else /tmp/tt-llk-build."""
+        runner_temp = os.environ.get("RUNNER_TEMP")
+        if runner_temp:
+            return Path(runner_temp) / "tt-llk-build"
+        return TestConfig.DEFAULT_ARTEFACTS_PATH
+
+    @staticmethod
     def setup_paths(sources_path: Path):
-        TestConfig.ARTEFACTS_DIR = TestConfig.DEFAULT_ARTEFACTS_PATH
+        TestConfig.ARTEFACTS_DIR = TestConfig.resolve_artefacts_path()
 
         TestConfig.LLK_ROOT = sources_path
         TestConfig.TESTS_WORKING_DIR = TestConfig.LLK_ROOT / "tests"
