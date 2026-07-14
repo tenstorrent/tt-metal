@@ -47,6 +47,18 @@ void kernel_main() {
     constexpr uint32_t in1_blk = K_block * N_block;
     constexpr uint32_t in1_blk_bytes = in1_blk * tile_bytes;
     constexpr uint32_t seg_bytes = N_block * tile_bytes;  // one K-row of a block = N_sub tiles
+    constexpr uint32_t words_per_tile = tile_bytes / 4u;
+
+    // Zero `ntiles` bf16 tiles at L1 `addr`. Used ONLY for the small K-tail (l >= valid_k) within valid-N
+    // subblocks: those tiles are summed into every valid output column, so they must be exactly 0.0 —
+    // NOT left as (possibly NaN/Inf) uninitialized L1, since 0*NaN = NaN would poison the K reduction.
+    auto zero_l1 = [](uint32_t addr, uint32_t ntiles) {
+        volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
+        const uint32_t n = ntiles * words_per_tile;
+        for (uint32_t i = 0; i < n; ++i) {
+            p[i] = 0u;
+        }
+    };
 
     // ---- M-split SLAVE: receive in1 from the reader, do not touch DRAM. ----
     if (mrole == 0) {
@@ -113,11 +125,16 @@ void kernel_main() {
                 if (vcols > 0u) {
                     for (uint32_t kr = 0; kr < K_block; ++kr) {
                         const uint32_t l = kblk * K_block + kr;  // capacity-local K index within the slice
-                        if (l < valid_k) {                       // K tail (l >= valid_k): skip; in0-zero kills it
-                            const uint32_t gk = k_start + l;     // global logical K tile
+                        if (l < valid_k) {
+                            const uint32_t gk = k_start + l;  // global logical K tile
                             const uint32_t off = (gk * in1_shard_stride_n + n_local + ncol_base) * tile_bytes;
                             noc_async_read(
                                 get_noc_addr_from_bank_id<true>(bank_id, in1_addr + off), w1, vcols * tile_bytes);
+                            // cols [vcols, N_block) are pad-N (garbage): safe, those output cols aren't written.
+                        } else {
+                            // K tail: summed into EVERY valid output col -> must be exactly 0.0 (both operands
+                            // zeroed; writer also zeros in0's K/M tail), so the product is 0*0, never 0*NaN.
+                            zero_l1(w1, N_block);
                         }
                         w1 += seg_bytes;
                     }
