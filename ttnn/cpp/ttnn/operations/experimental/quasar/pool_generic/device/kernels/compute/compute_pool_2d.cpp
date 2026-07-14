@@ -251,17 +251,19 @@ void kernel_main() {
             }
 #endif
             // Re-init the fused tilize+reduce for THIS stick/c-block through the compute API rather than
-            // hand-issuing individual UNPACK/MATH/PACK llk_* calls. One call re-programs all three engines
-            // together, which is required because both change per iteration:
+            // hand-issuing individual UNPACK/MATH llk_* calls. This re-programs UNPACK and MATH together, which
+            // is required because both change per iteration:
             //   (a) split-reader: even sticks read in_cb_0, odd sticks read in_cb_1 -- the unpack-tilize
             //       descriptor must re-bind to THIS stick's input CB, else reader1 re-reduces reader0's window;
-            //   (b) tiles_to_reduce changes across c-blocks (e.g. 4 then 2 for 6 tiles / 192c) -- UNPACK, MATH
-            //       and PACK must all be re-programmed for the new count.
-            // Re-initing only some engines (the previous per-engine llk_* approach) desynced them and tripped a
-            // Risc IB interrupt (watcher code 0x19) -- first on MATH, then on PACK -- on the wide multi-c-block
-            // config. The compute API keeps them in lockstep.
-            tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
-                curr_in_cb_id, curr_scalar_cb_id, tiles_to_reduce, pack_target_cb_id);
+            //   (b) tiles_to_reduce changes across c-blocks (e.g. 4 then 2 for 6 tiles / 192c) -- UNPACK and
+            //       MATH must both be re-programmed for the new count (PACK is re-init'd via
+            //       pack_untilize_dest_init below).
+            // Use the *_short variant: the full tilizeA_B_reduce_init (called once at kernel start) also runs
+            // llk_*_hw_configure, and re-running hw_configure per c-block corrupts unpacker state (UNPACKER
+            // fault). Re-initing only some engines desynced them (Risc IB interrupt, watcher 0x19, on MATH then
+            // PACK); the short compute API keeps unpack+math in lockstep without the illegal per-block reconfig.
+            tilizeA_B_reduce_init_short<neginf_srca_maxpool, zero_srca_avgpool>(
+                curr_in_cb_id, curr_scalar_cb_id, tiles_to_reduce);
             MATH(WATCHER_RING_BUFFER_PUSH(0xC0FFEE11u));
             tile_regs_acquire();
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {

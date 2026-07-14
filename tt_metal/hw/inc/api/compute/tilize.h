@@ -124,6 +124,32 @@ ALWI void tilizeA_B_reduce_init(
     PACK((llk_pack_dest_init()));
 #endif
 }
+
+// clang-format off
+/**
+ * Re-initializes the fused tilize+reduce for a new input CB and/or a changed block size WITHOUT re-running the
+ * one-time hw_configure that tilizeA_B_reduce_init performs. Call tilizeA_B_reduce_init once at kernel start,
+ * then use this lighter variant to re-bind the unpack-tilize / math-reduce to a different input CB or a
+ * changed `block` (tiles-to-reduce) mid-kernel -- e.g. per split-reader stream, or per channel-block when the
+ * tile count changes. Re-running hw_configure every iteration corrupts unpacker state (UNPACKER fault), so
+ * this issues only the per-use unpack/math inits (the pack side is re-init'd separately, e.g. via
+ * pack_untilize_dest_init). These two llk inits are identical across WH/BH/Quasar, so no arch split is needed.
+ *
+ * | Param Type | Name             | Description                          | Type     | Valid Range | Required |
+ * |------------|------------------|--------------------------------------|----------|-------------|----------|
+ * | Template   | neginf_srcA      | NegInf source A flag                 | bool     | true/false  | False    |
+ * | Template   | zero_srcA_reduce | Zero source A for reduce flag        | bool     | true/false  | False    |
+ * | Function   | icb0             | Input circular buffer A identifier   | uint32_t | 0 to 31     | True     |
+ * | Function   | icb1_scaler      | Input circular buffer for scaler     | uint32_t | 0 to 31     | True     |
+ * | Function   | block            | Size of tile block to work on        | uint32_t | > 0         | True     |
+ */
+// clang-format on
+template <bool neginf_srcA = true, bool zero_srcA_reduce = false>
+ALWI void tilizeA_B_reduce_init_short(uint32_t icb0, uint32_t icb1_scaler, uint32_t block) {
+    UNPACK((llk_unpack_tilizeA_B_init<neginf_srcA, true /*reload_srcB*/, false /*zero_srcA*/, zero_srcA_reduce>(
+        icb0, icb1_scaler, block)));
+    MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>(icb0, icb1_scaler)));
+}
 #endif  // (REDUCE_OP && REDUCE_DIM) || __DOXYGEN__
 
 #ifndef ARCH_QUASAR
