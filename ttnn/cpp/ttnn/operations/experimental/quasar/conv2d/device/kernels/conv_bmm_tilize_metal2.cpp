@@ -506,6 +506,16 @@ void kernel_main() {
                     // relies on per c-block). If this regresses to the earlier t=1 tilize OOB (stale BD base),
                     // the proper fix is to set the pack BD base ONCE in tilize.h's Quasar tilize_init.
                     // See ~/QuasarProgrammingQuirks.md quirk #1.
+                    // Quasar-only: re-seed the MATH<->PACK DEST semaphore + dest-bank phase for the tilize.
+                    // Quasar's DEST handshake is a MATH_PACK-semaphore workaround (dest-dvalid gap); the plain
+                    // Quasar tilize_init omits llk_math_pack_sync_init, so the tilize inherits the matmul's
+                    // stale semaphore count / bank phase -> MATH issues its datacopy MOP into a DEST bank out
+                    // of phase with PACK -> Risc IB interrupt (0x19) whose faulting tile/core move with DPRINT
+                    // latency (a timing race, not OOB: TZCUR showed wr_entry_idx=0/nent=448). This is the
+                    // MATH-side partner of the llk_pack_init/llk_pack_dest_init re-issued just below; runs once
+                    // per tilize group, NO per-block hw_configure. Same Quasar gap the pool hit --
+                    // tilizeA_B_reduce_init_short adds llk_math_pack_sync_init for exactly this reason.
+                    MATH((llk_math_pack_sync_init()));
                     PACK((llk_pack_init(tilized_in0_cb_id)));
                     // A/B RESULT: disabling this moved the tilize fault EARLIER (t=4 -> t=1), so dest_init
                     // HELPS (sets up the packer DEST section Quasar tilize_init omits) — keep it. The residual
