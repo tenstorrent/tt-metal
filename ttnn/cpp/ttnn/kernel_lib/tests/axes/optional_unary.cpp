@@ -2,11 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// OptionalChainElement gating (untested mechanism).
-//
-// CopyTile -> OptionalChainElement<ON, Negative> -> PackTile. When ON the negate runs (out = -A);
-// when OFF the element is a compile-time no-op (out = A). Proves the gate both applies and elides,
-// and that the false stub of a DEST-only op is a valid (no-op) chain element. `cond` is a CT arg.
+// OptionalChainElement gating: CopyTile -> OptionalChainElement<ON, Negative> -> PackTile. ON runs
+// the negate (out = -A); OFF is a compile-time no-op (out = A). Proves the gate both applies and
+// elides, and that the false case is stripped entirely (as if the element weren't there). `cond` is a CT arg.
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
