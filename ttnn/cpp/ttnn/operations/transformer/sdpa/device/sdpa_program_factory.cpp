@@ -633,6 +633,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     defines_map["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines_map["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines_map["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    // QK-scores tile face count for reduce_block_max_row: 2 for a 16x32 tiny tile (one face-row),
+    // 4 for a full 32x32 tile. Derived from the (Q-seq) operand tile height.
+    defines_map["QK_NUM_FACES"] = std::to_string(input_tile_height < tt::constants::TILE_HEIGHT ? 2u : 4u);
     log_debug(tt::LogOp, "use_zigzag_balancing: {}", use_zigzag_balancing);
 
     KernelDescriptor::Defines defines(defines_map.begin(), defines_map.end());
