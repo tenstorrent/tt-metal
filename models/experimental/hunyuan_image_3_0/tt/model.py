@@ -35,7 +35,7 @@ from models.experimental.hunyuan_image_3_0.ref.weights import load_tensors, reso
 
 from .transformer_layer import HunyuanTtDecoderLayer
 from .attention.rms_norm import HunyuanTtRMSNorm
-from .parallel_utils import sp_gather, sp_shard
+from .parallel_utils import resid_mem_config, sp_gather, sp_shard
 from .cache import cache_file, resolve_transformer_cache
 
 
@@ -314,8 +314,11 @@ class HunyuanTtModel(LightweightModule):
                     attention_mask = ttnn.pad(attention_mask, [(0, 0), (0, 0), (0, 0), (0, sp_pad)], value=-1.0e30)
                     attention_mask = ttnn.pad(attention_mask, [(0, 0), (0, 0), (0, sp_pad), (0, 0)], value=0.0)
             # hidden feeds the input_layernorm next: land it L1-resident to avoid a
-            # DRAM->L1 copy. cos/sin/mask keep the DRAM default (the SDPA mask MUST be DRAM).
-            hidden = sp_shard(ccl, hidden, dim=1, mesh_axis=ax, n=n, out_memory_config=ttnn.L1_MEMORY_CONFIG)
+            # DRAM->L1 copy — but only up to the measured residual-stream CB-clash bound
+            # (per-device seq S_pad/n); above it the layer input must be DRAM too, else
+            # the input_layernorm's CBs collide with this resident input. cos/sin/mask
+            # keep the DRAM default (the SDPA mask MUST be DRAM).
+            hidden = sp_shard(ccl, hidden, dim=1, mesh_axis=ax, n=n, out_memory_config=resid_mem_config(S_pad // n))
             caller_owns_hidden = False  # we created a fresh sharded tensor
             cos_tt = sp_shard(ccl, cos_tt, dim=2, mesh_axis=ax, n=n, out_memory_config=ttnn.L1_MEMORY_CONFIG)
             sin_tt = sp_shard(ccl, sin_tt, dim=2, mesh_axis=ax, n=n, out_memory_config=ttnn.L1_MEMORY_CONFIG)
