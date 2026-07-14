@@ -1316,6 +1316,24 @@ uint32_t RealtimeProfilerManager::drain_device_pages(
     return num_pages_to_read;
 }
 
+// EXPERIMENT: raw-marker stall decoder. In DROP mode the FW bulk-flushes raw 2-word markers (no
+// reshape, 8/64B-page). Rather than discard them, decode each marker and count PROFILER_STALL_ZONE
+// (id 0x7FFF) START/END events -- the producer's self-measured back-pressure -- with no core info.
+// This is the correct perturbation signal (device-side), which the reader "wall" does NOT capture.
+namespace {
+struct X280RawStall {
+    uint64_t markers = 0, stall_start = 0, stall_end = 0, paired = 0, dur_sum = 0, dur_max = 0;
+    uint64_t prev_start_ts = 0;
+    bool have_prev = false;
+    // STICKY_META tally + a sample of the first decoded one (validates the FW packet format).
+    uint64_t sticky = 0;
+    uint32_t s_cx = 0, s_cy = 0, s_risc = 0, s_id = 0;
+    bool have_sticky_sample = false;
+    uint32_t sticky_risc_mask = 0;  // bit r set if a sticky with risc==r was seen (expect 0x1F = all 5)
+};
+X280RawStall g_x280_raw;  // single receiver thread -> no lock
+}  // namespace
+
 uint32_t RealtimeProfilerManager::drain_x280_device(DeviceState& dev_state) {
     if (!dev_state.x280_active || !dev_state.x280_socket) {
         return 0;
@@ -1341,6 +1359,66 @@ uint32_t RealtimeProfilerManager::drain_x280_device(DeviceState& dev_state) {
     {
         ZoneScopedN("X280-SockRead");  // D2H FIFO read (clflush + memcpy) + ack that frees FIFO for the X280
         dev_state.x280_socket->read(x280_page_buf.data(), n);
+    }
+
+    // EXPERIMENT (TT_METAL_X280_DROP=1): the read() above already drained + ACKed the pages, freeing FIFO
+    // room for the X280. Skip all host-side decode/enrich/emit and just discard them. Pairs with the FW
+    // raw-flush experiment (reader bulk-copies raw markers, no reshape) to isolate the drain-side (X280
+    // reader/relay) cost from host processing. Non-functional: no Tracy zones are produced in this mode.
+    static const bool x280_drop = (std::getenv("TT_METAL_X280_DROP") != nullptr);
+    if (x280_drop) {
+        // Decode raw 2-word markers (8 per 64B page) and tally PROFILER_STALL_ZONE (id 0x7FFF) events.
+        // No emit. START/END are adjacent within a ring's contiguous segment, so naive pairing gives a
+        // rough duration; the START count is the robust metric. Timestamps are device cycles (~1.35 GHz).
+        for (uint32_t pg = 0; pg < n; pg++) {
+            const uint32_t* page = x280_page_buf.data() + static_cast<size_t>(pg) * page_words;
+            for (uint32_t m = 0; m + 1 < page_words; m += 2) {
+                const uint32_t w0 = page[m];
+                const uint32_t w1 = page[m + 1];
+                if (!(w0 & 0x80000000u)) {
+                    continue;  // valid bit clear -> stale staging padding
+                }
+                g_x280_raw.markers++;
+                const uint32_t type = (w0 >> 28) & 0x7;  // same bits for markers + sticky
+                if (type == kernel_profiler::STICKY_META) {
+                    g_x280_raw.sticky++;
+                    const uint32_t rr = (w0 >> 14) & 0x3F;
+                    if (rr < 32) {
+                        g_x280_raw.sticky_risc_mask |= (1u << rr);
+                    }
+                    if (!g_x280_raw.have_sticky_sample) {
+                        g_x280_raw.s_cx = (w0 >> 24) & 0xF;
+                        g_x280_raw.s_cy = (w0 >> 20) & 0xF;
+                        g_x280_raw.s_risc = (w0 >> 14) & 0x3F;
+                        g_x280_raw.s_id = w1;
+                        g_x280_raw.have_sticky_sample = true;
+                    }
+                    continue;
+                }
+                const uint32_t tid = (w0 >> 12) & 0x7FFFF;
+                if ((tid & 0xFFFF) != 0x7FFF) {
+                    continue;  // not a stall zone
+                }
+                const uint64_t ts = (static_cast<uint64_t>(w0 & 0xFFF) << 32) | w1;
+                if (((tid >> 16) & 0x7) == kernel_profiler::ZONE_START) {
+                    g_x280_raw.stall_start++;
+                    g_x280_raw.prev_start_ts = ts;
+                    g_x280_raw.have_prev = true;
+                } else {  // ZONE_END
+                    g_x280_raw.stall_end++;
+                    if (g_x280_raw.have_prev) {
+                        const uint64_t d = ts - g_x280_raw.prev_start_ts;
+                        g_x280_raw.dur_sum += d;
+                        if (d > g_x280_raw.dur_max) {
+                            g_x280_raw.dur_max = d;
+                        }
+                        g_x280_raw.paired++;
+                        g_x280_raw.have_prev = false;
+                    }
+                }
+            }
+        }
+        return n;
     }
 
     // 16-bit-hash -> zone name/file/line, resolved the same way the DRAM profiler names zones.
@@ -1706,6 +1784,32 @@ void RealtimeProfilerManager::shutdown() {
                         rreserve / 1000000,
                         rcopy / 1000000,
                         rempty / 1000000);
+                }
+                // Raw-marker stall decode (DROP mode only): device-side back-pressure straight from the
+                // marker stream. ~1.35 GHz => cycles/1350 = us. START count is the robust metric.
+                if (std::getenv("TT_METAL_X280_DROP") != nullptr) {
+                    log_info(
+                        tt::LogMetal,
+                        "[Real-time profiler] Device {}: RAW stall decode: {} markers, stall START={}, END={}, "
+                        "paired={}, dur avg={} us, max={} us",
+                        dev_state.chip_id,
+                        g_x280_raw.markers,
+                        g_x280_raw.stall_start,
+                        g_x280_raw.stall_end,
+                        g_x280_raw.paired,
+                        g_x280_raw.paired ? (g_x280_raw.dur_sum / g_x280_raw.paired) / 1350 : 0,
+                        g_x280_raw.dur_max / 1350);
+                    log_info(
+                        tt::LogMetal,
+                        "[Real-time profiler] Device {}: RAW sticky decode: {} STICKY_META packets; "
+                        "risc-mask=0x{:x} (0x1F=all 5); sample core=({},{}) risc={} host_id={}",
+                        dev_state.chip_id,
+                        g_x280_raw.sticky,
+                        g_x280_raw.sticky_risc_mask,
+                        g_x280_raw.s_cx,
+                        g_x280_raw.s_cy,
+                        g_x280_raw.s_risc,
+                        g_x280_raw.s_id);
                 }
                 // Reader ILP diagnostic: avg bulk-read segment width (words) per reader. Small (<~8)
                 // => the round-robin drains rings to near-empty each visit, so the vector burst is

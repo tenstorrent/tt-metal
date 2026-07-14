@@ -197,42 +197,40 @@ int main(uint64_t hartid) {
                     uint64_t ring_base = rbufs + (uint64_t)r * 2048;
                     uint32_t h = head;
                     while (h != tail) {
-                        /* Read a CONTIGUOUS ring segment (up to the wrap) in one ILP burst off the
-                         * uncached System Port into LIM scratch, then reshape from LIM. seg stays even:
-                         * RING_CAP, head and tail are all even (markers are 2 words). */
+                        /* EXPERIMENT (non-functional; host DROPS the data): flush the raw ring segment
+                         * straight into LIM staging as a bulk vector copy -- NO reshape, NO per-marker
+                         * loop, NO identity stamping. Raw 2-word markers pack 8 per 64B staging page; the
+                         * relay ships those pages unchanged and the host discards them. Isolates whether
+                         * the reader per-marker path is what stretches burst-drain latency. */
                         uint32_t hidx = h % RING_CAP;   /* word offset in the ring */
                         uint32_t seg = RING_CAP - hidx; /* words until the ring wraps */
                         uint32_t rem = (uint32_t)(tail - h);
                         if (seg > rem) {
                             seg = rem;
                         }
-                        bulk_read_words(scratch, ring_base + (uint64_t)hidx * 4, seg);
+                        uint32_t npg = (seg + 15u) / 16u; /* 64B pages (8 markers each) to hold seg words */
+                        /* one staging-room check per SEGMENT (was per marker); bail on shutdown */
+                        while ((uint32_t)(prod + npg - r32(CONS(hartid))) > NREC) {
+                            if (r64(P_STOP)) {
+                                goto reader_done;
+                            }
+                        }
+                        uint32_t pidx = prod % NREC; /* first staging page for this segment */
+                        uint32_t pfit = NREC - pidx; /* pages until the staging ring wraps */
+                        uint64_t sbase = STAGE_BASE + (uint64_t)hartid * STAGE_STRIDE;
+                        if (npg <= pfit) {
+                            bulk_read_words(sbase + (uint64_t)pidx * 64, ring_base + (uint64_t)hidx * 4, seg);
+                        } else {
+                            uint32_t w1 = pfit * 16u; /* words that fit before the staging wrap (even) */
+                            bulk_read_words(sbase + (uint64_t)pidx * 64, ring_base + (uint64_t)hidx * 4, w1);
+                            bulk_read_words(sbase, ring_base + (uint64_t)(hidx + w1) * 4, seg - w1);
+                        }
                         bulk_words += seg;
                         segs++;
-                        fence_(); /* vector store to LIM visible before the scalar reshape reads it */
-                        volatile uint32_t* sc = (volatile uint32_t*)scratch;
-                        for (uint32_t i = 0; i < seg; i += 2) {
-                            /* wait for staging room (SPSC vs relay); bail on shutdown */
-                            while ((uint32_t)(prod + 1u - r32(CONS(hartid))) > NREC) {
-                                if (r64(P_STOP)) {
-                                    goto reader_done;
-                                }
-                            }
-                            uint32_t w0 = sc[i];
-                            uint32_t w1 = sc[i + 1];
-                            uint64_t p = SPAGE(hartid, prod);
-                            w32(p + 0, 0); /* PacketHeader{ type=WorkerZone } */
-                            w32(p + 4, cx);
-                            w32(p + 8, cy);
-                            w32(p + 12, r);
-                            w32(p + 16, (w0 >> 12) & 0x7FFFF); /* timer_id (type|hash) */
-                            w32(p + 20, w0 & 0xFFF);           /* time_hi */
-                            w32(p + 24, w1);                   /* time_lo */
-                            prod++;
-                        }
+                        prod += npg;
                         h += seg;
                         w32(cbase + CTRL_HEAD(r) * 4, h); /* advance SPSC head (NoC write) -> producer unblocks */
-                        fence_();                         /* pages visible before PROD advances */
+                        fence_();                         /* staged pages visible before PROD advances */
                         w32(PROD(hartid), prod);
                     }
                 }

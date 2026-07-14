@@ -654,10 +654,27 @@ ring-segment read into LIM scratch `SCRATCH_BASE 0x08012000`, reshape from LIM) 
 were removed — count-based is uncontaminated). `realtime_profiler_manager.cpp` — host log of the reader
 wall / drain rate / poll count / avg seg. See memory `x280-rt-profiler-backpressure`.
 
-**Bottom line for drop-vs-block:** the lossless X280 drain sustains **~450k markers/s** and inflates a
-64-core workload **~22×**, and that ceiling is set by the reader blind-polling ~275 mostly-idle rings
-(99.7% empty polls) — the drain/socket/reads all have >10× headroom. So the ceiling is *addressable*
-(cheaper polls ~3×, or a producer doorbell for more) if lossless is required; otherwise go lossy.
+**ROOT CAUSE — the reader's per-marker RESHAPE (2026-07-14, supersedes the "wall / producer-emit / blind-poll"
+readings above).** The reader "wall" is boot-to-teardown and does NOT represent device-side kernel
+elongation (it even rose to 2147 ms on a noisier run while back-pressure fell). The true signal is the
+producer's self-emitted `PROFILER_STALL_ZONE` (id `0x7FFF`). Built a HOST raw-marker decoder
+(`TT_METAL_X280_DROP=1`: FW bulk-flushes raw 2-word markers, host decodes + tallies stall zones, no core
+info needed), validated with a guaranteed per-RISC stall injected in `risc_finished_profiling` (decoder saw
+it; since removed). Measured REAL stalls:
+
+| reader mode | stall count | stall dur avg | stall max |
+|---|---|---|---|
+| reshape (per-marker, 4×w64) | ~1248 | ~2.5 ms | ~12.6 ms |
+| **raw bulk-flush (no reshape)** | **546** | **12 µs** | **121 µs** |
+
+⇒ dropping the on-device reshape collapses producer stall **duration ~200×** (and count ~2.3×). A full ring
+drains in ~2.5 ms with per-marker reshape vs ~12 µs with a bulk vector copy, so producers block that much
+less. The earlier 7→4-store vectorize did nothing because it kept the per-marker *loop*; only the full
+per-segment bulk copy collapses it. **FIX = relay raw markers + convey (core,risc) once per ring as a sticky
+header, reshape on the (idle) host** — proven to cut perturbation ~200× and it's the DRAM-profiler-style
+format (`ID_LL..ID_HH` headers) rather than self-describing-per-page. Raw decoder + `g_x280_raw` live in
+`realtime_profiler_manager.cpp`; the non-functional raw-flush is in `src/profzone.c`; functional reshape
+version committed at `dfe12d1d`.
 
 ---
 

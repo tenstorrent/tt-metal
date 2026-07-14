@@ -72,7 +72,12 @@ enum ControlBuffer {
     DRAM_PROFILER_ADDRESS_T2_0,
 };
 
-enum PacketTypes { ZONE_START, ZONE_END, ZONE_TOTAL, TS_DATA, TS_EVENT, TS_DATA_16B };
+// STICKY_META (SPSC/X280 backend): an 8B context packet emitted once per RISC per launch at the main
+// zone scope. High word carries (core_x, core_y, risc) + this type; low word a 32-bit host-side ID. The
+// host forward-fills that identity onto the following timing markers so the X280 reader can bulk-copy raw
+// markers with NO per-marker reshape. Its type sits in the same bits (28-30 of w0) as a marker's type, so
+// the host distinguishes it before decoding the rest. Must stay <= 7 (3-bit type field).
+enum PacketTypes { ZONE_START, ZONE_END, ZONE_TOTAL, TS_DATA, TS_EVENT, TS_DATA_16B, STICKY_META };
 
 // Number of expected uint64_t data values for each PacketType
 template <PacketTypes packet_type>

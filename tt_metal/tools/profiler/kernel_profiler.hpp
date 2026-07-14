@@ -66,6 +66,11 @@ extern uint32_t wIndex;  // producer tail (monotonic word count for this RISC's 
 extern uint32_t stackSize;
 extern uint32_t traceCount;
 
+// Host-side ID (run/program id) carried in the low word of the STICKY_META context packet. Fed by
+// set_host_counter() (the DeviceZoneSetCounter hook) -- realizes the TODO there. The host forward-fills
+// it onto following markers. 0 until set (currently ~0 on worker cores until a program_host_id is plumbed).
+[[maybe_unused]] static uint32_t hostZoneId = 0;
+
 // SPSC publish gate for the DeviceValidateProfiler filter. publish_tail() only advances the
 // consumer-visible ring tail while this is true. On "validator" RISCs (those whose FW loop calls
 // DeviceValidateProfiler(enables) to declare whether this launch ran a real kernel) it is set false
@@ -222,6 +227,43 @@ inline __attribute__((always_inline)) void mark_time(uint32_t timer_id) {
     publish_tail();
 }
 
+// Emit the STICKY_META context packet (2 words) into ALL of this core's RISC rings, not just the
+// caller's. Each per-RISC ring the X280 drains needs its own (core_x, core_y, risc) + host_id header so
+// the host can forward-fill that identity onto the following raw markers -- letting the X280 reader
+// bulk-copy them with NO per-marker reshape. The type sits in the same valid/type bits (w0[31], w0[30:28])
+// the host reads on any marker, so a sticky is distinguished before its payload is decoded.
+//
+// Called from set_host_counter (BRISC's assign-ID hook). Safe to populate sibling rings because at that
+// point BRISC is the only active RISC -- the others are out of reset but not yet emitting (run_triscs is
+// later). init_profiler() has already zeroed the rings this launch. For sibling rings the sticky lands
+// first; only BRISC's own ring has its FW ZONE_START ahead of the sticky (fine -- FW zone carries no ID).
+inline __attribute__((always_inline)) void mark_sticky_meta() {
+    if (!zoneValid) {
+        return;  // idle launch: no markers follow on any ring, so skip the context packets
+    }
+    const uint32_t cx = my_x[0] & 0xF;  // NOTE: 4-bit fields truncate NoC coords >= 16
+    const uint32_t cy = my_y[0] & 0xF;
+    for (uint32_t r = 0; r < PROCESSOR_COUNT; r++) {
+        // w0: [31]=valid [30:28]=type(STICKY_META) [27:24]=core_x [23:20]=core_y [19:14]=risc [13:0]=unused
+        const uint32_t w0 = 0x80000000u | ((STICKY_META & 0x7u) << 28) | (cx << 24) | (cy << 20) | ((r & 0x3F) << 14);
+        if (r == myRiscID) {
+            // Own ring: go through the normal tail so wIndex stays in sync for this RISC's later markers.
+            ring_ensure_room(PROFILER_L1_MARKER_UINT32_SIZE);
+            ring_write_word(w0);
+            ring_write_word(hostZoneId);
+            publish_tail();
+        } else {
+            // Sibling ring (that RISC has not started emitting): write at its producer tail directly, then
+            // publish (release) so the X280 sees the context ahead of that RISC's own markers.
+            uint32_t t = profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + r];
+            profiler_data_buffer[r].data[t % RING_CAPACITY] = w0;
+            profiler_data_buffer[r].data[(t + 1) % RING_CAPACITY] = hostZoneId;
+            asm volatile("fence" ::: "memory");  // marker words visible before the tail advance
+            profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + r] = t + 2;
+        }
+    }
+}
+
 // Fixed-index write retained only for the trace-only build mode (writes directly
 // into the ring storage region; not used by the default SPSC path).
 inline __attribute__((always_inline)) void mark_time_at_index_inlined(uint32_t index, uint32_t timer_id) {
@@ -244,14 +286,15 @@ inline __attribute__((always_inline)) bool get_dropped_timestamps(uint32_t index
 }
 
 inline __attribute__((always_inline)) void set_host_counter(uint32_t counterValue) {
-    // SPSC backend: the trace/host counter used to be written into the fixed ID_LL slot. But in this
-    // backend the whole buffer (incl. ID_*/GUARANTEED slots) is the X280-drained ring, so that write
-    // clobbered whatever marker word currently occupied slot ID_LL -> the marker's time_lo became a
-    // small traceCount value, placing the zone ~2^32 cycles early and wrecking Tracy nesting. The
-    // X280 drain never reads ID_LL, so this is a no-op here.
-    // TODO(perf): replace with a state/context packet type that sets run/host-id-style fields for all
-    // subsequent markers; host enrichment forward-fills them (see PROFILER_PACKET_PIPELINE.md).
-    (void)counterValue;
+    // Assign-ID hook (DeviceZoneSetCounter): the SPSC backend used to write this counter into the fixed
+    // ID_LL slot, but the whole buffer is the X280-drained ring, so that corrupted a live marker word.
+    // Instead, emit it in-band as the STICKY_META context packet carrying (core, risc, host_id); the host
+    // forward-fills that identity onto the following raw markers (no per-marker reshape on the X280). This
+    // is the "state/context packet" the old TODO described. Emitted here, at the ID-assign call, rather
+    // than the main zone scope because the ID is only known now -- it lands just after the FW ZONE_START,
+    // which is fine (the FW zone carries no assigned ID). TODO: rename DeviceZoneSetCounter accordingly.
+    hostZoneId = counterValue;
+    mark_sticky_meta();
 }
 
 inline __attribute__((always_inline)) void set_profiler_zone_valid(bool condition) {
