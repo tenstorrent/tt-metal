@@ -23,6 +23,7 @@
 //   #3 ACT split_reader_cb_shared -> TT_FATAL-rejected (deferred); single-DM-fill ACT only.
 
 #include <cstdint>
+#include <cstdlib>  // std::getenv (Option C split-tilize test toggle)
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -680,6 +681,18 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         act_block_h_ntiles);
     uint32_t num_blocks_act_h_per_core = per_core_out_matrix_height_ntiles / act_block_h_ntiles;
 
+    // OPTION C (split tilize/matmul) test toggle. When TT_METAL_QSR_CONV_SPLIT_TILIZE is set, select the
+    // conv_bmm_split_tilize_metal2.cpp compute kernel, which tilizes ALL height blocks first (one contiguous
+    // tilize phase) then matmuls them, so the compute engine transitions tilize->matmul only once (diagnostic
+    // for the Quasar per-block tilize<->matmul DEST-handshake 0x19 race). Gated to the height-sharded,
+    // single-K-block (in0_num_blocks_w == 1), single-output-width-block (num_blocks_weight_w_per_core == 1),
+    // no-split-reader / no-activation-reuse / non-depthwise path -- the resnet stem / 1x1 conv shape the split
+    // kernel implements. Requires act_tilized to hold all height blocks at once (resized below). Everything
+    // else falls back to the fused kernel even when the env is set.
+    const bool split_tilize_matmul = (std::getenv("TT_METAL_QSR_CONV_SPLIT_TILIZE") != nullptr) && height_sharded &&
+                                     !is_conv_1d_depthwise_conv && !enable_split_reader && !enable_activation_reuse &&
+                                     (in0_num_blocks_w == 1) && (num_blocks_weight_w_per_core == 1);
+
     TT_FATAL(
         act_matrix_height_ntiles % per_core_out_matrix_height_ntiles == 0,
         "Activation matrix height in tiles ({}) must be divisible by per-core output matrix height in tiles ({})",
@@ -997,7 +1010,22 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         //  = 50,176 units of 16 B, and 2x = 100,352 units overflows the uint16_t DFB ring-extent field
         //  (max 65,536 = 1 MB). Capacity double-buffering of a full K-block is structurally impossible
         //  on Quasar — see dfb_conv2d_analysis.md.)
-        spec.dataflow_buffers.push_back(make_dfb(DFB_ACT_TILIZED, Conv2dCb::ACT_TILIZED));
+        if (split_tilize_matmul) {
+            // OPTION C: hold ALL height blocks of tilized activation at once (num_blocks_act_h_per_core x
+            // one block) so Phase 1 can tilize every block before Phase 2's matmul consumes them. NB: the
+            // ring extent (page_size_units x num_entries) must stay under the uint16_t limit (65,536 units
+            // = 1 MB); if the full per-core tilized activation exceeds that, the DFB spec is rejected at
+            // program creation and this path cannot be used for that conv (fall back to the fused kernel).
+            const CBInfo& tilized_info = cb(Conv2dCb::ACT_TILIZED);
+            spec.dataflow_buffers.push_back(m2::DataflowBufferSpec{
+                .unique_id = DFB_ACT_TILIZED,
+                .entry_size = tilized_info.page_size,
+                .num_entries = tilized_info.num_pages * num_blocks_act_h_per_core,
+                .data_format_metadata = tilized_info.data_format,
+            });
+        } else {
+            spec.dataflow_buffers.push_back(make_dfb(DFB_ACT_TILIZED, Conv2dCb::ACT_TILIZED));
+        }
     }
 
     // MATMUL_PARTIALS: self-loop accumulator (resolution #2).  Borrowed-from OUTPUT when
@@ -1048,11 +1076,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         return "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
                "reader_conv_activations_padded_with_halo_3x3_weights_v2_metal2.cpp";
     }();
-    const std::string compute_kernel = is_conv_1d_depthwise_conv
-                                           ? "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
-                                             "compute_depthwise_conv1d_metal2.cpp"
-                                           : "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
-                                             "conv_bmm_tilize_metal2.cpp";
+    const std::string compute_kernel =
+        is_conv_1d_depthwise_conv ? "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
+                                    "compute_depthwise_conv1d_metal2.cpp"
+        : split_tilize_matmul     ? "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
+                                    "conv_bmm_split_tilize_metal2.cpp"
+                                  : "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
+                                    "conv_bmm_tilize_metal2.cpp";
     const std::string writer_sender_kernel =
         block_sharded ? "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
                         "writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks_metal2.cpp"
