@@ -53,6 +53,10 @@
 
 #define NRISC 5
 #define RING_CAP 512u /* producer L1 ring depth (words) */
+/* Idle poll backoff: after a whole pass drains nothing, spin ~this many cycles (X280 ~1 GHz => ~ns)
+ * before re-polling. 99.7% of passes are idle, so this cuts the ~2.6M wasted polls ~10x and frees
+ * NoC/L1 for the producers+relay; a PRODUCTIVE pass skips it, so real bursts still poll at full rate. */
+#define POLL_BACKOFF_CYC 500000u
 #define WRITE_WIN 200u
 #define PAGE 64u
 #define CTRL_HEAD(r) (r)
@@ -77,18 +81,45 @@
 #define CONS(h) (STAGECTL + (uint64_t)(h) * 32 + 8)
 #define RDONE(h) (STAGECTL + (uint64_t)(h) * 32 + 16)
 #define SPAGE(h, i) (STAGE_BASE + (uint64_t)(h) * STAGE_STRIDE + ((uint64_t)(i) % NREC) * PAGE)
+/* per-reader ILP bulk-read scratch in LIM (RING_CAP words = 2 KiB; 4 KiB stride). Lives between
+ * COORDS (~0x08011600) and STAGECTL (0x08018000); safe for nread <= 5. */
+#define SCRATCH_BASE 0x08012000UL
+#define SCRATCH_STRIDE 0x1000UL
+#define SCRATCH(h) (SCRATCH_BASE + (uint64_t)(h) * SCRATCH_STRIDE)
 
 static inline uint32_t r32(uint64_t a) { return *(volatile uint32_t*)a; }
 static inline void w32(uint64_t a, uint32_t v) { *(volatile uint32_t*)a = v; }
 static inline uint64_t r64(uint64_t a) { return *(volatile uint64_t*)a; }
 static inline void w64(uint64_t a, uint64_t v) { *(volatile uint64_t*)a = v; }
 static inline void fence_(void) { __asm__ volatile("fence iorw, iorw"); }
+static inline uint64_t rdcycle_(void) {
+    uint64_t c;
+    __asm__ volatile("rdcycle %0" : "=r"(c));
+    return c;
+}
 /* copy one 64 B page (LIM staging -> FIFO) as a single wide vector load+store */
 static inline void page_copy(uint64_t src, uint64_t dst) {
     __asm__ volatile("vsetivli zero, 8, e64, m1, ta, ma\n vle64.v v0, (%0)\n vse64.v v0, (%1)\n"
                      :
                      : "r"(src), "r"(dst)
                      : "memory", "v0");
+}
+/* ILP bulk-read: pull nwords (even) from an uncached NoC System-Port window into a LIM buffer with
+ * wide LMUL=8 vector loads so many read beats are in flight (proven ~1.8 GB/s vs ~530 MB/s for a
+ * blocking per-word r32). The reshape then reads from LIM (local, fast) instead of the NoC. */
+static inline void bulk_read_words(uint64_t dst, uint64_t src, uint32_t nwords) {
+    uint32_t nel = nwords >> 1; /* e64 doublewords */
+    while (nel > 0) {
+        uint64_t vl;
+        __asm__ volatile("vsetvli %0, %1, e64, m8, ta, ma" : "=r"(vl) : "r"((uint64_t)nel));
+        __asm__ volatile("vle64.v v0, (%0)\n vse64.v v0, (%1)\n"
+                         :
+                         : "r"(src), "r"(dst)
+                         : "memory", "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7");
+        src += vl * 8u;
+        dst += vl * 8u;
+        nel -= (uint32_t)vl;
+    }
 }
 
 int main(uint64_t hartid) {
@@ -125,15 +156,35 @@ int main(uint64_t hartid) {
 
         uint32_t prod = 0; /* monotonic staged-page count for this reader */
         uint64_t dropped = 0;
+        uint64_t scratch = SCRATCH(hartid);
+        uint64_t bulk_words = 0, segs = 0; /* diag: avg seg = bulk_words/segs => is the ILP burst wide? */
+        uint64_t passes = 0, polls = 0;    /* count-based (per-iteration rdcycle TRAPS on X280 => contaminates) */
+        uint64_t t_start = rdcycle_();     /* ONE rdcycle pair for the whole run: uncontaminated wall */
         for (;;) {
             uint64_t progressed = 0;
+            passes++;
             for (uint64_t c = lo; c < hi; c++) {
                 uint32_t cx = coords[c * 2 + 0], cy = coords[c * 2 + 1];
                 uint64_t cbase = NOC_2M_WINDOW_BASE + c * NOC_2M_WINDOW_STRIDE + ctrl_off;
                 uint64_t rbufs = cbase + 128;
+                /* Poll ALL 5 RISCs' head/tail in ONE ILP burst: ctrl[0..15] covers head[0..4]=ctrl[0..4]
+                 * and tail[0..4]=ctrl[5..9]. Was 10 scalar NoC reads/core/pass, which dominated the run
+                 * (rdcycle split: ~1.2s of 2.5s polling). Copy to locals BEFORE the marker bulk-read
+                 * below reuses `scratch`. */
+                bulk_read_words(scratch, cbase, 16);
+                fence_();
+                polls++;
+                uint32_t hd[NRISC], tl[NRISC];
+                {
+                    volatile uint32_t* cv = (volatile uint32_t*)scratch;
+                    for (uint32_t r = 0; r < NRISC; r++) {
+                        hd[r] = cv[r];
+                        tl[r] = cv[5u + r];
+                    }
+                }
                 for (uint32_t r = 0; r < NRISC; r++) {
-                    uint32_t tail = r32(cbase + CTRL_TAIL(r) * 4);
-                    uint32_t head = r32(cbase + CTRL_HEAD(r) * 4);
+                    uint32_t tail = tl[r];
+                    uint32_t head = hd[r];
                     if (head == tail) {
                         continue;
                     }
@@ -146,32 +197,57 @@ int main(uint64_t hartid) {
                     uint64_t ring_base = rbufs + (uint64_t)r * 2048;
                     uint32_t h = head;
                     while (h != tail) {
-                        /* wait for staging room (SPSC vs relay); bail on shutdown */
-                        while ((uint32_t)(prod + 1u - r32(CONS(hartid))) > NREC) {
-                            if (r64(P_STOP)) {
-                                goto reader_done;
-                            }
+                        /* Read a CONTIGUOUS ring segment (up to the wrap) in one ILP burst off the
+                         * uncached System Port into LIM scratch, then reshape from LIM. seg stays even:
+                         * RING_CAP, head and tail are all even (markers are 2 words). */
+                        uint32_t hidx = h % RING_CAP;   /* word offset in the ring */
+                        uint32_t seg = RING_CAP - hidx; /* words until the ring wraps */
+                        uint32_t rem = (uint32_t)(tail - h);
+                        if (seg > rem) {
+                            seg = rem;
                         }
-                        uint32_t w0 = r32(ring_base + (uint64_t)(h % RING_CAP) * 4);
-                        uint32_t w1 = r32(ring_base + (uint64_t)((h + 1) % RING_CAP) * 4);
-                        uint64_t p = SPAGE(hartid, prod);
-                        w32(p + 0, 0); /* PacketHeader{ type=WorkerZone } */
-                        w32(p + 4, cx);
-                        w32(p + 8, cy);
-                        w32(p + 12, r);
-                        w32(p + 16, (w0 >> 12) & 0x7FFFF); /* timer_id (type|hash) */
-                        w32(p + 20, w0 & 0xFFF);           /* time_hi */
-                        w32(p + 24, w1);                   /* time_lo */
-                        prod++;
-                        h += 2;
+                        bulk_read_words(scratch, ring_base + (uint64_t)hidx * 4, seg);
+                        bulk_words += seg;
+                        segs++;
+                        fence_(); /* vector store to LIM visible before the scalar reshape reads it */
+                        volatile uint32_t* sc = (volatile uint32_t*)scratch;
+                        for (uint32_t i = 0; i < seg; i += 2) {
+                            /* wait for staging room (SPSC vs relay); bail on shutdown */
+                            while ((uint32_t)(prod + 1u - r32(CONS(hartid))) > NREC) {
+                                if (r64(P_STOP)) {
+                                    goto reader_done;
+                                }
+                            }
+                            uint32_t w0 = sc[i];
+                            uint32_t w1 = sc[i + 1];
+                            uint64_t p = SPAGE(hartid, prod);
+                            w32(p + 0, 0); /* PacketHeader{ type=WorkerZone } */
+                            w32(p + 4, cx);
+                            w32(p + 8, cy);
+                            w32(p + 12, r);
+                            w32(p + 16, (w0 >> 12) & 0x7FFFF); /* timer_id (type|hash) */
+                            w32(p + 20, w0 & 0xFFF);           /* time_hi */
+                            w32(p + 24, w1);                   /* time_lo */
+                            prod++;
+                        }
+                        h += seg;
+                        w32(cbase + CTRL_HEAD(r) * 4, h); /* advance SPSC head (NoC write) -> producer unblocks */
+                        fence_();                         /* pages visible before PROD advances */
+                        w32(PROD(hartid), prod);
                     }
-                    w32(cbase + CTRL_HEAD(r) * 4, h); /* advance SPSC head -> producer unblocks */
-                    fence_();                         /* pages visible before PROD advances */
-                    w32(PROD(hartid), prod);
                 }
             }
-            if (r64(P_STOP) && !progressed) {
-                break;
+            if (!progressed) {
+                if (r64(P_STOP)) {
+                    break;
+                }
+                /* idle: back off so we don't blind-poll ~275 rings at full tilt (see POLL_BACKOFF_CYC) */
+                uint64_t tbk = rdcycle_();
+                while ((rdcycle_() - tbk) < POLL_BACKOFF_CYC) {
+                    if (r64(P_STOP)) {
+                        goto reader_done;
+                    }
+                }
             }
         }
     reader_done:
@@ -179,6 +255,11 @@ int main(uint64_t hartid) {
         w32(PROD(hartid), prod);
         w64(RDONE(hartid), 1);
         w64(RES(0x50 + hartid * 8), dropped);
+        w64(RES(0x60 + hartid * 8), bulk_words); /* diag: ILP burst width = bulk_words/segs */
+        w64(RES(0x70 + hartid * 8), segs);
+        w64(RES(0x80 + hartid * 8), rdcycle_() - t_start); /* uncontaminated total reader wall (X280 ~1 GHz) */
+        w64(RES(0x90 + hartid * 8), passes);               /* outer-loop passes */
+        w64(RES(0xA0 + hartid * 8), polls);                /* core-polls (1 ctrl bulk-read each) */
         for (;;) {
             __asm__ volatile("wfi");
         }
@@ -210,10 +291,21 @@ int main(uint64_t hartid) {
         uint64_t wbase = NOC_2M_WINDOW_BASE + (uint64_t)WRITE_WIN * NOC_2M_WINDOW_STRIDE;
         uint64_t fifo_off = fifo_addr & (NOC_2M_WINDOW_STRIDE - 1ULL);
         uint64_t bsent_off = bsent_addr & (NOC_2M_WINDOW_STRIDE - 1ULL);
+        /* Second window for the bytes_sent SIGNAL, NON-POSTED (posted=0): the write completes -- lands in
+         * host memory -- before the relay proceeds, so the host's pages_available() observes it promptly.
+         * POSTED bytes_sent writes (even batched) landed only in ~15ms bursts => the host under-drained and
+         * the relay reserve-stalled (the ~250k/s cap). */
+        wt.addr = bsent_addr >> 21;
+        wt.posted = 0;
+        (void)noc_configure_tlb_2m_ext(WRITE_WIN + 1u, &wt, 0);
+        uint64_t wbase_bsent = NOC_2M_WINDOW_BASE + (uint64_t)(WRITE_WIN + 1u) * NOC_2M_WINDOW_STRIDE;
         fence_();
 
         uint32_t cons[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+        uint32_t sig_ctr = 0;
         uint64_t total = 0, loops = 0, stalls = 0;
+        uint64_t cyc_reserve = 0, cyc_copy = 0; /* relay time-split: FIFO-reserve wait vs page copy+signal */
+        uint64_t t_start = rdcycle_();          /* total relay wall => empty-spin = wall - reserve - copy */
         for (;;) {
             uint64_t progressed = 0, all_done = 1;
             for (uint64_t h = 0; h < nread; h++) {
@@ -222,6 +314,7 @@ int main(uint64_t hartid) {
                 while (cn != pr) {
                     int stopped = 0;
                     uint64_t rs = 0;
+                    uint64_t trs = rdcycle_();
                     for (;;) { /* reserve one page of FIFO space (bytes in flight = bytes_sent-acked) */
                         fence_();
                         uint32_t acked = r32(backed_addr);
@@ -241,19 +334,32 @@ int main(uint64_t hartid) {
                             break;
                         }
                     }
+                    cyc_reserve += rdcycle_() - trs; /* time blocked on host FIFO room (bytes_sent-acked) */
                     if (stopped) {
                         goto relay_done;
                     }
+                    uint64_t tcp = rdcycle_();
                     page_copy(SPAGE(h, cn), wbase + fifo_off + write_ptr);
                     write_ptr += PAGE;
                     if (write_ptr >= fifo_total) {
                         write_ptr -= fifo_total;
                     }
-                    bytes_sent += PAGE;
-                    w32(wbase + bsent_off, bytes_sent);
+                    bytes_sent += PAGE; /* local (drives the reserve check) */
+                    /* Signal bytes_sent every 256 pages via the NON-POSTED window so it LANDS promptly (host
+                     * acks + frees FIFO room). Batched by 256 so the non-posted round-trips stay cheap
+                     * (~631k pages / 256 ~= 2.5k signal writes). */
+                    if (++sig_ctr >= 256u) {
+                        w32(wbase_bsent + bsent_off, bytes_sent);
+                        sig_ctr = 0;
+                    }
                     cn++;
                     total++;
                     progressed = 1;
+                    cyc_copy += rdcycle_() - tcp; /* page_copy to FIFO + write_ptr advance + bytes_sent signal */
+                }
+                if (cn != cons[h]) {
+                    w32(wbase_bsent + bsent_off, bytes_sent); /* flush the tail (non-posted) */
+                    sig_ctr = 0;
                 }
                 cons[h] = cn;
                 w32(CONS(h), cn);
@@ -272,7 +378,10 @@ int main(uint64_t hartid) {
         fence_();
         w64(RES(0x00), total);
         w64(RES(0x20), stalls);
-        w64(RES(0x18), DONE_MAGIC);
+        w64(RES(0xB0), rdcycle_() - t_start); /* relay wall (X280 ~1 GHz); empty-spin = wall-reserve-copy */
+        w64(RES(0xB8), cyc_reserve);          /* time blocked waiting on host D2H FIFO room */
+        w64(RES(0xC0), cyc_copy);             /* time in page_copy + bytes_sent signal */
+        w64(RES(0x18), DONE_MAGIC);           /* written LAST: host waits on it before reading results */
         for (;;) {
             __asm__ volatile("wfi");
         }

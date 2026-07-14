@@ -572,6 +572,95 @@ Files (uncommitted): `build_env_manager.cpp`, `d2h_socket.{hpp,cpp}`, `src/profs
 
 ---
 
+### 20. RT-profiler back-pressure — reader blind-polling is the wall (bh-11, 2026-07-10)
+
+The productionized drainer is `src/profzone.c` (2 readers + 1 relay), driven by the
+`RealtimeProfilerManager` and pushing through the real D2H socket to the RT Tracy handler.
+Measured under a real 64-core workload (`python -m tracy -m -p pytest
+tests/ttnn/tracy/test_trace_runs.py::test_with_ops`, `TT_METAL_X280_FORCE_PRIME=1`).
+
+**Symptom:** the drainer sustains only **~250k markers/s (≈16 MB/s)** end-to-end, and because
+`kernel_profiler.hpp` is lossless-BLOCKING (compute cores stall on a full L1 ring), the workload's
+TRISC-KERNEL zones inflate **~22× avg / up to ~2700×** (min ~7 µs → max ~15–22 ms). Single-core is
+clean. So the X280 drain rate directly throttles the compute.
+
+**What was tried on the drain/signal side — all no help (numbers):**
+- `bytes_sent` POSTED, batched once per N pages instead of per page: no change. It is NOT PCIe
+  write-combining coalescing of *many* writes — host observes `avail>0` only ~160×/run regardless of
+  write frequency (per-page 163, per-drain 160).
+- `bytes_sent` NON-POSTED via a 2nd `posted=0` window (`WRITE_WIN+1`), batched every 256 pages: SAFE
+  (no hang — a non-posted *write* is fine; only PCIe-tile *reads* hang), but no reliable throughput
+  change. Reserve-stalls are pure NOISE (48k / 78k / 888k / 1.3M back-to-back, prime-state dependent).
+- ILP reader: reader bulk-reads each contiguous ring segment off the System Port in one wide `vle64`
+  (LMUL=8) burst into a LIM scratch, then reshapes from LIM. Diagnostic (RES `+0xA0/+0xB0`) confirms
+  ILP is ACTIVE — reader 0 avg **230 words/seg** (115-marker bursts) — yet throughput stayed ~250k/s.
+- `fence_()` after the `bytes_sent` write: no effect.
+
+**The decisive measurement — the drain path is EXONERATED (~98× headroom).** Reran the isolated
+D2H-socket push bench on bh-11: `test_x280_profcons --socktest --npages 200000` **WITHOUT**
+`TT_METAL_DEVICE_PROFILER` (else the RT manager auto-boots profzone and steals the X280) →
+**1566 MB/s = 24.5M pages/s, lossless, done=1** (batch=16 push + notify). vs production 16 MB/s. So the
+socket + PCIe + host-drain path can do 1566 MB/s; reads are also proven fast in isolation (`gridilp`
+~1533 MB/s @ 2 harts ILP-4). The 250k/s bottleneck is ENTIRELY in the coupled READER path.
+
+**ROOT CAUSE (rdcycle + count instrumentation of the reader) = blind empty-ring POLLING, NOT reshape.**
+Corrected drain rate: reader wall = **1.42 s** for ~640k markers ⇒ **~450k markers/s** (the earlier
+"250k/s" used a wrong 2.5 s wall assumption). Clean count-based run (no per-iteration rdcycle):
+
+| reader | wall | markers | core-polls | ns/poll | productive segs | %productive |
+|---|---|---|---|---|---|---|
+| 0 | 1422 ms | 400 330 | 1 278 695 | 1112 | 3 413 | 0.27% |
+| 1 | 1421 ms | 241 114 | 1 322 970 | 1074 | 16 246 | 1.2% |
+
+Where the reader's 1.42 s goes (per reader, count-based —
+per-iteration rdcycle does NOT trap/contaminate here, wall unchanged with/without it):
+- **~2.6M core-polls (both readers) at ~1100 ns each = essentially the ENTIRE wall.** A "core-poll" =
+  bulk-read `ctrl[0..15]` (head+tail for all 5 RISCs) in one `vle` + `fence` + extract 10 values.
+- **Only ~20k of the 2.6M polls were productive (0.3%). 99.7% of polls find an empty ring.** The reader
+  free-runs (~23k passes × 55 cores), and markers trickle in over the ~1.4 s, so almost every poll is wasted.
+- reshape = 148 ms, bulk-read = 3 ms — both NEGLIGIBLE. **The reshape hypothesis was WRONG.** LIM scalar
+  ops measured ~52 ns each (reshape: 9 LIM ops/marker × 315k ≈ 148 ms).
+- Per-poll ~1100 ns ≈ ~300 ns (bulk-read + `fence`) + ~700 ns (reading the ctrl vector back out of LIM
+  scratch, 10 reads × ~68 ns) + loop glue.
+
+**CORRECTION — the reader is NOT the bottleneck; poll rate is irrelevant.** Tested a 10× poll reduction
+(idle-backoff: after a fully-empty pass, spin `POLL_BACKOFF_CYC`=500 µs before re-polling; productive
+passes skip it). Core-polls dropped as designed: 1.28M → 123k, passes 23k → 2.2k. **But wall (1416 ms),
+drain rate, and perturbation (162 µs avg / 14 ms max / 22×) were ALL identical.** So the 1.42 s reader
+"wall" is really the elongated WORKLOAD DURATION (the reader runs until teardown) — NOT time spent
+polling. Reducing polls just converts poll-time into backoff-time. The "polling is the wall" reading
+above conflated wall with busy-time; it's wrong. Reader poll/visit rate does not gate the compute.
+
+**RELAY TIME-SPLIT (2026-07-14) refutes the host-FIFO hypothesis — the WHOLE drain pipeline is ~90% IDLE.**
+Instrumented the relay (rdcycle brackets, X280 ~1 GHz): of a 1429 ms wall, **empty-spin = 1287 ms (90%)**,
+reserve-stall (host FIFO) = **108 ms (7.5%)**, copy = **33 ms (2%)**. The reserve-stall *count* is ~1M but
+the *time* is only 108 ms (~100 ns/spin), so the host FIFO is NOT the bottleneck. The relay is STARVED —
+spinning on empty LIM staging 90% of the time. The readers are idle too (reshape ~150 ms + reads 3 ms of
+their 1429 ms wall). So reader → relay → host all keep up with huge headroom; markers just arrive slowly.
+
+**⇒ The throttle is UPSTREAM of the drain — the PRODUCER (compute) marker-emission path, not the pipeline.**
+The compute emits ~630k markers over ~1.43 s (~440k/s) because the compute itself is slowed when emitting,
+not because the drain can't keep up. Consistent with EVERY drain-side lever having zero effect (poll rate
+10×, bytes_sent posted/non-posted, 1 MB FIFO, ILP reads). Single-core is clean, so it's a many-core
+producer effect. **NEXT: instrument the PRODUCER** — `kernel_profiler.hpp` SPSC emit path
+(`ring_ensure_room` block-on-full + `publish_tail` fence per marker) + the `ring_full_wait_count` the
+manager already logs at shutdown ("L1 ring hit capacity N times"). If rings rarely fill, the ~22× is
+per-marker emission overhead (fence/L1), not ring-full blocking. Then decide fix vs go-lossy.
+
+Files (uncommitted on bh-11, on top of EXPERIMENT `214632ee`): `src/profzone.c` — ILP reader (bulk `vle64`
+ring-segment read into LIM scratch `SCRATCH_BASE 0x08012000`, reshape from LIM) + bulk `ctrl[0..15]` poll
++ non-posted `bytes_sent` (2nd `posted=0` window) + count diag at RES `+0x60`=bulk_words, `+0x70`=segs,
+`+0x80`=reader wall, `+0x90`=passes, `+0xA0`=core-polls (the earlier per-iteration rdcycle-split brackets
+were removed — count-based is uncontaminated). `realtime_profiler_manager.cpp` — host log of the reader
+wall / drain rate / poll count / avg seg. See memory `x280-rt-profiler-backpressure`.
+
+**Bottom line for drop-vs-block:** the lossless X280 drain sustains **~450k markers/s** and inflates a
+64-core workload **~22×**, and that ceiling is set by the reader blind-polling ~275 mostly-idle rings
+(99.7% empty polls) — the drain/socket/reads all have >10× headroom. So the ceiling is *addressable*
+(cheaper polls ~3×, or a producer doorbell for more) if lossless is required; otherwise go lossy.
+
+---
+
 ## Hardware facts established
 
 - **X280 → host D2H write ceiling ≈ 3.0 GB/s** (1 hart, posted 64 B `vse64`,
@@ -632,6 +721,8 @@ Firmware — `tools/x280_bm/`:
 | `src/profrelay.c` | §14 relay device-profiler L1 snapshot → host (bit-exact, all RISCs/cores) |
 | `src/profcons.c` | §15 continuous SPSC consumer (lossless flow control) + `--bench` |
 | `src/profcons_split.c` | §15 reader/relay-hart split, two-sided ILP-4, NOC split (1097 MB/s) |
+| `src/profsock.c` | §19 D2H-socket sender bench (`--socktest`: 1566 MB/s isolated push on bh-11, §20) |
+| `src/profzone.c` | §20 PRODUCTION drainer: 2 readers (ILP `vle64`→LIM scratch, reshape) + 1 relay |
 
 Producer backend — `tt_metal/tools/profiler/`:
 | File | Purpose |

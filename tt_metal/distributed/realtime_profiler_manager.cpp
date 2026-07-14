@@ -1689,6 +1689,52 @@ void RealtimeProfilerManager::shutdown() {
                     total_markers,
                     loops,
                     reserve_stalls);
+                // Relay time-split (X280 ~1 GHz => cycles ~= ns). empty-spin = wall - reserve - copy is
+                // time the relay looped over readers finding LIM staging empty (reader too slow); reserve
+                // = time blocked on the host D2H FIFO (host too slow); copy = page_copy + bytes_sent.
+                {
+                    uint64_t rwall = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0xF0);
+                    uint64_t rreserve = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0xF8);
+                    uint64_t rcopy = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x100);
+                    uint64_t rempty = rwall - (rreserve + rcopy);
+                    log_info(
+                        tt::LogMetal,
+                        "[Real-time profiler] Device {}: relay time-split (of {} ms wall): reserve-stall={} ms "
+                        "(host FIFO), copy={} ms, empty-spin={} ms (staging empty / reader slow)",
+                        dev_state.chip_id,
+                        rwall / 1000000,
+                        rreserve / 1000000,
+                        rcopy / 1000000,
+                        rempty / 1000000);
+                }
+                // Reader ILP diagnostic: avg bulk-read segment width (words) per reader. Small (<~8)
+                // => the round-robin drains rings to near-empty each visit, so the vector burst is
+                // too narrow to pipeline (ILP inactive); large => wide bursts, ILP is doing work.
+                for (int rh = 0; rh < 2; ++rh) {
+                    uint64_t bulk_words = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0xA0 + rh * 8);
+                    uint64_t segs = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0xB0 + rh * 8);
+                    // Count-based (per-iteration rdcycle traps on the X280 => contaminates timing). One
+                    // rdcycle pair gives an uncontaminated wall; counts give per-op cost. X280 ~1 GHz.
+                    uint64_t wall = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0xC0 + rh * 8);
+                    uint64_t passes = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0xD0 + rh * 8);
+                    uint64_t polls = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0xE0 + rh * 8);
+                    uint64_t markers = bulk_words / 2;
+                    double wall_ms = wall / 1e6;
+                    log_info(
+                        tt::LogMetal,
+                        "[Real-time profiler] Device {}: reader {}: wall={} ms, {} markers => {} k/s; {} passes, "
+                        "{} core-polls ({} ns/poll); {} segments (avg {} words/seg)",
+                        dev_state.chip_id,
+                        rh,
+                        (uint64_t)wall_ms,
+                        markers,
+                        wall_ms > 0 ? (uint64_t)(markers / wall_ms) : 0,
+                        passes,
+                        polls,
+                        polls ? wall / polls : 0,
+                        segs,
+                        segs ? bulk_words / segs : 0);
+                }
                 dev_state.x280_driver->assert_reset();
             } catch (const std::exception& e) {
                 log_warning(
