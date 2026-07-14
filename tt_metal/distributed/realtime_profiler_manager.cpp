@@ -768,9 +768,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 return false;
             }
 
-            // TODO: Uncomment this and apply a debug verbosity level when
-            // https://github.com/tenstorrent/tt-metal/issues/30615 is done.
-            // ZoneScopedN("ProcessPage");
+            TTZoneScopedDN(RT_PROFILER, "ProcessPage");
             dev_state.socket->read(page_buf.data(), 1);
             uint32_t* read_ptr = page_buf.data();
 
@@ -800,9 +798,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
             // Skip records with id==0 (non-GO dispatch commands like SET_NUM_WORKER_SEMS):
             // they have no valid program and may carry stale end timestamps.
             if (start_id != 0) {
-                // TODO: Uncomment this and apply a debug verbosity level when
-                // https://github.com/tenstorrent/tt-metal/issues/30615 is done.
-                // ZoneScopedN("InvokeCallbacks");
+                TTZoneScopedDN(RT_PROFILER, "InvokeCallbacks");
                 tt::ProgramRealtimeRecord record{
                     .runtime_id = start_id,
                     .chip_id = dev_state.chip_id,
@@ -828,9 +824,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 continue;
             }
 
-            // TODO: Uncomment this and apply a debug verbosity level when
-            // https://github.com/tenstorrent/tt-metal/issues/30615 is done.
-            // ZoneScopedN("PollLoop");
+            TTZoneScopedDN(RT_PROFILER, "PollLoop");
             bool any_data = false;
 
             for (auto& dev_state : devices_) {
@@ -848,18 +842,14 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
             }
 
             if (!any_data) {
-                // TODO: Uncomment this and apply a debug verbosity level when
-                // https://github.com/tenstorrent/tt-metal/issues/30615 is done.
-                // ZoneScopedN("Idle");
+                TTZoneScopedDN(RT_PROFILER, "Idle");
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
         }
 
         // Drain in-flight PCIe pages until all sockets stay empty for several rounds.
         {
-            // TODO: Uncomment this and apply a debug verbosity level when
-            // https://github.com/tenstorrent/tt-metal/issues/30615 is done.
-            // ZoneScopedN("DrainShutdown");
+            TTZoneScopedDN(RT_PROFILER, "DrainShutdown");
             constexpr uint32_t kDrainQuietRounds = 10;
             uint64_t drain_pages = 0;
             uint32_t quiet_rounds = 0;

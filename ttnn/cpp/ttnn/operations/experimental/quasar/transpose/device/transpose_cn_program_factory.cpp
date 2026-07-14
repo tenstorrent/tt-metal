@@ -12,6 +12,8 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+
 using namespace tt::constants;
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
@@ -19,6 +21,7 @@ using namespace tt::tt_metal::experimental;
 namespace ttnn::prim::qsr {
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 // DFB / kernel / tensor names for the CN factory's ProgramSpec.
 const DFBSpecName CN_CB{"cn_cb"};
@@ -27,10 +30,12 @@ const KernelSpecName CN_WRITER{"cn_writer"};
 const TensorParamName INPUT{"input"};
 const TensorParamName OUTPUT{"output"};
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_program_artifacts(
     const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;  // resolve the file-local ids/helpers below
     const auto& input_tensor = tensor_args.input;
     const auto& input_mesh_tensor = input_tensor.mesh_tensor();
     const auto& output_mesh_tensor = output_tensor.mesh_tensor();
@@ -128,7 +133,7 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
             },
         .runtime_arg_schema =
             {.runtime_arg_names = {"N", "C", "HtWt", "batch_step", "channel_step", "num_pages", "start_id", "hw", "n"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
 
     // Writer KernelSpec.
@@ -152,7 +157,7 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
                 {"write_size", stick_size},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
 
     spec.kernels.push_back(std::move(reader));
