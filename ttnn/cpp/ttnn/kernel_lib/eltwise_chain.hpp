@@ -51,18 +51,17 @@
  *   eltwise_chain(EltwiseShape::tiles(num_tiles),
  *       CopyTile<dfb_in, Dst::D0, InputLifecycle::Streaming>{},
  *       Exp<>{},
- *       PackTile<dfb_out, Dst::D0, OutputLifecycle::Streaming>{});
+ *       PackTile<dfb_out, OutputLifecycle::Streaming>{});
  *
  *   // Streaming binary — A + B -> out (BinaryFpu writes DEST; the output buffer lives on PackTile)
  *   eltwise_chain(EltwiseShape::tiles(num_tiles),
  *       BinaryFpu<dfb_a, dfb_b, BinaryFpuOp::Add>{},
- *       PackTile<dfb_out, Dst::D0, OutputLifecycle::Streaming, OperandKind::Scalar,
- *                PackTileReconfig::Output>{});
+ *       PackTile<dfb_out, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
  *
  * Not supported: per-iteration (mid-loop) dtype swaps — each element's dtype reconfig point is
  * resolved per element at compile time (fold-driven, emitted once at element entry), so there is
- * no per-loop-iteration dtype reconfig path; pack-relu; and the legacy `acquire_dst/release_dst`
- * macros (modern dst-sync only).
+ * no per-loop-iteration reconfig path; pack-relu; and the legacy `acquire_dst/release_dst` macros
+ * (modern dst-sync only).
  */
 
 #include <cstdint>
@@ -143,29 +142,6 @@ enum class SetupOwner {
     Chain,   // this eltwise_chain call emits the one-time setup (init + reconfig)
     Caller,  // the caller emitted it once, outside the loop — the chain emits none of it here
 };
-
-// -----------------------------------------------------------------------------
-// Skip-compute — a performance-debugging BUILD knob, NOT part of the eltwise_chain API.
-//
-// With CKL_ELTWISE_CHAIN_SKIP_COMPUTE=1, every eltwise_chain in the translation unit emits only the
-// CB lifecycle (wait/pop/reserve/push) + the tile_regs window, skipping all init, reconfig, and
-// compute. CB counts are unchanged, so the reader/writer handshake holds — no hang, just fast
-// garbage output.
-//
-// USE IT to profile a kernel skip-off vs skip-on: the delta is the compute+init cost, and the
-// skip-on time is the CB/data-movement floor. That split tells you whether an eltwise kernel is
-// compute-bound or dataflow-bound before you spend effort optimizing the wrong half.
-//
-// DON'T ship it: output is garbage, so it is only ever a local profiling build — never production,
-// and never a correctness run.
-//
-// Opt in per kernel, before the include (call sites never change):
-//   #define CKL_ELTWISE_CHAIN_SKIP_COMPUTE 1
-//   #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
-// See tests/axes/skip_compute_exp.cpp for the pattern.
-#ifndef CKL_ELTWISE_CHAIN_SKIP_COMPUTE
-#define CKL_ELTWISE_CHAIN_SKIP_COMPUTE 0
-#endif
 
 // =============================================================================
 // 1c. Taxonomy: Lifecycle as reserve/push axes plus a purpose tag
@@ -269,7 +245,7 @@ enum class ReservePolicy : uint8_t {
     None,
     PerTile,
     PerChunk,
-    PerOuter,  // reserve 1 at each OUTER (ht/row) iteration entry — one output tile per row
+    PerOuter,  // reserve one accumulated output at each outer-row entry
     Upfront,
     OneUpfront,  // reserve one accumulator tile once at chain entry
 };
@@ -278,7 +254,7 @@ enum class PushPolicy : uint8_t {
     None,
     PerTile,
     PerChunk,
-    PerOuter,  // push 1 at each OUTER (ht/row) iteration exit — one output tile per row
+    PerOuter,  // push one accumulated output at each outer-row exit
     AtEnd,
     OneAtEnd,  // push one accumulator tile once at chain exit
 };
@@ -286,6 +262,7 @@ enum class PushPolicy : uint8_t {
 enum class OutputLifecyclePurpose : uint8_t {
     General,
     L1Accumulation,
+    DestAccumulation,
 };
 
 struct OutputLifecycle {
@@ -299,8 +276,12 @@ struct OutputLifecycle {
     constexpr bool operator!=(OutputLifecycle other) const noexcept { return !(*this == other); }
 
     // Named cells — written type-qualified (e.g. `OutputLifecycle::Bulk`). Defined out-of-line below.
-    static const OutputLifecycle Streaming, Chunked, Bulk, BulkReservePerTile, BulkReservePerChunk, CallerManaged,
-        HeldReserve, DeferredReserve, OuterStream, L1Accumulation, L1AccumulationCallerManaged;
+    // Naming: single-word names (Streaming/Chunked/Bulk/CallerManaged) are the symmetric cells where
+    // reserve and push move together; the asymmetric cells spell BOTH axes literally as
+    // Reserve<rate>Push<rate> (e.g. ReserveAllPushPerTile = reserve all upfront, push one per tile).
+    static const OutputLifecycle Streaming, Chunked, Bulk, ReserveAllPushPerTile, ReserveAllPushPerChunk, CallerManaged,
+        ReserveNonePushEnd, L1Accumulation, L1AccumulationCallerManaged, DestAccumulation,
+        DestAccumulationCallerManaged;
 };
 
 // Default: reserve and push 1 output tile each step.
@@ -311,37 +292,45 @@ inline constexpr OutputLifecycle OutputLifecycle::Chunked = {ReservePolicy::PerC
 inline constexpr OutputLifecycle OutputLifecycle::Bulk = {ReservePolicy::Upfront, PushPolicy::AtEnd};
 // Reserve all output tiles upfront, but push 1 per step so a downstream consumer can start reading before the chain
 // finishes.
-inline constexpr OutputLifecycle OutputLifecycle::BulkReservePerTile = {ReservePolicy::Upfront, PushPolicy::PerTile};
+inline constexpr OutputLifecycle OutputLifecycle::ReserveAllPushPerTile = {ReservePolicy::Upfront, PushPolicy::PerTile};
 // Reserve all output tiles upfront, push block_size tiles at a time.
-inline constexpr OutputLifecycle OutputLifecycle::BulkReservePerChunk = {ReservePolicy::Upfront, PushPolicy::PerChunk};
+inline constexpr OutputLifecycle OutputLifecycle::ReserveAllPushPerChunk = {
+    ReservePolicy::Upfront, PushPolicy::PerChunk};
 // Chain does not reserve or push (it only writes the tile). Use when you wrap the chain in your own reserve/push.
 inline constexpr OutputLifecycle OutputLifecycle::CallerManaged = {ReservePolicy::None, PushPolicy::None};
-// Reserve 1 output tile per step, but do not push — you push later yourself.
-inline constexpr OutputLifecycle OutputLifecycle::HeldReserve = {ReservePolicy::PerTile, PushPolicy::None};
 // Do not reserve (you reserved upfront yourself), push all at the end.
-inline constexpr OutputLifecycle OutputLifecycle::DeferredReserve = {ReservePolicy::None, PushPolicy::AtEnd};
-// Reserve and push 1 output tile per row (one per outer/ht step). Use for chains that produce one output tile per row
-// instead of one per tile.
-inline constexpr OutputLifecycle OutputLifecycle::OuterStream = {ReservePolicy::PerOuter, PushPolicy::PerOuter};
+inline constexpr OutputLifecycle OutputLifecycle::ReserveNonePushEnd = {ReservePolicy::None, PushPolicy::AtEnd};
 // L1 accumulation owns one persistent output tile for the whole chain: reserve it once, repeatedly
 // accumulate into it, then publish exactly that one tile at chain exit.
 inline constexpr OutputLifecycle OutputLifecycle::L1Accumulation = {
     ReservePolicy::OneUpfront, PushPolicy::OneAtEnd, OutputLifecyclePurpose::L1Accumulation};
-// L1 accumulation with both synchronization edges owned by the caller. The chain only writes the
-// caller's already-reserved accumulator tile; the caller decides when to publish it.
+// L1 accumulation with both synchronization edges owned by the caller. The chain only accumulates
+// into the caller's already-reserved tile; the caller decides when to publish it.
 inline constexpr OutputLifecycle OutputLifecycle::L1AccumulationCallerManaged = {
     ReservePolicy::None, PushPolicy::None, OutputLifecyclePurpose::L1Accumulation};
+// DEST accumulation keeps one sticky DEST tile live across each outer row, then packs and
+// publishes one result per row. A 1D shape has one row and therefore produces one result.
+inline constexpr OutputLifecycle OutputLifecycle::DestAccumulation = {
+    ReservePolicy::PerOuter, PushPolicy::PerOuter, OutputLifecyclePurpose::DestAccumulation};
+// DEST accumulation with reserve/push owned by the caller. The caller provides one output
+// slot per outer row.
+inline constexpr OutputLifecycle OutputLifecycle::DestAccumulationCallerManaged = {
+    ReservePolicy::None, PushPolicy::None, OutputLifecyclePurpose::DestAccumulation};
 
 constexpr bool is_legal_output_lifecycle(OutputLifecycle lc) noexcept {
     return lc == OutputLifecycle::Streaming || lc == OutputLifecycle::Chunked || lc == OutputLifecycle::Bulk ||
-           lc == OutputLifecycle::BulkReservePerTile || lc == OutputLifecycle::BulkReservePerChunk ||
-           lc == OutputLifecycle::CallerManaged || lc == OutputLifecycle::HeldReserve ||
-           lc == OutputLifecycle::DeferredReserve || lc == OutputLifecycle::OuterStream ||
-           lc == OutputLifecycle::L1Accumulation || lc == OutputLifecycle::L1AccumulationCallerManaged;
+           lc == OutputLifecycle::ReserveAllPushPerTile || lc == OutputLifecycle::ReserveAllPushPerChunk ||
+           lc == OutputLifecycle::CallerManaged || lc == OutputLifecycle::ReserveNonePushEnd ||
+           lc == OutputLifecycle::L1Accumulation || lc == OutputLifecycle::L1AccumulationCallerManaged ||
+           lc == OutputLifecycle::DestAccumulation || lc == OutputLifecycle::DestAccumulationCallerManaged;
 }
 
 constexpr bool is_l1_accumulation_output_lifecycle(OutputLifecycle lc) noexcept {
     return lc == OutputLifecycle::L1Accumulation || lc == OutputLifecycle::L1AccumulationCallerManaged;
+}
+
+constexpr bool is_dest_accumulation_output_lifecycle(OutputLifecycle lc) noexcept {
+    return lc == OutputLifecycle::DestAccumulation || lc == OutputLifecycle::DestAccumulationCallerManaged;
 }
 
 /// Which tile of an input operand to read at each step of the (Ht x Wt) walk.
@@ -425,9 +414,9 @@ constexpr bool is_legal_input_lifecycle_with_base(InputLifecycle lc) noexcept {
 
 /// Lifecycle compatibility check for `TileBase != None` on output elements.
 constexpr bool is_legal_output_lifecycle_with_base(OutputLifecycle lc) noexcept {
-    return lc == OutputLifecycle::Bulk || lc == OutputLifecycle::DeferredReserve ||
-           lc == OutputLifecycle::HeldReserve || lc == OutputLifecycle::CallerManaged ||
-           lc == OutputLifecycle::L1AccumulationCallerManaged;
+    return lc == OutputLifecycle::Bulk || lc == OutputLifecycle::ReserveNonePushEnd ||
+           lc == OutputLifecycle::CallerManaged || lc == OutputLifecycle::L1AccumulationCallerManaged ||
+           lc == OutputLifecycle::DestAccumulationCallerManaged;
 }
 
 // =============================================================================
@@ -470,10 +459,10 @@ constexpr uint32_t to_u32(Dst s) noexcept { return static_cast<uint32_t>(s); }
 /// processes `block_size` tiles across `block_size` DEST lanes (lane j at slot
 /// dst_slot + j * chain_lane_width); `block_size == 1` is the per-tile shape.
 ///
-/// DEST footprint `block_size * chain_lane_width <= DEST_AUTO_LIMIT` is the caller's
-/// responsibility — query `chain_max_block_v<Chain>` and static_assert at the call site
-/// for a build-time check. Streaming CB-reader chains consume one tile per iter, so the
-/// chain silently clamps block_size to 1 for them (`!chain_supports_block_v<Chain>`).
+/// The chain clamps `block_size` at runtime so `block_size * chain_lane_width` always fits DEST
+/// (`DEST_AUTO_LIMIT`): an oversized value can't overflow DEST, it only costs extra outer
+/// iterations. Streaming CB-reader chains consume one tile per iter, so block_size is clamped to 1
+/// for them.
 
 // =============================================================================
 // 4. Policy enums — CB lifecycle, indexing, reconfig, broadcast
@@ -483,8 +472,8 @@ constexpr uint32_t to_u32(Dst s) noexcept { return static_cast<uint32_t>(s); }
 /// CopyTile / BinaryFpu / PackTile.
 ///
 /// 2D-walk tile index per kind (Scalar→0, Block→ht*Wt+wt, Row→wt, Col→ht; upfront window
-/// 1 / Ht*Wt / Wt / Ht respectively). Row/Col are meaningful only in the 2D
-/// `EltwiseShape{Ht, Wt}` overload — the 1D `n_tiles` overload static_asserts them out.
+/// 1 / Ht*Wt / Wt / Ht respectively). Row/Col are meaningful only with a 2D
+/// `EltwiseShape::grid(Ht, Wt)` shape; there is no separate 1D overload.
 /// Tile offsets are layered on via `TileBase`, not separate index modes.
 ///
 /// Row/Col require a non-streaming policy (caller stages the whole Row/Col window — Wt or Ht
@@ -501,11 +490,19 @@ constexpr uint32_t to_u32(Dst s) noexcept { return static_cast<uint32_t>(s); }
 /// (canonical: a copy/identity/typecast kernel whose CBs are set once at boot). Keep it.
 enum class CopyTileReconfig : uint8_t {
     None,   // no reconfig (boot init already programmed this CB's format)
-    Input,  // copy_tile_to_dst_init_short_with_dt(old_cb, new_cb)
+    Input,  // reconfig_data_format_srca on entry (single-arg first-emit; two-arg _with_dt with prev)
 };
 
 /// FPU binary op selector.
 enum class BinaryFpuOp : uint8_t { Add, Sub, Mul };
+
+/// Whether an FPU binary result overwrites its lane-relative DEST tile or accumulates every
+/// logical input into the chain's single sticky DEST tile. The enabled mode is a type property:
+/// it selects a compile-time-specialized chain schedule with no per-tile mode branch.
+enum class DestAccumulation : uint8_t {
+    Disabled,
+    Enabled,
+};
 
 /// FPU binary dtype-reconfig. Input-side only — pack-side reconfig is owned by
 /// the downstream `PackTile` element (`PackTileReconfig::Output`). BinaryFpu writes
@@ -558,7 +555,7 @@ enum class DestReuseReconfig : uint8_t {
 /// UnaryBcast reconfig.
 enum class UnaryBcastReconfig : uint8_t {
     None,
-    Input,  // reconfigure_unary_bcast(old_icb, new_icb, old_ocb, new_ocb)
+    Input,  // reconfig srca + srcb for the bcast input CB (no pack side — UnaryBcast never packs)
 };
 
 /// Pack-side dtype-reconfig.
@@ -592,14 +589,15 @@ enum class PackTileL1Accumulation : uint8_t {
 // 7. Chain element types — declarations
 //
 //    Implementation lives in eltwise_chain.inl and the per-family headers.
-//    Every element has the following surface:
+//    Every element exposes:
 //
-//      static void init();                   // hardware init (per chain entry, or per tile)
-//      static void wait_inputs(uint32_t i);  // CB wait phase (CB readers only)
-//      static void exec(uint32_t i);         // body (always runs per tile)
-//      static void pop_inputs(uint32_t i);   // CB pop phase  (CB readers only)
-//      static void reserve_outputs(uint32_t i); // CB reserve  (CB writers only)
-//      static void push_outputs(uint32_t i);    // CB push     (CB writers only)
+//      init()          // per-op hw init (instance method; may read ctor args, e.g. seed/scalar)
+//      exec(...)       // body per tile — (i, slot_offset) for DEST-only ops; (i_flat, ht, wt,
+//                      //   slot_offset) for CB elements. slot_offset shifts the DEST lane for block>1.
+//      wait_per_tile / wait_per_block / wait_upfront / wait_per_row   // CB wait  (readers, per policy)
+//      pop_per_tile / pop_per_block / pop_upfront_end / pop_per_row   // CB pop   (readers, per policy)
+//      reserve_per_tile / reserve_per_block / reserve_upfront         // CB reserve (writers, per policy)
+//      push_per_tile / push_per_block / push_at_end                  // CB push    (writers, per policy)
 //
 //    Plus static-constexpr traits used by chain-shape predicates:
 //      is_upfront, lane_width, etc.
@@ -626,7 +624,8 @@ template <
     OperandKind AIndex = OperandKind::Scalar,
     OperandKind BIndex = AIndex,
     TileOffset OffsetA = TileOffset::Unset,
-    TileOffset OffsetB = TileOffset::Unset>
+    TileOffset OffsetB = TileOffset::Unset,
+    DestAccumulation Accumulation = DestAccumulation::Disabled>
 struct BinaryFpu;
 
 template <
@@ -691,7 +690,7 @@ struct RandTile;
 /// Index-mode (OperandKind) and block-mode behavior match the enum docs above: Block /
 /// Row / Col / Scalar pick the per-iter tile index; any `is_upfront` element takes the
 /// upfront-block path; Streaming chains clamp block_size to 1. Row/Col need a non-streaming
-/// policy. Query `chain_supports_block_v` / `chain_max_block_v` for a build-time block check.
+/// policy.
 template <SetupOwner SO = SetupOwner::Chain, class... Es>
 ALWI void eltwise_chain(EltwiseShape shape, Es... elts);
 
