@@ -145,10 +145,25 @@ ALWI void tilizeA_B_reduce_init(
  */
 // clang-format on
 template <bool neginf_srcA = true, bool zero_srcA_reduce = false>
-ALWI void tilizeA_B_reduce_init_short(uint32_t icb0, uint32_t icb1_scaler, uint32_t block) {
+ALWI void tilizeA_B_reduce_init_short(uint32_t icb0, uint32_t icb1_scaler, uint32_t block, uint32_t ocb) {
+    // Identical to tilizeA_B_reduce_init but WITHOUT the three llk_*_hw_configure calls (unpack/math/pack),
+    // which are one-time hardware setup and corrupt engine state if re-run per iteration. The per-use inits
+    // below -- including the MATH pack-sync and the PACK init/dest-init -- must all be re-issued together so
+    // UNPACK, MATH and PACK stay coherent when `block` (tiles-to-reduce) or the input CB changes mid-kernel.
+    // On Quasar this matters especially because pack_untilize_dest_init only issues llk_pack_untilize_init and
+    // relies on llk_pack_init/llk_pack_dest_init here for the packer's dest-offset / MATH-PACK sync state.
     UNPACK((llk_unpack_tilizeA_B_init<neginf_srcA, true /*reload_srcB*/, false /*zero_srcA*/, zero_srcA_reduce>(
         icb0, icb1_scaler, block)));
     MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>(icb0, icb1_scaler)));
+#ifndef ARCH_QUASAR
+    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
+    PACK((llk_pack_init(ocb)));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>(ocb)));
+#else
+    MATH((llk_math_pack_sync_init()));
+    PACK((llk_pack_init(ocb)));
+    PACK((llk_pack_dest_init()));
+#endif
 }
 #endif  // (REDUCE_OP && REDUCE_DIM) || __DOXYGEN__
 

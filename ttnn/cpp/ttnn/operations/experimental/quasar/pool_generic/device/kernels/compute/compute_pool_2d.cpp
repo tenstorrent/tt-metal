@@ -263,7 +263,7 @@ void kernel_main() {
             // fault). Re-initing only some engines desynced them (Risc IB interrupt, watcher 0x19, on MATH then
             // PACK); the short compute API keeps unpack+math in lockstep without the illegal per-block reconfig.
             tilizeA_B_reduce_init_short<neginf_srca_maxpool, zero_srca_avgpool>(
-                curr_in_cb_id, curr_scalar_cb_id, tiles_to_reduce);
+                curr_in_cb_id, curr_scalar_cb_id, tiles_to_reduce, pack_target_cb_id);
             MATH(WATCHER_RING_BUFFER_PUSH(0xC0FFEE11u));
             tile_regs_acquire();
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
