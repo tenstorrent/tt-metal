@@ -352,6 +352,11 @@ def generate_perf_test(
         "`trace_region_size`/`num_command_queues` on that self-open call when TT_PERF_TRACE (drop the "
         "`_DEV_PARAMS`/`device_params` fixture entirely). Keep `_build_for_perf(dev)` building the pipeline "
         "on the passed-in `dev` so both the eager forward and the trace run the SAME sharded topology.\n"
+        "- MESH SHAPE — honor the tool's topology: when you self-open a mesh, derive the (rows, cols) via "
+        "`from models.experimental.perf_automation.agent.perf_adapter import resolve_mesh_shape` and "
+        "`rows, cols = resolve_mesh_shape(default_rows=<source rows>, default_cols=<source cols>)`, then "
+        "open `MeshShape(rows, cols)`. This lets --devices/--mesh reshape the run (single->1x1, N chips->the "
+        "planned TP x DP); with the env unset it falls back to the source's own shape. Do NOT hardcode the shape.\n"
         "- Lift the imports + build args straight from the demo above.\n\n"
         f"Use this structural skeleton (adapt the build+run to the demo):\n{_SKELETON_REF}\n"
     )

@@ -80,3 +80,22 @@ def test_neither_no_write_inputs_means_1cq(monkeypatch):
     a = PipelineDecodeAdapter(lambda dev: _PipeNeither())
     a.setup(device=object())
     assert not hasattr(a, "write_inputs")  # measure_adapter auto -> single-CQ
+
+
+def test_resolve_mesh_shape_reads_env_else_default(monkeypatch):
+    from agent.perf_adapter import resolve_mesh_shape
+
+    monkeypatch.delenv("TT_PERF_MESH_ROWS", raising=False)
+    monkeypatch.delenv("TT_PERF_MESH_COLS", raising=False)
+    assert resolve_mesh_shape(default_rows=1, default_cols=4) == (1, 4)  # unset -> source default
+
+    monkeypatch.setenv("TT_PERF_MESH_ROWS", "1")
+    monkeypatch.setenv("TT_PERF_MESH_COLS", "1")
+    assert resolve_mesh_shape(default_rows=1, default_cols=4) == (1, 1)  # env wins -> single chip
+
+    monkeypatch.setenv("TT_PERF_MESH_ROWS", "2")
+    monkeypatch.setenv("TT_PERF_MESH_COLS", "2")
+    assert resolve_mesh_shape(default_rows=1, default_cols=4) == (2, 2)  # env wins -> planned split
+
+    monkeypatch.setenv("TT_PERF_MESH_ROWS", "notanint")
+    assert resolve_mesh_shape(default_rows=1, default_cols=4) == (1, 4)  # bad env -> default

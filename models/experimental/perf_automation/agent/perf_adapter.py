@@ -32,7 +32,23 @@ the perf test's guard then falls back to FORWARD_WALL_MS and the detector report
 
 from __future__ import annotations
 
+import os
 from typing import Callable
+
+
+def resolve_mesh_shape(default_rows: int = 1, default_cols: int = 1) -> tuple[int, int]:
+    """The topology the run should open, as (rows, cols). optimize/emit-e2e export the planned split
+    (plan_parallelism -> TP x DP) into TT_PERF_MESH_ROWS/COLS; a model's device-open (or the generated
+    perf test's self-open) calls this to honor it, falling back to its own default when unset. This is
+    how --devices/--mesh actually reshapes topology: the tool plans, the open reads it here."""
+    try:
+        r = int(os.environ.get("TT_PERF_MESH_ROWS", ""))
+        c = int(os.environ.get("TT_PERF_MESH_COLS", ""))
+        if r >= 1 and c >= 1:
+            return r, c
+    except (TypeError, ValueError):
+        pass
+    return default_rows, default_cols
 
 
 class PipelineDecodeAdapter:

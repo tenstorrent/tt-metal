@@ -134,6 +134,25 @@ def select_parallelism(chips: int, kernel_report) -> ParallelConfig:
     return ParallelConfig(tp=1, dp=chips)
 
 
+def plan_parallelism(model_id: str, chips: int):
+    """Shared topology planner for BOTH emit-e2e and optimize: probe the model, evaluate per-TP kernel
+    viability, and return the select_parallelism ParallelConfig for `chips`. Returns None when chips<=1
+    or the model cannot be probed (caller then runs single-chip / a 1D default). Engine-neutral: the
+    only place either path decides a TP x DP split, so both stay consistent."""
+    if not model_id or not chips or chips <= 1:
+        return None
+    try:
+        from .cli import evaluate_kernels, probe_model
+
+        probe = probe_model(model_id)
+        if not getattr(probe, "raw_config", None):
+            return None
+        kr = evaluate_kernels(probe.raw_config, tp_grid=None)
+        return select_parallelism(chips, kr)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def enumerate_meshes(box: Box, explore_pp: bool = False) -> Iterator[Tuple[Tuple[int, int], ParallelConfig]]:
     """
     Yield (mesh_shape, parallel_config) for each canonical mesh on `box`.

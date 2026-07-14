@@ -1502,21 +1502,9 @@ def _mesh_chip_count(mesh_arg) -> int:
 
 
 def _planned_parallelism(model_id: str, args):
-    chips = _mesh_chip_count(getattr(args, "mesh", None))
-    if chips <= 1:
-        return None
-    try:
-        from ..cli import evaluate_kernels, probe_model
-        from ..parallelism import select_parallelism
+    from ..parallelism import plan_parallelism
 
-        probe = probe_model(model_id)
-        if not getattr(probe, "raw_config", None):
-            return None
-        kr = evaluate_kernels(probe.raw_config, tp_grid=None)
-        pc = select_parallelism(chips, kr)
-    except Exception:
-        return None
-    return pc
+    return plan_parallelism(model_id, _mesh_chip_count(getattr(args, "mesh", None)))
 
 
 def _parallelism_prompt_block(pc) -> str:

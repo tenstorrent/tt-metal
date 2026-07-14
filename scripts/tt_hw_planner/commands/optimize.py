@@ -252,6 +252,59 @@ def run_perf_optimization(
     return _latest_summary(perf_dir), rc
 
 
+def _chip_count_from_mesh(mesh_arg) -> int:
+    if not mesh_arg:
+        return 0
+    try:
+        prod = 1
+        for tok in str(mesh_arg).lower().split("x"):
+            prod *= int(tok)
+        return max(prod, 0)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _optimize_chip_count(args):
+    mesh_chips = _chip_count_from_mesh(getattr(args, "mesh", None))
+    if mesh_chips >= 1:
+        return mesh_chips
+    dev = (getattr(args, "devices", "") or "").strip()
+    if dev == "single":
+        return 1
+    if dev in ("", "all"):
+        return None
+    ids = [x for x in dev.split(",") if x.strip() != ""]
+    return len(ids) or None
+
+
+def _derive_topology_env(args, model_dir):
+    """Reshape topology from --devices/--mesh the SAME way emit-e2e does: chip count -> shared
+    plan_parallelism (kernel-viable TP x DP) -> export TT_PERF_MESH_ROWS/COLS the model's open + the
+    perf skeleton read via perf_adapter.resolve_mesh_shape. Falls back to a 1D 1xN mesh when the model
+    can't be probed (existing --model-dir with no HF id). No-op when chip count is unknown ('all')."""
+    chips = _optimize_chip_count(args)
+    if not chips:
+        return
+    if chips <= 1:
+        os.environ["TT_PERF_MESH_ROWS"] = "1"
+        os.environ["TT_PERF_MESH_COLS"] = "1"
+        print("  [optimize] topology: single chip -> mesh 1x1")
+        return
+    rows, cols, tag = 1, chips, "1D default"
+    model_id = None if model_dir else getattr(args, "target", None)
+    try:
+        from ..parallelism import plan_parallelism
+
+        pc = plan_parallelism(model_id, chips)
+    except Exception:  # noqa: BLE001
+        pc = None
+    if pc is not None:
+        rows, cols, tag = pc.dp, pc.tp, "kernel-viable"
+    os.environ["TT_PERF_MESH_ROWS"] = str(rows)
+    os.environ["TT_PERF_MESH_COLS"] = str(cols)
+    print(f"  [optimize] topology: {chips}-chip -> mesh {rows}x{cols} (TP={cols} DP={rows}) [{tag}]")
+
+
 def cmd_optimize(args) -> int:
     try:
         from ..cli import _quiet_framework_logging
@@ -283,6 +336,7 @@ def cmd_optimize(args) -> int:
     if pcc_test:
         print(f"  [optimize] pcc gate: {pcc_test} (perf test auto-generated from it)")
     print(f"  [optimize] engine={engine} devices={args.devices} mesh={args.mesh or '-'} metric={args.metric}")
+    _derive_topology_env(args, model_dir)
     if engine == "cc":
         run_cc = _load_cc_runner(repo_root)
         if run_cc is None:
