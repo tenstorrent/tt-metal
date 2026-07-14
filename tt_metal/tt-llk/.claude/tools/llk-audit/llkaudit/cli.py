@@ -19,8 +19,8 @@ The fact-base input is the concatenated per-file JSON the extractor prints
     checks: { <name>: { description, blind_spots, count,
       findings: [ { file, line, function, kind, hint, detail, evidence,
                     safety? (a sub-annotation like SAFE_BY_MASKING /
-                    UNRESOLVED_COWRITER / LOW_CONFIDENCE / FLUSH_NOT_BARRIER /
-                    POSTED_FLUSH_ONLY — never a pass/fail) } ] } } }
+                    POTENTIAL_CLOBBER / UNRESOLVED_COWRITER / LOW_CONFIDENCE /
+                    FLUSH_NOT_BARRIER / POSTED_FLUSH_ONLY — never a pass/fail) } ] } } }
 
 A successful run exits 0 (augmentor, never a gate — it does not fail on findings).
 Argument errors (unknown check, unreadable --facts, bad --arch) exit 2 via
