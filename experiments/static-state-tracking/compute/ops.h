@@ -164,13 +164,13 @@ ALWI auto copy_tile(Tag<S>, const Tensor<TileT, B>& in, uint32_t in_idx, uint32_
 }
 
 // ---------------------------------------------------------------------------
-// pack_untilize_dest: pack a block of DST tiles -> L1 in untilized layout.
+// untilize_block: pack a block of DST tiles -> L1 in untilized layout.
 // Configures PACK for untilize (+ geometry) only when the incoming state does
 // not already match.  TilesPerBlock/TilesPerRow lead the template list so callers write
-// `pack_untilize_dest<tiles_per_block, tiles_per_row>(state, out, block_index)`.
+// `untilize_block<tiles_per_block, tiles_per_row>(state, out, block_index)`.
 // ---------------------------------------------------------------------------
 template <uint16_t TilesPerBlock, uint16_t TilesPerRow, const State& S, typename TileT, Backend B>
-ALWI auto pack_untilize_dest(Tag<S>, const Tensor<TileT, B>& out, uint32_t col_tile_offset) {
+ALWI auto untilize_block(Tag<S>, const Tensor<TileT, B>& out, uint32_t col_tile_offset) {
     constexpr TileConfig tile_config = Resolver<TileT>::tile_config();
 
     // The untilize PACR MOP depends on mode + block width (TilesPerBlock); the per-row

@@ -67,7 +67,7 @@ void kernel_main() {
 
             sst::compute::tile_regs_wait();
             // Drain the DST block to L1 in untilized (row-major) layout.
-            auto s_packed = pack_untilize_dest<tiles_per_block, tiles_per_row>(
+            auto s_packed = untilize_block<tiles_per_block, tiles_per_row>(
                 s_copied, out, static_cast<uint32_t>(b) * tiles_per_block);
             sst::compute::tile_regs_release();
 

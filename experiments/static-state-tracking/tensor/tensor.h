@@ -20,7 +20,7 @@
 // can never reach a DFB release path (or vice-versa). The verbs are uniform
 // across both backends — wait_front / reserve_back / pop_front / push_back — so
 // only the `Backend` in the type changes between a CB kernel and a DFB kernel.
-// The ops (copy_tile, pack_untilize_dest, …) are backend-agnostic.
+// The ops (copy_tile, untilize_block, …) are backend-agnostic.
 //
 // `Tensor<Shape, B>` stores the tile count (r_tiles/c_tiles), so pop_front /
 // push_back derive num_tiles() from the handle.
