@@ -6,23 +6,22 @@
 Single-card MoE compute test (1x1 mesh, cluster_axis=None). Runs on both WH
 and BH; other arches are skipped at fixture time.
 
-This test exercises the `compute_only=True` bypass path of
-`ttnn.experimental.moe_compute`, which skips the fused selective_reduce_combine
-stage entirely. It is the hermetic dev/regression net for the MoE compute
-kernels (tilize + matmul + activation), without requiring a 6U Galaxy host or
-working CCL-on-BH.
+This test exercises both paths of `ttnn.experimental.moe_compute` on a single device:
+  - `compute_only=True`: bypasses the fused selective_reduce_combine stage entirely.
+    Returns 5 tensors; matmul_output (slot 4) is the final output.
+  - `compute_only=False` (FullLocal): runs the fused local combine stage without CCL/fabric.
+    Returns 6 tensors; combine_output (slot 5) is the final output.
+
+It is the hermetic dev/regression net for the MoE compute kernels (tilize + matmul +
+activation [+ combine]) without requiring a 6U Galaxy host or working CCL-on-BH.
 
 Validation points (all using the 6U helpers verbatim — no logic duplication):
   - Output 0 (per_expert_total_tokens)
   - Output 1 (expert_activation)
   - Output 2 (e_t)
-  - Output 4 (matmul_output)  <-- final user-visible output in compute_only mode
-
-The combine output (which would be slot 5 in the production op) is NOT
-produced by compute_only=True. The test asserts that the op returns exactly
-5 tensors as a tripwire: if the bypass branch silently fails and returns 6
-tensors, the test fails immediately at the assertion rather than deep inside
-validate_combine.
+  - Output 4 (matmul_output) — final output in compute_only mode
+  - Output 5 (combine_output) — final output in FullLocal mode, validated only when
+    compute_only=False
 """
 
 import os
@@ -54,6 +53,7 @@ from tests.nightly.tg.ccl.moe.test_moe_compute_6U import (
     compute_e_t_golden,
     compute_expert_activation_golden,
     compute_matmul_golden,
+    compute_combine_golden,
     compute_selective_tilize_golden,
     create_sharded_memory_config,
     gen_expert_mapping,
@@ -62,6 +62,7 @@ from tests.nightly.tg.ccl.moe.test_moe_compute_6U import (
     validate_activation,
     validate_e_t,
     validate_matmul,
+    validate_combine,
     validate_per_expert_tokens,
     _get_base_pcc_threshold,
 )
@@ -82,10 +83,11 @@ def _run_moe_compute_single_card_test(
     activation_type,
     has_bias=False,
     skip_on_ci=False,
+    compute_only=True,
 ):
     """
     Single-card MoE compute test body. cluster_axis is fixed to None
-    (no dispatch axis on 1x1 mesh) and compute_only is fixed to True.
+    (no dispatch axis on 1x1 mesh).
 
     The matmul ring size is auto-detected from the live DRAM-bank count (12 on WH, 7/8 on
     BH) — the same ``effective_matmul_ring_size(mesh_device)`` the public op uses — and is used
@@ -150,7 +152,7 @@ def _run_moe_compute_single_card_test(
     logger.info(f"Single-card MoE compute test:")
     logger.info(f"  mesh_shape: {mesh_shape}")
     logger.info(f"  cluster_axis: {cluster_axis}")
-    logger.info(f"  compute_only: True")
+    logger.info(f"  compute_only: {compute_only}")
     logger.info(f"  num_devices: {num_devices}")
     logger.info(f"  tokens_per_device: {tokens_per_device}, total_tokens: {total_tokens}")
     logger.info(f"  experts: {experts}, experts_per_device: {experts_per_device}")
@@ -342,9 +344,33 @@ def _run_moe_compute_single_card_test(
     )
 
     #########################################
-    # RUN OP (compute_only=True)
+    # RUN OP
     #########################################
-    logger.info(f"\n========== Running op (compute_only=True) ==========")
+    logger.info(f"\n========== Running op (compute_only={compute_only}) ==========")
+
+    # For local-full mode (compute_only=False on 1x1), pre-allocate the combine output tensor.
+    tt_combine_output_tensor = None
+    combine_goldens = None
+    if not compute_only:
+        combine_goldens = compute_combine_golden(
+            num_layers,
+            experts,
+            total_tokens,
+            hidden_size,
+            selected_experts_k,
+            mesh_shape,
+            matmul_goldens,
+            [golden_activation],  # compute_combine_golden expects a per-layer list
+            cluster_axis=-1,  # single-device: get_cluster_dims uses -1 for "no replication axis"
+        )
+        torch_combine_output = torch.zeros([selected_experts_k, total_tokens, hidden_size], dtype=torch.bfloat16)
+        tt_combine_output_tensor = ttnn.from_torch(
+            torch_combine_output,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+        )
 
     layer_id = 0
     outputs = ttnn.experimental.moe_compute(
@@ -358,34 +384,46 @@ def _run_moe_compute_single_card_test(
         output_height_shard_dim=output_height_shard_dim,
         intermediate_size=N,
         has_bias=has_bias,
-        # compute_only=True forbids any of these:
+        # cluster_axis=None: required for both compute_only and single-device fused (FullLocal).
+        # topology/num_links/mux/semaphore must be None for both paths.
         cluster_axis=None,
         topology=None,
         num_links=None,
         mux_core_range_set=None,
-        optional_output_tensor=None,
+        optional_output_tensor=tt_combine_output_tensor,
         optional_cross_device_semaphore=None,
         activation_type=activation_type,
-        compute_only=True,
+        compute_only=compute_only,
     )
 
     # ===================================================================
-    # TRIPWIRE: compute_only=True must return EXACTLY 5 tensors.
-    # If the bypass branch silently failed and returned 6 tensors, this
-    # assertion fires immediately rather than deep in validate_combine.
+    # TRIPWIRE: output count must match the mode.
+    # - compute_only=True: 5 tensors (matmul_output is the final output, no combine).
+    # - compute_only=False (FullLocal): 6 tensors (slot 5 = combine output).
     # ===================================================================
-    assert len(outputs) == 5, (
-        f"compute_only=True must return 5 tensors (matmul_output is the final output, "
-        f"no combine output is produced). Got {len(outputs)}."
-    )
+    expected_n = 5 if compute_only else 6
+    assert (
+        len(outputs) == expected_n
+    ), f"compute_only={compute_only} must return {expected_n} tensors. Got {len(outputs)}."
 
-    (
-        per_expert_total_tokens_output_tensor,
-        expert_activation_output_tensor,
-        e_t_output_tensor,
-        tilize_output_tensor,  # slot 3
-        matmul_output_tensor,  # slot 4 -- final output
-    ) = outputs
+    if compute_only:
+        (
+            per_expert_total_tokens_output_tensor,
+            expert_activation_output_tensor,
+            e_t_output_tensor,
+            tilize_output_tensor,  # slot 3
+            matmul_output_tensor,  # slot 4 -- final output
+        ) = outputs
+        combine_output_tensor = None
+    else:
+        (
+            per_expert_total_tokens_output_tensor,
+            expert_activation_output_tensor,
+            e_t_output_tensor,
+            tilize_output_tensor,  # slot 3
+            matmul_output_tensor,  # slot 4
+            combine_output_tensor,  # slot 5 -- final output in FullLocal
+        ) = outputs
 
     # Move outputs to DRAM for validation (host readback).
     per_expert_total_tokens_output_tensor = ttnn.to_memory_config(
@@ -396,6 +434,8 @@ def _run_moe_compute_single_card_test(
     )
     e_t_output_tensor = ttnn.to_memory_config(e_t_output_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     matmul_output_tensor = ttnn.to_memory_config(matmul_output_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if combine_output_tensor is not None:
+        combine_output_tensor = ttnn.to_memory_config(combine_output_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     #########################################
     # VALIDATE
@@ -468,20 +508,32 @@ def _run_moe_compute_single_card_test(
         has_bias=has_bias,
     )
 
-    # NOTE: validate_combine intentionally NOT called -- there is no combine output
-    # in compute_only mode. The 5-tensor return assertion above is the tripwire
-    # ensuring this branch was actually taken.
+    combine_all_passed = True
+    if not compute_only:
+        # validate_combine uses cluster_axis for the mesh composer; on 1x1, dim=1 is correct.
+        combine_all_passed = validate_combine(
+            layer_id,
+            mesh_device,
+            cluster_axis=1,  # single device: either axis works
+            tt_combine_output=combine_output_tensor,
+            combine_goldens=combine_goldens,
+            pcc_threshold=base_pcc_threshold,
+        )
 
     logger.info(f"\n========== Asserts ==========")
     logger.info(f"Per Expert Total Tokens: {'PASSED' if per_expert_tokens_all_passed else 'FAILED'}")
     logger.info(f"Expert Activation: {'PASSED' if activation_all_passed else 'FAILED'}")
     logger.info(f"E-T Tensor: {'PASSED' if e_t_all_passed else 'FAILED'}")
     logger.info(f"Matmul Output Tensor: {'PASSED' if matmul_all_passed else 'FAILED'}")
+    if not compute_only:
+        logger.info(f"Combine Output Tensor: {'PASSED' if combine_all_passed else 'FAILED'}")
 
     assert per_expert_tokens_all_passed, "Per expert total tokens tensor verification failed!"
     assert activation_all_passed, "Expert activation tensor verification failed!"
     assert e_t_all_passed, "E-T tensor verification failed!"
     assert matmul_all_passed, "Matmul output tensor verification failed!"
+    if not compute_only:
+        assert combine_all_passed, "Combine output tensor verification failed!"
 
 
 # DeepSeek-shaped workload mirrored on a single WH card so kernels see the same dims.
@@ -504,14 +556,18 @@ def _run_moe_compute_single_card_test(
     ],
     indirect=True,
 )
+@pytest.mark.parametrize("compute_only", [True, False], ids=["compute_only", "fused_local"])
 @pytest.mark.parametrize("has_bias", [False, True], ids=["no_bias", "with_bias"])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape, has_bias, is_ci_env, is_ci_v2_env):
-    """compute_only=True on a 1x1 mesh, DeepSeek-shaped workload (hidden=7168).
+def test_moe_compute_single_card_deepseek(
+    mesh_device, mesh_shape, has_bias, compute_only, is_ci_env, is_ci_v2_env
+):
+    """Single-card MoE compute on a 1x1 mesh, DeepSeek-shaped workload (hidden=7168).
 
-    The matmul ring size is auto-detected from the live DRAM-bank count (12 on WH, 7/8 on
-    BH); the op no longer exposes a bh_ring_size knob. The width-shard dim must match the op's
-    ring-aware derivation, so it is auto-derived.
+    Runs in both compute_only mode (5 outputs, matmul is final) and fused-local mode
+    (6 outputs, combine is final). The matmul ring size is auto-detected from the live
+    DRAM-bank count (12 on WH, 7/8 on BH); the op no longer exposes a bh_ring_size knob.
+    The width-shard dim must match the op's ring-aware derivation, so it is auto-derived.
     """
     hidden_size = 7168
     N = 2048
@@ -519,7 +575,7 @@ def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape, has_bias, is_
     _run_moe_compute_single_card_test(
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
-        experts_per_device=8,
+        experts_per_device=64,
         tokens_per_device=32,
         selected_experts_k=8,
         N=N,
@@ -530,6 +586,7 @@ def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape, has_bias, is_
         activation_type=MoEActivationFunction.SILU,
         has_bias=has_bias,
         skip_on_ci=is_ci_env or is_ci_v2_env,
+        compute_only=compute_only,
     )
 
 
@@ -546,19 +603,21 @@ def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape, has_bias, is_
     ],
     indirect=True,
 )
+@pytest.mark.parametrize("compute_only", [True, False], ids=["compute_only", "fused_local"])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape, is_ci_env, is_ci_v2_env):
-    """compute_only=True on a 1x1 mesh, GPT-OSS-shaped workload (hidden=N=2880, SWIGLU+bias).
+def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape, compute_only, is_ci_env, is_ci_v2_env):
+    """Single-card MoE compute on a 1x1 mesh, GPT-OSS-shaped workload (hidden=N=2880, SWIGLU+bias).
 
-    The matmul ring size is auto-detected from the live DRAM-bank count (12 on WH, 7/8 on
-    BH); the op no longer exposes a bh_ring_size knob.
+    Runs in both compute_only mode (5 outputs, matmul is final) and fused-local mode
+    (6 outputs, combine is final). The matmul ring size is auto-detected from the live
+    DRAM-bank count (12 on WH, 7/8 on BH); the op no longer exposes a bh_ring_size knob.
     """
     hidden_size = 2880
     ring_n = effective_matmul_ring_size(mesh_device)
     _run_moe_compute_single_card_test(
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
-        experts_per_device=4,
+        experts_per_device=64,
         tokens_per_device=32,
         selected_experts_k=4,
         N=hidden_size,
@@ -569,6 +628,7 @@ def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape, is_ci_env, is_
         activation_type=MoEActivationFunction.SWIGLU,
         has_bias=True,
         skip_on_ci=is_ci_env or is_ci_v2_env,
+        compute_only=compute_only,
     )
 
 

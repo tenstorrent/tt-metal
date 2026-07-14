@@ -118,8 +118,11 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         max_tokens >= total_tokens, "Too many tokens in input, got: {} but expected max: {}", total_tokens, max_tokens);
 
-    // ComputeOnly mode: combine_params must be nullopt and the optional output tensor (which
-    // would normally be the combine output) must not be provided.
+    // Mode-specific validation of combine_params and optional_output_tensor.
+    // - ComputeOnly: no combine_params, no optional_output_tensor (5 outputs).
+    // - FullLocal: combine_params must be set with local_combine=true; optional_output_tensor
+    //   is allowed as the combine output sink (6 outputs, no CCL).
+    // - FullCcl: combine_params must be set with local_combine=false (6 outputs, CCL path).
     if (args.path == MoEComputePath::ComputeOnly) {
         TT_FATAL(!args.combine_params.has_value(), "path=ComputeOnly requires combine_params to be std::nullopt");
         TT_FATAL(
@@ -127,8 +130,15 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
             "path=ComputeOnly requires optional_output_tensor to be std::nullopt (no combine output is produced)");
     } else {
         TT_FATAL(args.combine_params.has_value(), "path=Full requires combine_params to be set");
-        TT_FATAL(args.combine_params->num_links > 0, "num_links must be greater than 0");
-        TT_FATAL(args.combine_params->axis < 2, "cluster_axis must be 0 or 1");
+        if (args.path == MoEComputePath::FullLocal) {
+            TT_FATAL(
+                args.combine_params->local_combine, "path=FullLocal requires combine_params->local_combine to be true");
+        } else {
+            TT_FATAL(
+                !args.combine_params->local_combine, "path=FullCcl requires combine_params->local_combine to be false");
+            TT_FATAL(args.combine_params->num_links > 0, "num_links must be greater than 0");
+            TT_FATAL(args.combine_params->axis < 2, "cluster_axis must be 0 or 1");
+        }
     }
 
     // Validate hidden_size
@@ -447,7 +457,21 @@ std::vector<ttnn::Tensor> moe_compute(
         }
     }
 
-    // In compute_only mode, the public-layer must not pass any CCL-related optionals.
+    // Determine the MoE compute path from compute_only and cluster_axis.
+    // - ComputeOnly: compute_only=true, cluster_axis must be None, no CCL options.
+    // - FullLocal: compute_only=false, cluster_axis=None, only valid on a 1x1 mesh. No CCL
+    //   options; combine runs as a local reduction with no fabric.
+    // - FullCcl: compute_only=false, cluster_axis must be provided. CCL options required.
+    const uint32_t num_devices = mesh_device->num_devices();
+    const bool full_local = !compute_only && !cluster_axis.has_value();
+    if (full_local) {
+        TT_FATAL(
+            num_devices == 1,
+            "moe_compute(compute_only=false, cluster_axis=None) is only supported on a 1x1 mesh, "
+            "got num_devices={}. Pass cluster_axis for multi-device fused compute+combine.",
+            num_devices);
+    }
+
     if (compute_only) {
         TT_FATAL(!cluster_axis.has_value(), "moe_compute(compute_only=true) requires cluster_axis to be std::nullopt");
         TT_FATAL(!topology.has_value(), "moe_compute(compute_only=true) requires topology to be std::nullopt");
@@ -461,6 +485,15 @@ std::vector<ttnn::Tensor> moe_compute(
         TT_FATAL(
             !optional_output_tensor.has_value(),
             "moe_compute(compute_only=true) requires optional_output_tensor to be std::nullopt");
+    } else if (full_local) {
+        TT_FATAL(!topology.has_value(), "moe_compute(cluster_axis=None) requires topology to be std::nullopt");
+        TT_FATAL(!num_links.has_value(), "moe_compute(cluster_axis=None) requires num_links to be std::nullopt");
+        TT_FATAL(
+            !mux_core_range_set.has_value(),
+            "moe_compute(cluster_axis=None) requires mux_core_range_set to be std::nullopt");
+        TT_FATAL(
+            !optional_cross_device_semaphore.has_value(),
+            "moe_compute(cluster_axis=None) requires optional_cross_device_semaphore to be std::nullopt");
     } else {
         TT_FATAL(cluster_axis.has_value(), "moe_compute(compute_only=false) requires cluster_axis to be provided");
     }
@@ -474,7 +507,25 @@ std::vector<ttnn::Tensor> moe_compute(
         ring_n);
 
     std::optional<ttnn::experimental::prim::SelectiveReduceCombineParams> combine_params;
-    if (!compute_only) {
+    if (full_local) {
+        // Local combine: no fabric, no mux, no cross-device semaphore. axis=0 is a dummy
+        // (mesh is 1x1 so mesh_shape[1-axis]=1 for shared_expert_tp_factor).
+        combine_params = ttnn::experimental::prim::SelectiveReduceCombineParams{
+            .hidden_size = hidden_size,
+            .batch_size = 1,
+            .seq_size = total_tokens,
+            .select_experts_k = select_experts_k,
+            .num_links = 1,
+            .axis = 0,
+            .topology = tt::tt_fabric::Topology::Linear,
+            .num_token_parallel_cores = num_token_parallel_cores,
+            .num_data_parallel_cores = num_data_parallel_cores,
+            .worker_cores = combine_cores,
+            .mux_core_range_set = CoreRangeSet{},
+            .output_memory_config = output_memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG),
+            .optional_cross_device_semaphore = std::nullopt,
+            .local_combine = true};
+    } else if (!compute_only) {
         // see #27196 for potential limitations
         const uint32_t resolved_num_links =
             num_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device, *cluster_axis));
@@ -526,7 +577,8 @@ std::vector<ttnn::Tensor> moe_compute(
             .num_token_parallel_cores = num_token_parallel_cores,
             .num_data_parallel_cores = num_data_parallel_cores,
             .path = compute_only ? experimental::prim::MoEComputePath::ComputeOnly
-                                 : experimental::prim::MoEComputePath::Full,
+                                 : (full_local ? experimental::prim::MoEComputePath::FullLocal
+                                               : experimental::prim::MoEComputePath::FullCcl),
             .bh_ring_size = ring_n,
             .combine_params = combine_params,
             .activation_type = activation_type.value_or(experimental::prim::detail::MoEActivationFunction::SILU)},

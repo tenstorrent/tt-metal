@@ -175,9 +175,11 @@ MoEComputeMeshWorkloadFactory::cached_mesh_workload_t MoEComputeMeshWorkloadFact
     std::optional<GlobalSemaphore> init_barrier_semaphore;
     std::optional<GlobalSemaphore> final_barrier_semaphore;
 
-    if (args.path == MoEComputePath::Full) {
+    // FullCcl and FullLocal both run the combine stage; only ComputeOnly skips it.
+    // FullLocal creates local barrier semaphores (no cross-device fabric semaphore).
+    if (args.path != MoEComputePath::ComputeOnly) {
         // combine_params.has_value() is checked in validate_on_program_cache_miss.
-        // mux_core_range_set comes from combine_params when in Full mode.
+        // mux_core_range_set comes from combine_params (empty for FullLocal).
         const auto core_ret = get_cores(
             mesh_device,
             args.num_token_parallel_cores,
@@ -1438,15 +1440,18 @@ MoEComputeMeshWorkloadFactory::create_at(
     std::vector<GlobalSemaphore> combine_global_semaphores;
     std::vector<CoreCoord> combine_cores_for_shared = combine_cores;
 
-    if (args.path == MoEComputePath::Full) {
+    if (args.path != MoEComputePath::ComputeOnly) {
         // combine_params validity, num_links, and axis range are all checked in
         // validate_on_program_cache_miss. Barrier semaphores are an internal contract
         // between create_mesh_workload (caller) and create_at (callee), so checked here.
-        TT_FATAL(init_barrier_semaphore.has_value(), "init_barrier_semaphore must be set when path is Full");
-        TT_FATAL(final_barrier_semaphore.has_value(), "final_barrier_semaphore must be set when path is Full");
+        TT_FATAL(init_barrier_semaphore.has_value(), "init_barrier_semaphore must be set when path is not ComputeOnly");
+        TT_FATAL(
+            final_barrier_semaphore.has_value(), "final_barrier_semaphore must be set when path is not ComputeOnly");
 
         TT_FATAL(
-            tensor_return_value.size() == 6, "path=Full expects 6 output tensors, got {}", tensor_return_value.size());
+            tensor_return_value.size() == 6,
+            "path=FullCcl/FullLocal expects 6 output tensors, got {}",
+            tensor_return_value.size());
         ttnn::Tensor& output_tensor = tensor_return_value[5];
 
         auto combine_params = *args.combine_params;
@@ -1605,17 +1610,17 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
         // Combine
         //-------------------------------------------------------------------------
 
-        if (shared_variables.path == MoEComputePath::Full) {
+        if (shared_variables.path != MoEComputePath::ComputeOnly) {
             // combine_params validity is checked in validate_on_program_cache_miss.
             TT_FATAL(
                 shared_variables.combine_kernel_handles.size() == 2,
-                "Expected 2 combine kernel handles when path=Full");
+                "Expected 2 combine kernel handles when path is not ComputeOnly");
             TT_FATAL(
                 shared_variables.combine_global_semaphores.size() == 2,
-                "Expected 2 combine global semaphores when path=Full");
+                "Expected 2 combine global semaphores when path is not ComputeOnly");
             TT_FATAL(
                 tensor_return_value.size() == 6,
-                "path=Full expects 6 output tensors, got {}",
+                "path=FullCcl/FullLocal expects 6 output tensors, got {}",
                 tensor_return_value.size());
 
             ttnn::Tensor& output_tensor = tensor_return_value[5];

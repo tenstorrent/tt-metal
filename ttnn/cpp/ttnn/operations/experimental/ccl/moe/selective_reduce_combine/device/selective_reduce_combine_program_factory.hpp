@@ -25,7 +25,8 @@ SelectiveReduceCombineWorkerLayout compute_worker_layout(
     const Tensor& input_tensor,
     uint32_t hidden_size,
     uint32_t num_token_parallel_cores,
-    uint32_t num_data_parallel_cores);
+    uint32_t num_data_parallel_cores,
+    bool local_combine = false);
 
 }  // namespace detail
 
