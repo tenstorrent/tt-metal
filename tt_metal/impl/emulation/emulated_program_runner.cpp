@@ -2107,6 +2107,7 @@ static std::unordered_map<uint64_t, EmuleRoute> g_route_meta;
 
 extern "C" void __emule_fabric_set_route(
     uint32_t hdr, uint32_t kind, uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t e, uint32_t f) {
+    emule_require_self(__func__);  // keys through __emule_self->bridge_l1 via emule_route_key
     std::lock_guard<std::mutex> lk(g_route_meta_mu);
     auto& r = g_route_meta[emule_route_key(hdr)];
     r.kind = kind; r.a = a; r.b = b; r.c = c; r.d = d; r.e = e; r.f = f;  // dir_index set separately at send
@@ -2124,6 +2125,7 @@ extern "C" void __emule_fabric_set_route(
 // address (the forwarder slot the teleport will read). Same address (no relocation) is a no-op. This is a
 // single faithful mechanism, not a divergent path. See tt-emule docs/fabric-ccl-emulation.md.
 extern "C" void __emule_fabric_route_follow(uint32_t src_key, uint32_t dst_key) {
+    emule_require_self(__func__);  // keys through __emule_self->bridge_l1 via emule_route_key
     if (src_key == dst_key) {
         return;
     }
@@ -2140,6 +2142,7 @@ extern "C" void __emule_fabric_route_follow(uint32_t src_key, uint32_t dst_key) 
 // worker's mux NOC coords (MUX path); 0xFFFF means unset. See tt-emule docs/fabric-ccl-emulation.md.
 extern "C" void __emule_fabric_set_route_dir(
     uint32_t hdr, uint32_t conn_index, uint32_t mux_x, uint32_t mux_y) {
+    emule_require_self(__func__);  // keys through __emule_self->bridge_l1 via emule_route_key
     std::lock_guard<std::mutex> lk(g_route_meta_mu);
     auto& r = g_route_meta[emule_route_key(hdr)];
     r.dir_index = conn_index;
