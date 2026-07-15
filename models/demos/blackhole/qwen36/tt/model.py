@@ -62,6 +62,14 @@ class Qwen36Model:
         # RoPE setup (for gated attention layers only)
         self.rope = Qwen36RoPESetup(mesh_device, args)
 
+        # Per-request vision grid (t,h,w), stashed by get_image_features / get_video_features so the
+        # prefill paths can build the multimodal 3D RoPE (M-RoPE) position ids without threading
+        # grid_thw through every prefill signature. Exactly one is non-None for a multimodal request
+        # (image XOR video); both None => text-only. The active one also selects which placeholder
+        # token id (image_token_id vs video_token_id) the vision-splice paths look for.
+        self._req_image_grid_thw = None
+        self._req_video_grid_thw = None
+
         # Transformer layers
         logger.info(f"Loading {args.n_layers} transformer layers...")
         self.layers = []
@@ -132,6 +140,312 @@ class Qwen36Model:
         self._chunk_cos_buf = None
         self._chunk_sin_buf = None
 
+        # Optional vision tower (DropInVisionTransformer), attached lazily by
+        # init_vision_model() for the multimodal serving path. None on the text-only path.
+        self.vision_model = None
+        self.vision_args = None
+
+        # Trace-safe vision splice (traced serving path). The chunk/masked-bucket forwards run a
+        # FIXED-shape ttnn.where(mask, vision, text) over these persistent buffers — compiled once
+        # at warmup, then updated per request via copy_host_to_device, so no per-request program
+        # ever compiles to clobber a parked trace. Allocated (single device only) in
+        # capture_prefill_trace_chunked; None means "no traced path" -> the where is skipped.
+        self._vis_buf = None  # [1, chunk_size, dim] bf16, image rows placed at their positions
+        self._vis_mask_buf = None  # [1, chunk_size, 1] bf16, 1 at image positions else 0
+        self._vis_zero_mask_host = None  # cached host zero mask for the clear (text/tail) path
+
+    def init_vision_model(self, reference_visual=None, vision_args=None, dtype=ttnn.bfloat8_b, debug=False):
+        """Build and attach the TT vision tower (DropInVisionTransformer).
+
+        The vision tower runs on the SAME mesh as the text model. It still needs the HF
+        reference visual for the patch embed / positional-interpolation steps that are not
+        ported to TT; if ``reference_visual`` is not supplied it is loaded here via
+        ``VisionModelArgs.reference_vision_model``. Idempotent — returns the existing tower
+        if already built.
+
+        Args:
+            reference_visual: HF ``model.model.visual`` to wrap. Loaded internally if None.
+            vision_args (VisionModelArgs): vision config on this mesh. Built internally if None.
+            dtype (ttnn.dtype): compute dtype for the vision weights.
+            debug (bool): run the reference vision path alongside and log PCC.
+
+        Returns:
+            DropInVisionTransformer: the attached vision tower.
+        """
+        if self.vision_model is not None:
+            return self.vision_model
+        from models.demos.blackhole.qwen36.tt.vision.model import DropInVisionTransformer
+        from models.demos.blackhole.qwen36.tt.vision.vision_model_config import VisionModelArgs
+
+        if vision_args is None:
+            vision_args = VisionModelArgs(
+                self.mesh_device,
+                max_batch_size=self.args.max_batch_size,
+                max_seq_len=self.args.max_seq_len,
+            )
+        if reference_visual is None:
+            reference_visual = vision_args.reference_vision_model(depth=vision_args.hf_config.vision_config.depth)
+        self.vision_args = vision_args
+        self.vision_model = DropInVisionTransformer(reference_visual, vision_args, dtype=dtype, debug=debug)
+        return self.vision_model
+
+    def get_image_features(self, pixel_values, image_grid_thw):
+        """Run the vision tower over a single user's images.
+
+        Mirrors the HF reference's ``get_image_features`` seam: pixel patches in, packed
+        image embeddings out — one row per image-placeholder token, ready to be spliced
+        into the text embeddings by ``_scatter_vision_tokens``.
+
+        Args:
+            pixel_values (torch.Tensor): patchified pixels ``[num_patches, patch_dim]``.
+            image_grid_thw (torch.Tensor): per-image grid ``(t, h, w)``, ``[num_images, 3]``.
+
+        Returns:
+            ttnn.Tensor: ``[num_image_tokens, H]`` image embeddings, hidden-fractured along
+            the last dim on a mesh (same sharding as the text embeddings).
+        """
+        assert self.vision_model is not None, "init_vision_model() must be called before get_image_features()"
+        # Stash the grid (as an IMAGE grid) so the prefill paths can build M-RoPE position ids for
+        # this request (the splice positions in input_ids + the (t,h,w) grid are all M-RoPE needs).
+        # Clear any stale video grid so the modality (and thus the placeholder token id) is image.
+        self._req_image_grid_thw = image_grid_thw
+        self._req_video_grid_thw = None
+        image_features = self.vision_model.forward(pixel_values, grid_thw=image_grid_thw)
+        # The vision tower returns [1, B, S, H]; flatten the leading (batch/seq) dims to the
+        # packed [num_image_tokens, H] rows the text-model splice (_scatter_vision_tokens /
+        # _set_vision_merge) expects. The hidden dim is unchanged so the mesh hidden-fracture
+        # is preserved. B == 1 for now.
+        hidden = image_features.shape[-1]
+        return ttnn.reshape(image_features, (-1, hidden))
+
+    def get_video_features(self, pixel_values_videos, video_grid_thw):
+        """Run the vision tower over a single user's video frames.
+
+        Mirrors the HF reference's ``get_video_features`` seam, which is just ``get_image_features``
+        on the video pixels/grid — the vision tower forward is identical for image and video. The
+        only differences are downstream: M-RoPE treats the grid as a VIDEO grid (split per frame by
+        timestamps, modality==2), and the embeddings splice into ``video_token_id`` placeholders
+        rather than ``image_token_id``. Both are selected by stashing the grid here as a video grid.
+
+        Args:
+            pixel_values_videos (torch.Tensor): patchified video pixels ``[num_patches, patch_dim]``.
+            video_grid_thw (torch.Tensor): per-video grid ``(t, h, w)``, ``[num_videos, 3]``.
+
+        Returns:
+            ttnn.Tensor: ``[num_video_tokens, H]`` video embeddings, hidden-fractured along the last
+            dim on a mesh (same sharding as the text embeddings).
+        """
+        assert self.vision_model is not None, "init_vision_model() must be called before get_video_features()"
+        # Stash the grid as a VIDEO grid; clear any stale image grid so the modality (and the
+        # placeholder token id) is video.
+        self._req_video_grid_thw = video_grid_thw
+        self._req_image_grid_thw = None
+        video_features = self.vision_model.forward(pixel_values_videos, grid_thw=video_grid_thw)
+        hidden = video_features.shape[-1]
+        return ttnn.reshape(video_features, (-1, hidden))
+
+    def _vision_placeholder_token_id(self):
+        """The input-id the current request's vision embeddings splice into: ``video_token_id`` for
+        a video request (video grid stashed), else ``image_token_id``. The vision-splice paths
+        (_scatter_vision_tokens / _set_vision_merge / _vis_row_offset_for) use this to locate the
+        placeholder positions, mirroring HF's ``input_ids == image_token_id`` /
+        ``input_ids == video_token_id`` masks."""
+        if self._req_video_grid_thw is not None:
+            return int(self.args.hf_config.video_token_id)
+        return int(self.args.hf_config.image_token_id)
+
+    def _build_request_rope(self, token_ids, vision_tokens):
+        """Stage the per-request RoPE for this prefill: M-RoPE (3D position ids + rope_delta) when
+        the request is multimodal (vision_tokens present -> use the grid stashed by
+        get_image_features / get_video_features), else clear to ordinary 1D RoPE. Call once at a
+        prefill entry point with the REAL token ids (token_ids[:, :actual_len]); the chunk/tail
+        seams then slice the staged table by sequence position and decode offsets by rope_delta."""
+        image_grid = self._req_image_grid_thw if vision_tokens is not None else None
+        video_grid = self._req_video_grid_thw if vision_tokens is not None else None
+        self.rope.build_request_rope(token_ids, image_grid_thw=image_grid, video_grid_thw=video_grid)
+
+    def _alloc_vision_merge_buffers(self, device, chunk_size):
+        """Allocate the persistent vision-splice buffers used by the traced prefill path.
+
+        ``_vis_buf`` holds the image embeddings placed at their token positions (zeros elsewhere);
+        ``_vis_mask_buf`` is the 0/1 image mask. Both are zero-initialised, so the ttnn.where baked
+        into the captured forward is the identity until a real multimodal request stages them.
+        Allocating before warmup means the where compiles in the warmup pass (and is then
+        captured), never at request time.
+
+        Shapes/sharding match the activations of the forward that consumes them:
+          - single device: vis [1, chunk_size, dim], mask [1, chunk_size, 1] (the 3D embd output);
+          - TP: vis [1, 1, chunk_size, dim] HIDDEN-SHARDED across the mesh exactly like embd
+            fractures its output (ShardTensor2dMesh dims=(None, -1)), so each device's where sees
+            its own [.., dim/TP] vision columns; mask [1, 1, chunk_size, 1] REPLICATED (it
+            broadcasts over the sharded hidden dim). DropInVisionTransformer fractures its output
+            the same way, so the per-device columns line up.
+        """
+        if self._vis_buf is not None:
+            return
+        H = self.args.dim
+        if self.num_devices > 1:
+            shard = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -1), mesh_shape=self.args.cluster_shape)
+            rep = ttnn.ReplicateTensorToMesh(self.mesh_device)
+            self._vis_buf = ttnn.from_torch(
+                torch.zeros(1, 1, chunk_size, H, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=shard,
+            )
+            self._vis_mask_buf = ttnn.from_torch(
+                torch.zeros(1, 1, chunk_size, 1, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=rep,
+            )
+            self._vis_zero_mask_host = ttnn.from_torch(
+                torch.zeros(1, 1, chunk_size, 1, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=None,
+                mesh_mapper=rep,
+            )
+            return
+        self._vis_buf = ttnn.from_torch(
+            torch.zeros(1, chunk_size, H, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._vis_mask_buf = ttnn.from_torch(
+            torch.zeros(1, chunk_size, 1, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._vis_zero_mask_host = ttnn.from_torch(
+            torch.zeros(1, chunk_size, 1, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )
+
+    def _apply_vision_merge(self, x, length):
+        """Final text-vs-vision SELECTION of the trace-safe splice: where(mask, vision, x).
+
+        This is NOT a scatter and is not a substitute for one. The scatter — placing the n
+        (variable) vision rows at their n image positions — already happened on host in
+        _set_vision_merge, which is why ``_vis_buf`` here is a FULL [1, chunk_size, dim] buffer
+        (image rows at their positions, zeros elsewhere), the same length as ``x``, NOT the raw
+        [n, dim] vision tensor. So n << seq_len (a few image tokens in a long text prompt) is fine:
+        the [.,1] mask broadcasts over the hidden dim and is 1 only at those n positions, so
+        out == vision there and out == x (text) everywhere else (mask==0 is the exact identity).
+
+        The placement is forced onto the host because aligning a variable n to fixed positions is
+        inherently variable-shape; any on-device form (ttnn.scatter / pad / slice-copy) recompiles
+        per request and would clobber the parked trace. ``length`` selects the segment (chunk_size
+        for a full chunk, bucket for the masked path); the buffers slice down to it. No-op when the
+        buffers are unallocated (text-only / non-traced deployment, which uses the device scatter)."""
+        if self._vis_buf is None:
+            return x
+        if self._vis_buf.shape.rank == 4:
+            # TP: buffers are [1, 1, chunk_size, dim(/TP)], matching the 4D TP activations.
+            full = self._vis_buf.shape[2] == length
+            mask = self._vis_mask_buf if full else self._vis_mask_buf[:, :, :length, :]
+            vis = self._vis_buf if full else self._vis_buf[:, :, :length, :]
+        else:
+            full = self._vis_buf.shape[1] == length
+            mask = self._vis_mask_buf if full else self._vis_mask_buf[:, :length, :]
+            vis = self._vis_buf if full else self._vis_buf[:, :length, :]
+        out = ttnn.where(mask, vis, x)
+        ttnn.deallocate(x)
+        return out
+
+    def _set_vision_merge(self, ids_host, vision_tokens, vis_row_offset=0):
+        """Stage the persistent vision buffers for the next forward (host -> device copy only;
+        no program compiles). ``vision_tokens`` None clears the mask (the where becomes identity,
+        for text-only requests); otherwise the packed image rows are read back to host, placed at
+        their token positions in a zero [1, chunk_size, dim] buffer, and uploaded along with the
+        0/1 mask. ``ids_host`` is the segment's token ids (torch), used to locate the image
+        placeholders (== hf_config.image_token_id).
+
+        ``vis_row_offset`` is the number of image-placeholder tokens that appear in the prompt
+        BEFORE this segment, i.e. the index of the first packed vision row belonging to it. A
+        large image whose placeholders span multiple prefill chunks (or spill into the tail) is
+        thus spliced correctly: each segment consumes its own slice
+        ``vis_host[vis_row_offset : vis_row_offset + n]`` of the packed rows. A segment with no
+        image placeholders (text-only chunk / tail) clears the mask (identity merge)."""
+        if self._vis_buf is None:
+            # Fail loudly rather than silently drop the image: a multimodal request must run on a
+            # path with the trace-safe buffers (capture_prefill_trace_chunked, single device) or
+            # the on-device scatter (non-traced prefill_paged).
+            assert vision_tokens is None, "vision merge requested but the trace-safe buffers are not allocated"
+            return
+        if vision_tokens is None:
+            ttnn.copy_host_to_device_tensor(self._vis_zero_mask_host, self._vis_mask_buf)
+            return
+        tp = self.num_devices > 1
+        cs = self._vis_buf.shape[-2]  # seq dim: dim 1 (3D single) / dim 2 (4D TP)
+        Hg = self.args.dim  # global hidden (the buffer's last dim is dim/TP on a mesh)
+        flat = ids_host.reshape(-1)
+        pos = torch.nonzero(flat[:cs] == self._vision_placeholder_token_id(), as_tuple=False).reshape(-1)
+        n = int(pos.numel())
+        # No image placeholders in this segment (text-only chunk, or a tail that holds none of the
+        # image rows): the merge is the identity, so just clear the mask.
+        if n == 0:
+            ttnn.copy_host_to_device_tensor(self._vis_zero_mask_host, self._vis_mask_buf)
+            return
+        assert vis_row_offset + n <= int(vision_tokens.shape[0]), (
+            f"vision splice out of range: row offset {vis_row_offset} + {n} image positions in this "
+            f"segment exceeds {int(vision_tokens.shape[0])} packed vision rows"
+        )
+        # Gather the (hidden-fractured on a mesh) vision rows to full [num_image_tokens, Hg] on
+        # host, then take this segment's slice. The placement is along the SEQ dim, orthogonal to
+        # the hidden fracture, so the round-trip gather->place->reshard preserves the per-device
+        # columns. ConcatMeshToTensor(dim=1) over the 2D [rows, dim/TP] is the inverse of the
+        # dims=(None,-1) hidden shard used on re-upload.
+        if tp:
+            vis_host = ttnn.to_torch(vision_tokens, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=1)).to(
+                torch.bfloat16
+            )
+        else:
+            vis_host = ttnn.to_torch(vision_tokens).to(torch.bfloat16)  # [num_image_tokens, Hg]
+        seg = vis_host[vis_row_offset : vis_row_offset + n]
+        if tp:
+            shard = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -1), mesh_shape=self.args.cluster_shape)
+            rep = ttnn.ReplicateTensorToMesh(self.mesh_device)
+            vis_full = torch.zeros(1, 1, cs, Hg, dtype=torch.bfloat16)
+            vis_full[0, 0, pos] = seg
+            mask = torch.zeros(1, 1, cs, 1, dtype=torch.bfloat16)
+            mask[0, 0, pos, 0] = 1.0
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(vis_full, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=shard),
+                self._vis_buf,
+            )
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep),
+                self._vis_mask_buf,
+            )
+            return
+        vis_full = torch.zeros(1, cs, Hg, dtype=torch.bfloat16)
+        vis_full[0, pos] = seg
+        mask = torch.zeros(1, cs, 1, dtype=torch.bfloat16)
+        mask[0, pos, 0] = 1.0
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(vis_full, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), self._vis_buf
+        )
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), self._vis_mask_buf
+        )
+
+    def _vis_row_offset_for(self, token_ids, chunk_start):
+        """Packed-vision-row offset for the prefill segment starting at absolute position
+        ``chunk_start``: the number of image-placeholder tokens before it. The vision rows are
+        packed in image-placeholder order, so this is the index of the first row this segment
+        owns — used to splice a large image whose placeholders span multiple chunks / the tail."""
+        if chunk_start <= 0:
+            return 0
+        return int((token_ids[:, :chunk_start] == self._vision_placeholder_token_id()).sum())
+
     def switch_mode(self, mode):
         """Generator calls this on mode change; Qwen has no prefetcher, so no-op."""
         return None
@@ -162,7 +476,7 @@ class Qwen36Model:
         cache_path = args.weight_cache_path()
         return cls(device, args, state_dict, tensor_cache_path=cache_path)
 
-    def prefill_tp(self, token_ids, valid_len=None):
+    def prefill_tp(self, token_ids, valid_len=None, vision_tokens=None):
         """Tensor-parallel full-model prefill (num_devices>1). Stateless: runs the
         whole sequence from scratch through the fractured-residual TP layers and
         returns the next-token logits at position valid_len-1.
@@ -171,12 +485,13 @@ class Qwen36Model:
         kernel; right-padding does not affect the causal logit at valid_len-1).
         Returns ttnn logits [1, 1, 1, vocab_size] (host).
         """
-        from models.demos.blackhole.qwen36.tt.attention.rope_tp import rot_mats_prefill
-
         B, T = token_ids.shape
         assert B == 1, "prefill_tp is single-sequence"
         valid_len = valid_len or T
 
+        # Stage the per-request RoPE (M-RoPE for multimodal, 1D for text), then build cos/sin from
+        # that staged sequence table — same source as the traced TP path (_rope_tp_cos_sin_torch).
+        self._build_request_rope(token_ids[:, :valid_len], vision_tokens)
         tok = ttnn.from_torch(
             token_ids.to(torch.int32),
             dtype=ttnn.uint32,
@@ -184,8 +499,12 @@ class Qwen36Model:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
         )
         x = self.embd(tok)  # [1, T, dim_frac] (hidden dim sharded across mesh)
+        x = self._scatter_vision_tokens(x, token_ids, vision_tokens)
         x = ttnn.reshape(x, (1, 1, T, x.shape[-1]))
-        cos, sin = rot_mats_prefill(self.device, self.args.rope_head_dim, T, self.args.rope_theta)
+        cos_t, sin_t = self._rope_tp_cos_sin_torch(0, T)
+        rep = ttnn.ReplicateTensorToMesh(self.device)
+        cos = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=rep)
+        sin = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=rep)
 
         for layer in self.layers:
             x = layer.forward(x, cos=cos, sin=sin, mode="prefill", chunk_size=128, valid_len=valid_len)
@@ -231,12 +550,13 @@ class Qwen36Model:
         )
         x = self.embd(tok)  # [1,1,dim_frac]
         x = ttnn.reshape(x, (1, 1, 1, x.shape[-1]))  # [1,1,B=1,dim_frac]
+        # RoPE position offset by rope_delta for multimodal (KV position cur_pos_tt stays `pos`).
         cos, sin = rot_mats_decode(
             self.device,
             self.args.rope_head_dim,
             self.args.max_seq_len,
             self.args.rope_theta,
-            torch.tensor([pos], dtype=torch.int32),
+            torch.tensor([pos + self.rope.rope_delta], dtype=torch.int32),
         )
         cur_pos_tt = ttnn.from_torch(
             torch.tensor([pos], dtype=torch.int32),
@@ -269,20 +589,122 @@ class Qwen36Model:
             out.append(nxt)
         return out
 
-    def prefill(self, token_ids):
+    def _scatter_vision_tokens(self, x, token_ids, vision_tokens):
+        """Splice vision-model embeddings into the text token embeddings, on device.
+
+        On-device equivalent of the HF reference's
+        ``inputs_embeds.masked_scatter(image_mask, image_embeds)``. The embedding is
+        flattened to ``[rows, H]``; the packed ``vision_tokens`` are placed into a zero
+        buffer at the image-placeholder rows with a dim-0 ``ttnn.scatter``, then merged
+        with the text embeddings via
+        ``ttnn.where(special_image_mask, vision, text)``. The embeddings/vision never
+        leave the device. No-op when ``vision_tokens`` is None or the prompt has no
+        image tokens (the text-only path).
+
+        The image-placeholder mask and placement positions are computed on host from the
+        token ids (which already live on host at every call site), mirroring the HF
+        reference's ``special_image_mask = input_ids == self.config.image_token_id``, then
+        uploaded. The two tiny derived tensors uploaded are the ``[n, H]`` scatter index
+        (hidden-sharded on a mesh, like the embedding activations) and the ``[rows, 1]``
+        where-predicate (replicated on a mesh — it broadcasts over the sharded hidden dim).
+
+        Args:
+            x (ttnn.Tensor): text embeddings from ``self.embd`` — ``[B, T, H]`` (the
+                raw embedding output), hidden fractured along the last dim on a mesh.
+            token_ids (torch.Tensor): the prefill token ids (``input_ids``), ``[B, T]`` on
+                host; image placeholders are the entries equal to ``hf_config.image_token_id``.
+            vision_tokens (ttnn.Tensor): ``[num_image_tokens, H]`` produced by the
+                vision tower (fractured along hidden on a mesh, like ``x``), one row
+                per image placeholder token.
+
+        Returns:
+            ttnn.Tensor: same logical shape / layout / sharding as ``x`` with the
+            vision embeddings scattered in.
+        """
+        if vision_tokens is None:
+            return x
+
+        orig_shape = tuple(x.shape)
+        hidden = orig_shape[-1]
+        rows = 1
+        for d in orig_shape[:-1]:
+            rows *= d
+
+        # special_image_mask = input_ids == image_token_id, computed on host from the
+        # token ids and uploaded. torch.nonzero gives the placement positions directly.
+        flat_ids = token_ids.reshape(-1)
+        mask_bool = flat_ids == self._vision_placeholder_token_id()
+        pos = torch.nonzero(mask_bool, as_tuple=False).reshape(-1)
+        n = int(pos.numel())
+        if n == 0:
+            return x
+        assert n == int(
+            vision_tokens.shape[0]
+        ), f"input_ids has {n} image-token positions but vision_tokens has {int(vision_tokens.shape[0])} rows"
+
+        # Placement index: the dim-0 rows of the flattened [rows, H] embedding to fill,
+        # repeated across the hidden dim so the whole hidden vector at each row is written.
+        # ttnn.scatter mirrors torch.scatter: out[index[i, h], h] = src[i, h], with
+        # index/src/input the same rank.
+        index = pos.view(n, 1).expand(n, hidden).contiguous().to(torch.int32)
+        # where-predicate: [rows, 1], broadcasts over hidden in ttnn.where.
+        mask_col = mask_bool.view(rows, 1)
+
+        if self.num_devices > 1:
+            # Shard the index along hidden the same way the embedding shards its
+            # activations, so each device's [n, H/TP] index matches its local x/vision
+            # shard (the hidden columns are identical, so splitting is free). The predicate
+            # broadcasts over the sharded hidden dim, so it is replicated.
+            index_tt = ttnn.from_torch(
+                index,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, dims=(None, 1), mesh_shape=self.args.cluster_shape
+                ),
+            )
+            mask_tt = ttnn.from_torch(
+                mask_col,
+                dtype=x.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+            )
+        else:
+            index_tt = ttnn.from_torch(index, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+            mask_tt = ttnn.from_torch(mask_col, dtype=x.dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
+
+        # ttnn.scatter requires input.dtype == src.dtype.
+        src = vision_tokens if vision_tokens.dtype == x.dtype else ttnn.typecast(vision_tokens, x.dtype)
+
+        # Place the packed vision rows into a zero buffer, then select per row:
+        # vision at image positions, original text embedding everywhere else.
+        x_2d = ttnn.reshape(x, (rows, hidden))
+        vision_placed = ttnn.scatter(ttnn.zeros_like(x_2d), 0, index_tt, src)
+        ttnn.deallocate(index_tt)
+        out = ttnn.where(mask_tt, vision_placed, x_2d)
+        ttnn.deallocate(vision_placed)
+        ttnn.deallocate(mask_tt)
+        return ttnn.reshape(out, orig_shape)
+
+    def prefill(self, token_ids, vision_tokens=None):
         B, T = token_ids.shape
 
+        # Stage the per-request RoPE (M-RoPE for multimodal, 1D for text) before any cos/sin seam.
+        self._build_request_rope(token_ids, vision_tokens)
+
         if T > 1024:
-            return self.prefill_layer_chunked(token_ids, chunk_size=2048)
+            return self.prefill_layer_chunked(token_ids, chunk_size=2048, vision_tokens=vision_tokens)
 
         # Original path for short sequences
         self.reset_state(batch_size=B)
 
         token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
         x = self.embd(token_ids_ttnn)
+        x = self._scatter_vision_tokens(x, token_ids, vision_tokens)
 
-        position_ids = torch.arange(T).unsqueeze(0).expand(B, -1)
-        cos, sin = self.rope.get_rot_mats(position_ids)
+        cos, sin = self.rope.get_prefill_rot_mats(0, T)
 
         for layer in self.layers:
             x = layer.forward(x, cos=cos, sin=sin, mode="prefill")
@@ -294,7 +716,7 @@ class Qwen36Model:
 
         return logits
 
-    def prefill_layer_chunked(self, token_ids, chunk_size=2048, page_table=None):
+    def prefill_layer_chunked(self, token_ids, chunk_size=2048, page_table=None, vision_tokens=None):
         """Prefill long sequences using layer-at-a-time chunked processing.
 
         Unlike prefill_segmented (segment through all layers), this processes
@@ -317,6 +739,7 @@ class Qwen36Model:
 
         token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
         x = self.embd(token_ids_ttnn)
+        x = self._scatter_vision_tokens(x, token_ids, vision_tokens)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(token_ids_ttnn)
 
@@ -342,9 +765,9 @@ class Qwen36Model:
                 x_chunk = ttnn.to_layout(x_chunk, ttnn.TILE_LAYOUT)
 
                 if layer.is_full_attention and page_table is not None:
-                    # Paged prefill path
-                    cos = self.rope.cos_device[:, chunk_start:chunk_end, :]
-                    sin = self.rope.sin_device[:, chunk_start:chunk_end, :]
+                    # Paged prefill path. M-RoPE-aware cos/sin for sequence positions of this chunk
+                    # (slices the staged per-request table for multimodal; 1D RoPE otherwise).
+                    cos, sin = self.rope.get_prefill_rot_mats(chunk_start, chunk_end - chunk_start)
 
                     block_size = 64
                     chunk_blocks_end = math.ceil(chunk_end / block_size)
@@ -364,9 +787,9 @@ class Qwen36Model:
                     )
 
                 elif layer.is_full_attention:
-                    # Original concat path (non-paged prefill)
-                    cos = self.rope.cos_device[:, chunk_start:chunk_end, :]
-                    sin = self.rope.sin_device[:, chunk_start:chunk_end, :]
+                    # Original concat path (non-paged prefill). M-RoPE-aware cos/sin (per-request
+                    # table slice for multimodal; 1D RoPE otherwise).
+                    cos, sin = self.rope.get_prefill_rot_mats(chunk_start, chunk_end - chunk_start)
                     x_chunk = layer.forward(x_chunk, cos=cos, sin=sin, mode="prefill")
                 else:
                     x_chunk = layer.forward(
@@ -412,7 +835,9 @@ class Qwen36Model:
         x = self.embd(token_ids_ttnn)
         ttnn.deallocate(token_ids_ttnn)
 
-        position_ids = torch.full((B, 1), current_pos, dtype=torch.long)
+        # RoPE position is offset by rope_delta for a multimodal request (image tokens compress the
+        # position space); the KV/cache position (cur_pos_tensor below) stays the true sequence pos.
+        position_ids = torch.full((B, 1), current_pos + self.rope.rope_delta, dtype=torch.long)
         cos, sin = self.rope.get_rot_mats(position_ids)
 
         # Create cur_pos_tensor for SDPA decode + paged_update_cache.
@@ -461,6 +886,10 @@ class Qwen36Model:
         Returns the chunk's last-layer hidden state [1, chunk_size, hidden_size]."""
         x = self.embd(token_buf)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        # Trace-safe vision splice (fixed-shape where over persistent buffers; identity when the
+        # mask buffer is zero, which is the case for every text-only chunk and request). The caller
+        # stages the buffers before replaying chunk 0 of a multimodal prompt; chunks>0 are cleared.
+        x = self._apply_vision_merge(x, length=x.shape[1])
         for layer in self.layers:
             if layer.is_full_attention:
                 x_new = layer.forward(
@@ -479,17 +908,17 @@ class Qwen36Model:
         return x
 
     def _rope_tp_cos_sin_torch(self, start, length):
-        """Torch cos/sin tables [1, 1, length, rope_head_dim] for absolute positions
+        """Torch cos/sin tables [1, 1, length, rope_head_dim] for SEQUENCE positions
         [start, start+length), in the rope_tp (HF split-halves) format consumed by
         apply_partial_rope_prefill. Single source of truth for the TP masked-bucket and
         traced chunk-outer prefill paths (so the captured trace's cos/sin are byte-identical
-        to the eager path's)."""
+        to the eager path's). M-RoPE-aware: when a multimodal request staged a per-sequence
+        table (build_request_rope) this slices it; otherwise it is ordinary 1D RoPE at
+        positions [start, start+length) — byte-identical to the pre-M-RoPE behaviour."""
         rd = self.args.rope_head_dim
-        inv_freq = 1.0 / (self.args.rope_theta ** (torch.arange(0, rd, 2).float() / rd))
-        t = torch.arange(start, start + length, dtype=torch.float32)
-        emb = torch.cat([torch.outer(t, inv_freq)] * 2, dim=-1)  # [length, rd], HF split-halves
-        cos = emb.cos().reshape(1, 1, length, rd).to(torch.bfloat16)
-        sin = emb.sin().reshape(1, 1, length, rd).to(torch.bfloat16)
+        cos_t, sin_t = self.rope.prefill_cos_sin_torch(start, length)  # [length, rd] bf16
+        cos = cos_t.reshape(1, 1, length, rd)
+        sin = sin_t.reshape(1, 1, length, rd)
         return cos, sin
 
     def _forward_prefill_chunk_tp(
@@ -508,6 +937,10 @@ class Qwen36Model:
         x = self.embd(token_buf)
         x = ttnn.reshape(x, (1, 1, chunk_size, x.shape[-1]))
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        # Trace-safe vision splice (fixed-shape where over the hidden-sharded persistent buffers;
+        # identity when the mask is zero, i.e. every text-only chunk). The caller stages the
+        # buffers before replaying chunk 0 of a multimodal prompt; later chunks are cleared.
+        x = self._apply_vision_merge(x, length=chunk_size)
         for layer in self.layers:
             if layer.is_full_attention:
                 x_new = layer.forward(
@@ -562,6 +995,11 @@ class Qwen36Model:
             self._chunked_trace_id = None
 
         self._chunked_chunk_size = chunk_size
+
+        # Allocate the vision-splice buffers BEFORE warmup so the fixed-shape ttnn.where in
+        # _forward_prefill_chunk / _forward_prefill_chunk_masked compiles in the warmup pass (and
+        # is captured), never at request time. Zero-initialised -> identity for text-only.
+        self._alloc_vision_merge_buffers(device, chunk_size)
 
         # ---- Persistent per-chunk input buffers (addresses baked into the trace) ----
         self._chunk_token_buf = ttnn.from_torch(
@@ -678,6 +1116,11 @@ class Qwen36Model:
             self._chunked_trace_id = None
         self._chunked_chunk_size = chunk_size
 
+        # Allocate the hidden-sharded vision-splice buffers BEFORE warmup so the fixed-shape
+        # ttnn.where in the TP forwards compiles in the warmup pass (and is captured), never at
+        # request time. Zero-initialised -> identity for text-only.
+        self._alloc_vision_merge_buffers(device, chunk_size)
+
         rep = ttnn.ReplicateTensorToMesh(device)
         B = 1
         # ---- Persistent per-chunk input buffers (replicated; addresses baked into the trace). ----
@@ -764,7 +1207,7 @@ class Qwen36Model:
         x = self.embd(tok)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(tok)
-        cos, sin = self.rope.get_rot_mats(torch.arange(chunk_start, chunk_start + T_tail).unsqueeze(0))
+        cos, sin = self.rope.get_prefill_rot_mats(chunk_start, T_tail)
         full_pt = ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
         blk0 = chunk_start // block_size
         blkN = math.ceil((chunk_start + T_tail) / block_size)
@@ -810,7 +1253,9 @@ class Qwen36Model:
                 return b
         return ((length + 127) // 128) * 128
 
-    def _forward_prefill_chunk_masked(self, token_buf, valid_len, chunk_start, page_table, bucket, flex_sdpa=True):
+    def _forward_prefill_chunk_masked(
+        self, token_buf, valid_len, chunk_start, page_table, bucket, flex_sdpa=True, vision_tokens=None
+    ):
         """Single masked fixed-bucket prefill forward over `bucket` positions.
 
         token_buf is [1, bucket]: the first valid_len positions are real, the rest are
@@ -824,7 +1269,7 @@ class Qwen36Model:
         [1, 1, bucket, hidden_size] (TP)."""
         if self.num_devices > 1:
             return self._forward_prefill_chunk_masked_tp(
-                token_buf, valid_len, chunk_start, page_table, bucket, flex_sdpa=flex_sdpa
+                token_buf, valid_len, chunk_start, page_table, bucket, flex_sdpa=flex_sdpa, vision_tokens=vision_tokens
             )
         block_size = get_block_size(self._paged_kv_caches)
         tok = ttnn.from_torch(
@@ -833,7 +1278,11 @@ class Qwen36Model:
         x = self.embd(tok)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(tok)
-        cos, sin = self.rope.get_rot_mats(torch.arange(chunk_start, chunk_start + bucket).unsqueeze(0))
+        # Trace-safe vision splice: a fixed-shape ttnn.where over persistent buffers (compiled
+        # at warmup; mask==0 -> identity, so text-only is unchanged). The caller stages the
+        # buffers (prefill_masked_bucket -> _set_vision_merge). No-op until a trace is captured.
+        x = self._apply_vision_merge(x, length=bucket)
+        cos, sin = self.rope.get_prefill_rot_mats(chunk_start, bucket)
         full_pt = ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
         blk0 = chunk_start // block_size
         # Fill K/V for ONLY the real blocks (those covering valid_len), NOT the full bucket.
@@ -876,7 +1325,9 @@ class Qwen36Model:
             x = x_new
         return x
 
-    def _forward_prefill_chunk_masked_tp(self, token_buf, valid_len, chunk_start, page_table, bucket, flex_sdpa=True):
+    def _forward_prefill_chunk_masked_tp(
+        self, token_buf, valid_len, chunk_start, page_table, bucket, flex_sdpa=True, vision_tokens=None
+    ):
         """TP (num_devices>1) masked fixed-bucket single-chunk prefill forward.
 
         flex_sdpa=True (default, the serving path) drives the full-attention SDPA via the FLEXIBLE
@@ -904,6 +1355,10 @@ class Qwen36Model:
         x = ttnn.reshape(x, (1, 1, bucket, x.shape[-1]))
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(tok)
+        # Trace-safe vision splice (fixed-shape where over the hidden-sharded persistent buffers,
+        # sliced to bucket; identity when the mask is zero). The caller stages the buffers
+        # (prefill_masked_bucket -> _set_vision_merge). No-op until a trace is captured.
+        x = self._apply_vision_merge(x, length=bucket)
         # rope_tp cos/sin for absolute positions [chunk_start, chunk_start+bucket).
         cos_t, sin_t = self._rope_tp_cos_sin_torch(chunk_start, bucket)
         cos = ttnn.from_torch(
@@ -966,7 +1421,17 @@ class Qwen36Model:
             ttnn.deallocate(csi_tensor)
         return x
 
-    def prefill_masked_bucket(self, token_ids, page_table, actual_len, chunk_start=0, bucket=None, flex_sdpa=True):
+    def prefill_masked_bucket(
+        self,
+        token_ids,
+        page_table,
+        actual_len,
+        chunk_start=0,
+        bucket=None,
+        flex_sdpa=True,
+        vision_tokens=None,
+        vis_row_offset=0,
+    ):
         """Masked fixed-bucket prefill for a segment of `actual_len` real tokens.
 
         Pads the segment up to a fixed bucket length, runs all layers ONCE, and masks the GDN
@@ -978,8 +1443,10 @@ class Qwen36Model:
 
         `chunk_start` is the segment's absolute start position (0 for a from-scratch short
         prompt; num_full*chunk_size for the tail of a long prompt — the carried GDN/KV state
-        must already be in place). Returns ttnn.Tensor (host) [1, 1, vocab_size]: the logit
-        after position actual_len-1.
+        must already be in place). `vis_row_offset` is the number of image-placeholder tokens
+        before this segment (so a tail that holds the bottom of a large image splices the right
+        slice of the packed vision rows). Returns ttnn.Tensor (host) [1, 1, vocab_size]: the
+        logit after position actual_len-1.
         """
         B_batch, _ = token_ids.shape
         assert B_batch == 1, "masked-bucket prefill is single-sequence"
@@ -992,6 +1459,10 @@ class Qwen36Model:
             # GDN state — the warmup-dirty-state guard. chunk_start>0 is a carried tail, so the
             # in-place GDN/KV state from the full chunks must NOT be reset here.
             self._reset_gdn_state_for_new_sequence()
+            # Stage the per-request RoPE for this segment (M-RoPE for multimodal, 1D for text).
+            # Only at the sequence start; a carried tail (chunk_start>0) keeps the table the
+            # long-prompt entry (prefill_traced_chunked) already staged.
+            self._build_request_rope(token_ids[:, :actual_len], vision_tokens)
 
         real = token_ids[:, :actual_len].to(torch.int32)
         if bucket > actual_len:
@@ -1000,8 +1471,14 @@ class Qwen36Model:
         else:
             token_buf = real
 
+        # Stage the trace-safe vision buffers (host->device copy only). A segment splices its own
+        # slice of the packed vision rows (vis_row_offset); a segment with no image placeholders
+        # (text-only prompt, or a tail past the image) clears the mask inside _set_vision_merge so
+        # the where is the identity. No-op without buffers.
+        self._set_vision_merge(token_buf, vision_tokens, vis_row_offset)
+
         hidden = self._forward_prefill_chunk_masked(
-            token_buf, actual_len, chunk_start, page_table, bucket, flex_sdpa=flex_sdpa
+            token_buf, actual_len, chunk_start, page_table, bucket, flex_sdpa=flex_sdpa, vision_tokens=vision_tokens
         )
         ttnn.synchronize_device(self.device)
 
@@ -1125,7 +1602,7 @@ class Qwen36Model:
                 ttnn.deallocate(pt)
             ttnn.deallocate(k_full)
 
-    def prefill_traced_chunked(self, token_ids, page_table, actual_len):
+    def prefill_traced_chunked(self, token_ids, page_table, actual_len, vision_tokens=None):
         """Prefill by replaying the captured per-chunk trace for each FULL 2048-token chunk,
         then processing the final partial chunk eagerly with minimal padding.
 
@@ -1136,6 +1613,17 @@ class Qwen36Model:
         of repeating the bucket padding through the recurrence — which corrupts the decode
         state at long context. actual_len is the real prompt length; the next-token logit is
         extracted at actual_len-1. Returns ttnn.Tensor (host) [1, 1, vocab_size].
+
+        vision_tokens (multimodal) are spliced trace-safely: the captured forward runs a
+        FIXED-shape ttnn.where(mask, vision, text) over persistent buffers (_vis_buf /
+        _vis_mask_buf) that this method stages per chunk via copy_host_to_device — no program
+        compiles at request time, so the parked trace is never clobbered. Each chunk (and the tail)
+        splices its own slice of the packed vision rows (vis_row_offset = image tokens before the
+        chunk), so a large image whose placeholders span multiple chunks is handled; a segment with
+        no image tokens clears the mask (the where becomes the identity). Works on both single
+        device (3D buffers) and TP (4D hidden-sharded buffers; the vision rows are gathered to full
+        hidden on host in _set_vision_merge, placed along seq, then re-sharded — see
+        _alloc_vision_merge_buffers).
         """
         # Default to the standard 2048-token chunk when no trace is captured (e.g. the TP MVP,
         # which serves <=2048 prompts entirely via the masked bucket below and so needs no chunk
@@ -1150,6 +1638,12 @@ class Qwen36Model:
         assert (
             num_full == 0 or self.num_devices > 1 or self._chunked_trace_id is not None
         ), "Call capture_prefill_trace_chunked first"
+
+        # Stage the per-request RoPE once for the whole prompt (M-RoPE for multimodal, 1D for text).
+        # The chunk-replay loops + the masked tail then slice this sequence-indexed table by chunk
+        # position, and decode offsets by the stored rope_delta. (The num_full==0 short path below
+        # re-stages it inside prefill_masked_bucket; that is idempotent.)
+        self._build_request_rope(token_ids[:, :actual_len], vision_tokens)
 
         # Short prompt (no full chunks): route the whole prompt through the SAME masked
         # fixed-bucket path the long-prompt tail uses. chunk_start=0 makes prefill_masked_bucket
@@ -1178,7 +1672,7 @@ class Qwen36Model:
                 elif page_table.shape[1] > buf_blocks:
                     page_table = page_table[:, :buf_blocks]
             return self.prefill_masked_bucket(
-                token_ids[:, :actual_len], page_table, actual_len=actual_len, chunk_start=0
+                token_ids[:, :actual_len], page_table, actual_len=actual_len, chunk_start=0, vision_tokens=vision_tokens
             )
 
         if self.num_devices > 1:
@@ -1190,12 +1684,19 @@ class Qwen36Model:
             # Both carry GDN recurrent/conv + paged-KV state across chunks via the in-place buffers.
             if self._chunked_trace_id is not None:
                 return self._prefill_traced_chunked_tp(
-                    token_ids, page_table, actual_len, num_full, chunk_size, tail_real
+                    token_ids, page_table, actual_len, num_full, chunk_size, tail_real, vision_tokens=vision_tokens
                 )
             # Eager fallback when no chunk trace is parked. Eager = flexible qk=64, identical SDPA to
             # the traced path, so the eager result matches the traced chunk-outer path.
             return self._prefill_chunked_eager_tp(
-                token_ids, page_table, actual_len, num_full, chunk_size, tail_real, flex_sdpa=True
+                token_ids,
+                page_table,
+                actual_len,
+                num_full,
+                chunk_size,
+                tail_real,
+                flex_sdpa=True,
+                vision_tokens=vision_tokens,
             )
 
         # >= 1 full chunk: re-zero GDN state once (the warmup-dirty-state guard); it then carries
@@ -1242,18 +1743,31 @@ class Qwen36Model:
             )
             ttnn.copy_host_to_device_tensor(cpt_host, self._chunk_page_table_buf)
 
+            # M-RoPE-aware per-chunk cos/sin (slices the staged per-request table for multimodal;
+            # 1D RoPE for text). Updated into the persistent buffer per chunk via host->device copy,
+            # so it stays trace-safe.
+            cos_seq, sin_seq = self.rope.prefill_cos_sin_torch(cs, chunk_size)
             cos_host = ttnn.from_torch(
-                self.rope.cos_cpu[cs : cs + chunk_size].unsqueeze(0).contiguous(),
+                cos_seq.unsqueeze(0).contiguous(),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
             )
             sin_host = ttnn.from_torch(
-                self.rope.sin_cpu[cs : cs + chunk_size].unsqueeze(0).contiguous(),
+                sin_seq.unsqueeze(0).contiguous(),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
             )
             ttnn.copy_host_to_device_tensor(cos_host, self._chunk_cos_buf)
             ttnn.copy_host_to_device_tensor(sin_host, self._chunk_sin_buf)
+
+            # Stage the trace-safe vision buffers: each chunk splices its own slice of the packed
+            # vision rows (vis_row_offset = image tokens before cs); a chunk with no image tokens
+            # clears the mask so the captured where is the identity. host->device copy only (no
+            # compile), so the parked trace is untouched. Handles a large image whose placeholders
+            # span multiple chunks.
+            self._set_vision_merge(
+                token_ids[:, cs : cs + chunk_size], vision_tokens, self._vis_row_offset_for(token_ids, cs)
+            )
 
             ttnn.execute_trace(self.device, self._chunked_trace_id, cq_id=0, blocking=False)
 
@@ -1269,7 +1783,12 @@ class Qwen36Model:
         if tail_real > 0:
             cs = num_full * chunk_size
             return self.prefill_masked_bucket(
-                token_ids[:, cs:actual_len], page_table, actual_len=tail_real, chunk_start=cs
+                token_ids[:, cs:actual_len],
+                page_table,
+                actual_len=tail_real,
+                chunk_start=cs,
+                vision_tokens=vision_tokens,
+                vis_row_offset=self._vis_row_offset_for(token_ids, cs),
             )
         hidden = self._chunked_trace_output  # last full chunk's hidden state
         pos_in_chunk = (actual_len - 1) - (num_full - 1) * chunk_size
@@ -1283,7 +1802,7 @@ class Qwen36Model:
         return logits.cpu()
 
     def _prefill_chunked_eager_tp(
-        self, token_ids, page_table, actual_len, num_full, chunk_size, tail_real, flex_sdpa=True
+        self, token_ids, page_table, actual_len, num_full, chunk_size, tail_real, flex_sdpa=True, vision_tokens=None
     ):
         """TP long-prompt prefill (>chunk_size). Processes each full chunk_size-token chunk
         EAGERLY through the masked path at bucket=chunk_size (valid_len=chunk_size → no mask),
@@ -1303,6 +1822,12 @@ class Qwen36Model:
             cs = c * chunk_size
             if last_hidden is not None:
                 ttnn.deallocate(last_hidden)
+            # Stage the vision buffers: each chunk splices its own slice of the packed vision rows
+            # (vis_row_offset = image tokens before cs); a chunk with no image tokens clears the
+            # mask so the where is the identity (host->device copy only, no compile).
+            self._set_vision_merge(
+                token_ids[:, cs : cs + chunk_size], vision_tokens, self._vis_row_offset_for(token_ids, cs)
+            )
             # Full chunk: valid_len == bucket == chunk_size (no padding/masking).
             last_hidden = self._forward_prefill_chunk_masked_tp(
                 token_ids[:, cs : cs + chunk_size], chunk_size, cs, page_table, chunk_size, flex_sdpa=flex_sdpa
@@ -1312,14 +1837,22 @@ class Qwen36Model:
             ttnn.deallocate(last_hidden)
             cs = num_full * chunk_size
             return self.prefill_masked_bucket(
-                token_ids[:, cs:actual_len], page_table, actual_len=tail_real, chunk_start=cs, flex_sdpa=flex_sdpa
+                token_ids[:, cs:actual_len],
+                page_table,
+                actual_len=tail_real,
+                chunk_start=cs,
+                flex_sdpa=flex_sdpa,
+                vision_tokens=vision_tokens,
+                vis_row_offset=self._vis_row_offset_for(token_ids, cs),
             )
         # Exact multiple of chunk_size: next-token logit from the last full chunk's last position.
         logits = self._masked_bucket_logits_tp(last_hidden, chunk_size, chunk_size)
         ttnn.deallocate(last_hidden)
         return logits
 
-    def _prefill_traced_chunked_tp(self, token_ids, page_table, actual_len, num_full, chunk_size, tail_real):
+    def _prefill_traced_chunked_tp(
+        self, token_ids, page_table, actual_len, num_full, chunk_size, tail_real, vision_tokens=None
+    ):
         """TP traced chunk-outer prefill: replay the captured per-chunk trace
         (_forward_prefill_chunk_tp) for each FULL chunk, then run the partial tail through the
         masked bucket. The TP analog of the single-device loop in prefill_traced_chunked: each
@@ -1398,6 +1931,14 @@ class Qwen36Model:
             ttnn.copy_host_to_device_tensor(cos_host, self._chunk_cos_buf)
             ttnn.copy_host_to_device_tensor(sin_host, self._chunk_sin_buf)
 
+            # Stage the hidden-sharded vision buffers: each chunk splices its own slice of the
+            # packed vision rows (vis_row_offset = image tokens before cs); a chunk with no image
+            # tokens clears the mask so the captured where is the identity. host->device copy only
+            # (no compile), so the parked trace is untouched.
+            self._set_vision_merge(
+                token_ids[:, cs : cs + chunk_size], vision_tokens, self._vis_row_offset_for(token_ids, cs)
+            )
+
             ttnn.execute_trace(self.device, self._chunked_trace_id, cq_id=0, blocking=False)
 
         ttnn.synchronize_device(self.device)
@@ -1411,7 +1952,12 @@ class Qwen36Model:
         if tail_real > 0:
             cs = num_full * chunk_size
             return self.prefill_masked_bucket(
-                token_ids[:, cs:actual_len], page_table, actual_len=tail_real, chunk_start=cs
+                token_ids[:, cs:actual_len],
+                page_table,
+                actual_len=tail_real,
+                chunk_start=cs,
+                vision_tokens=vision_tokens,
+                vis_row_offset=self._vis_row_offset_for(token_ids, cs),
             )
         return self._masked_bucket_logits_tp(self._chunked_trace_output, chunk_size, chunk_size)
 
@@ -1613,17 +2159,17 @@ class Qwen36Model:
         self._deltanet_external_states = []
         return kv_caches
 
-    def _prefill_paged_tp(self, token_ids, page_table, valid_len=None):
+    def _prefill_paged_tp(self, token_ids, page_table, valid_len=None, vision_tokens=None):
         """TP (num_devices>1) paged prefill, B=1. Mirrors the demo prefill_tp but routes
         the full-attention layers through the paged KV cache (forward_prefill_paged) so
         decode can read it via page_table. GDN layers capture their recurrent/conv state
         as in the demo. Returns logits [1, 1, vocab] at position valid_len-1.
         """
-        from models.demos.blackhole.qwen36.tt.attention.rope_tp import rot_mats_prefill
-
         B, T = token_ids.shape
         assert B == 1, "TP prefill is single-sequence (B=1)"
         vlen = valid_len or T
+        # Stage the per-request RoPE (M-RoPE for multimodal, 1D for text).
+        self._build_request_rope(token_ids[:, :vlen], vision_tokens)
         pt_torch = page_table if isinstance(page_table, torch.Tensor) else ttnn.to_torch(page_table)
         page_table_tt = ttnn.from_torch(pt_torch, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
         tok = ttnn.from_torch(
@@ -1633,9 +2179,13 @@ class Qwen36Model:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
         )
         x = self.embd(tok)
+        x = self._scatter_vision_tokens(x, token_ids, vision_tokens)
         x = ttnn.reshape(x, (1, 1, T, x.shape[-1]))
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-        cos, sin = rot_mats_prefill(self.device, self.args.rope_head_dim, T, self.args.rope_theta)
+        cos_t, sin_t = self._rope_tp_cos_sin_torch(0, T)
+        rep = ttnn.ReplicateTensorToMesh(self.device)
+        cos = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=rep)
+        sin = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=rep)
         for layer in self.layers:
             x = layer.forward(
                 x,
@@ -1671,7 +2221,7 @@ class Qwen36Model:
                 attn.past_key = None
                 attn.past_value = None
 
-    def prefill_paged(self, token_ids, page_table, valid_len=None):
+    def prefill_paged(self, token_ids, page_table, valid_len=None, vision_tokens=None):
         """Prefill using paged attention for long sequences, concat for short.
 
         For T > 1024: uses paged prefill (paged_fill_cache + chunked_sdpa)
@@ -1685,23 +2235,28 @@ class Qwen36Model:
             logits: ttnn.Tensor [B, 1, vocab_size]
         """
         if self.num_devices > 1:
-            return self._prefill_paged_tp(token_ids, page_table, valid_len=valid_len)
+            return self._prefill_paged_tp(token_ids, page_table, valid_len=valid_len, vision_tokens=vision_tokens)
 
         B, T = token_ids.shape
+        # Stage the per-request RoPE (M-RoPE for multimodal, 1D for text) before any cos/sin seam;
+        # prefill_layer_chunked (T>1024) inherits the staged table.
+        self._build_request_rope(token_ids[:, :valid_len] if valid_len else token_ids, vision_tokens)
         # Keep page_table as torch.Tensor for CPU slicing in prefill_layer_chunked.
         page_table_torch = page_table if isinstance(page_table, torch.Tensor) else ttnn.to_torch(page_table)
         self.reset_state(batch_size=B)
 
         # Use existing prefill (concat-based K/V for SDPA)
         if T > 1024:
-            logits = self.prefill_layer_chunked(token_ids, chunk_size=2048, page_table=page_table_torch)
+            logits = self.prefill_layer_chunked(
+                token_ids, chunk_size=2048, page_table=page_table_torch, vision_tokens=vision_tokens
+            )
         else:
             token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
             x = self.embd(token_ids_ttnn)
+            x = self._scatter_vision_tokens(x, token_ids, vision_tokens)
             ttnn.deallocate(token_ids_ttnn)
 
-            position_ids = torch.arange(T).unsqueeze(0).expand(B, -1)
-            cos, sin = self.rope.get_rot_mats(position_ids)
+            cos, sin = self.rope.get_prefill_rot_mats(0, T)
 
             for layer in self.layers:
                 x = layer.forward(x, cos=cos, sin=sin, mode="prefill")
@@ -1760,7 +2315,8 @@ class Qwen36Model:
         x = self.embd(token_ids_ttnn)
         ttnn.deallocate(token_ids_ttnn)
 
-        position_ids = torch.full((B, 1), current_pos, dtype=torch.long)
+        # RoPE position offset by rope_delta for multimodal (KV position stays the true seq pos).
+        position_ids = torch.full((B, 1), current_pos + self.rope.rope_delta, dtype=torch.long)
         cos, sin = self.rope.get_rot_mats(position_ids)
 
         # cur_pos_tensor shape [B] for paged ops (NOT [B*n_kv] like the non-paged path)
@@ -1807,19 +2363,23 @@ class Qwen36Model:
         B = tokens.shape[0]
         tokens_tt = ttnn.from_torch(tokens.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
         pos = current_pos[0].item() if isinstance(current_pos, torch.Tensor) else int(current_pos)
+        # RoPE position is the KV position offset by rope_delta (multimodal compresses the position
+        # space; post-image text has t==h==w so 1D RoPE at rope_pos is correct). cur_pos_tt below
+        # stays the true KV position. rope_delta is 0 for text, so this is a no-op there.
+        rope_pos = pos + self.rope.rope_delta
         if self.num_devices > 1:
             # TP rope seam: build rope_tp-format cos/sin [1, B, 1, rope_dim] (same math as
             # attention/rope_tp.rot_mats_decode) on host and pack along dim 0; unpack_rope +
             # _forward_decode flow unchanged (apply_partial_rope_decode consumes this layout).
             rd = self.args.rope_head_dim
             inv_freq = 1.0 / (self.args.rope_theta ** (torch.arange(0, rd, 2).float() / rd))
-            freqs = torch.outer(torch.full((B,), float(pos)), inv_freq)
+            freqs = torch.outer(torch.full((B,), float(rope_pos)), inv_freq)
             emb = torch.cat([freqs, freqs], dim=-1)
             cos = emb.cos().reshape(1, B, 1, rd).to(torch.bfloat16)
             sin = emb.sin().reshape(1, B, 1, rd).to(torch.bfloat16)
             rope_packed = ttnn.from_torch(torch.cat([cos, sin], dim=0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         else:
-            cos_host, sin_host = self.rope.get_cos_sin_host(pos)  # HOST ttnn tensors [1,1,rope_head_dim]
+            cos_host, sin_host = self.rope.get_cos_sin_host(rope_pos)  # HOST ttnn tensors [1,1,rope_head_dim]
             rope_packed = pack_rope_host(cos_host, sin_host)  # torch-based (host)
         cur_pos_tt = ttnn.from_torch(
             torch.full((B,), pos, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT

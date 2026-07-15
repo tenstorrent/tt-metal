@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -25,7 +25,7 @@ void kernel_main() {
     const auto s = TensorAccessor(dst_args, dst_addr);
 
     Noc noc;
-    CircularBuffer cb_out(cb_id_out0);
+    DataflowBuffer dfb_out(cb_id_out0);
     const uint32_t tile_bytes = get_tile_size(cb_id_out0);
 
     uint32_t tile_id = 0;
@@ -34,10 +34,10 @@ void kernel_main() {
         tile_id = i_nc + Wt_read;
         for (uint32_t i = 0; i < Ht; i++) {
             for (uint32_t j = 0; j < Wt; j++) {
-                cb_out.wait_front(onetile);
-                noc.async_write(cb_out, s, tile_bytes, {.offset_bytes = 0}, {.page_id = tile_id, .offset_bytes = 0});
+                dfb_out.wait_front(onetile);
+                noc.async_write(dfb_out, s, tile_bytes, {.offset_bytes = 0}, {.page_id = tile_id, .offset_bytes = 0});
                 noc.async_write_barrier();
-                cb_out.pop_front(onetile);
+                dfb_out.pop_front(onetile);
 
                 tile_id++;
             }
