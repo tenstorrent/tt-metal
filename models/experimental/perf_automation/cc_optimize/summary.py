@@ -64,6 +64,26 @@ def _read_json(path) -> object:
         return None
 
 
+def _stage_table_lines(stages: list) -> list:
+    """Render the per-stage (block-level) trace timing as bars — the SAME view the HITL pause screen
+    shows, so both hitl and non-hitl RUN_REPORT.md surface where device time went per stage/block.
+    Fed by the agent's stages passed to record_kernel_attempt. Empty list when no stages present."""
+    st = [s for s in (stages or []) if isinstance(s, dict)]
+    if not st:
+        return []
+    peak = max((s.get("ms") or 0) for s in st) or 1.0
+    hot = max(st, key=lambda s: s.get("ms") or 0)
+    out = []
+    for s in st:
+        ms = s.get("ms") or 0
+        filled = int(round((ms / peak) * 22)) if peak else 0
+        bar = "#" * filled + "." * (22 - filled)
+        dom = f" · {s['dominant']}" if s.get("dominant") else ""
+        mark = "  <- hottest" if s is hot else ""
+        out.append(f"  {str(s.get('name', '?')):<12} {ms:>9.2f} ms  {bar}{dom}{mark}")
+    return out
+
+
 def _baseline_bucket_lines(baseline_profile: dict | None, report_csv: str = "") -> list:
     """Render the baseline op-class breakdown (device time per op class, ranked) so an operator can
     read WHAT to target directly from RUN_REPORT.md instead of the terminal/CSV. Sourced from the
@@ -161,6 +181,14 @@ def render_summary(
     lines.append("")
 
     lines.extend(_baseline_bucket_lines(baseline_profile, report_csv))
+
+    _st = next((a for a in reversed(attempts) if isinstance(a, dict) and a.get("stages")), None)
+    if _st:
+        lines.append(
+            f"Block-level timing (per-stage trace) — latest lever on {_op_label(_st.get('op_signature', '?'))}:"
+        )
+        lines.extend(_stage_table_lines(_st["stages"]))
+        lines.append("")
 
     if by_op:
         hdr = f"{'op':<34} " + " ".join(f"{c:>7}" for c in _LEVEL_COLS) + f" {'best ms':>9}"

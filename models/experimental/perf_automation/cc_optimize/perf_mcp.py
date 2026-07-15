@@ -1131,7 +1131,7 @@ def git_revert(sha: str) -> dict:
 
 @mcp.tool()
 def record_kernel_attempt(
-    op_signature: str, kernel_kind: str, measured_ms: float, beat_baseline: bool, note: str = ""
+    op_signature: str, kernel_kind: str, measured_ms: float, beat_baseline: bool, note: str = "", stages_json: str = ""
 ) -> dict:
     """Record that you AUTHORED and MEASURED a real custom kernel for an open op (tt-lang or C++).
     REQUIRED before termination_check() will let you stop on any op with material roofline gap — a
@@ -1141,7 +1141,9 @@ def record_kernel_attempt(
     (e.g. 'MatmulDeviceOperation 32 x 32 x 32' or 'LayerNorm'). kernel_kind: 'tt-lang' | 'cpp'.
     measured_ms: the device_ms measure_candidate reported with the kernel in place. This verifies a
     kernel actually exists in the model source — a record with no kernel present is flagged and will
-    NOT clear the op."""
+    NOT clear the op. stages_json: OPTIONAL per-stage trace timings for this lever (the same
+    JSON list of {"name","ms","dominant?"} you would pass hitl_gate) — rendered as the block-level
+    timing table in RUN_REPORT.md so BOTH hitl and non-hitl runs surface where device time went."""
     # CONFIG/STRUCTURAL kinds — changes with NO custom-kernel source marker: program-config knobs
     # (grid/dtype), trace/2-CQ host-loop transforms, and dataflow restructures (gather/fusion/cache).
     # Accepted as detected; the re-profile + PCC verify the real effect. Only true kernel kinds
@@ -1170,6 +1172,11 @@ def record_kernel_attempt(
     ttl_absent = (kernel_kind or "").lower() == "tt-lang" and not _ttl_available()
     if ttl_absent:
         detected = False
+    try:
+        stages = json.loads(stages_json) if stages_json else []
+        stages = [s for s in stages if isinstance(s, dict)] if isinstance(stages, list) else []
+    except Exception:  # noqa: BLE001
+        stages = []
     attempts = _load_attempts()
     rec = {
         "op_signature": op_signature,
@@ -1177,6 +1184,7 @@ def record_kernel_attempt(
         "measured_ms": round(float(measured_ms), 4),
         "beat_baseline": bool(beat_baseline),
         "note": note,
+        "stages": stages,
         "kernel_detected_in_source": detected,
         "evidence": ev,
     }
