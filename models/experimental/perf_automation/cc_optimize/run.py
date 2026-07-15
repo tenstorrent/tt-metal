@@ -157,6 +157,7 @@ def discover(
         devices,
         int(os.environ.get("PERF_MCP_DISCOVER_TIMEOUT", "3600") or "3600"),
         "discovery",
+        capture=False,
     )
     mani = _latest_manifest(perf_dir)
     if mani is None or rc is None:
@@ -515,7 +516,9 @@ def _reset_devices(devices: str) -> str:
         return "device reset FAILED (%s)" % exc
 
 
-def _run_device_proc(cmd, cwd, env, devices: str, timeout_s: int, label: str = "", reset_on_timeout: bool = True):
+def _run_device_proc(
+    cmd, cwd, env, devices: str, timeout_s: int, label: str = "", reset_on_timeout: bool = True, capture: bool = True
+):
     """Run a DEVICE-touching subprocess so a device wedge can never hang the tool forever. Own session +
     hard timeout; on timeout SIGKILL the WHOLE process group (reaping device-holding children that would
     otherwise leak the mesh and wedge every later step) and optionally tt-smi -r. Returns (rc, combined
@@ -524,14 +527,17 @@ def _run_device_proc(cmd, cwd, env, devices: str, timeout_s: int, label: str = "
         list(cmd),
         cwd=str(cwd),
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
+        stdout=subprocess.PIPE if capture else None,
+        stderr=subprocess.STDOUT if capture else None,
+        text=True if capture else None,
         start_new_session=True,
     )
     try:
-        out, _ = proc.communicate(timeout=timeout_s)
-        return proc.returncode, out or ""
+        if capture:
+            out, _ = proc.communicate(timeout=timeout_s)
+            return proc.returncode, out or ""
+        proc.wait(timeout=timeout_s)
+        return proc.returncode, ""
     except subprocess.TimeoutExpired:
         try:
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
