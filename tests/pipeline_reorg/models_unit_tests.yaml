@@ -174,10 +174,16 @@
     pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
     pytest --timeout 60 models/demos/blackhole/qwen36/tests/test_mlp_tp.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model_tp.py
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_mlp.py
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_patch_merger.py
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_vision_attention.py
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_vision_block.py
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model.py
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_wrapped_model.py
   model: qwen3.6-27b
   skus:
     bh_quietbox_2:
-      timeout: 12
+      timeout: 35
       tier: 1
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models

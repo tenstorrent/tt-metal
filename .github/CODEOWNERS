@@ -512,7 +512,7 @@ models/demos/llama3_70b_galaxy @johanna-rock-tt @kpaigwar @sraizada-tt @djordje-
 models/tt_transformers/tt/generator*.py @gwangTT @cglagovichTT @yieldthought @mtairum @ppetrovicTT @uaydonat @tenstorrent/codeowner-bypass
 models/demos/qwen25_vl @gwangTT @ssanjayTT @yieldthought @uaydonat @tenstorrent/codeowner-bypass
 models/demos/qwen3_vl @ssanjayTT @gwangTT @tenstorrent/codeowner-bypass
-models/demos/blackhole/qwen36 @atupe-tt @tenstorrent/codeowner-bypass
+models/demos/blackhole/qwen36 @atupe-tt @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/demos/falcon7b_common @gwangTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
 models/demos/wormhole/mamba @esmalTT @uaydonat @kpaigwar @tenstorrent/codeowner-bypass
 models/demos/wormhole/falcon7b @djordje-tt @uaydonat @tenstorrent/codeowner-bypass

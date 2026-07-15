@@ -250,6 +250,13 @@ class TtIndexer:
         # match BF16 within bf16 noise, ~5e-4 PCC — so it can be allocated BF8 to halve the memory).
         # self._index_kbuf below is the NATURAL (single-shot) path's internal concat-grown cache only.
         self._index_kbuf = None
+        # GLM-5.2 cross-layer indexer reuse: the index key cache is allocated for full layers only, so this
+        # layer writes/reads its compacted rank among full layers, and the folded (user-major) slot stride
+        # is num_full, not all layers. _index_cache_layers is that stride.
+        self._num_index_layers = num_full_indexer_layers(config)
+        self._is_index_compact = self._num_index_layers is not None
+        self._index_layer_idx = full_indexer_rank(config, layer_idx) if self._is_index_compact else layer_idx
+        self._index_cache_layers = self._num_index_layers if self._is_index_compact else self.layer_num
         self._upload_weights(idx_host)
         self._build_rope_tables()
         # DS block-cyclic uses the interleaved rotary_embedding_indexed op, but DS weights emit the
@@ -470,7 +477,7 @@ class TtIndexer:
                 k,
                 slot_idx=cache_user_id,
                 layer_idx=cache_layer_idx,
-                num_layers=self.layer_num,
+                num_layers=self._index_cache_layers,
                 kv_actual_global=start_pos,
                 cluster_axis=self.sp_axis,
             )
@@ -535,6 +542,8 @@ class TtIndexer:
         scoring. Scoring currently spans the full preallocated cache width (see the kv_len TODO below).
         Natural path ignores rope_tensors/cache_user_id."""
         a = self.index_args
+        if self._is_index_compact:
+            cache_layer_idx = self._index_layer_idx
         glob = seq_len * self.sp_factor  # global query/key count this chunk
         end_pos = start_pos + glob
         # Block-cyclic key cache is caller-owned (like the KVPE cache) — required, never self-allocated.
@@ -543,10 +552,7 @@ class TtIndexer:
                 "block-cyclic indexer requires an externally-allocated index_kv_cache passed to forward() "
                 "(same ownership as the MLA KVPE cache); none was provided"
             )
-        # Flat user-major slot into the shared [num_users*layer_num, 1, T, D_idx] cache — same formula as
-        # ttMLA._cache_batch_idx for the KVPE cache (cache_layer_idx is the LOCAL per-rank cache slot).
-        # Written by write_k and sliced by _gather_index_kbuf.
-        cache_batch_idx = cache_user_id * self.layer_num + cache_layer_idx
+        cache_batch_idx = cache_user_id * self._index_cache_layers + cache_layer_idx
         self.write_k(
             hidden_states,
             seq_len,
@@ -721,3 +727,22 @@ def indexer_layer_is_reused(config, layer_idx: int) -> bool:
     device construction (ReuseIndexer binding) and the cache build (skip the indexer tensorbins)."""
     types = getattr(config, "indexer_types", None)
     return bool(types) and layer_idx < len(types) and types[layer_idx] == "shared"
+
+
+def num_full_indexer_layers(config):
+    """Count how many entries equal ``"full"`` in ``config.indexer_types``. Returns ``None`` when the list
+    is absent or empty."""
+    types = getattr(config, "indexer_types", None)
+    if not types:
+        return None
+    return sum(1 for t in types if t == "full")
+
+
+def full_indexer_rank(config, layer_idx: int) -> int:
+    """Prefix rank over ``config.indexer_types``: count how many entries equal ``"full"`` before position
+    ``layer_idx`` (exclusive), renumbering the matching positions into dense 0-based ranks. Returns
+    ``layer_idx`` unchanged when the list is absent or empty."""
+    types = getattr(config, "indexer_types", None)
+    if not types:
+        return layer_idx
+    return sum(1 for t in types[:layer_idx] if t == "full")
