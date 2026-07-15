@@ -97,7 +97,7 @@ TEST_F(UnitMeshCQSingleCardFixture, ScratchpadWriteReadback) {
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
         .kernel = experimental::KernelSpecName{"scratch_kernel"},
-        .runtime_arg_values = {{node, {{"report_addr", kReportAddr}}}},
+        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"report_addr", kReportAddr}}),
     }};
     experimental::SetProgramRunArgs(program, params);
 

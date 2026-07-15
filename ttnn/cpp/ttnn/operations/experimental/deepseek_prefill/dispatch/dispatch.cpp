@@ -14,7 +14,6 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch {
 
 std::array<ttnn::Tensor, 2> dispatch(
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weights_tensor,
     const ttnn::Tensor& indices_tensor,
     const ttnn::Tensor& expert_offsets_tensor,
     const ttnn::Tensor& expert_dispatch_table_tensor,
@@ -61,7 +60,6 @@ std::array<ttnn::Tensor, 2> dispatch(
 
     return ttnn::prim::prefill_dispatch(
         input_tensor,
-        weights_tensor,
         indices_tensor,
         expert_offsets_tensor,
         expert_dispatch_table_tensor,
