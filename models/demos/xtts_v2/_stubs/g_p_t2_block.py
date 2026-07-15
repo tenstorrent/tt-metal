@@ -122,21 +122,21 @@ def build_gpt2_block(device, torch_module):
         # to the old slice + _split_heads path. transpose_key=True yields k as
         # [1, H, hd, T], ready for q @ k^T without a separate transpose.
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
-            qkv, num_heads=n_heads, transpose_key=True,
-        )                                                   # q,v:[1,H,T,hd] k:[1,H,hd,T]
+            qkv, num_heads=n_heads, transpose_key=False,
+        )                                                   # each [1, H, T, hd]
 
-        weight = ttnn.matmul(q, k,
-                             compute_kernel_config=_attn_kernel_cfg)  # [1, H, T, T]
-        weight = ttnn.multiply(weight, scaling)
-        # `attn_bias` is the additive attention mask (e.g. a [1,1,T,T] causal
-        # bias). None here == HF's attention_mask=None == FULL (bidirectional)
-        # attention, which is what the standalone per-block PCC test exercises;
-        # the GPT2Model stack passes a causal bias down.
-        if attn_bias is not None:
-            weight = ttnn.add(weight, attn_bias)
-        weight = ttnn.softmax(weight, dim=-1)
-        attn_out = ttnn.matmul(weight, v,
-                               compute_kernel_config=_attn_kernel_cfg)  # [1, H, T, hd]
+        # Fused FlashAttention-2: (q @ k^T) * scale (+ causal mask) -> softmax
+        # -> @ v, in ONE device op. Replaces the explicit 5-op path (score
+        # matmul, scale-multiply, mask-add, softmax, context matmul) — kills the
+        # dispatch-bound tiny 64x64x64 BMMs + the softmax/mul/add. is_causal
+        # matches the GPT2Model's lower-triangular bias; the standalone per-block
+        # PCC test (attn_bias=None) is FULL (bidirectional) attention.
+        attn_out = ttnn.transformer.scaled_dot_product_attention(
+            q, k, v,
+            is_causal=attn_bias is not None,
+            scale=scaling,
+            compute_kernel_config=_attn_kernel_cfg,
+        )                                                   # [1, H, T, hd]
 
         # Fused merge (inverse of the split above) — one device op, no layout churn.
         attn_out = ttnn.transformer.concatenate_heads(attn_out)   # [1, T, embed]
