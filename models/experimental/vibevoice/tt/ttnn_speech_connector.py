@@ -107,6 +107,22 @@ _COMPUTE_KERNEL_HIFI4 = ttnn.WormholeComputeKernelConfig(
 )
 
 
+# fc2 (hidden×hidden = 1536×1536) decode config: single-token frames (M≤32 = 1 tile) run the
+# auto config at ~25 us / 37% DRAM ("SLOW"); this 1D mcast_in0 config → ~13 us (2x, PCC 1.0).
+# Swept in tests/perf/matmul_slow_sweep.py.  per_core_M=1 → valid only when rows ≤ 32.
+_FC2_DECODE_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
+    in0_block_w=8,
+    out_subblock_h=1,
+    out_subblock_w=1,
+    per_core_M=1,
+    per_core_N=2,
+    fuse_batch=True,
+    fused_activation=None,
+    mcast_in0=True,
+)
+
+
 class TTSpeechConnector:
     """TTNN port of SpeechConnector: fc1 → RMSNorm → fc2.
 
@@ -144,12 +160,15 @@ class TTSpeechConnector:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # fc2: [B, T, hidden_dim] → [B, T, hidden_dim]
+        # fc2: [B, T, hidden_dim] → [B, T, hidden_dim].  Single-token frames (rows ≤ 32) use the
+        # swept 1D decode config (~2x); larger T (e.g. prefill) keeps the auto config.
+        fc2_pc = _FC2_DECODE_PROGCFG if x.shape[-2] <= 32 else None
         x = ttnn.linear(
             x,
             p.fc2_weight,
             bias=p.fc2_bias,
             compute_kernel_config=_COMPUTE_KERNEL_HIFI4,
+            program_config=fc2_pc,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 

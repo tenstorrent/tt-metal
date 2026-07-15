@@ -86,6 +86,13 @@ _FFN_DOWN_PROGCFG = {
     1024: _mm1d_post(8, 2, 8, 2),  # 4096x1024   60 -> 40 us (1.5x)
 }
 
+# Up-proj (linear1, dim->ffn) was on the auto config.  dim1024 (1024x4096) auto 21 -> 13 us (1.6x,
+# PCC 1.0, swept in tests/perf/matmul_slow_sweep.py).  dim2048 (2048x8192) is BW-bound (~48 us either
+# way) so it stays auto.  per_core_M=1 -> valid only when rows (T) <= 32.
+_FFN_UP_PROGCFG = {
+    1024: _mm1d_post(8, 8, 8, 2),  # 1024x4096   21 -> 13 us (1.6x)
+}
+
 
 # ──────────────────────────────────────────────────────────────
 # Host-side weight containers (torch tensors, not TTNN)
@@ -509,8 +516,9 @@ class TTBlock1DDevice:
             l2_w_host = l2_w_host * fg.view(-1, 1)
             l2_b_host = (l2_b_host * fg) if l2_b_host is not None else None
         self.linear2_w = _tile_linear(l2_w_host.contiguous(), device, dtype=compute_dtype)
-        # Tuned down-proj config for the deep (dim 2048/1024) stages; auto otherwise.
+        # Tuned up/down-proj configs for the deep (dim 2048/1024) stages; auto otherwise.
         self._l2_progcfg = _FFN_DOWN_PROGCFG.get(self.dim)
+        self._l1_progcfg = _FFN_UP_PROGCFG.get(self.dim)
 
         def _bias(b: Optional[torch.Tensor]) -> Optional[ttnn.Tensor]:
             if b is None:
@@ -556,8 +564,15 @@ class TTBlock1DDevice:
             compute_kernel_config=_HIFI4,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        # per_core_M=1 config valid only when T<=32 rows (M_tiles=1); else auto.
+        l1_pc = self._l1_progcfg if (self._l1_progcfg is not None and x.shape[2] <= 32) else None
         x = ttnn.linear(
-            x, self.linear1_w, bias=self.linear1_b, compute_kernel_config=_HIFI2, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            x,
+            self.linear1_w,
+            bias=self.linear1_b,
+            compute_kernel_config=_HIFI2,
+            program_config=l1_pc,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         x = ttnn.gelu(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # per_core_M=1 config valid only when T<=32 rows (M_tiles=1); else auto.
