@@ -107,3 +107,7 @@ python models/autoports/google_gemma_4_31b/tests/run_full_model_qualitative.py \
 ### Review and commits
 
 The first independent review returned `more-work-needed` on compatible K-block coverage, compact-profile provenance, cross-regime lower-bound arithmetic, and unmatched full-path timing. `$autofix` isolated each issue; owner-side hardware evidence closed the block frontier and matched timing; compact reports were regenerated and hashed; and the arithmetic was replaced with a like-regime operation model. A different fresh independent reviewer then returned `clean-pass`; see `stage_review.md`. The path-scoped implementation/evidence commit SHA is recorded in the follow-up checkpoint entry below.
+
+### Checkpoint
+
+Stage-owned implementation, tests, contract, and evidence: `aeb81fdbd74` (`Optimize Gemma 4 31B full model on TP4`). The commit was path-scoped to `models/autoports/google_gemma_4_31b`; unrelated checkout state was not staged. No commit was pushed.
