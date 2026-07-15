@@ -5,7 +5,6 @@
 import ttnn
 
 
-def apply_swiglu(gate, up):
-    """SwiGLU activation: silu(gate) * up."""
-    activated = ttnn.silu(gate)
-    return ttnn.mul(activated, up)
+def apply_swiglu(up_gate):
+    """SwiGLU activation over concatenated [up | gate]: up * silu(gate)."""
+    return ttnn.swiglu(up_gate, dim=-1)
