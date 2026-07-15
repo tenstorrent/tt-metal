@@ -400,3 +400,56 @@
   gamma) + `test_rms_norm_rejects_row_major_width_block`. `test_rms_norm_cross_core_debug.py`
   (expert-debugger regression guard: PCC + uniform-scale-ratio on the wide-W BLOCK corner, 3 seeds).
   Probes `probe_025`–`probe_042` capture the plumbing/combine/broadcast/fallback verification.
+
+## Refinement 5a — ROW_MAJOR + WIDTH/BLOCK_SHARDED cross-core reduction (partial)
+- Date: 2026-07-15
+- What was done: Extended the R5 dependent-axis cross-core scheme to **ROW_MAJOR** input.
+  RM width-sharding splits each logical row's W across cores at sub-tile (stick) granularity,
+  so a row is not contiguous in any one core's L1. Each core now reads its OWN resident
+  `[Hs, Ws]` shard directly from **local L1** (buffer_address is the same offset on every
+  shard-grid core; the shard is `Hs` sticks of `Ws` elements, stride `Ws*elt`), zero-pads the
+  sub-tile W **and** H tail to whole tiles, tilizes, and the SAME R5 reduce-root gather +
+  mcast broadcast combine runs unchanged.
+  - **Geometry reality (bigger than the note anticipated)**: per-core RM slices are pervasively
+    sub-tile — `Ws∈{4,8,16}` for narrow W, and BLOCK narrow-H gives `Hs∈{3,4,7,8}`. So the fix
+    is a unifying **zero-pad-both-dims** local-shard tilize, not just a "partial-width slice".
+  - **Reused**: the compute kernel is BYTE-IDENTICAL — it already composed `IS_ROW_MAJOR`
+    (tilize/untilize) × `IS_CROSS_CORE` (gather/fold/broadcast) as independent compile-time
+    flags; R5 had merely hardcoded `IS_ROW_MAJOR=0` in the cross-core builder. Flipping it to 1
+    for RM input (+ allocating cb_input_rm / cb_output_rm) turns on the existing tilize/untilize
+    around the untouched combine. The R5 `mcast_pipe` gather+broadcast transport is reused
+    UNCHANGED — all non-excluded RM cross-core groups are rectangular (BLOCK grids always are;
+    the only ragged RM geometry, `{RM,WIDTH,w_non}`, is EXCLUDED → 5b).
+  - **Added**: an RM leg in `rms_norm_sharded_reader.cpp` (local-L1 resident-shard read with
+    zero-padded sub-tile W+H tail) and `rms_norm_writer.cpp` (an `IS_CROSS_CORE` local-L1
+    resident-shard writeback leg); RM geometry in `_sharded_cross_core_plan`
+    (`local_tile_rows=ceil(Hs/32)`, `local_Wt=ceil(Ws/32)`, `w_col_start`) and
+    `_build_cross_core_descriptor` (RM routing, cb_input_rm/cb_output_rm, RM reader/writer/compute
+    args). Routed RM WIDTH/BLOCK to the cross-core builder (no `has_partial_w` gate — the
+    zero-padded W-tail handles a non-aligned W with the same 1/W_global scaler, no partial scaler).
+  - **Bug fixed via DEVICE_PRINT (RM gamma)**: DRAM reads require a 32B-aligned SOURCE; a sub-tile
+    `w_col_start` makes the gamma column-slice DRAM offset sub-aligned, so odd sub-tile cores read
+    garbage (PCC ~0.5; even cores at 0/32/64B were correct). Fix: read the gamma slice from the
+    32B-aligned-down base into cb_gamma_rm page slack (+32B) and shift-copy the window to local
+    col 0 with an L1 byte copy (alignment-free).
+  - **No new transport**, no new kernel file, no parallel datapath (as the note anticipated).
+- Accuracy achieved (golden tolerances, PCC bf16≥0.995 / fp32≥0.999, rel-RMS bf16≤0.04 / fp32≤0.02):
+  RM WIDTH (tile_aligned + h_non) and RM BLOCK (all alignments incl w_non), bf16 + fp32,
+  no_gamma + RM gamma — all pass on shapes [1x1x32x64, 2x4x128x512, 1x1x256x512, 1x1x64x17,
+  4x8x47x256, 1x1x32x4096/8192, 1024x1024, 1x32x128, 128x100, 2x1x128x100, 1x1x50x128, …].
+- Golden test progress: WIDTH/BLOCK slices **2590 passed / 0 failed / 0 xpassed** across ~29
+  shapes (all alignments × dtypes × gamma combos); INTERLEAVED/HEIGHT **481 passed / 0 failed**
+  (no regression from the shared-writer CT-arg change); `test_op_loose` 6/6; unit dir **335 passed**.
+- Issues encountered: (1) the RM-gamma DRAM sub-alignment bug above; (2) the geometry is far
+  more sub-tile than the note's "partial-width slice" framing (handled by the unifying
+  zero-pad-both-dims approach).
+- Partial outcome — two structural carve-outs left EXCLUDED (characterized at depth, filed as
+  follow-ups): **5b** `{RM, WIDTH, w_non_aligned}` — `auto_shard_config` splits a non-aligned W
+  into a ragged (non-rectangular) grid the mcast broadcast can't address; lever = unicast
+  broadcast for ragged groups. **5c** `{RM, WIDTH/BLOCK, gamma_layout=TILE}` — a TILE-stored gamma
+  can't be read as whole tiles at a sub-tile global column offset; lever = sub-tile tile-column
+  extract. Both are rare configs (RM width-sharding; RM-act + TILE-weight cross-layout).
+- Tests added: `test_rms_norm_r5a_debug.py` (progression + WIDTH/BLOCK matrix, 79 cases);
+  `test_rms_norm_sharded.py::test_rms_norm_row_major_cross_core` (RM WIDTH/BLOCK acceptance) +
+  `test_rms_norm_rejects_row_major_width_block_remaining` (5b/5c carve-outs still refused),
+  replacing the old blanket `test_rms_norm_rejects_row_major_width_block`. Probes 056–059.

@@ -231,7 +231,7 @@ shard-grid bbox); ragged / non-tile-aligned-W route to a correct interleaved-col
 `{ROW_MAJOR, WIDTH/BLOCK_SHARDED}` EXCLUDED (RM W-sharding splits row sticks sub-tile across
 cores) → Refinement 5a below.
 
-### [ ] Refinement 5a — ROW_MAJOR + WIDTH/BLOCK_SHARDED cross-core reduction
+### [~] Refinement 5a — ROW_MAJOR + WIDTH/BLOCK_SHARDED cross-core reduction
 
 **Goal**: lift the R5 `{ROW_MAJOR, WIDTH_SHARDED}` / `{ROW_MAJOR, BLOCK_SHARDED}` EXCLUSIONS. RM
 width-sharding splits each logical row's `W` across cores at sub-tile (stick) granularity, so a
@@ -251,6 +251,50 @@ guard; flip it to an acceptance test when this lands.
 
 **Done when**: `{ROW_MAJOR, WIDTH_SHARDED}` + `{ROW_MAJOR, BLOCK_SHARDED}` move out of EXCLUSIONS
 into passing golden cells, no regression on the R5 TILE surface.
+
+**Landed (2026-07-15, partial)**: the bulk of the RM WIDTH/BLOCK surface. Each core reads its OWN
+resident `[Hs, Ws]` shard directly from **local L1** (`buffer_address` is the same offset on every
+shard-grid core; the shard is `Hs` sticks of `Ws` elements), **zero-pads the sub-tile W AND H tail
+to whole tiles** (the geometry is pervasively sub-tile: `Ws∈{4,8,16}`, and BLOCK narrow-H gives
+`Hs∈{3,4,7,8}` — bigger than the "partial-width slice" the note anticipated), tilizes, and the R5
+gather + mcast broadcast combine runs **unchanged** (compute already composed `IS_ROW_MAJOR ×
+IS_CROSS_CORE`; only the sharded reader/writer grew a local-shard RM leg + RM geometry in the
+plan/builder). SUPPORTED now covers `{RM, WIDTH, tile_aligned/h_non}` and `{RM, BLOCK, all
+alignments}` for `no_gamma` + RM gamma. Golden: WIDTH/BLOCK **2590 passed / 0 failed / 0 xpassed**
+across ~29 shapes; INTERLEAVED/HEIGHT **481 passed** (no regression from the shared-writer CT
+change); loose 6/6; unit dir 335 passed. Two structural carve-outs remain EXCLUDED → 5b/5c.
+
+### [ ] Refinement 5b — RM + WIDTH_SHARDED, non-tile-aligned W (ragged-grid unicast broadcast)
+
+**Goal**: lift the `{ROW_MAJOR, WIDTH_SHARDED, w_non_aligned}` EXCLUSION (5a). `auto_shard_config`
+splits a non-tile-aligned W into a **ragged** WIDTH grid (`ncores != nx*ny`, e.g. 13 cores in an
+8×2 bbox), so the WIDTH reduction group (= the whole shard grid) is **not a rectangle** the R5
+`mcast_pipe` broadcast can address. (BLOCK grids are always rectangular — RM+BLOCK+w_non already
+works, R5a — and RM+WIDTH tile/h-aligned grids are too.) **Next lever**: replace the mcast
+broadcast-back with a **unicast broadcast** (root → each group member individually + a per-member
+`ready` semaphore, mirroring the already-unicast gather leg — topology-agnostic, `cross_core_
+reduction_design.md §8 option 3`). Route only ragged WIDTH groups to it (keep mcast for the
+rectangular fast path), or use unicast for all RM WIDTH. Rare config (RM width-sharding, non-aligned
+W) — low priority.
+
+**Done when**: `{RM, WIDTH, w_non_aligned}` moves out of EXCLUSIONS into passing golden cells;
+no regression on the RM WIDTH/BLOCK rectangular surface (R5a) or the R5 TILE surface.
+
+### [ ] Refinement 5c — RM cross-core + TILE gamma (sub-tile-offset gamma tile-column extract)
+
+**Goal**: lift the `{ROW_MAJOR, WIDTH_SHARDED, gamma_layout=TILE}` / `{ROW_MAJOR, BLOCK_SHARDED,
+gamma_layout=TILE}` EXCLUSIONS (5a). Each RM cross-core core owns a sub-tile W-slice at a **sub-tile
+global column offset** (`w_col_start = i·Ws`, `Ws∈{4,8,16}`), so a TILE-stored gamma cannot be read
+as whole tiles aligned to the core's LOCAL column 0 — cols `w_col_start..w_col_start+Ws` live inside
+one global gamma tile at a sub-tile position. (RM gamma already works: read as a column-slice stick
+at `w_col_start`, with an aligned-read + L1 shift-copy for the 32B DRAM-source-alignment rule — see
+5a.) **Next lever**: extract the `[w_col_start%32, +Ws)` sub-columns from the containing global gamma
+tile and place them at local cols `[0, Ws)` — either a compute-side tile-column shift, or read+
+untilize the containing gamma tile(s) in the reader and re-slice as RM. Rare cross-layout combo
+(RM activations + TILE weights, width-sharded) — low priority.
+
+**Done when**: `{RM, WIDTH/BLOCK, gamma_layout=TILE}` moves out of EXCLUSIONS into passing golden
+cells; no regression on the RM-gamma / no_gamma RM cross-core surface (R5a).
 
 > **Trailing perf (once generality is exhausted, after Refinement 5)**: the wide-W / few-tile-row
 > interleaved cells (W=16384/32768, 1–2 tile-rows) are latency-bound on one core — the cross-core

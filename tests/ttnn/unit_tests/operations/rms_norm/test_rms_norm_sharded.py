@@ -152,19 +152,77 @@ def test_rms_norm_cross_core_sharded(device, shape, memory_layout, dtype, with_g
     assert_with_pcc(expected.to(torch.float32), actual.to(torch.float32), PCC[dtype])
 
 
-@pytest.mark.parametrize("memory_layout", [WIDTH, BLOCK])
-def test_rms_norm_rejects_row_major_width_block(device, memory_layout, expect_error):
-    """ROW_MAJOR + WIDTH/BLOCK_SHARDED is EXCLUDED (R5): W-sharding splits each row's
-    sticks across cores at sub-tile granularity, unreadable by the TILE-only cross-core
-    path or the full-stick fallback. A follow-up (R5a) would tilize partial-width slices."""
-    torch.manual_seed(42)
-    shape = (1, 1, 64, 512)
-    torch_input = torch.randn(shape, dtype=torch.bfloat16)
-    mem_cfg = auto_shard_config(
-        list(shape), memory_layout, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device
-    )
+# Refinement 5a — ROW_MAJOR + WIDTH/BLOCK_SHARDED cross-core reduction. RM width-sharding
+# splits each logical row's W across cores at sub-tile (stick) granularity, so each core
+# reads its OWN resident [Hs, Ws] shard from local L1, zero-pads the sub-tile W (and H) tail
+# to whole tiles, tilizes, and the SAME R5 reduce-root gather + mcast broadcast combine runs
+# unchanged. Supported: no_gamma + RM gamma, all alignments (WIDTH excludes w_non — ragged
+# grid; TILE gamma excluded — sub-tile gamma column offset). These flip the old rejection.
+RM_CROSS_CORE_SHAPES = [
+    ((1, 1, 32, 64), WIDTH),  # sub-tile Ws=8, 1 tile-row
+    ((2, 4, 128, 512), WIDTH),  # multi-tile-row (32), multi-image
+    ((1, 1, 17, 64), WIDTH),  # h_non
+    ((1, 1, 32, 4096), WIDTH),  # wide, tile-aligned Ws
+    ((1, 1, 32, 64), BLOCK),  # sub-tile H=4 AND W=8
+    ((1, 1, 256, 512), BLOCK),  # design loose case
+    ((1, 1, 64, 17), BLOCK),  # w_non (BLOCK grids stay rectangular)
+    ((1024, 1024), BLOCK),  # 2D, tile-aligned per-core
+]
+
+
+@pytest.mark.parametrize("shape,memory_layout", RM_CROSS_CORE_SHAPES)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("with_gamma", [False, True])
+def test_rms_norm_row_major_cross_core(device, shape, memory_layout, dtype, with_gamma):
+    """R5a: ROW_MAJOR WIDTH/BLOCK cross-core (RM gamma / no_gamma) matches the reference
+    and keeps the input's shard spec."""
+    torch.manual_seed(0)
+    tdt = _TORCH_DTYPE[dtype]
+    torch_input = torch.randn(shape, dtype=tdt)
+    gamma_t = torch.randn(shape[-1], dtype=tdt) if with_gamma else None
+    mem_cfg = auto_shard_config(list(shape), memory_layout, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, device=device)
     ttnn_input = ttnn.from_torch(
-        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_cfg
+        torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_cfg
+    )
+    ttnn_gamma = (
+        ttnn.from_torch(gamma_t.reshape(1, 1, 1, shape[-1]), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        if with_gamma
+        else None
+    )
+    out = rms_norm(ttnn_input, gamma=ttnn_gamma, compute_kernel_config=_cfg(), memory_config=ttnn_input.memory_config())
+    assert out.memory_config().memory_layout == memory_layout
+    actual = ttnn.to_torch(out).reshape(shape)
+    expected = pytorch_rms_norm(torch_input, gamma=gamma_t)
+    assert_with_pcc(expected.to(torch.float32), actual.to(torch.float32), PCC[dtype])
+
+
+def test_rms_norm_rejects_row_major_width_block_remaining(device, expect_error):
+    """R5a carve-outs still refused (structural follow-ups): RM+WIDTH with non-tile-aligned
+    W (ragged grid -> non-rectangular mcast group), and RM cross-core + TILE gamma (sub-tile
+    global column offset can't index a TILE-stored gamma)."""
+    torch.manual_seed(42)
+    # (a) RM + WIDTH + w_non-aligned W (W=50).
+    shape_wnon = (1, 1, 64, 50)
+    x_wnon = torch.randn(shape_wnon, dtype=torch.bfloat16)
+    mem_wnon = auto_shard_config(
+        list(shape_wnon), WIDTH, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device
+    )
+    in_wnon = ttnn.from_torch(
+        x_wnon, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_wnon
     )
     with expect_error((NotImplementedError, RuntimeError), ".*"):
-        rms_norm(ttnn_input, compute_kernel_config=_cfg(), memory_config=ttnn_input.memory_config())
+        rms_norm(in_wnon, compute_kernel_config=_cfg(), memory_config=in_wnon.memory_config())
+
+    # (b) RM + BLOCK + TILE gamma.
+    shape_g = (1, 1, 64, 512)
+    x_g = torch.randn(shape_g, dtype=torch.bfloat16)
+    mem_g = auto_shard_config(list(shape_g), BLOCK, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    in_g = ttnn.from_torch(x_g, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_g)
+    gamma_tile = ttnn.from_torch(
+        torch.randn(512, dtype=torch.bfloat16).reshape(1, 1, 1, 512),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    with expect_error((NotImplementedError, RuntimeError), ".*"):
+        rms_norm(in_g, gamma=gamma_tile, compute_kernel_config=_cfg(), memory_config=in_g.memory_config())
