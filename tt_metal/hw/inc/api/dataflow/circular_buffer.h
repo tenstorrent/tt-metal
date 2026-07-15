@@ -28,32 +28,33 @@ public:
 
     uint32_t get_cb_id() const { return cb_id_; }
 
+    // DBG-LLK-NOCB: bodies gutted on Quasar (both TRISC llk_wait_tiles/pop_tiles/push_tiles/wait_for_free
+    // and the host cb_* free functions) to test the LLK team's hypothesis that the 0x19 is a CB-op fault.
+    // Neutralizes ALL Quasar CircularBuffer flow-control globally -- conv-only test; REVERT afterwards.
     void reserve_back(int32_t num_pages) {
-#ifdef COMPILE_FOR_TRISC
-#ifndef ARCH_QUASAR
+#ifdef ARCH_QUASAR
+        (void)num_pages;
+#elif defined(COMPILE_FOR_TRISC)
         PACK((llk_wait_for_free_tiles<false, false, false>(cb_id_, num_pages)));
-#else
-        PACK((llk_wait_for_free_tiles(cb_id_, num_pages)));
-#endif
 #else
         cb_reserve_back(cb_id_, num_pages);
 #endif
     }
 
     void push_back(int32_t num_pages) {
-#ifdef COMPILE_FOR_TRISC
-#ifndef ARCH_QUASAR
+#ifdef ARCH_QUASAR
+        (void)num_pages;
+#elif defined(COMPILE_FOR_TRISC)
         PACK((llk_push_tiles<false, false>(cb_id_, num_pages)));
-#else
-        PACK((llk_push_tiles(cb_id_, num_pages)));
-#endif
 #else
         cb_push_back(cb_id_, num_pages);
 #endif
     }
 
     void wait_front(int32_t num_pages) {
-#ifdef COMPILE_FOR_TRISC
+#ifdef ARCH_QUASAR
+        (void)num_pages;
+#elif defined(COMPILE_FOR_TRISC)
         UNPACK((llk_wait_tiles(cb_id_, num_pages)));
 #else
         cb_wait_front(cb_id_, num_pages);
@@ -61,7 +62,9 @@ public:
     }
 
     void pop_front(int32_t num_pages) {
-#ifdef COMPILE_FOR_TRISC
+#ifdef ARCH_QUASAR
+        (void)num_pages;
+#elif defined(COMPILE_FOR_TRISC)
         UNPACK((llk_pop_tiles(cb_id_, num_pages)));
 #else
         cb_pop_front(cb_id_, num_pages);
