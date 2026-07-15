@@ -628,7 +628,7 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
     # Centralized recv-contig GCB builder: validates the (program_config, weight, bank_to_receivers)
     # triple (num_shards == ring_size, K % ring_size == 0, per_core_N == per-receiver N) and sizes/builds
     # the GCB in one place.
-    gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d_recv_contig(
+    gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
         device,
         [cc_program_config],
         [tt_weight],

@@ -911,7 +911,7 @@ def test_tensor_prefetcher_streaming_matmul(
     # and, because program_config.stream_in1 is set, relaxes its size floor from a full layer down to a
     # double-buffer window -- so the shallow streaming GCB is accepted here instead of only via the raw
     # create_global_circular_buffer_for_tensor_prefetcher path.
-    gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d_recv_contig(
+    gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
         device, [program_config], [tt_weight], bank_to_receivers=bank_to_receivers, size=gcb_size
     )
 

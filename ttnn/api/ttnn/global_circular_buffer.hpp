@@ -36,42 +36,47 @@ GlobalCircularBuffer create_global_circular_buffer_for_tensor_prefetcher(
     BufferType buffer_type = BufferType::L1,
     bool support_multi_receiver_shards = true);
 
-// Build a DRAM-sender GCB shaped to feed one or more 1D ring matmuls (gather_in0=true)
-// from the given weight tensors. The caller supplies `bank_to_receivers` (the same layout
-// the low-level `create_global_circular_buffer_for_tensor_prefetcher` takes), and the factory
-// validates it is compatible with the matmul program configs and weight shapes.
+// Build a DRAM-sender GCB shaped to feed one or more 1D ring matmuls (gather_in0=true) from the
+// given weight tensors. The caller supplies `bank_to_receivers` (the same layout the low-level
+// `create_global_circular_buffer_for_tensor_prefetcher` takes); this factory validates it against
+// the matmul program configs and weight shapes and sizes the GCB accordingly.
 //
-// One (program_config, weight) pair per matmul. Each pair is validated independently:
-//   * weight K is tile-aligned AND divisible by ring_size (so activation K_per_shard is
-//     integer-tile, the silent-hang case where matmul pads K beyond what the prefetcher
-//     pushes),
-//   * weight N shards evenly across senders (num_senders = bank_to_receivers.size()) and
-//     per-bank N splits evenly across receivers,
-//   * matmul's per_core_N matches the weight per-receiver N.
-// All configs must agree on compute_with_storage_grid_size and num_global_cb_receivers
-// (the GCB has one receiver rectangle shared across all consumer matmuls).
+// The DRAM layout is detected from the weight allocation, NOT chosen by the caller — the tensor's
+// layout determines what the prefetcher does (mirrors tt_metal detect_layout_mode). All weights
+// sharing one GCB must use the same layout:
+//   * Legacy K-row-major (WIDTH_SHARDED): one shard per bank, K-row-major within the bank, so one
+//     read serves all of a bank's receivers. Always single-sender per bank. Validated: weight K
+//     tile-aligned AND divisible by ring_size (the silent-hang case where the matmul pads K beyond
+//     what the prefetcher pushes); weight N shards evenly across senders and per-bank N splits
+//     evenly across receivers; matmul per_core_N == weight per-receiver N. `bank_to_receivers`
+//     shape is checked: num_senders * num_global_cb_receivers == ring_size, every bank owns exactly
+//     num_global_cb_receivers cores. `size` floor is one full layer (ring_size * largest in1 block).
+//   * Receiver-contiguous (NdShardSpec): num_shards == ring_size, each shard (full K, N/ring_size)
+//     owned by one receiver. Validated: num_shards == ring_size, weight K-tiles divisible by
+//     ring_size, per_core_N == per-receiver N. Receivers need NOT be uniform per bank (strided
+//     round-robin). `size` floor is ring_size * largest per-receiver page, relaxed to a
+//     double-buffer window when every config is stream_in1. This layout also permits dual senders
+//     per bank via `support_multi_receiver_shards=false` (see below).
 //
-// `bank_to_receivers` shape is checked: num_senders * num_global_cb_receivers must equal
-// ring_size, and every bank must own exactly num_global_cb_receivers cores. The factory
-// does NOT check that the receivers row-major-walk into the same order as the matmul's
-// activation grid — the matmul op asserts that at construction time.
+// All configs must agree on compute_with_storage_grid_size (and, for legacy, num_global_cb_receivers)
+// — the GCB has one receiver rectangle shared across all consumer matmuls. The factory does NOT
+// check that receivers row-major-walk into the matmul's activation-grid order (the matmul op asserts
+// that at construction time), nor L1 capacity — callers must size the GCB to fit alongside the
+// matmul's in0/in1/out/interm CBs on the receiver cores. `size` is capped against a conservative
+// remote-CB page-count limit; larger-than-one-layer buffering does not raise throughput (the DRISC
+// stalls on remote_cb_reserve_back).
 //
-// `size` is the GCB size in bytes. Picking it:
-//   * Minimum = num_blocks * largest_in1_block_size (one full layer's pages). The matmul
-//     does wait_front(num_blocks) per layer, so anything smaller deadlocks.
-//   * Larger values let the DRISC prefetcher run further ahead. Past one full layer worth
-//     more buffering does not increase throughput — the DRISC stalls on
-//     remote_cb_reserve_back.
-//   * The factory only caps `size` against a conservative remote-CB page-count limit; it
-//     does NOT check L1 capacity. Callers must size the GCB to fit alongside the matmul's
-//     in0/in1/out/interm CBs on the receiver cores.
+// `support_multi_receiver_shards` (receiver-contiguous only): leave true (default) for one sender
+// per bank; set false to fan a bank's receivers across two DRISC senders for higher bandwidth. It is
+// an error to pass false with a legacy weight (that layout is inherently single-sender).
 GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d(
     MeshDevice* mesh_device,
     const std::vector<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>& program_configs,
     const std::vector<tt::tt_metal::Tensor>& weights,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
-    BufferType buffer_type = BufferType::L1);
+    BufferType buffer_type = BufferType::L1,
+    bool support_multi_receiver_shards = true);
 
 // Compute the validated `block_count` to pair with `weight` in a TensorPrefetcherInput when feeding a
 // gather_in0 1D matmul (`program_config`) from a *receiver-contiguous* DRAM weight via `gcb`. This is the
@@ -91,30 +96,5 @@ uint32_t tensor_prefetcher_block_count_for_matmul_1d(
     const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
     const tt::tt_metal::Tensor& weight,
     const GlobalCircularBuffer& gcb);
-
-// Receiver-contiguous counterpart of create_global_circular_buffer_for_matmul_1d: build a DRAM-sender
-// GCB sized to feed one or more gather_in0 1D ring matmuls from *receiver-contiguous* (NdShardSpec) DRAM
-// weights, and validate the (program_config, weight, bank_to_receivers) triple in one place.
-//
-// Differences from the K-row-major builder, all inherent to the recv-contig layout:
-//   * `size` minimum is ring_size * largest per-receiver page (= (K_tiles/ring_size) * per_core_N * tile);
-//   * receivers need NOT be uniform per bank and the bank->ring mapping is the strided round-robin one,
-//     so no per-bank-count / contiguous-ring assertions (the matmul op asserts the strided walk);
-//   * clearing `support_multi_receiver_shards` (i.e. promising each receiver owns a disjoint
-//     contiguous shard) lets each bank split its receivers across two DRISC sender cores
-//     (a single-receiver bank falls back to one sender, so mixed single/dual banks are allowed).
-//     The Tensor prefetcher always provisions both cores and targets the subset mapped by this GCB.
-//
-// Per (config, weight) it runs the same recv-contig cross-checks as
-// tensor_prefetcher_block_count_for_matmul_1d (num_shards == ring_size, weight K-tiles divisible by
-// ring_size, per_core_N == per-receiver N). Throws (TT_FATAL) on any mismatch.
-GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d_recv_contig(
-    MeshDevice* mesh_device,
-    const std::vector<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>& program_configs,
-    const std::vector<tt::tt_metal::Tensor>& weights,
-    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
-    uint32_t size,
-    BufferType buffer_type = BufferType::L1,
-    bool support_multi_receiver_shards = true);
 
 }  // namespace ttnn::global_circular_buffer
