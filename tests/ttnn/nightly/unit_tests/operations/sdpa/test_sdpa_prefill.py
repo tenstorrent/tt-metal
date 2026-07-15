@@ -166,10 +166,14 @@ def run_sdpa_noncausal(
     bcast_mask_batch_dim=False,
     bcast_mask_head_dim=True,
     mask_dtype=ttnn.bfloat4_b,
+    tile=None,
 ):
     torch.manual_seed(1234)
     if sk is None:
         sk = sq
+    # Optional non-default tile shape (e.g. 16x32 tiny tile). Passed only when set so existing
+    # 32x32 callers are byte-for-byte unchanged.
+    tile_kwargs = {} if tile is None else {"tile": tile}
 
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
@@ -206,9 +210,9 @@ def run_sdpa_noncausal(
         mask = mask * -1e9
         tt_mask = ttnn.from_torch(mask, dtype=mask_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
-    tt_Q = ttnn.from_torch(Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
-    tt_K = ttnn.from_torch(K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
-    tt_V = ttnn.from_torch(V, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+    tt_Q = ttnn.from_torch(Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0, **tile_kwargs)
+    tt_K = ttnn.from_torch(K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0, **tile_kwargs)
+    tt_V = ttnn.from_torch(V, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0, **tile_kwargs)
     tt_back = ttnn.transformer.scaled_dot_product_attention(
         tt_Q,
         tt_K,
@@ -449,6 +453,37 @@ def test_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dt
         pytest.skip("Bad PCC for small chunks")
     rmse_threshold = 0.0069
     run_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, rmse_threshold=rmse_threshold)
+
+
+# 16x32 tiny-tile SDPA. Exercises the Blackhole no-mop matmul 2-face path and the tiny-tile flash
+# "SALAD" correction across multiple k-chunks (online-softmax combine + DEST-batching boundary at
+# sbw = head_dim/32). Full-32x32 SDPA is covered by the tests above; these use ttnn.Tile((16,32)).
+@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize(
+    "b, nh, nkv, sq, sk, d, q_chunk_size, k_chunk_size",
+    (
+        [1, 1, 1, 32, 256, 128, 32, 128],  # 2 k-chunks, sbw=4 (DEST-batching boundary)
+        [1, 8, 1, 32, 800, 256, 32, 96],  # GQA, 9 k-chunks, sbw=8 (recorded-op shape)
+        [1, 8, 1, 64, 512, 128, 32, 128],  # multi q-tile, 4 k-chunks, sbw=4
+    ),
+    ids=["2chunk-d128", "gqa-9chunk-d256", "4chunk-d128"],
+)
+def test_sdpa_tiny_tile(device, b, nh, nkv, sq, sk, d, q_chunk_size, k_chunk_size, dtype):
+    run_sdpa_noncausal(
+        device,
+        b,
+        nh,
+        nkv,
+        sq,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        sk=sk,
+        use_mask=False,
+        tile=ttnn.Tile((16, 32)),
+    )
 
 
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
