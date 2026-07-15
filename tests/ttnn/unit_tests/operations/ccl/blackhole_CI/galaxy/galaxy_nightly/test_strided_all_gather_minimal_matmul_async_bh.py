@@ -14,6 +14,12 @@ from models.common.utility_functions import (
 )
 
 
+def _fabric_router_config(max_payload_size_bytes):
+    config = ttnn._ttnn.fabric.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = max_payload_size_bytes
+    return config
+
+
 # SP=8 / TP=4 on the blackhole galaxy. The (8, 4) mesh puts the M/sequence shard (other_dim) on
 # axis 0 (SP=8) and the K/contraction shard (dim) on axis 1 (TP=4), matching the impl's
 # shard_dims = [other_dim, dim]. The all-gather reconstructs full K across the TP group, so it
@@ -86,7 +92,14 @@ from models.common.utility_functions import (
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1171456}, ttnn.Topology.Ring),
+        (
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": _fabric_router_config(8192),
+                "trace_region_size": 1171456,
+            },
+            ttnn.Topology.Ring,
+        ),
     ],
     indirect=["device_params"],
     ids=["fabric_ring"],
