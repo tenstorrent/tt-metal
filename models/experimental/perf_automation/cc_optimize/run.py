@@ -722,7 +722,7 @@ def optimize_pipeline(
         pass
     before_ms = _fullpipe_e2e(repo_root, mcp_env, devices, "BEFORE")
     rounds, can_stop, halted = 0, False, False
-    stall_sec = int(os.environ.get("PERF_MCP_ROUND_STALL_SEC", "2400") or "2400")
+    stall_sec = int(os.environ.get("PERF_MCP_ROUND_STALL_SEC", "600") or "600")
     max_wedge = int(os.environ.get("PERF_MCP_MAX_WEDGE_STRIKES", "2") or "2")
     wedge_strikes = 0
     round_cmd = [

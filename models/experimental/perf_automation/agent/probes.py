@@ -510,7 +510,7 @@ def _execute(
     env: dict,
     timeout_s: int,
     log_path: Path,
-    stall_timeout_s: int = 2400,
+    stall_timeout_s: int = 600,
 ) -> int:
     """Run cmd with output streamed to log_path (live-tailable). Hang-proof:
     no pipes (a daemon child inheriting them cannot deadlock us), and the
