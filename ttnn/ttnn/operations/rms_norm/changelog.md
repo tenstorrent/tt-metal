@@ -685,3 +685,64 @@
   /perf-measure "fresh kernel cache → N trials" requirement made explicit for this box.
 - Tests added: none new — reused `test_rms_norm_perf.py` (the RM shapes it already
   parametrizes were the measurement targets). Kept as the reusable perf harness.
+
+## Perf 2 — reconfig-off lever on the all-fp32 chain (measured, REVERTED — null result)
+- Date: 2026-07-15
+- Lever tried: the `compute_block_size` SECOND lever (master.md) — drop the redundant
+  per-helper-call data-format reconfig at phase boundaries when the dtype is constant
+  across the boundary. Applied to the **all-fp32 chain**, the only regime where every
+  eltwise CB carries one unchanging format (cb_input_tiles / cb_xsq / cb_sumsq / cb_norm /
+  cb_output_tiles all fp32; the AccumulateViaAdd reduce reads cb_xsq on both lanes and
+  never the bf16 cb_scaler), so every input/pack reconfig is a redundant fp32->fp32
+  reprogram. bf16/bf8b/non-aligned/cross-core have genuine bf16<->fp32 transitions
+  (cb_sumsq fp32 vs bf16 x; the bf16 reduce scaler), so the lever is fp32-only.
+- Bottleneck classified FIRST (per /perf-measure): the op is compute-bound and
+  DM-saturated — R3's DM-payload ablation moved device-ns 0% (reads hidden) and Perf 1
+  showed the RM reader fully overlapped by compute (RM ~= TILE modulo the RM-only
+  tilize/untilize). So the only remaining headroom is compute, and the reconfig-off
+  lever is the one master.md compute lever not yet exploited by a prior refinement
+  (reader_placement=row_wise landed R4; double_buffer + compute_block_size FIRST lever
+  landed R3+Perf1; the AccumulateViaAdd accumulate-then-finalize reduce landed R1/R2a;
+  compute_fusion's guidance already holds — the pass-2 `mul<Col>`->L1->`mul<Row>` is two
+  FPU muls through an L1 round-trip, which compute_fusion says is FASTER than DEST-reuse
+  for an FPU consumer, so no fusion is available).
+- Implementation measured (fresh isolated `TT_METAL_CACHE` per side, confirmed the gate
+  fired: out_dtype==in_dtype==fp32, use_acc_via_add tile-aligned, no gamma ⇒
+  FORMAT_CONSTANT=1): a `FORMAT_CONSTANT` compute CT arg gating
+  `BinaryDataFormatReconfig::None` + `PackTileReconfig::None` +
+  `ReduceDataFormatReconfigMode::NONE` on square/reduce/mul<Col>/mul<Row>/pack, plus a
+  boot `compute_kernel_hw_startup(cb_input_tiles, cb_input_tiles, cb_output_tiles)` so
+  srcb is programmed fp32 (not the bf16 scaler) before the first None-reconfig helper.
+  Non-fp32-constant cells compile byte-identically (the constexpr resolves to the exact
+  prior template args).
+- Correctness: **bit-identical** to baseline — a paired probe (fp32 TILE/RM × gamma/no_gamma,
+  W=256/8192) matched maxabs to 4 decimals on every case (e.g. TILE-wg 8192 0.0223==0.0223,
+  RM-wg 8192 0.0239==0.0239), PCC=1.0 throughout. Dropping a redundant fp32->fp32 reprogram
+  changes no math, as expected.
+- Perf (median device-ns, WH B0, 1 core, 11 post-warmup trials/point, CV ~0.3%;
+  baseline -> after, each on a FRESH isolated cache):
+  | path | 1x1x32x8192 |
+  |------|-------------|
+  | TILE fp32 no_gamma | 139.18 -> 138.83us (**1.002x**) |
+  | RM fp32 no_gamma   | 255.72 -> 255.26us (**1.002x**) |
+  | TILE bf16 control (FORMAT_CONSTANT=0) | 88.24 -> 88.16us (1.001x, unchanged) |
+  The 0.2% delta is **within the ~0.3% noise floor** — NOT a measured net win. Root cause:
+  at `W_BLOCK_TILES=8` (R3's tuned block) each phase-boundary reconfig is amortized over 8
+  tiles, so the reconfig MMIO is a negligible fraction of the actual FPU/SFPU work (square,
+  the add_tiles fold, the sfpu_reduce finalize, the two normalize muls, and RM's
+  tilize/untilize). master.md's "up to 1.19x" for this lever is on a pure-compute microbench
+  with SMALL per-call payloads and many transitions; our large-payload/coarse-block chain
+  sits at the far end of the diminishing-returns curve.
+- Outcome: **REVERTED byte-for-byte** (op source is now identical to the committed Perf 1
+  baseline). Per the perf-refinement protocol, a lever tried, measured, and correctly
+  reverted is a completed investigation — recorded here as the measured null result.
+- Guard-set (on the reverted = committed baseline tree): `eval/golden_tests/rms_norm/`
+  `test_regression.py` **15 passed** + `test_translated.py` **84 passed** = 99 passed / 0
+  failed. The op source is byte-identical to the committed (green) baseline, so the full
+  golden cartesian is unchanged from Perf 1's 6072-pass state — no regression is possible.
+- Tests added: none — reused `test_rms_norm_perf.py`. Probes `probe_065.py` (modified-kernel
+  correctness), `probe_066.py` (baseline correctness, the bit-identical comparison) preserved.
+- Net conclusion for this op's perf surface: after R3 (block+double-buffer), Perf 1 (RM
+  reader barrier), R4 (row-wise multi-core), and R1/R2a (accumulate-then-finalize reduce),
+  every applicable master.md lever is exploited or measured-null. The op is at its practical
+  compute roofline on WH B0; no further data-movement or reconfig headroom was found.
