@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import atexit
@@ -243,6 +243,43 @@ def pytest_addoption(parser):
         help="Path to folder where stimuli should be loaded from",
     )
 
+    parser.addoption(
+        "--enable-perf-counters",
+        action="store_true",
+        default=False,
+        help="Enable hardware performance counter collection during perf tests",
+    )
+
+    parser.addoption(
+        "--dump-raw-counters",
+        action="store_true",
+        default=False,
+        help="Print raw hardware counter values to console (implies --enable-perf-counters)",
+    )
+
+    parser.addoption(
+        "--dump-raw-metrics",
+        action="store_true",
+        default=False,
+        help="Print derived efficiency metrics to console (implies --enable-perf-counters)",
+    )
+
+    parser.addoption(
+        "--dump-csv-counters",
+        action="store_true",
+        default=False,
+        help="Export raw hardware counter values to a separate .counters.csv file (implies --enable-perf-counters)",
+    )
+
+    parser.addoption(
+        "--disable-sfploadmacro",
+        action="store_true",
+        default=False,
+        help="Compile kernels with -DDISABLE_SFPLOADMACRO so SFPLOADMACRO-based SFPU "
+        "kernels fall back to their plain sfpi/TTI calculate path (equivalent to "
+        "setting TT_METAL_DISABLE_SFPLOADMACRO=1).",
+    )
+
 
 _RECORD_TEST_ORDER: bool = False
 _UNIFIED_ORDER_FILE: str = "DEFAULT"
@@ -260,7 +297,26 @@ def pytest_configure(config):
         config.option.log_cli_level = log_level
         config.option.log_cli = True
 
+    # Let the CLI flag drive the compile define; test_config reads the env var
+    # when assembling per-variant compile options.
+    if config.getoption("--disable-sfploadmacro", default=False):
+        os.environ["TT_METAL_DISABLE_SFPLOADMACRO"] = "1"
+
     config.coverage_enabled = config.getoption("--coverage", default=False)
+    TestConfig.DUMP_RAW_COUNTERS = config.getoption(
+        "--dump-raw-counters", default=False
+    )
+    TestConfig.DUMP_RAW_METRICS = config.getoption("--dump-raw-metrics", default=False)
+    TestConfig.DUMP_CSV_COUNTERS = config.getoption(
+        "--dump-csv-counters", default=False
+    )
+    # --dump-raw-counters, --dump-raw-metrics, or --dump-csv-counters imply --enable-perf-counters
+    TestConfig.ENABLE_PERF_COUNTERS = (
+        config.getoption("--enable-perf-counters", default=False)
+        or TestConfig.DUMP_RAW_COUNTERS
+        or TestConfig.DUMP_RAW_METRICS
+        or TestConfig.DUMP_CSV_COUNTERS
+    )
 
     # Device print is enabled on debug or trace.
     resolved_log_level = (
@@ -279,9 +335,15 @@ def pytest_configure(config):
         config.getoption("--speed-of-light", default=False),
     )
 
+    worker_id = getattr(config, "workerinput", {}).get("workerid", "master")
+
+    if worker_id != "master":
+        import torch
+
+        torch.set_num_threads(1)
+
     TestConfig.setup_mode(
-        # Pass worker id here, so TestConfig can calculate Tensix tile it will run on
-        getattr(config, "workerinput", {}).get("workerid", "master"),
+        worker_id,
         config.getoption("--compile-consumer", default=False),
         config.getoption("--compile-producer", default=False),
         config.getoption("--stimuli-only"),
@@ -363,7 +425,53 @@ def pytest_configure(config):
             tt_exalens_init.init_ttexalens(use_4B_mode=False)
 
 
+def pytest_ignore_collect(collection_path, config):
+    # Skip collecting the quasar/ dir on non-quasar arch — those tests are
+    # deselected there anyway, so there's no need to collect them.
+    if (
+        get_chip_architecture() != ChipArchitecture.QUASAR
+        and "quasar" in collection_path.parts
+    ):
+        return True
+    return None
+
+
+def _collapse_runtime_only_variants(config, items):
+    """Keep only one test per unique compile key, dropping runtime only duplicates.
+
+    Tests decorated with ``@parametrize`` that use ``runtime()`` markers carry a
+    ``compile_key_fn`` on their ``runtime_axes`` pytest mark.  That function extracts
+    the compile time subset of each item's params.  Items that share the same compile
+    key produce identical ELFs, so only the first is kept for the compile-producer pass.
+    """
+    from helpers.param_config import RUNTIME_AXES_MARK
+
+    seen = set()
+    keep = []
+    deselected = []
+    for item in items:
+        marker = item.get_closest_marker(RUNTIME_AXES_MARK)
+        if marker is None:
+            keep.append(item)
+            continue
+        compile_key_fn = marker.kwargs["compile_key_fn"]
+        key = (item.nodeid.split("[")[0], repr(compile_key_fn(item.callspec.params)))
+        if key not in seen:
+            seen.add(key)
+            keep.append(item)
+        else:
+            deselected.append(item)
+
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = keep
+
+
+@pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
+        _collapse_runtime_only_variants(config, items)
+
     test_order_file = config.getoption("--test-order-file")
 
     if not test_order_file:
@@ -632,6 +740,43 @@ def pytest_sessionstart(session):
 
 
 @pytest.fixture(scope="module", autouse=True)
+def counter_report(request, worker_id):
+    """Separate report for raw hardware counter CSV data (--dump-csv-counters)."""
+    if not TestConfig.DUMP_CSV_COUNTERS:
+        PerfConfig.COUNTER_REPORT = None
+        yield None
+        return
+
+    test_module = request.path.stem
+    temp_report = PerfReport()
+    PerfConfig.COUNTER_REPORT = temp_report
+
+    try:
+        yield temp_report
+    except Exception as e:
+        logger.warning("Counter report: Unexpected error, saving anyway: {}", e)
+
+    PerfConfig.COUNTER_REPORT = None
+
+    if TestConfig.MODE == TestMode.PRODUCE:
+        return
+
+    if PerfConfig.TEST_COUNTER == 0:
+        return
+
+    temp_report.assert_single_schema(
+        context=f"{test_module} counters (worker {worker_id})"
+    )
+
+    counters_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.counters.csv"
+
+    if counters_path.exists():
+        counters_path.unlink()
+
+    temp_report.dump_csv(counters_path)
+
+
+@pytest.fixture(scope="module", autouse=True)
 def perf_report(request, worker_id):
 
     test_module = request.path.stem
@@ -648,6 +793,11 @@ def perf_report(request, worker_id):
 
     if PerfConfig.TEST_COUNTER == 0:
         return
+
+    # Fail loud before writing: a single CSV must hold exactly one column schema.
+    # More than one means two unrelated tests/ops share this module (split them
+    # into separate files) or one test emits inconsistent columns across its sweep.
+    temp_report.assert_single_schema(context=f"{test_module} (worker {worker_id})")
 
     raw_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.csv"
     post_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.post.csv"

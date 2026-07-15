@@ -47,7 +47,9 @@ def _make_report(
     metadata=None,
 ):
     """Build a complete JSON report dict matching C++ output format."""
-    report = {"version": 1, "graph": graph, "devices": devices or [], "metadata": metadata or {}}
+    md = dict(metadata) if metadata is not None else {}
+    md.setdefault("rank", 0)
+    report = {"version": 1, "graph": graph, "devices": devices or [], "metadata": md}
     if per_operation_buffers is not None:
         report["per_operation_buffers"] = per_operation_buffers
     if python_io is not None:
@@ -63,6 +65,119 @@ def _import_to_db(report_dict, tmp_path):
     db_path = graph_report.import_report(report_path, tmp_path / "output")
     conn = sqlite3.connect(db_path)
     return conn, conn.cursor()
+
+
+def _import_to_db_with_comparison_sidecar(report_dict, comparison_sidecar, tmp_path):
+    """Write report plus comparison sidecar, import, return (connection, cursor)."""
+    report_path = tmp_path / "report.json"
+    with open(report_path, "w") as f:
+        json.dump(report_dict, f)
+    sidecar_path = report_path.with_suffix(graph_report.COMPARISON_RECORDS_SIDECAR_SUFFIX)
+    with open(sidecar_path, "w") as f:
+        json.dump(comparison_sidecar, f)
+    db_path = graph_report.import_report(report_path, tmp_path / "output")
+    conn = sqlite3.connect(db_path)
+    return conn, conn.cursor()
+
+
+_SQLITE_TABLES_WITH_RANK = (
+    "devices",
+    "operations",
+    "operation_arguments",
+    "tensors",
+    "device_tensors",
+    "buffers",
+    "captured_graph",
+    "nodes",
+    "edges",
+    "errors",
+    "stack_traces",
+    "input_tensors",
+    "output_tensors",
+    "tensor_lifetime",
+    "tensor_consumers",
+    "tensor_producers",
+    "buffer_chunks",
+    "local_tensor_comparison_records",
+    "global_tensor_comparison_records",
+)
+
+
+def _assert_nonempty_tables_rank_equals(cursor, expected_rank: int) -> None:
+    """For every table that has a rank column, rows must all equal ``expected_rank``."""
+    for table in _SQLITE_TABLES_WITH_RANK:
+        cursor.execute(f"SELECT COUNT(*), COALESCE(MIN(rank), -1), COALESCE(MAX(rank), -1) FROM {table}")
+        cnt, rmin, rmax = cursor.fetchone()
+        if cnt:
+            assert (
+                rmin == rmax == expected_rank
+            ), f"table {table}: expected rank {expected_rank} on all {cnt} row(s), got min={rmin} max={rmax}"
+
+
+class TestImportReportMultiFileOperationIds:
+    """import_report over multiple JSON files: UNIQUE(operation_id, rank) and per-rank file stride."""
+
+    @staticmethod
+    def _minimal_single_op_graph(op_name="ttnn.relu"):
+        return [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 3]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": op_name},
+                "connections": [],
+                "input_tensors": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_end",
+                "params": {"name": op_name},
+                "connections": [],
+                "duration_ns": 100,
+            },
+            {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+
+    def _import_report_dir(self, reports, tmp_path):
+        """Write JSON reports into a directory and run import_report on that directory."""
+        report_dir = tmp_path / "reports_in"
+        report_dir.mkdir()
+        for filename, report_dict in reports:
+            with open(report_dir / filename, "w") as f:
+                json.dump(report_dict, f)
+        db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        conn = sqlite3.connect(db_path)
+        return conn, conn.cursor()
+
+    def test_same_numeric_operation_id_for_different_ranks(self, tmp_path):
+        """Two captures with different ranks may both assign operation_id 1 (disambiguated by rank)."""
+        r0 = _make_report(self._minimal_single_op_graph(), metadata={"rank": 0})
+        r1 = _make_report(self._minimal_single_op_graph(), metadata={"rank": 1})
+        conn, cursor = self._import_report_dir([("first.json", r0), ("second.json", r1)], tmp_path)
+        cursor.execute("SELECT operation_id, rank FROM operations ORDER BY rank, operation_id")
+        assert cursor.fetchall() == [(1, 0), (1, 1)]
+        conn.close()
+
+    def test_second_json_same_rank_shifts_operation_ids(self, tmp_path):
+        """Two JSON files for the same rank: second file uses base_operation_id = stride (10000)."""
+        r_a = _make_report(self._minimal_single_op_graph("ttnn.op_a"), metadata={"rank": 0})
+        r_b = _make_report(self._minimal_single_op_graph("ttnn.op_b"), metadata={"rank": 0})
+        conn, cursor = self._import_report_dir([("a.json", r_a), ("b.json", r_b)], tmp_path)
+        stride = graph_report._OPERATION_ID_STRIDE_PER_RANK_FILE
+        cursor.execute("SELECT operation_id, rank FROM operations ORDER BY operation_id")
+        rows = cursor.fetchall()
+        assert rows == [(1, 0), (stride + 1, 0)]
+        conn.close()
+
+    def test_mixed_multiple_files_per_rank_and_separate_ranks(self, tmp_path):
+        """Rank 0: two files (ids 1 and 10001); rank 1: one file (id 1 again)."""
+        r0a = _make_report(self._minimal_single_op_graph("ttnn.r0a"), metadata={"rank": 0})
+        r0b = _make_report(self._minimal_single_op_graph("ttnn.r0b"), metadata={"rank": 0})
+        r1 = _make_report(self._minimal_single_op_graph("ttnn.r1"), metadata={"rank": 1})
+        conn, cursor = self._import_report_dir([("a.json", r0a), ("b.json", r0b), ("c.json", r1)], tmp_path)
+        stride = graph_report._OPERATION_ID_STRIDE_PER_RANK_FILE
+        cursor.execute("SELECT operation_id, rank FROM operations ORDER BY rank, operation_id")
+        assert cursor.fetchall() == [(1, 0), (stride + 1, 0), (1, 1)]
 
 
 @pytest.fixture
@@ -262,7 +377,7 @@ class TestTensorLifetime:
         report = _make_report(single_relu_mock_graph, python_io=single_relu_python_io)
         conn, cursor = _import_to_db(report, tmp_path)
         cursor.execute(
-            "SELECT tensor_id, producer_operation_id, last_use_operation_id, deallocate_operation_id "
+            "SELECT tensor_id, producer_operation_id, last_use_operation_id, deallocate_operation_id, rank "
             "FROM tensor_lifetime ORDER BY tensor_id"
         )
         rows = {r[0]: r for r in cursor.fetchall()}
@@ -270,6 +385,7 @@ class TestTensorLifetime:
         assert rows[42][2] == 1  # tensor 42 is consumed by op 1 (ttnn::relu)
         assert rows[101][1] == 1  # tensor 101 is produced by op 1
         assert rows[101][2] is None  # tensor 101 is never consumed — orphan candidate
+        assert all(r[4] == 0 for r in rows.values())
         conn.close()
 
     def test_tensor_lifetime_table_empty_without_stack_traces(self, tmp_path, single_relu_mock_graph):
@@ -288,23 +404,23 @@ class TestTensorLifetime:
     def test_tensor_consumers_mirror_input_tensors(self, tmp_path, single_relu_mock_graph):
         report = _make_report(single_relu_mock_graph)
         conn, cursor = _import_to_db(report, tmp_path)
-        cursor.execute("SELECT operation_id, input_index, tensor_id FROM input_tensors ORDER BY tensor_id")
+        cursor.execute("SELECT operation_id, input_index, tensor_id, rank FROM input_tensors ORDER BY tensor_id")
         inp = cursor.fetchall()
-        cursor.execute("SELECT tensor_id, operation_id, input_index FROM tensor_consumers ORDER BY tensor_id")
+        cursor.execute("SELECT tensor_id, operation_id, input_index, rank FROM tensor_consumers ORDER BY tensor_id")
         tc = cursor.fetchall()
         assert len(tc) == len(inp)
-        assert {(r[2], r[0], r[1]) for r in inp} == {(r[0], r[1], r[2]) for r in tc}
+        assert {(r[2], r[0], r[1], r[3]) for r in inp} == {(r[0], r[1], r[2], r[3]) for r in tc}
         conn.close()
 
     def test_tensor_producers_mirror_output_tensors(self, tmp_path, single_relu_mock_graph):
         report = _make_report(single_relu_mock_graph)
         conn, cursor = _import_to_db(report, tmp_path)
-        cursor.execute("SELECT operation_id, output_index, tensor_id FROM output_tensors ORDER BY tensor_id")
+        cursor.execute("SELECT operation_id, output_index, tensor_id, rank FROM output_tensors ORDER BY tensor_id")
         out = cursor.fetchall()
-        cursor.execute("SELECT tensor_id, operation_id, output_index FROM tensor_producers ORDER BY tensor_id")
+        cursor.execute("SELECT tensor_id, operation_id, output_index, rank FROM tensor_producers ORDER BY tensor_id")
         tp = cursor.fetchall()
         assert len(tp) == len(out)
-        assert {(r[2], r[0], r[1]) for r in out} == {(r[0], r[1], r[2]) for r in tp}
+        assert {(r[2], r[0], r[1], r[3]) for r in out} == {(r[0], r[1], r[2], r[3]) for r in tp}
         conn.close()
 
 
@@ -359,6 +475,95 @@ class TestImportGraphUnit:
         assert len(input_rows) == 1, f"Expected 1 input tensor, got {len(input_rows)}"
         assert input_rows[0][2] == 42, f"Expected tensor_id 42 (resolved from node 1), got {input_rows[0][2]}"
 
+        conn.close()
+
+    def test_comparison_sidecar_imports_records_and_golden_tensors(self, tmp_path):
+        """Comparison mode records are imported from the JSON sidecar."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.relu"},
+                "connections": [],
+                "input_tensors": [2],
+            },
+            {
+                "counter": 2,
+                "node_type": "tensor",
+                "params": {"tensor_id": "100", "shape": "[1,32]", "dtype": "BFLOAT16", "layout": "TILE"},
+                "connections": [1],
+            },
+            {
+                "counter": 3,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.relu"},
+                "connections": [4],
+                "duration_ns": 100,
+            },
+            {
+                "counter": 4,
+                "node_type": "tensor",
+                "params": {"tensor_id": "101", "shape": "[1,32]", "dtype": "BFLOAT16", "layout": "TILE"},
+                "connections": [],
+            },
+            {"counter": 5, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        comparison_sidecar = {
+            "version": 1,
+            "local_tensor_comparison_records": [
+                {
+                    "tensor_id": 101,
+                    "golden_tensor_id": 1001,
+                    "matches": True,
+                    "desired_pcc": 0.9999,
+                    "actual_pcc": 1.0,
+                }
+            ],
+            "global_tensor_comparison_records": [
+                {
+                    "tensor_id": 101,
+                    "golden_tensor_id": 1002,
+                    "matches": True,
+                    "desired_pcc": 0.9999,
+                    "actual_pcc": 1.0,
+                }
+            ],
+            "tensors": [
+                {
+                    "tensor_id": 1001,
+                    "shape": "torch.Size([1, 32])",
+                    "dtype": "torch.bfloat16",
+                    "layout": "torch.strided",
+                    "memory_config": None,
+                    "device_id": None,
+                    "address": None,
+                    "buffer_type": None,
+                },
+                {
+                    "tensor_id": 1002,
+                    "shape": "torch.Size([1, 32])",
+                    "dtype": "torch.bfloat16",
+                    "layout": "torch.strided",
+                    "memory_config": None,
+                    "device_id": None,
+                    "address": None,
+                    "buffer_type": None,
+                },
+            ],
+        }
+
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db_with_comparison_sidecar(report, comparison_sidecar, tmp_path)
+
+        cursor.execute("SELECT * FROM local_tensor_comparison_records")
+        assert cursor.fetchall() == [(101, 1001, 1, 0.9999, 1.0, 0)]
+
+        cursor.execute("SELECT * FROM global_tensor_comparison_records")
+        assert cursor.fetchall() == [(101, 1002, 1, 0.9999, 1.0, 0)]
+
+        cursor.execute("SELECT tensor_id FROM tensors WHERE tensor_id IN (1001, 1002) AND rank = 0 ORDER BY tensor_id")
+        assert cursor.fetchall() == [(1001,), (1002,)]
         conn.close()
 
     def test_multiple_output_tensors(self, tmp_path):
@@ -1004,6 +1209,138 @@ class TestImportGraphUnit:
 
         conn.close()
 
+    def test_imported_sql_rows_rank_matches_report_metadata(self, tmp_path):
+        """Every populated table with a ``rank`` column stores ``metadata.rank`` from the JSON report."""
+        expected_rank = 6
+        devices = [{"device_id": 0, "num_dram_channels": 12, "l1_num_banks": 64}]
+
+        graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 7]},
+            {
+                "counter": 1,
+                "node_type": "tensor",
+                "params": {"tensor_id": "42", "shape": "[1,1,32,32]"},
+                "connections": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_start",
+                "params": {"name": "ttnn::relu", "inputs": "1"},
+                "connections": [3, 4],
+                "input_tensors": [1],
+                "arguments": ["x"],
+            },
+            {
+                "counter": 3,
+                "node_type": "buffer_allocate",
+                "params": {
+                    "device_id": "0",
+                    "address": "12345",
+                    "size": "4096",
+                    "page_size": "2048",
+                    "type": "L1",
+                    "layout": "INTERLEAVED",
+                },
+                "connections": [],
+            },
+            {
+                "counter": 4,
+                "node_type": "tensor",
+                "params": {
+                    "tensor_id": "101",
+                    "shape": "[1,1,32,32]",
+                    "dtype": "DataType.BFLOAT16",
+                    "layout": "Layout.TILE",
+                    "device_id": 0,
+                    "address": 9999,
+                    "buffer_type": "0",
+                    "device_tensors": json.dumps([{"device_id": 0, "address": 9999}]),
+                },
+                "connections": [],
+            },
+            {
+                "counter": 5,
+                "node_type": "function_end",
+                "params": {"name": "ttnn::relu"},
+                "connections": [4],
+                "duration_ns": 1000,
+            },
+            {"counter": 7, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        python_io = [
+            {
+                "name": "ttnn::relu",
+                "arguments": {"x": "t42"},
+                "input_tensor_ids": [42],
+                "output_tensor_ids": [101],
+                "python_stack_trace": ['  File "model.py", line 10, in forward\n    ttnn.relu(x)'],
+            }
+        ]
+        report = _make_report(
+            graph,
+            devices=devices,
+            python_io=python_io,
+            metadata={
+                "rank": expected_rank,
+                "world_size": 4,
+                "capture_timestamp_ns": 0,
+            },
+        )
+        report["buffer_pages"] = [
+            {
+                "device_id": 0,
+                "address": 1,
+                "core_y": 0,
+                "core_x": 0,
+                "bank_id": 0,
+                "page_index": 0,
+                "page_address": 0,
+                "page_size": 2048,
+                "buffer_type": 0,
+            }
+        ]
+
+        conn, cursor = _import_to_db(report, tmp_path)
+
+        cursor.execute("SELECT value FROM report_metadata WHERE key = 'rank'")
+        assert cursor.fetchone()[0] == str(expected_rank)
+
+        _assert_nonempty_tables_rank_equals(cursor, expected_rank)
+        conn.close()
+
+    def test_errors_table_rank_matches_metadata(self, tmp_path):
+        """Error rows from ``node_type == 'error'`` carry the same rank as the rest of the import."""
+        expected_rank = 2
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 3]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn::bad_op", "inputs": "1"},
+                "connections": [2],
+                "input_tensors": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "error",
+                "params": {
+                    "error_type": "exception",
+                    "error_message": "fail",
+                    "error_operation": "ttnn::bad_op",
+                },
+                "connections": [],
+            },
+            {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        report = _make_report(mock_graph, metadata={"rank": expected_rank, "world_size": 3})
+        conn, cursor = _import_to_db(report, tmp_path)
+
+        cursor.execute("SELECT COUNT(*), MIN(rank), MAX(rank) FROM errors")
+        cnt, rmin, rmax = cursor.fetchone()
+        assert cnt == 1
+        assert rmin == rmax == expected_rank
+        conn.close()
+
     def test_cluster_mesh_descriptors_saved(self, tmp_path):
         """Test that cluster and mesh descriptors are saved during import."""
         graph = [
@@ -1028,8 +1365,8 @@ class TestImportGraphUnit:
         assert "wormhole" in content
 
         # Check mesh coordinate mapping was saved
-        mesh_path = output_dir / "physical_chip_mesh_coordinate_mapping_1_of_1.yaml"
-        assert mesh_path.exists(), "physical_chip_mesh_coordinate_mapping_1_of_1.yaml should be created"
+        mesh_path = output_dir / "physical_chip_mesh_coordinate_mapping.yaml"
+        assert mesh_path.exists(), "physical_chip_mesh_coordinate_mapping.yaml should be created"
         with open(mesh_path) as f:
             content = f.read()
         assert "chips" in content
@@ -1295,14 +1632,14 @@ class TestImportValidation:
         conn.commit()
 
         # Manually insert a dangling reference (simulating the old bug)
-        cursor.execute("INSERT INTO input_tensors VALUES (0, 0, 999)")
+        cursor.execute("INSERT INTO input_tensors VALUES (0, 0, 999, 0)")
         conn.commit()
 
         # Run validation directly
         warnings = graph_report._validate_graph_integrity(
-            operations_batch=[(0, "ttnn::relu", 0.0)],
+            operations_batch=[(0, "ttnn::relu", 0.0, 0)],
             tensors_batch=[],
-            input_tensors_batch=[(0, 0, 999)],
+            input_tensors_batch=[(0, 0, 999, 0)],
             output_tensors_batch=[],
             operation_arguments_batch=[],
             device_tensors_batch=[],
@@ -2048,6 +2385,139 @@ class TestGraphReportImport:
 
         conn.close()
 
+    def test_import_populates_comparison_records_from_runtime_sidecar(self, device, tmp_report_dir):
+        """Test comparison mode sidecar is produced at runtime and imported offline."""
+        report_path = tmp_report_dir / "report.json"
+        db_dir = tmp_report_dir / "db"
+
+        with (
+            ttnn.manage_config("enable_fast_runtime_mode", False),
+            ttnn.manage_config("enable_logging", True),
+            ttnn.manage_config("enable_comparison_mode", True),
+        ):
+            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            try:
+                torch_input = torch.rand((1024, 1024), dtype=torch.bfloat16)
+                input_tensor_a = ttnn.from_torch(
+                    torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+                )
+                input_tensor_b = ttnn.from_torch(
+                    torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+                )
+                output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+                ttnn.to_torch(output_tensor)
+            finally:
+                if ttnn.graph.is_graph_capture_active():
+                    ttnn.graph.end_graph_capture_to_file(str(report_path))
+
+        sidecar_path = report_path.with_suffix(graph_report.COMPARISON_RECORDS_SIDECAR_SUFFIX)
+        assert sidecar_path.exists()
+
+        db_path = graph_report.import_report(report_path, db_dir)
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "SELECT tensor_id, golden_tensor_id, matches, desired_pcc, actual_pcc, rank "
+            "FROM local_tensor_comparison_records"
+        )
+        local_tensor_comparison_records = cursor.fetchall()
+
+        cursor.execute(
+            "SELECT tensor_id, golden_tensor_id, matches, desired_pcc, actual_pcc, rank "
+            "FROM global_tensor_comparison_records"
+        )
+        global_tensor_comparison_records = cursor.fetchall()
+
+        assert len(local_tensor_comparison_records) > 0
+        assert len(global_tensor_comparison_records) > 0
+
+        for tensor_id, golden_tensor_id, matches, desired_pcc, actual_pcc, record_rank in (
+            local_tensor_comparison_records + global_tensor_comparison_records
+        ):
+            assert record_rank == 0
+            assert matches
+            assert actual_pcc >= desired_pcc
+            cursor.execute("SELECT tensor_id FROM tensors WHERE tensor_id = ? AND rank = ?", (tensor_id, record_rank))
+            assert cursor.fetchone() is not None
+            cursor.execute(
+                "SELECT tensor_id FROM tensors WHERE tensor_id = ? AND rank = ?", (golden_tensor_id, record_rank)
+            )
+            assert cursor.fetchone() is not None
+
+        conn.close()
+
+    def test_import_includes_git_sha_and_url_in_report_metadata(self, device, tmp_report_dir):
+        """Importer stamps report_metadata with tt-metal origin URL and HEAD SHA when available."""
+        report_path = tmp_report_dir / "report.json"
+        db_dir = tmp_report_dir / "db"
+
+        torch_input = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        _ = ttnn.relu(tt_input)
+        _ = ttnn.graph.end_graph_capture_to_file(report_path)
+
+        db_path = graph_report.import_report(report_path, db_dir)
+
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT key, value FROM report_metadata WHERE key IN ('git_sha', 'git_url') ORDER BY key")
+        rows = dict(cursor.fetchall())
+        conn.close()
+
+        assert "git_sha" in rows and "git_url" in rows
+        git_meta = graph_report.get_tt_metal_git_report_metadata()
+        assert rows["git_sha"] == git_meta["git_sha"]
+        assert rows["git_url"] == git_meta["git_url"]
+        if git_meta["git_sha"]:
+            assert len(rows["git_sha"]) >= 7
+
+
+class TestSanitizeGitRemoteUrl:
+    """``sanitize_git_remote_url`` must not persist credentials into report_metadata."""
+
+    def test_strips_userinfo_query_fragment_https(self):
+        assert (
+            graph_report.sanitize_git_remote_url("https://user:secret@github.com/org/repo.git?x=1#frag")
+            == "https://github.com/org/repo.git"
+        )
+
+    def test_strips_empty_userinfo(self):
+        assert graph_report.sanitize_git_remote_url("https://@github.com/org/repo.git") == (
+            "https://github.com/org/repo.git"
+        )
+
+    def test_strips_token_as_username(self):
+        assert graph_report.sanitize_git_remote_url("https://token@github.com/org/repo.git") == (
+            "https://github.com/org/repo.git"
+        )
+
+    def test_scp_style_drops_user(self):
+        assert graph_report.sanitize_git_remote_url("git@github.com:tenstorrent/tt-metal.git") == (
+            "github.com:tenstorrent/tt-metal.git"
+        )
+
+    def test_ssh_url_strips_userinfo(self):
+        assert graph_report.sanitize_git_remote_url("ssh://git@github.com/org/repo.git") == (
+            "ssh://github.com/org/repo.git"
+        )
+
+    def test_ipv6_host_preserved(self):
+        assert graph_report.sanitize_git_remote_url("http://[::1]:8080/path/to/repo") == (
+            "http://[::1]:8080/path/to/repo"
+        )
+
+    def test_whitespace_trimmed(self):
+        assert graph_report.sanitize_git_remote_url("  https://a@b/c  ") == "https://b/c"
+
+    def test_non_numeric_port_does_not_raise(self):
+        # urlparse parses ':org' as the port token; .port raises ValueError without the guard.
+        result = graph_report.sanitize_git_remote_url("ssh://git@github.com:org/repo.git")
+        assert "git@" not in result
+        assert "github.com" in result
+
 
 class TestReportVersion:
     """Tests for report version handling."""
@@ -2193,9 +2663,9 @@ class TestBufferChunksSchemaAndAggregation:
         ]
         rows = graph_report._aggregate_pages_to_chunks(op_id=7, pages=pages)
         assert len(rows) == 1
-        op, dev, addr, bank, cx, cy, chunk_addr, chunk_size, page_size, num_pages, btype = rows[0]
+        op, dev, addr, bank, cx, cy, chunk_addr, chunk_size, page_size, num_pages, btype, row_rank = rows[0]
         assert (op, dev, addr, bank, cx, cy) == (7, 1, 1000, 64, 0, 0)
-        assert (chunk_addr, chunk_size, page_size, num_pages, btype) == (0, 10 * 2048, 2048, 10, 1)
+        assert (chunk_addr, chunk_size, page_size, num_pages, btype, row_rank) == (0, 10 * 2048, 2048, 10, 1, 0)
 
     def test_aggregate_preserves_per_core_asymmetry(self):
         """Different cores hosting different page counts produce independent rows."""

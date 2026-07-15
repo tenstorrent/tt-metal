@@ -25,7 +25,7 @@ namespace sfpu {
  * @return bf16 value packed in the upper 16 bits of a float32
  */
 sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
-    sfpi::vUInt bits = sfpi::reinterpret<sfpi::vUInt>(in);
+    sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(in);
 
     // Extract the LSB of what will become the bf16 mantissa (bit 16 of float32).
     // Needed for the tie-breaker: round to even.
@@ -42,7 +42,7 @@ sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
     // Clear the lower 16 bits to get bf16 in upper 16 bits (bf16 format in float32).
     bits = bits & 0xFFFF0000U;
 
-    return sfpi::reinterpret<sfpi::vFloat>(bits);
+    return sfpi::as<sfpi::vFloat>(bits);
 }
 
 /**
@@ -88,7 +88,7 @@ inline void calculate_sfpu_binary(
                 }
                 v_endif;
             }
-            v_elseif(in0 == in1) { result = sfpi::vConst1; }
+            v_elseif(in0 == in1) { result = 1.0f; }
             v_endif;
 
             if constexpr (!is_fp32_dest_acc_en) {

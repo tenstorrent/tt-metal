@@ -29,6 +29,4 @@ ttnn::Tensor update_cache(
 ttnn::Tensor fill_cache(
     const ttnn::Tensor& cache_tensor, const ttnn::Tensor& input_tensor, uint32_t batch_idx, uint32_t update_idx = 0);
 
-ttnn::Tensor zero_cache_range(const ttnn::Tensor& cache, uint32_t start_token, uint32_t end_token);
-
 }  // namespace ttnn

@@ -23,6 +23,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -127,9 +128,14 @@ def generate_qsr_pack_l1_acc_combinations(
 @pytest.mark.quasar
 @parametrize(
     formats_dest_acc=generate_qsr_pack_l1_acc_combinations(PACK_L1_ACC_FORMATS),
-    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
+    # don't generate the No variant for them. formats_dest_acc[0] is the InputOutputFormat (input/output pair).
+    implied_math_format=lambda formats_dest_acc: (
+        [ImpliedMathFormat.Yes]
+        if formats_dest_acc[0].input_format.is_mx_format()
+        else [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+    ),
     dest_sync_mode=[DestSync.Half, DestSync.Full],
-    input_dimensions=INPUT_DIMENSIONS,
+    input_dimensions=runtime(INPUT_DIMENSIONS),
 )
 def test_pack_l1_acc_quasar(
     formats_dest_acc,
@@ -139,13 +145,6 @@ def test_pack_l1_acc_quasar(
     boot_mode=BootMode.DEFAULT,
 ):
     (formats, dest_acc) = formats_dest_acc
-
-    # MX formats REQUIRE implied_math_format=Yes on Quasar (bypass format inference pipeline)
-    if (
-        formats.input_format.is_mx_format()
-        and implied_math_format == ImpliedMathFormat.No
-    ):
-        pytest.skip("MX formats require implied_math_format=Yes on Quasar")
 
     tile_rows, tile_cols = TILE_DIMENSIONS
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(
@@ -211,11 +210,11 @@ def test_pack_l1_acc_quasar(
         "sources/quasar/pack_l1_acc_quasar_test.cpp",
         formats,
         templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
             IMPLIED_MATH_FORMAT(implied_math_format),
             DEST_SYNC(dest_sync_mode),
         ],
         runtimes=[
+            generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_cnt),
             NUM_FACES(num_faces),
             NUM_TILES_IN_BLOCK(

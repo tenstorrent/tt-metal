@@ -10,8 +10,9 @@ InheritParentConfig: true
 # Tracked for incremental remediation — do not add new entries here.
 #
 # clang-diagnostic-deprecated-declarations: tt-metal API headers (core_coord.hpp,
-#   device.hpp, distributed.hpp, ...) still use tt::stl which is [[deprecated]].
-#   Not a tt-train issue — remove once those headers are migrated to ttsl.
+#   device.hpp, mesh_command_queue.hpp, ...) carry various [[deprecated]] APIs
+#   (CoreCoord aliases, ShardDataTransfer, etc.) that tt-train includes but
+#   doesn't own. Not a tt-train issue — revisit as those APIs are removed upstream.
 # misc-confusable-identifiers: fires in xtensor headers; SYSTEM include marking
 #   suppresses compiler warnings but not clang-tidy checks.
 # bugprone-unused-raii: nanobind builder pattern — nb::class_<>() calls are

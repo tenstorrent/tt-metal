@@ -257,7 +257,7 @@ class T5DenseGatedActDense(Module):
             in_features=self.config.embed_dim,
             out_features=self.config.ff_dim,
             bias=False,
-            activation_fn="gelu",
+            activation_fn="gelu_tanh",
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
         )

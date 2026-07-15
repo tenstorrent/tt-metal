@@ -27,13 +27,18 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void cbrt_tile(uint32_t idst) {
-    MATH(SFPU_CALL_MODE(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_cube_root, (APPROX, DST_ACCUM_MODE, 8 /* ITERATIONS */), RC, idst));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_cube_root,
+        (APPROX, DST_ACCUM_MODE, 8 /* ITERATIONS */),
+        idst,
+        VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void cbrt_tile_init() { MATH(SFPU_INIT_CB(cbrt, sfpu::cube_root_init, (APPROX))); }
+ALWI void cbrt_tile_init() { MATH(SFPU_UNARY_INIT_FN(cbrt, sfpu::cube_root_init, (APPROX))); }
 
 }  // namespace ckernel

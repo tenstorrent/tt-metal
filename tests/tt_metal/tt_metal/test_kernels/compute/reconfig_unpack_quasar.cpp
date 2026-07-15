@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/dataflow/dataflow_buffer.h"
 
@@ -17,7 +18,8 @@ void kernel_main() {
     DataflowBuffer d5(dfb::in5);
     DataflowBuffer dout(dfb::out);
 
-    mm_init(d0.get_id(), d1.get_id(), dout.get_id());
+    compute_kernel_hw_startup<SrcOrder::Reverse>(d0.get_id(), d1.get_id(), dout.get_id());
+    matmul_init(d0.get_id(), d1.get_id());
 
     d0.wait_front(1);
     d1.wait_front(1);

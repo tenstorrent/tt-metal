@@ -22,6 +22,54 @@ from .tile_shape import construct_tile_shape
 
 torch.set_printoptions(linewidth=500, sci_mode=False, precision=2, threshold=10000)
 
+
+# ANSI styling for pretty-printing tensors. Used by passed_test and device print.
+def _bg(r, g, b):
+    return f"\033[48;2;{r};{g};{b}m"
+
+
+ANSI_RESET = "\033[0m"
+TILE_BG_RESULT = _bg(0, 0, 100)  # blue
+TILE_BG_GOLDEN = _bg(50, 0, 50)  # purple
+TILE_BG_ERROR = _bg(160, 0, 0)  # red
+
+
+def format_tile_row(
+    values,
+    background: str,
+    *,
+    row_idx: int | None = None,
+    face_c_dim: int | None = None,
+    error_mask=None,
+    error_background: str | None = None,
+) -> str:
+    """Render one row of values as colored, fixed-width cells.
+
+    Cells: '{:7d}' for Python ints, and '{:7.2f}' otherwise.
+    The default background applies per cell unless `error_mask`
+    is set at that index; if so, `error_background` is used.
+
+    A face boundary is marked with an extra space.
+
+    Pass `row_idx` to prefix the row with '01. ', '02. ' etc.;
+    omit for a bare 1D array."""
+
+    cells = []
+    for c, v in enumerate(values):
+        body = (
+            f"{v:7d}" if isinstance(v, int) and not isinstance(v, bool) else f"{v:7.2f}"
+        )
+        colour = (
+            error_background
+            if error_mask is not None and error_mask[c] and error_background
+            else background
+        )
+        face_sep = " " if face_c_dim and c == face_c_dim - 1 else ""
+        cells.append(f"{colour}{body}{ANSI_RESET}{face_sep}")
+    body = " ".join(cells)
+    return f"{row_idx:02d}. {body}" if row_idx is not None else body
+
+
 Tolerance = namedtuple("Tolerance", ["atol", "rtol"])
 tolerances = {
     DataFormat.Float16: Tolerance(atol=0.05, rtol=0.05),
@@ -551,15 +599,6 @@ def passed_test(
                     tile_shape.total_col_dim(),
                 )
 
-                def bg(r, g, b):
-                    return f"\033[48;2;{r};{g};{b}m"
-
-                BLUE = bg(0, 0, 100)
-                RED = bg(160, 0, 0)
-                PURPLE = bg(50, 0, 50)
-
-                RESET = "\033[0m"
-
                 def format_tile(
                     tile_data, error_tile, tile_no, golden: bool = False
                 ) -> list[str]:
@@ -567,17 +606,20 @@ def passed_test(
                         return []
 
                     label = "Golden tile" if golden else "Result tile"
-                    background = PURPLE if golden else BLUE
-                    tile_lines = [f"Row\t === {label} {tile_no+1} ==="]
+                    background = TILE_BG_GOLDEN if golden else TILE_BG_RESULT
+                    lines = [f"Row\t === {label} {tile_no+1} ==="]
                     for row in range(tile_shape.total_row_dim()):
-                        row_values = []
-                        for col in range(tile_shape.total_col_dim()):
-                            colour = RED if error_tile[row, col] else background
-                            row_values.append(
-                                f"{colour}{tile_data[row, col]:7.2f}{RESET}{' ' if col == tile_shape.face_c_dim - 1 else '' }"
+                        lines.append(
+                            format_tile_row(
+                                tile_data[row],
+                                background,
+                                row_idx=row + 1,
+                                face_c_dim=tile_shape.face_c_dim,
+                                error_mask=error_tile[row],
+                                error_background=TILE_BG_ERROR,
                             )
-                        tile_lines.append(f"{(row+1):02d}. {''.join(row_values)}")
-                    return tile_lines
+                        )
+                    return lines
 
                 formatted_error = []
 

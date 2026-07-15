@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Test kernel: TensorAccessor loopback producer using a Metal 2.0 TensorBinding.
-// Reads pages from an input tensor via TensorAccessor(ta::input_tensor) and pushes them
+// Reads pages from an input tensor via TensorAccessor(tensor::input_tensor) and pushes them
 // entry by entry into a DFB bound via dfb::input_dfb. The base address comes from the binding's
 // slot in the kernel's TensorBinding address section, filled by SetProgramRunArgs from
 // TensorArgument.
@@ -16,7 +16,7 @@
 void kernel_main() {
     uint32_t num_pages = get_arg_val<uint32_t>(0);
 
-    TensorAccessor accessor(ta::input_tensor);
+    TensorAccessor accessor(tensor::input_tensor);
     DataflowBuffer buf(dfb::input_dfb);
     uint32_t entry_size = buf.get_entry_size();
 

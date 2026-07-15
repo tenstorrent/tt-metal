@@ -8,6 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
 
 
 def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
@@ -70,6 +71,7 @@ def run_test_linear_impl(
     addcmul_scalar=1.0,
     chunks=1,
     broadcast_gate=True,
+    fuse_swiglu=False,
 ):
     ccl_cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
@@ -85,6 +87,9 @@ def run_test_linear_impl(
     M = torch_input.shape[2] if use_non_fused else torch_input.shape[0]
     K = torch_input.shape[3] if use_non_fused else torch_input.shape[1]
     N = weight_input.shape[3] if use_non_fused else weight_input.shape[1]
+    if fuse_swiglu:
+        # weight is the packed [gate|up] of width 2*out_N; the fused op emits out_N.
+        N = N // 2
     per_device_M = M // device.shape[sp_axis]
     if use_persistent_buffers:
         persistent_output_buffers = [
@@ -146,6 +151,9 @@ def run_test_linear_impl(
         torch_output = torch_input @ weight_input
         if bias_input is not None:
             torch_output = torch_output + bias_input
+        if fuse_swiglu:
+            first, second = torch.chunk(torch_output, 2, dim=-1)
+            torch_output = first * torch.nn.functional.silu(second)
         if fuse_addcmul:
             torch_output = torch.addcmul(torch_addcmul_a, torch_output, torch_addcmul_b, value=addcmul_scalar)
 
@@ -184,7 +192,7 @@ def run_test_linear_impl(
                 topology=topology,
                 cluster_axis=cluster_axis,
                 chunks_per_sync=16,
-                num_workers_per_link=3,
+                num_workers_per_link=4,
                 num_buffers_per_channel=2,
             )
 
@@ -245,6 +253,7 @@ def run_test_linear_impl(
                 addcmul_input_tensor1=tt_addcmul_a,
                 addcmul_input_tensor2=tt_addcmul_b,
                 chunks=chunks,
+                fuse_swiglu=fuse_swiglu,
             )
 
         return tt_output
@@ -375,22 +384,26 @@ def run_test_linear(
     addcmul_scalar=1.0,
     chunks=1,
     broadcast_gate=True,
+    fuse_swiglu=False,
 ):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_dtype = torch.float32
 
+    # For fused SwiGLU the weight packs [gate|up] -> width 2N; the op emits out width N.
+    weight_N = 2 * N if fuse_swiglu else N
+
     if use_non_fused:
         torch_input = torch.randn((1, 1, M, K), dtype=torch_dtype)
-        weight_input = torch.randn((1, 1, K, N), dtype=torch_dtype)
+        weight_input = torch.randn((1, 1, K, weight_N), dtype=torch_dtype)
     else:
         torch_input = torch.randn((M, K), dtype=torch_dtype)
-        weight_input = torch.randn((K, N), dtype=torch_dtype)
+        weight_input = torch.randn((K, weight_N), dtype=torch_dtype)
     bias_input = None
     if use_bias:
         if use_non_fused:
-            bias_input = torch.randn((1, 1, 1, N), dtype=torch_dtype)
+            bias_input = torch.randn((1, 1, 1, weight_N), dtype=torch_dtype)
         else:
-            bias_input = torch.randn((1, N), dtype=torch_dtype)
+            bias_input = torch.randn((1, weight_N), dtype=torch_dtype)
 
     if fuse_addcmul:
         if use_non_fused:
@@ -428,10 +441,21 @@ def run_test_linear(
         mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=shard_dims),
     )
 
-    tt_weight = ttnn.from_torch(weight_input, dtype=weight_dtype or dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    # Fused SwiGLU: tile-pair interleave the (replicated) weight/bias so each ring device's
+    # N-slice holds whole [second(silu'd), first] pairs. ndev = ring size (cluster_axis).
+    weight_to_load = weight_input
+    bias_to_load = bias_input
+    if fuse_swiglu:
+        ring_size = device.shape[cluster_axis]
+        weight_2d = weight_input.reshape(K, weight_input.shape[-1])
+        weight_to_load = prepare_for_fused_swiglu(weight_2d, ndev=ring_size).reshape(weight_input.shape)
+        if use_bias:
+            bias_to_load = prepare_for_fused_swiglu(bias_input.reshape(1, -1), ndev=ring_size).reshape(bias_input.shape)
+
+    tt_weight = ttnn.from_torch(weight_to_load, dtype=weight_dtype or dtype, device=device, layout=ttnn.TILE_LAYOUT)
     tt_bias = None
     if use_bias:
-        tt_bias = ttnn.from_torch(bias_input, dtype=bias_dtype or dtype, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_bias = ttnn.from_torch(bias_to_load, dtype=bias_dtype or dtype, device=device, layout=ttnn.TILE_LAYOUT)
 
     return run_test_linear_impl(
         device=device,
@@ -469,6 +493,7 @@ def run_test_linear(
         addcmul_scalar=addcmul_scalar,
         chunks=chunks,
         broadcast_gate=broadcast_gate,
+        fuse_swiglu=fuse_swiglu,
     )
 
 
@@ -709,6 +734,510 @@ def test_linear(
                 assert check_result[n][c][i]["relative_rmse"] < 0.02
 
 
+def run_test_linear_fsdp(
+    device,
+    M,
+    K,
+    N,
+    M_block_size,
+    K_block_size,
+    N_block_size,
+    subblock_h,
+    subblock_w,
+    topology,
+    core_grid,
+    num_workers_per_link,
+    num_links,
+    *,
+    tp_axis,
+    fsdp_axis,
+    fsdp_topology,
+    fuse_fsdp=True,
+    use_bias=True,
+    activation=None,
+    chunks=1,
+    num_iters=1,
+    enable_trace=False,
+    dtype=ttnn.bfloat16,
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    fp32_acc=True,
+):
+    """
+    FSDP-fused variant. fsdp_axis is also the sp_axis from the model's perspective, so
+    activation M is sharded on it. Layout:
+      - x       : [M, K]        M sharded on fsdp_axis (= sp), K sharded on tp_axis
+      - weight  : [K, N]        K sharded on fsdp_axis,        N sharded on tp_axis
+      - bias    : [1, N]        N sharded on tp_axis (replicated on fsdp_axis)
+      - output  : [M, N]        M sharded on fsdp_axis,        N sharded on tp_axis
+    """
+    logger.info(f"Running test_linear fsdp with M={M}, K={K}, N={N}")
+    assert tp_axis != fsdp_axis, "tp_axis and fsdp_axis must be distinct"
+    tp_size = device.shape[tp_axis]
+    fsdp_size = device.shape[fsdp_axis]
+    assert tp_size > 1 and fsdp_size > 1, "FSDP fusion test requires both axes > 1"
+
+    torch_dtype = torch.float32
+    torch_input = torch.randn((M, K), dtype=torch_dtype)
+    weight_input = torch.randn((K, N), dtype=torch_dtype)
+    bias_input = torch.randn((1, N), dtype=torch_dtype) if use_bias else None
+
+    with torch.no_grad():
+        torch_output = torch_input @ weight_input
+        if bias_input is not None:
+            torch_output = torch_output + bias_input
+        if activation == "gelu":
+            torch_output = torch.nn.functional.gelu(torch_output)
+        torch_output_chunks = torch.chunk(torch_output, chunks, dim=-1)
+
+    # --- K-sharding ---
+    # FUSED: the weight is gathered in lockstep by AGMM's fsdp ring, so in0's tp ring and in1's
+    # fsdp ring must consume the same global K-block at each step. We enforce that with a skewed
+    # (a+b) K-sharding: device (tp=a, fsdp=b) holds global K-stripe (a+b) for BOTH operands, via a
+    # per-block cyclic roll of the K dim so a *uniform* 2D shard of the rolled tensor lands stripe
+    # (a+b) on device (a,b). The skew is purely on the contracted K dim, so torch_output (computed
+    # above from the unrolled tensors) is unchanged.
+    # SEPARATE: the weight is fully gathered (full K) by a standalone all-gather before the matmul,
+    # so AGMM indexes the weight by global K-offset (like run_test_linear) and no skew is needed —
+    # use the natural, contiguously-sharded tensors.
+    if fuse_fsdp:
+        assert tp_size == fsdp_size, "skewed sharding requires tp_size == fsdp_size"
+        N_ring = tp_size
+        assert K % N_ring == 0, "K must be divisible by the ring size for skewed sharding"
+        K_per_stripe = K // N_ring
+
+        x_to_load = torch_input.clone()
+        M_per_fsdp = M // fsdp_size
+        for b in range(fsdp_size):
+            rows = slice(b * M_per_fsdp, (b + 1) * M_per_fsdp)
+            x_to_load[rows, :] = torch.roll(torch_input[rows, :], shifts=-(b * K_per_stripe), dims=1)
+
+        w_to_load = weight_input.clone()
+        N_per_tp = N // tp_size
+        for a in range(tp_size):
+            cols = slice(a * N_per_tp, (a + 1) * N_per_tp)
+            w_to_load[:, cols] = torch.roll(weight_input[:, cols], shifts=-(a * K_per_stripe), dims=0)
+
+        # Self-consistency: after a uniform shard, device (tp=a, fsdp=b) must hold original K-stripe (a+b).
+        for a in range(tp_size):
+            for b in range(fsdp_size):
+                s = (a + b) % N_ring
+                x_local = x_to_load[b * M_per_fsdp : (b + 1) * M_per_fsdp, a * K_per_stripe : (a + 1) * K_per_stripe]
+                x_ref = torch_input[b * M_per_fsdp : (b + 1) * M_per_fsdp, s * K_per_stripe : (s + 1) * K_per_stripe]
+                assert torch.equal(x_local, x_ref), f"x skew mismatch at (a={a}, b={b})"
+                w_local = w_to_load[b * K_per_stripe : (b + 1) * K_per_stripe, a * N_per_tp : (a + 1) * N_per_tp]
+                w_ref = weight_input[s * K_per_stripe : (s + 1) * K_per_stripe, a * N_per_tp : (a + 1) * N_per_tp]
+                assert torch.equal(w_local, w_ref), f"W skew mismatch at (a={a}, b={b})"
+    else:
+        x_to_load = torch_input
+        w_to_load = weight_input
+
+    # x: M (dim 0) sharded on fsdp_axis (= sp_axis), K (dim 1) sharded on tp_axis
+    x_shard_dims = [None, None]
+    x_shard_dims[fsdp_axis] = 0
+    x_shard_dims[tp_axis] = 1
+    tt_input = ttnn.from_torch(
+        x_to_load,
+        dtype=dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=x_shard_dims),
+    )
+
+    # W: K (dim 0) sharded on fsdp_axis, N (dim 1) sharded on tp_axis
+    w_shard_dims = [None, None]
+    w_shard_dims[fsdp_axis] = 0
+    w_shard_dims[tp_axis] = 1
+    tt_weight = ttnn.from_torch(
+        w_to_load,
+        dtype=dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=w_shard_dims),
+    )
+
+    # bias: N (dim 1) sharded on tp_axis only
+    tt_bias = None
+    if use_bias:
+        b_shard_dims = [None, None]
+        b_shard_dims[tp_axis] = 1
+        tt_bias = ttnn.from_torch(
+            bias_input,
+            dtype=dtype,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=b_shard_dims),
+        )
+
+    activation_fn = None
+    if activation == "gelu":
+        activation_fn = (ttnn.UnaryOpType.GELU, False)
+    else:
+        assert activation is None, f"Unsupported activation: {activation}"
+
+    ccl_cores = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
+    )
+
+    # Semaphores: TP-axis activation gather + FSDP-axis weight gather (both ping-pong pairs)
+    tp_sems = [create_global_semaphores(device, device.get_num_devices(), ccl_cores, 0) for _ in range(num_iters)]
+    fsdp_sems = [create_global_semaphores(device, device.get_num_devices(), ccl_cores, 0) for _ in range(num_iters)]
+
+    logger.info("Creating persistent buffers")
+    # Persistent activation-gather buffer holds the per-device gathered activation
+    # [M/fsdp_size, K] (M is sharded on fsdp_axis, K becomes full after the TP all-gather).
+    per_device_M = M // fsdp_size
+    ag_persistent_buffers = [
+        ttnn.from_torch(
+            torch.zeros((per_device_M, K), dtype=torch_dtype),
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=dtype,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=[None, None]),
+        )
+        for _ in range(num_iters)
+    ]
+
+    # Persistent gathered-weight buffer: [K, N/tp_size] per device — N is TP-sharded.
+    per_device_N = N // tp_size
+    pwb_shard_dims = [None, None]
+    pwb_shard_dims[tp_axis] = 1
+    pwb_persistent_buffers = [
+        ttnn.from_torch(
+            torch.zeros((K, per_device_N), dtype=torch_dtype),
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=dtype,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=[None, None]),
+        )
+        for _ in range(num_iters)
+    ]
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=math_fidelity,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_acc,
+        packer_l1_acc=True,
+    )
+
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=M_block_size,
+        K_block_size=K_block_size,
+        N_block_size=N_block_size,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
+        compute_with_storage_grid_size=core_grid,
+    )
+
+    def run_op(i):
+        if fuse_fsdp:
+            # Fused: AGMM gathers the weight across fsdp (into the PWB) and the activation across
+            # tp internally, then matmuls.
+            return ttnn.experimental.all_gather_minimal_matmul_async(
+                tt_input,
+                tt_weight,
+                bias_tensor=tt_bias,
+                fused_activation=activation_fn,
+                compute_kernel_config=compute_config,
+                config=matmul_config,
+                persistent_output_buffer=ag_persistent_buffers[i],
+                multi_device_global_semaphore=tp_sems[i],
+                num_links=num_links,
+                topology=topology,
+                cluster_axis=tp_axis,
+                force_transpose=True,
+                num_workers_per_link=num_workers_per_link,
+                num_buffers_per_channel=48,
+                chunks=chunks,
+                fsdp_cluster_axis=fsdp_axis,
+                fsdp_multi_device_global_semaphore=fsdp_sems[i],
+                persistent_weight_buffer=pwb_persistent_buffers[i],
+                fsdp_topology=fsdp_topology,
+            )
+
+        # Separate: standalone all-gather of the weight across fsdp (K = dim 0) -> [K, N/tp] full-K
+        # weight (reusing the [K, N/tp] PWB buffer as the gather output), then plain (non-fsdp) AGMM
+        # gathers the activation across tp and matmuls against that full-K weight.
+        gathered_weight = ttnn.experimental.all_gather_async(
+            tt_weight,
+            persistent_output_buffer=pwb_persistent_buffers[i],
+            dim=0,
+            multi_device_global_semaphore=fsdp_sems[i],
+            num_links=num_links,
+            topology=fsdp_topology,
+            cluster_axis=fsdp_axis,
+            num_workers_per_link=num_workers_per_link,
+            num_buffers_per_channel=2,
+        )
+        ttnn.synchronize_device(device)
+        return ttnn.experimental.all_gather_minimal_matmul_async(
+            tt_input,
+            gathered_weight,
+            bias_tensor=tt_bias,
+            fused_activation=activation_fn,
+            compute_kernel_config=compute_config,
+            config=matmul_config,
+            persistent_output_buffer=ag_persistent_buffers[i],
+            multi_device_global_semaphore=tp_sems[i],
+            num_links=num_links,
+            topology=topology,
+            cluster_axis=tp_axis,
+            force_transpose=True,
+            num_workers_per_link=num_workers_per_link,
+            num_buffers_per_channel=48,
+            chunks=chunks,
+        )
+
+    tt_output_tensor_list = []
+    if enable_trace:
+        run_op(0)
+        ttnn.synchronize_device(device)
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        tt_out_tensor = run_op(0)
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        ttnn.synchronize_device(device)
+        for _ in range(num_iters):
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(device)
+            tt_output_tensor_list.append(tt_out_tensor)
+    else:
+        for i in range(num_iters):
+            ttnn.synchronize_device(device)
+            tt_out_tensor = run_op(i)
+            tt_output_tensor_list.append(tt_out_tensor)
+            logger.info(f"Waiting for op")
+            ttnn.synchronize_device(device)
+            logger.info(f"Done op")
+
+            logger.info(f"Done iteration {i}")
+
+    # Output is [M/fsdp, N/tp] per device — M sharded on fsdp_axis, N sharded on tp_axis.
+    # After ConcatMesh2dToTensor the tensor recovers global [M, N/chunks].
+    concat_dims = [0, 0]
+    concat_dims[fsdp_axis] = 0  # M
+    concat_dims[tp_axis] = 1  # N (after chunk split: N/chunks)
+    chunk_n = N // chunks
+
+    check_result_list = []
+    for n in range(num_iters):
+        tt_output = tt_output_tensor_list[n]
+        check_result = []
+        for c in range(chunks):
+            tt_output_chunk = ttnn.from_device(tt_output[c])
+            tt_output_chunk = ttnn.to_torch(
+                tt_output_chunk,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(device, mesh_shape=tuple(device.shape), dims=concat_dims),
+            )
+            # PCC every (fsdp_i, tp_i) device's slice against the matching slab of torch.
+            check_result_chunk = []
+            for fsdp_i in range(fsdp_size):
+                m_slice = slice(fsdp_i * per_device_M, (fsdp_i + 1) * per_device_M)
+                for tp_i in range(tp_size):
+                    n_per_dev = chunk_n // tp_size
+                    n_slice = slice(tp_i * n_per_dev, (tp_i + 1) * n_per_dev)
+                    tt_device_output = tt_output_chunk[m_slice, n_slice]
+                    torch_slice = torch_output_chunks[c][m_slice, n_slice]
+                    check_result_chunk.append(assert_quality(torch_slice, tt_device_output))
+            check_result.append(check_result_chunk)
+        check_result_list.append(check_result)
+
+    return check_result_list
+
+
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, device_params, topology, fsdp_topology, num_links, num_workers_per_link, tp_axis, fsdp_axis, core_grid_x, core_grid_y",
+    [
+        [
+            (4, 8),
+            (4, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(4096),
+                "trace_region_size": 90112,
+            },
+            ttnn.Topology.Linear,  # in0: forced Linear so it matches the fsdp uni-ring K-block order
+            ttnn.Topology.Linear,
+            4,
+            2,
+            0,
+            1,
+            8,
+            8,
+        ],
+    ],
+    ids=["wh_sweep_4x4"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "M, K, N, use_bias, activation, chunks, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [
+        # 4x4 shapes
+        (6912, 5120, 15360, True, None, 1, 8, 8, 6, 2, 2),
+        (6912, 5120, 5120, True, None, 1, 10, 5, 6, 2, 2),
+        (6912, 5120, 13824, True, None, 1, 7, 10, 5, 1, 1),
+        (9216, 5120, 15360, True, None, 1, 10, 5, 10, 2, 2),
+        (9216, 5120, 5120, True, None, 1, 14, 8, 6, 2, 2),
+        (9216, 5120, 13824, True, None, 1, 9, 5, 14, 1, 2),
+        (10584, 5120, 15360, True, None, 1, 12, 5, 10, 2, 2),
+        (10584, 5120, 5120, True, None, 1, 12, 4, 6, 2, 2),
+        (10584, 5120, 13824, True, None, 1, 11, 4, 14, 1, 2),
+        (12288, 5120, 15360, True, None, 1, 12, 5, 10, 2, 2),
+        (12288, 5120, 5120, True, None, 1, 12, 5, 6, 2, 2),
+        (12288, 5120, 13824, True, None, 1, 12, 3, 14, 2, 2),
+        (16384, 5120, 15360, True, None, 1, 12, 5, 10, 2, 2),
+        (16384, 5120, 5120, True, None, 1, 8, 8, 5, 2, 1),
+        (16384, 5120, 13824, True, None, 1, 8, 4, 14, 2, 2),
+        (18432, 5120, 15360, True, None, 1, 12, 5, 8, 2, 2),
+        (18432, 5120, 5120, True, None, 1, 10, 8, 10, 2, 2),
+        (18432, 5120, 13824, True, None, 1, 10, 4, 14, 2, 2),
+        (24576, 5120, 15360, True, None, 1, 14, 5, 10, 2, 2),
+        (24576, 5120, 5120, True, None, 1, 8, 8, 6, 2, 2),
+        (24576, 5120, 13824, True, None, 1, 12, 3, 14, 2, 2),
+        (27648, 5120, 15360, True, None, 1, 14, 5, 10, 2, 2),
+        (27648, 5120, 5120, True, None, 1, 10, 8, 6, 2, 2),
+        (27648, 5120, 13824, True, None, 1, 10, 4, 14, 2, 2),
+        (32768, 5120, 15360, True, None, 1, 12, 8, 8, 2, 2),
+        (32768, 5120, 5120, True, None, 1, 8, 8, 6, 2, 2),
+        (32768, 5120, 13824, True, None, 1, 8, 4, 14, 2, 2),
+        (36864, 5120, 15360, True, None, 1, 12, 8, 8, 2, 2),
+        (36864, 5120, 5120, True, None, 1, 10, 8, 6, 2, 2),
+        (36864, 5120, 13824, True, None, 1, 10, 5, 14, 2, 2),
+        (42336, 5120, 15360, True, None, 1, 14, 5, 10, 2, 2),
+        (42336, 5120, 5120, True, None, 1, 14, 8, 6, 2, 1),
+        (42336, 5120, 13824, True, None, 1, 14, 5, 8, 2, 2),
+        (49152, 5120, 15360, True, None, 1, 12, 8, 8, 2, 2),
+        (49152, 5120, 5120, True, None, 1, 10, 8, 6, 2, 2),
+        (49152, 5120, 13824, True, None, 1, 10, 5, 14, 2, 2),
+        (65536, 5120, 15360, True, None, 1, 14, 5, 10, 2, 2),
+        (65536, 5120, 5120, True, None, 1, 14, 8, 6, 2, 2),
+        (65536, 5120, 13824, True, None, 1, 10, 5, 14, 2, 2),
+    ],
+    ids=[
+        "6912qkv",
+        "6912denseout",
+        "6912ff1",
+        "9216qkv",
+        "9216denseout",
+        "9216ff1",
+        "10584qkv",
+        "10584denseout",
+        "10584ff1",
+        "12288qkv",
+        "12288denseout",
+        "12288ff1",
+        "16384qkv",
+        "16384denseout",
+        "16384ff1",
+        "18432qkv",
+        "18432denseout",
+        "18432ff1",
+        "24576qkv",
+        "24576denseout",
+        "24576ff1",
+        "27648qkv",
+        "27648denseout",
+        "27648ff1",
+        "32768qkv",
+        "32768denseout",
+        "32768ff1",
+        "36864qkv",
+        "36864denseout",
+        "36864ff1",
+        "42336qkv",
+        "42336denseout",
+        "42336ff1",
+        "49152qkv",
+        "49152denseout",
+        "49152ff1",
+        "65536qkv",
+        "65536denseout",
+        "65536ff1",
+    ],
+)
+@pytest.mark.parametrize(
+    "fuse_fsdp",
+    [True, False],
+    ids=["fused", "separate"],
+)
+def test_linear_fsdp(
+    mesh_device,
+    mesh_shape,
+    M,
+    K,
+    N,
+    M_block_size,
+    K_block_size,
+    N_block_size,
+    subblock_h,
+    subblock_w,
+    topology,
+    fsdp_topology,
+    core_grid_x,
+    core_grid_y,
+    num_workers_per_link,
+    num_links,
+    tp_axis,
+    fsdp_axis,
+    use_bias,
+    activation,
+    chunks,
+    fuse_fsdp,
+):
+    """
+    Exercises all_gather_minimal_matmul_async with the FSDP weight gather fused in.
+
+    Layout:
+      - x        : [M, K]         replicated on fsdp_axis, K-sharded on tp_axis
+      - weight   : [K, N]         K-sharded on fsdp_axis, N-sharded on tp_axis
+      - bias     : [1, N]         N-sharded on tp_axis (replicated on fsdp_axis)
+      - output   : [M, N/tp]      replicated on fsdp_axis, N-sharded on tp_axis
+    """
+    parent_mesh = mesh_device
+    mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+
+    # Scheme-4 single-row muxes: the fused path now uses the full 8x8 grid (64 worker cores). All 8
+    # muxes (4 in0 + 4 fsdp) share the single row below the grid, interleaved by column parity, so the
+    # matmul reclaims both the old fsdp column and the second mux row. The separate path is the plain
+    # (non-fsdp) AGMM, which already uses the full 8x8 grid (matching test_linear).
+    if not fuse_fsdp:
+        core_grid_x = 8
+        core_grid_y = 8
+
+    check_result = run_test_linear_fsdp(
+        mesh_device,
+        M,
+        K,
+        N,
+        M_block_size,
+        K_block_size,
+        N_block_size,
+        subblock_h,
+        subblock_w,
+        topology,
+        core_grid=ttnn.CoreCoord(core_grid_x, core_grid_y),
+        num_workers_per_link=num_workers_per_link,
+        num_links=num_links,
+        tp_axis=tp_axis,
+        fsdp_axis=fsdp_axis,
+        fsdp_topology=fsdp_topology,
+        fuse_fsdp=fuse_fsdp,
+        use_bias=use_bias,
+        activation=activation,
+        chunks=chunks,
+    )
+
+    fsdp_size = mesh_device.shape[fsdp_axis]
+    tp_size = mesh_device.shape[tp_axis]
+    for n in range(len(check_result)):
+        for c in range(chunks):
+            assert len(check_result[n][c]) == fsdp_size * tp_size
+            for entry in check_result[n][c]:
+                assert entry["pcc"] > 0.999_500
+                assert entry["relative_rmse"] < 0.02
+
+
 @pytest.mark.parametrize(
     "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis, core_grid_x, core_grid_y, cluster_axis",
     [
@@ -862,6 +1391,92 @@ def test_linear_k_tail(
     for c in range(1):
         for i in range(submesh.get_num_devices()):
             assert check_result[0][c][i]["pcc"] > 0.999_500
+            assert check_result[0][c][i]["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis, core_grid_x, core_grid_y, cluster_axis",
+    [
+        [
+            (4, 8),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(4096),
+                "trace_region_size": 90112,
+            },
+            ttnn.Topology.Ring,
+            2,
+            6,
+            1,
+            0,
+            12,
+            9,
+            0,
+        ],
+    ],
+    ids=["bh4x8links2"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("use_bias", [False, True], ids=["no_bias", "bias"])
+@pytest.mark.parametrize(
+    "M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [
+        (3072, 5120, 1280, 8, 8, 8, 2, 1),
+        (3072, 5120, 3840, 8, 8, 8, 2, 2),
+    ],
+    ids=["3072x5120x1280", "3072x5120x3840"],
+)
+def test_linear_swiglu(
+    mesh_device,
+    M,
+    K,
+    N,
+    M_block_size,
+    K_block_size,
+    N_block_size,
+    subblock_h,
+    subblock_w,
+    topology,
+    core_grid_x,
+    core_grid_y,
+    num_workers_per_link,
+    num_links,
+    sp_axis,
+    tp_axis,
+    cluster_axis,
+    use_bias,
+):
+    """Ring-fused all_gather_minimal_matmul_async with FUSE_SWIGLU.
+
+    The (replicated) weight is the packed [gate|up] of width 2N, tile-pair interleaved so each
+    ring device's N-slice holds whole pairs; the op emits silu(gate)*up of width N in one matmul.
+    N here is the OUTPUT width (weight width is 2N).
+    """
+    submesh = _create_cluster_submesh(mesh_device, cluster_axis)
+    check_result = run_test_linear(
+        submesh,
+        M,
+        K,
+        N,
+        M_block_size,
+        K_block_size,
+        N_block_size,
+        subblock_h,
+        subblock_w,
+        topology,
+        core_grid=ttnn.CoreCoord(core_grid_x, core_grid_y),
+        num_workers_per_link=num_workers_per_link,
+        num_links=num_links,
+        force_transpose=True,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        use_bias=use_bias,
+        cluster_axis=cluster_axis,
+        fuse_swiglu=True,
+    )
+    for c in range(1):
+        for i in range(submesh.get_num_devices()):
+            assert check_result[0][c][i]["pcc"] > 0.999_000
             assert check_result[0][c][i]["relative_rmse"] < 0.02
 
 

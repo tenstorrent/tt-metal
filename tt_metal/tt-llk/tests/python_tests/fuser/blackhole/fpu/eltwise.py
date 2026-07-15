@@ -6,9 +6,9 @@ from typing import List, Tuple
 
 import torch
 from fuser.block_data import BlockData
+from fuser.fpu_node import FpuNode
 from fuser.fused_fpu import Fpu
 from fuser.fused_loop import FusedLoop, LoopTileByTile
-from fuser.fused_math import ComputeNode
 from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
 from helpers.golden_generators import EltwiseBinaryGolden, get_golden_generator
@@ -38,9 +38,9 @@ class EltwiseFpu(Fpu):
         tensor_dst: torch.Tensor,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        output_format = operation.output.data_format
+        output_format = config.sentinel.golden_math_format
         math_fidelity = compute_unit.math_fidelity
 
         if compute_unit.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA:
@@ -53,7 +53,12 @@ class EltwiseFpu(Fpu):
 
         generate_golden = get_golden_generator(EltwiseBinaryGolden)
         golden_tensor = generate_golden(
-            self.operation, tensor_a, tensor_b, output_format, math_fidelity
+            self.operation,
+            tensor_a,
+            tensor_b,
+            output_format,
+            math_fidelity,
+            tile_shape=operation.tile_shape,
         ).reshape(operation.max_output_dimensions)
 
         if compute_unit.acc_to_dest == AccToDest.Yes:
@@ -65,14 +70,14 @@ class EltwiseFpu(Fpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         stage = operation.stage_id
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
         op = self.operation.cpp_enum_value
-        face_r_dim = operation.output.tile_shape.face_r_dim
-        face_c_dim = operation.output.tile_shape.face_c_dim
+        face_r_dim = operation.tile_shape.face_r_dim
+        face_c_dim = operation.tile_shape.face_c_dim
         num_faces_r_dim = compute_unit.src_a.tile_shape.total_row_dim() // face_r_dim
         num_faces_c_dim = compute_unit.src_a.tile_shape.total_col_dim() // face_c_dim
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
@@ -89,15 +94,15 @@ class EltwiseFpu(Fpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        stage = operation.stage_id
+        dest_sync = operation.dest_sync.cpp_enum_value
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
         dest_acc = config.dest_acc.cpp_enum_value
         op = self.operation.cpp_enum_value
-        face_r_dim = operation.output.tile_shape.face_r_dim
-        face_c_dim = operation.output.tile_shape.face_c_dim
+        face_r_dim = operation.tile_shape.face_r_dim
+        face_c_dim = operation.tile_shape.face_c_dim
         num_faces_r_dim = compute_unit.src_a.tile_shape.total_row_dim() // face_r_dim
         num_faces_c_dim = compute_unit.src_a.tile_shape.total_col_dim() // face_c_dim
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
@@ -105,7 +110,7 @@ class EltwiseFpu(Fpu):
         clear_fp32_dst_acc = compute_unit.clear_fp32_dst_acc.cpp_enum_value
 
         return (
-            f"_llk_math_eltwise_binary_<ckernel::EltwiseBinaryType::{op}, {broadcast_type}, dest_sync{stage},\n"
+            f"_llk_math_eltwise_binary_<ckernel::EltwiseBinaryType::{op}, {broadcast_type}, {dest_sync},\n"
             f"{dest_acc}, {math_fidelity}, {reuse_dest}>"
             f"(ckernel::TensorShape{{{face_r_dim}, {face_c_dim}, {num_faces_r_dim}, {num_faces_c_dim}}}, {block.tile_id_block}, {clear_fp32_dst_acc}\n"
             f");\n"
@@ -115,7 +120,7 @@ class EltwiseFpu(Fpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         return "_llk_math_eltwise_binary_uninit_();\n"

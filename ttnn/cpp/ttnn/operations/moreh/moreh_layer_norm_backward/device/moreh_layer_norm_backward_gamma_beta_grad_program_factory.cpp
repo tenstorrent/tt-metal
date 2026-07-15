@@ -245,8 +245,11 @@ MorehLayerNormBackwardGammaBetaGradOperation::MorehLayerNormBackwardGammaBetaGra
     auto* const mean_buf = mean.buffer();
     auto* const rstd_buf = rstd.buffer();
 
-    const auto gamma_grad_addr = gamma_grad_has_value ? gamma_grad.value().buffer()->address() : 0u;
-    const auto beta_grad_addr = beta_grad_has_value ? beta_grad.value().buffer()->address() : 0u;
+    // Pass the output grad tensors as Buffer* (not raw ->address()) so the program-cache fast hit
+    // path patches their addresses when they are reallocated across calls. nullptr is valid for an
+    // absent optional output.
+    auto* const gamma_grad_buf = gamma_grad_has_value ? gamma_grad.value().buffer() : nullptr;
+    auto* const beta_grad_buf = beta_grad_has_value ? beta_grad.value().buffer() : nullptr;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -275,7 +278,7 @@ MorehLayerNormBackwardGammaBetaGradOperation::MorehLayerNormBackwardGammaBetaGra
              mean_rstd_height,
              mean_rstd_width});
 
-        writer_desc.emplace_runtime_args(core, {gamma_grad_addr, beta_grad_addr, num_cols_per_core, tile_offset});
+        writer_desc.emplace_runtime_args(core, {gamma_grad_buf, beta_grad_buf, num_cols_per_core, tile_offset});
 
         tile_offset += num_cols_per_core;
     }

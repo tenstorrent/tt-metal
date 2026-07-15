@@ -22,14 +22,14 @@ TARGETS_YAML_PATH_DEFAULT = str(Path(__file__).resolve().parents[2] / "model_tar
 _SKU_ALIASES = {
     "wh_n150": {"wh_n150", "n150"},
     "wh_n300": {"wh_n300", "n300"},
-    "wh_llmbox_perf": {"wh_llmbox_perf", "t3k"},
-    "wh_galaxy_perf": {"wh_galaxy_perf", "tg", "glx"},
+    "wh_llmbox_perf": {"wh_llmbox_perf", "wh_llmbox", "t3k"},
+    "wh_galaxy_perf": {"wh_galaxy_perf", "wh_galaxy", "tg", "glx"},
     "bh_p100": {"bh_p100", "p100"},
     "bh_p150": {"bh_p150", "p150"},
     "bh_p300": {"bh_p300", "p300"},
     "bh_loudbox": {"bh_loudbox", "p150x8"},
     "p300x2": {"p300x2", "p150x4", "bh_quietbox_2"},
-    "bh_galaxy_perf": {"bh_galaxy_perf", "bhglx"},
+    "bh_galaxy_perf": {"bh_galaxy_perf", "bh_galaxy", "bhglx"},
     "blackhole": {"blackhole", "bh"},
 }
 

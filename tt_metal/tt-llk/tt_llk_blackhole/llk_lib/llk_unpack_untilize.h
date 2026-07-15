@@ -17,6 +17,7 @@
 #include "ckernel_template.h"
 #include "cunpack_common.h"
 #include "llk_unpack_common.h"
+#include "sanitizer/api.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -80,6 +81,18 @@ inline void _llk_unpack_untilize_mop_config_()
  */
 inline void _llk_unpack_untilize_init_(const std::uint32_t unpack_dst_format, const std::uint32_t tile_size, const std::uint32_t face_r_dim = FACE_R_DIM)
 {
+    llk::san::unpack_operand_check(
+        llk::san::IGNORE,
+        llk::san::IGNORE,
+        llk::san::IGNORE,
+        unpack_dst_format,
+        llk::san::IGNORE,
+        face_r_dim,
+        llk::san::IGNORE,
+        llk::san::IGNORE,
+        llk::san::IGNORE);
+    llk::san::operation_init<llk::san::Operation::UnpackUntilize>();
+
     // Always include setup calls first for safety (as recommended by maintainer)
     // Disable transpose when unused
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
@@ -103,7 +116,7 @@ inline void _llk_unpack_untilize_init_(const std::uint32_t unpack_dst_format, co
     // Configure unpacker registers
     // Get pointer to registers for current state ID
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
-    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32, UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT, UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK>(unpA_ch1_y_stride);
+    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32, UNP0_ADDR_CTRL_XY_REG_1_Ystride_SHAMT, UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK>(unpA_ch1_y_stride);
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, 0xFFFF>(FACE_C_DIM);
 
     // Configure tile dimensions
@@ -150,7 +163,7 @@ inline void _llk_unpack_untilize_uninit_(const std::uint32_t unpack_dst_format, 
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     TTI_WRCFG(p_gpr_unpack::FACE_DIM_16x16, p_cfg::WRCFG_32b, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, 0xFFFF>(1);
-    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32, UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT, UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK>(unpA_ch1_y_stride);
+    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32, UNP0_ADDR_CTRL_XY_REG_1_Ystride_SHAMT, UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK>(unpA_ch1_y_stride);
 
     TTI_NOP;
 }
@@ -171,6 +184,8 @@ inline void _llk_unpack_untilize_uninit_(const std::uint32_t unpack_dst_format, 
 template <bool first_pass = true>
 inline void _llk_unpack_untilize_pass_(const std::uint32_t base_address, const std::uint32_t block_tile_cols)
 {
+    llk::san::operation_check<llk::san::Operation::UnpackUntilize>();
+
     std::uint32_t rem_blocks_in_row = block_tile_cols;
 
     // Program srcA and srcB base addresses

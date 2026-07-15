@@ -16,11 +16,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch {
 namespace detail {
 
 std::pair<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_cb_sizes(
-    const Tensor& input_tensor,
-    const Tensor& weights_tensor,
-    const Tensor& indices_tensor,
-    uint32_t num_links,
-    std::optional<uint32_t> axis);
+    const Tensor& input_tensor, const Tensor& indices_tensor, uint32_t num_links, std::optional<uint32_t> axis);
 
 }  // namespace detail
 
@@ -46,7 +42,6 @@ namespace ttnn::prim {
 ttnn::operations::experimental::deepseek_prefill::dispatch::DispatchDeviceOperation::tensor_return_value_t
 prefill_dispatch(
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weights_tensor,
     const ttnn::Tensor& indices_tensor,
     const ttnn::Tensor& expert_offsets_tensor,
     const ttnn::Tensor& expert_dispatch_table_tensor,
@@ -56,6 +51,7 @@ prefill_dispatch(
     uint32_t num_experts_per_tok,
     uint32_t metadata_len,
     uint32_t max_dispatch_buffer_token_size,
+    const std::optional<ttnn::Tensor>& padding_config,
     std::optional<uint32_t> axis,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,

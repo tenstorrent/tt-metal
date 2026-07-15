@@ -498,10 +498,6 @@ def test_batch_norm_output_Default(input_shapes, device):
     "input_dtype, param_dtype", [("bfloat16", "bfloat16"), ("bfloat16", "float32"), ("float32", "float32")]
 )
 def test_batch_norm_compute_config(input_shapes, training, weight, bias, input_dtype, param_dtype, device):
-    if input_dtype == "float32" and os.environ.get("TT_METAL_SIMULATOR"):
-        pytest.skip(
-            "Skipping float32 batch_norm compute_config on ttsim - fp16a untested functionality (ttsim-private issue #324)"
-        )
     N, H, W, C = input_shapes
     torch.manual_seed(0)
 
@@ -576,7 +572,7 @@ def test_batch_norm_compute_config(input_shapes, training, weight, bias, input_d
     # Execute low-accuracy groupnorm
     config_low = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
     )
@@ -881,3 +877,54 @@ def test_batch_norm_program_cache_shape_collision(device):
             )
     finally:
         device.disable_and_clear_program_cache()
+
+
+def test_batch_norm_training_avoids_variance_cancellation(device):
+    """Regression test for #45968: avoid bf16 E[x^2] - E[x]^2 cancellation in training mode."""
+
+    input_shape = torch.Size([2, 64, 32, 32])
+    channels = input_shape[1]
+    eps = 1e-5
+
+    torch.manual_seed(0)
+    channel_offsets = torch.where(torch.arange(channels, dtype=torch.float32) % 2 == 0, 5.0, -5.0).view(
+        1, channels, 1, 1
+    )
+    in_data = (channel_offsets + 0.1 * torch.randn(input_shape, dtype=torch.float32)).to(torch.bfloat16)
+
+    def to_tt(tensor):
+        return ttnn.from_torch(tensor.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    input_tensor = to_tt(in_data)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+
+    running_mean_tensor = to_tt(torch.zeros(1, channels, 1, 1))
+    running_var_tensor = to_tt(torch.ones(1, channels, 1, 1))
+    weight_tensor = to_tt(torch.ones(1, channels, 1, 1))
+    bias_tensor = to_tt(torch.zeros(1, channels, 1, 1))
+
+    tt_output_tensor = ttnn.batch_norm(
+        input_tensor,
+        running_mean=running_mean_tensor,
+        running_var=running_var_tensor,
+        weight=weight_tensor,
+        bias=bias_tensor,
+        training=True,
+        eps=eps,
+    )
+    tt_output = ttnn.to_torch(tt_output_tensor).float()
+    tt_running_var = ttnn.to_torch(running_var_tensor)
+
+    torch_output = torch.nn.functional.batch_norm(
+        input=in_data.float(),
+        running_mean=None,
+        running_var=None,
+        weight=torch.ones(channels),
+        bias=torch.zeros(channels),
+        training=True,
+        eps=eps,
+    )
+
+    assert torch.isfinite(tt_output).all()
+    assert torch.isfinite(tt_running_var).all()
+    assert_numeric_metrics(torch_output, tt_output, pcc_threshold=0.99, rtol=0.1, atol=4.0, frobenius_threshold=0.15)

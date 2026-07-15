@@ -564,11 +564,12 @@ def create_pipeline_configuration_from_num_procs(
     accidental misuse.
     """
     if num_procs == 4:
-        if enable_speculative_decode:
+        if num_mtp_levels > 0:
             return create_single_galaxy_spec_decode_pipeline_configuration(
                 weight_provider,
                 fp32_dest_acc_en=fp32_dest_acc_en,
                 persistent_mode=persistent_mode,
+                num_mtp_levels=num_mtp_levels,
             )
         return create_single_galaxy_deepseek_pipeline_configuration(
             weight_provider,
@@ -624,11 +625,11 @@ def create_pipeline_configuration_from_stage_count(
     fp32_dest_acc_en: bool = True,
     persistent_mode: bool = True,
     enable_mtp: bool = False,
-    enable_speculative_decode: bool = True,
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
     num_slots: int = 64,
     enable_sram_bspm: bool = False,
+    num_mtp_levels: int = 1,
 ) -> PipelineConfiguration:
     """Pick the model role map from logical stage count and derived stage family."""
 
@@ -639,11 +640,11 @@ def create_pipeline_configuration_from_stage_count(
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
             enable_mtp=enable_mtp,
-            enable_speculative_decode=enable_speculative_decode,
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
             num_slots=num_slots,
             enable_sram_bspm=enable_sram_bspm,
+            num_mtp_levels=num_mtp_levels,
         )
 
     return create_passthrough_pipeline_configuration(weight_provider, num_stages)

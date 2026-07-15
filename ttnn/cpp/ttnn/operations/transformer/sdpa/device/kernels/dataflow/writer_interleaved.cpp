@@ -5,9 +5,12 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/tensor_accessor.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
+#include "windowed_mask_gen.hpp"
 
 void kernel_main() {
     Noc noc;
@@ -37,8 +40,13 @@ void kernel_main() {
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(22);
     constexpr uint32_t k_partial_col = get_compile_time_arg_val(23);
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(24) == 1;
+    // Windowed (block-diagonal) mask generation flags. Fixed scalar slots BEFORE the tensor-accessor
+    // block so the accessor offset chain stays intact for all configs.
+    constexpr bool use_windowed_mask = get_compile_time_arg_val(25) == 1;
 
-    constexpr auto out_args = TensorAccessorArgs<25>();
+    // out accessor, then the cu_window accessor chained immediately after it (before the CB-id block).
+    constexpr auto out_args = TensorAccessorArgs<26>();
+    constexpr auto cu_window_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_id = get_arg_val<uint32_t>(1);
@@ -56,16 +64,20 @@ void kernel_main() {
     // Global Q scheduling args follow phase_2 args.
     const uint32_t global_q_start = get_arg_val<uint32_t>(8);
     const uint32_t global_q_count = get_arg_val<uint32_t>(9);
+    const uint32_t cu_window_seqlens_addr = get_arg_val<uint32_t>(10);
+    const uint32_t cu_window_seqlens_eles = get_arg_val<uint32_t>(11);
 
     constexpr uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;  // non-streaming drain only
 
-    constexpr uint32_t cb_arg_offset = out_args.next_compile_time_args_offset();
+    constexpr uint32_t cb_arg_offset = cu_window_args.next_compile_time_args_offset();
     constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_identity_scale_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_col_identity = get_compile_time_arg_val(cb_arg_offset + 2);
     constexpr uint32_t cb_chunk_start_idx = get_compile_time_arg_val(cb_arg_offset + 3);
     constexpr uint32_t cb_out = get_compile_time_arg_val(cb_arg_offset + 4);
+    // cu_window CB id lives in the CB-id block (appended by CBIds for windowed mode; inactive otherwise).
+    constexpr uint32_t cb_cu_window_in = get_compile_time_arg_val(cb_arg_offset + 5);
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
 
@@ -79,9 +91,8 @@ void kernel_main() {
         cb_identity_scale_in,
         ckernel::PoolType::MAX,
         ckernel::ReduceDim::REDUCE_ROW,
-        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
-        /*compute_uses_reduce_tile=*/true>();
-    generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
+    generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
 
     // Lightweight mask: generate template tiles once, leave permanently fronted.
     // Sliding layout: [neginf, trailing_primary, leading_prev, leading_current, trailing_next, k_partial?].
@@ -95,6 +106,19 @@ void kernel_main() {
             cb_mask_in,
             is_causal,
             sliding_window_size>(noc);
+    }
+
+    // Windowed: load cu_window_seqlens into L1 once; the writer synthesizes the block-diagonal mask per
+    // Q chunk from it (so the reader streams Q/K/V only).
+    if constexpr (use_windowed_mask) {
+        const auto cu_window_reader = TensorAccessor(cu_window_args, cu_window_seqlens_addr);
+        constexpr uint32_t cu_tile_bytes = get_tile_size(cb_cu_window_in);
+        CircularBuffer cb_cu(cb_cu_window_in);
+        cb_cu.reserve_back(1);
+        noc.async_read(
+            cu_window_reader, CoreLocalMem<uint32_t>(cb_cu.get_write_ptr()), cu_tile_bytes, {.page_id = 0}, {});
+        noc.async_read_barrier();
+        cb_cu.push_back(1);
     }
 
     if constexpr (is_chunked) {
@@ -145,6 +169,22 @@ void kernel_main() {
                     0,
                     is_causal);
             }
+
+            // Windowed: synthesize this Q chunk's block-diagonal mask (all K chunks) before draining its
+            // output. The call is a template wrapper that only instantiates the generator when
+            // use_windowed_mask is true (kernel_main is not a template, so a bare `if constexpr` here
+            // would still compile the discarded body). valid_Skt derived from the unpadded K length.
+            constexpr uint32_t windowed_valid_Skt =
+                (unpadded_Sk + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
+            windowed_generate_if_enabled<use_windowed_mask, cb_mask_in, cb_cu_window_in>(
+                noc,
+                q_chunk,
+                Sq_chunk_t,
+                Sk_chunk_t,
+                valid_Sqt,
+                windowed_valid_Skt,
+                k_num_chunks,
+                cu_window_seqlens_eles);
 
             // Determine how many rows of OUT will be written. Both start and end rows are
             // capped by valid_Sqt, since Sq padding is independent of Sk padding.

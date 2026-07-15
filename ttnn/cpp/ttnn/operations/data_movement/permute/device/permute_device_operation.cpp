@@ -61,7 +61,7 @@ PermuteDeviceOperation::spec_return_value_t PermuteDeviceOperation::compute_outp
     const auto& input_tensor = tensor_args.input_tensor;
     auto input_shape = input_tensor.logical_shape();
 
-    SmallVector<uint32_t> output_shape_vec(attributes.dims.size());
+    ttsl::SmallVector<uint32_t> output_shape_vec(attributes.dims.size());
     std::transform(attributes.dims.begin(), attributes.dims.end(), output_shape_vec.begin(), [&](auto dim) {
         return input_shape[dim];
     });
@@ -71,7 +71,7 @@ PermuteDeviceOperation::spec_return_value_t PermuteDeviceOperation::compute_outp
 
     // Derive shard_spec when sharded output lacks one.
     if (output_mem_config.is_sharded() && !output_mem_config.shard_spec().has_value()) {
-        SmallVector<uint32_t> output_padded_vec(output_shape.view().begin(), output_shape.view().end());
+        ttsl::SmallVector<uint32_t> output_padded_vec(output_shape.view().begin(), output_shape.view().end());
         if (input_tensor.layout() == Layout::TILE && output_shape.rank() >= 2) {
             const auto& tile = input_tensor.tensor_spec().tile();
             auto r = output_shape.rank();
@@ -102,7 +102,8 @@ PermuteDeviceOperation::spec_return_value_t PermuteDeviceOperation::compute_outp
                     const bool tile_aligned = adjusted->shape[0] % tt::constants::TILE_HEIGHT == 0 &&
                                               adjusted->shape[1] % tt::constants::TILE_WIDTH == 0;
                     if (!tile_layout || tile_aligned) {
-                        output_mem_config = output_mem_config.with_shard_spec(std::move(adjusted));
+                        output_mem_config = MemoryConfig(
+                            output_mem_config.memory_layout(), output_mem_config.buffer_type(), std::move(adjusted));
                         derived = true;
                     }
                 }
@@ -112,7 +113,8 @@ PermuteDeviceOperation::spec_return_value_t PermuteDeviceOperation::compute_outp
             // Generate a fresh shard spec for the permuted shape.
             auto shard_spec = transpose::generate_transpose_shard_spec(
                 input_tensor, output_padded_shape, output_mem_config.memory_layout());
-            output_mem_config = output_mem_config.with_shard_spec(shard_spec);
+            output_mem_config =
+                MemoryConfig(output_mem_config.memory_layout(), output_mem_config.buffer_type(), shard_spec);
         }
     }
 
@@ -163,7 +165,7 @@ ttsl::hash::hash_t PermuteDeviceOperation::compute_program_hash(
 namespace ttnn::prim {
 ttnn::operations::data_movement::PermuteDeviceOperation::tensor_return_value_t permute(
     const Tensor& input_tensor,
-    const SmallVector<uint32_t>& dims,
+    const ttsl::SmallVector<uint32_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
     float pad_value) {

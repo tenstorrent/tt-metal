@@ -46,7 +46,7 @@ private:
 
     void increment_num_entries_in_completion_queue();
     MeshEvent enqueue_record_event_helper(
-        tt::stl::Span<const SubDeviceId> sub_device_ids,
+        ttsl::Span<const SubDeviceId> sub_device_ids,
         bool notify_host,
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
     // Workload dispatch utility functions
@@ -82,7 +82,7 @@ private:
         const ReadCoreDataDescriptor& read_descriptor,
         const MeshCoordinate& device_coord,
         bool blocking,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+        ttsl::Span<const SubDeviceId> sub_device_ids = {});
 
     // Shared across all MeshCommandQueue instances for a MeshDevice.
     std::shared_ptr<CQSharedState> cq_shared_state_;
@@ -170,6 +170,12 @@ private:
     // so the main thread can handle the exception
     std::atomic<bool> thread_exception_state_ = false;
 
+    // Poll completion-queue reads, aborting early if watcher trips in test mode.
+    void wait_for_outstanding_reads(std::unique_lock<std::mutex>& reads_processed_lock);
+
+    // Route watcher faults through the same exception path as the completion-queue reader thread.
+    bool record_watcher_error_in_test_mode(ChipId device_id);
+
     // Distributed context used to synchronize operations done by all active ranks on the given mesh device.
     std::shared_ptr<distributed::multihost::DistributedContext> active_distributed_context_;
 
@@ -179,7 +185,7 @@ protected:
         const MeshCoordinate& device_coord,
         const void* src,
         const std::optional<BufferRegion>& region,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        ttsl::Span<const SubDeviceId> sub_device_ids = {},
         std::shared_ptr<experimental::PinnedMemory> pinned_memory = nullptr,
         const tt::tt_metal::CoreRangeSet* logical_core_filter = nullptr) override;
     void read_shard_from_device(
@@ -189,14 +195,14 @@ protected:
         std::shared_ptr<experimental::PinnedMemory> pinned_memory,
         const std::optional<BufferRegion>& region,
         std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
+        ttsl::Span<const SubDeviceId> sub_device_ids = {}) override;
     void submit_memcpy_request(
         std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
         bool blocking,
         std::vector<MemoryPin> memory_pins = {}) override;
-    void finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
+    void finish_nolock(ttsl::Span<const SubDeviceId> sub_device_ids = {}) override;
     MeshEvent enqueue_record_event_to_host_nolock(
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        ttsl::Span<const SubDeviceId> sub_device_ids = {},
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt) override;
     void invalidate_prefetcher_cache_after_pinned_write() override;
 
@@ -224,34 +230,35 @@ public:
         const void* src,
         uint32_t size_bytes,
         bool blocking,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+        ttsl::Span<const SubDeviceId> sub_device_ids = {});
     void enqueue_read_shard_from_core(
         DeviceMemoryAddress address,
         void* dst,
         uint32_t size_bytes,
         bool blocking,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+        ttsl::Span<const SubDeviceId> sub_device_ids = {});
     void enqueue_write_dram_core_counter(
-        tt::stl::Span<const DeviceMemoryAddress> targets,
+        ttsl::Span<const DeviceMemoryAddress> targets,
         uint32_t value,
         bool blocking,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
+        ttsl::Span<const SubDeviceId> sub_device_ids = {}) override;
 
     MeshEvent enqueue_record_event(
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        ttsl::Span<const SubDeviceId> sub_device_ids = {},
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt) override;
     MeshEvent enqueue_record_event_to_host(
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        ttsl::Span<const SubDeviceId> sub_device_ids = {},
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt) override;
     void enqueue_wait_for_event(const MeshEvent& sync_event) override;
     void drain_events_from_completion_queue();
     void verify_reported_events_after_draining(const MeshEvent& event);
-    void finish(tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
+    void finish(ttsl::Span<const SubDeviceId> sub_device_ids = {}) override;
     void reset_worker_state(
         bool reset_launch_msg_state,
         uint32_t num_sub_devices,
         const vector_aligned<uint32_t>& go_signal_noc_data,
-        const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping) override;
+        const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
+        ttsl::Span<const uint32_t> workers_per_sub_device) override;
     void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) override;
     void record_end() override;
     void enqueue_trace(const MeshTraceId& trace_id, bool blocking) override;

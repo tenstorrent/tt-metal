@@ -310,7 +310,7 @@ def test_matmul_transpose_a_with_low_precision_rhs(device, rhs_dtype):
     Regression test for transpose_a with a lower-precision RHS tensor.
 
     When transpose_a is True the compute kernel transposes in0 tiles via
-    transpose_wh_init_short, which requires the HW srcA unpacker to be
+    transpose_init, which requires the HW srcA unpacker to be
     configured for in0's data format (bfloat16).  mm_block_init sets srcA
     to in1's format instead; when in1 is Bfp8_b the resulting format
     mismatch caused an LLK assert (issue #35247b).

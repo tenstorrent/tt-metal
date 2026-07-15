@@ -68,6 +68,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/metal2_host_api/program.hpp
     api/tt-metalium/experimental/metal2_host_api/program_run_args.hpp
     api/tt-metalium/experimental/metal2_host_api/program_spec.hpp
+    api/tt-metalium/experimental/metal2_host_api/scratchpad_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp
     api/tt-metalium/experimental/metal2_host_api/utility/group.hpp
@@ -115,6 +116,8 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/hal_types.hpp
     api/tt-metalium/host_api.hpp
     api/tt-metalium/host_buffer.hpp
+    api/tt-metalium/internal/cluster.hpp
+    api/tt-metalium/internal/disaggregation/kv_chunk_address_table.hpp
     api/tt-metalium/kernel_types.hpp
     api/tt-metalium/math.hpp
     api/tt-metalium/maybe_remote.hpp
@@ -156,6 +159,7 @@ set(TT_METAL_PUBLIC_API
 
 set(TT_METAL_SOURCES
     impl/host_api/tt_metal.cpp
+    impl/experimental/offline_compile/offline_kernel_compile.cpp
     impl/graph/graph_tracking.cpp
     hal.cpp
 )
@@ -197,7 +201,9 @@ set(JITAPI_FILES
     impl/dispatch/kernels/cq_relay.hpp
     impl/dispatch/kernels/cq_helpers.hpp
     impl/dispatch/kernels/telemetry.hpp
+    impl/dispatch/kernels/cq_telemetry_dispatch_subordinate.hpp
     impl/dispatch/kernels/realtime_profiler.hpp
+    impl/dispatch/kernels/cq_realtime_profiler_dispatch_subordinate.hpp
     impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp
     soc_descriptors/blackhole_140_arch.yaml
     soc_descriptors/wormhole_b0_80_arch.yaml
@@ -217,13 +223,9 @@ set(JITAPI_FILES
     impl/dispatch/kernels/device_print_dispatch.h
     fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp
     fabric/impl/kernels/tt_fabric_mux.cpp
-    kernels/compute/blank.cpp
-    kernels/compute/eltwise_binary.cpp
-    kernels/compute/eltwise_sfpu.cpp
-    kernels/dataflow/blank.cpp
-    kernels/dataflow/reader_binary_diff_lengths.cpp
-    kernels/dataflow/reader_unary.cpp
-    kernels/dataflow/writer_unary.cpp
-    kernels/dataflow/writer_unary_1.cpp
+    fabric/impl/kernels/tt_fabric_mux_v2.cpp
+    fabric/impl/kernels/tt_fabric_mux_v2_forwarder.hpp
+    fabric/impl/kernels/tt_fabric_mux_v2_manager.hpp
+    fabric/impl/kernels/tt_fabric_mux_v2_kernel_common.hpp
     sfpi-version
 )

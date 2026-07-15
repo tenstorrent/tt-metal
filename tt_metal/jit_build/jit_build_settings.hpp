@@ -15,23 +15,30 @@ namespace tt::tt_metal {
 
 // Metal 2.0: precomputed layout of a kernel's common runtime args (CRTA) buffer.
 //
-// The CRTA buffer is laid out as three back-to-back sections:
-//   [ user-named CRTAs | TensorBinding section | vararg CRTAs ]
+// The CRTA buffer is laid out as four back-to-back sections:
+//   [ user-named CRTAs | TensorBinding section | Scratchpad section | vararg CRTAs ]
 //
-// Sections 1 and 2 are fixed-size at spec-resolution time. This struct records their
-// sizes (and the resulting vararg section start offset) so consumers don't have to
-// re-derive them by walking the binding handles.
+// Sections 1–3 are fixed-size at spec-resolution time. This struct records their sizes (and the
+// resulting vararg section start offset) so consumers don't have to re-derive them by walking the
+// binding handles.
 //
 // Section 2 (TensorBinding) is variable-size: each binding contributes
 // (1 + num_runtime_field_crta_words) words — the always-present base-address word, plus
 // any runtime accessor fields the TensorParameter opted into (currently: shape, for
 // sharded TensorParameters with dynamic_tensor_shape=true).
+//
+// Section 3 (Scratchpad) holds one base-address word per scratchpad binding. The address is
+// allocated by the framework at program-compile time (not user-supplied), and patched into the
+// buffer then. It sits BEFORE varargs so each binding's absolute CRTA offset is fixed at codegen
+// time (varargs are open-ended / runtime-counted, so a section after them would not be).
 struct KernelCrtaLayout {
     // Section 1 size, in words. Equals the number of user-named CRTAs.
     uint32_t num_named_words = 0;
     // Section 2 size, in words. Equals the sum-over-bindings of (1 + num_runtime_field_crta_words).
     uint32_t binding_section_words = 0;
-    // Start offset of section 3 (varargs), in words.
+    // Section 3 size, in words. Equals the number of scratchpad bindings (one address word each).
+    uint32_t scratchpad_section_words = 0;
+    // Start offset of section 4 (varargs), in words.
     // Stored (not computed on demand) so it can be set from a known value at spec resolution
     // and asserted against the derived sum if a consumer wants belt-and-suspenders verification.
     uint32_t vararg_section_offset = 0;
@@ -67,7 +74,7 @@ public:
         std::function<void(const std::string& accessor_name, uint16_t semaphore_id)>) const {}
 
     // TensorBinding callback emits the codegen-relevant fields only:
-    //  - accessor_name: kernel-side identifier, used as the symbol name in the `ta::` namespace
+    //  - accessor_name: kernel-side identifier, used as the symbol name in the `tensor::` namespace
     //  - cta_offset: starting word index of this binding's CTA payload in the kernel's
     //    positional compile-time-args buffer
     //  - addr_crta_offset: byte offset of the implicit base-address CRTA within the kernel's
@@ -82,6 +89,14 @@ public:
                                                     uint32_t cta_offset,
                                                     uint32_t addr_crta_offset,
                                                     uint32_t num_runtime_field_crta_words)>) const {}
+
+    // Scratchpad binding callback emits the codegen-relevant fields:
+    //  - accessor_name: kernel-side identifier, used as the symbol name in the `scratch::` namespace
+    //  - size_bytes: the scratchpad's per-node size, emitted as the accessor's compile-time size
+    //  - addr_crta_word: word index, within the kernel's CRTA buffer, of the word holding the
+    //    scratchpad's (framework-allocated) L1 base address
+    virtual void process_scratchpad_binding_handles(
+        std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word)>) const {}
 
     // Named RTA/CRTA schema (Metal 2.0 APIs).
     // The order of names determines the byte offset of each arg within the named-args

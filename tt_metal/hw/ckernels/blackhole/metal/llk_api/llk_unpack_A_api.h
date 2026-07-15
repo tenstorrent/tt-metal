@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_unpack_A.h"
 #include "llk_unpack_common_api.h"
 
@@ -20,26 +21,23 @@ inline void llk_unpack_A_init(
     const std::uint32_t within_face_16x16_transpose = 0,
     const std::uint32_t operand = 0) {
     const std::uint32_t operand_id = get_operand_id(operand);
-    const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
-    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
 
     const std::uint32_t operand_unpack_src_format = unpack_src_format[operand_id];
     const std::uint32_t operand_unpack_dst_format = unpack_dst_format[operand_id];
-    // TODO NC: Move to TRISC1 tt-metal#36411
-    if (unpack_to_dest && is_32bit_input(operand_unpack_src_format, operand_unpack_dst_format)) {
-        llk_unpack_dbg_feature_disable();
-    }
 
     LLK_ASSERT_BLOCK((is_unpacker_A_configured_correctly<
                       UnpackerProgramType::ProgramByTile,
                       (BType != BroadcastType::NONE && !unpack_to_dest)>(
-        operand_unpack_src_format, operand_unpack_dst_format, face_r_dim, num_faces)));
+        operand_unpack_src_format,
+        operand_unpack_dst_format,
+        tensor_shape.face_r_dim,
+        tensor_shape.total_num_faces())));
 
     _llk_unpack_A_init_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
         transpose_of_faces,
         within_face_16x16_transpose,
-        face_r_dim,
-        num_faces,
+        tensor_shape,
         operand_unpack_src_format,
         operand_unpack_dst_format);
 }
@@ -85,7 +83,7 @@ inline void llk_unpack_A_block(
 
     LLK_ASSERT(cb_access_within_bounds(operand_id, start_tile_index, ntiles), "Block tile read exceeds CB boundary");
 
-    for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
+    for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         WAYPOINT("UPAW");
         _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
             address, unpack_src_format[operand_id], unpack_dst_format[operand_id]);

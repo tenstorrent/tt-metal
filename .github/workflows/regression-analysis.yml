@@ -60,4 +60,4 @@ jobs:
           cutoff-commit: ${{ inputs.cutoff_commit }}
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-          SLACK_CHANNEL_ID: ${{ inputs.slack_channel_id != '' && inputs.slack_channel_id || secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
+          SLACK_CHANNEL_ID: ${{ inputs.slack_channel_id != '' && inputs.slack_channel_id || secrets.FULL_CI_TRIAGE_CHANNEL }}

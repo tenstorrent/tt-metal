@@ -68,8 +68,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(td_val);
     }
 
-    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, num_input_tiles);
-    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0);
+    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_input_tiles);
+    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0, ckernel::DEFAULT_TENSOR_SHAPE);
 
     if (unpack_to_dest)
     {
@@ -129,7 +129,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         for (std::uint32_t i = 0; i < NUM_INPUT_TILES; ++i)
         {
-            _llk_math_eltwise_unary_datacopy_(num_rows, params.DST_INDEX + i);
+            _llk_math_eltwise_unary_datacopy_(params.DST_INDEX + i);
         }
 
         _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
@@ -216,14 +216,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
 
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
-    _llk_pack_init_(buf_desc_id, num_output_tiles);
+    _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_output_tiles);
 
     // Output lives at Dest tile index 2 — this is the layout *this driver*
     // uses (see "Layout used by this test" at the top of the file): gate=0,
     // up=1, out=2 relative to DST_INDEX. The kernel itself is layout-agnostic
     // and accepts arbitrary (gate, up, out) Dest offsets via
     // `_calculate_swiglu_`'s parameters; +2 is not a property of swiglu.
-    _llk_pack_(params.DST_INDEX + 2, 0);
+    _llk_pack_(params.DST_INDEX + 2, 0, ckernel::DEFAULT_TENSOR_SHAPE);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
 #endif

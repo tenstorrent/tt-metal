@@ -29,6 +29,7 @@ struct MoEComputeParams {
     uint32_t layer_id = 0;
     uint32_t output_height_shard_dim = 0;
     uint32_t intermediate_size = 0;
+    std::optional<uint32_t> num_shared_experts_per_device;
     bool has_bias = false;
 
     // Number of token-parallel and data-parallel cores. These govern matmul output shard layout
@@ -38,11 +39,12 @@ struct MoEComputeParams {
 
     MoEComputePath path = MoEComputePath::Full;
 
-    // Ring size in matmul cores. On WH this is always 12 (DRAM banks). On BH it is 8, 12,
-    // or 16 (resolved from the bh_ring_size op kwarg, default 12). num_data_parallel_cores
-    // is auto-derived ring-aware (largest d | hidden_tiles with d<=4 and ring_n % d == 0).
-    // Stored in attributes() so the program cache distinguishes different ring sizes
-    // within the same session.
+    // Ring size in matmul cores. On WH this is always 12 (DRAM banks), so keep the
+    // field initializer at the WH-neutral default. On BH, invoke() resolves this to
+    // 8, 12, or 16 from the bh_ring_size op kwarg (default 8).
+    // num_data_parallel_cores is auto-derived ring-aware (largest d | hidden_tiles
+    // with d<=4 and ring_n % d == 0). Stored in attributes() so the program cache
+    // distinguishes different ring sizes within the same session.
     uint32_t bh_ring_size = 12;
 
     // nullopt if path == MoEComputePath::ComputeOnly
@@ -63,6 +65,7 @@ struct MoEComputeParams {
         attrs.emplace_back("layer_id", layer_id);
         attrs.emplace_back("output_height_shard_dim", output_height_shard_dim);
         attrs.emplace_back("intermediate_size", intermediate_size);
+        attrs.emplace_back("num_shared_experts_per_device", num_shared_experts_per_device);
         attrs.emplace_back("has_bias", has_bias);
         attrs.emplace_back("num_token_parallel_cores", num_token_parallel_cores);
         attrs.emplace_back("num_data_parallel_cores", num_data_parallel_cores);

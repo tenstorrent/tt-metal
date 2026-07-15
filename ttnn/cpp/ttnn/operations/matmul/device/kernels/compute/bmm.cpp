@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
 
@@ -31,7 +32,8 @@ void kernel_main() {
     CircularBuffer in1_cb(cb_in1);
     CircularBuffer out_cb(cb_out);
 
-    mm_init(cb_in0, cb_in1, cb_out);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0, cb_in1, cb_out);
+    matmul_init(cb_in0, cb_in1);
 
     // the simplest possible version of outer product blocked matmul
     // the reader is expected to read the A's and B's tile rows and tile columns for each output tile
@@ -50,13 +52,15 @@ void kernel_main() {
                     in1_cb.pop_front(onetile);
                 }
 
-                out_cb.reserve_back(onetile);
                 tile_regs_commit();
+
+                out_cb.reserve_back(onetile);
+
                 tile_regs_wait();
                 pack_tile(0, cb_out);
-                out_cb.push_back(onetile);
-
                 tile_regs_release();
+
+                out_cb.push_back(onetile);
             }
         }
     }

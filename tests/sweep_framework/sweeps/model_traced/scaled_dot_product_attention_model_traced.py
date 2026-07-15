@@ -225,7 +225,13 @@ def run(
     if output_memory_config is not None and "SHARDED" in str(output_memory_config):
         output_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
-    op_kwargs = build_op_kwargs(kwargs, exclude={"is_causal"}, output_memory_config=output_memory_config)
+    # Exclude program_config: build_op_kwargs would parse it (via dict_to_program_config)
+    # with the raw traced grid, which can be a different arch's grid (e.g. Blackhole
+    # 11x10) that overflows this device. The dedicated block below parses it AND clamps
+    # the grid to this device's compute grid, so it must own program_config.
+    op_kwargs = build_op_kwargs(
+        kwargs, exclude={"is_causal", "program_config"}, output_memory_config=output_memory_config
+    )
 
     # The master trace may record attention_sink and sliding_window_size as explicit kwargs
     # (possibly None). In combined vector files, absent keys from other configs are
@@ -283,8 +289,25 @@ def run(
                             }
                         )
                 if gm:
+                    grid_x, grid_y = int(gm.group(1)), int(gm.group(2))
+                    # The traced grid can come from a different arch (e.g. a
+                    # Blackhole 11x10 grid) and overflow this device, tripping
+                    # "num_cores <= compute_with_storage_grid_size.x*.y". The grid
+                    # is only a parallelization hint — SDPA's result is grid-
+                    # independent — so clamp it to this device's actual compute
+                    # grid. When the traced grid overflows, the traced
+                    # sub_core_grids (cores keyed to that larger grid) no longer
+                    # fits either, so drop it and let the op use the clamped grid.
+                    try:
+                        _dg = device.compute_with_storage_grid_size()
+                        _dx, _dy = int(_dg.x), int(_dg.y)
+                    except Exception:
+                        _dx = _dy = None
+                    if _dx is not None and (grid_x > _dx or grid_y > _dy):
+                        grid_x, grid_y = min(grid_x, _dx), min(grid_y, _dy)
+                        sub_core_grids = None
                     pc_kwargs = dict(
-                        compute_with_storage_grid_size=ttnn.CoreCoord(int(gm.group(1)), int(gm.group(2))),
+                        compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
                         q_chunk_size=int(qm.group(1)) if qm else 0,
                         k_chunk_size=int(km.group(1)) if km else 0,
                     )
@@ -401,12 +424,55 @@ def run(
     torch_k_golden = torch_k_for_golden.to(torch.float32)
     torch_v_golden = torch_v_for_golden.to(torch.float32)
 
+    # Reconstruct an explicit attn_mask when the master passed one (non-causal
+    # configs). Generate it once and use the SAME tensor for golden + device so
+    # PCC matches; dropping it is an attn_mask extra_key diff + wrong golden.
+    attn_mask_info = extract_named_tensor_kwargs(kwargs, "attn_mask")
+    torch_attn_mask = None
+    if attn_mask_info is not None and attn_mask_info.get("shape"):
+        torch_attn_mask = (torch.rand(tuple(attn_mask_info["shape"])) * 2 - 1).to(torch.float32)
+
     # Trace-validation mode: every chip receives the FULL per-chip Q/K/V via
     # replicate_with_topology and runs SDPA on them. The gathered output is the
     # per-chip SDPA tiled along the shard axis — handled by
-    # reconcile_golden_to_actual below.
+    # reconcile_golden_to_actual below. With an explicit attn_mask, is_causal
+    # must be False (torch rejects both).
+    _golden_causal = bool(is_causal) and torch_attn_mask is None
+    # Match the op's scale. The model can pass a custom scale (e.g. Gemma's
+    # query_pre_attn_scalar -> scale=1.0, not the 1/sqrt(head_dim) torch default);
+    # the device op gets it via op_kwargs, so the golden must use it too or the
+    # attention weights diverge (≈0.1 PCC). None -> torch's default scale.
+    _scale = kwargs.get("scale")
+    if _scale == "__ABSENT__":
+        _scale = None
+
+    # Sliding-window attention (e.g. Gemma): the op restricts each query to the
+    # last `sliding_window_size` keys on top of the causal mask. torch SDPA has no
+    # sliding-window flag, so build the causal+window mask explicitly and feed it
+    # in (is_causal must then be False). Without this the golden attends the full
+    # causal range and diverges past the window (≈0.5 PCC).
+    _sw = kwargs.get("sliding_window_size")
+    if _sw == "__ABSENT__":
+        _sw = None
+    if _sw is not None and int(_sw) > 0 and _golden_causal:
+        q_len = torch_q_golden.shape[-2]
+        k_len = torch_k_golden.shape[-2]
+        # Queries align to the end of the key sequence (prefill q_len == k_len);
+        # query qi attends keys kj with (kj <= qi) and (kj > qi - window).
+        offset = k_len - q_len
+        qi = torch.arange(q_len).view(-1, 1) + offset
+        kj = torch.arange(k_len).view(1, -1)
+        allowed = (kj <= qi) & (kj > qi - int(_sw))
+        torch_attn_mask = torch.where(allowed, 0.0, float("-inf")).to(torch.float32)
+        _golden_causal = False
     torch_output_golden = torch.nn.functional.scaled_dot_product_attention(
-        torch_q_golden, torch_k_golden, torch_v_golden, attn_mask=None, dropout_p=0.0, is_causal=bool(is_causal)
+        torch_q_golden,
+        torch_k_golden,
+        torch_v_golden,
+        attn_mask=torch_attn_mask,
+        dropout_p=0.0,
+        is_causal=_golden_causal,
+        scale=_scale,
     )
 
     # Check for attention_sink named tensor kwarg (pre-allocated tensor)
@@ -442,6 +508,31 @@ def run(
                 memory_config=as_mem_cfg,
             )
         op_kwargs["attention_sink"] = preallocated_attention_sink
+
+    # Build the ttnn attn_mask on device only when the master actually traced one
+    # (attn_mask_info present). torch_attn_mask may instead be a golden-only
+    # sliding-window mask we synthesized above — the device op applies that window
+    # itself via sliding_window_size, so it must NOT be turned into a device
+    # attn_mask (and attn_mask_info is None there, which would crash on .get).
+    if torch_attn_mask is not None and attn_mask_info is not None:
+        am_dtype = attn_mask_info.get("dtype") or dtype_q
+        if isinstance(am_dtype, dict):
+            am_dtype = parse_dict_value("attn_mask_dtype", am_dtype) or dtype_q
+        am_layout = attn_mask_info.get("layout") or layout_q
+        if isinstance(am_layout, dict):
+            am_layout = parse_dict_value("attn_mask_layout", am_layout) or layout_q
+        am_mem = attn_mask_info.get("memory_config") or ttnn.DRAM_MEMORY_CONFIG
+        if isinstance(am_mem, dict):
+            am_mem = parse_dict_value("attn_mask_memory_config", am_mem) or ttnn.DRAM_MEMORY_CONFIG
+        am_placement = attn_mask_info.get("tensor_placement")
+        if is_mesh_device and am_placement:
+            op_kwargs["attn_mask"] = create_tensor_on_mesh(
+                torch_attn_mask, device, am_dtype, am_layout, am_mem, am_placement
+            )
+        else:
+            op_kwargs["attn_mask"] = ttnn.from_torch(
+                torch_attn_mask, dtype=am_dtype, layout=am_layout, device=device, memory_config=am_mem
+            )
 
     # TTNN execution
     # GQA K/V used to take a replicate_with_topology path. With V2's global

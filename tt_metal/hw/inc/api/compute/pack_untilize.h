@@ -43,46 +43,9 @@ ALWI void pack_untilize_dest_init_impl(uint32_t ocb, uint32_t call_line = __buil
         llk_pack_untilize_init<block_ct_dim, full_ct_dim, false /*diagonal*/, narrow_row, row_num_datums, dense>(ocb)));
     PACK((llk_init_packer_dest_offset_registers<PackMode::Untilize, false /*diagonal*/>()));
 #else
-    LLK_ASSERT(narrow_row == false, "narrow_row not supported on Quasar");
-    PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim>(ocb)));
-#endif
-}
-
-// @deprecated Face geometry is now derived from the output CB metadata. Use the
-// pack_untilize_dest_init_impl(uint32_t ocb, uint32_t call_line) overload instead. This overload is retained
-// only for backwards compatibility and will be removed.
-template <
-    uint32_t block_ct_dim,
-    uint32_t full_ct_dim,
-    bool narrow_row,
-    std::uint32_t row_num_datums,
-    bool dense,
-    bool configure_remap>
-[[deprecated(
-    "Face geometry is now derived from the output CB metadata; use the "
-    "pack_untilize_dest_init_impl(uint32_t, uint32_t) overload instead.")]] ALWI void
-pack_untilize_dest_init_impl(
-    uint32_t ocb, uint32_t face_r_dim, uint32_t num_faces, uint32_t call_line = __builtin_LINE()) {
-#ifndef ARCH_QUASAR
-    state_configure<Operand::PACK>(ocb, call_line);
-#ifdef ARCH_BLACKHOLE
-    // Needed for setting swizzle_32b on Blackhole; llk_math_reconfig_remap is a no-op on Wormhole.
-    // TODO NC: A workaround for tt-metal#17132. Should be addressed more systematically in tt-llk#989
-    if constexpr (configure_remap) {
-        MATH((llk_math_reconfig_remap(true /*remap_enable*/)));
-    }
-#endif
-// These calls intentionally use the deprecated explicit-face-geometry LLK APIs to preserve the
-// original behavior of this compatibility overload.
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-    PACK((llk_pack_reconfig_data_format_disaggregated<DST_ACCUM_MODE>(ocb, face_r_dim, num_faces)));
-    PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim, false /*diagonal*/, narrow_row, row_num_datums, dense>(
-        ocb, face_r_dim, num_faces)));
-#pragma GCC diagnostic pop
-    PACK((llk_init_packer_dest_offset_registers<PackMode::Untilize, false /*diagonal*/>()));
-#else
-    LLK_ASSERT(narrow_row == false, "narrow_row not supported on Quasar");
+    static_assert(narrow_row == false, "non-default narrow_row not supported on Quasar");
+    static_assert(row_num_datums == TILE_C_DIM, "non-default row_num_datums not supported on Quasar");
+    static_assert(dense == false, "non-default dense not supported on Quasar");
     PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim>(ocb)));
 #endif
 }
@@ -163,87 +126,10 @@ template <
     bool dense = false,
     bool configure_remap = true>
 ALWI void pack_untilize_dest_init(uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    LLK_SAN_FUNCTION();
     pack_untilize_detail::
         pack_untilize_dest_init_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense, configure_remap>(
             ocb, call_line);
-}
-
-// clang-format off
-/**
- * @deprecated Face geometry is now derived from the output circular buffer metadata configured on the host via
- * CircularBufferConfig::set_unpack_face_geometry / CBFormatDescriptor::face_geometry. Use the
- * `pack_untilize_dest_init(ocb)` overload (which takes face geometry from the output CB) instead. This
- * explicit-face-geometry overload is retained only for backwards compatibility and will be removed.
- *
- * Return value: None
- *
- * | Param Type | Name           | Description                                       | Type     | Valid Range               | Required              |
- * |------------|----------------|---------------------------------------------------|----------|---------------------------|-----------------------|
- * | Template   | block_ct_dim   | Width of a single block in tiles                  | uint32_t | 1 to max (see note)       | False (default = 8)   |
- * | Template   | full_ct_dim    | Width of a full input in tiles                    | uint32_t | Divisible by block_ct_dim | False                 |
- * | Template   | narrow_row     | Whether the provided input is narrow              | bool     | true/false                | False                 |
- * | Template   | row_num_datums | Number of datums per row                          | uint32_t | >= 1                      | False                 |
- * | Template   | dense          | Packs two 2 face tiles in a single 4 face region  | bool     | true/false                | False (default false) |
- * | Function   | ocb            | Output circular buffer identifier                 | uint32_t | 0 to 31                   | True                  |
- * | Function   | face_r_dim     | Face height in rows                               | uint32_t | 1, 8 or 16                | True                  |
- * | Function   | num_faces      | Number of faces                                   | uint32_t | 1, 2 or 4                 | True                  |
- */
-// clang-format on
-template <
-    uint32_t block_ct_dim = 8,
-    uint32_t full_ct_dim = block_ct_dim,
-    bool narrow_row = false,
-    std::uint32_t row_num_datums = TILE_C_DIM,
-    bool dense = false>
-[[deprecated(
-    "Face geometry is now derived from the output CB metadata; use the pack_untilize_dest_init(ocb) "
-    "overload instead.")]] ALWI void
-pack_untilize_dest_init(uint32_t ocb, uint32_t face_r_dim, uint32_t num_faces, uint32_t call_line = __builtin_LINE()) {
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-    pack_untilize_detail::
-        pack_untilize_dest_init_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense, true>(
-            ocb, face_r_dim, num_faces, call_line);
-#pragma GCC diagnostic pop
-}
-
-// clang-format off
-/**
- * @deprecated Use `pack_untilize_dest_init<..., configure_remap = false>(ocb)` instead. BH DEST remap is no
- * longer (re)configured here, and face geometry is now derived from the output circular buffer metadata. This
- * explicit-face-geometry skip-remap helper is retained only for backwards compatibility and will be removed.
- *
- * Return value: None
- *
- * | Param Type | Name           | Description                                       | Type     | Valid Range               | Required              |
- * |------------|----------------|---------------------------------------------------|----------|---------------------------|-----------------------|
- * | Template   | block_ct_dim   | Width of a single block in tiles                  | uint32_t | 1 to max (see note)       | False (default = 8)   |
- * | Template   | full_ct_dim    | Width of a full input in tiles                    | uint32_t | Divisible by block_ct_dim | False                 |
- * | Template   | narrow_row     | Whether the provided input is narrow              | bool     | true/false                | False                 |
- * | Template   | row_num_datums | Number of datums per row                          | uint32_t | >= 1                      | False                 |
- * | Template   | dense          | Packs two 2 face tiles in a single 4 face region  | bool     | true/false                | False (default false) |
- * | Function   | ocb            | Output circular buffer identifier                 | uint32_t | 0 to 31                   | True                  |
- * | Function   | face_r_dim     | Face height in rows                               | uint32_t | 1, 8 or 16                | False (default = 16)  |
- * | Function   | num_faces      | Number of faces                                   | uint32_t | 1, 2 or 4                 | False (default = 4)   |
- */
-// clang-format on
-template <
-    uint32_t block_ct_dim = 8,
-    uint32_t full_ct_dim = block_ct_dim,
-    bool narrow_row = false,
-    std::uint32_t row_num_datums = TILE_C_DIM,
-    bool dense = false>
-[[deprecated(
-    "Use pack_untilize_dest_init<..., configure_remap = false>(ocb) instead; face geometry is now "
-    "derived from the output CB metadata.")]] ALWI void
-pack_untilize_dest_init_skip_remap(
-    uint32_t ocb, uint32_t face_r_dim = 16, uint32_t num_faces = 4, uint32_t call_line = __builtin_LINE()) {
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-    pack_untilize_detail::
-        pack_untilize_dest_init_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense, false>(
-            ocb, face_r_dim, num_faces, call_line);
-#pragma GCC diagnostic pop
 }
 
 // clang-format off
@@ -279,6 +165,7 @@ pack_untilize_dest_init_skip_remap(
 // clang-format on
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
 ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    LLK_SAN_FUNCTION();
     pack_untilize_detail::pack_untilize_init_impl<block_ct_dim, full_ct_dim, true>(icb, ocb, call_line);
 }
 
@@ -301,6 +188,7 @@ ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __
 // clang-format on
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
 ALWI void pack_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    LLK_SAN_FUNCTION();
     pack_untilize_detail::pack_untilize_init_impl<block_ct_dim, full_ct_dim, false>(icb, ocb, call_line);
 }
 
@@ -331,6 +219,7 @@ ALWI void pack_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t cal
 // clang-format on
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
 ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb, uint32_t block_c_index = 0) {
+    LLK_SAN_FUNCTION();
     for (uint32_t r = 0; r < block_rt_dim; ++r) {
         MATH((llk_math_wait_for_dest_available()));
         for (uint32_t c = 0; c < block_ct_dim; ++c) {
@@ -406,65 +295,16 @@ ALWI void pack_untilize_dest(
     uint32_t block_rt_dim = 1,
     uint32_t block_c_index = 0 /* used when full_ct_dim > block_ct_dim*/,
     uint32_t tile_dst_rt_offset = 0) {
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     PACK((llk_pack_untilize<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset, dense>(
         block_rt_dim, ocb, block_c_index, tile_dst_rt_offset)));
 #else
-    PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(block_rt_dim, ocb, block_c_index, tile_dst_rt_offset)));
-#endif
-}
-
-// clang-format off
-/**
- * @deprecated Face geometry (face_r_dim, num_faces) is now derived from the output circular buffer metadata
- * configured on the host via CircularBufferConfig::set_unpack_face_geometry / CBFormatDescriptor::face_geometry.
- * Use the `pack_untilize_dest(ocb, block_rt_dim, block_c_index, tile_dst_rt_offset)` overload instead. This
- * explicit-face-geometry overload is retained only for backwards compatibility and will be removed.
- *
- * Return value: None
- *
- * | Param Type | Name               | Description                                                                  | Type      | Valid Range                             | Required              |
- * |------------|--------------------|------------------------------------------------------------------------------|-----------|-----------------------------------------|-----------------------|
- * | Template   | block_ct_dim       | Width of a single block in tiles                                             | uint32_t  | 1 to max (see note)                     | False (default = 8)   |
- * | Template   | full_ct_dim        | Width of a full input in tiles                                               | uint32_t  | Divisible by block_ct_dim               | False                 |
- * | Template   | diagonal           | Whether to use diagonal packing                                              | bool      | true/false                              | False                 |
- * | Template   | narrow_row         | Whether the provided input is narrow                                         | bool      | true/false                              | False                 |
- * | Template   | row_num_datums     | Number of datums per row                                                     | uint32_t  | >= 1                                    | False                 |
- * | Template   | tile_dst_ct_offset | Compile time offset for the index of the tile in the dest from which to pack | uint32_t  | 0 to 7 (0 to 3 if fp32 dest is enabled) | False (default=0)     |
- * | Template   | dense              | Packs two 2 face tiles in a single 4 face region                             | bool      | true/false                              | False (default false) |
- * | Function   | ocb                | Output circular buffer identifier                                            | uint32_t  | 0 to 31                                 | True                  |
- * | Function   | block_rt_dim       | Height of a single block in tiles                                            | uint32_t  | >= 1                                    | True                  |
- * | Function   | block_c_index      | Block column index (used when full_ct_dim > block_ct_dim)                    | uint32_t  | >= 0                                    | True                  |
- * | Function   | face_r_dim         | Face height in rows                                                          | uint32_t  | 1, 8 or 16                              | True                  |
- * | Function   | num_faces          | Number of faces                                                              | uint32_t  | 1, 2 or 4                               | True                  |
- * | Function   | tile_dst_rt_offset | Runtime offset for the index of the tile in the dest from which to pack      | uint32_t  | 0 to 7 (0 to 3 if fp32 dest is enabled) | True                  |
- */
-// clang-format on
-template <
-    uint32_t block_ct_dim = 8,
-    uint32_t full_ct_dim = block_ct_dim,
-    bool diagonal = false,
-    bool narrow_row = false,
-    std::uint32_t row_num_datums = TILE_C_DIM,
-    uint32_t tile_dst_ct_offset = 0,
-    bool dense = false>
-[[deprecated(
-    "Face geometry is now derived from the output CB metadata; use the "
-    "pack_untilize_dest(ocb, block_rt_dim, block_c_index, tile_dst_rt_offset) overload instead.")]] ALWI void
-pack_untilize_dest(
-    uint32_t ocb,
-    uint32_t block_rt_dim,
-    uint32_t block_c_index,
-    [[maybe_unused]] uint32_t face_r_dim,
-    [[maybe_unused]] uint32_t num_faces,
-    uint32_t tile_dst_rt_offset) {
-#ifndef ARCH_QUASAR
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-    PACK((llk_pack_untilize<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset, dense>(
-        block_rt_dim, ocb, face_r_dim, num_faces, block_c_index, tile_dst_rt_offset)));
-#pragma GCC diagnostic pop
-#else
+    static_assert(narrow_row == false, "non-default narrow_row not supported on Quasar");
+    static_assert(row_num_datums == TILE_C_DIM, "non-default row_num_datums not supported on Quasar");
+    static_assert(tile_dst_ct_offset == 0, "non-default tile_dst_ct_offset not supported on Quasar");
+    static_assert(dense == false, "non-default dense not supported on Quasar");
+    static_assert(diagonal == false, "non-default diagonal not supported on Quasar");
     PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(block_rt_dim, ocb, block_c_index, tile_dst_rt_offset)));
 #endif
 }
@@ -486,16 +326,22 @@ pack_untilize_dest(
  */
 // clang-format on
 ALWI void pack_untilize_uninit(uint32_t ocb) {
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
-    // Reconfigure data format to match the initial configuration, before calling init.
-    // Init is called to ensure special untilize init overrides are cleaned up.
-    PACK((llk_init_packer_dest_offset_registers<PackMode::Default>()));
-    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(ocb)));
-    PACK((llk_pack_init(ocb)));
 
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_untilize_uninit(ocb)));
 #endif
+
+    // Reconfigure data format to match the initial configuration, before calling init.
+    // Init is called to ensure special untilize init overrides are cleaned up.
+    {
+        LLK_SAN_SILENT_ZONE();
+        PACK((llk_init_packer_dest_offset_registers<PackMode::Default>()));
+        PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(ocb)));
+        PACK((llk_pack_init(ocb)));
+    }
+
 #else
     // No-op: Quasar uses dedicated instructions (PACR_UNTILIZE, PACR_STRIDE) that
     // don't conflict with standard PACR paths, so no reconfiguration is needed.

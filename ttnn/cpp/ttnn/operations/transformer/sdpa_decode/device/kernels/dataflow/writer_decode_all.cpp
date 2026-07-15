@@ -30,7 +30,7 @@ void kernel_main() {
     constexpr uint32_t num_cores = get_compile_time_arg_val(10);                    // num running cores in total
     constexpr uint32_t reducer_semaphore_id = get_compile_time_arg_val(11);         // semaphore ID for reducer
     uint32_t reducer_semaphore_addr = get_semaphore(reducer_semaphore_id);          // semaphore for reducer
-    uint32_t output_semaphore_addr = get_semaphore(get_compile_time_arg_val(12));   // semaphore for sender
+    constexpr uint32_t output_semaphore_id = get_compile_time_arg_val(12);          // semaphore ID for sender
     constexpr bool is_out_sharded = get_compile_time_arg_val(13);
     constexpr uint32_t k_chunk_size = get_compile_time_arg_val(14);
     constexpr uint32_t num_q_heads = get_compile_time_arg_val(15);
@@ -197,9 +197,6 @@ void kernel_main() {
     uint32_t reduce_core_noc_x = all_reducer_noc_x[reduce_core_index];
     uint32_t reduce_core_noc_y = all_reducer_noc_y[reduce_core_index];
 
-    const uint64_t in0_sender_semaphore_noc_addr =
-        get_noc_addr(reduce_core_noc_x, reduce_core_noc_y, reducer_semaphore_addr);
-
     constexpr uint32_t out_chunk_tiles = PNHt * vDHt;
     uint32_t num_cores_to_wait = num_cores_per_head - 1;
     if (num_cores_per_head > k_num_chunks) {
@@ -213,10 +210,9 @@ void kernel_main() {
         cb_identity_scale_in,
         ckernel::PoolType::MAX,
         ckernel::ReduceDim::REDUCE_ROW,
-        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
-        /*compute_uses_reduce_tile=*/true>();
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
     dataflow_kernel_lib::prepare_zero_tile<cb_zero_in>();
-    generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
+    generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
 
     // Generate sliding window mask only if we have local data and need it
     if (has_local_data && k_chunk_start == window_start_chunk && window_start_unaligned > 0) {
@@ -426,9 +422,7 @@ void kernel_main() {
                 // read from reducer cores
                 constexpr uint32_t num_reducers_per_output = num_reducer_cores / num_output_cores;
                 constexpr uint32_t num_reducers_to_wait = num_reducers_per_output - 1;
-                volatile tt_l1_ptr uint32_t* output_self_semaphore_addr_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(output_semaphore_addr);
-                noc_semaphore_wait(output_self_semaphore_addr_ptr, num_reducers_to_wait);
+                Semaphore<>(output_semaphore_id).wait(num_reducers_to_wait);
 
                 uint32_t reduce_core_read_index_start = (cur_batch * num_cores_per_batch) / num_cores_per_head;
 
@@ -484,9 +478,7 @@ void kernel_main() {
                 // tell output core that its output is ready
                 uint32_t output_core_noc_x = all_output_noc_x[cur_batch];
                 uint32_t output_core_noc_y = all_output_noc_y[cur_batch];
-                const uint64_t output_core_semaphore_noc_addr =
-                    get_noc_addr(output_core_noc_x, output_core_noc_y, output_semaphore_addr);
-                noc_semaphore_inc(output_core_semaphore_noc_addr, 1);
+                Semaphore<>(output_semaphore_id).up(noc, output_core_noc_x, output_core_noc_y, 1);
             }
         } else {
             // MQA (Multi Query Attention):  we don't need to gather outputs for other heads so we can just write entire

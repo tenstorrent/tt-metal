@@ -300,9 +300,7 @@ __attribute__((noinline)) bool is_packer_to_L1_conversion_supported(const DataFo
 template <PackMode pack_mode = PackMode::Default>
 inline void set_packer_strides(const std::uint32_t pack_src_format, const std::uint32_t tile_c_dim)
 {
-    std::uint32_t x_stride = (pack_src_format & 0x3) == to_underlying(DataFormat::Float32)   ? 4
-                             : (pack_src_format & 0x3) == to_underlying(DataFormat::Float16) ? 2
-                                                                                             : 1;
+    std::uint32_t x_stride = datum_size_in_bytes(pack_src_format);
     std::uint32_t y_stride = FACE_C_DIM * x_stride;
     std::uint32_t w_stride = TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * x_stride;
 
@@ -570,6 +568,11 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
 
     // Set packer strides
     set_packer_strides<PackMode::Default>(pack_output_src_format, tile_c_dim);
+
+    // Program the packer X (datum) counter. _llk_pack_init_ owns this counter ("inits own SETADCXX"),
+    // but reconfig also programs it here: a reconfig is not always followed by an init, and on Blackhole
+    // the value is a mode-independent constant (single row, FACE_C_DIM - 1), so it is safe to set here.
+    TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
 }
 
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
@@ -593,6 +596,10 @@ inline void configure_pack(
     const std::uint32_t pack_output_src_format = masked_data_format(pack_src_format);
 
     set_packer_strides<pack_mode>(pack_src_format, tile_c_dim);
+
+    // NOTE: the packer X (datum) counter (SETADCXX PAC) is intentionally NOT programmed here. It is
+    // owned by _llk_pack_init_, which runs after hw-configure and sets its own value per the
+    // "inits own SETADCXX" contract.
 
     t6_mutex_acquire(mutex::REG_RMW);
 
@@ -678,12 +685,11 @@ inline void select_packer_dest_registers()
 inline void program_packer_destination(std::uint32_t addr)
 {
     LLK_ASSERT(is_valid_L1_address(addr), "L1 address must be in valid L1 memory region");
-    /*
-       The GPR OUTPUT_ADDR is only used by the packer mop when writing tile headers.
-       Since we do not write tile headers in tt-metal, we do not need to wait for
-       packer to finish or say put a stallwait at this point.
-       We just need to make sure we wait before issuing the WRCFG.
-    */
+    // No packer-drain STALLWAIT is needed before reprogramming the destination: the pack thread issues its
+    // instruction stream in order, so each tile's PACR has already started -- and latched L1_Dest_addr,
+    // sampled at PACR start -- before the next call's WRCFG reprograms it, and the Last=1 PACR that ends each
+    // pack MOP drains the packer and forces the next pack to re-sample L1_Dest_addr. The STALLWAIT below is
+    // only the GPR-producer fence: it ensures the SETDMAREG write to OUTPUT_ADDR retires before WRCFG reads it.
     std::uint32_t new_l1_addr = (1 << 31) | addr;
     TT_SETDMAREG(0, LOWER_HALFWORD(addr), 0, LO_16(p_gpr_pack::OUTPUT_ADDR));
     TT_SETDMAREG(0, UPPER_HALFWORD(new_l1_addr), 0, HI_16(p_gpr_pack::OUTPUT_ADDR));

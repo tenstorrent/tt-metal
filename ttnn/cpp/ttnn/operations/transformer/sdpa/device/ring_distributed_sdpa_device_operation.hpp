@@ -8,6 +8,7 @@
 #include <variant>
 
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
@@ -25,11 +26,11 @@ struct RingDistributedSdpaDeviceOperation {
     using tensor_return_value_t = Tensor;
 
     struct RingDistributedSdpaProgramFactory {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value,
-            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
+            const ttnn::MeshCoordinateRangeSet& tensor_coords);
     };
 
     using program_factory_t = std::variant<RingDistributedSdpaProgramFactory>;

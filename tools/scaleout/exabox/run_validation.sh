@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# Source MPI interface validation utility
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/utils/mpi_if_selection.sh"
+source "$SCRIPT_DIR/utils/host_utils.sh"
+
 # Function to display help
 show_help() {
     cat << EOF
@@ -26,7 +31,8 @@ Optional:
                                             /data/scaleout_configs is mounted by default when it exists on
                                             the host; each host path is mounted at the same path inside
                                             the container
-    --mpi-if <interface>                    Network interface for MPI TCP transport (default: ens5f0np0)
+    --mpi-if <interface>                    Network interface for MPI TCP transport
+                                            (auto-detected if not specified)
     --mpi-args <args>                       Extra arguments passed directly to mpirun (quoted string)
                                             e.g. --mpi-args "--tag-output"
     --validation-args <args>                Extra arguments passed verbatim to run_cluster_validation (quoted string)
@@ -65,7 +71,8 @@ OUTPUT_DIR="validation_output"
 # pass them via --volume / the descriptor path flags.
 EXTRA_VOLUMES=()
 [[ -d /data/scaleout_configs ]] && EXTRA_VOLUMES+=(/data/scaleout_configs)
-MPI_IF="ens5f0np0"
+MPI_IF=""
+MPI_IF_EXPLICIT=false
 MPI_EXTRA_ARGS=()
 VALIDATION_EXTRA_ARGS=()
 
@@ -145,6 +152,7 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             MPI_IF="$2"
+            MPI_IF_EXPLICIT=true
             shift 2
             ;;
         --mpi-args)
@@ -201,11 +209,26 @@ if [[ -z "$HOSTS" ]]; then
     exit 1
 fi
 
+check_duplicate_hosts "$HOSTS" || exit 1
+
 if [[ -z "$DOCKER_IMAGE" ]]; then
     echo "Error: --image is required"
     echo ""
     show_help
     exit 1
+fi
+
+# Validate/auto-detect MPI interface with first host from the list
+FIRST_HOST="${HOSTS%%,*}"
+if [[ "$MPI_IF_EXPLICIT" == "true" ]]; then
+    validate_mpi_interface "$MPI_IF" "true" "$FIRST_HOST"
+else
+    MPI_IF=$(validate_mpi_interface "" "false" "$FIRST_HOST")
+    # Check if validation failed (command substitution only exits subshell, not parent)
+    if [[ -z "$MPI_IF" ]]; then
+        echo "Error: MPI interface auto-detection failed" >&2
+        exit 1
+    fi
 fi
 
 run_cluster_validation() {
@@ -256,15 +279,34 @@ run_board_reset() {
     local output_file="$2"
     local msg_prefix="$3"
 
-    # Convert host list to array
-    IFS=',' read -ra host_array <<< "$host_list"
-
-    # Run reset
+    # Each rank host-tags the reset log and streams it to stderr (shown live + tee'd), then prints one
+    # "RESET_RESULT|<host>|<exit_code>" line to stdout for the retry logic below. tt-smi writes key
+    # progress to the tty (not stdout) so it runs under `script`; the tr/sed/awk pipeline collapses its
+    # animated \r/spinner output and keeps colors (pipefail+`script -e` give the real exit code).
+    read -r -d '' RESET_CMD <<'RESET_CMD' || true
+set -o pipefail
+h=$(hostname)
+script -qefc "tt-smi -glx_reset" /dev/null |
+    tr -d '\000-\010\013\014\016-\032\034-\037' |
+    sed -u 's/\r$//; s/.*\r//; s/\^@//g; /^\(\x1b\[[0-9;]*[a-zA-Z]\|[[:space:]]\)*$/d' |
+    awk '{
+        key = $0
+        gsub(/\033\[[0-9;]*[a-zA-Z]/, "", key)    # ignore color codes when comparing
+        sub(/[0-9]+[[:space:]]*$/, "", key)       # ignore trailing counter
+        if (seen && key == prev) { buf = $0 }     # same template -> keep only the latest
+        else { if (seen) print buf; buf = $0; prev = key; seen = 1 }
+    }
+    END { if (seen) print buf }' |
+    while IFS= read -r line; do
+        printf '[%s][%(%H:%M:%S)T] %s\n' "$h" -1 "$line"
+    done >&2
+ec=${PIPESTATUS[0]}
+echo "RESET_RESULT|$h|$ec"
+RESET_CMD
     mpirun --host "$host_list" \
         --mca btl_tcp_if_include "$MPI_IF" \
         "${MPI_EXTRA_ARGS[@]}" \
-        --tag-output \
-        bash -c 'tt-smi -glx_reset > /dev/null 2>&1; echo "RESET_EXIT_CODE=$?"' > "$output_file"
+        bash -c "$RESET_CMD" > "$output_file"
     mpirun_exit_code=$?
 
    # Check if mpirun failed
@@ -274,25 +316,17 @@ run_board_reset() {
         return 1  # Signal mpirun infrastructure failure
     fi
 
-    # Parse and display results, collect failures
+    # Parse per-host results (RESET_RESULT|<host>|<exit_code>), collect failures
     local failed_hosts=()
     while IFS= read -r line; do
-        if [[ $line =~ ^\[([0-9]+),([0-9]+)\]\<stdout\>:RESET_EXIT_CODE=([0-9]+)$ ]]; then
-            local job_id="${BASH_REMATCH[1]}"
-            local mpi_rank="${BASH_REMATCH[2]}"
-            local exit_code="${BASH_REMATCH[3]}"
-
-            # Use mpi_rank to index host_array
-            if [[ $mpi_rank -lt ${#host_array[@]} ]]; then
-                local hostname="${host_array[$mpi_rank]}"
-                if [[ $exit_code -eq 0 ]]; then
-                    echo "[$job_id,$mpi_rank]$hostname: ${msg_prefix}Reset completed successfully" >&2
-                else
-                    echo "[$job_id,$mpi_rank]$hostname: ${msg_prefix}Reset failed | Exit code: $exit_code" >&2
-                    failed_hosts+=("$hostname")
-                fi
+        if [[ $line =~ ^RESET_RESULT\|(.+)\|([0-9]+)$ ]]; then
+            local hostname="${BASH_REMATCH[1]}"
+            local exit_code="${BASH_REMATCH[2]}"
+            if [[ $exit_code -eq 0 ]]; then
+                echo "$hostname: ${msg_prefix}Reset completed successfully" >&2
             else
-                echo "Warning: MPI rank $mpi_rank exceeds host array size ${#host_array[@]}" >&2
+                echo "$hostname: ${msg_prefix}Reset failed | Exit code: $exit_code" >&2
+                failed_hosts+=("$hostname")
             fi
         fi
     done < "$output_file"

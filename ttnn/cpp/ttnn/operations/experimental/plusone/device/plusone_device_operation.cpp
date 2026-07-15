@@ -23,21 +23,6 @@ PlusOneDeviceOperation::spec_return_value_t PlusOneDeviceOperation::compute_outp
     return input_tensor.tensor_spec();
 }
 
-ttsl::hash::hash_t PlusOneDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& input_tensor) {
-    const auto& input_shape = input_tensor.padded_shape();
-    // Hash operation attributes (both sub_core_grids and skip_negative_entries affect program structure)
-    // and specific tensor properties that affect program structure (dtype, memory_config, shape)
-    // rather than the whole tensor to avoid including runtime-only properties like buffer addresses
-    tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<PlusOneDeviceOperation>(
-        args,                          // Includes sub_core_grids and skip_negative_entries
-        input_tensor.dtype(),          // Affects CB data format and element size
-        input_tensor.memory_config(),  // Affects buffer type (DRAM/L1) and sharding
-        input_shape);                  // Affects W, H, aligned_input_page_size, core groups
-
-    return hash;
-}
-
 PlusOneDeviceOperation::tensor_return_value_t PlusOneDeviceOperation::create_output_tensors(
     const operation_attributes_t&, const tensor_args_t& input_tensor) {
     return input_tensor;

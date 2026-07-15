@@ -75,7 +75,7 @@ void kernel_main() {
         ckernel::PoolType::AVG,
         ckernel::ReduceDim::REDUCE_ROW,
         reduce_factor>();
-    generate_bcast_col_scalar(epsilon_cb, epsilon_value);
+    generate_bcast_col_scalar(CircularBuffer(epsilon_cb), epsilon_value);
 
     if constexpr (fuse_rope) {
         // Read the single-tile transformation matrix for ROPE.

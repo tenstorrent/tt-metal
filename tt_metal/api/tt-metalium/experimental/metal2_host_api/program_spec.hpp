@@ -13,6 +13,7 @@
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/scratchpad_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
@@ -29,6 +30,7 @@ namespace tt::tt_metal::experimental {
 //  - program-scope resources
 //      o dataflow buffers
 //      o semaphores
+//      o scratchpads
 //  - user-managed resources (parameters)
 //      o tensor parameters
 //
@@ -75,11 +77,15 @@ struct ProgramSpec {
     // Human-readable name (debug/messaging only; no uniqueness invariant).
     std::string name;
 
-    // Kernels, DFBs (local + remote), and semaphores that make up the Program
+    // Kernels that make up the Program
     Group<KernelSpec> kernels;
+
+    // Program-scope resources (allocated for the Program's execution lifetime)
+    // DFBs (local + cross-node), and semaphores
     Group<DataflowBufferSpec> dataflow_buffers;
-    Group<RemoteDataflowBufferSpec> remote_dataflow_buffers;
+    Group<CrossNodeDataflowBufferSpec> cross_node_dataflow_buffers;
     Group<SemaphoreSpec> semaphores;
+    Group<ScratchpadSpec> scratchpads;
 
     // Tensor parameter declarations
     // Provides ids and layout specs for tensors the Program's kernels will operate on

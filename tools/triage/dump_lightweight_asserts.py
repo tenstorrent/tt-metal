@@ -78,6 +78,8 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
                 return "?wrong line number? Check the first code line in the stack trace."
             code_line = lines[line - 1]
 
+            start_index = -1
+
             def scan_for_needle(needle: str) -> None:
                 nonlocal start_index
                 search_from = 0
@@ -100,7 +102,6 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
                     start_index = new_index
                     search_from = new_index + 1
 
-            start_index = -1
             scan_for_needle("ASSERT(")
             if start_index == -1:
                 return "ASSERT() not found! Check the first code line in the stack trace."
@@ -189,11 +190,13 @@ def dump_lightweight_asserts(
         code_private_memory = risc_debug.get_code_private_memory()
         if code_private_memory is not None and code_private_memory.contains_private_address(pc):
             dispatcher_core_data = callstack_provider.dispatcher_data.get_cached_core_data(location, risc_name)
-            elf = callstack_provider.elfs_cache[dispatcher_core_data.kernel_path].elf
+            if dispatcher_core_data.kernel_path is None:
+                return None
+            elf = callstack_provider.elfs_cache[dispatcher_core_data.kernel_path]
             text_section = elf.get_section_by_name(".text")
             if text_section is None or dispatcher_core_data.kernel_offset is None:
                 return None
-            data: bytes = text_section.data()
+            data = text_section.data
             address: int = dispatcher_core_data.kernel_offset
             offset = pc - address
             current_instruction = int.from_bytes(data[offset : offset + 4], "little")
@@ -219,11 +222,12 @@ def dump_lightweight_asserts(
         )
         arguments_and_locals = None
         assert_code = "?"
-        if callstack_data.kernel_callstack_with_message.callstack[0] is not None:
+        if callstack_data.kernel_callstack_with_message.callstack:
+            fi = callstack_data.kernel_callstack_with_message.callstack[0].file_info
             assert_code = extract_assert_code(
-                callstack_data.kernel_callstack_with_message.callstack[0].file,
-                callstack_data.kernel_callstack_with_message.callstack[0].line,
-                callstack_data.kernel_callstack_with_message.callstack[0].column,
+                fi.file if fi is not None else None,
+                fi.line if fi is not None else None,
+                fi.column if fi is not None else None,
             )
             arguments_and_locals = ""
             top_frame = callstack_data.kernel_callstack_with_message.callstack[0]

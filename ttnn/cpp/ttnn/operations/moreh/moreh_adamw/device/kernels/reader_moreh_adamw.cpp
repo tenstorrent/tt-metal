@@ -7,7 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -59,27 +59,31 @@ void kernel_main() {
     const auto max_exp_avg_sq_addrg = TensorAccessor(max_exp_avg_sq_args, max_exp_avg_sq_addr);
 #endif
 
-    fill_cb_with_value(cb_scalar_args, lr);
-    fill_cb_with_value(cb_scalar_args, beta1);
-    fill_cb_with_value(cb_scalar_args, beta2);
-    fill_cb_with_value(cb_scalar_args, eps);
-    fill_cb_with_value(cb_scalar_args, weight_decay);
-    fill_cb_with_value(cb_beta1_exponent, beta1_exponent);
-    fill_cb_with_value(cb_beta2_exponent, beta2_exponent);
+    DataflowBuffer dfb_scalar(cb_scalar_args);
+    DataflowBuffer dfb_beta1_exp(cb_beta1_exponent);
+    DataflowBuffer dfb_beta2_exp(cb_beta2_exponent);
+    DataflowBuffer dfb_one(cb_id_one);
+    fill_cb_with_value(dfb_scalar, lr);
+    fill_cb_with_value(dfb_scalar, beta1);
+    fill_cb_with_value(dfb_scalar, beta2);
+    fill_cb_with_value(dfb_scalar, eps);
+    fill_cb_with_value(dfb_scalar, weight_decay);
+    fill_cb_with_value(dfb_beta1_exp, beta1_exponent);
+    fill_cb_with_value(dfb_beta2_exp, beta2_exponent);
     union {
         float f;
         uint32_t u;
     } scaler;
     scaler.f = 1.0f;
-    fill_cb_with_value(cb_id_one, scaler.u);
+    fill_cb_with_value(dfb_one, scaler.u);
 
     Noc noc;
-    CircularBuffer cb_param(cb_id_param);
-    CircularBuffer cb_grad(cb_id_grad);
-    CircularBuffer cb_exp_avg(cb_id_exp_avg);
-    CircularBuffer cb_exp_avg_sq(cb_id_exp_avg_sq);
+    DataflowBuffer dfb_param(cb_id_param);
+    DataflowBuffer dfb_grad(cb_id_grad);
+    DataflowBuffer dfb_exp_avg(cb_id_exp_avg);
+    DataflowBuffer dfb_exp_avg_sq(cb_id_exp_avg_sq);
 #ifdef AMSGRAD
-    CircularBuffer cb_max_exp_avg_sq(cb_id_max_exp_avg_sq);
+    DataflowBuffer dfb_max_exp_avg_sq(cb_id_max_exp_avg_sq);
 #endif
 
     const auto param_tile_bytes = get_tile_size(cb_id_param);
@@ -93,32 +97,32 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     uint32_t end_id = start_id + num_tiles_per_core;
     for (uint32_t i = start_id; i < end_id; ++i) {
-        cb_param.reserve_back(onetile);
-        noc.async_read(param_addrg, cb_param, param_tile_bytes, {.page_id = i}, {.offset_bytes = 0});
+        dfb_param.reserve_back(onetile);
+        noc.async_read(param_addrg, dfb_param, param_tile_bytes, {.page_id = i}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_param.push_back(onetile);
+        dfb_param.push_back(onetile);
 
-        cb_grad.reserve_back(onetile);
-        noc.async_read(grad_addrg, cb_grad, grad_tile_bytes, {.page_id = i}, {.offset_bytes = 0});
+        dfb_grad.reserve_back(onetile);
+        noc.async_read(grad_addrg, dfb_grad, grad_tile_bytes, {.page_id = i}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_grad.push_back(onetile);
+        dfb_grad.push_back(onetile);
 
-        cb_exp_avg.reserve_back(onetile);
-        noc.async_read(exp_avg_addrg, cb_exp_avg, exp_avg_tile_bytes, {.page_id = i}, {.offset_bytes = 0});
+        dfb_exp_avg.reserve_back(onetile);
+        noc.async_read(exp_avg_addrg, dfb_exp_avg, exp_avg_tile_bytes, {.page_id = i}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_exp_avg.push_back(onetile);
+        dfb_exp_avg.push_back(onetile);
 
-        cb_exp_avg_sq.reserve_back(onetile);
-        noc.async_read(exp_avg_sq_addrg, cb_exp_avg_sq, exp_avg_sq_tile_bytes, {.page_id = i}, {.offset_bytes = 0});
+        dfb_exp_avg_sq.reserve_back(onetile);
+        noc.async_read(exp_avg_sq_addrg, dfb_exp_avg_sq, exp_avg_sq_tile_bytes, {.page_id = i}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_exp_avg_sq.push_back(onetile);
+        dfb_exp_avg_sq.push_back(onetile);
 
 #ifdef AMSGRAD
-        cb_max_exp_avg_sq.reserve_back(onetile);
+        dfb_max_exp_avg_sq.reserve_back(onetile);
         noc.async_read(
-            max_exp_avg_sq_addrg, cb_max_exp_avg_sq, max_exp_avg_sq_tile_bytes, {.page_id = i}, {.offset_bytes = 0});
+            max_exp_avg_sq_addrg, dfb_max_exp_avg_sq, max_exp_avg_sq_tile_bytes, {.page_id = i}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_max_exp_avg_sq.push_back(onetile);
+        dfb_max_exp_avg_sq.push_back(onetile);
 #endif
     }
 }

@@ -11,7 +11,7 @@
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/reduce.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/compute/bcast.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
@@ -74,14 +74,17 @@ void sub_exp_block_bcast_cols_inplace() {
                 exp_tile<true>(j);
             }
             tile_regs_commit();
+
             in0_cb_obj.pop_front(dst_tiles);
             in0_cb_obj.reserve_back(dst_tiles);
+
             tile_regs_wait();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 pack_tile(j, in0_cb);
             }
-            in0_cb_obj.push_back(dst_tiles);
             tile_regs_release();
+
+            in0_cb_obj.push_back(dst_tiles);
         }
     }
 }
@@ -100,18 +103,22 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     for (uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
         add_tiles(in0_cb, in1_cb, 0, i, 0);
+        tile_regs_commit();
+
         in0_cb_obj.pop_front(1);
         in0_cb_obj.reserve_back(1);
-        tile_regs_commit();
+
         tile_regs_wait();
         pack_reconfig_data_format(in0_cb);
         pack_tile(0, in0_cb);
-        in0_cb_obj.push_back(1);
         tile_regs_release();
+
+        in0_cb_obj.push_back(1);
     }
 }
 
-void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t rows, uint32_t cols) {
+void mul_block_bcast_cols(
+    uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t rows, uint32_t cols) {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
@@ -129,13 +136,16 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uin
         for (uint32_t j = 0; j < cols; ++j) {
             tile_regs_acquire();
             mul_tiles_bcast_cols(in0_cb, in1_cb, 0, i, 0);
+            tile_regs_commit();
+
             in0_cb_obj.pop_front(1);
             out_cb_obj.reserve_back(1);
-            tile_regs_commit();
+
             tile_regs_wait();
             pack_tile(0, out_cb);
-            out_cb_obj.push_back(1);
             tile_regs_release();
+
+            out_cb_obj.push_back(1);
         }
     }
     in1_cb_obj.pop_front(rows);
@@ -153,14 +163,17 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     for (uint32_t i = 0; i < num_tiles; ++i) {
         tile_regs_acquire();
         copy_tile(in_cb, 0, 0);
-        in_cb_obj.pop_front(1);
         recip_tile(0);
-        in_cb_obj.reserve_back(1);
         tile_regs_commit();
+
+        in_cb_obj.pop_front(1);
+        in_cb_obj.reserve_back(1);
+
         tile_regs_wait();
         pack_tile(0, in_cb);
-        in_cb_obj.push_back(1);
         tile_regs_release();
+
+        in_cb_obj.push_back(1);
     }
 }
 
@@ -218,7 +231,7 @@ void top_k() {
     CircularBuffer output_ind_cb(output_ind_cb_index);
 
     if (first_call) {
-        transpose_wh_init(input_cb_index, input_transposed_cb_index);
+        transpose_init(input_cb_index);
     }
     for (uint32_t ht = 0; ht < Ht; ++ht) {
         bool ascending = false;
@@ -227,25 +240,29 @@ void top_k() {
 
         // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
         for (uint32_t wt = 0; wt < Wt; wt += 2) {
-            tile_regs_acquire();
             // local sort into k groups
             input_cb.wait_front(2);
             index_cb.wait_front(2);
 
+            tile_regs_acquire();
             reconfig_data_format_srca(input_cb_index);
-            transpose_wh_init_short(input_cb_index);
-            transpose_wh_tile(input_cb_index, 0, 0);
-            transpose_wh_tile(input_cb_index, 1, 1);
+            transpose_init(input_cb_index);
+            transpose_tile(input_cb_index, 0, 0);
+            transpose_tile(input_cb_index, 1, 1);
 
             reconfig_data_format_srca(index_cb_index);
-            transpose_wh_init_short(index_cb_index);
-            transpose_wh_tile(index_cb_index, 0, 2);
-            transpose_wh_tile(index_cb_index, 1, 3);
+            transpose_init(index_cb_index);
+            transpose_tile(index_cb_index, 0, 2);
+            transpose_tile(index_cb_index, 1, 3);
 
             // llk_topk_sort -> inplace
             ckernel::topk_local_sort(0, (int)ascending, logk - 1);
 
             tile_regs_commit();
+
+            input_cb.pop_front(2);
+            index_cb.pop_front(2);
+
             tile_regs_wait();
             // pack value tiles into cb_intermed0
             pack_reconfig_data_format(input_transposed_cb_index);
@@ -256,9 +273,6 @@ void top_k() {
             pack_reconfig_data_format(index_transposed_cb_index);
             pack_tile(2, index_transposed_cb_index);
             pack_tile(3, index_transposed_cb_index);
-
-            input_cb.pop_front(2);
-            index_cb.pop_front(2);
             tile_regs_release();
         }
 
@@ -321,35 +335,41 @@ void top_k() {
 
         // transpose value tiles and pack into output buffer
         reconfig_data_format_srca(input_transposed_cb_index);
-        transpose_wh_init_short(input_transposed_cb_index);
+        transpose_init(input_transposed_cb_index);
         pack_reconfig_data_format(input_transposed_cb_index);
         input_transposed_cb.wait_front(Wt);
         for (uint32_t i = 0; i < Kt; ++i) {
             tile_regs_acquire();
-            values_cb.reserve_back(1);
-            transpose_wh_tile(input_transposed_cb_index, i, 0);
+            transpose_tile(input_transposed_cb_index, i, 0);
             tile_regs_commit();
+
+            values_cb.reserve_back(1);
+
             tile_regs_wait();
             pack_tile(0, values_cb_index);
-            values_cb.push_back(1);
             tile_regs_release();
+
+            values_cb.push_back(1);
         }
         input_transposed_cb.pop_front(Wt);
 
         // transpose index tiles and pack into output buffer
         reconfig_data_format_srca(index_transposed_cb_index);
-        transpose_wh_init_short(index_transposed_cb_index);
+        transpose_init(index_transposed_cb_index);
         pack_reconfig_data_format(index_transposed_cb_index);
         index_transposed_cb.wait_front(Wt);
         for (uint32_t i = 0; i < Kt; ++i) {
             tile_regs_acquire();
-            output_ind_cb.reserve_back(1);
-            transpose_wh_tile(index_transposed_cb_index, i, 0);
+            transpose_tile(index_transposed_cb_index, i, 0);
             tile_regs_commit();
+
+            output_ind_cb.reserve_back(1);
+
             tile_regs_wait();
             pack_tile(0, output_ind_cb_index);
-            output_ind_cb.push_back(1);
             tile_regs_release();
+
+            output_ind_cb.push_back(1);
         }
         index_transposed_cb.pop_front(Wt);
     }
@@ -379,15 +399,18 @@ void mul_block_bcast_scalar_inplace() {
         for (uint32_t i = 0; i < dst_tiles; ++i) {
             mul_tiles_bcast_scalar(in0_cb, in1_scalar_cb, i, 0, i);
         }
+        tile_regs_commit();
+
         in0_cb_obj.pop_front(dst_tiles);
         in0_cb_obj.reserve_back(dst_tiles);
-        tile_regs_commit();
+
         tile_regs_wait();
         for (uint32_t i = 0; i < dst_tiles; ++i) {
             pack_tile(i, in0_cb);
         }
-        in0_cb_obj.push_back(dst_tiles);
         tile_regs_release();
+
+        in0_cb_obj.push_back(dst_tiles);
     }
 }
 
@@ -418,6 +441,7 @@ void kernel_main() {
     const uint32_t logk = 5;  // log(32)
 
     // top-k
+    compute_kernel_hw_startup(input_values_cb_index, index_cb_index, input_transposed_cb_index);
     top_k<
         Ht,
         Wt,

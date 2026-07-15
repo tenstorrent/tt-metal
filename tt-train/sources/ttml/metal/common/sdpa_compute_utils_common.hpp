@@ -89,7 +89,7 @@ inline void sfpi_exp() {
         sfpi::vFloat val = sfpi::dst_reg[0];
         sfpi::vFloat result = ckernel::sfpu::_sfpu_exp_accurate_<is_fp32_dest_acc_en>(val);
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = result;
         if constexpr (DST_STRIDE == 1) {
@@ -107,7 +107,7 @@ inline void mul_then_sfpi_exp() {
         val = val * sfpi::sFloat16b(static_cast<uint32_t>(scale_bf16));
         sfpi::vFloat result = ckernel::sfpu::_sfpu_exp_accurate_<is_fp32_dest_acc_en>(val);
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg += DST_STRIDE;

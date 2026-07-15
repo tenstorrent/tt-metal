@@ -557,6 +557,7 @@ class SpecLMHeadStage(StageKind):
             "bcast_semaphores": bcast_inputs.semaphores,
             "global_semaphore": ttnn.create_global_semaphore(mesh_device, argmax_final_core_grid, 0),
             "global_stage2_semaphore": ttnn.create_global_semaphore(mesh_device, argmax_final_core_grid, 0),
+            "intra_device_semaphores": LMHeadSampling.create_semaphores(mesh_device),
         }
         self._persistent_loop = PersistentLoop(mesh_device, worker_crs, self._persistent_mode)
         if self._persistent_mode:
@@ -598,6 +599,7 @@ class SpecLMHeadStage(StageKind):
             is_mtp_verify_stage=True,
             mtp_level=self._mtp_level,
             metadata_tensor=d["metadata_tensor"],
+            intra_device_semaphores=d["intra_device_semaphores"],
             k=1,
         )
 
@@ -918,6 +920,7 @@ class BaseLMHeadStage(StageKind):
             "global_semaphore": global_semaphore,
             "global_stage2_semaphore": global_stage2_semaphore,
             "base_token_buffer": base_token_buffer,
+            "intra_device_semaphores": LMHeadSampling.create_semaphores(mesh_device),
         }
         if self._enable_mtp:
             ttnn_h_gamma = None
@@ -981,6 +984,7 @@ class BaseLMHeadStage(StageKind):
             reduce_semaphores=d.get("reduce_semaphores"),
             mtp_bcast_semaphores=d.get("mtp_bcast_semaphores"),
             base_token_buffer=d.get("base_token_buffer"),
+            intra_device_semaphores=d["intra_device_semaphores"],
             seed=self._seed,
         )
 

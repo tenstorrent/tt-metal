@@ -98,6 +98,15 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Multic
         {"num_dests", (uint32_t)num_dests},
         {"test_id", (uint32_t)test_config.test_id}};
 
+    DataMovementHardwareConfig sender_hw_config;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        sender_hw_config = DataMovementGen2Config{};
+    } else {
+        sender_hw_config = DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = test_config.noc_id,
+        };
+    }
     KernelSpec sender_spec{
         .unique_id = KernelSpecName{"sender"},
         .source = "tests/tt_metal/tt_metal/data_movement/multicast_atomics/kernels/multicast_atomic_sender_2_0.cpp",
@@ -109,20 +118,21 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Multic
             {
                 .runtime_arg_names = {"dst_start_x", "dst_start_y", "dst_end_x", "dst_end_y"},
             },
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config =
-                    DataMovementHardwareConfig::Gen1Config{
-                        .processor = DataMovementProcessor::RISCV_0,
-                        .noc = test_config.noc_id,
-                    },
-                .gen2_config = DataMovementHardwareConfig::Gen2Config{},
-            },
+        .hw_config = sender_hw_config,
     };
 
     KernelSpec::CompileTimeArgs receiver_cta_bindings = {
         {"expected_value", (uint32_t)expected_value}, {"test_id", (uint32_t)test_config.test_id}};
 
+    DataMovementHardwareConfig receiver_hw_config;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        receiver_hw_config = DataMovementGen2Config{};
+    } else {
+        receiver_hw_config = DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = test_config.noc_id,
+        };
+    }
     KernelSpec receiver_spec{
         .unique_id = KernelSpecName{"receiver"},
         .source = "tests/tt_metal/tt_metal/data_movement/multicast_atomics/kernels/multicast_atomic_receiver_2_0.cpp",
@@ -130,15 +140,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Multic
         .semaphore_bindings = {KernelSpec::SemaphoreBinding{
             .semaphore_spec_name = atomic_sem.unique_id, .accessor_name = "sem_name"}},
         .compile_time_args = receiver_cta_bindings,
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config =
-                    DataMovementHardwareConfig::Gen1Config{
-                        .processor = DataMovementProcessor::RISCV_1,
-                        .noc = test_config.noc_id,
-                    },
-                .gen2_config = DataMovementHardwareConfig::Gen2Config{},
-            },
+        .hw_config = receiver_hw_config,
     };
 
     ProgramSpec spec{
@@ -165,13 +167,15 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Multic
     ProgramRunArgs run_params;
     ProgramRunArgs::KernelRunArgs sender_run_params{.kernel = sender_spec.unique_id};
     for (const auto& sender_core : test_config.sender_cores) {
-        sender_run_params.runtime_arg_values.push_back(
-            {.node = sender_core,
-             .args = {
-                 {"dst_start_x", (uint32_t)physical_dst_start.x},
-                 {"dst_start_y", (uint32_t)physical_dst_start.y},
-                 {"dst_end_x", (uint32_t)physical_dst_end.x},
-                 {"dst_end_y", (uint32_t)physical_dst_end.y}}});
+        AddRuntimeArgsForNode(
+            sender_run_params.runtime_arg_values,
+            sender_core,
+            {
+                {"dst_start_x", (uint32_t)physical_dst_start.x},
+                {"dst_start_y", (uint32_t)physical_dst_start.y},
+                {"dst_end_x", (uint32_t)physical_dst_end.x},
+                {"dst_end_y", (uint32_t)physical_dst_end.y},
+            });
     }
     run_params.kernel_run_args.push_back(sender_run_params);
 
@@ -211,7 +215,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Multic
 /* ========== TEST CASES ========== */
 
 TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSource) {
-    uint32_t test_id = 321;
+    uint32_t test_id = 342;
 
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_device(0);
@@ -234,7 +238,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSource) {
 }
 
 TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSource) {
-    uint32_t test_id = 322;
+    uint32_t test_id = 343;
 
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_device(0);
@@ -257,7 +261,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSource) {
 }
 
 TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSourceNOC1) {
-    uint32_t test_id = 323;
+    uint32_t test_id = 344;
 
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_device(0);
@@ -280,7 +284,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSourceNOC1) {
 }
 
 TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSourceNOC1) {
-    uint32_t test_id = 324;
+    uint32_t test_id = 345;
 
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_device(0);
@@ -303,7 +307,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSourceNOC1) {
 }
 
 TEST_F(GenericMeshDeviceFixture, MulticastAtomicLargerIncrement) {
-    uint32_t test_id = 325;
+    uint32_t test_id = 346;
 
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_device(0);
@@ -328,7 +332,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicLargerIncrement) {
 }
 
 TEST_F(GenericMeshDeviceFixture, MulticastAtomicLargerIncrementNOC1) {
-    uint32_t test_id = 326;
+    uint32_t test_id = 347;
 
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_device(0);
@@ -355,7 +359,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicLargerIncrementNOC1) {
 /* ========== NOC 2.0 API TEST CASES ========== */
 
 TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSource_2_0) {
-    uint32_t test_id = 327;
+    uint32_t test_id = 348;
 
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_device(0);
@@ -379,7 +383,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSource_2_0) {
 }
 
 TEST_F(GenericMeshDeviceFixture, MulticastAtomicLargerIncrement_2_0) {
-    uint32_t test_id = 328;
+    uint32_t test_id = 349;
 
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_device(0);
@@ -405,7 +409,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicLargerIncrement_2_0) {
 }
 
 TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSource_2_0) {
-    uint32_t test_id = 329;
+    uint32_t test_id = 350;
 
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_device(0);
@@ -429,7 +433,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSource_2_0) {
 }
 
 TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSourceNOC1_2_0) {
-    uint32_t test_id = 330;
+    uint32_t test_id = 351;
 
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_device(0);
@@ -453,7 +457,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSourceNOC1_2_0) {
 }
 
 TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSourceNOC1_2_0) {
-    uint32_t test_id = 331;
+    uint32_t test_id = 352;
 
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_device(0);
@@ -477,7 +481,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSourceNOC1_2_0) {
 }
 
 TEST_F(GenericMeshDeviceFixture, MulticastAtomicLargerIncrementNOC1_2_0) {
-    uint32_t test_id = 332;
+    uint32_t test_id = 353;
 
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_device(0);

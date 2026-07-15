@@ -7,19 +7,31 @@ Utilities for KVPE cache initialization and management.
 
 import socket
 
-import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
 
 # This is a predefined constant for the number of contiguous tokens in a DRAM bank
 NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
+# Nominal DRAM bank count for a full (unharvested) Blackhole part. Prefer get_num_dram_banks(device)
+# at runtime: harvested parts expose fewer banks (e.g. 7), and the cache ND-shard grid + the
+# disaggregation address-table striding must both use the device's actual count to stay consistent.
 BH_NUM_DRAM_BANKS = 8
 PREFILL_CHUNK_OUTPUT_TOKENS = 5 * 1024
 
 
+def get_num_dram_banks(mesh_device):
+    """Usable DRAM banks on this device. Full Blackhole = 8; harvested parts expose fewer (e.g. 7).
+
+    The KV cache ND-shards round-robin across these banks and the disaggregation address table replays
+    that exact striping (`curr_bank_id = (curr_bank_id + 1) % num_banks`), so both MUST derive the count
+    from the same device. dram_grid_size().x is the number of DRAM cores/banks the device exposes."""
+    return mesh_device.dram_grid_size().x
+
+
 def create_kv_chunk_address_table_ds(
-    config, mesh_device, mesh_shape, seq_len, sp_axis, tt_kvpe_cache, chunk_size_bytes
+    config, mesh_device, mesh_shape, seq_len, sp_axis, tt_kvpe_cache, chunk_size_bytes, num_users=1
 ):
     """
     Create and populate a KV chunk address table for disaggregation.
@@ -32,10 +44,13 @@ def create_kv_chunk_address_table_ds(
         sp_axis: Sequence parallel axis
         tt_kvpe_cache: Initialized KVPE cache on device
         chunk_size_bytes: Size of each chunk in bytes
+        num_users: number of per-user cache slots (multi-user balanced layout is a follow-up;
+            only num_users == 1 is supported here)
 
     Returns:
         lookup_table: Populated KvChunkAddressTable
     """
+    assert num_users == 1, "create_kv_chunk_address_table_ds (balanced) supports only num_users == 1"
     lookup_table = ttnn.experimental.disaggregation.KvChunkAddressTable(config)
 
     host_name = socket.gethostname()
@@ -111,6 +126,8 @@ def create_kv_chunk_address_table_ds(
 
     logger.debug(f"kvpe cache shape is: {tt_kvpe_cache.shape}")
     dram_bank_base_addr = tt_kvpe_cache.buffer_address()
+    # Must match the bank count the cache was ND-sharded across (see get_num_dram_banks).
+    num_dram_banks = get_num_dram_banks(mesh_device)
     for row in range(len(device_group_idx_per_row)):
         group_idx = device_group_idx_per_row[row]
         curr_bank_id = 0
@@ -135,7 +152,7 @@ def create_kv_chunk_address_table_ds(
                     f"Rank: {rank} Set location for (layer={layer}, pos={layer_current_position}, slot={slot}, bank_id={curr_bank_id}, curr_bank_offset = {curr_bank_offset} noc_addr = 0x{noc_addr:X})"
                 )
 
-                curr_bank_id = (curr_bank_id + 1) % BH_NUM_DRAM_BANKS
+                curr_bank_id = (curr_bank_id + 1) % num_dram_banks
                 # move to next chunk offset
                 if curr_bank_id == 0:
                     curr_bank_offset += chunk_size_bytes
@@ -170,6 +187,51 @@ def create_kv_chunk_address_table_kimi(
         lookup_table: Populated KvChunkAddressTable
     """
     lookup_table = ttnn.experimental.disaggregation.KvChunkAddressTable(config)
+    return populate_kv_chunk_address_table_kimi(
+        lookup_table=lookup_table,
+        config=config,
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        seq_len=seq_len,
+        sp_axis=sp_axis,
+        tt_kvpe_cache=tt_kvpe_cache,
+        chunk_size_bytes=chunk_size_bytes,
+        num_users=num_users,
+        config_id=0,
+    )
+
+
+def populate_kv_chunk_address_table_kimi(
+    lookup_table,
+    config,
+    mesh_device,
+    mesh_shape,
+    seq_len,
+    sp_axis,
+    tt_kvpe_cache,
+    chunk_size_bytes,
+    num_users=1,
+    config_id=0,
+):
+    """
+    Populate ONE config (``config_id``) of an existing KvChunkAddressTable from a device cache tensor.
+
+    Factored out of create_kv_chunk_address_table_kimi so a single multi-config table can hold several
+    caches at once (the serving convention is config 0 = the MLA KVPE cache, config 1 = the block-cyclic
+    index-key cache); each config carries its own grid + chunk_size_bytes and is addressed by config_id.
+    The device-group
+    side table and fabric-node host map are SHARED across configs — re-registering them here per config is
+    safe (add_device_group dedups identical replica sets; set_fabric_node_host is idempotent).
+
+    Args:
+        lookup_table: an existing KvChunkAddressTable (single- or multi-config).
+        config: the KvChunkAddressTableConfig for THIS config_id (read for num_layers).
+        config_id: which config of the table to populate (default 0, the single-config case).
+        (remaining args as in create_kv_chunk_address_table_kimi)
+
+    Returns:
+        lookup_table: the same table, with config_id populated.
+    """
     host_name = socket.gethostname()
 
     rank = ttnn.distributed_context_get_rank()
@@ -215,6 +277,8 @@ def create_kv_chunk_address_table_kimi(
     ), f"cache batch dim {tt_kvpe_cache.shape[0]} != num_users({num_users}) * num_layers({num_layers})"
 
     dram_bank_base_addr = tt_kvpe_cache.buffer_address()
+    # Must match the bank count the cache was ND-sharded across (see get_num_dram_banks).
+    num_dram_banks = get_num_dram_banks(mesh_device)
     for local_idx, global_row in enumerate(range(rank_row_start, rank_row_end)):
         group_idx = device_group_idx_per_row[local_idx]
         curr_bank_id = 0
@@ -230,16 +294,26 @@ def create_kv_chunk_address_table_kimi(
                         location.noc_addr = (curr_bank_id << 32) | (dram_bank_base_addr + curr_bank_offset)
                         location.size_bytes = chunk_size_bytes
                         location.device_group_index = group_idx
-                        lookup_table.set(layer, position, slot, location)
+                        lookup_table.set(layer, position, slot, location, config_id)
 
-                        curr_bank_id = (curr_bank_id + 1) % BH_NUM_DRAM_BANKS
+                        curr_bank_id = (curr_bank_id + 1) % num_dram_banks
                         if curr_bank_id == 0:
                             curr_bank_offset += chunk_size_bytes
 
     return lookup_table
 
 
-def init_kvpe_cache(kvpe_cache_head_dim, mesh_device, seq_len, mesh_shape, sp_axis, num_kvpe_cache_layers, num_users=1):
+def init_kvpe_cache(
+    kvpe_cache_head_dim,
+    mesh_device,
+    seq_len,
+    mesh_shape,
+    sp_axis,
+    num_kvpe_cache_layers,
+    num_users=1,
+    dtype=ttnn.bfloat8_b,
+    layout=ttnn.TILE_LAYOUT,
+):
     """
     Initialize KVPE cache for MLA.
 
@@ -253,6 +327,8 @@ def init_kvpe_cache(kvpe_cache_head_dim, mesh_device, seq_len, mesh_shape, sp_ax
         num_users: Number of independent users sharing the cache. The batch dim
             is laid out user-major: slot index = user_id * num_kvpe_cache_layers + layer_idx,
             so each user's layers stay contiguous.
+        dtype: Cache element dtype (default bfloat8_b). Use fp8_e4m3 with ROW_MAJOR.
+        layout: Cache layout (default TILE_LAYOUT). ROW_MAJOR required for fp8_e4m3.
 
     Returns:
         tt_kvpe_cache: Initialized KVPE cache on device
@@ -260,10 +336,10 @@ def init_kvpe_cache(kvpe_cache_head_dim, mesh_device, seq_len, mesh_shape, sp_ax
     # hack in num_users * num_layers into batch size, so each user's layers are contiguous in memory
     num_layers = num_kvpe_cache_layers
     seq_len_local = seq_len // mesh_shape[sp_axis]
-    torch_kvpe_cache = torch.zeros(num_users * num_layers, 1, seq_len_local, kvpe_cache_head_dim)
 
+    num_dram_banks = get_num_dram_banks(mesh_device)
     core_ranges = [
-        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(BH_NUM_DRAM_BANKS)
+        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(num_dram_banks)
     ]
     grid = ttnn.CoreRangeSet(core_ranges)
 
@@ -278,13 +354,58 @@ def init_kvpe_cache(kvpe_cache_head_dim, mesh_device, seq_len, mesh_shape, sp_ax
         nd_shard_spec=kv_nd_shard_spec,
     )
 
-    tt_kvpe_cache = ttnn.from_torch(
-        torch_kvpe_cache,
-        dtype=ttnn.bfloat8_b,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=kv_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    # Allocate + zero on device. The host from_torch path packs the full replicated
+    # cache as bfp8 on host, overflowing pack_as_bfp8_tiles' 32-bit page index at high
+    # num_users; a device kernel zeros it instead with no host transfer. Allocating
+    # directly in the requested dtype/layout also sidesteps the mesh-mapper from_torch
+    # path that forces TILE for fp8_e4m3 (so fp8 rides on ROW_MAJOR).
+    #
+    # fp8_e4m3 can't be DRAMZeroFill'd directly: its compute kernel needs fp32_dest_acc_en
+    # whenever an 8-bit-float CB is on-core (Blackhole TT_FATAL), so for fp8 we allocate +
+    # zero in bf16 and typecast on device (still no host transfer; typecast keeps the
+    # ROW_MAJOR layout and the ND shard spec).
+    is_fp8 = dtype == ttnn.fp8_e4m3
+    tt_kvpe_cache = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([num_users * num_layers, 1, seq_len_local, kvpe_cache_head_dim]),
+        ttnn.bfloat16 if is_fp8 else dtype,
+        layout,
+        mesh_device,
+        kv_mem_config,
     )
+    DRAMZeroFill.op(tt_kvpe_cache)
+    if is_fp8:
+        tt_kvpe_cache = ttnn.typecast(tt_kvpe_cache, ttnn.fp8_e4m3)
+
+    # allocate_tensor_on_device assigns a default 2D fully-replicated topology, but the rest
+    # of the model produces replicated tensors via ReplicateTensorToMesh, which is a 1D
+    # MeshShape(num_devices) with a single Replicate placement. Reproduce that exactly: a 1D
+    # distribution_shape + single Replicate, with mesh_coords being the 2D physical device
+    # coordinates (row-major), matching what the ReplicateTensorToMesh mapper emits.
+    num_devices = mesh_device.shape[0] * mesh_device.shape[1]
+    dist_shape = ttnn.MeshShape([num_devices])
+    placements = [ttnn.PlacementReplicate()]
+    physical_mesh_shape = ttnn.MeshShape(mesh_device.shape[0], mesh_device.shape[1])
+    coords = list(ttnn.MeshCoordinateRange(physical_mesh_shape))
+    tt_kvpe_cache.update_tensor_topology(ttnn.TensorTopology(dist_shape, placements, coords))
 
     return tt_kvpe_cache
+
+
+def allocate_mla_kvpe_cache(*, mesh_device, hf_config, max_seq_len, mesh_shape, sp_axis, num_layers, num_users):
+    """Allocate the MLA KVPE cache for one runtime from the HF config.
+
+    The MLA per-token cache row is ``qk_rope_head_dim + kv_lora_rank`` wide; ONE
+    shared cache holds ``num_users * num_layers`` user-major slots of
+    ``max_seq_len`` each. Shared by ``TtPrefillRuntime`` (its default allocator)
+    and the MLA model adapter, so the MLA KV layout has one definition.
+    """
+    kvpe_head_dim = hf_config.qk_rope_head_dim + hf_config.kv_lora_rank
+    return init_kvpe_cache(
+        kvpe_cache_head_dim=kvpe_head_dim,
+        mesh_device=mesh_device,
+        seq_len=max_seq_len,
+        mesh_shape=list(mesh_shape),
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=num_layers,
+        num_users=num_users,
+    )

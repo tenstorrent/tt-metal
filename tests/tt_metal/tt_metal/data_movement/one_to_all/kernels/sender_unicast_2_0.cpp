@@ -15,6 +15,7 @@ void kernel_main() {
     constexpr uint32_t test_id = get_arg(args::test_id);
     constexpr uint32_t num_subordinates = get_arg(args::num_subordinates);
     constexpr uint32_t num_virtual_channels = get_arg(args::num_vc);
+    constexpr uint32_t loopback = get_arg(args::loopback);
 
     // Packed subordinate coords are truly variadic (one per subordinate).
     const uint32_t num_of_transactions = get_arg(args::num_of_transactions);
@@ -60,4 +61,5 @@ void kernel_main() {
     DeviceTimestampedData("Number of Virtual Channels", num_virtual_channels);
     DeviceTimestampedData("NoC Index", noc_index);
     DeviceTimestampedData("Number of subordinates", num_subordinates);
+    DeviceTimestampedData("Loopback", loopback);
 }

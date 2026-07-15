@@ -25,14 +25,21 @@
 #include "api/compute/untilize.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/bcast.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
-    constexpr uint32_t cb_input_e4m3 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_in_rm = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_in_tile = get_compile_time_arg_val(2);
-    constexpr uint32_t cb_scale_bcast = get_compile_time_arg_val(3);
-    constexpr uint32_t cb_out_tile = get_compile_time_arg_val(4);
-    constexpr uint32_t cb_out_fp32 = get_compile_time_arg_val(5);
+    constexpr uint32_t cb_input_e4m3_id = get_compile_time_arg_val(0);
+    CircularBuffer cb_input_e4m3(cb_input_e4m3_id);
+    constexpr uint32_t cb_in_rm_id = get_compile_time_arg_val(1);
+    CircularBuffer cb_in_rm(cb_in_rm_id);
+    constexpr uint32_t cb_in_tile_id = get_compile_time_arg_val(2);
+    CircularBuffer cb_in_tile(cb_in_tile_id);
+    constexpr uint32_t cb_scale_bcast_id = get_compile_time_arg_val(3);
+    CircularBuffer cb_scale_bcast(cb_scale_bcast_id);
+    constexpr uint32_t cb_out_tile_id = get_compile_time_arg_val(4);
+    CircularBuffer cb_out_tile(cb_out_tile_id);
+    constexpr uint32_t cb_out_fp32_id = get_compile_time_arg_val(5);
+    CircularBuffer cb_out_fp32(cb_out_fp32_id);
     // Tile dims from the tensor's tile spec.
     constexpr uint32_t tile_h = get_compile_time_arg_val(6);
     constexpr uint32_t tile_w = get_compile_time_arg_val(7);
@@ -45,73 +52,73 @@ void kernel_main() {
 
     uint32_t num_blocks = get_arg_val<uint32_t>(0);  // tile_h x 128 blocks for this core
 
-    compute_kernel_hw_startup(cb_input_e4m3, cb_out_fp32);
+    compute_kernel_hw_startup(cb_input_e4m3_id, cb_out_fp32_id);
 
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         {
             // ----- Phase 1: input_e4m3 row-major -> fp32 row-major (one tile at a time, index 0) -----
-            reconfig_data_format_srca(cb_input_e4m3);
-            pack_reconfig_data_format(cb_in_rm);
-            copy_tile_init(cb_input_e4m3);
+            reconfig_data_format_srca(cb_input_e4m3_id);
+            pack_reconfig_data_format(cb_in_rm_id);
+            copy_tile_init(cb_input_e4m3_id);
             // One input_e4m3 page is one 32x32 row-major tile. A 128-wide block contains
             // tiles_per_block such pages.
             for (uint32_t s = 0; s < tiles_per_block; ++s) {
-                cb_wait_front(cb_input_e4m3, 1);
-                cb_reserve_back(cb_in_rm, 1);
+                cb_input_e4m3.wait_front(1);
+                cb_in_rm.reserve_back(1);
                 tile_regs_acquire();
-                copy_tile(cb_input_e4m3, 0, IDST0);
+                copy_tile(cb_input_e4m3_id, 0, IDST0);
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile(IDST0, cb_in_rm);
+                pack_tile(IDST0, cb_in_rm_id);
                 tile_regs_release();
-                cb_push_back(cb_in_rm, 1);
-                cb_pop_front(cb_input_e4m3, 1);
+                cb_in_rm.push_back(1);
+                cb_input_e4m3.pop_front(1);
             }
 
             // ----- Phase 2a: tilize fp32 input row-major -> tile -----
-            reconfig_data_format_srca(cb_in_rm);
-            pack_reconfig_data_format(cb_in_tile);
-            tilize_init(cb_in_rm, tiles_per_block, cb_in_tile);
-            cb_wait_front(cb_in_rm, tiles_per_block);
-            cb_reserve_back(cb_in_tile, tiles_per_block);
-            tilize_block(cb_in_rm, tiles_per_block, cb_in_tile);
-            cb_push_back(cb_in_tile, tiles_per_block);
-            cb_pop_front(cb_in_rm, tiles_per_block);
-            tilize_uninit(cb_in_rm, cb_in_tile);
+            reconfig_data_format_srca(cb_in_rm_id);
+            pack_reconfig_data_format(cb_in_tile_id);
+            tilize_init(cb_in_rm_id, tiles_per_block, cb_in_tile_id);
+            cb_in_rm.wait_front(tiles_per_block);
+            cb_in_tile.reserve_back(tiles_per_block);
+            tilize_block(cb_in_rm_id, tiles_per_block, cb_in_tile_id);
+            cb_in_tile.push_back(tiles_per_block);
+            cb_in_rm.pop_front(tiles_per_block);
+            tilize_uninit(cb_in_rm_id, cb_in_tile_id);
 
             // ----- Phase 2c: block broadcast multiply -----
             // cb_scale_bcast holds block_ht tiles; tile block_h_idx has column 0 = scale[:, block_h_idx].
-            reconfig_data_format(cb_in_tile, cb_scale_bcast);
-            pack_reconfig_data_format(cb_out_tile);
-            mul_bcast_cols_init_short(cb_in_tile, cb_scale_bcast);
-            cb_wait_front(cb_in_tile, tiles_per_block);
-            cb_wait_front(cb_scale_bcast, block_ht);
-            cb_reserve_back(cb_out_tile, tiles_per_block);
+            reconfig_data_format(cb_in_tile_id, cb_scale_bcast_id);
+            pack_reconfig_data_format(cb_out_tile_id);
+            mul_bcast_cols_init_short(cb_in_tile_id, cb_scale_bcast_id);
+            cb_in_tile.wait_front(tiles_per_block);
+            cb_scale_bcast.wait_front(block_ht);
+            cb_out_tile.reserve_back(tiles_per_block);
             for (uint32_t block_h_idx = 0; block_h_idx < block_ht; ++block_h_idx) {
                 for (uint32_t k = 0; k < block_wt; ++k) {
                     uint32_t in_idx = block_h_idx * block_wt + k;
                     tile_regs_acquire();
-                    mul_tiles_bcast_cols(cb_in_tile, cb_scale_bcast, in_idx, block_h_idx, IDST0);
+                    mul_tiles_bcast_cols(cb_in_tile_id, cb_scale_bcast_id, in_idx, block_h_idx, IDST0);
                     tile_regs_commit();
                     tile_regs_wait();
-                    pack_tile(IDST0, cb_out_tile);
+                    pack_tile(IDST0, cb_out_tile_id);
                     tile_regs_release();
                 }
             }
-            cb_push_back(cb_out_tile, tiles_per_block);
-            cb_pop_front(cb_in_tile, tiles_per_block);
-            cb_pop_front(cb_scale_bcast, block_ht);
+            cb_out_tile.push_back(tiles_per_block);
+            cb_in_tile.pop_front(tiles_per_block);
+            cb_scale_bcast.pop_front(block_ht);
 
             // ----- Phase 3: untilize cb_out_tile -> fp32 row-major output -----
-            reconfig_data_format_srca(cb_out_tile);
-            pack_reconfig_data_format(cb_out_fp32);
-            untilize_init(cb_out_tile);
-            cb_wait_front(cb_out_tile, tiles_per_block);
-            cb_reserve_back(cb_out_fp32, tiles_per_block);
-            untilize_block(cb_out_tile, tiles_per_block, cb_out_fp32);
-            cb_push_back(cb_out_fp32, tiles_per_block);
-            cb_pop_front(cb_out_tile, tiles_per_block);
-            untilize_uninit(cb_out_tile);
+            reconfig_data_format_srca(cb_out_tile_id);
+            pack_reconfig_data_format(cb_out_fp32_id);
+            untilize_init(cb_out_tile_id);
+            cb_out_tile.wait_front(tiles_per_block);
+            cb_out_fp32.reserve_back(tiles_per_block);
+            untilize_block(cb_out_tile_id, tiles_per_block, cb_out_fp32_id);
+            cb_out_fp32.push_back(tiles_per_block);
+            cb_out_tile.pop_front(tiles_per_block);
+            untilize_uninit(cb_out_tile_id);
         }
     }
 }

@@ -13,7 +13,8 @@ import pytest
 import torch
 
 import ttnn
-from models.common.models.executor import ConfigMismatch, EagerLLMExecutor, TensorSpec, TracedLLMExecutor
+from models.common.models.executor import EagerLLMExecutor, TensorSpec, TracedLLMExecutor
+from models.common.models.module_input_validation import ConfigMismatch
 
 
 class TestTensorSpec:

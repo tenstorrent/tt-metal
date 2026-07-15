@@ -193,20 +193,25 @@ inline void set_dst_write_addr(const std::uint32_t tile_index)
 /**
  * @brief Configure the packer relu mode and threshold.
  *
- * Decodes the relu config into a hardware relu mode (none / min-threshold / max-threshold) and
- * threshold value and writes it to the STACC_RELU config register.
+ * Writes the relu mode and threshold carried by the config to the STACC_RELU config register.
  *
- * @param relu_config: Relu configuration carrying the hardware relu mode and threshold value.
+ * @param relu_config: Relu configuration carrying the mode and threshold value.
  */
 TT_ALWAYS_INLINE void _llk_pack_relu_config_(const ckernel::ReluConfig& relu_config)
 {
-    const std::uint32_t val = (relu_config.get_threshold() << STACC_RELU_ReluThreshold_SHAMT) | (relu_config.get_hw_mode() << STACC_RELU_ApplyRelu_SHAMT);
-    TTI_SETDMAREG(0, val & 0xffff, 0, LO_16(p_gpr_pack::TMP0));
-    TTI_SETDMAREG(0, val >> 16, 0, HI_16(p_gpr_pack::TMP0));
+    const std::uint32_t mode = static_cast<std::uint32_t>(relu_config.get_mode());
+    const std::uint32_t val  = (relu_config.get_threshold() << STACC_RELU_ReluThreshold_SHAMT) | (mode << STACC_RELU_ApplyRelu_SHAMT);
+
+    // STACC_RELU shares this cfg word with ALU_ACC_CTRL_Zero_Flag_disabled_src/dst (bits 0-1, owned by the
+    // MATH/UNPACK threads). A whole-word WRCFG_32b would clobber those bits, so use a masked RMW under
+    // mutex::REG_RMW -- matching how configure_pack programs relu.
+    static_assert(STACC_RELU_ApplyRelu_ADDR32 == STACC_RELU_ReluThreshold_ADDR32, "STACC_RELU ApplyRelu and ReluThreshold must share ADDR32 for combined RMW");
+    constexpr std::uint32_t hw_relu_mask = STACC_RELU_ApplyRelu_MASK | STACC_RELU_ReluThreshold_MASK;
+
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
-    TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, STACC_RELU_ApplyRelu_ADDR32);
-    TTI_NOP;
-    TTI_NOP;
+    t6_mutex_acquire(mutex::REG_RMW);
+    cfg_reg_rmw_tensix<STACC_RELU_ApplyRelu_ADDR32, 0, hw_relu_mask>(val);
+    t6_mutex_release(mutex::REG_RMW);
 }
 
 /**

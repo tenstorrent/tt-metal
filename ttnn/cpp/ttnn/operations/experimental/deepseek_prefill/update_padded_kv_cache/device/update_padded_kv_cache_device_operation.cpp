@@ -29,13 +29,14 @@ namespace {
 // MeshWorkloadFactory::override_runtime_arguments, so the buffer-binding fast cache-hit path stays
 // correct while those values remain out of the program hash.
 constexpr auto kReaderKernelPath =
-    "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/dataflow/reader_fill_cache_interleaved_start_id.cpp";
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/device/kernels/dataflow/"
+    "reader_update_padded_kv_cache.cpp";
 constexpr auto kWriterKernelPath =
     "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/device/kernels/dataflow/"
     "writer_update_padded_kv_cache.cpp";
 
 constexpr uint32_t kSrcCbIndex = 0;
-constexpr uint32_t kNumInputTilesDoubleBuffered = 2;
+constexpr uint32_t kNumInputPagesDoubleBuffered = 2;
 
 // Per-call scalar checks shared by the cache-miss and cache-hit paths. slot_idx and kv_actual_global
 // are now host-side scalars (common runtime args patched on cache hits), so the value-range checks
@@ -84,9 +85,21 @@ void UpdatePaddedKvCacheDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(cache.storage_type() == StorageType::DEVICE, "cache must be on device");
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "input must be on device");
-    TT_FATAL(cache.layout() == Layout::TILE, "cache must be TILE layout");
-    TT_FATAL(input.layout() == Layout::TILE, "input must be TILE layout");
     TT_FATAL(cache.dtype() == input.dtype(), "cache and input dtype must match");
+
+    // Layout / dtype gating. The op is a pure page copy, so it supports both TILE and ROW_MAJOR;
+    // the page-unit math in create_descriptor branches on layout. The two formats are mutually
+    // exclusive per dtype family:
+    //   - block-float (bfloat8_b/bfloat4_b) carries a per-face shared exponent and is tile-only.
+    //   - fp8_e4m3 is ROW_MAJOR-only (Blackhole) in ttnn today.
+    TT_FATAL(cache.layout() == input.layout(), "cache and input layout must match");
+    TT_FATAL(input.layout() == Layout::TILE || input.layout() == Layout::ROW_MAJOR, "layout must be TILE or ROW_MAJOR");
+    if (tt::tt_metal::is_block_float(input.dtype())) {
+        TT_FATAL(input.layout() == Layout::TILE, "block-float dtypes (bfloat8_b/bfloat4_b) require TILE layout");
+    }
+    if (input.dtype() == DataType::FP8_E4M3) {
+        TT_FATAL(input.layout() == Layout::ROW_MAJOR, "FP8_E4M3 requires ROW_MAJOR layout");
+    }
 
     const auto& cache_shape = cache.padded_shape();
     const auto& input_shape = input.padded_shape();
@@ -97,7 +110,11 @@ void UpdatePaddedKvCacheDeviceOperation::validate_on_program_cache_miss(
 
     const uint32_t cache_seq = cache_shape[-2];
     const uint32_t input_seq = input_shape[-2];
+    // Seq / offset arithmetic stays tile-granular (multiples of 32) in BOTH layouts: the writer's
+    // update_idxt boundary math counts tile-rows even when ROW_MAJOR makes each page a single token
+    // row, so input/cache seq must be 32-aligned regardless of layout.
     TT_FATAL(input_seq % TILE_HEIGHT == 0, "input seq dim ({}) must be tile-aligned", input_seq);
+    TT_FATAL(cache_seq % TILE_HEIGHT == 0, "cache seq dim ({}) must be tile-aligned", cache_seq);
     TT_FATAL(cache_seq % input_seq == 0, "cache seq ({}) must be a multiple of input seq ({})", cache_seq, input_seq);
 
     TT_FATAL(args.num_layers > 0, "num_layers must be positive");
@@ -156,6 +173,7 @@ ttsl::hash::hash_t UpdatePaddedKvCacheDeviceOperation::compute_program_hash(
         args.num_layers,
         args.cluster_axis,
         input.dtype(),
+        input.layout(),  // TILE vs ROW_MAJOR drives the page-unit math; must not collide
         input.memory_config(),
         input.padded_shape(),
         cache.memory_config(),
@@ -180,11 +198,33 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     const auto& input_shape = input.padded_shape();
 
     const tt::DataFormat data_format = datatype_to_dataformat_converter(input.dtype());
-    const uint32_t single_tile_size = tt::tile_size(data_format);
 
-    const uint32_t Wt = cache_shape[-1] / TILE_WIDTH;
-    const uint32_t input_Ht = input_shape[-2] / TILE_HEIGHT;
-    const uint32_t cache_HtWt = cache_shape[-2] * Wt / TILE_HEIGHT;
+    // The op moves the cache as opaque pages: in TILE layout a page is a 32x32 tile; in ROW_MAJOR a
+    // page is one token row (head_dim wide). All of the writer's start_id / update_idxt arithmetic is
+    // expressed in pages, so switching layout is purely a reinterpretation of these page-unit counts
+    // (plus the page byte size and the writer's tile_height compile arg). The seq/offset asserts keep
+    // everything 32-row-aligned in both layouts, so the boundary math is identical.
+    const bool is_row_major = input.layout() == Layout::ROW_MAJOR;
+
+    uint32_t single_page_size;  // bytes per page / CB page
+    uint32_t Wt;                // width pages per (head, seq-row)
+    uint32_t input_Ht;          // input seq in page-rows
+    uint32_t cache_HtWt;        // cache page-rows per head
+    uint32_t writer_tile_height;
+    if (is_row_major) {
+        // ROW_MAJOR: page = one token row; use the buffer's aligned page size (handles row padding).
+        single_page_size = cache.buffer()->aligned_page_size();
+        Wt = 1;
+        input_Ht = input_shape[-2];
+        cache_HtWt = cache_shape[-2];
+        writer_tile_height = 1;
+    } else {
+        single_page_size = tt::tile_size(data_format);
+        Wt = cache_shape[-1] / TILE_WIDTH;
+        input_Ht = input_shape[-2] / TILE_HEIGHT;
+        cache_HtWt = cache_shape[-2] * Wt / TILE_HEIGHT;
+        writer_tile_height = TILE_HEIGHT;
+    }
     const uint32_t cache_CHtWt = cache_shape[1] * cache_HtWt;
 
     // Per-chip kernel inputs: kernel does the update_idxt + start_id math itself from these.
@@ -202,14 +242,14 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
 
     tt::tt_metal::ProgramDescriptor desc;
 
-    // CB for the input tiles.
+    // CB for the input pages (a page is a tile in TILE layout, a token row in ROW_MAJOR).
     desc.cbs.push_back(CBDescriptor{
-        .total_size = kNumInputTilesDoubleBuffered * single_tile_size,
+        .total_size = kNumInputPagesDoubleBuffered * single_page_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = kSrcCbIndex,
             .data_format = data_format,
-            .page_size = single_tile_size,
+            .page_size = single_page_size,
         }}},
     });
 
@@ -224,9 +264,9 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     reader_kernel.compile_time_args = std::move(reader_compile_args);
     reader_kernel.config = ReaderConfigDescriptor{};
 
-    // Writer kernel descriptor. Compile args: src CB (read), TILE_HEIGHT (divides kv tokens into
-    // tiles), then the cache tensor accessor.
-    KernelDescriptor::CompileTimeArgs writer_compile_args = {kSrcCbIndex, TILE_HEIGHT};
+    // Writer kernel descriptor. Compile args: src CB (read), tile_height (divides kv tokens into the
+    // page-row unit: TILE_HEIGHT for TILE, 1 for ROW_MAJOR), then the cache tensor accessor.
+    KernelDescriptor::CompileTimeArgs writer_compile_args = {kSrcCbIndex, writer_tile_height};
     TensorAccessorArgs(cache.buffer()).append_to(writer_compile_args);
 
     KernelDescriptor writer_kernel;

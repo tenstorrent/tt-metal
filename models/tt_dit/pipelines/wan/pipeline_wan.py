@@ -281,7 +281,10 @@ class WanPipeline(PipelineAPIMixin):
         device: ttnn.MeshDevice,
         config: WanPipelineConfig,
         run_warmup: bool = True,
+        lora_enabled: bool = False,
     ) -> None:
+        super().__init__()
+
         self.checkpoint_name = config.checkpoint_name
         self.model_type = config.model_type
         self._cfg_enabled = config.cfg_enabled
@@ -322,11 +325,14 @@ class WanPipeline(PipelineAPIMixin):
             max_sequence_length=config.max_sequence_length,
         )
 
+        self.lora_enabled = lora_enabled
+
         self.transformer = self._checkpoint.build(
             ccl_manager=self.dit_ccl_manager,
             parallel_config=self.parallel_config,
             is_fsdp=self.is_fsdp,
             model_type=self.model_type,
+            lora_enabled=lora_enabled,
         )
 
         self.transformer_2 = self._checkpoint_2.build(
@@ -334,6 +340,7 @@ class WanPipeline(PipelineAPIMixin):
             parallel_config=self.parallel_config,
             is_fsdp=self.is_fsdp,
             model_type=self.model_type,
+            lora_enabled=lora_enabled,
         )
 
         self._vae = WanVAEDecoderAdapter(

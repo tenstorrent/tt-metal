@@ -22,11 +22,22 @@ def get_rot_transformation_mat():
     return rot_emb_matrix
 
 
-def get_cos_sin_matrix(hf_config):
+def get_cos_sin_matrix(hf_config, interleave: bool = True):
     """Get cos and sin matrices for rotary positional embeddings.
 
     HuggingFace returns cos/sin in [max_seq_len, dim] with dim = [t1,..,td//2, t1,..,td//2].
-    We convert to Meta-style [t1,t1,..,td//2,td//2] format and return [1, 1, max_seq_len, dim].
+    Returns cos, sin as [1, 1, max_seq_len, dim].
+
+    interleave (which physical columns form a rotated pair):
+        True  -> Meta-style duplicated pairs [t1,t1,..,td//2,td//2]; pairs (0,1),(2,3),..
+                 consumed by ``rotary_embedding_llama`` + ``get_rot_transformation_mat``
+                 (MLA q_pe/k_pe, and the GLM indexer).
+        False -> rotate_half / half-split [t1,..,td//2, t1,..,td//2]; pairs (i, i+dim/2)
+                 consumed by ``rotary_embedding_hf`` (no trans_mat) — the DeepSeek indexer.
+
+    Tables are always pure rotations (unit modulus): ``_mscale = m(mscale)/m(mscale_all_dim)``
+    is forced to 1. The YaRN mscale amplitude is applied elsewhere (the attention softmax
+    scale); for every shipped config the baked factor is 1, so this is exact.
     """
     args = {
         "dim": hf_config.qk_rope_head_dim,
@@ -40,23 +51,72 @@ def get_cos_sin_matrix(hf_config):
         "mscale": hf_config.rope_scaling["mscale"],
         "mscale_all_dim": hf_config.rope_scaling["mscale_all_dim"],
     }
+    # Force _mscale = m(mscale)/m(mscale_all_dim) = 1 → pure rotations (no amplitude in
+    # cos/sin). The mscale amplitude is applied in the attention softmax scale instead.
+    args["mscale_all_dim"] = args["mscale"]
 
     reference_rope = DeepseekV3YarnRotaryEmbedding(**args)
 
     cos = reference_rope.cos_cached
     sin = reference_rope.sin_cached
 
-    # Undo the HF permute to Meta-style
+    # HF stores [t1,..,td//2, t1,..,td//2]; take one half, then lay out per `interleave`.
     cos = cos[:, : cos.shape[1] // 2]
-    cos = torch.stack((cos, cos), dim=-1).flatten(-2)
-
     sin = sin[:, : sin.shape[1] // 2]
-    sin = torch.stack((sin, sin), dim=-1).flatten(-2)
+    if interleave:
+        cos = torch.stack((cos, cos), dim=-1).flatten(-2)  # [t1,t1,t2,t2,..]
+        sin = torch.stack((sin, sin), dim=-1).flatten(-2)
+    else:
+        cos = torch.cat((cos, cos), dim=-1)  # [t1,..,td//2, t1,..,td//2]
+        sin = torch.cat((sin, sin), dim=-1)
 
     cos = cos.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len, dim]
     sin = sin.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len, dim]
 
     return cos, sin
+
+
+def interleaved_to_halfsplit_perm(rope_dim: int = 64) -> torch.Tensor:
+    """Dim permutation that maps this MLA's RoPE layout to vLLM's (and back — it is
+    its own structural counterpart applied to the other side).
+
+    RoPE CONVENTION NOTE (verified vs DeepSeek-V3.2-Exp reference, layers 0/30/60).
+    This MLA carries q_pe and stores k_pe in the **interleaved** layout of the
+    official ``inference/model.py`` (``apply_rotary_emb(interleaved=True)``: the
+    2-D rotated pairs are dims (0,1),(2,3),...). vLLM's ``DeepseekV32`` uses the HF
+    **rotate_half / half-split** layout (pairs (i, i+rope_dim/2)) with projection
+    weights pre-permuted to suit. The two are exactly one fixed dim permutation
+    apart, so:
+      * q·k — and therefore the entire MLA output — is IDENTICAL in both layouts
+        (the dot product sums over the rope dims, which the permutation only
+        reorders). Measured: output PCC unchanged at 0.99983 either way.
+      * the stored k_pe *values* differ element-wise: a direct comparison of our
+        k_pe against a vLLM-written cache reads ~0.43 PCC, while the SAME tensor
+        reindexed by this permutation matches at 0.99997.
+
+    So within our self-consistent stack the layout is irrelevant. It matters ONLY
+    when interoperating with a vLLM-written KV cache (e.g. cross-stack disaggregated
+    prefill/decode, or validating against vLLM's recorded k_pe): reindex the rope
+    half of the cache row with ``kpe[..., interleaved_to_halfsplit_perm()]`` to put
+    it in vLLM's layout (or the reverse to ingest a vLLM cache).
+
+    Returns the index tensor p such that ``interleaved_kpe[..., p] == halfsplit_kpe``:
+    p = [0, 2, 4, ..., 1, 3, 5, ...] (even dims = cos halves, then odd dims = sin).
+    """
+    return torch.cat([torch.arange(0, rope_dim, 2), torch.arange(1, rope_dim, 2)])
+
+
+def interleaved_perm_matrix(rope_dim: int = 64) -> torch.Tensor:
+    """``[rope_dim, rope_dim]`` permutation matrix that reorders a half-split rope layout into the
+    interleaved one (``out = in @ P``). Purpose: run a half-split (DeepSeek) q/k through the
+    interleaved-only ``rotary_embedding_indexed`` op — applied to BOTH q and k the permutation cancels
+    in ``q·k`` (score/top-k unchanged), while letting the interleaved op pair the right dims with each
+    frequency. Built from ``interleaved_to_halfsplit_perm`` (its inverse), the canonical convention:
+    ``interleaved = halfsplit[argsort(p)]``, so ``P[argsort(p)[j], j] = 1``."""
+    src = torch.argsort(interleaved_to_halfsplit_perm(rope_dim))  # out[j] = in[src[j]]
+    perm = torch.zeros(rope_dim, rope_dim)
+    perm[src, torch.arange(rope_dim)] = 1.0
+    return perm
 
 
 class RotarySetup:
@@ -80,8 +140,11 @@ class RotarySetup:
 
         If is_balanced, cos/sin are reordered according to balanced chunk order
         before sharding so each SP device gets rope values matching its chunk positions.
+
+        Always Meta-style interleaved cos/sin + a trans_matrix (rotary_embedding_llama) — the
+        MLA's own RoPE layout.
         """
-        cos_matrix_torch, sin_matrix_torch = get_cos_sin_matrix(self.hf_config)
+        cos_matrix_torch, sin_matrix_torch = get_cos_sin_matrix(self.hf_config, interleave=True)
 
         assert (
             seq_len <= self.hf_config.max_seq_len
@@ -196,3 +259,24 @@ class RotarySetup:
         )
 
         return {"cos_matrix": cos_matrix, "sin_matrix": sin_matrix, "trans_matrix": trans_matrix}
+
+    def get_indexer_rope_tables(self, interleave: bool) -> dict[str, ttnn.Tensor]:
+        """Full-length REPLICATED cos/sin (+ trans_matrix iff ``interleave``) for the DSA lightning
+        indexer's natural-path RoPE. Distinct from ``get_rope_tensors`` (SP-sharded, interleaved-only,
+        for the MLA q_pe/k_pe): the indexer keeps a replicated full/gathered key cache, chooses its
+        convention per config (GLM interleaved -> ``rotary_embedding_llama``; DeepSeek half-split ->
+        ``rotary_embedding_hf``), and slices the tables per chunk itself. Pure rotations (no mscale),
+        same theta/YaRN as the MLA. Returns ``{"cos", "sin", "trans"}`` with ``trans=None`` for the
+        half-split (DeepSeek) convention."""
+        cos, sin = get_cos_sin_matrix(self.hf_config, interleave=interleave)
+
+        def repl(t):
+            return ttnn.from_torch(
+                t.to(torch.bfloat16),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+
+        return {"cos": repl(cos), "sin": repl(sin), "trans": repl(get_rot_transformation_mat()) if interleave else None}

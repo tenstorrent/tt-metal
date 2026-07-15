@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/compute_kernel_api.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
@@ -122,9 +122,8 @@ void kernel_main() {
     // Supports K only up to 64
     int end_phase = (K <= 64) ? logk - 1 : 5;
 
+    compute_kernel_hw_startup(input_cb_index, index_cb_index, input_transposed_cb_index);
     ckernel::topk_tile_init();
-    transpose_wh_init(input_cb_index, input_transposed_cb_index);
-    transpose_wh_init(index_cb_index, index_transposed_cb_index);
 
     CircularBuffer input_transposed_cb(input_transposed_cb_index);
     CircularBuffer index_transposed_cb(index_transposed_cb_index);
@@ -192,13 +191,16 @@ void kernel_main() {
         input_transposed_cb.wait_front(Kt);
         for (uint32_t i = 0; i < Kt; ++i) {
             tile_regs_acquire();
-            values_cb.reserve_back(1);
             copy_tile(input_transposed_cb_index, i, 0);  // Copy i-th sorted value tile
             tile_regs_commit();
+
+            values_cb.reserve_back(1);
+
             tile_regs_wait();
-            pack_tile(0, values_cb_index);               // Pack for output transmission
-            values_cb.push_back(1);
+            pack_tile(0, values_cb_index);  // Pack for output transmission
             tile_regs_release();
+
+            values_cb.push_back(1);
         }
         // Clean up remaining tiles in transposed buffer
         input_transposed_cb.wait_front(Wt);
@@ -211,13 +213,16 @@ void kernel_main() {
         index_transposed_cb.wait_front(Kt);
         for (uint32_t i = 0; i < Kt; ++i) {
             tile_regs_acquire();
-            output_ind_cb.reserve_back(1);
             copy_tile(index_transposed_cb_index, i, 0);  // Copy i-th sorted index tile
             tile_regs_commit();
+
+            output_ind_cb.reserve_back(1);
+
             tile_regs_wait();
-            pack_tile(0, output_ind_cb_index);           // Pack for output transmission
-            output_ind_cb.push_back(1);
+            pack_tile(0, output_ind_cb_index);  // Pack for output transmission
             tile_regs_release();
+
+            output_ind_cb.push_back(1);
         }
         // Clean up remaining tiles in transposed buffer
         index_transposed_cb.wait_front(Wt);

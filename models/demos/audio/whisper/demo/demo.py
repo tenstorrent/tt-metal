@@ -39,6 +39,7 @@ from models.demos.audio.whisper.tt.whisper_generator import GenerationParams, Wh
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import verify_perf
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 available_devices = len(ttnn.get_device_ids()) if ttnn.get_device_ids() else 1
 
@@ -864,6 +865,10 @@ def test_demo_for_conditional_generation(
         and not use_per_request_params
     )
 
+    profiler = BenchmarkProfiler()
+    profiler.start("run")
+    profiler.start("inference_prefill")
+    profiler.start("inference_decode")
     ttft, decode_throughput = run_demo_whisper_for_conditional_generation_inference(
         input_path,
         mesh_device,
@@ -877,6 +882,31 @@ def test_demo_for_conditional_generation(
         stream=stream,
         run_both_batch_sizes=run_both_batch_sizes and not should_check_perf,
     )
+    profiler.end("inference_prefill")
+    profiler.end("inference_decode")
+    profiler.end("run")
+
+    if is_ci_env:
+        # When run_both_batch_sizes is active, the returned metrics correspond to
+        # the last batch size iterated (WHISPER_BATCH_SIZE).
+        effective_bs_per_device = (
+            WHISPER_BATCH_SIZE if (run_both_batch_sizes and not should_check_perf) else batch_size_per_device
+        )
+        total_batch = mesh_device.get_num_devices() * effective_bs_per_device
+        benchmark_data = BenchmarkData()
+        benchmark_data.add_measurement(profiler, 0, "inference_prefill", "time_to_token", ttft)
+        benchmark_data.add_measurement(profiler, 0, "inference_decode", "tokens/s/user", decode_throughput)
+        benchmark_data.add_measurement(profiler, 0, "inference_decode", "tokens/s", decode_throughput * total_batch)
+        benchmark_data.save_partial_run_json(
+            profiler,
+            run_type="demo_perf",
+            ml_model_name=model_repo.split("/")[-1],
+            ml_model_type="audio",
+            batch_size=total_batch,
+            # Whisper encoder uses 30-second mel spectrogram chunks → 3000 frames at 80 mel bins,
+            # downsampled 2× by two Conv1d layers to 1500 encoder time steps.
+            input_sequence_length=1500,
+        )
 
     if should_check_perf:
         # Whisper perf targets are maintained for N150 and P150 only.

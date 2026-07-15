@@ -37,7 +37,7 @@ void kernel_main() {
     cb_in0.push_back(num_tiles);
 #endif
 
-    generate_bcast_unary_scalar(cb_id_in1, packed_scalar);
+    generate_bcast_unary_scalar(CircularBuffer(cb_id_in1), packed_scalar);
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         uint32_t curr_id = base_start_id_HtWt + curr_id_from_base;

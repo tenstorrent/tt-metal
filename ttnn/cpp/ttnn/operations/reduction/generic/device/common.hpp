@@ -51,6 +51,39 @@ inline uint32_t dense_rm_padding_identity_bits(tt::DataFormat df, tt::tt_metal::
     return static_cast<uint32_t>(bf16);
 }
 
+// True when the reduce uses the SFPU path instead of the FPU GMPOOL/matmul path.
+// Int32 MAX/SUM always use SFPU (FPU has no Int32 support); MIN is lowered to MAX + negate on the
+// host before reaching the factories. Float32 SUM opts into SFPU only when the host requests the
+// accurate ttnn.mean path (`use_sfpu_reduce`): the FPU path truncates fp32 to tf32,
+// so accumulating register-to-register in the SFPU preserves full fp32. mean is lowered to SUM +
+// a 1/N post-mul before this is consulted, so only SUM (never AVG) is checked for fp32.
+inline bool use_sfpu_reduce_path(
+    tt::tt_metal::DataType dtype, tt::tt_metal::ReduceOpMath math_op, bool use_sfpu_reduce = false) {
+    using tt::tt_metal::ReduceOpMath;
+    if (dtype == tt::tt_metal::DataType::INT32) {
+        return math_op == ReduceOpMath::MAX || math_op == ReduceOpMath::SUM;
+    }
+    return use_sfpu_reduce && dtype == tt::tt_metal::DataType::FLOAT32 && math_op == ReduceOpMath::SUM;
+}
+
+// True when a non-unity scalar must be a post-reduce multiply instead of via the scaler CB: MAX/MIN,
+// the Int32 SFPU path, and the accurate fp32 SFPU mean all ignore the scaler CB (fp32 matches AVG/SUM).
+inline bool requires_post_mul(
+    tt::tt_metal::ReduceOpMath math_op, tt::tt_metal::DataType dtype, float scaler, bool use_sfpu_reduce = false) {
+    using tt::tt_metal::ReduceOpMath;
+    if (scaler == 1.0f) {
+        return false;
+    }
+    if (math_op == ReduceOpMath::MAX) {
+        return true;
+    }
+    if (math_op == ReduceOpMath::SUM && dtype == tt::tt_metal::DataType::INT32) {
+        return true;
+    }
+    return use_sfpu_reduce && dtype == tt::tt_metal::DataType::FLOAT32 &&
+           (math_op == ReduceOpMath::SUM || math_op == ReduceOpMath::AVG);
+}
+
 // All RM-path locals derived from the input shape, tile geometry, and math op.
 // One instance is populated at the top of the RM branch in each factory and consumed
 // by the build_rm_*_ct_args helpers; both factories see the same field layout.

@@ -13,7 +13,7 @@
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/debug/assert.h"
 
 void kernel_main() {
@@ -41,13 +41,15 @@ void kernel_main() {
     binary_dest_reuse_tiles_init(cb_in2);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
-    mm_init(cb_in0, cb_in1, cb_out1);
+    state_configure<Operand::PACK>(cb_out1, __builtin_LINE());
+    matmul_init(cb_in0, cb_in1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
 
-    mm_block_init_short(cb_in1, cb_in0);
+    matmul_block_init(cb_in1, cb_in0);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
 
-    mm_block_init(cb_in0, cb_in1, cb_out0);
+    state_configure<Operand::PACK>(cb_out0, __builtin_LINE());
+    matmul_block_init(cb_in0, cb_in1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
 
     init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::NONE>(cb_in2, cb_in1, cb_out1);
@@ -80,17 +82,20 @@ void kernel_main() {
     pack_untilize_init(cb_in0, cb_out1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
 
+    reconfig_data_format(cb_in0, cb_in1);
+    // REDUCE_ROW+SUM swaps operands: state_configure(icb_scaler=cb_in0, icb=cb_in1, cb_out0)
+    // SrcA stays cb_in0 (unchanged from pack_untilize_init above), SrcB and Pack change.
     reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_in1, cb_in0, cb_out0);
-    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
     reduce_uninit();
 
     tilize_init(cb_in0, 1, cb_out1);
-    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_PACK));
 
     fast_tilize_init(cb_in2, 1, cb_out0);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
 
-    transpose_wh_init_short(cb_in1);
+    transpose_init(cb_in1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
     unary_op_init_common(cb_in0, cb_out0);
@@ -99,12 +104,12 @@ void kernel_main() {
     unary_op_init_common(cb_in1, cb_out1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
 
-    transpose_wh_init(cb_in0, cb_out0);
-    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
+    transpose_init(cb_in0);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
     copy_tile_to_dst_init_short(cb_in2);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
     tilizeA_B_reduce_init<false, true>(cb_in0, cb_in1, 1, cb_out1);
-    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 }

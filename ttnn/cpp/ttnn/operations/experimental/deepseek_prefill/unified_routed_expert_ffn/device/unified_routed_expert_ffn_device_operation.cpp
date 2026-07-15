@@ -61,6 +61,16 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     constexpr uint32_t TILE = tt::constants::TILE_HEIGHT;
     TT_FATAL(x_shape[-2] % TILE == 0, "x M ({}) must be tile-aligned", x_shape[-2]);
     TT_FATAL(op.chunk_M_tiles > 0, "chunk_M_tiles must be > 0");
+    // m_tiles is this expert's M (grid/chunk/CB sizing). x may be a shared
+    // buffer spanning many experts, so its allocated M only bounds m_tiles from
+    // above — the reader/writer index into x at the region offset.
+    TT_FATAL(op.m_tiles > 0, "m_tiles must be > 0");
+    TT_FATAL(
+        op.m_tiles <= x_shape[-2] / TILE, "m_tiles ({}) must be <= x M in tiles ({})", op.m_tiles, x_shape[-2] / TILE);
+    // read_x_at_offset needs expert_region_offsets to locate this expert's x
+    // rows in the shared buffer (the reader fetches start[global_id]).
+    TT_FATAL(
+        !op.read_x_at_offset || t.expert_region_offsets.has_value(), "read_x_at_offset requires expert_region_offsets");
 
     // Weight tensors share x's storage / layout / memory contract — fail
     // host-side if the caller forgot to upload one, picked the wrong layout,
@@ -101,8 +111,50 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
         op.local_expert_id,
         t.global_expert_idx_table.logical_shape()[-1]);
 
-    // optional_output: writer kernel computes per-core tile indices from
-    // x.padded_shape[-2]/TILE; a smaller output buffer would overflow.
+    // Direct-write mode: expert_region_offsets present => the writer places
+    // this expert's output into the SHARED optional_output buffer at the
+    // expert's region offset (fusing ttnn::insert). Requires optional_output.
+    const bool direct_write = t.expert_region_offsets.has_value();
+    if (direct_write) {
+        const auto& start = *t.expert_region_offsets;
+        // These mirror ttnn::insert's validate_index_tensor for the `start`
+        // tensor: by fusing insert into this op, the FFN now owns the
+        // region-offset vector the writer fetches device-side, so it must
+        // enforce the same invariants insert did. The writer does a single
+        // noc_async_read_page(page 0) and indexes start[global_id], which is
+        // only correct for a contiguous ROW_MAJOR single-page UINT32 vector.
+        TT_FATAL(start.storage_type() == tt::tt_metal::StorageType::DEVICE, "expert_region_offsets must be on device");
+        TT_FATAL(start.dtype() == tt::tt_metal::DataType::UINT32, "expert_region_offsets must be UINT32");
+        TT_FATAL(
+            start.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+            "expert_region_offsets must be ROW_MAJOR layout, got {}",
+            start.layout());
+        TT_FATAL(is_dram_interleaved(start), "expert_region_offsets must be DRAM-interleaved");
+        const auto& start_shape = start.logical_shape();
+        const bool start_valid_1d = start_shape.rank() == 1;
+        const bool start_valid_2d = start_shape.rank() == 2 && start_shape[0] == 1;
+        TT_FATAL(
+            start_valid_1d || start_valid_2d,
+            "expert_region_offsets must be 1D or 2D with first dimension == 1, got shape {}",
+            start_shape);
+        TT_FATAL(
+            static_cast<uint32_t>(start_shape[-1]) <= MAX_GLOBAL_EXPERTS,
+            "expert_region_offsets length ({}) exceeds the maximum supported number of experts ({})",
+            start_shape[-1],
+            MAX_GLOBAL_EXPERTS);
+        // The writer reads start[global_id] and counts[global_id] from the same
+        // global-expert index space, so the two vectors must be the same length
+        // (mirrors ttnn::insert's start/counts last-dim check).
+        TT_FATAL(
+            start_shape[-1] == t.counts.logical_shape()[-1],
+            "expert_region_offsets length ({}) must equal counts length ({})",
+            start_shape[-1],
+            t.counts.logical_shape()[-1]);
+        TT_FATAL(
+            t.optional_output.has_value(),
+            "direct-write mode (expert_region_offsets set) requires optional_output (the shared destination buffer)");
+    }
+
     if (t.optional_output.has_value()) {
         const auto& out = *t.optional_output;
         TT_FATAL(out.storage_type() == tt::tt_metal::StorageType::DEVICE, "optional_output must be on device");
@@ -116,14 +168,36 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
             "optional_output rank ({}) must match x rank ({})",
             out_shape.rank(),
             x_shape.rank());
-        for (int i = 0; i < static_cast<int>(out_shape.rank()); ++i) {
+        // Common to both modes: the N (emb) dim and all leading dims must match
+        // x — the writer's tile-row stride is out_shape[-1]/TILE, and leading
+        // dims index the same logical (1,..,1,M,N) tensor.
+        TT_FATAL(
+            out_shape[-1] == x_shape[-1],
+            "optional_output last dim ({}) must match x last dim ({})",
+            out_shape[-1],
+            x_shape[-1]);
+        for (int i = 0; i < static_cast<int>(out_shape.rank()) - 2; ++i) {
             TT_FATAL(
                 out_shape[i] == x_shape[i],
-                "optional_output padded_shape[{}] ({}) must match x padded_shape[{}] ({})",
+                "optional_output leading dim {} ({}) must match x ({})",
                 i,
                 out_shape[i],
-                i,
                 x_shape[i]);
+        }
+        // Mode-specific M (row) dim: direct-write targets the larger shared
+        // buffer (M >= x's M, tile-aligned; the writer bounds rows by
+        // dst_M_tiles); otherwise the output is per-expert and M must match x.
+        constexpr uint32_t TILE_H = tt::constants::TILE_HEIGHT;
+        if (direct_write) {
+            TT_FATAL(out_shape[-2] % TILE_H == 0, "optional_output M ({}) must be tile-aligned", out_shape[-2]);
+            TT_FATAL(
+                out_shape[-2] >= x_shape[-2],
+                "optional_output M ({}) must be >= x M ({}) in direct-write mode",
+                out_shape[-2],
+                x_shape[-2]);
+        } else {
+            TT_FATAL(
+                out_shape[-2] == x_shape[-2], "optional_output M ({}) must match x M ({})", out_shape[-2], x_shape[-2]);
         }
     }
 }
@@ -165,14 +239,21 @@ ttnn::Tensor unified_routed_expert_ffn(
     const ttnn::Tensor& global_expert_idx_table,
     uint32_t local_expert_id,
     uint32_t chunk_M_tiles,
+    uint32_t m_tiles,
+    bool read_x_at_offset,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    const std::optional<ttnn::Tensor>& optional_output) {
+    const std::optional<ttnn::Tensor>& optional_output,
+    const std::optional<ttnn::Tensor>& expert_region_offsets,
+    ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::RoutedExpertActivation activation) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::UnifiedRoutedExpertFfnDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .chunk_M_tiles = chunk_M_tiles,
+            .m_tiles = m_tiles,
             .local_expert_id = local_expert_id,
+            .read_x_at_offset = read_x_at_offset,
+            .activation = activation,
             .compute_kernel_config = compute_kernel_config},
         OperationType::tensor_args_t{
             .x = x,
@@ -181,7 +262,8 @@ ttnn::Tensor unified_routed_expert_ffn(
             .down_proj = down_proj,
             .counts = counts,
             .global_expert_idx_table = global_expert_idx_table,
-            .optional_output = optional_output});
+            .optional_output = optional_output,
+            .expert_region_offsets = expert_region_offsets});
 }
 
 }  // namespace ttnn::prim

@@ -2,6 +2,11 @@
 
 set -eo pipefail
 
+# Source MPI interface validation utility
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/utils/mpi_if_selection.sh"
+source "$SCRIPT_DIR/utils/host_utils.sh"
+
 # Function to display help
 show_help() {
     cat << EOF
@@ -22,9 +27,8 @@ Optional:
     --skip-validation                       Skip validation, only run tt-smi reset
     --no-send-traffic                       Disable --send-traffic in cluster validation
     --check                                 Dry run: verify MPI can reach all hosts via hostname, then exit
-    --mpi-if <interface>                    Network interface for MPI TCP transport (default: ens5f0np0)
-                                            Use a specific interface name to avoid virtual interfaces
-                                            (Kubernetes CNI, flannel, docker) being selected by MPI
+    --mpi-if <interface>                    Network interface for MPI TCP transport
+                                            (auto-detected if not specified)
     --mpi-args <args>                       Extra arguments passed directly to mpirun (quoted string)
                                             e.g. --mpi-args "--tag-output"
     --output <directory>                    Output directory for logs and validation artifacts (default: recover-logs).
@@ -84,7 +88,8 @@ SKIP_RESET=false
 SKIP_VALIDATION=false
 SEND_TRAFFIC=true
 CHECK=false
-MPI_IF="ens5f0np0"
+MPI_IF=""
+MPI_IF_EXPLICIT=false
 MPI_EXTRA_ARGS=()
 OUTPUT_DIR="recover-logs"
 RERUN_ON_RETRAIN=false
@@ -177,6 +182,7 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             MPI_IF="$2"
+            MPI_IF_EXPLICIT=true
             shift 2
             ;;
         --mpi-args)
@@ -277,9 +283,24 @@ if [[ -z "$HOSTS" ]]; then
     exit 1
 fi
 
+check_duplicate_hosts "$HOSTS" || exit 1
+
 if [[ "$SKIP_RESET" == true && "$SKIP_VALIDATION" == true ]]; then
     echo "Error: cannot use both --skip-reset and --skip-validation"
     exit 1
+fi
+
+# Validate/auto-detect MPI interface with first host from the list
+FIRST_HOST="${HOSTS%%,*}"
+if [[ "$MPI_IF_EXPLICIT" == "true" ]]; then
+    validate_mpi_interface "$MPI_IF" "true" "$FIRST_HOST"
+else
+    MPI_IF=$(validate_mpi_interface "" "false" "$FIRST_HOST")
+    # Check if validation failed (command substitution only exits subshell, not parent)
+    if [[ -z "$MPI_IF" ]]; then
+        echo "Error: MPI interface auto-detection failed" >&2
+        exit 1
+    fi
 fi
 
 # Set log file path inside output directory (captures actual start time).
@@ -369,10 +390,36 @@ echo ""
 # Note: tt-smi -glx_reset is deprecated as of tt-smi 3.1.1; use tt-smi -r if available
 if [[ "$SKIP_RESET" == false ]]; then
     echo "Running tt-smi -glx_reset..."
+    # Host-tag every reset line for attribution. tt-smi writes key progress to the tty (not stdout) so
+    # run under `script`; the tr/sed/awk pipeline collapses its animated \r/spinner output, keeps colors.
+    read -r -d '' RESET_CMD <<'RESET_CMD' || true
+set -o pipefail
+h=$(hostname)
+script -qefc "tt-smi -glx_reset" /dev/null |
+    tr -d '\000' |
+    sed -u 's/\r$//; s/.*\r//; s/\^@//g; /^\(\x1b\[[0-9;]*[a-zA-Z]\|[[:space:]]\)*$/d' |
+    awk '{
+        key = $0
+        gsub(/\033\[[0-9;]*[a-zA-Z]/, "", key)    # ignore color codes when comparing
+        sub(/[0-9]+[[:space:]]*$/, "", key)       # ignore trailing counter
+        if (seen && key == prev) { buf = $0 }     # same template -> keep only the latest
+        else { if (seen) print buf; buf = $0; prev = key; seen = 1 }
+    }
+    END { if (seen) print buf }' |
+    while IFS= read -r line; do
+        printf '[%s][%(%H:%M:%S)T] %s\n' "$h" -1 "$line"
+    done
+ec=${PIPESTATUS[0]}
+if [[ $ec -eq 0 ]]; then
+    printf '[%s][%(%H:%M:%S)T] Reset completed successfully\n' "$h" -1
+else
+    printf '[%s][%(%H:%M:%S)T] Reset failed | Exit code: %s\n' "$h" -1 "$ec"
+fi
+RESET_CMD
     mpirun --host "$HOSTS" \
         --mca btl_tcp_if_include "$MPI_IF" \
         "${MPI_EXTRA_ARGS[@]}" \
-        tt-smi -glx_reset
+        bash -c "$RESET_CMD"
 
     echo ""
     echo "Sleeping ${SLEEP_DURATION}s..."

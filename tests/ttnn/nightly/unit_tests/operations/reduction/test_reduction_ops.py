@@ -193,17 +193,15 @@ def _torch_sampling_reference(values, indices, k, p, temp, seed):
 
 # Test a 0D, 1D, 1-element, 1 column, 0-volume, and a 5D tensor
 @pytest.mark.parametrize(
-    "tensor_shape",
-    [(), (2,), (1, 1), (32, 1), (6, 0, 32), (3, 6, 40, 63, 20)],
+    "tensor_shape", [(), (2,), (1, 1), (32, 1), (6, 0, 32), (3, 6, 40, 63, 20), (4, 8, 32, 64), (2, 4, 8, 32, 64)]
 )
-@pytest.mark.parametrize("dim", [None, 0, -1, (-2, -1), (0, 2), (0, 2, 4)])
+@pytest.mark.parametrize("dim", [None, 0, -1, (-2, -1), (0, 2), (0, 2, 4), (0, 2, 3), (0, 3, 4), (1, 2, 3)])
 @pytest.mark.parametrize("keepdim", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("correction", [True, False])
 @pytest.mark.parametrize("op", ["mean", "sum", "max", "min", "prod", "std", "var"])
-@pytest.mark.parametrize("use_legacy", [True, False])
-def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correction, op, use_legacy):
+def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correction, op):
     """
     Test the compatibility of the torch and ttnn output for the given operation and different
     tensor shapes, keepdim, and dim values.
@@ -211,9 +209,6 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correcti
     Some operations raise exceptions in torch, we check if the same behavior is observed in ttnn.
     Note: We do not enforce the same exception type or message.
     """
-    if op not in ("var", "std") and use_legacy:
-        pytest.skip("use_legacy only applies to std and var")
-
     if op not in ("var", "std") and correction:
         pytest.skip("PyTorch supports the correction argument only for var and std")
 
@@ -259,7 +254,7 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correcti
     try:
         # ttnn.prod doesn't support the correction argument.
         if op in ("var", "std"):
-            ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim, correction=correction, use_legacy=use_legacy)
+            ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim, correction=correction)
         elif op != "prod":
             ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim, correction=correction)
         else:
@@ -290,10 +285,6 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correcti
         # and results also vary from near 0 to relatively large values (in hundreds)
         # PCC should catch any significant errors.
         atol = 1.5
-    elif use_legacy and op == "std":
-        # Legacy two-pass method (E[X^2] - E[X]^2) suffers from more catastrophic cancellation
-        # than the Welford single-pass path, especially in bfloat16, so thresholds are slightly relaxed.
-        atol = 0.25
     else:
         atol = 0.1
 
@@ -594,9 +585,6 @@ def test_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype)
         if reduction_count <= 1:
             pytest.skip("Bessel-corrected std/var with reduction count of 1 produces NaN output")
 
-    if op in ("var", "std") and scalar != 1.0 and dtype == torch.float32:
-        pytest.xfail("FPU SrcA TF32 floor on do_scale path: cb_in loses precision before the mul. Issue #45222.")
-
     torch.manual_seed(0)
     torch_input = torch.randn(shape, dtype=dtype)
 
@@ -615,11 +603,12 @@ def test_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype)
         torch_result = torch_op(scalar * torch_input, dim=dim)
 
     if dtype == torch.float32 and op in ("var", "std"):
-        # var/std with scalar == 1.0 uses the Welford single-pass path, which
-        # avoids the FPU scale-mul and operates at full FP32 precision
-        # (eps = 2^-23 ~= 1.19e-7). Welford has relative error bounded by
-        # O(sqrt(N) * eps); for N up to 177408 this is ~5e-5. rtol = 1e-4 covers
-        # this with margin, and atol = 1e-4 handles the small-magnitude regime.
+        # var/std always run the Welford single-pass path unscaled and apply the scalar
+        # afterwards (var(s*x) = s^2 var(x), std(s*x) = |s| std(x)), so the reduction stays
+        # at full FP32 precision (eps = 2^-23 ~= 1.19e-7) and avoids the FPU scale-mul.
+        # Welford has relative error bounded by O(sqrt(N) * eps); for N up to 177408 this is
+        # ~5e-5. rtol = 1e-4 covers this with margin, and atol = 1e-4 handles the
+        # small-magnitude regime.
         rtol = 1e-4
         atol = 1e-4
         frobenius_threshold = 1e-4

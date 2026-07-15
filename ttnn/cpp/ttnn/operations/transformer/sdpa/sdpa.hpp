@@ -24,7 +24,8 @@ ttnn::Tensor scaled_dot_product_attention(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    const std::optional<ttnn::Tensor>& attention_sink = std::nullopt);
+    const std::optional<ttnn::Tensor>& attention_sink = std::nullopt,
+    const std::optional<ttnn::Tensor>& cu_window_seqlens = std::nullopt);
 
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).
@@ -121,9 +122,9 @@ struct ExecuteExpRingJointAttention {
         const ttnn::Tensor& input_tensor_q,
         const ttnn::Tensor& input_tensor_k,
         const ttnn::Tensor& input_tensor_v,
-        const ttnn::Tensor& joint_tensor_q,
-        const ttnn::Tensor& joint_tensor_k,
-        const ttnn::Tensor& joint_tensor_v,
+        const std::optional<ttnn::Tensor>& joint_tensor_q,
+        const std::optional<ttnn::Tensor>& joint_tensor_k,
+        const std::optional<ttnn::Tensor>& joint_tensor_v,
         ttnn::Tensor& persistent_output_buffer_k,
         ttnn::Tensor& persistent_output_buffer_v,
         const std::string& joint_strategy,
