@@ -532,7 +532,15 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
 
     const size_t max_consumer_batch_records =
         std::min(kMaxConsumerBatchCap, kMaxConsumerBatchPerDevice * devices_.size());
-    ring_.emplace(std::min(kMaxRingCapacity, max_consumer_batch_records * kRingHeadroomBatches));
+    // PROTO: the ring now carries X280 device MARKERS (hundreds of k per run), not the far smaller
+    // program-record volume. The default (max_consumer_batch_records*headroom = 131072) is too small
+    // -> the lossy BroadcastRing overwrites unread markers, splitting START/END pairs -> orphaned zones.
+    // Size it to hold the full run's backlog so shutdown's DrainThenStop pushes everything (lossless).
+    // kMaxRingCapacity (4M records ~= 128 MB) covers the observed ~870k markers with headroom.
+    // (An earlier "4M crashes" note was a misdiagnosis -- the crash was a dangling x280_dev_ / the
+    //  find()-%0 SIGFPE, unrelated to ring size; fixed separately.)
+    (void)max_consumer_batch_records;
+    ring_.emplace(kMaxRingCapacity);
 
     // Announce activation; paired with NotifyProgramRealtimeProfilerDeactivated on shutdown.
     // Additionally, for chips where the X280 drainer actually booted (x280_active), announce the
@@ -843,6 +851,18 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
         MetalContext::instance(context_id_).device_manager()->mark_rt_profiler_device_init_complete(device_id);
         devices_.push_back(std::move(dev_state));
     }
+
+    // Point x280_dev_ at the X280-active element INSIDE devices_, now that the vector is fully built
+    // and will not reallocate for the rest of the run. Doing this per-iteration (or inside
+    // boot_x280_drainer) is a use-after-free: each push_back can reallocate the vector, and the value
+    // boot_x280_drainer saw was a soon-moved-from loop local. run_consumer dereferences x280_dev_ from
+    // another thread, so a stale pointer here is the SIGFPE/SIGSEGV in the WorkerZone enrichment path.
+    for (auto& dev_state : devices_) {
+        if (dev_state.x280_active) {
+            x280_dev_ = &dev_state;
+            break;
+        }
+    }
 }
 
 void RealtimeProfilerManager::boot_x280_drainer(
@@ -1082,7 +1102,11 @@ void RealtimeProfilerManager::boot_x280_drainer(
                 }
             } else {
                 dev_state.x280_active = true;
-                x280_dev_ = &dev_state;  // consumer enriches WorkerZone records against this device's maps
+                // NB: do NOT set x280_dev_ = &dev_state here. `dev_state` is the caller's loop LOCAL,
+                // which is immediately std::move'd into devices_ (and destroyed) after this returns --
+                // the pointer would dangle at a moved-from stack object, whose moved-from unordered_map
+                // reads as garbage/zero bucket_count in run_consumer (SIGFPE on `% 0`, or SIGSEGV once
+                // the frame is reused). x280_dev_ is set post-loop, once devices_ is fully built + stable.
                 // Clear the auto-prime loop guard: a clean boot means the prime (if any) took.
                 std::remove(("/tmp/tt_x280_autoprime_dev" + std::to_string(device_id)).c_str());
                 log_info(
@@ -1453,9 +1477,9 @@ uint32_t RealtimeProfilerManager::drain_x280_device(DeviceState& dev_state) {
             }
             const uint32_t type = (w0 >> 28) & 0x7;  // shares a marker's valid/type bits
             if (type == kernel_profiler::STICKY_META) {
-                ctx_cx = (w0 >> 24) & 0xF;  // NOTE: 4-bit coords (FW packs my_x/my_y & 0xF)
-                ctx_cy = (w0 >> 20) & 0xF;
-                ctx_risc = (w0 >> 14) & 0x3F;
+                ctx_cx = (w0 >> 22) & 0x3F;  // 6-bit coords (see FW mark_sticky_meta layout)
+                ctx_cy = (w0 >> 16) & 0x3F;
+                ctx_risc = (w0 >> 10) & 0x3F;
                 ctx_valid = true;
                 continue;
             }
@@ -1600,17 +1624,41 @@ void RealtimeProfilerManager::run_consumer(Consumer& consumer) {
                 continue;
             }
             uint32_t noc0_x = w.core_x, noc0_y = w.core_y;
-            if (auto it = dev->x280_virt_to_noc0.find((static_cast<uint64_t>(w.core_x) << 32) | w.core_y);
-                it != dev->x280_virt_to_noc0.end()) {
-                noc0_x = it->second.first;
-                noc0_y = it->second.second;
+            // Defensive: skip the lookups if a map is genuinely empty (no mapping => keep fallback values,
+            // same outcome find() would give). A truly-empty x280_virt_to_noc0 would also be a real
+            // enrichment bug, so it's logged once below. (This is NOT what caused the historical SIGFPE --
+            // that was a dangling x280_dev_ pointing at a moved-from DeviceState; fixed at init time.)
+            if (!dev->x280_virt_to_noc0.empty()) {
+                if (auto it = dev->x280_virt_to_noc0.find((static_cast<uint64_t>(w.core_x) << 32) | w.core_y);
+                    it != dev->x280_virt_to_noc0.end()) {
+                    noc0_x = it->second.first;
+                    noc0_y = it->second.second;
+                }
+            } else {
+                [[maybe_unused]] static std::once_flag warned;
+                std::call_once(warned, [] {
+                    log_warning(
+                        tt::LogMetal,
+                        "[Real-time profiler] X280 consumer: x280_virt_to_noc0 is EMPTY -- noc0 enrichment "
+                        "disabled (zones will carry virtual coords). This also avoids a find()-on-empty SIGFPE.");
+                });
             }
             const uint16_t hash = static_cast<uint16_t>(w.timer_id & 0xFFFF);
             std::string_view name;
             if (hash == 0x7FFF) {  // PROFILER_STALL_ZONE_ID
                 name = "X280-STALL";
-            } else if (auto it = zone_names.find(hash); it != zone_names.end()) {
-                name = it->second.marker_name;
+            } else if (!zone_names.empty()) {
+                if (auto it = zone_names.find(hash); it != zone_names.end()) {
+                    name = it->second.marker_name;
+                }
+            } else {
+                [[maybe_unused]] static std::once_flag warned_zn;
+                std::call_once(warned_zn, [] {
+                    log_warning(
+                        tt::LogMetal,
+                        "[Real-time profiler] X280 consumer: zone_names is EMPTY -- zone names unresolved "
+                        "(zones will be unnamed). This also avoids a find()-on-empty SIGFPE.");
+                });
             }
             exp::WorkerZonePacket pkt{
                 .chip_id = dev->chip_id,
@@ -1920,6 +1968,13 @@ void RealtimeProfilerManager::shutdown() {
         std::lock_guard<std::mutex> lock(consumers_mutex_);
         for (auto& [handle, consumer] : consumers_) {
             stop_consumer(*consumer, ConsumerStopMode::DrainThenStop);
+            // PROTO diagnostic: records the lossy BroadcastRing dropped before this consumer read them.
+            // Should be 0 now that the ring is sized for the device-marker backlog.
+            log_info(
+                tt::LogMetal,
+                "[Real-time profiler] X280 consumer {}: ring-dropped {} records",
+                handle,
+                consumer->dropped);
         }
         consumers_.clear();
     }

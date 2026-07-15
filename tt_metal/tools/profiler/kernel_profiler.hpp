@@ -241,11 +241,11 @@ inline __attribute__((always_inline)) void mark_sticky_meta() {
     if (!zoneValid) {
         return;  // idle launch: no markers follow on any ring, so skip the context packets
     }
-    const uint32_t cx = my_x[0] & 0xF;  // NOTE: 4-bit fields truncate NoC coords >= 16
-    const uint32_t cy = my_y[0] & 0xF;
+    const uint32_t cx = my_x[0] & 0x3F;  // 6-bit coords: Blackhole NoC coords exceed 15, so 4 bits
+    const uint32_t cy = my_y[0] & 0x3F;  // truncated -> host virt->noc0 miss -> uncalibrated ctx -> crash
     for (uint32_t r = 0; r < PROCESSOR_COUNT; r++) {
-        // w0: [31]=valid [30:28]=type(STICKY_META) [27:24]=core_x [23:20]=core_y [19:14]=risc [13:0]=unused
-        const uint32_t w0 = 0x80000000u | ((STICKY_META & 0x7u) << 28) | (cx << 24) | (cy << 20) | ((r & 0x3F) << 14);
+        // w0: [31]=valid [30:28]=type(STICKY_META) [27:22]=core_x(6) [21:16]=core_y(6) [15:10]=risc(6) [9:0]=unused
+        const uint32_t w0 = 0x80000000u | ((STICKY_META & 0x7u) << 28) | (cx << 22) | (cy << 16) | ((r & 0x3F) << 10);
         if (r == myRiscID) {
             // Own ring: go through the normal tail so wIndex stays in sync for this RISC's later markers.
             ring_ensure_room(PROFILER_L1_MARKER_UINT32_SIZE);
