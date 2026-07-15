@@ -308,14 +308,13 @@ def sfpu_binary(
         MathOperation.SfpuElwrsub,
         MathOperation.SfpuElwpow,
         MathOperation.SfpuXlogy,
-        # Eq/Ne moved to test_sfpu_binary_eq_ne: independent random draws are never
-        # equal here, so the golden collapses to a constant — they need crafted paired
-        # stimuli to exercise the equal branch.
-        # Disabled: failing due to very small differences in generated stimuli
-        # MathOperation.SfpuElwLt,
-        # MathOperation.SfpuElwGt,
-        # MathOperation.SfpuElwLe,
-        # MathOperation.SfpuElwGe,
+        # fp32 total-order comparisons (sfpi calculate_binary_comp_fp32_*)
+        MathOperation.SfpuElwLt,
+        MathOperation.SfpuElwGt,
+        MathOperation.SfpuElwLe,
+        MathOperation.SfpuElwGe,
+        MathOperation.SfpuElwEq,
+        MathOperation.SfpuElwNe,
     ],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
