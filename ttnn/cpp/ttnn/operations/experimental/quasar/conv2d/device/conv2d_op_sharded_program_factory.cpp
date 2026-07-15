@@ -287,8 +287,17 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     const uint32_t act_block_w_ntiles = block_config.act_block_w_ntiles;
     const uint32_t weight_block_w_ntiles = parallelization_config.per_core_out_matrix_width_ntile;
     const uint32_t out_block_h_ntiles = parallelization_config.per_core_out_matrix_height_ntile;
-    const uint32_t out_subblock_h_ntiles = block_config.out_subblock_h_ntiles;
-    const uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
+    // WORKAROUND (Quasar), from sjovic/quasar-resnet 057e1792f0a: force out_subblock to 1x1. The Quasar
+    // compute dest-sync (MATH_PACK / SrcA handshake) in conv_bmm_tilize_metal2 deadlocks the three compute
+    // threads whenever the matmul_partials spill/reload handles more than one tile per subblock
+    // (out_subblock_num_tiles > 1). Constraining to 1x1 makes partials flow one tile at a time so the
+    // compute pipeline drains. Verified there: the resnet stem conv passes single-core AND full 32-core
+    // (was hanging). Applies to every conv this factory builds (stem + bottleneck 3x3), so it also covers
+    // the L1-path convs a DRAM slice_config cannot reach. Gated to Quasar; WH/BH keep the tuned subblock.
+    // Remove once the LLK dest-sync limitation is fixed (tt-metal #48679 / tt-llk #48504).
+    const bool arch_is_quasar = device->arch() == tt::ARCH::QUASAR;
+    const uint32_t out_subblock_h_ntiles = arch_is_quasar ? 1 : block_config.out_subblock_h_ntiles;
+    const uint32_t out_subblock_w_ntiles = arch_is_quasar ? 1 : block_config.out_subblock_w_ntiles;
 
     const SkipMcast skip_mcast = conv_skip_mcast(parallelization_config, a.memory_config().memory_layout());
     const bool skip_activation_mcast = skip_mcast.skip_activation_mcast;
@@ -834,7 +843,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // by NOT taking the packer-relu fast-path here -- the `!pack_relu` branch below then merges the SFPU relu
     // defines (SFPU_OP_*_ACTIVATION), applied per output tile in the compute kernel after the bias add.
     // TODO(LLK): fix the Quasar packer relu face coverage so the faster packer clamp can be used again.
-    const bool arch_is_quasar = device->arch() == tt::ARCH::QUASAR;
+    // (arch_is_quasar is declared earlier, near the out_subblock 1x1 workaround.)
     bool pack_relu =
         fused_activation.has_value() && fused_activation.value().op_type == unary::UnaryOpType::RELU && !arch_is_quasar;
 
