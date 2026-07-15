@@ -204,7 +204,7 @@ buffer via `ttnn.cb_descriptor_from_sharded_tensor` (golden shard specs come fro
 it is orthogonal to any L1 concern. The HEIGHT_SHARDED loose case (`1x1x256x512`) flips to
 `supported_pass` when this lands.
 
-### [ ] Refinement 5 — WIDTH_SHARDED + BLOCK_SHARDED cross-core reduction
+### [x] Refinement 5 — WIDTH_SHARDED + BLOCK_SHARDED cross-core reduction
 
 **Goal**: add `ttnn.TensorMemoryLayout.WIDTH_SHARDED` and `ttnn.TensorMemoryLayout.BLOCK_SHARDED` to
 `SUPPORTED["memory_layout"]`. Here the hidden `W` is split across cores, so the RMS denominator spans
@@ -220,6 +220,37 @@ measured topology evidence. Phase 0's streaming reduce already materialises a pe
 `Σx²` (the `cb_sumsq` accumulator), so the combine only has to gather + fold + broadcast-back. Land
 last — it is the highest-complexity refinement and stresses inter-core sync. The WIDTH/BLOCK loose
 cases (`1x1x32x2048` WIDTH, `1x1x256x512` BLOCK) flip to `supported_pass` when this lands.
+
+**Landed (2026-07-15)**: WIDTH_SHARDED + BLOCK_SHARDED added to SUPPORTED via a reduce-root
+cross-core combine (each core reduces its LOCAL W-slice → partial `Σx²/W_global`; the group
+root gathers via unicast+`progress` sem, folds + rsqrt-finalizes, and broadcasts `1/rms` back
+over the group rectangle via `mcast_pipe` `SenderPipe`/`ReceiverPipe` + host `Mcast2D`). Golden
+cartesian: **WIDTH/BLOCK 2102 passed / 0 failed / 2100 xfailed**; INTERLEAVED/HEIGHT 3346 passed
+(no regression); both loose cases pass. Rectangular groups only (BLOCK grid-row lines; WIDTH
+shard-grid bbox); ragged / non-tile-aligned-W route to a correct interleaved-collapse fallback.
+`{ROW_MAJOR, WIDTH/BLOCK_SHARDED}` EXCLUDED (RM W-sharding splits row sticks sub-tile across
+cores) → Refinement 5a below.
+
+### [ ] Refinement 5a — ROW_MAJOR + WIDTH/BLOCK_SHARDED cross-core reduction
+
+**Goal**: lift the R5 `{ROW_MAJOR, WIDTH_SHARDED}` / `{ROW_MAJOR, BLOCK_SHARDED}` EXCLUSIONS. RM
+width-sharding splits each logical row's `W` across cores at sub-tile (stick) granularity, so a
+row is not contiguous in any one core's L1 — neither the R5 TILE-only cross-core path (it never
+tilizes) nor the interleaved-collapse fallback (it reads a full-W stick as one NoC page, which
+returns garbage for a split stick; measured PCC 0.0098) handles it. The fix: extend the sharded
+reader/compute to **tilize each core's partial-width stick slice** before the partial reduce, then
+reuse the R5 gather + mcast-broadcast combine unchanged. Low priority — RM width-sharding is an
+unusual model config; the TILE surface (the norm-op default) is fully covered by R5.
+
+**Verifier notes**: standalone follow-up to R5's structural gap. The cross-core combine topology
+(gather + fold + broadcast-back) is already proven; this is a per-core RM→TILE tilize of a
+partial-width W-slice added ahead of the existing pass-1 reduce (the interleaved/HEIGHT RM reader
+already tilizes full-W stick blocks — the extension is the partial-width offset + count). No new
+transport. `test_rms_norm_sharded.py::test_rms_norm_rejects_row_major_width_block` is the current
+guard; flip it to an acceptance test when this lands.
+
+**Done when**: `{ROW_MAJOR, WIDTH_SHARDED}` + `{ROW_MAJOR, BLOCK_SHARDED}` move out of EXCLUSIONS
+into passing golden cells, no regression on the R5 TILE surface.
 
 > **Trailing perf (once generality is exhausted, after Refinement 5)**: the wide-W / few-tile-row
 > interleaved cells (W=16384/32768, 1–2 tile-rows) are latency-bound on one core — the cross-core

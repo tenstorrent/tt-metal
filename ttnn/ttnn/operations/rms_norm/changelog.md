@@ -336,3 +336,67 @@
   rejection test). Probes `probe_021.py`–`probe_024.py` capture the loose-case
   verification, the 48-combo cartesian landscape, and the wide/large L1-pressure
   sweep.
+
+## Refinement 5 — WIDTH_SHARDED + BLOCK_SHARDED cross-core reduction
+- Date: 2026-07-15
+- What was done: Landed the design's dependent-axis **scheme-change** — the hidden W is split
+  across a reduction GROUP of cores, so the RMS denominator spans core boundaries. Added
+  `WIDTH_SHARDED` + `BLOCK_SHARDED` to `SUPPORTED["memory_layout"]` via a **reduce-root cross-core
+  combine** (references/cross_core_reduction_design.md Pattern A; transport = `mcast_pipe.hpp`):
+  - Each core reduces its LOCAL W-slice into a partial `Σx²/W_global` (its contribution to the
+    GLOBAL mean(x²) — the sum of partials IS the global mean, so the finalize is unchanged).
+  - **Gather** (many→one): non-root cores unicast their partial to the group root's `cb_gather[idx]`
+    + bump the root's `progress` semaphore (per-round reset, barrier-before-signal).
+  - **Combine** (root, compute): fold the group's `GROUP_SIZE` col-0-only partials with
+    `reduce<AccumulateViaAdd>` (add_tiles + one column-collapse), `transform_in_place` rsqrt-finalize.
+  - **Broadcast** (one→many): root `SenderPipe`-mcasts `1/rms` over the group rectangle (loopback
+    fills its own `cb_sumsq`); non-roots `ReceiverPipe.receive()`. Host wire = `Mcast2D` per group
+    (`McastConfig(sem_ids=[READY, CONSUMED])`); the Flag handshake is per-round self-contained so
+    multi-tile-row cores just loop.
+  - Groups must be RECTANGULAR (mcast addresses a rectangle): BLOCK = grid-row lines (always rect);
+    WIDTH = the shard-grid bounding box. Ragged WIDTH grids / RM input / non-tile-aligned W route to
+    a correct **interleaved-collapse fallback** (one core streams the whole W of each tile-row from
+    the resident shards via TensorAccessor — verified correct, no cross-core sync, no hang).
+  - **Reused**: the whole pass-1 streaming reduce (ReduceTile local W-slice → col-0-only partial),
+    `transform_in_place` rsqrt, `copy`, pass-2 normalize (mul<Col>/mul<Row>), and the writer
+    (generalized with a `w_tile_start` RT arg, default 0 → byte-identical for interleaved/HEIGHT).
+  - **Added**: `rms_norm_sharded_reader.cpp` (streaming + gather + mcast broadcast); an
+    `IS_CROSS_CORE` branch in the shared compute kernel (fold partials in `cb_combine`, one clean
+    `copy` each to `cb_partial` (pass 1) and `cb_rms_src` (combine) so the reader's gather can't race
+    a churning accumulator); `_sharded_cross_core_plan` + `_build_cross_core_descriptor` (per-core
+    group/root/rect assignment, 3 semaphores, CBs cb_partial/cb_gather/cb_rms_src/cb_combine).
+  - **New kernel-file justification**: the sharded reader does NoC gather + mcast broadcast (semaphores,
+    `mcast_pipe`) the streaming reader has no notion of; forcing it into the shared reader risked the
+    1683-passing interleaved/HEIGHT surface. Compute is SHARED (one `IS_CROSS_CORE` branch reuses all
+    the tested pass-1/pass-2 math). Writer is SHARED (w_tile_start generalization).
+  - **Raw-LLK**: none beyond the reused `transform_in_place` rsqrt hook. The combine uses the
+    `reduce<AccumulateViaAdd>` helper (col-0-only partials from ReduceTile make its column-collapse
+    idempotent — an earlier raw add_tiles element-wise sum was tried and reverted after it produced
+    NaN via a fragile pack-reconfig; the helper path is correct + simpler).
+- Accuracy achieved (golden tolerances):
+  - WIDTH loose `(1,1,32,2048)` bf16: PCC=0.999997, relRMS=0.0024. BLOCK loose `(1,1,256,512)` bf16:
+    PCC=0.999997, relRMS=0.0024. Both flip xfail→PASS (Done-when gate met).
+  - Cross-core verified across dtypes (bf16 / fp32 PCC≈1.0 / bf8b PCC=0.9999), gamma/no_gamma,
+    fp32_dest_acc_en True/False, single-round + multi-round (multi-tile-row) groups, h_non_aligned,
+    2-core to 64-core groups.
+- Golden test progress: **WIDTH/BLOCK cartesian 2102 passed / 0 failed / 2100 xfailed / 15960
+  skipped**; INTERLEAVED/HEIGHT cartesian **3346 passed / 0 failed** (no regression from the shared
+  compute/writer changes); `test_op_loose` all 6 pass; `test_translated.py` + `test_regression.py`
+  99 passed. Unit dir **225 passed**.
+- Issues encountered:
+  - Two combine-datapath bugs found + fixed via DEVICE_PRINT: (1) `reduce<AccumulateViaAdd>` for the
+    combine did a column-collapse that summed the partials' UNSPECIFIED non-col-0 columns into col 0
+    (scale corruption) → switched pass-1 to ReduceTile (col-0-only partials, collapse idempotent);
+    (2) the reader's `cb_wait_front` on the combine/pass-1 accumulator CB RACED a mid-accumulation
+    intermediate for `num_w_blocks>1` (wide-W BLOCK) → route the fold through a dedicated `cb_combine`
+    accumulator and emit `cb_partial`/`cb_rms_src` with exactly ONE clean `copy` push.
+  - RM + WIDTH/BLOCK_SHARDED fails (split row sticks; PCC 0.0098) → EXCLUDED with a note; filed as
+    Refinement 5a (tilize partial-width stick slices before the combine).
+  - A late 2-cell golden miss (`(32,8192)` BLOCK bf16 acc=False) was diagnosed by the expert-debugger
+    as a **stale JIT-cached kernel binary** (a forced-fresh recompile of the identical source passes);
+    re-running the golden subset confirmed 2102/2102 pass. Source unchanged.
+- Tests added: `test_rms_norm_sharded.py` — replaced the obsolete WIDTH-rejection test with
+  `test_rms_norm_cross_core_sharded` (WIDTH/BLOCK × {loose, multirow, h_non_aligned} × {bf16,fp32} ×
+  gamma) + `test_rms_norm_rejects_row_major_width_block`. `test_rms_norm_cross_core_debug.py`
+  (expert-debugger regression guard: PCC + uniform-scale-ratio on the wide-W BLOCK corner, 3 seeds).
+  Probes `probe_025`–`probe_042` capture the plumbing/combine/broadcast/fallback verification.
