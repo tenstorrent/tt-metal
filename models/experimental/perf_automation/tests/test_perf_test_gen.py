@@ -5,13 +5,12 @@ test can be stale or cover only a slice (e.g. prefill-only). generate_perf_test(
 regenerate every call, retry transient bad drafts, and gate generative demos on decode coverage.
 """
 
-
 import json
 
 from agent.perf_test_gen import generate_perf_test
 
 _VALID = "import ttnn\ndef test_text_generation_perf(device):\n    import os\n    os.environ.get('TT_PERF_MAX_NEW_TOKENS')\n    pass\n"
-_PREFILL_ONLY = "import ttnn\ndef test_text_generation_perf(device):\n    pass\n"  # no decode loop env
+_PREFILL_ONLY = "import ttnn\ndef test_text_generation_perf(device):\n    pass\n"
 
 
 def _demo(tmp_path, generative=True):
@@ -30,7 +29,7 @@ def test_force_overwrites_existing_never_reuses(tmp_path):
     out.write_text("# STALE prior test — must be overwritten\n")
     node = generate_perf_test(tmp_path, "text_generation", demo_rel, runner=lambda p: _VALID, force=True)
     assert node == "tests/e2e/test_text_generation_perf.py::test_text_generation_perf"
-    assert "STALE" not in out.read_text()  # regenerated from scratch, the old content is gone
+    assert "STALE" not in out.read_text()
 
 
 def test_retries_transient_bad_draft(tmp_path):
@@ -103,7 +102,7 @@ def test_persistent_1cq_is_corrected_not_shipped(tmp_path, monkeypatch):
         lambda node, env, timeout_s=2400: (0, "TRACE_PER_TOKEN_MS=6.0\nTRACE_REPLAY_PATH=trace+1cq\n"),
     )
     node = generate_perf_test(tmp_path, "text_generation", demo_rel, runner=lambda p: _VALID, force=True, validate=True)
-    assert node is None  # never reached trace+2cq -> not accepted
+    assert node is None
     caps = _caps(tmp_path)
     assert caps["trace_1cq"] is True and caps["trace_2cq"] is False
 
@@ -121,7 +120,7 @@ def test_eager_terminal_pipeline_is_accepted(tmp_path, monkeypatch):
         ),
     )
     node = generate_perf_test(tmp_path, "text_generation", demo_rel, runner=lambda p: _VALID, force=True, validate=True)
-    assert node is not None  # eager is legitimate here (authoritative TRACE_NOT_TRACE_CAPABLE marker)
+    assert node is not None
 
 
 def test_validation_skips_when_device_unavailable(tmp_path, monkeypatch):
@@ -142,10 +141,10 @@ def test_needed_trace_region_grows_to_device_reported_max():
 
     assert _needed_trace_region("nothing here") is None
     one = "Creating trace buffers of size 100B on MeshDevice 1, but only 50B is allocated for trace region."
-    assert _needed_trace_region(one) == 125  # 100 * 1.25
+    assert _needed_trace_region(one) == 125
     multi = one + "\nCreating trace buffers of size 200B on MeshDevice 1, but only 125B is allocated for trace region."
-    assert _needed_trace_region(multi) == 250  # MAX(100,200) * 1.25 — covers the biggest stage
-    assert _needed_trace_region("Creating trace buffers of size 40B ... only 50B is allocated") is None  # fits
+    assert _needed_trace_region(multi) == 250
+    assert _needed_trace_region("Creating trace buffers of size 40B ... only 50B is allocated") is None
 
 
 def test_run_perf_node_grows_trace_region_until_it_fits(monkeypatch):
@@ -160,7 +159,6 @@ def test_run_perf_node_grows_trace_region_until_it_fits(monkeypatch):
     def fake_execute(cmd, cwd, env, timeout_s, log_path, stall_timeout_s=300):
         region = int(env.get("TT_PERF_TRACE_REGION", "23887872"))
         sizes_used.append(region)
-        # cumulative multi-stage need: fits only once region >= 40_000_000 (forces the grow-loop)
         if region < 40_000_000:
             need = 30_000_000 if region < 25_000_000 else 40_000_000
             log_path.write_text(
@@ -174,7 +172,7 @@ def test_run_perf_node_grows_trace_region_until_it_fits(monkeypatch):
     monkeypatch.delenv("TT_PERF_TRACE_REGION", raising=False)
     rc, out = m._run_perf_node("some_node::t", {"TT_PERF_NUM_CQ": "2"})
     assert rc == 0 and "path=trace+2cq" in out
-    assert sizes_used[0] == 23887872 and sizes_used[-1] >= 40_000_000  # started at default, grew until it fit
+    assert sizes_used[0] == 23887872 and sizes_used[-1] >= 40_000_000
 
 
 def test_run_perf_node_wedge_is_caught_reset_and_reported(monkeypatch):
@@ -193,9 +191,9 @@ def test_run_perf_node_wedge_is_caught_reset_and_reported(monkeypatch):
     monkeypatch.setattr(probes, "_execute", hang_execute)
     monkeypatch.setattr(probes, "_device_reset", lambda: reset_calls.append(True) or True)
     rc, out = m._run_perf_node("some_node::t", {"TT_PERF_NUM_CQ": "2"})
-    assert rc == 124  # wedge signalled as a failure, not a hang
-    assert "Event Synchronization" in out and "tt-smi -r" in out  # fatal fed back + board reset noted
-    assert reset_calls == [True]  # device was reset for the next correction attempt
+    assert rc == 124
+    assert "Event Synchronization" in out and "tt-smi -r" in out
+    assert reset_calls == [True]
 
 
 def test_injected_runner_defaults_to_no_execution(tmp_path, monkeypatch):
@@ -225,17 +223,15 @@ def test_self_recording_pipeline_detected_and_rerecording_rejected(tmp_path):
         "def run_plain(p):\n"
         "    return p()\n"
     )
-    assert _self_tracing_fns(tmp_path) == {"run_fast"}  # only the self-recording one, derived from source
+    assert _self_tracing_fns(tmp_path) == {"run_fast"}
 
     d = tmp_path / "demo"
     d.mkdir()
     (d / "demo_fast.py").write_text("from tt.pipeline import run_fast\nout = run_fast(p)\n")
 
-    # re-recording a self-recording function (measure_adapter AROUND run_fast) nests two captures -> rejected
     rerecord = "import ttnn\ndef test_fast_perf(device):\n" "    measure_adapter(lambda: run_fast(p), device)\n"
     assert generate_perf_test(tmp_path, "fast", "demo/demo_fast.py", runner=lambda p: rerecord, force=True) is None
 
-    # timing the self-recording function directly (no external capture) is accepted
     time_it = (
         "import ttnn\ndef test_fast_perf(device):\n"
         "    run_fast(p)\n"
@@ -252,14 +248,9 @@ def test_eager_mislabelled_as_trace_is_rejected(tmp_path):
     from agent.perf_test_gen import generate_perf_test
 
     (tmp_path / "tt").mkdir(parents=True)
-    (tmp_path / "tt" / "pipeline.py").write_text(
-        "import ttnn\n"
-        "def run_slow(p):\n"  # NO begin_trace_capture -> not self-recording
-        "    return p()\n"
-    )
+    (tmp_path / "tt" / "pipeline.py").write_text("import ttnn\n" "def run_slow(p):\n" "    return p()\n")
     d = tmp_path / "demo"
     d.mkdir()
-    # demo runs the non-tracing op as a pipeline call AND ends with a bare launcher (the contamination trap)
     (d / "demo_slow.py").write_text(
         "from tt.pipeline import run_slow\n"
         "def main():\n    out = run_slow(p)\n"
@@ -303,10 +294,10 @@ def test_self_recording_detects_all_shapes(tmp_path):
         "        return 1\n"
     )
     got = _self_tracing_fns(tmp_path)
-    assert "run_fast" in got  # top-level function shape
-    assert "generate" in got  # class-method shape
-    assert "unrelated" not in got  # a method that does not self-record
-    assert "_frame" not in got and "_inner" not in got  # nested helpers roll up to the public callable
+    assert "run_fast" in got
+    assert "generate" in got
+    assert "unrelated" not in got
+    assert "_frame" not in got and "_inner" not in got
 
 
 def test_self_traced_ignores_bare_launcher():
@@ -316,16 +307,13 @@ def test_self_traced_ignores_bare_launcher():
     main(); it must get the standard template, not the time-it-directly one.)"""
     from agent.perf_test_gen import _invoked_as_pipeline_op
 
-    # a demo that ONLY runs the non-tracing op and then launches main() -> self-recording main is ignored
     tts_demo = "wav = P.run_tts(pipe, ids, ref)\nif __name__ == '__main__':\n    main()\n"
     assert _invoked_as_pipeline_op("main", tts_demo) is False
     assert _invoked_as_pipeline_op("run_tts_fast", tts_demo) is False
 
-    # a demo that actually invokes the self-recording pipeline op -> flagged
     fast_demo = "wav = P.run_tts_fast(pipe, ids, ref)\nif __name__ == '__main__':\n    main()\n"
     assert _invoked_as_pipeline_op("run_tts_fast", fast_demo) is True
-    assert _invoked_as_pipeline_op("main", fast_demo) is False  # bare launcher still ignored
+    assert _invoked_as_pipeline_op("main", fast_demo) is False
 
-    # direct import call WITH args also counts (no attribute access)
     assert _invoked_as_pipeline_op("run_tts_fast", "run_tts_fast(pipe, ids)\n") is True
-    assert _invoked_as_pipeline_op("run_tts_fast", "run_tts_fast()\n") is False  # no args = not a pipeline op
+    assert _invoked_as_pipeline_op("run_tts_fast", "run_tts_fast()\n") is False

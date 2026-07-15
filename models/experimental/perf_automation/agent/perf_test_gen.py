@@ -454,7 +454,7 @@ def validate_generated_perf_test(out_path: Path, task: str) -> tuple[str, str]:
     if caps["trace_2cq"]:
         return "ok_2cq", ""
     if caps["trace_1cq"]:
-        return "ok_1cq", ""
+        return "invalid", "trace-capable but degraded to 1cq (never held trace+2cq)"
     return "invalid", (
         f"pipeline could not trace at all (path={path2 or _parse_trace_path(out1)}); neither 1cq nor "
         "2cq trace engaged. " + (_extract_error(out2) or "")
@@ -705,11 +705,6 @@ def generate_perf_test(
     gen = runner or _claude
     if validate is None:
         validate = runner is None
-    # CORRECTION LOOP — no fixed attempt budget. Keep regenerating until the test is trace+2cq-acceptable
-    # (or a legitimate eager terminal), feeding the REAL error + the LLM's own previous draft back each
-    # round so it EDITS the failing file rather than rewriting blind. Terminate only on acceptance or on
-    # a STALL (no forward progress _STALL_LIMIT times running) — never ship a test that fails 2cq. This is
-    # fully model- and hardware-agnostic: the verdicts come from what the pipeline actually did on device.
     feedback = ""
     prev_draft = None
     stall = 0
@@ -735,8 +730,6 @@ def generate_perf_test(
             )
             prev_draft = content
             continue
-        # AGNOSTIC trace-recording guards — validate the GENERATED test against the real self-recording set
-        # (not a demo-scan guess), so no launcher name or demo shape can produce a wrong test for any model.
         _code = "\n".join(re.sub(r"#.*$", "", ln) for ln in content.splitlines())
         _times_selfrec = sorted(f for f in _selfrec_set if _invoked_as_pipeline_op(f, _code))
         _external_capture = "measure_adapter(" in _code or "begin_trace_capture(" in _code
@@ -780,7 +773,7 @@ def generate_perf_test(
         if not validate:
             return node
         verdict, failure = validate_generated_perf_test(out_path, task)
-        if verdict in ("ok_2cq", "ok_1cq", "ok_marker", "skip"):
+        if verdict in ("ok_2cq", "ok_marker", "skip"):
             return node
         stall += 1
         if "WEDGE" in failure:
