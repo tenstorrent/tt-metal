@@ -107,6 +107,31 @@ bool get_exp_approx_mode(const std::optional<ttnn::operations::transformer::SDPA
     return true;
 }
 
+// Effective (num_kv_heads_k, num_kv_heads_v, block_size) for an HMA-shared paged buffer.
+// Apply PagedCacheGeometryOverride only when !use_mla: MLA never passes overrides (validated
+// upstream), and applying num_kv_heads to V under MLA would skip the elems/block check.
+struct EffectiveKvGeometry {
+    uint32_t nkh = 0;
+    uint32_t nvh = 0;
+    uint32_t block_size = 0;
+};
+
+EffectiveKvGeometry resolve_effective_kv_geometry(
+    const ttnn::operations::transformer::PagedCacheGeometryOverride& geo,
+    bool use_mla,
+    uint32_t k_num_heads,
+    uint32_t v_num_heads,
+    uint32_t k_block_size) {
+    if (use_mla || !geo.active()) {
+        return {k_num_heads, v_num_heads, k_block_size};
+    }
+    return {
+        geo.num_kv_heads.value_or(k_num_heads),
+        geo.num_kv_heads.value_or(v_num_heads),
+        geo.block_size.value_or(k_block_size),
+    };
+}
+
 // Chunked prefill parameters collected from page table layout.
 struct ChunkedParams {
     uint32_t chunked_q_chunk_offset = 0;
@@ -196,23 +221,17 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const auto& k_shape = input_tensor_k.logical_shape();
     const auto& v_shape = input_tensor_v.logical_shape();
     const uint32_t B = q_shape[0], NQH = q_shape[1], Sq = q_shape[2], DH = q_shape[3];
-    // Geometry overrides for an HMA-shared paged buffer (see PagedCacheGeometryOverride):
-    // when the paged K/V cache was allocated for a different layer's view, the reader must
-    // address it with this call's num_kv_heads / block_size (Q already drives head_dim via
-    // DHt) rather than the cache's declared shape. Unset ⇒ the cache's own num_kv_heads /
-    // block_size (all existing callers are unchanged). The reader computes physical tile ids
-    // manually from these as compile-time args (dataflow_common.hpp
-    // virtual_seq_tile_id_to_physical_tile_id), so the flat-tile buffer is reinterpreted
-    // correctly without any kernel change.
-    //
-    // Apply only when !use_mla: MLA never passes overrides (validated above), and applying
-    // num_kv_heads to NVH under MLA would reinterpret V without the elems/block check that
-    // is gated behind !use_mla.
-    const auto& geo = operation_attributes.paged_cache_geometry;
-    const bool apply_geometry_override = !use_mla && geo.active();
-    const uint32_t NKH = apply_geometry_override ? geo.num_kv_heads.value_or(k_shape[1]) : k_shape[1];
-    const uint32_t NVH = apply_geometry_override ? geo.num_kv_heads.value_or(v_shape[1]) : v_shape[1];
-    const uint32_t effective_kv_block_size = apply_geometry_override ? geo.block_size.value_or(k_shape[2]) : k_shape[2];
+    // Geometry overrides for an HMA-shared paged buffer (see PagedCacheGeometryOverride): when
+    // the paged K/V cache was allocated for a different layer's view, the reader must address it
+    // with this call's num_kv_heads / block_size (Q already drives head_dim via DHt) rather than
+    // the cache's declared shape. Unset ⇒ the cache's own num_kv_heads / block_size. The reader
+    // computes physical tile ids manually from these as compile-time args
+    // (dataflow_common.hpp virtual_seq_tile_id_to_physical_tile_id).
+    const auto kv_geo = resolve_effective_kv_geometry(
+        operation_attributes.paged_cache_geometry, use_mla, k_shape[1], v_shape[1], k_shape[2]);
+    const uint32_t NKH = kv_geo.nkh;
+    const uint32_t NVH = kv_geo.nvh;
+    const uint32_t effective_kv_block_size = kv_geo.block_size;
 
     // In flash mla prefill, we have to support the case where NKH != NVH
     // We are calling op with the following shapes:
