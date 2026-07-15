@@ -73,6 +73,25 @@ neg=segment-relative), per-batch cur_pos, and segment-boundary/first-frame speci
 with the whole-segment trace. Substantial refactor, but the highest-value lever by far and
 zero quality risk (batching doesn't change math). `scratchpad/batch2_iso.py`.
 
+## POST-WIRING MATMUL/GLUE ANALYSIS (exp5)
+- **FFN-down decode-config fix (LANDED, −2.36 ms):** the batched forward's S=2 disabled the swept
+  `_W2_DECODE_PROGCFG` (S==1 gate) → down_proj ran auto (142 µs, SLOW, 199 GB/s). Forcing decode=True
+  (row-stacked M=2 = 1 tile) → 65 µs. Frame 34.14 → 31.79 ms; equiv PCC 0.9996 → 1.0.
+- **Other matmuls are at/near their ceilings** (report tags, exp5): lm_head 1536x151936 75% DRAM BW;
+  LM FFN down/gate 65-82%; tokenizer FFN down 8192x2048 **84%** (near ceiling), up 2048x8192 68% (bf8_b);
+  diffusion 4608 65-74%. All prior-swept MultiCast1D. The report's blanket "try DRAM-sharded" would
+  need per-weight DRAM-shard relayout for marginal gain over the tuned configs — not worth it now.
+- **Post-phase glue = ~2.0 ms (16% of post):** InterleavedToSharded 0.84 ms ×69 (conv2d input shard,
+  the expensive direction — S2I is only 0.08 ms), UntilizeWithUnpadding 0.44, Concat 0.25 (streaming
+  cache), Slice/Copy/Halo small. Mostly intrinsic to ttnn.conv2d's internal shard/halo + the
+  prior-tuned ROW_MAJOR streaming concat. A probe worth trying: L1-interleaved conv activations so the
+  I2S is L1→L1 (not DRAM→L1) — numerically free, ~0.4 ms upside, but bounded by L1 fit. Marginal.
+- **L1 vs DRAM I/O:** the LM decode already keeps residual/act in L1 (res_mc); the big conv activations
+  can't go blanket-L1 interleaved (size), but selective L1 on the conv chain is the glue probe above.
+
+## Campaign total: 41.06 → 31.79 ms device time (−22.6%), all PCC-gated
+diffusion fusions −0.55, CFG-batched LM −6.73, FFN-down config −2.36.
+
 ## INCREMENTAL WINS LANDED (numerically-exact, low risk)
 User chose "low-risk incremental wins first" over the big CFG-batched-LM refactor.
 
