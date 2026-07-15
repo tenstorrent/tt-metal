@@ -71,22 +71,15 @@ MAX_QKV_MM_SEQ_LEN = 2048  # Maximum sequence length for single QKV matmul
 # Source: TTTv1 model_config.py "MAX_MM_SEQ_LEN": 1024
 MAX_MM_SEQ_LEN = 1024
 
-# Total tokens in KV cache must fit in device DRAM. The 128K limit is a hardware
-# constraint for Wormhole devices (by 12GB DRAM per chip) - exceeding it causes OOM based on previous tests.
+# Total tokens in a locally allocated KV cache must fit in device DRAM. The 128K limit is a
+# hardware constraint for Wormhole devices (by 12GB DRAM per chip).
 MAX_TOTAL_TOKENS = 128 * 1024  # 131072 tokens
 
 
 def _validate_token_budget(config: "Attention1DConfig") -> None:
-    paged_cfg = config.paged_attention_config
-    if config.use_vllm_paged_kv_cache and paged_cfg is not None:
-        paged_tokens = paged_cfg.max_num_blocks * paged_cfg.block_size
-        if paged_tokens > MAX_TOTAL_TOKENS:
-            raise ValueError(
-                f"Paged KV token budget exceeded: max_num_blocks ({paged_cfg.max_num_blocks}) x "
-                f"block_size ({paged_cfg.block_size}) = {paged_tokens:,} tokens, "
-                f"but maximum is {MAX_TOTAL_TOKENS:,} tokens. "
-                f"Reduce max_num_blocks or block_size to fit in device DRAM."
-            )
+    if config.use_vllm_paged_kv_cache:
+        # External paged KV cache capacity is configured and managed by the
+        # caller, which is responsible for ensuring it fits in device DRAM.
         return
 
     total_tokens = config.max_batch_size * config.max_seq_len
@@ -174,6 +167,8 @@ class Attention1DConfig:
     # - None: Set externally before forward (e.g., via from_model_args or direct assignment)
     # - tuple[LazyWeight, LazyWeight]: (keys, values) backed by cache files, resolved lazily
     # - tuple[ttnn.Tensor, ttnn.Tensor]: Pre-allocated (keys, values) tensors (e.g., from vLLM)
+    # When enabled, KV cache allocation and capacity are owned by the caller.
+    # The caller must ensure the paged cache fits in device DRAM.
     use_vllm_paged_kv_cache: bool = False
     kv_cache: "tuple[LazyWeight, LazyWeight] | tuple[ttnn.Tensor, ttnn.Tensor] | None" = None
     paged_attention_config: "PagedAttentionConfig | None" = None  # type: ignore
