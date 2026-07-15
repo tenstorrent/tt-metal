@@ -204,6 +204,7 @@ def before_loop(
 
     stages.start("environment_check", "Checking the Tenstorrent device")
     env = environment_check(env_probe)
+    physical_chips = int(env.get("device_count") or 0)  # physical ASIC count, before any --box override drops it
     box = config.get("box")
     if box:
         try:
@@ -219,6 +220,10 @@ def before_loop(
         except Exception as exc:
             print(f"      WARN --box {box}: {exc}; using auto-detected single-chip env", file=sys.stderr, flush=True)
     stages.done(f"{env['card']} · {env['arch']} · {env['worker_cores']} cores")
+    from .probes import note_board
+
+    chips = max(physical_chips, int(env.get("mesh_chips") or env.get("device_count") or 0))
+    note_board(str(env.get("card") or ""), chips, box=str(box or ""))
 
     devices = str(config.get("devices") or "single")
     # DEVICE VISIBILITY IS INTENTIONALLY NEVER RESTRICTED (chip-count / hardware agnostic): pinning

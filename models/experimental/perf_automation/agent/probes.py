@@ -404,13 +404,75 @@ def _kill_tree(root_pid: int) -> None:
             pass
 
 
+_GALAXY_HOST: bool | None = None
+
+
+def _galaxy_capability_probe(tt_smi: str) -> bool | None:
+    """Ask tt-smi DIRECTLY whether this is a Galaxy host, on the healthy startup board — the only
+    signal that survives the mesh rewiring (board_type strings, physical ASIC enumeration, and the
+    --box/--mesh chip count are all unreliable now). `-glx_list_tray_to_device` lists galaxy trays and
+    succeeds ONLY on a Galaxy; it errors on a plain board. Returns None if the probe itself failed to
+    run (tt-smi missing / timed out), so the caller can fall back to hints."""
+    try:
+        r = subprocess.run([tt_smi, "-glx_list_tray_to_device"], capture_output=True, text=True, timeout=30)
+    except Exception:
+        return None
+    out = (r.stdout or "") + (r.stderr or "")
+    if r.returncode == 0 and "tray" in out.lower():
+        return True
+    if r.returncode != 0:
+        return False
+    return None
+
+
+def note_board(card: str = "", device_count: int = 0, box: str = "", tt_smi: str | None = None) -> None:
+    """Record, at healthy STARTUP, whether this host is a Galaxy — a Galaxy needs `-glx_reset`, a plain
+    board needs `-r`, and a WEDGED board can't be re-probed at reset time so the decision must be made
+    now. Order of trust: explicit env override -> tt-smi galaxy-tray capability probe (authoritative,
+    survives the mesh rewiring) -> cheap hints (box/board name says 'galaxy', or >=32 chips) as a
+    last-ditch fallback when the probe couldn't run."""
+    global _GALAXY_HOST
+    v = os.environ.get("TT_HW_PLANNER_GALAXY")
+    if v is not None:
+        _GALAXY_HOST = v.strip().lower() in ("1", "true", "yes")
+        return
+    text = f"{card} {box}".strip().lower()
+    if "galaxy" not in text and 0 < device_count < 32:
+        _GALAXY_HOST = False  # obviously a plain PCIe board -> skip the probe, leave normal boards untouched
+        return
+    smi = tt_smi or shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
+    probed = _galaxy_capability_probe(smi)
+    if probed is not None:
+        _GALAXY_HOST = probed
+        return
+    _GALAXY_HOST = "galaxy" in text or device_count >= 32
+
+
+def _reset_arg_sets() -> list[list[str]]:
+    """The tt-smi reset invocations to try, in order, for THIS host. An explicit override wins; else a
+    Galaxy host uses the galaxy-tray reset (auto-retry first) with the plain reset as a last-ditch
+    fallback, and a non-Galaxy host uses the plain per-device reset."""
+    override = os.environ.get("TT_HW_PLANNER_RESET_ARGS")
+    if override:
+        return [override.split()]
+    galaxy = _GALAXY_HOST
+    if galaxy is None:
+        galaxy = os.environ.get("TT_HW_PLANNER_GALAXY", "").strip().lower() in ("1", "true", "yes")
+    if galaxy:
+        return [["-glx_reset_auto"], ["-glx_reset"], ["-r"]]
+    return [["-r"]]
+
+
 def _device_reset() -> bool:
     tt_smi = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
-    try:
-        subprocess.run([tt_smi, "-r"], capture_output=True, text=True, timeout=240)
-        return True
-    except Exception:
-        return False
+    for args in _reset_arg_sets():
+        try:
+            proc = subprocess.run([tt_smi, *args], capture_output=True, text=True, timeout=300)
+            if proc.returncode == 0:
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def _execute(
