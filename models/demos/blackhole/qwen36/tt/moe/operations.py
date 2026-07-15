@@ -1,11 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Expert activation for Qwen3.5-MoE: SwiGLU = silu(gate) * up (hidden_act=silu)."""
+"""Expert activation (SwiGLU)."""
 
 import ttnn
 
 
-def apply_swiglu(gate, up):
-    """SwiGLU activation: silu(gate) * up."""
-    activated = ttnn.silu(gate)
-    return ttnn.mul(activated, up)
+def apply_swiglu(up_gate):
+    """SwiGLU over concatenated [up | gate]: up * silu(gate)."""
+    return ttnn.swiglu(up_gate, dim=-1)

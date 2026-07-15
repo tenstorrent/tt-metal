@@ -33,7 +33,7 @@ class ExpertWeights:
     up_proj: ttnn.Tensor  # [1, E, H, I_per_device]
     down_proj: ttnn.Tensor  # [1, E, I_per_device, H]
     intermediate_size_per_device: int
-    gate_up_proj: ttnn.Tensor = None  # [1, E, H, 2*I_per_device] = concat(gate, up) on N
+    gate_up_proj: ttnn.Tensor = None  # [1, E, H, 2*I_per_device] = concat(up, gate) on N
 
 
 def _stack_per_expert(state_dict, intermediate_size):
@@ -95,9 +95,9 @@ def load_expert_weights(
     else:
         col_mapper = row_mapper = None
 
-    # `_ep` marks the expert-parallel cache layout so it never collides with the older
-    # intermediate-parallel (`_tp`) cached tensors on disk (different sharding = different bytes).
-    tp_suffix = f"_ep{tp}" if tp > 1 else ""
+    # `_ep_swiglu` marks the expert-parallel [up|gate] cache layout so it never collides with the
+    # older intermediate-parallel (`_tp`) or expert-parallel [gate|up] cached tensors on disk.
+    tp_suffix = f"_ep_swiglu{tp}" if tp > 1 else ""
 
     def _cache(name):
         return str(tensor_cache_path / f"moe.experts.{name}{tp_suffix}") if tensor_cache_path else None
@@ -130,11 +130,10 @@ def load_expert_weights(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    # Fused gate|up along N. Each device holds its expert shard of both at FULL intermediate,
-    # so a local concat yields [gate | up] with N = 2*full_intermediate. gate+up run as ONE
-    # sparse_matmul over that wide N (32 N-tiles -> 32 cores vs 8), then the two halves are
-    # sliced back apart — mathematically identical to two separate matmuls.
-    gate_up_proj_tt = ttnn.concat([gate_proj_tt, up_proj_tt], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    # Fused up|gate along N. Each device holds its expert shard of both at FULL intermediate,
+    # so a local concat yields [up | gate] with N = 2*full_intermediate. This order matches
+    # ttnn.swiglu's first_half * silu(second_half) contract.
+    gate_up_proj_tt = ttnn.concat([up_proj_tt, gate_proj_tt], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     return ExpertWeights(
         gate_proj=gate_proj_tt,
