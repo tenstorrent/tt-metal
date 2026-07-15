@@ -1,10 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Local vLLM wrapper for Qwen3.5-9B: a thin tt_transformers Generator subclass.
+"""Local vLLM wrapper for the Qwen3.5/3.6 family (9B / 27B / 35B-A3B): a thin
+tt_transformers Generator subclass. Model-agnostic — the checkpoint (dense vs sparse MoE,
+layer count, head dims) is read from the HF config via create_tt_model, so the same wrapper
+serves the dense variants and the sparse 35B-A3B MoE with no MoE-specific code here.
 
-Qwen3.5-9B is a hybrid model: 8 full-attention layers (paged KV, stateless across prefill) plus
-24 Gated DeltaNet (GDN) layers carrying a recurrent + conv state that accumulates across the whole
-sequence. Standard tt_transformers models are stateless beyond paged KV, so the standard contract
+These are hybrid models: full-attention layers (paged KV, stateless across prefill) plus
+Gated DeltaNet (GDN) layers carrying a recurrent + conv state that accumulates across the whole
+sequence (e.g. the 9B has 8 full-attention + 24 GDN). Standard tt_transformers models are
+stateless beyond paged KV, so the standard contract
 assumes token-padding is numerically free and the decode trace is position-general. Neither holds
 for GDN — which is the root of every place this model must diverge.
 
@@ -125,7 +129,8 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         return cls([model], [args], mesh_device)
 
     def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
-        """Allocate paged KV (8 attn layers) + external GDN state; returns the 8 KV pairs."""
+        """Allocate paged KV (one pair per full-attention layer) + external GDN state; the
+        full-attention layer count is config-driven (8 on 9B, 10 on 35B-A3B)."""
         return self.model[0].allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
 
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
