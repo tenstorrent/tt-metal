@@ -291,6 +291,7 @@ _CRASH_RE = re.compile(
     r"|Compil(?:e|ation)Error[^\n]*|LoweringError[^\n]*|failed to (?:compile|lower|build)[^\n]*"
     r"|loc\([^\n]*\):\s*error:[^\n]*|ttmlir[^\n]*?error[^\n]*)"
 )
+_DEVICE_CRASH_RE = re.compile(r"Segmentation fault|core dumped|Aborted|terminate called|libc\+\+abi")
 # pytest end-of-run summary: BOTH "failed" and "error" (collection/fixture errors print as
 # "N errors", never "failed") mark a non-passing run.
 _TEST_FAILED_RE = re.compile(r"=+\s*(\d+)\s+(?:failed|error)", re.IGNORECASE)
@@ -466,7 +467,7 @@ def note_board(card: str = "", device_count: int = 0, box: str = "", tt_smi: str
         return
     text = f"{card} {box}".strip().lower()
     if "galaxy" not in text and 0 < device_count < 32:
-        _GALAXY_HOST = False  # obviously a plain PCIe board -> skip the probe, leave normal boards untouched
+        _GALAXY_HOST = False
         return
     smi = tt_smi or shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
     probed = _galaxy_capability_probe(smi)
@@ -744,6 +745,15 @@ def make_run_profiled(
             # (carries the error) so REMEASURE routes it to REPAIR_CODE and the agent fixes its edit.
             crash = detect_perf_crash(log_text)
             if crash:
+                if _DEVICE_CRASH_RE.search(log_text) and heal_attempt < _MAX_HEAL_ATTEMPTS:
+                    heal_attempt += 1
+                    device_reset()
+                    with open(log_path, "a") as fh:
+                        fh.write(
+                            f"\n[harness] device crash ({crash}); reset + re-profile "
+                            f"(heal {heal_attempt}/{_MAX_HEAL_ATTEMPTS})\n"
+                        )
+                    continue
                 raise PerfRunFailed(crash, log_path)
             drop = detect_marker_drop(log_text)
             if drop and support_count < _MAX_PROFILER_SUPPORT_COUNT and heal_attempt < _MAX_HEAL_ATTEMPTS:

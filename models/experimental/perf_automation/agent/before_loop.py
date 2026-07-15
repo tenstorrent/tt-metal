@@ -204,7 +204,7 @@ def before_loop(
 
     stages.start("environment_check", "Checking the Tenstorrent device")
     env = environment_check(env_probe)
-    physical_chips = int(env.get("device_count") or 0)  # physical ASIC count, before any --box override drops it
+    physical_chips = int(env.get("device_count") or 0)
     box = config.get("box")
     if box:
         try:
