@@ -785,8 +785,11 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
             ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh)
         logits_step = model.process_output_decode(tt_logits, B)  # [B, 1, vocab]
+        # Vectorized argmax over the whole batch in ONE call (matches tt_transformers'
+        # batched decode pattern) instead of B separate full-vocab argmax + .item() calls.
+        next_toks = torch.argmax(logits_step[:, 0, :vocab].float(), dim=-1).tolist()
         for u in range(B):
-            generated[u].append(_pick(logits_step[u, 0, :vocab]))
+            generated[u].append(next_toks[u])
         pos = [p + 1 for p in pos]
         decode_times.append(time.time() - t_step)
     if trace_id is not None:
