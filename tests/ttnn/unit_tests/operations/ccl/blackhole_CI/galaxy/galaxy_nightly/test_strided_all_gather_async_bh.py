@@ -14,6 +14,12 @@ from models.common.utility_functions import (
 )
 
 
+def _fabric_router_config(max_payload_size_bytes):
+    config = ttnn._ttnn.fabric.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = max_payload_size_bytes
+    return config
+
+
 def _create_cluster_submesh(mesh_device, cluster_axis):
     """Create a 1xN (or Nx1) submesh sized to the cluster axis ring.
 
@@ -64,7 +70,14 @@ def _create_cluster_submesh(mesh_device, cluster_axis):
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1171456}, ttnn.Topology.Ring),
+        (
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": _fabric_router_config(8192),
+                "trace_region_size": 1171456,
+            },
+            ttnn.Topology.Ring,
+        ),
     ],
     indirect=["device_params"],
     ids=["fabric_ring"],

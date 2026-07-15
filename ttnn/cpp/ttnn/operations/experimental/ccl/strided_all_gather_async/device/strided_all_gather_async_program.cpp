@@ -437,13 +437,22 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = page_size;
 
-    // scatter-write currently only supports 2 distinct noc addresses
-    uint32_t max_target_noc_addresses_per_packet = 2;
+    // scatter-write supports up to NOC_SCATTER_WRITE_MAX_CHUNKS (4) distinct noc addresses per packet
+    uint32_t max_target_noc_addresses_per_packet = 4;
 
     // for bfloat8_b, tile_num_per_link=6, we would need to send 2 packages, but they can be of size 3 instead of 4
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t num_tiles_to_write_per_packet = std::min(max_target_noc_addresses_per_packet, num_pages_per_packet);
     uint32_t cb_num_pages = 3 * num_tiles_to_write_per_packet;  // triple buffering
+    log_warning(
+        tt::LogOp,
+        "STRIDED_AGMM_PACKET_DEBUG: packet_size_bytes={} l1_scratch_cb_page_size_bytes={} num_pages_per_packet={} "
+        "max_target_noc_addresses_per_packet={} num_tiles_to_write_per_packet={}",
+        packet_size_bytes,
+        l1_scratch_cb_page_size_bytes,
+        num_pages_per_packet,
+        max_target_noc_addresses_per_packet,
+        num_tiles_to_write_per_packet);
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     // CBs for transferring data between sender_reader and sender_writer

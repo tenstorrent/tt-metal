@@ -190,14 +190,16 @@ void kernel_main() {
     }
 
     auto page_size = tt::tt_fabric::linear::addrgen_detail::get_page_size(output_addrgen);
+    uint64_t scatter_init_addrs[NOC_SCATTER_WRITE_MAX_CHUNKS] = {0, 0, 0, 0};
+    uint16_t scatter_init_sizes[NOC_SCATTER_WRITE_MAX_CHUNKS - 1] = {
+        static_cast<uint16_t>(page_size), static_cast<uint16_t>(page_size), static_cast<uint16_t>(page_size)};
     fabric_unicast_noc_scatter_write_set_state<
         UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
         pkt_scatter_hdr,
         static_cast<uint8_t>(unicast_route_info.distance_in_hops),
         NocUnicastScatterCommandHeader(
-            {0, 0},  // ignore
-            {static_cast<uint16_t>(page_size)}),
-        page_size * 2);
+            scatter_init_addrs, scatter_init_sizes, static_cast<uint8_t>(max_tiles_per_packet)),
+        page_size * max_tiles_per_packet);
 
     fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
         pkt_unicast_hdr, static_cast<uint8_t>(unicast_route_info.distance_in_hops), nullptr, output_page_size);
