@@ -273,11 +273,14 @@ class BgeM3Attention(LightweightModule):
         # SDPA chunk sizing keys off the full (key) sequence length. In
         # sequence-parallel mode queries are local (S/tp) but keys span full S.
         sdpa_seq_len = k.shape[2]
-        # DP query-reshape trick: SDPA throughput is set by Sq (query length),
-        # not batch/total-work (measured: Sq8192=29 vs Sq4096=44 TFLOP/s). Fold
-        # G query-halves into the batch dim so SDPA sees Sq/G; replicate K/V per
-        # group so each query still attends to the FULL sequence (exact, PCC=1.0).
-        # Only for DP (K/V fully local, no gather) and no dense mask.
+        # DP query head-fold trick: SDPA throughput is set by Sq (query length),
+        # not total work (measured: Sq8192=29 vs Sq4096=44 TFLOP/s). Fold G
+        # query-chunks into the HEAD dim so SDPA sees Sq/G queries per head; K/V
+        # stay unchanged and SDPA's GQA head-broadcast makes each query head
+        # attend to the FULL sequence via its parent kv head. Exact (PCC=1.0) and
+        # needs NO K/V replicate (unlike the batch-fold variant). Only for DP
+        # (no mask). q [B,H,S,DH] -> [B, H*G, S/G, DH] with head h*G+j = head h's
+        # j-th seq chunk; kv head h broadcasts to query heads h*G..h*G+G-1.
         dp_reshape_g = 0
         if (
             os.environ.get("BGE_M3_DATA_PARALLEL", "0") == "1"
@@ -288,15 +291,7 @@ class BgeM3Attention(LightweightModule):
         if dp_reshape_g >= 2:
             b0, h0, s0, dh0 = q.shape
             g = dp_reshape_g
-            q = ttnn.reshape(q, [b0, h0, g, s0 // g, dh0])
-            q = ttnn.permute(q, [0, 2, 1, 3, 4])
-            q = ttnn.reshape(q, [b0 * g, h0, s0 // g, dh0])
-            k = ttnn.reshape(k, [b0, 1, h0, sdpa_seq_len, dh0])
-            k = ttnn.repeat(k, ttnn.Shape([1, g, 1, 1, 1]))
-            k = ttnn.reshape(k, [b0 * g, h0, sdpa_seq_len, dh0])
-            v = ttnn.reshape(v, [b0, 1, h0, sdpa_seq_len, dh0])
-            v = ttnn.repeat(v, ttnn.Shape([1, g, 1, 1, 1]))
-            v = ttnn.reshape(v, [b0 * g, h0, sdpa_seq_len, dh0])
+            q = ttnn.reshape(q, [b0, h0 * g, s0 // g, dh0])
         sdpa_program_config = _sdpa_program_config(
             sdpa_seq_len,
             self.config.mesh_device,
@@ -316,11 +311,9 @@ class BgeM3Attention(LightweightModule):
         )
         if dp_reshape_g >= 2:
             g = dp_reshape_g
-            b0 = context.shape[0] // g
-            h0, sg, dh0 = context.shape[1], context.shape[2], context.shape[3]
-            context = ttnn.reshape(context, [b0, g, h0, sg, dh0])
-            context = ttnn.permute(context, [0, 2, 1, 3, 4])
-            context = ttnn.reshape(context, [b0, h0, sg * g, dh0])
+            b0, hg, sg, dh0 = context.shape
+            # [B, H*G, S/G, DH] -> [B, H, S, DH]
+            context = ttnn.reshape(context, [b0, hg // g, sg * g, dh0])
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
