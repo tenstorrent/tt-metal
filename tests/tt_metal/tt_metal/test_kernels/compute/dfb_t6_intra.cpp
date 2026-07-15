@@ -35,12 +35,10 @@ void kernel_main() {
 #endif
         dfb.push_back(1);
 
-        // Unpack TRISC: wait for credit, datacopy, increment entry in-place, consume credit.
+        acquire_dst();
         dfb.wait_front(1);
-        tile_regs_acquire();
-        tile_regs_wait();
-#ifdef UCK_CHLKC_UNPACK
         copy_tile(dfb::out, 0, 0);
+#ifdef UCK_CHLKC_UNPACK
         if (trisc_id == 0) {
             volatile uint32_t* entry = reinterpret_cast<volatile uint32_t*>(dfb.get_read_ptr() << 4);
             for (uint32_t w = 0; w < words_per_entry; w++) {
@@ -48,11 +46,8 @@ void kernel_main() {
             }
         }
 #endif
-        tile_regs_commit();
-        tile_regs_release();
-        WAYPOINT("NAVY");
         dfb.pop_front(1);
-        WAYPOINT("HERE");
+        release_dst();
     }
 
     dfb.finish();

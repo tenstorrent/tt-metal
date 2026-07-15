@@ -90,10 +90,11 @@ static_assert(sizeof(LocalDFBInterface) == 88, "LocalDFBInterface (unpack TRISC)
 // with natural alignment the compiler emits sw/lw for each u32 field rather than
 // byte-stores, which is correct and more efficient.
 //
-//   - tc_slots[0] starts at offset 20 in LocalDFBInterface (divisible by 4).
+//   - tc_slots[0] starts at offset 24 in LocalDFBInterface (divisible by 4).
 //   - DFBTCSlot is 20B (u32s at 0/4/8/12, u8 at 16, pad 17-19) — all naturally aligned.
-//   - tc_slots[i] at offset 20 + i*20, always 4B-aligned.
-//   - sizeof(LocalDFBInterface) = 20 + 6*20 = 140 = 4*35; g_dfb_interface[id] is
+//   - tc_slots[i] at offset 24 + i*20, always 4B-aligned.
+//   - Prefix bytes [8,20) hold the Opt-4/5 scalar pack; num_entries (u16) follows at 20.
+//   - sizeof(LocalDFBInterface) = 24 + 6*20 = 144 = 4*36; g_dfb_interface[id] is
 //     4B-aligned for every id when the array base is 4B-aligned.
 struct DFBTCSlot {
     uint32_t rd_ptr;
@@ -113,7 +114,6 @@ struct DFBTCSlot {
 struct LocalDFBInterface {
     uint32_t entry_size;
     uint32_t stride_size;
-    uint16_t num_entries;
 
     uint8_t num_tcs_to_rr;
     uint8_t tc_idx;
@@ -124,13 +124,15 @@ struct LocalDFBInterface {
     uint8_t num_entries_per_txn_id_per_tc;
     uint8_t num_txn_ids;
     uint8_t broadcast_tc;  // DM-DM ALL producer: post to all TCs instead of round-robin
-    uint8_t _tc_align_pad;  // pad 19B prefix → 20B so tc_slots[0] is 4B-aligned
+    uint8_t _tc_align_pad;  // pad bytes [8,20) → 20B so tc_slots[] stays 4B-aligned
+
+    uint16_t num_entries;
 
     DFBTCSlot tc_slots[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
 };
 
 static_assert(sizeof(DFBTCSlot) == 20, "DFBTCSlot size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 140, "LocalDFBInterface size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 144, "LocalDFBInterface size is incorrect");
 
 #endif
 

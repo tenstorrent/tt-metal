@@ -53,7 +53,7 @@ FORCE_INLINE uint32_t dfb_read_blob_u32(uintptr_t blob_addr, uint32_t byte_off) 
 }
 
 // Device-side shadow of dfb_hart_init_entry_t, populated by dfb_read_init_entry_header.
-// Mirrors the 24B on-disk layout (including txn_ids[4] + remapper_pair_index) captured in 6 u32 reads.
+// Mirrors the 28B on-disk layout captured in 7 u32 reads.
 struct dfb_init_entry_hdr_t {
     uint8_t logical_dfb_id;
     uint8_t num_tcs;
@@ -69,10 +69,11 @@ struct dfb_init_entry_hdr_t {
     uint8_t producer_signal_bit;  // bit position in dfb_signal[dfb_id]; 0xFF if consumer
     uint8_t txn_ids[dfb::NUM_TXN_IDS];  // bytes 18–21 (DM only; 0 elsewhere)
     uint8_t broadcast_tc;         // DM pack byte 22 → iface.broadcast_tc (DM unpack only)
-    uint8_t remapper_pair_index;  // byte 23 / DM pack byte 11 → iface._tc_align_pad on copy
+    uint8_t remapper_pair_index;  // TRISC byte 22; DM pack byte 23
+    uint16_t num_entries;         // bytes 24–25
 };
 
-// Fix A: read the entire 24B dfb_hart_init_entry_t (__attribute__((packed))) as 6 u32s.
+// Fix A: read the entire 28B dfb_hart_init_entry_t (__attribute__((packed))) as 7 u32s.
 // Two variants with identical unpack logic; only the pointer type differs:
 //   - dfb_read_init_entry_header        — uncached alias (TRISC path, no L2 coherency)
 //   - dfb_read_init_entry_header_cached — cached TL1 pointer (DM path, after L2 invalidate)
@@ -83,12 +84,13 @@ struct dfb_init_entry_hdr_t {
 //   w2 = stride_size_precomp (u32): host pre-computed per hart type — DM=raw bytes, TRISC=tile units
 //   w3 [7:0]=stride_size_tiles  [15:8]=num_txn_ids  [23:16]=threshold  [31:24]=num_entries_per_txn_id
 //   w4 [7:0]=num_entries_per_txn_id_per_tc  [15:8]=producer_signal_bit  [23:16]=txn_ids[0]  [31:24]=txn_ids[1]
-//   w5 [7:0]=txn_ids[2]  [15:8]=txn_ids[3]  [23:16]=remapper_pair_index  [31:24]=_pad
+//   w5 [7:0]=txn_ids[2]  [15:8]=txn_ids[3]  [23:16]=remapper_pair_index  [31:24]=_pad (TRISC) / remapper (DM pack)
+//   w6 [15:0]=num_entries  [31:16]=_pad2
 
-// Shared unpack helper: TRISC blob w3–w5 (legacy SoA byte layout).
+// Shared unpack helper: TRISC blob w3–w6 (legacy SoA byte layout).
 template <typename PtrT>
 FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header(PtrT s) {
-    const uint32_t w0 = s[0], w1 = s[1], w2 = s[2], w3 = s[3], w4 = s[4], w5 = s[5];
+    const uint32_t w0 = s[0], w1 = s[1], w2 = s[2], w3 = s[3], w4 = s[4], w5 = s[5], w6 = s[6];
     dfb_init_entry_hdr_t h;
     h.logical_dfb_id             = static_cast<uint8_t>(w0);
     h.num_tcs                    = static_cast<uint8_t>(w0 >> 8);
@@ -108,13 +110,14 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header(PtrT s) {
     h.txn_ids[3]                 = static_cast<uint8_t>(w5 >> 8);
     h.broadcast_tc               = 0;
     h.remapper_pair_index        = static_cast<uint8_t>(w5 >> 16);
+    h.num_entries                = static_cast<uint16_t>(w6);
     return h;
 }
 
 // DM unpack: w3–w5 are the Opt-5 scalar pack (12B DTCM layout). See dfb_write_dm_scalar_pack_to_blob.
 template <typename PtrT>
 FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header_dm(PtrT s) {
-    const uint32_t w0 = s[0], w1 = s[1], w2 = s[2], w3 = s[3], w4 = s[4], w5 = s[5];
+    const uint32_t w0 = s[0], w1 = s[1], w2 = s[2], w3 = s[3], w4 = s[4], w5 = s[5], w6 = s[6];
     dfb_init_entry_hdr_t h;
     h.logical_dfb_id             = static_cast<uint8_t>(w0);
     h.num_tcs                    = static_cast<uint8_t>(w0 >> 8);
@@ -134,6 +137,7 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header_dm(PtrT s) {
     h.num_txn_ids                = static_cast<uint8_t>(w5 >> 8);
     h.broadcast_tc               = static_cast<uint8_t>(w5 >> 16);
     h.remapper_pair_index        = static_cast<uint8_t>(w5 >> 24);
+    h.num_entries                = static_cast<uint16_t>(w6);
     return h;
 }
 
@@ -193,6 +197,7 @@ FORCE_INLINE void dfb_init_timing_write_slot(
     uint32_t metric_h = 0,
     uint32_t metric_i = 0,
     uint32_t metric_j = 0) {
+#ifdef DFB_INIT_TIMING_ENABLED
     volatile uint32_t* words = dfb_init_timing_slot_words(slot);
     // Publish pattern: write payload first, VALID last. Uncached stores land in TL1 directly.
     words[dfb::DFB_INIT_TIMING_W_MAGIC] = dfb::DFB_INIT_TIMING_MAGIC;
@@ -213,6 +218,23 @@ FORCE_INLINE void dfb_init_timing_write_slot(
     asm volatile("fence w, w" ::: "memory");
     words[dfb::DFB_INIT_TIMING_W_VALID] = 1u;
     asm volatile("fence w, w" ::: "memory");
+#else
+    (void)slot;
+    (void)role;
+    (void)e2e;
+    (void)metric_a;
+    (void)metric_b;
+    (void)metric_c;
+    (void)metric_d;
+    (void)metric_e;
+    (void)metric_f;
+    (void)start_time;
+    (void)end_time;
+    (void)metric_g;
+    (void)metric_h;
+    (void)metric_i;
+    (void)metric_j;
+#endif
 }
 
 #ifdef COMPILE_FOR_TRISC
@@ -227,10 +249,14 @@ FORCE_INLINE uint8_t dfb_init_timing_trisc_slot_index() {
 #endif
 
 inline uint32_t rdcycle() {
+#ifdef DFB_INIT_TIMING_ENABLED
     uint32_t c;
     asm volatile("rdcycle %0" : "=r"(c));
     return c;
-}
+#else
+    return 0;
+#endif
+            }
 
 // (load_dfb_risc_mask removed — device no longer walks the risc_mask in wait_all)
 
@@ -288,7 +314,8 @@ FORCE_INLINE void dfb_ensure_ready(uintptr_t config_cached, uint8_t dfb_id) {
     }
 #ifndef COMPILE_FOR_TRISC
     if (need_isr_gate) {
-        while (*isr_ready_ptr != 1u) {}
+        while (*isr_ready_ptr != 1u) {
+        }
     }
 #endif
     WAYPOINT("DFD");
@@ -323,31 +350,30 @@ FORCE_INLINE void dfb_publish_producer_ready(
 FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, uint32_t /*num_dfbs*/) {
     uint32_t start_time = rdcycle();
 
-    volatile tt_l1_ptr uint8_t* config_base = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(dfb_config_base);
-    volatile dfb_global_header_t* ghdr = reinterpret_cast<volatile dfb_global_header_t*>(config_base);
-    uint32_t dm0_isr_blob_offset = ghdr->dm0_isr_blob_offset;
+    const uintptr_t config_cached = reinterpret_cast<uintptr_t>(dfb_config_base);
 
-    volatile tt_l1_ptr uint8_t* dm0_blob_ptr = config_base + dm0_isr_blob_offset;
+    // Hybrid (*774-style body + warm-config correctness): uncached bootstrap of offset/masks,
+    // one invalidate over threshold+desc pools, then cached walks (non-volatile after inv).
+    const uint32_t dm0_isr_blob_offset = *dfb_l1_uncached_u32_ptr(
+        config_cached + offsetof(dfb_global_header_t, dm0_isr_blob_offset));
+    const uintptr_t dm0_blob_base = config_cached + dm0_isr_blob_offset;
 
-    uint32_t producer_txn_id_mask = 0;
-    uint32_t consumer_txn_id_mask = 0;
-
-    // Core-wide masks precomputed on host (Phase A).
-    const volatile tt_l1_ptr uint32_t* core_hdr_src =
-        reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(dm0_blob_ptr);
-    producer_txn_id_mask = core_hdr_src[0];
-    consumer_txn_id_mask = core_hdr_src[1];
-    dm0_blob_ptr += sizeof(dfb_dm0_isr_blob_core_header_t);
-
-    WAYPOINT("IS1");
+    const uint32_t producer_txn_id_mask = dfb_read_blob_u32(dm0_blob_base, 0);
+    const uint32_t consumer_txn_id_mask = dfb_read_blob_u32(dm0_blob_base, 4);
 
     const uint32_t txn_hw_bytes =
         dm0_isr_txn_hw_pool_byte_size(producer_txn_id_mask, consumer_txn_id_mask);
     const uint32_t pool_bytes = dm0_isr_txn_desc_pool_byte_size(producer_txn_id_mask, consumer_txn_id_mask);
-    const volatile tt_l1_ptr uint8_t* pool_base = dm0_blob_ptr + txn_hw_bytes;
+    // Core header already read uncached — invalidate only the pools the cached walk touches.
+    const uintptr_t pools_base = dm0_blob_base + sizeof(dfb_dm0_isr_blob_core_header_t);
+    invalidate_l2_cache_range(pools_base, txn_hw_bytes + pool_bytes);
 
-    const volatile dfb_dm0_isr_txn_threshold_t* txn_threshold_table =
-        reinterpret_cast<const volatile dfb_dm0_isr_txn_threshold_t*>(dm0_blob_ptr);
+    WAYPOINT("IS1");
+
+    const uint8_t* pool_base =
+        reinterpret_cast<const uint8_t*>(pools_base + txn_hw_bytes);
+    const dfb_dm0_isr_txn_threshold_t* txn_threshold_table =
+        reinterpret_cast<const dfb_dm0_isr_txn_threshold_t*>(pools_base);
 
     const uint32_t t_before_desc_copy = rdcycle();
     if (pool_bytes != 0) {
@@ -355,7 +381,7 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
         uint32_t pending_desc = all_mask;
         while (pending_desc) {
             const uint32_t txn_id = static_cast<uint32_t>(__builtin_ctz(pending_desc));
-            const volatile uint32_t* s = reinterpret_cast<const volatile uint32_t*>(pool_base + txn_id * 32u);
+            const uint32_t* s = reinterpret_cast<const uint32_t*>(pool_base + txn_id * 32u);
             volatile uint32_t* d = reinterpret_cast<volatile uint32_t*>(&g_txn_dfb_descriptor[txn_id]);
             d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; d[3] = s[3];
             d[4] = s[4]; d[5] = s[5]; d[6] = s[6]; d[7] = s[7];
@@ -380,7 +406,6 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
         const uint32_t t_wr_start = rdcycle();
         CMDBUF_CLEAR_TILES_TO_PROCESS_TR_ACK(OVERLAY_RD_CMD_BUF, txn_id);
         asm volatile("nop");
-        DPRINT("ack txn id: {} threshold: {}\n", txn_id, threshold);
         SET_TILES_TO_PROCESS_THRES_TR_ACK(txn_id, threshold);
         hw_reg_writes += 2u;
         hw_reg_write_cycles += rdcycle() - t_wr_start;
@@ -399,7 +424,6 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
         const uint32_t t_wr_start = rdcycle();
         CMDBUF_CLEAR_TILES_TO_PROCESS_WR_SENT(OVERLAY_WR_CMD_BUF, txn_id);
         asm volatile("nop");
-        DPRINT("wr sent txn id: {} threshold: {}\n", txn_id, threshold);
         SET_TILES_TO_PROCESS_THRES_WR_SENT(txn_id, threshold);
         hw_reg_writes += 2u;
         hw_reg_write_cycles += rdcycle() - t_wr_start;
@@ -412,13 +436,11 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
     const uint32_t t_before_ie = rdcycle();
     uint64_t reg_val = CMDBUF_RD_REG(OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);
     reg_val = (reg_val & 0x00000000FFFFFFFFULL) | ((uint64_t)(producer_txn_id_mask & 0xFFFFFFFFULL) << 32);
-    DPRINT("producer txn id mask: {}\n", producer_txn_id_mask);
     CMDBUF_WR_REG(OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET, reg_val);
     const uint32_t t_after_first_ie_rmw = rdcycle();
 
     reg_val = CMDBUF_RD_REG(OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);
     reg_val = (reg_val & 0xFFFFFFFF00000000ULL) | (consumer_txn_id_mask & 0xFFFFFFFFULL);
-    DPRINT("consumer txn id mask: {}\n", consumer_txn_id_mask);
     CMDBUF_WR_REG(OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET, reg_val);
     const uint32_t t_after_isr_ie_writes = rdcycle();
     hw_reg_writes += 2u;
@@ -474,10 +496,22 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
 FORCE_INLINE void setup_dfb_remapper(uint32_t tt_l1_ptr* dfb_config_base, uint32_t /*num_dfbs*/) {
     const uint32_t start_time = rdcycle();
 
-    volatile tt_l1_ptr uint8_t* config_base = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(dfb_config_base);
-    volatile dfb_global_header_t* ghdr = reinterpret_cast<volatile dfb_global_header_t*>(config_base);
-    const uint32_t dm1_remapper_blob_offset = ghdr->dm1_remapper_blob_offset;
-    volatile tt_l1_ptr uint8_t* dm1_blob_ptr = config_base + dm1_remapper_blob_offset;
+    const uintptr_t config_cached = reinterpret_cast<uintptr_t>(dfb_config_base);
+
+    // Host may rewrite overlapping L1 across programs: uncached bootstrap of offset/num_slots,
+    // one invalidate over slots when non-empty, then cached remapper slot walk (*774 DM1).
+    const uint32_t dm1_remapper_blob_offset = *dfb_l1_uncached_u32_ptr(
+        config_cached + offsetof(dfb_global_header_t, dm1_remapper_blob_offset));
+    const uintptr_t dm1_blob_base = config_cached + dm1_remapper_blob_offset;
+    const uint16_t num_slots_bootstrap = *reinterpret_cast<volatile uint16_t*>(
+        dfb_l1_uncached_byte_ptr(dm1_blob_base + offsetof(dfb_dm1_remapper_core_header_t, num_slots)));
+    // Skip invalidate when empty: no cached slot walk (keeps Base/Three near *774 DM1 e2e).
+    // Header already bootstrapped uncached — invalidate only the slot array.
+    if (num_slots_bootstrap > 0u) {
+        const uintptr_t slots_base = dm1_blob_base + sizeof(dfb_dm1_remapper_core_header_t);
+        invalidate_l2_cache_range(
+            slots_base, static_cast<uint32_t>(num_slots_bootstrap) * sizeof(dfb_dm0_remapper_slot_t));
+    }
 
     // bool enable_remapper = false;
     uint32_t end_remapper_config_time = 0;
@@ -495,12 +529,9 @@ FORCE_INLINE void setup_dfb_remapper(uint32_t tt_l1_ptr* dfb_config_base, uint32
     uint32_t max_pair_idx = 0;
 
     const uint32_t t_loop_start = rdcycle();
-    const volatile dfb_dm1_remapper_core_header_t* core_hdr =
-        reinterpret_cast<const volatile dfb_dm1_remapper_core_header_t*>(dm1_blob_ptr);
-    const uint16_t num_slots = core_hdr->num_slots;
-    const volatile dfb_dm0_remapper_slot_t* slots =
-        reinterpret_cast<const volatile dfb_dm0_remapper_slot_t*>(
-            dm1_blob_ptr + sizeof(dfb_dm1_remapper_core_header_t));
+    const uint16_t num_slots = num_slots_bootstrap;
+    const dfb_dm0_remapper_slot_t* slots = reinterpret_cast<const dfb_dm0_remapper_slot_t*>(
+        dm1_blob_base + sizeof(dfb_dm1_remapper_core_header_t));
     const uint32_t t_after_hdr = rdcycle();
     blob_l1_read_sw = t_after_hdr - t_loop_start;
 
@@ -643,8 +674,8 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
     // -----------------------------------------------------------------------
 
     // Replaces dfb_hart_init_entry_byte_size for num_tcs 0..6: avoids MUL per entry.
-    // AoP tail: 24B header + (num_tcs*9 + 3)&~3. Identical to original SoA byte count.
-    static constexpr uint8_t k_entry_byte_size_lut[7] = {24, 36, 44, 52, 60, 72, 80};
+    // AoP tail: 28B header + (num_tcs*9 + 3)&~3. Identical to original SoA byte count.
+    static constexpr uint8_t k_entry_byte_size_lut[7] = {28, 40, 48, 56, 64, 76, 84};
 
     const uint8_t num_init = dfb_hart_participation_count(participation_mask);
 
@@ -668,7 +699,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 
     // Opt 3: compute the starting g_dfb_interface pointer from the first blob entry's
     // logical_dfb_id (1 multiply, amortised). Subsequent iterations use pointer increment
-    // (1 addi) instead of recomputing &g_dfb_interface[id] (id×140 multiply) per entry.
+    // (1 addi) instead of recomputing &g_dfb_interface[id] (id×144 multiply) per entry.
     // Precondition: host emits blob entries in ascending consecutive DFB ID order.
     LocalDFBInterface* iface_ptr = (num_init > 0)
         ? &g_dfb_interface[*reinterpret_cast<const uint8_t*>(reinterpret_cast<uintptr_t>(p))]
@@ -694,7 +725,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
             : dfb_hart_init_entry_byte_size(num_tcs);
         p = reinterpret_cast<const volatile uint8_t*>(e_addr + entry_bytes);
 
-        // AoP TC tail starts right after the 24B header: pairs first, ptc bytes after all pairs.
+        // AoP TC tail starts right after the 28B header: pairs first, ptc bytes after all pairs.
         const uintptr_t tc_base_addr = e_addr + sizeof(dfb_hart_init_entry_t);
 
         WAYPOINT("L1");
@@ -731,19 +762,21 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 #else  // unpack TRISC
         iface.tensix_trisc_mask = static_cast<uint8_t>(eh.flags & DFB_HART_FLAG_TRISC_MASK);
 #endif
+        iface.num_entries = eh.num_entries;
 #else  // DM
         iface.entry_size  = eh.entry_size >> cb_addr_shift;
         // Opt 2: stride_size_precomp already has entry_size_raw * stride_in_entries — no multiply.
         iface.stride_size = eh.stride_size_precomp;
         // Opt 4: 3×u32 DTCM stores from Opt-5 unpacked eh; no second L1 read of bytes 12–23.
         dfb_write_dm_iface_scalars_from_hdr(iface, eh);
+        iface.num_entries = eh.num_entries;
 #endif
 
         WAYPOINT("L3");
 
         // --- TC slot population ---
         // AoP TC tail: dfb_blob_tc_pair_t[num_tcs] (8B each, base+limit adjacent per slot)
-        // immediately after the 24B header, then uint8_t ptc[num_tcs] padded to 4B.
+        // immediately after the 28B header, then uint8_t ptc[num_tcs] padded to 4B.
         // Preload ptc as 1–2 word reads before the loop; in-loop ptc is a register bit-extract
         // (zero additional memory traffic). Running pair pointer advances 8B per slot.
         // Fix C: DM path uses cached pointer (blob in L2 after invalidate); TRISC uses uncached alias.
@@ -786,7 +819,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
             iface.tc_slots[t].rd_ptr    = base;
             iface.tc_slots[t].wr_ptr    = base;
 #endif
-        }
+                }
         total_tc_slots += rdcycle() - t_slots_start;
 
         WAYPOINT("L4");

@@ -19,7 +19,7 @@
 #include "api/kernel_thread_globals.h"
 
 inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id)
-    : local_dfb_interface_(g_dfb_interface[logical_dfb_id]), logical_dfb_id_(logical_dfb_id) {
+    : local_dfb_interface_(get_local_dfb_interface(logical_dfb_id)), logical_dfb_id_(logical_dfb_id) {
     dfb_ensure_ready(g_dfb_config_base_addr, static_cast<uint8_t>(logical_dfb_id));
 }
 
@@ -67,6 +67,7 @@ inline void DataflowBuffer::push_back_impl(uint16_t num_entries) {
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= num_entries);
     llk_push_tiles(logical_dfb_id_, num_entries);
+    DPRINT("push_back_impl: num_entries = {}\n", num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
     if (__builtin_expect(local_dfb_interface_.broadcast_tc, 0)) {
         // DM-DM BLOCKED: post to all N TCs; wr_ptr tracked on slot 0
@@ -121,6 +122,7 @@ inline void DataflowBuffer::pop_front_impl(uint16_t num_entries) {
     }
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= num_entries);
     llk_pop_tiles(logical_dfb_id_, num_entries);
+    DPRINT("pop_front_impl: num_entries = {}\n", num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
     uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
     ASSERT(overlay::llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);

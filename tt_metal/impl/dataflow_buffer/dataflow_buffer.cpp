@@ -562,12 +562,13 @@ size_t serialize_dfb_config_for_core(
             TT_FATAL(offset + entry_sz <= out.size(),
                 "DFB config overflow (init entry dfb={} hart={})", dfb->id, h);
 
-            // Header (24B fixed).
+            // Header (28B fixed).
             dfb_hart_init_entry_t entry = {};
             entry.logical_dfb_id = static_cast<uint8_t>(dfb->id);
             entry.num_tcs        = num_tcs;
             entry.capacity       = rc.is_producer ? static_cast<uint8_t>(dfb->capacity) : 0u;
             entry.entry_size = dfb->config.entry_size;
+            entry.num_entries = static_cast<uint16_t>(dfb->config.num_entries);
             // Opt 2: pre-compute hart-type-specific stride_size so device can do a direct
             // copy instead of a multiply in setup_local_dfb_interfaces.
             //   DM harts   (h < TENSIX_RISC_OFFSET): stride_size = entry_size_raw * stride_in_entries
@@ -633,7 +634,7 @@ size_t serialize_dfb_config_for_core(
                     entry.remapper_pair_index);
             }
 
-            // Write AoP TC tail: dfb_blob_tc_pair_t[num_tcs] immediately after the 24B header,
+            // Write AoP TC tail: dfb_blob_tc_pair_t[num_tcs] immediately after the 28B header,
             // followed by uint8_t packed_tile_counter[num_tcs] padded to 4B.
             // Each pair is {base_addr(4B), limit(4B)} = 8B; ptc bytes are packed contiguously.
             // Total TC section = (num_tcs*9 + 3) & ~3 — identical to original SoA byte count.
@@ -1470,6 +1471,27 @@ void DataflowBufferImpl::update_size(std::optional<uint32_t> new_entry_size, std
             consumer_is_tensix_only,
             config.enable_consumer_implicit_sync,
             num_consumer_tcs);
+    }
+
+    if (configs_finalized && MetalContext::instance().hal().has_tile_counter_registers()) {
+        log_info(
+            tt::LogMetal,
+            "DFB {} size override applied: entry_size={} num_entries={} prod_threshold={} prod_per_tc={} "
+            "cons_threshold={} cons_per_tc={}",
+            id,
+            config.entry_size,
+            config.num_entries,
+            producer_txn_descriptor.num_entries_to_process_threshold,
+            producer_txn_descriptor.num_entries_per_txn_id_per_tc,
+            consumer_txn_descriptor.num_entries_to_process_threshold,
+            consumer_txn_descriptor.num_entries_per_txn_id_per_tc);
+    } else {
+        log_debug(
+            tt::LogMetal,
+            "DFB {} size override applied: entry_size={} num_entries={}",
+            id,
+            config.entry_size,
+            config.num_entries);
     }
 
     if (serialized_size_before.has_value()) {

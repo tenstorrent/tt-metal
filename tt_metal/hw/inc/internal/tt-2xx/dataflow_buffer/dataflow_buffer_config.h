@@ -135,7 +135,7 @@ constexpr uint8_t DFB_HART_FLAG_BROADCAST_TC = (1u << 5);
 constexpr uint8_t DFB_HART_FLAG_TRISC_MASK   = 0x0Fu;  // bits 3:0 = tensix_trisc_mask (which TRISC(s) run DFB ops)
 
 // AoP (array-of-pairs) per-TC pair in the blob tail.
-// Layout: dfb_blob_tc_pair_t[num_tcs] immediately after the 24B header, followed by
+// Layout: dfb_blob_tc_pair_t[num_tcs] immediately after the 28B header, followed by
 // uint8_t packed_tile_counter[num_tcs] padded to the next 4B boundary.
 // This keeps base_addr and limit for the same slot adjacent (8B apart, same cache line)
 // while eliminating the 3B-per-slot padding of the 12B AoS format.
@@ -148,9 +148,9 @@ struct dfb_blob_tc_pair_t {
 static_assert(sizeof(dfb_blob_tc_pair_t) == 8, "dfb_blob_tc_pair_t must be 8B");
 
 // Per-(hart, DFB) init entry in this hart's sequential blob.
-// Fixed 24B header, followed by dfb_blob_tc_pair_t[num_tcs] (8B each), then
+// Fixed 28B header, followed by dfb_blob_tc_pair_t[num_tcs] (8B each), then
 // uint8_t packed_tile_counter[num_tcs] padded to 4B.
-// Total entry size = 24 + ceil9(num_tcs) where ceil9(n) = (n*9 + 3) & ~3.
+// Total entry size = 28 + ceil9(num_tcs) where ceil9(n) = (n*9 + 3) & ~3.
 struct dfb_hart_init_entry_t {
     uint8_t  logical_dfb_id;
     uint8_t  num_tcs;
@@ -168,10 +168,12 @@ struct dfb_hart_init_entry_t {
     uint8_t  num_entries_per_txn_id_per_tc;  // TRISC layout byte 16; DM pack byte 20
     uint8_t  producer_signal_bit;            // TRISC layout byte 17; DM pack byte 13 (transport)
     uint8_t  txn_ids[dfb::NUM_TXN_IDS];     // TRISC layout bytes 18-21; DM pack bytes 14-17
-    uint8_t  remapper_pair_index;            // TRISC layout byte 22; DM pack byte 23
-    uint8_t  _pad;                           // pad header to 24B → 4B-aligned TC arrays follow
+    uint8_t  remapper_pair_index;            // TRISC layout byte 22; DM pack remapper at byte 23
+    uint8_t  _pad;                           // byte 23; DM pack p[11] overwrites with remapper_pair_index
+    uint16_t num_entries;                    // bytes 24-25; ring entry count (main update_size path)
+    uint8_t  _pad2[2];                       // pad header to 28B → 4B-aligned TC arrays follow
 } __attribute__((packed));
-static_assert(sizeof(dfb_hart_init_entry_t) == 24, "dfb_hart_init_entry_t must be 24B");
+static_assert(sizeof(dfb_hart_init_entry_t) == 28, "dfb_hart_init_entry_t must be 28B");
 
 // Opt 5 (DM only): bytes [12,24) of the init entry header mirror LocalDFBInterface bytes [8,20)
 // (num_tcs_to_rr through _tc_align_pad). Host writes this 12B span in DTCM order; device unpacks
@@ -377,13 +379,18 @@ inline uint32_t dm0_isr_txn_desc_pool_byte_size(uint32_t producer_txn_id_mask, u
     return dm0_isr_txn_slot_span(producer_txn_id_mask, consumer_txn_id_mask) * sizeof(dfb_dm0_txn_descriptor_image_t);
 }
 
+inline uint32_t dm0_isr_blob_byte_size(uint32_t producer_txn_id_mask, uint32_t consumer_txn_id_mask) {
+    return sizeof(dfb_dm0_isr_blob_core_header_t) + dm0_isr_txn_hw_pool_byte_size(producer_txn_id_mask, consumer_txn_id_mask) +
+           dm0_isr_txn_desc_pool_byte_size(producer_txn_id_mask, consumer_txn_id_mask);
+}
+
 static_assert(sizeof(dfb_global_header_t) == 96, "dfb_global_header_t size changed — check field alignment");
 static_assert(sizeof(dfb_dm1_remapper_core_header_t) == 4, "dfb_dm1_remapper_core_header_t must be 4 bytes");
 static_assert(sizeof(TCAddressEntry) == 8, "TCAddressEntry size is incorrect");
 static_assert(sizeof(dfb_initializer_t) == 36, "dfb_initializer_t size is incorrect");
 static_assert(sizeof(dfb_initializer_per_risc_t) == 64, "dfb_initializer_per_risc_t size is incorrect");
 static_assert(sizeof(dfb_initializer_intra_tensix_t) == 24, "dfb_initializer_intra_tensix_t size is incorrect");
-static_assert(sizeof(dfb_hart_init_entry_t) == 24, "dfb_hart_init_entry_t must be 24B");
+static_assert(sizeof(dfb_hart_init_entry_t) == 28, "dfb_hart_init_entry_t must be 28B");
 
 namespace dfb {
 

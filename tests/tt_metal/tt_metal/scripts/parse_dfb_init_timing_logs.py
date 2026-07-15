@@ -5,10 +5,11 @@
 
 """Parse DFB init timing lines from unit test logs into CSV.
 
-Reads LogDfbInitTimingFromL1() output emitted by MeshDeviceFixture benchmark
-tests in test_dataflow_buffer.cpp.
+Reads LogDfbInitTimingFromL1() output emitted by the dfb_init_timing_bench binary
+(requires TT_METAL_MEASURE_DFB_INIT_TIME=1).
 
 Example:
+    ./build/test/tt_metal/dfb_init_timing_bench --case all 2>&1 | tee case-all.log
     python3 tests/tt_metal/tt_metal/scripts/parse_dfb_init_timing_logs.py \\
         case-*-75.log -o dfb_init_timing.csv --summary dfb_init_summary.csv
 """
