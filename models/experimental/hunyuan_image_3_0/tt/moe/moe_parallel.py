@@ -214,6 +214,10 @@ class HunyuanTtMoEParallel(LightweightModule):
         h = ttnn.multiply(x2, x1, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=mc)
         ttnn.deallocate(x1)
         ttnn.deallocate(x2)
+        # Down-proj (M x 3072 x 4096) schedule is M-dependent (measured,
+        # tests/perf/test_expert_down_sweep.py): Mt==1 decode -> width-sharded L1,
+        # mid M (Mt 2-7) -> ttnn auto (25-33% faster than wide_mm), large M (Mt >= 8)
+        # -> rectangular-grid 2D-mcast. l1_sharded_linear applies exactly this policy.
         out = l1_sharded_linear(h, wdn, compute_kernel_config=self.compute_kernel_config)
         ttnn.deallocate(h)
         return out
