@@ -34,12 +34,21 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 
 
-def _interleaved_row_major(x: ttnn.Tensor, shape) -> ttnn.Tensor:
-    """Bring a (possibly sharded/tiled) conv output back to interleaved ROW_MAJOR
-    and reshape to ``shape`` so downstream element-wise ops and the next conv can
-    consume it as ``[N, L, C]``."""
+def _interleaved(x: ttnn.Tensor, shape, *, row_major: bool) -> ttnn.Tensor:
+    """Bring a (possibly sharded) conv output to interleaved DRAM and reshape to
+    ``shape`` so downstream ops consume it as ``[N, L, C]`` (or ``[N, H, W, C]``).
+
+    ``to_memory_config(DRAM)`` is a cheap no-op when the conv already returns
+    interleaved DRAM (the width-sliced path always does) and otherwise gathers an
+    L1-sharded output. ``row_major=True`` additionally untilizes to ROW_MAJOR —
+    needed by conv2d's downstream (speaker encoder) and by conv-transpose
+    zero-stuffing. ``row_major=False`` keeps TILE, so a conv1d -> eltwise -> conv1d
+    chain avoids the per-op untilize round-trip: ttnn.conv1d accepts a TILE
+    interleaved input directly (verified PCC 1.0), and leaky_relu/add/mul/tanh all
+    run in TILE, so the vocoder's deep conv chain never leaves tiled layout."""
     x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    if row_major:
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
     return ttnn.reshape(x, shape)
 
 
@@ -60,6 +69,7 @@ class TtConv1d(LightweightModule):
         padding: int = 0,
         dilation: int = 1,
         groups: int = 1,
+        activation: ttnn.UnaryWithParam | None = None,
         weights_dtype: ttnn.DataType = ttnn.bfloat16,
         activations_dtype: ttnn.DataType = ttnn.float32,
         math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4,
@@ -90,9 +100,13 @@ class TtConv1d(LightweightModule):
         # No forced shard_layout: HEIGHT_SHARDED fails the DRAM slicer on the wide
         # (1024-channel) layers with short spatial extent. Auto-sharding picks a
         # valid layout per shape and gives PCC ~0.9999.
+        # ``activation`` (e.g. leaky_relu) is fused onto the conv output (post-bias),
+        # so ``conv(x, activation=leaky_relu) == leaky_relu(conv(x))`` — used to fold
+        # HiFi-GAN's between-conv activations into the producing conv.
         self.conv_config = ttnn.Conv1dConfig(
             weights_dtype=weights_dtype,
             deallocate_activation=False,
+            activation=activation,
         )
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
@@ -125,7 +139,10 @@ class TtConv1d(LightweightModule):
         )
         self.tt_weight = weight
         self.tt_bias = bias
-        return _interleaved_row_major(out, [batch_size, out_length, self.out_channels])
+        # Keep TILE: the conv already emits TILE/interleaved-DRAM, and the whole
+        # vocoder conv chain (+ its eltwise ops) consumes TILE, so we skip the
+        # per-conv untilize->ROW_MAJOR round-trip.
+        return _interleaved(out, [batch_size, out_length, self.out_channels], row_major=False)
 
 
 class TtConvTranspose1d(LightweightModule):
@@ -164,6 +181,10 @@ class TtConvTranspose1d(LightweightModule):
         self.conv = TtConv1d(device, weight_conv, bias, stride=1, padding=0, **conv_kwargs)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        # The zero-stuffing reshape/pad/slice inserts zeros along the (tiled) length
+        # dim, which only works in ROW_MAJOR; upstream now flows TILE, so untilize
+        # here (no-op if already ROW_MAJOR). The inner TtConv1d re-tiles internally.
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         batch_size, input_length, channels = x.shape
 
         # Zero-stuff: [N, L, C] -> [N, L, 1, C] -> pad to [N, L, stride, C] ->
@@ -249,4 +270,4 @@ class TtConv2d(LightweightModule):
         )
         self.tt_weight = weight
         self.tt_bias = bias
-        return _interleaved_row_major(out, [batch_size, out_h, out_w, self.out_channels])
+        return _interleaved(out, [batch_size, out_h, out_w, self.out_channels], row_major=True)
