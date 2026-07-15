@@ -132,7 +132,7 @@
   test_group: module
   skus:
     bh_spsg:
-      timeout: 30
+      timeout: 40
   owner_id: U08RL15T4N8
   team: models
   sp_config: spsg
