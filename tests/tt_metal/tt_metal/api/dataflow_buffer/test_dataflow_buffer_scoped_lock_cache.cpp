@@ -10,6 +10,7 @@
 // state and verify that scoped_lock touches EXACTLY the held entries (invalidate both roles / flush producer-only).
 
 #include "dfb_test_common.hpp"
+#include "tt_metal/tt_metal/test_kernels/dataflow/dfb_scoped_lock_cache_common.h"
 
 namespace tt::tt_metal {
 namespace {
@@ -26,7 +27,7 @@ struct DfbCacheParams {
     uint32_t entry_size;      // bytes per entry (>= 64, 64-aligned)
     uint32_t num_entries;     // ring slots driven by the kernel
     bool active_is_producer;  // which role takes the lock (does the cache dance)
-    uint32_t mode;            // 0 = flush-on-release, 1 = invalidate-on-acquire
+    DfbCacheTestMode mode;    // FlushOnRelease vs InvalidateOnAcquire
     uint32_t lock_n;          // entries locked
     // Multi-consumer ALL invalidate variant: the producer publishes the shared stale state and signals,
     // then all num_consumers consumers concurrently invalidate the shared held entries (each verifies into
@@ -61,7 +62,8 @@ std::vector<uint32_t> dfb_cache_expected(const DfbCacheParams& p) {
     for (uint32_t k = 0; k < p.lock_n; ++k) {
         held[(k * stride) % p.num_entries] = true;  // wraps at the ring limit, like scoped_lock
     }
-    const bool op_makes_fresh = (p.mode == 1) || (p.mode == 0 && p.active_is_producer);
+    const bool op_makes_fresh = (p.mode == DfbCacheTestMode::InvalidateOnAcquire) ||
+                                (p.mode == DfbCacheTestMode::FlushOnRelease && p.active_is_producer);
     std::vector<uint32_t> exp(p.num_entries);
     for (uint32_t s = 0; s < p.num_entries; ++s) {
         exp[s] = (held[s] && op_makes_fresh) ? (DFB_CACHE_NEW_BASE + s) : (DFB_CACHE_OLD_BASE + s);
@@ -155,7 +157,7 @@ std::vector<uint32_t> run_dfb_scoped_lock_cache_test(
         return experimental::MakeRuntimeArgsForSingleNode(
             node,
             {{"is_active", active ? 1u : 0u},
-             {"test_mode", p.mode},
+             {"test_mode", static_cast<uint32_t>(p.mode)},
              {"lock_n", p.lock_n},
              {"num_entries", p.num_entries},
              {"ring_base", ring_base},
@@ -213,42 +215,90 @@ std::vector<uint32_t> run_dfb_scoped_lock_cache_test(
 // Baseline: 1P/1C STRIDED (stride==1, contiguous), lock_n=4 -> held = {0..3}.
 TEST_F(MeshDeviceFixture, ScopedLockCacheFlushProducerStrided1Sx1S) {
     DFB_CACHE_SKIP_IF_NOT_QUASAR();
-    DfbCacheParams p{1, 1, dfb::AccessPattern::STRIDED, 1024, 8, /*producer=*/true, /*flush=*/0, /*lock_n=*/4};
+    DfbCacheParams p{
+        1,
+        1,
+        dfb::AccessPattern::STRIDED,
+        1024,
+        8,
+        /*producer=*/true,
+        /*mode=*/DfbCacheTestMode::FlushOnRelease,
+        /*lock_n=*/4};
     EXPECT_EQ(run_dfb_scoped_lock_cache_test(this->devices_.at(0), p), dfb_cache_expected(p));
 }
 
 // Same baseline but lock_n=1: only the head entry {0} is held/flushed.
 TEST_F(MeshDeviceFixture, ScopedLockCacheFlushProducerStrided1Sx1S_LockOne) {
     DFB_CACHE_SKIP_IF_NOT_QUASAR();
-    DfbCacheParams p{1, 1, dfb::AccessPattern::STRIDED, 1024, 8, /*producer=*/true, /*flush=*/0, /*lock_n=*/1};
+    DfbCacheParams p{
+        1,
+        1,
+        dfb::AccessPattern::STRIDED,
+        1024,
+        8,
+        /*producer=*/true,
+        /*mode=*/DfbCacheTestMode::FlushOnRelease,
+        /*lock_n=*/1};
     EXPECT_EQ(run_dfb_scoped_lock_cache_test(this->devices_.at(0), p), dfb_cache_expected(p));
 }
 
 // 2 producers (stride==2): only this producer's held {0,2,4,6} flush; interleaved neighbours {1,3,5,7} untouched.
 TEST_F(MeshDeviceFixture, ScopedLockCacheFlushProducerStrided2Sx1S_SkipsNeighbours) {
     DFB_CACHE_SKIP_IF_NOT_QUASAR();
-    DfbCacheParams p{2, 1, dfb::AccessPattern::STRIDED, 1024, 8, /*producer=*/true, /*flush=*/0, /*lock_n=*/4};
+    DfbCacheParams p{
+        2,
+        1,
+        dfb::AccessPattern::STRIDED,
+        1024,
+        8,
+        /*producer=*/true,
+        /*mode=*/DfbCacheTestMode::FlushOnRelease,
+        /*lock_n=*/4};
     EXPECT_EQ(run_dfb_scoped_lock_cache_test(this->devices_.at(0), p), dfb_cache_expected(p));
 }
 
 // ALL pattern (broadcast, stride==1) instead of STRIDED; held = {0..3}.
 TEST_F(MeshDeviceFixture, ScopedLockCacheFlushProducerAll) {
     DFB_CACHE_SKIP_IF_NOT_QUASAR();
-    DfbCacheParams p{1, 2, dfb::AccessPattern::ALL, 1024, 8, /*producer=*/true, /*flush=*/0, /*lock_n=*/4};
+    DfbCacheParams p{
+        1,
+        2,
+        dfb::AccessPattern::ALL,
+        1024,
+        8,
+        /*producer=*/true,
+        /*mode=*/DfbCacheTestMode::FlushOnRelease,
+        /*lock_n=*/4};
     EXPECT_EQ(run_dfb_scoped_lock_cache_test(this->devices_.at(0), p), dfb_cache_expected(p));
 }
 
 // Wrap: held window {0,2,0} crosses the ring end -> exercises the wrap-to-base branch (idempotent); {0,2}=NEW.
 TEST_F(MeshDeviceFixture, ScopedLockCacheFlushProducerWrap) {
     DFB_CACHE_SKIP_IF_NOT_QUASAR();
-    DfbCacheParams p{2, 1, dfb::AccessPattern::STRIDED, 1024, 4, /*producer=*/true, /*flush=*/0, /*lock_n=*/3};
+    DfbCacheParams p{
+        2,
+        1,
+        dfb::AccessPattern::STRIDED,
+        1024,
+        4,
+        /*producer=*/true,
+        /*mode=*/DfbCacheTestMode::FlushOnRelease,
+        /*lock_n=*/3};
     EXPECT_EQ(run_dfb_scoped_lock_cache_test(this->devices_.at(0), p), dfb_cache_expected(p));
 }
 
 // Consumer release must NOT flush -> every slot reads back OLD.
 TEST_F(MeshDeviceFixture, ScopedLockCacheFlushConsumerDoesNotFlush) {
     DFB_CACHE_SKIP_IF_NOT_QUASAR();
-    DfbCacheParams p{1, 1, dfb::AccessPattern::STRIDED, 1024, 8, /*producer=*/false, /*flush=*/0, /*lock_n=*/4};
+    DfbCacheParams p{
+        1,
+        1,
+        dfb::AccessPattern::STRIDED,
+        1024,
+        8,
+        /*producer=*/false,
+        /*mode=*/DfbCacheTestMode::FlushOnRelease,
+        /*lock_n=*/4};
     EXPECT_EQ(run_dfb_scoped_lock_cache_test(this->devices_.at(0), p), dfb_cache_expected(p));
 }
 
@@ -258,21 +308,45 @@ TEST_F(MeshDeviceFixture, ScopedLockCacheFlushConsumerDoesNotFlush) {
 // Baseline: 1P/1C STRIDED producer (stride==1), lock_n=4 -> held = {0..3}.
 TEST_F(MeshDeviceFixture, ScopedLockCacheInvalidateProducerStrided1Sx1S) {
     DFB_CACHE_SKIP_IF_NOT_QUASAR();
-    DfbCacheParams p{1, 1, dfb::AccessPattern::STRIDED, 1024, 8, /*producer=*/true, /*invalidate=*/1, /*lock_n=*/4};
+    DfbCacheParams p{
+        1,
+        1,
+        dfb::AccessPattern::STRIDED,
+        1024,
+        8,
+        /*producer=*/true,
+        /*mode=*/DfbCacheTestMode::InvalidateOnAcquire,
+        /*lock_n=*/4};
     EXPECT_EQ(run_dfb_scoped_lock_cache_test(this->devices_.at(0), p), dfb_cache_expected(p));
 }
 
 // 2 producers (stride==2): only held {0,2,4,6} invalidated; interleaved neighbours {1,3,5,7} keep stale OLD.
 TEST_F(MeshDeviceFixture, ScopedLockCacheInvalidateProducerStrided2Sx1S_SkipsNeighbours) {
     DFB_CACHE_SKIP_IF_NOT_QUASAR();
-    DfbCacheParams p{2, 1, dfb::AccessPattern::STRIDED, 1024, 8, /*producer=*/true, /*invalidate=*/1, /*lock_n=*/4};
+    DfbCacheParams p{
+        2,
+        1,
+        dfb::AccessPattern::STRIDED,
+        1024,
+        8,
+        /*producer=*/true,
+        /*mode=*/DfbCacheTestMode::InvalidateOnAcquire,
+        /*lock_n=*/4};
     EXPECT_EQ(run_dfb_scoped_lock_cache_test(this->devices_.at(0), p), dfb_cache_expected(p));
 }
 
 // Consumer also invalidates on acquire (both roles) -> held {0,1,2,3}=NEW, rest OLD.
 TEST_F(MeshDeviceFixture, ScopedLockCacheInvalidateConsumer) {
     DFB_CACHE_SKIP_IF_NOT_QUASAR();
-    DfbCacheParams p{1, 1, dfb::AccessPattern::STRIDED, 1024, 8, /*producer=*/false, /*invalidate=*/1, /*lock_n=*/4};
+    DfbCacheParams p{
+        1,
+        1,
+        dfb::AccessPattern::STRIDED,
+        1024,
+        8,
+        /*producer=*/false,
+        /*mode=*/DfbCacheTestMode::InvalidateOnAcquire,
+        /*lock_n=*/4};
     EXPECT_EQ(run_dfb_scoped_lock_cache_test(this->devices_.at(0), p), dfb_cache_expected(p));
 }
 
@@ -288,7 +362,7 @@ TEST_F(MeshDeviceFixture, ScopedLockCacheInvalidateMultiConsumerAll) {
         /*entry_size=*/1024,
         /*num_entries=*/4,
         /*active_is_producer=*/false,
-        /*mode=*/1,
+        /*mode=*/DfbCacheTestMode::InvalidateOnAcquire,
         /*lock_n=*/2,
         /*multi_all=*/true};
     const auto result = run_dfb_scoped_lock_cache_test(this->devices_.at(0), p);
@@ -311,7 +385,7 @@ TEST_F(MeshDeviceFixture, ScopedLockCacheHandshakeDmToDmWrap) {
         /*entry_size=*/1024,
         /*num_entries=*/4,             // small ring: slots wrap/reuse across rounds and stay cache-resident
         /*active_is_producer=*/false,  // unused in handshake mode
-        /*mode=*/1,                    // unused in handshake mode
+        /*mode=*/DfbCacheTestMode::InvalidateOnAcquire,  // unused in handshake mode
         /*lock_n=*/1};
     p.handshake = true;
     p.num_rounds = 12;  // > capacity (4) so each slot is reused ~3x
@@ -335,7 +409,7 @@ TEST_F(MeshDeviceFixture, ScopedLockCacheHandshakeNonSnoopingProducerWrap) {
         /*entry_size=*/1024,
         /*num_entries=*/4,
         /*active_is_producer=*/false,
-        /*mode=*/1,
+        /*mode=*/DfbCacheTestMode::InvalidateOnAcquire,
         /*lock_n=*/1};
     p.handshake = true;
     p.num_rounds = 12;
