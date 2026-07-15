@@ -580,6 +580,21 @@ enum class PackTileL1Accumulation : uint8_t {
     SeedFirst,
 };
 
+/// Packer-side ReLU activation applied as tiles are packed DEST -> L1 (a free clamp riding the
+/// existing pack; no SFPU/MATH pass). `Zero` is plain ReLU (max(x, 0)). The packer ReLU register
+/// (STACC_RELU) is a *latched* mode, so the chain programs it once before the loop and restores it
+/// to pass-through at exit — exactly like L1 accumulation — so unrelated pack work after this chain
+/// cannot inherit the activation. All PackTile elements in one chain must agree on the mode (mixed
+/// ReLU across pack sites would need per-stage toggling and is not supported yet); ReLU also does not
+/// yet compose with L1 or DEST accumulation.
+///
+/// Threshold modes (ReluConfig::min_threshold / max_threshold) are intentionally omitted for now —
+/// no current op needs them, and their threshold must be pre-encoded in the packer output format.
+enum class PackRelu : uint8_t {
+    None,  // pass-through (default) — no packer ReLU
+    Zero,  // plain ReLU: clamp negatives to 0 (ckernel::ReluConfig::zero())
+};
+
 // (The CRTP op bases — UnaryOp / BinaryOp / TernaryOp, from which SFPU/FPU op-helper
 //  headers derive their concrete ops — are defined in eltwise_chain.inl. They are not
 //  part of the kernel-author surface; only op-helper headers (eltwise_math.hpp, …)
@@ -654,7 +669,8 @@ template <
     PackTileReconfig Reconfig = PackTileReconfig::Output,
     Dst DstSlot = Dst::D0,
     TileOffset Offset = TileOffset::Unset,
-    PackTileL1Accumulation L1Accumulation = PackTileL1Accumulation::Disabled>
+    PackTileL1Accumulation L1Accumulation = PackTileL1Accumulation::Disabled,
+    PackRelu Relu = PackRelu::None>
 struct PackTile;
 
 // Fill / Rand forward declarations — implementations live in eltwise_fill.hpp / eltwise_rand.hpp.
