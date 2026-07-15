@@ -248,20 +248,61 @@ def test_rms_norm_row_major_width_ragged_unicast(device, shape, with_gamma):
     assert_with_pcc(expected.to(torch.float32), actual.to(torch.float32), PCC[dtype])
 
 
+# Refinement 5c — RM cross-core + TILE gamma (fp32/bf16). Each RM cross-core core owns a
+# sub-tile global W-column offset (w_col_start = i*Ws), so a TILE-stored gamma can't be read
+# as whole tiles aligned to local col 0. The reader extracts the containing global gamma
+# tile(s)' ROW-0 sub-columns (face-aware L1 byte copy) into cb_gamma_rm and reuses the
+# RM-gamma compute tilize leg unchanged. bf8b TILE gamma stays excluded (5d — block-float
+# sub-tile extraction needs an in-reader dequant).
+R5C_TILE_GAMMA_SHAPES = [
+    ((1, 1, 32, 64), WIDTH),  # sub-tile Ws=8
+    ((1, 1, 32, 4096), WIDTH),  # tile-aligned Ws=64 (2 gamma tiles/core)
+    ((1, 1, 32, 50), WIDTH),  # w_non (bf16 rectangular, fp32 ragged)
+    ((1, 1, 256, 512), BLOCK),  # design loose case
+    ((1, 1, 64, 17), BLOCK),  # w_non BLOCK
+    ((1024, 1024), BLOCK),  # 2D, per_w=4 (W_BLOCK_TILES=4), multi-round
+]
+
+
+@pytest.mark.parametrize("shape,memory_layout", R5C_TILE_GAMMA_SHAPES)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("gamma_dtype", [ttnn.bfloat16, ttnn.float32])
+def test_rms_norm_row_major_cross_core_tile_gamma(device, shape, memory_layout, dtype, gamma_dtype):
+    """R5c: RM WIDTH/BLOCK cross-core with a TILE-stored gamma (fp32/bf16, incl. mixed
+    precision) matches the reference and keeps the input's shard spec."""
+    torch.manual_seed(0)
+    W = shape[-1]
+    tdt = _TORCH_DTYPE[dtype]
+    gdt = _TORCH_DTYPE[gamma_dtype]
+    torch_input = torch.randn(shape, dtype=tdt)
+    gamma_t = torch.randn(W, dtype=gdt)
+    mem_cfg = auto_shard_config(list(shape), memory_layout, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, device=device)
+    ttnn_input = ttnn.from_torch(
+        torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_cfg
+    )
+    ttnn_gamma = ttnn.from_torch(gamma_t.reshape(1, 1, 1, W), dtype=gamma_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    out = rms_norm(ttnn_input, gamma=ttnn_gamma, compute_kernel_config=_cfg(), memory_config=ttnn_input.memory_config())
+    assert out.memory_config().memory_layout == memory_layout
+    actual = ttnn.to_torch(out).reshape(shape)
+    expected = pytorch_rms_norm(torch_input, gamma=gamma_t)
+    assert_with_pcc(expected.to(torch.float32), actual.to(torch.float32), PCC[dtype])
+
+
 def test_rms_norm_rejects_row_major_width_block_remaining(device, expect_error):
-    """R5c carve-out still refused (structural follow-up): RM cross-core + TILE gamma (a
-    sub-tile global column offset can't index a TILE-stored gamma). R5b lifted the other
-    R5a carve-out — RM+WIDTH with non-tile-aligned W now works via the ragged unicast
-    broadcast (see test_rms_norm_row_major_cross_core)."""
+    """R5d carve-out still refused (structural follow-up): RM cross-core + bf8b TILE gamma.
+    A bf8b tile is block-float (16 elements share an exponent), so the row-0 sub-column
+    extraction R5c does for fp32/bf16 is not a byte copy — it needs an in-reader dequant.
+    R5c lifted the fp32/bf16 TILE-gamma carve-out (see
+    test_rms_norm_row_major_cross_core_tile_gamma); only bf8b TILE gamma remains refused."""
     torch.manual_seed(42)
-    # (b) RM + BLOCK + TILE gamma.
+    # RM + BLOCK + bf8b TILE gamma (bf8b gamma is always TILE — bf8b + RM is INVALID).
     shape_g = (1, 1, 64, 512)
     x_g = torch.randn(shape_g, dtype=torch.bfloat16)
     mem_g = auto_shard_config(list(shape_g), BLOCK, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device)
     in_g = ttnn.from_torch(x_g, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_g)
     gamma_tile = ttnn.from_torch(
         torch.randn(512, dtype=torch.bfloat16).reshape(1, 1, 1, 512),
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=device,
     )

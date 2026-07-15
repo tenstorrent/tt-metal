@@ -326,16 +326,28 @@ def _build_cross_core_descriptor(
     device = input_tensor.device()
     has_gamma = gamma is not None
     gamma_is_row_major = has_gamma and gamma.layout == ttnn.ROW_MAJOR_LAYOUT
+    gamma_is_tile = has_gamma and gamma.layout == ttnn.TILE_LAYOUT
     shard_h, shard_w = int(shard_hw[0]), int(shard_hw[1])
 
     in_dtype = input_tensor.dtype
     out_dtype = output_tensor.dtype
     gamma_dtype = gamma.dtype if has_gamma else in_dtype
     interm_dtype = ttnn.bfloat16 if in_dtype == ttnn.bfloat8_b else in_dtype
+    # R5c: RM cross-core + TILE gamma (fp32/bf16). Each core owns a SUB-TILE global
+    # W-column offset (w_col_start = i*Ws), so a TILE-stored gamma can't be read as whole
+    # tiles aligned to local col 0. The reader extracts the containing gamma tile(s)' row-0
+    # sub-columns into cb_gamma_rm (face-aware L1 byte copy), then the SAME RM-gamma compute
+    # tilize leg produces cb_gamma_tiles — so the gamma is "fed via RM" even though it is
+    # TILE-stored. bf8b TILE gamma is EXCLUDED op-side (block-float sub-tile extraction needs
+    # an in-reader dequant — filed as Refinement 5d).
+    gamma_tile_extract = is_row_major and gamma_is_tile and gamma_dtype in (ttnn.float32, ttnn.bfloat16)
+    gamma_via_rm = gamma_is_row_major or gamma_tile_extract
     # Partials / gathered stats / broadcast 1/rms are fp32 so the cross-core sum
     # does not truncate (same rationale as the R1/R2a AccumulateViaAdd accumulator).
     stat_dtype = ttnn.float32
-    gamma_tiles_dtype = gamma_dtype if (has_gamma and not gamma_is_row_major) else interm_dtype
+    # Gamma-via-RM (RM gamma, or the R5c TILE-extract leg) is tilized by compute, so its
+    # tiles carry interm precision; a direct TILE read keeps the on-disk gamma dtype.
+    gamma_tiles_dtype = gamma_dtype if (has_gamma and not gamma_via_rm) else interm_dtype
 
     input_elt = _elt(input_tensor)
     gamma_elt = _elt(gamma) if has_gamma else input_elt
@@ -366,6 +378,7 @@ def _build_cross_core_descriptor(
     CB_SCALER = 2
     CB_GAMMA_RM = 3
     CB_GAMMA_TILES = 4
+    CB_GAMMA_SRC = 5  # R5c: scratch for the containing global gamma tile(s)
     CB_OUTPUT_TILES = 16
     CB_OUTPUT_RM = 17
     CB_XSQ = 24
@@ -411,12 +424,20 @@ def _build_cross_core_descriptor(
         cbs.append(cb(CB_INPUT_RM, in_dtype, in_rm_page, double * TILE_DIM))
         cbs.append(cb(CB_OUTPUT_RM, out_dtype, out_rm_page, double * W_BLOCK_TILES))
     if has_gamma:
-        if gamma_is_row_major:
-            # R5a RM leg reads the gamma column-slice from a 32B-aligned DRAM base into
-            # the page, so add DRAM_ALIGN(32B) of slack for the aligned-read overshoot;
-            # the shift-copy places the real slice at local col 0 (see reader).
+        if gamma_via_rm:
+            # RM gamma / R5c TILE-extract leg both feed a per-core gamma stick into
+            # cb_gamma_rm (compute tilizes it). The real-RM leg reads a column-slice from a
+            # 32B-aligned DRAM base, so add DRAM_ALIGN(32B) of page slack for the aligned-read
+            # overshoot (shift-copy places the slice at local col 0). The extract leg fills
+            # cb_gamma_rm by L1 copy (no DRAM sub-align), so the slack is unused there.
             gamma_rm_alloc = gamma_rm_page + (32 if is_row_major else 0)
             cbs.append(cb(CB_GAMMA_RM, gamma_dtype, gamma_rm_alloc, double))
+        if gamma_tile_extract:
+            # R5c scratch: hold the up-to-(W_BLOCK_TILES+1) containing global gamma tiles a
+            # W-block's sub-tile slice can span (aligned span W_BLOCK_TILES + 1 for a
+            # misaligned start). Reader-local (read whole tiles -> extract row 0 -> pop).
+            gamma_src_tile = ttnn.tile_size(gamma_dtype)
+            cbs.append(cb(CB_GAMMA_SRC, gamma_dtype, gamma_src_tile, W_BLOCK_TILES + 1))
         cbs.append(cb(CB_GAMMA_TILES, gamma_tiles_dtype, gamma_tiles_tile, double * W_BLOCK_TILES))
         cbs.append(cb(CB_NORM, interm_dtype, interm_tile, W_BLOCK_TILES))
 
@@ -454,8 +475,9 @@ def _build_cross_core_descriptor(
         shard_w,  # RM leg: local shard cols (Ws)
         input_elt,  # RM leg: input element bytes (local shard stride)
         1 if ragged else 0,  # USE_UNICAST_BCAST (R5b): ragged WIDTH group -> unicast 1/rms
+        1 if gamma_tile_extract else 0,  # GAMMA_TILE_EXTRACT (R5c): extract TILE gamma row-0 sub-cols
     ]
-    reader_ct_args.extend(mcast_ct)  # 5-word McastArgs block (CT base = 15)
+    reader_ct_args.extend(mcast_ct)  # McastArgs block (CT base = 16)
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct_args.extend(
         ttnn.TensorAccessorArgs(gamma).get_compile_time_args()
@@ -551,7 +573,9 @@ def _build_cross_core_descriptor(
         # combine.) The local W-slice is small (<=W_BLOCK_TILES tiles), so ReduceTile's
         # ∝W-slice bias is negligible vs the bf16 tolerance.
         0,
-        1 if gamma_is_row_major else 0,
+        # GAMMA_IS_ROW_MAJOR (compute): tilize cb_gamma_rm -> cb_gamma_tiles. Set for a real
+        # RM gamma AND for the R5c TILE-extract leg (both feed a per-core gamma stick).
+        1 if gamma_via_rm else 0,
         1,  # IS_CROSS_CORE
         group_size,
     ]

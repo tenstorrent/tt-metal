@@ -126,20 +126,31 @@ EXCLUSIONS = [
     #     WIDTH groups only; rectangular WIDTH/BLOCK groups keep the mcast fast path.
     #     So {RM, WIDTH, w_non_aligned} is now SUPPORTED (no exclusion).
     #
-    # (b) RM cross-core + TILE gamma. Each core owns a sub-tile W-slice at a sub-tile
-    #     global column offset, so a TILE-stored gamma can't be read as whole tiles
-    #     aligned to the core's LOCAL column 0 (its cols 0..Ws map to global cols
-    #     w_col_start..). RM gamma (read as a column-slice stick at w_col_start) and
-    #     no_gamma are supported. Follow-up: sub-tile gamma tile-column extract.
+    # (5c landed) RM cross-core + TILE gamma (fp32/bf16). Each core owns a sub-tile W-slice
+    #     at a sub-tile global column offset (w_col_start = i*Ws), so a TILE-stored gamma
+    #     can't be read as whole tiles aligned to the core's LOCAL column 0. The reader now
+    #     extracts the containing global gamma tile(s)' ROW-0 sub-columns (face-aware L1 byte
+    #     copy) into cb_gamma_rm and reuses the RM-gamma compute tilize leg — so fp32/bf16
+    #     TILE gamma is SUPPORTED (no exclusion). See rms_norm_sharded_reader.cpp
+    #     (GAMMA_TILE_EXTRACT) + _build_cross_core_descriptor.
+    #
+    # (5d follow-up) RM cross-core + TILE gamma, gamma_dtype=bf8b. A bf8b tile is
+    #     block-float (16 elements share an 8-bit exponent; per-element bytes are meaningless
+    #     without the shared exponent), so the row-0 sub-column extraction above is not a byte
+    #     copy — it needs an in-reader block-float dequant. Deferred to a follow-up; the
+    #     fp32/bf16 TILE-gamma surface is landed. bf8b gamma is always TILE (bf8b+RM INVALID),
+    #     so gamma_dtype=bf8b names exactly the deferred cells.
     {
         "layout": ttnn.ROW_MAJOR_LAYOUT,
         "memory_layout": ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         "gamma_layout": ttnn.TILE_LAYOUT,
+        "gamma_dtype": ttnn.bfloat8_b,
     },
     {
         "layout": ttnn.ROW_MAJOR_LAYOUT,
         "memory_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         "gamma_layout": ttnn.TILE_LAYOUT,
+        "gamma_dtype": ttnn.bfloat8_b,
     },
 ]
 

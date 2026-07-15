@@ -35,9 +35,11 @@
 // zero-padding the sub-tile W-tail (and any H-tail) so compute always tilizes a
 // clean full tile. The Σx² partial over the zero-padded tile equals the partial
 // over the core's real columns (zeros add nothing) and ×1/W_global makes the
-// group-sum the true global mean(x²) — no partial scaler needed. Gamma (RM only on
-// this leg) is read as a column-slice stick at the core's global W-offset
-// (w_col_start), matching the input's local column layout.
+// group-sum the true global mean(x²) — no partial scaler needed. Gamma on this leg
+// is read as a column-slice stick at the core's global W-offset (w_col_start),
+// matching the input's local column layout: RM gamma directly (a linear stick read),
+// TILE gamma (R5c, fp32/bf16) by extracting the containing gamma tile(s)' row-0
+// sub-columns into the same cb_gamma_rm (see the GAMMA_TILE_EXTRACT pass-2 leg).
 //
 // The gather is many->one (raw unicast + a `progress` counter). The broadcast is
 // one->many, chosen by group geometry:
@@ -69,6 +71,7 @@ constexpr uint32_t cb_input_tiles = 1;
 constexpr uint32_t cb_scaler = 2;
 constexpr uint32_t cb_gamma_rm = 3;
 constexpr uint32_t cb_gamma_tiles = 4;
+constexpr uint32_t cb_gamma_src = 5;  // R5c: L1 scratch for the containing global gamma tile(s)
 constexpr uint32_t cb_sumsq = 25;
 constexpr uint32_t cb_partial = 27;
 constexpr uint32_t cb_gather = 28;
@@ -108,8 +111,16 @@ void kernel_main() {
     // of one mcast to the bbox rectangle (which would hit phantom cores). The gather leg
     // and the non-root ReceiverPipe are topology-agnostic and unchanged.
     constexpr uint32_t USE_UNICAST_BCAST = get_compile_time_arg_val(14);
-    // mcast wire (host Mcast2D) at CT 15; TensorAccessors chained after it.
-    constexpr auto mc = McastArgs</*CT=*/15, /*RT=*/10>();
+    // R5c: RM cross-core + TILE gamma (fp32/bf16). This core owns a SUB-TILE global
+    // W-column offset (w_col_start), so a TILE-stored gamma can't be read as whole tiles
+    // aligned to local col 0. When set, the reader extracts the gamma's ROW 0 sub-columns
+    // from the containing global gamma tile(s) into cb_gamma_rm (see pass-2 gamma leg), and
+    // the SAME RM-gamma compute tilize leg (GAMMA_IS_ROW_MAJOR=1 on the compute side)
+    // produces cb_gamma_tiles unchanged. bf8b TILE gamma is EXCLUDED op-side (block-float
+    // sub-tile extraction needs an in-reader dequant).
+    constexpr uint32_t GAMMA_TILE_EXTRACT = get_compile_time_arg_val(15);
+    // mcast wire (host Mcast2D) at CT 16; TensorAccessors chained after it.
+    constexpr auto mc = McastArgs</*CT=*/16, /*RT=*/10>();
     constexpr uint32_t ta_ct_base = mc.next_compile_time_args_offset();
     // Ragged unicast broadcast: the root reads its group's member virtual coords from the
     // RT tail (2 words each, slot order), starting right after the 4-word mcast RT block.
@@ -344,9 +355,58 @@ void kernel_main() {
                         }
                     }
                     cb_push_back(cb_gamma_rm, 1);
+                } else if constexpr (GAMMA_TILE_EXTRACT) {
+                    // R5c: RM cross-core + TILE gamma (fp32/bf16). This core owns global
+                    // cols [g_col0, g_col0+cols) at a SUB-TILE column offset, so a
+                    // TILE-stored gamma can't be read as whole tiles aligned to local col 0.
+                    // Read the containing global gamma tile(s) into an L1 scratch (whole
+                    // tile pages -> tile-aligned DRAM reads, no sub-32B source issue), then
+                    // extract their ROW 0 sub-columns (face-aware byte offset: cols 0..15 in
+                    // face 0 at byte c*elt; cols 16..31 in face 1 at byte (256+(c-16))*elt)
+                    // into cb_gamma_rm at local col 0 with an alignment-free L1->L1 copy,
+                    // zero-padding the W-tail. The compute then tilizes cb_gamma_rm exactly
+                    // like the RM-gamma leg (GAMMA_IS_ROW_MAJOR=1) -> cb_gamma_tiles unchanged.
+                    const uint32_t g_tile_bytes = get_tile_size(cb_gamma_src);
+                    const auto g_acc = TensorAccessor(gamma_args, gamma_addr, g_tile_bytes);
+                    uint32_t g_col0 = w_col_start + b * wblock_cols;
+                    uint32_t cols = origin_W > g_col0 ? (origin_W - g_col0) : 0;
+                    if (cols > wblock_cols) {
+                        cols = wblock_cols;
+                    }
+                    cb_reserve_back(cb_gamma_rm, 1);
+                    uint32_t gl1 = get_write_ptr(cb_gamma_rm);
+                    zero_l1_page(gl1, gamma_padded_bytes);
+                    if (cols > 0) {
+                        uint32_t gt_first = g_col0 / TILE_W;
+                        uint32_t gt_last = (g_col0 + cols - 1) / TILE_W;
+                        uint32_t span = gt_last - gt_first + 1;
+                        // cb_gamma_src is a reader-LOCAL L1 scratch (single-thread: the reader
+                        // both fills and reads it). It has no consumer kernel, so it uses NO CB
+                        // flow control — get_write_ptr returns its fixed L1 base (nothing is ever
+                        // pushed). Read the span containing tiles, then extract row 0 in place.
+                        uint32_t src_base = get_write_ptr(cb_gamma_src);
+                        for (uint32_t s = 0; s < span; ++s) {
+                            noc_async_read_page(gt_first + s, g_acc, src_base + s * g_tile_bytes);
+                        }
+                        noc_async_read_barrier();
+                        for (uint32_t j = 0; j < cols; ++j) {
+                            uint32_t g = g_col0 + j;
+                            uint32_t local_t = (g / TILE_W) - gt_first;
+                            uint32_t sc = g % TILE_W;
+                            uint32_t face_off = (sc < 16 ? sc : (256 + (sc - 16))) * gamma_elt;
+                            volatile tt_l1_ptr uint8_t* sptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(
+                                src_base + local_t * g_tile_bytes + face_off);
+                            volatile tt_l1_ptr uint8_t* dptr =
+                                reinterpret_cast<volatile tt_l1_ptr uint8_t*>(gl1 + j * gamma_elt);
+                            for (uint32_t k = 0; k < gamma_elt; ++k) {
+                                dptr[k] = sptr[k];
+                            }
+                        }
+                    }
+                    cb_push_back(cb_gamma_rm, 1);
                 } else {
-                    // TILE gamma: raw tile copy at the global gamma tile offset (TILE leg only —
-                    // RM cross-core + TILE gamma is op-side EXCLUDED, sub-tile W-col offset).
+                    // TILE gamma direct: raw tile copy at the global gamma tile offset (TILE
+                    // INPUT cross-core; the whole-tile W offset w_tile_start is tile-aligned).
                     const auto g_acc = TensorAccessor(gamma_args, gamma_addr, get_tile_size(cb_gamma_tiles));
                     uint32_t g_base_tile = w_tile_start + b * W_BLOCK_TILES;
                     for (uint32_t wt = 0; wt < W_BLOCK_TILES; ++wt) {

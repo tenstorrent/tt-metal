@@ -295,7 +295,7 @@ w_non slice **90 passed / 0 failed / 0 xpassed** (150 correctly-xfailed remain �
 xpassed / 2310 xfailed** (no regression); loose 6/6; regression+translated 99; unit dir 353 passed.
 Stresses covered: ragged grids to 25 cores (8×4 bbox) and multi-round groups to 32 tile-rows.
 
-### [ ] Refinement 5c — RM cross-core + TILE gamma (sub-tile-offset gamma tile-column extract)
+### [~] Refinement 5c — RM cross-core + TILE gamma (sub-tile-offset gamma tile-column extract)
 
 **Goal**: lift the `{ROW_MAJOR, WIDTH_SHARDED, gamma_layout=TILE}` / `{ROW_MAJOR, BLOCK_SHARDED,
 gamma_layout=TILE}` EXCLUSIONS (5a). Each RM cross-core core owns a sub-tile W-slice at a **sub-tile
@@ -310,6 +310,39 @@ untilize the containing gamma tile(s) in the reader and re-slice as RM. Rare cro
 
 **Done when**: `{RM, WIDTH/BLOCK, gamma_layout=TILE}` moves out of EXCLUSIONS into passing golden
 cells; no regression on the RM-gamma / no_gamma RM cross-core surface (R5a).
+
+**Landed (2026-07-15, partial)**: the fp32/bf16 TILE-gamma surface. Chose the reader-side extract
+lever: for RM cross-core + TILE gamma the reader reads the containing global gamma tile(s) into an L1
+scratch (whole-tile pages → tile-aligned DRAM reads) and extracts their **ROW-0 sub-columns**
+(face-aware byte offset: cols 0–15 in face 0 at byte `c·elt`, cols 16–31 in face 1 at byte
+`(256+(c-16))·elt`) into `cb_gamma_rm` at local col 0 with an alignment-free L1→L1 copy — then the
+**SAME RM-gamma compute tilize leg runs UNCHANGED** (`GAMMA_IS_ROW_MAJOR=1` on the compute side; the
+gamma is "fed via RM" though it is TILE-stored). One uniform path handles sub-tile, tile-straddling
+(`Ws` not a divisor of 32), and tile-aligned `Ws`. `{RM, WIDTH/BLOCK, gamma_layout=TILE}` (fp32/bf16
+gamma, incl. mixed precision) is now SUPPORTED. Golden RM+TILE-gamma WIDTH **740 passed / 0 failed /
+0 xpassed**; BLOCK **740 passed / 0 failed / 0 xpassed**; full WIDTH/BLOCK cross-core surface **1575 +
+1575 passed** (no regression from the McastArgs CT-base bump shared by all cross-core builds); loose +
+regression + translated 105; unit dir 414. Reused the R5a `cb_gamma_rm` + compute tilize + mcast/unicast
+transport UNCHANGED; added one reader leg (`GAMMA_TILE_EXTRACT`) + a reader-local `cb_gamma_src` scratch
++ the `gamma_via_rm` descriptor flag. One structural carve-out remains EXCLUDED → 5d.
+
+### [ ] Refinement 5d — RM cross-core + bf8b TILE gamma (block-float sub-tile column dequant)
+
+**Goal**: lift the `{ROW_MAJOR, WIDTH_SHARDED, gamma_dtype=bf8b, gamma_layout=TILE}` /
+`{ROW_MAJOR, BLOCK_SHARDED, gamma_dtype=bf8b, gamma_layout=TILE}` EXCLUSIONS (the last 5c carve-out).
+5c lifted fp32/bf16 TILE gamma via a face-aware **byte copy** of the containing gamma tile's row-0
+sub-columns. A **bf8b** tile is block-float — 16 elements share one 8-bit exponent, and a per-element
+mantissa byte is meaningless without it (`bfloat8.cpp:143-207`), so the byte-copy extraction does not
+apply; producing an fp32/bf16 gamma stick for the RM-gamma tilize leg needs an **in-reader block-float
+dequant** (combine the shared exponent + mantissa, normalize, rebias). bf8b gamma is always TILE
+(`bf8b + RM` INVALID), so `gamma_dtype=bf8b` names exactly the deferred cells. **Next lever**: mirror
+the host `unpack_bfp8_tiles_into_float_vec` decode in the reader for the row-0 sub-columns, OR read the
+containing bf8b tile(s) → compute-untilize to a bf16 stick (dequant) → reader shift-extract → compute
+tilize. Rare mixed-precision cross-layout combo (RM activations + bf8b weights, width-sharded) — low
+priority.
+
+**Done when**: `{RM, WIDTH/BLOCK, gamma_dtype=bf8b, gamma_layout=TILE}` moves out of EXCLUSIONS into
+passing golden cells; no regression on the R5c fp32/bf16 TILE-gamma surface.
 
 > **Trailing perf (once generality is exhausted, after Refinement 5)**: the wide-W / few-tile-row
 > interleaved cells (W=16384/32768, 1–2 tile-rows) are latency-bound on one core — the cross-core

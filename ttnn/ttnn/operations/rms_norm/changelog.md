@@ -508,3 +508,59 @@
   is exercised, not silently skipped); removed the RM+WIDTH+w_non case from
   `test_rms_norm_rejects_row_major_width_block_remaining` (now supported; the 5c TILE-gamma
   carve-out stays). Probes 060–061 capture the non-ragged/ragged + multi-round verification.
+
+## Refinement 5c — RM cross-core + TILE gamma (sub-tile-offset gamma tile-column extract) (partial)
+- Date: 2026-07-15
+- What was done: Lifted the `{ROW_MAJOR, WIDTH/BLOCK_SHARDED, gamma_layout=TILE}` EXCLUSIONS for
+  fp32/bf16 gamma. Each RM cross-core core owns a sub-tile W-slice at a sub-tile global column offset
+  (`w_col_start = i*Ws`, `Ws∈{4,8,16,...}`), so a TILE-stored gamma can't be read as whole tiles
+  aligned to local col 0. Chose the **reader-side row-0 extract** lever:
+  - The reader (`rms_norm_sharded_reader.cpp`, new `GAMMA_TILE_EXTRACT` leg) reads the up-to-
+    `(W_BLOCK_TILES+1)` containing global gamma tiles into an L1 scratch (whole-tile pages ⇒
+    tile-aligned DRAM reads, no 32B sub-source issue), then extracts their **ROW-0 sub-columns**
+    (face-aware byte offset: cols 0–15 in face 0 at byte `c*elt`, cols 16–31 in face 1 at byte
+    `(256+(c-16))*elt`) into `cb_gamma_rm` at local col 0 with an alignment-free L1→L1 copy,
+    zero-padding the W-tail. One uniform path handles sub-tile, tile-straddling (`Ws` not a divisor
+    of 32), and tile-aligned `Ws`.
+  - The **compute is BYTE-IDENTICAL**: `GAMMA_IS_ROW_MAJOR=1` (host = `gamma_via_rm`) drives the
+    existing RM-gamma tilize leg (`tilize cb_gamma_rm -> cb_gamma_tiles`), so the gamma is "fed via
+    RM" though it is TILE-stored. The `mul<Row>` gamma scale is unchanged. Mixed precision (bf16 acts
+    + fp32 TILE gamma, and vice-versa) rides the tilize's format reconfig, exactly like RM gamma.
+  - **Reused**: the R5a `cb_gamma_rm` + compute tilize/`mul<Row>` leg, the whole R5/R5a/R5b cross-core
+    combine + mcast/unicast broadcast transport (UNCHANGED — the broadcast is topology-agnostic to the
+    gamma leg), all existing CBs, and the writer (untouched — gamma is a read-side concern).
+  - **Added**: a reader `GAMMA_TILE_EXTRACT` CT flag (McastArgs CT base bumped 15→16 for all cross-core
+    builds) + the extract leg; a reader-local `cb_gamma_src` L1 scratch CB (index 5) used with a fixed
+    `get_write_ptr` (NO CB flow control — it has no consumer kernel; see the hang below); the descriptor
+    `gamma_tile_extract`/`gamma_via_rm` flags routing `gamma_tiles_dtype`, the `cb_gamma_rm`/`cb_gamma_src`
+    allocation, and the reader/compute CT args. No new kernel file, no new transport, no parallel datapath.
+  - **Narrowed EXCLUSIONS**: the two broad `{RM, WIDTH/BLOCK, gamma_layout=TILE}` cells were replaced by
+    two `gamma_dtype=bf8b`-narrowed cells — bf8b TILE gamma stays refused (see below).
+- Accuracy achieved (golden tolerances, PCC bf16≥0.995 / fp32≥0.999): RM WIDTH/BLOCK + TILE gamma
+  (fp32/bf16, incl. mixed precision), all alignments (sub-tile Ws=8/4, tile-aligned Ws=64, w_non
+  rectangular + ragged, narrow-H BLOCK), 2D/3D/4D, multi-round groups — all pass. Minimal probe
+  `(1,1,32,64)` WIDTH bf16+bf16-TILE-gamma PCC=0.99999.
+- Golden test progress: RM+TILE-gamma WIDTH slice **740 passed / 0 failed / 0 xpassed / 340 xfailed**;
+  RM+TILE-gamma BLOCK slice **740 / 0 / 0 / 340**; full WIDTH_SHARDED cross-core surface **1575 passed /
+  0 failed / 0 xpassed** (all input layouts × gammas — no regression from the shared McastArgs CT bump);
+  full BLOCK_SHARDED **1575 / 0 / 0**; `test_op_loose` + `test_regression.py` + `test_translated.py`
+  **105 passed**; unit dir **414 passed** (--dev + non-dev). (340/525 remaining xfails per slice are the
+  permanent `{fp32,False}` + the 5d bf8b-TILE-gamma exclusion, both correct.)
+- Issues encountered: One hang on `(1024,1024)` BLOCK (`W_BLOCK_TILES=4`, `span=4`): compute stuck at
+  `tilize(cb_gamma_rm)`, reader at `cb_push_back`. Root cause — `cb_gamma_src` was first used with a
+  same-thread `reserve/push/wait/pop`, but it has **no consumer kernel**, so `cb_push_back` on the
+  consumer-less CB hangs. Fix: treat `cb_gamma_src` as a pure L1 scratch via a fixed `get_write_ptr`
+  (no flow control). Re-ran green (--dev + non-dev, no race).
+- Partial outcome — one structural carve-out left EXCLUDED, characterized at depth and filed as
+  **Refinement 5d** (`{RM, WIDTH/BLOCK, gamma_dtype=bf8b, gamma_layout=TILE}`): a bf8b tile is
+  block-float (16 elements share an 8-bit exponent; a per-element mantissa byte is meaningless without
+  it — `bfloat8.cpp:143-207`), so the face-aware BYTE-copy extraction does not apply. Producing an
+  fp32/bf16 gamma stick for the tilize leg needs an in-reader block-float dequant — a substantial
+  cross-thread pipeline change for a rare mixed-precision combo (RM acts + bf8b weights, width-sharded).
+  bf8b gamma is always TILE (`bf8b + RM` INVALID), so `gamma_dtype=bf8b` names exactly the deferred cells.
+- Tests added: `tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_r5c_debug.py` (WIDTH/BLOCK ×
+  bf16/fp32 input × bf16/fp32 TILE gamma incl. mixed precision, 36 cases + a bf8b-exclusion guard, 37
+  total). `test_rms_norm_sharded.py` — added `test_rms_norm_row_major_cross_core_tile_gamma` (RM+TILE-gamma
+  acceptance) and re-pointed `test_rms_norm_rejects_row_major_width_block_remaining` from bf16 (now
+  supported) to bf8b TILE gamma (the 5d carve-out). Probe `probe_5c_geom` / `probe_5c_min` capture the
+  Ws geometry + minimal verification.
