@@ -518,6 +518,16 @@ def main():
 
     regenerate_latest(args.history, args.latest)
 
+    # Refresh the standalone dashboard (agmm/agmm_db.html) from the updated
+    # snapshot. Best-effort: never let a dashboard issue fail the sweep.
+    try:
+        import build_dashboard
+
+        res = build_dashboard.build()
+        print(f"Dashboard refreshed: {res['html']} ({res['measured']}/{res['total']} measured)")
+    except Exception as e:
+        print(f"(dashboard refresh skipped: {str(e)[:200]})", flush=True)
+
     ok = sum(1 for r in history_rows if r.get("status") == "OK")
     print(f"\n{'='*60}\nDone: {ok}/{len(history_rows)} shapes OK. Latest snapshot -> {args.latest}")
 

@@ -14,8 +14,10 @@ latest main* and how it moves as optimizations land.
 | `sweep_shapes.json` | **You edit this.** The list of shapes/configs you care about. |
 | `run_sweeps.py` | The runner. Consumes the spec, sweeps each shape, writes history. |
 | `roofline_lib.py` | Shared roofline math (`compute_roofline`); used by the runner and `roofline.py`. |
+| `build_dashboard.py` | Regenerates the `agmm_db.html` dashboard from `sweep_latest.csv` + `roofline_lib`. Pure Python (no ttnn); run_sweeps calls it automatically. |
 | `sweep_history.csv` | **Output.** Append-only, one row per (shape, run). The tracking record. |
 | `sweep_latest.csv` | **Output.** Regenerated each run: most-recent best per shape (at-a-glance). |
+| `agmm_db.html` | **Output.** Self-contained dashboard: sortable/filterable roofline table + per-shape drawer. Refreshed each run; open in a browser. |
 | `sweeps/<commit>_<ts>/` | **Output.** Full per-combo CSV per shape (drill-down; git-ignored). |
 
 The runner reuses the on-device sweep machinery in
