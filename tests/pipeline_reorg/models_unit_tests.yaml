@@ -759,8 +759,10 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
-    pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k flux_dev
-    pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_transformer_flux1.py -k flux_dev
+    # bare `pytest` is not on PATH in the exabox worker env (PATH=/opt/venv/bin:...);
+    # invoke via the interpreter, matching the demo_sp_multihost_tests.yaml convention.
+    python3 -m pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k flux_dev
+    python3 -m pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_transformer_flux1.py -k flux_dev
   model: flux-multihost-tests
   skus:
     bh_spsg:
