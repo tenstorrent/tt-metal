@@ -32,5 +32,7 @@ struct PerTokenCastToFp8DeviceOperation {
 
 namespace ttnn::prim {
 std::tuple<ttnn::Tensor, ttnn::Tensor> per_token_cast_to_fp8(
-    const Tensor& input_tensor, const tt::tt_metal::MemoryConfig& output_memory_config);
+    const Tensor& input_tensor,
+    const tt::tt_metal::MemoryConfig& output_memory_config,
+    bool round_scale_to_power_of_two);
 }  // namespace ttnn::prim

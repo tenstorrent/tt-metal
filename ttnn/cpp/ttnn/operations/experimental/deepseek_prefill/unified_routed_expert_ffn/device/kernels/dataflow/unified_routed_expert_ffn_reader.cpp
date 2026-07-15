@@ -81,10 +81,8 @@ void kernel_main() {
     // up_done = up block landed in L1. Monotonic; gy=0 in1-sender cores only.
     const uint32_t up_go_sem_id = get_arg_val<uint32_t>(31);
     const uint32_t up_done_sem_id = get_arg_val<uint32_t>(32);
-    volatile tt_l1_ptr uint32_t* up_go_local =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(up_go_sem_id));
-    volatile tt_l1_ptr uint32_t* up_done_local =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(up_done_sem_id));
+    Semaphore<> up_go_sem(up_go_sem_id);
+    Semaphore<> up_done_sem(up_done_sem_id);
 
     // M-row NoC coord table: GRID_X (x, y) pairs starting at runtime arg 33.
     // Used to resolve the sender's NoC addr per phase-4 K-block kb (= gx).
@@ -335,7 +333,7 @@ void kernel_main() {
             if constexpr (up_split) {
                 if (is_in1_sender) {
                     ++up_seq;
-                    *up_go_local = up_seq;
+                    up_go_sem.set(up_seq);
                 }
             }
 
@@ -465,7 +463,8 @@ void kernel_main() {
                             const uint32_t col = my_nt_gu * per_core_N_gu + n;
                             if (col < N_gate_tiles_full) {
                                 const uint32_t tile_idx = row * N_gate_tiles_full + col;
-                                noc_async_read_page(tile_idx, up_acc, l1_w_up, /*offset=*/0, /*noc=*/0);
+                                noc_read.async_read(
+                                    up_acc, CoreLocalMem<uint32_t>(l1_w_up), up_tile_bytes, {.page_id = tile_idx}, {});
                             } else {
                                 volatile tt_l1_ptr uint64_t* p =
                                     reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_up);
@@ -481,7 +480,7 @@ void kernel_main() {
 
                 // UP_SPLIT: wait for the writer's NoC-1 `up` read before mcast.
                 if constexpr (up_split) {
-                    noc_semaphore_wait_min(up_done_local, up_seq);
+                    up_done_sem.wait_min(up_seq);
                 }
 
                 // GRID_Y == 1: no column receivers — skip mcast/valid-sem; the

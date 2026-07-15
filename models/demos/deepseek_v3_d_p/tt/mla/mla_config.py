@@ -364,7 +364,7 @@ MLA_SDPA_CONFIG = {
     640: {
         "q_chunk_size": 32,
         "k_chunk_size": 640,
-        "num_heads": 64,
+        "num_heads": None,
         "chunked_only": True,
     },
 }
