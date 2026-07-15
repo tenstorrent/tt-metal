@@ -1,5 +1,14 @@
 # LTX-opt autonomous loop — ONE LAP per invocation
 
+## CONVERGED (2026-07-15) — no-finetune perf floor reached
+Shipped to origin/ltx-rt: **−1005ms denoise** (W1 dedup −268, bf8 weights+activations −737, relay N-split −22),
+VBench-clean. The no-finetune collective levers are EXHAUSTED and MEASURED null: v2a/ff2/out-proj gathers are
+already fused+overlapped inside ring_joint SDPA (census estimates were isolated upper bounds); AG-matmul overlap
+is wire-BW-bound on the hardware-capped 2 eth links (relay N-split shipped −22ms, 20x under prediction). The
+remaining path to 6.0s is a RESOURCING decision, not a loop lever: (a) step-distillation (out of repo), or
+(b) bf4 activations (quality-risk, needs the VBench gate). Do NOT re-hunt collective-count nulls. A cron lap
+holds unless the human sets one of (a)/(b) here.
+
 ## RULE ZERO — CHECK THE DEVICE FIRST, DISPATCH, THEN THINK
 
 `tt-device-mcp status`. **If nothing owned by `[claude]smarton` is RUNNING or QUEUED and the goal is open,
