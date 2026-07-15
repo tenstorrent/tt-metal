@@ -61,6 +61,19 @@ DEVICE_CONFIGS = {
         "tp_axis": 0,
         "cluster_axis": 0,
     },
+    # Same galaxy, but the all-gather ring runs along the size-8 mesh axis
+    # (ring_size=8) instead of the size-4 axis. Used for FLUX shapes.
+    "bh_4x8_ring8": {
+        "mesh_shape": (4, 8),
+        "fabric_config": "FABRIC_1D_RING",
+        "fabric_router_config_payload": None,
+        "topology": "Ring",
+        "num_links": 2,
+        "num_workers_per_link": 6,
+        "sp_axis": 0,
+        "tp_axis": 1,
+        "cluster_axis": 1,
+    },
     # WH Galaxy 4x8, 4-device cluster along axis 0 (rows). Matches wh4x8links4_*
     # configs in tests/.../test_all_gather_minimal_matmul_async.py.
     "wh_4x8_ring": {

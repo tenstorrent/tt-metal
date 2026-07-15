@@ -7,3 +7,7 @@ transformer_stage2_ops_perf_results.csv
 # the tracking record; commit them if you want the perf history versioned.
 sweeps/
 .valid_combos_*.json
+
+# Re-include the tracking record (root .gitignore has a broad *.csv rule)
+!sweep_history.csv
+!sweep_latest.csv
