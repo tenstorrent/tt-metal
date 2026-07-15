@@ -16,7 +16,6 @@ from loguru import logger
 
 import ttnn._ttnn
 
-
 Config = ttnn._ttnn.core.Config
 CONFIG = ttnn._ttnn.CONFIG
 CONFIG_PATH = None
@@ -162,7 +161,6 @@ from ttnn._ttnn.operations.debug import (
 )
 
 from ttnn.trace_allocation_config import TRACE_ALLOC_TRACKING
-
 
 if TRACE_ALLOC_TRACKING:
 
