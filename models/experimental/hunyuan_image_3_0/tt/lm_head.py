@@ -64,6 +64,9 @@ class HunyuanTtLMHead(LightweightModule):
             B, S, H = hidden.shape
             x = ttnn.slice(hidden, [0, S - 1, 0], [B, S, H])
             sliced = True
+        # Vocab projection (huge N=133120). l1_sharded_linear's small-M width-sharded
+        # (split-N) path is the measured-optimal decode schedule (Mt<=2, 2.4-4.9x vs
+        # auto — see tests/perf/test_lmhead_sweep.py); wider M falls back internally.
         logits = l1_sharded_linear(
             x,
             self.weight,
