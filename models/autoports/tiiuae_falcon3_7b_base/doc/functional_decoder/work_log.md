@@ -142,4 +142,5 @@ The exact real-weight shard `model-00002-of-00004.safetensors` is cached locally
 - Complete file gate: `3 passed` (static fallback audit, synthetic prefill/decode, real-weight prefill/decode).
 - Independent `$stage-review`: `clean-pass`; no P1/P2 findings. Its only P3 clarity concern was fixed
   by marking `AUTODEBUG.md` as historical, and the narrow rereview returned `clean-pass`.
-- Local commit SHA: pending clean review.
+- Local stage checkpoint: `e0f096c91ee` (`Add IR-translated Falcon3 functional decoder`).
+- No push was performed.
