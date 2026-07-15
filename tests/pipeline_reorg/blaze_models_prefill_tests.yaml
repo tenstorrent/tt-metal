@@ -206,6 +206,7 @@
       timeout: 20
   owner_id: U09LK84G4TF  # Nikola Milicevic
   team: models
+  sp_config: spsg
 
 - name: "Blaze - GLM-5.1 Prefill Block"
   cmd: |
