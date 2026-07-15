@@ -21,7 +21,7 @@ Single source of truth for the DiffusionGemma bring-up branch. **This file merge
 ---
 
 ## Part 0 — Current status & roadmap
-> **Priority (2026-07-02): RUN-first — get the loop emitting text end-to-end on hardware; `#48291` correctness is explicitly deferred.** The near-term goal is a prompt→text device run at small scale, *accepting degenerate output* (EOS-heavy / garbage): the bf16/MoE backbone only ~50% argmax-agrees with HF and diffusion commits the clean argmax, so text quality is *known* to be poor until fidelity work happens — that is acceptable for the RUN milestone. Everything fidelity-shaped (#48291, R0.5/R0.6 replay, the staged-GQA PCC test, the shared-gemma4 decode gate-vs-rebaseline) is moved to the **Deferred — correctness track** below and is **not** on the RUN critical path.
+> **Priority (2026-07-02): RUN-first — get the loop emitting text end-to-end on hardware; `#48291` correctness is explicitly deferred.** The near-term goal is a prompt→text device run at small scale, *accepting degenerate output* (EOS-heavy / garbage): the bf16/MoE backbone only ~50% argmax-agrees with HF and diffusion commits the clean argmax, so text quality is *known* to be poor until fidelity work happens — that is acceptable for the RUN milestone. *(The "~50% argmax → poor/degenerate output" premise is superseded 2026-07-15: see the Status addendum above — the real full-trajectory output is coherent and TT is at/above the intrinsic bf16 floor.)* Everything fidelity-shaped (#48291, R0.5/R0.6 replay, the staged-GQA PCC test, the shared-gemma4 decode gate-vs-rebaseline) is moved to the **Deferred — correctness track** below and is **not** on the RUN critical path.
 >
 > The original four device workstreams (W1–W4, Part II) are now mostly done or blocked. This roadmap is authoritative for "what to do next"; W1–W4 in Part II are the detailed specs for the pieces they cover.
 
@@ -67,6 +67,69 @@ The older sections remain as bring-up history and standing design context.
   `traced_chunked_gumbel_20260713.json`; the July-10 rows are historical same-shape
   performance provenance.
 
+### Status addendum (2026-07-15)
+
+This addendum supersedes the older RUN-first "expect degenerate output / ~50% argmax"
+framing below (the 2026-07-02 Priority note and the two-gaps table). Grounded in the
+2026-07-15 issue updates (#48291/#47466/#49526/#47488/#47465) and
+`doc/decision_fidelity/`.
+
+**#48291 — DECISION: TT is at the intrinsic bf16 floor; the strict `0.95` gate is
+mis-specified (recommendation recorded; production pass/fail unchanged pending owner
+sign-off).**
+
+- A zero-TT self-consistency control (same HF model, fp32 vs bf16, identical seeded
+  FP32 Gumbel noise, committing the clean argmax) shows the block-diffusion trajectory
+  is chaotic at the bf16 rounding scale: HF-fp32 vs HF-bf16 committed = **0.863 / 0.914**
+  (seeds 0/1) at the 8-step gate and **0.867 / 0.914** at the full 48-step production
+  budget — the reference **cannot match itself** to `0.95`, so **no bf16 implementation
+  can clear the strict gate**. (`doc/decision_fidelity/`: `measure_bf16_floor.py`,
+  `README.md`, `work_log.md`; commits `78ab3cda0ef`, `82cb69e6c45`.)
+- **TT sits at/above that floor.** At the 48-step production config TT tracks the fp32
+  *ideal* at **TT-vs-fp32 = 0.992** — closer than the bf16 reference itself (0.914); at
+  the 8-step gate TT-vs-fp32 = 0.980 (seed 1) and equals the floor exactly on seed 0.
+  **TT decoded output is content-identical to fp32 and COHERENT** (non-degenerate, 36
+  content tokens, halted).
+- **This REVISES the earlier framing.** The old "~50% argmax agreement → expect
+  degenerate output" narrative is withdrawn: the floor is the intrinsic
+  *diffusion-trajectory* sensitivity to bf16 that the HF reference shares, **not** a
+  TT/gemma4 MoE defect. The 2026-07-03 "inherent shared Gemma-4 BF16 ceiling" comment is
+  likewise withdrawn.
+- **Recommendation (recorded as a recommendation, not a done deal):** product-accept the
+  current coherent output; re-spec the gate to sound, reachable criteria (fidelity to the
+  fp32 ideal, alignment-robust agreement, `sound_entropy_step_fidelity` as a
+  converged-step diagnostic); pursue an fp32 MoE backbone as a **separate owned effort**
+  (blocked today by `ttnn.topk` `TT_FATAL` on FLOAT32 + fp32 experts exceeding QB2 DRAM;
+  DG must not edit `models/demos/gemma4/`).
+- **Production stage-gate pass/fail is deliberately UNCHANGED (still red)** against the
+  mis-specified bf16 reference — flipping the pass criteria is a correctness-policy change
+  left for **owner sign-off**. Floor characterized on one canonical prompt at two seeds so
+  far; a broader prompt/seed sweep would tighten the "usable bar" claim.
+
+**One-line status on the serving/perf issues (2026-07-15, all on
+`diffusion-gemma-function`; no shared-gemma4 edits in this work):**
+
+- **#47466 (chunked/vLLM prefill):** live TTFT **20-25x faster** on the real
+  `tenstorrent/vllm` path (prefill 1024 15.07→0.60 s, 16384 ~270→13.5 s); the >4096 MoE
+  prefill cliff is gone via default-on chunked ragged prefill (bit-identical, `233b88276ab`);
+  the 32K serving stall is root-caused + fixed (`FullAttentionSpec` for sliding layers,
+  QB2-verified 32768 prefill 11.96 s, `210a60f0ac1`). Open: traced-denoise replay recovery,
+  256K KV-memory-bound (~128K bf16 ceiling), upstream #47488, single-sequence cache.
+- **#49526 (traced denoise):** production chunked-Gumbel tracing + growing-prefix
+  correctness landed and QB2-verified (`ec5b64b4891`), **but** the growing prefix
+  reintroduced per-block trace recapture → steady serving regressed **~18 → 3.6 tok/s**; a
+  fixed-shape paged-read recovery is designed (not implemented, ~2-4 d,
+  `denoise_replay_recovery_plan.md`, `6e2cde6f9f1`).
+- **#47488 (block-granular serving):** the >21824-token admission stall is fixed in
+  tt-metal (`FullAttentionSpec`, `210a60f0ac1`, QB2 32768 prefill 11.96 s); the runner/
+  scheduler N-token contract remains fork patches with no upstream PR; paged-cache
+  ownership is unimplemented so `--max-num-seqs 1` stays mandatory (#47557).
+- **#47465 (decode/denoise perf):** throughput vs denoise-step `K` measured (`K=48`
+  model-faithful ~18 tok/s; device-proven traced sparse-MoE @16 = 78.3, @6 = 155.9 tok/s,
+  bit-identical, `6edc78938f4`); step time is MoE-machinery-dominated; the fused MoE
+  dispatch kernel landed (`DG_MOE_DISPATCH_FUSED2`, default off); decode opts
+  (`DG_SPARSE_MOE`/`DG_DENOISE_TRACED`) stay opt-in pending PCC + t/s validation.
+
 ### Where we are (2026-06-26)
 
 Foundation (torch reference + PCC harness #47468 ✅ closed, causal backbone #47461 ✅, QB2 fit #47487) plus the device attention/KV/sampling pieces are validated: KV-phase machine (W1/#47474) ✅, bidirectional masked SDPA — **both** ≤32768 (W2a) **and** the long-prompt >32768 path (W2b, resolved with regular non-causal SDPA — no new kernel) (#47462) ✅, on-device canvas sampling (W4/#47472) ✅. The decode-loop control flow (W3/#47463) is built and validated on synthetic logits but **blocked on decision fidelity (#48291)**.
@@ -80,7 +143,7 @@ Foundation (torch reference + PCC harness #47468 ✅ closed, causal backbone #47
 | **Make it RUN** (emit *some* text) | Integration glue: join the pieces into one prompt→text device loop | Large but tractable net-new engineering (~weeks) | #47464 |
 | **Make it CORRECT** (match HF) | The bf16/MoE/TP=4 **decision-fidelity bar** — diffusion commits the *clean argmax*, and the shared backbone shows only ~50% argmax agreement | Core gemma4 MoE-precision work **or** a product decision; possibly multi-week or unachievable on current kernels | #48291 |
 
-The model can be made to *run* (and emit text) **without** resolving fidelity — it just will not be *correct*. **We are taking exactly that path: pursue RUN now, defer #48291.** Diffusion has no temperature/top-p cushion (it commits the clean argmax), so the ~50% backbone argmax ceiling maps almost directly to wrong tokens — **expect degenerate output from the first runs.** #48291 still determines whether the integration *eventually* yields usable output, so it must be decided *before shipping* — just not before running.
+The model can be made to *run* (and emit text) **without** resolving fidelity — it just will not be *correct*. **We are taking exactly that path: pursue RUN now, defer #48291.** Diffusion has no temperature/top-p cushion (it commits the clean argmax), so the ~50% backbone argmax ceiling maps almost directly to wrong tokens — **expect degenerate output from the first runs.** *(Superseded 2026-07-15: see the Status addendum above — the full-trajectory output is coherent; the ~50% causal-prefill proxy did not predict the real diffusion-trajectory fidelity.)* #48291 still determines whether the integration *eventually* yields usable output, so it must be decided *before shipping* — just not before running.
 
 ### Critical path to a first RUN (emit text) — correctness deferred
 
