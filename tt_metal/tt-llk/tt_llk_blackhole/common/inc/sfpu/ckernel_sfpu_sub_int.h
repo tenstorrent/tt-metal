@@ -28,8 +28,11 @@ inline void _sub_int_(const std::uint32_t dst_index_in0, const std::uint32_t dst
     if constexpr (SIGN_MAGNITUDE_FORMAT)
     {
         // Sign-magnitude operands must be converted to 2's complement in-LREG before/after the
-        // integer add, because on Blackhole the INT32_2S_COMP load/store mode has no effect. This
-        // manual conversion has no sfpi equivalent, so keep the raw hand-scheduled path here.
+        // integer add, because on Blackhole the INT32_2S_COMP load/store mode has no effect. sfpi
+        // can express this via DataLayout::SM32 (which emits smag_to_int/int_to_smag in software),
+        // but that generic conversion measures ~35% slower on Blackhole than this raw hand-scheduled
+        // path (~498 vs ~368 cyc/tile at MATH_ISOLATE, and #pragma GCC unroll 0 does not help), so
+        // the sign-magnitude path stays raw. The 2's-complement branch below is sfpi.
         constexpr auto INSTR_MOD_CAST = InstrModCast::INT_SIGN_MAGN_TO_INT32_2S_COMP;
 
         // size of each tile in Dest is 64 rows

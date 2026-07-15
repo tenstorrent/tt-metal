@@ -41,8 +41,9 @@ inline void calculate_rsub_int(
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 void calculate_rsub_scalar_int32(std::uint32_t scalar) {
-    // out = scalar - dst. The scalar is hoisted into a vInt once; the compiler keeps it live across
-    // the (unrolled) loop, so there is no per-iteration reload/move as in the raw _sfpu_load_imm32_ path.
+    // out = scalar - dst. The scalar is materialized into a vInt once before the loop (as the raw
+    // _sfpu_load_imm32_ path also did), and `s - a` lowers to the same single SFPIADD (2's-complement
+    // of dst) per iteration, leaving the load/store and dst walk to the compiler.
     const sfpi::vInt s = static_cast<int>(scalar);
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
