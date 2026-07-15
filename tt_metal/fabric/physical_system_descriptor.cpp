@@ -443,11 +443,12 @@ std::vector<std::string> PhysicalSystemDescriptor::get_all_hostnames() const {
 
 std::string PhysicalSystemDescriptor::my_host_name() const {
     if (!local_hostname_.empty()) {
-        // Discovery has set local_hostname_ and local_rank_
-        if (all_hostnames_unique_) {
-            return local_hostname_;
+        // Discovery has set local_hostname_ and local_rank_. When multiple MPI ranks share the same
+        // discovery hostname (mock descriptor basename or colliding OS hostname), suffix with rank.
+        if (!all_hostnames_unique_) {
+            return local_hostname_ + "_" + std::to_string(local_rank_);
         }
-        return local_hostname_ + "_" + std::to_string(local_rank_);
+        return local_hostname_;
     }
     // Fallback for file-based PSD (no discovery) - assume hostnames are unique
     return get_host_name();

@@ -576,6 +576,27 @@ run_test tt-run --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/t
 run_test tt-run --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/triple_pod_32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto --mock-cluster-rank-binding "${SC16_REVAB_AISLED_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestTriplePod32x4QuadBHGalaxyFabric1DSanity"
 run_test tt-run --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/triple_pod_32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto --mock-cluster-rank-binding "${SC16_REVAB_AISLED_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestTriplePod32x4QuadBHGalaxyFabric2DSanity"
 
+######################################
+# Blitz superpod mapping determinism tests (mock cluster / CPU sim — canonical + 5 variations)
+# Variations: shuffled mock rank binding, relabeled MGD descriptors, permuted mesh_id in instances/connections.
+######################################
+AUTOMAPPER_DEFAULT_ARGS=(
+  --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/sp4_glx_cluster_desc_mapping.yaml
+  --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/fabric_cpu_only_blitz_superpod_mesh_graph_descriptor.textproto
+  --num-variations 5
+  --seed 42
+  --golden tests/tt_metal/tt_fabric/golden_mapping_files/TestBlitzSuperpodAutoMapperControlPlaneInit.yaml
+)
+# Optional override: AUTOMAPPER_TEST_ARGS="--num-variations 1 --force-regenerate"
+if [[ -n "${AUTOMAPPER_TEST_ARGS:-}" ]]; then
+  # shellcheck disable=SC2206
+  AUTOMAPPER_ARGS=(${AUTOMAPPER_TEST_ARGS})
+else
+  AUTOMAPPER_ARGS=("${AUTOMAPPER_DEFAULT_ARGS[@]}")
+fi
+TT_METAL_SLOW_DISPATCH_MODE=1 python_env/bin/python3 tests/scripts/multihost/run_blitz_superpod_automapper_tests.py "${AUTOMAPPER_ARGS[@]}"
+
+
 fi # bh-sp4-glx
 
 ######################################
