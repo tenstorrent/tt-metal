@@ -334,8 +334,10 @@ models:
     bh_galaxy: 90  # +20: GPT-OSS-120B bh_galaxy 10->30 (watcher slowdown)
   unit_tier2:
     wh_llmbox: 114
-    wh_llmbox_perf: 198
-    wh_n150: 55
+    # TODO(watcher-fix, TEMPORARY - REVERT BEFORE MERGE): +10 (198->208) for Qwen2.5-32B step/job budget bump; see watcher_timeout_recommendations.md
+    wh_llmbox_perf: 208
+    # TODO(watcher-fix, TEMPORARY - REVERT BEFORE MERGE): +10 (55->65) for Mistral-7B job budget bump; see watcher_timeout_recommendations.md
+    wh_n150: 65
     bh_p150: 20
     bh_quietbox_2: 60  # +10: GPT-OSS-20B bh_quietbox_2 5->15 (watcher slowdown)
   unit_tier3:

@@ -145,7 +145,8 @@
 
 - name: Qwen2.5-32B unit tests
   cmd: |
-    export TT_METAL_WATCHER=60
+    # TODO(watcher-fix, TEMPORARY - REVERT BEFORE MERGE): raised 60 -> 120 to reduce watcher polling overhead (class B, run 29254446088); see watcher_timeout_recommendations.md
+    export TT_METAL_WATCHER=120
     export HF_MODEL=Qwen/Qwen2.5-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-32B-Instruct
     pytest --timeout 900 models/tt_transformers/tests/test_attention.py
     pytest --timeout 900 models/tt_transformers/tests/test_attention_prefill.py
@@ -156,7 +157,8 @@
   model: qwen2.5-32b
   skus:
     wh_llmbox_perf:
-      timeout: 12
+      # TODO(watcher-fix, TEMPORARY - REVERT BEFORE MERGE): raised step/job budget 12 -> 22 (+10 min) so the suite fits despite watcher overhead (class B, run 29254446088); see watcher_timeout_recommendations.md
+      timeout: 22
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -198,12 +200,14 @@
 
 - name: Mistral-7B unit tests
   cmd: |
-    export TT_METAL_WATCHER=60
+    # TODO(watcher-fix, TEMPORARY - REVERT BEFORE MERGE): raised 60 -> 120 to reduce watcher polling overhead (class B, run 29295369351); see watcher_timeout_recommendations.md
+    export TT_METAL_WATCHER=120
     export HF_MODEL=mistralai/Mistral-7B-Instruct-v0.3 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mistral-7B-Instruct-v0.3
     pytest --timeout 600 models/tt_transformers/tests/test_embedding.py
     pytest --timeout 600 models/tt_transformers/tests/test_attention.py
     pytest --timeout 600 models/tt_transformers/tests/test_attention_prefill.py
-    pytest --timeout 600 models/tt_transformers/tests/test_mlp.py
+    # TODO(watcher-fix, TEMPORARY - REVERT BEFORE MERGE): raised --timeout 600 -> 1200 for test_mlp_inference (65536 seqlen ran 896s under watcher, timed out at 600s); see watcher_timeout_recommendations.md
+    pytest --timeout 1200 models/tt_transformers/tests/test_mlp.py
     pytest --timeout 600 models/tt_transformers/tests/test_rms_norm.py
     pytest --timeout 600 models/tt_transformers/tests/test_decoder.py
     pytest --timeout 600 models/tt_transformers/tests/test_decoder_prefill.py
@@ -212,7 +216,8 @@
   model: mistral-7b
   skus:
     wh_n150:
-      timeout: 20
+      # TODO(watcher-fix, TEMPORARY - REVERT BEFORE MERGE): raised job budget 20 -> 30 to accommodate the temporary test_mlp --timeout bump; see watcher_timeout_recommendations.md
+      timeout: 30
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
