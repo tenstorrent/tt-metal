@@ -80,3 +80,36 @@ def test_width_subtile_w(device):
 def test_block_subtile_hw(device):
     # (1,1,32,64) RM BLOCK bf16: shard[4,8] -> sub-tile H=4 AND sub-tile W=8.
     _run((1, 1, 32, 64), BLOCK, ttnn.bfloat16, with_gamma=False)
+
+
+# Broad matrix over the golden RM WIDTH/BLOCK surface (excluding {WIDTH, w_non}
+# and TILE gamma — both op-side EXCLUDED). RM gamma + no_gamma, bf16 + fp32.
+WIDTH_SHAPES = [
+    (1, 1, 32, 64),  # sub-tile Ws, 1 tile-row
+    (2, 4, 128, 512),  # multi-tile-row (32), multi-image
+    (1, 1, 17, 64),  # h_non (Hs=17)
+    (1, 1, 50, 128),  # h_non (Hs=50 -> 2 tile-rows)
+    (4, 8, 47, 256),  # h_non, larger flattened H
+    (1, 1, 32, 4096),  # wide, tile-aligned Ws=64 (2 tiles)
+    (1024, 1024),  # 2D, 32 tile-rows
+    (1, 32, 128),  # 3D
+]
+BLOCK_SHAPES = WIDTH_SHAPES + [
+    (1, 1, 64, 17),  # w_non (BLOCK only; rectangular)
+    (128, 100),  # w_non (BLOCK only)
+    (1, 1, 32, 8192),  # wide, sub-tile H=4, large local_Wt
+]
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("with_gamma", [False, True])
+@pytest.mark.parametrize("shape", WIDTH_SHAPES)
+def test_width_matrix(device, shape, dtype, with_gamma):
+    _run(shape, WIDTH, dtype, with_gamma)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("with_gamma", [False, True])
+@pytest.mark.parametrize("shape", BLOCK_SHAPES)
+def test_block_matrix(device, shape, dtype, with_gamma):
+    _run(shape, BLOCK, dtype, with_gamma)

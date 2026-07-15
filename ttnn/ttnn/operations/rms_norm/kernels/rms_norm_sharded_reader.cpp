@@ -70,6 +70,10 @@ constexpr uint32_t cb_gather = 28;
 constexpr uint32_t cb_rms_src = 29;
 constexpr uint32_t TILE_H = 32;
 constexpr uint32_t TILE_W = 32;
+// Arch DRAM read source alignment (Wormhole/Blackhole = 32B). The RM-gamma
+// column-slice read at a sub-tile w_col_start can be sub-aligned, so it is read
+// from the aligned-down base and shifted (see the RM gamma leg below).
+constexpr uint32_t GAMMA_DRAM_ALIGN = 32;
 
 // Zero an L1 page word-by-word (RM stick padding tail).
 FORCE_INLINE void zero_l1_page(uint32_t l1, uint32_t nbytes) {
@@ -253,12 +257,39 @@ void kernel_main() {
                         cols = wblock_cols;
                     }
                     uint32_t real_bytes = cols * gamma_elt;
-                    if (real_bytes < gamma_padded_bytes) {
-                        zero_l1_page(gl1, gamma_padded_bytes);
-                    }
+                    zero_l1_page(gl1, gamma_padded_bytes);
                     if (real_bytes > 0) {
-                        noc_async_read(g_acc.get_noc_addr(0, g_col0 * gamma_elt), gl1, real_bytes);
-                        noc_async_read_barrier();
+                        if constexpr (IS_ROW_MAJOR) {
+                            // R5a: a sub-tile w_col_start makes the gamma DRAM source
+                            // byte offset sub-32B-aligned, but DRAM reads require a
+                            // 32B-aligned source (odd sub-tile cores read garbage
+                            // otherwise). Read from the 32B-aligned base into the page
+                            // (sized with GAMMA_DRAM_ALIGN slack) and shift the window
+                            // left to local col 0 with an L1 byte copy (any alignment).
+                            uint32_t byte_off = g_col0 * gamma_elt;
+                            uint32_t aligned_off = byte_off & ~(GAMMA_DRAM_ALIGN - 1);
+                            uint32_t shift = byte_off - aligned_off;
+                            uint32_t page_bytes = origin_W * gamma_elt;
+                            uint32_t span = shift + real_bytes;
+                            uint32_t aligned_span = (span + GAMMA_DRAM_ALIGN - 1) & ~(GAMMA_DRAM_ALIGN - 1);
+                            if (aligned_off + aligned_span > page_bytes) {
+                                aligned_span = page_bytes - aligned_off;
+                            }
+                            noc_async_read(g_acc.get_noc_addr(0, aligned_off), gl1, aligned_span);
+                            noc_async_read_barrier();
+                            if (shift > 0) {
+                                volatile tt_l1_ptr uint8_t* p = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(gl1);
+                                for (uint32_t i = 0; i < real_bytes; ++i) {
+                                    p[i] = p[i + shift];  // forward copy (dst < src): safe
+                                }
+                                for (uint32_t i = real_bytes; i < gamma_padded_bytes; ++i) {
+                                    p[i] = 0;  // re-zero the W-tail after the shift
+                                }
+                            }
+                        } else {
+                            noc_async_read(g_acc.get_noc_addr(0, g_col0 * gamma_elt), gl1, real_bytes);
+                            noc_async_read_barrier();
+                        }
                     }
                     cb_push_back(cb_gamma_rm, 1);
                 } else {

@@ -391,7 +391,11 @@ def _build_cross_core_descriptor(
         cbs.append(cb(CB_OUTPUT_RM, out_dtype, out_rm_page, double * W_BLOCK_TILES))
     if has_gamma:
         if gamma_is_row_major:
-            cbs.append(cb(CB_GAMMA_RM, gamma_dtype, gamma_rm_page, double))
+            # R5a RM leg reads the gamma column-slice from a 32B-aligned DRAM base into
+            # the page, so add DRAM_ALIGN(32B) of slack for the aligned-read overshoot;
+            # the shift-copy places the real slice at local col 0 (see reader).
+            gamma_rm_alloc = gamma_rm_page + (32 if is_row_major else 0)
+            cbs.append(cb(CB_GAMMA_RM, gamma_dtype, gamma_rm_alloc, double))
         cbs.append(cb(CB_GAMMA_TILES, gamma_tiles_dtype, gamma_tiles_tile, double * W_BLOCK_TILES))
         cbs.append(cb(CB_NORM, interm_dtype, interm_tile, W_BLOCK_TILES))
 
