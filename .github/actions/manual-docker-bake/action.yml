@@ -148,9 +148,10 @@ runs:
           done
         fi
 
-        # Install syft + oras once per job when SBOM enrichment is requested (see
-        # enrich-sbom input). Pinned versions - do not float to latest.
-        SYFT_VERSION="v1.18.1"
+        # Install syft (https://github.com/anchore/syft, Apache-2.0 license) + oras
+        # once per job when SBOM enrichment is requested (see enrich-sbom input).
+        # Pinned versions - do not float to latest.
+        SYFT_VERSION="v1.46.0"
         ORAS_VERSION="1.2.0"
         if [ "${INPUT_ENRICH_SBOM}" = "true" ] && [ "${INPUT_ENABLE_ATTESTATIONS}" = "true" ]; then
           # /usr/local/bin is not guaranteed to be writable without sudo on every
