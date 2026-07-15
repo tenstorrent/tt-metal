@@ -759,8 +759,8 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
-    # pytest is installed into the worker venv by the multihost job's install step; bare `pytest`
-    # is not on PATH, so invoke via the interpreter (matches demo_sp_multihost_tests.yaml).
+    # pytest is installed into the worker venv by the multihost job install step; bare pytest
+    # is not on PATH, so invoke via the interpreter, matching demo_sp_multihost_tests.yaml.
     python3 -m pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k flux_dev
     python3 -m pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_transformer_flux1.py -k flux_dev
   model: flux-multihost-tests
