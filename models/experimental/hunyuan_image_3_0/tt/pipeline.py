@@ -36,6 +36,7 @@ import time
 import torch
 import ttnn
 
+from .attention.mask import build_attention_mask_tt
 from .denoise_dual_cq import DenoiseDualCQCoordinator, denoise_2cq_enabled, latent_tt_to_torch
 from .matmul_utils import spill_resident_emb_to_dram
 from .scheduler import classifier_free_guidance_tt
@@ -493,19 +494,58 @@ def upload_denoise_cond_mesh(
     mesh_device,
     replicate_fn,
     full_attn_slices=None,
+    mask_dtype=ttnn.bfloat16,
+    attention_mask: ttnn.Tensor | None = None,
 ):
-    """Upload host cond dict entries needed on device for ``denoise_loop``."""
-    del seq_len, full_attn_slices  # reserved for TT attention-mask build
+    """Prepare cond dict entries needed on device for ``denoise_loop``.
+
+    Attention masks for I2I are ``[B,1,S,S]`` (~400 MiB bf16 at long seq_len).
+    Prefer building on-device from ``full_attn_slices``. Must stay bf16/f32 —
+    SP path uses ``ttnn.pad`` which rejects packed dtypes (bf8/bf4). Call this
+    **before** loading the denoise backbone so the ``S^2`` build has headroom.
+
+    When ``base_embeds_host`` is present, host base embeds are **not** uploaded —
+    ``denoise_loop`` re-scatters / uploads them each step.
+    """
     out = dict(cond_row)
-    mask = out.get("attention_mask")
-    if mask is not None and not isinstance(mask, ttnn.Tensor):
-        out["attention_mask"] = replicate_fn(mask)
-    base = out.get("base_embeds")
-    if base is None:
-        base = out.get("base_embeds_host")
-    if base is not None and not isinstance(base, ttnn.Tensor):
-        host = base.to(torch.bfloat16) if isinstance(base, torch.Tensor) else base
-        out["base_embeds"] = replicate_fn(host)
+    if attention_mask is not None:
+        out["attention_mask"] = attention_mask
+    elif full_attn_slices is not None:
+        bsz = int(out.get("batch", 1))
+        out["attention_mask"] = build_attention_mask_tt(
+            mesh_device,
+            seq_len,
+            image_slices=full_attn_slices,
+            bsz=bsz,
+            dtype=mask_dtype,
+        )
+    else:
+        mask = out.get("attention_mask")
+        if mask is not None and not isinstance(mask, ttnn.Tensor):
+            # Packed dtype: avoid replicate_fn (bf16 TILE) which OOMs once the
+            # backbone fills DRAM. Tilize from a host float tensor into mask_dtype.
+            if isinstance(mask, torch.Tensor):
+                host = mask.detach().to(dtype=torch.float32).contiguous()
+            else:
+                host = mask
+            out["attention_mask"] = ttnn.from_torch(
+                host,
+                dtype=mask_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+
+    # Drop host torch duplicates so callers don't accidentally treat them as
+    # device tensors. Keep base_embeds_host for per-step scatter + upload.
+    if out.get("base_embeds_host") is not None:
+        out.pop("base_embeds", None)
+    else:
+        base = out.get("base_embeds")
+        if base is not None and not isinstance(base, ttnn.Tensor):
+            host = base.to(torch.bfloat16) if isinstance(base, torch.Tensor) else base
+            out["base_embeds"] = replicate_fn(host)
     return out
 
 

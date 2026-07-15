@@ -122,7 +122,7 @@ class HunyuanSymmetricConv3d(Module):
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4
+            math_fidelity=ttnn.MathFidelity.HiFi2
             if (is_blackhole() and dtype == ttnn.float32)
             else ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
