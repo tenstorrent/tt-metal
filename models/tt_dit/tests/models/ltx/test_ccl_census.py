@@ -204,6 +204,8 @@ def test_ccl_census(mesh_device: ttnn.MeshDevice) -> None:
     gate_a = col_linear(AUDIO_DIM, NUM_HEADS)  # attn.to_gate_logits (audio)
     qkv_a = col_linear(AUDIO_DIM, 3 * AUDIO_DIM, chunks=3)  # audio_attn1.to_qkv
     out_v = col_linear(VIDEO_DIM, VIDEO_DIM)  # attn.to_out (video)
+    out_v_bf8 = col_linear(VIDEO_DIM, VIDEO_DIM)  # same, but gathers its input in bf8
+    out_v_bf8.activation_dtype = ttnn.bfloat8_b
     ff1_v = col_linear(VIDEO_DIM, 4 * VIDEO_DIM)  # ffn.ff1 (video)
     ff2_v = RowParallelLinear(
         4 * VIDEO_DIM, VIDEO_DIM, bias=True, mesh_device=mesh_device, mesh_axis=tp_axis, ccl_manager=ccl
@@ -454,6 +456,7 @@ def test_ccl_census(mesh_device: ttnn.MeshDevice) -> None:
         ("mm_ff1_video_s2_gathered", lambda: ff1_v(x_v2_full), True),
         ("agmm_out_video_s2", lambda: out_v(x_v2, parallel_config=pc), True),
         ("mm_out_video_s2_gathered", lambda: out_v(x_v2_full), True),
+        ("agmm_out_video_s2_bf8", lambda: out_v_bf8(x_v2, parallel_config=pc), True),
     ]
 
     variants += cut1c
