@@ -39,15 +39,12 @@ void kernel_main() {
     constexpr uint32_t in0_num_blocks_h = get_arg(args::in0_num_blocks_h);
 
     constexpr uint32_t in0_cb_id = dfb::act;
-    // DIAGNOSTIC (rule out the borrowed/resized OUT ring as the 0x19 trigger): Program A tilizes into a
-    // PLAIN, non-borrowed ACT_TILIZED DFB — the SAME tilized CB the fused conv_bmm_tilize_metal2.cpp uses
-    // (tilized_in0_cb_id = dfb::act_tilized) — instead of the borrowed OUT shard. The factory sizes this
-    // ACT_TILIZED to hold the whole per-core tilized activation (M*K tiles) and binds it PRODUCER+degenerate
-    // CONSUMER on compute. OUT stays bound (dead) only so TP_OUTPUT / the op's output tensor stays valid.
-    // If this COMPLETES (no 0x19) the borrowed+resized OUT ring was the trigger; if it still faults, the
-    // tilize 0x19 is intrinsic (LLK). Everything else (tilize-oriented hw_startup, single tilize call,
-    // num_blocks, config) is byte-identical to the passing standalone tilize.
-    constexpr uint32_t out_cb_id = dfb::act_tilized;
+    // Program A tilizes STRAIGHT INTO dfb::out — OUT is borrowed from the op's output tensor
+    // (factory: DFB_OUT.borrowed_from = TP_OUTPUT), so the op's OUTPUT IS the tilized activation
+    // [per-core M*32 rows, in0_block_w*32 cols]. Program B (host-level matmul in conv2d.cpp) then
+    // consumes this tilized activation. (The borrowed-OUT-vs-plain-DFB diagnostic is reverted: it
+    // proved the 0x19 is intrinsic to tilize_block, not the borrowed OUT — the fix is UnpackToDestEn.)
+    constexpr uint32_t out_cb_id = dfb::out;
 
     // ==================== TILIZE-ORIENTED HW STARTUP (no matmul) ====================
     // The whole point of Option B: bring the engine up for tilize (in -> out), NOT for matmul.

@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdlib>  // std::getenv (TT_METAL_QSR_CONV_SPLIT_PROGRAM Option-B two-program split)
 #include <optional>
 #include <string>
 #include <utility>
@@ -689,6 +690,50 @@ Result conv2d_L1(
             conv_config.enable_activation_reuse,
             conv_config.config_tensors_in_dram,
             conv_config.force_split_reader);
+
+        // OPTION B — PROGRAM B (two-program split). Under TT_METAL_QSR_CONV_SPLIT_PROGRAM the conv op above ran
+        // TILIZE-ONLY (Program A: reader gather + UnpackToDestEn tilize) and `conv_output` is the tilized
+        // activation [M, K] (K = in0_block_w). The tilize and matmul can't share one kernel on Quasar (the
+        // dvalid-synced tilize + semaphore-synced matmul re-fault the 0x19), so the matmul runs here as a
+        // SEPARATE op: conv_output @ weights -> conv result [M, N], reusing the same quasar matmul::linear the
+        // 1x1-conv path uses (bias + activation folded into the matmul program config). Gate must match the
+        // factory's split_program_tilize_only eligibility (height-sharded + full_inner_dim single-K-block; this
+        // is the !mm_conv, non-depthwise branch already).
+        const bool split_program_active =
+            (std::getenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM") != nullptr) && device->arch() == tt::ARCH::QUASAR &&
+            parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED && conv_config.full_inner_dim;
+        if (split_program_active) {
+            std::optional<ttnn::operations::experimental::quasar::matmul::MatmulProgramConfig> program_config =
+                std::nullopt;
+            std::optional<MemoryConfig> mm_output_memory_config = std::nullopt;
+            if (conv_output.is_sharded()) {
+                uint32_t num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
+                program_config = determine_matmul_op_config_from_conv_op_config_qsr(
+                    opt_conv_op_parallel_config,
+                    opt_conv_op_block_config,
+                    parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED,
+                    conv_config.activation,
+                    parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
+                    num_cores_c);
+                mm_output_memory_config = conv_out_memory_config;
+            }
+            ttnn::Tensor matmul_output = ttnn::operations::experimental::quasar::matmul::linear(
+                conv_output,  // Program A output = tilized activation [M, K]
+                weight_tensor_on_device,
+                bias_tensor_on_device,
+                false,
+                false,
+                mm_output_memory_config,
+                output_dtype,
+                program_config,
+                conv_output.is_sharded() ? std::nullopt : conv_config.activation,
+                compute_config);
+            if (memory_config.has_value() && memory_config.value() != matmul_output.memory_config()) {
+                matmul_output = ttnn::operations::experimental::quasar::to_memory_config(
+                    matmul_output, memory_config.value(), std::nullopt);
+            }
+            return {matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+        }
 
         if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
             conv_output = ttnn::operations::experimental::quasar::to_memory_config(

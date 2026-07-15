@@ -1104,13 +1104,12 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         //  = 50,176 units of 16 B, and 2x = 100,352 units overflows the uint16_t DFB ring-extent field
         //  (max 65,536 = 1 MB). Capacity double-buffering of a full K-block is structurally impossible
         //  on Quasar — see dfb_conv2d_analysis.md.)
-        if (split_program_tilize_only) {
-            // OPTION B / Program A DIAGNOSTIC: tilize into a PLAIN (non-borrowed) ACT_TILIZED DFB sized to
-            // hold the WHOLE per-core tilized activation (num_blocks_act_h_per_core blocks x one ACT_TILIZED
-            // block = per_core_out_matrix_height_ntiles x in0_block_w = M*K tiles), to rule out the
-            // borrowed+resized OUT ring as the 0x19 trigger. Same sizing as the split-path OUT below; nothing
-            // pops it (compute binds it PRODUCER + degenerate CONSUMER), so reserve_back fills exactly to
-            // capacity (M reserves of in0_block_w = M*K = num_entries, no wrap).
+        if (split_program_unpack_tilize) {
+            // UNPACK-TILIZE PROBE (diagnostic): tilize into a PLAIN (non-borrowed) ACT_TILIZED DFB sized to hold
+            // the WHOLE per-core tilized activation (num_blocks_act_h_per_core x one ACT_TILIZED block = M*K
+            // tiles); the probe reduce writes here (throwaway). Plus a reduce-scalar (srcB) DFB — one tile, face
+            // geometry {face_r_dim=1, num_faces=4} mirroring the pool's scalar CB — credited as a compute
+            // self-loop, value unfilled.
             const CBInfo& tilized_info = cb(Conv2dCb::ACT_TILIZED);
             spec.dataflow_buffers.push_back(m2::DataflowBufferSpec{
                 .unique_id = DFB_ACT_TILIZED,
@@ -1118,19 +1117,16 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                 .num_entries = tilized_info.num_pages * num_blocks_act_h_per_core,
                 .data_format_metadata = tilized_info.data_format,
             });
-            if (split_program_unpack_tilize) {
-                // UNPACK-TILIZE PROBE: reduce-scalar (srcB) DFB — one tile, face geometry {face_r_dim=1,
-                // num_faces=4} mirroring the pool's scalar CB (pool_multi_core_program_factory.cpp scalar_face).
-                // The probe compute kernel provides its credit as a self-loop and leaves the value unfilled
-                // (throwaway reduce). Reuse the ACT_TILIZED tile size for the entry.
-                spec.dataflow_buffers.push_back(m2::DataflowBufferSpec{
-                    .unique_id = DFB_IN_SCALAR,
-                    .entry_size = tilized_info.page_size,
-                    .num_entries = 1,
-                    .data_format_metadata = tilized_info.data_format,
-                    .unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 1, .num_faces = 4},
-                });
-            }
+            spec.dataflow_buffers.push_back(m2::DataflowBufferSpec{
+                .unique_id = DFB_IN_SCALAR,
+                .entry_size = tilized_info.page_size,
+                .num_entries = 1,
+                .data_format_metadata = tilized_info.data_format,
+                .unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 1, .num_faces = 4},
+            });
+        } else if (split_program_tilize_only) {
+            // OPTION B / Program A: the tilize writes STRAIGHT INTO the borrowed OUT (sized to M*K below,
+            // borrowed_from OUTPUT — the op's output IS the tilized activation). No separate ACT_TILIZED DFB.
         } else if (split_tilize_matmul) {
             // OPTION C: hold ALL height blocks of tilized activation at once (num_blocks_act_h_per_core x
             // one block) so Phase 1 can tilize every block before Phase 2's matmul consumes them. NB: the
@@ -1663,11 +1659,10 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     //  COMPUTE kernel
     // ============================================================================
     std::vector<m2::DFBBinding> compute_dfb_bindings;
-    if (split_program_tilize_only) {
-        // OPTION B / Program A DIAGNOSTIC: compute consumes ACT (gathered by the reader) and PRODUCES the
-        // PLAIN ACT_TILIZED DFB (the tilize target), plus a degenerate ACT_TILIZED self-consumer (nothing
-        // pops it). OUT stays PRODUCER + degenerate CONSUMER — dead (the compute never packs it) but bound so
-        // TP_OUTPUT / the op's output tensor stays satisfied. No weights / bias / matmul_partials.
+    if (split_program_unpack_tilize) {
+        // UNPACK-TILIZE PROBE (diagnostic): compute consumes ACT + reduces into the PLAIN ACT_TILIZED DFB
+        // (PRODUCER + degenerate CONSUMER, throwaway) with the IN_SCALAR reduce-scalar as a self-loop. OUT is
+        // dead-but-bound so TP_OUTPUT stays satisfied. No weights / bias / matmul_partials.
         compute_dfb_bindings = {
             m2::DFBBinding{
                 .dfb_spec_name = DFB_ACT, .accessor_name = "act", .endpoint_type = m2::DFBEndpointType::CONSUMER},
@@ -1683,19 +1678,28 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                 .dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER},
             m2::DFBBinding{
                 .dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER},
+            m2::DFBBinding{
+                .dfb_spec_name = DFB_IN_SCALAR,
+                .accessor_name = "in_scalar",
+                .endpoint_type = m2::DFBEndpointType::PRODUCER},
+            m2::DFBBinding{
+                .dfb_spec_name = DFB_IN_SCALAR,
+                .accessor_name = "in_scalar",
+                .endpoint_type = m2::DFBEndpointType::CONSUMER},
         };
-        if (split_program_unpack_tilize) {
-            // UNPACK-TILIZE PROBE: the reduce scalar (srcB). Compute self-loop (PRODUCER + CONSUMER): the probe
-            // reserves+pushes the credit once and waits on it, never popping (one-scalar-per-core style).
-            compute_dfb_bindings.push_back(m2::DFBBinding{
-                .dfb_spec_name = DFB_IN_SCALAR,
-                .accessor_name = "in_scalar",
-                .endpoint_type = m2::DFBEndpointType::PRODUCER});
-            compute_dfb_bindings.push_back(m2::DFBBinding{
-                .dfb_spec_name = DFB_IN_SCALAR,
-                .accessor_name = "in_scalar",
-                .endpoint_type = m2::DFBEndpointType::CONSUMER});
-        }
+    } else if (split_program_tilize_only) {
+        // OPTION B / Program A: compute consumes ACT (gathered by the reader) and tilizes it STRAIGHT INTO OUT
+        // (borrowed from the op's output tensor — the op output IS the tilized activation). PRODUCER + the
+        // degenerate self-CONSUMER, mirroring the fused packer-into-output idiom. No weights / act_tilized /
+        // matmul_partials. Program B (host-level matmul) consumes this tilized activation.
+        compute_dfb_bindings = {
+            m2::DFBBinding{
+                .dfb_spec_name = DFB_ACT, .accessor_name = "act", .endpoint_type = m2::DFBEndpointType::CONSUMER},
+            m2::DFBBinding{
+                .dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER},
+            m2::DFBBinding{
+                .dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER},
+        };
     } else if (is_conv_1d_depthwise_conv) {
         // Depthwise: consumes ACT (raw RM) + WEIGHTS, produces ACT_TILIZED (tilize out) and consumes it,
         // produces OUT (dest-reuse accumulate, packer-into-output; no MATMUL_PARTIALS CB).
