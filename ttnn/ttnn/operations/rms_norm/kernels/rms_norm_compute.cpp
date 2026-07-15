@@ -122,9 +122,14 @@ void kernel_main() {
     constexpr uint32_t IS_CROSS_CORE = get_compile_time_arg_val(11);
     constexpr uint32_t GROUP_SIZE = get_compile_time_arg_val(12);
     (void)Wt;
-    // Pass-1 reduce target: the cross-core path accumulates into cb_partial (later
-    // gathered + folded); the local path accumulates straight into cb_sumsq.
-    constexpr uint32_t cb_reduce_out = (IS_CROSS_CORE != 0) ? cb_partial : cb_sumsq;
+    // Pass-1 reduce target. The local path accumulates straight into cb_sumsq (which
+    // the same compute thread then finalizes + consumes — no cross-thread race). The
+    // cross-core path accumulates into cb_combine (an internal accumulator the reduce
+    // push/pops PER W-block), then emits cb_partial with ONE clean copy — because the
+    // reader gathers cb_partial and its cb_wait_front(cb_partial, 1) must not race a
+    // mid-accumulation intermediate (that bug gathered a partial sum for wide-W BLOCK
+    // shards, per_w>W_BLOCK_TILES -> num_w_blocks>1).
+    constexpr uint32_t cb_reduce_out = (IS_CROSS_CORE != 0) ? cb_combine : cb_sumsq;
 
     uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
     uint32_t start_tile_row = get_arg_val<uint32_t>(1);
@@ -184,6 +189,14 @@ void kernel_main() {
                     ckl::NoOp{},
                     part);
             }
+        }
+
+        if constexpr (IS_CROSS_CORE) {
+            // Emit this core's finished local partial with ONE clean push, so the reader's
+            // gather cb_wait_front(cb_partial, 1) can't grab a mid-accumulation cb_combine
+            // intermediate (num_w_blocks>1 for wide-W shards). cb_combine is then free to
+            // be reused as the root's combine accumulator below.
+            ckl::copy<cb_combine, cb_partial>(ckl::EltwiseShape::single());
         }
 
         // ---------- Finalize: 1/sqrt(mean + eps) → cb_sumsq (held across pass 2) ----------
