@@ -207,7 +207,7 @@ set_target_properties(
             api
 )
 
-file(GLOB_RECURSE ttnn_kernels cpp/ttnn/operations/copy/typecast/device/kernels/*)
+file(GLOB_RECURSE ttnn_kernels cpp/ttnn/operations/copy/typecast/device/kernels/*.cpp)
 target_sources(
     ttnncpp
     PUBLIC
