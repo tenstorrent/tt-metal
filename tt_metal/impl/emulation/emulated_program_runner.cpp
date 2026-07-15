@@ -2035,6 +2035,25 @@ extern "C" void __emule_fabric_set_route_dir(
     r.mux_y = mux_y;
 }
 
+// Carry a stamped route from a source header address to a destination when the header bytes are copied
+// (a worker staging a packet header into a forwarder relay slot). On silicon the routing fields ride inside
+// the header, so a byte copy carries them for free; emule keeps them in the address-keyed side-table, so the
+// copy must replicate the entry. No-op when src carries no route. src_key/dst_key are 0-based L1 offsets
+// (the fabric shim passes bridge_l1-relative offsets); widen through emule_route_key to match the set/read
+// sides. See tt-emule docs/fabric-ccl-emulation.md.
+extern "C" void __emule_fabric_route_follow(uint32_t src_key, uint32_t dst_key) {
+    if (src_key == dst_key) {
+        return;
+    }
+    std::lock_guard<std::mutex> lk(g_route_meta_mu);
+    auto it = g_route_meta.find(emule_route_key(src_key));
+    if (it == g_route_meta.end()) {
+        return;  // src carries no route — not a packet-header copy; nothing to follow.
+    }
+    const EmuleRoute r = it->second;  // copy before the insert below can rehash/invalidate `it`.
+    g_route_meta[emule_route_key(dst_key)] = r;
+}
+
 // Fabric connection routes recorded host-side by append_fabric_connection_rt_args: for 1D the dst chip is
 // bound to the connection, not the header, so the host records each connection's direction + immediate
 // neighbor here. See tt-emule docs/fabric-ccl-emulation.md.
@@ -2318,50 +2337,44 @@ static void __emule_fabric_deliver(
             }
             break;
         }
-        case 4: {  // NOC_UNICAST_SCATTER_WRITE: noc_address[4]@0, chunk_size[3]@32, chunk_count@38
+        case 4: {  // NOC_UNICAST_SCATTER_WRITE: noc_address[4]@0, chunk_size[3]@32, chunk_count@38, chunk_encoding@39
+            // Also carries the fused scatter-write + atomic-inc: chunk_encoding holds a 2-bit code per chunk
+            // (silicon NocScatterWriteChunkEncoding: 0 = NOP, 1 = unicast write, 2/3 = semaphore increment).
+            // On silicon a scatter write is NOT left at 0 — to_noc_unicast_scatter_write fills every chunk with
+            // encoding 1, and a fused packet marks its trailing chunk as a seminc (2/3) with the writes at 1.
+            // Encoding 0 is CHUNK_ENCODING_NOP on the wire, so the write branch below handling enc 0 the same
+            // as enc 1 is an emulator compatibility fallback only: emule's own NocUnicastScatterCommandHeader
+            // defaults chunk_encoding to 0 for a plain scatter write. For a seminc chunk, fetch_add the value
+            // stored in that chunk's size slot instead of copying payload (the seminc chunk carries no bytes).
             const uint64_t* na = reinterpret_cast<const uint64_t*>(h + 0);
             const uint16_t* cs = reinterpret_cast<const uint16_t*>(h + 32);
             uint8_t chunk_count = *(h + 38);
+            uint8_t chunk_encoding = *(h + 39);
             uint32_t off = 0;
-            for (uint8_t i = 0; i < chunk_count && payload != nullptr; ++i) {
-                uint32_t csz = (i + 1 < chunk_count) ? cs[i] : (size - off);
+            for (uint8_t i = 0; i < chunk_count; ++i) {
+                const uint8_t enc = (chunk_encoding >> (i * 2)) & 0x3;
                 uint8_t* d = __emule_fabric_resolve_remote(dst_chip, na[i]);
-                if (d != nullptr && csz > 0) {
+                if (enc == 2 /*SEMINC_NO_FLUSH*/ || enc == 3 /*SEMINC_FLUSH*/) {
+                    uint32_t val = cs[i];  // seminc value packed into this chunk's size slot
+                    if (d != nullptr) {
+                        reinterpret_cast<std::atomic<uint32_t>*>(d)->fetch_add(val, std::memory_order_release);
+                        if (dbg) {
+                            fprintf(stderr, "[EMULE_FABRIC]   scatter_seminc chip=%u dst=%p val=%u\n",
+                                    dst_chip, (void*)d, val);
+                        }
+                        __emule_fiber_wake(d);
+                    }
+                    continue;  // no payload advance for a seminc chunk
+                }
+                // Write chunk. The last write chunk's size is implicit (remaining payload).
+                uint32_t csz = (i + 1 < chunk_count) ? cs[i] : (size - off);
+                if (payload != nullptr && d != nullptr && csz > 0) {
                     std::memcpy(d, static_cast<const uint8_t*>(payload) + off, csz);
                     __emule_fiber_wake(d);
                 }
                 off += csz;
             }
             std::atomic_thread_fence(std::memory_order_release);
-            break;
-        }
-        case 8: {  // NOC_FUSED_SCATTER_WRITE_ATOMIC_INC (emule): na[0]@0, na[1]@8, sem@16, chunk_size[0]@24, val@26
-            const uint64_t* na = reinterpret_cast<const uint64_t*>(h + 0);
-            uint64_t sem_addr = *reinterpret_cast<const uint64_t*>(h + 16);
-            uint16_t cs0 = *reinterpret_cast<const uint16_t*>(h + 24);
-            uint16_t val = *reinterpret_cast<const uint16_t*>(h + 26);
-            if (payload != nullptr && size > 0) {
-                uint32_t sz0 = (cs0 < size) ? cs0 : size;  // chunk 0
-                uint8_t* d0 = __emule_fabric_resolve_remote(dst_chip, na[0]);
-                if (d0 != nullptr && sz0 > 0) {
-                    std::memcpy(d0, payload, sz0);
-                    __emule_fiber_wake(d0);
-                }
-                uint32_t sz1 = size - sz0;  // chunk 1 (implicit last chunk size)
-                if (sz1 > 0) {
-                    uint8_t* d1 = __emule_fabric_resolve_remote(dst_chip, na[1]);
-                    if (d1 != nullptr) {
-                        std::memcpy(d1, static_cast<const uint8_t*>(payload) + sz0, sz1);
-                        __emule_fiber_wake(d1);
-                    }
-                }
-                std::atomic_thread_fence(std::memory_order_release);
-            }
-            uint8_t* s = __emule_fabric_resolve_remote(dst_chip, sem_addr);
-            if (s != nullptr) {
-                reinterpret_cast<std::atomic<uint32_t>*>(s)->fetch_add(val, std::memory_order_release);
-                __emule_fiber_wake(s);
-            }
             break;
         }
         default:
