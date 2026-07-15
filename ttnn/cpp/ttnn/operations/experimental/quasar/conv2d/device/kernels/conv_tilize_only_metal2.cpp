@@ -39,12 +39,15 @@ void kernel_main() {
     constexpr uint32_t in0_num_blocks_h = get_arg(args::in0_num_blocks_h);
 
     constexpr uint32_t in0_cb_id = dfb::act;
-    // Program A tilizes STRAIGHT INTO dfb::out. On the height-sharded path OUT is borrowed from the
-    // op's output tensor (factory: DFB_OUT.borrowed_from = TP_OUTPUT), so the compute packs the
-    // tilized activations directly into the output shard — no matmul, no weights, no separate
-    // act_tilized DFB, and no output writer. The factory sizes the op's output (and therefore OUT)
-    // to the tilized-activation shape [per_core M*32, in0_block_w*32] for the split-program path.
-    constexpr uint32_t out_cb_id = dfb::out;
+    // DIAGNOSTIC (rule out the borrowed/resized OUT ring as the 0x19 trigger): Program A tilizes into a
+    // PLAIN, non-borrowed ACT_TILIZED DFB — the SAME tilized CB the fused conv_bmm_tilize_metal2.cpp uses
+    // (tilized_in0_cb_id = dfb::act_tilized) — instead of the borrowed OUT shard. The factory sizes this
+    // ACT_TILIZED to hold the whole per-core tilized activation (M*K tiles) and binds it PRODUCER+degenerate
+    // CONSUMER on compute. OUT stays bound (dead) only so TP_OUTPUT / the op's output tensor stays valid.
+    // If this COMPLETES (no 0x19) the borrowed+resized OUT ring was the trigger; if it still faults, the
+    // tilize 0x19 is intrinsic (LLK). Everything else (tilize-oriented hw_startup, single tilize call,
+    // num_blocks, config) is byte-identical to the passing standalone tilize.
+    constexpr uint32_t out_cb_id = dfb::act_tilized;
 
     // ==================== TILIZE-ORIENTED HW STARTUP (no matmul) ====================
     // The whole point of Option B: bring the engine up for tilize (in -> out), NOT for matmul.

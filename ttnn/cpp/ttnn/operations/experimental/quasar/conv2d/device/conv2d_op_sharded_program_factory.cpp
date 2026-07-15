@@ -1078,8 +1078,19 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         //  (max 65,536 = 1 MB). Capacity double-buffering of a full K-block is structurally impossible
         //  on Quasar — see dfb_conv2d_analysis.md.)
         if (split_program_tilize_only) {
-            // OPTION B / Program A: the tilize packs straight into OUT (borrowed output shard); there is no
-            // separate ACT_TILIZED buffer. Emit nothing here.
+            // OPTION B / Program A DIAGNOSTIC: tilize into a PLAIN (non-borrowed) ACT_TILIZED DFB sized to
+            // hold the WHOLE per-core tilized activation (num_blocks_act_h_per_core blocks x one ACT_TILIZED
+            // block = per_core_out_matrix_height_ntiles x in0_block_w = M*K tiles), to rule out the
+            // borrowed+resized OUT ring as the 0x19 trigger. Same sizing as the split-path OUT below; nothing
+            // pops it (compute binds it PRODUCER + degenerate CONSUMER), so reserve_back fills exactly to
+            // capacity (M reserves of in0_block_w = M*K = num_entries, no wrap).
+            const CBInfo& tilized_info = cb(Conv2dCb::ACT_TILIZED);
+            spec.dataflow_buffers.push_back(m2::DataflowBufferSpec{
+                .unique_id = DFB_ACT_TILIZED,
+                .entry_size = tilized_info.page_size,
+                .num_entries = tilized_info.num_pages * num_blocks_act_h_per_core,
+                .data_format_metadata = tilized_info.data_format,
+            });
         } else if (split_tilize_matmul) {
             // OPTION C: hold ALL height blocks of tilized activation at once (num_blocks_act_h_per_core x
             // one block) so Phase 1 can tilize every block before Phase 2's matmul consumes them. NB: the
@@ -1611,12 +1622,21 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // ============================================================================
     std::vector<m2::DFBBinding> compute_dfb_bindings;
     if (split_program_tilize_only) {
-        // OPTION B / Program A: compute consumes ACT (gathered by the reader) and PRODUCES OUT (the tilized
-        // activation, packed straight into the borrowed output shard). No weights / act_tilized / partials.
-        // OUT also carries a degenerate self-consumer for node-coverage (same idiom as the fused path).
+        // OPTION B / Program A DIAGNOSTIC: compute consumes ACT (gathered by the reader) and PRODUCES the
+        // PLAIN ACT_TILIZED DFB (the tilize target), plus a degenerate ACT_TILIZED self-consumer (nothing
+        // pops it). OUT stays PRODUCER + degenerate CONSUMER — dead (the compute never packs it) but bound so
+        // TP_OUTPUT / the op's output tensor stays satisfied. No weights / bias / matmul_partials.
         compute_dfb_bindings = {
             m2::DFBBinding{
                 .dfb_spec_name = DFB_ACT, .accessor_name = "act", .endpoint_type = m2::DFBEndpointType::CONSUMER},
+            m2::DFBBinding{
+                .dfb_spec_name = DFB_ACT_TILIZED,
+                .accessor_name = "act_tilized",
+                .endpoint_type = m2::DFBEndpointType::PRODUCER},
+            m2::DFBBinding{
+                .dfb_spec_name = DFB_ACT_TILIZED,
+                .accessor_name = "act_tilized",
+                .endpoint_type = m2::DFBEndpointType::CONSUMER},
             m2::DFBBinding{
                 .dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER},
             m2::DFBBinding{

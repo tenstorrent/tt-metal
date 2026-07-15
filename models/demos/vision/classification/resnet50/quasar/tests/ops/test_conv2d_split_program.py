@@ -127,16 +127,16 @@ def test_quasar_conv2d_split_program_tilize_only(mesh_device):
         else:
             os.environ["TT_METAL_QSR_CONV_SPLIT_PROGRAM"] = prev
 
-    # PRIMARY SIGNAL: we got here without a 0x19 / ERROR_TRISC1 fault (a fault aborts the process before this).
+    # PRIMARY (and only) SIGNAL: we got here without a 0x19 / ERROR_TRISC1 fault (a fault aborts the process
+    # before this). In this DIAGNOSTIC the compute tilizes into a plain ACT_TILIZED DFB, NOT the op's output
+    # tensor (OUT), so the output tensor is intentionally UNWRITTEN — its contents are garbage. We therefore
+    # only assert the op COMPLETED and returned a non-empty tensor; do NOT assert on the values.
     tt_out = ttnn.to_torch(ttnn.from_device(out))
     assert tt_out is not None and tt_out.numel() > 0, "tilize-only conv returned an empty tensor"
-    assert torch.isfinite(tt_out.float()).all(), "tilize-only conv output contains NaN/Inf"
 
-    # The op output is the per-core tilized activation shard. Its width is K tiles (in0_block_w) = 32*4*4 = 512;
-    # rows are the conv output rows padded to tiles. Sanity-check the width matches K (confirms Program A ran,
-    # not the fused fallback whose output width would be N = out_channels).
-    k_cols = in_channels * kernel_size[0] * kernel_size[1]  # 512
+    finite = bool(torch.isfinite(tt_out.float()).all())
     print(
-        f"Program A (tilize-only) completed. out shape={tuple(tt_out.shape)} "
-        f"conv_out_hw=({out_h_r},{out_w_r}) expected_tilized_width(K)={k_cols} out_channels(N)={out_channels}"
+        f"Program A (tilize-only, plain ACT_TILIZED) COMPLETED — no 0x19. "
+        f"out shape={tuple(tt_out.shape)} conv_out_hw=({out_h},{out_w}) "
+        f"(output tensor is unwritten/garbage by design; all_finite={finite})"
     )
