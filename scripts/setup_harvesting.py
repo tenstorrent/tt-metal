@@ -16,6 +16,8 @@ This script:
 import subprocess
 import sys
 import os
+import re
+import glob
 
 
 def run_command(cmd, cwd=None, shell=True, check=True, capture_output=False):
@@ -75,22 +77,100 @@ def setup_tt_flash_venv():
     return venv_path
 
 
-def select_firmware_version():
-    """Let user select firmware version from available tags."""
+def filter_firmware_tags(tags):
+    """Keep only version tags with major version >= 19 (v19 and above)."""
+    selected = []
+    for tag in tags:
+        match = re.match(r"^v(\d+)(?:\.|$)", tag)
+        if match and int(match.group(1)) >= 19:
+            selected.append(tag)
+    return selected
+
+
+def find_fwbundle(repo_dir, version):
+    """Locate the firmware bundle for the given version inside the chosen repo.
+
+    tt-firmware uses the ``fw_pack-<version>.fwbundle`` naming; tt-system-firmware
+    may name it differently, so fall back to any ``*.fwbundle`` in the repo.
+    """
+    expected = os.path.join(repo_dir, f"fw_pack-{version}.fwbundle")
+    if os.path.exists(expected):
+        return expected
+
+    candidates = sorted(glob.glob(os.path.join(repo_dir, "**", "*.fwbundle"), recursive=True))
+    if len(candidates) == 1:
+        print(f"\nNote: expected {expected} not found; using {candidates[0]}")
+        return candidates[0]
+    if len(candidates) > 1:
+        print(f"\nMultiple firmware bundles found in {repo_dir}:")
+        for i, path in enumerate(candidates, 1):
+            print(f"  {i}. {path}")
+        while True:
+            choice = input(f"\nSelect firmware bundle (1-{len(candidates)}): ").strip()
+            try:
+                idx = int(choice) - 1
+                if 0 <= idx < len(candidates):
+                    return candidates[idx]
+            except ValueError:
+                pass
+            print(f"Please enter a number between 1 and {len(candidates)}")
+
+    print(f"\nERROR: No firmware bundle (*.fwbundle) found in {repo_dir}")
+    print(f"       (expected something like {expected})")
+    sys.exit(1)
+
+
+def select_firmware_repo():
+    """Let user choose which firmware repository to source the bundle from."""
     print("\n" + "=" * 80)
-    print("STEP 3: Selecting firmware version")
+    print("STEP 3: Selecting firmware")
     print("=" * 80)
 
-    print("\nFetching available firmware versions...")
-    tags_output = run_command("git tag -l 'v19.*'", cwd="tt-firmware", capture_output=True)
+    print("\n" + "!" * 80)
+    print("WARNING: The 'tt-firmware' repository is now ARCHIVED and no longer maintained.")
+    print("         Prefer 'tt-system-firmware' for up-to-date firmware.")
+    print("!" * 80)
 
-    tags = [tag.strip() for tag in tags_output.split("\n") if tag.strip()]
+    repos = {
+        "1": ("tt-firmware", "tt-firmware  (ARCHIVED - no longer maintained)"),
+        "2": ("tt-system-firmware", "tt-system-firmware  (maintained)"),
+    }
+
+    print("\nAvailable firmware repositories:")
+    for key, (_repo_dir, label) in repos.items():
+        print(f"  {key}. {label}")
+
+    while True:
+        choice = input("\nSelect firmware repository (1-2): ").strip()
+        if choice not in repos:
+            print("Invalid choice. Please enter 1 or 2.")
+            continue
+
+        repo_dir, _label = repos[choice]
+        if repo_dir == "tt-firmware":
+            print("\nYou selected an ARCHIVED repository (tt-firmware); it is no longer maintained.")
+            confirm = input("Continue with tt-firmware anyway? (yes/no): ").strip().lower()
+            if confirm != "yes":
+                print("Please choose again.")
+                continue
+
+        print(f"\n✓ Selected firmware repository: {repo_dir}")
+        return repo_dir
+
+
+def select_firmware_version(repo_dir):
+    """Let user select a v19+ firmware version from the chosen repo's tags."""
+    print(f"\nFetching available firmware versions from {repo_dir} (v19 and above)...")
+    tags_output = run_command("git tag -l 'v*'", cwd=repo_dir, capture_output=True)
+
+    all_tags = [tag.strip() for tag in tags_output.split("\n") if tag.strip()]
+    tags = filter_firmware_tags(all_tags)
 
     if not tags:
-        print("ERROR: No v19.x.y tags found in tt-firmware repository")
+        print(f"ERROR: No v19+ version tags found in {repo_dir} repository")
         sys.exit(1)
 
-    print("\nAvailable firmware versions:")
+    print("\nAvailable firmware versions (v19 and above):")
     for i, tag in enumerate(tags, 1):
         print(f"  {i}. {tag}")
 
@@ -106,16 +186,12 @@ def select_firmware_version():
         except (ValueError, KeyboardInterrupt):
             print("\nInvalid input. Please enter a number.")
 
-    print(f"\nChecking out {selected_tag}...")
-    run_command(f"git checkout {selected_tag}", cwd="tt-firmware")
+    print(f"\nChecking out {selected_tag} in {repo_dir}...")
+    run_command(f"git checkout {selected_tag}", cwd=repo_dir)
 
     # Extract version number (remove 'v' prefix)
     version = selected_tag[1:] if selected_tag.startswith("v") else selected_tag
-    fwbundle_path = f"tt-firmware/fw_pack-{version}.fwbundle"
-
-    if not os.path.exists(fwbundle_path):
-        print(f"\nERROR: Expected firmware bundle not found at: {fwbundle_path}")
-        sys.exit(1)
+    fwbundle_path = find_fwbundle(repo_dir, version)
 
     print(f"\n✓ Firmware bundle found: {fwbundle_path}")
     return fwbundle_path, version
@@ -308,8 +384,9 @@ def main():
         # Step 2: Setup tt-flash venv
         venv_path = setup_tt_flash_venv()
 
-        # Step 3: Select firmware version
-        fwbundle_path, _ = select_firmware_version()
+        # Step 3: Select firmware repository (with archived-repo warning) + version
+        repo_dir = select_firmware_repo()
+        fwbundle_path, _ = select_firmware_version(repo_dir)
 
         # Step 4: Select chip type
         harvesting_cols, expected_chips = select_chip_type()
