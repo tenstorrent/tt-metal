@@ -29,9 +29,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Install syft (https://github.com/anchore/syft, Apache-2.0 license) + oras
 # once per job when SBOM enrichment is requested (see enrich-sbom input).
-# Pinned versions - do not float to latest.
+# Pinned versions and sha256 checksums - do not float to latest. Checksums
+# verified against each project's published *_checksums.txt release asset.
 SYFT_VERSION="v1.46.0"
-ORAS_VERSION="1.2.0"
+SYFT_SHA256="d654f678b709eb53c393d38519d5ed7d2e57205529404018614cfefa0fb2b5ca"
+ORAS_VERSION="1.3.3"
+ORAS_SHA256="9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59"
 
 # Populated by parse_inputs; referenced by later functions.
 CLEAN_TARGETS=()
@@ -100,6 +103,31 @@ build_bake_sets() {
   append_attestation_sets BAKE_SETS
 }
 
+# --- download a release tarball, verify its sha256, install one named binary ---
+# No black-box install scripts: pull the tarball directly and verify it against
+# a pinned checksum before extracting anything from it.
+# Usage: install_pinned_binary <url> <expected_sha256> <binary_name> <dest_dir>
+install_pinned_binary() {
+  local url="$1" expected_sha256="$2" binary_name="$3" dest_dir="$4"
+  local tmp_dir tarball actual_sha256
+  tmp_dir="$(mktemp -d)"
+  tarball="${tmp_dir}/${binary_name}.tar.gz"
+
+  curl -sSfL "$url" -o "$tarball"
+  actual_sha256="$(sha256sum "$tarball" | cut -d' ' -f1)"
+  if [ "$actual_sha256" != "$expected_sha256" ]; then
+    echo "ERROR: sha256 mismatch for ${binary_name} tarball from ${url}" >&2
+    echo "  expected: ${expected_sha256}" >&2
+    echo "  actual:   ${actual_sha256}" >&2
+    rm -rf "$tmp_dir"
+    exit 1
+  fi
+
+  tar -xzf "$tarball" -C "$tmp_dir" "$binary_name"
+  install "${tmp_dir}/${binary_name}" "${dest_dir}/${binary_name}"
+  rm -rf "$tmp_dir"
+}
+
 # --- install syft + oras into a writable temp dir when enrichment is on ---
 install_bake_tools() {
   if [ "${INPUT_ENRICH_SBOM}" = "true" ] && [ "${INPUT_ENABLE_ATTESTATIONS}" = "true" ]; then
@@ -113,23 +141,16 @@ install_bake_tools() {
     export PATH="${TOOL_BIN_DIR}:${PATH}"
 
     if ! command -v syft >/dev/null 2>&1; then
-      echo "Installing syft ${SYFT_VERSION}..."
-      # DOWNLOAD_TAG_INSTALL_SCRIPT=false: skip the installer's default behavior
-      # of re-fetching a version-pinned copy of this same script from Anchore's
-      # own CDN (get.anchore.io) before installing - an unnecessary third-party
-      # dependency that has been observed to fail (HTTP 000/connection refused)
-      # on GitHub-hosted runners. Install directly from the copy we already have.
-      curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
-        | DOWNLOAD_TAG_INSTALL_SCRIPT=false sh -s -- -b "$TOOL_BIN_DIR" "${SYFT_VERSION}"
+      echo "Installing syft ${SYFT_VERSION} (sha256-verified)..."
+      install_pinned_binary \
+        "https://github.com/anchore/syft/releases/download/${SYFT_VERSION}/syft_${SYFT_VERSION#v}_linux_amd64.tar.gz" \
+        "$SYFT_SHA256" "syft" "$TOOL_BIN_DIR"
     fi
     if ! command -v oras >/dev/null 2>&1; then
-      echo "Installing oras ${ORAS_VERSION}..."
-      curl -sSfL "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz" \
-        -o /tmp/oras.tar.gz
-      mkdir -p /tmp/oras-install
-      tar -xzf /tmp/oras.tar.gz -C /tmp/oras-install
-      install /tmp/oras-install/oras "${TOOL_BIN_DIR}/oras"
-      rm -rf /tmp/oras.tar.gz /tmp/oras-install
+      echo "Installing oras v${ORAS_VERSION} (sha256-verified)..."
+      install_pinned_binary \
+        "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz" \
+        "$ORAS_SHA256" "oras" "$TOOL_BIN_DIR"
     fi
   fi
 }
