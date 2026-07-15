@@ -155,8 +155,13 @@ runs:
         if [ "${INPUT_ENRICH_SBOM}" = "true" ] && [ "${INPUT_ENABLE_ATTESTATIONS}" = "true" ]; then
           if ! command -v syft >/dev/null 2>&1; then
             echo "Installing syft ${SYFT_VERSION}..."
+            # DOWNLOAD_TAG_INSTALL_SCRIPT=false: skip the installer's default behavior
+            # of re-fetching a version-pinned copy of this same script from Anchore's
+            # own CDN (get.anchore.io) before installing - an unnecessary third-party
+            # dependency that has been observed to fail (HTTP 000/connection refused)
+            # on GitHub-hosted runners. Install directly from the copy we already have.
             curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
-              | sh -s -- -b /usr/local/bin "${SYFT_VERSION}"
+              | DOWNLOAD_TAG_INSTALL_SCRIPT=false sh -s -- -b /usr/local/bin "${SYFT_VERSION}"
           fi
           if ! command -v oras >/dev/null 2>&1; then
             echo "Installing oras ${ORAS_VERSION}..."
