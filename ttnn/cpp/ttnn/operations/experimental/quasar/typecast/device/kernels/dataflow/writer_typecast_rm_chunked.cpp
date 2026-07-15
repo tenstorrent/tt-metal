@@ -8,7 +8,6 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -36,15 +35,9 @@ void kernel_main() {
         // Process all full chunks for this row
         for (uint32_t chunk_idx = 0; chunk_idx < full_chunks_per_row; ++chunk_idx) {
             cb_out.wait_front(onepage);
-            const uint32_t l1_read_addr = cb_out.get_read_ptr();
 
             const uint32_t byte_offset = chunk_idx * full_chunk_size_bytes;
-            noc.async_write(
-                CoreLocalMem<uint32_t>(l1_read_addr),
-                s,
-                full_chunk_size_bytes,
-                {},
-                {.page_id = row_id, .offset_bytes = byte_offset});
+            noc.async_write(cb_out, s, full_chunk_size_bytes, {}, {.page_id = row_id, .offset_bytes = byte_offset});
 
             noc.async_writes_flushed();
             cb_out.pop_front(onepage);
@@ -53,15 +46,9 @@ void kernel_main() {
         // Process partial chunk if it exists
         if constexpr (partial_chunks_per_row > 0) {
             cb_out.wait_front(onepage);
-            const uint32_t l1_read_addr = cb_out.get_read_ptr();
 
             const uint32_t byte_offset = full_chunks_per_row * full_chunk_size_bytes;
-            noc.async_write(
-                CoreLocalMem<uint32_t>(l1_read_addr),
-                s,
-                partial_chunk_size_bytes,
-                {},
-                {.page_id = row_id, .offset_bytes = byte_offset});
+            noc.async_write(cb_out, s, partial_chunk_size_bytes, {}, {.page_id = row_id, .offset_bytes = byte_offset});
 
             noc.async_writes_flushed();
             cb_out.pop_front(onepage);
