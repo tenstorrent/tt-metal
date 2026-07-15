@@ -301,17 +301,16 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         "kernel config; otherwise precision is silently lost in the unpacker format conversion.");
 
     // welford_unpack_fp32_active is true iff the compute kernel's intake transpose_tile
-    // reads from a CB that carries UnpackToDestFp32, regardless of which CB is used: c_29
-    // in the TILIZE_IN branch (configured below) or the c_19 alias of c_0 in the
-    // non-TILIZE_IN branch (welford_fp32_alias). Both paths route the transpose through
-    // llk_math_transpose_dest, whose math-side init records slots [16, 32) of the math-thread
-    // replay buffer (clobbering welford's LREG2 / LREG3 portions), so the kernel's SFPU re-init
-    // after the transpose must fire iff this is true.
+    // reads from a CB that carries UnpackToDestFp32. Both TILIZE_IN and non-TILIZE_IN use
+    // the c_19 alias (of c_29 / c_0 respectively) for that transpose; the primary index stays
+    // Default for the final-stage FPU sub. The transpose routes through llk_math_transpose_dest,
+    // whose math-side init records slots [16, 32) of the math-thread replay buffer (clobbering
+    // welford's LREG2 / LREG3 portions), so the kernel's SFPU re-init after the transpose must
+    // fire iff this is true.
     const bool welford_unpack_fp32_active =
         use_welford && fp32_dest_acc_en && in_data_format == tt::DataFormat::Float32;
 
-    // welford_fp32_alias is the non-TILIZE_IN sub-case (c_19 alias is only useful when
-    // c_0 isn't itself the consumer of the FP32 transpose, i.e. when tilize_in is false).
+    // welford_fp32_alias is the non-TILIZE_IN sub-case (c_19 alias of c_0 for the welford intake transpose).
     const bool welford_fp32_alias = welford_unpack_fp32_active && !tilize_in;
 
     const uint32_t cb_in0_welford_index =
@@ -452,14 +451,54 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         x_CB_size_group_2 = single_tile_size * 1;
         xmm_CB_size_group_1 = single_tile_size * 3;
         xmm_CB_size_group_2 = single_tile_size * 3;
+        // xmm2 (c_23) is unused by the Welford compute kernel; keep a 1-tile stub so the CB still exists.
+        xmm2_CB_size_group_1 = single_tile_size;
+        // xmm3 (c_22) is only the TILE-output sink when neither gamma nor beta is fused (otherwise output
+        // packs into c_16). Keep a 1-tile stub when unused.
+        const bool xmm3_is_out = !untilize_out && !gamma.has_value() && !beta.has_value();
+        xmm3_CB_size_group_1 = xmm3_is_out ? out_CB_size_group_1 : single_tile_size;
+        if (!equal_batches_per_core) {
+            xmm2_CB_size_group_2 = single_tile_size;
+            xmm3_CB_size_group_2 = xmm3_is_out ? out_CB_size_group_2 : single_tile_size;
+        }
     }
 
     // c_30 (untilize output) and c_20 (row-major reread) scratch for the ROW_MAJOR-output path.
     uint32_t rm_untilize_CB_size_group_1 = in_CB_size_group_1;
     uint32_t rm_untilize_CB_size_group_2 = in_CB_size_group_2;
 
-    // Legacy ROW_MAJOR input: cb_in_resident (c_17) holds the whole per-core group tilized once, reused across
-    // the mean/variance/normalize passes. The host op only dispatches a ROW_MAJOR input here when it fits L1.
+    // Welford + ROW_MAJOR input keeps the whole per-core batch tilized in c_0/c_29 across both welford passes
+    // (the reader gathers it once, the compute tilizes per-batch and reuses it). Only needed for on-core tilize
+    // (tilize_in) -- a TILE input that reached here (e.g. a large RM input the host tilized to a composite)
+    // reads per-out-block and must NOT oversize c_0/c_29.
+    if (use_welford && tilize_in) {
+        const uint32_t welford_batch_tiles_g1 = block_ht_group_1 * per_core_Nt;
+        in0_CB_size_group_1 = welford_batch_tiles_g1 * in_single_tile_size;
+        in_CB_size_group_1 = welford_batch_tiles_g1 * in_single_tile_size;
+        if (!equal_batches_per_core) {
+            const uint32_t welford_batch_tiles_g2 = block_ht_group_2 * per_core_Nt;
+            in0_CB_size_group_2 = welford_batch_tiles_g2 * in_single_tile_size;
+            in_CB_size_group_2 = welford_batch_tiles_g2 * in_single_tile_size;
+        }
+    }
+    // Welford + ROW_MAJOR output: c_16/c_30 span the full per-core width (per_core_Nt), unlike the legacy
+    // per-group block_wt output CBs. Sized per out-block.
+    if (use_welford && untilize_out) {
+        const uint32_t welford_outblk_tiles_g1 = (block_ht_group_1 / num_out_blocks) * per_core_Nt;
+        out_CB_size_group_1 = welford_outblk_tiles_g1 * out_single_tile_size;
+        rm_untilize_CB_size_group_1 = welford_outblk_tiles_g1 * in_single_tile_size;
+        if (!equal_batches_per_core) {
+            const uint32_t welford_outblk_tiles_g2 = (block_ht_group_2 / num_out_blocks) * per_core_Nt;
+            out_CB_size_group_2 = welford_outblk_tiles_g2 * out_single_tile_size;
+            rm_untilize_CB_size_group_2 = welford_outblk_tiles_g2 * in_single_tile_size;
+        }
+    }
+
+    // Legacy ROW_MAJOR input: cb_in_resident (c_17) holds the whole per-core group tilized once so the
+    // mean/variance/normalize passes reuse it (no re-read / re-tilize). The host op (group_norm) guarantees this
+    // group fits L1 before dispatching a ROW_MAJOR input here; when it would not fit, the host converts the input
+    // with ttnn::tilize_with_zero_padding and takes the TILE path instead. Both per-core groups share
+    // block_ht/num_out_blocks/block_wt.
     uint32_t in_tilized_CB_size_group_1 = 0;
     uint32_t in_tilized_CB_size_group_2 = 0;
     if (!use_welford && tilize_in) {
@@ -580,9 +619,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"num_out_blocks", num_out_blocks},
         {"num_channels_per_group", num_channels_per_group},
         {"num_rows_per_group", num_rows_per_batch_per_core_group_1},
-        // Reader pushes the cb_in0_welford alias in lockstep with cb_in0 so compute's welford
-        // section can wait_front on the alias independently. When welford_fp32_alias is false,
-        // cb_in0_welford_index == c_0 and the reader's gated push is skipped.
+        // TILE-input FP32: reader pushes the c_19 alias in lockstep with cb_in0. TILIZE_IN FP32:
+        // compute mirrors the tilized batch onto the alias after tilize (reader does not push it).
+        // When welford_fp32_alias is false the gated pushes are skipped.
         {"welford_fp32_alias", static_cast<uint32_t>(welford_fp32_alias)},
         {"cb_in0_welford", cb_in0_welford_index},
     };
@@ -613,9 +652,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"num_out_blocks", num_out_blocks},
         {"num_channels_per_group", num_channels_per_group},
         {"num_rows_per_group", num_rows_per_batch_per_core_group_2},
-        // Reader pushes the cb_in0_welford alias in lockstep with cb_in0 so compute's welford
-        // section can wait_front on the alias independently. When welford_fp32_alias is false,
-        // cb_in0_welford_index == c_0 and the reader's gated push is skipped.
+        // TILE-input FP32: reader pushes the c_19 alias in lockstep with cb_in0. TILIZE_IN FP32:
+        // compute mirrors the tilized batch onto the alias after tilize (reader does not push it).
+        // When welford_fp32_alias is false the gated pushes are skipped.
         {"welford_fp32_alias", static_cast<uint32_t>(welford_fp32_alias)},
         {"cb_in0_welford", cb_in0_welford_index},
     };
@@ -885,17 +924,12 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
 
     // UnpackToDestFp32 only helps for CBs whose only consumer is an op that supports the
     // unpack-to-DEST path (copy_tile or transpose_tile in fp32 mode):
-    // c_0 (input) has two consumers in the welford kernel: transpose_tile during the
-    //   welford intake (non-TILIZE_IN branch) and sub_tiles_bcast_scalar during the final
-    //   (x - mean) normalization. The latter is FPU on SrcA, so the flag cannot be set on
-    //   c_0 directly. Instead we register c_19 as a second buffer index pointing to the same
-    //   SRAM allocation, with UnpackToDestFp32 set on that alias only. The compute kernel
-    //   reads via c_19 for the welford intake transpose (UnpackToDest path preserves the full
-    //   23-bit mantissa into DEST, which the SFPU welford then consumes) and via c_0 for the
-    //   final-stage FPU sub.
-    // c_29 is the tilized-input CB used by the welford TILIZE_IN path; its only consumer is
-    //   transpose_tile (final normalization reads c_0, not c_29). Pure unary-only path,
-    //   so the flag is safe.
+    // c_0 (TILE input) and c_29 (TILIZE_IN tilized resident) each have two consumers in the
+    //   welford kernel: transpose_tile during intake and sub_tiles_bcast_scalar during the
+    //   final (x - mean) normalization. The latter is FPU on SrcA, so the flag cannot be set
+    //   on either primary index. Instead we register c_19 as a second buffer index pointing to
+    //   the same SRAM (c_0 or c_29), with UnpackToDestFp32 set on that alias only. The compute
+    //   kernel reads via c_19 for the intake transpose and via the primary for the FPU sub.
     //
     // Other FP32 CBs were considered and rejected because, even though they pass through an
     // unpack-to-DEST-capable op, the next consumer is a pack into a CB whose downstream

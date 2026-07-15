@@ -49,10 +49,9 @@ void kernel_main() {
     // welford_unpack_fp32_active flag is needed here. Both the TILIZE_IN and
     // non-TILIZE_IN branches route the welford intake transpose through an alias
     // CB (cb_in_welford_id or cb_in0_welford_id), so the unpack-to-DEST fp32
-    // path is active on both branches iff the alias is active. In the
-    // mcast/no_mcast kernels the TILIZE_IN branch tilizes directly into the
-    // unpack-fp32 CB without an alias, so those kernels need the unpack-fp32
-    // state and the alias gating to be tracked independently.
+    // path is active on both branches iff the alias is active. The mcast/no_mcast
+    // kernels use the same alias pattern (c_19 on c_0 / c_29) but still track
+    // welford_unpack_fp32_active separately for the SFPU re-init after transpose.
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
     constexpr uint32_t cb_in0_welford_id = get_named_compile_time_arg_val("cb_in0_welford");
     constexpr uint32_t cb_in_welford_id = get_named_compile_time_arg_val("cb_in_welford");

@@ -37,13 +37,21 @@ inline constexpr uint64_t kGroupnormTilizedL1UsagePercent = 95;
 // sum individually.
 inline constexpr uint32_t kGroupnormSmallCbAllowanceTiles = 32;
 
-// Host-side estimate of whether a legacy (non-Welford) ROW_MAJOR interleaved input fits in L1 with the whole
-// per-core group tilized resident in c_17; when it does not, group_norm() takes the TILE composite path.
-// Mirrors the program factory's CB-footprint accounting, deliberately conservative (mask CB over-estimated as
-// bf16) so a "fits" answer is always safe to allocate.
-// `per_batch_hw` is padded_shape[1] * padded_shape[2]; `available_l1` is usable per-core L1 (l1_size_per_core
-// minus the base-allocated region); `single_tile_size` is bytes; `num_out_blocks_arg` uses -1 == auto.
-bool groupnorm_legacy_rm_input_fits_l1(
+// Host-side estimate of whether ROW_MAJOR interleaved I/O fits in L1 on-core (input tilized resident, output
+// untilized on-core). When it does not fit, the host op runs a TILE-only composite instead -- tilizing the
+// input and/or untilizing the output around the device op. Mirrors the CB-footprint accounting the program
+// factory uses; deliberately conservative (over-estimates the mask CB as bf16) so a "fits" answer is always
+// safe to allocate.
+// The legacy path keeps one per-group block resident in c_17. The Welford path keeps the whole per-core
+// batch resident in c_0/c_29 when tilize_in, and sizes c_16/c_30 to the full per-core width when
+// untilize_out; those two costs are included only when the corresponding flag is set. The Welford
+// estimate also accounts for the full mask tensor, ex_* reduction CBs, and xmm3 when it is the TILE
+// output sink.
+// `per_batch_hw` is padded_shape[1] * padded_shape[2] (matches the factory heuristic numerator
+// shape[1]*shape[2]*shape[3] when multiplied by W). `available_l1` is usable per-core L1
+// (l1_size_per_core minus the base-allocated region); `single_tile_size` is the bf16 tile size in bytes.
+// `num_out_blocks_arg` uses the -1 == auto-heuristic convention.
+bool groupnorm_rm_input_fits_l1(
     uint32_t Ht,
     uint32_t W,
     uint32_t per_batch_hw,
@@ -57,7 +65,9 @@ bool groupnorm_legacy_rm_input_fits_l1(
     bool has_gamma,
     bool has_beta,
     bool has_mask,
+    bool tilize_in,
     bool untilize_out,
+    bool use_welford,
     uint64_t available_l1);
 
 }  // namespace ttnn::prim

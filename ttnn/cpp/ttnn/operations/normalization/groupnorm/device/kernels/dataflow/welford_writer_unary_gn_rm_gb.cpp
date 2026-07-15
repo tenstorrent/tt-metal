@@ -87,6 +87,11 @@ void kernel_main() {
 
     constexpr uint32_t single_tile_size_bytes = get_tile_size(cb_out_id);
     constexpr uint32_t input_mask_single_tile_size_bytes = get_tile_size(cb_input_mask_id);
+#ifdef UNTILIZE_OUT
+    constexpr uint32_t tile_hw = get_named_compile_time_arg_val("TILE_HW");
+    constexpr uint32_t tile_height = tile_hw / tile_width;
+    const uint32_t datum_size_bytes = single_tile_size_bytes / tile_hw;
+#endif
 
     const auto mask = TensorAccessor(input_mask_args, input_mask_addr);
 
@@ -217,6 +222,35 @@ void kernel_main() {
                 out_block_h_actual = out_block_h_normal;
             }
 
+#ifdef UNTILIZE_OUT
+            const uint32_t out_block_in_tiles = out_block_h_actual * per_core_N;
+            const uint32_t row_chunk_bytes = tile_width * datum_size_bytes;
+            cb_out.wait_front(out_block_in_tiles);
+            const uint32_t l1_read_addr = cb_out.get_read_ptr();
+            uint32_t mt_offset = 0;
+            for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
+                for (uint32_t r = 0; r < tile_height; r++) {
+                    for (uint32_t nt = 0; nt < per_core_N; ++nt) {
+                        const uint32_t out_tile_id =
+                            out_start_id + index_b_offset + out_block_index_offset + mt_offset + nt;
+                        const uint32_t tile_row = out_tile_id / num_channels_tiles;
+                        const uint32_t tile_col = out_tile_id % num_channels_tiles;
+                        const uint32_t rm_row = (tile_row * tile_height) + r;
+                        const uint32_t l1_addr =
+                            l1_read_addr + ((((mt * tile_height) + r) * per_core_N + nt) * row_chunk_bytes);
+                        noc.async_write(
+                            CoreLocalMem<uint32_t>(l1_addr),
+                            dst_a,
+                            row_chunk_bytes,
+                            {},
+                            {.page_id = rm_row, .offset_bytes = tile_col * row_chunk_bytes});
+                    }
+                }
+                mt_offset += num_channels_tiles;
+            }
+            noc.async_write_barrier();
+            cb_out.pop_front(out_block_in_tiles);
+#else
             uint32_t mt_offset = 0;
             for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
                 for (uint32_t nt = 0; nt < per_core_N; ++nt) {
@@ -233,6 +267,7 @@ void kernel_main() {
                 }
                 mt_offset += num_channels_tiles;
             }
+#endif
             out_block_index_offset += out_block_h_actual * num_channels_tiles;
         }
         index_b_offset += num_tiles_per_batch;

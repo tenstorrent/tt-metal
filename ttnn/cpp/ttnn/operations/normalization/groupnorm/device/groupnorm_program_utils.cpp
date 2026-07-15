@@ -22,7 +22,7 @@ uint32_t groupnorm_tilized_group_tiles(uint32_t block_ht, uint32_t num_out_block
     return num_out_blocks_padded * out_block_h_normal * block_wt;
 }
 
-bool groupnorm_legacy_rm_input_fits_l1(
+bool groupnorm_rm_input_fits_l1(
     uint32_t Ht,
     uint32_t W,
     uint32_t per_batch_hw,
@@ -36,7 +36,9 @@ bool groupnorm_legacy_rm_input_fits_l1(
     bool has_gamma,
     bool has_beta,
     bool has_mask,
+    bool tilize_in,
     bool untilize_out,
+    bool use_welford,
     uint64_t available_l1) {
     // Grid geometry, replicating the program factory (identical formulas in the mcast and no-mcast factories).
     uint32_t num_virtual_cols = std::min(grid_x, num_groups);
@@ -59,6 +61,7 @@ bool groupnorm_legacy_rm_input_fits_l1(
 
     const auto [block_wt, unused_num_groups_per_reset] = find_max_tile_span(per_core_N, num_channels_per_group);
     (void)unused_num_groups_per_reset;
+
     // Per-core per-batch tile height. Matches factory: when num_batches > num_shards_r (== num_virtual_rows)
     // each core holds multiple batches (block_ht = Ht/num_batches); otherwise a batch is split across rows
     // (block_ht = per_core_Mt). Equality yields the same value either way.
@@ -83,6 +86,54 @@ bool groupnorm_legacy_rm_input_fits_l1(
         num_out_blocks = num_out_blocks_arg == 0 ? 1 : static_cast<uint32_t>(num_out_blocks_arg);
     }
     num_out_blocks = std::min(num_out_blocks, block_ht);
+
+    // Welford ROW_MAJOR footprint mirrors the factory overrides:
+    // - tilize_in: c_0 + c_29 hold the whole per-core batch (block_ht * per_core_Nt each)
+    // - untilize_out: c_16 + c_30 span the full per-core width per out-block
+    // - otherwise those CBs stay at the (smaller) per-group TILE-path size
+    // - x/xmm are 1/3 tiles; xmm2 is unused (1-tile stub); xmm3 is a full out-block only when it is
+    //   the TILE output sink (!untilize_out && !gamma && !beta)
+    // - mask CB is the full mask tensor (num_groups * mask_block_wt tiles), not the legacy 2-tile staging CB
+    if (use_welford) {
+        const uint64_t out_block_h = static_cast<uint64_t>(block_ht / num_out_blocks);
+        const uint64_t group_outblk = out_block_h * block_wt * single_tile_size;
+        const uint64_t full_outblk = out_block_h * per_core_Nt * single_tile_size;
+        const uint64_t batch_tiles = static_cast<uint64_t>(block_ht) * per_core_Nt;
+        const uint32_t num_groups_per_core = num_groups / num_virtual_cols;
+        // Mask width uses the full channel axis (matches create_group_norm_input_mask).
+        const auto [mask_block_wt, mask_unused] = find_max_tile_span(W, num_channels_per_group);
+        (void)mask_unused;
+
+        uint64_t welford_est = static_cast<uint64_t>(kGroupnormSmallCbAllowanceTiles) * single_tile_size;
+        if (tilize_in) {
+            welford_est += 2 * batch_tiles * single_tile_size;  // c_0 (RM gather) + c_29 (tilized resident)
+        } else {
+            welford_est += 2 * group_outblk;  // c_0 + c_29 per-out-block on the TILE-input path
+        }
+        if (untilize_out) {
+            welford_est += 2 * full_outblk;  // c_16 (tiled out) + c_30 (untilized out)
+        } else {
+            welford_est += group_outblk;  // c_16 per-out-block on the TILE-output path
+        }
+        // x (1) + xmm (3); xmm2 stub covered by the small-CB allowance
+        welford_est += 4 * static_cast<uint64_t>(single_tile_size);
+        // xmm3 (c_22) is the TILE-output sink only when neither gamma nor beta is fused
+        if (!untilize_out && !has_gamma && !has_beta) {
+            welford_est += group_outblk;
+        }
+        // ex_partial (2 tiles) + ex_global (2 * ngpc) + ex2pe (ngpc)
+        welford_est += static_cast<uint64_t>(2 + 3 * num_groups_per_core) * single_tile_size;
+        if (has_gamma) {
+            welford_est += static_cast<uint64_t>(per_core_Nt) * single_tile_size;
+        }
+        if (has_beta) {
+            welford_est += static_cast<uint64_t>(per_core_Nt) * single_tile_size;
+        }
+        if (has_mask) {
+            welford_est += static_cast<uint64_t>(num_groups) * mask_block_wt * single_tile_size;
+        }
+        return welford_est * 100 <= available_l1 * kGroupnormTilizedL1UsagePercent;
+    }
 
     // CB footprint, mirroring the factory's resident-path estimate (bf16 legacy). Seven per-out-block CBs
     // (in0/in/out/x/xmm/xmm2/xmm3), the resident tilized group (c_17), a flat small-CB allowance, plus

@@ -82,10 +82,10 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
                     * - BFLOAT16
                       - TILE, ROW_MAJOR
 
-                ROW_MAJOR input is supported only for sharded inputs. An interleaved
-                (non-sharded) input must be in TILE layout; convert it first with
-                ``ttnn.to_layout(input, ttnn.TILE_LAYOUT)`` (and convert the output
-                back with ``ttnn.to_layout`` if a ROW_MAJOR result is required).
+                ROW_MAJOR interleaved (non-sharded) input/output is supported on both the legacy and
+                Welford paths. When the per-core tilized footprint would not fit in L1, the op
+                automatically falls back to a host tilize and/or untilize composite around a TILE-only
+                device path. Per-batch H*W must still be a multiple of the tile height.
 
                 .. list-table:: weight (gamma) and bias (beta)
                     :header-rows: 1

@@ -14,7 +14,13 @@
 
 // Gather one out-block of a ROW_MAJOR interleaved DRAM tensor into `cb`, row by row, so the
 // compute kernel can tilize it on-core. Shared by the TILIZE_IN input read and the UNTILIZE_OUT
-// output re-read in both the mcast sender and receiver GroupNorm readers.
+// output re-read in the legacy mcast sender/receiver readers, and by the Welford readers.
+//
+// Two calling conventions:
+//  - legacy: one call per group -- `block_w` is the group's tile span and `index_g_offset` its
+//    column offset; the last group can run past the channels, so columns are clamped.
+//  - Welford: one call for the whole per-core batch -- `block_w` is per_core_N and
+//    `index_g_offset` is 0; the clamp is then inert because per_core_N <= num_channels_tiles.
 //
 // tile_width / tile_height / block_w / datum_size_bytes are compile-time so row_chunk_bytes stays
 // constexpr. `accessor` and `base_start_id` select the source tensor (input vs previous output).

@@ -12,6 +12,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "groupnorm_reader_rm.hpp"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -28,6 +29,7 @@ void kernel_main() {
     constexpr uint32_t per_core_M = get_named_compile_time_arg_val("per_core_M");
     constexpr uint32_t tile_height = get_named_compile_time_arg_val("TILE_HEIGHT");
     constexpr uint32_t tile_width = get_named_compile_time_arg_val("TILE_WIDTH");
+    constexpr uint32_t datum_size_bytes = get_named_compile_time_arg_val("datum_size_bytes");
 
     constexpr uint32_t block_h = get_named_compile_time_arg_val("block_h");
     constexpr uint32_t block_w = get_named_compile_time_arg_val("block_w");
@@ -127,6 +129,24 @@ void kernel_main() {
             }
 
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
+#ifdef TILIZE_IN
+            // ROW_MAJOR input: gather this out-block row-major into cb_in0 for the compute kernel's
+            // per-batch on-core tilize (the pushes accumulate to one whole batch in cb_in0). Whole-width
+            // gather (per_core_N, index_g_offset 0) via the shared helper that the legacy readers use.
+            const uint32_t out_block_in_tiles = out_block_h_actual * per_core_N;
+            groupnorm_gather_rm_block<tile_width, tile_height, per_core_N, datum_size_bytes>(
+                noc,
+                src_a,
+                cb_in0,
+                start_id,
+                mt_offset,
+                index_b_offset,
+                /*index_g_offset=*/0,
+                num_channels_tiles,
+                out_block_h_actual,
+                out_block_in_tiles);
+            mt_offset += out_block_h_actual * num_channels_tiles;
+#else
             for (uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
                 for (uint32_t nt = 0; nt < per_core_N; ++nt) {
                     cb_in0.reserve_back(1);
@@ -150,6 +170,7 @@ void kernel_main() {
                 }
                 mt_offset += num_channels_tiles;
             }
+#endif
 #endif
         }
 
@@ -193,6 +214,7 @@ void kernel_main() {
         cb_ex_partial.pop_front(2);
         cb_ex_global.push_back(2 * num_groups);
 
+#ifndef TILIZE_IN
         mt_offset = 0;
         for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
             uint32_t out_block_h_actual;
@@ -201,7 +223,6 @@ void kernel_main() {
             } else {
                 out_block_h_actual = out_block_h_normal;
             }
-#if !defined(READER_REPACK) or !defined(TILIZE_IN)
             for (uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
                 for (uint32_t nt = 0; nt < per_core_N; ++nt) {
                     cb_in0.reserve_back(1);
@@ -225,8 +246,8 @@ void kernel_main() {
                 }
                 mt_offset += num_channels_tiles;
             }
-#endif
         }
+#endif
         index_b_offset += num_tiles_per_batch;
     }
 

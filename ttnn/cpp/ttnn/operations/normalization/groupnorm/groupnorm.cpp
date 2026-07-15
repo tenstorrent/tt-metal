@@ -374,47 +374,75 @@ Tensor group_norm(
             reciprocals);
     }
 
-    // Only reroute when per-batch H*W is tile-aligned. Otherwise tilizing would zero-pad the spatial dim
-    // (corrupting mean/variance), so leave it ROW_MAJOR for the device op to reject.
+    // ROW_MAJOR I/O runs on-core (input tilized resident, output untilized on-core) when the per-core footprint
+    // fits L1; otherwise it falls back to a host composite: tilize the input and/or untilize the output around a
+    // TILE-only device op. Only reroute when per-batch H*W is tile-aligned -- otherwise tilizing would zero-pad
+    // the spatial dim (corrupting mean/variance), so leave it ROW_MAJOR for the device op to reject.
     const uint32_t per_batch_hw = input_padded_shape[1] * input_padded_shape[2];
     const uint32_t tile_h = input_tensor.tensor_spec().tile().get_height();
     const bool per_batch_hw_tile_aligned = per_batch_hw % tile_h == 0;
+    const bool rm_input = input_tensor.layout() == Layout::ROW_MAJOR;
+    const bool rm_output = output_layout.value_or(input_tensor.layout()) == Layout::ROW_MAJOR;
 
-    // Legacy (non-Welford) ROW_MAJOR interleaved input whose per-core group would not fit in L1 as a resident
-    // tilized block: convert it once with ttnn::tilize_with_zero_padding and run the TILE-input path
-    // (composite), rather than re-gathering and re-tilizing on-core on every one of the three passes.
-    // Welford ROW_MAJOR is rejected upstream, so this only applies to the legacy path.
     Tensor gn_input = input_tensor;
-    if (!use_welford && input_tensor.layout() == Layout::ROW_MAJOR && per_batch_hw_tile_aligned) {
+    bool composite_output = false;
+    bool gn_inplace = inplace.value_or(false);
+    if ((rm_input || (use_welford && rm_output)) && per_batch_hw_tile_aligned) {
         const uint32_t Ht = nhw / ttnn::types::TILE_SIZE;
         const uint32_t tile_w = input_tensor.tensor_spec().tile().get_width();
         const uint64_t base_l1 =
             input_tensor.device()->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
         const uint64_t available_l1 = input_tensor.device()->l1_size_per_core() - base_l1;
-        const bool fits = ttnn::prim::groupnorm_legacy_rm_input_fits_l1(
-            Ht,
-            input_padded_shape[3],
-            per_batch_hw,
-            input_padded_shape[0],
-            core_grid->x,
-            core_grid->y,
-            static_cast<uint32_t>(num_groups),
-            core_grid_auto_selected ? -1 : num_out_blocks.value_or(1),
-            tile_w,
-            tile_h * tile_w * input_tensor.element_size(),
-            gamma.has_value(),
-            beta.has_value(),
-            /*has_mask=*/true,  // a mask CB is always allocated (get_mask_tensor creates one if absent)
-            output_layout.value_or(input_tensor.layout()) == Layout::ROW_MAJOR,
-            available_l1);
-        if (!fits) {
-            log_debug(
-                tt::LogOp,
-                "group_norm: ROW_MAJOR input does not fit L1 as a resident tilized group; "
-                "tilizing on host and running the TILE path (composite).");
-            // Keep the intermediate in the input's memory config (typically DRAM interleaved). Tilizing into
-            // output_mem_config would be wrong if the caller requested a different output config.
+        const auto fits_l1 = [&](bool tilize_in, bool untilize_out) {
+            return ttnn::prim::groupnorm_rm_input_fits_l1(
+                Ht,
+                input_padded_shape[3],
+                per_batch_hw,
+                input_padded_shape[0],
+                core_grid->x,
+                core_grid->y,
+                static_cast<uint32_t>(num_groups),
+                core_grid_auto_selected ? -1 : num_out_blocks.value_or(1),
+                tile_w,
+                tile_h * tile_w * input_tensor.element_size(),
+                gamma.has_value(),
+                beta.has_value(),
+                /*has_mask=*/true,  // a mask CB is always allocated (get_mask_tensor creates one if absent)
+                tilize_in,
+                untilize_out,
+                use_welford,
+                available_l1);
+        };
+        // Only Welford needs the output composite (its output CBs are the wide ones); legacy untilizes
+        // its small per-group output CBs on-core and never composites the output.
+        if (use_welford) {
+            // Decide tilize and untilize independently so a shape that fits resident input but not
+            // wide output CBs can keep on-core tilize and only composite the output (and vice versa).
+            if (rm_input && !fits_l1(/*tilize_in=*/true, /*untilize_out=*/false)) {
+                log_debug(
+                    tt::LogOp, "group_norm: ROW_MAJOR input does not fit L1 on-core; using host tilize composite.");
+                // Keep the intermediate in the input's memory config (typically DRAM interleaved).
+                // Tilizing into output_mem_config would be wrong if the caller requested a different
+                // output config.
+                gn_input = ttnn::tilize_with_zero_padding(input_tensor, input_tensor.memory_config());
+                // TILE layout forbids inplace; the tilized tensor is also not the caller's buffer.
+                gn_inplace = false;
+            }
+            if (rm_output) {
+                // Re-check with the layout the device will actually see (host may have tilized above).
+                const bool device_tilize_in = gn_input.layout() == Layout::ROW_MAJOR;
+                if (!fits_l1(/*tilize_in=*/device_tilize_in, /*untilize_out=*/true)) {
+                    log_debug(
+                        tt::LogOp,
+                        "group_norm: ROW_MAJOR output does not fit L1 on-core; using host untilize composite.");
+                    composite_output = true;
+                    gn_inplace = false;
+                }
+            }
+        } else if (rm_input && !fits_l1(/*tilize_in=*/true, /*untilize_out=*/rm_output)) {
+            log_debug(tt::LogOp, "group_norm: ROW_MAJOR input does not fit L1 on-core; using host tilize composite.");
             gn_input = ttnn::tilize_with_zero_padding(input_tensor, input_tensor.memory_config());
+            gn_inplace = false;
         }
     }
 
@@ -425,10 +453,10 @@ Tensor group_norm(
         .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
         .im_data_format = DataType::BFLOAT16,
         .out_data_format = DataType::BFLOAT16,
-        .inplace = inplace.value_or(false),
-        .output_layout = output_layout.value_or(input_tensor.layout()),
+        .inplace = gn_inplace,
+        .output_layout = composite_output ? Layout::TILE : output_layout.value_or(input_tensor.layout()),
         .num_out_blocks = core_grid_auto_selected ? -1 : num_out_blocks.value_or(1)};
-    return ttnn::prim::group_norm(
+    Tensor output = ttnn::prim::group_norm(
         gn_input,
         epsilon,
         static_cast<uint32_t>(num_groups),
@@ -441,6 +469,10 @@ Tensor group_norm(
         mask,
         negative_mask,
         reciprocals);
+    if (composite_output) {
+        output = ttnn::to_layout(output, Layout::ROW_MAJOR, /*dtype=*/std::nullopt, output_mem_config);
+    }
+    return output;
 }
 
 }  // namespace ttnn

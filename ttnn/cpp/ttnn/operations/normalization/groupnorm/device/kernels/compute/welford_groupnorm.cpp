@@ -119,20 +119,21 @@ void kernel_main() {
     // input cbs
     constexpr uint32_t cb_in0_id = tt::CBIndex::c_0;
     constexpr uint32_t cb_in_id = tt::CBIndex::c_29;
-    // Welford-fp32 alias for cb_in0 (non-TILIZE_IN path). Shares L1 memory with cb_in0 but has
-    // its own buffer index configured with unpack_to_dest_mode=UnpackToDestFp32
-    // cb_in0 is in Default mode so the final-stage sub_tiles_bcast_scalar (FPU on SrcA) keeps working.
+    // Welford-fp32 alias for the intake CB. Shares L1 with the primary input CB but has its own
+    // buffer index configured with unpack_to_dest_mode=UnpackToDestFp32:
+    //   - non-TILIZE_IN: aliases c_0 (cb_in0); final-stage FPU sub keeps reading c_0 (Default/SrcA)
+    //   - TILIZE_IN: aliases c_29 (cb_in); final-stage FPU sub keeps reading c_29 (Default/SrcA)
+    // The primary index must stay Default -- UnpackToDestFp32 cannot share a buffer index with an
+    // FPU SrcA consumer (same constraint as the sharded welford kernel).
     constexpr uint32_t cb_in0_welford_id = get_named_compile_time_arg_val("cb_in0_welford");
     // Boolean indicating whether the welford kernel uses the alias CB.
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
-    // True when the welford intake CB is configured with UnpackToDestFp32, i.e. the FP32
-    // path. Covers both the TILIZE_IN branch (intake CB is c_29) and the non-TILIZE_IN
-    // alias branch (intake CB is cb_in0_welford, see welford_fp32_alias). On this path,
-    // transpose_tile routes through llk_math_transpose_dest, whose math-side init
-    // records slots [16, 32) of the math-thread replay buffer, clobbering welford's
-    // LREG2 / LREG3 portions, so the welford SFPU state must be re-initialized after each
-    // transpose. For bf16 input, transpose routes through SrcA without touching the
-    // math-thread replay buffer, so no re-init is needed.
+    // True when the welford intake transpose reads via an UnpackToDestFp32 CB (the alias when
+    // active). On this path transpose_tile routes through llk_math_transpose_dest, whose math-side
+    // init records slots [16, 32) of the math-thread replay buffer, clobbering welford's LREG2 /
+    // LREG3 portions, so the welford SFPU state must be re-initialized after each transpose. For
+    // bf16 input, transpose routes through SrcA without touching the math-thread replay buffer,
+    // so no re-init is needed.
     constexpr bool welford_unpack_fp32_active = get_named_compile_time_arg_val("welford_unpack_fp32_active") != 0;
     constexpr uint32_t cb_eps_id = tt::CBIndex::c_3;
     constexpr uint32_t cb_gamma_id = tt::CBIndex::c_5;
@@ -155,28 +156,19 @@ void kernel_main() {
     // output cb
     constexpr uint32_t cb_out0_id = tt::CBIndex::c_16;
 #ifdef UNTILIZE_OUT
-    constexpr uint32_t cb_out_id = tt::CBIndex::c_30;
-#else
-    constexpr uint32_t cb_out_id = (do_gamma or do_beta) ? cb_out0_id : cb_reread_write_out_id;
-#endif
-
-#ifdef UNTILIZE_OUT
-    constexpr int cb_outgamma_id = cb_in_id;
-    constexpr int cb_inbeta_id = do_gamma ? cb_outgamma_id : cb_reread_write_out_id;
-    constexpr int cb_outbeta_id = do_gamma ? cb_out_id : cb_in_id;
-    constexpr int cb_untilize_in_id = (do_gamma and not do_beta) ? cb_outgamma_id
-                                      : do_beta                  ? cb_outbeta_id
-                                                                 : cb_reread_write_out_id;
+    // ROW_MAJOR output: the normalize loop packs the tiled result into cb_out0 (c_16), which is then
+    // untilized on-core into the row-major output CB c_30 for the writer to scatter. Affine
+    // (gamma/beta) is applied via cb_x in-place before that pack, so no separate outgamma/outbeta CBs.
+    constexpr uint32_t cb_out_id = cb_out0_id;
+    constexpr int cb_untilize_in_id = cb_out0_id;
     constexpr int cb_untilize_out_id =
 #ifdef READER_REPACK
         cb_repack_out_id;
 #else
-        cb_out0_id;
+        tt::CBIndex::c_30;
 #endif
 #else
-    constexpr int cb_outgamma_id = do_beta ? cb_in_id : cb_out0_id;
-    constexpr int cb_inbeta_id = do_gamma ? cb_outgamma_id : cb_reread_write_out_id;
-    constexpr int cb_outbeta_id = cb_out0_id;
+    constexpr uint32_t cb_out_id = (do_gamma or do_beta) ? cb_out0_id : cb_reread_write_out_id;
 #endif
 
     CircularBuffer cb_beta(cb_beta_id);
@@ -196,39 +188,20 @@ void kernel_main() {
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
     binary_op_init_common(cb_in0_id, cb_in0_id, cb_in_id);
-// Tilize in0 -> in (row-major to tiled)
 #ifdef READER_REPACK
     constexpr uint32_t cb_in_rm_id = cb_repack_id;
-    compute_kernel_lib::tilize<
-        per_core_N,
-        cb_in_rm_id,
-        cb_in_id,
-        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #else
     constexpr uint32_t cb_in_rm_id = cb_in0_id;
-    compute_kernel_lib::tilize<
-        per_core_N,
-        cb_in_rm_id,
-        cb_in_id,
-        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::tilize_config::WaitMode::NoWait,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
-    cb_in.wait_front(per_core_MN);
+    constexpr uint32_t welford_batch_tiles = block_h * per_core_N;
 #else
     binary_op_init_common(cb_in0_id, cb_in0_id, cb_in0_id);
 #endif
 
     if constexpr (welford_unpack_fp32_active) {
-        // Reconfigure the transpose op for the welford intake CB. The factory marks this CB
-        // with UnpackToDestFp32: c_29 in the TILIZE_IN branch, c_19 in the non-TILIZE_IN alias branch.
-#ifdef TILIZE_IN
-        transpose_init(cb_in_id);
-#else
+        // Reconfigure the transpose op for the UnpackToDestFp32 alias (c_19), used for welford
+        // intake on both TILIZE_IN (aliases c_29) and non-TILIZE_IN (aliases c_0).
         transpose_init(cb_in0_welford_id);
-#endif
     }
 
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
@@ -257,11 +230,32 @@ void kernel_main() {
     }
 
     for (uint32_t b = 0; b < num_batches; ++b) {
+#ifdef TILIZE_IN
+        compute_kernel_lib::tilize<
+            per_core_N,
+            cb_in_rm_id,
+            cb_in_id,
+            compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+            compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(block_h);
+        cb_in.wait_front(welford_batch_tiles);
+        if constexpr (welford_fp32_alias) {
+            // Mirror the tilized batch onto the UnpackToDestFp32 alias (shares SRAM with c_29;
+            // independent FIFO pointers need their own push/wait).
+            cb_in0_welford.reserve_back(welford_batch_tiles);
+            cb_in0_welford.push_back(welford_batch_tiles);
+            cb_in0_welford.wait_front(welford_batch_tiles);
+        }
+#endif
         cb_ex_partial.reserve_back(2);
         tile_regs_acquire();
         welford_init();
 
         uint32_t block_xy_coord = 0;
+
+#ifdef TILIZE_IN
+        uint32_t stats_tile_idx = 0;
+#endif
 
         for (uint32_t g = 0; g < num_groups; ++g) {
             welford_save_state(mean_dst, g);
@@ -292,6 +286,18 @@ void kernel_main() {
                 uint32_t curr_xy_coord = block_xy_coord;
 
                 for (uint32_t nt = 0; nt < per_core_N; ++nt) {
+#ifdef TILIZE_IN
+                    // ROW_MAJOR: batch is pre-tilized into cb_in. FP32 intake reads the
+                    // UnpackToDestFp32 alias; bf16 reads cb_in directly.
+                    if constexpr (welford_fp32_alias) {
+                        transpose_init(cb_in0_welford_id);
+                        transpose_tile(cb_in0_welford_id, stats_tile_idx, input_dst);
+                    } else {
+                        transpose_init(cb_in_id);
+                        transpose_tile(cb_in_id, stats_tile_idx, input_dst);
+                    }
+                    ++stats_tile_idx;
+#else
                     cb_in0.wait_front(1);
                     if constexpr (welford_fp32_alias) {
                         // The reader pushes cb_in0 and cb_in0_welford in separate push_back
@@ -300,10 +306,6 @@ void kernel_main() {
                         // second before transpose_tile reads via the alias below.
                         cb_in0_welford.wait_front(1);
                     }
-#ifdef TILIZE_IN
-                    transpose_init(cb_in_id);
-                    transpose_tile(cb_in_id, 0, input_dst);
-#else
                     transpose_init(cb_in0_welford_id);
                     transpose_tile(cb_in0_welford_id, 0, input_dst);
 #endif
@@ -357,10 +359,12 @@ void kernel_main() {
                             break;
                         }
                     }
+#ifndef TILIZE_IN
                     cb_in0.pop_front(1);
                     if constexpr (welford_fp32_alias) {
                         cb_in0_welford.pop_front(1);
                     }
+#endif
                 }
                 block_xy_coord += num_channels_per_group;
             }
@@ -405,6 +409,9 @@ void kernel_main() {
         cb_ex2pe.wait_front(num_groups);
 
         // Start Final Normalization
+#ifdef TILIZE_IN
+        uint32_t norm_tile_idx = 0;
+#endif
         for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
             uint32_t out_block_h_actual = out_block_h_normal;
             if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
@@ -430,6 +437,12 @@ void kernel_main() {
                 uint32_t block_w_index = 0;
 
                 for (uint32_t nt = 0; nt < per_core_N; ++nt) {
+#ifdef TILIZE_IN
+                    constexpr uint32_t cb_norm_in_id = cb_in_id;
+                    const uint32_t norm_in_idx = norm_tile_idx;
+#else
+                    constexpr uint32_t cb_norm_in_id = cb_in0_id;
+                    const uint32_t norm_in_idx = 0;
                     cb_in0.wait_front(1);
                     if constexpr (welford_fp32_alias) {
                         // The reader pushes cb_in0 and cb_in0_welford in lockstep; wait on the
@@ -437,6 +450,7 @@ void kernel_main() {
                         // the reader's wr_ptr advance on the alias.
                         cb_in0_welford.wait_front(1);
                     }
+#endif
 
                     uint32_t group_offset = 0;
                     for (uint32_t g = min_group; g < num_groups; ++g) {
@@ -444,11 +458,11 @@ void kernel_main() {
 
                         // // Now let us do the actual computation for the current group here
                         // // a. x-u
-                        sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);
+                        sub_tiles_bcast_scalar_init_short(cb_norm_in_id, cb_ex_global_id);
                         reconfig_data_format_srcb(cb_eps_id, cb_ex_global_id);
 
                         tile_regs_acquire();
-                        sub_tiles_bcast_scalar(cb_in0_id, cb_ex_global_id, 0, 0 + (g << 1), dst0);
+                        sub_tiles_bcast_scalar(cb_norm_in_id, cb_ex_global_id, norm_in_idx, 0 + (g << 1), dst0);
                         tile_regs_commit();
                         tile_regs_wait();
                         pack_tile(dst0, cb_xmm_id);
@@ -542,10 +556,14 @@ void kernel_main() {
                             break;
                         }
                     }
+#ifdef TILIZE_IN
+                    ++norm_tile_idx;
+#else
                     cb_in0.pop_front(1);
                     if constexpr (welford_fp32_alias) {
                         cb_in0_welford.pop_front(1);
                     }
+#endif
 
                     if constexpr (do_gamma) {
                         mul_bcast_rows_init_short(cb_x_id, cb_gamma_id);
@@ -604,10 +622,18 @@ void kernel_main() {
                 cb_untilize_out_id,
                 compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
                 compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
-                compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+                compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+                out_block_h_actual);
 #endif
         }
         // End Final Normalization
+
+#ifdef TILIZE_IN
+        cb_in.pop_front(welford_batch_tiles);
+        if constexpr (welford_fp32_alias) {
+            cb_in0_welford.pop_front(welford_batch_tiles);
+        }
+#endif
 
         cb_ex_global.pop_front(2 * num_groups);
         cb_ex2pe.pop_front(num_groups);
