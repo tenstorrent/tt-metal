@@ -307,7 +307,7 @@ def _fullpipe_e2e(repo_root: Path, mcp_env: dict, devices: str, label: str) -> f
             pass
         print(
             f"  [optimize/cc] FULL-model end-to-end ({label}) TIMED OUT after {timeout_s}s (likely a "
-            f"device wedge / leaked mesh) — killed the whole process group + {_reset_devices(devices)}"
+            f"device wedge / leaked mesh) — killed the whole process group + {_reclaim_device(devices)}"
         )
         return None
     except Exception as exc:  # noqa: BLE001
@@ -516,6 +516,42 @@ def _reset_devices(devices: str) -> str:
         return "device reset FAILED (%s)" % exc
 
 
+def _reclaim_device(devices: str) -> str:
+    """UNIVERSAL device reclaim used at EVERY recovery point: kill every process holding
+    /dev/tenstorrent (except this process + its ancestors, so the supervisor/self is never killed),
+    then tt-smi -r the chips. A wedge is cleared no matter WHO holds the device -- a stray child, a
+    hung profiler, a busy pytest, or a leaked resident mesh. The one holder this cannot kill is the
+    caller's own tree; an orchestrator self-hold is handled by exiting to the supervisor, which then
+    reclaims from outside."""
+    import glob as _glob
+
+    protected = set()
+    _p = os.getpid()
+    for _ in range(64):
+        if _p <= 1:
+            break
+        protected.add(_p)
+        try:
+            _p = int(open("/proc/%d/stat" % _p).read().split()[3])
+        except Exception:  # noqa: BLE001
+            break
+    holders = set()
+    for _n in _glob.glob("/dev/tenstorrent/*"):
+        try:
+            _r = subprocess.run(["fuser", _n], capture_output=True, text=True, timeout=30)
+            holders.update(int(_t) for _t in (_r.stdout + " " + _r.stderr).split() if _t.strip().isdigit())
+        except Exception:  # noqa: BLE001
+            pass
+    killed = []
+    for _pid in holders - protected:
+        try:
+            os.kill(_pid, signal.SIGKILL)
+            killed.append(_pid)
+        except Exception:  # noqa: BLE001
+            pass
+    return "reclaimed device (killed holders %s) + %s" % (killed or "none", _reset_devices(devices))
+
+
 def _run_device_proc(
     cmd, cwd, env, devices: str, timeout_s: int, label: str = "", reset_on_timeout: bool = True, capture: bool = True
 ):
@@ -547,7 +583,7 @@ def _run_device_proc(
             proc.communicate(timeout=30)
         except Exception:  # noqa: BLE001
             pass
-        tail = _reset_devices(devices) if reset_on_timeout else "process group killed"
+        tail = _reclaim_device(devices) if reset_on_timeout else "process group killed"
         print(
             f"  [optimize/cc] {label or 'device subprocess'} TIMED OUT after {timeout_s}s "
             f"(likely a device wedge / leaked mesh) -- killed the whole process group + {tail}"
@@ -616,7 +652,7 @@ def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_lo
         proc.wait(timeout=30)
     except Exception:  # noqa: BLE001
         pass
-    rst = _reset_devices(devices)
+    rst = _reclaim_device(devices)
     print(
         "  [optimize/cc] WATCHDOG: round stalled %ds with no forward progress (likely device wedge) — "
         "killed the round + %s; next round starts a FRESH mcp server on the reset mesh." % (stall_sec, rst)
@@ -828,6 +864,15 @@ def optimize_pipeline(
         if wedged:
             wedge_strikes += 1
             if wedge_strikes >= max_wedge:
+                if os.environ.get("PERF_MCP_SUPERVISED") == "1":
+                    print(
+                        "  [optimize/cc] WATCHDOG: %d consecutive wedged rounds — exiting so the supervisor "
+                        "reclaims the device (kills holders + reset) and restarts; ladder state is preserved."
+                        % wedge_strikes,
+                        flush=True,
+                    )
+                    _reclaim_device(devices)
+                    os._exit(75)
                 print(
                     "  [optimize/cc] WATCHDOG: %d consecutive wedged rounds — aborting this pipeline "
                     "(all committed wins are safe)." % wedge_strikes

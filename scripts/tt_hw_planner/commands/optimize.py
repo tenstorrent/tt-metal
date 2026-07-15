@@ -377,11 +377,17 @@ def cmd_optimize(args) -> int:
                 f"-- resetting device + restarting (restart {_n + 1}/{_max}); ladder state is preserved on disk.",
                 flush=True,
             )
-            if _ttsmi:
-                try:
-                    _sp.run([_ttsmi, "-r"], timeout=420, capture_output=True, text=True)
-                except Exception as _e:  # noqa: BLE001
-                    print(f"  [optimize/supervisor] tt-smi -r skipped: {_e}", flush=True)
+            try:
+                from models.experimental.perf_automation.cc_optimize.run import _reclaim_device as _rcl
+
+                print("  [optimize/supervisor] " + _rcl(getattr(args, "devices", "all") or "all"), flush=True)
+            except Exception as _e:  # noqa: BLE001
+                if _ttsmi:
+                    try:
+                        _sp.run([_ttsmi, "-r"], timeout=420, capture_output=True, text=True)
+                    except Exception:  # noqa: BLE001
+                        pass
+                print(f"  [optimize/supervisor] reclaim fell back to reset ({_e})", flush=True)
             _t.sleep(5)
 
     try:
