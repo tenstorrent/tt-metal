@@ -202,11 +202,23 @@ jobs:
           ACTIVATE=/opt/tt_metal_infra/provisioning/provisioning_env/bin/activate
           reset_cluster() { ( if [ -f "$ACTIVATE" ]; then source "$ACTIVATE"; fi; tt-smi -glx_reset_auto ); }
           free_tt_devices() { sudo python3 .github/scripts/utils/free_tt_devices.py || true; sleep 3; }
+          # A missing/unenumerated device yields an incomplete mapping that would
+          # only fail later in create-files with no recovery; treat it as a failed
+          # attempt so the reset+retry below can bring the device back.
+          EXPECTED=$(( ${{ matrix.num_containers }} * ${{ matrix.chips_per_container }} ))
+          generate_ok() {
+            python3 .github/scripts/utils/generate_tray_mapping.py || return 1
+            count=$(python3 -c "import yaml; d=yaml.safe_load(open('tray_to_pcie_device_mapping.yaml')); print(sum(len(v) for v in d.get('device_mapping', {}).values()))")
+            if [ "$count" -ne "$EXPECTED" ]; then
+              echo "Incomplete cluster: mapped $count devices, expected $EXPECTED"
+              return 1
+            fi
+          }
           attempts=3
           free_tt_devices
           for i in $(seq 1 $attempts); do
             echo "generate_tray_mapping attempt $i of $attempts"
-            if python3 .github/scripts/utils/generate_tray_mapping.py; then
+            if generate_ok; then
               echo "Tray mapping generated successfully"
               exit 0
             fi
