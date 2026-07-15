@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <variant>
+
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/repeat_interleave/codegen/repeat_interleave_codegen_device_operation_types.hpp"
 #include "ttnn/operations/data_movement/repeat_interleave/codegen/repeat_interleave_codegen_program_factory.hpp"
@@ -16,7 +18,9 @@ struct RepeatInterleaveCodegenDeviceOperation {
     using tensor_args_t = RepeatInterleaveCodegenInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = RepeatInterleaveCodegenProgramFactory;
+    // DeviceOperationConcept's AllFactoriesValid requires program_factory_t to be a std::variant, even
+    // with a single alternative (see ttnn/operation_concepts.hpp).
+    using program_factory_t = std::variant<RepeatInterleaveCodegenProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
