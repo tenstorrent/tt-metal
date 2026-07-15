@@ -96,10 +96,31 @@ class OpTestBase:
 
     def run_device_operation(self):
         # Default Op is matmul. Override in derived class if needed.
+        # MMBENCH_AUTO=1 (profiling only): drop the hardcoded program_config so ttnn's
+        # auto-tuner selects the config for these input shapes. On mm_help3 the tuner
+        # reaches the helper's TRM / relaxed-subblock modes for sharded outputs, so this
+        # measures the "optimal mm_help3 pick" vs the model's hardcoded (main) config.
+        # Env-gated; with the var unset, behavior is identical to before.
+        import os as _os
+
+        _pc = self.program_config
+        if _os.environ.get("MMBENCH_AUTO") == "1":
+            _pc = None  # let the auto-tuner pick (reaches TRM on mm_help3 for sharded)
+        elif _pc is not None:
+            # Forced unlocked-lever sweep: override subblock shape / TRM in place. TRM
+            # (tile_pack_row_major) lets mm_help3 pack out_subblock_h>1 with out_subblock_w<per_core_N
+            # for sharded output, which main's SBM validator rejects. Env-gated; unset = unchanged.
+            _sbh, _sbw, _trm = _os.environ.get("MMBENCH_SBH"), _os.environ.get("MMBENCH_SBW"), _os.environ.get("MMBENCH_TRM")
+            if _sbh:
+                _pc.out_subblock_h = int(_sbh)
+            if _sbw:
+                _pc.out_subblock_w = int(_sbw)
+            if _trm is not None:
+                _pc.tile_pack_row_major = (_trm == "1")
         return ttnn.matmul(
             self.activations,
             self.inputs[0],
-            program_config=self.program_config,
+            program_config=_pc,
             memory_config=self.out_mem_config,
             dtype=self.out_dtype,
             compute_kernel_config=self.compute_config,
