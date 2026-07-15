@@ -505,7 +505,7 @@ Host binding: `TensorBinding` on the touching kernel; kernel constructs `LocalTe
 
 **Porting heuristic:** When classifying a sync-free CB, ask **backing first**: borrowed tensor → **LTA**; private L1 → **scratchpad**. Do not keep a fabricated self-loop or DFB binding once LTA (or scratchpad) can replace it — record interim hacks in the port report for rollback ([metal2_port_patterns.md § Sync-free](metal2_port_patterns.md#pattern-sync-free-and-single-ended-cbs--self-loop-dfb-interim-workaround)).
 
-**See also:** [Sync-free classify-it table](metal2_port_patterns.md#pattern-sync-free-and-single-ended-cbs--self-loop-dfb-interim-workaround); [Case 2a raw local L1](../_meta/RECIPE_OVERHAUL_ROADMAP.md) (LTA unblocks compute `TensorBinding`); [Scratchpad + semaphores](#scratchpad--semaphores-explicit-sync) when sync is real but not FIFO-shaped.
+**See also:** [Sync-free classify-it table](metal2_port_patterns.md#pattern-sync-free-and-single-ended-cbs--self-loop-dfb-interim-workaround); [Scratchpad + semaphores](#scratchpad--semaphores-explicit-sync) when sync is real but not FIFO-shaped.
 
 ---
 
