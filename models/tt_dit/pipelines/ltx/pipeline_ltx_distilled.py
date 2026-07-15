@@ -385,6 +385,16 @@ class LTXDistilledPipeline(LTXPipeline):
         else:
             logger.info("LTX_WARMUP_ENCODERS=0: skipping image + gemma encoder warmup")
 
+        # The audio-decode warmup above evicts the VAE decoder (VAE + audio can't be L1-coresident,
+        # so decode_audio frees it when not dynamic_load). Left evicted, it is reloaded lazily in
+        # gen#0's generate() — AFTER the denoise traces are captured — so its weights land in a
+        # trace's activation region. A pure-replay gen that skips the reload (video-only, no audio
+        # decode to re-evict + reload it) then has that region overwritten by the replay and decodes
+        # to garbage. Re-prime it here, before any capture, so its weights are live during capture and
+        # the trace routes activations around them.
+        if self._traced and not self.dynamic_load:
+            self._prepare_vae()
+
         logger.info(f"warmup (distilled 2-stage) done in {time.time() - t0:.1f}s")
 
     def _prepare_stage_statics(
