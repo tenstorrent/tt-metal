@@ -100,3 +100,8 @@ One host-wide reset was enough to show that reset did not alter the first-pair f
 - The first commit attempt created no commit: repository hooks applied `isort` and an XML final newline, then required the repository `expect_error` fixture instead of `pytest.raises`.
 - Replaced the one bound-check context manager with `expect_error`; runtime implementation behavior was unchanged. Re-ran `py_compile`, the strict context checker, and the complete hardware suite after that test-source change. All six cases passed again with the same exact PCC values and zero skips.
 - Re-ran the independent stage review on the hook-clean snapshot before committing.
+
+## Local commits
+
+- Reviewed functional-decoder artifact: `88aa9f0d75fecc65be3b034d1f9ea3fa9348df26` (`Add IR-derived GPT-OSS functional decoder`).
+- This work-log-only SHA record is committed separately so the reviewed artifact commit can be named exactly.
