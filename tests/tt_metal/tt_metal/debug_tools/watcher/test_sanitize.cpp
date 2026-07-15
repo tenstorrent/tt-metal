@@ -846,6 +846,23 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCAlignmentL1ReadNCrisc) {
         this->devices_[0]);
 }
 
+// Quasar relaxes NoC transfer alignment to 1B (misaligned transfers are legal, so the watcher can't
+// flag them) while allocation alignment stays at the physical floor. Guards against regressing either.
+TEST_F(MeshWatcherFixture, TensixTestWatcherQuasarAlignmentContract) {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    if (hal.get_arch() != tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Relaxed NoC alignment is Quasar-only";
+    }
+    // NoC transfer alignment relaxed to 1B.
+    EXPECT_EQ(hal.get_read_alignment(HalMemType::L1), 1u);
+    EXPECT_EQ(hal.get_write_alignment(HalMemType::L1), 1u);
+    EXPECT_EQ(hal.get_read_alignment(HalMemType::DRAM), 1u);
+    EXPECT_EQ(hal.get_write_alignment(HalMemType::DRAM), 1u);
+    // Allocation alignment stays at the physical floor.
+    EXPECT_EQ(hal.get_alignment(HalMemType::L1), 16u);
+    EXPECT_EQ(hal.get_alignment(HalMemType::DRAM), 64u);
+}
+
 TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCZeroL1Write) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
