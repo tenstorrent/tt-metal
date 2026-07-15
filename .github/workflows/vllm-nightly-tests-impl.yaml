@@ -420,6 +420,10 @@ jobs:
             matrix=$(echo "$all_tests" | jq -c "[.[] | select(.model | contains(\"${{ inputs.model }}\"))]")
           fi
 
+          # Restrict to BH-Quietbox-2: this branch only exercises the fleet that
+          # exhibits the leaked-TLB-window device-open failure, to cut runner load.
+          matrix=$(echo "$matrix" | jq -c '[.[] | select(.["runner-label"] == "BH-Quietbox-2")]')
+
           echo "matrix=$(echo "$matrix" | jq -c .)" >> $GITHUB_OUTPUT
 
   vllm-tests:
@@ -491,6 +495,70 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+
+      # A crashed process from a prior job can keep the device's TLB windows
+      # mapped; a soft `tt-smi -r` does not reclaim them, so the next device
+      # open fails with `tt_tlb_alloc -12`. Try to reap those holders before the
+      # health check opens the device. Diagnostic and non-fatal: it also reveals
+      # whether the holders are reachable from inside this container's PID
+      # namespace at all.
+      - name: 🧹 Kill stale TT device holders
+        if: ${{ contains(matrix.test-group.mesh-device, 'P150') }}
+        timeout-minutes: 5
+        run: |
+          set +e
+          echo "::group::TT device holders BEFORE"
+          id; echo "self=$$"
+          grep -i '^NSpid' /proc/self/status || true
+          { ls -l /dev/tenstorrent/ || ls -l /dev/tenstorrent; } 2>/dev/null || true
+          for pf in /proc/driver/tenstorrent/*/pids; do
+            [ -e "$pf" ] && { echo "--- $pf ---"; cat "$pf" 2>/dev/null; }
+          done
+          for mf in /sys/kernel/debug/tenstorrent/*/mappings; do
+            [ -e "$mf" ] && { echo "--- $mf ---"; cat "$mf" 2>/dev/null; }
+          done
+          echo "--- lsof ---"; lsof /dev/tenstorrent* 2>/dev/null || echo "(lsof: none/unavailable)"
+          echo "--- fuser ---"; fuser -v /dev/tenstorrent* 2>/dev/null || echo "(fuser: none/unavailable)"
+          echo "--- ps ---"; ps -eo pid,ppid,user,comm,args 2>/dev/null | grep -iE 'ttnn|tt_metal|vllm|test_system_health|pytest|EngineCore|python' | grep -v grep || echo "(no matching processes visible)"
+          echo "::endgroup::"
+
+          pids=""
+          for pf in /proc/driver/tenstorrent/*/pids; do
+            [ -e "$pf" ] || continue
+            while read -r p _; do
+              case "$p" in ''|*[!0-9]*) continue;; esac
+              pids="$pids $p"
+            done < "$pf"
+          done
+          fp=$(fuser /dev/tenstorrent* 2>/dev/null | tr -cs '0-9' ' ')
+          pids=$(printf '%s %s\n' "$pids" "$fp" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -un)
+          echo "Holder PIDs from driver+fuser: [$(echo $pids)]"
+
+          for p in $pids; do
+            case "$p" in 1|$$) echo "skip $p (self/init)"; continue;; esac
+            if [ ! -e "/proc/$p" ]; then
+              echo "pid $p: NOT in this PID namespace -> cannot signal (host/other-container leak)"
+              continue
+            fi
+            c=$(cat /proc/$p/comm 2>/dev/null)
+            case "$c" in
+              *[Rr]unner*|node|bash|sh) echo "pid $p ($c): skipping runner/shell"; continue;;
+            esac
+            echo "TERM pid $p ($c)"; kill -TERM "$p"; echo "  rc=$?"
+          done
+          sleep 5
+          for p in $pids; do
+            case "$p" in 1|$$) continue;; esac
+            [ -e "/proc/$p" ] && { echo "KILL pid $p"; kill -KILL "$p"; echo "  rc=$?"; }
+          done
+          sleep 3
+
+          echo "::group::TT device holders AFTER"
+          for pf in /proc/driver/tenstorrent/*/pids; do
+            [ -e "$pf" ] && { echo "--- $pf ---"; cat "$pf" 2>/dev/null; }
+          done
+          echo "::endgroup::"
+          exit 0
 
       - name: Ensure BH Eth links online
         if: ${{ contains(matrix.test-group.mesh-device, 'P150') }}
