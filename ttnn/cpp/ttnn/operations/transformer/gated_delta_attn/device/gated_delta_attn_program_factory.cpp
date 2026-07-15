@@ -144,7 +144,10 @@ GatedDeltaAttnSeqProgramFactory::cached_program_t GatedDeltaAttnSeqProgramFactor
     TensorAccessorArgs(in.L_inv.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(in.initial_state.has_value() ? in.initial_state->buffer() : nullptr).append_to(reader_ct_args);
 
-    std::vector<uint32_t> writer_ct_args = ct_args;
+    const uint32_t token_major = attrs.token_major_output ? 1u : 0u;
+    const uint32_t num_v_heads = attrs.num_v_heads;
+    const uint32_t T_tiles = attrs.token_major_output ? ((attrs.seq_len + TILE_HEIGHT - 1) / TILE_HEIGHT) : 0u;
+    std::vector<uint32_t> writer_ct_args = {Ct, Kt, Vt, token_major, num_v_heads, T_tiles};
     TensorAccessorArgs(outputs[0].buffer()).append_to(writer_ct_args);
     TensorAccessorArgs(outputs[1].buffer()).append_to(writer_ct_args);
 
