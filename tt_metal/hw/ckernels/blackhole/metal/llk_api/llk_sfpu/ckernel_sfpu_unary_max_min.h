@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "llk_math_eltwise_unary_sfpu.h"
@@ -12,25 +13,27 @@
 
 namespace ckernel::sfpu {
 
-sfpi_inline void load_value_param_float(uint value) { sfpi::vConstIntPrgm0 = value; }
+sfpi_inline void load_value_param_float(std::uint32_t value) { sfpi::vConstIntPrgm0 = value; }
 
 template <bool IS_MAX_OP>
 sfpi_inline void calculate_unary_max_min_float_body() {
-    sfpi::l_reg[sfpi::LRegs::LReg0].in_use();
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
+    // vConstIntPrgm0 holds the raw bits of the fp32 scalar loaded by load_value_param_float.
+    sfpi::vInt scalar_bits = sfpi::vConstIntPrgm0;
+    sfpi::vFloat scalar = sfpi::as<sfpi::vFloat>(scalar_bits);
+    sfpi::vFloat a = sfpi::dst_reg[0];
 
     if constexpr (IS_MAX_OP) {
-        // L0 = max(L0, constant); this will only write to L0 since L12 is a constant register.
-        TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, 9); // mod1=9 means set VD=max and VC=min
+        v_if(scalar > a) { a = scalar; }
+        v_endif;
     } else {
-        // L0 = min(L0, constant); this will only write to L0 since L12 is a constant register.
-        TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+        v_if(scalar < a) { a = scalar; }
+        v_endif;
     }
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
+    sfpi::dst_reg[0] = a;
 }
 
 template <bool IS_MAX_OP = true, bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_unary_max_min(uint value) {
+inline void calculate_unary_max_min(std::uint32_t value) {
     // This uses SFPLOADMACRO to achieve a throughput of 2 cycles per input row.
     //
     // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
@@ -66,13 +69,13 @@ inline void calculate_unary_max_min(uint value) {
 }
 
 template <bool IS_UNSIGNED = false>
-sfpi_inline void load_value_param_int(uint value) {
+sfpi_inline void load_value_param_int(std::uint32_t value) {
     // if msb(value) == (IS_UNSIGNED ? 0 : 1), we need to invert for SFPSWAP to work
     sfpi::vConstIntPrgm0 = IS_UNSIGNED ^ ((int)value >= 0) ? value : ~value;
 }
 
 template <bool IS_MAX_OP, bool IS_UNSIGNED = false>
-sfpi_inline void calculate_unary_max_min_int32_body(uint value) {
+sfpi_inline void calculate_unary_max_min_int32_body(std::uint32_t value) {
     sfpi::l_reg[sfpi::LRegs::LReg0].in_use();
     TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
 
@@ -97,7 +100,7 @@ sfpi_inline void calculate_unary_max_min_int32_body(uint value) {
 }
 
 template <bool IS_MAX_OP = true, bool IS_UNSIGNED = false, bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_unary_max_min_int32(uint value) {
+inline void calculate_unary_max_min_int32(std::uint32_t value) {
     load_value_param_int<IS_UNSIGNED>(value);
 
 #ifdef DISABLE_SFPLOADMACRO
@@ -176,10 +179,10 @@ inline void unary_max_min_init() {
 
     // Macro 0
     {
-        constexpr uint simple_bits = 0x80 | 0x00 | (0 << 3) | 4;
-        constexpr uint mad_bits = 0;
-        constexpr uint round_bits = 0;
-        constexpr uint store_bits = 0x00 | 0x00 | (2 << 3) | 3;
+        constexpr std::uint32_t simple_bits = 0x80 | 0x00 | (0 << 3) | 4;
+        constexpr std::uint32_t mad_bits = 0;
+        constexpr std::uint32_t round_bits = 0;
+        constexpr std::uint32_t store_bits = 0x00 | 0x00 | (2 << 3) | 3;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
@@ -212,10 +215,10 @@ inline void unary_max_min_int32_init() {
 
     // Macro 0
     {
-        constexpr uint simple_bits = 0x80 | 0x00 | (0 << 3) | 4;
-        constexpr uint mad_bits = 0;
-        constexpr uint round_bits = 0;
-        constexpr uint store_bits = 0x00 | 0x00 | (2 << 3) | 3;
+        constexpr std::uint32_t simple_bits = 0x80 | 0x00 | (0 << 3) | 4;
+        constexpr std::uint32_t mad_bits = 0;
+        constexpr std::uint32_t round_bits = 0;
+        constexpr std::uint32_t store_bits = 0x00 | 0x00 | (2 << 3) | 3;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
@@ -224,10 +227,10 @@ inline void unary_max_min_int32_init() {
 
     // Macro 1
     {
-        constexpr uint simple_bits = 0x00 | 0x40 | (3 << 3) | 5;
-        constexpr uint mad_bits = 0;
-        constexpr uint round_bits = 0;
-        constexpr uint store_bits = 0x00 | 0x40 | (4 << 3) | 3;
+        constexpr std::uint32_t simple_bits = 0x00 | 0x40 | (3 << 3) | 5;
+        constexpr std::uint32_t mad_bits = 0;
+        constexpr std::uint32_t round_bits = 0;
+        constexpr std::uint32_t store_bits = 0x00 | 0x40 | (4 << 3) | 3;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
