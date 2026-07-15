@@ -528,7 +528,13 @@ def _build_op_runner(
     # each device reconstructs the full K. Sweeps AG knobs, not block sizes.
     if op == "ag":
         sp_axis, tp_axis = cfg["sp_axis"], cfg["tp_axis"]
-        full_M = M * cfg["mesh_shape"][sp_axis]
+        # open_mesh runs the op on a cluster-axis submesh (the non-cluster/sp axis
+        # is collapsed to size 1), so full_M == M: one ring holds ONE sp position's
+        # M rows. Using cfg["mesh_shape"][sp_axis] here (the full mesh's sp size)
+        # over-sized M by that factor -- the tensor was built with M*sp rows but
+        # sharded on a size-1 sp axis, so every device processed sp x too much
+        # data (the isolated-AG time was inflated by exactly that factor).
+        full_M = M * mesh_shape[sp_axis]
         tt_input = ttnn.from_torch(
             torch.randn((full_M, K), dtype=torch.float32),
             dtype=dtype,
@@ -893,10 +899,11 @@ def _run_shape_sweep(device_config, M, K, N, cgx, cgy, is_agmm, use_case, uc_cfg
         k_cands = sorted({c[1] for c in combos})
         n_cands = sorted({c[2] for c in combos})
     elif op == "ag":
-        # Isolated all-gather: sweep AG knobs, not block sizes. Gathered tensor is
-        # (full_M, K) elements; full_M = M * sp_size (the sequence-parallel axis).
-        sp_size = cfg["mesh_shape"][cfg["sp_axis"]]
-        gathered_elems = (M * sp_size) * K
+        # Isolated all-gather: sweep AG knobs, not block sizes. The op runs on a
+        # cluster-axis submesh (sp axis collapsed to 1), so the per-device gathered
+        # tensor is M x K -- one sp position's rows, full K. (Multiplying by the
+        # full mesh's sp size here over-sized the transfer by that factor.)
+        gathered_elems = M * K
         combos = generate_ag_combos(gathered_elems, cluster_size, cfg["num_links"])
         m_cands = sorted({c[0] for c in combos})  # num_workers_per_link
         k_cands = sorted({c[1] for c in combos})  # chunks_per_sync
