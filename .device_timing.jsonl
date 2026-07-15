@@ -171,3 +171,26 @@
 {"source":"run_safe_pytest","pid":3932738,"started_at_ms":1784077460800,"wait_ms":2,"run_ms":24738,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/","exit_code":0}
 {"source":"run_safe_pytest","pid":3933370,"started_at_ms":1784077485545,"wait_ms":2,"run_ms":22490,"test_path":"eval/golden_tests/rms_norm/test_translated.py","exit_code":0}
 {"source":"run_safe_pytest","pid":3934445,"started_at_ms":1784077617027,"wait_ms":2,"run_ms":19922,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_sharded.py","exit_code":0}
+{"event": "phase", "phase": "refinement_5", "state": "end", "at_ms": 1784077674486}
+{"event": "phase", "phase": "refinement_5_golden", "state": "start", "at_ms": 1784077674765}
+{"source":"eval_test_runner","pid":3935601,"started_at_ms":1784077674768,"wait_ms":3434,"run_ms":1083682,"test_path":"eval/golden_tests/rms_norm/","exit_code":0}
+{"event": "phase", "phase": "refinement_5_golden", "state": "end", "at_ms": 1784078761886}
+{"event": "phase", "phase": "refinement_5a", "state": "start", "at_ms": 1784078768312}
+{"source":"run_safe_pytest","pid":3997778,"started_at_ms":1784081069282,"wait_ms":1,"run_ms":17266,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_r5a_debug.py::test_width_clean_tilealigned","exit_code":0}
+{"source":"run_safe_pytest","pid":3998132,"started_at_ms":1784081093475,"wait_ms":2,"run_ms":17087,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_r5a_debug.py::test_width_subtile_w","exit_code":0}
+{"source":"run_safe_pytest","pid":3998459,"started_at_ms":1784081115561,"wait_ms":2,"run_ms":10963,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_r5a_debug.py::test_block_subtile_hw","exit_code":0}
+{"source":"run_safe_pytest","pid":4000150,"started_at_ms":1784081206152,"wait_ms":2,"run_ms":23725,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_r5a_debug.py::test_width_matrix","exit_code":1}
+{"source":"tt-probe","pid":4001778,"started_at_ms":1784081484627,"wait_ms":191,"run_ms":15875,"test_path":"rms_norm","exit_code":1}
+{"source":"tt-probe","pid":4002021,"started_at_ms":1784081514085,"wait_ms":189,"run_ms":15996,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":4002637,"started_at_ms":1784081650219,"wait_ms":225,"run_ms":19210,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":4003330,"started_at_ms":1784081775556,"wait_ms":226,"run_ms":16814,"test_path":"rms_norm","exit_code":0}
+{"source":"run_safe_pytest","pid":4004344,"started_at_ms":1784082028036,"wait_ms":2,"run_ms":12627,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_r5a_debug.py::test_width_matrix","exit_code":0}
+{"source":"run_safe_pytest","pid":4004790,"started_at_ms":1784082045182,"wait_ms":2,"run_ms":25548,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_r5a_debug.py::test_block_matrix","exit_code":0}
+{"source":"run_safe_pytest","pid":4006923,"started_at_ms":1784082141478,"wait_ms":1,"run_ms":22275,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_sharded.py","exit_code":0}
+{"source":"run_safe_pytest","pid":4007665,"started_at_ms":1784082171329,"wait_ms":2,"run_ms":28211,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/","exit_code":0}
+{"source":"run_safe_pytest","pid":4016516,"started_at_ms":1784082414234,"wait_ms":2,"run_ms":120026,"test_path":"eval/golden_tests/rms_norm/test_golden.py","exit_code":143}
+{"source":"run_safe_pytest","pid":4019040,"started_at_ms":1784082562795,"wait_ms":1,"run_ms":58061,"test_path":"eval/golden_tests/rms_norm/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":4019934,"started_at_ms":1784082644139,"wait_ms":2,"run_ms":86959,"test_path":"eval/golden_tests/rms_norm/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":4021203,"started_at_ms":1784082747170,"wait_ms":1,"run_ms":50416,"test_path":"eval/golden_tests/rms_norm/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":4022193,"started_at_ms":1784082807396,"wait_ms":2,"run_ms":16684,"test_path":"eval/golden_tests/rms_norm/test_golden.py::test_op_loose","exit_code":0}
+{"source":"run_safe_pytest","pid":4022844,"started_at_ms":1784082926110,"wait_ms":2,"run_ms":106878,"test_path":"eval/golden_tests/rms_norm/test_golden.py","exit_code":0}
