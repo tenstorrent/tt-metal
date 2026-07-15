@@ -20,7 +20,7 @@ from ttml.modules import (
     VocabParallelEmbedding,
 )
 
-from .. import RunnerType, WeightTyingType, memory_efficient_runner
+from .. import EmbeddingParallelType, RunnerType, WeightTyingType, memory_efficient_runner
 from .autograd_ops import SliceLastDim
 from .transformer import LlamaBlock, RMSNormLayer, compute_swiglu_intermediate_size
 
@@ -45,6 +45,9 @@ class LlamaConfig:
     vocab does *not* need to be TP-divisible: the embedding and LM-head
     weights are padded internally to ``lcm(32, tp_size)``, exposed as
     ``Llama.padded_vocab_size``.
+
+    ``embedding_parallel`` selects how the token-embedding table is sharded under
+    TP (see :class:`EmbeddingParallelType`); it is ignored when ``use_tp=False``.
     """
 
     hidden_size: int = 384
@@ -62,6 +65,7 @@ class LlamaConfig:
     weight_tying: WeightTyingType = WeightTyingType.Disabled
     rope_scaling: LlamaRopeScalingConfig = field(default_factory=LlamaRopeScalingConfig)
     use_tp: bool = False
+    embedding_parallel: EmbeddingParallelType = EmbeddingParallelType.FeatureParallel
 
     def __post_init__(self):
         if self.max_position_embeddings % 32 != 0:
@@ -95,6 +99,16 @@ class LlamaConfig:
                 f"Provided num_attention_heads={self.num_attention_heads}, num_key_value_heads={self.num_key_value_heads}"
             )
         if self.use_tp:
+            if (
+                self.embedding_parallel == EmbeddingParallelType.FeatureParallel
+                and self.weight_tying == WeightTyingType.Enabled
+            ):
+                raise ValueError(
+                    "embedding_parallel=FeatureParallel shards the token embedding on the "
+                    "feature (hidden) dimension, whose layout is incompatible with the "
+                    "vocab-parallel LM head; weight tying cannot be used. Set "
+                    "weight_tying=Disabled or embedding_parallel=VocabParallel."
+                )
             tp_size = ttml.mesh().axis_size("tp")
             if self.num_attention_heads % tp_size != 0:
                 raise ValueError(
@@ -145,15 +159,11 @@ class Llama(AbstractModuleBase):
                 gather_output=False,
                 axis_name="tp",
             )
-            if True:
-                # Shard the embedding table on the hidden dim.
-                if config.weight_tying == ttml.models.WeightTyingType.Enabled:
-                    raise ValueError(
-                        "FeatureParallelEmbedding shards the token embedding on the feature "
-                        "(hidden) dimension, which is not layout-compatible with the "
-                        "vocab-parallel LM head; weight tying cannot be used. Set "
-                        "weight_tying=Disabled."
-                    )
+            if config.embedding_parallel == EmbeddingParallelType.FeatureParallel:
+                # Shard the embedding table on the feature (hidden) dim: a fully
+                # local lookup plus an all-gather, no id masking. Its layout does
+                # not match the vocab-parallel LM head, so weight tying is
+                # unavailable (validated in LlamaConfig.__post_init__).
                 self.tok_emb = FeatureParallelEmbedding(
                     self.padded_vocab_size,
                     config.hidden_size,
