@@ -275,11 +275,11 @@ class TestTriage:
         )
         assert len(result.stderr) == 0
 
-    def test_triage_initialize_with_noc0(self):
+    def test_triage_with_noc_0(self):
         global triage_script
 
         result = subprocess.run(
-            [triage_script, "--initialize-with-noc0", "--run=test_output"],
+            [triage_script, "--noc-id=0", "--run=test_output"],
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
