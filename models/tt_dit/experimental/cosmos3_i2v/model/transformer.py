@@ -216,7 +216,7 @@ class Cosmos3OmniTransformer(Module):
             gen_seq = self.proj_in(
                 gen_seq_fp32,
                 compute_kernel_config=self._proj_in_compute_kernel_config,
-                default_block_size=4,
+                default_block_size=(4, 4, 8),
             )
             ttnn.deallocate(gen_seq_fp32)
             gen_seq = ttnn.typecast(gen_seq, und_seq.dtype)
