@@ -49,9 +49,14 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
 )
 from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import get_tp, mesh_cluster_axis
 
-# Matmul chunk rows: 256 for T2U linears (8 tiles) — 512-row chunks clash with decode-trace L1.
+# Matmul chunk rows: 256 (8 tiles) for the shared tp>1 linear path — 512-row chunks clash with the
+# co-resident decode-trace L1 on BH-QB (measured: S2ST "static CB clash" in demo_perf_sweep at 4096).
+# The tp=1 mcast reroute (single device, lower L1 pressure) passes 512 explicitly (see _linear
+# ..._mcast reroute); it is demo_perf_sweep-validated clash-free on P150.
 _HARD_UPSAMPLE_MATMUL_CHUNK_ROWS = 16 * TILE
 _T2U_LINEAR_CHUNK_ROWS = 8 * TILE
+# Larger chunk for the tp=1 (single-device) reroute where L1 has headroom (2x fewer matmuls than 256).
+_T2U_TP1_LINEAR_CHUNK_ROWS = 16 * TILE
 _T2U_LINEAR_IN0_BLOCK_W = 8
 _T2U_LONG_SDPA_TP_THRESHOLD = 128
 _T2U_SDPA_Q_CHUNK_ROWS = 512
@@ -102,6 +107,81 @@ def _linear_token_rows(x: ttnn.Tensor) -> int:
 def _weight_is_dram_width_sharded(weight: ttnn.Tensor) -> bool:
     mc = weight.memory_config()
     return mc.buffer_type == ttnn.BufferType.DRAM and mc.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+
+
+def _t2u_tp1_mcast_linear_enabled() -> bool:
+    """tp=1: route the large-M T2U linears (encoder seq 4096, decoder seq 16640) through the 512-row
+    mcast1D / tuned-2D chunked matmul instead of the m<=32 DRAM-sharded decode matmul. The
+    DRAM-sharded op is capped at per_core_M=1 (32 rows) so a 16640-row linear becomes ~520 tiny
+    matmuls; the mcast path runs 512-row chunks (~16x fewer ops) and is ~1.5x faster per matmul
+    (measured fc1 [16640,1024]@[1024,8192]: 512-row mcast1D 5.16 ms vs 256-row 7.96 ms). Requires the
+    weight in DRAM-interleaved (the prep ships it DRAM-width-sharded), converted+cached on first use.
+    Default on (P150 T2U 520->377 ms, -27.6%; validated clash-free vs the co-resident decode trace via
+    demo_perf_sweep at seq 4096). Set SEAMLESS_T2U_TP1_MCAST_LINEAR=0 to restore the DRAM-sharded path."""
+    return os.environ.get("SEAMLESS_T2U_TP1_MCAST_LINEAR", "1") != "0"
+
+
+def _interleave_dram_weight_cached(
+    cache: dict, weight: ttnn.Tensor, bias: Optional[ttnn.Tensor]
+) -> Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
+    """DRAM-width-sharded weight/bias -> DRAM-interleaved, cached by device buffer address (one-time)."""
+    key = weight.buffer_address()
+    hit = cache.get(key)
+    if hit is not None:
+        return hit
+    w_int = ttnn.to_memory_config(weight, ttnn.DRAM_MEMORY_CONFIG)
+    b_int = None
+    if bias is not None:
+        b_int = ttnn.to_memory_config(bias, ttnn.DRAM_MEMORY_CONFIG)
+        # DRAM-sharded bias is [1,1,TILE,N] (row-broadcast, all TILE rows identical). The mcast/2D
+        # matmul needs a single bias row [1,N]; slice row 0 and flatten so it broadcasts over M.
+        if len(b_int.shape) == 4 and int(b_int.shape[2]) > 1:
+            n_pad = int(b_int.shape[3])
+            b_row = ttnn.slice(
+                b_int, [0, 0, 0, 0], [1, 1, 1, n_pad], [1, 1, 1, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            ttnn.deallocate(b_int)
+            b_int = ttnn.reshape(b_row, (1, n_pad))
+    cache[key] = (w_int, b_int)
+    return w_int, b_int
+
+
+def _tp1_mcast_linear(
+    device: ttnn.Device,
+    interleave_cache: dict,
+    x: ttnn.Tensor,
+    weight: ttnn.Tensor,
+    bias: Optional[ttnn.Tensor],
+    *,
+    activation: Optional[str],
+    batch: int,
+    seq: int,
+    m_actual: int,
+    k: int,
+    logical_out_dim: int,
+    compute_kernel_config: ttnn.DeviceComputeKernelConfig,
+) -> ttnn.Tensor:
+    """tp=1 large-M linear via the 512-row mcast/tuned chunked path (weight interleaved+cached).
+
+    Reroutes off the m<=32 DRAM-sharded decode matmul (~520 chunks over the 16640 unit seq) onto
+    ~33 512-row chunks — see ``_t2u_tp1_mcast_linear_enabled``.
+    """
+    w_int, b_int = _interleave_dram_weight_cached(interleave_cache, weight, bias)
+    return _linear_tuned_chunked(
+        device,
+        x,
+        w_int,
+        b_int,
+        activation=activation,
+        batch=batch,
+        seq=seq,
+        m_actual=m_actual,
+        k=k,
+        n=int(w_int.shape[-1]),
+        logical_out_dim=logical_out_dim,
+        compute_kernel_config=compute_kernel_config,
+        chunk_rows=_T2U_TP1_LINEAR_CHUNK_ROWS,
+    )
 
 
 def _bias_token_rows(bias: ttnn.Tensor) -> int:
@@ -583,10 +663,11 @@ def _linear_tuned_chunked(
     n: int,
     logical_out_dim: int,
     compute_kernel_config: ttnn.DeviceComputeKernelConfig,
+    chunk_rows: int = _T2U_LINEAR_CHUNK_ROWS,
 ) -> ttnn.Tensor:
     """Chunked ``ttnn.linear`` using sweep-tuned 2D matmul when ``(k, n)`` is tuned."""
     fused_activation = ttnn.UnaryOpType.RELU if activation == "relu" else None
-    chunk_m = _T2U_LINEAR_CHUNK_ROWS
+    chunk_m = chunk_rows
     tuned = t2u_tuned_matmul(device, chunk_m, k, n, fused_activation=fused_activation)
     if tuned is None:
         return _linear_matmul_1d_chunked(
@@ -602,6 +683,7 @@ def _linear_tuned_chunked(
             n=n,
             logical_out_dim=logical_out_dim,
             compute_kernel_config=compute_kernel_config,
+            chunk_rows=chunk_rows,
         )
 
     program_config, in0_mem, out_mem = tuned
@@ -713,6 +795,7 @@ def _linear_matmul_1d_chunked(
     n: int,
     logical_out_dim: int,
     compute_kernel_config: ttnn.DeviceComputeKernelConfig,
+    chunk_rows: int = _T2U_LINEAR_CHUNK_ROWS,
 ) -> ttnn.Tensor:
     """Chunked ``ttnn.linear`` with 1D multicast (interleaved weights, DRAM activations)."""
     if len(x.shape) == 4:
@@ -720,10 +803,10 @@ def _linear_matmul_1d_chunked(
     elif len(x.shape) == 2:
         x = ttnn.reshape(x, (batch, seq, k))
 
-    # 512-row chunks via a 1D multicast PC with the K-block pinned to the 32-row baseline (bit-identical,
-    # ~16× fewer ops). The PC is fixed at ``m=chunk_m`` for every chunk, so a short final chunk is
-    # zero-padded up to ``chunk_m`` (the pad rows' output is discarded by the trim — M-independent).
-    chunk_m = _T2U_LINEAR_CHUNK_ROWS
+    # ``chunk_rows``-row chunks via a 1D multicast PC with the K-block pinned to the 32-row baseline
+    # (bit-identical, ~16× fewer ops). The PC is fixed at ``m=chunk_m`` for every chunk, so a short
+    # final chunk is zero-padded up to ``chunk_m`` (the pad rows' output is discarded by the trim).
+    chunk_m = chunk_rows
     pc = matmul_multicast_1d_program_config(device, m=chunk_m, k=k, n=n, force_in0_block_w=_T2U_LINEAR_IN0_BLOCK_W)
     chunks: list[ttnn.Tensor] = []
     for start in range(0, m_actual, chunk_m):
@@ -1901,6 +1984,8 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
         self._sdpa_pc_cache: dict = {}
         self._matmul_pc_cache: dict = {}
         self._dram_matmul_pc_cache: dict = {}
+        # DRAM-width-sharded weight/bias -> DRAM-interleaved, cached for the tp=1 mcast linear reroute.
+        self._t2u_interleave_cache: dict = {}
         self._chunked_linear_compute_cfg: Optional[ttnn.DeviceComputeKernelConfig] = None
         self._long_seq_mc: Optional[ttnn.MemoryConfig] = None
 
@@ -1952,6 +2037,26 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
             seq = seq if seq is not None else m_actual
 
         m = _bias_token_rows(bias) if bias is not None else TILE
+        if (
+            self._tp == 1
+            and m_actual > TILE
+            and _t2u_tp1_mcast_linear_enabled()
+            and _weight_is_dram_width_sharded(weight)
+        ):
+            return _tp1_mcast_linear(
+                self.device,
+                self._t2u_interleave_cache,
+                x,
+                weight,
+                bias,
+                activation=activation,
+                batch=batch,
+                seq=seq,
+                m_actual=m_actual,
+                k=k,
+                logical_out_dim=logical_out_dim,
+                compute_kernel_config=self._linear_ln_compute_cfg,
+            )
         if self._tp == 1 and (m_actual > m or _weight_is_dram_width_sharded(weight)):
             out, self._chunked_linear_compute_cfg = _linear_dram_chunked(
                 self.device,
@@ -2263,6 +2368,8 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         self._sdpa_pc_cache: dict = {}
         self._matmul_pc_cache: dict = {}
         self._dram_matmul_pc_cache: dict = {}
+        # DRAM-width-sharded weight/bias -> DRAM-interleaved, cached for the tp=1 mcast linear reroute.
+        self._t2u_interleave_cache: dict = {}
         self._chunked_linear_compute_cfg: Optional[ttnn.DeviceComputeKernelConfig] = None
         self._long_seq_mc: Optional[ttnn.MemoryConfig] = None
         self._unit_pad_tail_cache: Dict[Tuple[int, int, int], ttnn.Tensor] = {}
@@ -2448,6 +2555,27 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             seq = seq if seq is not None else m_actual
 
         m = _bias_token_rows(bias) if bias is not None else TILE
+        if (
+            dtype is None
+            and self._tp == 1
+            and m_actual > TILE
+            and _t2u_tp1_mcast_linear_enabled()
+            and _weight_is_dram_width_sharded(weight)
+        ):
+            return _tp1_mcast_linear(
+                self.device,
+                self._t2u_interleave_cache,
+                x,
+                weight,
+                bias,
+                activation=activation,
+                batch=batch,
+                seq=seq,
+                m_actual=m_actual,
+                k=k,
+                logical_out_dim=logical_out_dim,
+                compute_kernel_config=self._linear_ln_compute_cfg,
+            )
         if dtype is None and self._tp == 1 and (m_actual > m or _weight_is_dram_width_sharded(weight)):
             out, self._chunked_linear_compute_cfg = _linear_dram_chunked(
                 self.device,
