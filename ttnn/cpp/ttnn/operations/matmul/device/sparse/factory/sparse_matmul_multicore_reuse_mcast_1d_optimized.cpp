@@ -97,7 +97,6 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     const uint32_t in0_aligned_tile_size = tt::align(in0_single_tile_size, dram_alignment);
     const uint32_t in1_aligned_tile_size = tt::align(in1_single_tile_size, dram_alignment);
     const auto output_single_tile_size = output_tile.get_tile_size(output_data_format);
-    const auto interm0_single_tile_size = output_tile.get_tile_size(output_data_format);
 
     auto* const in0_buffer = a.buffer();
     auto* const in1_buffer = b.buffer();
@@ -165,6 +164,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     const auto interm0_data_format = packer_l1_acc_en
                                          ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
                                          : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
+    const auto interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;

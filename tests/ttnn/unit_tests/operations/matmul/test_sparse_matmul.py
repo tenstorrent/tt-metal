@@ -12,8 +12,82 @@ import random
 import torch
 import ttnn
 
-from models.common.utility_functions import skip_for_slow_dispatch
+from models.common.utility_functions import comp_pcc, skip_for_slow_dispatch
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
+
+
+def test_sparse_matmul_fp32_dest_accumulation_uses_fp32_intermediate_cb(device):
+    if device.arch() != ttnn.device.Arch.BLACKHOLE:
+        pytest.skip("targets the Blackhole fp32 sparse-matmul corruption regression")
+
+    torch.manual_seed(0)
+    batch, sequence, experts = 1, 4, 8
+    m, k, n = 16, 128, 512
+    in0 = torch.randn((batch, sequence, m, k), dtype=torch.bfloat16)
+    in1 = torch.randn((1, experts, k, n), dtype=torch.bfloat16)
+    sparsity = torch.ones((batch, sequence, 1, experts), dtype=torch.bfloat16)
+
+    in0_tt = ttnn.from_torch(
+        in0,
+        tile=ttnn.Tile((16, 32)),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    in1_tt = ttnn.from_torch(
+        in1,
+        tile=ttnn.Tile((32, 32)),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    sparsity_tt = ttnn.from_torch(
+        sparsity,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    output_tt = ttnn.sparse_matmul(
+        in0_tt,
+        in1_tt,
+        sparsity=sparsity_tt,
+        nnz=batch * sequence * experts,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        output_tile=ttnn.Tile([16, 32]),
+        program_config=ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(4, 4),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            out_block_h=1,
+            out_block_w=1,
+            per_core_M=1,
+            per_core_N=1,
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=True,
+        ),
+        compute_kernel_config=compute_kernel_config,
+        dtype=ttnn.bfloat16,
+    )
+    output = ttnn.to_torch(output_tt).float()
+    golden = torch.stack(
+        [
+            torch.matmul(in0[batch_idx, sequence_idx].float(), in1[0, expert_idx].float())
+            for batch_idx, sequence_idx, expert_idx in itertools.product(range(batch), range(sequence), range(experts))
+        ]
+    ).reshape(batch, sequence, 1, experts, m, n)
+
+    passing, pcc = comp_pcc(golden, output, pcc=0.99999)
+    assert passing, f"fp32 sparse matmul PCC {pcc} is below 0.99999"
+    assert torch.max(torch.abs(golden - output)) < 0.25
 
 
 @pytest.mark.parametrize("mkn", [(16, 128, 512)])
