@@ -298,6 +298,7 @@ models:
     bh_p300: 20
     bh_loudbox: 190
     bh_quietbox_2: 80
+    bh_spsg: 20 # single galaxy MLA chunked prefill
   # Per-tier e2e budgets, consumed by the tiered model pipelines;
   # The plain `e2e` key is used for the non-tiered pipelines (blackhole-e2e, t3000-e2e).
   e2e_tier1:
@@ -361,6 +362,8 @@ models:
     wh_galaxy: 345
     wh_galaxy_perf: 150
     bh_galaxy: 470
+    # blaze_models_prefill_tests.yaml sum of bh_spsg job timeouts (tightened from 840)
+    bh_spsg: 480
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600
