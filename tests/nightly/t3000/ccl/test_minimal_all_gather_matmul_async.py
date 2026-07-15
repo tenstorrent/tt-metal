@@ -208,10 +208,12 @@ def run_all_gather_impl(
             fused_activation=None,  # ttnn.UnaryOpType.SILU,
             fuse_batch=False,
         )
-    # For the precision check, use full-mantissa HiFi4 with no approximation so the only source of
-    # error under test is the fp32 cross-block reload, not the multiply fidelity.
+    # For the precision check, use HiFi3 with no approximation. HiFi3 keeps the bf16 multiply accurate
+    # so the only source of error under test is the fp32 cross-block reload, while avoiding the Wormhole
+    # HiFi4 + fp32-accumulation hardware bug that otherwise degrades accuracy (see the warning in
+    # compute_kernel_config.cpp, which recommends HiFi3 with fp32 accumulation on Wormhole).
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4 if precision_offset is not None else ttnn.MathFidelity.HiFi2,
+        math_fidelity=ttnn.MathFidelity.HiFi3 if precision_offset is not None else ttnn.MathFidelity.HiFi2,
         math_approx_mode=False if precision_offset is not None else True,
         fp32_dest_acc_en=True,
         packer_l1_acc=packer_l1_acc,
