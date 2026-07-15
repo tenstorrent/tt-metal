@@ -13,9 +13,8 @@
 # Notes:
 # - The reference keeps the router projection + softmax in fp32 because bf16
 #   ties can flip expert selection. Here the router runs end-to-end in bf16
-#   (HiFi4 + fp32 dest accumulation on the matmul keeps the logits close to
-#   fp32 despite bf16-stored activations/weights) — PCC-validated against the
-#   fp32 reference before relying on this in production.
+#   (HiFi2 + fp32 dest accumulation on the matmul; PCC-validated against the
+#   fp32 reference before relying on this in production).
 # - ttnn.topk requires the reduced (last) dim to be a multiple of 64 and k a
 #   power of two; num_experts=64 / moe_topk=8 satisfy both.
 
@@ -76,9 +75,8 @@ class HunyuanTtTopKGate(LightweightModule):
             cache_file_name=cache_file(weight_cache_path, key),
         )
 
-        # High-fidelity matmul so routing logits stay close to fp32.
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,

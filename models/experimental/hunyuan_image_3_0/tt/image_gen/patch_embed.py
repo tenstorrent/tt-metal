@@ -32,9 +32,9 @@ from .patch_embed_conv_configs import make_layer_conv2d_config
 # Prefer sharded conv configs when HY_PATCH_EMBED_SHARDED=1 (set 0 for auto-only).
 _PATCH_EMBED_SHARDED = os.environ.get("HY_PATCH_EMBED_SHARDED", "1") != "0"
 
-# Emb-layer linear keeps HiFi4; convs use HiFi2 + bf16 dest for throughput.
+# Emb linear and convs both use HiFi2; convs also use bf16 dest for throughput.
 _COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_fidelity=ttnn.MathFidelity.HiFi2,
     math_approx_mode=False,
     fp32_dest_acc_en=True,
     packer_l1_acc=True,
