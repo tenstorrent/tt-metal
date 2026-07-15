@@ -247,29 +247,53 @@ def build_configs(args) -> list:
         n2 = max(2, N // 4)
         cfgs.append({"label": f"fixed_traced_s{n2}", "env": TRACED_FIXED, "steps": n2, "blocks": 3, "threshold": THR})
         # scheme-A: no-halt (pure overhead) + real-threshold (realized distribution under #48291).
-        cfgs.append({"label": "earlyhaltA_nohalt", "env": _early_halt_env(1), "steps": N, "blocks": 3, "threshold": NEVER})
+        cfgs.append(
+            {"label": "earlyhaltA_nohalt", "env": _early_halt_env(1), "steps": N, "blocks": 3, "threshold": NEVER}
+        )
         cfgs.append({"label": "earlyhaltA_real", "env": _early_halt_env(1), "steps": N, "blocks": 3, "threshold": THR})
         # scheme-B: per-window overhead at each K (no-halt so the full budget runs => amortized o_B/K).
         for k in K_list:
             if k <= 1:
                 continue
             cfgs.append(
-                {"label": f"earlyhaltB_k{k}_nohalt", "env": _early_halt_env(k), "steps": N, "blocks": 3, "threshold": NEVER}
+                {
+                    "label": f"earlyhaltB_k{k}_nohalt",
+                    "env": _early_halt_env(k),
+                    "steps": N,
+                    "blocks": 3,
+                    "threshold": NEVER,
+                }
             )
     if args.mode in ("correctness", "all"):
         # Guard 1: no-halt scheme-A must equal the fixed budget commit (byte-identical).
         cfgs.append({"label": "fixedC_traced", "env": TRACED_FIXED, "steps": N, "blocks": 2, "threshold": THR})
-        cfgs.append({"label": "earlyhaltA_nohaltC", "env": _early_halt_env(1), "steps": N, "blocks": 2, "threshold": NEVER})
-        # Guard 2: forced elevated threshold — eager vs scheme-A must agree (sha + steps + halted).
-        cfgs.append({"label": "eager_forced", "env": EAGER, "steps": N, "blocks": 2, "threshold": args.forced_threshold})
         cfgs.append(
-            {"label": "earlyhaltA_forced", "env": _early_halt_env(1), "steps": N, "blocks": 2, "threshold": args.forced_threshold}
+            {"label": "earlyhaltA_nohaltC", "env": _early_halt_env(1), "steps": N, "blocks": 2, "threshold": NEVER}
+        )
+        # Guard 2: forced elevated threshold — eager vs scheme-A must agree (sha + steps + halted).
+        cfgs.append(
+            {"label": "eager_forced", "env": EAGER, "steps": N, "blocks": 2, "threshold": args.forced_threshold}
+        )
+        cfgs.append(
+            {
+                "label": "earlyhaltA_forced",
+                "env": _early_halt_env(1),
+                "steps": N,
+                "blocks": 2,
+                "threshold": args.forced_threshold,
+            }
         )
         for k in K_list:
             if k <= 1:
                 continue
             cfgs.append(
-                {"label": f"earlyhaltB_k{k}_forced", "env": _early_halt_env(k), "steps": N, "blocks": 2, "threshold": args.forced_threshold}
+                {
+                    "label": f"earlyhaltB_k{k}_forced",
+                    "env": _early_halt_env(k),
+                    "steps": N,
+                    "blocks": 2,
+                    "threshold": args.forced_threshold,
+                }
             )
     return cfgs
 
@@ -330,7 +354,7 @@ def analyze(results, args, eager_diag) -> dict:
         if dev_trace:
             ent_err = []
             mism_err = []
-            for (w_end, mean_ent, mismatch) in dev_trace:
+            for w_end, mean_ent, mismatch in dev_trace:
                 s = int(w_end) - 1  # scheme-A: w_end == step+1
                 if 0 <= s < len(eager_diag["entropy_mean_per_step"]):
                     ent_err.append(abs(mean_ent - eager_diag["entropy_mean_per_step"][s]))
@@ -378,13 +402,21 @@ def analyze(results, args, eager_diag) -> dict:
                 if denom > 0:
                     out["break_even"][f"schemeB_k{k}_break_even_steps"] = N * step_dev / denom
 
-    # -------- Realized halt-step distribution (real threshold, honest) --------
+    # -------- Realized halt-step distribution (real threshold) --------
     if "earlyhaltA_real" in R:
         r = R["earlyhaltA_real"]
+        halted = r["halted_per_block"]
+        fires = any(bool(h) for h in halted)
         out["realized_distribution"]["schemeA_real_threshold"] = {
             "denoise_steps_per_block": r["denoise_steps_per_block"],
-            "halted_per_block": r["halted_per_block"],
-            "note": "under #48291 the entropy gate never clears 0.005 => full budget (no early halt)",
+            "halted_per_block": halted,
+            "note": (
+                # Post the tanh-GELU decision-fidelity fix the coherent trajectory converges, so the
+                # 0.005 entropy gate now clears and early-halt fires well before the full budget.
+                "early-halt FIRES under the real 0.005 threshold (coherent model converges post tanh-fix)"
+                if fires
+                else "entropy gate did not clear 0.005 => full budget (no early halt)"
+            ),
         }
     return out
 
@@ -401,7 +433,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--mode", choices=["correctness", "perf", "all"], default="all")
     p.add_argument("--window-sweep", default="4,8", help="comma-separated scheme-B window sizes")
-    p.add_argument("--forced-threshold", type=float, default=100.0, help="elevated threshold that forces halt (Guard 2)")
+    p.add_argument(
+        "--forced-threshold", type=float, default=100.0, help="elevated threshold that forces halt (Guard 2)"
+    )
     p.add_argument("--out", default=None)
     return p
 
@@ -427,7 +461,9 @@ def main(argv=None) -> int:
             eager_diag = eager_block_records(
                 bundle, mesh_device, prompt_tokens, args, args.max_denoise_steps, args.forced_threshold
             )
-            logger.info(f"[early_halt] eager forced-halt block: steps={eager_diag['num_steps']} halted={eager_diag['halted']}")
+            logger.info(
+                f"[early_halt] eager forced-halt block: steps={eager_diag['num_steps']} halted={eager_diag['halted']}"
+            )
             print("EAGER_DIAG " + json.dumps(eager_diag))
 
         for spec in build_configs(args):

@@ -66,3 +66,72 @@ capture; gated default-OFF.
 ## 6. Effort
 ~2–4 days including device verification; toward the upper end (or more) if the denoise has no
 ready-made paged SDPA.
+
+## 7. Feasibility recon (2026-07-15) — upper-end/kernel-level, and early-halt is the cheaper recovery
+
+Source recon (read-only) verdict: **there is no ready-made paged SDPA that satisfies the denoise
+cross-attention's semantics, so the paged-prefix path is upper-end-of-2–4-days-or-beyond
+(kernel-level), not a drop-in.**
+
+- **What's reusable (favors the estimate):** `ttnn.transformer.chunked_scaled_dot_product_attention`
+  is a real paged prefill SDPA with a fixed-shape `page_table_tensor` and a trace-safe device-tensor
+  offset (`chunk_start_idx_tensor`, "update on device, no recompile") — exactly the persistent
+  written-input the plan wants. gemma4 already runs paged decode/prefill + hybrid page tables
+  (`decode.py`, `prefill.py`, `kv_cache_hybrid.py`); DiffusionGemma's own commit path already
+  writes/reads paged (`commit_decode.py:216-289`); the committed prefix is already in the cache.
+- **Why it is NOT a drop-in (the crux):**
+  1. The paged prefill op is **causal-only, no `attn_mask`/`is_causal`** (`sdpa_nanobind.cpp:460-471`),
+     but the denoise op runs `is_causal=False` (`diffusion_attention.py:200`). canvas→prefix is
+     causal-equivalent (`chunk_start_idx=prompt_len`), but **canvas→canvas is bidirectional** and
+     cannot be expressed causally in one paged SDPA.
+  2. Merging a paged-causal prefix read with a local non-causal canvas SDPA needs flash-style
+     online-softmax (LSE) accumulation; the base SDPA returns only the output (no LSE), so there is
+     **no ready-made merge op** — requires a two-pass custom merge OR a C++/LLK extension of the
+     paged/chunked SDPA to accept a mask / non-causal mode.
+  3. **Sliding layers (25 of 30) have no paged prefill primitive** — gemma4 slides with a *non-paged*
+     windowed slicer (`operations.py:320-376`) over bounded, modulo-mapped caches; they need a
+     different paged-read design than the 5 full-attention layers.
+- **The sole remaining recapture cause** is the growing concatenated prefix K/V (dim-2 grows by
+  `canvas_len`/block via `read_prompt_kv_cache_slice` + the `invalidate_prefix_growth` guard at
+  `traced_denoise.py:434-442`); RoPE is already trace-fixed via the constant-shape
+  `canvas_rope_provider`.
+- **Cheaper alternative to evaluate first — fixed-max prefix + reveal-mask:** slice a *fixed-max*
+  prefix span and reveal committed positions with a persistent `attn_mask` written-input (the masked
+  denoise SDPA path already exists — `diffusion_attention.py:199-208`, mask builder
+  `denoise_forward.py:118-146`), so trace shape stays fixed → capture-once/replay-many with NO new
+  kernel. Costs extra masked compute over the padded span (fine for the current bounded
+  `max_num_seqs=1` contexts; wasteful toward 256K) and must be bit-exactness-checked vs the
+  contiguous-concat golden and must never expose uncommitted tokens.
+- **Highest-leverage, already-tractable recovery: early-halt.** Post the tanh-GELU fix the trajectory
+  converges (halts ~7–15 of 48 steps — device-observed on the canonical prompt). Recapture cost is
+  per-trace-per-block, so halting at ~K steps cuts BOTH replays and captured traces by ~48/K,
+  recovering most of the 3.6-tok/s regression with zero attention-path change. Land/enable this
+  first; scope the paged-prefix (or reveal-mask) work against what remains.
+
+## 8. Implemented: `DG_DENOISE_FROZEN_PREFIX` capture-once (device-verified 2026-07-15)
+
+Restored the pre-`ec5b64b4891` capture-once/replay-many mechanism as an **opt-in flag** (default
+OFF): the recapture-on-growth guard in `traced_denoise.py` is gated so the block-0 trace is reused
+across blocks (`frozen_prefix_reuse` metric instead of `invalidate_prefix_growth`). Unit-tested
+(`test_frozen_prefix_reuses_block0_trace_without_recapture`) + full-30L device measurement
+(`probe_early_halt --mode perf`, canonical prompt, 3 blocks):
+
+| config (30L, frozen prefix) | steady t/s | block | steps/blk | vs regressed 3.03 |
+| --- | --- | --- | --- | --- |
+| fixed-48 | **11.92** | 21.5 s | [48,48,48] | ~3.9× |
+| **frozen + early-halt** | **47.84** | 5.35 s | [9,17,2] halted | ~16× |
+
+- Capture-once confirmed: 2 capture events, 8 `frozen_prefix_reuse`, **0 recapture**; per-step cost
+  1.746 s (capture+replay) → **0.42 s** (replay-only).
+- **Early-halt now FIRES** under the real 0.005 threshold on the coherent model (halts [9,17,2] of 48,
+  bit-exact vs the full path) — the tanh-GELU fix unlocked it; the old "never clears 0.005" note is
+  withdrawn. Frozen **+** early-halt is the fastest config (47.84 t/s), far exceeding the historical
+  ~17.9 t/s fixed-48 baseline.
+- fixed-48 frozen (11.92) is below the historical 17.9 because the model now runs the *correct*
+  tanh-GELU (heavier than the old fast-approx GELU the baseline was measured under) and this config
+  omits the fused MoE-dispatch kernel (`DG_MOE_DISPATCH_FUSED2`, default off) — headroom, not a
+  regression.
+- **TRADE-OFF (why default-OFF):** frozen prefix means later blocks read the block-0 prefix slice —
+  they do NOT attend to earlier blocks' committed KV. Bit-correct for single-block generation; a
+  speed-over-multiblock-fidelity trade for >1 block. The correct-AND-fast path still needs the
+  fixed-shape reveal-mask (§7) or paged read (§1–6).
