@@ -181,6 +181,12 @@ def test_ccl_census(mesh_device: ttnn.MeshDevice) -> None:
         dtype=ttnn.bfloat8_b,
         device=mesh_device,
     )  # S2 bf8: half the gather payload, where the out-proj gather is exposed
+    x_v2_bf4 = ttnn.from_torch(
+        torch.randn(1, 1, V_ROWS_S2, v_loc),
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat4_b,
+        device=mesh_device,
+    )  # S2 bf4: quarter the payload — does going below bf8 reclaim the ~88us bf8 still leaks?
     ff_v1 = _bf16(torch.randn(1, 1, V_ROWS_S1, 4 * VIDEO_DIM // tp), mesh_device)  # ff2 input (TP-sharded)
     gate_col = _bf16(torch.randn(1, 1, 1, v_loc), mesh_device)  # AdaLN gate slice
     # Row-parallel gate candidate: partials (N,32) all-gathered to (N,128), then one tiny matmul
@@ -206,6 +212,8 @@ def test_ccl_census(mesh_device: ttnn.MeshDevice) -> None:
     out_v = col_linear(VIDEO_DIM, VIDEO_DIM)  # attn.to_out (video)
     out_v_bf8 = col_linear(VIDEO_DIM, VIDEO_DIM)  # same, but gathers its input in bf8
     out_v_bf8.activation_dtype = ttnn.bfloat8_b
+    out_v_bf4 = col_linear(VIDEO_DIM, VIDEO_DIM)  # same, but gathers its input in bf4
+    out_v_bf4.activation_dtype = ttnn.bfloat4_b
     ff1_v = col_linear(VIDEO_DIM, 4 * VIDEO_DIM)  # ffn.ff1 (video)
     ff2_v = RowParallelLinear(
         4 * VIDEO_DIM, VIDEO_DIM, bias=True, mesh_device=mesh_device, mesh_axis=tp_axis, ccl_manager=ccl
@@ -457,6 +465,12 @@ def test_ccl_census(mesh_device: ttnn.MeshDevice) -> None:
         ("agmm_out_video_s2", lambda: out_v(x_v2, parallel_config=pc), True),
         ("mm_out_video_s2_gathered", lambda: out_v(x_v2_full), True),
         ("agmm_out_video_s2_bf8", lambda: out_v_bf8(x_v2, parallel_config=pc), True),
+        (
+            "ag_activation_video_s2_bf4",
+            lambda: ccl.all_gather_persistent_buffer(x_v2_bf4, dim=3, mesh_axis=tp_axis),
+            False,
+        ),
+        ("agmm_out_video_s2_bf4", lambda: out_v_bf4(x_v2, parallel_config=pc), True),
     ]
 
     variants += cut1c
