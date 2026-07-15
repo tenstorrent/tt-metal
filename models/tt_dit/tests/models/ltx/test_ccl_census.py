@@ -279,6 +279,8 @@ def test_ccl_census(mesh_device: ttnn.MeshDevice) -> None:
     kv_v2a = col_linear(VIDEO_DIM, 2 * AUDIO_DIM, chunks=2)  # video_to_audio_attn.to_kv (video context)
     kv_v2a_bf8 = col_linear(VIDEO_DIM, 2 * AUDIO_DIM, chunks=2)  # same, but gathers its input in bf8
     kv_v2a_bf8.activation_dtype = ttnn.bfloat8_b
+    kv_v2a_bf4 = col_linear(VIDEO_DIM, 2 * AUDIO_DIM, chunks=2)  # same, but gathers its input in bf4
+    kv_v2a_bf4.activation_dtype = ttnn.bfloat4_b
     ff1_a = col_linear(AUDIO_DIM, 4 * AUDIO_DIM)  # audio_ff.ff1
 
     # to_out inputs are the concatenated-heads SDPA output: TP-sharded on the head dim, so the
@@ -484,6 +486,12 @@ def test_ccl_census(mesh_device: ttnn.MeshDevice) -> None:
         ("agmm_kv_v2a_video_s2", lambda: kv_v2a(x_v2, parallel_config=pc), True),
         ("mm_kv_v2a_s2_gathered", lambda: kv_v2a(x_v2_full), True),
         ("agmm_kv_v2a_video_s2_bf8", lambda: kv_v2a_bf8(x_v2, parallel_config=pc), True),
+        ("agmm_kv_v2a_video_s2_bf4", lambda: kv_v2a_bf4(x_v2, parallel_config=pc), True),
+        # attn2.to_q at S2: the third VIDEO_DIM->VIDEO_DIM site, same matmul width as the out-proj but
+        # gathering the normed hidden state (not the attention output). Priced fused vs matmul-on-gathered
+        # to test whether a THIRD exposed S2 collective exists beyond out-proj and v2a to_kv.
+        ("agmm_q_v_video_s2", lambda: q_v(x_v2, parallel_config=pc), True),
+        ("mm_q_v_s2_gathered", lambda: q_v(x_v2_full), True),
     ]
 
     variants += cut1c
