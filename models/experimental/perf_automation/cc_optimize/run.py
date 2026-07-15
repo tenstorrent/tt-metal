@@ -150,9 +150,16 @@ def discover(
     if case:
         cmd += ["-k", case]
     launch_ts = time.time()
-    rc = subprocess.run(cmd, cwd=str(perf_dir), env=cc_env(repo_root, devices)).returncode
+    rc, _ = _run_device_proc(
+        cmd,
+        perf_dir,
+        cc_env(repo_root, devices),
+        devices,
+        int(os.environ.get("PERF_MCP_DISCOVER_TIMEOUT", "3600") or "3600"),
+        "discovery",
+    )
     mani = _latest_manifest(perf_dir)
-    if mani is None:
+    if mani is None or rc is None:
         return None
     if rc != 0 and mani.stat().st_mtime < launch_ts:
         return None
@@ -234,18 +241,17 @@ def _gate_status(repo_root: Path, mcp_env: dict, devices: str) -> dict:
     )
     env = cc_env(repo_root, devices)
     env.update(mcp_env)  # PERF_MCP_* so the gate targets this pipeline
-    try:
-        r = subprocess.run(
-            [_python_bin(repo_root), "-c", code, str(repo_root / CC_DIR)],
-            cwd=str(repo_root / PERF_DIR),
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=3600,
-        )
-    except Exception:  # noqa: BLE001 — gate crashed/timed out -> treat as not-done, loop retries
+    rc, out = _run_device_proc(
+        [_python_bin(repo_root), "-c", code, str(repo_root / CC_DIR)],
+        repo_root / PERF_DIR,
+        env,
+        devices,
+        int(os.environ.get("PERF_MCP_GATE_TIMEOUT", "1800") or "1800"),
+        "termination_check",
+    )
+    if rc is None:
         return {"can_stop": False, "halt": False, "reason": ""}
-    out = r.stdout or ""
+    out = out or ""
     reason = ""
     for line in out.splitlines():
         if line.startswith("HALTREASON="):
@@ -353,11 +359,17 @@ def _run_op_sigs(repo_root: Path, mcp_env: dict, devices: str, node: str, case, 
     cmd = [_python_bin(repo_root), str(repo_root / CC_DIR / "_op_sig_probe.py"), node]
     if case:
         cmd.append(case)
-    try:
-        r = subprocess.run(cmd, cwd=str(repo_root), env=env, capture_output=True, text=True, timeout=1800)
-    except Exception:  # noqa: BLE001
+    rc, raw = _run_device_proc(
+        cmd,
+        repo_root,
+        env,
+        devices,
+        int(os.environ.get("PERF_MCP_COVERAGE_TIMEOUT", "1800") or "1800"),
+        "coverage probe",
+    )
+    if rc is None:
         return None, ""
-    raw = (r.stdout or "") + "\n" + (r.stderr or "")
+    raw = raw or ""
     sigs = None
     for line in raw.splitlines():
         if line.startswith("PERF_OP_SIGS="):
@@ -499,6 +511,40 @@ def _reset_devices(devices: str) -> str:
         return "tt-smi -r %s rc=%d" % (chips, r.returncode)
     except Exception as exc:  # noqa: BLE001
         return "device reset FAILED (%s)" % exc
+
+
+def _run_device_proc(cmd, cwd, env, devices: str, timeout_s: int, label: str = "", reset_on_timeout: bool = True):
+    """Run a DEVICE-touching subprocess so a device wedge can never hang the tool forever. Own session +
+    hard timeout; on timeout SIGKILL the WHOLE process group (reaping device-holding children that would
+    otherwise leak the mesh and wedge every later step) and optionally tt-smi -r. Returns (rc, combined
+    stdout+stderr); rc is None when it timed out / was killed."""
+    proc = subprocess.Popen(
+        list(cmd),
+        cwd=str(cwd),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        out, _ = proc.communicate(timeout=timeout_s)
+        return proc.returncode, out or ""
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except Exception:  # noqa: BLE001
+            proc.kill()
+        try:
+            proc.communicate(timeout=30)
+        except Exception:  # noqa: BLE001
+            pass
+        tail = _reset_devices(devices) if reset_on_timeout else "process group killed"
+        print(
+            f"  [optimize/cc] {label or 'device subprocess'} TIMED OUT after {timeout_s}s "
+            f"(likely a device wedge / leaked mesh) -- killed the whole process group + {tail}"
+        )
+        return None, ""
 
 
 def _progress_token(repo_root: Path, kernel_log: str):
