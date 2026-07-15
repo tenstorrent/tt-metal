@@ -100,6 +100,25 @@ low-risk incremental vein.
 fusing already-tuned matmuls loses more (config) than it saves (launch overhead). **Net banked:
 41.06 → 40.52 ms (−0.55 ms), all numerically exact.** The real prize remains the CFG-batched LM (~9 ms).
 
+## CFG-BATCHED LM — feasibility VALIDATED (scratchpad/cfg_sdpa_iso.py)
+The two make-or-break primitives were validated in isolation:
+- **Batched SDPA-decode** (combined cache `[2,n_kv,maxS,hd]`, per-batch `cur_pos_tensor=[p_pos,p_neg]`)
+  == two separate batch-1 decodes: **PCC 1.000000** both rows.
+- **Per-row RoPE** (different position per row, `[1,1,2,hd]` cos/sin via `_apply_rope_ttnn`):
+  **PCC 0.999996** both rows.
+- Matmul cost premise (M=1≡M=2 row-stacked, fuse_batch): validated earlier (scratchpad/batch2_iso.py).
+
+Integration steps (build additively so the working model is never broken):
+1. `alloc_kv_cache_batched2` → combined cache `[2,n_kv,maxS,hd]` (row0=pos, row1=neg).
+2. batched decode attention: row-stacked QKV `[1,1,2,2048]` → nlp_create_qkv_heads → permute to
+   batch-2 → per-row RoPE (2 gathered position rows) → paged_update_cache(update_idxs=[p_pos,p_neg])
+   → batched SDPA-decode(cur_pos_tensor) → concat heads → wo (row-stacked).
+3. AR loop: pipeline neg one frame ahead — batch pos-LM(i) with neg-LM(i+1) (both inputs ready
+   mid-frame i), assemble row-stacked input, one batched 28-layer forward, split outputs
+   (pos→logits+hidden, neg→hidden cached for next frame). lm_head on the pos row only.
+4. Segment-boundary + first-frame special-casing; wire into the whole-segment trace.
+Expected ~9 ms/frame (neg-LM becomes ~free). Numerically exact → zero quality risk.
+
 ## OPTIMIZATION PLAN (prioritized by expected device-time win × confidence)
 
 ### Tier 1 — cross-cutting, highest leverage

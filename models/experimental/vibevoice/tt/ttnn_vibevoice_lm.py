@@ -531,6 +531,14 @@ class TTVibeVoiceLM:
             ttnn.BufferType.L1,
             ttnn.ShardSpec(_shard_grid, [32, self.cfg.head_dim], ttnn.ShardOrientation.ROW_MAJOR),
         )
+        # CFG-batched decode (batch=2 streams stacked in the cache batch dim): paged_update_cache
+        # input is [1, 2, n_kv, hd] → 2 tile-rows → 2-core height-sharded L1.
+        _shard_grid2 = ttnn.num_cores_to_corerangeset(2, _grid, True)
+        self._kv_update_shard_mc2 = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(_shard_grid2, [32, self.cfg.head_dim], ttnn.ShardOrientation.ROW_MAJOR),
+        )
 
     def alloc_kv_cache(self, max_seq: int, dtype: ttnn.DataType = ttnn.bfloat16) -> KVCache:
         """Preallocate a fixed-size KV cache sized to ``max_seq`` (rounded up).
@@ -563,6 +571,56 @@ class TTVibeVoiceLM:
                 )
             )
         return KVCache(keys=keys, values=values, max_seq=max_seq_aligned)
+
+    def alloc_kv_cache_batched2(self, max_seq: int, dtype: ttnn.DataType = ttnn.bfloat16) -> KVCache:
+        """Combined CFG KV cache for the batched decode: two streams stacked in the batch dim.
+
+        Shape per layer: ``[2, n_kv_heads, max_seq_aligned, head_dim]`` — batch row 0 = positive
+        stream, row 1 = negative (uncond) stream.  A single batched decode forward reads/writes
+        both with a per-stream ``cur_pos_tensor``; the two streams' matmuls/norms are row-stacked
+        (M=2 → still one tile row), so the negative stream costs ~nothing extra.
+        """
+        cfg = self.cfg
+        max_seq_aligned = _round_up(max(max_seq, self._KV_ALIGN), self._KV_ALIGN)
+        n_kv, head_dim = cfg.num_key_value_heads, cfg.head_dim
+        keys, values = [], []
+        for _ in range(cfg.num_hidden_layers):
+            keys.append(
+                ttnn.zeros(
+                    [2, n_kv, max_seq_aligned, head_dim],
+                    dtype=dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            )
+            values.append(
+                ttnn.zeros(
+                    [2, n_kv, max_seq_aligned, head_dim],
+                    dtype=dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            )
+        return KVCache(keys=keys, values=values, max_seq=max_seq_aligned)
+
+    def _rope_rows_from_pos_int2(self, pos0: int, pos1: int) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Build [1,1,2,hd] cos/sin RoPE rows for two stream positions (host write, TILE).
+
+        Row 0 = pos0 (positive/absolute), row 1 = pos1 (negative/segment-relative); broadcast
+        over heads inside rotary_embedding_hf, applied per-row to the M=2 stream dim.
+        """
+        hd = self.cfg.head_dim
+        cos = torch.from_numpy(self._cos_np[[pos0, pos1]]).to(torch.bfloat16).reshape(1, 1, 2, hd)
+        sin = torch.from_numpy(self._sin_np[[pos0, pos1]]).to(torch.bfloat16).reshape(1, 1, 2, hd)
+        c = ttnn.from_torch(
+            cos, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        s = ttnn.from_torch(
+            sin, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        return c, s
 
     def _embed(self, input_ids) -> ttnn.Tensor:
         """Device embedding lookup via ttnn.embedding. Returns [B, 1, S, hidden] TILE.
@@ -1138,6 +1196,119 @@ class TTVibeVoiceLM:
         return self.forward_decode_traced_embeds(
             inputs_embeds, cos_row, sin_row, cur_pos, kv_cache, return_last_hidden, need_logits
         )
+
+    # ── CFG-batched decode (batch=2 streams, row-stacked M) ─────────────────────
+    def _attention_decode_batched2(
+        self,
+        x2: ttnn.Tensor,  # [1, 1, 2, hidden]  (row0 pos, row1 neg)
+        layer_w: LayerWeights,
+        cos_rows: ttnn.Tensor,  # [1, 1, 2, hd]
+        sin_rows: ttnn.Tensor,  # [1, 1, 2, hd]
+        cur_pos: ttnn.Tensor,  # [2] int32 (per-stream position)
+        kv_cache: KVCache,  # combined [2, n_kv, maxS, hd]
+        layer_idx: int,
+    ) -> ttnn.Tensor:
+        cfg = self.cfg
+        n_heads, n_kv, head_dim = cfg.num_attention_heads, cfg.num_key_value_heads, cfg.head_dim
+        qkv = ttnn.linear(
+            _matmul_in_l1(x2, True),
+            layer_w.wqkv,
+            bias=layer_w.qkv_bias,
+            compute_kernel_config=_HIFI4,
+            program_config=_QKV_DECODE_PROGCFG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # [1,1,2,(nq+2nkv)hd] → q[1,nq,2,hd], k/v[1,nkv,2,hd] (the "S"=2 dim holds the 2 streams)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv,
+            num_heads=n_heads,
+            num_kv_heads=n_kv,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        q = _apply_rope_ttnn(q, cos_rows, sin_rows)  # per-row RoPE over the stream dim
+        k = _apply_rope_ttnn(k, cos_rows, sin_rows)
+        # KV write: [1,nkv,2,hd] → [1,2,nkv,hd] (batch=stream) → 2-core height-sharded L1
+        k_in = ttnn.to_memory_config(ttnn.permute(k, (0, 2, 1, 3)), self._kv_update_shard_mc2)
+        v_in = ttnn.to_memory_config(ttnn.permute(v, (0, 2, 1, 3)), self._kv_update_shard_mc2)
+        ttnn.experimental.paged_update_cache(
+            kv_cache.keys[layer_idx], k_in, update_idxs_tensor=cur_pos, page_table=None
+        )
+        ttnn.experimental.paged_update_cache(
+            kv_cache.values[layer_idx], v_in, update_idxs_tensor=cur_pos, page_table=None
+        )
+        # SDPA-decode: q [1, batch=2, nq, hd]
+        q_dec = ttnn.permute(q, (0, 2, 1, 3))
+        attn = ttnn.transformer.scaled_dot_product_attention_decode(
+            q_dec,
+            kv_cache.keys[layer_idx],
+            kv_cache.values[layer_idx],
+            cur_pos_tensor=cur_pos,
+            scale=self.scale,
+            program_config=_SDPA_DECODE_CFG,
+            compute_kernel_config=_HIFI4,
+        )  # [1, 2, nq, hd]
+        # merge heads → row-stacked [1,1,2,hidden]: permute to [1,nq,2,hd] then concat heads
+        out = ttnn.experimental.nlp_concat_heads(ttnn.permute(attn, (0, 2, 1, 3)), memory_config=ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.linear(
+            _matmul_in_l1(out, True),
+            layer_w.wo,
+            compute_kernel_config=_HIFI4,
+            program_config=_QO_DECODE_PROGCFG,
+            memory_config=_QO_DECODE_OUT_MEMCFG,
+        )
+        return out
+
+    def _transformer_layer_batched2(self, x2, layer_idx, cos_rows, sin_rows, cur_pos, kv_cache):
+        lw = self.w.layers[layer_idx]
+        res_mc = ttnn.L1_MEMORY_CONFIG
+        x_norm = ttnn.rms_norm(
+            x2, weight=lw.attn_norm_w, epsilon=self.cfg.rms_norm_eps, compute_kernel_config=_HIFI4, memory_config=res_mc
+        )
+        attn_out = self._attention_decode_batched2(x_norm, lw, cos_rows, sin_rows, cur_pos, kv_cache, layer_idx)
+        x2 = ttnn.add(x2, attn_out, memory_config=res_mc)
+        x_norm = ttnn.rms_norm(
+            x2, weight=lw.ffn_norm_w, epsilon=self.cfg.rms_norm_eps, compute_kernel_config=_HIFI4, memory_config=res_mc
+        )
+        ffn_out = self._ffn_layer(x_norm, lw)
+        x2 = ttnn.add(x2, ffn_out, memory_config=res_mc)
+        return x2
+
+    def forward_decode_batched2(
+        self,
+        embeds2: ttnn.Tensor,  # [1, 1, 2, hidden]  (row0 pos, row1 neg)
+        cos_rows: ttnn.Tensor,
+        sin_rows: ttnn.Tensor,
+        cur_pos: ttnn.Tensor,  # [2] int32
+        kv_cache: KVCache,  # combined [2, n_kv, maxS, hd]
+    ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """One batched CFG decode step over both streams.
+
+        Returns (logits, hidden2): logits = lm_head on ROW 0 (positive) only [1,1,1,vocab];
+        hidden2 = both streams' final hidden [1,1,2,hidden] fp32 (row0 pos, row1 neg).
+        """
+        cfg = self.cfg
+        x = embeds2 if embeds2.dtype != ttnn.float32 else ttnn.typecast(embeds2, ttnn.bfloat16)
+        for layer_idx in range(cfg.num_hidden_layers):
+            x = self._transformer_layer_batched2(x, layer_idx, cos_rows, sin_rows, cur_pos, kv_cache)
+        x = ttnn.rms_norm(
+            x,
+            weight=self.w.norm_w,
+            epsilon=cfg.rms_norm_eps,
+            compute_kernel_config=_HIFI4,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        hidden2 = ttnn.typecast(x, ttnn.float32)
+        # lm_head on the positive row only (row 1's logits are discarded, like the reference neg pass)
+        x_pos = ttnn.slice(x, [0, 0, 0, 0], [1, 1, 1, cfg.hidden_size], memory_config=ttnn.L1_MEMORY_CONFIG)
+        logits = ttnn.linear(
+            _matmul_in_l1(x_pos, True),
+            self.w.lm_head_w,
+            compute_kernel_config=_HIFI4,
+            program_config=_LM_HEAD_DECODE_PROGCFG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return logits, hidden2
 
     def prefill(
         self,
