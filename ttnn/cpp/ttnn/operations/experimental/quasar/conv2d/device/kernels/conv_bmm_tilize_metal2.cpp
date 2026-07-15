@@ -428,7 +428,18 @@ void kernel_main() {
     });
 #endif
 
+#if defined(ARCH_QUASAR) && defined(QSR_TILIZE_ORIENTED_HW_STARTUP)
+    // OPTION B PROBE (env TT_METAL_QSR_CONV_TILIZE_HW_STARTUP): give the in-kernel tilize a TILIZE-oriented
+    // one-time hw_configure (unpack=act, pack=act_tilized), exactly like the standalone tilize op that
+    // PASSES on Quasar -- instead of the matmul-oriented startup that makes the tilize's MATH datacopy MOP
+    // get rejected (ERROR_TRISC1 0x19). The matmul below runs with only matmul_block_init (its hw_configure
+    // is NOT set here), so it may fault / mis-compute -- that is EXPECTED for this probe. The goal is to
+    // confirm the TILIZE clears the 0x19 under a tilize-oriented startup, which validates splitting tilize
+    // and matmul into two device programs (each with its own hw_startup) -- the real Option B fix.
+    compute_kernel_hw_startup(in0_cb_id, tilized_in0_cb_id);
+#else
     compute_kernel_hw_startup<SrcOrder::Reverse>(mm_in0_cb_id, in1_cb_id, out_cb_id);
+#endif
     matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
