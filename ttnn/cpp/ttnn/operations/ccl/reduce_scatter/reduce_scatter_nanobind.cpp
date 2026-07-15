@@ -57,7 +57,7 @@ void bind_reduce_scatter(nb::module_& mod) {
 
         Memory Support:
             - Interleaved: DRAM and L1
-            - Sharded: WIDTH_SHARDED, HEIGHT_SHARDED, BLOCK_SHARDED, ND_SHARDED (BLOCK_SHARDED must be in L1)
+            - Sharded: WIDTH_SHARDED, HEIGHT_SHARDED and ND_SHARDED may reside in DRAM or L1; BLOCK_SHARDED must be in L1.
         )doc";
 
     ttnn::bind_function<"reduce_scatter">(

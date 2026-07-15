@@ -150,29 +150,51 @@ def test_point_to_point(mesh_device):
 
 
 @pytest.mark.parametrize("device_params", FABRIC_1D, indirect=True)
-@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 1)], indirect=True)
 def test_reduce_to_root(mesh_device):
-    # SDPA tree-reduction state tensors (values / running-sum / running-max), sharded per device.
-    l = ttnn.from_torch(
-        torch.randn((8, 128), dtype=torch.bfloat16),
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    # reduce_to_root runs an SDPA tree-reduction across a fixed 4-device line and stores the
+    # result on the root device only. The three state tensors (values l, running-sum s,
+    # running-max m) must be TILE-laid-out, WIDTH_SHARDED, and resident in L1.
+    num_devices = 4
+    num_cores = 8
+    tile = ttnn.Tile((8, 32))
+
+    # 8 shard cores laid out as two rows of four.
+    shard_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3)),
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 3)),
+        }
     )
-    s = ttnn.from_torch(
-        torch.randn((8, 32), dtype=torch.bfloat16),
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
-    )
-    m = ttnn.from_torch(
-        torch.randn((8, 32), dtype=torch.bfloat16),
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
-    )
+
+    def make_state(width_per_core):
+        # Per-device tensor is [8, width_per_core * num_cores]; stack one per device and shard
+        # dim 0 across the 4-device line so each device holds its own [8, width] slice.
+        shard_spec = ttnn.ShardSpec(shard_grid, [8, width_per_core], ttnn.ShardOrientation.ROW_MAJOR)
+        mem_config = ttnn.MemoryConfig(
+            ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, shard_spec
+        )
+        per_device = torch.stack(
+            [torch.randn([8, width_per_core * num_cores], dtype=torch.bfloat16) for _ in range(num_devices)], dim=0
+        )
+        return ttnn.from_torch(
+            per_device,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            tile=tile,
+            dtype=ttnn.bfloat16,
+            memory_config=mem_config,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        )
+
+    l = make_state(128)
+    s = make_state(32)
+    m = make_state(32)
 
     # Reduce the three states along the line to the root coordinate; outputs match the input specs.
     root_coord = ttnn.MeshCoordinate(1, 0)
     out_l, out_s, out_m = ttnn.reduce_to_root(l, s, m, root_coord, scale_fp32=1.0, topology=ttnn.Topology.Linear)
-    print(out_l.shape, out_s.shape, out_m.shape)  # (8, 128) (8, 32) (8, 32)
+    print(out_l.shape, out_s.shape, out_m.shape)
 
 
 @pytest.mark.parametrize("device_params", FABRIC_2D, indirect=True)

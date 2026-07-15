@@ -49,7 +49,7 @@ void bind_all_reduce(nb::module_& mod) {
 
         Memory Support:
             - Interleaved: DRAM and L1
-            - Sharded: supported (converted to interleaved internally and restored on output)
+            - Sharded: supported in DRAM or L1. A sharded input is converted to interleaved internally (its buffer type is preserved), and the result is written back according to the requested output ``memory_config``.
         )doc";
 
     ttnn::bind_function<"all_reduce">(

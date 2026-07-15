@@ -49,14 +49,15 @@ void bind_all_gather(nb::module_& mod) {
 
                 * - Dtypes
                   - Layouts
-                * - BFLOAT16, BFLOAT8_B, FLOAT32
+                * - BFLOAT16, BFLOAT8_B, FLOAT32, UINT32
                   - TILE, ROW_MAJOR
 
-            All-gather is a data-movement collective and does not restrict the input dtype; the output preserves the input dtype. Input must be rank 2 or greater. Row-major inputs, and tiled inputs whose gather dim is not tile-aligned, are routed through the composite (all-broadcast based) implementation.
+            All-gather is a data-movement collective and does not restrict the input dtype (e.g. UINT32 is supported and tested); the output preserves the input dtype. Input must be rank 2 or greater. Row-major inputs, and tiled inputs whose gather dim is not tile-aligned, are routed through the composite (all-broadcast based) implementation.
 
         Memory Support:
-            - Interleaved: DRAM and L1
-            - Sharded: WIDTH_SHARDED, HEIGHT_SHARDED, BLOCK_SHARDED (BLOCK_SHARDED must be in L1)
+            - Interleaved: DRAM and L1 (input and output)
+            - Sharded input: WIDTH_SHARDED, HEIGHT_SHARDED, BLOCK_SHARDED; a BLOCK_SHARDED input must be in L1 (DRAM block sharding is rejected), the others may be in DRAM or L1.
+            - Sharded output: the output memory config may differ from the input's and is not subject to the input BLOCK_SHARDED/DRAM restriction.
         )doc";
 
     ttnn::bind_function<"all_gather">(

@@ -41,7 +41,7 @@ void bind_mesh_partition(nb::module_& mod) {
                 * - BFLOAT16, BFLOAT8_B, FLOAT32
                   - TILE, ROW_MAJOR
 
-            mesh_partition is a per-device slice (it does not use the fabric) and does not restrict the input dtype; the output preserves the input dtype. ``input_shape[dim]`` must be evenly divisible by the number of devices along the cluster axis, and for TILE layout the partition must not introduce tile padding.
+            mesh_partition is a per-device slice (it does not use the fabric) and does not restrict the input dtype; the output preserves the input dtype. ``input_shape[dim]`` must be evenly divisible by the number of devices along the cluster axis.
 
         Memory Support:
             - Interleaved: DRAM and L1

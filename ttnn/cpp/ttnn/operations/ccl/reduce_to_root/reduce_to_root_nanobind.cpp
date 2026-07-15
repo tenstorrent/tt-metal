@@ -35,10 +35,10 @@ void bind_reduce_to_root(nb::module_& mod) {
                 output_tensor_s (ttnn.Tensor, optional): Preallocated output tensor for sum. Defaults to `None`.
                 output_tensor_m (ttnn.Tensor, optional): Preallocated output tensor for max. Defaults to `None`.
                 intermediate_tensor (ttnn.Tensor, optional): Preallocated intermediate tensor. Defaults to `None`.
-                input_mux_cores (List[ttnn.MeshCoordinate], optional): the 4 mux coordinates used for the reduction. Defaults to `None`.
+                input_mux_cores (List[ttnn.CoreCoord], optional): the 4 mux core coordinates used for the reduction. Defaults to `None`.
 
             Returns:
-                Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: the reduced (l, s, m) tensors, each with the same spec as the corresponding input. The results are valid only on the root device.
+                List[ttnn.Tensor]: the reduced (l, s, m) tensors, each with the same spec as the corresponding input. The results are valid only on the root device.
 
             Supported dtypes and layouts:
 

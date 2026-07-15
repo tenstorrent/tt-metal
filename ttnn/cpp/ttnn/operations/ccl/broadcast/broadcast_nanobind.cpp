@@ -53,7 +53,7 @@ void bind_broadcast(nb::module_& mod) {
 
         Memory Support:
             - Interleaved: DRAM and L1
-            - Sharded: WIDTH_SHARDED, HEIGHT_SHARDED, BLOCK_SHARDED
+            - Sharded: WIDTH_SHARDED, HEIGHT_SHARDED, BLOCK_SHARDED (each may reside in DRAM or L1; the op places no buffer-type restriction)
         )doc";
 
     ttnn::bind_function<"broadcast">(

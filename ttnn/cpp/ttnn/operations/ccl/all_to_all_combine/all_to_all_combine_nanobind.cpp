@@ -96,7 +96,13 @@ void bind_all_to_all_combine(nb::module_& mod) {
                   - UINT16
                   - ROW_MAJOR
 
-            All input tensors must be rank 4 and ``cluster_axis`` is required. ``expert_mapping_tensor`` must be fully replicated across the mesh. The output preserves the input dtype (BFLOAT16) and is ROW_MAJOR.
+            All input tensors must be rank 4 and ``cluster_axis`` is required. ``expert_mapping_tensor`` must be fully replicated across the mesh. Additional input-spec constraints enforced by the op:
+
+            - The number of experts must be evenly divisible by the number of devices.
+            - Unless ``local_reduce`` is set, ``input_tensor``'s leading (expert) dimension must equal ``experts / num_devices``.
+            - ``output_shard_dim`` must be 1 or 2. When it is 1, the metadata batch dimension must be divisible by the cluster-axis device count; when it is 2, the metadata sequence dimension must be divisible by the cluster-axis device count.
+
+            The output preserves the input dtype (BFLOAT16) and is ROW_MAJOR.
 
         Memory Support:
             - Interleaved: DRAM and L1
