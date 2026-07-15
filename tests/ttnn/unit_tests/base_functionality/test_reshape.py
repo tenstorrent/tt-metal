@@ -16,7 +16,7 @@ def test_reshape_preserves_root_buffer_unique_id(device):
     input_tensor = ttnn.from_torch(
         torch.rand((1, 1, 32, 32), dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
     )
     input_buffer_id = input_tensor.buffer_unique_id()
