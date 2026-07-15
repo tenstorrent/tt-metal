@@ -74,10 +74,17 @@ LABEL_VERSION="$(printf '%s' "$LABELS_JSON" | jq -r '."org.opencontainers.image.
 log "labels: source='${LABEL_SOURCE}' licenses='${LABEL_LICENSES}' version='${LABEL_VERSION}'"
 
 # --- (c) rescan the image from the registry with syft, seeded from labels ---
+# file.metadata.selection defaults to "owned-by-package": syft only computes real
+# file digests for files it can attribute to a detected package (dpkg/rpm/language
+# manifests/etc). These tool images are raw binaries COPYed from `FROM scratch` with
+# no package-manager metadata at all, so every file is "unowned" and syft falls back
+# to a placeholder all-zero SHA1 checksum instead of a real one (a known syft
+# behavior for unowned files - see anchore/syft#2307/#1226). Force "all" so real
+# digests get computed for every file regardless of package ownership.
 SYFT_SPDX="$WORKDIR/syft.spdx.json"
 SYFT_ARGS=(scan "registry:${REF}" -o "spdx-json=${SYFT_SPDX}")
 [ -n "$LABEL_VERSION" ] && SYFT_ARGS+=(--source-version "$LABEL_VERSION")
-syft "${SYFT_ARGS[@]}"
+SYFT_FILE_METADATA_SELECTION=all syft "${SYFT_ARGS[@]}"
 
 # --- (d) jq-patch ONLY the describing/root package ---
 PATCHED_SPDX="$WORKDIR/spdx.patched.json"
