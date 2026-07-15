@@ -155,22 +155,24 @@ jobs:
         # makes serialize_cluster_descriptor() crash in the next step. Reset the
         # cards and verify links are online before opening the cluster.
         if: ${{ matrix.arch == 'blackhole' }}
-        timeout-minutes: 10
+        timeout-minutes: 15
+        env:
+          DEV_IMAGE: ${{ needs.build-artifact.outputs.dev-docker-image }}
         run: |
           HEALTH_CHECK=./build/test/tt_metal/tt_fabric/test_system_health
-          # test_system_health needs libtt_metal.so (build/lib) and libmpi.so.40
-          # (bundled in the ttnn wheel); neither is on the default path off-container.
-          export TT_METAL_HOME="$PWD"
-          TTNN_ROOT=$(python3 -c "import os, ttnn; print(os.path.dirname(ttnn.__file__))" 2>/dev/null || true)
-          MPI_LIB=""
-          if [ -n "$TTNN_ROOT" ]; then
-            MPI_SO=$(find "$TTNN_ROOT" -name 'libmpi.so*' -print -quit 2>/dev/null || true)
-            if [ -n "$MPI_SO" ]; then MPI_LIB=$(dirname "$MPI_SO"); fi
-          fi
-          export LD_LIBRARY_PATH="$PWD/build/lib${MPI_LIB:+:$MPI_LIB}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           # tt-smi lives in the runner provisioning venv, not on the default PATH.
           ACTIVATE=/opt/tt_metal_infra/provisioning/provisioning_env/bin/activate
           reset_cluster() { ( if [ -f "$ACTIVATE" ]; then source "$ACTIVATE"; fi; tt-smi -glx_reset_auto ); }
+          # Run the binary inside the dev image, which carries its runtime deps
+          # (OpenMPI etc.) that are absent on the bare-metal runner.
+          health_check() {
+            docker run --rm --privileged \
+              --device /dev/tenstorrent --device /dev/ipmi0 \
+              -v /dev/hugepages-1G:/dev/hugepages-1G \
+              -v "$PWD":/work -w /work -e TT_METAL_HOME=/work \
+              "$DEV_IMAGE" \
+              bash -c 'export LD_LIBRARY_PATH="/work/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"; exec ./build/test/tt_metal/tt_fabric/test_system_health'
+          }
           for i in $(seq 1 10); do
             echo "Reset/health-check attempt $i"
             if reset_cluster; then
@@ -178,7 +180,7 @@ jobs:
                 echo "Reset succeeded; test_system_health binary not present, skipping link verification"
                 exit 0
               fi
-              if "$HEALTH_CHECK"; then
+              if health_check; then
                 echo "Reset + health check passed"
                 exit 0
               fi
