@@ -272,7 +272,7 @@ class HunyuanTtSiglip2VisionEmbeddings(LightweightModule):
 
         self._weight_dtype = weight_dtype
         self._pos_compute_cfg = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -463,7 +463,7 @@ class HunyuanTtSiglip2Attention(LightweightModule):
         self.scale = self.head_dim**-0.5
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -578,7 +578,7 @@ class HunyuanTtSiglip2MLP(LightweightModule):
         self.fc2_b = ttnn.from_torch(b1, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -640,7 +640,7 @@ class HunyuanTtSiglip2EncoderLayer(LightweightModule):
         self.layer_norm_eps = VIT_CONFIG["layer_norm_eps"]
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -729,7 +729,7 @@ class HunyuanTtSiglip2Vision(LightweightModule):
         self.layer_norm_eps = VIT_CONFIG["layer_norm_eps"]
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -784,7 +784,7 @@ class HunyuanTtLightProjector(LightweightModule):
         self.b2 = ttnn.from_torch(b2, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
