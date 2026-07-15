@@ -324,31 +324,35 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
     };
 
     // --- Per-core runtime args ---
-    Group<KernelRunArgs::NodeRuntimeArgs> reader_node_args;
-    Group<KernelRunArgs::NodeRuntimeArgs> writer_node_args;
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
     AdvancedKernelRunArgs reader_run_advanced;
 
     for (size_t i = 0; i < all_cores_vec.size(); ++i) {
         const auto& core = all_cores_vec[i];
-        reader_node_args.push_back(
-            {.node = core,
-             .args = {
-                 {"start_id", rt.start_id[i]},
-                 {"num_sticks_per_core", rt.num_sticks_per_core[i]},
-                 {"num_sticks_per_core_read", rt.num_sticks_per_core_read[i]},
-                 {"num_read_per_barrier", rt.num_read_per_barrier[i]}}});
+        AddRuntimeArgsForNode(
+            reader_node_args,
+            core,
+            {
+                {"start_id", rt.start_id[i]},
+                {"num_sticks_per_core", rt.num_sticks_per_core[i]},
+                {"num_sticks_per_core_read", rt.num_sticks_per_core_read[i]},
+                {"num_read_per_barrier", rt.num_read_per_barrier[i]},
+            });
         reader_run_advanced.runtime_varargs.emplace(core, rt.id_per_dim[i]);
 
-        writer_node_args.push_back(
-            {.node = core,
-             .args = {
-                 {"stick_size", rt.unpadded_row_size_bytes},
-                 {"stick_size_offset", rt.unpadded_row_size_bytes_offset},
-                 {"num_sticks_per_core", rt.num_sticks_per_core[i]},
-                 {"num_sticks_per_core_read", rt.num_sticks_per_core_read[i]},
-                 {"num_read_per_barrier", rt.num_read_per_barrier[i]},
-                 {"start_id", rt.num_sticks_written[i]},
-                 {"page_size_override", rt.writer_page_size}}});
+        AddRuntimeArgsForNode(
+            writer_node_args,
+            core,
+            {
+                {"stick_size", rt.unpadded_row_size_bytes},
+                {"stick_size_offset", rt.unpadded_row_size_bytes_offset},
+                {"num_sticks_per_core", rt.num_sticks_per_core[i]},
+                {"num_sticks_per_core_read", rt.num_sticks_per_core_read[i]},
+                {"num_read_per_barrier", rt.num_read_per_barrier[i]},
+                {"start_id", rt.num_sticks_written[i]},
+                {"page_size_override", rt.writer_page_size},
+            });
     }
 
     // --- TensorParameters ---
