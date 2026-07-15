@@ -354,7 +354,9 @@ jobs:
             ls -R /ci/artifacts
             exit 1
           fi
-          mpirun --pernode uv pip install "${ttnn_wheels[@]}"
+          # Include pytest (+ pytest-timeout, needed by the --timeout flag) so test entries can
+          # run pytest in the worker venv, which is otherwise runtime-only.
+          mpirun --pernode uv pip install "${ttnn_wheels[@]}" pytest pytest-timeout
 
       - name: Reset cards and validate cluster for ${{ matrix.test-group.name }}
         working-directory: /tmp
