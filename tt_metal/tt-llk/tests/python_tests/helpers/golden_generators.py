@@ -3473,7 +3473,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         return torch.bitwise_xor(t1.to(torch.int32), t2.to(torch.int32)).to(torch.int32)
 
     def _div_int32(self, t1, t2):
-        # int32 truncating division (rounds toward zero), matching calculate_div_int32.
+        # int32 truncating division (rounds toward zero), matching calculate_div_int32_trunc.
         return torch.div(
             t1.to(torch.int64), t2.to(torch.int64), rounding_mode="trunc"
         ).to(torch.int32)

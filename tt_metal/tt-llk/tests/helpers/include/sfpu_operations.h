@@ -1268,11 +1268,19 @@ void call_binary_sfpu_operation_init()
     {
         SFPU_BINARY_INIT(lt);
     }
-    else if constexpr (BINOP == BinaryOp::MAX || BINOP == BinaryOp::MIN)
+    else if constexpr (BINOP == BinaryOp::MAX)
     {
         // binary_max_min uses SFPLOADMACRO templates programmed by its init.
-        constexpr bool IS_MAX = (BINOP == BinaryOp::MAX);
-        SFPU_BINARY_INIT_FN(add1, binary_max_min_init, (IS_MAX));
+        // The SfpuType must be max/min (not a generic placeholder): the LLK init
+        // selects a max/min-specific address-mod setup (ADDR_MOD_6 with dest incr=2)
+        // that the kernel's load/swap/store sequence depends on. Using add1 skips
+        // that setup and leaves the output tile holding in0. Mirrors binary_max_tile_init.
+        SFPU_BINARY_INIT_FN(max, binary_max_min_init, (true /* IS_MAX */));
+    }
+    else if constexpr (BINOP == BinaryOp::MIN)
+    {
+        // See MAX above: the min SfpuType drives the required address-mod setup.
+        SFPU_BINARY_INIT_FN(min, binary_max_min_init, (false /* IS_MAX */));
     }
     else if constexpr (BINOP == BinaryOp::FMOD)
     {
@@ -1287,7 +1295,10 @@ void call_binary_sfpu_operation_init()
     }
     else if constexpr (BINOP == BinaryOp::DIV_INT32)
     {
-        SFPU_BINARY_INIT_FN(add1, div_init, (APPROXIMATION_MODE));
+        // Truncating int32 division writes an int32 quotient (calculate_div_int32_trunc),
+        // so it needs the reciprocal-polynomial constants from div_trunc_init (shared with
+        // DIV_INT32_FLOOR) rather than div_init's sfpu_reciprocal_init.
+        SFPU_BINARY_INIT_FN(add1, div_trunc_init, (APPROXIMATION_MODE));
     }
     else if constexpr (BINOP == BinaryOp::DIV_INT32_FLOOR)
     {
@@ -1582,11 +1593,13 @@ void call_binary_sfpu_operation(
     }
     else if constexpr (BINOP == BinaryOp::DIV_INT32)
     {
-        // int32 truncating division (rounds toward zero).
+        // int32 truncating division (rounds toward zero). calculate_div_int32_trunc writes a
+        // true int32 quotient; the legacy calculate_div_int32 stored an fp32 result, which the
+        // Int32 pack path reinterpreted as garbage bit patterns.
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
-            calculate_div_int32,
+            calculate_div_int32_trunc,
             (APPROXIMATION_MODE, PER_FACE_ITERATIONS),
             dst_index_in0,
             dst_index_in1,
