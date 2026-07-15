@@ -548,7 +548,16 @@ class TPAttention:
         q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
         k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
 
-        # Cap SDPA-decode grid to 64 cores (tree-reduction limit on P150)
+        # Cap SDPA-decode grid to 64 cores (tree-reduction limit on P150). Swept two knobs
+        # looking for a fix to SDPA-decode's ~3.7x per-call slowdown at B=8 vs B=1: (1) grid size
+        # 64 -> the real P150x4 grid (11x10=110 cores) -- measured NO improvement (114.6us ->
+        # 118.0us, slightly worse), likely because the extra cores sit in a less favorable
+        # NOC/DRAM-distance region, or the added tree-reduction round offsets the gain; (2)
+        # max_cores_per_head_batch (defaults to 16 in SDPAProgramConfig when unset -- B=1 has only
+        # ever used 16 of the 64 grid cores, not all 64) swept 1..64 at both B=1 and B=8 -- flat
+        # within noise (~1-3%) at every value. Neither knob moves this op; the B-scaling looks
+        # like a fixed per-batch-group cost (dispatch/output-write per independent reduction
+        # group), not a cores-per-group effect -- not fixable via SDPAProgramConfig tuning.
         sdpa_dec_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8), exp_approx_mode=False, q_chunk_size=0, k_chunk_size=0
         )
