@@ -76,9 +76,11 @@ void FusedRMSNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
         a.padded_shape()[-1]);
 
     TT_FATAL(a.logical_shape().rank() == 4, "Input must have rank 4, got: {}", a.logical_shape().rank());
-    // Expected input shape: [batch, 1, sequence_length, hidden_dim]
+    // Expected input shape: [batch, 1, sequence_length, hidden_dim]. Dim 1 is the
+    // "head slot" that the op expands into num_heads on output, so it must be 1.
+    // The batch dim (dim 0) may be >1: leading dims are folded into the row dimension
+    // (rows are laid out row-major), and ROPE cycles every sequence_length rows.
     TT_FATAL(a.logical_shape()[1] == 1, "Input dim 1 must be 1, got: {}", a.logical_shape()[1]);
-    TT_FATAL(a.logical_shape()[0] == 1, "Expecting input batch dimension to be 1, got: {}", a.logical_shape()[0]);
 
     if (weight_opt.has_value()) {
         // Gamma is given
