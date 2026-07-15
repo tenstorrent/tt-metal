@@ -382,3 +382,58 @@ def test_smollm3_encoder_full_mesh(*, mesh_device, seq):
         pos_embeds=(tt_tensor.from_torch(cos, device=mesh_device), tt_tensor.from_torch(sin, device=mesh_device)),
     )
     assert_quality(ref_prompt, tt_tensor.to_torch(prompt_embeds), pcc=0.99)
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 8192}],
+    indirect=["device_params"],
+)
+@pytest.mark.parametrize("seq", [128, 512])  # divisible by sp_factor(4)*32
+def test_smollm3_encoder_sp(*, mesh_device, seq):
+    """Sequence-parallel (all-gather K/V) encoder: seq sharded on sp_axis=0, tp on axis 1.
+
+    Inputs (input_ids, rope cos/sin) are sharded along the seq dim over sp_axis; outputs are
+    gathered back over the same axis. PCC vs. HF proves the RoPE-shard-offset + rectangular
+    causal-bias math.
+    """
+    from models.tt_dit.encoders.smollm3.model_smollm3 import SmolLM3TextEncoder
+
+    torch.manual_seed(0)
+    sp_axis, tp_axis = 0, 1
+    sp_factor = mesh_device.shape[sp_axis]
+    tp_factor = mesh_device.shape[tp_axis]
+    hf = _load_hf_smollm3()
+    tokens = torch.randint(0, hf.config.vocab_size, (1, seq))
+    with torch.no_grad():
+        ref = hf.model(input_ids=tokens, output_hidden_states=True)
+    ref_prompt = torch.cat([ref.hidden_states[-1], ref.hidden_states[-2]], dim=-1).float()
+
+    cfg = SmolLM3Config.from_hf_config(hf.config)
+    ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    pc = EncoderParallelConfig.from_tuples(tp=(tp_factor, tp_axis), sp=(sp_factor, sp_axis))
+    enc = SmolLM3TextEncoder(cfg, device=mesh_device, parallel_config=pc, ccl_manager=ccl)
+    enc.load_torch_state_dict(hf.model.state_dict())
+
+    cos, sin = enc.create_rope_tensors(1, seq)  # (1,1,seq,head_dim); shard seq (axis 2) on sp_axis
+    tt_ids = tt_tensor.from_torch(
+        tokens, device=mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[None, sp_axis]
+    )
+    tt_cos = tt_tensor.from_torch(cos, device=mesh_device, mesh_axes=[None, None, sp_axis, None])
+    tt_sin = tt_tensor.from_torch(sin, device=mesh_device, mesh_axes=[None, None, sp_axis, None])
+    prompt_embeds, _ = enc.encode(tt_ids, attention_mask=None, pos_embeds=(tt_cos, tt_sin))
+    out = tt_tensor.to_torch(prompt_embeds, mesh_axes=[None, sp_axis, None], composer_device=mesh_device)
+    assert_quality(ref_prompt, out, pcc=0.99, relative_rmse=0.2)
+
+
+def test_fibo_wrapper_bucket_pick(*, expect_error):
+    from models.tt_dit.pipelines.bria_fibo.text_encoder import pick_bucket
+
+    assert pick_bucket(10, (1024,), sp_factor=4) == 1024
+    assert pick_bucket(1024, (1024, 2048), sp_factor=4) == 1024
+    assert pick_bucket(1025, (1024, 2048), sp_factor=4) == 2048
+    with expect_error(ValueError, "exceeds all buckets"):
+        pick_bucket(3000, (1024, 2048), sp_factor=4)
+    with expect_error(ValueError, "not divisible"):
+        pick_bucket(10, (1000,), sp_factor=4)  # 1000 % (4*32) != 0

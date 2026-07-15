@@ -36,6 +36,22 @@ if TYPE_CHECKING:
 BOT_TOKEN_ID = 128000
 
 
+def pick_bucket(seq_len: int, buckets, sp_factor: int) -> int:
+    """Smallest bucket >= seq_len; validate each bucket is divisible by ``sp_factor * 32``.
+
+    A fixed bucket gives the encoder a stable padded shape (needed for clean sequence-parallel
+    sharding and program-cache reuse). Raises ``ValueError`` if a bucket is not shardable or if the
+    prompt is longer than every bucket (the caller should then add a larger bucket).
+    """
+    for b in sorted(buckets):
+        if b % (sp_factor * 32) != 0:
+            raise ValueError(f"bucket {b} not divisible by sp_factor*32 = {sp_factor * 32}")
+    for b in sorted(buckets):
+        if b >= seq_len:
+            return b
+    raise ValueError(f"prompt seq_len {seq_len} exceeds all buckets {sorted(buckets)}; add a larger bucket")
+
+
 def build_text_encoder_layers(all_hidden_states: list, num_blocks: int) -> list:
     """Stretch/trim SmolLM3's hidden-state list to the transformer's per-block count.
 
@@ -64,10 +80,15 @@ class SmolLM3TextEncoderWrapper:
         device: ttnn.MeshDevice,
         ccl_manager: "CCLManager | None",
         parallel_config: "EncoderParallelConfig",
+        pad_buckets=(1024,),
         use_torch: bool = False,
     ) -> None:
         self._device = device
         self._use_torch = use_torch
+        self._pad_buckets = tuple(pad_buckets)
+        sp = parallel_config.sequence_parallel
+        self._sp_axis = sp.mesh_axis if (sp is not None and sp.factor > 1) else None
+        self._sp_factor = sp.factor if (sp is not None) else 1
 
         self.tokenizer = AutoTokenizer.from_pretrained(checkpoint, subfolder="tokenizer")
 
@@ -112,24 +133,40 @@ class SmolLM3TextEncoderWrapper:
             prompt_embeds = torch.cat([all_hidden_states[-1], all_hidden_states[-2]], dim=-1)
             return prompt_embeds, all_hidden_states
 
-        # The tokenized attention_mask is all-ones (no right-padding beyond the true token count),
-        # so an explicit attention bias is redundant here: tile-pad to a valid ttnn shape
-        # ourselves and run with attention_mask=None (is_causal SDPA) -- verified numerically
-        # equivalent to routing the same all-ones mask through SmolLM3TextEncoder's own internal
-        # tile-padding path, since causal masking guarantees the padded tail never influences the
-        # real (leading) positions' outputs.
-        padded_len = -(-seq_len // 32) * 32
-        padded_ids = torch.nn.functional.pad(input_ids, (0, padded_len - seq_len), value=0)
-        cos, sin = self._encoder.create_rope_tensors(1, padded_len)
+        # Pad to a fixed bucket length (stable shape for SP sharding + program-cache reuse). The
+        # tokenized attention_mask is all-ones, so we run with attention_mask=None: at sp=1 that is
+        # the is_causal SDPA path (padded tail never influences leading tokens under causal masking);
+        # at sp>1 the encoder builds a per-shard rectangular causal bias internally.
+        bucket = pick_bucket(seq_len, self._pad_buckets, self._sp_factor)
+        padded_ids = torch.nn.functional.pad(input_ids, (0, bucket - seq_len), value=0)
+        cos, sin = self._encoder.create_rope_tensors(1, bucket)
 
-        tt_ids = tt_tensor.from_torch(padded_ids, device=self._device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-        tt_cos = tt_tensor.from_torch(cos, device=self._device)
-        tt_sin = tt_tensor.from_torch(sin, device=self._device)
+        if self._sp_factor > 1:
+            # Shard input_ids + RoPE tables along the sequence dim across the sp axis.
+            tt_ids = tt_tensor.from_torch(
+                padded_ids,
+                device=self._device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_axes=[None, self._sp_axis],
+            )
+            tt_cos = tt_tensor.from_torch(cos, device=self._device, mesh_axes=[None, None, self._sp_axis, None])
+            tt_sin = tt_tensor.from_torch(sin, device=self._device, mesh_axes=[None, None, self._sp_axis, None])
+        else:
+            tt_ids = tt_tensor.from_torch(
+                padded_ids, device=self._device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+            )
+            tt_cos = tt_tensor.from_torch(cos, device=self._device)
+            tt_sin = tt_tensor.from_torch(sin, device=self._device)
 
         prompt_embeds, all_hidden_states = self._encoder.encode(
             tt_ids, attention_mask=None, pos_embeds=(tt_cos, tt_sin)
         )
 
-        host_prompt_embeds = tt_tensor.to_torch(prompt_embeds)[:, :seq_len, :]
-        host_hidden_states = [tt_tensor.to_torch(h)[:, :seq_len, :] for h in all_hidden_states]
+        # Under SP the outputs are sequence-sharded; gather them back over the sp axis on readback.
+        gather = (
+            dict(mesh_axes=[None, self._sp_axis, None], composer_device=self._device) if self._sp_factor > 1 else {}
+        )
+        host_prompt_embeds = tt_tensor.to_torch(prompt_embeds, **gather)[:, :seq_len, :]
+        host_hidden_states = [tt_tensor.to_torch(h, **gather)[:, :seq_len, :] for h in all_hidden_states]
         return host_prompt_embeds, host_hidden_states

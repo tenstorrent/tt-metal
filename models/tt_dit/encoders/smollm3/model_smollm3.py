@@ -101,12 +101,33 @@ def prepare_attention_bias(attention_mask: ttnn.Tensor) -> ttnn.Tensor:
     return ttnn.clone(attention_mask, dtype=ttnn.bfloat4_b)
 
 
+def build_sp_causal_bias(seq_local: int, sp_factor: int, *, device: ttnn.MeshDevice, sp_axis: int) -> ttnn.Tensor:
+    """Per-shard rectangular causal bias for sequence-parallel attention.
+
+    The sequence is sharded across ``sp_axis``; shard ``r`` holds query rows for global positions
+    ``[r*seq_local, (r+1)*seq_local)`` while K/V are all-gathered to the full ``seq_local*sp_factor``.
+    Row ``i`` (global ``r*seq_local+i``) may attend key ``j`` iff ``j <= r*seq_local+i``. The result
+    is sharded along ``sp_axis`` so each device receives only its own ``(1,1,seq_local,seq_total)`` slice.
+    """
+    seq_total = seq_local * sp_factor
+    q_idx = torch.arange(seq_local)
+    k_idx = torch.arange(seq_total)
+    masks = []
+    for r in range(sp_factor):
+        allow = k_idx[None, :] <= (r * seq_local + q_idx)[:, None]  # (seq_local, seq_total)
+        masks.append(torch.where(allow, 0.0, float("-inf")))
+    stacked = torch.stack(masks, dim=0).reshape(sp_factor, 1, seq_local, seq_total)
+    return tensor.from_torch(stacked, device=device, dtype=ttnn.bfloat16, mesh_axes=[sp_axis, None, None, None])
+
+
 @dataclass
 class SmolLM3Context:
     device: ttnn.MeshDevice
     tp_axis: int | None
     ccl_manager: CCLManager | None
     fsdp_mesh_axis: int | None = None
+    sp_axis: int | None = None
+    sp_factor: int = 1
 
 
 class SmolLM3RmsNorm(RMSNorm):
@@ -244,6 +265,8 @@ class SmolLM3Attention(Module):
         self._split_factor = split_factor
         self._tp_axis = ctx.tp_axis
         self._tp_factor = tp_factor
+        self._sp_axis = ctx.sp_axis
+        self._sp_factor = ctx.sp_factor
         self._device = ctx.device
         self._ccl_manager = ctx.ccl_manager
 
@@ -317,13 +340,20 @@ class SmolLM3Attention(Module):
             q = _apply_rope(q, cos, sin)
             k = _apply_rope(k, cos, sin)
 
+        if self._sp_factor > 1:
+            # Sequence-parallel: gather full-sequence K/V (already RoPE'd) across the sp axis so each
+            # shard's local Q attends the whole sequence. The rectangular causal bias carries the
+            # shard's global offset, so is_causal cannot be used here.
+            k = self._ccl_manager.all_gather_persistent_buffer(k, dim=2, mesh_axis=self._sp_axis, use_hyperparams=True)
+            v = self._ccl_manager.all_gather_persistent_buffer(v, dim=2, mesh_axis=self._sp_axis, use_hyperparams=True)
+
         x = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
             v,
             attn_mask=attention_bias,
             is_causal=attention_bias is None,
-            program_config=self._sdpa_program_config(q.shape[2]),
+            program_config=self._sdpa_program_config(k.shape[2]),
             compute_kernel_config=self._sdpa_compute_kernel_config,
         )
 
@@ -417,14 +447,23 @@ class SmolLM3TextEncoder(Module):
             other = 1 - tp_axis
             if device.shape[other] > 1:
                 fsdp_mesh_axis = other
+        sp = parallel_config.sequence_parallel
+        sp_axis = sp.mesh_axis if (sp is not None and sp.factor > 1) else None
+        sp_factor = sp.factor if sp is not None else 1
         ctx = SmolLM3Context(
             device=device,
             tp_axis=tp_axis if tp_factor > 1 else None,
             ccl_manager=ccl_manager,
             fsdp_mesh_axis=fsdp_mesh_axis,
+            sp_axis=sp_axis,
+            sp_factor=sp_factor,
         )
         if ctx.tp_axis is not None and ctx.ccl_manager is None:
             raise ValueError("ccl_manager must be provided if tensor parallelism is used")
+        if ctx.sp_axis is not None and ctx.ccl_manager is None:
+            raise ValueError("ccl_manager must be provided if sequence parallelism is used")
+        self._sp_axis = ctx.sp_axis
+        self._sp_factor = ctx.sp_factor
 
         self.embed_tokens = Embedding(config.vocab_size, config.hidden_size, device=device)
         self.layers = ModuleList(
@@ -483,9 +522,16 @@ class SmolLM3TextEncoder(Module):
         attention_mask: ttnn.Tensor | None = None,
         pos_embeds: tuple[ttnn.Tensor, ttnn.Tensor],
     ) -> list[ttnn.Tensor]:
+        # When sequence-parallel, ``.shape`` reports the LOCAL (per-shard) sequence length; the full
+        # sequence is ``seq_len * sp_factor`` and lives across the sp axis after the K/V all-gather.
         batch_size, seq_len = input_ids.shape
 
-        if attention_mask is not None:
+        if self._sp_factor > 1:
+            # Sharded seq: build the per-shard rectangular causal bias (global offset baked in) once
+            # and thread it through every layer. No local padding -- the wrapper pads to a bucket.
+            padded = seq_len
+            attention_bias = build_sp_causal_bias(seq_len, self._sp_factor, device=self._device, sp_axis=self._sp_axis)
+        elif attention_mask is not None:
             padded = (
                 -(-seq_len // 32) * 32 if seq_len < MAX_CHUNK_SIZE else -(-seq_len // MAX_CHUNK_SIZE) * MAX_CHUNK_SIZE
             )
