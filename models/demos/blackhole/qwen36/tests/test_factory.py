@@ -181,9 +181,12 @@ def parametrize_mesh_tp(max_tp=4):
     shape = _resolve_mesh_shape(max_tp)
 
     def decorator(fn):
-        fn = pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)(
-            fn
-        )
+        fn = pytest.mark.parametrize(
+            "device_params",
+            # l1_small_size required by ttnn.conv1d in the GDN prefill path
+            [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 24576}],
+            indirect=True,
+        )(fn)
         fn = pytest.mark.parametrize("mesh_device", [pytest.param(shape, id=f"{shape[0]}x{shape[1]}")], indirect=True)(
             fn
         )
