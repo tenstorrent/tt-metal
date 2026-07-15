@@ -18,9 +18,9 @@ struct alignas(uint64_t) NocDebuggingEventMetadata {
         uint64_t raw;
         struct {
             uint64_t event_type : 8;
-            uint64_t locked_addr_16b : 16;
-            uint64_t size_16b : 16;
-            uint64_t reserved : 24;
+            uint64_t locked_addr : 24;
+            uint64_t locked_size : 24;
+            uint64_t reserved : 8;
         };
     };
 
@@ -31,12 +31,12 @@ struct alignas(uint64_t) NocDebuggingEventMetadata {
     void setEventType(NocDebugEventType type) { event_type = static_cast<uint64_t>(type); }
 
     void setLockedRegion(uint32_t locked_address_base, uint32_t num_bytes) {
-        locked_addr_16b = locked_address_base >> 4;
-        size_16b = num_bytes >> 4;
+        locked_addr = locked_address_base;
+        locked_size = num_bytes;
     }
 
-    uint32_t getLockedAddressBase() const { return static_cast<uint32_t>(locked_addr_16b) << 4; }
-    uint32_t getNumBytes() const { return static_cast<uint32_t>(size_16b) << 4; }
+    uint32_t getLockedAddressBase() const { return static_cast<uint32_t>(locked_addr); }
+    uint32_t getNumBytes() const { return static_cast<uint32_t>(locked_size); }
 
     uint64_t asU64() const { return raw; }
 };

@@ -11,6 +11,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/lock.h"
+#include "tools/profiler/noc_debugging_profiler.hpp"
 #endif
 
 namespace experimental {
@@ -612,13 +613,22 @@ public:
      * @return A scoped lock on the RemoteCircularBuffer
      */
     [[nodiscard]] auto scoped_lock() {
+#if defined(DEVICE_DEBUG_DUMP)
+        const RemoteReceiverCBInterface& remote_cb = get_remote_receiver_cb_interface(remote_cb_index_);
+        uint32_t addr = remote_cb.fifo_start_addr;
+        uint32_t num_bytes = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.config_ptr)[3];
+        RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::CB_LOCK, addr, num_bytes);
+        return Lock([this, addr, num_bytes]() {
+            RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::CB_UNLOCK, addr, num_bytes);
+            release_scoped_lock();
+        });
+#else
         return Lock([this]() { release_scoped_lock(); });
+#endif
     }
 
 private:
-    void release_scoped_lock() {
-        // TODO: Unregister with the debugger
-    }
+    void release_scoped_lock() {}
 
     uint32_t remote_cb_index_;
 };

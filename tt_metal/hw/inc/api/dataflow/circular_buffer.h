@@ -135,9 +135,14 @@ public:
     [[nodiscard]] auto scoped_lock() {
 #ifndef COMPILE_FOR_TRISC
         auto& iface = get_local_cb_interface(cb_id_);
-        uint32_t base_16b = iface.fifo_limit - iface.fifo_size;
-        uint32_t addr = base_16b << 4;
-        uint32_t num_bytes = iface.fifo_size << 4;
+        // scoped_lock only runs on DM (#ifndef COMPILE_FOR_TRISC). The host authors the CB config in
+        // bytes, and DM consumes it with cb_addr_shift == 0 (only TRISC shifts to 16B words), so
+        // fifo_size/fifo_limit stay in bytes here. cb_push_back confirms the unit: it does
+        // fifo_wr_ptr += num_pages * fifo_page_size and wraps via fifo_wr_ptr -= fifo_size, i.e. all
+        // fields share one (byte) unit. Region base = fifo_limit - fifo_size, size = fifo_size; do NOT
+        // shift by 4 (that would inflate the byte region 16x and break overlap detection).
+        uint32_t addr = iface.fifo_limit - iface.fifo_size;
+        uint32_t num_bytes = iface.fifo_size;
         RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::CB_LOCK, addr, num_bytes);
         return Lock([this, addr, num_bytes]() {
             RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::CB_UNLOCK, addr, num_bytes);

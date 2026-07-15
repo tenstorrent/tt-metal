@@ -6,6 +6,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -657,6 +658,280 @@ TEST_F(NOCDebuggingFixture, ScopedLockNoWritesNoIssue) {
         for (IDevice* device : mesh_device->get_devices()) {
             EXPECT_FALSE(this->has_write_to_locked_issue(device->id(), virtual_core, 0))
                 << "Unexpected write-to-locked issue; kernel only locked and unlocked with no NOC writes.";
+        }
+    }
+}
+
+TEST_F(NOCDebuggingFixture, ScopedLockCBSelfWriteToLockedIssue) {
+    for (auto& mesh_device : devices_) {
+        log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
+
+        const CoreCoord core = {0, 0};
+        auto virtual_core = mesh_device->worker_core_from_logical_core(core);
+
+        auto& mc = MetalContext::instance();
+        uint32_t unreserved_addr =
+            mc.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+        uint32_t alignment = mc.hal().get_alignment(HalMemType::L1);
+
+        constexpr uint8_t cb_index = 0;
+        uint32_t cb_page_size = 2048;
+        uint32_t cb_total_size = cb_page_size * 2;
+
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        workload.add_program(device_range, CreateProgram());
+        Program& program = workload.get_programs().at(device_range);
+
+        CircularBufferConfig cb_config = CircularBufferConfig(cb_total_size, {{cb_index, tt::DataFormat::Float16_b}})
+                                             .set_page_size(cb_index, cb_page_size);
+        CreateCircularBuffer(program, core, cb_config);
+
+        // NOC records sub-32B writes rounded up, so use a 32B-aligned size for an exact issue_size check.
+        uint32_t write_size = 2 * alignment;
+        uint32_t src_buffer_addr = unreserved_addr;
+        uint32_t scratch_addr = unreserved_addr + write_size;  // host reads the kernel's write target here
+
+        KernelHandle kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_cb_self_write_kernel.cpp",
+            core,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
+        SetRuntimeArgs(
+            program,
+            kernel,
+            core,
+            {static_cast<uint32_t>(cb_index),
+             src_buffer_addr,
+             write_size,
+             virtual_core.x,
+             virtual_core.y,
+             scratch_addr});
+
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+        distributed::Finish(mesh_device->mesh_command_queue());
+        ReadMeshDeviceProfilerResults(*mesh_device);
+
+        for (IDevice* device : mesh_device->get_devices()) {
+            std::vector<uint32_t> scratch;
+            tt::tt_metal::detail::ReadFromDeviceL1(
+                device, core, scratch_addr, sizeof(uint32_t), scratch, CoreType::WORKER);
+            ASSERT_FALSE(scratch.empty());
+            uint32_t expected_addr = scratch[0];
+
+            auto locked_issues = this->get_write_to_locked_issues(device->id(), virtual_core, 0);
+            ASSERT_FALSE(locked_issues.empty())
+                << "Expected write-to-locked-CB issue when the kernel writes into its own locked "
+                   "CircularBuffer region. A 16x-inflated (<<4) lock region would sit outside L1 and miss this.";
+            for (const auto& issue : locked_issues) {
+                EXPECT_EQ(issue.base_type, NOCDebugIssueBaseType::WRITE_TO_LOCKED_CB);
+                EXPECT_EQ(issue.issue_address, expected_addr);
+                EXPECT_EQ(issue.issue_size, write_size);
+                EXPECT_EQ(issue.src_x, virtual_core.x);
+                EXPECT_EQ(issue.src_y, virtual_core.y);
+                EXPECT_EQ(issue.dst_x, virtual_core.x);
+                EXPECT_EQ(issue.dst_y, virtual_core.y);
+            }
+        }
+    }
+}
+
+TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessRemoteCBIssue) {
+    for (auto& mesh_device : devices_) {
+        log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
+        auto grid_size = mesh_device->compute_with_storage_grid_size();
+        if (grid_size.x < 3) {
+            GTEST_SKIP() << "Test requires at least 3 cores in x dimension";
+        }
+
+        const CoreCoord sender_core = {0, 0};
+        const CoreCoord receiver_core = {1, 0};  // locker
+        const CoreCoord writer_core = {2, 0};
+        CoreRangeSet receiver_cores = CoreRangeSet(CoreRange(receiver_core));
+
+        constexpr uint32_t gcb_page_size = 32;
+        constexpr uint32_t gcb_size = gcb_page_size * 100;  // 3200 bytes
+        std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {{sender_core, receiver_cores}};
+        auto global_cb = experimental::CreateGlobalCircularBuffer(
+            mesh_device.get(), sender_receiver_core_mapping, gcb_size, BufferType::L1);
+
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        workload.add_program(device_range, CreateProgram());
+        Program& program = workload.get_programs().at(device_range);
+
+        constexpr uint32_t remote_cb_index = 31;
+        CircularBufferConfig gcb_config = CircularBufferConfig(gcb_page_size);
+        gcb_config.remote_index(remote_cb_index)
+            .set_page_size(gcb_page_size)
+            .set_data_format(tt::DataFormat::Float16_b);
+        experimental::CreateCircularBuffer(program, receiver_cores, gcb_config, global_cb);
+
+        auto receiver_virtual_core = mesh_device->worker_core_from_logical_core(receiver_core);
+        auto writer_virtual_core = mesh_device->worker_core_from_logical_core(writer_core);
+        uint32_t receiver_sem_id = CreateSemaphore(program, receiver_core, 0);
+        uint32_t writer_sem_id = CreateSemaphore(program, writer_core, 0);
+
+        auto& mc = MetalContext::instance();
+        uint32_t alignment = mc.hal().get_alignment(HalMemType::L1);
+        uint32_t unreserved_addr =
+            mc.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+        // NOC records sub-32B writes rounded up, so use a 32B-aligned size for an exact issue_size check.
+        uint32_t write_size = 2 * alignment;
+        // The remote CB's L1 region base is the global CB buffer address (== fifo_start_addr on the
+        // receiver). A single write there lands exactly at the start of the locked region, so the flagged
+        // issue address is known exactly on the host.
+        uint32_t gcb_addr = static_cast<uint32_t>(global_cb.buffer_address());
+
+        KernelHandle locker_kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_remote_cb_locker.cpp",
+            receiver_core,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
+        KernelHandle writer_kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_cb_writer_kernel.cpp",
+            writer_core,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
+
+        SetRuntimeArgs(
+            program,
+            locker_kernel,
+            receiver_core,
+            {remote_cb_index, receiver_sem_id, writer_sem_id, writer_virtual_core.x, writer_virtual_core.y});
+        SetRuntimeArgs(
+            program,
+            writer_kernel,
+            writer_core,
+            {unreserved_addr,
+             write_size,
+             receiver_virtual_core.x,
+             receiver_virtual_core.y,
+             gcb_addr,
+             gcb_addr + write_size,
+             write_size,
+             writer_sem_id,
+             receiver_sem_id,
+             receiver_virtual_core.x,
+             receiver_virtual_core.y});
+
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+        distributed::Finish(mesh_device->mesh_command_queue());
+        ReadMeshDeviceProfilerResults(*mesh_device);
+
+        std::vector<NOCDebugIssueType> locked_issues;
+        for (IDevice* device : mesh_device->get_devices()) {
+            auto issues = this->get_write_to_locked_issues(device->id(), writer_virtual_core, 0);
+            locked_issues.insert(locked_issues.end(), issues.begin(), issues.end());
+        }
+        ASSERT_FALSE(locked_issues.empty())
+            << "Expected write-to-locked-CB issue on writer core; NOC debug did not report the "
+               "RemoteCircularBuffer lock violation.";
+        for (const auto& issue : locked_issues) {
+            EXPECT_EQ(issue.base_type, NOCDebugIssueBaseType::WRITE_TO_LOCKED_CB);
+            EXPECT_EQ(issue.issue_address, gcb_addr);  // exact: the remote CB's L1 region base
+            EXPECT_EQ(issue.issue_size, write_size);
+            EXPECT_EQ(issue.src_x, writer_virtual_core.x);
+            EXPECT_EQ(issue.src_y, writer_virtual_core.y);
+            EXPECT_EQ(issue.dst_x, receiver_virtual_core.x);
+            EXPECT_EQ(issue.dst_y, receiver_virtual_core.y);
+        }
+    }
+}
+
+TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessRemoteCBNoIssue) {
+    for (auto& mesh_device : devices_) {
+        log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
+        auto grid_size = mesh_device->compute_with_storage_grid_size();
+        if (grid_size.x < 3) {
+            GTEST_SKIP() << "Test requires at least 3 cores in x dimension";
+        }
+
+        const CoreCoord sender_core = {0, 0};
+        const CoreCoord receiver_core = {1, 0};  // locker
+        const CoreCoord writer_core = {2, 0};
+        CoreRangeSet receiver_cores = CoreRangeSet(CoreRange(receiver_core));
+
+        constexpr uint32_t gcb_page_size = 32;
+        constexpr uint32_t gcb_size = gcb_page_size * 100;  // 3200 bytes
+        std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {{sender_core, receiver_cores}};
+        auto global_cb = experimental::CreateGlobalCircularBuffer(
+            mesh_device.get(), sender_receiver_core_mapping, gcb_size, BufferType::L1);
+
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        workload.add_program(device_range, CreateProgram());
+        Program& program = workload.get_programs().at(device_range);
+
+        constexpr uint32_t remote_cb_index = 31;
+        CircularBufferConfig gcb_config = CircularBufferConfig(gcb_page_size);
+        gcb_config.remote_index(remote_cb_index)
+            .set_page_size(gcb_page_size)
+            .set_data_format(tt::DataFormat::Float16_b);
+        experimental::CreateCircularBuffer(program, receiver_cores, gcb_config, global_cb);
+
+        auto receiver_virtual_core = mesh_device->worker_core_from_logical_core(receiver_core);
+        auto writer_virtual_core = mesh_device->worker_core_from_logical_core(writer_core);
+        uint32_t receiver_sem_id = CreateSemaphore(program, receiver_core, 0);
+        uint32_t writer_sem_id = CreateSemaphore(program, writer_core, 0);
+
+        auto& mc = MetalContext::instance();
+        uint32_t alignment = mc.hal().get_alignment(HalMemType::L1);
+        uint32_t unreserved_addr =
+            mc.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+        // NOC records sub-32B writes rounded up, so use a 32B-aligned size for an exact issue_size check.
+        uint32_t write_size = 2 * alignment;
+        uint32_t l1_size = mesh_device->l1_size_per_core();
+        // Sweep the whole L1: the receiver's remote-CB region (gcb_size bytes) is much larger than the
+        // stride, so the sweep is guaranteed to hit it wherever the allocator placed it.
+        uint32_t stride = alignment * 64;
+
+        KernelHandle locker_kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_remote_cb_locker_no_issue.cpp",
+            receiver_core,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
+        KernelHandle writer_kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_cb_writer_kernel_no_issue.cpp",
+            writer_core,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
+
+        SetRuntimeArgs(
+            program,
+            locker_kernel,
+            receiver_core,
+            {remote_cb_index, receiver_sem_id, writer_sem_id, writer_virtual_core.x, writer_virtual_core.y});
+        SetRuntimeArgs(
+            program,
+            writer_kernel,
+            writer_core,
+            {unreserved_addr,
+             write_size,
+             receiver_virtual_core.x,
+             receiver_virtual_core.y,
+             unreserved_addr,
+             l1_size,
+             stride,
+             writer_sem_id,
+             receiver_sem_id,
+             receiver_virtual_core.x,
+             receiver_virtual_core.y});
+
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+        distributed::Finish(mesh_device->mesh_command_queue());
+        ReadMeshDeviceProfilerResults(*mesh_device);
+
+        for (IDevice* device : mesh_device->get_devices()) {
+            ChipId chip_id = device->id();
+            EXPECT_FALSE(this->has_write_to_locked_issue(chip_id, writer_virtual_core, 0))
+                << "Unexpected write-to-locked-CB issue on writer core; writes were outside the "
+                   "RemoteCircularBuffer lock scope.";
+            EXPECT_FALSE(this->has_write_to_locked_issue(chip_id, receiver_virtual_core, 0))
+                << "Unexpected write-to-locked-CB issue on receiver core.";
         }
     }
 }
