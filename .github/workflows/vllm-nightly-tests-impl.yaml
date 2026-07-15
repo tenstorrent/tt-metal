@@ -193,7 +193,7 @@ jobs:
               "runner-label": "BH-Quietbox-2",
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
-              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
+              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 134217728}",
               "additional-server-args": "--max_model_len 32768 --max_num_seqs 1 --async-scheduling",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
@@ -570,25 +570,28 @@ jobs:
           fi
 
           # Gemma4 trace-region tuning for this benchmark (random-input-len 100,
-          # single-stream max_num_seqs=1). These are load-bearing, not just a
-          # startup speedup: dropping them makes WH-T3K 31B capture the full
-          # prefill-bucket sweep at warmup and OOM DRAM (a ~0.5 GB trace buffer
-          # with only ~20 MB free), so the server never comes up. They are
-          # benchmark-shape tuning (a 100-token prompt only ever replays the 128
-          # bucket, and the default-sampling benchmark uses no penalties/logprobs
-          # permutations), so they belong with the benchmark config, not the
-          # model code.
+          # single-stream max_num_seqs=1). Prefill tracing is on by default and
+          # warmup pre-captures every bucket (128..4096) up front, keeping each
+          # resident for replay (#49083). That footprint is benchmark-shape waste
+          # here — a 100-token prompt only ever replays the 128 bucket, and the
+          # default-sampling benchmark uses no penalties/logprobs permutations.
+          #   * TT_LEAN_DECODE_WARMUP=1: warm only plain/greedy/None decode
+          #     traces instead of the full penalties×logprobs sweep.
           #   * GEMMA4_TRACE_PREFILL_SEQ_LENS=128: capture only the 128 prefill
           #     bucket instead of the 128..4096 sweep (the 4096 bucket alone is
           #     ~0.5 GB on 26B-A4B).
-          #   * TT_LEAN_DECODE_WARMUP=1: warm only plain/greedy/None decode
-          #     traces instead of the full penalties×logprobs sweep.
-          # Both shrink the required trace_region_size (validated to fit <200 MB
-          # on 26B-A4B P150x4, vs >1 GB unbounded).
+          # The prefill cap is skipped for BH-QB2 31B, which has the DRAM headroom
+          # to capture the full sweep and instead gets a larger trace_region_size
+          # in its tt-config. It stays on for WH-T3K 31B, which cannot hold the
+          # full sweep in DRAM at all (hard OOM at warmup — see tt-metal #49929).
           case "$HF_MODEL" in
             google/gemma-4-*)
               export TT_LEAN_DECODE_WARMUP=1
-              export GEMMA4_TRACE_PREFILL_SEQ_LENS=128
+              if [ "$HF_MODEL" = "google/gemma-4-31B-it" ] && [ "${{ matrix.test-group.arch }}" = "arch-blackhole" ]; then
+                : # full prefill-bucket sweep; trace_region_size in tt-config gives the headroom
+              else
+                export GEMMA4_TRACE_PREFILL_SEQ_LENS=128
+              fi
               ;;
           esac
 
