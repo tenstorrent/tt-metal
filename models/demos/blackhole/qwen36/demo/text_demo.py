@@ -608,12 +608,16 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     decode_times = []
     signpost("inference_decode")
     profiler.start("inference_decode")
+    _DEBUG_TIMING = os.environ.get("QWEN36_DEBUG_DECODE_TIMING") == "1"
+    _phase_times = {"update": [], "exec_sync": [], "readback": []}
     while len(generated) < max_generated_tokens:
         # Time the FULL decode step (input update + device decode + host readback + sampling),
         # matching _run_tp_generation_batched and the tt_transformers reference convention —
         # not just the device compute — so the reported tok/s is real end-to-end throughput.
         t_step = time.time()
+        t0 = time.time()
         _update(nxt, pos)
+        t1 = time.time()
         if eager:
             tt_logits = _decode_fwd()
             if _ondev_sample:
@@ -623,6 +627,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
             # Folded decode+sampling trace: tt_tok is written by this same execute_trace.
             ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh)
+        t2 = time.time()
         if _ondev_sample:
             nxt = int(model.process_output_decode(tt_tok, B=1, is_tokens=True)[0])
             if not (0 <= nxt < vocab):
@@ -635,9 +640,19 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
             nxt = _read_tok(tt_idx, tt_val)
         else:
             nxt = _read(tt_logits)
+        t3 = time.time()
+        if _DEBUG_TIMING:
+            _phase_times["update"].append(t1 - t0)
+            _phase_times["exec_sync"].append(t2 - t1)
+            _phase_times["readback"].append(t3 - t2)
         decode_times.append(time.time() - t_step)
         generated.append(nxt)
         pos += 1
+    if _DEBUG_TIMING:
+        for k, vs in _phase_times.items():
+            vs_steady = vs[1:] if len(vs) > 1 else vs
+            m = (sum(vs_steady) / len(vs_steady)) if vs_steady else 0.0
+            logger.info(f"[DEBUG_DECODE_TIMING] {k}: avg={m*1000:.2f}ms")
     if trace_id is not None:
         ttnn.release_trace(mesh, trace_id)
     profiler.end("inference_decode")
@@ -764,39 +779,153 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
         page_table=page_table,
     )
 
-    trace_id, tt_logits = None, None
+    # Batched decode readback mode (QWEN36_BATCHED_DECODE_MODE):
+    #   "shard" (default) - per-shard on-device argmax+max (generalizes _run_tp_generation's
+    #            B=1 fast path to B>1): each device reduces its OWN vocab shard to (idx, max)
+    #            on device, then only 2 tiny [num_devices, B] tensors are read to host — no
+    #            full-vocab all-gather, no [B,1,vocab] logits transfer.
+    #   "sample" - TTSampling force-argmax path (all-gathers full logits across devices before
+    #            arg-maxing). Avoids the full logits HOST transfer but adds a real device-side
+    #            all-gather; measured slower overall than "shard" — kept for comparison.
+    #   "host"  - legacy: full [B,1,vocab] logits to host, then torch.argmax. Baseline.
+    _mode = os.environ.get("QWEN36_BATCHED_DECODE_MODE", "shard")
+    if _mode == "sample" and model.sampling is None:
+        _mode = "host"
+    if _mode == "shard":
+        _per_shard = vocab // model.num_devices
+        _MAXVAL_C = 32
+        _MAXVAL_R = (((_per_shard + _MAXVAL_C - 1) // _MAXVAL_C) + 31) // 32 * 32
+        _read_comp = ttnn.ConcatMeshToTensor(mesh, dim=0)
+        _nd = model.num_devices
+
+        def _maxval_dev_b(sharded_logits, Bn):
+            # sharded_logits: [1,1,Bn,per_shard] -> per-row (per-user) max, tile-parallel reduce.
+            padded = ttnn.pad(
+                sharded_logits, [(0, 0), (0, 0), (0, 0), (0, _MAXVAL_R * _MAXVAL_C - _per_shard)], value=-1e30
+            )
+            grid = ttnn.reshape(padded, (1, Bn, _MAXVAL_R, _MAXVAL_C))
+            part = ttnn.max(grid, dim=-1)
+            part_row = ttnn.reshape(part, (1, 1, Bn, _MAXVAL_R))
+            val = ttnn.max(part_row, dim=-1)
+            ttnn.deallocate(padded)
+            ttnn.deallocate(grid)
+            ttnn.deallocate(part)
+            ttnn.deallocate(part_row)
+            return val
+
+        def _argmax_dev_b(sharded_logits, Bn):
+            # Per-device, per-user local argmax (ttnn.argmax reduces the last dim per row,
+            # so this generalizes to Bn>1 unchanged from the B=1 version).
+            logits_rm = ttnn.to_layout(sharded_logits, ttnn.ROW_MAJOR_LAYOUT)
+            idx = ttnn.argmax(logits_rm, dim=-1, keepdim=False)
+            ttnn.deallocate(logits_rm)
+            return idx, _maxval_dev_b(sharded_logits, Bn)
+
+        def _read_tok_b(idx_t, val_t, Bn):
+            # [num_devices, Bn] after mesh-concat (Bn may be sampler-padded); winning device per
+            # USER (not globally): global token = winning_device*per_shard + its local argmax idx.
+            # Only the first B columns are real users -- the rest are the sampler-width pad.
+            idxs = ttnn.to_torch(idx_t, mesh_composer=_read_comp).reshape(_nd, Bn)[:, :B].to(torch.int64)
+            vals = ttnn.to_torch(val_t, mesh_composer=_read_comp).reshape(_nd, Bn)[:, :B]
+            d = torch.argmax(vals, dim=0)  # [B] winning device index per user
+            tok = d * _per_shard + idxs[d, torch.arange(B)]
+            return tok.tolist()
+
+    if _mode == "sample":
+        from models.common.sampling.generator import SamplingParams
+
+        _sbatch = model.sampling.tt_sampling.max_batch_size
+        _greedy_params = SamplingParams(
+            temperature=[1.0] * _sbatch, top_k=[1] * _sbatch, top_p=[1.0] * _sbatch, seed=[0] * _sbatch
+        )
+        model.sampling.apply_decode_state([_greedy_params], reset_batch=True)
+
+    _sharded_logits_mode = _mode in ("shard", "sample")
+    trace_id, tt_logits, tt_idx, tt_val, tt_tok = None, None, None, None, None
     if not eager:
         snap = _snapshot_gdn()
-        model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
+        _warm_logits = model.ttnn_decode_forward(
+            dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3], on_device_logits=_sharded_logits_mode
+        )
+        if _mode == "shard":
+            # ttnn_decode_forward(on_device_logits=True) pads the batch dim up to the sampler's
+            # width (e.g. 32), not our real B -- use the actual shape, slice to B on readback.
+            _wi, _wv = _argmax_dev_b(_warm_logits, _warm_logits.shape[2])
+            ttnn.deallocate(_wi)
+            ttnn.deallocate(_wv)
+        elif _mode == "sample":
+            model.sampling.sample(_warm_logits, enable_trace=False)
         trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
-        tt_logits, _ = model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
+        tt_logits = model.ttnn_decode_forward(
+            dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3], on_device_logits=_sharded_logits_mode
+        )
+        if _mode == "shard":
+            # Fold per-shard argmax+max into the trace: tiny [num_devices,padded_B] readback/step.
+            tt_idx, tt_val = _argmax_dev_b(tt_logits, tt_logits.shape[2])
+        elif _mode == "sample":
+            # Fold sampling INTO the same trace as the forward pass (mirrors _run_tp_generation).
+            tt_tok, _ = model.sampling.sample(tt_logits, enable_trace=False)
+        else:
+            tt_logits = tt_logits[0]
         ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
         _restore_gdn(snap)
 
     # Time the FULL decode step (input update + device decode + host logit read + token select)
     # so the reported tok/s is real end-to-end throughput, not just the device compute.
     decode_times = []
+    _DEBUG_TIMING = os.environ.get("QWEN36_DEBUG_DECODE_TIMING") == "1"
+    _phase_times = {"update": [], "exec_sync": [], "readback": [], "argmax": []}
     while len(generated[0]) < max_generated_tokens:
         t_step = time.time()
+        t0 = time.time()
         _update([generated[u][-1] for u in range(B)], pos)
+        t1 = time.time()
         if eager:
-            tt_logits, _ = model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
+            out = model.ttnn_decode_forward(
+                dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3], on_device_logits=_sharded_logits_mode
+            )
+            if _mode == "shard":
+                tt_idx, tt_val = _argmax_dev_b(out, out.shape[2])
+            elif _mode == "sample":
+                tt_tok, _ = model.sampling.sample(out, enable_trace=False)
+            else:
+                tt_logits = out[0]
         else:
             ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh)
-        logits_step = model.process_output_decode(tt_logits, B)  # [B, 1, vocab]
-        # Vectorized argmax over the whole batch in ONE call (matches tt_transformers'
-        # batched decode pattern) instead of B separate full-vocab argmax + .item() calls.
-        next_toks = torch.argmax(logits_step[:, 0, :vocab].float(), dim=-1).tolist()
+        t2 = time.time()
+        if _mode == "shard":
+            # Two tiny [num_devices, padded_B] tensors, not the full [B,1,vocab] logits.
+            next_toks = _read_tok_b(tt_idx, tt_val, tt_idx.shape[-1])
+        elif _mode == "sample":
+            # Sampled ids only: a tiny [B] tensor, not the full [B,1,vocab] logits.
+            next_toks = model.process_output_decode(tt_tok, B, is_tokens=True).reshape(-1).tolist()
+        else:
+            logits_step = model.process_output_decode(tt_logits, B)  # [B, 1, vocab]
+            # Vectorized argmax over the whole batch in ONE call (matches tt_transformers'
+            # batched decode pattern) instead of B separate full-vocab argmax + .item() calls.
+            next_toks = torch.argmax(logits_step[:, 0, :vocab].float(), dim=-1).tolist()
+        t3 = time.time()
         for u in range(B):
             generated[u].append(next_toks[u])
         pos = [p + 1 for p in pos]
+        t4 = time.time()
+        if _DEBUG_TIMING:
+            _phase_times["update"].append(t1 - t0)
+            _phase_times["exec_sync"].append(t2 - t1)
+            _phase_times["readback"].append(t3 - t2)
+            _phase_times["argmax"].append(t4 - t3)
         decode_times.append(time.time() - t_step)
     if trace_id is not None:
         ttnn.release_trace(mesh, trace_id)
 
     steady = decode_times[1:] if len(decode_times) > 1 else decode_times
     avg = (sum(steady) / len(steady)) if steady else float("inf")
+    if _DEBUG_TIMING:
+        for k, vs in _phase_times.items():
+            vs_steady = vs[1:] if len(vs) > 1 else vs
+            m = (sum(vs_steady) / len(vs_steady)) if vs_steady else 0.0
+            logger.info(f"[DEBUG_DECODE_TIMING] {k}: avg={m*1000:.2f}ms")
     return generated, {
         "ttft_s": ttft,
         "decode_tok_s": (1.0 / avg) if avg > 0 else 0.0,  # per decode step (advances all B users)
