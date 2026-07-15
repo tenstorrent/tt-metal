@@ -54,7 +54,9 @@ def _mm1d(cx, cy, in0_block_w, per_core_n, out_subblock_w=None):
 
 _MM_DOWN = _mm1d(8, 3, 8, 2)  # ffn down_proj   [.,4608]@[4608,1536]  146->38us (3.8x)
 _MM_ADALN = _mm1d(8, 9, 4, 2)  # layer adaLN     [.,1536]@[1536,4608]  73->40us  (1.9x)
-_MM_GATEUP = _mm1d(8, 9, 6, 2)  # ffn gate/up bf8 [.,1536]@[1536,4608]  61->35us  (1.7x)
+_MM_GATEUP = _mm1d(8, 9, 6, 2)  # ffn gate/up bf8 [.,1536]@[1536,4608]  61->35us (1.7x)
+# Note: HiFi2 on this bf8 path was tried (exp8) — wall +2us and DRAM% 64→60 (more SLOW).
+# Keep HiFi4; Tracy "try HiFi2" advice does not apply cleanly when already DRAM-limited.
 _MM_HSQ = _mm1d(8, 3, 12, 2)  # cond_proj/t_mlp2[.,1536]@[1536,1536]  50->33us  (1.5x)
 _MM_FADALN = _mm1d(8, 6, 12, 2)  # final adaLN     [.,1536]@[1536,3072]  70->34us  (2.0x)
 # Untuned on auto (2 cores / ~36us SLOW in speech_frame_exp6). Isolation sweep

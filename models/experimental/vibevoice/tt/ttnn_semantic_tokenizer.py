@@ -87,11 +87,10 @@ _FFN_DOWN_PROGCFG = {
 }
 
 # Up-proj (linear1, dim->ffn).  dim1024 (1024x4096) auto 21 -> 13 us (1.6x, PCC 1.0).
-# dim2048 (2048x8192): isolation sweep preferred 8x8 / in0_block_w=8 / per_core_N=4 over auto
-# (~64 vs ~67 us, L1 out).  per_core_M=1 -> valid only when rows (T) <= 32.
+# dim2048 (2048x8192): forced 8x8/bw8/pcn4 was *slower* than auto in-model (exp7 57us vs
+# exp6 auto ~50us) and in isolation (~62 vs ~54 us).  Leave 2048 on auto.
 _FFN_UP_PROGCFG = {
     1024: _mm1d_post(8, 8, 8, 2),  # 1024x4096   21 -> 13 us (1.6x)
-    2048: _mm1d_post(8, 8, 8, 4),  # 2048x8192   Nt=256, 64 cores → pcn4
 }
 
 

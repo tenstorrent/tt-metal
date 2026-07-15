@@ -125,6 +125,22 @@ Same capture: frame 2, `1p_CH2EN`, eager, BH P150. Report: `lm/speech_frame_exp7
 | lm_head | 1232 µs | 1178 µs | −54 µs |
 | Tok up 2048×8192 | 50.4 µs | 57.6 µs | **+7 µs** (L1-island regress; revisit) |
 
+### exp7 Tracy suggestions — probed, **not applied**
+`tests/perf/matmul_subblock_probe.py` (wall sync, CFG pcm=2 / M=64):
+- **final 1536→64** (“try `out_subblock_h*out_subblock_w>=2`”): `osh=2` **39 µs vs CUR 30 µs** — regress. 1-core `pcn=2 osw=2` also slower. Keep `2×1 bw12 pcn1 osw1 osh1`.
+- **noisy 64→1536** (“bw=2 / osw=2 look good”): already near Tracy floor (~3 µs). `osh=2` on CUR grid regresses; best alt `6×4 osh2` only ~2–3 µs wall — not worth wiring.
+- Same `osh=2` rule on HSQ-like 1536→1536: noise (~0.4 µs). **Do not spread osh=2.**
+
+### exp8 — tip SLOW→DRAM (clean after HiFi2 revert)
+| Change | Result |
+|---|---|
+| Tok up 2048→8192: drop forced 8×8 → **auto** | **57.6→47.1 µs**, DRAM% **57→70**, 32/32 **SLOW→DRAM** |
+| Diff gate/up bf8 HiFi4→HiFi2 | **REJECTED** (exp8 intermediate): +2 µs, DRAM% 64→60. Reverted. |
+| **Frame** | **30.31 → 30.18 ms (−0.13)** |
+| SLOW matmul time | 6.54 → 4.65 ms (−1.9); SLOW op count 334→300 |
+
+Gate/up stays HiFi4 @ ~64.5% DRAM (straddles the 65% tag). Tiny SLOW leftovers are &lt;15 µs floor ops.
+
 ## Campaign total: 41.06 → 31.79 ms device time (−22.6%), all PCC-gated
 diffusion fusions −0.55, CFG-batched LM −6.73, FFN-down config −2.36.
 
