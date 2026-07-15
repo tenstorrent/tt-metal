@@ -38,10 +38,16 @@ enum RegimeADiag : uint32_t {
     DIAG_SKIP_IN0_FORWARD = 1u << 2,  // writer: suppress ring payload write; still signal next core (no deadlock)
     DIAG_NO_REDUCE = 1u << 3,         // force bottom-band copy path everywhere; bypass reduce credits/recv/fwd
     DIAG_LOCAL_FEED = 1u << 4,        // (reserved) purely local CB feed: no DRAM/ring/fwd/M-split/reduce
-    // NOTE: the bit below is a CORRECT algorithmic VARIANT (produces the right output), not an ablation.
+    // NOTE: the bits below are CORRECT algorithmic VARIANTS (produce the right output), not ablations.
     DIAG_IN0_SCATTER = 1u << 5,  // writer: in0 all-gather via 1 direct-scatter round instead of G-1 serial
                                  // ring rotations. Identical cb0 layout (slot d = shard rp-d), so compute +
                                  // the in1 rotated read are unchanged; removes the serial-hop critical path.
+    // Replicated shorter ring: each core reads R seed shards (stride G/R) and rotates the R-shard bundle
+    // for G/R rounds (nearest-neighbor, incremental per-round push preserved). Cuts the forwarding
+    // dependency depth from G-1 to G/R-1, trading R x in0 DRAM reads. cb0 slot (r*R+i) = shard (rp-r-i*G/R);
+    // the in1 reader uses the SAME formula so compute is unchanged. Factory maps these to IN0_REPL=2/4.
+    DIAG_IN0_REPL2 = 1u << 6,  // R=2: 2 seeds, 4 rounds, 6 forwarded shard-equiv (vs 7), depth 3
+    DIAG_IN0_REPL4 = 1u << 7,  // R=4: 4 seeds, 2 rounds, 4 forwarded shard-equiv, depth 1
 };
 
 namespace plan = ttnn::operations::experimental::regime_a_matmul::plan;

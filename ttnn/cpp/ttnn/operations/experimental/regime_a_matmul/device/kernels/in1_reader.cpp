@@ -117,7 +117,16 @@ void kernel_main() {
         [[maybe_unused]] const uint32_t vcols =
             (ncol_base < valid_n) ? (((valid_n - ncol_base) < N_block) ? (valid_n - ncol_base) : N_block) : 0u;
         for (uint32_t step = 0; step < G; ++step) {
+            // Shard read order MUST match the in0 cb0 order. Baseline ring: block `step` = shard (rp-step).
+            // Replicated shorter ring (IN0_REPL=R): block b=r*R+i = shard (rp - r - i*(G/R)), the order the
+            // writer fills cb0, so the in0/in1 pairing (hence compute) is unchanged.
+#ifdef IN0_REPL
+            constexpr uint32_t R = IN0_REPL;
+            constexpr uint32_t stride = G / R;
+            [[maybe_unused]] const uint32_t s = (ring_pos + 2u * G - (step / R) - (step % R) * stride) % G;
+#else
             [[maybe_unused]] const uint32_t s = (ring_pos + G - step) % G;
+#endif
             for (uint32_t wb = 0; wb < W; ++wb) {
                 [[maybe_unused]] const uint32_t kblk = s * W + wb;
                 cb_reserve_back(in1_cb, in1_blk);

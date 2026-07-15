@@ -112,6 +112,15 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     if (scatter) {
         wdefs["DIAG_IN0_SCATTER"] = "1";  // writer phase-1 uses direct scatter; needs the G-1 ahead peers (below)
     }
+    // Replicated shorter ring: IN0_REPL (2 or 4) goes to BOTH the writer (seed reads + R-bundle rotation) and
+    // the in1 reader (matching shard order). No runtime-arg change (nearest-neighbor forward reuses fwd_next).
+    if (diag & RegimeADiag::DIAG_IN0_REPL2) {
+        wdefs["IN0_REPL"] = "2";
+        rdefs["IN0_REPL"] = "2";
+    } else if (diag & RegimeADiag::DIAG_IN0_REPL4) {
+        wdefs["IN0_REPL"] = "4";
+        rdefs["IN0_REPL"] = "4";
+    }
 
     // ---- Core range sets: all cores + split-NoC groups (g0 = noc 0, g1 = noc 1) ----
     std::set<CoreRange> all_set, g0_set, g1_set;

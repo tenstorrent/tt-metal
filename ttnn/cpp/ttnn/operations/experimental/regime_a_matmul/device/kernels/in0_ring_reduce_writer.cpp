@@ -112,6 +112,47 @@ void kernel_main() {
     noc_semaphore_wait_min(fwd_ptr, G - 1);  // the G-1 cores behind filled our slots 1..G-1
     cb_push_back(in0_cb, K_num_blocks * in0_blk);
     noc_async_write_barrier();
+#elif defined(IN0_REPL)
+    // Replicated shorter ring (R = IN0_REPL): read R seed shards (stride G/R), then rotate the R-shard bundle
+    // for G/R rounds (nearest-neighbor forward + incremental per-round push, exactly like the R=1 ring). Slot
+    // (r*R+i) ends up holding shard (ring_pos - r - i*(G/R)); the in1 reader uses the same formula, so compute
+    // is unchanged. Depth = G/R-1 forwards (vs G-1); cost = R x in0 DRAM seed reads.
+    constexpr uint32_t R = IN0_REPL;
+    constexpr uint32_t RR = G / R;      // rounds
+    constexpr uint32_t stride = G / R;  // seed stride
+    for (uint32_t r = 0; r < RR; ++r) {
+        uint32_t bslot = base0 + r * R * shard_bytes;
+        if (r == 0) {
+            uint32_t p = bslot;
+            for (uint32_t i = 0; i < R; ++i) {
+                const uint32_t shard = (ring_pos + 2u * G - i * stride) % G;  // i-th seed (rp - i*stride)
+                for (uint32_t wb = 0; wb < W; ++wb) {
+                    const uint32_t sb = shard * W + wb;  // capacity-local block index of this shard
+                    for (uint32_t m = 0; m < M_block; ++m) {
+                        for (uint32_t k = 0; k < K_block; ++k) {
+                            const uint32_t l = sb * K_block + k;
+                            if (m < valid_m && l < valid_k) {
+                                noc_async_read_page((m_start + m) * Kt + (k_start + l), in0, p);
+                            } else {
+                                zero_tile(p);
+                            }
+                            p += tile_bytes;
+                        }
+                    }
+                }
+            }
+            noc_async_read_barrier();
+        } else {
+            noc_semaphore_wait_min(fwd_ptr, r);  // prev forwarded round r's R shards into our slots r*R..
+        }
+        if (r + 1 < RR) {  // forward our R-shard bundle to the next core's round-(r+1) slots
+            uint64_t dst = get_noc_addr(fwd_next_x, fwd_next_y, base0 + (r + 1) * R * shard_bytes);
+            noc_async_write(bslot, dst, R * shard_bytes);
+            noc_semaphore_inc(get_noc_addr(fwd_next_x, fwd_next_y, fwd_addr), 1);
+        }
+        cb_push_back(in0_cb, R * W * in0_blk);  // incremental: compute consumes this round's R shards
+    }
+    noc_async_write_barrier();
 #else
     for (uint32_t step = 0; step < G; ++step) {
         uint32_t slot = base0 + step * shard_bytes;

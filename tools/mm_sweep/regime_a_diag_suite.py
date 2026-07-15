@@ -105,9 +105,9 @@ def run_one(M, K, N, cfg, mask, iters=8, timeout=150):
     for line in r.stdout.splitlines():
         if "DIAGPCC" in line:
             maxrel = float(line.split("max_rel_err=")[1])
-    # masks 0 (public path) and 32 (DIAG_IN0_SCATTER variant) are correctness-checked by the gtest -> require
-    # the PASS; the pure ablations produce garbage and are not checked.
-    checked = mask in (0, 32)
+    # masks 0 (public path) and the correct in0-delivery variants (32=scatter, 64=repl2, 128=repl4) are
+    # correctness-checked by the gtest -> require the PASS; the pure ablations produce garbage, not checked.
+    checked = mask in (0, 32, 64, 128)
     return {
         "cfg": list(cfg),
         "mask": mask,
@@ -318,6 +318,76 @@ def scatter():
     print("SCATTER DONE", flush=True)
 
 
+def _bytes(M, K, N):
+    Mt, Kt, Nt = cdiv(M, 32), cdiv(K, 32), cdiv(N, 32)
+    return {"in0": Mt * Kt * 2048, "in1": Kt * Nt * 2048, "out": Mt * Nt * 2048}
+
+
+# in0-delivery variants: (name, mask, in0 DRAM replication factor R). Replicated rings read in0 R times.
+VARIANTS = [("ring", 0, 1), ("scatter", 32, 1), ("repl2", 64, 2), ("repl4", 128, 4)]
+
+
+def variants():
+    # Compare all correct in0-delivery variants vs the ring at each shape's winner config, per the protocol:
+    # retain every relaunch, per-RISC spans, PCC; report logical eff-BW (logical/time) AND delivered eff-BW
+    # (actual DRAM bytes incl. R x in0 replication / time). Gate: target >=8% faster, control regress <=3%.
+    groups = {"target": [(256, 2048, 1024), (256, 6144, 768)], "control": [(256, 6144, 2304), (256, 6144, 4608)]}
+    out = []
+    for grp, shapes in groups.items():
+        for M, K, N in shapes:
+            cfgs = pick_configs(M, K, N)
+            winner = next((c for c, labels in cfgs.items() if "winner" in labels), None)
+            if winner is None:
+                print(f"[variants] {M}x{K}x{N}: no winner cfg (sweep missing); skipping", flush=True)
+                continue
+            b = _bytes(M, K, N)
+            logical = b["in0"] + b["in1"] + b["out"]
+            per = {}
+            for name, mask, R in VARIANTS:
+                runs = [run_one(M, K, N, winner, mask) for _ in range(3)]
+                oks = [x for x in runs if x.get("ok") and x["wall_us"]]
+                walls = sorted(x["wall_us"] for x in oks)
+                med = statistics.median(walls) if walls else None
+                delivered = R * b["in0"] + b["in1"] + b["out"]
+                per[name] = {
+                    "mask": mask,
+                    "repl": R,
+                    "walls": walls,
+                    "med_us": med,
+                    "min_us": (walls[0] if walls else None),
+                    "n_ok": len(oks),
+                    "pcc": [x.get("max_rel_err") for x in runs],
+                    "risc": (oks[0]["risc"] if oks else None),
+                    "logical_gbps": (logical / (med / 1e6) / 1e9 if med else None),
+                    "delivered_gbps": (delivered / (med / 1e6) / 1e9 if med else None),
+                    "delivered_bytes": delivered,
+                }
+            rm = per["ring"]["med_us"]
+            for name, _, _ in VARIANTS:
+                m = per[name]["med_us"]
+                per[name]["vs_ring_pct"] = ((m / rm - 1) * 100) if (rm and m) else None
+            out.append(
+                {
+                    "group": grp,
+                    "M": M,
+                    "K": K,
+                    "N": N,
+                    "cfg": list(winner),
+                    "ideal_us": ideal_us(M, K, N),
+                    "logical_bytes": logical,
+                    "variants": per,
+                }
+            )
+            summ = " ".join(
+                f"{n}={per[n]['med_us'] if per[n]['med_us'] is None else round(per[n]['med_us'],1)}"
+                f"({'' if per[n]['vs_ring_pct'] is None else ('%+d' % round(per[n]['vs_ring_pct']))}%)"
+                for n, _, _ in VARIANTS
+            )
+            print(f"[variants/{grp}] {M}x{K}x{N} cfg={winner} ideal={ideal_us(M,K,N):.1f}  {summ}", flush=True)
+            json.dump(out, open(f"{HERE}/regime_a_variants_bench.json", "w"), indent=2)
+    print("VARIANTS DONE", flush=True)
+
+
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "smoke"
-    {"smoke": smoke, "matrix": matrix, "mscale": mscale, "scatter": scatter}[mode]()
+    {"smoke": smoke, "matrix": matrix, "mscale": mscale, "scatter": scatter, "variants": variants}[mode]()
