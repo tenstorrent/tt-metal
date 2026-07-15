@@ -44,7 +44,7 @@ inline void llk_unpack_tilize_uninit(const std::uint32_t operand) {
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
     _llk_unpack_tilize_uninit_(
-        (std::uint32_t)unpack_dst_format[operand_id], ckernel::tensor_shape_from_num_faces(num_faces, face_r_dim));
+        (std::uint32_t)unpack_dst_format[operand_id], ckernel::tensor_shape_from_num_faces(face_r_dim, num_faces));
 }
 
 /**
