@@ -17,7 +17,7 @@ import pytest
 from models.demos.deepseek_v3_d_p.utils.perf_utils import run_model_device_perf_test_with_merge
 
 _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_compressor.py::test_hca_compressor"
-_CMD = f"pytest {_TEST_PATH} -k 'seq512'"
+_CMD = f"pytest {_TEST_PATH} -k 'b1-seq512'"
 
 
 @pytest.mark.timeout(0)
