@@ -188,6 +188,12 @@ public:
     // per-processor build states. Ordinary local builds never write the sidecar, so this returns
     // false for them. Single source of truth shared by the local and remote reuse paths.
     bool warmed_elf_reusable(std::string_view kernel_name) const;
+
+    // Write the preprocess-and-ship reuse cache (FULL_DEPHASH_SUFFIX sidecar + ".build_state") for
+    // this build state's ELF, from the .d files the -E step left in the target dir plus the link
+    // inputs. Call only after the remote compile succeeds and the ELF is on disk, so the cache never
+    // points at a missing or stale ELF. Validates on the next run via warmed_elf_reusable.
+    void write_reuse_cache(std::string_view kernel_name) const;
     const std::string& get_weakened_firmware_name() const { return weakened_firmware_name_; }
     bool get_firmware_is_kernel_object() const { return firmware_is_kernel_object_; }
 };

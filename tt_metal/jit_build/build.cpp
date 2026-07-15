@@ -502,6 +502,57 @@ bool JitBuildState::warmed_elf_reusable(std::string_view kernel_name) const {
            jit_build::dependencies_up_to_date_file(full_dephash);
 }
 
+void JitBuildState::write_reuse_cache(std::string_view kernel_name) const {
+    // Write the reuse cache (source-complete FULL_DEPHASH_SUFFIX sidecar + ".build_state") that lets a
+    // later run reuse this ELF with no intermediate object. Called only after a successful compile, so
+    // the cache never validates against a missing or stale ELF. The dependencies come from the .d files
+    // the preprocess-and-ship -E step left in the target dir (which is hash-qualified, so it holds only
+    // this build's sources) plus the link inputs, which only this build state knows.
+    const fs::path elf_path = get_target_out_path(std::string(kernel_name));
+    const std::string out_dir = elf_path.parent_path().string() + "/";
+
+    std::vector<std::string> deps;
+    for (const auto& entry : fs::directory_iterator(elf_path.parent_path())) {
+        if (entry.path().extension() != ".d") {
+            continue;
+        }
+        std::ifstream d_file(entry.path());
+        if (!d_file.is_open()) {
+            continue;
+        }
+        for (auto& [key, dep_list] : jit_build::parse_dependency_file(d_file)) {
+            deps.insert(deps.end(), std::make_move_iterator(dep_list.begin()), std::make_move_iterator(dep_list.end()));
+        }
+    }
+    // Link inputs also gate reuse: a changed linker script or firmware must invalidate the ELF even
+    // when no source changed. weakened_firmware_name_ is the real on-disk path (the recipe carries
+    // only the bare filename, which the server resolves from its own cache).
+    if (!linker_script_.empty()) {
+        deps.push_back(linker_script_);
+    }
+    if (!weakened_firmware_name_.empty()) {
+        deps.push_back(weakened_firmware_name_);
+    }
+    if (deps.empty()) {
+        return;
+    }
+    std::sort(deps.begin(), deps.end());
+    deps.erase(std::unique(deps.begin(), deps.end()), deps.end());
+
+    const std::string elf = elf_path.string();
+    const std::string full_dephash = elf + std::string(jit_build::FULL_DEPHASH_SUFFIX);
+    jit_build::ParsedDependencies deps_map{{elf, std::move(deps)}};
+    std::ofstream hash_file(full_dephash);
+    jit_build::write_dependency_hashes(deps_map, out_dir, elf, hash_file);
+    hash_file.close();
+    if (hash_file.fail()) {
+        // A genuinely unreadable dependency drops the sidecar, correctly forcing a later recompile.
+        fs::remove(full_dephash);
+        return;
+    }
+    write_build_state_hash(out_dir);
+}
+
 void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* settings, size_t src_index) const {
     // ZoneScoped;
 
