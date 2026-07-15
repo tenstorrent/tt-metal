@@ -88,7 +88,14 @@ inline void _llk_unpack_AB_reduce_block_max_row_init_runtime_(std::uint32_t bloc
     TTI_SETDMAREG(0, 1 * FACE_C_DIM * FACE_R_DIM, 0, LO_16(p_gpr_unpack::TMP0));
     TTI_SETDMAREG(0, 1 * FACE_C_DIM * FACE_R_DIM, 0, HI_16(p_gpr_unpack::TMP0));
     TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
-    TTI_SETDMAREG(0, 4 /* y_dim */, 0, LO_16(p_gpr_unpack::TMP0));
+    // y_dim = number of faces (4 for a 32x32 tile, 2 for a 16x32 tiny tile). Hardcoding 4 makes the
+    // unpacker stride a full 32x32 tile between block tiles, over-reading the next tile (out-of-bounds
+    // / wrong tile) for a genuine 16x32 operand.
+    if (tensor_shape.num_faces_r_dim == 1) {
+        TTI_SETDMAREG(0, 2 /* y_dim: 2 faces (16x32 tiny tile) */, 0, LO_16(p_gpr_unpack::TMP0));
+    } else {
+        TTI_SETDMAREG(0, 4 /* y_dim: 4 faces (32x32 tile) */, 0, LO_16(p_gpr_unpack::TMP0));
+    }
     TTI_SETDMAREG(0, 1 /* z_dim */, 0, HI_16(p_gpr_unpack::TMP0));
     TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
 
