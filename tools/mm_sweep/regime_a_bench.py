@@ -206,10 +206,83 @@ def _metrics(M, K, N, cfg, d):
     }
 
 
+INNER_TIMEOUT = 150  # GNU `timeout` on the worker subprocess
+OUTER_TIMEOUT = 180  # subprocess.run watchdog (fires only if the inner timeout itself wedges)
+
+
+def classify_timeout(returncode):
+    """True if the worker process ended by our timeout/kill (a HANG), not a normal crash. GNU `timeout`
+    returns 124 when it times out the command; 137 = SIGKILL (128+9, e.g. escalation / OOM-kill); a
+    negative code means Python's immediate child was signal-terminated. SIGABRT/SIGSEGV (134/139) are
+    genuine crashes -> NOT a timeout, so they stay 'runtime'."""
+    return returncode == 124 or returncode == 137 or returncode < 0
+
+
+class CacheStore:
+    """cfg-key -> record map. Persistent ONLY when bound to a path; a path-less store (the default for
+    interactive callers) never touches disk, so an ad-hoc run cannot clobber a sweep's cache. On persist
+    it MERGES with the current on-disk cache (so a concurrent/earlier writer's records survive) and writes
+    ATOMICALLY (temp file + os.replace). A plain dict is also accepted by run_cfg and is treated as a
+    path-less (non-persistent) store."""
+
+    def __init__(self, path=None):
+        self.path = path
+        self.data = {}
+        if path and os.path.exists(path):
+            try:
+                self.data = json.load(open(path))
+            except Exception:
+                self.data = {}
+
+    def __contains__(self, k):
+        return k in self.data
+
+    def __getitem__(self, k):
+        return self.data[k]
+
+    def get(self, k, default=None):
+        return self.data.get(k, default)
+
+    def values(self):
+        return self.data.values()
+
+    def put(self, key, rec):
+        self.data[key] = rec
+        if not self.path:
+            return  # non-persistent
+        merged = {}
+        if os.path.exists(self.path):
+            try:
+                merged = json.load(open(self.path))
+            except Exception:
+                merged = {}
+        merged.update(self.data)  # our records win over any stale on-disk copy of the same keys
+        tmp = f"{self.path}.tmp.{os.getpid()}"
+        with open(tmp, "w") as f:
+            json.dump(merged, f)
+        os.replace(tmp, self.path)  # atomic on POSIX
+        self.data = merged
+
+
+def _cache_put(cache, key, rec):
+    """Persist through a CacheStore; a plain dict stays in-memory only (never writes CACHE)."""
+    if hasattr(cache, "put"):
+        cache.put(key, rec)
+    else:
+        cache[key] = rec
+    return rec
+
+
+def _reset_device():
+    subprocess.run(["tt-smi", "-r"], capture_output=True)
+
+
 def run_cfg(M, K, N, cfg, cache):
     """cfg = (Ns,Pk,Sm,kb,nsb) or None (product). Returns a record with a 'cls' outcome class:
     validation | runtime | hang | pcc | ok. Feasibility is checked HERE (host planner mirror) so
-    invalid configs never launch a device subprocess."""
+    invalid configs never launch a device subprocess. `cache` may be a CacheStore (persists to its bound
+    path, merge+atomic) or a plain dict (in-memory only -> an interactive run_cfg(...,{}) cannot clobber
+    the sweep cache). Inner GNU-timeout (124/kill) and the outer watchdog both -> 'hang' + device reset."""
     key = f"{M}x{K}x{N}:" + ("auto" if cfg is None else ",".join(map(str, cfg)))
     if key in cache:
         return cache[key]
@@ -218,12 +291,10 @@ def run_cfg(M, K, N, cfg, cache):
     if cfg is not None:
         ok, why = planner_feasible(M, K, N, cfg)
         if not ok:
-            rec = {"key": key, "cls": "validation", "reason": why, "cfg": list(cfg)}
-            cache[key] = rec
-            json.dump(cache, open(CACHE, "w"))
-            return rec
-    args = [M, K, N, 1, 0, 1, 1, 1] if cfg is None else [M, K, N, *cfg[:1], cfg[1], cfg[2], cfg[3], cfg[4]]
-    if cfg is not None:
+            return _cache_put(cache, key, {"key": key, "cls": "validation", "reason": why, "cfg": list(cfg)})
+    if cfg is None:
+        args = [M, K, N, 1, 0, 1, 1, 1]
+    else:
         Ns, Pk, Sm, kb, nsb = cfg
         args = [M, K, N, Ns, Pk, Sm, kb, nsb]
     env = dict(os.environ)
@@ -231,10 +302,13 @@ def run_cfg(M, K, N, cfg, cache):
     env["TT_METAL_HOME"] = ROOT
     env["ARCH_NAME"] = "blackhole"
     env["PYTHONPATH"] = ROOT
-    cmd = ["timeout", "-s", "TERM", "150", sys.executable, __file__, "--run"] + [str(a) for a in args]
+    cmd = ["timeout", "-s", "TERM", str(INNER_TIMEOUT), sys.executable, __file__, "--run"] + [str(a) for a in args]
     rec = None
     try:
-        r = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=180, cwd=ROOT)
+        r = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=OUTER_TIMEOUT, cwd=ROOT)
+        if classify_timeout(r.returncode):  # inner GNU-timeout / kill BEFORE parsing stdout
+            _reset_device()
+            return _cache_put(cache, key, {"key": key, "cls": "hang", "returncode": r.returncode})
         for line in r.stdout.splitlines():
             if line.startswith("RESULT "):
                 d = json.loads(line[7:])
@@ -245,13 +319,11 @@ def run_cfg(M, K, N, cfg, cache):
                 else:
                     rec = {"key": key, "cls": "pcc", "pcc": d.get("pcc"), "finite": d.get("finite"), "cfg": list(rcfg)}
         if rec is None:
-            rec = {"key": key, "cls": "runtime", "stderr": r.stderr[-300:]}
-    except subprocess.TimeoutExpired:
-        rec = {"key": key, "cls": "hang"}
-        subprocess.run(["tt-smi", "-r"], capture_output=True)
-    cache[key] = rec
-    json.dump(cache, open(CACHE, "w"))
-    return rec
+            rec = {"key": key, "cls": "runtime", "returncode": r.returncode, "stderr": r.stderr[-300:]}
+    except subprocess.TimeoutExpired:  # outer watchdog: the inner timeout itself wedged
+        _reset_device()
+        rec = {"key": key, "cls": "hang", "returncode": "outer-timeout"}
+    return _cache_put(cache, key, rec)
 
 
 def sweep_seeds(M, K, N, sweep, topk=3):
@@ -327,17 +399,17 @@ def enumerate_feasible(M, K, N):
     return cfgs
 
 
-def load_cache():
-    """Genuinely resumable: the flat CACHE file (written per config by run_cfg). Falls back to a
-    finalized {corpus, cache} OUT only if it carries new-format ('cls') records."""
-    if os.path.exists(CACHE):
-        return json.load(open(CACHE))
-    if os.path.exists(OUT):
+def load_cache(path=CACHE, persist=True):
+    """Return a resumable CacheStore bound to `path` (the flat CACHE, written per config by run_cfg).
+    Seeds from a finalized {corpus, cache} OUT only when no CACHE exists yet AND OUT carries new-format
+    ('cls') records. persist=False gives a path-less (non-persistent) store for interactive use."""
+    store = CacheStore(path if persist else None)
+    if persist and not os.path.exists(path) and os.path.exists(OUT):
         d = json.load(open(OUT))
         c = d.get("cache") if isinstance(d, dict) else None
         if isinstance(c, dict) and any(isinstance(v, dict) and "cls" in v for v in c.values()):
-            return c
-    return {}
+            store.data = dict(c)  # seed in-memory; first put() will persist to CACHE (never to OUT)
+    return store
 
 
 if __name__ == "__main__":
@@ -422,5 +494,6 @@ if __name__ == "__main__":
             + (f"  manual {mu:.1f}us {man.get('pct512',0):.0f}% cfg={man.get('cfg')}" if mu else "  manual -"),
             flush=True,
         )
-    json.dump({"corpus": out, "cache": cache}, open(OUT, "w"), indent=2)
+    # OUT is the finalized report; run_cfg only ever writes CACHE, so OUT is written here exactly once.
+    json.dump({"corpus": out, "cache": cache.data}, open(OUT, "w"), indent=2)
     print(f"\nWROTE {OUT}")
