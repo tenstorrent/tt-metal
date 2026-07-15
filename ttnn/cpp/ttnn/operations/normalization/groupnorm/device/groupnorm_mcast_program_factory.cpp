@@ -263,6 +263,14 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     // c_0 isn't itself the consumer of the FP32 transpose, i.e. when tilize_in is false).
     const bool welford_fp32_alias = welford_unpack_fp32_active && !tilize_in;
 
+    // True when any reconfig-relevant operand is fp32, so the compute kernel must run its per-tile
+    // reconfig_data_format calls. When all are bf16 they're no-ops and the kernel skips them.
+    // cb_reciprocals is excluded: it's fp32 here but the reconfigs never touch it.
+    const bool enable_fp32_reconfig =
+        !(in_data_format == tt::DataFormat::Float16_b && out_data_format == tt::DataFormat::Float16_b &&
+          cb_data_format == tt::DataFormat::Float16_b && gamma_beta_cb_data_format == tt::DataFormat::Float16_b &&
+          in_mask_cb_data_format == tt::DataFormat::Float16_b);
+
     const uint32_t cb_in0_welford_index =
         welford_fp32_alias ? static_cast<uint32_t>(tt::CBIndex::c_19) : static_cast<uint32_t>(tt::CBIndex::c_0);
 
@@ -718,10 +726,13 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     mcast_sender_compute_named_compile_time_args["welford_unpack_fp32_active"] =
         static_cast<uint32_t>(welford_unpack_fp32_active);
     mcast_sender_compute_named_compile_time_args["cb_in0_welford"] = cb_in0_welford_index;
+    mcast_sender_compute_named_compile_time_args["enable_fp32_reconfig"] = static_cast<uint32_t>(enable_fp32_reconfig);
     mcast_receiver_compute_named_compile_time_args["welford_fp32_alias"] = static_cast<uint32_t>(welford_fp32_alias);
     mcast_receiver_compute_named_compile_time_args["welford_unpack_fp32_active"] =
         static_cast<uint32_t>(welford_unpack_fp32_active);
     mcast_receiver_compute_named_compile_time_args["cb_in0_welford"] = cb_in0_welford_index;
+    mcast_receiver_compute_named_compile_time_args["enable_fp32_reconfig"] =
+        static_cast<uint32_t>(enable_fp32_reconfig);
 
     KernelDescriptor compute_sender_desc;
     compute_sender_desc.kernel_source = compute_kernel_path;

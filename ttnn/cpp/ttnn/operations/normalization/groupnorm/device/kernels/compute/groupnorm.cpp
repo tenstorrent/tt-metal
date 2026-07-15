@@ -93,6 +93,9 @@ void kernel_main() {
     constexpr uint32_t do_gamma = get_named_compile_time_arg_val("do_gamma");
     constexpr uint32_t do_beta = get_named_compile_time_arg_val("do_beta");
     constexpr uint32_t num_cores_per_mcast_group = get_named_compile_time_arg_val("num_cores_per_mcast_group");
+    // True when a reconfig-relevant operand is fp32: the per-group reconfig_data_format calls below
+    // are then required. All-bf16 compiles them out (no-ops). See program factory.
+    constexpr bool enable_fp32_reconfig = get_named_compile_time_arg_val("enable_fp32_reconfig") != 0;
 
     constexpr uint32_t batch = get_named_compile_time_arg_val("batch");
     constexpr uint32_t group = get_named_compile_time_arg_val("group");
@@ -393,10 +396,11 @@ void kernel_main() {
                 cb_in0.wait_front(out_block_hw_normal);
                 // x - E[x]
                 sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);
-                // fp32: reset both srcs so fp32 input/mean aren't read through the stale bf16 scaler format; no-op for
-                // bf16.
-                reconfig_data_format_srca(cb_in0_id);
-                reconfig_data_format_srcb(cb_ex_global_id);
+                // fp32: reset both srcs so fp32 input/mean aren't read through the stale bf16 scaler format.
+                if constexpr (enable_fp32_reconfig) {
+                    reconfig_data_format_srca(cb_in0_id);
+                    reconfig_data_format_srcb(cb_ex_global_id);
+                }
 
                 cb_xmm.reserve_back(out_block_hw_normal);
                 cb_ex_global.wait_front(1);
@@ -520,8 +524,10 @@ void kernel_main() {
             tile_regs_acquire();
             add_tiles_init(cb_ex2_global_id, cb_eps_id);
             // fp32: reset both srcs so fp32 variance / bf16 eps aren't read through the stale square/reduce format.
-            reconfig_data_format_srca(cb_ex2_global_id);
-            reconfig_data_format_srcb(cb_eps_id);
+            if constexpr (enable_fp32_reconfig) {
+                reconfig_data_format_srca(cb_ex2_global_id);
+                reconfig_data_format_srcb(cb_eps_id);
+            }
             add_tiles(cb_ex2_global_id, cb_eps_id, 0, 0, dst0);
             tile_regs_wait();
             // 1/[sqrt(Var + eps)]
@@ -555,8 +561,10 @@ void kernel_main() {
                 // x - E[x]
                 sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);
                 // fp32: reset both srcs so fp32 input/mean aren't read through the stale rsqrt/eps format.
-                reconfig_data_format_srca(cb_in0_id);
-                reconfig_data_format_srcb(cb_ex_global_id);
+                if constexpr (enable_fp32_reconfig) {
+                    reconfig_data_format_srca(cb_in0_id);
+                    reconfig_data_format_srcb(cb_ex_global_id);
+                }
                 cb_xmm.reserve_back(out_block_hw_normal);
                 cb_ex_global.wait_front(1);
                 for (uint32_t i = 0; i < out_block_h_actual; i++) {
@@ -616,8 +624,10 @@ void kernel_main() {
                 index_h_offset = 0;
                 mul_tiles_bcast_scalar_init_short(cb_x_id, cb_ex2pe_id);
                 // fp32: reset both srcs so fp32 x/rstd aren't read through the stale mask/eps format.
-                reconfig_data_format_srca(cb_x_id);
-                reconfig_data_format_srcb(cb_ex2pe_id);
+                if constexpr (enable_fp32_reconfig) {
+                    reconfig_data_format_srca(cb_x_id);
+                    reconfig_data_format_srcb(cb_ex2pe_id);
+                }
                 cb_xmm.reserve_back(out_block_hw_normal);
                 cb_ex2pe.wait_front(1);
                 cb_x.wait_front(out_block_hw_normal);
@@ -719,8 +729,10 @@ void kernel_main() {
                                 mul_bcast_rows_init_short(cb_reread_write_out_id, cb_gamma_id);
                                 // fp32: reset both srcs so bf16 gamma isn't read through the reread stage's fp32
                                 // format.
-                                reconfig_data_format_srca(cb_reread_write_out_id);
-                                reconfig_data_format_srcb(cb_gamma_id);
+                                if constexpr (enable_fp32_reconfig) {
+                                    reconfig_data_format_srca(cb_reread_write_out_id);
+                                    reconfig_data_format_srcb(cb_gamma_id);
+                                }
                             } else {
                                 copy_tile_init(cb_reread_write_out_id);
                             }
@@ -755,8 +767,10 @@ void kernel_main() {
                             if (apply_gamma_beta[j]) {
                                 add_bcast_rows_init_short(cb_inbeta_id, cb_beta_id);
                                 // fp32: reset both srcs so bf16 beta isn't read through the fp32 cb_inbeta format.
-                                reconfig_data_format_srca(cb_inbeta_id);
-                                reconfig_data_format_srcb(cb_beta_id);
+                                if constexpr (enable_fp32_reconfig) {
+                                    reconfig_data_format_srca(cb_inbeta_id);
+                                    reconfig_data_format_srcb(cb_beta_id);
+                                }
                             } else {
                                 copy_tile_init(cb_inbeta_id);
                             }
