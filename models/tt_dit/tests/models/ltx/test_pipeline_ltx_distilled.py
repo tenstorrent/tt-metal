@@ -31,7 +31,7 @@ from models.tt_dit.utils.ltx import (
     print_ltx_timing_table,
 )
 from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
-from models.tt_dit.utils.test import line_params, ring_params
+from models.tt_dit.utils.test import line_params, ring_params, ring_params_8k
 from models.tt_dit.utils.vbench import assert_vbench_quality
 
 
@@ -76,7 +76,11 @@ _apply_local_iter_env()
 # where the stage-2 activation footprint fills DRAM) can drop it to 0 for an UNTRACED pass,
 # reclaiming ~500 MB of general DRAM. Only meaningful with LTX_TRACED=0 (no trace is captured).
 _LTX_TRACE_REGION = int(os.environ.get("LTX_TRACE_REGION", "500000000"))
-ring_trace_params = {**ring_params, "trace_region_size": _LTX_TRACE_REGION, "l1_small_size": 32768}
+# LTX_RING_8K=1: 8192B fabric payload (4 bf16 tiles/packet vs the default 2) -> half the packets on
+# the ring AG+MM / MM+RS. Pure transport, latents stay bit-identical (gate with LTX_STEP_FP); mirrors
+# the wan2_2 BH-4x8/Ring/num_links=2 performance config.
+_ring_base = ring_params_8k if os.environ.get("LTX_RING_8K", "0") in ("1", "true", "True") else ring_params
+ring_trace_params = {**_ring_base, "trace_region_size": _LTX_TRACE_REGION, "l1_small_size": 32768}
 line_trace_params = {**line_params, "trace_region_size": _LTX_TRACE_REGION, "l1_small_size": 32768}
 
 
