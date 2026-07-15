@@ -440,21 +440,35 @@ constexpr uint32_t dfb_for_side() {
     }
 }
 
+// Packer ReLU mode of an element — PackRelu::None for anything that isn't a PackTile (only pack
+// sites carry the packer-global ReLU knob). Reflected into ElemDesc and used to detect a chain that
+// mixes ReLU modes across pack sites, and to forbid an inert ReLU knob under SetupOwner::Caller.
+template <class E>
+constexpr PackRelu pack_relu_of() {
+    if constexpr (is_pack_tile_op_v<E>) {
+        return E::pack_relu;
+    } else {
+        return PackRelu::None;
+    }
+}
+
 // True iff NO element in the pack requests any srca / srcb / pack reconfig — i.e. every element's
-// reconfig knob is None. Under SetupOwner::Caller the chain emits zero reconfig, so a non-None knob
-// is inert and lies about what the helper does; eltwise_chain uses this to forbid that, forcing the
-// caller to declare None — which honestly reflects "the chain does no reconfig, I own the format."
+// reconfig knob is None (and no packer ReLU). Under SetupOwner::Caller the chain emits zero setup, so
+// a non-None knob is inert and lies about what the helper does; eltwise_chain uses this to forbid
+// that, forcing the caller to declare None — which honestly reflects "the chain does no reconfig, I
+// own the format."
 template <class... Es>
 constexpr bool chain_requests_no_reconfig() {
     return ((dfb_for_side<Side::SrcA, Es>() == NO_PREV_DFB &&
              dfb_for_side<Side::SrcB, Es>() == NO_PREV_DFB &&
-             dfb_for_side<Side::Pack, Es>() == NO_PREV_DFB) &&
+             dfb_for_side<Side::Pack, Es>() == NO_PREV_DFB &&
+             pack_relu_of<Es>() == PackRelu::None) &&
             ...);
 }
 
 // Per-side prev-CB history, last opt-in pack CB, and heterogeneous-pack detection are
-// single-sweep fields on `ChainTraits` (prev / last_pack_cb / pack_hetero), computed
-// once from the reflected ElemDesc array.
+// single-sweep fields on `ChainTraits` (prev / last_pack_cb / pack_dtype_hetero /
+// pack_relu_hetero / any_pack_relu), computed once from the reflected ElemDesc array.
 
 }  // namespace detail
 
@@ -686,7 +700,8 @@ template <uint32_t Cb,
           PackTileReconfig Reconfig,
           Dst DstSlot,
           TileOffset Offset,
-          PackTileL1Accumulation L1Accumulation>
+          PackTileL1Accumulation L1Accumulation,
+          PackRelu Relu>
 struct PackTile : OutputStream<Cb, Policy, Offset>, PackTileTag {
     using Base = OutputStream<Cb, Policy, Offset>;
     using Base::tile_base;
@@ -700,6 +715,11 @@ struct PackTile : OutputStream<Cb, Policy, Offset>, PackTileTag {
         (L1Accumulation != PackTileL1Accumulation::Disabled) == is_l1_accumulation_output_lifecycle(Policy),
         "PackTile: L1 accumulation requires OutputLifecycle::L1Accumulation or "
         "OutputLifecycle::L1AccumulationCallerManaged, and those lifecycles require L1 accumulation");
+    // Packer ReLU and L1 accumulation both write the packer's output; whether ReLU clamps the
+    // accumulated sum or the pre-accumulation DEST value is unverified, so forbid the combination
+    // for now (a chain-level assert forbids ReLU + DEST accumulation).
+    static_assert(Relu == PackRelu::None || L1Accumulation == PackTileL1Accumulation::Disabled,
+                  "PackTile: packer ReLU combined with L1 accumulation is not supported yet");
     // TileBase != None on pack side requires caller-managed-style lifecycle on the
     // output CB (caller pre-reserved a window large enough for base + kind window).
     // InputLifecycle::Streaming / InputLifecycle::Chunked reserve+push counts can't be inflated by a runtime base
@@ -713,6 +733,7 @@ struct PackTile : OutputStream<Cb, Policy, Offset>, PackTileTag {
     static constexpr uint32_t dfb = Cb;
     static constexpr uint32_t pack_dfb_id() { return Cb; }
     static constexpr Dst pack_dst_slot = DstSlot;
+    static constexpr PackRelu pack_relu = Relu;  // packer ReLU mode — reflected for hetero detection
     static constexpr bool uses_l1_accumulation = (L1Accumulation != PackTileL1Accumulation::Disabled);
     static constexpr bool seeds_l1_accumulation = (L1Accumulation == PackTileL1Accumulation::SeedFirst);
     static constexpr bool manages_l1_accumulation_lifecycle = (Policy == OutputLifecycle::L1Accumulation);
@@ -1426,6 +1447,7 @@ struct ElemDesc {
     uint32_t lane_width;
     uint32_t transient_lane_width;
     bool supports_block;
+    PackRelu pack_relu;  // packer ReLU mode (PackRelu::None for non-pack elements) — hetero/any-relu input
 };
 
 template <class E>
@@ -1525,6 +1547,7 @@ constexpr ElemDesc describe() {
         elem_lane_width_v<E>,
         transient_lane_width_of<E>(),
         element_supports_block<E>(),
+        pack_relu_of<E>(),
     };
 }
 
@@ -1778,8 +1801,10 @@ constexpr uint32_t ct_last_pack_cb(const ElemDesc* d, int n) {
     }
     return last;
 }
-// True iff ≥2 opt-in pack sites declare different CBs (boot can't program all).
-constexpr bool ct_pack_hetero(const ElemDesc* d, int n) {
+// True iff ≥2 opt-in pack sites declare different CBs (boot can't program all). This is the
+// pack DATA-FORMAT heterogeneity axis — it gates data-format reconfig deferral (see
+// emit_per_stage_pack_reconfig) and is orthogonal to ReLU (ct_pack_relu_hetero below).
+constexpr bool ct_pack_dtype_hetero(const ElemDesc* d, int n) {
     uint32_t first = NO_PREV_DFB;
     for (int i = 0; i < n; ++i) {
         if (d[i].pack_side_dfb == NO_PREV_DFB) {
@@ -1788,6 +1813,35 @@ constexpr bool ct_pack_hetero(const ElemDesc* d, int n) {
         if (first == NO_PREV_DFB) {
             first = d[i].pack_side_dfb;
         } else if (first != d[i].pack_side_dfb) {
+            return true;
+        }
+    }
+    return false;
+}
+// True iff ≥2 PackTile sites declare different packer ReLU modes. STACC_RELU is a latched
+// packer-global mode, so a mixed chain would need per-stage set/reset around each pack (not yet
+// supported); this is the ReLU heterogeneity axis, orthogonal to data-format (ct_pack_dtype_hetero).
+constexpr bool ct_pack_relu_hetero(const ElemDesc* d, int n) {
+    bool have_first = false;
+    PackRelu first = PackRelu::None;
+    for (int i = 0; i < n; ++i) {
+        if (!d[i].is_pack) {
+            continue;
+        }
+        if (!have_first) {
+            first = d[i].pack_relu;
+            have_first = true;
+        } else if (d[i].pack_relu != first) {
+            return true;
+        }
+    }
+    return false;
+}
+// True iff any PackTile site applies a packer ReLU — drives the once-before-loop set and the
+// restore-before-publish reset in chain_run_loop.
+constexpr bool ct_any_pack_relu(const ElemDesc* d, int n) {
+    for (int i = 0; i < n; ++i) {
+        if (d[i].is_pack && d[i].pack_relu != PackRelu::None) {
             return true;
         }
     }
@@ -1823,7 +1877,12 @@ struct ChainTraits {
     // Per-side prev-CB history (one sweep), + pack-side metadata.
     static constexpr PrevTable<N ? N : 1> prev = ct_build_prev<N ? N : 1>(d, N);
     static constexpr uint32_t last_pack_cb = ct_last_pack_cb(d, N);
-    static constexpr bool pack_hetero = ct_pack_hetero(d, N);
+    // Two orthogonal pack-heterogeneity axes: data-format (which CB/dtype each pack site targets)
+    // drives data-format reconfig deferral; ReLU (which packer activation each site applies) drives
+    // the packer-ReLU set/reset. `chain_hoist_pack` is boot-hoistable only when NEITHER is hetero.
+    static constexpr bool pack_dtype_hetero = ct_pack_dtype_hetero(d, N);
+    static constexpr bool pack_relu_hetero = ct_pack_relu_hetero(d, N);
+    static constexpr bool any_pack_relu = ct_any_pack_relu(d, N);
 };
 
 }  // namespace detail
@@ -1996,15 +2055,17 @@ struct chain_hoist_sfpu<EltwiseChain<Es...>>
     : std::bool_constant<chain_hoist_math_mop_v<EltwiseChain<Es...>> &&
                          chain_sfpu_inits_uniform_v<EltwiseChain<Es...>>> {};
 
-// Pack cohort hoist: pack init + reconfig are fully boot-emitted, with NO per-stage pack
-// reconfig in the loop. True iff the chain isn't pack-hetero (homogeneous opt-in pack CBs).
-// The output-reconfig leg of "all one-time setup is boot-hoistable" (with math-MOP + SFPU).
+// Pack cohort hoist: pack init + reconfig + packer ReLU are fully boot-emitted, with NO per-stage
+// pack work in the loop. True iff NEITHER pack-heterogeneity axis is set — homogeneous opt-in pack
+// CBs (data-format) AND a single packer ReLU mode across pack sites. The output leg of "all one-time
+// setup is boot-hoistable" (with math-MOP + SFPU).
 template <class Chain>
 struct chain_hoist_pack : std::true_type {};
 
 template <class... Es>
 struct chain_hoist_pack<EltwiseChain<Es...>>
-    : std::bool_constant<!detail::ChainTraits<Es...>::pack_hetero> {};
+    : std::bool_constant<!detail::ChainTraits<Es...>::pack_dtype_hetero &&
+                         !detail::ChainTraits<Es...>::pack_relu_hetero> {};
 
 // True iff no element requests any reconfig (all reconfig knobs None). SetupOwner::Caller requires
 // this so a set-but-inert reconfig knob (which the helper would silently ignore) is a compile error
@@ -2083,7 +2144,7 @@ ALWI void emit_pre_element_transitions() {
     // handles intra-stage transitions cheaply and the per-iter wraparound from
     // last-pack-cb to first-pack-cb is correctly programmed.
     constexpr bool defer_pack_to_per_stage =
-        ChainTraits<Es...>::pack_hetero && (prev_p != NO_PREV_DFB);
+        ChainTraits<Es...>::pack_dtype_hetero && (prev_p != NO_PREV_DFB);
 
     // ---- srca + srcb: coalesce when both sides share prev-state ----
     if constexpr (reconf_a && reconf_b) {
@@ -2141,7 +2202,7 @@ ALWI void emit_pre_element_transitions() {
 // a few cycles when adjacent stages happen to share a dtype.
 template <class E, std::size_t I, class... Es>
 ALWI void emit_per_stage_pack_reconfig() {
-    if constexpr (!ChainTraits<Es...>::pack_hetero) {
+    if constexpr (!ChainTraits<Es...>::pack_dtype_hetero) {
         return;
     }
     constexpr uint32_t curr_p = dfb_for_side<Side::Pack, E>();
@@ -2322,11 +2383,24 @@ ALWI void elem_apply_pack(
     if constexpr (is_pack_tile_op_v<ElemT>) {
         // upfront reserve is emitted once before the loop (see eltwise_chain_impl)
         emit_per_stage_pack_reconfig<ElemT, I, Es...>();
+        // Heterogeneous packer ReLU: this site sets its own mode right before its packs and restores
+        // pass-through right after, so the next (differently-configured) pack site is unaffected and
+        // the chain still exits with ReLU off. Homogeneous ReLU is bracketed once around the whole
+        // loop in chain_run_loop, so this per-pack path is compiled out for it. Only sites that apply
+        // ReLU act — a None site needs nothing because every ReLU site restores none() after itself.
+        constexpr bool per_stage_relu =
+            ChainTraits<Es...>::pack_relu_hetero && (ElemT::pack_relu != PackRelu::None);
         elem.reserve_per_tile(i_flat);
         elem.reserve_per_block(inner_count);
+        if constexpr (per_stage_relu) {
+            ckernel::pack_relu_config(ckernel::ReluConfig::zero());
+        }
         for (uint32_t j = 0; j < inner_count; ++j) {
             const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
             elem.exec(i_arg, ht, wt + j, j * chain_lane_width);
+        }
+        if constexpr (per_stage_relu) {
+            ckernel::pack_relu_config(ckernel::ReluConfig::none());  // bring it back before publish
         }
         elem.push_per_tile(i_flat);
         elem.push_per_block(inner_count);
@@ -2526,6 +2600,15 @@ ALWI void chain_run_loop(EltwiseShape shape, Es... elts) {
         pack_reconfig_l1_acc(detail::ChainTraits<Es...>::any_seed_first_l1_accumulation ? 0 : 1);
     }
 
+    // Packer ReLU (STACC_RELU) is a latched packer-global mode like L1 accumulation. When every pack
+    // site shares one mode (homogeneous), program it once here and restore pass-through before
+    // publication below — the cheap path. A heterogeneous chain does NOT bracket here; each ReLU pack
+    // sets and restores its own mode in elem_apply_pack. `any_pack_relu && !pack_relu_hetero` means
+    // "homogeneous and at least one site is ReLU" (all such sites share the single non-None mode).
+    if constexpr (detail::ChainTraits<Es...>::any_pack_relu && !detail::ChainTraits<Es...>::pack_relu_hetero) {
+        ckernel::pack_relu_config(ckernel::ReluConfig::zero());
+    }
+
     // Outer 2D loop. `flat_base = ht * Wt + wt_base` is computed once per (ht, wt_base) pair.
     // Block-mode elements consume `flat_base + j`; bcast-mode read `ht` / `wt = wt_base + j`.
     for (uint32_t ht = 0; ht < Ht; ++ht) {
@@ -2558,6 +2641,12 @@ ALWI void chain_run_loop(EltwiseShape shape, Es... elts) {
     // accumulation mode even if the consumer wakes immediately on the push below.
     if constexpr (detail::ChainTraits<Es...>::any_l1_accumulation) {
         pack_reconfig_l1_acc(0);
+    }
+    // Same escape concern for packer ReLU (homogeneous path only): restore pass-through before the
+    // push below so a later, unrelated pack in this kernel isn't silently clamped by our latched
+    // STACC_RELU mode. A heterogeneous chain already restored none() after its last ReLU pack.
+    if constexpr (detail::ChainTraits<Es...>::any_pack_relu && !detail::ChainTraits<Es...>::pack_relu_hetero) {
+        ckernel::pack_relu_config(ckernel::ReluConfig::none());
     }
 
     // End-of-chain upfront-policy lifecycle.
@@ -2668,6 +2757,15 @@ ALWI void eltwise_chain_impl(EltwiseShape shape, Es... elts) {
     static_assert(
         detail::ChainTraits<Es...>::managed_l1_accumulation_lifecycles <= 1,
         "eltwise_chain: only one PackTile may own the L1-accumulation reserve-one/push-one lifecycle");
+    // Packer ReLU (STACC_RELU) is a latched packer-global mode. A HOMOGENEOUS-ReLU chain programs it
+    // once before the loop and restores it at exit (chain_run_loop). A HETEROGENEOUS chain (pack sites
+    // disagree on ReLU) instead sets each ReLU pack's mode before its pack and restores pass-through
+    // after it (elem_apply_pack) — so mixed ReLU is supported, just at a per-pack cost.
+    // The packer-ReLU set/reset live only on the ordinary (non-DEST-accumulation) walk; a DEST-
+    // accumulation chain routes through chain_run_dest_accumulation_loop and would silently drop the
+    // activation. Forbid the combination until it's wired there.
+    static_assert(!detail::ChainTraits<Es...>::any_pack_relu || !detail::ChainTraits<Es...>::any_dest_accumulation,
+                  "eltwise_chain: packer ReLU combined with DEST accumulation is not supported yet");
     static_assert(!chain_has_duplicate_upfront_cbs_v<Chain>,
                   "eltwise_chain: two CB-reader elements share a CB on upfront-wait policy.");
     static_assert(!chain_pack_writes_collide_v<Chain>,
