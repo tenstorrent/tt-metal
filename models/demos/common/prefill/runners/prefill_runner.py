@@ -197,10 +197,41 @@ def _handle_sigterm(signum, frame):
 # ---------------------------------------------------------------------------
 
 
-def compute_layer_split(num_layers: int, num_ranks: int) -> list[tuple[int, int]]:
+def _snap_counts_to_starts(counts, valid_starts, num_layers):
+    """Nudge an even split's interior rank boundaries onto the nearest valid start (preserving
+    sum == num_layers), for models that constrain where a rank may begin (layer_split_boundaries).
+    Nearest by |distance| then lower index; each boundary is used at most once and stays increasing."""
+    valid = sorted(valid_starts)
+    boundaries, s = [], 0
+    for c in counts[:-1]:
+        s += c
+        boundaries.append(s)
+    snapped, prev = [], 0
+    for b in boundaries:
+        cand = min(
+            (v for v in valid if prev < v < num_layers and v not in snapped),
+            key=lambda v: (abs(v - b), v),
+            default=None,
+        )
+        if cand is None:
+            raise ValueError(f"cannot place {len(counts)} pipeline ranks on valid layer boundaries {valid}")
+        snapped.append(cand)
+        prev = cand
+    out, prev = [], 0
+    for b in [*snapped, num_layers]:
+        out.append(b - prev)
+        prev = b
+    return out
+
+
+def compute_layer_split(num_layers: int, num_ranks: int, valid_starts=None) -> list[tuple[int, int]]:
     """Contiguous (first_layer_idx, count) per rank. PREFILL_PP_LAYER_COUNTS, a
     comma-separated count list summing to num_layers, overrides the default even
-    split (remainder handed to the earlier ranks)."""
+    split (remainder handed to the earlier ranks).
+
+    ``valid_starts`` (from the adapter's ``layer_split_boundaries``): layer indices at which a rank may
+    begin. None => unconstrained. When set, the default even split is auto-snapped onto valid
+    boundaries, and any split (explicit or snapped) whose rank starts fall off them is rejected early."""
     override = os.environ.get("PREFILL_PP_LAYER_COUNTS")
     if override:
         counts = [int(x) for x in override.split(",")]
@@ -212,12 +243,24 @@ def compute_layer_split(num_layers: int, num_ranks: int) -> list[tuple[int, int]
     else:
         base, rem = divmod(num_layers, num_ranks)
         counts = [base + (1 if r < rem else 0) for r in range(num_ranks)]
+        if valid_starts is not None:
+            counts = _snap_counts_to_starts(counts, valid_starts, num_layers)
 
     ranges = []
     start = 0
     for count in counts:
         ranges.append((start, count))
         start += count
+
+    if valid_starts is not None:
+        for first_idx, _ in ranges:
+            if first_idx not in valid_starts:
+                near = sorted(b for b in valid_starts if abs(b - first_idx) <= 4)
+                raise ValueError(
+                    f"pipeline rank starts at layer {first_idx}, not a valid boundary for this model "
+                    f"(nearest valid: {near}). Set PREFILL_PP_LAYER_COUNTS so every cumulative boundary "
+                    f"is a valid start."
+                )
     return ranges
 
 
@@ -1009,7 +1052,7 @@ def main() -> None:
     rank = int(ttnn.distributed_context_get_rank())
     num_ranks = int(ttnn.distributed_context_get_size())
 
-    layer_split = compute_layer_split(NUM_LAYERS, num_ranks)
+    layer_split = compute_layer_split(NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS))
     first_layer_idx, num_my_layers = layer_split[rank]
     is_first_rank = rank == 0
     is_last_rank = rank == num_ranks - 1

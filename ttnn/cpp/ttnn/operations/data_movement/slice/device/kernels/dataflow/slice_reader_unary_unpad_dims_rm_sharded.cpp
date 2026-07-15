@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
@@ -22,17 +22,17 @@ void kernel_main() {
     tt_l1_ptr uint32_t* chunk_start_id = (tt_l1_ptr uint32_t*)(get_arg_addr(1 + num_cores_read * 3));
     tt_l1_ptr uint32_t* chunk_num_sticks = (tt_l1_ptr uint32_t*)(chunk_start_id + 1);
 
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
+    constexpr auto dfb_in0 = tt::CBIndex::c_0;
+    constexpr auto dfb_out0 = tt::CBIndex::c_16;
 
     Noc noc;
-    // Create CircularBuffers for Device 2.0 API
-    CircularBuffer cb_in(cb_in0);
-    CircularBuffer cb_out(cb_out0);
+    // Create DataflowBuffers for Device 2.0 API
+    DataflowBuffer dfb_in(dfb_in0);
+    DataflowBuffer dfb_out(dfb_out0);
 
-    cb_out.reserve_back(num_sticks_unpadded);
-    uint32_t l1_read_addr = cb_in.get_write_ptr();
-    uint32_t l1_write_addr = cb_out.get_write_ptr();
+    dfb_out.reserve_back(num_sticks_unpadded);
+    uint32_t l1_read_addr = dfb_in.get_write_ptr();
+    uint32_t l1_write_addr = dfb_out.get_write_ptr();
 
     uint32_t chunk_ptr_offset = 0;
     uint32_t read_noc_xy_ptr_offset = 0;
@@ -65,5 +65,5 @@ void kernel_main() {
     }
 
     noc.async_read_barrier();
-    cb_out.push_back(num_sticks_unpadded);
+    dfb_out.push_back(num_sticks_unpadded);
 }

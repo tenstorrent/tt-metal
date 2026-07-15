@@ -44,7 +44,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -77,7 +77,7 @@ void kernel_main() {
     uint32_t start_row_for_this_core = get_arg_val<uint32_t>(rt_args_idx++);
 
     // Compile-time arguments
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_id_out = get_compile_time_arg_val(0);
     constexpr uint32_t compile_time_element_size = get_compile_time_arg_val(1);
     constexpr auto src_args = TensorAccessorArgs<2>();
 
@@ -89,8 +89,8 @@ void kernel_main() {
     const auto s0 = TensorAccessor(src_args, src_addr);
 
     Noc noc;
-    // Create CircularBuffer for Device 2.0 API
-    CircularBuffer cb_out(cb_id_out);
+    // Create DataflowBuffer for Device 2.0 API
+    DataflowBuffer dfb_out(dfb_id_out);
 
     // Multi-core work distribution: this core processes rows [start_row_for_this_core, start_row_for_this_core +
     // num_rows_for_this_core) We need to map these logical output row indices back to the corresponding (n,d,h)
@@ -149,8 +149,8 @@ void kernel_main() {
                     input_row_idx = n * input_d * input_h + d * input_h + h;
                 }
 
-                cb_out.reserve_back(1);
-                uint32_t l1_write_addr = cb_out.get_write_ptr();
+                dfb_out.reserve_back(1);
+                uint32_t l1_write_addr = dfb_out.get_write_ptr();
 
                 // noc_async_read_sharded splits the read across shards for B/W-sharded inputs;
                 // falls through to a single noc_async_read for interleaved / HEIGHT-sharded.
@@ -176,7 +176,7 @@ void kernel_main() {
                     }
                 }
 
-                cb_out.push_back(1);
+                dfb_out.push_back(1);
                 rows_processed++;
                 current_logical_row++;
 
