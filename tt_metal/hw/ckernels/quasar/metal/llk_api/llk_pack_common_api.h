@@ -143,10 +143,10 @@ inline void llk_pack_set_dest_filled_by_unpack(const std::uint32_t operand) {
 }
 
 /**
- * @brief Clear the pack thread's dest_filled_by_unpack flag (mark this section FPU/math-produced).
- * Reset at tile_regs_acquire (each section starts FPU-owned by default), so a later FPU write overrides an earlier
- * copy_tile in the same section. Thus final DEST writer wins. SFPU in-place ops (transpose_dest, unary sfpu)
- * do NOT call this, so a copy_tile (to dest) stays flagged udest_filled_by_unpack = true.
+ * @brief Reset the pack thread's dest_filled_by_unpack flag to its default (FPU/math-owned).
+ * Called only from tile_regs_acquire, so each section starts on the regular path and copy_tile
+ * re-flags it unpack-to-dest per operand. FPU ops do NOT call this; a single per-section flag cannot
+ * represent mixed operand provenance, so a section is expected to use one routing mode (see #37468).
  */
 inline void llk_pack_clear_dest_filled_by_unpack() { ckernel::trisc::dest_filled_by_unpack = false; }
 

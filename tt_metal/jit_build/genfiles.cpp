@@ -818,7 +818,7 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
 
     out << "#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK) || "
            "defined(UCK_CHLKC_ISOLATE_SFPU)\n";
-    emit_compute_scalar_descriptors(out, options, env.get_arch());
+    emit_compute_scalar_descriptors(out, options);
     out << "#endif\n";
 
     if (!out) {

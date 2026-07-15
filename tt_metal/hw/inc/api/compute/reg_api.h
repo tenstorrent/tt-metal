@@ -45,8 +45,11 @@ ALWI void acquire_dst() {
 ALWI void tile_regs_acquire() {
     MATH((llk_math_wait_for_dest_available()));
 #ifdef ARCH_QUASAR
-    // Each section starts FPU/math-owned on packer; copy_tile re-flags it unpack-to-dest per
-    // operand, and FPU-combine ops (matmul/eltwise-binary/reduce) clear it again, final DEST writer wins.
+    // Reset the packer's per-section unpack-to-dest flag to its default; copy_tile re-flags it per
+    // operand for this section (see llk_pack_set_dest_filled_by_unpack). This is what makes a
+    // copy_tile-free section (e.g. matmul/reduce-only) correctly take the regular path. A single
+    // per-section flag cannot represent mixed operand provenance within one acquired section; a
+    // section is expected to use one routing mode (general fix is programmable dest-dvalid).
     PACK((llk_pack_clear_dest_filled_by_unpack()));
 #endif
 }
