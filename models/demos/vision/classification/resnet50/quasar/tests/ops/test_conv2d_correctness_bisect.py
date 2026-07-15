@@ -50,7 +50,7 @@ def _run(
     full_inner_dim,
     math_fidelity,
     with_bias=True,
-    with_relu=True,
+    activation="relu",  # "relu" (packer clamp path) | "gelu" (SFPU path) | "none"
     packer_l1_acc=True,
     reshard=True,
 ):
@@ -77,8 +77,10 @@ def _run(
         stride=stride,
         padding=padding,
     )
-    if with_relu:
+    if activation == "relu":
         torch_golden = torch.relu(torch_golden)
+    elif activation == "gelu":
+        torch_golden = torch.nn.functional.gelu(torch_golden)
 
     # pre-shard the activation into L1 (height-sharded) so conv2d takes the L1 path (not DRAM slicing)
     nhw = batch_size * input_height * input_width
@@ -105,8 +107,10 @@ def _run(
         full_inner_dim=full_inner_dim,
         reshard_if_not_optimal=reshard,
     )
-    if with_relu:
+    if activation == "relu":
         conv_kwargs["activation"] = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
+    elif activation == "gelu":
+        conv_kwargs["activation"] = ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU)
     conv_config = ttnn.Conv2dConfig(**conv_kwargs)
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(), math_fidelity=math_fidelity, packer_l1_acc=packer_l1_acc
@@ -191,17 +195,19 @@ def _report_error_pattern(golden, tt, oh, ow, c):
 # or RELU. Toggle each on a fixed 3x3 conv; whichever flip lifts PCC to ~1.0 is the culprit. If none do, the
 # bug is in the core matmul_block / conv tilize (values). (Quasar output absmax > golden => extra/stale term.)
 @pytest.mark.parametrize(
-    "label, with_bias, with_relu, packer_l1_acc, reshard",
+    "label, with_bias, activation, packer_l1_acc, reshard",
     [
-        pytest.param("base", True, True, True, True, id="base"),
-        pytest.param("no_l1acc", True, True, False, True, id="no_l1acc"),
-        pytest.param("no_bias", False, True, True, True, id="no_bias"),
-        pytest.param("no_relu", True, False, True, True, id="no_relu"),
-        pytest.param("no_reshard", True, True, True, False, id="no_reshard"),
-        pytest.param("bare", False, False, False, True, id="bare_matmul_only"),
+        # ROOT CAUSE (proven): activation off => 0.99997, RELU on => 0.8547. RELU was routed to the PACKER
+        # (llk_pack_relu_config(ReluConfig::zero())), which leaves ~1 face/output-tile unclamped on Quasar.
+        # FIX APPLIED (conv2d_op_sharded_program_factory.cpp): on Quasar, pack_relu is forced false so RELU
+        # goes through the SFPU activation path (full-tile) instead. Expected with the fix built:
+        pytest.param("relu", True, "relu", True, True, id="relu_now_sfpu"),  # was 0.85; expect ~1.0 after fix
+        pytest.param("none", True, "none", True, True, id="none"),  # control (~1.0)
+        # gelu always used SFPU (no packer fast-path) -- independent confirmation the SFPU path is correct.
+        pytest.param("gelu_sfpu", True, "gelu", True, True, id="gelu_sfpu"),
     ],
 )
-def test_conv2d_correctness_bisect(mesh_device, label, with_bias, with_relu, packer_l1_acc, reshard):
+def test_conv2d_correctness_bisect(mesh_device, label, with_bias, activation, packer_l1_acc, reshard):
     # WH passes all of these. Quasar 3x3 base = 0.8547, values wrong (sorted-PCC too), uniform, fidelity- AND
     # window-shape-independent. `bare` = matmul only (no bias/relu/l1acc) isolates the core matmul+tilize+pack.
     _run(
@@ -211,7 +217,7 @@ def test_conv2d_correctness_bisect(mesh_device, label, with_bias, with_relu, pac
         full_inner_dim=False,
         math_fidelity=ttnn.MathFidelity.LoFi,
         with_bias=with_bias,
-        with_relu=with_relu,
+        activation=activation,
         packer_l1_acc=packer_l1_acc,
         reshard=reshard,
     )

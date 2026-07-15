@@ -826,7 +826,17 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // Convenience accessor for CB sizing.
     auto cb = [&](Conv2dCb name) -> const CBInfo& { return get_cb_info_by_name(cb_info, name); };
 
-    bool pack_relu = fused_activation.has_value() && fused_activation.value().op_type == unary::UnaryOpType::RELU;
+    // QSR: the packer RELU (llk_pack_relu_config(ReluConfig::zero())) leaves ~one 16x16 face per output tile
+    // UNCLAMPED on Quasar -- proven by bisect (test_conv2d_correctness_bisect): a height-sharded conv is
+    // correct with the activation off (PCC 0.99997) but drops to 0.8547 with RELU on, uniform / tap-count-
+    // independent / fidelity-independent, with stale negatives surviving (output absmax > golden). WH is fine.
+    // Route RELU through the SFPU activation path on Quasar instead (full DEST tile; the same path GELU uses)
+    // by NOT taking the packer-relu fast-path here -- the `!pack_relu` branch below then merges the SFPU relu
+    // defines (SFPU_OP_*_ACTIVATION), applied per output tile in the compute kernel after the bias add.
+    // TODO(LLK): fix the Quasar packer relu face coverage so the faster packer clamp can be used again.
+    const bool arch_is_quasar = device->arch() == tt::ARCH::QUASAR;
+    bool pack_relu =
+        fused_activation.has_value() && fused_activation.value().op_type == unary::UnaryOpType::RELU && !arch_is_quasar;
 
     const bool check_skip_compute = input_cores != output_cores;
     // populate_skipped_work_cores is only reachable with split reader (deferred), so it is always false.
