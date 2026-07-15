@@ -150,9 +150,9 @@ const tt::core_descriptor_t& MetalEnvImpl::get_core_descriptor_config(
 
     tt_fabric::FabricTensixConfig fabric_tensix_config = get_fabric_tensix_config();
     bool fast_dispatch = get_rtoptions().get_fast_dispatch();
+    // Only Quasar registers HalProgrammableCoreType::DISPATCH; resolve_dispatch_core_type returns DISPATCH only then.
     const bool quasar_dispatch_engine_fd =
-        arch == tt::ARCH::QUASAR && fast_dispatch &&
-        !get_rtoptions().get_use_quasar_tensix_dispatch_cores() &&
+        fast_dispatch && !get_rtoptions().get_use_quasar_tensix_dispatch_cores() &&
         tt::tt_metal::detail::resolve_dispatch_core_type(
             arch,
             dispatch_core_config,

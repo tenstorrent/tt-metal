@@ -123,8 +123,7 @@ public:
             dispatch_mem_map_[enchantum::to_underlying(core_type)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
                 core_type, descriptor.num_cqs(), descriptor.hal(), is_galaxy_cluster, layout, descriptor.rtoptions());
         }
-        if (descriptor.cluster().arch() == tt::ARCH::QUASAR &&
-            descriptor.hal().has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
+        if (descriptor.hal().has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
             const auto& layout = get_dispatch_query_manager_ref().cq_dispatch_layout(CoreType::DISPATCH);
             dispatch_mem_map_[enchantum::to_underlying(CoreType::DISPATCH)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
                 CoreType::DISPATCH,

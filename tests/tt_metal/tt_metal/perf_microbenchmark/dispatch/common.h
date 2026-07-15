@@ -1000,7 +1000,7 @@ inline tt_metal::KernelHandle create_sd_cq_kernel(
     const std::map<std::string, std::string>& defines,
     const std::vector<uint32_t>& compile_args = {}) {
     const tt::CoreType core_type = sd_cq_kernel_core_type(device);
-    if (device->arch() == tt::ARCH::QUASAR && core_type == tt::CoreType::DISPATCH) {
+    if (core_type == tt::CoreType::DISPATCH) {
         return tt::tt_metal::detail::CreateDispatchEngineKernel(
             program,
             kernel_path,
