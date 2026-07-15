@@ -537,6 +537,17 @@ void kernel_main() {
                                 .tc_slots[get_local_dfb_interface(tilized_in0_cb_id).tc_idx]
                                 .wr_entry_idx,
                             (uint32_t)cb_tilized_in0.get_total_num_entries()));
+                        // [stale-pack-BD confirm] The tilize packs into act_tilized (tilized base). If the
+                        // ERROR_TRISC1 0x19 fault address (~0x37c28) lands in the OUT CB's L1 range instead of
+                        // the tilized CB's range, the packer BD is still pointed at OUT (from hw_startup) --
+                        // the Quasar tilize_init omits the pack hw_configure that would repoint it. esz = entry
+                        // size (bytes); tilized range = [tilized_base, tilized_base + nent*esz).
+                        PACK(DPRINT(
+                            "TZBASE tilized_base={} tilized_esz={} out_base={} out_esz={}\n",
+                            (uint32_t)cb_tilized_in0.get_write_ptr(),
+                            (uint32_t)cb_tilized_in0.get_entry_size(),
+                            (uint32_t)cb_out.get_write_ptr(),
+                            (uint32_t)cb_out.get_entry_size()));
                     }
 #endif
                     // (TZHWCFG/TZBD/TZBDTAB/TILIZEPACK probes removed — they confirmed the tilize pack BD is
