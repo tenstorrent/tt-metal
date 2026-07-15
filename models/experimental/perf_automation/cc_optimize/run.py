@@ -149,11 +149,14 @@ def discover(
         cmd += ["--pcc-test", pcc_test]
     if case:
         cmd += ["-k", case]
+    launch_ts = time.time()
     rc = subprocess.run(cmd, cwd=str(perf_dir), env=cc_env(repo_root, devices)).returncode
-    if rc != 0:
-        return None
     mani = _latest_manifest(perf_dir)
-    return json.loads(mani.read_text()) if mani else None
+    if mani is None:
+        return None
+    if rc != 0 and mani.stat().st_mtime < launch_ts:
+        return None
+    return json.loads(mani.read_text())
 
 
 def pipelines_from_manifest(manifest: dict, model_rel: str) -> list[dict]:
