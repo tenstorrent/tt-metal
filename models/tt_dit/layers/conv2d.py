@@ -285,7 +285,14 @@ class Conv2d(Module):
                 batch_size=b,
                 input_height=h,
                 input_width=w,
-                conv_config=ttnn.Conv2dConfig(act_block_h_override=32),
+                # Large convs (spatial > 1024^2, e.g. VAE decode at 2048px) exhaust the small L1
+                # region: even at max DRAM width-slicing, their halo/reader config tensors don't
+                # fit L1_SMALL and OOM. Spill those config tensors to DRAM for big convs so they
+                # fit; 1024^2 and below keep the faster in-L1 config path unchanged.
+                conv_config=ttnn.Conv2dConfig(
+                    act_block_h_override=32,
+                    config_tensors_in_dram=h * w > 1024 * 1024,
+                ),
                 compute_config=self.compute_config,
                 slice_config=slice_config,
                 return_output_dim=True,
