@@ -1,0 +1,96 @@
+{
+  "hf_model": "mistralai/Mistral-Small-24B-Instruct-2501",
+  "hf_advertised_context": 32768,
+  "current_supported_context": 3583,
+  "limiting_reason": "device_dram",
+  "capacity_evidence": {
+    "probe_command": "TT_LOGGER_LEVEL=fatal MISTRAL_SMALL_24B_CONTEXT_PROBE_LEN=<length> TT_VISIBLE_DEVICES=2,3 pytest -q -s models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_context_capacity.py (add MISTRAL_SMALL_24B_CONTEXT_EXPECT_OOM=1 for the first failing length)",
+    "device": "Blackhole p300c UMD, one logical 1x1 mesh device",
+    "num_dram_banks": 8,
+    "bytes_per_dram_bank": 4272341376,
+    "total_device_dram_bytes": 34178731008,
+    "full_context_input_bf16_bytes": 10737418240,
+    "full_context_kv_cache_bf16_bytes": 4294967296,
+    "one_full_context_mlp_activation_bf16_bytes": 68719476736,
+    "probe_batch": 32,
+    "probe_process_policy": "one length per fresh process on a one-device mesh; full-shape synthetic BF16 weights have the same device allocation sizes as real weights; output is copied to host to force completion",
+    "passing_lengths": [
+      128,
+      256,
+      512,
+      1024,
+      2048,
+      3072,
+      3328,
+      3456,
+      3520,
+      3552,
+      3553,
+      3568,
+      3576,
+      3580,
+      3582,
+      3583
+    ],
+    "largest_feasible_length": 3583,
+    "first_failing_length": 3584,
+    "first_failure_reproductions": 2,
+    "first_failure": {
+      "operation_class": "device DRAM tensor allocation during prefill",
+      "exception": "TT_FATAL Out of Memory",
+      "requested_buffer_bytes": 1174405120,
+      "requested_bytes_per_bank": 146800640,
+      "allocated_bytes_per_bank": 3958020096,
+      "free_bytes_per_bank": 314321280,
+      "largest_free_block_bytes_per_bank": 114688000
+    },
+    "post_failure_health_check": "tt-smi -ls --local returned all four Blackhole chips after normal fixture teardown",
+    "explanation": "At emitted batch 32, the current dense BF16 path completes at logical sequence length 3583 and the immediately adjacent length 3584 reproducibly fails a physical DRAM allocation, establishing the exact current boundary. HF context 32768 is also impossible for this path: one [32,32768,32768] BF16 MLP activation alone is 68,719,476,736 bytes, exceeding the measured 34,178,731,008 device bytes before weights, input, KV cache, or other live tensors."
+  },
+  "paths": {
+    "prefill": {
+      "status": "translated_and_tested",
+      "source_graph": "ttnn_mistral_small_24b_instruct_2501_tp_qb2_bs32_isl128_runc399_g0_1784013702712.mlir",
+      "classifier_signals": {
+        "fill_cache": 2560,
+        "paged_update_cache": 0,
+        "scaled_dot_product_attention_decode": 0
+      },
+      "tested_sequence_lengths": [
+        4,
+        18,
+        128
+      ],
+      "capacity_tested_sequence_length": 3583,
+      "tested_batches": [
+        13,
+        32
+      ]
+    },
+    "decode": {
+      "status": "translated_and_tested",
+      "source_graph": "ttnn_mistral_small_24b_instruct_2501_tp_qb2_bs32_isl128_runc399_g1_1784014155192.mlir",
+      "classifier_signals": {
+        "fill_cache": 0,
+        "paged_update_cache": 80,
+        "scaled_dot_product_attention_decode": 40
+      },
+      "tested_positions": [
+        4,
+        18
+      ],
+      "tested_batches": [
+        13,
+        32
+      ]
+    }
+  },
+  "ir_provenance": {
+    "representative_layer": 20,
+    "source_mesh": "1x4",
+    "tensor_parallel_degree": 4,
+    "translation_mesh": "1x1",
+    "collective_policy": "TP shards and all-reduces collapsed to equivalent dense single-device math over full unsharded Hugging Face weights"
+  },
+  "notes": "This is the functional-decoder contract only. It does not claim optimized-decoder, multichip, full-model, or serving readiness."
+}
