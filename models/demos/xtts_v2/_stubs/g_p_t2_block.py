@@ -115,17 +115,17 @@ def build_gpt2_block(device, torch_module):
         h = ttnn.layer_norm(x, epsilon=_LN_EPS, weight=ln1_w, bias=ln1_b)
         qkv = c_attn_fwd(h)                                 # [1, T, 3*embed]
 
-        # split q|k|v BLOCKS on the last dim (bounds are tile-aligned)
-        t = qkv.shape[1]
-        q = ttnn.slice(qkv, [0, 0, 0], [1, t, embed_dim], [1, 1, 1])
-        k = ttnn.slice(qkv, [0, 0, embed_dim], [1, t, 2 * embed_dim], [1, 1, 1])
-        v = ttnn.slice(qkv, [0, 0, 2 * embed_dim], [1, t, 3 * embed_dim], [1, 1, 1])
+        # Fused split + head-reshape + key-transpose in ONE device op (no
+        # ROW_MAJOR round-trips). HF's c_attn emits q|k|v as contiguous 1024
+        # blocks; reshaping [3*embed] -> [48, head_dim] and slicing [:16]/
+        # [16:32]/[32:] recovers exactly those blocks, so this is byte-identical
+        # to the old slice + _split_heads path. transpose_key=True yields k as
+        # [1, H, hd, T], ready for q @ k^T without a separate transpose.
+        q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
+            qkv, num_heads=n_heads, transpose_key=True,
+        )                                                   # q,v:[1,H,T,hd] k:[1,H,hd,T]
 
-        q = _split_heads(q, n_heads, head_dim)              # [1, H, T, hd]
-        k = _split_heads(k, n_heads, head_dim)
-        v = _split_heads(v, n_heads, head_dim)
-
-        weight = ttnn.matmul(q, ttnn.transpose(k, -2, -1),
+        weight = ttnn.matmul(q, k,
                              compute_kernel_config=_attn_kernel_cfg)  # [1, H, T, T]
         weight = ttnn.multiply(weight, scaling)
         # `attn_bias` is the additive attention mask (e.g. a [1,1,T,T] causal
@@ -138,7 +138,8 @@ def build_gpt2_block(device, torch_module):
         attn_out = ttnn.matmul(weight, v,
                                compute_kernel_config=_attn_kernel_cfg)  # [1, H, T, hd]
 
-        attn_out = _merge_heads(attn_out)                   # [1, T, embed]
+        # Fused merge (inverse of the split above) — one device op, no layout churn.
+        attn_out = ttnn.transformer.concatenate_heads(attn_out)   # [1, T, embed]
         attn_out = c_proj_fwd(attn_out)
 
         x = ttnn.add(attn_out, x)                           # residual
