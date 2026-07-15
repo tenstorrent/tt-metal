@@ -1104,9 +1104,19 @@ regression a live outcome if the gathers are already overlapped. **Both landed i
       (arm Q still timed out at 298s); what worked was run → offline `kernel_prewarm` → re-run (2nd run 218s, JIT 100%).
 - [ ] **NEXT: make `LTX_QUALITY=medium/fast` carry both flags** once the 1080p decoded-video gate signs off — `utils/ltx.py`
       `FAST_QUANT` sets the preset but not these env flags, so the served tiers do NOT yet get this −411 ms.
-- [ ] **NEXT: the cross-attn `to_kv`/a2v/v2a SDPA inputs are still bf16** — `_quant_cross_attn` never sets `_sdpa_input_dtype`
-      (SDPAQuantConfig is documented self-attn-only). The v2a ring-cross gathers video K/V across SP ⇒ another fabric payload
-      the same cast would shrink. Un-measured.
+- [x] **PRICED (job 596, census `sp_ag_video_kv_v2a_*`): the v2a cross-attn video-K/V SP-gather bf8 cast is a LARGE un-banked
+      fabric payload — E2E ceiling ≈ 90 ms. FUND-WORTHY warm lever.** `_quant_cross_attn` never sets `_sdpa_input_dtype`
+      (SDPAQuantConfig is documented self-attn-only), so the v2a ring-cross video K/V (audio Q attends the full video seq ⇒
+      video K/V all-gathered across SP, seq-scaled) still gathers bf16. Standalone SP-gather bf16→bf8: **S1 227.85→136.19 =
+      −91.66 µs (−40.2%); S2 881.87→500.91 = −380.96 µs (−43.2%)**, drift anchors dead-on (`prog_launch_ref` 5.84,
+      `sp_ag_audio_kv` 16.20). Byte-count signature confirmed (bf16 3.87× / saving 4.16× for 4× tokens = the QA2 fabric
+      fingerprint). Ceiling (v2a fires once/block): 48 blk × [8×S1 91.66 µs + 3×S2 380.96 µs] ≈ 90 ms. **⚠ UPPER BOUND** —
+      standalone gather, not the ring-folded exposure (QA2 precedent says ring-SDPA bf8 realizes its byte saving, so mostly
+      realizable, but un-measured in-fold). Wiring = source edit to `_quant_cross_attn` + own PCC gate (cross-attn K/V ≠
+      self-attn tensor class; QA2's self-attn PCC pass does not transfer) + prewarm + traced pipeline = WARM-authoring, NOT
+      cron. The a2v audio-K/V mirror is negligible (`sp_ag_audio_kv` 16.2 µs = 1 tile, not seq-scaled).
+- [ ] **NEXT: make `LTX_QUALITY=medium/fast` carry both QA flags AND (once funded) the v2a cross-K/V bf8 cast** — gated on
+      the 1080p decoded-video quality sign-off. The v2a cast (~90 ms ceiling) stacks on top of QA2's −411 ms.
 
 ## QUALITY GATE — the instrument, and why every earlier one was wrong
 

@@ -198,6 +198,18 @@ def test_ccl_census(mesh_device: ttnn.MeshDevice) -> None:
     x_a_full = _bf16(torch.randn(1, 1, A_ROWS, AUDIO_DIM), mesh_device)
     kv_a_sp = _bf16(torch.randn(1, 1, A_ROWS, a_loc), mesh_device)  # a2v audio K/V, SP-sharded
     k_bhne_a = _bf16(torch.randn(1, NUM_HEADS // tp, A_ROWS, AUDIO_DIM // NUM_HEADS), mesh_device)
+    # v2a cross-attn: audio Q attends the full video K/V, so the video K/V (audio-dim, both K+V,
+    # SP-sharded along video seq) is all-gathered across SP — a seq-scaled fabric payload the
+    # self-attn ring-SDPA bf8 cast (SHIPPED, -37.5ms/S2) does NOT touch (`_quant_cross_attn` leaves
+    # `_sdpa_input_dtype` unset). Priced bf16-vs-bf8 at both stages to size that un-cast payload.
+    kv_v2a_sp_s1 = _bf16(torch.randn(1, 1, V_ROWS_S1, 2 * a_loc), mesh_device)
+    kv_v2a_sp_s2 = _bf16(torch.randn(1, 1, V_ROWS_S2, 2 * a_loc), mesh_device)
+    kv_v2a_sp_s1_bf8 = ttnn.from_torch(
+        torch.randn(1, 1, V_ROWS_S1, 2 * a_loc), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b, device=mesh_device
+    )
+    kv_v2a_sp_s2_bf8 = ttnn.from_torch(
+        torch.randn(1, 1, V_ROWS_S2, 2 * a_loc), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b, device=mesh_device
+    )
     tiny_a = _bf16(torch.randn(1, 1, 32, 32), mesh_device)
     tiny_b = _bf16(torch.randn(1, 1, 32, 32), mesh_device)
 
@@ -423,6 +435,27 @@ def test_ccl_census(mesh_device: ttnn.MeshDevice) -> None:
         # SP-axis collectives on the audio path
         ("sp_ag_audio_kv", lambda: ccl.all_gather_persistent_buffer(kv_a_sp, dim=2, mesh_axis=sp_axis), False),
         ("sp_ag_audio_k_bhne", lambda: ccl.all_gather_persistent_buffer(k_bhne_a, dim=2, mesh_axis=sp_axis), False),
+        # v2a cross-attn video K/V SP-gather (seq-scaled), bf16 vs bf8 at both stages
+        (
+            "sp_ag_video_kv_v2a_s1",
+            lambda: ccl.all_gather_persistent_buffer(kv_v2a_sp_s1, dim=2, mesh_axis=sp_axis),
+            False,
+        ),
+        (
+            "sp_ag_video_kv_v2a_s1_bf8",
+            lambda: ccl.all_gather_persistent_buffer(kv_v2a_sp_s1_bf8, dim=2, mesh_axis=sp_axis),
+            False,
+        ),
+        (
+            "sp_ag_video_kv_v2a_s2",
+            lambda: ccl.all_gather_persistent_buffer(kv_v2a_sp_s2, dim=2, mesh_axis=sp_axis),
+            False,
+        ),
+        (
+            "sp_ag_video_kv_v2a_s2_bf8",
+            lambda: ccl.all_gather_persistent_buffer(kv_v2a_sp_s2_bf8, dim=2, mesh_axis=sp_axis),
+            False,
+        ),
         # rest of the block's TP collectives, so the census table has a price for every row
         ("agmm_out_video_s1", lambda: out_v(x_v1, parallel_config=pc), True),
         ("agmm_ff1_video_s1", lambda: ff1_v(x_v1, parallel_config=pc), True),
