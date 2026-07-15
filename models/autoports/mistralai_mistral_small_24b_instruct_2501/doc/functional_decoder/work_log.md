@@ -82,4 +82,4 @@ MISTRAL_SMALL_24B_CONTEXT_EXPECT_OOM=1 TT_VISIBLE_DEVICES=2,3 pytest -q -s \
 - Fresh reviewer `/root/stage_review_mistral` returned `MORE-WORK-NEEDED` only for the unproven initial context cap; all graph, translation, API, PCC, runtime-fallback, provenance, and scope gates passed.
 - After the adjacent capacity boundary was measured and documented, a different fresh reviewer, `/root/stage_review_mistral_rereview`, returned `CLEAN-PASS` with no required work. Its explicit graph/path, IR-fidelity, TP-collapse, runtime, correctness, context, documentation, and scope assessments all passed.
 - The post-remediation final serialized correctness run passed all four tests in 26.84 seconds with the real-weight environment enabled. Python compile, JSON parse, `git diff --check`, and the context-contract checker also passed.
-- The local functional-decoder checkpoint SHA is recorded in a follow-up log-only commit after the stage checkpoint is created.
+- Local functional-decoder checkpoint: `6154b41e1f85baf4d621eb128bb651eb7f245f8f` (`Add Mistral Small 24B functional decoder from TTNN IR`).
