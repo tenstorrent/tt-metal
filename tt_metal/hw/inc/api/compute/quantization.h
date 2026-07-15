@@ -304,11 +304,37 @@ ALWI void requant_int8_in_tile_init(const uint32_t zero_point) {
         requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::Int32, true), zero_point)));
 }
 
+// clang-format off
+/**
+ * Initialize the sfpu for requantize reading an int8 input tensor and writing a uint8 output tensor. Shares the
+ * int8-input handling of requant_int8_in_tile_init (see that function). Must be called before using the op.
+ * Repeated callsare redundant.
+ *
+ * Return value: None
+ *
+ * | Argument   | Description                              | Data type | Valid range | Required |
+ * |------------|------------------------------------------|-----------|-------------|----------|
+ * | zero_point | The zero point of the re-quantization Op | uint32_t  | Any number  | Yes      |
+ * */
+// clang-format on
 ALWI void requant_int8_in_uint8_tile_init(const uint32_t zero_point) {
     MATH((SFPU_BINARY_INIT_FN_ARGS(
         requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::UInt8, true), zero_point)));
 }
 
+// clang-format off
+/**
+ * Initialize the sfpu for requantize reading an int8 input tensor and writing an int8 output tensor. Shares the
+ * int8-input handling of requant_int8_in_tile_init and additionally packs the result into the signed int8 range.
+ * Must be called before using the op. Repeated calls are redundant.
+ *
+ * Return value: None
+ *
+ * | Argument   | Description                              | Data type | Valid range | Required |
+ * |------------|------------------------------------------|-----------|-------------|----------|
+ * | zero_point | The zero point of the re-quantization Op | uint32_t  | Any number  | Yes      |
+ * */
+// clang-format on
 ALWI void requant_int8_in_int8_tile_init(const uint32_t zero_point) {
     MATH((SFPU_BINARY_INIT_FN_ARGS(
         requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::Int8, true), zero_point)));
