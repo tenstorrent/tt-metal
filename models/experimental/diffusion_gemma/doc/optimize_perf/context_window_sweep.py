@@ -27,7 +27,7 @@ from models.experimental.diffusion_gemma.checkpoint import build_tt_model_from_c
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.demo.text_demo import _close_mesh_device, _open_mesh_device
 from models.experimental.diffusion_gemma.tt.commit_batched import batched_commit_enabled
-from models.experimental.diffusion_gemma.tt.generate import select_denoise_block_fn
+from models.experimental.diffusion_gemma.tt.generate import prefill_prompt_tokens, select_denoise_block_fn
 from models.experimental.diffusion_gemma.tt.prefill_moe import (
     _find_supported_experts,
     tuned_prefill_moe_enabled,
@@ -101,11 +101,14 @@ def _write_result(path: Path, result: dict) -> None:
 
 
 def _validate_contract(args) -> None:
-    if args.num_blocks != NUM_BLOCKS:
+    expected_blocks = 0 if args.prefill_only else NUM_BLOCKS
+    if args.num_blocks != expected_blocks:
+        if args.prefill_only:
+            raise ValueError("prefill-only comparison requires num_blocks=0")
         raise ValueError(f"comparison table requires exactly {NUM_BLOCKS} blocks")
     if args.canvas_length != CANVAS_LENGTH:
         raise ValueError(f"comparison table requires canvas_length={CANVAS_LENGTH}")
-    if args.max_denoise_steps != MAX_DENOISE_STEPS:
+    if not args.prefill_only and args.max_denoise_steps != MAX_DENOISE_STEPS:
         raise ValueError(f"comparison table requires max_denoise_steps={MAX_DENOISE_STEPS}")
     for prompt_len in args.prompt_lengths:
         aligned = ((prompt_len + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
@@ -114,13 +117,13 @@ def _validate_contract(args) -> None:
                 f"prompt {prompt_len} aligns to {aligned}; two committed blocks exceed "
                 f"max_seq_len={args.max_seq_len}"
             )
-    if os.environ.get("DG_SPARSE_MOE") != "1":
+    if not args.prefill_only and os.environ.get("DG_SPARSE_MOE") != "1":
         raise ValueError("set DG_SPARSE_MOE=1 for the comparison contract")
-    if os.environ.get("DG_DEDUP_ARGMAX") != "1":
+    if not args.prefill_only and os.environ.get("DG_DEDUP_ARGMAX") != "1":
         raise ValueError("set DG_DEDUP_ARGMAX=1 for the comparison contract")
     if not tuned_prefill_moe_enabled():
         raise ValueError("tuned prefill MoE must resolve enabled")
-    if not tuned_configs_enabled():
+    if not args.prefill_only and not tuned_configs_enabled():
         raise ValueError("tuned sparse denoise MoE must resolve enabled")
 
 
@@ -145,6 +148,7 @@ def run(args) -> dict:
             "prompt_recipe": "token[i] = (i*1103515245 + 12345) % (vocab_size-1) + 1",
             "canvas_length": args.canvas_length,
             "num_blocks": args.num_blocks,
+            "prefill_only": args.prefill_only,
             "max_denoise_steps": args.max_denoise_steps,
             "gumbel_mode": "argmax",
             "seed": args.seed,
@@ -213,6 +217,39 @@ def run(args) -> dict:
         vocab_size = int(bundle.tt_model.hf_config.vocab_size)
         for prompt_len in args.prompt_lengths:
             prompt_tokens = _prompt_prefix(prompt_len, vocab_size)
+            if args.prefill_only:
+                ttnn.synchronize_device(mesh_device)
+                prefill_t0 = time.perf_counter()
+                prefill = prefill_prompt_tokens(bundle.tt_model, prompt_tokens)
+                ttnn.synchronize_device(mesh_device)
+                prefill_s = time.perf_counter() - prefill_t0
+                dram_after_prefill = _dram_gib(mesh_device)
+                row = {
+                    "prompt_len": prompt_len,
+                    "cache_len": int(prefill.cache_len),
+                    "prompt_token_sha256": _token_sha256(prompt_tokens),
+                    "prefill_s": prefill_s,
+                    "prefill_tokens_per_s": prompt_len / prefill_s,
+                    "dram_after_prefill": dram_after_prefill,
+                    "blocks": [],
+                    "final_next_pos": int(prefill.cache_len),
+                }
+                result["rows"].append(row)
+                _write_result(args.output, result)
+                print(
+                    "DG_CONTEXT_PREFILL_ROW "
+                    + json.dumps(
+                        {
+                            "max_seq_len": args.max_seq_len,
+                            "prompt_len": prompt_len,
+                            "prefill_s": round(prefill_s, 6),
+                            "prefill_tokens_per_s": round(prompt_len / prefill_s, 3),
+                        },
+                        sort_keys=True,
+                    ),
+                    flush=True,
+                )
+                continue
             session = BlockDiffusionServingSession(
                 bundle.tt_model,
                 bundle.state_dict,
@@ -307,6 +344,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mesh", default="P150x4")
     parser.add_argument("--canvas-length", type=int, default=CANVAS_LENGTH)
     parser.add_argument("--num-blocks", type=int, default=NUM_BLOCKS)
+    parser.add_argument("--prefill-only", action="store_true")
     parser.add_argument("--max-denoise-steps", type=int, default=MAX_DENOISE_STEPS)
     parser.add_argument("--seed", type=int, default=0)
     return parser

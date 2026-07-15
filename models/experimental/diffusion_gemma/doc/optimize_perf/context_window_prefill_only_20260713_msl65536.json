@@ -1,0 +1,163 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "label": "current-64k-build-prefill-only",
+  "tt_metal_head": "ec5b64b4891d8babfa3829a886d53068c5b2d889",
+  "checkpoint": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+  "hardware": {
+    "mesh": "P150x4",
+    "mesh_shape": [
+      1,
+      4
+    ],
+    "architecture": "Blackhole",
+    "tensor_parallel": 4
+  },
+  "contract": {
+    "num_layers": 30,
+    "max_seq_len": 65536,
+    "prompt_lengths": [
+      1024,
+      4096,
+      16384,
+      32768,
+      65536
+    ],
+    "prompt_recipe": "token[i] = (i*1103515245 + 12345) % (vocab_size-1) + 1",
+    "canvas_length": 256,
+    "num_blocks": 0,
+    "prefill_only": true,
+    "max_denoise_steps": 4,
+    "gumbel_mode": "argmax",
+    "seed": 0,
+    "steady_block": 1,
+    "timing": "synchronized device wall time"
+  },
+  "environment": {
+    "DG_PREFILL_MOE_TUNED": "1",
+    "DG_SPARSE_MOE": "<unset>",
+    "DG_SPARSE_MOE_TUNED": "<unset>",
+    "DG_SPARSE_MOE_CAPACITY": "<unset>",
+    "DG_DEDUP_ARGMAX": "<unset>",
+    "DG_COMMIT_BATCHED": "<unset>",
+    "DG_SELFCOND_PRECHUNK_EMBED": "<unset>",
+    "DG_SELFCOND_LOGITS_L1": "<unset>",
+    "DG_NORM_FULLCANVAS": "<unset>",
+    "DG_MOE_L1": "<unset>",
+    "DG_DENOISE_TRACED": "<unset>",
+    "DG_DENOISE_TRACED_MULTISTEP": "<unset>",
+    "DG_DENOISE_EARLY_HALT": "<unset>",
+    "DG_PREFIX_CACHE": "<unset>",
+    "TT_METAL_WATCHER": "<unset>",
+    "TT_METAL_DEVICE_PROFILER": "<unset>"
+  },
+  "resolved_defaults": {
+    "prefill_moe_tuned": true,
+    "sparse_moe_tuned": true,
+    "batched_commit": true,
+    "selfcond_prechunk": true,
+    "selfcond_logits_l1": "chain",
+    "denoise_block_fn": "denoise_block"
+  },
+  "model_build": {
+    "dram_before": {
+      "used": 0.0,
+      "free": 31.867186546325684,
+      "usable_total": 31.867186546325684,
+      "banks": 8
+    },
+    "elapsed_s": 21.3654793589958,
+    "dram_after": {
+      "used": 17.328871726989746,
+      "free": 14.538314819335938,
+      "usable_total": 31.867186546325684,
+      "banks": 8
+    },
+    "num_layers": 30,
+    "prefill_expert_layers_guarded": 30
+  },
+  "rows": [
+    {
+      "prompt_len": 1024,
+      "cache_len": 1024,
+      "prompt_token_sha256": "ae538b066e7ea6bf7c539865d2fc5548b927407dfc26b32ba3c80f8a86ba130f",
+      "prefill_s": 0.694734224001877,
+      "prefill_tokens_per_s": 1473.9449484746176,
+      "dram_after_prefill": {
+        "used": 17.335951805114746,
+        "free": 14.531234741210938,
+        "usable_total": 31.867186546325684,
+        "banks": 8
+      },
+      "blocks": [],
+      "final_next_pos": 1024
+    },
+    {
+      "prompt_len": 4096,
+      "cache_len": 4096,
+      "prompt_token_sha256": "2caccb1735e6e37cfb83eb4b227195e7823d596485c1c7ee7165c63b37359aa1",
+      "prefill_s": 1.274737864965573,
+      "prefill_tokens_per_s": 3213.209642996383,
+      "dram_after_prefill": {
+        "used": 17.342284202575684,
+        "free": 14.52490234375,
+        "usable_total": 31.867186546325684,
+        "banks": 8
+      },
+      "blocks": [],
+      "final_next_pos": 4096
+    },
+    {
+      "prompt_len": 16384,
+      "cache_len": 16384,
+      "prompt_token_sha256": "9d3e382906b5c9544b2e5989c1bc5442a391a783b8282fcb69ee6f0615958de8",
+      "prefill_s": 43.16967660700902,
+      "prefill_tokens_per_s": 379.5256598549523,
+      "dram_after_prefill": {
+        "used": 17.353468894958496,
+        "free": 14.513717651367188,
+        "usable_total": 31.867186546325684,
+        "banks": 8
+      },
+      "blocks": [],
+      "final_next_pos": 16384
+    },
+    {
+      "prompt_len": 32768,
+      "cache_len": 32768,
+      "prompt_token_sha256": "910f64be4fb64afc08e44bc25b27aff27f811583f6e7d4067a9ef7742f21d97c",
+      "prefill_s": 96.5408960210043,
+      "prefill_tokens_per_s": 339.4209226406051,
+      "dram_after_prefill": {
+        "used": 17.36289882659912,
+        "free": 14.504287719726562,
+        "usable_total": 31.867186546325684,
+        "banks": 8
+      },
+      "blocks": [],
+      "final_next_pos": 32768
+    },
+    {
+      "prompt_len": 65536,
+      "cache_len": 65536,
+      "prompt_token_sha256": "276402cb06838249af29133bd9b3bae97f8973309410b215b4488fb8d4b359f0",
+      "prefill_s": 235.441819966014,
+      "prefill_tokens_per_s": 278.35326795154793,
+      "dram_after_prefill": {
+        "used": 17.38076686859131,
+        "free": 14.486419677734375,
+        "usable_total": 31.867186546325684,
+        "banks": 8
+      },
+      "blocks": [],
+      "final_next_pos": 65536
+    }
+  ],
+  "completed_prompt_lengths": [
+    1024,
+    4096,
+    16384,
+    32768,
+    65536
+  ]
+}
