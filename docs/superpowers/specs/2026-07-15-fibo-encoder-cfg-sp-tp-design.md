@@ -2,7 +2,14 @@
 
 **Date:** 2026-07-15
 **Branch:** `fibo-pipeline`
-**Status:** Approved (design)
+**Status:** Implemented — with a revision (CFG=2 dropped; see "Outcome" at the bottom)
+
+> **Outcome summary (read first):** CFG=2 via two overlapping cfg-parallel encoder submeshes
+> **deadlocks** against the whole-mesh DiT's CCL context and was dropped. Shipped instead: the
+> sequence-parallel + 1024-bucket encoder on the **whole mesh** (its own CCLManager), positive/negative
+> encoded sequentially. `encoder_sp_axis` selects the SP axis; **SP=8 × TP=4 is the default and ~1.9×
+> faster** than SP=4 × TP=8 (12.5 s vs 23.8 s/encode on 4×8). Both layouts PCC ≥ 0.999 vs HF. Full
+> detail in the "Outcome" section at the end.
 
 ## Goal
 
@@ -193,3 +200,39 @@ to `_num_links`. The 2×2 param continues to work via the degradation in §2.
 - SP method: all-gather K/V. (User choice.)
 - Landing: shared encoder + FIBO wrapper + main pipeline `_encode`. (User: "Also update main
   pipeline".)
+
+## Outcome (2026-07-15, post-implementation)
+
+**Delivered as designed:**
+- All-gather K/V sequence parallelism in the SmolLM3 encoder (per-shard rectangular causal bias +
+  shard-offset RoPE). PCC ≥ 0.999 vs HF on 4×8 for both SP-axis assignments and multiple lengths.
+- Fixed-bucket padding (`pick_bucket`, start `[1024]`, error on overflow, divisible by `sp_factor*32`).
+- `EncoderParallelConfig` extended (cfg/sp); FIBO wrapper SP-aware host I/O.
+
+**Revised: CFG=2 dropped.** Running the encoder as CFG=2 requires two (4,4) submeshes that physically
+overlap the DiT's whole (4,8) mesh. Those two partitionings conflict at the CCL/fabric layer:
+- Construction hang: creating a `CCLManager` (global semaphores) on a (4,4) child submesh hangs after
+  the transformer build has set sub-device state on the whole-mesh submesh. Reordering (encoders first)
+  fixed construction but…
+- Runtime hang: the encoder's all-gather then deadlocks during `_encode` once the DiT occupies the
+  whole mesh. Isolated repros proved the encoder-on-submesh works *alone*; the conflict is the two
+  overlapping CCL contexts coexisting — a deeper tt-metal submesh/fabric limitation.
+
+Per the user's decision, we ship the **whole-mesh** encoder (SP × TP on the same submesh as the DiT,
+its own `CCLManager` like the VAE so it doesn't perturb the denoise trace), with positive/negative
+encoded **sequentially**. This delivers the two core asks — **1024 padding** and **SP across tokens** —
+and is guaranteed to coexist with the whole-mesh DiT.
+
+**SP-axis perf comparison (4×8, `test_fibo_encode_perf`, avg of 3, pos+neg):**
+
+| Layout | encode (pos+neg) | PCC vs HF |
+|--------|------------------|-----------|
+| SP=4 (axis 0) × TP=8 (axis 1) | 23.763 s | 99.953% |
+| **SP=8 (axis 1) × TP=4 (axis 0)** | **12.493 s** | 99.955% |
+
+SP=8 × TP=4 is ~1.9× faster, so `encoder_sp_axis` defaults to 1. The DiT is unchanged (still
+SP=4 × TP=8 on axis 0/1); the encoder's axis choice is independent (it returns host tensors).
+
+**Follow-up (if CFG=2 is revisited):** needs proper tt-metal sub-device isolation between the encoder
+submeshes and the whole-mesh DiT (e.g. dedicated sub-device managers / non-overlapping partitions), or
+making the DiT itself cfg-parallel.
