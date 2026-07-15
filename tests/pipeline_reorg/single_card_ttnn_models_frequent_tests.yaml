@@ -22,7 +22,7 @@
       timeout: 30
     wh_n300:
       timeout: 30
-  owner_id: U03PUAKE719 # TODO: verify owner. CODEOWNERS: @gtobarTT (no known Slack ID)
+  owner_id: U082LLYBLSW # Gabriel Tobar (CODEOWNERS @gtobarTT)
   team: models
 - name: common_models nightly
   cmd: $PYTEST_CMD tests/nightly/single_card/common_models
@@ -32,7 +32,7 @@
       timeout: 30
     wh_n300:
       timeout: 30
-  owner_id: U03PUAKE719 # TODO: verify owner. No CODEOWNERS model dir (falls to /models/ catch-all)
+  owner_id: U03PUAKE719 # Miguel Tairum (@mtairum)
   team: models
 - name: resnet50 nightly
   cmd: $PYTEST_CMD tests/nightly/single_card/resnet50
@@ -156,7 +156,7 @@
       timeout: 30
     wh_n300:
       timeout: 30
-  owner_id: U03PUAKE719 # TODO: verify owner. CODEOWNERS: @ssinghalTT (no known Slack ID)
+  owner_id: U087HGJ455E # (CODEOWNERS @ssinghalTT)
   team: models
 - name: efficientdetd0 nightly
   cmd: $PYTEST_CMD tests/nightly/single_card/efficientdetd0
@@ -176,7 +176,7 @@
       timeout: 30
     wh_n300:
       timeout: 30
-  owner_id: U03PUAKE719 # TODO: verify owner. CODEOWNERS: @ssinghalTT (no known Slack ID)
+  owner_id: U087HGJ455E # (CODEOWNERS @ssinghalTT)
   team: models
 - name: ssd512 nightly
   cmd: $PYTEST_CMD tests/nightly/single_card/ssd512
@@ -196,7 +196,7 @@
       timeout: 30
     wh_n300:
       timeout: 30
-  owner_id: U03PUAKE719 # TODO: verify owner. CODEOWNERS first: @tvardhineniTT (no known Slack ID); 2nd @dvartaniansTT = U056BK5U81E
+  owner_id: U0978501V8B # (CODEOWNERS @tvardhineniTT)
   team: models
 - name: retinanet nightly
   cmd: $PYTEST_CMD tests/nightly/single_card/retinanet
@@ -261,7 +261,7 @@
       timeout: 30
     wh_n300_civ2:
       timeout: 30
-  owner_id: U03PUAKE719 # TODO: verify owner. No CODEOWNERS model dir (falls to /models/ catch-all)
+  owner_id: U03PUAKE719 # Miguel Tairum (@mtairum)
   team: models
 
 # Blackhole frequent model tests
