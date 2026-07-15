@@ -14,6 +14,8 @@ Controlled by environment variables:
   TT_METAL_TRACE_ALLOC_REFERRER_DEPTH=N Maximum referrer traversal depth
                                          (default: 10).
 
+Set these before importing ttnn; they are read once at process startup.
+
 See also: ttnn.corruptible_allocation_scope, ttnn.execute_trace.
 """
 
