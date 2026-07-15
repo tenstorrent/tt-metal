@@ -771,6 +771,26 @@ class TTVibeVoiceGenerator:
         fused = ttnn.add(acoustic_embed, semantic_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return fused, audio_chunk
 
+    def _neg_diffusion_embed(self) -> ttnn.Tensor:
+        """Cached embedding of speech_diffusion_id [1,1,1,H] (the neg stream's steady-state token)."""
+        if getattr(self, "_neg_diff_embed_tt", None) is None:
+            self._neg_diff_embed_tt = self.lm._embed(torch.tensor([[self.speech_diffusion_id]], dtype=torch.long))
+        return self._neg_diff_embed_tt
+
+    def _reset_neg_cache_batched(self, kv_comb: KVCache):
+        """Reset the negative stream in the combined cache: write speech_start's K/V into cache
+        ROW 1 at pos 0 and return neg_start_hidden.  Reuses forward_decode_batched2 — row 0 is a
+        harmless dummy written at a scratch position (``maxS-32``, beyond any real pos_valid, so
+        never read), row 1 = speech_start at pos 0.  Returns neg_start_hidden [1,1,1,H]."""
+        H = self.lm.cfg.hidden_size
+        scratch = kv_comb.max_seq - 32
+        ss = self.lm._embed(torch.tensor([[self.speech_start_id]], dtype=torch.long))  # [1,1,1,H]
+        e2 = ttnn.concat([ss, ss], dim=2)  # row0 dummy (discarded), row1 = speech_start
+        cos_rows, sin_rows = self.lm._rope_rows_from_pos_int2(scratch, 0)
+        cur = ttnn.from_torch(torch.tensor([scratch, 0], dtype=torch.int32), device=self.device, dtype=ttnn.int32)
+        _, hidden2 = self.lm.forward_decode_batched2(e2, cos_rows, sin_rows, cur, kv_comb)
+        return ttnn.slice(hidden2, [0, 0, 1, 0], [1, 1, 2, H], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
     def _reset_neg_cache(self, kv_cache_neg: KVCache):
         """Negative prefill: single speech_start token."""
         if self._ref_lm is not None:
@@ -896,9 +916,22 @@ class TTVibeVoiceGenerator:
         # Preallocate fixed-size KV caches (TT LM path only).  Positive cache holds
         # prefill + all generated tokens; negative cache is reset per speech segment
         # (reused buffer), so it only needs to span one segment ≤ max_steps.
+        # CFG-batched decode: run the negative + positive LM streams in ONE row-stacked batch-2
+        # forward (matmuls/norms/heads pad M=1->32 either way, so the neg stream is ~free).  Uses a
+        # combined [2,n_kv,maxS,hd] cache (row0=pos, row1=neg).  Eager TT path only; the whole-
+        # segment trace and the reference path keep the separate-cache path for now.
+        use_cfg_batched = (
+            (self._ref_lm is None) and (not self._trace_segment) and os.environ.get("VV_CFG_BATCHED", "1") == "1"
+        )
+        kv_comb = None
         if self._ref_lm is None:
-            kv_cache_pos = self.lm.alloc_kv_cache(prefill_len + max_steps + 8)
-            kv_cache_neg = self.lm.alloc_kv_cache(max_steps + 8)
+            if use_cfg_batched:
+                kv_comb = self.lm.alloc_kv_cache_batched2(prefill_len + max_steps + 8)
+                kv_cache_pos = kv_comb  # prefill + pos decode write row 0
+                kv_cache_neg = None
+            else:
+                kv_cache_pos = self.lm.alloc_kv_cache(prefill_len + max_steps + 8)
+                kv_cache_neg = self.lm.alloc_kv_cache(max_steps + 8)
         else:
             kv_cache_pos = create_kv_cache(cfg.num_hidden_layers)
             kv_cache_neg = create_kv_cache(cfg.num_hidden_layers)
@@ -906,9 +939,14 @@ class TTVibeVoiceGenerator:
         with prof.section("lm_prefill"):
             logits_pos, prefill_hidden = self._lm_prefill(inputs_embeds, kv_cache_pos)
         _t_prefill_end = time.perf_counter()
-        _vv_debug(f"lm_prefill done: kv_cache_pos size={prefill_len + max_steps + 8}")
+        _vv_debug(f"lm_prefill done: kv_cache size={prefill_len + max_steps + 8} cfg_batched={use_cfg_batched}")
 
-        neg_pos, neg_start_hidden = self._reset_neg_cache(kv_cache_neg)
+        if use_cfg_batched:
+            neg_pos = 1  # next neg write position (reset wrote pos 0)
+            neg_start_hidden = self._reset_neg_cache_batched(kv_comb)
+        else:
+            neg_pos, neg_start_hidden = self._reset_neg_cache(kv_cache_neg)
+        neg_hidden_pending = neg_start_hidden  # neg_hidden used by the CURRENT frame's diffusion
         neg_prev_diffusion_token: Optional[int] = None  # delayed token for negative CFG
 
         sequences = input_ids.clone()
@@ -1005,6 +1043,102 @@ class TTVibeVoiceGenerator:
                 if _sf_replay:
                     _steady_decode_s += time.perf_counter() - _frame_t0
                     _steady_decode_frames += 1
+                continue
+
+            if use_cfg_batched:
+                # ── Eager CFG-batched frame ──────────────────────────────────────────
+                # diffusion(uses neg_hidden_pending) -> post -> ONE batched forward that
+                # decodes the positive token AND (pipelined one frame ahead) the negative
+                # stream's next token.  Positive row -> logits + step_hidden; negative row ->
+                # neg_hidden_pending for the NEXT frame's diffusion.
+                H = self.lm.cfg.hidden_size
+                is_diff = current_token == self.speech_diffusion_id
+                if is_diff:
+                    diffusion_frames += 1
+                    _spf_profiling = _profile_frame_n > 0 and diffusion_frames == _profile_frame_n
+                    if _spf_profiling:
+                        import tracy
+
+                        ttnn.synchronize_device(device)
+                        tracy.signpost("start")
+                        _vv_debug(f"Tracy signpost start: speech frame {diffusion_frames}")
+                    cond_pos = _condition_from_hidden(step_hidden)
+                    cond_neg = _condition_from_hidden(neg_hidden_pending)
+                    with prof.section("diffusion (CFG x num_steps)"):
+                        noise_2x = diffusion_noise[diffusion_frames - 1] if diffusion_noise is not None else None
+                        speech_latent = self._run_speech_diffusion(
+                            cond_pos, cond_neg, latent_size=64, noise_2x=noise_2x, rng=rng
+                        )
+                    with prof.section("post_diffusion (decode+sem_enc+conn)"):
+                        pending_embeds, audio_chunk = self._post_diffusion_embeds(speech_latent)
+                    if _spf_profiling:
+                        _spf_audio_deferred = audio_chunk
+                    else:
+                        with prof.section("audio_chunk -> host"):
+                            _emit_audio(ttnn.to_torch(audio_chunk).to(torch.float32).reshape(-1))
+
+                if current_token == self.eos_token_id:
+                    _vv_debug(f"EOS at step {step + 1}")
+                    break
+
+                start_pos = prefill_len + step
+                scratch = kv_comb.max_seq - 32
+                if pending_embeds is not None:
+                    pos_embed = pending_embeds
+                else:
+                    pos_embed = self.lm._embed(torch.tensor([[current_token]], dtype=torch.long))
+                if is_diff:
+                    neg_embed = self._neg_diffusion_embed()
+                    neg_write = neg_pos
+                else:
+                    neg_embed = pos_embed  # dummy negative row (output discarded)
+                    neg_write = scratch
+                e2 = ttnn.concat([pos_embed, neg_embed], dim=2)  # [1,1,2,H]
+                cos_rows, sin_rows = self.lm._rope_rows_from_pos_int2(start_pos, neg_write)
+                cur = ttnn.from_torch(
+                    torch.tensor([start_pos, neg_write], dtype=torch.int32), device=device, dtype=ttnn.int32
+                )
+                with prof.section("pos_lm+neg_lm (batched)"):
+                    logits, hidden2 = self.lm.forward_decode_batched2(e2, cos_rows, sin_rows, cur, kv_comb)
+                step_hidden = ttnn.slice(hidden2, [0, 0, 0, 0], [1, 1, 1, H], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                pending_embeds = None
+                if is_diff:
+                    neg_hidden_pending = ttnn.slice(
+                        hidden2, [0, 0, 1, 0], [1, 1, 2, H], memory_config=ttnn.DRAM_MEMORY_CONFIG
+                    )
+                    neg_pos += 1
+
+                if _spf_profiling:
+                    import tracy
+
+                    ttnn.synchronize_device(device)
+                    tracy.signpost("stop")
+                    _vv_debug(f"Tracy signpost stop: speech frame {_profile_frame_n}")
+                    if _spf_audio_deferred is not None:
+                        _emit_audio(ttnn.to_torch(_spf_audio_deferred).to(torch.float32).reshape(-1))
+                        _spf_audio_deferred = None
+                    _spf_profiling = False
+                    if os.environ.get("VV_PROFILE_SPEECH_FRAME_EXIT", "0") == "1":
+                        _vv_debug("VV_PROFILE_SPEECH_FRAME_EXIT=1 — ending generate after profiled frame")
+                        break
+
+                if current_token == self.speech_start_id:
+                    _vv_debug("  new speech segment: reset neg-CFG cache + tokenizer streaming caches")
+                    neg_pos = 1
+                    neg_hidden_pending = self._reset_neg_cache_batched(kv_comb)
+                    self.acoustic_tok.reset_decode_cache()
+                    self.semantic_tok.reset_cache()
+
+                with prof.section("token_constraint"):
+                    logits = ttnn.add(
+                        logits, self._token_constraint_mask(logits.shape[-1]), memory_config=ttnn.DRAM_MEMORY_CONFIG
+                    )
+                with prof.section("argmax"):
+                    if forced_tokens is not None:
+                        next_token = forced_tokens[forced_idx] if forced_idx < len(forced_tokens) else self.eos_token_id
+                        forced_idx += 1
+                    else:
+                        next_token = _greedy_argmax(logits, use_fp32=use_fp32_argmax)
                 continue
 
             if current_token == self.speech_diffusion_id:

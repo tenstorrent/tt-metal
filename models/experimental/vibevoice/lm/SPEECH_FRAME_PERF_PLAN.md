@@ -108,6 +108,41 @@ The two make-or-break primitives were validated in isolation:
   **PCC 0.999996** both rows.
 - Matmul cost premise (M=1≡M=2 row-stacked, fuse_batch): validated earlier (scratchpad/batch2_iso.py).
 
+### STATUS: WIRED into the eager path + measured (exp4)
+`generate()` eager TT path (`VV_CFG_BATCHED=1`, default; traced + reference paths unchanged) now
+runs the CFG streams as one row-stacked batch-2 forward with the combined cache, pipelining the
+negative stream one frame ahead. **Speech frame 40.88 → 34.14 ms device time (−6.73 ms, −515 ops);
+from the original baseline 41.06 → 34.14 ms (−16.8%).** Breakdown: Matmul −2.89, LayerNorm −1.38,
+Nlp{Create,Concat}Heads −1.29, SDPA −0.38 (56→28 batch-2), RoPE −0.41; UpdateKVCache→PagedUpdateCache.
+**Correctness:** frame-0 audio PCC **0.9997** (old vs new, seed 0; gate 0.90), test_lm_pcc intact
+(prefill 0.995 / decode 0.9997), test_cfg_batched_lm_equiv + _prefill_equiv PASS. `VV_CFG_BATCHED=0`
+falls back to the separate-cache path.
+REMAINING: wire the whole-segment trace (deployed path) to the batched forward.
+
+### batched decode CORE (3de97d74f4f)
+`alloc_kv_cache_batched2`, `_rope_rows_from_pos_int2`, `_attention_decode_batched2`,
+`_transformer_layer_batched2`, `forward_decode_batched2` — all in ttnn_vibevoice_lm.py, inert
+until wired. `test_cfg_batched_lm_equiv.py`: batched == 2 separate decodes (pos_hidden 0.9996,
+neg_hidden 0.9997, pos_logits 0.9995, token match 1.0).
+
+### REMAINING: AR-loop integration (design locked)
+- **Prefill → combined-cache row 0:** pass the `[2,…]` combined cache to the existing
+  `prefill_embeds`; its fp32 prefill writes `fill_cache(batch_idx=0)` and reads `slice[0:1]`
+  (B=1) → populates row 0 only. Works as-is (verify).
+- **Neg reset → combined-cache row 1 (the trick):** reuse `forward_decode_batched2` itself —
+  row0 = dummy embed at a *scratch* position (`maxS-32`, never read since pos_valid ≪ maxS →
+  harmless write), row1 = speech_start embed at pos 0. Returns neg_start_hidden AND writes row 1
+  pos 0. No new prefill/batch_idx surgery needed.
+- **AR loop (pipeline neg one frame ahead):** keep `neg_hidden_pending` (init = neg_start_hidden).
+  Per diffusion frame i: diffusion uses `neg_hidden_pending`; then ONE batched forward
+  (row0 = pending_embeds @ pos_pos=prefill_len+step, row1 = speech_diffusion_id @ neg_pos) →
+  logits+step_hidden (row0), `neg_hidden_pending` ← hidden2 row1; neg_pos++.
+- **Boundaries:** segment start re-runs the neg reset; speech_end → the speculative neg row is
+  discarded (reset wipes it). Non-diffusion tokens keep the single-stream pos decode.
+- **Trace:** mirror in `_run_segment_frame_traced` (`_sf_*` persistent buffers, dev-RoPE rows via
+  a batch-2 `_rope_rows_from_pos` gather; positions self-advance with `plus_one`).
+Expected ~9 ms/frame (neg-LM ~free). Gate: test_lm_pcc + demo sanity + re-profile.
+
 Integration steps (build additively so the working model is never broken):
 1. `alloc_kv_cache_batched2` → combined cache `[2,n_kv,maxS,hd]` (row0=pos, row1=neg).
 2. batched decode attention: row-stacked QKV `[1,1,2,2048]` → nlp_create_qkv_heads → permute to
