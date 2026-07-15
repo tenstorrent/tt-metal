@@ -27,15 +27,18 @@ ProgramDescriptor UntilizeMultiCoreParallelizeColumnProgramFactory::create_descr
     const Tensor& output = tensor_return_value;
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
 
+    const auto& tile = a.tensor_spec().tile();
+    const uint32_t tile_height = tile.get_height();
+    const uint32_t tile_width = tile.get_width();
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
+    uint32_t input_single_tile_size = tile.get_tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    uint32_t output_single_tile_size = tile.get_tile_size(output_cb_data_format);
 
     IDevice* device = a.device();
     auto grid_size = device->compute_with_storage_grid_size();
 
-    uint32_t ntiles = a.physical_volume() / TILE_HW;
+    uint32_t ntiles = a.physical_volume() / tile.get_tile_hw();
     uint32_t ncores_x = grid_size.x;
     uint32_t ncores_y = grid_size.y;
 
@@ -49,7 +52,7 @@ ProgramDescriptor UntilizeMultiCoreParallelizeColumnProgramFactory::create_descr
     uint32_t max_tiles = 1;
 
     uint32_t stick_s = a.padded_shape()[-1];
-    uint32_t ntiles_per_row = stick_s / TILE_WIDTH;
+    uint32_t ntiles_per_row = stick_s / tile_width;
     uint32_t stick_size = stick_s * output.element_size();
     uint32_t ntiles_per_column = ntiles / ntiles_per_row;
     uint32_t starting_tile = ntiles_per_block;
@@ -84,6 +87,7 @@ ProgramDescriptor UntilizeMultiCoreParallelizeColumnProgramFactory::create_descr
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
+            .tile = TileDescriptor(tile),
         }}},
     });
 
@@ -95,6 +99,7 @@ ProgramDescriptor UntilizeMultiCoreParallelizeColumnProgramFactory::create_descr
             .buffer_index = static_cast<uint8_t>(output_cb_index),
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
+            .tile = TileDescriptor(tile),
         }}},
     });
 
@@ -109,7 +114,7 @@ ProgramDescriptor UntilizeMultiCoreParallelizeColumnProgramFactory::create_descr
     reader_desc.compile_time_args = std::move(reader_ct_args);
     reader_desc.config = ReaderConfigDescriptor{};
 
-    std::vector<uint32_t> writer_ct_args = {stick_size};
+    std::vector<uint32_t> writer_ct_args = {stick_size, tile_height};
     TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
 
     KernelDescriptor writer_desc;
@@ -186,7 +191,7 @@ ProgramDescriptor UntilizeMultiCoreParallelizeColumnProgramFactory::create_descr
     uint32_t offset_within_stick = 0;
     auto cores = grid_to_cores(ncores_x * ncores_y, ncores_x, ncores_y, row_major);
 
-    auto nsticks_per_core = ntiles_per_column * TILE_HEIGHT;
+    auto nsticks_per_core = ntiles_per_column * tile_height;
 
     for (const auto& core : cores) {
         if (!full_cores.contains(core)) {
@@ -206,12 +211,12 @@ ProgramDescriptor UntilizeMultiCoreParallelizeColumnProgramFactory::create_descr
             {dst_buffer,                                                 // dst_addr
              nsticks_per_core,                                           // nsticks
              ntiles_per_core,                                            // ntiles_per_core
-             static_cast<uint32_t>(TILE_WIDTH * output.element_size()),  // tile_width_size
+             static_cast<uint32_t>(tile_width * output.element_size()),  // tile_width_size
              std::uint32_t{0},                                           // start stick id = 0
              offset_within_stick});
 
         tile_start_id += ntiles_per_core;
-        offset_within_stick += ntiles_per_core * TILE_WIDTH * output.element_size();
+        offset_within_stick += ntiles_per_core * tile_width * output.element_size();
     }
     if (ncores_full < ncores) {
         // last core is the cliff core with nblocks_per_core_cliff blocks
@@ -230,7 +235,7 @@ ProgramDescriptor UntilizeMultiCoreParallelizeColumnProgramFactory::create_descr
              nsticks_per_core,                                           // nsticks
              stick_size,                                                 // block_size_nbytes
              ntiles_per_core_cliff,                                      // ntiles_per_core
-             static_cast<uint32_t>(TILE_WIDTH * output.element_size()),  // tile_width_size
+             static_cast<uint32_t>(tile_width * output.element_size()),  // tile_width_size
              std::uint32_t{0},                                           // start stick id = 0
              offset_within_stick});
     }

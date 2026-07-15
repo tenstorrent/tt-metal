@@ -24,7 +24,12 @@ namespace ttnn::operations::data_movement {
 
 uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& slice_start);
 uint32_t get_tiled_start_offset(const Tensor& input_tensor, const ttnn::Shape& slice_start, bool round_up = false);
-uint32_t get_tiled_start_offset(const ttnn::Shape& input_shape, const ttnn::Shape& slice_start, bool round_up = false);
+// Default Tile() is 32x32 so existing Shape-only callers stay correct; pass the tensor tile for tiny tiles.
+uint32_t get_tiled_start_offset(
+    const ttnn::Shape& input_shape,
+    const ttnn::Shape& slice_start,
+    bool round_up = false,
+    const tt::tt_metal::Tile& tile = tt::tt_metal::Tile());
 
 }  // namespace ttnn::operations::data_movement
 

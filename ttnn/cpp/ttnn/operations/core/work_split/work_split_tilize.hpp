@@ -10,6 +10,7 @@
 
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/constants.hpp>
 
 namespace ttnn {
 
@@ -426,9 +427,16 @@ struct BlockRep {
     uint32_t n_pads;
     // total repeat times
     uint32_t times;
+    // height (in rows) of a single tile block; each n_data block contributes this many data rows
+    uint32_t tile_height;
 
-    BlockRep(uint32_t n_data, uint32_t n_mixed, uint32_t n_pads, uint32_t times) :
-        n_data(n_data), n_mixed(n_mixed), n_pads(n_pads), times(times) {
+    BlockRep(
+        uint32_t n_data,
+        uint32_t n_mixed,
+        uint32_t n_pads,
+        uint32_t times,
+        uint32_t tile_height = tt::constants::TILE_HEIGHT) :
+        n_data(n_data), n_mixed(n_mixed), n_pads(n_pads), times(times), tile_height(tile_height) {
         if (this->n_data == 0 && this->n_mixed == 0) {
             this->n_pads *= this->times;
             this->times = 1;
@@ -444,7 +452,7 @@ struct BlockRep {
 
     uint32_t block_count() const { return single_rep() * times; }
 
-    uint32_t data_row_count() const { return (n_data * 32 + n_mixed) * times; }
+    uint32_t data_row_count() const { return (n_data * tile_height + n_mixed) * times; }
 
     std::pair<std::vector<BlockRep>, std::vector<BlockRep>> split_at(uint32_t idx) const {
         // TT_ASSERT(idx <= block_count());
@@ -454,28 +462,28 @@ struct BlockRep {
 
         int rep_idx = idx / single_rep();
         if (rep_idx > 0) {
-            first.emplace_back(n_data, n_mixed, n_pads, rep_idx);
+            first.emplace_back(n_data, n_mixed, n_pads, rep_idx, tile_height);
         }
 
         int within_rep_idx = idx % single_rep();
         bool is_within_rep = within_rep_idx > 0;
         if (is_within_rep) {
             if (within_rep_idx <= n_data) {
-                first.emplace_back(within_rep_idx, 0, 0, 1);
-                second.emplace_back(n_data - within_rep_idx, n_mixed, n_pads, 1);
+                first.emplace_back(within_rep_idx, 0, 0, 1, tile_height);
+                second.emplace_back(n_data - within_rep_idx, n_mixed, n_pads, 1, tile_height);
             } else if (within_rep_idx == n_data + 1 && has_mixed_block()) {
-                first.emplace_back(n_data, n_mixed, 0, 1);
-                second.emplace_back(0, 0, n_pads, 1);
+                first.emplace_back(n_data, n_mixed, 0, 1, tile_height);
+                second.emplace_back(0, 0, n_pads, 1, tile_height);
             } else {
                 within_rep_idx -= n_data + has_mixed_block();
-                first.emplace_back(n_data, n_mixed, within_rep_idx, 1);
-                second.emplace_back(0, 0, n_pads - within_rep_idx, 1);
+                first.emplace_back(n_data, n_mixed, within_rep_idx, 1, tile_height);
+                second.emplace_back(0, 0, n_pads - within_rep_idx, 1, tile_height);
             }
         }
 
         int remaining_times = times - rep_idx - is_within_rep;
         if (remaining_times > 0) {
-            second.emplace_back(n_data, n_mixed, n_pads, remaining_times);
+            second.emplace_back(n_data, n_mixed, n_pads, remaining_times, tile_height);
         }
 
         return {first, second};
@@ -497,8 +505,8 @@ struct FullRep {
         uint32_t pads_mul,
         uint32_t times_total,
         uint32_t tile_height) :
-        rep{n_rows / tile_height, n_rows % tile_height, n_pads / tile_height, times},
-        pad{0, 0, (n_rows + n_pads) * pads_mul / tile_height, 1},
+        rep{n_rows / tile_height, n_rows % tile_height, n_pads / tile_height, times, tile_height},
+        pad{0, 0, (n_rows + n_pads) * pads_mul / tile_height, 1, tile_height},
         times_total(times_total) {
         TT_FATAL(
             (n_rows + n_pads) % tile_height == 0,
@@ -548,7 +556,7 @@ inline std::vector<std::vector<BlockRep>> distribute_work(
     // total work is a full rep followed by a padding.
     auto full_rep_blocks = FullRep(input_y, padding_y, input_z, padding_z, input_w, tile_height).to_block_reps();
     std::deque<BlockRep> total_work(full_rep_blocks.begin(), full_rep_blocks.end());
-    total_work.emplace_back(0, 0, (input_y + padding_y) * (input_z + padding_z) * padding_w, 1);
+    total_work.emplace_back(0, 0, (input_y + padding_y) * (input_z + padding_z) * padding_w, 1, tile_height);
 
     std::vector<std::vector<BlockRep>> core_assignments;
     core_assignments.reserve(num_cores);

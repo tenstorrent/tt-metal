@@ -7,7 +7,7 @@ import pytest
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_equal
+from tests.ttnn.utils_for_testing import assert_equal, select_tile
 from tests.ttnn.unit_tests.base_functionality.test_narrow import assert_quality
 
 
@@ -26,7 +26,9 @@ def test_untilize_single_core_interleaved_to_interleaved(device, dtype, tensor_s
         input_torch_tensor = torch.randint(-1000, 1000, tensor_shape, dtype=torch.int32)
     else:
         input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=select_tile(dtype)
+    )
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=False)
 
@@ -125,7 +127,9 @@ def test_untilize_single_core_interleaved_to_sharded(
 
     # Test
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=select_tile(dtype)
+    )
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=False)
 
@@ -234,7 +238,9 @@ def test_untilize_single_core_interleaved_to_sharded_writer_kernel_tensor_addrge
 
     # Test
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=select_tile(dtype)
+    )
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=False)
     assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
@@ -329,7 +335,9 @@ def test_untilize_single_core_sharded_to_interleaved(
 
     # Test
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=select_tile(dtype)
+    )
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=False)
 
@@ -446,7 +454,9 @@ def test_untilize_single_core_sharded_to_sharded(
 
     # Test
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=select_tile(dtype)
+    )
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=False)
 
@@ -503,7 +513,9 @@ def test_untilize_single_core_buffer_type_variations(
         input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
     else:
         input_torch_tensor = torch.randint(-(2 ** (30)), 2 ** (30) - 1, tensor_shape, dtype=torch.int32)
-    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=select_tile(dtype)
+    )
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=False)
 
@@ -527,7 +539,9 @@ def test_untilize_multi_core_interleaved_to_interleaved(device, dtype, tensor_sh
 
     # Test
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=select_tile(dtype)
+    )
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True)
 
@@ -643,7 +657,9 @@ def test_untilize_multi_core_interleaved_to_sharded(
 
     # Test
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=select_tile(dtype)
+    )
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True)
 
@@ -708,7 +724,9 @@ def test_untilize_multi_core_interleaved_to_uneven_sharded(
     output_memory_config = ttnn.MemoryConfig(output_memory_layout, ttnn.BufferType.L1, output_shard_spec)
 
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=select_tile(dtype)
+    )
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True)
 
@@ -756,7 +774,9 @@ def test_untilize_multi_core_interleaved_to_uneven_nd_sharded(
     output_memory_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=output_nd_shard_spec)
 
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=select_tile(dtype)
+    )
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True)
 
@@ -858,7 +878,9 @@ def test_untilize_multi_core_sharded_to_interleaved(
 
     # Test
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=select_tile(dtype)
+    )
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True)
 
@@ -912,7 +934,9 @@ def test_untilize_multi_core_sharded_to_interleaved_uneven_input_shard_spec(
 
     # Test
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=select_tile(dtype)
+    )
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True)
 
@@ -1012,7 +1036,9 @@ def test_untilize_multi_core_sharded_to_sharded_different_shard_types(
 
     # Test
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=select_tile(dtype)
+    )
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True)
 
@@ -1171,7 +1197,9 @@ def test_untilize_multi_core_sharded_to_sharded_different_shard_types_uneven_inp
 
     # Test
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=select_tile(dtype)
+    )
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True)
 
@@ -1314,7 +1342,9 @@ def test_untilize_multi_core_sharded_to_sharded_same_shard_type_different_shard_
 
     # Test
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=select_tile(dtype)
+    )
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True)
 
@@ -1373,7 +1403,9 @@ def test_untilize_multi_core_sharded_to_sharded_same_shard_type_different_shard_
 
     # Test
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=select_tile(dtype)
+    )
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True)
 
@@ -1463,7 +1495,9 @@ def test_untilize_multi_core_sharded_to_sharded_same_shard_type_and_shard_spec(
 
     # Test
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=select_tile(dtype)
+    )
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=memory_config, use_multicore=True)
 
@@ -1511,7 +1545,9 @@ def test_untilize_multi_core_sharded_to_sharded_same_shard_type_and_shard_spec_u
 
     # Test
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=select_tile(dtype)
+    )
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=memory_config, use_multicore=True)
 
@@ -1565,7 +1601,9 @@ def test_untilize_multi_core_buffer_type_variations(
 
     # Test
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=select_tile(dtype)
+    )
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True)
 
@@ -1587,7 +1625,11 @@ def test_untilize_fp32(device, tensor_shape, input_buffer_type, output_buffer_ty
     output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, output_buffer_type)
 
     tile_tensor = ttnn.from_torch(
-        torch_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_memory_config
+        torch_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=input_memory_config,
+        tile=select_tile(ttnn.float32),
     )
     untilized = ttnn.untilize(tile_tensor, memory_config=output_memory_config)
     result = ttnn.to_torch(untilized)
@@ -1636,7 +1678,9 @@ def test_untilize_same_volume_different_shapes(device, dtype, use_multicore, sha
         torch.manual_seed(42)
         input_torch_tensor = torch.randn(shape, dtype=torch.bfloat16)
 
-        input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+        input_ttnn_tensor = ttnn.from_torch(
+            input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=select_tile(dtype)
+        )
         input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
 
         ttnn_output_tensor = ttnn.untilize(
@@ -1691,7 +1735,9 @@ def test_untilize_single_core_interleaved_to_nd_sharded(
 
     # Test
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=select_tile(dtype)
+    )
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=False)
     assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
@@ -1795,7 +1841,9 @@ def test_untilize_single_core_legacy_sharded_to_nd_sharded(
 
     # Test
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=select_tile(dtype)
+    )
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=False)
 
@@ -1846,6 +1894,7 @@ def test_untilize_single_core_nd_sharded_to_nd_sharded(
         layout=ttnn.TILE_LAYOUT,
         nd_shard_spec=input_nd_shard_spec,
         buffer_type=ttnn.BufferType.L1,
+        tile=select_tile(dtype),
     )
 
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
@@ -1926,6 +1975,7 @@ def test_untilize_single_core_nd_sharded_to_legacy_sharded(
         layout=ttnn.TILE_LAYOUT,
         nd_shard_spec=input_nd_shard_spec,
         buffer_type=ttnn.BufferType.L1,
+        tile=select_tile(dtype),
     )
 
     # Output legacy shard shapes
@@ -2003,6 +2053,7 @@ def test_untilize_single_core_nd_sharded_to_interleaved(
         layout=ttnn.TILE_LAYOUT,
         nd_shard_spec=input_nd_shard_spec,
         buffer_type=ttnn.BufferType.L1,
+        tile=select_tile(dtype),
     )
 
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
@@ -2083,7 +2134,11 @@ def test_untilize_multi_core_interleaved_to_nd_sharded(
         # Output memory config with ND shard spec built via sharded_across_dims
         shard_dims = list(range(len(tensor_shape) - 2, len(tensor_shape)))  # shard last two dims
         tensor_spec = ttnn.TensorSpec(
-            shape=tensor_shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1
+            shape=tensor_shape,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            buffer_type=ttnn.BufferType.L1,
+            tile=select_tile(dtype),
         ).sharded_across_dims(shard_dims, shard_core_grid, output_shard_orientation)
         nd_shard_spec = tensor_spec.memory_config.nd_shard_spec
         assert nd_shard_spec is not None
@@ -2091,7 +2146,9 @@ def test_untilize_multi_core_interleaved_to_nd_sharded(
 
     # Test
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=select_tile(dtype)
+    )
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True)
     assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
@@ -2139,7 +2196,11 @@ def test_untilize_multi_core_nd_sharded_to_interleaved(
     # Build an ND shard spec by sharding the last two dimensions across the grid
     shard_dims = list(range(len(tensor_shape) - 2, len(tensor_shape)))
     tensor_spec = ttnn.TensorSpec(
-        shape=tensor_shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1
+        shape=tensor_shape,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        buffer_type=ttnn.BufferType.L1,
+        tile=select_tile(dtype),
     ).sharded_across_dims(shard_dims, shard_core_grid, input_shard_orientation)
     nd_shard_spec = tensor_spec.memory_config.nd_shard_spec
     assert nd_shard_spec is not None
@@ -2193,7 +2254,11 @@ def test_untilize_multi_core_nd_shard_to_interleaved_uneven_input_shard_spec(
 ):
     torch.manual_seed(0)
     tensor_spec = ttnn.TensorSpec(
-        shape=tensor_shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1
+        shape=tensor_shape,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        buffer_type=ttnn.BufferType.L1,
+        tile=select_tile(dtype),
     ).sharded(shard_shape, shard_core_grid, orientation=input_shard_orientation)
 
     output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
@@ -2259,6 +2324,7 @@ def test_untilize_multicore_nd_shard_to_nd_shard_spec_different_shard_specs(
         layout=ttnn.TILE_LAYOUT,
         nd_shard_spec=input_nd_shard_spec,
         buffer_type=ttnn.BufferType.L1,
+        tile=select_tile(dtype),
     )
 
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
@@ -2326,6 +2392,7 @@ def test_untilize_multicore_nd_shard_to_nd_shard_spec_grid_2d_input_to_round_rob
         layout=ttnn.TILE_LAYOUT,
         nd_shard_spec=input_nd_shard_spec,
         buffer_type=ttnn.BufferType.L1,
+        tile=select_tile(dtype),
     )
 
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
@@ -2389,6 +2456,7 @@ def test_untilize_multicore_nd_shard_to_nd_shard_spec_different_shard_specs_grid
         layout=ttnn.TILE_LAYOUT,
         nd_shard_spec=input_nd_shard_spec,
         buffer_type=ttnn.BufferType.L1,
+        tile=select_tile(dtype),
     )
 
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
@@ -2455,6 +2523,7 @@ def test_untilize_multicore_nd_shard_round_robin_input_to_grid_2d_output(
         layout=ttnn.TILE_LAYOUT,
         nd_shard_spec=input_nd_shard_spec,
         buffer_type=ttnn.BufferType.L1,
+        tile=select_tile(dtype),
     )
 
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
@@ -2527,6 +2596,7 @@ def test_untilize_multicore_nd_shard_to_nd_shard_spec_different_shard_specs_shar
         layout=ttnn.TILE_LAYOUT,
         nd_shard_spec=input_nd_shard_spec,
         buffer_type=ttnn.BufferType.L1,
+        tile=select_tile(dtype),
     )
 
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
@@ -2606,6 +2676,7 @@ def test_untilize_multicore_nd_shard_to_legacy_shard(
         layout=ttnn.TILE_LAYOUT,
         nd_shard_spec=input_nd_shard_spec,
         buffer_type=ttnn.BufferType.L1,
+        tile=select_tile(dtype),
     )
 
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
@@ -2713,6 +2784,7 @@ def test_untilize_multicore_nd_shard_to_legacy_shard_uneven_output(
         layout=ttnn.TILE_LAYOUT,
         nd_shard_spec=input_nd_shard_spec,
         buffer_type=ttnn.BufferType.L1,
+        tile=select_tile(dtype),
     )
 
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
@@ -2826,6 +2898,7 @@ def test_untilize_multicore_legacy_shard_to_nd_shard(
         layout=ttnn.TILE_LAYOUT,
         dtype=dtype,
         memory_config=input_memory_config,
+        tile=select_tile(dtype),
     )
 
     # Output ND shard spec
@@ -2849,7 +2922,11 @@ def untilize_nd_shard_spec_to_same_shard_spec_test_helper(
     core_ranges = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(core_start), ttnn.CoreCoord(core_end))})
 
     nd_spec = ttnn.TensorSpec(
-        shape=shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1
+        shape=shape,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        buffer_type=ttnn.BufferType.L1,
+        tile=select_tile(dtype),
     ).sharded_across_dims(shard_across_dims, core_ranges)
 
     torch_tensor = torch.randn(shape, dtype=torch.bfloat16)
@@ -2921,7 +2998,11 @@ def test_untilize_nd_shard_to_same_shard_spec_uneven_input_shard_spec(
 ):
     torch.manual_seed(0)
     tensor_spec = ttnn.TensorSpec(
-        shape=tensor_shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1
+        shape=tensor_shape,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        buffer_type=ttnn.BufferType.L1,
+        tile=select_tile(dtype),
     ).sharded(shard_shape, shard_core_grid, orientation=input_shard_orientation)
 
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)

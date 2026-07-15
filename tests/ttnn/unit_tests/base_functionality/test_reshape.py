@@ -9,7 +9,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, select_tile
 
 
 @pytest.mark.parametrize(
@@ -93,10 +93,12 @@ def test_reshape_block_shard(
         strategy=ttnn.ShardStrategy.BLOCK,
         use_height_and_width_as_shard_shape=True,
     )
+    tile = select_tile(ttnn.bfloat16)
     input_ttnn = ttnn.from_torch(
         input_torch,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        tile=tile,
         device=device,
         memory_config=block_sharded_config,
     )
@@ -120,10 +122,12 @@ def test_reshape_height_shard(device, layout):
         strategy=ttnn.ShardStrategy.HEIGHT,
         use_height_and_width_as_shard_shape=False,
     )
+    tile = select_tile(ttnn.bfloat16, layout=layout)
     input_ttnn = ttnn.from_torch(
         input_torch,
         dtype=ttnn.bfloat16,
         layout=layout,
+        tile=tile,
         device=device,
         memory_config=height_sharded_config,
     )
@@ -152,10 +156,12 @@ def test_reshape_width_shard(device, layout):
         strategy=ttnn.ShardStrategy.WIDTH,
         use_height_and_width_as_shard_shape=False,
     )
+    tile = select_tile(ttnn.bfloat16, layout=layout)
     input_ttnn = ttnn.from_torch(
         input_torch,
         dtype=ttnn.bfloat16,
         layout=layout,
+        tile=tile,
         device=device,
         memory_config=width_sharded_config,
     )
@@ -442,7 +448,10 @@ def test_reshape_tile_layout_mamba(device):
     reshape_shape = (1, 2, 1024, 64)
     torch_result = torch_input_tensor.reshape(reshape_shape)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    tile = select_tile(ttnn.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, tile=tile, device=device
+    )
     ttnn_output = ttnn.reshape(input_tensor, reshape_shape)
 
     output = ttnn.to_torch(ttnn_output)
@@ -455,7 +464,10 @@ def test_reshape_tile_layout_only_change_shape(device):
     reshape_shape = (1, 32, 64, 4 * 32)
     torch_result = torch_input_tensor.reshape(reshape_shape)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    tile = select_tile(ttnn.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, tile=tile, device=device
+    )
     ttnn_output = ttnn.reshape(input_tensor, reshape_shape)
 
     output = ttnn.to_torch(ttnn_output)
@@ -507,8 +519,9 @@ def test_reshape_tile(device, input_shape, output_shape, layout, memory_config, 
         torch_input_tensor = torch_input_tensor.abs()
 
     torch_result = torch_input_tensor.reshape(output_shape)
+    tile = select_tile(ttnn_dtype, layout=layout)
     input_tensor = ttnn.from_torch(
-        torch_input_tensor, layout=layout, dtype=ttnn_dtype, device=device, memory_config=memory_config
+        torch_input_tensor, layout=layout, dtype=ttnn_dtype, tile=tile, device=device, memory_config=memory_config
     )
     ttnn_output = ttnn.reshape(input_tensor, output_shape)
     output = ttnn.to_torch(ttnn_output)
@@ -555,8 +568,9 @@ def test_reshape_subgrid(device, input_shape, output_shape, layout, memory_confi
         torch_input_tensor = torch_input_tensor.abs()
 
     torch_result = torch_input_tensor.reshape(output_shape)
+    tile = select_tile(ttnn_dtype, layout=layout)
     input_tensor = ttnn.from_torch(
-        torch_input_tensor, layout=layout, dtype=ttnn_dtype, device=device, memory_config=memory_config
+        torch_input_tensor, layout=layout, dtype=ttnn_dtype, tile=tile, device=device, memory_config=memory_config
     )
     ttnn_output = ttnn.reshape(input_tensor, output_shape, sub_core_grids=sub_core_grids)
     output = ttnn.to_torch(ttnn_output)
@@ -570,8 +584,9 @@ def test_reshape_tile_program_cache(device, reshape_tile_mode):
             torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
             torch_result = torch_input_tensor.reshape(output_shape)
 
+            tile = select_tile(ttnn.bfloat16)
             input_tensor = ttnn.from_torch(
-                torch_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device
+                torch_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, tile=tile, device=device
             )
             ttnn_output = ttnn.reshape(input_tensor, output_shape, reshape_tile_mode=reshape_tile_mode)
 
@@ -586,10 +601,12 @@ def test_previously_failing_test(device):
     torch_input_tensor = torch.randn(src_shape, dtype=torch.bfloat16)
     torch_result = torch_input_tensor.reshape(target_shape)
 
+    tile = select_tile(ttnn.bfloat16)
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        tile=tile,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -613,7 +630,10 @@ def test_reshape_host(input_shape, output_shape, device):
     torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
     torch_result = torch_input_tensor.reshape(output_shape)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    tile = select_tile(ttnn.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, tile=tile, device=device
+    )
     ttnn_output = ttnn.reshape(input_tensor, output_shape)
 
     output = ttnn.to_torch(ttnn_output)
@@ -634,9 +654,11 @@ def test_reshape_int(input_shape, output_shape, device):
     torch_input_tensor = torch.randint(0, 100, input_shape)
     torch_result = torch_input_tensor.reshape(output_shape)
 
+    tile = select_tile(ttnn.int32)
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
         layout=ttnn.TILE_LAYOUT,
+        tile=tile,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -663,10 +685,12 @@ def test_fp32_support(input_shape, output_shape, device):
     torch_input_tensor = torch.randint(0, 100, input_shape)
     torch_result = torch_input_tensor.reshape(output_shape)
 
+    tile = select_tile(ttnn.float32)
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
         dtype=ttnn.float32,
         layout=ttnn.TILE_LAYOUT,
+        tile=tile,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -694,10 +718,12 @@ def test_bf8_support(input_shape, output_shape, device):
     torch_input_tensor = torch.randint(0, 100, input_shape)
     torch_result = torch_input_tensor.reshape(output_shape)
 
+    tile = select_tile(ttnn.bfloat8_b)
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
+        tile=tile,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -732,10 +758,13 @@ def test_bf8_support(input_shape, output_shape, device):
 )
 def test_reshape_zero_element(input_shape, output_shape, layout, ttnn_reshape, use_device, memory_config, device):
     torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
+    tile = select_tile(ttnn.bfloat16, layout=layout)
     if use_device:
-        tt_input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, memory_config=memory_config)
+        tt_input_tensor = ttnn.from_torch(
+            torch_input_tensor, layout=layout, tile=tile, device=device, memory_config=memory_config
+        )
     else:
-        tt_input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout)
+        tt_input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, tile=tile)
     if ttnn_reshape:
         tt_output_tensor = ttnn.reshape(tt_input_tensor, output_shape)
     else:
@@ -757,8 +786,14 @@ def test_reshape_zero_element(input_shape, output_shape, layout, ttnn_reshape, u
 def test_reshape_replicated_tensor(mesh_device, input_shape, output_shape):
     torch_input_tensor = torch.randn(input_shape)
     mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    tile = select_tile(ttnn.bfloat16)
     tt_input_tensor = ttnn.from_torch(
-        torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mesh_mapper, device=mesh_device
+        torch_input_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        tile=tile,
+        mesh_mapper=mesh_mapper,
+        device=mesh_device,
     )
     tt_output_tensor = ttnn.reshape(tt_input_tensor, ttnn.Shape(output_shape))
 
@@ -840,8 +875,9 @@ def test_reshape_nd_sharded(shape, shard_shape, output_shape, dim, interleaved, 
     output_shard_shape[0] = 1
     output_memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, ttnn.NdShardSpec(ttnn.Shape(output_shard_shape), grid))
 
+    tile = select_tile(ttnn.bfloat16)
     input_tensor = ttnn.from_torch(
-        torch_input_tensor, layout=ttnn.TILE_LAYOUT, memory_config=memory_config, device=device
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, tile=tile, memory_config=memory_config, device=device
     )
 
     output_tensor = ttnn.reshape(input_tensor, output_shape)
@@ -868,7 +904,8 @@ def test_reshape_conv2d(device, N, D, H, W, C):
     x = torch.randn(N, D, H, W, C, dtype=torch.bfloat16)
     ref = x.float().permute(0, 4, 1, 2, 3).contiguous()  # NDHWC -> NCDHW
 
-    t = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tile = select_tile(ttnn.bfloat16)
+    t = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=tile)
     t = ttnn.reshape(t, (N, C, D, H, W))
     out = ttnn.to_torch(t, device=device).to(torch.float32)
 
@@ -889,7 +926,8 @@ def test_reshape_conv2d_rank3(device, H, W, C):
 
     logging.info(f"{ref.shape}")
 
-    t = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tile = select_tile(ttnn.bfloat16)
+    t = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=tile)
     t = ttnn.reshape(t, (H, C, W))
     out = ttnn.to_torch(t, device=device).to(torch.float32)
 

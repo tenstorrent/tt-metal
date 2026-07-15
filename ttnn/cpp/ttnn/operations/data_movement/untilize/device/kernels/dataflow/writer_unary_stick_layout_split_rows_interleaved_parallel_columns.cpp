@@ -12,7 +12,7 @@
 void kernel_main() {
     // Constexpr
     constexpr uint32_t cb_id_out0 = 16;
-    constexpr uint32_t tile_height = 32;
+    constexpr uint32_t tile_height = get_compile_time_arg_val(1);
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t num_sticks = get_arg_val<uint32_t>(1);
@@ -22,7 +22,7 @@ void kernel_main() {
     uint32_t offset_within_stick = get_arg_val<uint32_t>(5);
 
     constexpr uint32_t stick_size = get_compile_time_arg_val(0);
-    constexpr auto dst_args = TensorAccessorArgs<1>();
+    constexpr auto dst_args = TensorAccessorArgs<2>();
     const auto s = TensorAccessor(dst_args, dst_addr);
 
     Noc noc;

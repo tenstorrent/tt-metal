@@ -49,7 +49,7 @@ uint32_t get_pf_type(bool output_is_sharded, const Tensor& tensor) {
     uint32_t max_l1_size =
         (device->l1_size_per_core() / 2) - device->allocator()->get_base_allocator_addr(HalMemType::L1);
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
-    uint32_t single_tile_size = tt::tile_size(input_cb_data_format);
+    uint32_t single_tile_size = tensor.tensor_spec().tile().get_tile_size(input_cb_data_format);
     // Determine the max number of tiles that can be in any CB at a given time (1 input CB + 1 output CB = 2 total CBs)
     uint32_t max_tiles_per_cb = max_l1_size / (2 * single_tile_size);
 
@@ -100,9 +100,20 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to untilize need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Can only untilize tile major data");
 
+    // Tiny-tile support: allow tile heights smaller than TILE_HEIGHT while keeping the width
+    // constrained to TILE_WIDTH. Blocked (bfp8/bfp4) formats are not supported with tiny heights.
+    const auto& tile = input_tensor_a.tensor_spec().tile();
+    const uint32_t tile_height = tile.get_height();
+    const uint32_t tile_width = tile.get_width();
+    TT_FATAL(tile_width == TILE_WIDTH, "untilize requires tile width {}, got {}", TILE_WIDTH, tile_width);
+    TT_FATAL(
+        tile_height >= TILE_HEIGHT ||
+            (input_tensor_a.dtype() != DataType::BFLOAT8_B && input_tensor_a.dtype() != DataType::BFLOAT4_B),
+        "Tiny tile heights are not supported for blocked data types like BFLOAT8_B or BFLOAT4_B");
+
     // Input must be in valid tile layout
-    TT_FATAL(tensor_width % TILE_WIDTH == 0, "Width must be evenly divisible into tiles");
-    TT_FATAL(tensor_height % TILE_HEIGHT == 0, "Height must be evenly divisible into tiles");
+    TT_FATAL(tensor_width % tile_width == 0, "Width must be evenly divisible into tiles");
+    TT_FATAL(tensor_height % tile_height == 0, "Height must be evenly divisible into tiles");
 
     // Special conditions for sub_core_grids special case
     if (operation_attributes.sub_core_grids.has_value()) {
@@ -134,11 +145,11 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
             input_shard_height = nd_spec.shard_shape[-2];
         }
         TT_FATAL(
-            input_shard_width % TILE_WIDTH == 0,
+            input_shard_width % tile_width == 0,
             "Input shard width {} must be a multiple of tile width",
             input_shard_width);
         TT_FATAL(
-            input_shard_height % TILE_HEIGHT == 0,
+            input_shard_height % tile_height == 0,
             "Input shard height {} must be a multiple of tile height",
             input_shard_height);
     }
@@ -341,8 +352,8 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
     if (!input_is_sharded and !output_is_sharded) {
         if (num_tiles_per_row > threshold_row_block and
             (num_tiles_per_col > threshold_row_block or num_tiles_per_row > num_tiles_per_col)) {
-            uint32_t num_blocks_block = (input_tensor_a.padded_shape()[-1] * input_tensor_a.padded_shape()[-2]) /
-                                        (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
+            uint32_t num_blocks_block =
+                (input_tensor_a.padded_shape()[-1] * input_tensor_a.padded_shape()[-2]) / (tile_height * tile_width);
             auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
             if (num_compute_cores < ncores_wh.ncores) {
                 return UntilizeMultiCoreBlockProgramFactory{};

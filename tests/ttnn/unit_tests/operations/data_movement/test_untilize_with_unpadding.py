@@ -7,7 +7,7 @@ import pytest
 import torch
 import ttnn
 import math
-from tests.ttnn.utils_for_testing import assert_equal
+from tests.ttnn.utils_for_testing import assert_equal, select_tile
 
 TTNN_TO_TORCH_DTYPE = {
     ttnn.float32: torch.float32,
@@ -47,8 +47,9 @@ def test_untilize_with_unpadding_fp32(device, dtype, shape_output_end, input_buf
 
     input_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, input_buffer_type)
     output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, output_buffer_type)
+    tile = select_tile(dtype)
     tile_tensor = ttnn.from_torch(
-        torch_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_memory_config
+        torch_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_memory_config, tile=tile
     )
     untilized = ttnn.untilize_with_unpadding(
         tile_tensor, output_tensor_end=output_end, memory_config=output_memory_config
@@ -81,6 +82,7 @@ def test_untilize_with_unpadding_reuses_cache_when_only_width_l1_heuristic_chang
         torch_input,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        tile=select_tile(ttnn.bfloat16),
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -156,7 +158,8 @@ def test_untilize_with_unpadding_height_sharded(
         output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
     # Create input tensor on device with sharded memory config
-    tile_tensor = ttnn.from_torch(torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    tile = select_tile(dtype)
+    tile_tensor = ttnn.from_torch(torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=tile)
     tile_tensor = ttnn.to_device(tile_tensor, device, memory_config=input_memory_config)
 
     untilized = ttnn.untilize_with_unpadding(
@@ -246,7 +249,8 @@ def test_untilize_with_unpadding_width_sharded(
         output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
     # Create input tensor on device with sharded memory config
-    tile_tensor = ttnn.from_torch(torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    tile = select_tile(dtype)
+    tile_tensor = ttnn.from_torch(torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=tile)
     tile_tensor = ttnn.to_device(tile_tensor, device, memory_config=input_memory_config)
 
     untilized = ttnn.untilize_with_unpadding(
@@ -294,7 +298,8 @@ def test_untilize_with_unpadding_block_sharded(device, dtype, shape, output_end,
     output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
     # Create input tensor on device with sharded memory config
-    tile_tensor = ttnn.from_torch(torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    tile = select_tile(dtype)
+    tile_tensor = ttnn.from_torch(torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=tile)
     tile_tensor = ttnn.to_device(tile_tensor, device, memory_config=input_memory_config)
 
     untilized = ttnn.untilize_with_unpadding(
@@ -372,8 +377,9 @@ def test_untilize_with_unpadding_multi_core_nd_sharded_to_interleaved(
 ):
     torch.manual_seed(0)
     shard_dims = list(range(len(tensor_shape) - 2, len(tensor_shape)))
+    tile = select_tile(dtype)
     tensor_spec = ttnn.TensorSpec(
-        shape=tensor_shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1
+        shape=tensor_shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1, tile=tile
     ).sharded_across_dims(shard_dims, shard_core_grid, input_shard_orientation)
     nd_shard_spec = tensor_spec.memory_config.nd_shard_spec
     assert nd_shard_spec is not None
@@ -437,8 +443,9 @@ def test_untilize_with_unpadding_multi_core_nd_shard_to_interleaved_uneven_input
     shard_core_grid,
 ):
     torch.manual_seed(0)
+    tile = select_tile(dtype)
     tensor_spec = ttnn.TensorSpec(
-        shape=tensor_shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1
+        shape=tensor_shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1, tile=tile
     ).sharded(shard_shape, shard_core_grid, orientation=input_shard_orientation)
 
     output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
@@ -508,12 +515,14 @@ def test_untilize_with_unpadding_multicore_nd_shard_to_nd_shard_spec_different_s
     input_nd_shard_spec = ttnn.NdShardSpec(
         shard_shape=input_shard_shape, grid=shard_core_grid, orientation=input_shard_orientation
     )
+    tile = select_tile(dtype)
     tensor_spec = ttnn.TensorSpec(
         shape=tensor_shape,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         nd_shard_spec=input_nd_shard_spec,
         buffer_type=ttnn.BufferType.L1,
+        tile=tile,
     )
 
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
@@ -581,12 +590,14 @@ def test_untilize_with_unpadding_multicore_nd_shard_round_robin_input_to_grid_2d
         orientation=input_shard_orientation,
         shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
     )
+    tile = select_tile(dtype)
     tensor_spec = ttnn.TensorSpec(
         shape=tensor_shape,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         nd_shard_spec=input_nd_shard_spec,
         buffer_type=ttnn.BufferType.L1,
+        tile=tile,
     )
 
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
@@ -663,12 +674,14 @@ def test_untilize_with_unpadding_multicore_nd_shard_to_nd_shard_spec_different_s
     input_nd_shard_spec = ttnn.NdShardSpec(
         shard_shape=input_shard_shape, grid=shard_core_grid, orientation=input_shard_orientation
     )
+    tile = select_tile(dtype)
     tensor_spec = ttnn.TensorSpec(
         shape=tensor_shape,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         nd_shard_spec=input_nd_shard_spec,
         buffer_type=ttnn.BufferType.L1,
+        tile=tile,
     )
 
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
@@ -754,12 +767,14 @@ def test_untilize_with_unpadding_multicore_nd_shard_to_legacy_shard(
     input_nd_shard_spec = ttnn.NdShardSpec(
         shard_shape=input_shard_shape, grid=shard_core_grid, orientation=input_shard_orientation
     )
+    tile = select_tile(dtype)
     input_tensor_spec = ttnn.TensorSpec(
         shape=tensor_shape,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         nd_shard_spec=input_nd_shard_spec,
         buffer_type=ttnn.BufferType.L1,
+        tile=tile,
     )
 
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
@@ -871,7 +886,8 @@ def test_untilize_with_unpadding_sharded_multi_batch_unpadding_regression(
 
     output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, output_buffer_type)
 
-    tile_tensor = ttnn.from_torch(torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    tile = select_tile(dtype)
+    tile_tensor = ttnn.from_torch(torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=tile)
     tile_tensor = ttnn.to_device(tile_tensor, device, memory_config=input_memory_config)
 
     untilized = ttnn.untilize_with_unpadding(

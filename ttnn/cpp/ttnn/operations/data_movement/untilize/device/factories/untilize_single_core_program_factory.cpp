@@ -33,16 +33,17 @@ tt::tt_metal::ProgramDescriptor UntilizeSingleCoreProgramFactory::create_descrip
 
     CoreRange core({0, 0}, {0, 0});
 
+    const auto& tile = a.tensor_spec().tile();
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
+    uint32_t input_single_tile_size = tile.get_tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    uint32_t output_single_tile_size = tile.get_tile_size(output_cb_data_format);
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    const auto& tile_shape = a.tensor_spec().tile().get_tile_shape();
+    const auto& tile_shape = tile.get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
     uint32_t tile_volume = tile_height * tile_width;
@@ -85,7 +86,7 @@ tt::tt_metal::ProgramDescriptor UntilizeSingleCoreProgramFactory::create_descrip
     }
 
     uint32_t num_blocks_per_column_row = num_tiles_per_column_row / num_tiles_per_block;
-    uint32_t output_single_block_width_size = num_tiles_per_block * TILE_WIDTH * output.element_size();
+    uint32_t output_single_block_width_size = num_tiles_per_block * tile_width * output.element_size();
     uint32_t num_total_sticks = a.physical_volume() / a.padded_shape()[-1] * num_columns_of_blocks;
     uint32_t output_stick_size = a.physical_volume() * output.element_size() / num_total_sticks;
 
@@ -99,6 +100,7 @@ tt::tt_metal::ProgramDescriptor UntilizeSingleCoreProgramFactory::create_descrip
             .buffer_index = src0_cb_index,
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
+            .tile = TileDescriptor(tile),
         }}},
     });
 
@@ -112,6 +114,7 @@ tt::tt_metal::ProgramDescriptor UntilizeSingleCoreProgramFactory::create_descrip
             .buffer_index = output_cb_index,
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
+            .tile = TileDescriptor(tile),
         }}},
     });
 
