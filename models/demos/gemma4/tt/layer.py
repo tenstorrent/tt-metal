@@ -65,16 +65,20 @@ class Gemma4DecoderLayer:
         max_seq_len,
         max_local_batch_size,
         shared_mlp_dtype=None,
+        shared_mlp_down_dtype=None,
         attention_dtype=None,
         experts_dtype=None,
         router_dtype=None,
         bounded_sliding_kv_cache: bool = False,
+        prefetcher=None,
         transformation_mats=None,  # Legacy — ignored (HF-style RoPE needs no transformation mats)
     ):
         # Per-module dtype overrides default to the model-wide ``dtype`` so
         # callers that don't care about precision config see no change.
         if shared_mlp_dtype is None:
             shared_mlp_dtype = dtype
+        if shared_mlp_down_dtype is None:
+            shared_mlp_down_dtype = shared_mlp_dtype
         if attention_dtype is None:
             attention_dtype = dtype
         if experts_dtype is None:
@@ -87,6 +91,7 @@ class Gemma4DecoderLayer:
         self.layer_type = hf_config.layer_types[layer_idx]
         self.enable_moe_block = hf_config.enable_moe_block
         self.hidden_size_per_layer_input = getattr(hf_config, "hidden_size_per_layer_input", 0) or 0
+        self.prefetcher = prefetcher
 
         # Try both key formats (HF uses "model.language_model.layers", tests use "model.layers")
         layer_state = {}
@@ -148,7 +153,9 @@ class Gemma4DecoderLayer:
             mesh_config=mesh_config,
             ccl_manager=ccl_manager,
             dtype=shared_mlp_dtype,
+            down_dtype=shared_mlp_down_dtype,
             tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/mlp" if tensor_cache_path else None,
+            prefetcher=prefetcher,
         )
 
         # MoE block (router + routed experts) — split dtypes between the two
@@ -234,8 +241,12 @@ class Gemma4DecoderLayer:
             hidden_states: [1, 1, seq_len, hidden_size] on device
         """
         # 1. Attention block: norm -> attn -> post_attn_norm -> residual add
+        from models.demos.gemma4.tt.prefetcher_utils import pf_kwargs
+
+        pf = self.prefetcher if is_decode else None
+        pf_sd = pf_kwargs(pf)
         residual = hidden_states
-        normed = self.input_layernorm.forward(hidden_states)
+        normed = self.input_layernorm.forward(hidden_states, prefetcher=pf)
         if not is_decode and batch_size > 1:
             attn_in = ttnn.reshape(normed, [batch_size, 1, normed.shape[-2] // batch_size, -1])
         else:
@@ -260,54 +271,55 @@ class Gemma4DecoderLayer:
             packed=packed,
             chunk_start_idx=chunk_start_idx,
             chunk_page_table=chunk_page_table,
+            prefetcher=pf,
         )
 
         if isinstance(attn_output, torch.Tensor):
             hidden_states = residual
         else:
-            attn_output = self.post_attention_layernorm.forward(attn_output)
+            attn_output = self.post_attention_layernorm.forward(attn_output, prefetcher=pf)
             if not is_decode and batch_size > 1:
                 residual = ttnn.reshape(
                     residual, [1, 1, residual.shape[-2] * residual.shape[-3] * residual.shape[0], -1]
                 )
-            hidden_states = ttnn.add(residual, attn_output)
+            hidden_states = ttnn.add(residual, attn_output, **pf_sd)
             residual.deallocate(True)
             attn_output.deallocate(True)
 
         # 2. MLP + MoE block
         residual = hidden_states
-        normed = self.pre_feedforward_layernorm.forward(hidden_states)
+        normed = self.pre_feedforward_layernorm.forward(hidden_states, prefetcher=pf)
         mlp_output = self.shared_mlp(normed)
         normed.deallocate(True)
 
         if self.enable_moe_block:
             # post_feedforward_layernorm_1 on MLP output
-            mlp_normed = self.post_feedforward_layernorm_1.forward(mlp_output)
+            mlp_normed = self.post_feedforward_layernorm_1.forward(mlp_output, prefetcher=pf)
             mlp_output.deallocate(True)
 
             # Router input = pre-MLP residual, expert input = normed residual
             # All on device — no CPU round-trip
             residual_for_router = residual
-            expert_input = self.pre_feedforward_layernorm_2.forward(residual_for_router)
+            expert_input = self.pre_feedforward_layernorm_2.forward(residual_for_router, prefetcher=pf)
 
             # MoE: router(residual) → dense_routing → experts(normed_input, routing)
             expert_output = self.moe(residual_for_router, expert_input)
             expert_input.deallocate(True)
 
             # post_feedforward_layernorm_2 on expert output
-            expert_normed = self.post_feedforward_layernorm_2.forward(expert_output)
+            expert_normed = self.post_feedforward_layernorm_2.forward(expert_output, prefetcher=pf)
             expert_output.deallocate(True)
 
             # Combine: mlp_normed + expert_normed
-            hidden_states = ttnn.add(mlp_normed, expert_normed)
+            hidden_states = ttnn.add(mlp_normed, expert_normed, **pf_sd)
             mlp_normed.deallocate(True)
             expert_normed.deallocate(True)
         else:
             hidden_states = mlp_output
 
         # post_feedforward_layernorm -> residual add
-        hidden_states = self.post_feedforward_layernorm.forward(hidden_states)
-        combined = ttnn.add(residual, hidden_states)
+        hidden_states = self.post_feedforward_layernorm.forward(hidden_states, prefetcher=pf)
+        combined = ttnn.add(residual, hidden_states, **pf_sd)
         residual.deallocate(True)
         hidden_states.deallocate(True)
 
@@ -315,18 +327,42 @@ class Gemma4DecoderLayer:
 
         # Per-layer input embeddings (E2B/E4B) — BEFORE layer_scalar (matching HF order)
         if self.hidden_size_per_layer_input and per_layer_input is not None and hasattr(self, "per_layer_input_gate"):
+            from models.demos.gemma4.tt.prefetcher_utils import pf_plain_1d_program_config
+
             residual_pli = hidden_states
-            gated = ttnn.linear(hidden_states, self.per_layer_input_gate)
-            gated = ttnn.gelu(gated, fast_and_approximate_mode=True)
-            gated = ttnn.mul(gated, per_layer_input)
-            projected = ttnn.linear(gated, self.per_layer_projection)
-            normed_pli = self.post_per_layer_input_norm.forward(projected)
-            hidden_states = ttnn.add(residual_pli, normed_pli)
+            if pf is not None:
+                pc_g = pf_plain_1d_program_config(
+                    hidden_states.shape[-2], hidden_states.shape[-1], self.per_layer_input_gate.shape[-1], pf
+                )
+                gated = (
+                    ttnn.linear(hidden_states, self.per_layer_input_gate, program_config=pc_g)
+                    if pc_g is not None
+                    else ttnn.linear(hidden_states, self.per_layer_input_gate)
+                )
+            else:
+                gated = ttnn.linear(hidden_states, self.per_layer_input_gate)
+            gated = ttnn.gelu(
+                gated, fast_and_approximate_mode=True, **pf_kwargs(pf, use_sub_device=False, use_sub_core_grids=True)
+            )
+            gated = ttnn.mul(gated, per_layer_input, **pf_sd)
+            if pf is not None:
+                pc_p = pf_plain_1d_program_config(
+                    gated.shape[-2], gated.shape[-1], self.per_layer_projection.shape[-1], pf
+                )
+                projected = (
+                    ttnn.linear(gated, self.per_layer_projection, program_config=pc_p)
+                    if pc_p is not None
+                    else ttnn.linear(gated, self.per_layer_projection)
+                )
+            else:
+                projected = ttnn.linear(gated, self.per_layer_projection)
+            normed_pli = self.post_per_layer_input_norm.forward(projected, prefetcher=pf)
+            hidden_states = ttnn.add(residual_pli, normed_pli, **pf_sd)
             if len(hidden_states.shape) > 4:
                 hidden_states = ttnn.reshape(hidden_states, (1, 1, hidden_states.shape[-2], self.hidden_size))
 
         # Layer scalar — AFTER PLI (matching HF order)
         if self.layer_scalar != 1.0:
-            hidden_states = ttnn.mul(hidden_states, self.layer_scalar)
+            hidden_states = ttnn.mul(hidden_states, self.layer_scalar, **pf_sd)
 
         return hidden_states

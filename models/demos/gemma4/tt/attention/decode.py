@@ -11,6 +11,7 @@ import os
 
 import ttnn
 
+from ..dram_sharded import env_flag
 from .operations import (
     apply_allreduce,
     apply_output_projection,
@@ -67,6 +68,7 @@ def decode_forward(
     position_idx_cache=None,
     sequential_kv_write=False,
     rope_presliced=False,
+    prefetcher=None,
 ):
     """
     Single-token decode attention, fully on device.
@@ -90,18 +92,36 @@ def decode_forward(
         page_table: optional paged attention table
         ccl_manager: optional CCL manager for TP > 1
         is_kv_shared: if True, skip K/V projection and cache update (use source layer's KV cache)
+        prefetcher: optional Prefetcher — constrain multicore ops to worker sub-device
     """
+    from models.demos.gemma4.tt.prefetcher_utils import pf_sub_core_grids, pf_sub_device_id
+
     tp = mesh_config.tp if mesh_config else 1
+    pf_sd = pf_sub_device_id(prefetcher)
+    pf_grids = pf_sub_core_grids(prefetcher)
 
     # 1. Fused QKV projection
-    xqkv = apply_qkv_projection(hidden_states, weights)
+    xqkv = apply_qkv_projection(hidden_states, weights, prefetcher=prefetcher)
 
     # 2. Split into Q, K, V heads
     tt_q, tt_k, tt_v = split_qkv_heads_decode(
-        xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
+        xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated, prefetcher=prefetcher
     )
 
-    # 3. Per-head norms (move to DRAM for rms_norm, restore sharded for RoPE)
+    # 3. Per-head norms. rms_norm needs an interleaved (non-height-sharded) input,
+    # so we reshard Q/K/V out of their L1 height-sharded layout for the norm.
+    # Baseline staged through DRAM; Phase 4 stages K/V through L1 instead (matches
+    # the tt_transformers `norm_reshard` hack) to drop a per-layer DRAM write+read
+    # on each of K and V. Gated so it can be A/B'd and reverted cleanly.
+    #
+    # Q is deliberately NOT L1-staged: after norm+RoPE it feeds sdpa_decode, which
+    # asserts the (non-sharded) Q buffer is DRAM. K/V instead get resharded to the
+    # height-sharded config for the cache update (below) and never reach SDPA as an
+    # interleaved tensor, so L1 is safe for them.
+    l1_norm = env_flag("GEMMA4_ATTN_L1_NORM", default=False)
+    kv_stage_mem = ttnn.L1_MEMORY_CONFIG if l1_norm else ttnn.DRAM_MEMORY_CONFIG
+    kv_out_mem = ttnn.L1_MEMORY_CONFIG if l1_norm else None
+
     q_sharded_mem = tt_q.memory_config()
     tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
     tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True)
@@ -111,10 +131,12 @@ def decode_forward(
         tt_k.deallocate(True)
         tt_v.deallocate(True)
     else:
-        tt_k = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
-        tt_v = ttnn.to_memory_config(tt_v, ttnn.DRAM_MEMORY_CONFIG)
-        tt_k = apply_per_head_norm(tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True)
-        tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
+        tt_k = ttnn.to_memory_config(tt_k, kv_stage_mem)
+        tt_v = ttnn.to_memory_config(tt_v, kv_stage_mem)
+        tt_k = apply_per_head_norm(
+            tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=kv_out_mem
+        )
+        tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False, memory_config=kv_out_mem)
 
     # 4. RoPE — use on-device embedding lookup for trace compatibility
     # use_embedding_rope: cos/sin are per-position [1,1,batch_pad,head_dim] tensors.
@@ -284,18 +306,54 @@ def decode_forward(
     # users on columns 8..10 of an 11-wide Blackhole grid and corrupt the output.
     batch_size = tt_q.shape[1]
     device_grid = mesh_device.compute_with_storage_grid_size()
-    if config.head_dim >= 512 and batch_size == 1:
+    if pf_grids is not None:
+        # Receivers-only worker SD is a fragmented 64-core set; the
+        # num_cores_to_corerangeset_in_subcoregrids helper cannot assign 64
+        # cores from it (no wrap-around past start_core). Use a 16-core
+        # receiver-safe rectangle pick that is known to succeed from (1,0).
+        sdpa_grid = (4, 4)
+    elif config.head_dim >= 512 and batch_size == 1:
         # Single-user global layers: smaller grid — head_dim=512 needs more L1 per core.
-        sdpa_grid = ttnn.CoreCoord(8, 4)
+        sdpa_grid = (8, 4)
     else:
         # Sliding layers, and all batched decode: use the full device compute grid.
-        sdpa_grid = ttnn.CoreCoord(device_grid.x, device_grid.y)
+        sdpa_grid = (device_grid.x, device_grid.y)
 
+    sdpa_kwargs = {}
+    sdpa_out_mem = ttnn.DRAM_MEMORY_CONFIG
+    if pf_grids is not None:
+        # Peer pattern: pick N worker cores from all_worker_cores_range_set so
+        # SDPA kernels never land on Prefetcher sender cores. Subcoregrids
+        # require height-sharded Q (or output) — re-shard after RoPE.
+        import math
+
+        num_sdpa_cores = sdpa_grid[0] * sdpa_grid[1]
+        sdpa_kwargs["sub_core_grids"] = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            ttnn.CoreCoord(1, 0), num_sdpa_cores, pf_grids, row_wise=True
+        )
+        num_local_heads = config.num_attention_heads // tp
+        q_shard_h = math.ceil(num_local_heads / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        q_core_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            ttnn.CoreCoord(1, 0), batch_size, pf_grids, row_wise=True
+        )
+        q_mem = ttnn.create_sharded_memory_config(
+            shape=(q_shard_h, config.head_dim),
+            core_grid=q_core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        if not tt_q.is_sharded():
+            tt_q = ttnn.to_memory_config(tt_q, q_mem)
+        # GQA forbids sharded SDPA output — keep DRAM; sharded Q alone satisfies
+        # the subcoregrids requirement.
+        sdpa_out_mem = ttnn.DRAM_MEMORY_CONFIG
     sdpa_program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=sdpa_grid,
         q_chunk_size=32,
         k_chunk_size=64,
         exp_approx_mode=False,
+        **sdpa_kwargs,
     )
 
     if page_table is not None:
@@ -308,7 +366,7 @@ def decode_forward(
             page_table_tensor=page_table,
             scale=1.0,
             sliding_window_size=sliding_window,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=sdpa_out_mem,
             program_config=sdpa_program_config,
             block_size=effective_block_size(k_cache, config.head_dim, sdpa_num_local_kv_heads),
             # Tell SDPA the layer's view of the cache when the buffer was allocated
@@ -325,18 +383,28 @@ def decode_forward(
             cur_pos_tensor=cache_pos,
             scale=1.0,
             sliding_window_size=sliding_window,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=sdpa_out_mem,
             program_config=sdpa_program_config,
         )
     tt_q.deallocate(True)
+    if tt_sdpa.is_sharded():
+        # concat_heads expects DRAM interleaved SDPA output (it re-shards itself).
+        sdpa_dram = ttnn.sharded_to_interleaved(tt_sdpa, ttnn.DRAM_MEMORY_CONFIG)
+        tt_sdpa.deallocate(True)
+        tt_sdpa = sdpa_dram
 
     # 7. Concat heads + output projection + allreduce
     num_local_heads = config.num_attention_heads // tp
     tt_out = concat_heads(
-        tt_sdpa, is_decode_mode=True, num_heads=num_local_heads, head_dim=config.head_dim, mesh_device=mesh_device
+        tt_sdpa,
+        is_decode_mode=True,
+        num_heads=num_local_heads,
+        head_dim=config.head_dim,
+        mesh_device=mesh_device,
+        prefetcher=prefetcher,
     )
-    tt_out = apply_output_projection(tt_out, weights)
-    tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
+    tt_out = apply_output_projection(tt_out, weights, prefetcher=prefetcher)
+    tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size, subdevice_id=pf_sd)
 
     return tt_out
 

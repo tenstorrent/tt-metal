@@ -564,11 +564,15 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 getattr(self.model[0], "_supports_on_device_sampling", False)
                 and getattr(self.model[0], "sampling", None) is not None
             )
-
+            # When the caller did not request sampling, do not sweep non-greedy
+            # penalty/logprob warmup configs. On TP>1 those hit a vocab-shard
+            # shape mismatch in tt_penalties (logits [B, vocab] vs presence
+            # [B, vocab/tp]) — see gemma4 unit test_spec_decode prefill helpers.
             self.warmup_model_prefill(
                 kv_cache=kv_cache,
                 enable_trace=enable_trace,
                 can_sample_on_device=on_device_sampling_enabled,
+                greedy_only=not on_device_sampling_requested,
             )
 
         batch_size, batch_seq_len = tokens.shape

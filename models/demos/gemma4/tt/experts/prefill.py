@@ -76,6 +76,7 @@ def _process_prefill_chunk(
     output_tile = ttnn.Tile([32, 32])
     intermediate_size = weights.intermediate_size_per_device
     gate_up_config = _build_sparse_matmul_config(TILE_SIZE, intermediate_size)
+    gate_config = _build_sparse_matmul_config(TILE_SIZE, intermediate_size, fuse_gelu=True)
     down_config = _build_sparse_matmul_config(TILE_SIZE, hidden_size)
 
     # HiFi4 for the expert matmuls. Matmuls default to LoFi; the gate/up/down accumulate

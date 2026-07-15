@@ -132,6 +132,7 @@ def make_blocks(header, rows, signpost):
     # group rows by device then merge them together
     block_by_device = defaultdict(list)
     stop_on_signpost = False
+    in_signpost_region = signpost is None
     signposts_seen = []
 
     OP_CODE = header.index("OP CODE")
@@ -151,10 +152,17 @@ def make_blocks(header, rows, signpost):
             elif op_name == signpost:
                 # clear any previous data and stop on the next signpost
                 stop_on_signpost = True
+                in_signpost_region = True
                 block_by_device = defaultdict(list)
         elif op_type == "tt_dnn_device":
+            if not in_signpost_region:
+                continue
+            fw_duration = row[FW_DURATION].strip()
+            if not fw_duration:
+                # trace capture emits host-only rows with no device FW timing
+                continue
             device_id = int(row[DEVICE_ID])
-            time = int(row[FW_DURATION])
+            time = int(fw_duration)
             block_by_device[device_id].append(Block(op_name, [time]))
 
     # merge each device block into a single block with all the device times,

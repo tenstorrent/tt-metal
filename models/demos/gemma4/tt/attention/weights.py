@@ -33,6 +33,10 @@ class AttentionWeights:
     k_norm_weight: ttnn.Tensor  # Replicated across devices
     is_global: bool  # Controls K=V tying and partial RoPE
     kv_replicated: bool = False  # True when KV heads are replicated (not split) across TP devices
+    # Phase 2a: optional persistent DRAM-width-sharded copies used only by decode
+    # (peak-BW weight reads). None => interleaved decode. See tt/dram_sharded.py.
+    wqkv_ds: object = None  # DramShardedMatmul | None
+    o_proj_ds: object = None  # DramShardedMatmul | None
 
 
 def load_attention_weights(
@@ -180,6 +184,24 @@ def load_attention_weights(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
+    # Phase 2a: build DRAM-width-sharded decode copies of wqkv / o_proj (peak-BW
+    # weight reads). Opt-in; interleaved weights above are untouched so prefill is
+    # unchanged. Dims are per-device and depend on the layer type (sliding head_dim
+    # vs global head_dim), so derive them from config rather than assuming square.
+    from models.demos.gemma4.tt.dram_sharded import DramShardedMatmul, env_flag
+
+    wqkv_ds = None
+    o_proj_ds = None
+    if env_flag("GEMMA4_DRAM_SHARDED_ATTN", "GEMMA4_DRAM_SHARDED"):
+        head_dim = config.head_dim
+        q_per_dev = (config.num_attention_heads // tp) * head_dim
+        kv_per_dev = head_dim if kv_replicated else (config.num_key_value_heads // tp) * head_dim
+        qkv_n = q_per_dev + 2 * kv_per_dev  # fused Q+K+V width on this device
+        o_k = q_per_dev  # concat-heads width on this device = (heads/tp) * head_dim
+        o_n = (padded_local_hidden * tp) if (o_proj_pad_size > 0 and tp > 1) else hidden_size
+        wqkv_ds = DramShardedMatmul.try_build(mesh_device, wqkv, k=hidden_size, n=qkv_n, name=f"wqkv[{tp=}]")
+        o_proj_ds = DramShardedMatmul.try_build(mesh_device, o_proj, k=o_k, n=o_n, name=f"o_proj[{tp=}]")
+
     return AttentionWeights(
         wqkv=wqkv,
         o_proj=o_proj,
@@ -187,4 +209,6 @@ def load_attention_weights(
         k_norm_weight=k_norm_weight,
         is_global=is_global,
         kv_replicated=kv_replicated,
+        wqkv_ds=wqkv_ds,
+        o_proj_ds=o_proj_ds,
     )

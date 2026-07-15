@@ -59,6 +59,20 @@ def _to_probs(logits_row, temperature, top_p, top_k):
 
 
 class SpeculativeDecoder:
+    # Cached at init: pad rows to 32 → untilize → ttnn.argmax(dim=-1) on ROW_MAJOR.
+    # Multicore is auto-selected in tt-metal for last-dim RM reductions; without
+    # row padding, unaligned batch rows return garbage token ids. Fall back to
+    # host argmax only when the device pipeline fails the correctness probe.
+    _device_argmax_ok = None
+
+    @classmethod
+    def _probe_device_argmax(cls, mesh_device, mapper):
+        from models.demos.gemma4.tt.device_greedy_argmax import probe_device_argmax
+
+        ok = probe_device_argmax(mesh_device, mapper)
+        cls._device_argmax_ok = ok
+        return ok
+
     def __init__(
         self,
         target_model,
@@ -89,7 +103,7 @@ class SpeculativeDecoder:
         self.tt_kv_cache = tt_kv_cache
         self.page_table_torch = page_table_torch
         self.stop_tokens = set(stop_tokens or [])
-        self.draft_len = int(draft_len if draft_len is not None else os.environ.get("GEMMA4_SPEC_DRAFT_LEN", 3))
+        self.draft_len = int(draft_len if draft_len is not None else os.environ.get("GEMMA4_SPEC_DRAFT_LEN", 4))
         if self.draft_len < 1:
             raise ValueError("draft_len must be >= 1")
         # Recurrent drafter-seed strategy across verify rounds (see generate()).
@@ -99,13 +113,15 @@ class SpeculativeDecoder:
         self._is_mesh = hasattr(mesh_device, "shape")
         self._mapper = target_model._replicate_to_mesh_mapper()
         self._tp = target_model.mesh_config.tp if target_model.mesh_config else 1
+        SpeculativeDecoder._probe_device_argmax(mesh_device, self._mapper)
         # The drafter cross-attends to the target's last full / last sliding KV.
         self._shared_kv = target_model.get_shared_kv_caches()
         # Tracing: persistent I/O buffers + execute_trace replace per-op host
         # dispatch (the untraced loop is host-bound: ~77ms/decode vs a few ms
         # traced). Verify traces are keyed by batch (K+1 for verify, 1 for
         # seed/reseed). Captured lazily on first call at real inputs.
-        self._use_trace = os.environ.get("GEMMA4_SPEC_TRACE", "0") == "1"
+        _trace_env = os.environ.get("GEMMA4_SPEC_TRACE")
+        self._use_trace = True if _trace_env is None else (_trace_env == "1")
         self._verify_traces = {}
         # Single batch=1 drafter-step trace, replayed K times. The recurrent
         # hidden is kept ON DEVICE: between trace replays, ttnn.copy(next_hidden
@@ -124,15 +140,16 @@ class SpeculativeDecoder:
         # batched packed verify). Captured once, replayed per iter (prefill never
         # traced). See _capture_fused_trace_batched / _generate_fused_traced_batched.
         self._fused_trace_batched = None
-        # Seed mode for the fused greedy trace. "shift" (default) is the fast
-        # production mode: it reuses the previous verify hidden row as an
+        # Seed mode for the fused greedy trace. "shift" (default via env=0) is the
+        # fast production mode: it reuses the previous verify hidden row as an
         # approximate drafter seed and repairs the anchor KV at the next verify.
-        # "reseed" is the exact assistant contract: run a batch=1 target seed
-        # inside the fused trace before drafting, so the drafter sees the current
-        # anchor's exact target hidden/KV. It raises acceptance, but the extra
-        # target forward currently costs more than it saves; keep it as an A/B
-        # correctness/reference mode via GEMMA4_SPEC_FUSED_RESEED=1.
-        self._fused_reseed = os.environ.get("GEMMA4_SPEC_FUSED_RESEED", "0") == "1"
+        # "reseed" (default "1" here) is the exact assistant contract: run a
+        # batch=1 target seed inside the fused trace before drafting, so the drafter
+        # sees the current anchor's exact target hidden/KV. It raises acceptance and
+        # is trace-safe on QB2 (shift mode allocates between replays via
+        # _hidden_row_to_device and hangs on replay #2 when draft_len >= 2).
+        # Set GEMMA4_SPEC_FUSED_RESEED=0 to A/B shift mode (not recommended).
+        self._fused_reseed = os.environ.get("GEMMA4_SPEC_FUSED_RESEED", "1") == "1"
         # Cheap approximate seed-row selection for fused shift mode. `next` is
         # the original position-aligned row p+m+1. `current` uses row m (usually
         # the last matched target row), and `last_accepted` uses row m-1 when at
@@ -158,6 +175,46 @@ class SpeculativeDecoder:
         self._pv_ready = False
         self._pv_a_prev = -1  # last hot block index (-1 ⇒ staging unseeded)
         self._pv_traces = {}  # (P, S_k) -> persistent trace inputs/outputs
+
+    def set_draft_len(self, draft_len: int) -> bool:
+        """Set draft length K for the next ``generate`` call.
+
+        The fused CCL trace bakes K into its captured graph and persistent
+        verify buffers. Changing K therefore releases any live fused trace so
+        the next generate recaptures at the new K. Mid-request changes are
+        unsafe (capture writes KV) — only call between requests / before
+        ``generate``.
+
+        Returns True if K changed (trace released), False if unchanged.
+        """
+        k = int(draft_len)
+        if k < 1:
+            raise ValueError(f"draft_len must be >= 1, got {k}")
+        if k == self.draft_len:
+            return False
+        self.release_fused_trace()
+        # Also drop per-batch verify traces keyed by old K+1 shapes.
+        self._verify_traces = {}
+        self._draft_trace = None
+        self.draft_len = k
+        return True
+
+    def _begin_generation_guard(self, repetition_max_streak: int) -> None:
+        from models.demos.gemma4.tt.sampling_utils import RepetitionStreakGuard
+
+        self._streak_guard = RepetitionStreakGuard(repetition_max_streak)
+
+    def _on_committed_token(self, tok: int, out: list[int], token_callback) -> bool:
+        """Append *tok*, invoke callback. Return True when generation should stop."""
+        out.append(tok)
+        if token_callback is not None:
+            token_callback(tok)
+        if tok in self.stop_tokens:
+            return True
+        guard = getattr(self, "_streak_guard", None)
+        if guard is not None and guard.observe(tok):
+            return True
+        return False
 
     def _fused_shift_seed_row(self, accepted, K):
         if self._fused_shift_seed == "current":
@@ -187,10 +244,18 @@ class SpeculativeDecoder:
         )
         return pos_uint32, pos_int32
 
+    def _sanitize_token_id(self, tok):
+        tok = int(tok)
+        vs = self.target.vocab_size
+        if tok < 0 or tok >= vs:
+            raise ValueError(f"invalid token id {tok} (vocab_size={vs})")
+        return tok
+
     def _tokens_tensor(self, tokens):
+        safe = [self._sanitize_token_id(t) for t in tokens]
         # int64 host source for the uint32 tensor (see _pos_tensors): avoids the
         # int32->uint32 conversion that triggers the #18536 row-major warning.
-        t = torch.tensor(tokens, dtype=torch.int64).reshape(1, len(tokens))
+        t = torch.tensor(safe, dtype=torch.int64).reshape(1, len(safe))
         return ttnn.from_torch(
             t, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=self._mapper
         )
@@ -225,9 +290,10 @@ class SpeculativeDecoder:
 
     # ── host-side input tensors (for copy_host_to_device_tensor into traces) ──
     def _host_tokens(self, tokens):
+        safe = [self._sanitize_token_id(t) for t in tokens]
         # int64 host source for the uint32 tensor (see _pos_tensors): avoids the
         # int32->uint32 conversion that triggers the #18536 row-major warning.
-        t = torch.tensor(tokens, dtype=torch.int64).reshape(1, len(tokens))
+        t = torch.tensor(safe, dtype=torch.int64).reshape(1, len(safe))
         return ttnn.from_torch(t, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=self._mapper)
 
     def _host_pos(self, positions):
@@ -692,65 +758,46 @@ class SpeculativeDecoder:
         return drafts, draft_logits
 
     # ── fully on-device fused iteration (greedy) ─────────────────────────────
+    def _argmax_last_host(self, logits, rows):
+        """Host argmax — correct on all builds; used when device multicore argmax is unavailable."""
+        from models.demos.gemma4.tt.device_greedy_argmax import argmax_last_host
+
+        return argmax_last_host(
+            logits,
+            rows,
+            mesh_device=self.mesh_device,
+            mapper=self._mapper,
+            tp=self._tp,
+            vocab_size=self.target.vocab_size,
+        )
+
     def _argmax_last(self, logits, rows):
         """argmax over the last (vocab) dim — fast path. Returns [1,1,rows] uint32.
 
-        ``ttnn.argmax`` requires ROW_MAJOR input; passing a TILE tensor takes a
-        single-core internal-untilize path that is catastrophically slow on a
-        262144-wide vocab (~9 ms for 1 row, ~28 ms for 5). The multicore argmax
-        is fast (~1.6 ms) but ROW-PARALLEL: it returns GARBAGE unless the row
-        (batch) dim is EXACTLY one tile (32) — verified by a correctness probe
-        (1/5 rows -> wrong; padded to 32 -> exact; and >32 rows in one call also
-        returns garbage beyond the first tile). So process the rows in 32-row
-        chunks: pad each ≤32-row chunk up to 32, run the multicore untilize +
-        argmax, slice back, and concat. Net ~1.6 ms/chunk vs ~9-28 ms bare.
+        See ``device_greedy_argmax.argmax_last`` for the pad-to-32 multicore recipe.
         """
-        R32 = 32
-        if rows > R32:
-            # Batched packed verify (B*P > 32): argmax each 32-row tile separately
-            # (offsets are multiples of 32, so the TILE slices are tile-aligned)
-            # and concat — a single >32-row multicore argmax garbles later tiles.
-            vocab = logits.shape[-1]
-            chunks = []
-            off = 0
-            while off < rows:
-                n = min(R32, rows - off)
-                part = ttnn.slice(logits, [0, 0, off, 0], [1, 1, off + n, vocab])
-                chunks.append(self._argmax_last(part, n))  # recurse (≤32 rows)
-                part.deallocate(True)
-                off += n
-            out = ttnn.concat(chunks, dim=2)  # [1,1,rows]
-            for c in chunks:
-                c.deallocate(True)
-            return out
-        src = logits
-        padded = None
-        if rows < R32:
-            padded = ttnn.pad(logits, [(0, 0), (0, 0), (0, R32 - rows), (0, 0)], value=0.0)
-            src = padded
-        u = ttnn.untilize(src, use_multicore=True)
-        if padded is not None:
-            padded.deallocate(True)
-        idx = ttnn.argmax(
-            u, dim=-1, keepdim=False
-        )  # [1,1,32 or rows] uint32 RM (multicore by default on ROW_MAJOR last-dim)
-        u.deallocate(True)
-        if rows < R32:
-            sliced = ttnn.slice(idx, [0, 0, 0], [1, 1, rows])  # [1,1,rows]
-            idx.deallocate(True)
-            idx = sliced
-        return idx
+        from models.demos.gemma4.tt.device_greedy_argmax import argmax_last
+
+        return argmax_last(
+            logits,
+            rows,
+            mesh_device=self.mesh_device,
+            mapper=self._mapper,
+            tp=self._tp,
+            vocab_size=self.target.vocab_size,
+        )
 
     def _id_to_host(self, id_tt):
         """[*,1] uint32 device id -> python int (TP: read device-0 replica)."""
-        t = ttnn.to_torch(ttnn.get_device_tensors(id_tt)[0]) if self._tp > 1 else ttnn.to_torch(id_tt)
-        return int(t.reshape(-1)[0])
+        from models.demos.gemma4.tt.device_greedy_argmax import id_to_host
+
+        return id_to_host(id_tt, tp=self._tp, sanitize=self._sanitize_token_id)
 
     def _ids_to_host(self, ids_tt, n):
         """[1,1,n] uint32 device ids -> list[int] (TP: read device-0 replica)."""
-        t = ttnn.to_torch(ttnn.get_device_tensors(ids_tt)[0]) if self._tp > 1 else ttnn.to_torch(ids_tt)
-        flat = t.reshape(-1)
-        return [int(flat[j]) for j in range(n)]
+        from models.demos.gemma4.tt.device_greedy_argmax import ids_to_host
+
+        return ids_to_host(ids_tt, n, tp=self._tp, sanitize=self._sanitize_token_id)
 
     def _fused_iter(self, anchor_tok_tt, anchor_hidden, anchor_pos):
         """ONE greedy speculative iteration, fully on-device.
@@ -871,7 +918,7 @@ class SpeculativeDecoder:
         hidden.deallocate(True)
         return h
 
-    def generate_fused(self, anchor_token, anchor_pos, max_new_tokens):
+    def generate_fused(self, anchor_token, anchor_pos, max_new_tokens, token_callback=None, repetition_max_streak=0):
         """Greedy speculative decode using the fully on-device fused iteration.
 
         Each iteration reads back only the ``2K+1`` token ids; the drafter
@@ -881,9 +928,47 @@ class SpeculativeDecoder:
         forward, so the whole iteration is one device program (this is the eager
         twin of the fused trace). Returns ``(generated_ids, accepts_per_iter)``.
         """
+        self._begin_generation_guard(repetition_max_streak)
         if self._use_trace:
-            return self._generate_fused_traced(anchor_token, anchor_pos, max_new_tokens)
+            if not self._fused_reseed:
+                from loguru import logger as _lg
+
+                _lg.warning(
+                    "[spec-decode] GEMMA4_SPEC_FUSED_RESEED=0 (shift mode) with fused trace "
+                    "hangs on replay #2 when draft_len >= 2; forcing reseed mode"
+                )
+                self._fused_reseed = True
+            if SpeculativeDecoder._device_argmax_ok:
+                return self._generate_fused_traced(
+                    anchor_token,
+                    anchor_pos,
+                    max_new_tokens,
+                    token_callback=token_callback,
+                    repetition_max_streak=repetition_max_streak,
+                )
+            from loguru import logger as _lg
+
+            _lg.info(
+                "[spec-decode] fused trace disabled (device argmax probe failed); "
+                "using eager fused iter with host argmax"
+            )
+            self._use_trace = False
         self._pv_a_prev = -1  # re-seed packed-verify staging for the new anchor/request
+        # Optional exact-reseed loop (higher acceptance, slower). Default: eager fused shift.
+        if os.environ.get("GEMMA4_SPEC_HOST_RESEED", "0") == "1":
+            saved_trace = self._use_trace
+            self._use_trace = False
+            try:
+                return self.generate(
+                    anchor_token,
+                    anchor_pos,
+                    max_new_tokens,
+                    temperature=0.0,
+                    token_callback=token_callback,
+                    repetition_max_streak=repetition_max_streak,
+                )
+            finally:
+                self._use_trace = saved_trace
         self._last_fused_setup_s = 0.0
         K = self.draft_len
         out, accepts = [], []
@@ -923,8 +1008,7 @@ class SpeculativeDecoder:
             anchor_pos = new_pos
 
             for tok in committed:
-                out.append(tok)
-                if tok in self.stop_tokens:
+                if self._on_committed_token(tok, out, token_callback):
                     anchor_hidden.deallocate(True)
                     anchor_tok_tt.deallocate(True)
                     self._last_fused_replay_s = time.perf_counter() - loop_t0
@@ -992,6 +1076,24 @@ class SpeculativeDecoder:
         vlogits.deallocate(True)
         return verify_x, vidx, vhidden
 
+    def _bind_fused_trace_inputs(self, tr, cur_token, cur_pos):
+        """Rebind token/position inputs for the next fused-trace replay."""
+        K = self.draft_len
+        h_tok = self._host_tokens([cur_token])
+        ttnn.copy_host_to_device_tensor(h_tok, tr["anchor_tok"])
+        h_tok.deallocate(True)
+        d_hpu, d_hpi = self._host_pos([cur_pos])
+        ttnn.copy_host_to_device_tensor(d_hpu, tr["d_pu"])
+        ttnn.copy_host_to_device_tensor(d_hpi, tr["d_pi"])
+        d_hpu.deallocate(True)
+        d_hpi.deallocate(True)
+        v_pos = [cur_pos + 1 + j for j in range(K)] if self._fused_reseed else [cur_pos + j for j in range(K + 1)]
+        v_hpu, v_hpi = self._host_pos(v_pos)
+        ttnn.copy_host_to_device_tensor(v_hpu, tr["v_pu"])
+        ttnn.copy_host_to_device_tensor(v_hpi, tr["v_pi"])
+        v_hpu.deallocate(True)
+        v_hpi.deallocate(True)
+
     def _capture_fused_trace(self, anchor_token, anchor_hidden, anchor_pos):
         """Capture ONE fused iteration at the real first-call inputs.
 
@@ -1032,6 +1134,46 @@ class SpeculativeDecoder:
         tr["vhidden"] = vh
         self._fused_trace = tr
 
+    def release_fused_trace(self):
+        """Release the fused trace + its persistent buffers.
+
+        A captured fused trace is a CCL-bearing metal trace. If it survives past
+        the current ``generate`` call, the NEXT request's ``prefill_forward_text``
+        (also a CCL trace) interleaves with a later replay of this stale trace and
+        the mesh deadlocks (the distinct-CCL-trace interleave hang). A long-lived
+        server therefore recaptures the fused trace per request; this frees the
+        previous one first so recapture's compile run starts from a clean slate
+        (recapturing WITHOUT releasing hangs at the fused compile run)."""
+        tr = self._fused_trace
+        if tr is None:
+            return
+        tid = tr.get("id")
+        if tid is not None:
+            try:
+                ttnn.release_trace(self.mesh_device, tid)
+            except Exception:
+                pass
+        for key in (
+            "anchor_tok",
+            "h",
+            "d_pu",
+            "d_pi",
+            "d_pt",
+            "v_pu",
+            "v_pi",
+            "v_pt",
+            "verify_x",
+            "vidx",
+            "vhidden",
+        ):
+            t = tr.get(key)
+            if t is not None and hasattr(t, "deallocate"):
+                try:
+                    t.deallocate(True)
+                except Exception:
+                    pass
+        self._fused_trace = None
+
     def _hidden_row_to_device(self, row):
         """Read the verify hidden, slice row `row`, and copy it into tr["h"].
 
@@ -1047,10 +1189,13 @@ class SpeculativeDecoder:
         ttnn.copy_host_to_device_tensor(host_h, tr["h"])
         host_h.deallocate(True)
 
-    def _generate_fused_traced(self, anchor_token, anchor_pos, max_new_tokens):
+    def _generate_fused_traced(
+        self, anchor_token, anchor_pos, max_new_tokens, token_callback=None, repetition_max_streak=0
+    ):
         """Greedy spec-decode via the single fused trace (one replay per iter)."""
         from loguru import logger as _lg
 
+        self._begin_generation_guard(repetition_max_streak)
         K = self.draft_len
         # Eager seed (once, before the loop). Force the UNTRACED verify so we do
         # NOT capture a separate batch=1 verify trace — an active verify trace
@@ -1061,33 +1206,34 @@ class SpeculativeDecoder:
         self._use_trace = False
         anchor_hidden = self.seed(anchor_token, anchor_pos)
         self._use_trace = True
-        self._capture_fused_trace(anchor_token, anchor_hidden, anchor_pos)
+        # Capture the single fused CCL trace ONCE and reuse it for every request.
+        # The fused trace replays safely many times (both within a generate and
+        # across requests) as long as no OTHER CCL trace (e.g. a prefill trace
+        # replay) interleaves between replays — the server runs prefill eagerly
+        # (enable_trace=False) to guarantee this. Recapturing per request instead
+        # deadlocks at the fused compile run, and letting a prefill trace replay
+        # precede a replay deadlocks at execute; a single long-lived trace avoids
+        # both.
+        reuse_trace = self._fused_trace is not None
+        if not reuse_trace:
+            self._capture_fused_trace(anchor_token, anchor_hidden, anchor_pos)
         anchor_hidden.deallocate(True)
         tr = self._fused_trace
         self._last_fused_setup_s = time.perf_counter() - setup_t0
 
         out, accepts = [], []
         cur_token, cur_pos = anchor_token, anchor_pos
-        first = True  # capture already bound the first inputs (token/pos/hidden)
+        # Fresh capture bound the first inputs; on reuse rebind for this request.
+        first = not reuse_trace
         replay_t0 = time.perf_counter()
+        _dbg = os.environ.get("GEMMA4_SPEC_TRACE_DEBUG", "0") == "1"
         while len(out) < max_new_tokens:
             if not first:
-                h_tok = self._host_tokens([cur_token])
-                ttnn.copy_host_to_device_tensor(h_tok, tr["anchor_tok"])
-                h_tok.deallocate(True)
-                d_hpu, d_hpi = self._host_pos([cur_pos])
-                ttnn.copy_host_to_device_tensor(d_hpu, tr["d_pu"])
-                ttnn.copy_host_to_device_tensor(d_hpi, tr["d_pi"])
-                d_hpu.deallocate(True)
-                d_hpi.deallocate(True)
-                v_pos = (
-                    [cur_pos + 1 + j for j in range(K)] if self._fused_reseed else [cur_pos + j for j in range(K + 1)]
-                )
-                v_hpu, v_hpi = self._host_pos(v_pos)
-                ttnn.copy_host_to_device_tensor(v_hpu, tr["v_pu"])
-                ttnn.copy_host_to_device_tensor(v_hpi, tr["v_pi"])
-                v_hpu.deallocate(True)
-                v_hpi.deallocate(True)
+                if _dbg:
+                    _lg.info(f"[spec-trace] pos={cur_pos} copy inputs BEGIN")
+                self._bind_fused_trace_inputs(tr, cur_token, cur_pos)
+                if _dbg:
+                    _lg.info(f"[spec-trace] pos={cur_pos} copy inputs DONE")
                 # In reseed mode the trace computes the exact seed internally.
                 # Otherwise tr["h"] already holds this iter's approximate seed
                 # (set at the end of the previous iteration).
@@ -1095,6 +1241,17 @@ class SpeculativeDecoder:
 
             _lg.debug(f"[spec-trace] fused replay pos={cur_pos} execute")
             ttnn.execute_trace(self.mesh_device, tr["id"], cq_id=0, blocking=False)
+            if _dbg:
+                _lg.info(f"[spec-trace] pos={cur_pos} execute_trace returned; sync BEGIN")
+            # The trace's outputs (verify_x/vidx/vhidden) are persistent buffers
+            # that we read back immediately AND overwrite (via host->device input
+            # copies) at the top of the next iteration. On a non-blocking replay
+            # the readback can race the in-flight trace and deadlock after the
+            # first couple of iterations, so drain the queue before touching any
+            # trace-owned tensor on host.
+            ttnn.synchronize_device(self.mesh_device)
+            if _dbg:
+                _lg.info(f"[spec-trace] pos={cur_pos} sync DONE; readback BEGIN")
 
             vx = (
                 ttnn.to_torch(ttnn.get_device_tensors(tr["verify_x"])[0])
@@ -1104,6 +1261,8 @@ class SpeculativeDecoder:
             vx = vx.reshape(-1)
             drafts = [int(vx[j if self._fused_reseed else 1 + j]) for j in range(K)]
             target_ids = self._ids_to_host(tr["vidx"], K + 1)
+            if _dbg:
+                _lg.info(f"[spec-trace] pos={cur_pos} readback DONE drafts={drafts} target={target_ids}")
             m = next((i for i in range(K) if drafts[i] != target_ids[i]), K)
             committed = drafts[:m] + [target_ids[m]]
             accepts.append(m)
@@ -1111,13 +1270,16 @@ class SpeculativeDecoder:
             if not self._fused_reseed:
                 # Shift seed: choose one of the verified hidden rows as a cheap
                 # approximate seed for the next anchor (see _fused_shift_seed).
+                if _dbg:
+                    _lg.info(f"[spec-trace] pos={cur_pos} hidden_row_to_device BEGIN")
                 self._hidden_row_to_device(self._fused_shift_seed_row(m, K))
+                if _dbg:
+                    _lg.info(f"[spec-trace] pos={cur_pos} hidden_row_to_device DONE")
             cur_pos = cur_pos + m + 1
             cur_token = committed[-1]
 
             for tok in committed:
-                out.append(tok)
-                if tok in self.stop_tokens:
+                if self._on_committed_token(tok, out, token_callback):
                     self._last_fused_replay_s = time.perf_counter() - replay_t0
                     return out, accepts
                 if len(out) >= max_new_tokens:
@@ -1556,7 +1718,16 @@ class SpeculativeDecoder:
         return outs, accepts
 
     def generate(
-        self, anchor_token, anchor_pos, max_new_tokens, anchor_hidden=None, temperature=0.0, top_p=1.0, top_k=0
+        self,
+        anchor_token,
+        anchor_pos,
+        max_new_tokens,
+        anchor_hidden=None,
+        temperature=0.0,
+        top_p=1.0,
+        top_k=0,
+        token_callback=None,
+        repetition_max_streak=0,
     ):
         """Run speculative decode from a prompt anchor (prefill must have filled the KV).
 
@@ -1566,15 +1737,40 @@ class SpeculativeDecoder:
             max_new_tokens: max tokens to generate.
             anchor_hidden: optional pre-seeded target hidden at p; computed via
                 ``seed`` when None.
+            token_callback: optional ``fn(token_id)`` invoked for each committed
+                token the moment it is read back from device (enables live
+                streaming). It runs between iterations, after the readback that
+                already happens, so it adds no device-side overhead.
 
         Returns:
             (generated_token_ids, num_accept_per_iter) — the latter for accept-rate stats.
         """
-        greedy = not temperature or temperature <= 0
-        if self._use_trace:
-            if greedy:
-                return self.generate_fused(anchor_token, anchor_pos, max_new_tokens)
+        max_seq_len = getattr(self.target, "max_seq_len", None)
+        if max_seq_len is not None:
+            # Fused verify reads draft positions up to cur_pos + draft_len (reseed)
+            # or cur_pos + draft_len (shift). Clamp so the last iteration never
+            # indexes past max_seq_len-1 — otherwise execute_trace deadlocks.
+            safe_new = max(0, max_seq_len - 1 - self.draft_len - int(anchor_pos))
+            if max_new_tokens > safe_new:
+                from loguru import logger as _lg
 
+                _lg.warning(
+                    f"Clamping spec max_new_tokens {max_new_tokens} -> {safe_new} "
+                    f"(max_seq_len={max_seq_len}, anchor_pos={anchor_pos}, draft_len={self.draft_len})"
+                )
+                max_new_tokens = safe_new
+        self._begin_generation_guard(repetition_max_streak)
+        greedy = not temperature or temperature <= 0
+        if self._use_trace and greedy:
+            return self.generate_fused(
+                anchor_token,
+                anchor_pos,
+                max_new_tokens,
+                token_callback=token_callback,
+                repetition_max_streak=repetition_max_streak,
+            )
+
+        if self._use_trace and not greedy:
             # Sampling mode cannot use the single fused greedy trace because the
             # draft/verify token selection is non-deterministic (it depends on the
             # sampled token), so draft and verify must run as two SEPARATE traces
@@ -1605,6 +1801,8 @@ class SpeculativeDecoder:
                     temperature=temperature,
                     top_p=top_p,
                     top_k=top_k,
+                    token_callback=token_callback,
+                    repetition_max_streak=repetition_max_streak,
                 )
             finally:
                 self._use_trace = True
@@ -1669,8 +1867,7 @@ class SpeculativeDecoder:
             anchor_token = new_token
 
             for tok in committed:
-                out.append(tok)
-                if tok in self.stop_tokens:
+                if self._on_committed_token(tok, out, token_callback):
                     if owns_anchor_hidden:
                         anchor_hidden.deallocate(True)
                     return out, accepts

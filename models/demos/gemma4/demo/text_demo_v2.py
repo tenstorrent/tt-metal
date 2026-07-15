@@ -54,6 +54,40 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 from models.tt_transformers.tt.model_config import determine_device_name
 
+# Tracy profiling hook; mirrors tests/unit/tracy_prefill_common.py.
+try:
+    from tracy import signpost as _tracy_signpost
+
+    _HAS_SIGNPOST = True
+except ModuleNotFoundError:
+    _tracy_signpost = None
+    _HAS_SIGNPOST = False
+    if os.environ.get("GEMMA4_PROFILE_DECODE", "").lower() in ("1", "true", "yes"):
+        logger.warning(
+            "GEMMA4_PROFILE_DECODE is set but the tracy signpost module could not be "
+            "imported. Tracy markers will not be emitted. Make sure the repository's "
+            "tools directory is on sys.path (e.g. PYTHONPATH=$TT_METAL_HOME/tools)."
+        )
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.lower() in ("1", "true", "yes")
+
+
+def _flush_device_profiler(mesh_device):
+    """Drain device profiler buffers before a Tracy signposted region."""
+    ttnn.ReadDeviceProfiler(mesh_device)
+    ttnn.synchronize_device(mesh_device)
+
+
+def _maybe_signpost(name: str, emit: bool) -> None:
+    if emit and _HAS_SIGNPOST and _tracy_signpost is not None:
+        _tracy_signpost(name)
+
+
 _CONTEXT_CACHE_DIR = Path("models/tt_transformers/demo/context_cache")
 
 
@@ -353,8 +387,20 @@ def test_demo_text(
     # Batch sweep hook: GEMMA4_BATCH overrides the config's batch_size so the
     # same config can probe batch-1 / 8 / 32 to find the QB2 ceiling.
     batch_size = int(os.environ.get("GEMMA4_BATCH", batch_size))
+    # GEMMA4_ENABLE_TRACE=0/1 overrides the config's enable_trace (debug hook).
+    if "GEMMA4_ENABLE_TRACE" in os.environ:
+        enable_trace = os.environ.get("GEMMA4_ENABLE_TRACE", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
 
-    # ── Speculative-decoding dispatch ────────────────────────────────────────
+    # Tracy decode-profiling controls.
+    profile_decode = _env_bool("GEMMA4_PROFILE_DECODE", False) and _HAS_SIGNPOST
+    profile_decode_iter = int(os.environ.get("GEMMA4_PROFILE_DECODE_ITER", "1"))
+
+    # -- Speculative-decoding dispatch --------------------------------------
     # `--speculative` reroutes the demo through the it-assistant drafter +
     # target verifier path. Delegated to _run_spec_decode, which builds its own
     # target+drafter, so we return before this test loads a model.
@@ -503,6 +549,25 @@ def test_demo_text(
     )
     input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
 
+    from models.demos.gemma4.tt.plain_fused_decode import PlainFusedGreedyDecoder, fused_greedy_enabled
+
+    use_fused_greedy = (
+        fused_greedy_enabled()
+        and batch_size == 1
+        and (not temperature or temperature <= 0)
+        and paged_attention
+        and page_table is not None
+        and not bounded_sliding
+        and not getattr(generator.model[0], "hidden_size_per_layer_input", 0)
+    )
+    # Fused greedy owns a CCL decode trace — prefill must be eager (same as spec).
+    prefill_enable_trace = enable_trace and not use_fused_greedy
+    if use_fused_greedy:
+        logger.info(
+            "GEMMA4_FUSED_GREEDY=1 — plain fused greedy decode "
+            f"(trace={os.environ.get('GEMMA4_FUSED_GREEDY_TRACE', '1')}, eager prefill)"
+        )
+
     logger.info("Starting prefill...")
     profiler.start("inference_prefill")
     prefill_logits = generator.prefill_forward_text(
@@ -531,38 +596,88 @@ def test_demo_text(
 
     logger.info("Starting decode loop...")
     profiler.start("inference_decode")
-    while users_decoding:
-        profiler.start(f"inference_decode_time_{iteration}")
-        logits, _ = generator.decode_forward(
-            out_tok,
-            current_pos,
-            enable_trace=enable_trace,
-            page_table=page_table,
-            kv_cache=tt_kv_cache,
-            sampling_params=None,  # host sampling
+    _fused_steady_iters = None
+    _fused_steady_s = None
+    if use_fused_greedy:
+        import time as _time
+
+        fused = PlainFusedGreedyDecoder(
+            target_model=generator.model[0],
+            mesh_device=mesh_device,
+            tt_kv_cache=tt_kv_cache,
+            page_table_torch=page_table,
+            stop_tokens=tokenizer.stop_tokens if stop_at_eos else None,
         )
-        out_tok = _host_sample(logits, temperature, top_p)
-        profiler.end(f"inference_decode_time_{iteration}")
+        try:
+            decode_t0 = _time.perf_counter()
+            generated = fused.generate(
+                anchor_token=int(prefilled_flat[0].item()),
+                anchor_pos=int(current_pos[0].item()),
+                max_new_tokens=max_generated_tokens,
+            )
+            decode_elapsed = _time.perf_counter() - decode_t0
+            all_outputs[0].extend(generated)
+            iteration = len(generated)
+            setup_s = getattr(fused, "_last_setup_s", 0.0)
+            steady_s = getattr(fused, "_last_replay_s", decode_elapsed)
+            if iteration > 0:
+                _fused_ms_per_tok = (steady_s * 1000.0 / iteration) if iteration else 0.0
+                logger.info(
+                    f"[plain-fused] setup/capture={setup_s:.2f}s steady={steady_s:.2f}s "
+                    f"({_fused_ms_per_tok:.2f} ms/tok @ "
+                    f"{(iteration / steady_s) if steady_s > 0 else 0:.2f} tok/s/u)"
+                )
+                _fused_steady_iters = iteration
+                _fused_steady_s = steady_s
+            else:
+                _fused_steady_iters = 0
+                _fused_steady_s = 0.0
+        finally:
+            fused.release_fused_trace()
+    else:
+        while users_decoding:
+            if profile_decode and iteration == profile_decode_iter:
+                _flush_device_profiler(mesh_device)
+                _maybe_signpost("gemma4_decode_start", True)
+                logger.info(f"Tracy profiling decode iteration {iteration}")
+            profiler.start(f"inference_decode_time_{iteration}")
+            logits, _ = generator.decode_forward(
+                out_tok,
+                current_pos,
+                enable_trace=enable_trace,
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                sampling_params=None,  # host sampling
+            )
+            out_tok = _host_sample(logits, temperature, top_p)
+            profiler.end(f"inference_decode_time_{iteration}")
 
-        current_pos += 1
-        for user in range(batch_size):
-            tok = int(out_tok[user, 0].item())
-            if tok not in tokenizer.stop_tokens and not user_done[user]:
-                all_outputs[user].append(tok)
-            elif stop_at_eos:
-                user_done[user] = True
-                if all(user_done):
-                    users_decoding = False
+            if profile_decode and iteration == profile_decode_iter:
+                ttnn.synchronize_device(mesh_device)
+                _maybe_signpost("gemma4_decode_stop", True)
+                logger.info("GEMMA4_PROFILE_DECODE captured one decode step; stopping decode.")
+                iteration += 1
+                break
 
-        if not is_ci_env:
+            current_pos += 1
             for user in range(batch_size):
-                text = "".join(tokenizer.decode(all_outputs[user]))
-                text = ("..." + text[-97:]) if len(text) > 100 else text
-                logger.info(f"[User {user}] {text.replace(chr(10), ' ')}")
+                tok = int(out_tok[user, 0].item())
+                if tok not in tokenizer.stop_tokens and not user_done[user]:
+                    all_outputs[user].append(tok)
+                elif stop_at_eos:
+                    user_done[user] = True
+                    if all(user_done):
+                        users_decoding = False
 
-        iteration += 1
-        if iteration >= max_generated_tokens:
-            users_decoding = False
+            if not is_ci_env:
+                for user in range(batch_size):
+                    text = "".join(tokenizer.decode(all_outputs[user]))
+                    text = ("..." + text[-97:]) if len(text) > 100 else text
+                    logger.info(f"[User {user}] {text.replace(chr(10), ' ')}")
+
+            iteration += 1
+            if iteration >= max_generated_tokens:
+                users_decoding = False
     profiler.end("inference_decode")
     profiler.end("run")
 
@@ -579,9 +694,14 @@ def test_demo_text(
 
     # ── Performance metrics ───────────────────────────────────────────────────
     total_prefill = profiler.get_duration("inference_prefill")
-    # Iteration 0 is the decode compile step — exclude from the steady-state average.
-    steady_iters = max(iteration - 1, 1)
-    total_decode = sum(profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, iteration))
+    if _fused_steady_iters is not None and _fused_steady_s is not None and _fused_steady_iters > 0:
+        # Plain fused path: use wall steady-state (excludes one-time capture).
+        steady_iters = _fused_steady_iters
+        total_decode = _fused_steady_s
+    else:
+        # Iteration 0 is the decode compile step — exclude from the steady-state average.
+        steady_iters = max(iteration - 1, 1)
+        total_decode = sum(profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, iteration))
     ttft_ms = total_prefill * 1000
     amortized_prefill_ms = total_prefill / batch_size * 1000
     decode_tps_u = steady_iters / total_decode if total_decode > 0 else 0
@@ -660,20 +780,22 @@ def _run_spec_decode(
     import math
     import time
 
-    from models.demos.gemma4.tt.common import create_assistant_model
+    from models.demos.gemma4.tt.common import create_assistant_model, default_assistant_model_path
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
 
     model_path = _model_path()
-    assistant_path = os.getenv("GEMMA4_ASSISTANT_MODEL")
-    if not assistant_path:
-        # Default to the matching it-assistant drafter so the demo runs without
-        # an explicit env (e.g. google/gemma-4-12B-it -> ...-it-assistant).
-        assistant_path = f"{model_path}-assistant"
+    # Prefer GEMMA4_ASSISTANT_MODEL; else derive hub/cache path (…-it → …-it-assistant).
+    assistant_path = default_assistant_model_path(model_path)
+    if not os.getenv("GEMMA4_ASSISTANT_MODEL"):
         logger.info(f"GEMMA4_ASSISTANT_MODEL unset; defaulting drafter to {assistant_path}")
     temperature = sampling_params.get("temperature", 0)
     top_p = sampling_params.get("top_p", 1.0)
     top_k = sampling_params.get("top_k", 0)
+    adaptive_workload = None
+    draft_len_was_none = draft_len is None
     if draft_len is None:
+        # Placeholder until exact prompt length is known after encode; adaptive
+        # selection below overrides this. Env default matches prior demo (3).
         draft_len = int(os.environ.get("GEMMA4_SPEC_DRAFT_LEN", 3))
     batch_size = 1
 
@@ -708,6 +830,21 @@ def _run_spec_decode(
         [prompt], tokenizer, model_args, instruct, max_generated_tokens, max_prefill_len=max_seq_len
     )
     input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
+
+    if draft_len_was_none:
+        from models.demos.gemma4.tt.adaptive_draft_len import AdaptiveDraftLenConfig, select_adaptive_draft_len
+
+        prompt_tok_count = int(decoding_pos[0])
+        draft_len, adaptive_workload = select_adaptive_draft_len(
+            prompt,
+            prompt_tokens=prompt_tok_count,
+            max_new_tokens=max_generated_tokens,
+            config=AdaptiveDraftLenConfig.from_env(default_draft_len=int(os.environ.get("GEMMA4_SPEC_DRAFT_LEN", 3))),
+        )
+        if adaptive_workload is not None:
+            logger.info(
+                f"Adaptive draft_len={draft_len} (workload={adaptive_workload}, " f"prompt_tokens={prompt_tok_count})"
+            )
 
     logger.info("Spec-decode prefill...")
     prefill_t0 = time.perf_counter()
@@ -822,8 +959,10 @@ def _run_spec_decode(
     logger.info("=== Speculative decoding metrics ===")
     logger.info(f"Prompt tokens: {prompt_len}, generated tokens: {n_tokens}")
     logger.info(f"Time to First Token (TTFT): {prefill_elapsed * 1000.0 / batch_size:.1f} ms")
+    workload_note = f", workload={adaptive_workload}" if adaptive_workload else ""
     logger.info(
-        f"Drafter: {draft_len} drafts/iter; mean accepted {mean_accept:.2f}/{draft_len} (tokens/iter: {mean_accept + 1:.2f})"
+        f"Drafter: {draft_len} drafts/iter{workload_note}; "
+        f"mean accepted {mean_accept:.2f}/{draft_len} (tokens/iter: {mean_accept + 1:.2f})"
     )
     if setup_elapsed > 0:
         logger.info(
@@ -855,15 +994,14 @@ def _run_spec_decode_batched(
     import math
     import time
 
-    from models.demos.gemma4.tt.common import create_assistant_model
+    from models.demos.gemma4.tt.common import create_assistant_model, default_assistant_model_path
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
     from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
     B = len(prompts)
     model_path = _model_path()
-    assistant_path = os.getenv("GEMMA4_ASSISTANT_MODEL")
-    if not assistant_path:
-        assistant_path = f"{model_path}-assistant"
+    assistant_path = default_assistant_model_path(model_path)
+    if not os.getenv("GEMMA4_ASSISTANT_MODEL"):
         logger.info(f"GEMMA4_ASSISTANT_MODEL unset; defaulting drafter to {assistant_path}")
     temperature = sampling_params.get("temperature", 0)
     if temperature and temperature > 0:

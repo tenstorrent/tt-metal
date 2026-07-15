@@ -17,7 +17,7 @@ from .operations import apply_geglu
 from .weights import ExpertWeights
 
 
-def _build_sparse_matmul_config(m, n, in0_block_w=1):
+def _build_sparse_matmul_config(m, n, in0_block_w=1, fuse_gelu=False):
     """Build program config for sparse_matmul following gpt-oss pattern."""
     n_tiles = int(math.ceil(n / 32))
 
@@ -37,6 +37,11 @@ def _build_sparse_matmul_config(m, n, in0_block_w=1):
 
     per_core_N = n_tiles // best_cores
 
+    fused_activation = None
+    if fuse_gelu:
+        # Match the prior standalone ttnn.gelu(..., fast_and_approximate_mode=True).
+        fused_activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0)
+
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(best_cx, best_cy),
         in0_block_w=in0_block_w,
@@ -47,7 +52,7 @@ def _build_sparse_matmul_config(m, n, in0_block_w=1):
         per_core_M=max(32, m) // 32,
         per_core_N=per_core_N,
         fuse_batch=False,
-        fused_activation=None,
+        fused_activation=fused_activation,
         mcast_in0=True,
     )
 
@@ -83,6 +88,7 @@ def decode_forward(
     output_tile = ttnn.Tile([32, 32])
 
     gate_up_config = _build_sparse_matmul_config(batch_size, intermediate_size)
+    gate_config = _build_sparse_matmul_config(batch_size, intermediate_size, fuse_gelu=True)
     down_config = _build_sparse_matmul_config(batch_size, config.hidden_size)
 
     # Gate projection: [1,1,S,H] × [1,E,H,I] → [1,1,S,E,S_tile,I]
@@ -93,7 +99,7 @@ def decode_forward(
         nnz=top_k,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
-        program_config=gate_up_config,
+        program_config=gate_config,
         dtype=ttnn.bfloat16,
     )
     # sparse_matmul output uses logical intermediate dim (may differ from padded weight size)

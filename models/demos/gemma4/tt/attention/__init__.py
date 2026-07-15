@@ -143,6 +143,7 @@ class Gemma4Attention:
         packed=None,
         chunk_start_idx=None,
         chunk_page_table=None,
+        prefetcher=None,
     ):
         """
         Attention forward pass — dispatches to on-device decode or prefill.
@@ -161,6 +162,7 @@ class Gemma4Attention:
             packed: optional packed-verify dict (decode only) — keys packed_p,
                 position_idx, kv_write_idxs, attn_mask, rope_packed, embed_idx,
                 hot_pt; routes to packed_decode_forward (P positions, one pass)
+            prefetcher: optional Prefetcher — worker sub-device constraints for decode
         """
         cache = kv_cache or self.kv_cache
         cos_cache, sin_cache = rope_mats
@@ -206,6 +208,7 @@ class Gemma4Attention:
                 position_idx_cache=position_idx_cache,
                 sequential_kv_write=sequential_kv_write,
                 rope_presliced=rope_presliced,
+                prefetcher=prefetcher,
             )
         else:
             # Sliding-window layers under generator-level chunked prefill carry a
