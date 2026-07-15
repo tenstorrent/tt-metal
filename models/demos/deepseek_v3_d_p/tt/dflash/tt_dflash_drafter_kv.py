@@ -32,7 +32,7 @@ PHASE-1 SHARDING (correctness-first; the migration/distributed format is Phase 2
 
 Nothing in this file has run on hardware yet — program configs / memory configs are left to ttnn
 defaults with `TODO(bring-up)` markers; expect on-hardware tuning while PCC'ing against
-``tests/dflash/torch_dflash_golden.py``.
+``tests/speculative_decoding/dflash/test_dflash.py``.
 """
 
 from __future__ import annotations
@@ -78,10 +78,11 @@ class TtDFlashDrafterKV:
         self.sp_factor = mesh_device.shape[sp_axis]
         self.num_links = num_links
         self.topology = topology
-        # Per issue #49586 / tt-blaze#1674: the prefill draft cache is sized to the FULL sequence
-        # (max_seq_len), and the 4k window (config.context_len) is applied only at MIGRATION (Phase 3),
-        # NOT here — "implement it to have max_seq_len, while only migrating last 4k sequence". A single
-        # chunk (e.g. 5120) can exceed context_len (4096), so clamping the cache here would truncate it.
+        # Prefill builds drafter KV for the FULL chunk the verifier hands it (e.g. 5120 tokens), so the
+        # cache is sized to max_seq_len — NOT capped at 4k. The 4k (config.context_len) is the drafter's
+        # DECODE context window, applied at MIGRATION (send only the last 4k to decode), per #49586's
+        # "cache max_seq_len, migrate last 4k". Capping here would break integration with the verifier's
+        # 5k-token prefill chunks.
         self.cache_seq = max_seq_len if max_seq_len is not None else config.context_len
 
         assert (
@@ -311,7 +312,11 @@ class TtDFlashDrafterKV:
         reduced = self._tp_all_reduce(self._reduced_accum)  # [1,1,seq,H] replicated on TP
         self._reduced_accum = None
         seq = reduced.shape[2]
-        assert positions_start + seq <= self.cache_seq, "context exceeds the 4k spec window"
+        assert positions_start + seq <= self.cache_seq, (
+            f"positions_start+seq ({positions_start + seq}) exceeds cache_seq ({self.cache_seq}); "
+            f"construct with max_seq_len >= the chunk length (the cache is sized to the full chunk; "
+            f"the 4k window is applied at migration, not here)"
+        )
 
         # Distributed hidden_norm: partition the replicated full-H `reduced` across TP so each core
         # norms only H/tp, run TtDistributedRmsNorm (stats all-gathered → correct full-H norm), then

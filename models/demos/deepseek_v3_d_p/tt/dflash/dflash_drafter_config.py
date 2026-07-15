@@ -5,8 +5,8 @@
 """Config for the Kimi-K2.6-DFlash *drafter* (block-diffusion speculative-decoding draft model).
 
 Pure-Python (no ttnn/torch import) so both the device module
-(``tt/dflash/tt_dflash_drafter_kv.py``) and the torch golden
-(``tests/dflash/torch_dflash_golden.py``) can import it.
+(``tt/dflash/tt_dflash_drafter_kv.py``) and the torch-side HF PCC test
+(``tests/speculative_decoding/dflash/test_dflash.py``) can import it.
 
 Values are from the HF checkout ``Kimi-K2.6-DFlash/config.json`` (architecture
 ``DFlashDraftModel``, a Qwen3-style GQA model). See issue #49586.
@@ -27,6 +27,7 @@ class DFlashDrafterConfig:
     num_hidden_layers: int = 6  # draft layers
     num_target_layers: int = 61  # verifier layers
     rms_norm_eps: float = 1e-5
+    initializer_range: float = 0.02  # std for random-weight tests (config.json initializer_range)
     block_size: int = 8  # speculative block (decode-time)
     context_len: int = 4096  # spec-decode KV window
     mask_token_id: int = 163838
