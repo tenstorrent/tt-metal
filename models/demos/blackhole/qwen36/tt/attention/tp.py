@@ -174,7 +174,8 @@ class TPAttention:
                 self._col_proj(x, tw["wk"], self.args.attn_k_progcfg),
                 self._col_proj(x, tw["wv"], self.args.attn_v_progcfg),
             )
-        # Prefill: x is K-sharded (norm skipped its AG) -> fused all-gather + QKV matmul.
+        # Prefill: x is K-sharded (norm skipped its AG) -> fused all-gather + QKV matmul. Output stays
+        # DRAM: L1 clashes with a downstream matmul's CBs (verified; full-attn has more L1 pressure here).
         if self._fuse_agmm and x.shape[-2] > tpc.TILE_SIZE:
             qkv = tpc.all_gather_matmul_prefill(
                 x, tw["wqkv_fused"], self.tt_ccl, self.compute_cfg, self.args.ccl_topology()
@@ -197,7 +198,10 @@ class TPAttention:
         qkv3_dim = self.NH * self.HD + 2 * self.NKV * self.HD
         gate_dim = self.NH * self.HD
         sh = list(qkv.shape)
-        qkv3 = ttnn.slice(qkv, (0, 0, 0, 0), (sh[0], sh[1], sh[2], qkv3_dim))
+        # qkv3 short-lived (split by _make_heads then freed) -> L1 in PREFILL only; decode keeps DRAM
+        # (L1 qkv3 breaks the decode trace). gate lives across SDPA (post-concat) -> always DRAM.
+        _qkv3_mc = ttnn.L1_MEMORY_CONFIG if sh[2] > tpc.TILE_SIZE else ttnn.DRAM_MEMORY_CONFIG
+        qkv3 = ttnn.slice(qkv, (0, 0, 0, 0), (sh[0], sh[1], sh[2], qkv3_dim), memory_config=_qkv3_mc)
         gate = ttnn.slice(qkv, (0, 0, 0, qkv3_dim), (sh[0], sh[1], sh[2], qkv3_dim + gate_dim))
         ttnn.deallocate(qkv)
         return qkv3, gate, None
@@ -269,8 +273,11 @@ class TPAttention:
             # Fused [q|k|v|gate] weight (_qkv sentinel vp=None): qg is the contiguous [q|k|v] block,
             # kp is the gate. Slice q and (already-contiguous) kv directly — no concat needed.
             gate_flat = kp
-            q_flat = ttnn.slice(qg, (0, 0, 0, 0), (1, 1, S, NH * HD))
-            kv = ttnn.slice(qg, (0, 0, 0, NH * HD), (1, 1, S, NH * HD + 2 * NKV * HD))
+            # q_flat, kv feed nlp_create_qkv_heads then free immediately -> L1 (short-lived, no clash).
+            q_flat = ttnn.slice(qg, (0, 0, 0, 0), (1, 1, S, NH * HD), memory_config=ttnn.L1_MEMORY_CONFIG)
+            kv = ttnn.slice(
+                qg, (0, 0, 0, NH * HD), (1, 1, S, NH * HD + 2 * NKV * HD), memory_config=ttnn.L1_MEMORY_CONFIG
+            )
             ttnn.deallocate(qg)
             q, k, v = ttnn.experimental.nlp_create_qkv_heads(
                 q_flat,
@@ -278,7 +285,7 @@ class TPAttention:
                 num_heads=NH,
                 num_kv_heads=NKV,
                 transpose_k_heads=False,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             ttnn.deallocate(q_flat)
             ttnn.deallocate(kv)
@@ -307,8 +314,9 @@ class TPAttention:
         return q, gate_flat, k, v
 
     def _concat_heads(self, gated):
-        """Prefill concat-heads via nlp_concat_heads (post-gate)."""
-        return ttnn.experimental.nlp_concat_heads(gated, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        """Prefill concat-heads via nlp_concat_heads (post-gate). L1 output: short-lived post-SDPA temp,
+        no kernel-CB clash."""
+        return ttnn.experimental.nlp_concat_heads(gated, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     def _make_heads_decode(self, qg, kp, vp, B):
         """Decode head-split via nlp_create_qkv_heads_decode (the batched-decode idiom).
@@ -416,8 +424,16 @@ class TPAttention:
 
         q, gate_flat, k, v = self._make_heads(qg, kp, vp, S)
 
-        q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6), tw["q_norm"])
-        k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6), tw["k_norm"])
+        q = ttnn.multiply(
+            ttnn.rms_norm(q, epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG),
+            tw["q_norm"],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        k = ttnn.multiply(
+            ttnn.rms_norm(k, epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG),
+            tw["k_norm"],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
         q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
         k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim)
 
@@ -439,7 +455,7 @@ class TPAttention:
         else:
             q8, k8, v8 = q, k, v
         padded = max(32, ((S + 31) // 32) * 32)
-        ch = min(256 if S >= 2048 else 64, padded)
+        ch = min(128 if S >= 2048 else 64, padded)  # 128 beats 256
         sdpa_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8), exp_approx_mode=False, q_chunk_size=ch, k_chunk_size=ch
         )
@@ -453,7 +469,11 @@ class TPAttention:
         # Concat heads first, then gate: concat col h*HD+d == gate_flat col h*HD+d, so this is
         # bit-identical to per-head gating but skips the gate reshape+transpose to head-major.
         attn = self._concat_heads(attn)
-        gated = ttnn.multiply(attn, ttnn.sigmoid(gate_flat))
+        # concat(attn)+sigmoid(gate) in L1; gated stays DRAM (feeds the wo matmul_reduce_scatter — an L1
+        # CCL activation risks clashing with its CBs).
+        gated = ttnn.multiply(
+            attn, ttnn.sigmoid(gate_flat, memory_config=ttnn.L1_MEMORY_CONFIG), memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
         ttnn.deallocate(attn)
         ttnn.deallocate(gate_flat)
         if self._fuse_wo_mmrs_prefill:
@@ -670,8 +690,16 @@ class TPAttention:
 
         q, gate_flat, k, v = self._make_heads(qg, kp, vp, S)
 
-        q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6), tw["q_norm"])
-        k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6), tw["k_norm"])
+        q = ttnn.multiply(
+            ttnn.rms_norm(q, epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG),
+            tw["q_norm"],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        k = ttnn.multiply(
+            ttnn.rms_norm(k, epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG),
+            tw["k_norm"],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
         q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
         k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim)
 
@@ -704,7 +732,7 @@ class TPAttention:
         if chunk_start_idx_tensor is not None:
             qk_chunk = 64
         else:
-            cap = 256 if S >= 2048 else 64
+            cap = 128 if S >= 2048 else 64  # 128 beats 256
             qk_chunk = cap if not chunk_start_idx else min(cap, chunk_start_idx & -chunk_start_idx)
         # Full BH grid for SDPA perf (bit-identical to 8×8; see test_tp_chunked_prefill_pcc_sweep)
         sdpa_cfg = ttnn.SDPAProgramConfig(
@@ -756,7 +784,11 @@ class TPAttention:
 
         # Concat heads first, then gate (flat gate matches concat column order); see forward_prefill.
         attn = self._concat_heads(attn)
-        gated = ttnn.multiply(attn, ttnn.sigmoid(gate_flat))
+        # concat(attn)+sigmoid(gate) in L1; gated stays DRAM (feeds the wo matmul_reduce_scatter — an L1
+        # CCL activation risks clashing with its CBs).
+        gated = ttnn.multiply(
+            attn, ttnn.sigmoid(gate_flat, memory_config=ttnn.L1_MEMORY_CONFIG), memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
         ttnn.deallocate(attn)
         ttnn.deallocate(gate_flat)
         if self._fuse_wo_mmrs_prefill:

@@ -315,7 +315,7 @@ def _solve_lower_triangular_ttnn(L, eye_1cc, mesh_device):
     # Pre-broadcast eye to [batch,C,C] when batch>1 (~-4% prefill; batch==1 unchanged).
     _eye = eye_1cc
     if batch > 1:
-        _eye = ttnn.repeat(eye_1cc, ttnn.Shape([batch, 1, 1]))
+        _eye = ttnn.repeat(eye_1cc, ttnn.Shape([batch, 1, 1]), memory_config=mc)
     R = ttnn.add(_eye, neg_N, memory_config=mc)  # R_1 = I - N  ([batch,C,C])
     for _ in range(C - 2):  # R_1 -> R_{C-1} = sum (-N)^j (exact: N^C=0)
         NR = ttnn.matmul(neg_N, R, memory_config=mc, compute_kernel_config=_hifi_cfg)  # (-N) @ R
@@ -726,15 +726,16 @@ def chunk_gated_delta_rule_seq(
     )
     ttnn.deallocate(L_inv_4d)
 
+    _out_l1 = ttnn.L1_MEMORY_CONFIG
     out_4d = ttnn.to_layout(
-        ttnn.typecast(out_4d, ttnn.float32, memory_config=None) if out_4d.dtype != ttnn.float32 else out_4d,
+        ttnn.typecast(out_4d, ttnn.float32, memory_config=_out_l1) if out_4d.dtype != ttnn.float32 else out_4d,
         ttnn.TILE_LAYOUT,
-        memory_config=None,
+        memory_config=_out_l1,
     )
-    o = ttnn.reshape(out_4d, [BH, L, V], memory_config=None)
+    o = ttnn.reshape(out_4d, [BH, L, V], memory_config=_out_l1)
 
     if pad_len > 0:
         o = o[:, :T, :]
-        o = ttnn.to_layout(o, ttnn.TILE_LAYOUT, memory_config=None)
+        o = ttnn.to_layout(o, ttnn.TILE_LAYOUT, memory_config=_out_l1)
 
     return o, final_state
