@@ -225,8 +225,14 @@ KernelCompileDescriptor build_kernel_descriptor(
     desc.request.build_key = build_env.build_key();
     desc.request.kernel_name = kernel->name() + "/" + std::to_string(kernel_hash);
     desc.request.gpp = build_env.build_env.get_gpp();
-    static const std::vector<std::string> extensions = {".h", ".hpp", ".cpp"};
-    desc.request.generated_files = tt::jit_build::utils::read_directory_files(build_options.path, extensions);
+    static const bool preprocess_and_ship = std::getenv("TT_METAL_JIT_PREPROCESS") != nullptr;
+    // Non-preprocess mode ships the generated source tree for the server to compile. In
+    // preprocess-and-ship mode the shipped .ii units are self-contained (headers/defines inlined), so
+    // the source tree is neither read nor sent -- saving client I/O and RPC bandwidth on the farm path.
+    if (!preprocess_and_ship) {
+        static const std::vector<std::string> extensions = {".h", ".hpp", ".cpp"};
+        desc.request.generated_files = tt::jit_build::utils::read_directory_files(build_options.path, extensions);
+    }
 
     int num_binaries = kernel->expected_num_binaries();
     for (int i = 0; i < num_binaries; ++i) {
@@ -244,7 +250,6 @@ KernelCompileDescriptor build_kernel_descriptor(
     // only the toolchain. Reuses the generated_files content channel (written into the per-kernel
     // cache dir on the server), so no RPC/server change is required: the .ii is referenced as a
     // sibling of the target output dir ("../<name>").
-    static const bool preprocess_and_ship = std::getenv("TT_METAL_JIT_PREPROCESS") != nullptr;
     if (preprocess_and_ship) {
         for (std::size_t t = 0; t < desc.request.targets.size(); ++t) {
             auto& target = desc.request.targets[t];
