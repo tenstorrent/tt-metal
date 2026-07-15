@@ -18,6 +18,8 @@ from loguru import logger
 
 import ttnn
 from models.tt_dit.pipelines.ltx.pipeline_ltx_distilled import (
+    DISTILLED_SIGMA_VALUES,
+    STAGE_2_DISTILLED_SIGMA_VALUES,
     TEMPORAL_COMPRESSION,
     LTXDistilledPipeline,
     pixel_to_latent_frame,
@@ -128,6 +130,16 @@ def test_pipeline_distilled(
     no_prompt,
 ):
     """LTX-2.3 distilled 2-stage AV pipeline."""
+    # No-cheat fence: this benchmark must measure the shipped schedule — 8 stage-1 + 3 stage-2 steps,
+    # unquantized. A step-cut or LTX_QUANT run is a faster but distinct, lower-quality product, so it
+    # cannot count as a speedup. LTX_ALLOW_STEP_CUT=1 is the explicit opt-out for deliberate tier runs.
+    if os.environ.get("LTX_ALLOW_STEP_CUT", "0") not in ("1", "true", "True"):
+        s1_steps = len(DISTILLED_SIGMA_VALUES) - 1
+        s2_steps = len(STAGE_2_DISTILLED_SIGMA_VALUES) - 1
+        assert s1_steps == 8, f"stage-1 is {s1_steps} steps, not the shipped 8 — LTX_S1_SIGMAS/tier tampered"
+        assert s2_steps == 3, f"stage-2 is {s2_steps} steps, not the shipped 3 — LTX_S2_SIGMAS/tier tampered"
+        assert not os.environ.get("LTX_QUANT", "").strip(), "LTX_QUANT is set — a quantized run is not the baseline"
+
     ckpt = default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")
     gemma = default_ltx_gemma()
 
