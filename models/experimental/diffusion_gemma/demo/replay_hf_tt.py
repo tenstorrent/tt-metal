@@ -15,7 +15,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from types import MethodType
+from types import MethodType, SimpleNamespace
 
 import torch
 
@@ -237,7 +237,7 @@ def _compare_summary(prompt: str, seed: int, hf_traj, tt_traj, *, eos_token_id: 
     return comparison, summary
 
 
-def _load_hf_model(checkpoint: str | Path, *, local_files_only: bool):
+def _load_hf_model(checkpoint: str | Path, *, local_files_only: bool, dtype=torch.bfloat16):
     from transformers import AutoTokenizer
     from transformers.models.diffusion_gemma import DiffusionGemmaForBlockDiffusion
 
@@ -248,7 +248,7 @@ def _load_hf_model(checkpoint: str | Path, *, local_files_only: bool):
     )
     model = DiffusionGemmaForBlockDiffusion.from_pretrained(
         checkpoint,
-        dtype=torch.bfloat16,
+        dtype=dtype,
         low_cpu_mem_usage=True,
         local_files_only=local_files_only,
     ).eval()
@@ -282,6 +282,8 @@ def _run_hf_reference(
     capture_attention_injection_layer: int | None = None,
     capture_all_layer_inputs: bool = False,
     capture_all_encoder_layer_inputs: bool = False,
+    capture_residual_branch_layer: int | None = None,
+    capture_self_conditioning_signals: bool = False,
     gumbel_noise: list[torch.Tensor],
     renoise_tokens: list[torch.Tensor],
 ):
@@ -299,7 +301,17 @@ def _run_hf_reference(
     attention_injection_outputs = []
     all_layer_inputs = []
     all_encoder_layer_inputs = []
+    residual_branch_outputs = {"post_attn": [], "shared_ff": [], "expert_ff": [], "post_ff": []}
+    self_conditioning_signals = []
     layer_hooks = []
+    if capture_self_conditioning_signals:
+
+        def capture_self_conditioning_signal(_module, inputs):
+            self_conditioning_signals.append(inputs[1].detach().to(torch.bfloat16).cpu())
+
+        layer_hooks.append(
+            model.model.decoder.self_conditioning.register_forward_pre_hook(capture_self_conditioning_signal)
+        )
     if capture_layer_hidden:
         for layer in model.model.decoder.layers:
 
@@ -329,18 +341,30 @@ def _run_hf_reference(
 
             layer_hooks.append(layer.router.register_forward_hook(capture_router))
     if capture_hidden_injection_layer is not None:
-        if capture_hidden_injection_layer <= 0:
-            raise ValueError("hidden injection currently requires a target layer greater than zero")
+        if capture_hidden_injection_layer < 0:
+            raise ValueError("hidden injection layer must be non-negative")
+        if capture_hidden_injection_layer == 0:
 
-        def capture_injection_input(_module, _inputs, output):
-            hidden = output[0] if isinstance(output, (tuple, list)) else output
-            hidden_injection_inputs.append(hidden.detach().to(torch.bfloat16).cpu())
+            def capture_layer_zero_input(_module, args, kwargs):
+                hidden = kwargs.get("hidden_states")
+                if hidden is None:
+                    hidden = args[0]
+                hidden_injection_inputs.append(hidden.detach().to(torch.bfloat16).cpu())
 
-        layer_hooks.append(
-            model.model.decoder.layers[capture_hidden_injection_layer - 1].register_forward_hook(
-                capture_injection_input
+            layer_hooks.append(
+                model.model.decoder.layers[0].register_forward_pre_hook(capture_layer_zero_input, with_kwargs=True)
             )
-        )
+        else:
+
+            def capture_injection_input(_module, _inputs, output):
+                hidden = output[0] if isinstance(output, (tuple, list)) else output
+                hidden_injection_inputs.append(hidden.detach().to(torch.bfloat16).cpu())
+
+            layer_hooks.append(
+                model.model.decoder.layers[capture_hidden_injection_layer - 1].register_forward_hook(
+                    capture_injection_input
+                )
+            )
     if capture_attention_injection_layer is not None:
 
         def capture_attention_injection(_module, _inputs, output):
@@ -372,6 +396,31 @@ def _run_hf_reference(
                 all_encoder_layer_inputs.append(hidden.detach().to(torch.bfloat16).cpu())
 
             layer_hooks.append(layer.register_forward_pre_hook(capture_encoder_layer_input, with_kwargs=True))
+    if capture_residual_branch_layer is not None:
+        layer = model.model.decoder.layers[capture_residual_branch_layer]
+
+        def capture_post_attn(_module, _inputs, output):
+            residual_branch_outputs["post_attn"].append(output.detach().to(torch.bfloat16).cpu())
+
+        def capture_post_ff(_module, _inputs, output):
+            residual_branch_outputs["post_ff"].append(output.detach().to(torch.bfloat16).cpu())
+
+        layer_hooks.append(layer.post_attention_layernorm.register_forward_hook(capture_post_attn))
+        layer_hooks.append(
+            layer.post_feedforward_layernorm_1.register_forward_hook(
+                lambda _module, _inputs, output: residual_branch_outputs["shared_ff"].append(
+                    output.detach().to(torch.bfloat16).cpu()
+                )
+            )
+        )
+        layer_hooks.append(
+            layer.post_feedforward_layernorm_2.register_forward_hook(
+                lambda _module, _inputs, output: residual_branch_outputs["expert_ff"].append(
+                    output.detach().to(torch.bfloat16).cpu()
+                )
+            )
+        )
+        layer_hooks.append(layer.post_feedforward_layernorm.register_forward_hook(capture_post_ff))
 
     class HfLogits:
         def __init__(self) -> None:
@@ -382,7 +431,7 @@ def _run_hf_reference(
 
         def __call__(self, canvas, step):
             prev_sc = None
-            if self.prev_raw is not None:
+            if self.prev_raw is not None and os.environ.get("DG_DISABLE_SELF_CONDITIONING", "0") != "1":
                 temperature = S.temperature_at_step(
                     self.prev_step,
                     config.max_denoise_steps,
@@ -435,6 +484,8 @@ def _run_hf_reference(
         attention_injection_outputs,
         all_layer_inputs,
         all_encoder_layer_inputs,
+        residual_branch_outputs,
+        self_conditioning_signals,
         logits_fn.prompt_kv,
     )
 
@@ -459,16 +510,28 @@ def _run_tt_replay(
     routing_layers: set[int] | None = None,
     hidden_injection_layer: int | None = None,
     hf_hidden_injection_inputs=None,
+    hidden_injection_steps: set[int] | None = None,
     attention_injection_layer: int | None = None,
     hf_attention_injection_outputs=None,
     hf_all_layer_inputs=None,
     hf_all_encoder_layer_inputs=None,
+    residual_branch_layer: int | None = None,
+    residual_branches: set[str] | None = None,
+    hf_residual_branch_outputs=None,
+    capture_residual_branch_outputs: bool = False,
+    hf_self_conditioning_signals=None,
+    hf_self_conditioning_embedding_weight=None,
+    hf_self_conditioning_embed_scale=None,
+    hf_live_post_attn_norm=None,
+    hf_live_post_attn_branch=None,
+    capture_tp_partials_layer: int | None = None,
     gumbel_noise: list[torch.Tensor],
     renoise_tokens: list[torch.Tensor],
 ):
     import ttnn
 
     from models.experimental.diffusion_gemma.tt import denoise_forward as denoise_forward_module
+    from models.experimental.diffusion_gemma.tt import diffusion_attention as diffusion_attention_module
 
     DenoiseLogitsAdapter = denoise_forward_module.DenoiseLogitsAdapter
 
@@ -484,6 +547,8 @@ def _run_tt_replay(
     original_denoise_attention = denoise_forward_module.denoise_attention
     original_prefix_reader_call = denoise_forward_module.MutablePrefixKVReader.__call__
     original_router_forward = denoise_forward_module._denoise_router_forward
+    original_chunked_norm_forward = denoise_forward_module._chunked_norm_forward
+    original_attention_allreduce = diffusion_attention_module.apply_allreduce
     injected_prompt_kv = []
     prompt_kv_summary = []
     router_call_index = 0
@@ -491,21 +556,70 @@ def _run_tt_replay(
     attention_call_index = 0
     attention_injection_index = 0
     all_layer_input_index = 0
+    residual_branch_indices = {"post_attn": 0, "post_ff": 0}
+    tt_residual_branch_outputs = {"post_attn": [], "shared_ff": [], "expert_ff": [], "post_ff": []}
+    residual_norm_map = {}
+    tp_allreduce_call_index = 0
+    tp_partial_captures = []
+    live_residual_layer_inputs = []
+    current_denoise_step = -1
 
     def capturing_call(adapter, canvas_tokens, step):
-        logits = original_call(adapter, canvas_tokens, step)
+        nonlocal current_denoise_step
+        current_denoise_step = step
+        original_condition = None
+        injected_signal_host = None
+        if hf_self_conditioning_signals is not None and step > 0:
+            injected_signal_host = hf_self_conditioning_signals[step]
+        elif hf_self_conditioning_embedding_weight is not None and step > 0:
+            previous_logits_shard = ttnn.get_device_tensors(adapter.prev_logits)[0]
+            previous_logits_host = ttnn.to_torch(previous_logits_shard).squeeze(1)
+            temperature = adapter._temperature_at_step(step - 1)
+            processed_logits = (previous_logits_host / temperature).to(torch.bfloat16)
+            probabilities = processed_logits.softmax(dim=-1, dtype=torch.float32).to(
+                hf_self_conditioning_embedding_weight.dtype
+            )
+            injected_signal_host = (
+                torch.matmul(probabilities, hf_self_conditioning_embedding_weight) * hf_self_conditioning_embed_scale
+            ).to(torch.bfloat16)
+        if injected_signal_host is not None:
+            original_condition = adapter.self_conditioning.condition
+
+            def injected_condition(module, inputs_embeds, *_args, **_kwargs):
+                signal = ttnn.from_torch(
+                    injected_signal_host.unsqueeze(1),
+                    device=inputs_embeds.device(),
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat16,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(inputs_embeds.device()),
+                )
+                conditioned = module.forward(inputs_embeds, signal)
+                signal.deallocate(True)
+                return conditioned
+
+            adapter.self_conditioning.condition = MethodType(injected_condition, adapter.self_conditioning)
+        try:
+            logits = original_call(adapter, canvas_tokens, step)
+        finally:
+            if original_condition is not None:
+                adapter.self_conditioning.condition = original_condition
         if capture_positions:
             tile_start = min(capture_positions) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
             tile_end = (max(capture_positions) + 1 + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
-            logits_slice = ttnn.slice(
-                logits,
-                [0, 0, tile_start, 0],
-                [1, 1, tile_end, logits.shape[-1]],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            logits_slice = (
+                logits
+                if tile_start == 0 and tile_end == logits.shape[2]
+                else ttnn.slice(
+                    logits,
+                    [0, 0, tile_start, 0],
+                    [1, 1, tile_end, logits.shape[-1]],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
             )
             logits_shard = ttnn.get_device_tensors(logits_slice)[0]
             host_logits = ttnn.to_torch(logits_shard).float().cpu()
-            logits_slice.deallocate(True)
+            if logits_slice is not logits:
+                logits_slice.deallocate(True)
             local_positions = [pos - tile_start for pos in capture_positions]
             capture = _logits_topk_summary(host_logits, local_positions, k=capture_top_k, step=step)
             for row, absolute_pos in zip(capture["rows"], capture_positions):
@@ -517,6 +631,9 @@ def _run_tt_replay(
         nonlocal hidden_injection_index, all_layer_input_index
         mutable_args = list(layer_args)
         layer_idx = mutable_args[1]
+        if hf_live_post_attn_branch is not None and layer_idx == residual_branch_layer:
+            hidden_shard = ttnn.get_device_tensors(mutable_args[2])[0]
+            live_residual_layer_inputs.append(ttnn.to_torch(hidden_shard).squeeze(1).to(torch.bfloat16).cpu())
         if hf_all_layer_inputs is not None:
             original_hidden = mutable_args[2]
             mutable_args[2] = ttnn.from_torch(
@@ -528,10 +645,14 @@ def _run_tt_replay(
             )
             original_hidden.deallocate(True)
             all_layer_input_index += 1
-        elif hidden_injection_layer is not None and layer_idx == hidden_injection_layer:
+        elif (
+            hidden_injection_layer is not None
+            and layer_idx == hidden_injection_layer
+            and (hidden_injection_steps is None or current_denoise_step in hidden_injection_steps)
+        ):
             original_hidden = mutable_args[2]
             mutable_args[2] = ttnn.from_torch(
-                hf_hidden_injection_inputs[hidden_injection_index].unsqueeze(1),
+                hf_hidden_injection_inputs[current_denoise_step].unsqueeze(1),
                 device=original_hidden.device(),
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.bfloat16,
@@ -543,15 +664,20 @@ def _run_tt_replay(
         if capture_layer_hidden:
             tile_start = min(capture_positions) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
             tile_end = (max(capture_positions) + 1 + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
-            hidden_slice = ttnn.slice(
-                output,
-                [0, 0, tile_start, 0],
-                [1, 1, tile_end, output.shape[-1]],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            hidden_slice = (
+                output
+                if tile_start == 0 and tile_end == output.shape[2]
+                else ttnn.slice(
+                    output,
+                    [0, 0, tile_start, 0],
+                    [1, 1, tile_end, output.shape[-1]],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
             )
             hidden_shard = ttnn.get_device_tensors(hidden_slice)[0]
             host_hidden = ttnn.to_torch(hidden_shard).float().cpu().squeeze(1)
-            hidden_slice.deallocate(True)
+            if hidden_slice is not output:
+                hidden_slice.deallocate(True)
             local_positions = [pos - tile_start for pos in capture_positions]
             layer_hidden.append(host_hidden[:, local_positions, :])
         return output
@@ -575,15 +701,20 @@ def _run_tt_replay(
         if capture_layer_hidden:
             tile_start = min(capture_positions) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
             tile_end = (max(capture_positions) + 1 + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
-            hidden_slice = ttnn.slice(
-                output,
-                [0, 0, tile_start, 0],
-                [1, 1, tile_end, output.shape[-1]],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            hidden_slice = (
+                output
+                if tile_start == 0 and tile_end == output.shape[2]
+                else ttnn.slice(
+                    output,
+                    [0, 0, tile_start, 0],
+                    [1, 1, tile_end, output.shape[-1]],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
             )
             hidden_shard = ttnn.get_device_tensors(hidden_slice)[0]
             host_hidden = ttnn.to_torch(hidden_shard).float().cpu().squeeze(1)
-            hidden_slice.deallocate(True)
+            if hidden_slice is not output:
+                hidden_slice.deallocate(True)
             local_positions = [pos - tile_start for pos in capture_positions]
             attention_hidden.append(host_hidden[:, local_positions, :])
         return output
@@ -688,6 +819,73 @@ def _run_tt_replay(
         router_call_index += 1
         return dense
 
+    def capturing_chunked_norm_forward(norm, hidden_states, *, chunk_size=32):
+        output = original_chunked_norm_forward(norm, hidden_states, chunk_size=chunk_size)
+        branch = residual_norm_map.get(id(norm))
+        if branch is not None and capture_residual_branch_outputs:
+            output_shard = ttnn.get_device_tensors(output)[0]
+            tt_residual_branch_outputs[branch].append(ttnn.to_torch(output_shard).squeeze(1).to(torch.bfloat16).cpu())
+        if branch == "post_attn" and hf_live_post_attn_branch is not None and live_residual_layer_inputs:
+            with torch.no_grad():
+                normalized_host = hf_live_post_attn_branch(live_residual_layer_inputs.pop(0))
+            injected = ttnn.from_torch(
+                normalized_host.unsqueeze(1),
+                device=output.device(),
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(output.device()),
+            )
+            output.deallocate(True)
+            return injected
+        if branch == "post_attn" and hf_live_post_attn_norm is not None:
+            hidden_shard = ttnn.get_device_tensors(hidden_states)[0]
+            hidden_host = ttnn.to_torch(hidden_shard).squeeze(1).to(torch.bfloat16)
+            with torch.no_grad():
+                normalized_host = hf_live_post_attn_norm(hidden_host)
+            injected = ttnn.from_torch(
+                normalized_host.unsqueeze(1),
+                device=output.device(),
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(output.device()),
+            )
+            output.deallocate(True)
+            return injected
+        if branch is None or residual_branches is None or branch not in residual_branches:
+            return output
+        index = residual_branch_indices[branch]
+        if index >= len(hf_residual_branch_outputs[branch]):
+            return output
+        injected = ttnn.from_torch(
+            hf_residual_branch_outputs[branch][index].unsqueeze(1),
+            device=output.device(),
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(output.device()),
+        )
+        output.deallocate(True)
+        residual_branch_indices[branch] += 1
+        return injected
+
+    def capturing_attention_allreduce(tensor, mesh_config, ccl_manager, hidden_size):
+        nonlocal tp_allreduce_call_index
+        layer_idx = tp_allreduce_call_index % 30
+        partials = None
+        if capture_tp_partials_layer is not None and layer_idx == capture_tp_partials_layer:
+            partials = [ttnn.to_torch(shard).to(torch.bfloat16).cpu() for shard in ttnn.get_device_tensors(tensor)]
+        output = original_attention_allreduce(tensor, mesh_config, ccl_manager, hidden_size)
+        if partials is not None:
+            output_shard = ttnn.get_device_tensors(output)[0]
+            tp_partial_captures.append(
+                {
+                    "layer": layer_idx,
+                    "partials": partials,
+                    "output": ttnn.to_torch(output_shard).to(torch.bfloat16).cpu(),
+                }
+            )
+        tp_allreduce_call_index += 1
+        return output
+
     checkpoint_inputs = load_checkpoint_inputs(
         args.checkpoint,
         tokenizer_kwargs={"local_files_only": args.local_files_only, "trust_remote_code": True},
@@ -701,6 +899,8 @@ def _run_tt_replay(
         DenoiseLogitsAdapter.__call__ = capturing_call
         denoise_forward_module._denoise_layer_forward = capturing_layer_forward
         denoise_forward_module.denoise_attention = capturing_denoise_attention
+        denoise_forward_module._chunked_norm_forward = capturing_chunked_norm_forward
+        diffusion_attention_module.apply_allreduce = capturing_attention_allreduce
         if hf_routing is not None or hf_router_modules is not None:
             denoise_forward_module._denoise_router_forward = injected_router_forward
         _log_mesh_dram(mesh_device, "replay-baseline")
@@ -713,6 +913,12 @@ def _run_tt_replay(
             bounded_sliding_kv_cache=args.bounded_sliding_kv_cache,
         )
         tt_model = checkpoint_model_inputs.tt_model
+        if residual_branch_layer is not None:
+            target_layer = tt_model.layers[residual_branch_layer]
+            residual_norm_map[id(target_layer.post_attention_layernorm)] = "post_attn"
+            residual_norm_map[id(target_layer.post_feedforward_layernorm_1)] = "shared_ff"
+            residual_norm_map[id(target_layer.post_feedforward_layernorm_2)] = "expert_ff"
+            residual_norm_map[id(target_layer.post_feedforward_layernorm)] = "post_ff"
         if hf_all_encoder_layer_inputs is not None:
             prefill_layer_type = type(tt_model.layers[0])
             original_prefill_layer_call = prefill_layer_type.__call__
@@ -798,11 +1004,15 @@ def _run_tt_replay(
             if capture_positions and hidden_states.shape[-2] == config.canvas_length:
                 tile_start = min(capture_positions) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
                 tile_end = (max(capture_positions) + 1 + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
-                hidden_slice = ttnn.slice(
-                    hidden_states,
-                    [0, 0, tile_start, 0],
-                    [1, 1, tile_end, hidden_states.shape[-1]],
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                hidden_slice = (
+                    hidden_states
+                    if tile_start == 0 and tile_end == hidden_states.shape[2]
+                    else ttnn.slice(
+                        hidden_states,
+                        [0, 0, tile_start, 0],
+                        [1, 1, tile_end, hidden_states.shape[-1]],
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
                 )
                 hidden_shard = ttnn.get_device_tensors(hidden_slice)[0]
                 host_hidden = ttnn.to_torch(hidden_shard).float().cpu().squeeze(1)
@@ -836,6 +1046,8 @@ def _run_tt_replay(
             attention_hidden,
             final_hidden,
             prompt_kv_summary,
+            tp_partial_captures,
+            tt_residual_branch_outputs,
         )
     finally:
         DenoiseLogitsAdapter.__call__ = original_call
@@ -843,6 +1055,8 @@ def _run_tt_replay(
         denoise_forward_module.denoise_attention = original_denoise_attention
         denoise_forward_module.MutablePrefixKVReader.__call__ = original_prefix_reader_call
         denoise_forward_module._denoise_router_forward = original_router_forward
+        denoise_forward_module._chunked_norm_forward = original_chunked_norm_forward
+        diffusion_attention_module.apply_allreduce = original_attention_allreduce
         if prefill_layer_type is not None:
             prefill_layer_type.__call__ = original_prefill_layer_call
         for key, value in injected_prompt_kv:
@@ -876,6 +1090,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--bounded-sliding-kv-cache", action="store_true")
     parser.add_argument("--hf-only", action="store_true", help="Save only the HF reference trajectory.")
     parser.add_argument(
+        "--hf-dtype",
+        choices=("bfloat16", "float32"),
+        default="bfloat16",
+        help="HF backbone compute dtype. bfloat16 is the production reference; float32 gives the "
+        "quantization-ideal trajectory for the #48291 bf16-floor self-consistency control "
+        "(see doc/decision_fidelity/measure_bf16_floor.py). Forbidden under --stage-gate.",
+    )
+    parser.add_argument(
         "--capture-logits-topk",
         action="store_true",
         help="Capture top logits at --capture-positions for #48291 localization.",
@@ -883,6 +1105,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--capture-positions", default="2,3,4")
     parser.add_argument("--capture-top-k", type=int, default=8)
     parser.add_argument("--noise-mode", choices=("zero", "seeded"), default="zero")
+    parser.add_argument(
+        "--stage-gate",
+        action="store_true",
+        help="Enforce the seeded #48291 decision-fidelity gate and return nonzero on failure.",
+    )
     parser.add_argument(
         "--capture-layer-hidden",
         action="store_true",
@@ -926,6 +1153,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Diagnostic control: replace this TT layer's input with the exact HF hidden state.",
     )
     parser.add_argument(
+        "--inject-hf-hidden-steps",
+        help="Optional comma-separated denoise steps for --inject-hf-hidden-layer.",
+    )
+    parser.add_argument(
         "--inject-hf-attention-layer",
         type=int,
         help="Diagnostic control: replace this TT layer's raw attention output with the exact HF output.",
@@ -940,16 +1171,117 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Diagnostic control: execute every TT causal-prefill layer from its exact HF encoder input.",
     )
+    parser.add_argument(
+        "--inject-hf-residual-branch-layer",
+        type=int,
+        help="Diagnostic control: decoder layer whose normalized residual branch is replaced from HF.",
+    )
+    parser.add_argument(
+        "--capture-residual-branch-layer",
+        type=int,
+        help="Capture HF/TT post-attention and post-feedforward normalized branches for one layer.",
+    )
+    parser.add_argument(
+        "--inject-hf-residual-branches",
+        choices=("post_attn", "post_ff", "both"),
+        help="Residual branch to replace at --inject-hf-residual-branch-layer.",
+    )
+    parser.add_argument(
+        "--inject-hf-post-attn-norm-on-tt-layer",
+        type=int,
+        help="Diagnostic control: run this layer's HF post-attention RMSNorm on its live TT attention output.",
+    )
+    parser.add_argument(
+        "--inject-hf-post-attn-branch-on-tt-layer",
+        type=int,
+        help="Diagnostic control: run HF attention plus post-attention norm on this layer's live TT input.",
+    )
+    parser.add_argument(
+        "--capture-tp-partials-layer",
+        type=int,
+        help="Capture this denoise layer's per-device attention o_proj partials before TP all-reduce.",
+    )
+    parser.add_argument(
+        "--inject-hf-self-conditioning-signal",
+        action="store_true",
+        help="Diagnostic control: replace each TT previous-logit soft embedding with the exact HF signal.",
+    )
+    parser.add_argument(
+        "--inject-hf-self-conditioning-on-tt-logits",
+        action="store_true",
+        help="Diagnostic control: compute the exact HF soft embedding from each live TT previous-logit tensor.",
+    )
     parser.add_argument("--output", default="/tmp/dg_replay_hf_tt_compare.pt")
     return parser
 
 
+def _validate_stage_gate_args(args) -> None:
+    if not args.stage_gate:
+        return
+    if args.hf_only:
+        raise ValueError("--stage-gate requires both HF and TT trajectories")
+    if args.noise_mode != "seeded":
+        raise ValueError("--stage-gate requires --noise-mode seeded")
+    if args.canvas_length != 256:
+        raise ValueError("--stage-gate requires --canvas-length 256")
+    if args.max_denoising_steps != 8:
+        raise ValueError("--stage-gate requires --max-denoising-steps 8")
+    if args.mesh != "P150x4":
+        raise ValueError("--stage-gate requires --mesh P150x4")
+    if args.num_layers is not None:
+        raise ValueError("--stage-gate requires the full model (omit --num-layers)")
+    if os.environ.get("DG_SPARSE_MOE", "0") != "1":
+        raise ValueError("--stage-gate requires the production sparse path (DG_SPARSE_MOE=1)")
+    if getattr(args, "hf_dtype", "bfloat16") != "bfloat16":
+        raise ValueError("--stage-gate requires the bf16 HF reference (--hf-dtype bfloat16)")
+
+    diagnostic_controls = {
+        "--inject-hf-prompt-kv": args.inject_hf_prompt_kv,
+        "--inject-hf-routing-layers": args.inject_hf_routing_layers,
+        "--inject-hf-router-on-tt-hidden": args.inject_hf_router_on_tt_hidden,
+        "--inject-hf-router-on-tt-hidden-layers": args.inject_hf_router_on_tt_hidden_layers,
+        "--inject-hf-router-on-tt-hidden-steps": args.inject_hf_router_on_tt_hidden_steps,
+        "--inject-hf-router-tail-on-tt-norm": args.inject_hf_router_tail_on_tt_norm,
+        "--inject-hf-router-norm-on-tt-hidden": args.inject_hf_router_norm_on_tt_hidden,
+        "--inject-hf-hidden-layer": args.inject_hf_hidden_layer,
+        "--inject-hf-hidden-steps": args.inject_hf_hidden_steps,
+        "--inject-hf-attention-layer": args.inject_hf_attention_layer,
+        "--teacher-force-all-layer-inputs": args.teacher_force_all_layer_inputs,
+        "--teacher-force-prefill-layer-inputs": args.teacher_force_prefill_layer_inputs,
+        "--inject-hf-residual-branch-layer": args.inject_hf_residual_branch_layer,
+        "--capture-residual-branch-layer": args.capture_residual_branch_layer,
+        "--inject-hf-residual-branches": args.inject_hf_residual_branches,
+        "--inject-hf-post-attn-norm-on-tt-layer": args.inject_hf_post_attn_norm_on_tt_layer,
+        "--inject-hf-post-attn-branch-on-tt-layer": args.inject_hf_post_attn_branch_on_tt_layer,
+        "--inject-hf-self-conditioning-signal": args.inject_hf_self_conditioning_signal,
+        "--inject-hf-self-conditioning-on-tt-logits": args.inject_hf_self_conditioning_on_tt_logits,
+    }
+    enabled_controls = [name for name, value in diagnostic_controls.items() if value is not None and value is not False]
+    if enabled_controls:
+        raise ValueError(f"--stage-gate forbids diagnostic controls: {', '.join(enabled_controls)}")
+
+
+def _stage_gate_active_step_indices(hf_traj, tt_traj) -> list[int]:
+    indices = []
+    for step_idx, (hf_step, tt_step) in enumerate(zip(hf_traj.per_step, tt_traj.per_step)):
+        indices.append(step_idx)
+        if bool(hf_step.accept_mask.all()) and bool(tt_step.accept_mask.all()):
+            break
+    if not indices:
+        raise ValueError("stage gate requires at least one comparable denoise step")
+    return indices
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
+    if args.inject_hf_self_conditioning_signal and args.inject_hf_self_conditioning_on_tt_logits:
+        raise ValueError("select only one HF self-conditioning signal control")
+    _validate_stage_gate_args(args)
     config = _make_config(args)
     hf_checkpoint = args.hf_checkpoint or args.checkpoint
 
-    tokenizer, hf_model = _load_hf_model(hf_checkpoint, local_files_only=args.local_files_only)
+    hf_dtype = torch.float32 if getattr(args, "hf_dtype", "bfloat16") == "float32" else torch.bfloat16
+    tokenizer, hf_model = _load_hf_model(hf_checkpoint, local_files_only=args.local_files_only, dtype=hf_dtype)
     vocab_size = _hf_text_vocab_size(hf_model, tokenizer)
     generator = torch.Generator(device="cpu").manual_seed(args.seed)
     host_canvas = torch.randint(0, vocab_size, (1, config.canvas_length), dtype=torch.long, generator=generator)
@@ -995,6 +1327,60 @@ def main(argv: list[str] | None = None) -> int:
         if args.inject_hf_router_on_tt_hidden_steps
         else None
     )
+    hidden_injection_steps = (
+        {int(step.strip()) for step in args.inject_hf_hidden_steps.split(",") if step.strip()}
+        if args.inject_hf_hidden_steps
+        else None
+    )
+    if args.inject_hf_hidden_steps and args.inject_hf_hidden_layer is None:
+        raise ValueError("--inject-hf-hidden-steps requires --inject-hf-hidden-layer")
+    if (args.inject_hf_residual_branch_layer is None) != (args.inject_hf_residual_branches is None):
+        raise ValueError("residual branch layer and branch selection must be provided together")
+    live_branch_options = sum(
+        (
+            args.inject_hf_post_attn_norm_on_tt_layer is not None,
+            args.inject_hf_post_attn_branch_on_tt_layer is not None,
+            args.inject_hf_residual_branch_layer is not None,
+        )
+    )
+    if live_branch_options > 1:
+        raise ValueError("select only one fixed/live post-attention branch oracle")
+    residual_branch_layer = (
+        args.inject_hf_post_attn_branch_on_tt_layer
+        if args.inject_hf_post_attn_branch_on_tt_layer is not None
+        else (
+            args.inject_hf_post_attn_norm_on_tt_layer
+            if args.inject_hf_post_attn_norm_on_tt_layer is not None
+            else (
+                args.inject_hf_residual_branch_layer
+                if args.inject_hf_residual_branch_layer is not None
+                else args.capture_residual_branch_layer
+            )
+        )
+    )
+    residual_branches = (
+        {"post_attn", "post_ff"}
+        if args.inject_hf_residual_branches == "both"
+        else ({args.inject_hf_residual_branches} if args.inject_hf_residual_branches else None)
+    )
+    hf_live_post_attn_norm = (
+        hf_model.model.decoder.layers[args.inject_hf_post_attn_norm_on_tt_layer].post_attention_layernorm
+        if args.inject_hf_post_attn_norm_on_tt_layer is not None
+        else None
+    )
+    hf_live_post_attn_branch = None
+    capture_attention_layer = (
+        args.inject_hf_attention_layer if args.inject_hf_attention_layer is not None else args.capture_tp_partials_layer
+    )
+    capture_residual_branch_layer = (
+        args.capture_residual_branch_layer
+        if args.capture_residual_branch_layer is not None
+        else (
+            args.inject_hf_residual_branch_layer
+            if args.inject_hf_residual_branch_layer is not None
+            else args.capture_tp_partials_layer
+        )
+    )
 
     (
         prompt_tokens,
@@ -1008,6 +1394,8 @@ def main(argv: list[str] | None = None) -> int:
         hf_attention_injection_outputs,
         hf_all_layer_inputs,
         hf_all_encoder_layer_inputs,
+        hf_residual_branch_outputs,
+        hf_self_conditioning_signals,
         hf_prompt_kv,
     ) = _run_hf_reference(
         hf_model,
@@ -1021,12 +1409,38 @@ def main(argv: list[str] | None = None) -> int:
         capture_prompt_kv=args.inject_hf_prompt_kv,
         capture_routing=routing_layers is not None,
         capture_hidden_injection_layer=args.inject_hf_hidden_layer,
-        capture_attention_injection_layer=args.inject_hf_attention_layer,
+        capture_attention_injection_layer=capture_attention_layer,
         capture_all_layer_inputs=args.teacher_force_all_layer_inputs,
         capture_all_encoder_layer_inputs=args.teacher_force_prefill_layer_inputs,
+        capture_residual_branch_layer=capture_residual_branch_layer,
+        capture_self_conditioning_signals=args.inject_hf_self_conditioning_signal,
         gumbel_noise=gumbel_noise,
         renoise_tokens=renoise_tokens,
     )
+    if args.inject_hf_post_attn_branch_on_tt_layer is not None:
+        layer_idx = args.inject_hf_post_attn_branch_on_tt_layer
+        hf_layer = hf_model.model.decoder.layers[layer_idx]
+        decoder = hf_model.model.decoder
+        layer_type = decoder.text_config.layer_types[layer_idx]
+        decoder_position_ids = torch.arange(
+            prompt_tokens.shape[1],
+            prompt_tokens.shape[1] + config.canvas_length,
+            dtype=torch.long,
+        ).unsqueeze(0)
+        prompt_cache = SimpleNamespace(layers=[SimpleNamespace(keys=key, values=value) for key, value in hf_prompt_kv])
+
+        def hf_live_post_attn_branch(hidden_states):
+            normed = hf_layer.input_layernorm(hidden_states)
+            position_embeddings = decoder.rotary_emb(normed, decoder_position_ids, layer_type)
+            attention_output, _ = hf_layer.self_attn(
+                hidden_states=normed,
+                position_embeddings=position_embeddings,
+                attention_mask=None,
+                position_ids=decoder_position_ids,
+                past_key_values=prompt_cache,
+            )
+            return hf_layer.post_attention_layernorm(attention_output)
+
     eos_token_id = getattr(tokenizer, "eos_token_id", None)
     artifact = {
         "prompt": args.prompt,
@@ -1036,6 +1450,7 @@ def main(argv: list[str] | None = None) -> int:
         "host_canvas": host_canvas,
         "hf_traj": hf_traj,
         "hf_logits_topk": hf_logits_topk,
+        "hf_residual_branch_counts": {branch: len(outputs) for branch, outputs in hf_residual_branch_outputs.items()},
         "replay_input_hashes": {
             "initial_canvas": _tensor_sha256(host_canvas),
             "gumbel_noise": [_tensor_sha256(noise) for noise in gumbel_noise],
@@ -1060,6 +1475,8 @@ def main(argv: list[str] | None = None) -> int:
             tt_attention_hidden,
             tt_final_hidden,
             prompt_kv_summary,
+            tp_partial_captures,
+            tt_residual_branch_outputs,
         ) = _run_tt_replay(
             args,
             args.prompt,
@@ -1079,16 +1496,81 @@ def main(argv: list[str] | None = None) -> int:
             routing_layers=routing_layers,
             hidden_injection_layer=args.inject_hf_hidden_layer,
             hf_hidden_injection_inputs=hf_hidden_injection_inputs,
+            hidden_injection_steps=hidden_injection_steps,
             attention_injection_layer=args.inject_hf_attention_layer,
             hf_attention_injection_outputs=hf_attention_injection_outputs,
             hf_all_layer_inputs=hf_all_layer_inputs if args.teacher_force_all_layer_inputs else None,
             hf_all_encoder_layer_inputs=(
                 hf_all_encoder_layer_inputs if args.teacher_force_prefill_layer_inputs else None
             ),
+            residual_branch_layer=residual_branch_layer,
+            residual_branches=residual_branches,
+            hf_residual_branch_outputs=hf_residual_branch_outputs,
+            capture_residual_branch_outputs=args.capture_residual_branch_layer is not None,
+            hf_self_conditioning_signals=(
+                hf_self_conditioning_signals if args.inject_hf_self_conditioning_signal else None
+            ),
+            hf_self_conditioning_embedding_weight=(
+                hf_model.model.decoder.embed_tokens.weight if args.inject_hf_self_conditioning_on_tt_logits else None
+            ),
+            hf_self_conditioning_embed_scale=(
+                hf_model.model.decoder.embed_tokens.embed_scale
+                if args.inject_hf_self_conditioning_on_tt_logits
+                else None
+            ),
+            hf_live_post_attn_norm=hf_live_post_attn_norm,
+            hf_live_post_attn_branch=hf_live_post_attn_branch,
+            capture_tp_partials_layer=args.capture_tp_partials_layer,
             gumbel_noise=gumbel_noise,
             renoise_tokens=renoise_tokens,
         )
         comparison, summary = _compare_summary(args.prompt, args.seed, hf_traj, tt_traj, eos_token_id=eos_token_id)
+        hf_non_eos_mask = (
+            hf_traj.committed != eos_token_id
+            if eos_token_id is not None
+            else torch.ones_like(hf_traj.committed, dtype=torch.bool)
+        )
+        hf_non_eos_count = int(hf_non_eos_mask.sum())
+        summary["committed_match_on_hf_non_eos"] = (
+            float((tt_traj.committed[hf_non_eos_mask] == hf_traj.committed[hf_non_eos_mask]).float().mean())
+            if hf_non_eos_count
+            else None
+        )
+        summary["noise_mode"] = args.noise_mode
+        active_step_indices = (
+            _stage_gate_active_step_indices(hf_traj, tt_traj) if hf_traj.per_step and tt_traj.per_step else []
+        )
+        active_entropy_pcc = [comparison.per_step_entropy_pcc[index] for index in active_step_indices]
+        terminal_active_step = active_step_indices[-1] if active_step_indices else None
+        stage_gate = {
+            "enabled": args.stage_gate,
+            "criteria": {
+                "committed_match_strictly_greater_than": 0.95,
+                "min_active_step_entropy_pcc_strictly_greater_than": 0.95,
+                "terminal_active_accept_iou_strictly_greater_than": 0.95,
+            },
+            "observed": {
+                "committed_match": comparison.committed_match,
+                "active_step_indices": active_step_indices,
+                "min_active_step_entropy_pcc": min(active_entropy_pcc) if active_entropy_pcc else None,
+                "terminal_active_accept_iou": (
+                    comparison.per_step_accept_iou[terminal_active_step] if terminal_active_step is not None else None
+                ),
+                "raw_min_per_step_entropy_pcc": (
+                    min(comparison.per_step_entropy_pcc) if comparison.per_step_entropy_pcc else None
+                ),
+                "raw_final_accept_iou": (
+                    comparison.per_step_accept_iou[-1] if comparison.per_step_accept_iou else None
+                ),
+            },
+        }
+        stage_gate["passed"] = (
+            bool(active_step_indices)
+            and comparison.committed_match > 0.95
+            and min(active_entropy_pcc) > 0.95
+            and comparison.per_step_accept_iou[terminal_active_step] > 0.95
+        )
+        summary["stage_gate"] = stage_gate
         layer_hidden_summary = (
             _layer_hidden_summary(hf_layer_hidden, tt_layer_hidden, capture_positions)
             if args.capture_layer_hidden
@@ -1099,6 +1581,19 @@ def main(argv: list[str] | None = None) -> int:
             if args.capture_layer_hidden
             else []
         )
+        residual_branch_summary = {}
+        if args.capture_residual_branch_layer is not None:
+            for branch in ("post_attn", "shared_ff", "expert_ff", "post_ff"):
+                residual_branch_summary[branch] = []
+                for hf_branch, tt_branch in zip(hf_residual_branch_outputs[branch], tt_residual_branch_outputs[branch]):
+                    hf_branch_f = hf_branch.float()
+                    tt_branch_f = tt_branch.float()
+                    residual_branch_summary[branch].append(
+                        {
+                            "pcc": _pcc(hf_branch_f, tt_branch_f),
+                            "max_abs": float((hf_branch_f - tt_branch_f).abs().max()),
+                        }
+                    )
         hf_lm_head_on_tt_hidden_topk = []
         if capture_positions and tt_final_hidden:
             with torch.no_grad():
@@ -1118,7 +1613,10 @@ def main(argv: list[str] | None = None) -> int:
                 "hf_lm_head_on_tt_hidden_topk": hf_lm_head_on_tt_hidden_topk,
                 "layer_hidden_summary": layer_hidden_summary,
                 "attention_hidden_summary": attention_hidden_summary,
+                "residual_branch_summary": residual_branch_summary,
                 "prompt_kv_summary": prompt_kv_summary,
+                "tp_partial_captures": tp_partial_captures,
+                "hf_residual_branch_outputs": hf_residual_branch_outputs,
                 "comparison": asdict(comparison),
             }
         )
@@ -1127,6 +1625,8 @@ def main(argv: list[str] | None = None) -> int:
     output = Path(args.output)
     torch.save(artifact, output)
     print(json.dumps({"output": str(output), "summary": summary}, indent=2, sort_keys=True))
+    if args.stage_gate and not summary["stage_gate"]["passed"]:
+        return 1
     return 0
 
 

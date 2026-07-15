@@ -16,6 +16,7 @@ from numbers import Integral
 from pathlib import Path
 from typing import NamedTuple
 
+import torch
 from safetensors.torch import safe_open
 
 from models.experimental.diffusion_gemma.weight_mapping import DG_DECODER_PREFIX
@@ -221,6 +222,10 @@ def build_tt_model_from_checkpoint_inputs(
         model_path=str(backbone_config_dir or default_backbone_config_dir()),
         **model_kwargs,
     )
+    # HF stores Gemma4TextScaledWordEmbedding.embed_scale as a BF16 buffer.
+    # Keep the DiffusionGemma-owned model instance on that exact scalar rather
+    # than multiplying embeddings by the unrounded Python sqrt(hidden_size).
+    tt_model.embed_scale = torch.tensor(tt_model.hidden_size**0.5, dtype=torch.bfloat16).item()
     return CheckpointModelInputs(
         tokenizer=checkpoint_inputs.tokenizer,
         state_dict=checkpoint_inputs.state_dict,

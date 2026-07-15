@@ -31,10 +31,11 @@ import os
 
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
-from models.demos.gemma4.tt.experts.operations import apply_geglu
+from models.experimental.diffusion_gemma.tt.expert_operations import apply_geglu
 
 TILE = 32
 DEFAULT_CAPACITY = 32
+_EXPERT_FP32_FULL_SYNC_CFG_CACHE = {}
 
 
 def default_sparse_moe_compute_kernel_config():
@@ -45,6 +46,29 @@ def default_sparse_moe_compute_kernel_config():
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
     )
+
+
+def expert_compute_kernel_config(tensor, fallback):
+    # Blackhole half-DST only exposes four FP32 tiles and corrupts the 8-tile expert
+    # subblocks used here. Full-DST synchronization preserves the FP32 accumulation
+    # fidelity without changing the BF16 expert outputs. Keep an escape hatch for
+    # architecture/performance bisects.
+    arch = tensor.device().arch()
+    if os.environ.get("DG_SPARSE_EXPERT_FP32_FULL_SYNC", "0") != "1" or arch != ttnn.Arch.BLACKHOLE:
+        return fallback
+    key = (id(tensor.device()), arch)
+    config = _EXPERT_FP32_FULL_SYNC_CFG_CACHE.get(key)
+    if config is None:
+        config = ttnn.init_device_compute_kernel_config(
+            arch,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+            dst_full_sync_en=True,
+        )
+        _EXPERT_FP32_FULL_SYNC_CFG_CACHE[key] = config
+    return config
 
 
 # Constant/scratch tensors for the dispatch (independent of the routing VALUES) are allocated ONCE
@@ -574,7 +598,14 @@ def build_tuned_configs(mesh, E, C, H, I, S):
     return cfgs
 
 
-def _batched_experts(gathered, weights, compute_kernel_config, program_configs=None, l1_gate_up=False, l1_down=False):
+def _batched_experts(
+    gathered,
+    weights,
+    compute_kernel_config,
+    program_configs=None,
+    l1_gate_up=False,
+    l1_down=False,
+):
     """Batched gate/up/geglu/down over active experts.
 
     gathered: [1, E, C, H] — each expert's capacity tokens.
@@ -1136,7 +1167,7 @@ def sparse_experts_forward(
     experts,
     hidden_states,
     dense_routing,
-    capacity=DEFAULT_CAPACITY,
+    capacity=None,
     compute_kernel_config=None,
 ):
     """True-sparse token-gather expert forward — drop-in for ``moe.experts(hidden, routing)``.
@@ -1146,11 +1177,13 @@ def sparse_experts_forward(
             ``.ccl_manager``). Not mutated.
         hidden_states: [1, 1, S, H] on device (normed expert input, TP-replicated).
         dense_routing: [1, 1, S, E] on device (router output, ``top_k`` non-zero per token).
-        capacity: tokens per expert (multiple of 32).
+        capacity: tokens per expert (multiple of 32); defaults to the canvas
+            length so no routed token can be dropped.
 
     Returns:
         [1, 1, S, H] on device — expert output, all-reduced across TP.
     """
+    capacity = hidden_states.shape[2] if capacity is None else capacity
     assert capacity % TILE == 0, f"capacity must be a multiple of {TILE}, got {capacity}"
     if fused_gather_enabled():
         # Increment-3 integration point (see fused_gather_enabled / doc). The in-reader gather is not
@@ -1209,7 +1242,12 @@ def sparse_experts_forward(
 
     # experts (batched matmul over active experts only)
     down = _batched_experts(
-        gathered, weights, ckcfg, program_configs=tuned, l1_gate_up=l1_gate_up, l1_down=l1_down
+        gathered,
+        weights,
+        expert_compute_kernel_config(gathered, ckcfg),
+        program_configs=tuned,
+        l1_gate_up=l1_gate_up,
+        l1_down=l1_down,
     )  # [1, E, C, H] partial
     gathered.deallocate(True)
     down_flat = ttnn.reshape(down, (1, 1, EC, H))

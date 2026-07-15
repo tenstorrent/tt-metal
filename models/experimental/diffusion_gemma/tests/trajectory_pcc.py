@@ -19,7 +19,7 @@ util the plan references — inside the device tests that own those tensors.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List
+from typing import List, NamedTuple, Optional
 
 import torch
 
@@ -170,3 +170,47 @@ def assert_trajectory_matches(ref: DenoiseTrajectory, cand: DenoiseTrajectory, *
     comparison = compare_trajectories(ref, cand, **kwargs)
     assert comparison.passed, f"denoise trajectory mismatch: {comparison}"
     return comparison
+
+
+class SoundEntropyVerdict(NamedTuple):
+    """Variance-gated per-step entropy-fidelity verdict (#48291)."""
+
+    passed: bool
+    mode: str  # "pcc" (structured step) or "abs" (near-constant step)
+    std: float  # across-position std of the reference entropy profile
+    pcc: Optional[float]  # Pearson correlation (None on the abs branch)
+    max_abs: float  # max |Δ entropy| across positions
+
+
+def sound_entropy_step_fidelity(
+    ref_entropy: torch.Tensor,
+    cand_entropy: torch.Tensor,
+    *,
+    min_std: float = 0.15,
+    pcc_tol: float = 0.95,
+    abs_tol: float = 0.5,
+) -> SoundEntropyVerdict:
+    """Variance-gated per-step entropy fidelity — sound where raw PCC is not (#48291).
+
+    Pearson correlation of a near-constant vector is ill-conditioned: as a denoise
+    step converges, per-token entropy collapses toward a uniform tiny value, its
+    across-position variance -> 0, and ``_pearson`` is then dominated by rounding
+    noise (it can even go negative) even when the ABSOLUTE entropy error is
+    negligible. This is a property of the metric, not of the decisions — a
+    self-consistency control (the SAME HF model in fp32 vs bf16, identical injected
+    noise) reproduces the collapse, so the reference cannot pass a strict per-step
+    PCC bar against itself (see ``doc/decision_fidelity/``).
+
+    Gate PCC only where the reference entropy profile still carries real structure
+    (std >= ``min_std``); where it does not, require the mathematically sound
+    ABSOLUTE tolerance instead. This does not weaken fidelity — it replaces an
+    ill-conditioned test with a well-conditioned one at converged steps.
+    """
+    ref = ref_entropy.flatten().float()
+    cand = cand_entropy.flatten().float()
+    max_abs = float((ref - cand).abs().max()) if ref.numel() else 0.0
+    std = float(ref.std()) if ref.numel() > 1 else 0.0
+    if std >= min_std:
+        pcc = _pearson(ref, cand)
+        return SoundEntropyVerdict(passed=pcc >= pcc_tol, mode="pcc", std=std, pcc=pcc, max_abs=max_abs)
+    return SoundEntropyVerdict(passed=max_abs <= abs_tol, mode="abs", std=std, pcc=None, max_abs=max_abs)

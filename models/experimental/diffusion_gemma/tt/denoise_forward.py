@@ -20,6 +20,10 @@ from loguru import logger
 
 from models.experimental.diffusion_gemma.reference.attention_mask import build_canvas_denoise_mask
 from models.experimental.diffusion_gemma.tt.diffusion_attention import denoise_attention
+from models.experimental.diffusion_gemma.tt.expert_operations import (
+    shared_mlp_forward,
+    use_tanh_expert_activations,
+)
 from models.experimental.diffusion_gemma.tt.self_conditioning import (
     _rms_norm_dram,
     build_self_conditioning,
@@ -376,7 +380,14 @@ def _denoise_moe_forward(moe, router_input, expert_input):
         out = sparse_experts_forward(moe.experts, expert_input, dense_routing, capacity=capacity)
         dense_routing.deallocate(True)
         return out
-    return moe.experts(expert_input, dense_routing)
+    with use_tanh_expert_activations():
+        return moe.experts(expert_input, dense_routing)
+
+
+def _denoise_shared_mlp_forward(mlp, hidden_states):
+    if os.environ.get("DG_GELU_TANH", "1") != "1":
+        return mlp(hidden_states)
+    return shared_mlp_forward(mlp, hidden_states)
 
 
 def _denoise_layer_forward(
@@ -422,7 +433,7 @@ def _denoise_layer_forward(
 
     residual = hidden_states
     normed = _chunked_norm_forward(layer.pre_feedforward_layernorm, hidden_states)
-    mlp_output = layer.shared_mlp(normed)
+    mlp_output = _denoise_shared_mlp_forward(layer.shared_mlp, normed)
     normed.deallocate(True)
 
     if layer.enable_moe_block:
@@ -740,6 +751,7 @@ def denoise_logits_from_tokens(
     use_explicit_sliding_mask: bool = False,
     self_conditioning_embedding_weight=None,
     self_conditioning_compute_kernel_config=None,
+    self_conditioning_temperature: float = 1.0,
 ):
     """Embed canvas token ids, optionally self-condition, then run denoise logits."""
     canvas_hidden = embed_canvas_tokens(tt_model, canvas_tokens)
@@ -749,6 +761,7 @@ def denoise_logits_from_tokens(
             prev_logits,
             self_conditioning_embedding_weight,
             compute_kernel_config=self_conditioning_compute_kernel_config,
+            temperature=self_conditioning_temperature,
         )
         canvas_hidden.deallocate(True)
         canvas_hidden = conditioned
@@ -797,16 +810,25 @@ class DenoiseLogitsAdapter:
         self_conditioning_compute_kernel_config=None,
         q_rope_offset: int | None = None,
         prompt_len: int | None = None,
+        max_denoise_steps: int | None = None,
+        temperature_start: float = 0.8,
+        temperature_end: float = 0.4,
         logits_from_tokens=denoise_logits_from_tokens,
     ):
         self.tt_model = tt_model
         self.prompt_hidden_by_layer = prompt_hidden_by_layer
         self.prompt_len = prompt_len
-        self.self_conditioning = self_conditioning
-        self.self_conditioning_embedding_weight = self_conditioning_embedding_weight
+        disable_self_conditioning = os.environ.get("DG_DISABLE_SELF_CONDITIONING", "0") == "1"
+        self.self_conditioning = None if disable_self_conditioning else self_conditioning
+        self.self_conditioning_embedding_weight = (
+            None if disable_self_conditioning else self_conditioning_embedding_weight
+        )
         self.self_conditioning_compute_kernel_config = self_conditioning_compute_kernel_config
         self.q_rope_offset = q_rope_offset
         self.logits_from_tokens = logits_from_tokens
+        self.max_denoise_steps = max_denoise_steps
+        self.temperature_start = float(temperature_start)
+        self.temperature_end = float(temperature_end)
         self.prev_logits = None
         # Trace-safe self-conditioning: persistent [1,1,C,hidden] signal buffer(s)
         # (for the single-step traced loop; KV-cache-style cross-replay state).
@@ -1022,7 +1044,7 @@ class DenoiseLogitsAdapter:
             )
         self.sharded_terminal = True
 
-    def soft_embedding_signal_sharded(self, logits_shard):
+    def soft_embedding_signal_sharded(self, logits_shard, *, temperature: float = 1.0):
         """Sharded self-conditioning soft-embedding signal ``[1,1,C,hidden]`` from the logit shard.
 
         Drop-in replacement for ``self_conditioning.soft_embedding`` on the per-device shard;
@@ -1034,6 +1056,19 @@ class DenoiseLogitsAdapter:
             self._embedding_weight_sharded,
             mesh_config=self._sharded_mesh_config,
             ccl_manager=self._sharded_ccl_manager,
+            temperature=temperature,
+        )
+
+    def _temperature_at_step(self, step: int) -> float:
+        if self.max_denoise_steps is None:
+            return 1.0
+        from models.experimental.diffusion_gemma.reference.sampling import temperature_at_step
+
+        return temperature_at_step(
+            step,
+            self.max_denoise_steps,
+            self.temperature_start,
+            self.temperature_end,
         )
 
     def release_sharded_terminal(self):
@@ -1109,12 +1144,13 @@ class DenoiseLogitsAdapter:
             # On the sharded terminal the signal is the row-sharded soft-embedding of the
             # logit SHARD (no full-vocab all-gather); otherwise the replicated soft-embedding.
             if return_sharded:
-                new_signal = self.soft_embedding_signal_sharded(logits)
+                new_signal = self.soft_embedding_signal_sharded(logits, temperature=self._temperature_at_step(step))
             else:
                 new_signal = self.self_conditioning.soft_embedding(
                     logits,
                     self.self_conditioning_embedding_weight,
                     compute_kernel_config=self.self_conditioning_compute_kernel_config,
+                    temperature=self._temperature_at_step(step),
                 )
             ttnn.copy(new_signal, write_buf)
             new_signal.deallocate(True)
@@ -1134,6 +1170,7 @@ class DenoiseLogitsAdapter:
             prompt_len=self.prompt_len,
             self_conditioning_embedding_weight=self.self_conditioning_embedding_weight,
             self_conditioning_compute_kernel_config=self.self_conditioning_compute_kernel_config,
+            self_conditioning_temperature=(self._temperature_at_step(step - 1) if old_prev_logits is not None else 1.0),
         )
         self.prev_logits = logits
         if old_prev_logits is not None:
@@ -1195,6 +1232,9 @@ def make_denoise_logits_adapter_from_kv_cache(
     self_conditioning_embedding_weight=None,
     self_conditioning_compute_kernel_config=None,
     q_rope_offset: int | None = None,
+    max_denoise_steps: int | None = None,
+    temperature_start: float = 0.8,
+    temperature_end: float = 0.4,
     read_prompt_kv_fn=read_prompt_kv_cache_by_layer,
     adapter_cls=DenoiseLogitsAdapter,
 ):
@@ -1215,6 +1255,9 @@ def make_denoise_logits_adapter_from_kv_cache(
         self_conditioning_compute_kernel_config=self_conditioning_compute_kernel_config,
         q_rope_offset=prompt_len if q_rope_offset is None else q_rope_offset,
         prompt_len=prompt_len,
+        max_denoise_steps=max_denoise_steps,
+        temperature_start=temperature_start,
+        temperature_end=temperature_end,
     )
 
 
@@ -1232,6 +1275,9 @@ def make_denoise_logits_adapter_from_checkpoint_state(
     q_rope_offset: int | None = None,
     self_conditioning_dtype=ttnn.bfloat16,
     self_conditioning_compute_kernel_config=None,
+    max_denoise_steps: int | None = None,
+    temperature_start: float = 0.8,
+    temperature_end: float = 0.4,
     default_compute_kernel_config_fn=default_self_conditioning_compute_kernel_config,
     self_conditioning_builder=build_self_conditioning,
     embedding_weight_builder=build_self_conditioning_embedding_weight,
@@ -1265,6 +1311,9 @@ def make_denoise_logits_adapter_from_checkpoint_state(
         self_conditioning_embedding_weight=embedding_weight_tt,
         self_conditioning_compute_kernel_config=self_conditioning_compute_kernel_config,
         q_rope_offset=q_rope_offset,
+        max_denoise_steps=max_denoise_steps,
+        temperature_start=temperature_start,
+        temperature_end=temperature_end,
     )
 
 

@@ -485,6 +485,53 @@ def test_denoise_sparse_moe_defaults_to_zero_drop_canvas_capacity(monkeypatch):
     assert dense_routing.deallocated is True
 
 
+def test_sparse_experts_opt_into_blackhole_fp32_full_dst_accumulation(monkeypatch):
+    from models.experimental.diffusion_gemma.tt import sparse_moe
+
+    class _Device:
+        def arch(self):
+            return sparse_moe.ttnn.Arch.BLACKHOLE
+
+    tensor = SimpleNamespace(device=lambda: _Device())
+    fallback = object()
+    captured = {}
+    sparse_moe._EXPERT_FP32_FULL_SYNC_CFG_CACHE.clear()
+    monkeypatch.setenv("DG_SPARSE_EXPERT_FP32_FULL_SYNC", "1")
+
+    def fake_init(arch, **kwargs):
+        captured.update(arch=arch, **kwargs)
+        return "accurate-config"
+
+    monkeypatch.setattr(sparse_moe.ttnn, "init_device_compute_kernel_config", fake_init)
+    monkeypatch.setattr(sparse_moe.ttnn, "MathFidelity", SimpleNamespace(HiFi4="hifi4"))
+
+    assert sparse_moe.expert_compute_kernel_config(tensor, fallback) == "accurate-config"
+    assert captured == {
+        "arch": sparse_moe.ttnn.Arch.BLACKHOLE,
+        "math_fidelity": "hifi4",
+        "math_approx_mode": False,
+        "fp32_dest_acc_en": True,
+        "packer_l1_acc": False,
+        "dst_full_sync_en": True,
+    }
+
+    monkeypatch.setenv("DG_SPARSE_EXPERT_FP32_FULL_SYNC", "0")
+    assert sparse_moe.expert_compute_kernel_config(tensor, fallback) is fallback
+
+
+def test_sparse_experts_keep_wormhole_policy_and_zero_drop_api_default(monkeypatch):
+    from inspect import signature
+
+    from models.experimental.diffusion_gemma.tt import sparse_moe
+
+    wormhole = SimpleNamespace(device=lambda: SimpleNamespace(arch=lambda: sparse_moe.ttnn.Arch.WORMHOLE_B0))
+    fallback = object()
+    monkeypatch.setenv("DG_SPARSE_EXPERT_FP32_FULL_SYNC", "1")
+
+    assert sparse_moe.expert_compute_kernel_config(wormhole, fallback) is fallback
+    assert signature(sparse_moe.sparse_experts_forward).parameters["capacity"].default is None
+
+
 def test_denoise_logits_adapter_threads_canvas_rope_offset():
     calls = []
 
@@ -520,6 +567,32 @@ def test_denoise_logits_adapter_reports_retained_logits_ownership():
 
     assert adapter.owns_logits(logits)
     assert not adapter.owns_logits("other")
+
+
+def test_denoise_logits_adapter_temperatures_previous_logits_for_self_conditioning():
+    calls = []
+
+    def fake_logits_from_tokens(tt_model, **kwargs):
+        del tt_model
+        calls.append(kwargs["self_conditioning_temperature"])
+        return _FakeTensor([1, 1, 256, 32])
+
+    adapter = DenoiseLogitsAdapter(
+        object(),
+        prompt_hidden_by_layer=["prompt"],
+        self_conditioning=object(),
+        self_conditioning_embedding_weight="embedding",
+        max_denoise_steps=8,
+        temperature_start=0.8,
+        temperature_end=0.4,
+        logits_from_tokens=fake_logits_from_tokens,
+    )
+
+    adapter("canvas", 0)
+    adapter("canvas", 1)
+    adapter("canvas", 2)
+
+    assert calls == [1.0, 0.8, 0.75]
 
 
 def test_embed_canvas_tokens_rejects_batch_greater_than_one(expect_error):
@@ -699,6 +772,9 @@ def test_make_denoise_logits_adapter_from_checkpoint_state_builds_full_adapter_i
         "self_conditioning_embedding_weight": "embedding-tt",
         "self_conditioning_compute_kernel_config": "kernel",
         "q_rope_offset": 576,
+        "max_denoise_steps": None,
+        "temperature_start": 0.8,
+        "temperature_end": 0.4,
     }
 
 

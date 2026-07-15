@@ -27,7 +27,9 @@ from __future__ import annotations
 import os
 from typing import NamedTuple
 
+import torch
 import ttnn
+from models.experimental.diffusion_gemma.tt.expert_operations import apply_gelu
 
 from models.experimental.diffusion_gemma.weight_mapping import expected_self_conditioning_shapes
 
@@ -287,6 +289,7 @@ class TtSelfConditioning:
         self.device = device
         self.eps = eps
         self.hidden_size = hidden_size
+        self.embed_scale = torch.tensor(hidden_size**0.5, dtype=torch.bfloat16).item()
         self.intermediate_size = intermediate_size
 
         # scaled pre_norm weight for self-conditioning RMSNorm.
@@ -324,7 +327,7 @@ class TtSelfConditioning:
         normed = _rms_norm_dram(signal_tt, weight=self.pre_norm_weight, epsilon=self.eps)
 
         gate = ttnn.linear(normed, self.gate_proj)
-        gate = ttnn.gelu(gate, fast_and_approximate_mode=True)  # gelu_pytorch_tanh
+        gate = apply_gelu(gate)
         up = ttnn.linear(normed, self.up_proj)
         normed.deallocate(True)
 
@@ -341,7 +344,9 @@ class TtSelfConditioning:
         summed.deallocate(True)
         return out
 
-    def soft_embedding(self, prev_logits_tt, embedding_weight_tt, *, compute_kernel_config=None):
+    def soft_embedding(
+        self, prev_logits_tt, embedding_weight_tt, *, compute_kernel_config=None, temperature: float = 1.0
+    ):
         """Probability-weighted token embedding from prev-step logits — the decoder's
         soft-embedding step (modeling: ``softmax(logits, dim=-1) @ embed_tokens.weight``).
 
@@ -354,27 +359,39 @@ class TtSelfConditioning:
         """
         vocab_size = prev_logits_tt.shape[-1]
         vocab_chunk_size = 8192
+        processed_logits = prev_logits_tt
+        if temperature != 1.0:
+            processed_logits = ttnn.multiply(prev_logits_tt, 1.0 / temperature)
         if isinstance(embedding_weight_tt, ChunkedEmbeddingWeight) or vocab_size > vocab_chunk_size:
-            return self._soft_embedding_chunked(
-                prev_logits_tt,
+            signal = self._soft_embedding_chunked(
+                processed_logits,
                 embedding_weight_tt,
                 vocab_chunk_size=vocab_chunk_size,
+                temperature=1.0,
             )
+            if processed_logits is not prev_logits_tt:
+                processed_logits.deallocate(True)
+            return signal
         if compute_kernel_config is not None:
             probs = ttnn.softmax(
-                prev_logits_tt, dim=-1, numeric_stable=True, compute_kernel_config=compute_kernel_config
+                processed_logits, dim=-1, numeric_stable=True, compute_kernel_config=compute_kernel_config
             )
         else:
-            probs = ttnn.softmax(prev_logits_tt, dim=-1)
+            probs = ttnn.softmax(processed_logits, dim=-1)
+        if processed_logits is not prev_logits_tt:
+            processed_logits.deallocate(True)
         signal = ttnn.matmul(probs, embedding_weight_tt)  # [1,1,L,vocab] @ [1,1,vocab,hidden] -> [1,1,L,hidden]
         probs.deallocate(True)
         # canonical: * embed_scale = hidden_size**0.5 (the tied embedding's scale). The pre_norm eps
         # floor does NOT absorb this at the tiny soft-RMS of a 262k-vocab softmax, so it is load-bearing.
-        scaled = ttnn.multiply(signal, float(self.hidden_size) ** 0.5)
+        embed_scale = getattr(self, "embed_scale", torch.tensor(self.hidden_size**0.5, dtype=torch.bfloat16).item())
+        scaled = ttnn.multiply(signal, embed_scale)
         signal.deallocate(True)
         return scaled
 
-    def _soft_embedding_chunked(self, prev_logits_tt, embedding_weight_tt, *, vocab_chunk_size: int):
+    def _soft_embedding_chunked(
+        self, prev_logits_tt, embedding_weight_tt, *, vocab_chunk_size: int, temperature: float = 1.0
+    ):
         """Streaming ``softmax(prev_logits) @ embedding`` over vocab chunks.
 
         This avoids materializing a production-vocab probability tensor whose
@@ -403,6 +420,10 @@ class TtSelfConditioning:
             else:
                 shifted = ttnn.subtract(logits_chunk, logits_max)
             logits_chunk.deallocate(True)
+            if temperature != 1.0:
+                scaled_shifted = ttnn.multiply(shifted, 1.0 / temperature)
+                shifted.deallocate(True)
+                shifted = scaled_shifted
             if logits_l1_mode == "chain":
                 exp_chunk = ttnn.exp(shifted, memory_config=ttnn.L1_MEMORY_CONFIG)
             else:
@@ -442,7 +463,8 @@ class TtSelfConditioning:
         signal = ttnn.div(numerator, denominator)
         numerator.deallocate(True)
         denominator.deallocate(True)
-        scaled = ttnn.multiply(signal, float(self.hidden_size) ** 0.5)
+        embed_scale = getattr(self, "embed_scale", torch.tensor(self.hidden_size**0.5, dtype=torch.bfloat16).item())
+        scaled = ttnn.multiply(signal, embed_scale)
         signal.deallocate(True)
         return scaled
 
@@ -454,6 +476,7 @@ class TtSelfConditioning:
         mesh_config,
         ccl_manager,
         global_max=None,
+        temperature: float = 1.0,
     ):
         """Probability-weighted token embedding from TP-sharded prev-step logits (E7).
 
@@ -479,13 +502,19 @@ class TtSelfConditioning:
         from models.demos.gemma4.tt.ccl import ccl_allreduce
         from models.experimental.diffusion_gemma.tt.sampling import global_vocab_max
 
+        processed_logits = prev_logits_shard
+        if temperature != 1.0:
+            processed_logits = ttnn.multiply(prev_logits_shard, 1.0 / temperature)
+            global_max = None
         owns_max = global_max is None
         max_t = (
-            global_vocab_max(prev_logits_shard, mesh_config=mesh_config, ccl_manager=ccl_manager)
+            global_vocab_max(processed_logits, mesh_config=mesh_config, ccl_manager=ccl_manager)
             if owns_max
             else global_max
         )
-        shifted = ttnn.subtract(prev_logits_shard, max_t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        shifted = ttnn.subtract(processed_logits, max_t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if processed_logits is not prev_logits_shard:
+            processed_logits.deallocate(True)
         if owns_max:
             max_t.deallocate(True)
         exp_shard = ttnn.exp(shifted, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -504,7 +533,8 @@ class TtSelfConditioning:
         signal = ttnn.div(numerator, denominator)
         numerator.deallocate(True)
         denominator.deallocate(True)
-        scaled = ttnn.multiply(signal, float(self.hidden_size) ** 0.5)
+        embed_scale = getattr(self, "embed_scale", torch.tensor(self.hidden_size**0.5, dtype=torch.bfloat16).item())
+        scaled = ttnn.multiply(signal, embed_scale)
         signal.deallocate(True)
         if scaled.get_dtype() != ttnn.bfloat16:
             out = ttnn.typecast(scaled, ttnn.bfloat16)
@@ -512,7 +542,15 @@ class TtSelfConditioning:
             return out
         return scaled
 
-    def condition(self, inputs_embeds_tt, prev_logits_tt, embedding_weight_tt, *, compute_kernel_config=None):
+    def condition(
+        self,
+        inputs_embeds_tt,
+        prev_logits_tt,
+        embedding_weight_tt,
+        *,
+        compute_kernel_config=None,
+        temperature: float = 1.0,
+    ):
         """Full self-conditioning step: soft-embed prev logits, then apply the module
         (mirrors the reference ``SelfConditioning.condition`` / decoder forward).
 
@@ -521,7 +559,12 @@ class TtSelfConditioning:
         """
         if prev_logits_tt is None:
             return _rms_norm_dram(inputs_embeds_tt, epsilon=self.eps)
-        signal = self.soft_embedding(prev_logits_tt, embedding_weight_tt, compute_kernel_config=compute_kernel_config)
+        signal = self.soft_embedding(
+            prev_logits_tt,
+            embedding_weight_tt,
+            compute_kernel_config=compute_kernel_config,
+            temperature=temperature,
+        )
         out = self.forward(inputs_embeds_tt, signal)
         signal.deallocate(True)
         return out

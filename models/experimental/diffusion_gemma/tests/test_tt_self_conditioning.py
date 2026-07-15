@@ -303,6 +303,7 @@ def test_forward_requests_dram_rms_norm_outputs(monkeypatch):
     from models.experimental.diffusion_gemma.tt import self_conditioning as SC
 
     monkeypatch.setattr(SC, "ttnn", _FakeTtnn)
+    monkeypatch.setattr(SC, "apply_gelu", lambda tensor: _FakeTtnn.gelu(tensor, fast_and_approximate_mode=True))
     module = TtSelfConditioning.__new__(TtSelfConditioning)
     module.eps = 1e-6
     module.pre_norm_weight = "pre-weight"

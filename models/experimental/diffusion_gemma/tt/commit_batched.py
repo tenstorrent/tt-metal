@@ -48,6 +48,7 @@ import os
 from loguru import logger
 import torch
 import ttnn
+from models.experimental.diffusion_gemma.tt.expert_operations import shared_mlp_forward
 
 from models.demos.gemma4.tt.attention.operations import (
     apply_allreduce,
@@ -518,7 +519,11 @@ def _commit_layer_forward_batched(
 
     residual = hidden_states
     normed = _chunked_norm_forward(layer.pre_feedforward_layernorm, hidden_states)
-    mlp_output = layer.shared_mlp(normed)
+    mlp_output = (
+        shared_mlp_forward(layer.shared_mlp, normed)
+        if os.environ.get("DG_GELU_TANH", "1") == "1"
+        else layer.shared_mlp(normed)
+    )
     normed.deallocate(True)
 
     if layer.enable_moe_block:

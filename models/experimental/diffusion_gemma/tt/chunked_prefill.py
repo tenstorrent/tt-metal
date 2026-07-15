@@ -608,7 +608,9 @@ def chunked_prefill(
         global _CHUNK_CTX
         _CHUNK_CTX = _ChunkContext(chunk_start_idx=start, chunk_page_table=chunk_pt_dev, sliding_state=sliding_state)
         try:
-            with _swap_prefill_attention():
+            from models.experimental.diffusion_gemma.tt.prefill_moe import use_tuned_prefill_moe
+
+            with use_tuned_prefill_moe(model), _swap_prefill_attention():
                 out = model(
                     chunk_embeds,
                     rope_mats=rope,

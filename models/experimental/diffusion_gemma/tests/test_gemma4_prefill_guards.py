@@ -10,6 +10,7 @@ alignment (no batched-prefill case).
 """
 
 import torch
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 from models.experimental.diffusion_gemma.tt import diffusion_attention as DA
@@ -48,6 +49,28 @@ def test_get_rope_mats_reaches_256k_and_rejects_overflow(expect_error):
     assert sin.shape[-2] == cache_len
     with expect_error(ValueError, "requested RoPE seq_len 262176 exceeds cache length 262144"):
         DiffusionGemma4Model._get_rope_mats(model, 0, seq_len=cache_len + 32)
+
+
+def test_model_call_establishes_diffusion_activation_context(monkeypatch):
+    from models.demos.gemma4.tt.model import Gemma4Model
+    from models.experimental.diffusion_gemma.tt import prefill_moe
+
+    events = []
+
+    @contextmanager
+    def fake_context(model):
+        events.append(("enter", model))
+        try:
+            yield
+        finally:
+            events.append(("exit", model))
+
+    monkeypatch.setattr(prefill_moe, "use_tuned_prefill_moe", fake_context)
+    monkeypatch.setattr(Gemma4Model, "__call__", lambda self, *args, **kwargs: (args, kwargs))
+    model = object.__new__(DiffusionGemma4Model)
+
+    assert model("hidden", is_decode=False) == (("hidden",), {"is_decode": False})
+    assert events == [("enter", model), ("exit", model)]
 
 
 def test_slice_rope_cache_rejects_overflow(expect_error):

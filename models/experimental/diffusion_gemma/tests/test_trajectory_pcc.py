@@ -10,8 +10,10 @@ from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.reference import sampling as S
 from models.experimental.diffusion_gemma.reference.denoise_loop import denoise_block
 from models.experimental.diffusion_gemma.tests.trajectory_pcc import (
+    _pearson,
     assert_trajectory_matches,
     compare_trajectories,
+    sound_entropy_step_fidelity,
 )
 
 
@@ -126,3 +128,49 @@ def test_assert_trajectory_matches_returns_comparison_on_match():
     traj = _peaked_traj(target=9)
     cmp = assert_trajectory_matches(traj, traj)
     assert cmp.passed
+
+
+# --- variance-gated entropy fidelity (#48291) ----------------------------------
+# Raw per-step entropy PCC is ill-conditioned once a denoise step converges: the
+# per-token entropy profile goes near-constant, its variance -> 0, and PCC is then
+# dominated by rounding noise even when the absolute entropy error is negligible.
+# sound_entropy_step_fidelity gates PCC only where the reference profile carries
+# structure and falls back to an absolute tolerance where it does not.
+
+
+def test_sound_entropy_passes_converged_step_where_raw_pcc_fails():
+    # Near-constant entropy profile (converged step) + negligible absolute drift.
+    torch.manual_seed(0)
+    ref = 0.01 + 0.004 * torch.rand(256)  # std well below min_std=0.15
+    cand = ref + 0.02 * (torch.rand(256) - 0.5)  # tiny bf16-scale rounding noise
+    raw = _pearson(ref, cand)
+    verdict = sound_entropy_step_fidelity(ref, cand)
+    assert raw < 0.95, f"expected ill-conditioned raw PCC on a flat profile, got {raw}"
+    assert verdict.mode == "abs" and verdict.passed
+    assert verdict.max_abs < 0.5
+
+
+def test_sound_entropy_fails_converged_step_with_real_divergence():
+    # Near-constant profile but a genuinely large entropy error -> abs branch fails.
+    ref = torch.full((256,), 0.01)
+    cand = ref.clone()
+    cand[10] += 2.0
+    verdict = sound_entropy_step_fidelity(ref, cand)
+    assert verdict.mode == "abs" and not verdict.passed
+
+
+def test_sound_entropy_uses_pcc_on_structured_step():
+    # High-variance early-step profile: correlated -> pass via the PCC branch.
+    torch.manual_seed(1)
+    ref = torch.rand(256) * 2.0  # std well above min_std
+    cand = ref + 0.01 * (torch.rand(256) - 0.5)
+    verdict = sound_entropy_step_fidelity(ref, cand)
+    assert verdict.mode == "pcc" and verdict.passed and verdict.pcc >= 0.95
+
+
+def test_sound_entropy_fails_structured_step_when_decorrelated():
+    torch.manual_seed(2)
+    ref = torch.rand(256) * 2.0
+    cand = torch.rand(256) * 2.0  # unrelated structured profile
+    verdict = sound_entropy_step_fidelity(ref, cand)
+    assert verdict.mode == "pcc" and not verdict.passed

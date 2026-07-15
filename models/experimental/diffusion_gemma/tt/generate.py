@@ -1451,6 +1451,9 @@ def generate_text_from_checkpoint_state(
     if "decode_kwargs" not in generate_kwargs:
         generate_kwargs["decode_kwargs"] = {"skip_special_tokens": True}
     adapter_kwargs = dict(adapter_kwargs or {})
+    adapter_kwargs.setdefault("max_denoise_steps", config.max_denoise_steps)
+    adapter_kwargs.setdefault("temperature_start", config.temperature_start)
+    adapter_kwargs.setdefault("temperature_end", config.temperature_end)
     if "config" not in adapter_kwargs:
         adapter_config = getattr(tt_model, "hf_config", None)
         if adapter_config is not None:

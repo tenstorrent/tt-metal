@@ -12,6 +12,8 @@ through this file instead of ``Gemma4Model.ttnn_decode_forward``.
 
 from __future__ import annotations
 
+import os
+
 import ttnn
 from models.demos.gemma4.tt.attention.operations import (
     apply_allreduce,
@@ -24,7 +26,7 @@ from models.demos.gemma4.tt.attention.operations import (
 )
 from models.demos.gemma4.tt.attention.weights import AttentionWeights
 from models.demos.gemma4.tt.experts.decode import _build_sparse_matmul_config
-from models.demos.gemma4.tt.experts.operations import apply_geglu
+from models.experimental.diffusion_gemma.tt.expert_operations import apply_geglu, shared_mlp_forward
 from models.demos.gemma4.tt.experts.weights import ExpertWeights
 from models.demos.gemma4.tt.ccl import ccl_allreduce
 
@@ -488,7 +490,11 @@ def _commit_layer_forward(
 
     residual = hidden_states
     normed = _decode_rms_norm_forward(layer.pre_feedforward_layernorm, hidden_states)
-    mlp_output = layer.shared_mlp(normed)
+    mlp_output = (
+        shared_mlp_forward(layer.shared_mlp, normed)
+        if os.environ.get("DG_GELU_TANH", "1") == "1"
+        else layer.shared_mlp(normed)
+    )
     normed.deallocate(True)
 
     if layer.enable_moe_block:

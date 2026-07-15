@@ -32,6 +32,11 @@ import ttnn
 import models.demos.gemma4.tt.experts as gemma4_experts
 import models.demos.gemma4.tt.experts.prefill as gemma4_prefill
 from models.demos.gemma4.tt.router import Gemma4Router
+from models.demos.gemma4.tt.shared_mlp import SharedMLP
+from models.experimental.diffusion_gemma.tt.expert_operations import (
+    shared_mlp_forward,
+    use_tanh_expert_activations,
+)
 from models.experimental.diffusion_gemma.tt.sparse_moe import (
     RAGGED_PREFILL_CHUNK,
     chunked_ragged_sparse_prefill_forward,
@@ -53,10 +58,12 @@ _COMPUTE_GRID = (11, 10)
 
 _tuned_geometry_active: ContextVar[bool] = ContextVar("diffusion_gemma_tuned_prefill_moe", default=False)
 _ragged_prefill_active: ContextVar[bool] = ContextVar("diffusion_gemma_ragged_prefill_moe", default=False)
+_tanh_gelu_active: ContextVar[bool] = ContextVar("diffusion_gemma_tanh_gelu", default=False)
 _builder_install_lock = Lock()
 _original_builder = gemma4_prefill._build_sparse_matmul_config
 _original_prefill_forward = gemma4_experts.prefill_forward
 _original_router_forward = Gemma4Router.__call__
+_original_shared_mlp_forward = SharedMLP.__call__
 
 
 def tuned_prefill_moe_enabled() -> bool:
@@ -225,25 +232,47 @@ def _install_contextual_router_forward() -> None:
         Gemma4Router.__call__ = _contextual_router_forward
 
 
+def _contextual_shared_mlp_forward(mlp, hidden_states):
+    if _tanh_gelu_active.get():
+        return shared_mlp_forward(mlp, hidden_states)
+    return _original_shared_mlp_forward(mlp, hidden_states)
+
+
+def _install_contextual_shared_mlp_forward() -> None:
+    if SharedMLP.__call__ is _contextual_shared_mlp_forward:
+        return
+    with _builder_install_lock:
+        if SharedMLP.__call__ is _contextual_shared_mlp_forward:
+            return
+        SharedMLP.__call__ = _contextual_shared_mlp_forward
+
+
 @contextmanager
 def use_tuned_prefill_moe(model):
     """Apply supported DiffusionGemma prefill optimizations in this call context."""
 
     tuned = tuned_prefill_moe_enabled()
     ragged = ragged_prefill_moe_enabled()
-    if (not tuned and not ragged) or _find_supported_experts(model) is None:
+    tanh_gelu = os.environ.get("DG_GELU_TANH", "1") == "1"
+    supported_experts = _find_supported_experts(model)
+    if not tanh_gelu and ((not tuned and not ragged) or supported_experts is None):
         yield
         return
 
-    if tuned:
+    if tuned and supported_experts is not None:
         _install_contextual_builder()
-    if ragged:
+    if ragged and supported_experts is not None:
         _install_contextual_prefill_forward()
         _install_contextual_router_forward()
-    geometry_token = _tuned_geometry_active.set(tuned)
-    ragged_token = _ragged_prefill_active.set(ragged)
+    if tanh_gelu:
+        _install_contextual_shared_mlp_forward()
+    geometry_token = _tuned_geometry_active.set(tuned and supported_experts is not None)
+    ragged_token = _ragged_prefill_active.set(ragged and supported_experts is not None)
+    tanh_token = _tanh_gelu_active.set(tanh_gelu)
     try:
-        yield
+        with use_tanh_expert_activations(tanh_gelu):
+            yield
     finally:
+        _tanh_gelu_active.reset(tanh_token)
         _ragged_prefill_active.reset(ragged_token)
         _tuned_geometry_active.reset(geometry_token)

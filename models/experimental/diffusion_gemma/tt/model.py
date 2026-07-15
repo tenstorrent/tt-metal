@@ -24,6 +24,15 @@ from models.demos.gemma4.tt.model import Gemma4Model
 class DiffusionGemma4Model(Gemma4Model):
     """Gemma4 backbone with DiffusionGemma denoise-friendly RoPE bookkeeping."""
 
+    def __call__(self, *args, **kwargs):
+        # Establish the DiffusionGemma activation/experts context at the model
+        # boundary so direct prefill/decode calls cannot silently inherit
+        # Gemma-4's FastLut GELU. Nested generator contexts are token-safe.
+        from models.experimental.diffusion_gemma.tt.prefill_moe import use_tuned_prefill_moe
+
+        with use_tuned_prefill_moe(self):
+            return super().__call__(*args, **kwargs)
+
     def _get_rope_mats(self, layer_idx, seq_len=None, for_decode=False):
         # Self-contained (does not call super) so the bounds guard is unit-testable
         # without a constructed model and stays correct if the base slicing changes.
