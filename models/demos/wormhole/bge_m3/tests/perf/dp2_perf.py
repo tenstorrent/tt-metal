@@ -8,7 +8,7 @@ batch shard (B/2 = 6), full sequence 8192. NO inter-chip collectives (no K/V
 all-gather) - attention is standard single-chip SDPA over the full local
 sequence, i.e. exact full attention. Inputs are sharded on the BATCH dim (0).
 
-Requires BGE_M3_DATA_PARALLEL=1 in the environment (set by .auto/measure.sh).
+Activated via create_tt_model(..., data_parallel=True).
 """
 
 import time
@@ -63,8 +63,9 @@ def test_embedding_perf_b12_s8192_dp2(mesh_device):
         max_batch_size=BATCH,
         max_seq_len=SEQ_LEN,
         dtype=ttnn.bfloat8_b,
+        data_parallel=True,
     )
-    assert getattr(model, "_data_parallel", False), "DP mode not active - set BGE_M3_DATA_PARALLEL=1"
+    assert model._data_parallel, "DP mode not active"
     logger.info(f"DP2 model built in {time.perf_counter() - t0:.1f}s")
 
     inputs = prepare_inputs(args.tokenizer, BATCH, SEQ_LEN, args.pad_token_id)

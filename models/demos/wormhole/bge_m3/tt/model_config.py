@@ -25,6 +25,7 @@ class ModelArgs:
         cache_hf=False,
         hf_model_name=None,
         dtype=ttnn.bfloat16,
+        data_parallel=False,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -40,6 +41,21 @@ class ModelArgs:
         self.max_batch_size = max_batch_size
         self.max_seq_len = max_seq_len
         self.dtype = dtype
+        # Data-parallel serving path (DP=2): batch B12 split to B6 per chip on a
+        # 1x2 N300, each chip an independent full-sequence replica with no
+        # collectives. Requested via the data_parallel argument; only valid on
+        # the 2x1 / S8192 serving shape.
+        if data_parallel and not (
+            self.max_seq_len == 8192
+            and mesh_device is not None
+            and self.num_devices == 2
+            and tuple(mesh_device.shape) == (2, 1)
+        ):
+            raise ValueError(
+                "data_parallel=True requires max_seq_len=8192 on a (2, 1) 2-device mesh, "
+                f"got seq_len={self.max_seq_len}, shape={tuple(mesh_device.shape) if mesh_device else None}"
+            )
+        self.data_parallel = data_parallel
         self.attention_mask_dtype = (
             dtype if self.max_seq_len == 512 and max(1, int(self.max_batch_size)) in (1, 32) else ttnn.bfloat16
         )

@@ -13,6 +13,7 @@ def create_tt_model(
     state_dict=None,
     hf_model_name="BAAI/bge-m3",
     pooling=None,
+    data_parallel=False,
 ):
     """
     BGE-M3 version of create_tt_model that matches tt_transformers interface.
@@ -29,6 +30,7 @@ def create_tt_model(
         max_seq_len=max_seq_len,
         hf_model_name=hf_model_name,
         dtype=dtype,
+        data_parallel=data_parallel,
     )
 
     if not state_dict:
@@ -41,6 +43,7 @@ def create_tt_model(
         dtype=dtype,
         hidden_size=bge_m3_model_args.dim,
         intermediate_size=bge_m3_model_args.intermediate_size,
+        data_parallel=bge_m3_model_args.data_parallel,
     )
 
     model = BgeM3Model(

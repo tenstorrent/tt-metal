@@ -270,8 +270,6 @@ def test_bge_m3_tracy_perf_b12_s8192_dp2(mesh_device):
     ~49 LayerNorm, 24 GenericOp head-split, 24 concat-heads, 0 AllGather."""
     if os.environ.get("TT_METAL_DEVICE_PROFILER", "0") != "1":
         pytest.fail("TT_METAL_DEVICE_PROFILER=1 is required for device kernel profiling.")
-    if os.environ.get("BGE_M3_DATA_PARALLEL", "0") != "1":
-        pytest.fail("BGE_M3_DATA_PARALLEL=1 is required for DP2 profiling.")
 
     from models.demos.wormhole.bge_m3.tests.perf.dp2_perf import _to_batchsharded_tensors
 
@@ -283,8 +281,9 @@ def test_bge_m3_tracy_perf_b12_s8192_dp2(mesh_device):
         max_batch_size=12,
         max_seq_len=SEQ_LEN_8192,
         dtype=ttnn.bfloat8_b,
+        data_parallel=True,
     )
-    assert getattr(model, "_data_parallel", False), "DP mode not active"
+    assert model._data_parallel, "DP mode not active"
     host_inputs = prepare_inputs(model_args.tokenizer, 12, SEQ_LEN_8192, model_args.pad_token_id)
     device_inputs = _to_batchsharded_tensors(host_inputs, mesh_device, device=True)
 
@@ -319,8 +318,6 @@ def test_bge_m3_tracy_perf_b12_s8192_dp2_traced(mesh_device):
     wall-clock metric to see how much of the 1247ms wall is on-device vs host."""
     if os.environ.get("TT_METAL_DEVICE_PROFILER", "0") != "1":
         pytest.fail("TT_METAL_DEVICE_PROFILER=1 is required for device kernel profiling.")
-    if os.environ.get("BGE_M3_DATA_PARALLEL", "0") != "1":
-        pytest.fail("BGE_M3_DATA_PARALLEL=1 is required for DP2 profiling.")
 
     from models.demos.wormhole.bge_m3.tests.perf.dp2_perf import _to_batchsharded_tensors
 

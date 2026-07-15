@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 from dataclasses import replace
 
 import ttnn
@@ -171,12 +170,12 @@ def _attention_qkv_dtype(dtype, max_seq_len, max_batch_size):
     return dtype
 
 
-def _sequence_parallel_axis(mesh_device, max_seq_len):
+def _sequence_parallel_axis(args, mesh_device, max_seq_len):
     """Return the mesh axis to shard the sequence over, or None. Enabled for the
     S8192 serving shape on a 1x2 N300 (mesh (2, 1)). Disabled in data-parallel
-    mode (BGE_M3_DATA_PARALLEL=1), where each chip owns a full-sequence batch
-    shard and attention needs no K/V all-gather."""
-    if os.environ.get("BGE_M3_DATA_PARALLEL", "0") == "1":
+    mode, where each chip owns a full-sequence batch shard and attention needs
+    no K/V all-gather."""
+    if args.data_parallel:
         return None
     if (
         max_seq_len == 8192
@@ -190,8 +189,9 @@ def _sequence_parallel_axis(mesh_device, max_seq_len):
 
 def _build_attention_config(args, attention_weights, mesh_device, dtype, max_seq_len, max_batch_size, optimizations):
     """Build BgeM3AttentionConfig, overlaying Optimizations.attention fields when provided."""
-    sp_axis = _sequence_parallel_axis(mesh_device, max_seq_len)
+    sp_axis = _sequence_parallel_axis(args, mesh_device, max_seq_len)
     config = BgeM3AttentionConfig(
+        data_parallel=args.data_parallel,
         wqkv=attention_weights.wqkv,
         bqkv=attention_weights.bqkv,
         wo_weight=attention_weights.wo_weight,

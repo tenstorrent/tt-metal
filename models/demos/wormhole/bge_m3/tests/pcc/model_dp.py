@@ -9,7 +9,7 @@ inter-chip collectives. Inputs sharded on the batch dim; the output is the
 concatenation of the two per-chip batch halves. Compared against the HF
 reference at the same 0.93 gate as the TP test.
 
-Requires BGE_M3_DATA_PARALLEL=1 (set by .auto/measure.sh).
+Activated via create_tt_model(..., data_parallel=True).
 """
 
 import pytest
@@ -72,8 +72,9 @@ def test_model_dp2_b12_s8192(mesh_device, model_artifacts, reset_seeds):
         dtype=ttnn.bfloat8_b,
         state_dict=state_dict,
         hf_model_name=model_id_or_path,
+        data_parallel=True,
     )
-    assert getattr(tt_model, "_data_parallel", False), "DP mode not active - set BGE_M3_DATA_PARALLEL=1"
+    assert tt_model._data_parallel, "DP mode not active"
 
     torch.manual_seed(42)
     input_ids = torch.randint(low=0, high=model_args.vocab_size, size=(DP_BATCH_SIZE, DP_SEQ_LEN), dtype=torch.long)

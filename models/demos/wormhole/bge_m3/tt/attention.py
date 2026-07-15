@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, replace
 
 from ttnn.device import is_blackhole as ttnn_is_blackhole
@@ -21,6 +20,11 @@ _SDPA_K_CHUNKS_FLEX = (256, 128, 64, 32)
 # 38.7 us/call vs prod (q=128, k=128, grid=11x10) ~43 us/call -- 10% faster.
 _SDPA_B1S512_Q_CHUNK = 64
 _SDPA_B1S512_K_CHUNK = 512
+
+# Data-parallel query head-fold factor: fold G query-chunks into the head dim so
+# SDPA sees Sq/G queries per head (higher throughput), K/V unchanged via GQA
+# head-broadcast. G=2 is optimal (G=4 plateaus, adds heads).
+_DP_HEAD_FOLD = 2
 _MAX_QKV_MM_CHUNK_SEQ_LEN = 8192
 _MAX_WO_MM_CHUNK_SEQ_LEN = 8192
 
@@ -70,6 +74,10 @@ class BgeM3AttentionConfig:
     # so local queries cross-attend to every key. Everything else in the encoder
     # is token-local (zero comm). None disables (single-chip path).
     sequence_parallel_axis: int | None = None
+    # Data-parallel (DP=2): each chip runs an independent full-sequence B/2
+    # replica with no collectives. Enables the query head-fold SDPA trick and
+    # the DP-tuned SDPA chunk/dtype config.
+    data_parallel: bool = False
     # True when the attention scale was folded into the Q projection weight at
     # build time, so SDPA must run with scale=1.0 regardless of mask presence.
     qkv_scale_prefolded: bool = False
@@ -274,25 +282,27 @@ class BgeM3Attention(LightweightModule):
         # sequence-parallel mode queries are local (S/tp) but keys span full S.
         sdpa_seq_len = k.shape[2]
         # DP query head-fold trick: SDPA throughput is set by Sq (query length),
-        # not total work (measured: Sq8192=29 vs Sq4096=44 TFLOP/s). Fold G
-        # query-chunks into the HEAD dim so SDPA sees Sq/G queries per head; K/V
-        # stay unchanged and SDPA's GQA head-broadcast makes each query head
-        # attend to the FULL sequence via its parent kv head. Exact (PCC=1.0) and
-        # needs NO K/V replicate (unlike the batch-fold variant). Only for DP
-        # (no mask). q [B,H,S,DH] -> [B, H*G, S/G, DH] with head h*G+j = head h's
-        # j-th seq chunk; kv head h broadcasts to query heads h*G..h*G+G-1.
-        dp_reshape_g = 0
-        if os.environ.get("BGE_M3_DATA_PARALLEL", "0") == "1" and sdpa_mask is None and seq_len == 8192:
-            dp_reshape_g = int(os.environ.get("BGE_DP_SDPA_QRESHAPE", "2"))
-        if dp_reshape_g >= 2:
+        # not total work (measured: Sq8192=29 vs Sq4096=44 TFLOP/s). Fold
+        # DP_HEAD_FOLD query-chunks into the HEAD dim so SDPA sees Sq/G queries
+        # per head; K/V stay unchanged and SDPA's GQA head-broadcast makes each
+        # query head attend to the FULL sequence via its parent kv head. Exact
+        # (PCC=1.0), needs NO K/V replicate. q [B,H,S,DH] -> [B, H*G, S/G, DH]
+        # with head h*G+j = head h's j-th seq chunk.
+        head_fold = self.config.data_parallel and sdpa_mask is None and seq_len == 8192
+        if head_fold:
             b0, h0, s0, dh0 = q.shape
-            g = dp_reshape_g
-            q = ttnn.reshape(q, [b0, h0 * g, s0 // g, dh0])
+            q = ttnn.reshape(q, [b0, h0 * _DP_HEAD_FOLD, s0 // _DP_HEAD_FOLD, dh0])
+            # K to bfloat4_b: halves K read bandwidth in SDPA. PCC 0.9422 (clears
+            # the 0.94 preferred gate) with the q128/k2048 chunking; V stays bf8.
+            k_bf4 = ttnn.typecast(k, dtype=ttnn.bfloat4_b)
+            ttnn.deallocate(k)
+            k = k_bf4
         sdpa_program_config = _sdpa_program_config(
             sdpa_seq_len,
             self.config.mesh_device,
             batch_size=batch_size,
             sequence_parallel=self.config.sequence_parallel_axis is not None,
+            data_parallel=self.config.data_parallel,
         )
         context = ttnn.transformer.scaled_dot_product_attention(
             q,
@@ -305,11 +315,10 @@ class BgeM3Attention(LightweightModule):
             compute_kernel_config=self.config.score_compute_kernel_cfg,
             memory_config=self.config.score_memcfg,
         )
-        if dp_reshape_g >= 2:
-            g = dp_reshape_g
-            b0, hg, sg, dh0 = context.shape
+        if head_fold:
             # [B, H*G, S/G, DH] -> [B, H, S, DH]
-            context = ttnn.reshape(context, [b0, hg // g, sg * g, dh0])
+            b0, hg, sg, dh0 = context.shape
+            context = ttnn.reshape(context, [b0, hg // _DP_HEAD_FOLD, sg * _DP_HEAD_FOLD, dh0])
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
@@ -370,7 +379,7 @@ class BgeM3Attention(LightweightModule):
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def _sdpa_chunks_for_seq_len(seq_len, batch_size=None, sequence_parallel=False):
+def _sdpa_chunks_for_seq_len(seq_len, batch_size=None, sequence_parallel=False, data_parallel=False):
     if seq_len % 128 == 0:
         # N300 B12/S8192: q256/k256 wins IN-MODEL (4056ms). Standalone sweep is
         # unreliable for SDPA (see sweep_sdpa_b12_s8192.py warning); tuned by
@@ -382,15 +391,13 @@ def _sdpa_chunks_for_seq_len(seq_len, batch_size=None, sequence_parallel=False):
                 # pressure (halved Sq) lets k_chunk=512 fit, halving the number
                 # of k-passes and the online-softmax rescaling overhead.
                 return 512, 512
-            if os.environ.get("BGE_M3_DATA_PARALLEL", "0") == "1":
+            if data_parallel:
                 # Data-parallel + query head-fold: SDPA sees Sq=4096, Sk=8192, B6.
-                # q256/k1024 preserves the score-tile footprint of q512/k512
-                # (8x32 == 16x16 == 256 tiles, so score CB doesn't grow) while
-                # halving k-chunks (8 vs 16) => fewer online-softmax merges.
-                # Standalone device-kernel probe: 32.63ms->30.59ms/op (-6.2%),
-                # lossless BF8. Stock q512/k1024 OOMs; this footprint-preserving
-                # pair fits. (DP autoresearch #215.)
-                return 256, 1024
+                # q128/k2048 keeps the 256-score-tile footprint (4x64) while
+                # cutting k-chunks to 4 (fewer online-softmax merges). With
+                # bfloat4_b K it runs 30.1ms->28.9ms/op and holds PCC 0.9422
+                # (clears the 0.94 preferred gate). (DP autoresearch #216.)
+                return 128, 2048
             # Dense-mask S8192 needs the lower-L1 k256 configuration.
             return 512, 256
         # B8: q=256 k=256 (swept q{64..512} x k{128,256,512}; 256x256 is the min,
@@ -430,8 +437,10 @@ def _sdpa_compute_grid(mesh_device):
         return (8, 8)
 
 
-def _sdpa_program_config(seq_len, mesh_device, batch_size=None, sequence_parallel=False):
-    q_chunk, k_chunk = _sdpa_chunks_for_seq_len(seq_len, batch_size=batch_size, sequence_parallel=sequence_parallel)
+def _sdpa_program_config(seq_len, mesh_device, batch_size=None, sequence_parallel=False, data_parallel=False):
+    q_chunk, k_chunk = _sdpa_chunks_for_seq_len(
+        seq_len, batch_size=batch_size, sequence_parallel=sequence_parallel, data_parallel=data_parallel
+    )
     grid = _sdpa_compute_grid(mesh_device)
     # B1/S512 on Blackhole: 8x8=64 cores beats the default 11x10=110 grid.
     # Sweep showed ~10% lower SDPA device time at smaller grid (less dispatch

@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 from dataclasses import replace
 
 import ttnn
@@ -46,14 +45,8 @@ class BgeM3Model(LightweightModule):
         # full single-chip forward on its batch shard (B/2), full sequence. NO
         # inter-chip collectives (no K/V all-gather) — attention is standard
         # single-chip SDPA over the full local sequence. Exact full attention.
-        # Gated by BGE_M3_DATA_PARALLEL=1; takes precedence over sequence-parallel.
-        self._data_parallel = (
-            os.environ.get("BGE_M3_DATA_PARALLEL", "0") == "1"
-            and args.max_seq_len == 8192
-            and mesh_device is not None
-            and mesh_device.get_num_devices() == 2
-            and tuple(mesh_device.shape) == (2, 1)
-        )
+        # Resolved once in ModelArgs; takes precedence over sequence-parallel.
+        self._data_parallel = args.data_parallel
         # Sequence-parallel serving path: inputs sharded on the sequence dim;
         # attention all-gathers K/V. Disabled when data-parallel is active.
         self._sequence_parallel = (

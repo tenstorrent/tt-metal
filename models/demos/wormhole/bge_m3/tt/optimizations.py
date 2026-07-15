@@ -11,7 +11,6 @@ Usage:
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 
 from ttnn.device import is_blackhole as ttnn_is_blackhole
@@ -100,6 +99,7 @@ class Optimizations:
         *,
         hidden_size: int = 1024,
         intermediate_size: int = 4096,
+        data_parallel: bool = False,
     ) -> "Optimizations":
         """Build fully-resolved optimizations for the given shape and device."""
         max_batch = max(1, max_batch_size)
@@ -203,7 +203,9 @@ class Optimizations:
 
         norm_prg, norm_sharded_mem = _layernorm_sharded_config(max_seq_len, max_batch)
         norm_opts = NormOptimizations(
-            compute_kernel_config=layernorm_compute_kernel_config(mesh_device, max_seq_len, max_batch),
+            compute_kernel_config=layernorm_compute_kernel_config(
+                mesh_device, max_seq_len, max_batch, data_parallel=data_parallel
+            ),
             output_memcfg=_linear_activation_memory_config(max_seq_len, max_batch),
             program_config=norm_prg,
             sharded_memcfg=norm_sharded_mem,
@@ -409,7 +411,7 @@ def sdpa_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=Non
     return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi4, max_seq_len, max_batch_size)
 
 
-def layernorm_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None):
+def layernorm_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None, *, data_parallel=False):
     # B1/S512: HiFi2 (LoFi regressed test_model PCC 1.0 -> 0.906).
     # bf8b precision at B1/S512 is protected by the bf8b->bf16 fused reshard
     # in norm.py (interleaved_to_sharded with output_dtype=bf16).
@@ -425,7 +427,7 @@ def layernorm_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_siz
     # LN kernel ~28% standalone (1285us->925us) by dropping the fp32 dest accum
     # pass. Gated to DP so the SP/single-chip PCC-tighter paths keep fp32.
     if max_seq_len == 8192:
-        if os.environ.get("BGE_M3_DATA_PARALLEL", "0") == "1":
+        if data_parallel:
             return _make_compute_kernel(
                 mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch_size, fp32_dest_acc_en=False
             )
