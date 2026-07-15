@@ -200,7 +200,7 @@ def _needed_trace_region(text: str):
 def _run_perf_node(node_abs: str, extra_env: dict, timeout_s: int = 2400):
     def _once(ev):
         env = dict(os.environ)
-        env["TT_PERF_TRACE"] = "1"
+        env.setdefault("TT_PERF_TRACE", "1")
         env.setdefault("TT_PERF_MAX_NEW_TOKENS", "4")
         env.pop("TT_METAL_DEVICE_PROFILER", None)
         env.update(ev)
@@ -384,6 +384,18 @@ def validate_generated_perf_test(out_path: Path, task: str) -> tuple[str, str]:
             _extract_error(out1)
             or "perf test did not run the full pipeline (no TRACE_PER_TOKEN_MS / FORWARD_WALL_MS marker)"
         )
+    if os.environ.get("TT_PERF_TRACE") == "0" and "FORWARD_WALL_MS=" in out1:
+        _write_trace_caps(
+            out_path,
+            {
+                "trace_1cq": False,
+                "trace_1cq_path": None,
+                "trace_2cq": False,
+                "trace_2cq_path": None,
+                "eager_terminal": True,
+            },
+        )
+        return "ok_marker", ""
     eager = _is_eager_terminal(out1)
     caps = {
         "trace_1cq": "TRACE_PER_TOKEN_MS=" in out1,
