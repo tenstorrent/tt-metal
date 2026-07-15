@@ -214,6 +214,135 @@ def test_wan_transformer_block(
     assert_quality(torch_spatial_out, tt_spatial_out, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
 
+@pytest.mark.timeout(0) # Disable pytest timeout
+@pytest.mark.parametrize(
+    ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    [
+        pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="ring_bh_4x8sp1tp0"),
+        pytest.param((4, 8), (4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="line_bh_4x8sp1tp0"),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    ("B", "T", "H", "W", "prompt_seq_len"),
+    [
+        pytest.param(1, 21, 90, 160, 512, id="14b-720p"),
+    ],
+)
+@pytest.mark.parametrize("test_duration_s", [100, 200, 500, 1000], ids=["100s", "200s", "500s", "1000s"])
+def test_wan_workload_power(
+    mesh_device: ttnn.MeshDevice,
+    mesh_shape: tuple[int, int],
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    B: int,
+    T: int,
+    H: int,
+    W: int,
+    prompt_seq_len: int,
+    is_fsdp: bool,
+    topology: ttnn.Topology,
+    test_duration_s: int,
+    reset_seeds,
+) -> None:
+    MIN_PCC = 0.999_500
+    MAX_RMSE = 0.032
+
+    parent_mesh_device = mesh_device
+    mesh_device = parent_mesh_device.create_submesh(ttnn.MeshShape(*mesh_shape))
+
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
+    ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
+
+    p_t, p_h, p_w = PATCH_SIZE
+    spatial_seq_len = (T // p_t) * (H // p_h) * (W // p_w)
+
+    # Load Wan2.2-T2V-14B transformer model from HuggingFace
+    torch_model = TorchWanTransformer3DModel(num_layers=1).blocks[0]
+    torch_model.eval()
+
+    # Create TT model
+    tt_model = WanTransformerBlock(
+        dim=DIM,
+        ffn_dim=FFN_DIM,
+        num_heads=NUM_HEADS,
+        cross_attention_norm=CROSS_ATTN_NORM,
+        eps=EPS,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        is_fsdp=is_fsdp,
+    )
+    tt_model.load_torch_state_dict(torch_model.state_dict())
+
+    # Create input tensors
+    torch.manual_seed(0)
+    spatial_input = torch.randn((B, spatial_seq_len, DIM), dtype=torch.float32)
+    prompt_input = torch.randn((B, prompt_seq_len, DIM), dtype=torch.float32)
+    temb_input = torch.randn((B, 6, DIM), dtype=torch.float32)
+
+    # Create ROPE embeddings
+    rope_cos = torch.randn(B, spatial_seq_len, 1, HEAD_DIM // 2)
+    rope_sin = torch.randn(B, spatial_seq_len, 1, HEAD_DIM // 2)
+    torch_rope_cos, torch_rope_sin = stack_cos_sin(rope_cos, rope_sin)
+
+    rope_cos_stack = torch_rope_cos.permute(0, 2, 1, 3)
+    rope_sin_stack = torch_rope_sin.permute(0, 2, 1, 3)
+
+    spatial_padded = pad_vision_seq_parallel(spatial_input.unsqueeze(0), num_devices=sp_factor)
+    rope_cos_padded = pad_vision_seq_parallel(rope_cos_stack, num_devices=sp_factor)
+    rope_sin_padded = pad_vision_seq_parallel(rope_sin_stack, num_devices=sp_factor)
+
+    # Create TT tensors
+    tt_spatial = bf16_tensor_2dshard(spatial_padded, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3})
+    tt_prompt = bf16_tensor(prompt_input.unsqueeze(0), device=mesh_device)
+    tt_temb = from_torch(temb_input.unsqueeze(0), device=mesh_device, dtype=ttnn.float32, mesh_axes=[..., tp_axis])
+    tt_rope_cos = from_torch(rope_cos_padded, device=mesh_device, dtype=ttnn.float32, mesh_axes=[..., sp_axis, None])
+    tt_rope_sin = from_torch(rope_sin_padded, device=mesh_device, dtype=ttnn.float32, mesh_axes=[..., sp_axis, None])
+    tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
+
+    # Run TT model
+    logger.info(
+        f"Running TT model with spatial shape {tt_spatial.shape}, prompt shape {tt_prompt.shape}, rope_cos shape {tt_rope_cos.shape}, rope_sin shape {tt_rope_sin.shape}"
+    )
+    tt_spatial_out = tt_model(
+        spatial_1BND=tt_spatial,
+        prompt_1BLP=tt_prompt,
+        temb_1BTD=tt_temb,
+        N=spatial_seq_len,
+        rope_cos=tt_rope_cos,
+        rope_sin=tt_rope_sin,
+        trans_mat=tt_trans_mat,
+    )
+    
+    logger.info(f"Warmup iteration complete")
+    
+    start = time.time()
+    
+    itr = 0
+    while time.time() - start < test_duration_s:
+        ttnn.synchronize_device(mesh_device)
+        logger.info(f"Running iteration {itr}, time elapsed: {time.time() - start:.3f} seconds")
+        for _ in range(40):
+            tt_spatial_out = tt_model(
+                spatial_1BND=tt_spatial,
+                prompt_1BLP=tt_prompt,
+                temb_1BTD=tt_temb,
+                N=spatial_seq_len,
+                rope_cos=tt_rope_cos,
+                rope_sin=tt_rope_sin,
+                trans_mat=tt_trans_mat,
+            )
+        itr += 1
+    
+    end = time.time()
+    logger.info(f"Completed test after: {end - start} seconds")
+    
+
+
+
 @pytest.mark.parametrize(
     "dit_unit_test",
     [{"1": True, "0": False}.get(os.environ.get("DIT_UNIT_TEST"), False)],

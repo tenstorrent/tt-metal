@@ -7,6 +7,7 @@ import statistics
 import numpy as np
 import pytest
 import torch
+from diffusers.utils import export_to_video
 from loguru import logger
 from PIL import Image
 

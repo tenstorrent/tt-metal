@@ -11,6 +11,7 @@ from diffusers.models.embeddings import (
     CombinedTimestepGuidanceTextProjEmbeddings as TorchCombinedTimestepGuidanceTextProjEmbeddings,
 )
 from diffusers.models.embeddings import Timesteps as TorchTimesteps
+
 from diffusers.models.transformers.transformer_wan import WanTimeTextImageEmbedding as TorchWanTimeTextImageEmbedding
 from loguru import logger
 
@@ -19,6 +20,7 @@ import ttnn
 from ...layers.embeddings import (
     CombinedTimestepGuidanceTextProjEmbeddings,
     Embedding,
+
     PixArtAlphaTextProjection,
     SD35CombinedTimestepTextProjEmbeddings,
     TimestepEmbedding,
@@ -433,6 +435,7 @@ def test_combined_timestep_guidance_text_proj_embeddings(
 
 
 @pytest.mark.parametrize(
+
     "mesh_device",
     [(1, 1)],
     indirect=True,
@@ -518,6 +521,7 @@ def test_wan_patch_embed(
 
 
 @pytest.mark.parametrize(
+
     ("B, seq_len, embed_dim"),
     [
         (1, 512, 4096),  # Wan2.2

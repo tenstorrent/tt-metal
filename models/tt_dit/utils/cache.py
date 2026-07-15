@@ -79,6 +79,7 @@ def load_model(
     if tt_model.is_loaded():
         return
 
+
     cache_dir = model_cache_dir(
         model_name=model_name,
         subfolder=subfolder,

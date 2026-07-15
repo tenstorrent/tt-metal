@@ -114,6 +114,7 @@ def test_umt5_embeddings(
     logger.info(f"layer_norm_epsilon: {hf_model.config.layer_norm_epsilon}")
 
     max_prompt_length = 512
+
     tokens = torch.randint(hf_model.config.vocab_size, [1, max_prompt_length])
 
     tt_prompt = ttnn.from_torch(
