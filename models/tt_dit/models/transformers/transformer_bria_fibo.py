@@ -68,6 +68,50 @@ def _register_fibo_matmul_configs() -> None:
                 (32, 3072, 4608): (2, 3, 14, (2, 2)),  # single time_embed
                 (32, 3072, 3072): (2, 4, 14, (2, 2)),  # timestep_embedder linear_2
                 (32, 256, 3072): (2, 2, 8, (2, 2)),  # timestep_embedder linear_1
+                # --- FIBO denoise on the 4x8 Galaxy (sp=4/tp=8): M=1024 spatial (4096/sp), M=128 prompt,
+                # M=32 timestep; N/K are tp=8-sharded so they differ from the 2x2/tp=2 shapes above. Swept
+                # 2026-07-15 via sweep_mm_block_sizes.py (bh_4x8_fibo, 12x10). The 4 tp-independent shapes
+                # (32,256,3072 / 32,3072,3072 / 32,3072,6144 / 128,2048,1536) already hit the 2x2 12x10
+                # entries above, so only the 14 new (tp-dependent) shapes are added here. ns = HiFi2 per-op.
+                (1024, 1536, 3072): (8, 3, 10, (2, 2)),  # dual ff.ff2 spatial — 70330 ns
+                (1024, 1920, 3072): (10, 3, 12, (2, 2)),  # single proj_out spatial — 79605 ns
+                (1024, 3072, 1152): (8, 6, 4, (2, 2)),  # to_qkv spatial — 65895 ns
+                (1024, 3072, 1536): (4, 6, 4, (2, 2)),  # dual ff.ff1 / proj_mlp spatial — 101395 ns
+                (1024, 3072, 384): (3, 6, 2, (3, 1)),  # attn to_out spatial — 40553 ns
+                (1024, 3072, 64): (3, 8, 2, (3, 1)),  # final proj_out — 34773 ns
+                (1024, 64, 384): (3, 2, 2, (3, 1)),  # x_embedder — 5864 ns
+                (128, 1536, 3072): (2, 4, 14, (2, 2)),  # dual ff_context.ff2 prompt — 47116 ns
+                (128, 1920, 3072): (2, 4, 10, (2, 2)),  # single proj_out prompt twin — 56373 ns
+                (128, 3072, 1152): (2, 8, 4, (2, 2)),  # to_qkv prompt — 38160 ns
+                (128, 3072, 384): (2, 8, 2, (2, 2)),  # attn to_add_out prompt — 21230 ns
+                (128, 4096, 384): (2, 8, 2, (2, 2)),  # context_embedder — 25822 ns
+                (32, 3072, 1152): (2, 8, 6, (2, 2)),  # single-block time_embed — 37902 ns
+                (32, 3072, 2304): (2, 6, 6, (2, 2)),  # norm1 modulation — 64667 ns
+            },
+            # FIBO denoise on the 4x8 Galaxy at 11x10 (the historical Galaxy grid clamp). FIBO registered
+            # nothing at 11x10 before, so all 19 4x8 shapes are added. Kept as a fallback for when the
+            # matmul core grid is clamped back to 11x10 (see get_matmul_core_grid in utils/matmul.py).
+            # Swept 2026-07-15, same run as the 12x10 block above.
+            "11x10": {
+                (1024, 1536, 3072): (8, 4, 10, (2, 2)),  # dual ff.ff2 spatial — 78747 ns
+                (1024, 1920, 3072): (12, 4, 10, (2, 2)),  # single proj_out spatial — 90564 ns
+                (1024, 3072, 1152): (8, 6, 4, (2, 2)),  # to_qkv spatial — 65969 ns
+                (1024, 3072, 1536): (4, 3, 5, (4, 1)),  # dual ff.ff1 / proj_mlp spatial — 114275 ns
+                (1024, 3072, 384): (3, 6, 2, (3, 1)),  # attn to_out spatial — 40002 ns
+                (1024, 3072, 64): (3, 8, 2, (3, 1)),  # final proj_out — 34826 ns
+                (1024, 64, 384): (3, 2, 2, (3, 1)),  # x_embedder — 5742 ns
+                (128, 1536, 3072): (2, 3, 10, (2, 2)),  # dual ff_context.ff2 prompt — 51235 ns
+                (128, 1920, 3072): (2, 4, 10, (2, 2)),  # single proj_out prompt twin — 61632 ns
+                (128, 3072, 1152): (2, 8, 4, (2, 2)),  # to_qkv prompt — 44027 ns
+                (128, 3072, 384): (2, 8, 2, (2, 2)),  # attn to_add_out prompt — 28460 ns
+                (128, 4096, 384): (2, 8, 2, (2, 2)),  # context_embedder — 35620 ns
+                (32, 3072, 1152): (2, 8, 6, (2, 2)),  # single-block time_embed — 43811 ns
+                (32, 3072, 2304): (2, 6, 8, (2, 2)),  # norm1 modulation — 71665 ns
+                (128, 2048, 1536): (2, 4, 6, (2, 2)),  # caption_projection — 39750 ns
+                (128, 3072, 1536): (2, 6, 5, (2, 1)),  # dual ff_context.ff1 prompt — 76822 ns
+                (32, 256, 3072): (2, 2, 10, (2, 2)),  # timestep_embedder linear_1 — 15618 ns
+                (32, 3072, 3072): (2, 4, 16, (2, 2)),  # timestep_embedder linear_2 — 89023 ns
+                (32, 3072, 6144): (2, 8, 12, (2, 2)),  # time_embed_out — 164954 ns
             },
         }
     )

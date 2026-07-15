@@ -75,6 +75,21 @@ DEVICE_CONFIGS = {
         "tp_axis": 0,
         "cluster_axis": 0,
     },
+    # FIBO denoise topology on the 4x8 Blackhole Galaxy: FABRIC_1D / Linear / num_links=2, sp_axis=0
+    # (rows) / tp_axis=1 (cols), matching BriaFiboPipeline. The Ring-topology bh_4x8 above fails to map
+    # on this machine's physical topology ("Graph specified in MGD could not fit"); FIBO's block matmuls
+    # are all non-AGMM (replicated minimal_matmul) so only a mesh that opens cleanly matters here.
+    "bh_4x8_fibo": {
+        "mesh_shape": (4, 8),
+        "fabric_config": "FABRIC_1D",
+        "fabric_router_config_payload": None,
+        "topology": "Linear",
+        "num_links": 2,
+        "num_workers_per_link": 6,
+        "sp_axis": 0,
+        "tp_axis": 1,
+        "cluster_axis": 1,
+    },
     # WH Galaxy 4x8, 4-device cluster along axis 0 (rows). Matches wh4x8links4_*
     # configs in tests/.../test_all_gather_minimal_matmul_async.py.
     "wh_4x8_ring": {
@@ -182,6 +197,48 @@ SHAPES = [
     (32, 3072, 4608, 12, 10, False, "plain"),  # single-block time_embed (inner -> 3*inner)
     (32, 3072, 3072, 12, 10, False, "plain"),  # timestep_embedder linear_2
     (32, 256, 3072, 12, 10, False, "plain"),  # timestep_embedder linear_1 (256 -> inner)
+    # --- FIBO denoise on the 4x8 Galaxy (sp=4/tp=8), all non-AGMM. Captured 2026-07-15 from the
+    # get_matmul_config [fallback] warnings in test_fibo_denoise_device_profile[mesh_device1]. M=1024
+    # spatial (4096 seq / sp=4), M=128 prompt, M=32 timestep; N/K are tp=8-sharded so they differ from
+    # the 2x2/tp=2 shapes above (e.g. to_out N=inner/8=384, qkv N=3*inner/8=1152). Swept at 11x10 (the
+    # historical Galaxy clamp) AND 12x10 (full grid — confirmed to run on this Galaxy). use_case tags the
+    # runtime kernel path so the swept block is L1-safe: to_out has fused addcmul, qkv has chunks=3.
+    # 12x10 misses (14 shapes): registered under both 11x10 and 12x10.
+    (1024, 1536, 3072, 12, 10, False, "plain"),  # dual ff.ff2 spatial (RowParallel)
+    (1024, 1920, 3072, 12, 10, False, "plain"),  # single proj_out spatial
+    (1024, 3072, 1152, 12, 10, False, "qkv"),  # to_qkv spatial (chunks=3, approx)
+    (1024, 3072, 1536, 12, 10, False, "plain_gelu"),  # dual ff.ff1 / proj_mlp spatial (fused GELU)
+    (1024, 3072, 384, 12, 10, False, "to_out"),  # attn to_out spatial (addcmul, approx)
+    (1024, 3072, 64, 12, 10, False, "plain"),  # final proj_out (patch*patch*out)
+    (1024, 64, 384, 12, 10, False, "plain"),  # x_embedder (in 48->64, N=inner/8)
+    (128, 1536, 3072, 12, 10, False, "plain"),  # dual ff_context.ff2 prompt
+    (128, 1920, 3072, 12, 10, False, "plain"),  # single proj_out prompt twin
+    (128, 3072, 1152, 12, 10, False, "qkv"),  # to_qkv prompt (chunks=3, approx)
+    (128, 3072, 384, 12, 10, False, "to_out"),  # attn to_add_out prompt (addcmul, approx)
+    (128, 4096, 384, 12, 10, False, "plain"),  # context_embedder (joint_attention_dim 4096)
+    (32, 3072, 1152, 12, 10, False, "plain"),  # single-block time_embed (inner -> 3*inner/8)
+    (32, 3072, 2304, 12, 10, False, "plain"),  # norm1 modulation (9216/tp*2 -> 2304)
+    # Same 14 shapes at 11x10 (fallback grid), plus the 5 tp-independent shapes that already hit the
+    # 2x2-tuned 12x10 configs but MISS at 11x10 (FIBO registered nothing at 11x10 before).
+    (1024, 1536, 3072, 11, 10, False, "plain"),  # dual ff.ff2 spatial
+    (1024, 1920, 3072, 11, 10, False, "plain"),  # single proj_out spatial
+    (1024, 3072, 1152, 11, 10, False, "qkv"),  # to_qkv spatial
+    (1024, 3072, 1536, 11, 10, False, "plain_gelu"),  # dual ff.ff1 / proj_mlp spatial
+    (1024, 3072, 384, 11, 10, False, "to_out"),  # attn to_out spatial
+    (1024, 3072, 64, 11, 10, False, "plain"),  # final proj_out
+    (1024, 64, 384, 11, 10, False, "plain"),  # x_embedder
+    (128, 1536, 3072, 11, 10, False, "plain"),  # dual ff_context.ff2 prompt
+    (128, 1920, 3072, 11, 10, False, "plain"),  # single proj_out prompt twin
+    (128, 3072, 1152, 11, 10, False, "qkv"),  # to_qkv prompt
+    (128, 3072, 384, 11, 10, False, "to_out"),  # attn to_add_out prompt
+    (128, 4096, 384, 11, 10, False, "plain"),  # context_embedder
+    (32, 3072, 1152, 11, 10, False, "plain"),  # single-block time_embed
+    (32, 3072, 2304, 11, 10, False, "plain"),  # norm1 modulation
+    (128, 2048, 1536, 11, 10, False, "plain"),  # caption_projection (text_encoder_dim 2048)
+    (128, 3072, 1536, 11, 10, False, "plain_gelu"),  # dual ff_context.ff1 prompt (fused GELU)
+    (32, 256, 3072, 11, 10, False, "plain"),  # timestep_embedder linear_1
+    (32, 3072, 3072, 11, 10, False, "plain"),  # timestep_embedder linear_2
+    (32, 3072, 6144, 11, 10, False, "plain"),  # time_embed_out (inner -> 2*inner)
 ]
 
 SHAPE_IDS = [f"{M}_{K}_{N}_{cgx}x{cgy}_{'agmm' if agmm else 'mm'}_{uc}" for M, K, N, cgx, cgy, agmm, uc in SHAPES]

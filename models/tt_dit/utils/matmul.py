@@ -132,7 +132,11 @@ grid_11_10_configs = {
 
 
 _BH_GALAXY_MIN_DEVICES = 32
-_BH_GALAXY_MAX_CORE_GRID = (11, 10)
+# Full 12x10 compute grid on the 4x8 Blackhole Galaxy. Previously clamped to 11x10 for a power
+# constraint; verified 2026-07-15 that the full 12x10 grid runs cleanly on all 32 devices (FIBO
+# denoise forward, no fabric/power fault) and every FIBO matmul is faster at 12x10 than 11x10
+# (see the swept configs in transformer_bria_fibo.py). 11x10 configs are retained as a fallback.
+_BH_GALAXY_MAX_CORE_GRID = (12, 10)
 
 
 def get_matmul_core_grid(mesh_device):
