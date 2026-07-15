@@ -977,11 +977,16 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = TP_INPUT, .spec = a.mesh_tensor().tensor_spec()});
     spec.tensor_parameters.push_back(
         m2::TensorParameter{.unique_id = TP_OUTPUT, .spec = output.mesh_tensor().tensor_spec()});
-    spec.tensor_parameters.push_back(
-        m2::TensorParameter{.unique_id = TP_WEIGHTS, .spec = b.mesh_tensor().tensor_spec()});
-    if (has_bias) {
+    // Program A (split_program_tilize_only) has no weights reader / writer / matmul, so NO kernel binds
+    // TP_WEIGHTS or TP_BIAS. The Metal-2.0 spec validator (program_spec.cpp:575) rejects any TensorParameter
+    // that is declared but bound by no kernel, so we must not declare them in the tilize-only program.
+    if (!split_program_tilize_only) {
         spec.tensor_parameters.push_back(
-            m2::TensorParameter{.unique_id = TP_BIAS, .spec = bias.value().mesh_tensor().tensor_spec()});
+            m2::TensorParameter{.unique_id = TP_WEIGHTS, .spec = b.mesh_tensor().tensor_spec()});
+        if (has_bias) {
+            spec.tensor_parameters.push_back(
+                m2::TensorParameter{.unique_id = TP_BIAS, .spec = bias.value().mesh_tensor().tensor_spec()});
+        }
     }
     spec.tensor_parameters.push_back(
         m2::TensorParameter{.unique_id = TP_READER_INDICES, .spec = reader_indices_mesh_tensor.tensor_spec()});
@@ -995,8 +1000,14 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         spec.semaphores.push_back(m2::SemaphoreSpec{.unique_id = SEM_ACT_MCAST_SENDER, .target_nodes = all_cores});
         spec.semaphores.push_back(m2::SemaphoreSpec{.unique_id = SEM_ACT_MCAST_RECEIVER, .target_nodes = all_cores});
     }
-    spec.semaphores.push_back(m2::SemaphoreSpec{.unique_id = SEM_WEIGHTS_MCAST_SENDER, .target_nodes = all_cores});
-    spec.semaphores.push_back(m2::SemaphoreSpec{.unique_id = SEM_WEIGHTS_MCAST_RECEIVER, .target_nodes = all_cores});
+    // Program A (split_program_tilize_only) registers no writer kernels, so nothing constructs the weights
+    // mcast Semaphore objects — do not declare their tokens (an unbound semaphore is at best dead, and the
+    // spec validator may reject it the same way it rejects unbound tensor parameters).
+    if (!split_program_tilize_only) {
+        spec.semaphores.push_back(m2::SemaphoreSpec{.unique_id = SEM_WEIGHTS_MCAST_SENDER, .target_nodes = all_cores});
+        spec.semaphores.push_back(
+            m2::SemaphoreSpec{.unique_id = SEM_WEIGHTS_MCAST_RECEIVER, .target_nodes = all_cores});
+    }
 
     // ---- Dataflow buffers ----
     auto make_dfb = [&](const m2::DFBSpecName& id, Conv2dCb name) {
@@ -2096,9 +2107,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // ---- Tensor args ----
     run_args.tensor_args.emplace(TP_INPUT, std::cref(a.mesh_tensor()));
     run_args.tensor_args.emplace(TP_OUTPUT, std::cref(output.mesh_tensor()));
-    run_args.tensor_args.emplace(TP_WEIGHTS, std::cref(b.mesh_tensor()));
-    if (has_bias) {
-        run_args.tensor_args.emplace(TP_BIAS, std::cref(bias.value().mesh_tensor()));
+    // Program A declares no TP_WEIGHTS/TP_BIAS parameters (see tensor-parameter block above) — the run args
+    // must match the declared parameters, so only pass them on the fused/matmul path.
+    if (!split_program_tilize_only) {
+        run_args.tensor_args.emplace(TP_WEIGHTS, std::cref(b.mesh_tensor()));
+        if (has_bias) {
+            run_args.tensor_args.emplace(TP_BIAS, std::cref(bias.value().mesh_tensor()));
+        }
     }
     run_args.tensor_args.emplace(TP_READER_INDICES, std::cref(reader_indices_owned));
 
