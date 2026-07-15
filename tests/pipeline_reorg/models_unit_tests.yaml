@@ -759,10 +759,14 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
-    # bare `pytest` is not on PATH in the exabox worker env (PATH=/opt/venv/bin:...);
-    # invoke via the interpreter, matching the demo_sp_multihost_tests.yaml convention.
-    python3 -m pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k flux_dev
-    python3 -m pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_transformer_flux1.py -k flux_dev
+    # The exabox worker venv (/opt/venv, where ttnn was installed via `uv pip install`) is a
+    # runtime env without test deps, and a bare `python3` in this step resolves to the system
+    # interpreter that lacks ttnn. Install pytest (+ the pytest-timeout plugin the --timeout flag
+    # needs) into the venv and run the tests with the venv interpreter explicitly.
+    VENV_PY="${VIRTUAL_ENV:-/opt/venv}/bin/python3"
+    uv pip install pytest pytest-timeout
+    "$VENV_PY" -m pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k flux_dev
+    "$VENV_PY" -m pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_transformer_flux1.py -k flux_dev
   model: flux-multihost-tests
   skus:
     bh_spsg:
