@@ -273,6 +273,30 @@ class BgeM3Attention(LightweightModule):
         # SDPA chunk sizing keys off the full (key) sequence length. In
         # sequence-parallel mode queries are local (S/tp) but keys span full S.
         sdpa_seq_len = k.shape[2]
+        # DP query-reshape trick: SDPA throughput is set by Sq (query length),
+        # not batch/total-work (measured: Sq8192=29 vs Sq4096=44 TFLOP/s). Fold
+        # G query-halves into the batch dim so SDPA sees Sq/G; replicate K/V per
+        # group so each query still attends to the FULL sequence (exact, PCC=1.0).
+        # Only for DP (K/V fully local, no gather) and no dense mask.
+        dp_reshape_g = 0
+        if (
+            os.environ.get("BGE_M3_DATA_PARALLEL", "0") == "1"
+            and sdpa_mask is None
+            and seq_len == 8192
+        ):
+            dp_reshape_g = int(os.environ.get("BGE_DP_SDPA_QRESHAPE", "2"))
+        if dp_reshape_g >= 2:
+            b0, h0, s0, dh0 = q.shape
+            g = dp_reshape_g
+            q = ttnn.reshape(q, [b0, h0, g, s0 // g, dh0])
+            q = ttnn.permute(q, [0, 2, 1, 3, 4])
+            q = ttnn.reshape(q, [b0 * g, h0, s0 // g, dh0])
+            k = ttnn.reshape(k, [b0, 1, h0, sdpa_seq_len, dh0])
+            k = ttnn.repeat(k, ttnn.Shape([1, g, 1, 1, 1]))
+            k = ttnn.reshape(k, [b0 * g, h0, sdpa_seq_len, dh0])
+            v = ttnn.reshape(v, [b0, 1, h0, sdpa_seq_len, dh0])
+            v = ttnn.repeat(v, ttnn.Shape([1, g, 1, 1, 1]))
+            v = ttnn.reshape(v, [b0 * g, h0, sdpa_seq_len, dh0])
         sdpa_program_config = _sdpa_program_config(
             sdpa_seq_len,
             self.config.mesh_device,
@@ -290,6 +314,13 @@ class BgeM3Attention(LightweightModule):
             compute_kernel_config=self.config.score_compute_kernel_cfg,
             memory_config=self.config.score_memcfg,
         )
+        if dp_reshape_g >= 2:
+            g = dp_reshape_g
+            b0 = context.shape[0] // g
+            h0, sg, dh0 = context.shape[1], context.shape[2], context.shape[3]
+            context = ttnn.reshape(context, [b0, g, h0, sg, dh0])
+            context = ttnn.permute(context, [0, 2, 1, 3, 4])
+            context = ttnn.reshape(context, [b0, h0, sg * g, dh0])
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
