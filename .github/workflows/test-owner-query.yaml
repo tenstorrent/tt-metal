@@ -1,9 +1,7 @@
 name: "(infra) Test Owner Query"
 
 # On-demand lookup: given a Slack user ID, list every pipeline-reorg test that
-# person owns (name, pipeline-reorg file, line number, owning team). Wraps
-# .github/scripts/utils/tests_by_owner.py and renders a pretty table into the
-# run summary.
+# person owns (name, pipeline-reorg file, line number, owning team).
 
 on:
   workflow_dispatch:
