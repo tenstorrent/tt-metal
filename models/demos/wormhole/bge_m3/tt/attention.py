@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, replace
 
 from ttnn.device import is_blackhole as ttnn_is_blackhole
@@ -360,6 +361,10 @@ def _sdpa_chunks_for_seq_len(seq_len, batch_size=None, sequence_parallel=False):
                 # Sequence-parallel: local Sq=4096, gathered Sk=8192. Lower L1
                 # pressure (halved Sq) lets k_chunk=512 fit, halving the number
                 # of k-passes and the online-softmax rescaling overhead.
+                return 512, 512
+            if os.environ.get("BGE_M3_DATA_PARALLEL", "0") == "1":
+                # Data-parallel: full Sq=8192, Sk=8192, B=6, no dense mask.
+                # Re-tuned for this shape (DP autoresearch).
                 return 512, 512
             # Dense-mask S8192 needs the lower-L1 k256 configuration.
             return 512, 256
