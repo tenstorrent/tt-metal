@@ -164,11 +164,11 @@ struct ComputeGen2Config {
     //  - matmul (MVMUL/MVMULDI)
     //  - the GAPOOL instruction that column reduce ops are built on
     //
-    // Invoking other instructions On Mxfp4 data with the setting enabled will produce garbage
+    // Invoking other instructions on Mxfp4 data with the setting enabled will produce garbage
     // math results! Enable this setting ONLY for kernels whose inputs are consumed solely by
     // a matmul or a column reduce.
     //
-    // This API is not not final and subject to change! It should most likely become a per-DFB
+    // This API is not final and subject to change! It should most likely become a per-DFB
     // setting, similar to unpack_modes.
     bool enable_2x_src_register = false;
 
@@ -177,10 +177,10 @@ struct ComputeGen2Config {
     //
     // NOTE: This is a strictly TEMPORARY HACK!
     //       Removal / fix is tracked in issue #49445.
-    // ISSUES: Its presence alters the semantics of unpack_to_dest_mode.
-    //         This creates a surprising misalignment between Gen1 and Gen2 behavior
+    // ISSUES: Its presence alters the semantics of unpack_modes.
+    //         This creates a surprising misalignment between Gen1 and Gen2 behavior.
     //         It also creates a reachable, unvalidated misconfiguration if unpack_to_dest_en and
-    //         unpack_to_dest_mode are set inconsistently.
+    //         unpack_modes are set inconsistently.
     bool unpack_to_dest_en = false;
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
