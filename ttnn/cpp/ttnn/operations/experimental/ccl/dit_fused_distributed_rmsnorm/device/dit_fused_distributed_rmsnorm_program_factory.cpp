@@ -215,14 +215,32 @@ bool decide_block_major_post(
     uint32_t bias_cb_tiles,
     bool fuse_rope,
     bool is_layernorm,
+    bool per_head_norm,
+    uint32_t input_tile_bytes,
     uint64_t l1_cap_bytes) {
+    // fuse_rope / is_layernorm no longer change the rotated_input_cb sizing estimate
+    // (create_cb always sizes it whole-row unless fuse_mm_rope), but keep them in the
+    // signature for call-site clarity / future use.
+    (void)fuse_rope;
+    (void)is_layernorm;
     const uint32_t padded = ((num_tile_cols + block_size - 1u) / block_size) * block_size;
     // Whole-row CBs that the block-major layout collapses to O(block_size):
     uint64_t whole_row = static_cast<uint64_t>(padded) * intermediate_tile_bytes;  // intermediate_cb
-    // rotated_input_cb is whole-row for RoPE; LayerNorm always uses it as the
-    // (x-mean) xmm buffer, so it's whole-row there too (RMS no-rope leaves it tiny).
-    whole_row += (fuse_rope || is_layernorm) ? static_cast<uint64_t>(padded) * intermediate_tile_bytes : 0ull;
+    // rotated_input_cb: the resident/input-streaming create_cb ALWAYS sizes it to the
+    // whole (padded) row (rotated_cb_tiles == intermediate_cb_tiles unless fuse_mm_rope),
+    // even for RMS no-rope. The earlier "RMS no-rope leaves it tiny" assumption
+    // under-counted it and let wide per-head shards (e.g. Ideogram4 nhpd=10 -> 80 tile-cols,
+    // no rope) pick the resident layout and then blow past L1 at create_cb time. Count it
+    // whole-row unconditionally to match the actual allocation.
+    whole_row += static_cast<uint64_t>(padded) * intermediate_tile_bytes;  // rotated_input_cb
     whole_row += 2ull * padded * output_tile_bytes;  // output_cb (2 rows)
+    // Per-head keeps input_cb RESIDENT for the whole row (the whole-row path streams it,
+    // so it's counted via kSmallCbOverheadBytes there). Count the resident input_cb (2
+    // rows, matching input_cb_tiles below) so the head-major block-major layout engages
+    // before create_cb overflows L1 on wide per-head shards.
+    if (per_head_norm) {
+        whole_row += 2ull * num_tile_cols * input_tile_bytes;
+    }
     // weight_cb / bias_cb tile counts (passed in): every affine mode holds ONE row (num_tile_cols)
     // — broadcast resident, per-token / per-batch streamed per row. block-major does NOT shrink
     // these (only the intermediate/output whole-row CBs), so the decision counts them here at
@@ -674,6 +692,8 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         bias_cb_tiles_est,
         fuse_rope,
         is_layernorm,
+        args.per_head_norm,
+        input_tile_size,
         l1_cap_bytes);
     // When the resident POST overflows, the whole-row path MUST stream (block-major
     // re-reads input pass 1), so force streaming even if the input alone would fit
