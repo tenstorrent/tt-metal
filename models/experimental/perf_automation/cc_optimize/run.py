@@ -277,19 +277,36 @@ def _fullpipe_e2e(repo_root: Path, mcp_env: dict, devices: str, label: str) -> f
         f"  [optimize/cc] measuring FULL-model end-to-end ({label}) — ALL 52 layers, no tracy (one slow run, minutes)..."
     )
     ms = None
+    timeout_s = int(os.environ.get("PERF_MCP_FULLPIPE_TIMEOUT", "1200") or "1200")
+    proc = subprocess.Popen(
+        [_python_bin(repo_root), "-c", code, str(repo_root / CC_DIR)],
+        cwd=str(repo_root / PERF_DIR),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
+    )
     try:
-        r = subprocess.run(
-            [_python_bin(repo_root), "-c", code, str(repo_root / CC_DIR)],
-            cwd=str(repo_root / PERF_DIR),
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=5400,
+        out, _ = proc.communicate(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except Exception:  # noqa: BLE001
+            proc.kill()
+        try:
+            proc.communicate(timeout=30)
+        except Exception:  # noqa: BLE001
+            pass
+        print(
+            f"  [optimize/cc] FULL-model end-to-end ({label}) TIMED OUT after {timeout_s}s (likely a "
+            f"device wedge / leaked mesh) — killed the whole process group + {_reset_devices(devices)}"
         )
+        return None
     except Exception as exc:  # noqa: BLE001
         print(f"  [optimize/cc] FULL-model end-to-end ({label}) skipped ({exc})")
         return None
-    for line in ((r.stderr or "") + "\n" + (r.stdout or "")).splitlines():
+    for line in (out or "").splitlines():
         if line.startswith("FULLPIPE_MS="):
             try:
                 ms = float(line.split("=", 1)[1])
