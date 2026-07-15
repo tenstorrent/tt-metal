@@ -136,4 +136,4 @@
 // directions and a range of hop-distances: route = i-th active direction alternating (i%num_active),
 // distance = {1,2,3,3,2,1,4}[i%7], where i is the per-token index. Payload/page still come from the slot,
 // so tokens are MISROUTED — output is garbage (perf/liveness only). Set 0 to route tokens for real.
-// #define RELAY_ROUNDROBIN_ROUTE 1
+#define RELAY_ROUNDROBIN_ROUTE 0

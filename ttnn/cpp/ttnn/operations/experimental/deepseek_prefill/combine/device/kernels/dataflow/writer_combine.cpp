@@ -343,7 +343,15 @@ void kernel_main() {
         uint32_t w = 0;
 
         // Forward one slot_size L1 region ([route_info | payload]) from `src_l1` into the relay's next c_24
-        // slot, credit-flow-controlled, then signal data_ready (full flush so the whole slot has landed).
+        // slot, credit-flow-controlled, then signal data_ready.
+        // ORDERING (correctness): the relay READS this slot (both the route_info in the first bytes AND the
+        // payload) as soon as it sees data_ready incremented. So the whole slot must have LANDED in the
+        // relay's L1 before the inc. noc_async_writes_flushed() only guarantees the write was SENT (left our
+        // NIU), not that it landed at the remote — the data_ready atomic-inc could then apply at the relay
+        // before the payload/metadata bytes arrive, so the relay reads a STALE slot (misrouted + torn ->
+        // garbage). noc_async_write_barrier() waits for the write to be FLUSHED/acked (actually landed),
+        // matching main's untilizer->sender handoff (noc_async_write_barrier_with_trid before its data_ready
+        // inc). This is the landing guarantee the relay's read depends on.
         auto forward_slot = [&](uint32_t src_l1) {
             if (local_credits == 0) {
                 while (true) {
@@ -360,7 +368,7 @@ void kernel_main() {
             const uint32_t relay_slot_l1 = relay_c24_base + w * relay_slot_size;
             const uint64_t relay_slot_noc = get_noc_addr(relay_noc_x, relay_noc_y, relay_slot_l1);
             noc_async_write(src_l1, relay_slot_noc, relay_slot_size);
-            noc_async_writes_flushed();
+            noc_async_write_barrier();  // wait for the slot to LAND at the relay (not just be sent)
             noc_semaphore_inc<true>(relay_data_ready_noc_addr, 1);
             local_credits--;
             w = (w + 1 == RELAY_SLOTS) ? 0u : w + 1u;
