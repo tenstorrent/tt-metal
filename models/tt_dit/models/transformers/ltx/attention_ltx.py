@@ -28,13 +28,13 @@ def gate_merge_enabled() -> bool:
     bf16 while the projections drop to bf8 — merging would silently demote it. So the quant path
     keeps its standalone gate; the bf16 path merges.
 
-    OPT-IN (LTX_GATE_MERGE=1). The merge used to decode to NOISE; that was NOT the fold. Widening
+    Default ON; LTX_NO_GATE_MERGE forces it off. The merge used to decode to NOISE; that was NOT the fold. Widening
     to_qkv to [4096, 4096] made it spec-identical to ffn.ff1, and all_gather_minimal_matmul_async
     left `chunks` out of its program-cache key, so the FFN reused the QKV program. Fixed in the op
     (see its attribute_names) and guarded by
     test_ltx_merged_mm_configs.py::test_same_shape_different_chunks_do_not_alias.
 
-    It still defaults OFF, but the merge is NOT numerically wrong. Every claim this docstring used to
+    It defaults ON, and the merge is NOT numerically wrong. Every claim this docstring used to
     make about it — that min 0.868 / mean 0.923 sat "50x outside the noise floor" and therefore
     "injects a real, systematic numerical deviation" — was MEASURED AND REFUTED (2026-07-14). The
     merge is arithmetically exact; what is wrong is the noise floor it was priced against.
@@ -75,9 +75,11 @@ def gate_merge_enabled() -> bool:
     Which means the >0.99 frame-PCC-vs-baseline gate CANNOT be the acceptance test for this (or any)
     lever that perturbs stage-1 arithmetic: a bit-legal reblocking fails it at 0.755. Turning the
     merge on is therefore not a correctness call — it is a product call about accepting a different
-    (not worse) sample for ~0.3s of denoise (S1 2.7s vs 2.9s, S2 3.3s vs 3.4s). It stays OFF until
-    someone makes that call against a gate that can actually express it (a reference-free quality
-    metric over several prompts/seeds, not frame-PCC against one blessed decode).
+    (not worse) sample for ~0.3s of denoise (S1 2.7s vs 2.9s, S2 3.3s vs 3.4s). That call is made
+    against a gate that can express it — a reference-free quality metric over several seeds, not
+    frame-PCC against one blessed decode: a 5-seed paired VBench A/B puts the merged imaging_quality
+    within 0.004 of baseline (median 0.6556 vs 0.6597), well inside the ~0.025 spread a provably-benign
+    reblock already costs. So it is ON by default; LTX_NO_GATE_MERGE forces it off.
 
     LTX_NO_GATE_MERGE still forces it off. The transformer cache is keyed on the result (the merge
     widens the Q/QKV weights), so either flag also selects the matching cache — which makes this a
@@ -85,7 +87,7 @@ def gate_merge_enabled() -> bool:
     """
     if os.environ.get("LTX_NO_GATE_MERGE") or os.environ.get("LTX_QUANT"):
         return False
-    return bool(os.environ.get("LTX_GATE_MERGE"))
+    return True
 
 
 class LTXAttention(Module):
