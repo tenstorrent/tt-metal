@@ -12,6 +12,8 @@
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <umd/device/types/arch.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>  // tt::ChipId
+#include <umd/device/types/core_coordinates.hpp>         // CoreType
 
 namespace tt::tt_metal::experimental::quasar {
 struct QuasarDataMovementConfig;
@@ -33,7 +35,7 @@ std::vector<CoreCoord> get_quasar_soc_dispatch_engine_logical_cores(const metal_
 // Fail fast dispatch init when Quasar has no usable dispatch cores for the active path.
 void validate_quasar_dispatch_cores_for_fd(
     tt::tt_metal::MetalEnvImpl& env,
-    ChipId device_id,
+    tt::ChipId device_id,
     uint8_t num_hw_cqs,
     const tt_metal::DispatchCoreConfig& dispatch_core_config);
 
