@@ -133,6 +133,7 @@ void kernel_main() {
             get_noc_addr(sender_noc_x, sender_noc_y, get_semaphore(relay_credits_sem_id));
 
         uint32_t consumed = 0;
+        DeviceZoneScopedN("combine-ethernet-flow");
         while (true) {
             // Wait until slot `consumed` is filled: the producer monotonically ++ data_ready per token.
             while (true) {
