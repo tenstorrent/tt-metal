@@ -380,23 +380,60 @@ def best_manual(M, K, N, sweep, cache, picker=None):
     return min(results, key=lambda r: r["us_med"])
 
 
-def enumerate_feasible(M, K, N):
-    """Every planner-valid config across ALL 5 levers within the 104-worker + L1 limits (NOT Sm=1 only)."""
+def enumerate_feasible(M, K, N, kb_set=(1, 2, 4, 8, 16, 32), nsb_max=None):
+    """Planner-valid configs within the 104-worker + L1 limits (NOT Sm=1 only). Default = ALL 5 levers
+    (kb up to 32, every nsb). Pass kb_set / nsb_max to restrict to a documented practical sub-domain."""
     Mt, Kt, Nt = cdiv(M, 32), cdiv(K, 32), cdiv(N, 32)
     N_band = cdiv(Nt, 8)
     cfgs = []
     for Pk in range(1, min(Kt, 13) + 1):
         for Ns in range(1, 7):
             N_own = cdiv(N_band, Ns)
+            nmax = N_own if nsb_max is None else min(N_own, nsb_max)
             for Sm in range(1, Mt + 1):
                 if 8 * Pk * Ns * Sm > 104:
                     continue
-                for kb in (1, 2, 4, 8, 16, 32):
-                    for nsb in range(1, N_own + 1):
+                for kb in kb_set:
+                    for nsb in range(1, nmax + 1):
                         c = (Ns, Pk, Sm, kb, nsb)
                         if planner_feasible(M, K, N, c)[0]:
                             cfgs.append(c)
     return cfgs
+
+
+def plan_metrics(M, K, N, cfg):
+    """Host-planner geometry for a config: L1 bytes, per-CB tile counts, schedule capacities/padding, and
+    the DRAM-BW reference points (logical bytes, ideal time @512 GB/s). Mirrors build_plan()/planner_feasible."""
+    Ns, Pk, Sm, kb, nsb = cfg
+    Mt, Kt, Nt = cdiv(M, 32), cdiv(K, 32), cdiv(N, 32)
+    N_band = cdiv(Nt, 8)
+    Ktl = rup(cdiv(Kt, Pk), kb * 8)  # K-slice capacity (padded up to kb*8)
+    Mblk = cdiv(Mt, Sm)
+    N_own = cdiv(N_band, Ns)
+    N_bpc = cdiv(N_own, nsb)
+    N_slice = N_bpc * nsb
+    cb0, cb1, cb2, cb3 = Ktl * Mblk, 4 * kb * nsb, 2 * Mblk * nsb, Mblk * nsb
+    cb7 = 2 * Mblk * nsb if Pk > 1 else 0
+    l1 = (cb0 + cb1 + cb2 + cb7) * TB + cb3 * 4096
+    lb = logical_bytes(M, K, N)
+    return {
+        "cores": 8 * Pk * Ns * Sm,
+        "Ktl": Ktl,
+        "Mblk": Mblk,
+        "N_own": N_own,
+        "N_bpc": N_bpc,
+        "N_slice": N_slice,
+        "k_pad_tiles": Ktl * Pk - Kt,  # split-K padding of the K dim (schedule capacity - real)
+        "cb0_in1": cb0,
+        "cb1_in0": cb1,
+        "cb2_interm": cb2,
+        "cb3_out": cb3,
+        "cb7_reduce": cb7,
+        "l1_bytes": l1,
+        "l1_pct": l1 / L1_BUDGET * 100,
+        "logical_bytes": lb,
+        "ideal_us_512": lb / PEAK512 * 1e6,
+    }
 
 
 def load_cache(path=CACHE, persist=True):
