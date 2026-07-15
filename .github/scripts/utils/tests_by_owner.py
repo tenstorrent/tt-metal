@@ -9,9 +9,6 @@ matches the requested Slack ID, the test's:
   - line number of the entry's "- name:" declaration
   - owning team
 
-This module is also imported by verify_test_owner.py, which reuses
-`parse_all_tests()` and `tests_for_owner()`.
-
 Usage:
     python tests_by_owner.py U03PUAKE719
     python tests_by_owner.py U03PUAKE719 --tests-dir tests/pipeline_reorg
@@ -24,9 +21,7 @@ import re
 import sys
 
 # .github/scripts/utils/tests_by_owner.py -> repo root is four levels up.
-REPO_ROOT = os.path.dirname(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-)
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 DEFAULT_TESTS_DIR = os.path.join(REPO_ROOT, "tests", "pipeline_reorg")
 
 # Entries are top-level YAML sequence items, so a new item begins with a dash in
@@ -137,9 +132,8 @@ def tests_for_owner(owner_id, tests_dir=DEFAULT_TESTS_DIR, all_tests=None):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(
-        description="List pipeline-reorg tests owned by a Slack user ID (JSON)."
-    )
+    parser = argparse.ArgumentParser(description="List pipeline-reorg tests owned by a Slack user ID (JSON).")
+
     parser.add_argument("owner_id", help="Slack user ID (e.g. U03PUAKE719)")
     parser.add_argument(
         "--tests-dir",

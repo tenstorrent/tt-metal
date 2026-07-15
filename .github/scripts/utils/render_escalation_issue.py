@@ -2,18 +2,6 @@
 """
 Render the test-owner escalation GitHub issue body from a report JSON.
 
-Consumes the JSON produced by verify_test_owner.py and emits Markdown with this
-structure:
-
-    The following test owners are no longer valid test owners:
-    - <old owner> ...
-
-    @<team-lead> you have been assigned the following tests:
-    - [<test name>](<link to the test's start line>)
-    ...
-
-    @brAIn <review + reassignment instructions>
-
 Tests are grouped by the team lead they should move to (per .github/TESTOWNERS),
 and each is linked to the exact start line of its entry. Tests whose team has no
 lead set are grouped under a warning so they are not silently dropped.
@@ -93,9 +81,8 @@ def render_issue(owners, repo, ref):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(
-        description="Render the escalation issue body from a verify report."
-    )
+    parser = argparse.ArgumentParser(description="Render the escalation issue body from a verify report.")
+
     parser.add_argument("--report", required=True, help="Path to the report JSON.")
     parser.add_argument("--output", help="File to write the body to (default: stdout).")
     parser.add_argument(

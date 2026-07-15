@@ -3,13 +3,12 @@
 Flag pipeline-reorg tests whose owner needs reassignment.
 
 Given the set of Slack user IDs that are currently active, this scans
-tests/pipeline_reorg/*.yaml and reports every test whose `owner_id` is NOT in
+tests/pipeline_reorg/*.yaml and reports tests whose `owner_id` is NOT in
 that active set, plus every test with an empty/missing owner. A test is flagged
 when its owner is any of:
   - deactivated (Slack account marked DEACTIVATED / removed from the active set),
-  - metal-infra (the caller excludes infra members from the active set upstream,
-    so they fall through this same NOT-in-active check), or
-  - unassigned (owner_id blank or absent -> parsed as the "" sentinel).
+  - metal-infra, or
+  - unassigned (owner_id blank or absent).
 
 For each flagged owner the report also names the target team lead pulled from
 .github/TESTOWNERS, keyed on each test's `team`, so the escalation renderer can
@@ -63,12 +62,7 @@ def load_active_ids(args):
             ids.add(item["id"])
     return ids
 
-
-# A TESTOWNERS lead line, e.g. "  models: @mtairum # U03PUAKE719, Miguel Tairum".
-# Parsed by hand rather than as YAML because handle values start with "@", which
-# YAML reserves and refuses to load as a plain scalar.
 _LEAD_RE = re.compile(r"^\s+([\w-]+):\s*(\S+)\s*(?:#\s*(.*\S))?\s*$")
-
 
 def load_team_leads(testowners_path):
     """Return {team: {"github": handle, "slack_id": id, "name": name}}.
@@ -105,9 +99,7 @@ def find_deactivated_owners(active_ids, tests_dir, team_leads):
     """
     all_tests = parse_all_tests(tests_dir)
 
-    flagged_ids = sorted(
-        {t["owner_id"] for t in all_tests if t["owner_id"] not in active_ids}
-    )
+    flagged_ids = sorted({t["owner_id"] for t in all_tests if t["owner_id"] not in active_ids})
 
     owners = []
     for owner_id in flagged_ids:
@@ -142,9 +134,8 @@ def find_deactivated_owners(active_ids, tests_dir, team_leads):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(
-        description="Flag pipeline-reorg tests whose owner needs reassignment (JSON)."
-    )
+    parser = argparse.ArgumentParser(description="Flag pipeline-reorg tests whose owner needs reassignment (JSON).")
+
     src = parser.add_mutually_exclusive_group(required=True)
     src.add_argument(
         "--active-ids-file",
