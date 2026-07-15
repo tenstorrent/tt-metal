@@ -28,6 +28,7 @@ def geomean(xs):
 def load():
     bench = json.load(open(BENCH))
     corpus = bench["corpus"] if isinstance(bench, dict) else bench
+    cache = bench.get("cache", {}) if isinstance(bench, dict) else {}
     sweep = json.load(open(SWEEP))
     sbest = {}  # (M,K,N) -> best sweep record (max bwp)
     for r in sweep:
@@ -44,7 +45,7 @@ def load():
             oracle[(g["M"], g["K"], g["N"])] = g
     except Exception:
         pass
-    return corpus, sbest, skinny, oracle
+    return corpus, sbest, skinny, oracle, cache
 
 
 def cores_of(cfg):
@@ -55,14 +56,14 @@ def cores_of(cfg):
 
 
 def main():
-    corpus, sbest, skinny, oracle = load()
+    corpus, sbest, skinny, oracle, cache = load()
     lines = []
     lines.append("# regime_a_matmul — Blackhole steady-state benchmark\n")
     lines.append(
         "System under test: the independent `ttnn.experimental.regime_a_matmul` op (NOT the C++ prototype). "
         "Resident device inputs + pre-sharded resident weights; PCC>=0.999 verified before timing; 1 warmup "
-        "+ 8 timed iters (min reported; median/spread in JSON). op %=of 512 GB/s. Historical `bh_skinny` "
-        "%=of 500 GB/s (kept separate); cross-source comparison uses kernel us.\n"
+        "+ >=8 timed iters. **Ranked by MEDIAN kernel us** (min/spread in JSON). op %=of 512 GB/s. "
+        "Historical `bh_skinny` %=of 500 GB/s (kept separate); cross-source comparison uses kernel us.\n"
     )
 
     # per-shape table
@@ -82,11 +83,15 @@ def main():
     for rec in corpus:
         M, K, N, Mt, cat = rec["M"], rec["K"], rec["N"], rec["Mt"], rec["cat"]
         prod, man = rec.get("product"), rec.get("manual")
-        pu = prod.get("us_min") if prod and "us_min" in prod else None
-        pp = prod.get("pct512") if prod and "pct512" in prod else None
-        mu = man.get("us_min") if man and "us_min" in man else None
-        mp = man.get("pct512") if man and "pct512" in man else None
-        cfg = man.get("cfg") if man else None
+
+        def okrec(r):
+            return r and r.get("cls") == "ok"
+
+        pu = prod.get("us_med") if okrec(prod) else None  # MEDIAN is the primary metric
+        pp = prod.get("pct512") if okrec(prod) else None
+        mu = man.get("us_med") if okrec(man) else None
+        mp = man.get("pct512") if okrec(man) else None
+        cfg = man.get("cfg") if okrec(man) else None
         cores = cores_of(cfg)
         gap = (pu / mu - 1) * 100 if (pu and mu) else None
         sb = sbest.get((M, K, N))
@@ -107,8 +112,9 @@ def main():
                 picker_regrets.append(pu / mu)
             if vs_target is not None:
                 manual_vs_target.append((f"{M}x{K}x{N}", vs_target))
-            if (prod and "fail" in prod) or (man and "fail" in man) or (mu is None):
-                fails.append((f"{M}x{K}x{N}", prod, man))
+            # selected-path correctness failure = the chosen product OR best-manual config didn't measure ok
+            if not okrec(prod) or (man is not None and not okrec(man)) or mu is None:
+                fails.append((f"{M}x{K}x{N}", (prod or {}).get("cls"), (man or {}).get("cls")))
         tbl.append(
             f"| {cat} | {M}x{K}x{N} | {Mt}{'(diag)' if Mt>=16 else ''} | {fnum(pu)} | {fnum(pp)} | {fnum(mu)} | "
             f"{fnum(mp)} | {cfg} | {cores if cores else '-'} | {fnum(gap,'{:+.1f}')} | "
@@ -123,14 +129,15 @@ def main():
     # geomeans / gates (Mt<=8)
     lines.append("## Acceptance gates (Mt<=8)\n")
     auto_geo = geomean(picker_regrets)  # product_us / manual_us (>=1 means product slower)
+
+    def _med(r):
+        return r.get("us_med") if r and r.get("cls") == "ok" else None
+
     worst_gap = max(
         (
             (pu / mu - 1) * 100
-            for pu, mu in [
-                (r["product"].get("us_min"), r["manual"].get("us_min"))
-                for r in corpus
-                if r["Mt"] <= 8 and r.get("product", {}).get("us_min") and r.get("manual", {}).get("us_min")
-            ]
+            for pu, mu in [(_med(r.get("product")), _med(r.get("manual"))) for r in corpus if r["Mt"] <= 8]
+            if pu and mu
         ),
         default=0.0,
     )
@@ -146,8 +153,22 @@ def main():
             f"(gate: <=5%, fixed-cost noise on short kernels documented). Worst: {worst_mvt[0]} {worst_mvt[1]:+.1f}%."
         )
     lines.append(
-        f"- **Correctness/hangs (Mt<=8):** {'ALL PASS' if not fails else str(len(fails)) + ' FAIL: ' + ', '.join(f[0] for f in fails)}"
+        f"- **Selected-path correctness/hangs (Mt<=8):** {'ALL PASS' if not fails else str(len(fails)) + ' FAIL: ' + ', '.join(f[0] for f in fails)}"
+        " (this counts only the CHOSEN product + best-manual configs, not configs discarded during search)."
     )
+    # exploratory-search outcome tally (all configs the search touched, from the cache) — a validation or
+    # pcc/hang here on a NON-selected config is NOT an op correctness failure, just a pruned candidate.
+    tally = {}
+    for v in (cache or {}).values():
+        if isinstance(v, dict):
+            tally[v.get("cls", "?")] = tally.get(v.get("cls", "?"), 0) + 1
+    if tally:
+        lines.append(
+            "- **Exploratory-search outcomes (all measured/rejected configs):** "
+            + ", ".join(f"{k}={tally[k]}" for k in sorted(tally))
+            + ". validation = host-planner-rejected before launch (expected); ok = measured; "
+            "pcc/runtime/hang on non-selected configs are pruned candidates, not op defects."
+        )
     lines.append("")
 
     # balanced-tail / bank-quantization
@@ -176,9 +197,9 @@ def main():
         Nt = cdiv(N, 32)
         quant = cdiv(Nt, 8) * 8 / Nt
         nb = div_neighbor.get((M, K, N))
-        nb_us = by_shape.get(nb, {}).get("manual", {}).get("us_min") if nb else None
+        nb_us = by_shape.get(nb, {}).get("manual", {}).get("us_med") if nb else None
         btbl.append(
-            f"| {M}x{K}x{N} | {Mt} | {fnum(man.get('us_min'))} | {fnum(man.get('pct512'))} | "
+            f"| {M}x{K}x{N} | {Mt} | {fnum(man.get('us_med'))} | {fnum(man.get('pct512'))} | "
             f"{1/quant*100:.1f}% | {fnum(nb_us)} |"
         )
     lines += btbl
@@ -191,8 +212,8 @@ def main():
             continue
         man = rec.get("manual") or {}
         h = skinny.get((rec["M"], rec["K"], rec["N"]))
-        if man.get("us_min") and h:
-            hist_speedups.append(h["branch"]["us"] / man["us_min"])
+        if man.get("us_med") and h:
+            hist_speedups.append(h["branch"]["us"] / man["us_med"])
     hist_geo = geomean(hist_speedups) if hist_speedups else float("nan")
 
     lines.append("## Findings & prioritized gaps\n")
