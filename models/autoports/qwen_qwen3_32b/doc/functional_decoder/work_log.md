@@ -113,4 +113,4 @@ First independent review (`/root/stage_review_qwen32`) returned `more-work-neede
 
 Fresh rereview (`/root/stage_rereview_qwen32`) returned `Verdict: clean-pass`. It directly verified both corrected source paths and their emit line counts, confirmed the layer-32 BF8/BF16 source policy from both emits, rechecked the implementation, raw logs, scope, and context evidence, and reported no required work or blocking hard-check gap.
 
-The isolated local checkpoint SHA is appended after commit creation. The three raw `.log` artifacts are intentionally force-added because the repository's broad `*.log` ignore rule would otherwise omit required evidence.
+Stage checkpoint: `cbf05453488c69df82e2efbb5e4109fcd002654e` (`Add Qwen3 32B IR functional decoder`). The three raw `.log` artifacts were intentionally force-added because the repository's broad `*.log` ignore rule would otherwise omit required evidence. No push was performed.
