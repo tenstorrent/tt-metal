@@ -351,7 +351,54 @@ fused_mmrs_configs = {
 }
 
 
+def _parse_fused_mmrs_env(spec: str) -> dict:
+    """Parse TT_DIT_FUSED_MMRS="M,K,N=gx,gy,Mb,Kb,Nb,sh,sw; ..." into a {(M,K,N): FusedMMRSConfig} table."""
+    table = {}
+    for entry in spec.split(";"):
+        entry = entry.strip()
+        if not entry:
+            continue
+        shape_s, _, cfg_s = entry.partition("=")
+        shape = tuple(int(v) for v in shape_s.split(","))
+        vals = tuple(int(v) for v in cfg_s.split(","))
+        if len(shape) != 3 or len(vals) != 7:
+            msg = f"TT_DIT_FUSED_MMRS entry {entry!r} must be 'M,K,N=gx,gy,Mb,Kb,Nb,sh,sw'"
+            raise ValueError(msg)
+        gx, gy, mb, kb, nb, sh, sw = vals
+        table[shape] = FusedMMRSConfig(ttnn.CoreCoord(gx, gy), mb, kb, nb, sh, sw, None, 1)
+    return table
+
+
+_fused_mmrs_cache: tuple[str, dict] = ("", {})
+
+
+def fused_mmrs_overrides() -> dict:
+    """MM+RS blocking overrides from TT_DIT_FUSED_MMRS, keyed on (M, K, N), any core grid.
+
+    Sweep tool for shapes that miss fused_mmrs_configs and silently fall to default_fused_mmrs_config
+    (which fires no warning when the grid key exists with *other* shapes). Holding K_block fixed keeps
+    the K-reduction order intact, so a re-tiled config is bit-identical to the default by construction;
+    a fingerprint gate must confirm that before a config is trusted, then registered via
+    register_fused_mmrs_configs. num_buffers_per_channel and chunk_width are pinned to the default so
+    only the matmul-side tiling and compute grid move.
+    """
+    global _fused_mmrs_cache
+    spec = os.environ.get("TT_DIT_FUSED_MMRS", "")
+    if spec != _fused_mmrs_cache[0]:
+        _fused_mmrs_cache = (spec, _parse_fused_mmrs_env(spec) if spec.strip() else {})
+    return _fused_mmrs_cache[1]
+
+
 def get_fused_mmrs_config(M, K, N, device_core_grid, num_links):
+    override = fused_mmrs_overrides().get((M, K, N))
+    if override is not None:
+        logger.info(
+            f"TT_DIT_FUSED_MMRS: ({M}, {K}, {N}) on {device_core_grid.x}x{device_core_grid.y} forced to "
+            f"grid {override.compute_with_storage_grid_size.x}x{override.compute_with_storage_grid_size.y} "
+            f"M{override.M_block_size} K{override.K_block_size} N{override.N_block_size} "
+            f"sub{override.subblock_h}x{override.subblock_w}"
+        )
+        return override.get_params(device_core_grid, num_links)
     config = fused_mmrs_configs.get(device_core_grid, {})
     if len(config) == 0:
         logger.warning(
