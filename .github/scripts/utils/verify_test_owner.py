@@ -62,7 +62,9 @@ def load_active_ids(args):
             ids.add(item["id"])
     return ids
 
+
 _LEAD_RE = re.compile(r"^\s+([\w-]+):\s*(\S+)\s*(?:#\s*(.*\S))?\s*$")
+
 
 def load_team_leads(testowners_path):
     """Return {team: {"github": handle, "slack_id": id, "name": name}}.
