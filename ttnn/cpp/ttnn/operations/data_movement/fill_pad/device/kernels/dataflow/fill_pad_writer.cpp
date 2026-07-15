@@ -43,7 +43,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "fill_pad_dataflow_common.hpp"
 
@@ -81,18 +81,18 @@ void kernel_main() {
     const auto s = TensorAccessor(dst_args, buf_addr, tile_bytes);
 
     Noc noc;
-    CircularBuffer cb_right_mask(cb_right_mask_idx);
-    CircularBuffer cb_bot_mask(cb_bot_mask_idx);
-    CircularBuffer cb_data_out(cb_data_out_idx);
+    DataflowBuffer dfb_right_mask(cb_right_mask_idx);
+    DataflowBuffer dfb_bot_mask(cb_bot_mask_idx);
+    DataflowBuffer dfb_data_out(cb_data_out_idx);
 
     // ---- Phase 1: generate and push mask tile(s) ----
     using mask_t = MASK_ELEM_UINT;
     constexpr uint32_t TILE = 32;
     if constexpr (has_right_pad) {
-        push_right_mask_tile<mask_t, W_mod32, TILE>(cb_right_mask, static_cast<mask_t>(MASK_VALUE));
+        push_right_mask_tile<mask_t, W_mod32, TILE>(dfb_right_mask, static_cast<mask_t>(MASK_VALUE));
     }
     if constexpr (has_bottom_pad) {
-        push_bottom_mask_tile<mask_t, H_mod32, TILE>(cb_bot_mask, static_cast<mask_t>(MASK_VALUE));
+        push_bottom_mask_tile<mask_t, H_mod32, TILE>(dfb_bot_mask, static_cast<mask_t>(MASK_VALUE));
     }
 
     // ---- Phase 2: write-back loop ----
@@ -105,10 +105,10 @@ void kernel_main() {
         uint32_t row = num_right ? start_right - slice * right_slice_stride : 0u;
         for (uint32_t i = 0; i < num_right; ++i) {
             const uint32_t tile_id = slice * H_tiles * W_tiles + row * W_tiles + (W_tiles - 1u);
-            cb_data_out.wait_front(1);
-            noc.async_write(cb_data_out, s, tile_bytes, {.offset_bytes = 0}, {.page_id = tile_id});
+            dfb_data_out.wait_front(1);
+            noc.async_write(dfb_data_out, s, tile_bytes, {.offset_bytes = 0}, {.page_id = tile_id});
             noc.async_writes_flushed();
-            cb_data_out.pop_front(1);
+            dfb_data_out.pop_front(1);
             ++row;
             if (row == right_slice_stride) {
                 row = 0;
@@ -123,10 +123,10 @@ void kernel_main() {
         uint32_t col = num_bottom ? start_bottom - slice * bottom_slice_stride : 0u;
         for (uint32_t j = 0; j < num_bottom; ++j) {
             const uint32_t tile_id = slice * H_tiles * W_tiles + (H_tiles - 1u) * W_tiles + col;
-            cb_data_out.wait_front(1);
-            noc.async_write(cb_data_out, s, tile_bytes, {.offset_bytes = 0}, {.page_id = tile_id});
+            dfb_data_out.wait_front(1);
+            noc.async_write(dfb_data_out, s, tile_bytes, {.offset_bytes = 0}, {.page_id = tile_id});
             noc.async_writes_flushed();
-            cb_data_out.pop_front(1);
+            dfb_data_out.pop_front(1);
             ++col;
             if (col == bottom_slice_stride) {
                 col = 0;
@@ -140,10 +140,10 @@ void kernel_main() {
         for (uint32_t k = 0; k < num_corner; ++k) {
             const uint32_t slice = start_corner + k;
             const uint32_t tile_id = slice * H_tiles * W_tiles + (H_tiles - 1u) * W_tiles + (W_tiles - 1u);
-            cb_data_out.wait_front(1);
-            noc.async_write(cb_data_out, s, tile_bytes, {.offset_bytes = 0}, {.page_id = tile_id});
+            dfb_data_out.wait_front(1);
+            noc.async_write(dfb_data_out, s, tile_bytes, {.offset_bytes = 0}, {.page_id = tile_id});
             noc.async_writes_flushed();
-            cb_data_out.pop_front(1);
+            dfb_data_out.pop_front(1);
         }
     }
 
