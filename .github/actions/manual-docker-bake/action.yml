@@ -337,7 +337,7 @@ runs:
                       echo "$ENRICHED_SBOM_JSON" | jq -r '
                         .SPDX as $s |
                         "    documentNamespace: " + ($s.documentNamespace // "?"),
-                        ($s.packages // [] | .[0] // {} | 
+                        ($s.packages // [] | .[0] // {} |
                           "    licenseDeclared: " + (.licenseDeclared // "NOASSERTION"),
                           "    downloadLocation: " + (.downloadLocation // "NOASSERTION"),
                           "    supplier: " + (.supplier // "NOASSERTION"))
