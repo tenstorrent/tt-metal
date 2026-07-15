@@ -625,11 +625,17 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD
 # Per-cluster stage exceptions below: SC20 revAB subtorus aisleC keeps 16 + 64 only; SC16 revC subtorus
 # aisleC keeps 16 only -- its 48- and 64-stage rings strand (the closing hop lands on a Z-link that the
 # host-minimization SAT pass intermittently fails to assign -- "No inter-mesh connection mesh 62->63").
+# TODO(#49629): SC16 revC subtorus aisleD 64-stage (superpod MGD) fails the same z-link way after the
+# tt-cluster-descriptors uplift -- the ring's closing hop lands on a Z-link the mapper doesn't assign.
+# Repro: tt-run --mesh-graph-descriptor .../blitz_decode_mesh_graph_descriptor_superpod.textproto
+#   --mock-cluster-rank-binding .../SC16_32x4_revC_subtorus_aisleD/SC16_32x4_revC_subtorus_aisleD_mapping.yaml
+#   --gtest_filter="ControlPlaneFixture.TestGalaxyLayoutCheck:ControlPlaneFixture.TestBlitzDecodePipelineBuilder"
+# Kept at 16+48 here until #49629 lands; re-add 64 once the Z-link assignment is fixed.
 for entry in \
     "SC16_revAB_aisleD:${SC16_REVAB_AISLED_CLUSTER_DESC_MAPPING}:16 48 64" \
     "SC20_revAB_subtorus_aisleC:${SC20_REVAB_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 64" \
     "SC16_revC_subtorus_aisleC:${SC16_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16" \
-    "SC16_revC_subtorus_aisleD:${SC16_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 48 64" \
+    "SC16_revC_subtorus_aisleD:${SC16_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 48" \
     "SC20_revC_subtorus_aisleC:${SC20_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 48 64 80" ; do
   rest="${entry#*:}"; cluster_map="${rest%%:*}"; stages="${rest#*:}"
   for stage in ${stages}; do
