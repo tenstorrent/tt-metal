@@ -10,7 +10,6 @@ import sys
 
 import pytest
 
-
 CONFIG_PATH = Path(__file__).parents[3] / "ttnn" / "ttnn" / "trace_allocation_config.py"
 ENV_NAMES = (
     "TT_METAL_TRACE_ALLOC_TRACKING",

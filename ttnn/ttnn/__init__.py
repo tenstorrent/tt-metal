@@ -162,7 +162,6 @@ from ttnn._ttnn.operations.debug import (
 
 from ttnn.trace_allocation_config import TRACE_ALLOC_TRACKING
 
-
 if TRACE_ALLOC_TRACKING:
 
     @contextlib.contextmanager
