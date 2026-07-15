@@ -156,6 +156,27 @@ NOCDebugEvent make_noc_debug_event(
                 event.mcast_end_dst_x,
                 event.mcast_end_dst_y});
         }
+        case EMD::NocEventType::WRITE_INLINE:
+            // An inline dword write: a small write whose value is an immediate register, so it carries no L1
+            // source buffer. Modeled as a write (tracked for the unflushed-at-end and write-to-locked checks and
+            // released by a write barrier) but with has_source_buffer=false so the source-reuse and
+            // counter-monotonicity checks are skipped (there is no source data, and no usable counter snapshot).
+            return NOCDebugEvent(NocWriteEvent{
+                trailer.getSrcAddr(),
+                trailer.getDstAddr(),
+                event.getNumBytes(),
+                static_cast<uint32_t>(trailer.counter_value),
+                src_x,
+                src_y,
+                event.dst_x,
+                event.dst_y,
+                static_cast<bool>(event.posted),
+                event.noc_type == EMD::NocType::NOC_1,
+                /*is_semaphore=*/false,
+                /*is_mcast=*/false,
+                event.mcast_end_dst_x,
+                event.mcast_end_dst_y,
+                /*has_source_buffer=*/false});
         case EMD::NocEventType::READ_BARRIER_END:
             return NOCDebugEvent(NocReadBarrierEvent{src_x, src_y, event.noc_type == EMD::NocType::NOC_1});
         case EMD::NocEventType::READ_BARRIER_WITH_TRID:

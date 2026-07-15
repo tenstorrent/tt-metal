@@ -219,6 +219,92 @@ void RunSemaphoreIncTest(
         "unflushed semaphore inc");
 }
 
+// Every core issues repeated inline dword writes (4-byte immediate value, no L1 source buffer) to one destination
+// core. Because there is no source buffer, the same-src write-barrier check must NOT fire (that would be a false
+// positive); inline writes are released by a normal write barrier, so without one they are reported as unflushed at
+// kernel end. Exercises the Stage-3d WRITE_INLINE device emission + host mapping + has_source_buffer handling.
+void RunInlineWriteTest(
+    NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device, bool use_barrier) {
+    auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
+
+    CoreCoord grid_start = {0, 0};
+    CoreCoord grid_end = {compute_grid_size.x - 1, compute_grid_size.y - 1};
+    CoreRange core_range(grid_start, grid_end);
+
+    auto dest_core_virtual = mesh_device->worker_core_from_logical_core(grid_end);
+
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    tt_metal::Program program = tt_metal::CreateProgram();
+
+    constexpr uint32_t buffer_page_size = 4096;
+    constexpr uint32_t buffer_size = buffer_page_size * 4;
+
+    distributed::DeviceLocalBufferConfig l1_config{
+        .page_size = buffer_page_size, .buffer_type = tt::tt_metal::BufferType::L1};
+    distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
+
+    auto l1_buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
+
+    std::map<std::string, std::string> defines = {
+        {"OTHER_CORE_X", std::to_string(dest_core_virtual.x)},
+        {"OTHER_CORE_Y", std::to_string(dest_core_virtual.y)},
+        {"DST_ADDR", std::to_string(l1_buffer->address())},
+        {"NUM_ITERATIONS", "10"},
+    };
+
+    if (use_barrier) {
+        defines["USE_WRITE_BARRIER"] = "1";
+    }
+
+    tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_inline_writes.cpp",
+        core_range,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
+
+    tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_inline_writes.cpp",
+        core_range,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .defines = defines});
+
+    workload.add_program(device_range, std::move(program));
+
+    fixture->RunProgram(mesh_device, workload);
+
+    ReadMeshDeviceProfilerResults(*mesh_device);
+
+    // Primary: an inline write left unflushed at kernel end is reported iff there is no write barrier.
+    VerifyIssuesOnAllCores(
+        mesh_device,
+        grid_start,
+        grid_end,
+        /*expect_issue=*/!use_barrier,
+        [fixture](ChipId chip_id, CoreCoord core, int processor_id) {
+            return fixture->has_unflushed_write_issue(chip_id, core, processor_id);
+        },
+        "unflushed inline write");
+
+    // Guard: the same-src write-barrier check must never fire for inline writes (they have no source buffer, so
+    // repeated inline writes to the same destination are not a source-reuse hazard).
+    VerifyIssuesOnAllCores(
+        mesh_device,
+        grid_start,
+        grid_end,
+        /*expect_issue=*/false,
+        [fixture](ChipId chip_id, CoreCoord core, int processor_id) {
+            return fixture->has_write_barrier_issue(chip_id, core, processor_id);
+        },
+        "inline write same-src false positive");
+}
+
 // Single core + single RISC issues writes and then a full barrier. Exercises the FULL_BARRIER host
 // mapping via the end-of-kernel unflushed-write check: with the mapping the full barrier clears the
 // pending writes so nothing is reported; without it the full barrier is ignored and the writes are
@@ -522,6 +608,29 @@ TEST_F(NOCDebuggingFixture, SemaphoreIncWithFullBarrier) {
         this->RunTestOnDevice<NOCDebuggingFixture>(
             [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunSemaphoreIncTest(fixture, mesh_device, /*use_barrier=*/false, /*use_full_barrier=*/true);
+            },
+            mesh_device);
+    }
+}
+
+// Inline dword writes with no barrier stay outstanding at kernel end -> unflushed-write issue (and never a
+// same-src false positive, since they carry no source buffer).
+TEST_F(NOCDebuggingFixture, InlineWritesNoBarrier) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice<NOCDebuggingFixture>(
+            [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunInlineWriteTest(fixture, mesh_device, /*use_barrier=*/false);
+            },
+            mesh_device);
+    }
+}
+
+// A write barrier drains the inline writes, so nothing is reported.
+TEST_F(NOCDebuggingFixture, InlineWritesWithBarrier) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice<NOCDebuggingFixture>(
+            [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunInlineWriteTest(fixture, mesh_device, /*use_barrier=*/true);
             },
             mesh_device);
     }

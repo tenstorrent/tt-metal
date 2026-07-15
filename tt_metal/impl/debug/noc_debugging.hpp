@@ -35,6 +35,7 @@ struct NocWriteEvent {
     bool is_mcast;
     int8_t mcast_end_dst_x;
     int8_t mcast_end_dst_y;
+    bool has_source_buffer = true;  // False for writes that carry no L1 source buffer
 };
 
 struct NocReadEvent {

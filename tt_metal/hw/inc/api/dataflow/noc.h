@@ -549,6 +549,9 @@ public:
         static_assert(!std::is_same_v<Dst, MulticastEndpoint>);  // Can be removed when #30023 is resolved
         WAYPOINT("NWIW");
         auto dst_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
+        // Inline dword write: 4-byte immediate value, no L1 source buffer.
+        RECORD_NOC_EVENT_WITH_ADDR(
+            NocEventType::WRITE_INLINE, 0, dst_addr, 4, -1, has_flag(opts, NocOptions::POSTED), noc_id_);
         DEBUG_SANITIZE_NOC_ADDR(noc_id_, dst_addr, 4);
         DEBUG_SANITIZE_NO_DRAM_ADDR(noc_id_, dst_addr, 4);
 

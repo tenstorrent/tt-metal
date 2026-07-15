@@ -65,24 +65,29 @@ void NOCDebugState::handle_write_event(tt_cxy_pair core, int processor_id, uint6
     bool is_mcast = event.is_mcast;
     bool issue_found = false;
 
-    // Multiple writes from the same source address without a barrier in between
-    // Source data potentially overwritten before being flushed
-    if ((posted && state.posted_writes_pending[noc_id].contains(src_addr)) ||
-        (!posted && state.nonposted_writes_pending[noc_id].contains(src_addr))) {
-        issue_found = true;
-    }
-
-    // Check if transaction counter has not increased (should always increase)
-    // This detects cases where counters wrap incorrectly or don't advance
-    if (posted) {
-        if (state.any_posted_writes[noc_id] &&
-            !detail::wrap_ge(event.counter_snapshot, state.posted_write_counter_snapshot[noc_id])) {
+    // The source-reuse and counter-monotonicity checks only make sense for writes that carry an L1 source buffer
+    // and a usable NIU write-counter snapshot. An inline dword write has neither (its value is immediate and it
+    // does not advance the tracked write counter), so skip both to avoid false positives.
+    if (event.has_source_buffer) {
+        // Multiple writes from the same source address without a barrier in between
+        // Source data potentially overwritten before being flushed
+        if ((posted && state.posted_writes_pending[noc_id].contains(src_addr)) ||
+            (!posted && state.nonposted_writes_pending[noc_id].contains(src_addr))) {
             issue_found = true;
         }
-    } else {
-        if (state.any_nonposted_writes[noc_id] &&
-            !detail::wrap_ge(event.counter_snapshot, state.nonposted_write_counter_snapshot[noc_id])) {
-            issue_found = true;
+
+        // Check if transaction counter has not increased (should always increase)
+        // This detects cases where counters wrap incorrectly or don't advance
+        if (posted) {
+            if (state.any_posted_writes[noc_id] &&
+                !detail::wrap_ge(event.counter_snapshot, state.posted_write_counter_snapshot[noc_id])) {
+                issue_found = true;
+            }
+        } else {
+            if (state.any_nonposted_writes[noc_id] &&
+                !detail::wrap_ge(event.counter_snapshot, state.nonposted_write_counter_snapshot[noc_id])) {
+                issue_found = true;
+            }
         }
     }
 
@@ -113,14 +118,20 @@ void NOCDebugState::handle_write_event(tt_cxy_pair core, int processor_id, uint6
         }
     }
 
+    // Always track the pending write so the end-of-kernel unflushed check sees it, but only advance the
+    // counter-monotonicity baseline for writes that carry a real counter snapshot (see has_source_buffer above).
     if (event.posted) {
         state.posted_writes_pending[noc_id][src_addr] = {processor_id, is_semaphore, is_mcast};
-        state.posted_write_counter_snapshot[noc_id] = event.counter_snapshot;
-        state.any_posted_writes[noc_id] = true;
+        if (event.has_source_buffer) {
+            state.posted_write_counter_snapshot[noc_id] = event.counter_snapshot;
+            state.any_posted_writes[noc_id] = true;
+        }
     } else {
         state.nonposted_writes_pending[noc_id][src_addr] = {processor_id, is_semaphore, is_mcast};
-        state.nonposted_write_counter_snapshot[noc_id] = event.counter_snapshot;
-        state.any_nonposted_writes[noc_id] = true;
+        if (event.has_source_buffer) {
+            state.nonposted_write_counter_snapshot[noc_id] = event.counter_snapshot;
+            state.any_nonposted_writes[noc_id] = true;
+        }
     }
     update_latest_risc_timestamp(core, processor_id, timestamp);
 }
