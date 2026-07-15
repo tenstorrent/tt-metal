@@ -1046,8 +1046,15 @@ ParametrizationOptionsMap YamlConfigParser::parse_parametrization_params(const Y
         std::string key = parse_scalar<std::string>(it.first);
         const auto& node = it.second;
 
-        // num_links: all expands to [1 .. platform max] at build time.
-        if (key == "num_links" && node.IsScalar() && parse_scalar<std::string>(node) == "all") {
+        // num_links: all expands to [1 .. platform max] at build time. The IsScalar() check
+        // routes the scalar form here; the sequence form (e.g. [1, 2, 4]) falls through below.
+        if (key == "num_links" && node.IsScalar()) {
+            const auto value = parse_scalar<std::string>(node);
+            TT_FATAL(
+                value == "all",
+                "Parametrization option 'num_links' scalar value must be 'all', got '{}'. Use a sequence "
+                "(e.g. [1, 2, 4]) for explicit values.",
+                value);
             options[key] = std::vector<uint32_t>{kNumLinksAll};
             continue;
         }
