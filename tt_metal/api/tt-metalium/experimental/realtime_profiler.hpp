@@ -42,7 +42,7 @@ using ProgramRealtimeProfilerCallbackHandle = uint64_t;
  * Multiple callbacks can be registered; they are invoked concurrently. If a callback shares a resource
  * with other callbacks or across multiple MeshDevices, access it in a thread-safe way (e.g. with a lock).
  * Callbacks that are too slow to keep up with incoming profiler data may miss records; this
- * is tracked by ProgramRealtimeRecordBatch::dropped.
+ * is reported by ProgramRealtimeRecordBatch::dropped.
  *
  * Return value: ProgramRealtimeProfilerCallbackHandle - handle that can be passed to
  *               UnregisterProgramRealtimeProfilerCallback to remove the callback.
