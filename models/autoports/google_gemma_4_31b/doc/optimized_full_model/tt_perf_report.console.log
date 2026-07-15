@@ -1,0 +1,19 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'GEMMA4_FULL_MODEL_TOKEN_OUT_STEADY'.
+Using operations until 'GEMMA4_FULL_MODEL_TOKEN_OUT_STEADY_END'.
+Detected data from 4 devices. Merging device data...
+Writing CSV output to models/autoports/google_gemma_4_31b/doc/optimized_full_model/tt_perf_report.csv
+Overall DRAM roofline (modeled ops): 60.2% (308 GB/s)
+Warning: Unclassified operation 'AllBroadcastDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'NLPCreateQKVHeadsDecodeDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'PagedFusedUpdateCacheDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'RotaryEmbeddingDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'SdpaDecodeDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'PlusOneDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'AllReduceAsyncDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'GenericOpDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to models/autoports/google_gemma_4_31b/doc/optimized_full_model/tt_perf_summary.csv
+Plotting PNG stacked report to models/autoports/google_gemma_4_31b/doc/optimized_full_model/tt_perf_summary.png

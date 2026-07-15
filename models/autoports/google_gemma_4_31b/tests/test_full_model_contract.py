@@ -9,6 +9,11 @@ from pathlib import Path
 import torch
 
 import ttnn
+from models.autoports.google_gemma_4_31b.tests.run_full_model_qualitative import (
+    _aligned_logits_comparison,
+    _block_match_summary,
+    _stable_logits_summary,
+)
 from models.autoports.google_gemma_4_31b.tt.generator import Gemma4Generator, Gemma4GreedyTP4Sampler, build_generator
 from models.autoports.google_gemma_4_31b.tt.model import (
     ROPE_POSITION_INACTIVE_SENTINEL,
@@ -17,6 +22,7 @@ from models.autoports.google_gemma_4_31b.tt.model import (
     Gemma4FullModelConfig,
     _kv_cache_identity,
     _pad_rope_positions,
+    _sequence_tile_ranges,
 )
 from models.autoports.google_gemma_4_31b.tt.multichip_decoder import (
     DEFAULT_MULTICHIP_OPTIMIZATION_POLICY,
@@ -36,14 +42,58 @@ def test_generator_declares_standard_readiness_contract():
     assert {"model_dir", "mesh_device"} <= set(inspect.signature(build_generator).parameters)
 
 
+def test_aligned_lm_head_diagnostic_metrics_are_tie_stable_and_detect_block_permutation():
+    legacy = torch.tensor([4.0, 4.0, 2.0, 1.0], dtype=torch.bfloat16)
+    optimized = torch.tensor([4.0, 4.0, 2.5, 1.0], dtype=torch.bfloat16)
+    summary = _stable_logits_summary(legacy, top_k=4)
+    assert summary["argmax"] == 0
+    assert summary["exact_max_ids"] == [0, 1]
+    assert summary["top1_top2_margin"] == 0.0
+    comparison = _aligned_logits_comparison(legacy, optimized)
+    assert -1.0 <= comparison["pcc"] <= 1.0
+    assert comparison["exact_bf16_fraction"] == 0.75
+    assert comparison["max_abs_delta"] == 0.5
+
+    reference_blocks = torch.tensor([1.0, 2.0, 10.0, 20.0], dtype=torch.bfloat16)
+    swapped_blocks = torch.tensor([10.0, 20.0, 1.0, 2.0], dtype=torch.bfloat16)
+    matches = _block_match_summary(reference_blocks, swapped_blocks, block_size=2)
+    assert [entry["best_legacy_block"] for entry in matches] == [1, 0]
+    assert all(entry["best_mse"] == 0.0 for entry in matches)
+
+
+def test_full_model_evidence_harness_exposes_focused_repeat_modes():
+    source_path = Path(__file__).with_name("run_full_model_qualitative.py")
+    source = source_path.read_text(encoding="utf-8")
+    assert "--aligned-ab-only" in source
+    assert "--benchmark-only" in source
+    assert "benchmark_warmups" in source
+    assert "statistics.median" in source
+    assert 'GEMMA4_31B_LM_HEAD_DRAM_SHARDED", "1"' in source
+
+
 def test_full_model_preserves_tp4_decoder_and_context_defaults():
     config = Gemma4FullModelConfig()
     assert config.max_seq_len == 262_144
     assert config.max_batch_size == 1
     assert config.lm_head_weight_dtype == ttnn.bfloat16
+    assert config.logits_dtype == ttnn.bfloat16
+    assert config.lm_head_math_fidelity == ttnn.MathFidelity.HiFi2
+    assert config.lm_head_dram_sharded is True
+    assert config.lm_head_num_cores == 4
+    assert config.lm_head_in0_block_w == 2
+    assert config.lm_head_split_size == 8192
     source = inspect.getsource(Gemma4FullModel.__init__)
     assert "MultichipDecoder.from_state_dict" in source
     assert "models.demos.gemma4.tt.model" not in source
+
+    terminal_source = inspect.getsource(Gemma4FullModel._terminal)
+    sharded_projection_source = inspect.getsource(Gemma4FullModel._project_sharded_lm_head_tile)
+    assert "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig" in source
+    assert "self.lm_head_weights" in sharded_projection_source
+    assert "ttnn.sharded_to_interleaved" in sharded_projection_source
+    assert "ttnn.concat" in sharded_projection_source
+    assert "_sequence_tile_ranges(logical_rows)" in terminal_source
+    assert "ttnn.concat(tile_logits, dim=-2" in terminal_source
 
     policy = DEFAULT_MULTICHIP_OPTIMIZATION_POLICY
     assert policy.attention_weight_dtype == ttnn.bfloat8_b
@@ -54,6 +104,43 @@ def test_full_model_preserves_tp4_decoder_and_context_defaults():
     assert policy.mlp_down_math_fidelity == ttnn.MathFidelity.LoFi
     assert MultichipDecoder.mesh_profile["activation_contract"].startswith("replicated BF16")
     assert "BFP8" in MultichipDecoder.mesh_profile["kv_cache"]
+
+
+def test_sharded_lm_head_tiles_arbitrary_logical_prefill_rows(expect_error):
+    expected = {
+        1: ((0, 1),),
+        31: ((0, 31),),
+        32: ((0, 32),),
+        33: ((0, 32), (32, 33)),
+        63: ((0, 32), (32, 63)),
+        64: ((0, 32), (32, 64)),
+        65: ((0, 32), (32, 64), (64, 65)),
+        149: ((0, 32), (32, 64), (64, 96), (96, 128), (128, 149)),
+        249: (
+            (0, 32),
+            (32, 64),
+            (64, 96),
+            (96, 128),
+            (128, 160),
+            (160, 192),
+            (192, 224),
+            (224, 249),
+        ),
+    }
+    for logical_rows, ranges in expected.items():
+        assert _sequence_tile_ranges(logical_rows) == ranges
+        assert ranges[0][0] == 0
+        assert ranges[-1][1] == logical_rows
+        assert all(1 <= end - start <= ttnn.TILE_SIZE for start, end in ranges)
+        assert all(left[1] == right[0] for left, right in zip(ranges, ranges[1:]))
+    with expect_error(ValueError, "positive"):
+        _sequence_tile_ranges(0)
+
+    terminal_source = inspect.getsource(Gemma4FullModel._terminal)
+    assert terminal_source.index("self.final_norm.forward(hidden)") < terminal_source.index(
+        "for start, end in _sequence_tile_ranges(logical_rows)"
+    )
+    assert terminal_source.count("self.final_norm.forward(hidden)") == 1
 
 
 def test_non_aligned_and_inactive_position_normalization():

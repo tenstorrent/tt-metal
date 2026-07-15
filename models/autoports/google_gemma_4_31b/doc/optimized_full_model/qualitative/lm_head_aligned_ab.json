@@ -1,0 +1,2752 @@
+{
+  "prompt_token_ids": [
+    2,
+    6974,
+    496,
+    17856,
+    1292,
+    531,
+    9279,
+    506,
+    123466,
+    7501,
+    236761
+  ],
+  "prompt_len": 11,
+  "logical_row": 10,
+  "config": {
+    "legacy": {
+      "weight_layout": "interleaved DRAM",
+      "program_config": "auto (no explicit program_config)",
+      "weight_dtype": "DataType.BFLOAT16",
+      "logits_dtype": "DataType.BFLOAT16",
+      "math_fidelity": "MathFidelity.HiFi2"
+    },
+    "optimized": {
+      "weight_layout": "width-sharded DRAM",
+      "num_cores": 4,
+      "in0_block_w": 2,
+      "split_size": 8192,
+      "program_config": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=2,per_core_M=1,per_core_N=64,fused_activation=std::nullopt)"
+    },
+    "softcap": 30.0
+  },
+  "pre_softcap": {
+    "tensor": {
+      "legacy": {
+        "shape": [
+          1,
+          1,
+          11,
+          65536
+        ],
+        "padded_shape": [
+          1,
+          1,
+          32,
+          65536
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "device_shapes": [
+          [
+            1,
+            1,
+            11,
+            65536
+          ],
+          [
+            1,
+            1,
+            11,
+            65536
+          ],
+          [
+            1,
+            1,
+            11,
+            65536
+          ],
+          [
+            1,
+            1,
+            11,
+            65536
+          ]
+        ]
+      },
+      "optimized": {
+        "shape": [
+          1,
+          1,
+          11,
+          65536
+        ],
+        "padded_shape": [
+          1,
+          1,
+          32,
+          65536
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "device_shapes": [
+          [
+            1,
+            1,
+            11,
+            65536
+          ],
+          [
+            1,
+            1,
+            11,
+            65536
+          ],
+          [
+            1,
+            1,
+            11,
+            65536
+          ],
+          [
+            1,
+            1,
+            11,
+            65536
+          ]
+        ]
+      }
+    },
+    "legacy": {
+      "argmax": 669,
+      "top1_top2_margin": 1.25,
+      "exact_max_count": 1,
+      "exact_max_ids": [
+        669
+      ],
+      "top": [
+        {
+          "token_id": 669,
+          "score": 41.25,
+          "bf16_bits": 16933
+        },
+        {
+          "token_id": 108,
+          "score": 40.0,
+          "bf16_bits": 16928
+        },
+        {
+          "token_id": 107,
+          "score": 35.75,
+          "bf16_bits": 16911
+        },
+        {
+          "token_id": 562,
+          "score": 31.75,
+          "bf16_bits": 16894
+        },
+        {
+          "token_id": 5180,
+          "score": 31.625,
+          "bf16_bits": 16893
+        },
+        {
+          "token_id": 15642,
+          "score": 31.0,
+          "bf16_bits": 16888
+        },
+        {
+          "token_id": 6890,
+          "score": 30.75,
+          "bf16_bits": 16886
+        },
+        {
+          "token_id": 1174,
+          "score": 30.625,
+          "bf16_bits": 16885
+        },
+        {
+          "token_id": 236743,
+          "score": 30.375,
+          "bf16_bits": 16883
+        },
+        {
+          "token_id": 109,
+          "score": 30.125,
+          "bf16_bits": 16881
+        }
+      ]
+    },
+    "optimized": {
+      "argmax": 669,
+      "top1_top2_margin": 1.25,
+      "exact_max_count": 1,
+      "exact_max_ids": [
+        669
+      ],
+      "top": [
+        {
+          "token_id": 669,
+          "score": 41.25,
+          "bf16_bits": 16933
+        },
+        {
+          "token_id": 108,
+          "score": 40.0,
+          "bf16_bits": 16928
+        },
+        {
+          "token_id": 107,
+          "score": 35.75,
+          "bf16_bits": 16911
+        },
+        {
+          "token_id": 562,
+          "score": 31.75,
+          "bf16_bits": 16894
+        },
+        {
+          "token_id": 5180,
+          "score": 31.625,
+          "bf16_bits": 16893
+        },
+        {
+          "token_id": 15642,
+          "score": 31.0,
+          "bf16_bits": 16888
+        },
+        {
+          "token_id": 6890,
+          "score": 30.75,
+          "bf16_bits": 16886
+        },
+        {
+          "token_id": 1174,
+          "score": 30.625,
+          "bf16_bits": 16885
+        },
+        {
+          "token_id": 236743,
+          "score": 30.375,
+          "bf16_bits": 16883
+        },
+        {
+          "token_id": 109,
+          "score": 30.125,
+          "bf16_bits": 16881
+        }
+      ]
+    },
+    "aligned": {
+      "pcc": 1.0,
+      "exact_bf16_fraction": 1.0,
+      "max_abs_delta": 0.0,
+      "mean_abs_delta": 0.0,
+      "rms_delta": 0.0,
+      "top10_overlap": 10
+    },
+    "block_matches_8192": [
+      {
+        "optimized_block": 0,
+        "best_legacy_block": 0,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 1,
+        "best_legacy_block": 1,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 2,
+        "best_legacy_block": 2,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 3,
+        "best_legacy_block": 3,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 4,
+        "best_legacy_block": 4,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 5,
+        "best_legacy_block": 5,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 6,
+        "best_legacy_block": 6,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 7,
+        "best_legacy_block": 7,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 8,
+        "best_legacy_block": 8,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 9,
+        "best_legacy_block": 9,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 10,
+        "best_legacy_block": 10,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 11,
+        "best_legacy_block": 11,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 12,
+        "best_legacy_block": 12,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 13,
+        "best_legacy_block": 13,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 14,
+        "best_legacy_block": 14,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 15,
+        "best_legacy_block": 15,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 16,
+        "best_legacy_block": 16,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 17,
+        "best_legacy_block": 17,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 18,
+        "best_legacy_block": 18,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 19,
+        "best_legacy_block": 19,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 20,
+        "best_legacy_block": 20,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 21,
+        "best_legacy_block": 21,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 22,
+        "best_legacy_block": 22,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 23,
+        "best_legacy_block": 23,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 24,
+        "best_legacy_block": 24,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 25,
+        "best_legacy_block": 25,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 26,
+        "best_legacy_block": 26,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 27,
+        "best_legacy_block": 27,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 28,
+        "best_legacy_block": 28,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 29,
+        "best_legacy_block": 29,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 30,
+        "best_legacy_block": 30,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 31,
+        "best_legacy_block": 31,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      }
+    ],
+    "boundary_deltas": [
+      {
+        "token_id": 8190,
+        "legacy": 7.6875,
+        "optimized": 7.6875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 8191,
+        "legacy": 11.5625,
+        "optimized": 11.5625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 8192,
+        "legacy": 9.25,
+        "optimized": 9.25,
+        "delta": 0.0
+      },
+      {
+        "token_id": 8193,
+        "legacy": 13.375,
+        "optimized": 13.375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 8194,
+        "legacy": 11.375,
+        "optimized": 11.375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 16382,
+        "legacy": 9.125,
+        "optimized": 9.125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 16383,
+        "legacy": 11.75,
+        "optimized": 11.75,
+        "delta": 0.0
+      },
+      {
+        "token_id": 16384,
+        "legacy": 12.875,
+        "optimized": 12.875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 16385,
+        "legacy": 6.71875,
+        "optimized": 6.71875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 16386,
+        "legacy": 15.1875,
+        "optimized": 15.1875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 24574,
+        "legacy": 4.6875,
+        "optimized": 4.6875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 24575,
+        "legacy": 18.75,
+        "optimized": 18.75,
+        "delta": 0.0
+      },
+      {
+        "token_id": 24576,
+        "legacy": 9.8125,
+        "optimized": 9.8125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 24577,
+        "legacy": 5.15625,
+        "optimized": 5.15625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 24578,
+        "legacy": 4.96875,
+        "optimized": 4.96875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 32766,
+        "legacy": 11.0,
+        "optimized": 11.0,
+        "delta": 0.0
+      },
+      {
+        "token_id": 32767,
+        "legacy": 8.75,
+        "optimized": 8.75,
+        "delta": 0.0
+      },
+      {
+        "token_id": 32768,
+        "legacy": 5.21875,
+        "optimized": 5.21875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 32769,
+        "legacy": 9.8125,
+        "optimized": 9.8125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 32770,
+        "legacy": 11.4375,
+        "optimized": 11.4375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 40958,
+        "legacy": 3.515625,
+        "optimized": 3.515625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 40959,
+        "legacy": 10.1875,
+        "optimized": 10.1875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 40960,
+        "legacy": 6.34375,
+        "optimized": 6.34375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 40961,
+        "legacy": 12.5625,
+        "optimized": 12.5625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 40962,
+        "legacy": 0.86328125,
+        "optimized": 0.86328125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 49150,
+        "legacy": 7.3125,
+        "optimized": 7.3125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 49151,
+        "legacy": 4.9375,
+        "optimized": 4.9375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 49152,
+        "legacy": 7.25,
+        "optimized": 7.25,
+        "delta": 0.0
+      },
+      {
+        "token_id": 49153,
+        "legacy": 1.59375,
+        "optimized": 1.59375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 49154,
+        "legacy": 2.25,
+        "optimized": 2.25,
+        "delta": 0.0
+      },
+      {
+        "token_id": 57342,
+        "legacy": 11.25,
+        "optimized": 11.25,
+        "delta": 0.0
+      },
+      {
+        "token_id": 57343,
+        "legacy": 6.28125,
+        "optimized": 6.28125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 57344,
+        "legacy": 10.5625,
+        "optimized": 10.5625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 57345,
+        "legacy": 3.5625,
+        "optimized": 3.5625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 57346,
+        "legacy": 5.96875,
+        "optimized": 5.96875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 65534,
+        "legacy": 4.0625,
+        "optimized": 4.0625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 65535,
+        "legacy": 8.375,
+        "optimized": 8.375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 65536,
+        "legacy": 7.0,
+        "optimized": 7.0,
+        "delta": 0.0
+      },
+      {
+        "token_id": 65537,
+        "legacy": 4.84375,
+        "optimized": 4.84375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 65538,
+        "legacy": 7.8125,
+        "optimized": 7.8125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 73726,
+        "legacy": 8.3125,
+        "optimized": 8.3125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 73727,
+        "legacy": 9.3125,
+        "optimized": 9.3125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 73728,
+        "legacy": 8.5625,
+        "optimized": 8.5625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 73729,
+        "legacy": 11.8125,
+        "optimized": 11.8125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 73730,
+        "legacy": 1.296875,
+        "optimized": 1.296875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 81918,
+        "legacy": 7.59375,
+        "optimized": 7.59375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 81919,
+        "legacy": 9.25,
+        "optimized": 9.25,
+        "delta": 0.0
+      },
+      {
+        "token_id": 81920,
+        "legacy": 5.5625,
+        "optimized": 5.5625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 81921,
+        "legacy": 6.90625,
+        "optimized": 6.90625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 81922,
+        "legacy": 4.90625,
+        "optimized": 4.90625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 90110,
+        "legacy": 5.0,
+        "optimized": 5.0,
+        "delta": 0.0
+      },
+      {
+        "token_id": 90111,
+        "legacy": 6.65625,
+        "optimized": 6.65625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 90112,
+        "legacy": 5.71875,
+        "optimized": 5.71875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 90113,
+        "legacy": 7.875,
+        "optimized": 7.875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 90114,
+        "legacy": 5.84375,
+        "optimized": 5.84375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 98302,
+        "legacy": 5.09375,
+        "optimized": 5.09375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 98303,
+        "legacy": 4.40625,
+        "optimized": 4.40625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 98304,
+        "legacy": 4.65625,
+        "optimized": 4.65625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 98305,
+        "legacy": 5.125,
+        "optimized": 5.125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 98306,
+        "legacy": 9.1875,
+        "optimized": 9.1875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 106494,
+        "legacy": 5.3125,
+        "optimized": 5.3125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 106495,
+        "legacy": 0.859375,
+        "optimized": 0.859375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 106496,
+        "legacy": 4.59375,
+        "optimized": 4.59375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 106497,
+        "legacy": 6.9375,
+        "optimized": 6.9375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 106498,
+        "legacy": 3.734375,
+        "optimized": 3.734375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 114686,
+        "legacy": 4.75,
+        "optimized": 4.75,
+        "delta": 0.0
+      },
+      {
+        "token_id": 114687,
+        "legacy": 11.3125,
+        "optimized": 11.3125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 114688,
+        "legacy": 10.0,
+        "optimized": 10.0,
+        "delta": 0.0
+      },
+      {
+        "token_id": 114689,
+        "legacy": 10.625,
+        "optimized": 10.625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 114690,
+        "legacy": 8.5625,
+        "optimized": 8.5625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 122878,
+        "legacy": 4.96875,
+        "optimized": 4.96875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 122879,
+        "legacy": 5.90625,
+        "optimized": 5.90625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 122880,
+        "legacy": 4.875,
+        "optimized": 4.875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 122881,
+        "legacy": 7.0,
+        "optimized": 7.0,
+        "delta": 0.0
+      },
+      {
+        "token_id": 122882,
+        "legacy": 10.6875,
+        "optimized": 10.6875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 131070,
+        "legacy": 4.3125,
+        "optimized": 4.3125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 131071,
+        "legacy": 3.453125,
+        "optimized": 3.453125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 131072,
+        "legacy": 12.75,
+        "optimized": 12.75,
+        "delta": 0.0
+      },
+      {
+        "token_id": 131073,
+        "legacy": 11.0625,
+        "optimized": 11.0625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 131074,
+        "legacy": 7.15625,
+        "optimized": 7.15625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 139262,
+        "legacy": 6.53125,
+        "optimized": 6.53125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 139263,
+        "legacy": 9.3125,
+        "optimized": 9.3125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 139264,
+        "legacy": 7.59375,
+        "optimized": 7.59375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 139265,
+        "legacy": 0.002044677734375,
+        "optimized": 0.002044677734375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 139266,
+        "legacy": 2.609375,
+        "optimized": 2.609375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 147454,
+        "legacy": 5.8125,
+        "optimized": 5.8125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 147455,
+        "legacy": 2.078125,
+        "optimized": 2.078125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 147456,
+        "legacy": 8.875,
+        "optimized": 8.875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 147457,
+        "legacy": -0.498046875,
+        "optimized": -0.498046875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 147458,
+        "legacy": 10.3125,
+        "optimized": 10.3125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 155646,
+        "legacy": 9.5,
+        "optimized": 9.5,
+        "delta": 0.0
+      },
+      {
+        "token_id": 155647,
+        "legacy": 5.75,
+        "optimized": 5.75,
+        "delta": 0.0
+      },
+      {
+        "token_id": 155648,
+        "legacy": 5.03125,
+        "optimized": 5.03125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 155649,
+        "legacy": 0.71875,
+        "optimized": 0.71875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 155650,
+        "legacy": 4.875,
+        "optimized": 4.875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 163838,
+        "legacy": 0.83984375,
+        "optimized": 0.83984375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 163839,
+        "legacy": 3.53125,
+        "optimized": 3.53125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 163840,
+        "legacy": 3.375,
+        "optimized": 3.375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 163841,
+        "legacy": 5.875,
+        "optimized": 5.875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 163842,
+        "legacy": 6.875,
+        "optimized": 6.875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 172030,
+        "legacy": 6.875,
+        "optimized": 6.875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 172031,
+        "legacy": 8.5625,
+        "optimized": 8.5625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 172032,
+        "legacy": 4.15625,
+        "optimized": 4.15625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 172033,
+        "legacy": 4.5625,
+        "optimized": 4.5625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 172034,
+        "legacy": 3.109375,
+        "optimized": 3.109375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 180222,
+        "legacy": 9.375,
+        "optimized": 9.375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 180223,
+        "legacy": 6.46875,
+        "optimized": 6.46875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 180224,
+        "legacy": 8.25,
+        "optimized": 8.25,
+        "delta": 0.0
+      },
+      {
+        "token_id": 180225,
+        "legacy": 5.375,
+        "optimized": 5.375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 180226,
+        "legacy": 4.34375,
+        "optimized": 4.34375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 188414,
+        "legacy": 4.1875,
+        "optimized": 4.1875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 188415,
+        "legacy": 4.6875,
+        "optimized": 4.6875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 188416,
+        "legacy": 6.96875,
+        "optimized": 6.96875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 188417,
+        "legacy": 8.8125,
+        "optimized": 8.8125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 188418,
+        "legacy": 7.28125,
+        "optimized": 7.28125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 196606,
+        "legacy": 9.0625,
+        "optimized": 9.0625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 196607,
+        "legacy": 5.09375,
+        "optimized": 5.09375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 196608,
+        "legacy": 1.0625,
+        "optimized": 1.0625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 196609,
+        "legacy": 3.75,
+        "optimized": 3.75,
+        "delta": 0.0
+      },
+      {
+        "token_id": 196610,
+        "legacy": 2.9375,
+        "optimized": 2.9375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 204798,
+        "legacy": 3.109375,
+        "optimized": 3.109375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 204799,
+        "legacy": 11.6875,
+        "optimized": 11.6875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 204800,
+        "legacy": 7.71875,
+        "optimized": 7.71875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 204801,
+        "legacy": 4.25,
+        "optimized": 4.25,
+        "delta": 0.0
+      },
+      {
+        "token_id": 204802,
+        "legacy": 6.8125,
+        "optimized": 6.8125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 212990,
+        "legacy": 1.4453125,
+        "optimized": 1.4453125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 212991,
+        "legacy": 7.28125,
+        "optimized": 7.28125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 212992,
+        "legacy": 0.7578125,
+        "optimized": 0.7578125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 212993,
+        "legacy": 3.703125,
+        "optimized": 3.703125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 212994,
+        "legacy": -0.0986328125,
+        "optimized": -0.0986328125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 221182,
+        "legacy": 6.53125,
+        "optimized": 6.53125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 221183,
+        "legacy": 9.5625,
+        "optimized": 9.5625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 221184,
+        "legacy": 7.25,
+        "optimized": 7.25,
+        "delta": 0.0
+      },
+      {
+        "token_id": 221185,
+        "legacy": 2.3125,
+        "optimized": 2.3125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 221186,
+        "legacy": 6.75,
+        "optimized": 6.75,
+        "delta": 0.0
+      },
+      {
+        "token_id": 229374,
+        "legacy": 6.96875,
+        "optimized": 6.96875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 229375,
+        "legacy": 8.0,
+        "optimized": 8.0,
+        "delta": 0.0
+      },
+      {
+        "token_id": 229376,
+        "legacy": 2.875,
+        "optimized": 2.875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 229377,
+        "legacy": 7.125,
+        "optimized": 7.125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 229378,
+        "legacy": 4.75,
+        "optimized": 4.75,
+        "delta": 0.0
+      },
+      {
+        "token_id": 237566,
+        "legacy": 6.15625,
+        "optimized": 6.15625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 237567,
+        "legacy": 6.375,
+        "optimized": 6.375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 237568,
+        "legacy": 5.46875,
+        "optimized": 5.46875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 237569,
+        "legacy": 7.09375,
+        "optimized": 7.09375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 237570,
+        "legacy": 5.78125,
+        "optimized": 5.78125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 245758,
+        "legacy": 5.59375,
+        "optimized": 5.59375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 245759,
+        "legacy": 6.28125,
+        "optimized": 6.28125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 245760,
+        "legacy": 4.59375,
+        "optimized": 4.59375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 245761,
+        "legacy": 5.875,
+        "optimized": 5.875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 245762,
+        "legacy": 3.453125,
+        "optimized": 3.453125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 253950,
+        "legacy": 4.1875,
+        "optimized": 4.1875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 253951,
+        "legacy": 5.6875,
+        "optimized": 5.6875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 253952,
+        "legacy": 6.65625,
+        "optimized": 6.65625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 253953,
+        "legacy": 8.8125,
+        "optimized": 8.8125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 253954,
+        "legacy": 0.72265625,
+        "optimized": 0.72265625,
+        "delta": 0.0
+      }
+    ],
+    "known_prompt5_candidates": {
+      "108": {
+        "legacy": 40.0,
+        "optimized": 40.0,
+        "delta": 0.0
+      },
+      "669": {
+        "legacy": 41.25,
+        "optimized": 41.25,
+        "delta": 0.0
+      }
+    }
+  },
+  "post_softcap": {
+    "tensor": {
+      "legacy": {
+        "shape": [
+          1,
+          1,
+          11,
+          65536
+        ],
+        "padded_shape": [
+          1,
+          1,
+          32,
+          65536
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "device_shapes": [
+          [
+            1,
+            1,
+            11,
+            65536
+          ],
+          [
+            1,
+            1,
+            11,
+            65536
+          ],
+          [
+            1,
+            1,
+            11,
+            65536
+          ],
+          [
+            1,
+            1,
+            11,
+            65536
+          ]
+        ]
+      },
+      "optimized": {
+        "shape": [
+          1,
+          1,
+          11,
+          65536
+        ],
+        "padded_shape": [
+          1,
+          1,
+          32,
+          65536
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.TILE",
+        "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "device_shapes": [
+          [
+            1,
+            1,
+            11,
+            65536
+          ],
+          [
+            1,
+            1,
+            11,
+            65536
+          ],
+          [
+            1,
+            1,
+            11,
+            65536
+          ],
+          [
+            1,
+            1,
+            11,
+            65536
+          ]
+        ]
+      }
+    },
+    "legacy": {
+      "argmax": 669,
+      "top1_top2_margin": 0.375,
+      "exact_max_count": 1,
+      "exact_max_ids": [
+        669
+      ],
+      "top": [
+        {
+          "token_id": 669,
+          "score": 26.5,
+          "bf16_bits": 16852
+        },
+        {
+          "token_id": 108,
+          "score": 26.125,
+          "bf16_bits": 16849
+        },
+        {
+          "token_id": 107,
+          "score": 25.0,
+          "bf16_bits": 16840
+        },
+        {
+          "token_id": 562,
+          "score": 23.625,
+          "bf16_bits": 16829
+        },
+        {
+          "token_id": 5180,
+          "score": 23.5,
+          "bf16_bits": 16828
+        },
+        {
+          "token_id": 15642,
+          "score": 23.375,
+          "bf16_bits": 16827
+        },
+        {
+          "token_id": 1174,
+          "score": 23.25,
+          "bf16_bits": 16826
+        },
+        {
+          "token_id": 6890,
+          "score": 23.25,
+          "bf16_bits": 16826
+        },
+        {
+          "token_id": 236743,
+          "score": 23.125,
+          "bf16_bits": 16825
+        },
+        {
+          "token_id": 109,
+          "score": 23.0,
+          "bf16_bits": 16824
+        }
+      ]
+    },
+    "optimized": {
+      "argmax": 669,
+      "top1_top2_margin": 0.375,
+      "exact_max_count": 1,
+      "exact_max_ids": [
+        669
+      ],
+      "top": [
+        {
+          "token_id": 669,
+          "score": 26.5,
+          "bf16_bits": 16852
+        },
+        {
+          "token_id": 108,
+          "score": 26.125,
+          "bf16_bits": 16849
+        },
+        {
+          "token_id": 107,
+          "score": 25.0,
+          "bf16_bits": 16840
+        },
+        {
+          "token_id": 562,
+          "score": 23.625,
+          "bf16_bits": 16829
+        },
+        {
+          "token_id": 5180,
+          "score": 23.5,
+          "bf16_bits": 16828
+        },
+        {
+          "token_id": 15642,
+          "score": 23.375,
+          "bf16_bits": 16827
+        },
+        {
+          "token_id": 1174,
+          "score": 23.25,
+          "bf16_bits": 16826
+        },
+        {
+          "token_id": 6890,
+          "score": 23.25,
+          "bf16_bits": 16826
+        },
+        {
+          "token_id": 236743,
+          "score": 23.125,
+          "bf16_bits": 16825
+        },
+        {
+          "token_id": 109,
+          "score": 23.0,
+          "bf16_bits": 16824
+        }
+      ]
+    },
+    "aligned": {
+      "pcc": 1.0,
+      "exact_bf16_fraction": 1.0,
+      "max_abs_delta": 0.0,
+      "mean_abs_delta": 0.0,
+      "rms_delta": 0.0,
+      "top10_overlap": 10
+    },
+    "block_matches_8192": [
+      {
+        "optimized_block": 0,
+        "best_legacy_block": 0,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 1,
+        "best_legacy_block": 1,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 2,
+        "best_legacy_block": 2,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 3,
+        "best_legacy_block": 3,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 4,
+        "best_legacy_block": 4,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 5,
+        "best_legacy_block": 5,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 6,
+        "best_legacy_block": 6,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 7,
+        "best_legacy_block": 7,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 8,
+        "best_legacy_block": 8,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 9,
+        "best_legacy_block": 9,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 10,
+        "best_legacy_block": 10,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 11,
+        "best_legacy_block": 11,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 12,
+        "best_legacy_block": 12,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 13,
+        "best_legacy_block": 13,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 14,
+        "best_legacy_block": 14,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 15,
+        "best_legacy_block": 15,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 16,
+        "best_legacy_block": 16,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 17,
+        "best_legacy_block": 17,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 18,
+        "best_legacy_block": 18,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 19,
+        "best_legacy_block": 19,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 20,
+        "best_legacy_block": 20,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 21,
+        "best_legacy_block": 21,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 22,
+        "best_legacy_block": 22,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 23,
+        "best_legacy_block": 23,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 24,
+        "best_legacy_block": 24,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 25,
+        "best_legacy_block": 25,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 26,
+        "best_legacy_block": 26,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 27,
+        "best_legacy_block": 27,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 28,
+        "best_legacy_block": 28,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 29,
+        "best_legacy_block": 29,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 30,
+        "best_legacy_block": 30,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      },
+      {
+        "optimized_block": 31,
+        "best_legacy_block": 31,
+        "best_mse": 0.0,
+        "identity_mse": 0.0
+      }
+    ],
+    "boundary_deltas": [
+      {
+        "token_id": 8190,
+        "legacy": 7.5625,
+        "optimized": 7.5625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 8191,
+        "legacy": 11.0625,
+        "optimized": 11.0625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 8192,
+        "legacy": 8.9375,
+        "optimized": 8.9375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 8193,
+        "legacy": 12.625,
+        "optimized": 12.625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 8194,
+        "legacy": 10.875,
+        "optimized": 10.875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 16382,
+        "legacy": 8.875,
+        "optimized": 8.875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 16383,
+        "legacy": 11.1875,
+        "optimized": 11.1875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 16384,
+        "legacy": 12.125,
+        "optimized": 12.125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 16385,
+        "legacy": 6.625,
+        "optimized": 6.625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 16386,
+        "legacy": 14.0625,
+        "optimized": 14.0625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 24574,
+        "legacy": 4.6875,
+        "optimized": 4.6875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 24575,
+        "legacy": 16.75,
+        "optimized": 16.75,
+        "delta": 0.0
+      },
+      {
+        "token_id": 24576,
+        "legacy": 9.5,
+        "optimized": 9.5,
+        "delta": 0.0
+      },
+      {
+        "token_id": 24577,
+        "legacy": 5.125,
+        "optimized": 5.125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 24578,
+        "legacy": 4.9375,
+        "optimized": 4.9375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 32766,
+        "legacy": 10.5625,
+        "optimized": 10.5625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 32767,
+        "legacy": 8.5625,
+        "optimized": 8.5625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 32768,
+        "legacy": 5.1875,
+        "optimized": 5.1875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 32769,
+        "legacy": 9.5,
+        "optimized": 9.5,
+        "delta": 0.0
+      },
+      {
+        "token_id": 32770,
+        "legacy": 10.9375,
+        "optimized": 10.9375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 40958,
+        "legacy": 3.515625,
+        "optimized": 3.515625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 40959,
+        "legacy": 9.875,
+        "optimized": 9.875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 40960,
+        "legacy": 6.28125,
+        "optimized": 6.28125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 40961,
+        "legacy": 11.875,
+        "optimized": 11.875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 40962,
+        "legacy": 0.8671875,
+        "optimized": 0.8671875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 49150,
+        "legacy": 7.1875,
+        "optimized": 7.1875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 49151,
+        "legacy": 4.9375,
+        "optimized": 4.9375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 49152,
+        "legacy": 7.125,
+        "optimized": 7.125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 49153,
+        "legacy": 1.59375,
+        "optimized": 1.59375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 49154,
+        "legacy": 2.25,
+        "optimized": 2.25,
+        "delta": 0.0
+      },
+      {
+        "token_id": 57342,
+        "legacy": 10.75,
+        "optimized": 10.75,
+        "delta": 0.0
+      },
+      {
+        "token_id": 57343,
+        "legacy": 6.21875,
+        "optimized": 6.21875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 57344,
+        "legacy": 10.1875,
+        "optimized": 10.1875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 57345,
+        "legacy": 3.5625,
+        "optimized": 3.5625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 57346,
+        "legacy": 5.90625,
+        "optimized": 5.90625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 65534,
+        "legacy": 4.03125,
+        "optimized": 4.03125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 65535,
+        "legacy": 8.125,
+        "optimized": 8.125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 65536,
+        "legacy": 6.90625,
+        "optimized": 6.90625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 65537,
+        "legacy": 4.84375,
+        "optimized": 4.84375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 65538,
+        "legacy": 7.6875,
+        "optimized": 7.6875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 73726,
+        "legacy": 8.125,
+        "optimized": 8.125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 73727,
+        "legacy": 9.0,
+        "optimized": 9.0,
+        "delta": 0.0
+      },
+      {
+        "token_id": 73728,
+        "legacy": 8.375,
+        "optimized": 8.375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 73729,
+        "legacy": 11.25,
+        "optimized": 11.25,
+        "delta": 0.0
+      },
+      {
+        "token_id": 73730,
+        "legacy": 1.3046875,
+        "optimized": 1.3046875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 81918,
+        "legacy": 7.46875,
+        "optimized": 7.46875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 81919,
+        "legacy": 8.9375,
+        "optimized": 8.9375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 81920,
+        "legacy": 5.53125,
+        "optimized": 5.53125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 81921,
+        "legacy": 6.8125,
+        "optimized": 6.8125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 81922,
+        "legacy": 4.90625,
+        "optimized": 4.90625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 90110,
+        "legacy": 4.96875,
+        "optimized": 4.96875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 90111,
+        "legacy": 6.5625,
+        "optimized": 6.5625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 90112,
+        "legacy": 5.6875,
+        "optimized": 5.6875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 90113,
+        "legacy": 7.75,
+        "optimized": 7.75,
+        "delta": 0.0
+      },
+      {
+        "token_id": 90114,
+        "legacy": 5.8125,
+        "optimized": 5.8125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 98302,
+        "legacy": 5.0625,
+        "optimized": 5.0625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 98303,
+        "legacy": 4.40625,
+        "optimized": 4.40625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 98304,
+        "legacy": 4.625,
+        "optimized": 4.625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 98305,
+        "legacy": 5.09375,
+        "optimized": 5.09375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 98306,
+        "legacy": 8.875,
+        "optimized": 8.875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 106494,
+        "legacy": 5.28125,
+        "optimized": 5.28125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 106495,
+        "legacy": 0.859375,
+        "optimized": 0.859375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 106496,
+        "legacy": 4.5625,
+        "optimized": 4.5625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 106497,
+        "legacy": 6.84375,
+        "optimized": 6.84375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 106498,
+        "legacy": 3.734375,
+        "optimized": 3.734375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 114686,
+        "legacy": 4.75,
+        "optimized": 4.75,
+        "delta": 0.0
+      },
+      {
+        "token_id": 114687,
+        "legacy": 10.8125,
+        "optimized": 10.8125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 114688,
+        "legacy": 9.6875,
+        "optimized": 9.6875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 114689,
+        "legacy": 10.25,
+        "optimized": 10.25,
+        "delta": 0.0
+      },
+      {
+        "token_id": 114690,
+        "legacy": 8.375,
+        "optimized": 8.375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 122878,
+        "legacy": 4.9375,
+        "optimized": 4.9375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 122879,
+        "legacy": 5.875,
+        "optimized": 5.875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 122880,
+        "legacy": 4.875,
+        "optimized": 4.875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 122881,
+        "legacy": 6.90625,
+        "optimized": 6.90625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 122882,
+        "legacy": 10.3125,
+        "optimized": 10.3125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 131070,
+        "legacy": 4.3125,
+        "optimized": 4.3125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 131071,
+        "legacy": 3.453125,
+        "optimized": 3.453125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 131072,
+        "legacy": 12.0625,
+        "optimized": 12.0625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 131073,
+        "legacy": 10.625,
+        "optimized": 10.625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 131074,
+        "legacy": 7.0625,
+        "optimized": 7.0625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 139262,
+        "legacy": 6.46875,
+        "optimized": 6.46875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 139263,
+        "legacy": 9.0,
+        "optimized": 9.0,
+        "delta": 0.0
+      },
+      {
+        "token_id": 139264,
+        "legacy": 7.46875,
+        "optimized": 7.46875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 139265,
+        "legacy": 0.002044677734375,
+        "optimized": 0.002044677734375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 139266,
+        "legacy": 2.625,
+        "optimized": 2.625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 147454,
+        "legacy": 5.78125,
+        "optimized": 5.78125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 147455,
+        "legacy": 2.078125,
+        "optimized": 2.078125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 147456,
+        "legacy": 8.6875,
+        "optimized": 8.6875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 147457,
+        "legacy": -0.498046875,
+        "optimized": -0.498046875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 147458,
+        "legacy": 9.9375,
+        "optimized": 9.9375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 155646,
+        "legacy": 9.25,
+        "optimized": 9.25,
+        "delta": 0.0
+      },
+      {
+        "token_id": 155647,
+        "legacy": 5.71875,
+        "optimized": 5.71875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 155648,
+        "legacy": 5.0,
+        "optimized": 5.0,
+        "delta": 0.0
+      },
+      {
+        "token_id": 155649,
+        "legacy": 0.72265625,
+        "optimized": 0.72265625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 155650,
+        "legacy": 4.875,
+        "optimized": 4.875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 163838,
+        "legacy": 0.84375,
+        "optimized": 0.84375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 163839,
+        "legacy": 3.53125,
+        "optimized": 3.53125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 163840,
+        "legacy": 3.375,
+        "optimized": 3.375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 163841,
+        "legacy": 5.84375,
+        "optimized": 5.84375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 163842,
+        "legacy": 6.78125,
+        "optimized": 6.78125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 172030,
+        "legacy": 6.78125,
+        "optimized": 6.78125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 172031,
+        "legacy": 8.375,
+        "optimized": 8.375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 172032,
+        "legacy": 4.125,
+        "optimized": 4.125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 172033,
+        "legacy": 4.53125,
+        "optimized": 4.53125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 172034,
+        "legacy": 3.109375,
+        "optimized": 3.109375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 180222,
+        "legacy": 9.125,
+        "optimized": 9.125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 180223,
+        "legacy": 6.40625,
+        "optimized": 6.40625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 180224,
+        "legacy": 8.0625,
+        "optimized": 8.0625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 180225,
+        "legacy": 5.34375,
+        "optimized": 5.34375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 180226,
+        "legacy": 4.34375,
+        "optimized": 4.34375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 188414,
+        "legacy": 4.15625,
+        "optimized": 4.15625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 188415,
+        "legacy": 4.6875,
+        "optimized": 4.6875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 188416,
+        "legacy": 6.875,
+        "optimized": 6.875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 188417,
+        "legacy": 8.625,
+        "optimized": 8.625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 188418,
+        "legacy": 7.15625,
+        "optimized": 7.15625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 196606,
+        "legacy": 8.8125,
+        "optimized": 8.8125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 196607,
+        "legacy": 5.0625,
+        "optimized": 5.0625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 196608,
+        "legacy": 1.0703125,
+        "optimized": 1.0703125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 196609,
+        "legacy": 3.734375,
+        "optimized": 3.734375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 196610,
+        "legacy": 2.9375,
+        "optimized": 2.9375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 204798,
+        "legacy": 3.109375,
+        "optimized": 3.109375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 204799,
+        "legacy": 11.125,
+        "optimized": 11.125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 204800,
+        "legacy": 7.5625,
+        "optimized": 7.5625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 204801,
+        "legacy": 4.25,
+        "optimized": 4.25,
+        "delta": 0.0
+      },
+      {
+        "token_id": 204802,
+        "legacy": 6.71875,
+        "optimized": 6.71875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 212990,
+        "legacy": 1.453125,
+        "optimized": 1.453125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 212991,
+        "legacy": 7.15625,
+        "optimized": 7.15625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 212992,
+        "legacy": 0.76171875,
+        "optimized": 0.76171875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 212993,
+        "legacy": 3.703125,
+        "optimized": 3.703125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 212994,
+        "legacy": -0.0986328125,
+        "optimized": -0.0986328125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 221182,
+        "legacy": 6.46875,
+        "optimized": 6.46875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 221183,
+        "legacy": 9.3125,
+        "optimized": 9.3125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 221184,
+        "legacy": 7.125,
+        "optimized": 7.125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 221185,
+        "legacy": 2.3125,
+        "optimized": 2.3125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 221186,
+        "legacy": 6.65625,
+        "optimized": 6.65625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 229374,
+        "legacy": 6.875,
+        "optimized": 6.875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 229375,
+        "legacy": 7.84375,
+        "optimized": 7.84375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 229376,
+        "legacy": 2.890625,
+        "optimized": 2.890625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 229377,
+        "legacy": 7.03125,
+        "optimized": 7.03125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 229378,
+        "legacy": 4.75,
+        "optimized": 4.75,
+        "delta": 0.0
+      },
+      {
+        "token_id": 237566,
+        "legacy": 6.09375,
+        "optimized": 6.09375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 237567,
+        "legacy": 6.3125,
+        "optimized": 6.3125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 237568,
+        "legacy": 5.40625,
+        "optimized": 5.40625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 237569,
+        "legacy": 7.0,
+        "optimized": 7.0,
+        "delta": 0.0
+      },
+      {
+        "token_id": 237570,
+        "legacy": 5.75,
+        "optimized": 5.75,
+        "delta": 0.0
+      },
+      {
+        "token_id": 245758,
+        "legacy": 5.5625,
+        "optimized": 5.5625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 245759,
+        "legacy": 6.21875,
+        "optimized": 6.21875,
+        "delta": 0.0
+      },
+      {
+        "token_id": 245760,
+        "legacy": 4.5625,
+        "optimized": 4.5625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 245761,
+        "legacy": 5.84375,
+        "optimized": 5.84375,
+        "delta": 0.0
+      },
+      {
+        "token_id": 245762,
+        "legacy": 3.453125,
+        "optimized": 3.453125,
+        "delta": 0.0
+      },
+      {
+        "token_id": 253950,
+        "legacy": 4.15625,
+        "optimized": 4.15625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 253951,
+        "legacy": 5.65625,
+        "optimized": 5.65625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 253952,
+        "legacy": 6.5625,
+        "optimized": 6.5625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 253953,
+        "legacy": 8.625,
+        "optimized": 8.625,
+        "delta": 0.0
+      },
+      {
+        "token_id": 253954,
+        "legacy": 0.7265625,
+        "optimized": 0.7265625,
+        "delta": 0.0
+      }
+    ],
+    "known_prompt5_candidates": {
+      "108": {
+        "legacy": 26.125,
+        "optimized": 26.125,
+        "delta": 0.0
+      },
+      "669": {
+        "legacy": 26.5,
+        "optimized": 26.5,
+        "delta": 0.0
+      }
+    }
+  },
+  "sampler": {
+    "legacy_device_token": 669,
+    "legacy_host_argmax": 669,
+    "optimized_device_token": 669,
+    "optimized_host_argmax": 669
+  }
+}

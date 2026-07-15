@@ -1,0 +1,84 @@
+{
+  "stage": "optimized-full-model",
+  "model": "google/gemma-4-31B",
+  "mesh": "P150_X4 MeshShape(1,4) TP4 FABRIC_1D",
+  "workload": {
+    "prompt_tokens": 149,
+    "generated_tokens": 100,
+    "batch": 1
+  },
+  "ttft_ms": 452.40942295640707,
+  "token_out_decode_tps_per_user_including_prepare": 24.986542757740974,
+  "token_out_steady_decode_tps_per_user": 34.182469787410774,
+  "token_out_steady_ms_per_token": 29.254761467478712,
+  "token_out_decode_tokens": 99,
+  "matched_unsharded_baseline": {
+    "ttft_ms": 444.00848308578134,
+    "token_out_decode_tps_per_user_including_prepare": 24.888849665036062,
+    "token_out_steady_decode_tps_per_user": 33.874532402244085,
+    "token_out_steady_ms_per_token": 29.520719
+  },
+  "matched_change_percent": {
+    "ttft": 1.8920674245322289,
+    "token_out_decode_tps_per_user_including_prepare": 0.39251750892348447,
+    "token_out_steady_decode_tps_per_user": 0.909052799637422
+  },
+  "stage05_standalone_decoder_stack_target_ms_per_token": 28.356925,
+  "profile_modeled_full_path": {
+    "sliding_layer_ms": 0.44878175,
+    "sliding_layer_count": 50,
+    "full_attention_layer_ms": 0.479633,
+    "full_attention_layer_count": 10,
+    "embedding_and_input_ms": 0.025503,
+    "terminal_and_sampler_ms": 1.879172,
+    "modeled_ms_per_token": 29.1400925,
+    "modeled_tps_per_user": 34.31698,
+    "observed_minus_modeled_ms": 0.114668967478712,
+    "observed_minus_modeled_percent": 0.393509
+  },
+  "reduced_profile_summed_device_work_ms": 2.83308,
+  "reduced_profile_device_op_count": 155,
+  "roofline_mandatory_weight_bytes_per_token": 4205023232,
+  "roofline_at_512_gb_per_s_ms": 8.212936,
+  "trace_counters": {
+    "model_trace_replays": 99,
+    "token_host_refreshes": 0,
+    "position_host_refreshes": 2,
+    "rope_host_refreshes": 2,
+    "page_table_refreshes": 0,
+    "synchronizations": 3,
+    "sampled_token_readbacks": 1,
+    "full_logits_readbacks": 0
+  },
+  "accuracy": {
+    "prefill_top1": "91/100",
+    "prefill_top5": "100/100",
+    "prefill_top100": "100/100",
+    "teacher_forcing_top1": "91/100",
+    "teacher_forcing_top5": "100/100",
+    "teacher_forcing_top100": "100/100",
+    "teacher_forcing_ttft_ms": 841.55,
+    "teacher_forcing_decode_tps_per_user": 23.15,
+    "teacher_forcing_e2e_tps_per_user": 19.54
+  },
+  "measurement_notes": [
+    "End-to-end token-out timing is the median of five unprofiled warmed 100-token runs after one discarded warmup on each constructed generator.",
+    "The matched baseline/default artifacts retain all samples, ranges, and per-sample trace counters.",
+    "The reduced profiler uses one real sliding layer and one real full-attention layer as required by the optimization workflow; it is not an all-60-layer profile.",
+    "The merged four-device profiler chronology includes a 667.9 ms inter-stream gap, so summed device work is topology evidence and is not substituted for end-to-end latency.",
+    "The Stage 05 standalone layer-median sum is retained as a decoder-stack target, not interpreted as an additive captured-trace lower bound or terminal-cost measurement.",
+    "The roofline is a conservative mandatory-weight-read lower bound: 3,500,380,160 decoder bytes plus 704,643,072 BF16 LM-head bytes at 512 GB/s."
+  ],
+  "artifacts": {
+    "matched_baseline": "full_token_out_matched_baseline.json",
+    "matched_selected": "full_token_out_matched_selected.json",
+    "qualitative_run_token_out_benchmark": "token_out_no_readback.json",
+    "reduced_perf": "reduced_token_out_final_perf.json",
+    "profile_perf": "reduced_token_out_profile_perf.json",
+    "tt_perf_report_text": "tt_perf_report.txt",
+    "tt_perf_report_csv": "tt_perf_report.csv",
+    "tt_perf_report_summary_csv": "tt_perf_summary.csv",
+    "raw_ops_csv_gz": "profiler_raw_ops.csv.gz",
+    "profile_hashes": "profiler_sha256.txt"
+  }
+}

@@ -1,0 +1,155 @@
+{
+  "configuration": {
+    "lm_head_dram_sharded": true,
+    "lm_head_num_cores": 4,
+    "lm_head_in0_block_w": 2,
+    "lm_head_split_size": 8192
+  },
+  "workload": {
+    "prompt_len": 149,
+    "gen_len": 100,
+    "batch": 1
+  },
+  "warmups": 1,
+  "repeats": 5,
+  "summary": {
+    "ttft_ms": {
+      "median": 452.40942295640707,
+      "min": 445.4175611026585,
+      "max": 455.086023081094,
+      "samples": [
+        453.30908987671137,
+        455.086023081094,
+        452.40942295640707,
+        445.4175611026585,
+        447.17302406206727
+      ]
+    },
+    "decode_t/s/u": {
+      "median": 24.986542757740974,
+      "min": 24.946392097890993,
+      "max": 25.047552702713332,
+      "samples": [
+        25.01848104381178,
+        25.047552702713332,
+        24.946392097890993,
+        24.972438022290877,
+        24.986542757740974
+      ]
+    },
+    "steady_decode_t/s/u": {
+      "median": 34.182469787410774,
+      "min": 34.18226459157599,
+      "max": 34.183972729485916,
+      "samples": [
+        34.183401097330304,
+        34.183972729485916,
+        34.18226459157599,
+        34.182469787410774,
+        34.18239395255284
+      ]
+    }
+  },
+  "samples": [
+    {
+      "workload": {
+        "prompt_len": 149,
+        "gen_len": 100,
+        "batch": 1
+      },
+      "ttft_ms": 453.30908987671137,
+      "decode_t/s/u": 25.01848104381178,
+      "steady_decode_t/s/u": 34.183401097330304,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 0,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 1,
+        "full_logits_readbacks": 0
+      }
+    },
+    {
+      "workload": {
+        "prompt_len": 149,
+        "gen_len": 100,
+        "batch": 1
+      },
+      "ttft_ms": 455.086023081094,
+      "decode_t/s/u": 25.047552702713332,
+      "steady_decode_t/s/u": 34.183972729485916,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 0,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 1,
+        "full_logits_readbacks": 0
+      }
+    },
+    {
+      "workload": {
+        "prompt_len": 149,
+        "gen_len": 100,
+        "batch": 1
+      },
+      "ttft_ms": 452.40942295640707,
+      "decode_t/s/u": 24.946392097890993,
+      "steady_decode_t/s/u": 34.18226459157599,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 0,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 1,
+        "full_logits_readbacks": 0
+      }
+    },
+    {
+      "workload": {
+        "prompt_len": 149,
+        "gen_len": 100,
+        "batch": 1
+      },
+      "ttft_ms": 445.4175611026585,
+      "decode_t/s/u": 24.972438022290877,
+      "steady_decode_t/s/u": 34.182469787410774,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 0,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 1,
+        "full_logits_readbacks": 0
+      }
+    },
+    {
+      "workload": {
+        "prompt_len": 149,
+        "gen_len": 100,
+        "batch": 1
+      },
+      "ttft_ms": 447.17302406206727,
+      "decode_t/s/u": 24.986542757740974,
+      "steady_decode_t/s/u": 34.18239395255284,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 0,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 1,
+        "full_logits_readbacks": 0
+      }
+    }
+  ]
+}

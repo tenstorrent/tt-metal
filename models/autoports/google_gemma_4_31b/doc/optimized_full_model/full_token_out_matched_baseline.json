@@ -1,0 +1,155 @@
+{
+  "configuration": {
+    "lm_head_dram_sharded": false,
+    "lm_head_num_cores": 4,
+    "lm_head_in0_block_w": 2,
+    "lm_head_split_size": 8192
+  },
+  "workload": {
+    "prompt_len": 149,
+    "gen_len": 100,
+    "batch": 1
+  },
+  "warmups": 1,
+  "repeats": 5,
+  "summary": {
+    "ttft_ms": {
+      "median": 444.00848308578134,
+      "min": 437.08890909329057,
+      "max": 445.2425870113075,
+      "samples": [
+        444.00848308578134,
+        445.2425870113075,
+        444.8625803925097,
+        442.94006703421474,
+        437.08890909329057
+      ]
+    },
+    "decode_t/s/u": {
+      "median": 24.888849665036062,
+      "min": 24.879527467241875,
+      "max": 24.924485727737768,
+      "samples": [
+        24.924485727737768,
+        24.888849665036062,
+        24.879527467241875,
+        24.894291714360918,
+        24.883442587513233
+      ]
+    },
+    "steady_decode_t/s/u": {
+      "median": 33.874532402244085,
+      "min": 33.87393970542253,
+      "max": 33.87662317020271,
+      "samples": [
+        33.87662317020271,
+        33.875931326411234,
+        33.874532402244085,
+        33.874501830455976,
+        33.87393970542253
+      ]
+    }
+  },
+  "samples": [
+    {
+      "workload": {
+        "prompt_len": 149,
+        "gen_len": 100,
+        "batch": 1
+      },
+      "ttft_ms": 444.00848308578134,
+      "decode_t/s/u": 24.924485727737768,
+      "steady_decode_t/s/u": 33.87662317020271,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 0,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 1,
+        "full_logits_readbacks": 0
+      }
+    },
+    {
+      "workload": {
+        "prompt_len": 149,
+        "gen_len": 100,
+        "batch": 1
+      },
+      "ttft_ms": 445.2425870113075,
+      "decode_t/s/u": 24.888849665036062,
+      "steady_decode_t/s/u": 33.875931326411234,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 0,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 1,
+        "full_logits_readbacks": 0
+      }
+    },
+    {
+      "workload": {
+        "prompt_len": 149,
+        "gen_len": 100,
+        "batch": 1
+      },
+      "ttft_ms": 444.8625803925097,
+      "decode_t/s/u": 24.879527467241875,
+      "steady_decode_t/s/u": 33.874532402244085,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 0,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 1,
+        "full_logits_readbacks": 0
+      }
+    },
+    {
+      "workload": {
+        "prompt_len": 149,
+        "gen_len": 100,
+        "batch": 1
+      },
+      "ttft_ms": 442.94006703421474,
+      "decode_t/s/u": 24.894291714360918,
+      "steady_decode_t/s/u": 33.874501830455976,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 0,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 1,
+        "full_logits_readbacks": 0
+      }
+    },
+    {
+      "workload": {
+        "prompt_len": 149,
+        "gen_len": 100,
+        "batch": 1
+      },
+      "ttft_ms": 437.08890909329057,
+      "decode_t/s/u": 24.883442587513233,
+      "steady_decode_t/s/u": 33.87393970542253,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 0,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 1,
+        "full_logits_readbacks": 0
+      }
+    }
+  ]
+}

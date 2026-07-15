@@ -1,0 +1,26 @@
+{
+  "workload": {
+    "layers": [
+      0,
+      5
+    ],
+    "prompt_len": 149,
+    "gen_len": 12,
+    "batch": 1,
+    "context": 262144
+  },
+  "ttft_ms": 3580.4583528079093,
+  "prepare_decode_ms": 294.8135668411851,
+  "decode_t/s/u": 33.8718649731759,
+  "steady_decode_t/s/u": 334.0042888499172,
+  "trace_counters": {
+    "model_trace_replays": 11,
+    "token_host_refreshes": 0,
+    "position_host_refreshes": 2,
+    "rope_host_refreshes": 2,
+    "page_table_refreshes": 0,
+    "synchronizations": 3,
+    "sampled_token_readbacks": 1,
+    "full_logits_readbacks": 0
+  }
+}

@@ -1,0 +1,17 @@
+candidate,status,lm_head_split_size,in0_block_w,steady_decode_t_s_u,evidence
+unsharded_baseline,pass,65536,default,303.502387,reduced_token_out_baseline.json
+dram_sharded_unsplit,rejected,65536,7,,candidates/lm_head_dram8_block7.xml: static circular buffers 11674368 B exceed 1572864 B L1
+dram8_split4096_block7,pass,4096,7,334.004289,candidates/lm_head_dram8_split4096_block7_perf.json
+dram8_split4096_block3,pass,4096,3,335.032349,candidates/lm_head_dram8_split4096_block3_perf.json
+dram8_split4096_block21,rejected,4096,21,,candidates/lm_head_dram8_split4096_block21.xml: static circular buffers 2294528 B exceed 1572864 B L1
+dram8_split8192_block3,rejected_qualitative,8192,3,339.159538,candidates/lm_head_dram8_split8192_block3_perf.json; prompt-5 first-token drift and corpus-list continuation
+dram4_split8192_block2,selected,8192,2,339.823107,candidates/lm_head_dram4_split8192_block2_perf.json; restores Stage06 prompt-5 continuation exactly 64/64 at equal throughput
+dram4_split8192_block3,rejected_correctness_and_speed,8192,3,337.545868,candidates/lm_head_dram4_split8192_block3_perf.json; aligned exact BF16 fraction 0.160728 and greedy 669->108
+dram4_split8192_block6,rejected,8192,6,,candidates/lm_head_dram4_split8192_block6.log: L1 allocation at 1351040 clashes with static CB end 1381120
+dram4_split8192_block7,rejected,8192,7,,candidates/lm_head_dram4_split8192_block7.log: static CB 1581824 B exceeds 1572864 B L1
+dram4_split8192_block14,rejected,8192,14,,candidates/lm_head_dram4_split8192_block14.log: static CB 2986752 B exceeds 1572864 B L1
+dram4_split8192_block21,rejected,8192,21,,candidates/lm_head_dram4_split8192_block21.log: static CB 4391680 B exceeds 1572864 B L1
+dram4_split8192_block42,rejected,8192,42,,candidates/lm_head_dram4_split8192_block42.log: static CB 8606464 B exceeds 1572864 B L1
+dram8_split16384_block3,rejected,16384,3,,candidates/lm_head_dram8_split16384_block3.xml: L1 buffer at 1394048 clashes with static circular-buffer end 1434368
+block3_default_repeat,superseded,8192,3,339.834362,AUTOFIX_QUALITATIVE_LM_HEAD.md (historical repeat recorded before final artifact replacement)
+selected_default_repeat,pass,8192,2,339.164348,reduced_token_out_final_perf.json

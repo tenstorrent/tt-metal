@@ -1,0 +1,27 @@
+{
+  "artifact": "vllm_qualitative_outputs.json",
+  "prompts": 6,
+  "tokens_per_prompt": 64,
+  "aggregate_hf_tt_token_matches": 136,
+  "aggregate_hf_tt_prefix_tokens": 134,
+  "exact_hf_prompts": [1, 3],
+  "stage06_tt_exact_match_prompts": [0, 1, 2, 3, 4, 5],
+  "per_prompt": [
+    {"id": 0, "hf_tt_matches": 2, "hf_tt_prefix": 1, "tt_words": 40, "adjacent_repetitions": 0, "repeated_trigrams": 2},
+    {"id": 1, "hf_tt_matches": 64, "hf_tt_prefix": 64, "tt_words": 53, "adjacent_repetitions": 0, "repeated_trigrams": 42, "control": "exact HF output"},
+    {"id": 2, "hf_tt_matches": 4, "hf_tt_prefix": 3, "tt_words": 55, "adjacent_repetitions": 0, "repeated_trigrams": 18},
+    {"id": 3, "hf_tt_matches": 64, "hf_tt_prefix": 64, "tt_words": 51, "adjacent_repetitions": 0, "repeated_trigrams": 30, "control": "exact HF output"},
+    {"id": 4, "hf_tt_matches": 1, "hf_tt_prefix": 1, "tt_words": 51, "adjacent_repetitions": 0, "repeated_trigrams": 7, "control": "base-checkpoint corpus autocomplete"},
+    {"id": 5, "hf_tt_matches": 1, "hf_tt_prefix": 1, "tt_words": 39, "adjacent_repetitions": 1, "repeated_trigrams": 0, "control": "coherent Fibonacci continuation identical to Stage 06 TT"}
+  ],
+  "autoregressive_100_token_control": {
+    "first_token_matches_hf": true,
+    "first_difference_zero_based": 1,
+    "positional_matches": 8,
+    "tt_words": 83,
+    "adjacent_repetitions": 0,
+    "repeated_trigrams": 0,
+    "coherent_english": true
+  },
+  "verdict": "pass: no TT-only degeneration; repeated phrases in exact-match controls mirror HF, and the selected path restores all Stage 06 TT trajectories"
+}

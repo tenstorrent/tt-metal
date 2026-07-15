@@ -1,0 +1,25 @@
+{
+  "source": "../full_model/reduced_token_out_source_current_perf.json",
+  "source_stage_commit": "cc5b46623f0",
+  "workload": {
+    "layers": [0, 5],
+    "prompt_len": 149,
+    "gen_len": 12,
+    "batch": 1,
+    "context": 262144
+  },
+  "ttft_ms": 5087.012367788702,
+  "prepare_decode_ms": 652.516056317836,
+  "decode_t/s/u": 16.047507009515783,
+  "steady_decode_t/s/u": 303.50238740541005,
+  "trace_counters": {
+    "model_trace_replays": 11,
+    "token_host_refreshes": 0,
+    "position_host_refreshes": 2,
+    "rope_host_refreshes": 2,
+    "page_table_refreshes": 0,
+    "synchronizations": 3,
+    "sampled_token_readbacks": 1,
+    "full_logits_readbacks": 0
+  }
+}

@@ -121,6 +121,13 @@ def _kv_cache_identity(kv_cache: Sequence[Sequence[ttnn.Tensor]]) -> tuple[tuple
     return tuple(tuple(id(tensor) for tensor in cache_pair) for cache_pair in kv_cache)
 
 
+def _sequence_tile_ranges(logical_rows: int) -> tuple[tuple[int, int], ...]:
+    """Partition a positive logical sequence into contiguous TT tile-height ranges."""
+    if logical_rows < 1:
+        raise ValueError("logical_rows must be positive")
+    return tuple((start, min(start + ttnn.TILE_SIZE, logical_rows)) for start in range(0, logical_rows, ttnn.TILE_SIZE))
+
+
 @dataclass(frozen=True)
 class Gemma4FullModelConfig:
     max_seq_len: int = HF_ADVERTISED_CONTEXT
@@ -129,6 +136,10 @@ class Gemma4FullModelConfig:
     lm_head_weight_dtype: ttnn.DataType = ttnn.bfloat16
     logits_dtype: ttnn.DataType = ttnn.bfloat16
     lm_head_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
+    lm_head_dram_sharded: bool = True
+    lm_head_num_cores: int = 4
+    lm_head_in0_block_w: int = 2
+    lm_head_split_size: int = 8192
     trace_region_size_bytes: int = 256 << 20
 
 
@@ -201,6 +212,14 @@ class Gemma4FullModel:
         self.embed_scale = math.sqrt(self.hidden_size)
         self.trace_state = DecodeTraceState()
 
+        lm_head_k_tiles = self.hidden_size // ttnn.TILE_SIZE
+        if self.hidden_size % (ttnn.TILE_SIZE * self.config.lm_head_num_cores):
+            raise ValueError("LM-head hidden width must tile-divide over lm_head_num_cores")
+        if (lm_head_k_tiles // self.config.lm_head_num_cores) % self.config.lm_head_in0_block_w:
+            raise ValueError("LM-head in0_block_w must divide the per-core hidden K tiles")
+        if self.vocab_per_device % self.config.lm_head_split_size:
+            raise ValueError("TP-local vocabulary must divide exactly over lm_head_split_size")
+
         embed_key = "model.language_model.embed_tokens.weight"
         norm_key = "model.language_model.norm.weight"
         embedding = state_dict[embed_key].to(torch.bfloat16)
@@ -212,14 +231,48 @@ class Gemma4FullModel:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
         )
-        self.lm_head_weight = ttnn.from_torch(
-            embedding.transpose(0, 1).contiguous(),
-            device=mesh_device,
-            dtype=self.config.lm_head_weight_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
-        )
+        lm_head_source = embedding.transpose(0, 1).contiguous()
+        lm_head_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
+        self.lm_head_weights: list[ttnn.Tensor] = []
+        if self.config.lm_head_dram_sharded:
+            # Direct BF16 tilization into this very wide sharded allocation asks
+            # the device tilizer for an 8+ MiB circular buffer.  Tile on the host
+            # first, then perform only the final DRAM-sharded placement on device.
+            for split_start in range(0, self.vocab_per_device, self.config.lm_head_split_size):
+                device_splits = [
+                    lm_head_source[
+                        :,
+                        device_idx * self.vocab_per_device
+                        + split_start : device_idx * self.vocab_per_device
+                        + split_start
+                        + self.config.lm_head_split_size,
+                    ]
+                    for device_idx in range(mesh_device.get_num_devices())
+                ]
+                split_source = torch.cat(device_splits, dim=-1).contiguous()
+                lm_head_host = ttnn.from_torch(
+                    split_source,
+                    dtype=self.config.lm_head_weight_dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=lm_head_mapper,
+                )
+                self.lm_head_weights.append(
+                    ttnn.to_device(
+                        lm_head_host,
+                        mesh_device,
+                        memory_config=self._lm_head_weight_memory_config(self.config.lm_head_split_size),
+                    )
+                )
+            self.lm_head_weight = None
+        else:
+            self.lm_head_weight = ttnn.from_torch(
+                lm_head_source,
+                device=mesh_device,
+                dtype=self.config.lm_head_weight_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=lm_head_mapper,
+            )
         self.final_norm = RMSNorm(
             mesh_device,
             self.hf_config,
@@ -232,6 +285,12 @@ class Gemma4FullModel:
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
+        )
+        self.lm_head_input_memory_config = self._lm_head_input_memory_config()
+        self.lm_head_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=self.config.lm_head_in0_block_w,
+            per_core_M=1,
+            per_core_N=math.ceil(self.config.lm_head_split_size / (ttnn.TILE_SIZE * self.config.lm_head_num_cores)),
         )
 
         self.decode_rope = self._build_decode_rope_caches()
@@ -247,6 +306,36 @@ class Gemma4FullModel:
                     tensor_cache_path=layer_cache,
                 )
             )
+
+    def _lm_head_weight_memory_config(self, local_vocab_width: int) -> ttnn.MemoryConfig:
+        """Width-shard each TP-local vocab projection over Blackhole DRAM banks."""
+        grid = self.mesh_device.dram_grid_size()
+        num_banks = grid.x * grid.y
+        padded_n = math.ceil(local_vocab_width / (ttnn.TILE_SIZE * num_banks)) * ttnn.TILE_SIZE * num_banks
+        dram_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(
+                dram_cores,
+                (self.hidden_size, padded_n // num_banks),
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+
+    def _lm_head_input_memory_config(self) -> ttnn.MemoryConfig:
+        core_grid = ttnn.num_cores_to_corerangeset(
+            self.config.lm_head_num_cores,
+            self.mesh_device.compute_with_storage_grid_size(),
+            row_wise=True,
+        )
+        return ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, self.hidden_size // self.config.lm_head_num_cores),
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
 
     @classmethod
     def from_pretrained(
@@ -360,17 +449,60 @@ class Gemma4FullModel:
             raise ValueError("page_table must resolve to one device table per decoder layer")
         return result
 
+    def _project_sharded_lm_head_tile(self, normed_tile: ttnn.Tensor) -> ttnn.Tensor:
+        """Project one logical sequence tile with the fixed-M DRAM-sharded LM head."""
+        logical_rows = int(normed_tile.shape[-2])
+        if not 1 <= logical_rows <= ttnn.TILE_SIZE:
+            raise ValueError(f"sharded LM-head tile must have 1..{ttnn.TILE_SIZE} logical rows, got {logical_rows}")
+        lm_head_input = ttnn.to_memory_config(normed_tile, self.lm_head_input_memory_config)
+        normed_tile.deallocate(True)
+        split_logits = []
+        for weight in self.lm_head_weights:
+            local_logits = ttnn.linear(
+                lm_head_input,
+                weight,
+                dtype=self.config.logits_dtype,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                program_config=self.lm_head_program_config,
+                compute_kernel_config=self.lm_head_compute,
+            )
+            split_logits.append(ttnn.sharded_to_interleaved(local_logits, ttnn.DRAM_MEMORY_CONFIG))
+            local_logits.deallocate(True)
+        lm_head_input.deallocate(True)
+        logits = ttnn.concat(split_logits, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for split in split_logits:
+            split.deallocate(True)
+        return logits
+
     def _terminal(self, hidden: ttnn.Tensor) -> ttnn.Tensor:
         normed = self.final_norm.forward(hidden)
         hidden.deallocate(True)
-        logits = ttnn.linear(
-            normed,
-            self.lm_head_weight,
-            dtype=self.config.logits_dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.lm_head_compute,
-        )
-        normed.deallocate(True)
+        if self.config.lm_head_dram_sharded:
+            logical_rows = int(normed.shape[-2])
+            if logical_rows <= ttnn.TILE_SIZE:
+                logits = self._project_sharded_lm_head_tile(normed)
+            else:
+                tile_logits = []
+                for start, end in _sequence_tile_ranges(logical_rows):
+                    normed_tile = ttnn.slice(
+                        normed,
+                        [0, 0, start, 0],
+                        [1, 1, end, self.hidden_size],
+                    )
+                    tile_logits.append(self._project_sharded_lm_head_tile(normed_tile))
+                normed.deallocate(True)
+                logits = ttnn.concat(tile_logits, dim=-2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                for tile in tile_logits:
+                    tile.deallocate(True)
+        else:
+            logits = ttnn.linear(
+                normed,
+                self.lm_head_weight,
+                dtype=self.config.logits_dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.lm_head_compute,
+            )
+            normed.deallocate(True)
         if self.final_logit_softcapping > 0:
             scaled = ttnn.mul(logits, 1.0 / self.final_logit_softcapping)
             logits.deallocate(True)

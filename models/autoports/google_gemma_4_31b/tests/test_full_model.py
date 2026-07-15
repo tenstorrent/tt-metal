@@ -334,6 +334,19 @@ def test_reduced_full_model_prefill_split_greedy_and_trace():
         prompt = (prompt * ((33 + len(prompt) - 1) // len(prompt)))[:33]
         tokens = torch.tensor([prompt], dtype=torch.long)
 
+        # Regression for the M=32 DRAM-sharded terminal boundary. Readiness
+        # requests every logical row, including non-aligned multi-tile prompts.
+        all_logits = generator.prefill_forward(
+            tokens,
+            page_table=generator.page_tables,
+            kv_cache=generator.kv_cache,
+            prompt_lens=[33],
+            return_all_logits=True,
+        )
+        assert tuple(all_logits.shape) == (1, 33, generator.model.vocab_size)
+        del all_logits
+        generator.reset()
+
         device_logits = generator.prefill_forward(
             tokens,
             page_table=generator.page_tables,
@@ -442,7 +455,14 @@ def test_reduced_full_model_token_out_perf_signposts():
         generator = build_generator(
             MODEL_DIR,
             mesh,
-            model_config=Gemma4FullModelConfig(layer_indices=(0, 5), max_batch_size=1),
+            model_config=Gemma4FullModelConfig(
+                layer_indices=(0, 5),
+                max_batch_size=1,
+                lm_head_dram_sharded=os.environ.get("GEMMA4_31B_LM_HEAD_DRAM_SHARDED", "1") == "1",
+                lm_head_num_cores=int(os.environ.get("GEMMA4_31B_LM_HEAD_NUM_CORES", "4")),
+                lm_head_in0_block_w=int(os.environ.get("GEMMA4_31B_LM_HEAD_IN0_BLOCK_W", "2")),
+                lm_head_split_size=int(os.environ.get("GEMMA4_31B_LM_HEAD_SPLIT_SIZE", "8192")),
+            ),
             tensor_cache_path=Path("/tmp/gemma4_31b_full_model_tensor_cache"),
         )
         generator.reset()

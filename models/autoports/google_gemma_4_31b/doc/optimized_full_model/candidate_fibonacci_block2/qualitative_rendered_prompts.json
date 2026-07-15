@@ -1,0 +1,19 @@
+[
+  {
+    "id": 0,
+    "prompt": "Write a Python function to calculate the Fibonacci sequence.",
+    "prompt_token_ids": [
+      2,
+      6974,
+      496,
+      17856,
+      1292,
+      531,
+      9279,
+      506,
+      123466,
+      7501,
+      236761
+    ]
+  }
+]
