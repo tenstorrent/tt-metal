@@ -653,15 +653,15 @@ fi # bh-blitz-decode
 # Non-pod-aligned Blitz-decode ring lengths (20/24/28/32/36 stages) mapped onto the full 36-host SC36 revC
 # subtorus aisleD mock. These lengths don't align to pod (4-host) / galaxy boundaries, so they exercise
 # the topology mapper's general-SAT host-minimization fallback -- erratic cost that scales with ring
-# length (36-stage ~42s vs sub-second for 20/24/28/32). The subtorus wrap-around lets every length close
-# and map. Own shard, measured ~1.5 min end-to-end for the 5 maps.
+# length (36-stage ~42s local vs sub-second for 20/24/28/32). The subtorus wrap-around lets every length
+# close and map. Own shard; ~1.5 min end-to-end locally, ~6.5 min on the ~4x-slower cpu_medium CI runner.
 ######################################
 if run_group "bh-ring-stress"; then
 
-# Per-op mapper watchdog: 240s -- ~5x the worst observed solve (~42s), and below the shard step timeout
-# (6 min, see tests/pipeline_reorg/fabric_cpu_only_unit_tests.yaml) so a stuck solve is caught/reported
-# here rather than cancelled mid-shard by GitHub Actions.
-RING_STRESS_TIMEOUT=240
+# Per-op mapper watchdog: 300s -- above the worst per-stage solve on CI (~3 min on the slower cpu_medium
+# runner) and below the shard step timeout (10 min, see tests/pipeline_reorg/fabric_cpu_only_unit_tests.yaml)
+# so a stuck solve is caught/reported here rather than cancelled mid-shard by GitHub Actions.
+RING_STRESS_TIMEOUT=300
 for entry in \
     "SC36_revC_subtorus_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:20 24 28 32 36" ; do
   rest="${entry#*:}"; cluster_map="${rest%%:*}"; stages="${rest#*:}"
