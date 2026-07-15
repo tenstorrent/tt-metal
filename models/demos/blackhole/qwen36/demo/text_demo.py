@@ -745,12 +745,17 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
                 ttnn.deallocate(cc)
 
     def _update(tokens_row, positions):
+        # page_table is a constant per-user block mapping for the whole decode loop; it was
+        # uploaded once into dev[3] by prepare_inputs_decode (init) and the trace bakes in its
+        # address, so it never needs to change per step. Rebuilding + re-uploading it from torch
+        # every step was O(B * num_blocks_per_user) redundant host work that grows with both
+        # batch and context length. Update only the per-step inputs (tokens, cur_pos, rope).
         host = model.prepare_decode_inputs_host(
             torch.tensor(tokens_row, dtype=torch.int32).reshape(B, 1),
             torch.tensor(positions, dtype=torch.int32),
-            page_table=page_table,
+            page_table=None,
         )
-        copy_host_to_device(host, device_tensors=dev)
+        copy_host_to_device(host[:3], device_tensors=dev[:3])
 
     pos = [T] * B
     dev = model.prepare_inputs_decode(
