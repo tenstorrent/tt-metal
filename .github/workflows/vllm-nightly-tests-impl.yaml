@@ -569,29 +569,16 @@ jobs:
             export TT_MM_THROTTLE_PERF="${{ matrix.test-group.tt_mm_throttle_perf }}"
           fi
 
-          # Gemma4 trace-region tuning for this benchmark (random-input-len 100,
-          # single-stream max_num_seqs=1). Prefill tracing is on by default and
-          # warmup pre-captures every bucket (128..4096) up front, keeping each
-          # resident for replay (#49083). That footprint is benchmark-shape waste
-          # here — a 100-token prompt only ever replays the 128 bucket, and the
-          # default-sampling benchmark uses no penalties/logprobs permutations.
-          #   * TT_LEAN_DECODE_WARMUP=1: warm only plain/greedy/None decode
-          #     traces instead of the full penalties×logprobs sweep.
-          #   * GEMMA4_TRACE_PREFILL_SEQ_LENS=128: capture only the 128 prefill
-          #     bucket instead of the 128..4096 sweep (the 4096 bucket alone is
-          #     ~0.5 GB on 26B-A4B).
-          # The prefill cap is skipped for BH-QB2 31B, which has the DRAM headroom
-          # to capture the full sweep and instead gets a larger trace_region_size
-          # in its tt-config. It stays on for WH-T3K 31B, which cannot hold the
-          # full sweep in DRAM at all (hard OOM at warmup — see tt-metal #49929).
+          # Gemma4 decode-warmup tuning for this benchmark (default sampling): warm
+          # only plain/greedy/None decode traces instead of the full
+          # penalties×logprobs sweep. (The prefill-trace bucket limit that used to
+          # live here is now derived per (device, model) in model code — see
+          # resolve_gemma4_max_trace_prefill_seq_len; WH-T3K 31B caps it there to
+          # avoid the warmup OOM (tt-metal #49929), while BH-QB2 31B captures the
+          # full sweep with the larger trace_region_size set in its tt-config.)
           case "$HF_MODEL" in
             google/gemma-4-*)
               export TT_LEAN_DECODE_WARMUP=1
-              if [ "$HF_MODEL" = "google/gemma-4-31B-it" ] && [ "${{ matrix.test-group.arch }}" = "arch-blackhole" ]; then
-                : # full prefill-bucket sweep; trace_region_size in tt-config gives the headroom
-              else
-                export GEMMA4_TRACE_PREFILL_SEQ_LENS=128
-              fi
               ;;
           esac
 

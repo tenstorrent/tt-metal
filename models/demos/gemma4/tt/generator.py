@@ -10,9 +10,11 @@ from transformers import AutoTokenizer
 
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.generator_trace import (
+    GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN,
     apply_gemma4_prefill_trace_policy,
     maybe_disable_pli_prefill_trace,
     patch_gemma4_trace_model_args,
+    resolve_gemma4_max_trace_prefill_seq_len,
     resolve_gemma4_prefill_trace_enable,
     warmup_gemma4_model_prefill,
 )
@@ -120,7 +122,14 @@ def _patch_model_args(
     model_args.base_model_name = Path(model_path).name
     model_args.tokenizer = tokenizer
     model_args.processor = None
-    patch_gemma4_trace_model_args(model_args, prefill_trace_enabled=True)
+    patch_gemma4_trace_model_args(
+        model_args,
+        prefill_trace_enabled=True,
+        max_trace_prefill_seq_len=resolve_gemma4_max_trace_prefill_seq_len(
+            device_name=model_args.device_name,
+            base_model_name=model_args.base_model_name,
+        ),
+    )
     model_args.is_llama_vision = lambda: False
 
     def _encode_prompt(prompt, instruct=False):
@@ -321,6 +330,9 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
                         prefill_seq_lens[0],
                         chunk_size,
                         self.model[0],
+                        max_trace_prefill_seq_len=getattr(
+                            self.model_args[0], "max_trace_prefill_seq_len", GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN
+                        ),
                     )
                     chunk_result = super().prefill_forward_text(
                         tokens=tokens[chunk_start:chunk_end],

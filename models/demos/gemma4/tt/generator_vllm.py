@@ -12,6 +12,7 @@ from models.demos.gemma4.tt.generator import ChunkedPrefillPageTableGuardMixin
 from models.demos.gemma4.tt.generator_trace import (
     maybe_disable_pli_prefill_trace,
     patch_gemma4_trace_model_args,
+    resolve_gemma4_max_trace_prefill_seq_len,
     resolve_gemma4_prefill_chunk_size,
     resolve_gemma4_prefill_trace_enable,
     warmup_gemma4_model_prefill,
@@ -19,6 +20,7 @@ from models.demos.gemma4.tt.generator_trace import (
 from models.tt_transformers.tt.common import get_padded_prefill_len
 from models.tt_transformers.tt.generator import create_submeshes
 from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM, allocate_vllm_kv_cache
+from models.tt_transformers.tt.model_config import determine_device_name
 
 
 class _Gemma4VllmOptimizations:
@@ -94,7 +96,18 @@ def _patch_model_args(model_args, mesh_device, max_batch_size, max_seq_len, mode
     model_args.max_prefill_chunk_size = resolve_gemma4_prefill_chunk_size(
         max_seq_len, mesh_device=mesh_device, non_qb2_default=max_seq_len
     )
-    patch_gemma4_trace_model_args(model_args, prefill_trace_enabled=prefill_trace_enabled)
+    # model_path is hf_config._name_or_path (the HF id or a local snapshot dir,
+    # e.g. .../models--google--gemma-4-31B-it/snapshots/<hash>); both contain the
+    # "gemma-4-31B" marker the resolver matches on.
+    max_trace_prefill_seq_len = resolve_gemma4_max_trace_prefill_seq_len(
+        device_name=determine_device_name(mesh_device),
+        base_model_name=model_path,
+    )
+    patch_gemma4_trace_model_args(
+        model_args,
+        prefill_trace_enabled=prefill_trace_enabled,
+        max_trace_prefill_seq_len=max_trace_prefill_seq_len,
+    )
     model_args.optimizations = _Gemma4VllmOptimizations()
     model_args.mesh_device = mesh_device
     model_args._gemma4_model_path = model_path
