@@ -98,7 +98,6 @@ jobs:
       TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
       TT_METAL_CACHE: /home/user/.cache
     strategy:
-      max-parallel: 1  # Run tests sequentially to avoid resource contention
       fail-fast: false
       matrix:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
