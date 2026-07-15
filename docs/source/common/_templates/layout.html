@@ -1,20 +1,17 @@
 {%- extends "!layout.html" %}
 
+{#── noindex + canonical for versioned (non-latest) pages ────────#}
 {%- block extrahead %}
 {{ super() }}
 <script>
 (function() {
     var parts = window.location.pathname.split('/');
-    // Only applies to the hosted docs layout: /tt-metal/{version}/{project}/...
-    // Skips local builds (make html/server) where this prefix is absent.
     var version = parts[1] === 'tt-metal' ? (parts[2] || '') : '';
     if (version && version !== 'latest') {
-        // Add noindex to keep old versions out of search results
         var noindex = document.createElement('meta');
         noindex.name = 'robots';
         noindex.content = 'noindex';
         document.head.appendChild(noindex);
-        // Add canonical pointing to latest (clean URL, no query/fragment)
         var canonical = document.createElement('link');
         canonical.rel = 'canonical';
         canonical.href = (window.location.origin + window.location.pathname)
@@ -25,19 +22,200 @@
 </script>
 {%- endblock %}
 
+{#── Top navbar injected before the RTD grid ─────────────────────#}
+{%- block extrabody %}
+{%- set _logo_url = logo_url|default(pathto('_static/' + (logo or ""), 1)) %}
+{%- set _root_doc = root_doc|default(master_doc) %}
+{%- set _home = "https://docs.tenstorrent.com/" %}
+<nav class="tt-top-nav" role="navigation" aria-label="Top navigation">
+  <div class="tt-top-nav-left">
+    <a href="{{ _home }}" class="tt-nav-logo">
+      <img src="{{ pathto('_static/logotype.png', 1) }}" alt="Tenstorrent" />
+      <span>DOCUMENTATION</span>
+    </a>
+    <ul class="tt-nav-links">
+      <li class="has-dropdown">
+        <a href="{{ _home }}#get-started">Get Started</a>
+        <div class="tt-nav-dropdown">
+          <a href="{{ _home }}getting-started/tt-software-stack.html">Overview</a>
+          <a href="{{ _home }}getting-started/README.html">Installing Tenstorrent Software</a>
+          <a href="{{ _home }}getting-started/manual-software-install.html">Manual Installation</a>
+          <a href="{{ _home }}getting-started/vLLM-servers.html">Deploy LLMs</a>
+          <a href="https://docs.tenstorrent.com/tt-vscode-toolkit/" target="_blank" rel="noopener">Learn by Building</a>
+        </div>
+      </li>
+      <li class="has-dropdown">
+        <a href="{{ _home }}#software">Software</a>
+        <div class="tt-nav-dropdown">
+          <a href="{{ _home }}forge/index.html">TT-Forge</a>
+          <a href="https://docs.tenstorrent.com/tt-metal/latest/ttnn/" target="_blank" rel="noopener">TT-NN</a>
+          <a href="https://docs.tenstorrent.com/tt-lang/" target="_blank" rel="noopener">TT-Lang</a>
+          <a href="https://docs.tenstorrent.com/tt-mlir/" target="_blank" rel="noopener">TT-MLIR</a>
+          <a href="https://docs.tenstorrent.com/tt-xla/" target="_blank" rel="noopener">TT-XLA</a>
+          <a href="https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/" target="_blank" rel="noopener">TT-Metalium</a>
+        </div>
+      </li>
+      <li class="has-dropdown">
+        <a href="{{ _home }}#hardware">Hardware</a>
+        <div class="tt-nav-dropdown">
+          <span class="tt-nav-dropdown-label">Blackhole</span>
+          <a href="{{ _home }}aibs/blackhole/index.html">Blackhole™ PCIe Cards</a>
+          <a href="{{ _home }}systems/quietbox/quietbox-bh/index.html">TT-QuietBox</a>
+          <a href="{{ _home }}systems/quietbox/quietbox-bh-2/index.html">TT-QuietBox 2</a>
+          <span class="tt-nav-dropdown-label">Wormhole</span>
+          <a href="{{ _home }}aibs/wormhole/index.html">Wormhole™ PCIe Cards</a>
+          <a href="{{ _home }}systems/quietbox/quietbox-wh/index.html">TT-QuietBox</a>
+          <a href="{{ _home }}systems/t3000/index.html">TT-LoudBox™</a>
+        </div>
+      </li>
+      <li class="has-dropdown">
+        <a href="{{ _home }}#tools">Tools</a>
+        <div class="tt-nav-dropdown">
+          <a href="https://github.com/tenstorrent/tt-inference-server" target="_blank" rel="noopener">TT-Inference-Server</a>
+          <a href="https://github.com/tenstorrent/tt-studio" target="_blank" rel="noopener">TT-Studio</a>
+          <a href="https://github.com/tenstorrent/tt-smi" target="_blank" rel="noopener">TT-SMI</a>
+          <a href="https://docs.tenstorrent.com/tt-toplike/" target="_blank" rel="noopener">TT-Toplike</a>
+          <a href="https://docs.tenstorrent.com/ttnn-visualizer/" target="_blank" rel="noopener">TT-NN Visualizer</a>
+          <a href="https://github.com/tenstorrent/tt-topology" target="_blank" rel="noopener">TT-Topology</a>
+          <a href="https://docs.tenstorrent.com/tt-vscode-toolkit" target="_blank" rel="noopener">TT-VSCode-Toolkit</a>
+          <a href="https://docs.tenstorrent.com/tt-blacksmith/" target="_blank" rel="noopener">TT-Blacksmith</a>
+        </div>
+      </li>
+      <li class="has-dropdown">
+        <a href="{{ _home }}#resources">Resources</a>
+        <div class="tt-nav-dropdown">
+          <a href="https://tenstorrent.atlassian.net/servicedesk/customer/portal/1" target="_blank" rel="noopener">Request Support</a>
+          <a href="https://tenstorrent.com/developers" target="_blank" rel="noopener">Developer Hub</a>
+          <a href="https://discord.com/invite/tenstorrent" target="_blank" rel="noopener">Join our Discord</a>
+          <a href="https://tenstorrent.com/faq" target="_blank" rel="noopener">FAQ</a>
+        </div>
+      </li>
+    </ul>
+  </div>
+  <div class="tt-top-nav-right">
+    <button type="button" class="tt-nav-search-form tt-search-trigger" aria-label="Search docs" aria-haspopup="dialog">
+      <svg class="tt-search-glyph" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.4"/>
+        <path d="M11 11l3.5 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      </svg>
+      <span class="tt-nav-search-placeholder">Search</span>
+      <kbd class="tt-nav-search-kbd">⌘K</kbd>
+    </button>
+    <div class="tt-nav-actions">
+      <a href="https://docs.tenstorrent.com/tt-awesome/" class="tt-nav-btn-cta" target="_blank" rel="noopener">Explore</a>
+      <a href="https://github.com/tenstorrent" class="tt-nav-btn-github" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+          <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+        </svg>
+        Github
+      </a>
+    </div>
+    <i data-toggle="wy-nav-top" class="fa fa-bars tt-nav-hamburger" aria-hidden="true"></i>
+  </div>
+</nav>
+
+{#── Search / Ask AI command modal ───────────────────────────────#}
+<div class="tt-search-modal" id="tt-search-modal" hidden>
+  <div class="tt-search-backdrop" data-search-close></div>
+  <div class="tt-search-dialog" role="dialog" aria-modal="true" aria-label="Search documentation">
+    <div class="tt-search-head">
+      <div class="tt-search-box">
+        <svg class="tt-search-glyph" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.4"/>
+          <path d="M11 11l3.5 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        </svg>
+        <input type="text" class="tt-search-input" id="tt-search-input"
+               placeholder="Search for anything…" aria-label="Search for anything"
+               autocomplete="off" spellcheck="false" hidden />
+        <input type="text" class="tt-search-input" id="tt-ai-input"
+               placeholder="Ask anything about Tenstorrent hardware and software" aria-label="Ask about the docs"
+               autocomplete="off" spellcheck="false" />
+      </div>
+      <div class="tt-search-tabs" role="tablist">
+        <button type="button" class="tt-search-tab" data-tab="search" role="tab" aria-selected="false">
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.4"/>
+            <path d="M11 11l3.5 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+          </svg>
+          Search
+        </button>
+        <button type="button" class="tt-search-tab is-active" data-tab="ai" role="tab" aria-selected="true">
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M8 1.5l1.4 3.6L13 6.5 9.4 7.9 8 11.5 6.6 7.9 3 6.5l3.6-1.4L8 1.5Z" fill="currentColor"/>
+            <path d="M12.5 10.5l.6 1.5 1.5.6-1.5.6-.6 1.5-.6-1.5-1.5-.6 1.5-.6.6-1.5Z" fill="currentColor"/>
+          </svg>
+          Ask AI
+        </button>
+      </div>
+    </div>
+    <div class="tt-search-body">
+      <div class="tt-search-panel" data-panel="search" hidden>
+        <ul class="tt-search-results" id="tt-search-results"></ul>
+        <div class="tt-search-empty" id="tt-search-empty">Start typing to search the documentation.</div>
+      </div>
+      <div class="tt-search-panel" data-panel="ai">
+        <div class="tt-ai-intro" id="tt-ai-intro">
+          <svg class="tt-ai-intro-star" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <path d="M10 1.5 12 7l5.5 1-4 3.9 1.2 5.6L10 14.4 5.3 17l1.2-5.6L2.5 7.5 8 7z" fill="currentColor"/>
+            <path d="M15.5 12l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z" fill="currentColor"/>
+          </svg>
+          <span class="tt-ai-intro-hint">Type a question above and press <kbd>Enter</kbd> — or jump right in:</span>
+        </div>
+        <ul class="tt-ai-examples" id="tt-ai-examples">
+          <li><button type="button" class="tt-ai-example">How to debug TT-Forge compile errors?</button></li>
+          <li><button type="button" class="tt-ai-example">How to set up Tenstorrent Cloud SSH?</button></li>
+          <li><button type="button" class="tt-ai-example">TT-Metalium vs TT-NN: what's the difference?</button></li>
+          <li><button type="button" class="tt-ai-example">How to daisy-chain Wormhole devices?</button></li>
+        </ul>
+        <div id="tt-kapa-embed" hidden>
+          <div class="tt-chat-toolbar">
+            <button type="button" id="tt-ai-new-chat" class="tt-ai-new-chat">
+              <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M5 8h6M8 5l-3 3 3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              New conversation
+            </button>
+          </div>
+          <div id="tt-kapa-mount"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{%- endblock %}
+
+{#── Sidebar title: logo, project name, version, search ──────────#}
+{%- block sidebartitle %}
+
+{%- set _logo_url = logo_url|default(pathto('_static/' + (logo or ""), 1)) %}
+{%- set _root_doc = root_doc|default(master_doc) %}
+
+{%- if logo or logo_url %}
+<a href="{{ logo_link_url|default(pathto(_root_doc)) }}">
+    <img src="{{ _logo_url }}" class="logo" alt="{{ _('Logo') }}"/>
+</a>
+{%- endif %}
+
+<a href="{{ pathto(_root_doc) }}">
+    {{ project }}
+</a>
+
+{%- endblock %}
+
+{#── Suppress RTD built-in version flyout (we have our own switcher) ─#}
+{%- block versions %}{% endblock %}
+
+{#── Content: version warning banner + default + feedback widget ─#}
 {%- block content %}
 <div id="tt-version-warning" style="display:none"></div>
 <script>
 (function() {
     var parts = window.location.pathname.split('/');
-    // Only applies to the hosted docs layout: /tt-metal/{version}/{project}/...
-    // Skips local builds (make html/server) where this prefix is absent.
     var version = parts[1] === 'tt-metal' ? (parts[2] || '') : '';
     if (version && version !== 'latest') {
         var latestUrl = (window.location.origin + window.location.pathname)
             .replace('/tt-metal/' + version + '/', '/tt-metal/latest/');
         var banner = document.getElementById('tt-version-warning');
-        // Build with DOM nodes/textContent so URL-derived data is never parsed as HTML (avoids DOM XSS).
         banner.textContent = 'You are viewing documentation for an older version (';
         var versionEl = document.createElement('strong');
         versionEl.textContent = version;
@@ -51,38 +229,35 @@
     }
 })();
 </script>
-{{ super() }}
+  {{ super() }}
+  {# Default ON. Disable when head contains meta name="hide_feedback". #}
+  {%- if metatags is not defined or ('name="hide_feedback"' not in metatags) -%}
+    {%- include "feedback_widget.html" %}
+  {%- endif -%}
 {%- endblock %}
 
-{%- block sidebartitle %}
-
-{# the logo helper function was removed in Sphinx 6 and deprecated since Sphinx 4 #}
-{# the master_doc variable was renamed to root_doc in Sphinx 4 (master_doc still exists in later Sphinx versions) #}
-{%- set _logo_url = logo_url|default(pathto('_static/' + (logo or ""), 1)) %}
-{%- set _root_doc = root_doc|default(master_doc) %}
-
-{%- if logo or logo_url %}
-<a href="{{ logo_link_url }}">
-    <img src="{{ _logo_url }}" class="logo" alt="{{ _('Logo') }}"/>
-</a>
-{%- endif %}
-
-<a href="{{ pathto(_root_doc) }}">
-    {{ project }}
-</a>
-
-{%- if theme_display_version %}
-  {%- set nav_version = version %}
-  {%- if READTHEDOCS and current_version %}
-    {%- set nav_version = current_version %}
-  {%- endif %}
-  {%- if nav_version %}
-    <div class="version">
-      {{ nav_version }}
-    </div>
-  {%- endif %}
-{%- endif %}
-
-{%- include "searchbox.html" %}
-
+{#── Footer: inject right-TOC script and global Search / Ask AI ──#}
+{%- block footer %}
+<script src="{{ pathto('_static/docs-toc.js', 1) }}"></script>
+{#-
+  TODO(migration): the Search / "Ask AI" modal depends on assets and a backend
+  that are NOT part of this repository and must be provisioned in production:
+    * https://docs.tenstorrent.com/_static/sidebar-scroll.js
+    * https://docs.tenstorrent.com/_static/tt-search.js
+    * https://docs.tenstorrent.com/_static/kapa.js
+    * search API base: https://csl860x2oj.execute-api.us-east-2.amazonaws.com/prod
+  Confirm/replace the API base, source id, and kapa integration id with the
+  production values before enabling. Until these are served, the modal will
+  render but return no results.
+-#}
+{#- Keep the left sidebar from jumping to the top on every navigation -#}
+<script src="https://docs.tenstorrent.com/_static/sidebar-scroll.js"></script>
+<script id="tt-search-script"
+        src="https://docs.tenstorrent.com/_static/tt-search.js"
+        data-search-url="{{ pathto('search') }}"
+        data-search-api-base="https://csl860x2oj.execute-api.us-east-2.amazonaws.com/prod"
+        data-search-source="{{ search_source_id | default('docs-tenstorrent', true) }}"
+        data-site-base-url="{{ search_site_base_url | default('https://docs.tenstorrent.com/', true) }}"
+        data-kapa-src="https://docs.tenstorrent.com/_static/kapa.js"
+        data-kapa-integration-id="c37e0bab-7623-43d7-bff1-daa52e901bbe"></script>
 {%- endblock %}
