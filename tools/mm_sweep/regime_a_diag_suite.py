@@ -116,12 +116,26 @@ def run_one(M, K, N, cfg, mask, iters=8, timeout=150):
     }
 
 
+def _load_sweep(M, K, N):
+    """Load the practical sweep results, transparently handling the committed .json.gz (a fresh checkout
+    only has the gzipped artifact; the raw .json is gitignored)."""
+    base = f"{HERE}/regime_a_sweep_{M}x{K}x{N}.json"
+    if os.path.exists(base):
+        return json.load(open(base))
+    if os.path.exists(base + ".gz"):
+        import gzip
+
+        with gzip.open(base + ".gz", "rt") as f:
+            return json.load(f)
+    return None
+
+
 def pick_configs(M, K, N):
     """winner + best pure-K / KxM / KxN from the practical sweep JSON (falls back to auto if absent)."""
-    p = f"{HERE}/regime_a_sweep_{M}x{K}x{N}.json"
+    d = _load_sweep(M, K, N)
     picks = {}
-    if os.path.exists(p):
-        res = [r for r in json.load(open(p))["results"] if r.get("cls") == "ok"]
+    if d is not None:
+        res = [r for r in d["results"] if r.get("cls") == "ok"]
         res.sort(key=lambda r: r["us_med"])
 
         def best(pred):
@@ -166,9 +180,12 @@ def matrix():
             lab = "/".join(labels)
             for name, mask in ABLATIONS:
                 runs = [run_one(M, K, N, cfg, mask) for _ in range(3)]
-                oks = [x for x in runs if x["cls"] == "ok" and x["wall_us"]]
-                wall = min(x["wall_us"] for x in oks) if oks else None  # min over relaunches (steadiest)
-                med = statistics.median([x["wall_us"] for x in oks]) if oks else None
+                # Aggregate on the real `ok` field (mask 0 requires PCC pass), NOT cls=="ok" (which is set
+                # whenever the profiler parsed, regardless of a mask-0 correctness failure).
+                oks = [x for x in runs if x.get("ok") and x["wall_us"]]
+                walls = [x["wall_us"] for x in oks]
+                wall = min(walls) if walls else None
+                med = statistics.median(walls) if walls else None
                 rec = {
                     "M": M,
                     "K": K,
@@ -177,15 +194,19 @@ def matrix():
                     "labels": labels,
                     "ablation": name,
                     "mask": mask,
+                    "wall_us_all": walls,  # every relaunch measurement (audit stability independently)
                     "wall_us_min": wall,
                     "wall_us_med": med,
                     "n_ok": len(oks),
+                    "n_runs": len(runs),
+                    "max_rel_err": [x.get("max_rel_err") for x in runs],
                     "ideal_us": ideal_us(M, K, N),
                     "risc": (oks[0]["risc"] if oks else None),
                 }
                 out.append(rec)
                 print(
-                    f"  [{lab:14}] {name:22} wall_med={med if med is None else round(med,1)}us " f"({len(oks)}/3 ok)",
+                    f"  [{lab:14}] {name:22} wall_med={med if med is None else round(med,1)}us "
+                    f"all={[round(w,1) for w in walls]} ({len(oks)}/3 ok)",
                     flush=True,
                 )
                 json.dump(out, open(f"{HERE}/regime_a_diag_matrix.json", "w"), indent=2)
@@ -214,8 +235,9 @@ def mscale():
             print(f"\n=== {sname} {M}x{K}x{N} cfg={cfg} ideal={ideal_us(M,K,N):.1f}us", flush=True)
             for name, mask in key:
                 runs = [run_one(M, K, N, cfg, mask) for _ in range(3)]
-                oks = [x for x in runs if x["cls"] == "ok" and x["wall_us"]]
-                med = statistics.median([x["wall_us"] for x in oks]) if oks else None
+                oks = [x for x in runs if x.get("ok") and x["wall_us"]]
+                walls = [x["wall_us"] for x in oks]
+                med = statistics.median(walls) if walls else None
                 exc = (med - ideal_us(M, K, N)) if med else None
                 out.append(
                     {
@@ -226,6 +248,7 @@ def mscale():
                         "cfg": list(cfg),
                         "ablation": name,
                         "mask": mask,
+                        "wall_us_all": walls,
                         "wall_us_med": med,
                         "excess_us": exc,
                         "ideal_us": ideal_us(M, K, N),
