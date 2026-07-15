@@ -678,6 +678,59 @@ version committed at `dfe12d1d`.
 
 ---
 
+### 21. Yusuf-branch integration — crash fixed, pipeline reconciled, BW measured (bh-11, 2026-07-15)
+
+Wired the raw-flush + host-translate path into the `x280-on-yusuf` branch (Option A: the receiver
+translates raw markers → `WorkerZoneWire` into a `BroadcastRing`; a decoupled `run_consumer` enriches
+[noc0 coord + zone name] and pushes to Tracy). Three things resolved. Committed at `a7ea9c67663`.
+
+**(a) The persistent crash was a use-after-free, not corruption or an empty map.** Every run of the
+raw-flush path cored ~6 s in (0–389 zones) with `Fatal Python error: Segmentation fault` OR `Floating
+point exception` — the SIGFPE/SIGSEGV alternation is the tell. gdb pinned it to `run_consumer`
+(frame #1 = libstdc++ thread trampoline ⇒ fault in its own inlined `push_batch`). Root cause:
+`boot_x280_drainer(DeviceState& dev_state)` did `x280_dev_ = &dev_state`, but `dev_state` is the init
+loop's **local**, immediately `devices_.push_back(std::move(dev_state))`'d (and `devices_` is a
+`std::vector` that reallocates per push). So `x280_dev_` dangled at a moved-from, destroyed stack
+local; the consumer thread deref'd its moved-from `unordered_map`, whose garbage `bucket_count` gave
+`hash % 0` (SIGFPE) or a wild pointer (SIGSEGV). This is why ring size (131072/1M/4M) was irrelevant,
+the 6-bit-coord guesses failed, and an `!map.empty()` guard did nothing (`is EMPTY` fired 0× — the map
+isn't empty, the *pointer* is dead). **FIX**: don't take the address of the pre-move local; set
+`x280_dev_` **after** the init loop from the stable `devices_` element (scan for `x280_active`).
+Restored the ring to `kMaxRingCapacity` (~128 MB) for the lossless `DrainThenStop` backlog.
+**VALIDATED**: 0 crashes, `test_with_ops` passes, X280 boots (110 cores/111 ctx), `ring-dropped 0`.
+
+**(b) The "reader read 804k, relay relayed 108k" ⇒ 7× loss was a PHANTOM — a mislabeled counter.**
+The reader **does** advance the SPSC read pointer every core/segment (`profzone.c:232`
+`w32(CTRL_HEAD(r), h)`), and the staging hop is lossless-**blocking** (`profzone.c:213`, reader spins
+until the relay frees room), so real loss there is impossible without the reader stalling. The relay's
+`total` counter (`profzone.c:354`, `RES 0x00`) increments **once per 64 B page_copy — it counts PAGES,
+not markers** — but the manager logged it as "markers". 108,499 pages × 8 = ~868k marker-slots ≈ the
+readers' ~804k real markers + ~8% partial-page padding (reader 1's 13k tiny 45-word segments each round
+up to a full page). **Consistent, lossless end-to-end.** Fixed the mislabel in
+`realtime_profiler_manager.cpp` (now logs pages + bytes + marker-slots).
+
+**(c) BW on `test_with_ops`: ~6.9 MB (108,499 × 64 B) over ~1.3 s ≈ ~5 MB/s — but the pipeline is 99%
+idle** (relay empty-spin 1280/1298 ms, **0** host-FIFO reserve-stalls). This workload does NOT exercise
+the pipe: it's a 64-core matmul trace (100 capture + 5 replay, 0.12 s of `call`), supply-starved, ~300×
+below the isolated capacity ceilings (§13 ~3.0 GB/s D2H, §11–12 ~1.5–1.8 GB/s reads). A real
+post-reshape-removal BW number needs a sustained kernel that holds the L1 rings near-full for seconds.
+
+**(d) Reservation churn was self-inflicted (bh-11 kept "losing its ssh key").** My detached scripts
+`rm -f /tmp/tt_x280_autoprime_dev*` every run, forcing the boot path's `WarmReset::warm_reset_chip_id`
+— a chip warm-reset re-enumerates the Blackhole PCIe device out from under the container, so IRD's
+health-check **recreates the container** (new reservation id, wiped `/tmp`, key drops to a password
+prompt). Churned 128575→617→637→662. **FIX**: never delete the autoprime marker, never set
+`TT_METAL_X280_FORCE_PRIME`; let the chip prime at most once and stay primed. Added `ControlMaster`
+multiplexing for `bh-11` so bursts of `tt run` don't hammer sshd. The clean run did not churn.
+
+**Still open**: ~25+ orphan ZONE_ENDs across 18 lanes (guardrail log-capped at 25) — NOT ring loss
+(`ring-dropped 0`); it's the STICKY_META forward-fill attribution splitting START/END across lanes.
+Known-buggy by design: X280 serializes across two regions/cores so the sticky packet isn't
+representative of the full stream, and a Tensix producer can fill its L1 ring entirely inside the
+kernel and never return to `brisc.cc` to emit a sticky-meta packet at all. Deferred.
+
+---
+
 ## Hardware facts established
 
 - **X280 → host D2H write ceiling ≈ 3.0 GB/s** (1 hart, posted 64 B `vse64`,

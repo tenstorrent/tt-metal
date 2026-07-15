@@ -1832,19 +1832,23 @@ void RealtimeProfilerManager::shutdown() {
         if (dev_state.x280_active && dev_state.x280_driver) {
             try {
                 // Telemetry: profzone's result mailbox (results base = params_addr + 0x40).
-                // total_markers@+0x00 = raw markers relayed; loops@+0x08 = drain-loop passes;
-                // stalls@+0x20 = reserve-spin iterations where the X280 was BLOCKED waiting for the
-                // host to free D2H FIFO room. High stalls => host drain is the bottleneck; ~0 => the
-                // X280's own drain rate is the limit.
-                uint64_t total_markers = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x40);
+                // relayed_pages@+0x00 = 64B D2H PAGES relayed (profzone increments `total` once per
+                // page_copy, NOT per marker); each page carries up to 8 raw 2-word markers, so
+                // marker-slots = pages*8 (>= real markers; last page of each ring segment is padded).
+                // loops@+0x08 = drain-loop passes; stalls@+0x20 = reserve-spin iterations where the X280
+                // was BLOCKED waiting for the host to free D2H FIFO room. High stalls => host drain is the
+                // bottleneck; ~0 => the X280's own drain rate (or marker supply) is the limit.
+                uint64_t relayed_pages = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x40);
                 uint64_t loops = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x48);
                 uint64_t reserve_stalls = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x60);
                 log_info(
                     tt::LogMetal,
-                    "[Real-time profiler] Device {}: X280 drainer relayed {} markers ({} drain passes, {} "
-                    "reserve-stall spins waiting on host D2H FIFO)",
+                    "[Real-time profiler] Device {}: X280 drainer relayed {} pages ({} B, up to {} marker-slots) "
+                    "({} drain passes, {} reserve-stall spins waiting on host D2H FIFO)",
                     dev_state.chip_id,
-                    total_markers,
+                    relayed_pages,
+                    relayed_pages * 64,
+                    relayed_pages * 8,
                     loops,
                     reserve_stalls);
                 // Relay time-split (X280 ~1 GHz => cycles ~= ns). empty-spin = wall - reserve - copy is
