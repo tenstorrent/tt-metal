@@ -596,27 +596,27 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values =
-                {{node,
-                  {{"src0_addr", static_cast<uint32_t>(inp0_dram->address())},
-                   {"src0_bank_id", 0u},
-                   {"src1_addr", static_cast<uint32_t>(inp1_dram->address())},
-                   {"src1_bank_id", 0u},
-                   {"src2_addr", static_cast<uint32_t>(inp2_dram->address())},
-                   {"src2_bank_id", 0u},
-                   {"src3_addr", static_cast<uint32_t>(inp3_dram->address())},
-                   {"src3_bank_id", 0u},
-                   {"src4_addr", static_cast<uint32_t>(inp4_dram->address())},
-                   {"src4_bank_id", 0u},
-                   {"src5_addr", static_cast<uint32_t>(inp5_dram->address())},
-                   {"src5_bank_id", 0u},
-                   {"num_tiles", 1u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src0_addr", static_cast<uint32_t>(inp0_dram->address())},
+                 {"src0_bank_id", 0u},
+                 {"src1_addr", static_cast<uint32_t>(inp1_dram->address())},
+                 {"src1_bank_id", 0u},
+                 {"src2_addr", static_cast<uint32_t>(inp2_dram->address())},
+                 {"src2_bank_id", 0u},
+                 {"src3_addr", static_cast<uint32_t>(inp3_dram->address())},
+                 {"src3_bank_id", 0u},
+                 {"src4_addr", static_cast<uint32_t>(inp4_dram->address())},
+                 {"src4_bank_id", 0u},
+                 {"src5_addr", static_cast<uint32_t>(inp5_dram->address())},
+                 {"src5_bank_id", 0u},
+                 {"num_tiles", 1u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values =
-                {{node,
-                  {{"dst_addr", static_cast<uint32_t>(out_dram->address())}, {"bank_id", 0u}, {"num_tiles", kNumOps}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dst_addr", static_cast<uint32_t>(out_dram->address())}, {"bank_id", 0u}, {"num_tiles", kNumOps}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
@@ -942,39 +942,36 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values =
-                {{node,
-                  {{"src0_addr", static_cast<uint32_t>(inp0_dram->address())},
-                   {"src0_bank_id", 0u},
-                   {"src1_addr", static_cast<uint32_t>(inp1_dram->address())},
-                   {"src1_bank_id", 0u},
-                   {"src2_addr", static_cast<uint32_t>(inp2_dram->address())},
-                   {"src2_bank_id", 0u},
-                   {"src3_addr", static_cast<uint32_t>(inp3_dram->address())},
-                   {"src3_bank_id", 0u},
-                   {"src4_addr", static_cast<uint32_t>(inp4_dram->address())},
-                   {"src4_bank_id", 0u},
-                   {"src5_addr", static_cast<uint32_t>(inp5_dram->address())},
-                   {"src5_bank_id", 0u},
-                   {"num_tiles", 1u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src0_addr", static_cast<uint32_t>(inp0_dram->address())},
+                 {"src0_bank_id", 0u},
+                 {"src1_addr", static_cast<uint32_t>(inp1_dram->address())},
+                 {"src1_bank_id", 0u},
+                 {"src2_addr", static_cast<uint32_t>(inp2_dram->address())},
+                 {"src2_bank_id", 0u},
+                 {"src3_addr", static_cast<uint32_t>(inp3_dram->address())},
+                 {"src3_bank_id", 0u},
+                 {"src4_addr", static_cast<uint32_t>(inp4_dram->address())},
+                 {"src4_bank_id", 0u},
+                 {"src5_addr", static_cast<uint32_t>(inp5_dram->address())},
+                 {"src5_bank_id", 0u},
+                 {"num_tiles", 1u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER0,
-            .runtime_arg_values =
-                {{node,
-                  {{"dst_addr", static_cast<uint32_t>(out0_dram->address())}, {"bank_id", 0u}, {"num_tiles", 1u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"dst_addr", static_cast<uint32_t>(out0_dram->address())}, {"bank_id", 0u}, {"num_tiles", 1u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER1,
-            .runtime_arg_values =
-                {{node,
-                  {{"dst_addr", static_cast<uint32_t>(out1_dram->address())}, {"bank_id", 0u}, {"num_tiles", 1u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"dst_addr", static_cast<uint32_t>(out1_dram->address())}, {"bank_id", 0u}, {"num_tiles", 1u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER2,
-            .runtime_arg_values =
-                {{node,
-                  {{"dst_addr", static_cast<uint32_t>(out2_dram->address())}, {"bank_id", 0u}, {"num_tiles", 1u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"dst_addr", static_cast<uint32_t>(out2_dram->address())}, {"bank_id", 0u}, {"num_tiles", 1u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };

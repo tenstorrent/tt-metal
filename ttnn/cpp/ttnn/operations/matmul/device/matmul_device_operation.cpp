@@ -112,6 +112,51 @@ void validate_matmul_bfloat4_tile_dims(
     }
 }
 
+// Tiny Tile Constraints: runs after the program config is chosen. Rejects tiny-tile
+// combos that hang or deadlock on specific paths. See #42927.
+void validate_matmul_tiny_tile_constraints(
+    const Tensor& input_tensor_b,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    const operations::matmul::MatmulProgramConfig& chosen_program_config) {
+    const bool uses_tiny_outer_tile = (in0_tile.get_height() != TILE_HEIGHT || in1_tile.get_width() != TILE_WIDTH);
+    if (!uses_tiny_outer_tile) {
+        return;
+    }
+
+    // Transposed in1 with narrow tile width (16) is not supported by the LLK matmul
+    // path: llk_math_matmul has no addr_mod handling for 32x16 transposed tiles.
+    // Without this check the kernel hangs (CB producer/consumer deadlock). See #42927.
+    const bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
+    if (in1_transpose_tile && in1_tile.get_width() == 16) {
+        TT_FATAL(
+            false,
+            "matmul does not support transposed in1 with tile width 16 (in1 tile is {}x{} with transpose). "
+            "Use tile width 32 for transposed in1, or disable transpose_tile.",
+            in1_tile.get_height(),
+            in1_tile.get_width());
+    }
+
+    // Bfp compressed in1 dtypes (BFLOAT8_B, BFLOAT4_B) on the 2D/1D mcast paths hang for
+    // tile_h < 16 — the LLK unpack/pack path for Bfp faces is not yet validated below
+    // face_height 16 on these factories. The MatmulMultiCoreReuseProgramConfig path does
+    // support smaller tile_h with Bfp dtypes, so this check is scoped to the mcast configs.
+    // See #42927. This is a "not currently supported" throw, not a permanent fatal — it
+    // should be removed when the underlying kernel limitation is resolved.
+    const bool in1_is_bfp =
+        (input_tensor_b.dtype() == DataType::BFLOAT8_B) || (input_tensor_b.dtype() == DataType::BFLOAT4_B);
+    const bool is_mcast_config =
+        std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>(chosen_program_config) ||
+        std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config);
+    if (in1_is_bfp && is_mcast_config && in0_tile.get_height() < 16) {
+        TT_THROW(
+            "matmul tiny-tile combo with in1 dtype {} and tile_h {} is not currently supported on the "
+            "mcast program config path (requires tile_h >= 16); see issue #42927",
+            input_tensor_b.dtype(),
+            in0_tile.get_height());
+    }
+}
+
 // Optional Tensors: checks at most one optional input (bias). A caller-provided output
 // tensor must match the computed spec; otherwise the requested output mem-config must be
 // compatible with it (1D block-sharded == HEIGHT/WIDTH sharded).
@@ -363,6 +408,20 @@ void validate_matmul_bias_shape(
         "dimension, {}.",
         bias_shape[-1],
         b_shape[-1]);
+
+    // Fused bias with a narrow in1 tile (width 16) and full-height in0 (32) is not supported
+    // by the broadcast-row bias kernel path. Without this check the kernel hangs. See #42927.
+    if (in0_tile.get_height() == TILE_HEIGHT && in1_tile.get_width() == 16) {
+        const bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
+        if (!in1_transpose_tile) {
+            TT_FATAL(
+                false,
+                "matmul fused bias does not support 32x16 narrow in1 tile (in0 tile height={}, in1 tile width={}). "
+                "Use tile width 32 when bias is fused, or apply bias as a post-process add.",
+                in0_tile.get_height(),
+                in1_tile.get_width());
+        }
+    }
 }
 
 // Untilize Output: untilize_out means "give me row-major output." Allowed only with an
@@ -1164,6 +1223,18 @@ void validate_matmul_dram_sharded_config(
     const tt::tt_metal::Tile& in0_tile,
     const operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig& program_config) {
     const auto config_name = ttsl::get_type_name(program_config);
+
+    // The DRAM-sharded mcast path is not yet validated for tile_h < 16 — it hangs for
+    // all tile_h in {1,2,4,8} regardless of dtype or tile_w. Only tile_h in {16, 32} is
+    // currently supported on this path. See #42927.
+    if (in0_tile.get_height() < 16) {
+        TT_THROW(
+            "{}: matmul tiny-tile with tile_h {} is not currently supported on the DRAM-sharded mcast "
+            "program config path (requires tile_h >= 16); see issue #42927",
+            config_name,
+            in0_tile.get_height());
+    }
+
     TT_FATAL(
         input_tensor_a.is_sharded(), "{}: Input tensor A must be sharded for DRAM sharded program config", config_name);
     TT_FATAL(
@@ -2090,6 +2161,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
 
     // ---- universal checks, part 2: need the chosen program config ----
     // Config-based shared validators (each self-filters by config via std::visit).
+    validate_matmul_tiny_tile_constraints(input_tensor_b, in0_tile, in1_tile, chosen_program_config);
     validate_matmul_compute_grid_and_per_core_dims(input_tensor_a, chosen_program_config);
     validate_matmul_block_and_subblock_configuration(attributes, a_shape_padded, in0_tile, chosen_program_config);
     validate_matmul_bias(optional_bias, chosen_program_config);
