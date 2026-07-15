@@ -7,10 +7,12 @@ Tracks device buffer allocations made while traces are active, to catch
 buffers that would be silently corrupted on trace replay.
 
 Controlled by environment variables:
-  TT_METAL_TRACE_ALLOC_TRACKING=1   Enable tracking (error on untracked
-                                     buffers surviving until execute_trace).
-  TT_METAL_TRACE_ALLOC_TRACEBACKS=1 Also capture Python call stacks via
-                                     sys.setprofile for richer error messages.
+  TT_METAL_TRACE_ALLOC_TRACKING=1       Enable accounting and fail when unsafe
+                                         buffers survive until execute_trace.
+  TT_METAL_TRACE_ALLOC_TRACEBACKS=1     With accounting enabled, capture Python
+                                         allocation stacks and analyze referrers.
+  TT_METAL_TRACE_ALLOC_REFERRER_DEPTH=N Maximum referrer traversal depth
+                                         (default: 10).
 
 See also: ttnn.corruptible_allocation_scope, ttnn.execute_trace.
 """
@@ -18,10 +20,10 @@ See also: ttnn.corruptible_allocation_scope, ttnn.execute_trace.
 from __future__ import annotations
 
 import gc
-import os
 import sys
-import traceback
 from typing import ClassVar
+
+from ttnn.trace_allocation_config import TRACE_ALLOC_DIAGNOSTICS, TRACE_ALLOC_REFERRER_DEPTH
 
 
 class UnsafeAllocationTracker:
@@ -29,7 +31,8 @@ class UnsafeAllocationTracker:
 
     _tracebacks: ClassVar[dict[int, str]] = {}
 
-    _env_tracebacks: ClassVar[bool] = os.environ.get("TT_METAL_TRACE_ALLOC_TRACEBACKS") == "1"
+    _diagnostics_enabled: ClassVar[bool] = TRACE_ALLOC_DIAGNOSTICS
+    _referrer_depth: ClassVar[int] = TRACE_ALLOC_REFERRER_DEPTH
 
     def __init__(self, mesh_device):
         self.mesh_device = mesh_device
@@ -88,15 +91,17 @@ class UnsafeAllocationTracker:
             ctx_str = f" [op: {ctx}]" if ctx else ""
             parts.append(f"Buffer {buf_id}{ctx_str}")
 
-            tb = self._tracebacks.get(buf_id)
-            if tb:
-                parts.append(f"  allocated at:\n{tb}")
+            if self._diagnostics_enabled:
+                tb = self._tracebacks.get(buf_id)
+                if tb:
+                    parts.append(f"  allocated at:\n{tb}")
 
-        parts.append("\n--- Python referrer analysis ---\n")
-        try:
-            parts.append(self._find_python_referrers(live_unsafe))
-        except Exception as e:
-            parts.append(f"(referrer analysis failed: {type(e).__name__}: {e})")
+        if self._diagnostics_enabled:
+            parts.append("\n--- Python referrer analysis ---\n")
+            try:
+                parts.append(self._find_python_referrers(live_unsafe))
+            except Exception as e:
+                parts.append(f"(referrer analysis failed: {type(e).__name__}: {e})")
 
         parts.append(
             "\nUse corruptible_allocation_scope() for acknowledged-corruptible "
@@ -110,8 +115,8 @@ class UnsafeAllocationTracker:
         whose backing buffer unique_id is in *live_unsafe*.
 
         Recurses into frame locals, their list/dict/tuple children, and
-        object __dict__ attributes (two levels deep) to find tensors held
-        by e.g. self.some_list[i].
+        object __dict__ attributes up to the configured referrer depth to find
+        tensors held by e.g. self.some_list[i].
         """
         import ttnn
 
@@ -204,7 +209,7 @@ class UnsafeAllocationTracker:
                     continue
                 for name, val in local_items:
                     stats["locals"] += 1
-                    _scan_value(val, loc, name, depth=10)
+                    _scan_value(val, loc, name, depth=UnsafeAllocationTracker._referrer_depth)
                 frame = frame.f_back
 
         lines: list[str] = [
@@ -240,6 +245,6 @@ class UnsafeAllocationTracker:
             lines.append(
                 "Hint: these may be program cache buffers (tracked by default; disable with"
                 " TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=1), or held deeper than the"
-                " referrer search depth (currently 10 levels)."
+                f" referrer search depth (currently {UnsafeAllocationTracker._referrer_depth} levels)."
             )
         return "\n".join(lines)
