@@ -158,6 +158,10 @@ jobs:
         timeout-minutes: 10
         run: |
           HEALTH_CHECK=./build/test/tt_metal/tt_fabric/test_system_health
+          # The test binary links libtt_metal.so from the extracted build/lib,
+          # which is not on the default LD_LIBRARY_PATH outside the dev container.
+          export TT_METAL_HOME="$PWD"
+          export LD_LIBRARY_PATH="$PWD/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           # tt-smi lives in the runner provisioning venv, not on the default PATH.
           ACTIVATE=/opt/tt_metal_infra/provisioning/provisioning_env/bin/activate
           reset_cluster() { ( if [ -f "$ACTIVATE" ]; then source "$ACTIVATE"; fi; tt-smi -glx_reset_auto ); }
