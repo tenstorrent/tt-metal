@@ -108,6 +108,10 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         wdefs["DIAG_LOCAL_FEED"] = "1";
         ddefs["DIAG_LOCAL_FEED"] = "1";
     }
+    const bool scatter = (diag & RegimeADiag::DIAG_IN0_SCATTER) != 0u;
+    if (scatter) {
+        wdefs["DIAG_IN0_SCATTER"] = "1";  // writer phase-1 uses direct scatter; needs the G-1 ahead peers (below)
+    }
 
     // ---- Core range sets: all cores + split-NoC groups (g0 = noc 0, g1 = noc 1) ----
     std::set<CoreRange> all_set, g0_set, g1_set;
@@ -293,6 +297,19 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
             cp.valid_k,              // 14 valid K tiles (rest of capacity zero)
             cp.valid_m,              // 15 valid M tiles (rest zero / not written)
             cp.valid_n};             // 16 valid N tiles (rest zero / not written)
+        // DIAG_IN0_SCATTER (test-only variant): append the G-1 ring peers AHEAD of this core (args 17..),
+        // in d-ahead order (ring_next^1..ring_next^{G-1}). Core scatters its own shard to peer d's cb0 slot
+        // d; each peer receives from the core d-behind, reproducing the ring's cb0 layout. Appended only for
+        // the scatter program (distinct hash), so the public path's arg layout is unchanged.
+        if (scatter) {
+            uint32_t cur = i;
+            for (uint32_t d = 1; d < geo.G; ++d) {
+                cur = P.cores[cur].ring_next_idx;
+                auto pc = phys(cur);
+                wa.push_back(pc.x);
+                wa.push_back(pc.y);
+            }
+        }
         SetRuntimeArgs(program, wh, cores[i], wa);
 
         // compute runtime args: fixed rectangular block over the schedule capacities. N_end spans ALL

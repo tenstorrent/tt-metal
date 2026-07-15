@@ -76,6 +76,43 @@ void kernel_main() {
     // ---- PHASE 1: in0 ring all-gather (balanced tails: read only valid M rows / valid K, else zero) ----
     cb_reserve_back(in0_cb, K_num_blocks * in0_blk);
     const uint32_t base0 = get_write_ptr(in0_cb);
+#ifdef DIAG_IN0_SCATTER
+    // DIAG_IN0_SCATTER (correct variant): read our OWN shard into slot 0, then in ONE scatter round write it
+    // to the G-1 cores ahead (peer d gets it in its slot d) and receive the G-1 shards from the cores behind
+    // (they fill our slots 1..G-1). base0 is the same L1 address on every ring core, so slot d ends up
+    // holding shard (ring_pos-d) exactly as the ring rotation would -> compute + the in1 rotated read are
+    // unchanged. Replaces G-1 SERIAL rotations (each gated on the previous) with 1 scatter + 1 wait.
+    {
+        uint32_t p = base0;
+        for (uint32_t wb = 0; wb < W; ++wb) {
+            uint32_t sb = ring_pos * W + wb;
+            for (uint32_t m = 0; m < M_block; ++m) {
+                for (uint32_t k = 0; k < K_block; ++k) {
+                    const uint32_t l = sb * K_block + k;
+                    if (m < valid_m && l < valid_k) {
+                        noc_async_read_page((m_start + m) * Kt + (k_start + l), in0, p);
+                    } else {
+                        zero_tile(p);  // pad M row / K tail -> exact 0.0
+                    }
+                    p += tile_bytes;
+                }
+            }
+        }
+        noc_async_read_barrier();
+    }
+    for (uint32_t d = 1; d < G; ++d) {  // scatter own shard (slot 0) to peer d's slot d
+        uint32_t px = get_arg_val<uint32_t>(17 + (d - 1) * 2), py = get_arg_val<uint32_t>(18 + (d - 1) * 2);
+        noc_async_write(base0, get_noc_addr(px, py, base0 + d * shard_bytes), shard_bytes);
+    }
+    noc_async_writes_flushed();  // payloads landed before we signal
+    for (uint32_t d = 1; d < G; ++d) {
+        uint32_t px = get_arg_val<uint32_t>(17 + (d - 1) * 2), py = get_arg_val<uint32_t>(18 + (d - 1) * 2);
+        noc_semaphore_inc(get_noc_addr(px, py, fwd_addr), 1);
+    }
+    noc_semaphore_wait_min(fwd_ptr, G - 1);  // the G-1 cores behind filled our slots 1..G-1
+    cb_push_back(in0_cb, K_num_blocks * in0_blk);
+    noc_async_write_barrier();
+#else
     for (uint32_t step = 0; step < G; ++step) {
         uint32_t slot = base0 + step * shard_bytes;
         if (step == 0) {
@@ -120,6 +157,7 @@ void kernel_main() {
         cb_push_back(in0_cb, W * in0_blk);  // compute consumes this shard (W blocks)
     }
     noc_async_write_barrier();  // all ring forwards landed
+#endif  // DIAG_IN0_SCATTER
 
     // ---- PHASE 2: output / split-K reduction over the N_bpc output blocks ----
     constexpr uint32_t out_blk_bytes = out_blk * tile_bytes;

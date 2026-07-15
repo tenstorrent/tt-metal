@@ -38,6 +38,10 @@ enum RegimeADiag : uint32_t {
     DIAG_SKIP_IN0_FORWARD = 1u << 2,  // writer: suppress ring payload write; still signal next core (no deadlock)
     DIAG_NO_REDUCE = 1u << 3,         // force bottom-band copy path everywhere; bypass reduce credits/recv/fwd
     DIAG_LOCAL_FEED = 1u << 4,        // (reserved) purely local CB feed: no DRAM/ring/fwd/M-split/reduce
+    // NOTE: the bit below is a CORRECT algorithmic VARIANT (produces the right output), not an ablation.
+    DIAG_IN0_SCATTER = 1u << 5,  // writer: in0 all-gather via 1 direct-scatter round instead of G-1 serial
+                                 // ring rotations. Identical cb0 layout (slot d = shard rp-d), so compute +
+                                 // the in1 rotated read are unchanged; removes the serial-hop critical path.
 };
 
 namespace plan = ttnn::operations::experimental::regime_a_matmul::plan;

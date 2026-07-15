@@ -84,14 +84,16 @@ TEST_F(RegimeADiagFixture, Run) {
     // Warmup / compile (run 0, dropped by the profiler parser).
     Tensor out = ttnn::prim::regime_a_matmul_diag(in0, in1, cfg, std::nullopt, std::nullopt, std::nullopt, mask);
 
-    if (mask == 0) {
+    // Correctness is checked for the public path (mask 0) AND the DIAG_IN0_SCATTER variant (32), both of
+    // which must produce the exact result; the pure ablations (garbage output) are not checked.
+    if (mask == 0 || mask == 32) {
         const std::vector<float> host = out.to_vector<float>();
         double maxrel = 0.0;
         for (float v : host) {
             maxrel = std::max(maxrel, std::abs(static_cast<double>(v) - K) / K);
         }
         fmt::print("DIAGPCC max_rel_err={:.5f}\n", maxrel);
-        EXPECT_LT(maxrel, 0.02) << "mask-0 constant-input output should equal K";
+        EXPECT_LT(maxrel, 0.02) << "constant-input output should equal K (mask=" << mask << ")";
     }
 
     // Timed steady-state iterations (profiler captures kernel time; parsed after device close).
