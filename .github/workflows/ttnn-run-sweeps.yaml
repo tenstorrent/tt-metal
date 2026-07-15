@@ -696,8 +696,6 @@ jobs:
           # Resolve sweep name: map schedule cron to friendly name, or use dispatch input
           if [[ "$IS_SCHEDULED" == "true" ]]; then
             case "${{ github.event.schedule }}" in
-              "30 4 * * 0,1,2,4,5") SWEEP_NAME="ALL SWEEPS (Nightly)" ;;
-              "0 4 * * 3,6")         SWEEP_NAME="ALL SWEEPS (Comprehensive)" ;;
               "0 3 * * *")            SWEEP_NAME="ALL SWEEPS (Model Traced)" ;;
               "0 2 * * *")            SWEEP_NAME="ALL SWEEPS (Lead Models)" ;;
               *)                      SWEEP_NAME="ALL SWEEPS (Nightly)" ;;
