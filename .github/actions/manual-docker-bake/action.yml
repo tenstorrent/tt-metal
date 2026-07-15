@@ -218,6 +218,42 @@ runs:
                   validation_failed=true
                 else
                   echo "  Registry image validated: $target_tag"
+
+                  # Verbose: print manifest/attestation-manifest sizes, provenance, and SBOM summary.
+                  # Never fails validation itself (all commands below are best-effort/informational).
+                  IMAGETOOLS_JSON=$(docker buildx imagetools inspect "$target_tag" --format '{{json .}}' 2>/dev/null || echo "")
+                  if [ -n "$IMAGETOOLS_JSON" ]; then
+                    echo "$IMAGETOOLS_JSON" | jq -r '
+                      "  Manifest: \(.manifest.mediaType // "unknown") digest=\(.manifest.digest // "?")",
+                      (if .manifest.manifests then
+                        (.manifest.manifests[] | "    - " + (.platform.architecture // "?") + "/" + (.platform.os // "?") + " " + .mediaType + " size=" + (.size | tostring) + " bytes" + (if .annotations["vnd.docker.reference.type"] then " [" + .annotations["vnd.docker.reference.type"] + "]" else "" end))
+                      else
+                        "    (single manifest, size=" + (.manifest.size // 0 | tostring) + " bytes)"
+                      end)
+                    ' 2>/dev/null || echo "    (could not parse imagetools manifest output)"
+                  else
+                    echo "  WARNING: docker buildx imagetools inspect failed for $target_tag - skipping size/attestation details"
+                  fi
+
+                  PROVENANCE_JSON=$(docker buildx imagetools inspect "$target_tag" --format '{{json .Provenance}}' 2>/dev/null || echo "")
+                  if [ -n "$PROVENANCE_JSON" ] && [ "$PROVENANCE_JSON" != "null" ]; then
+                    echo "  Provenance (SLSA):"
+                    echo "$PROVENANCE_JSON" | jq -c '.SLSA | {builder, buildType, materialsCount: (.materials // [] | length)}' 2>/dev/null \
+                      | sed 's/^/    /' || echo "    (could not parse provenance JSON)"
+                  else
+                    echo "  WARNING: no provenance attestation found for $target_tag"
+                  fi
+
+                  SBOM_JSON=$(docker buildx imagetools inspect "$target_tag" --format '{{json .SBOM}}' 2>/dev/null || echo "")
+                  if [ -n "$SBOM_JSON" ] && [ "$SBOM_JSON" != "null" ]; then
+                    SBOM_PKG_COUNT=$(echo "$SBOM_JSON" | jq -r '.SPDX.packages // [] | length' 2>/dev/null || echo "?")
+                    SBOM_BYTES=$(echo -n "$SBOM_JSON" | wc -c)
+                    echo "  SBOM (SPDX): ${SBOM_PKG_COUNT} packages, ${SBOM_BYTES} bytes" \
+                      "(full document not printed here - too large for logs; fetch with" \
+                      "'docker buildx imagetools inspect ${target_tag} --format \"{{json .SBOM}}\"')"
+                  else
+                    echo "  WARNING: no SBOM attestation found for $target_tag"
+                  fi
                 fi
               else
                 echo "  Skipping validation for target '$target' (no tag specified for registry check)"
@@ -239,7 +275,9 @@ runs:
                 echo "The build reported success but the image is not inspectable."
                 validation_failed=true
               else
-                echo "  Local image validated: $local_tag"
+                local_size=$(docker image inspect "$local_tag" --format '{{.Size}}' 2>/dev/null || echo "?")
+                echo "  Local image validated: $local_tag (size=${local_size} bytes)"
+                echo "  (local docker-loaded images don't carry attestation manifests - no provenance/SBOM to report)"
               fi
             fi
           done
