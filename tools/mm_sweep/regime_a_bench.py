@@ -19,7 +19,8 @@ from collections import defaultdict
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 BIN_CSV = f"{ROOT}/generated/profiler/.logs/profile_log_device.csv"
 SWEEP = f"{os.path.dirname(__file__)}/fluxltx_regimeA_sweep.json"
-OUT = f"{os.path.dirname(__file__)}/regime_a_bench.json"
+OUT = f"{os.path.dirname(__file__)}/regime_a_bench.json"  # finalized {corpus, cache} (driver writes)
+CACHE = f"{os.path.dirname(__file__)}/regime_a_bench_cache.json"  # flat resumable cache (run_cfg writes)
 FREQ = 1.35e9
 PEAK512 = 512e9
 TB = 2048
@@ -37,6 +38,75 @@ def rup(x, y):
 def logical_bytes(M, K, N):
     Mt, Kt, Nt = cdiv(M, 32), cdiv(K, 32), cdiv(N, 32)
     return (Mt * Kt + Kt * Nt + Mt * Nt) * TB
+
+
+L1_BUDGET = 1440 * 1024
+
+
+def planner_feasible(M, K, N, cfg):
+    """Python mirror of the C++ host planner build_plan() rejects. Returns (ok, reason). Lets the driver
+    reject invalid configs WITHOUT launching a device subprocess (avoids 150s timeouts on infeasible
+    configs). Kept in lock-step with regime_a_matmul_plan.hpp."""
+    Ns, Pk, Sm, kb, nsb = cfg
+    Mt, Kt, Nt = cdiv(M, 32), cdiv(K, 32), cdiv(N, 32)
+    if Pk < 1 or Ns < 1 or Sm < 1 or kb < 1 or nsb < 1:
+        return False, "range"
+    if Sm > Mt:
+        return False, "Sm>Mt"
+    if Pk > Kt:
+        return False, "Pk>Kt"
+    N_band = cdiv(Nt, 8)
+    if 7 * N_band >= Nt:
+        return False, "empty-bank"  # width shard leaves some banks wholly-pad
+    if (Nt - 7 * N_band) < Ns:
+        return False, "empty-n-slice"  # smallest bank (7) can't feed Ns owners
+    cores = 8 * Pk * Ns * Sm
+    if cores > 104:
+        return False, "cores>104"
+    Ktl = rup(cdiv(Kt, Pk), kb * 8)
+    Mblk = cdiv(Mt, Sm)
+    N_own = cdiv(N_band, Ns)
+    if nsb > N_own:
+        return False, "nsb>N_own"
+    N_bpc = cdiv(N_own, nsb)
+    N_slice = N_bpc * nsb
+    cb0, cb1, cb2, cb3 = Ktl * Mblk, 4 * kb * nsb, 2 * Mblk * nsb, Mblk * nsb
+    cb7 = 2 * Mblk * nsb if Pk > 1 else 0
+    l1 = (cb0 + cb1 + cb2 + cb7) * TB + cb3 * 4096
+    if l1 > L1_BUDGET:
+        return False, "L1"
+    return True, "ok"
+
+
+_PICKERS = {}
+
+
+def _pickers():
+    if not _PICKERS:
+        import importlib.util, io, contextlib
+
+        for name in ("picker_table", "picker_v2"):
+            spec = importlib.util.spec_from_file_location(name, f"{os.path.dirname(__file__)}/{name}.py")
+            m = importlib.util.module_from_spec(spec)
+            cwd = os.getcwd()
+            os.chdir(os.path.dirname(__file__))
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    spec.loader.exec_module(m)
+            finally:
+                os.chdir(cwd)
+            _PICKERS[name] = m
+    return _PICKERS
+
+
+def auto_config(M, K, N):
+    """Mirror of C++ auto_select_config: element-keyed lookup table else v2 cost-model fallback."""
+    p = _pickers()
+    tbl = p["picker_table"].PICKER_TABLE
+    if (M, K, N) in tbl:
+        return tuple(tbl[(M, K, N)])
+    pv = p["picker_v2"]
+    return tuple(pv.pickfree(M, K, N, pv.bestP))
 
 
 # ---------------------------------------------------------------- worker (one config, one process)
@@ -111,14 +181,49 @@ def worker(M, K, N, Ns, Pk, Sm, kb, nsb):
 
 
 # ---------------------------------------------------------------- driver
+def _metrics(M, K, N, cfg, d):
+    """Build a success record. Rank by MEDIAN; keep min/spread. cores = 8*Pk*Ns*Sm (config-derived);
+    for product (cfg resolved by driver) the resolved cfg is passed in."""
+    runs = d["runs"]
+    cmed = statistics.median(runs)
+    cmin = min(runs)
+    Ns, Pk, Sm, kb, nsb = cfg
+    return {
+        "M": M,
+        "K": K,
+        "N": N,
+        "cfg": list(cfg),
+        "cores": 8 * Pk * Ns * Sm,
+        "cls": "ok",
+        "us_med": cmed / FREQ * 1e6,
+        "us_min": cmin / FREQ * 1e6,
+        "us_spread_pct": (max(runs) - cmin) / cmin * 100 if cmin else 0,
+        "eff_gbps": logical_bytes(M, K, N) / (cmed / FREQ) / 1e9,
+        "pct512": logical_bytes(M, K, N) / (cmed / FREQ) / PEAK512 * 100,
+        "pct512_min": logical_bytes(M, K, N) / (cmin / FREQ) / PEAK512 * 100,
+        "pcc": d["pcc"],
+        "niters": len(runs),
+    }
+
+
 def run_cfg(M, K, N, cfg, cache):
-    """cfg = (Ns,Pk,Sm,kb,nsb) or None (product). Returns dict or None on fail/hang."""
+    """cfg = (Ns,Pk,Sm,kb,nsb) or None (product). Returns a record with a 'cls' outcome class:
+    validation | runtime | hang | pcc | ok. Feasibility is checked HERE (host planner mirror) so
+    invalid configs never launch a device subprocess."""
     key = f"{M}x{K}x{N}:" + ("auto" if cfg is None else ",".join(map(str, cfg)))
     if key in cache:
         return cache[key]
-    if cfg is None:
-        args = [M, K, N, 1, 0, 1, 1, 1]  # Pk=0 => config=None
-    else:
+    # Manual configs: reject invalid ones before launching (product resolves in C++, always feasible or
+    # it FATALs -> classified 'runtime').
+    if cfg is not None:
+        ok, why = planner_feasible(M, K, N, cfg)
+        if not ok:
+            rec = {"key": key, "cls": "validation", "reason": why, "cfg": list(cfg)}
+            cache[key] = rec
+            json.dump(cache, open(CACHE, "w"))
+            return rec
+    args = [M, K, N, 1, 0, 1, 1, 1] if cfg is None else [M, K, N, *cfg[:1], cfg[1], cfg[2], cfg[3], cfg[4]]
+    if cfg is not None:
         Ns, Pk, Sm, kb, nsb = cfg
         args = [M, K, N, Ns, Pk, Sm, kb, nsb]
     env = dict(os.environ)
@@ -133,33 +238,19 @@ def run_cfg(M, K, N, cfg, cache):
         for line in r.stdout.splitlines():
             if line.startswith("RESULT "):
                 d = json.loads(line[7:])
-                runs = d["runs"]
-                if runs and d["ok"] and d["finite"]:
-                    cmin = min(runs)
-                    rec = {
-                        "key": key,
-                        "M": M,
-                        "K": K,
-                        "N": N,
-                        "cfg": cfg,
-                        "cores": d["cores"],
-                        "us_min": cmin / FREQ * 1e6,
-                        "us_med": statistics.median(runs) / FREQ * 1e6,
-                        "us_spread_pct": (max(runs) - cmin) / cmin * 100 if cmin else 0,
-                        "eff_gbps": logical_bytes(M, K, N) / (cmin / FREQ) / 1e9,
-                        "pct512": logical_bytes(M, K, N) / (cmin / FREQ) / PEAK512 * 100,
-                        "pcc": d["pcc"],
-                        "niters": len(runs),
-                    }
-                elif not (d["ok"] and d["finite"]):
-                    rec = {"key": key, "fail": "pcc/finite", "pcc": d.get("pcc")}
+                rcfg = cfg if cfg is not None else auto_config(M, K, N)  # product: resolved config
+                if d["runs"] and d["ok"] and d["finite"]:
+                    rec = _metrics(M, K, N, rcfg, d)
+                    rec["key"] = key
+                else:
+                    rec = {"key": key, "cls": "pcc", "pcc": d.get("pcc"), "finite": d.get("finite"), "cfg": list(rcfg)}
         if rec is None:
-            rec = {"key": key, "fail": "no-result", "stderr": r.stderr[-200:]}
+            rec = {"key": key, "cls": "runtime", "stderr": r.stderr[-300:]}
     except subprocess.TimeoutExpired:
-        rec = {"key": key, "fail": "hang"}
+        rec = {"key": key, "cls": "hang"}
         subprocess.run(["tt-smi", "-r"], capture_output=True)
     cache[key] = rec
-    json.dump(cache, open(OUT, "w"))
+    json.dump(cache, open(CACHE, "w"))
     return rec
 
 
@@ -195,33 +286,94 @@ def neighbors(cfg):
     return list(out)
 
 
+def _ok(r):
+    return bool(r) and r.get("cls") == "ok"
+
+
 def best_manual(M, K, N, sweep, cache, picker=None):
+    """Seed from the prototype sweep (else picker) + one focused local-search round. Ranks by MEDIAN."""
     seeds = sweep_seeds(M, K, N, sweep)
-    if not seeds and picker is not None:
-        seeds = [picker(M, K, N)]
+    if picker is not None:
+        seeds = seeds + [picker(M, K, N)]
     if not seeds:
         seeds = [(1, 6, 1, 2, 1)]
-    results = []
-    for c in seeds:
-        r = run_cfg(M, K, N, c, cache)
-        if r and "us_min" in r:
-            results.append(r)
+    results = [r for c in seeds if _ok(r := run_cfg(M, K, N, c, cache))]
     if not results:
         return None
-    best = min(results, key=lambda r: r["us_min"])
-    # one focused local-search round around the best seed
+    best = min(results, key=lambda r: r["us_med"])
     for c in neighbors(best["cfg"]):
         r = run_cfg(M, K, N, c, cache)
-        if r and "us_min" in r:
+        if _ok(r):
             results.append(r)
-    return min(results, key=lambda r: r["us_min"])
+    return min(results, key=lambda r: r["us_med"])
+
+
+def enumerate_feasible(M, K, N):
+    """Every planner-valid config across ALL 5 levers within the 104-worker + L1 limits (NOT Sm=1 only)."""
+    Mt, Kt, Nt = cdiv(M, 32), cdiv(K, 32), cdiv(N, 32)
+    N_band = cdiv(Nt, 8)
+    cfgs = []
+    for Pk in range(1, min(Kt, 13) + 1):
+        for Ns in range(1, 7):
+            N_own = cdiv(N_band, Ns)
+            for Sm in range(1, Mt + 1):
+                if 8 * Pk * Ns * Sm > 104:
+                    continue
+                for kb in (1, 2, 4, 8, 16, 32):
+                    for nsb in range(1, N_own + 1):
+                        c = (Ns, Pk, Sm, kb, nsb)
+                        if planner_feasible(M, K, N, c)[0]:
+                            cfgs.append(c)
+    return cfgs
+
+
+def load_cache():
+    """Genuinely resumable: the flat CACHE file (written per config by run_cfg). Falls back to a
+    finalized {corpus, cache} OUT only if it carries new-format ('cls') records."""
+    if os.path.exists(CACHE):
+        return json.load(open(CACHE))
+    if os.path.exists(OUT):
+        d = json.load(open(OUT))
+        c = d.get("cache") if isinstance(d, dict) else None
+        if isinstance(c, dict) and any(isinstance(v, dict) and "cls" in v for v in c.values()):
+            return c
+    return {}
 
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--run":
         worker(*[int(x) for x in sys.argv[2:10]])
         sys.exit(0)
-    # driver
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--sweep":
+        M, K, N = (int(x) for x in sys.argv[2:5])
+        cache = load_cache()
+        cfgs = enumerate_feasible(M, K, N)
+        print(f"exhaustive sweep {M}x{K}x{N}: {len(cfgs)} planner-valid configs", flush=True)
+        res = []
+        for i, c in enumerate(cfgs):
+            r = run_cfg(M, K, N, c, cache)
+            if _ok(r):
+                res.append(r)
+                if r["us_med"] <= min(x["us_med"] for x in res):
+                    print(
+                        f"  [{i+1}/{len(cfgs)}] NEW BEST cfg={c} med={r['us_med']:.1f}us "
+                        f"{r['pct512']:.1f}% cores={r['cores']}",
+                        flush=True,
+                    )
+        res.sort(key=lambda r: r["us_med"])
+        swout = f"{os.path.dirname(__file__)}/regime_a_sweep_{M}x{K}x{N}.json"
+        json.dump({"M": M, "K": K, "N": N, "results": res, "n_valid": len(cfgs)}, open(swout, "w"), indent=2)
+        print(f"\nTOP 8 (by median us):")
+        for r in res[:8]:
+            print(
+                f"  cfg={r['cfg']} med={r['us_med']:.1f}us min={r['us_min']:.1f} "
+                f"spread={r['us_spread_pct']:.1f}% {r['pct512']:.1f}% cores={r['cores']} pcc={r['pcc']:.5f}"
+            )
+        print(f"WROTE {swout}")
+        sys.exit(0)
+
+    # driver (full corpus)
     sweep = json.load(open(SWEEP))
     sweep_shapes = sorted(set((r["M"], r["K"], r["N"]) for r in sweep))
     added = [
@@ -238,47 +390,35 @@ if __name__ == "__main__":
         (32, 6080, 4640),
         (64, 6080, 4640),
         (128, 6080, 4640),
-        (256, 6080, 4640),  # vary M, non-div K,N
+        (256, 6080, 4640),
         (32, 6144, 4600),
         (32, 6100, 4608),
-        (48, 6144, 4608),  # independent N / K / M sub-tile
+        (48, 6144, 4608),
     ]
     corpus = (
         [("sweep", s) for s in sweep_shapes]
         + [("added", s) for s in added]
         + [("balanced_tail", s) for s in balanced_tail]
     )
-    cache = json.load(open(OUT)) if os.path.exists(OUT) else {}
-    picker = None
-    try:
-        import importlib.util, io, contextlib
-
-        spec = importlib.util.spec_from_file_location("pv", f"{os.path.dirname(__file__)}/picker_v2.py")
-        pv = importlib.util.module_from_spec(spec)
-        cwd = os.getcwd()
-        os.chdir(os.path.dirname(__file__))
-        with contextlib.redirect_stdout(io.StringIO()):
-            spec.loader.exec_module(pv)
-        os.chdir(cwd)
-        picker = lambda M, K, N: pv.pickfree(M, K, N, pv.bestP)
-    except Exception as e:
-        print("picker unavailable:", e)
+    cache = load_cache()
+    picker = auto_config
 
     out = []
     for cat, (M, K, N) in corpus:
         Mt = cdiv(M, 32)
         prod = run_cfg(M, K, N, None, cache)
-        # Mt>=16 is DIAGNOSTIC-ONLY (out of the Mt<=8 acceptance scope). Skip the manual local search
-        # for it: several of these deep-K/large-Mt shapes have no feasible config and would burn the
-        # whole budget on 180s worker timeouts. Report product only.
         man = None if Mt >= 16 else best_manual(M, K, N, sweep, cache, picker)
         rec = {"cat": cat, "M": M, "K": K, "N": N, "Mt": Mt, "diagnostic": Mt >= 16, "product": prod, "manual": man}
         out.append(rec)
-        pu = prod.get("us_min") if prod else None
-        mu = man.get("us_min") if man else None
+        pcls, pu = (prod or {}).get("cls"), (prod or {}).get("us_med")
+        mu = man.get("us_med") if _ok(man) else None
         print(
             f"[{cat:13}] {M}x{K}x{N} Mt{Mt}"
-            + (f"  product {pu:.1f}us {prod.get('pct512',0):.0f}%" if pu else f"  product {prod.get('fail')}")
+            + (
+                f"  product {pu:.1f}us {prod.get('pct512',0):.0f}% cfg={prod.get('cfg')}"
+                if _ok(prod)
+                else f"  product [{pcls}]"
+            )
             + (f"  manual {mu:.1f}us {man.get('pct512',0):.0f}% cfg={man.get('cfg')}" if mu else "  manual -"),
             flush=True,
         )
