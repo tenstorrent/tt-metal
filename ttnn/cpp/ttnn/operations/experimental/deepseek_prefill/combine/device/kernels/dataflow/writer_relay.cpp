@@ -226,10 +226,16 @@ void kernel_main() {
 
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
+#if RELAY_TRID_OVERLAP_SEND
     // Lockstep trid + header pool (right after the 2 base headers in c_5). Each in-flight token uses
     // header pool[overlap_slot] and trid (overlap_slot+1), cycling over [0, OVERLAP_POOL_DEPTH).
     const uint32_t overlap_hdr_pool_base = packet_header_buffer_address + 2u * sizeof(PACKET_HEADER_TYPE);
     uint32_t overlap_slot = 0;
+#else
+    // Main-only flavor: one reusable unicast header (c_5 slot 0, mirroring writer_combine's
+    // !OVERLAPING_TOKEN_WRITE path). Slot 1 is sem_packet_header (above); the overlap pool is unused.
+    auto* unicast_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address);
+#endif
 
     // ===== CB consumer: read sender-produced tokens from c_24 and forward to fabric =====
     // The sender (writer_combine) produces route_info + payload into our c_24 ring (credit-flow-controlled)
@@ -300,12 +306,23 @@ void kernel_main() {
             pkt_route_info.distance_in_hops = static_cast<uint16_t>(distance);
             auto& payload_sender = fabric_connections[route];
 
+#if RELAY_TRID_OVERLAP_SEND
+            // Trid-pipelined send (branch-only helpers): up to OVERLAP_POOL_DEPTH sends overlap; the
+            // completion wait lags by the pool depth.
             auto* overlap_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(
                 overlap_hdr_pool_base + overlap_slot * sizeof(PACKET_HEADER_TYPE));
             const uint32_t overlap_trid = overlap_slot + 1;  // 1..OVERLAP_POOL_DEPTH (trid 0 reserved)
 
             const uint64_t t0 = get_timestamp();
-            wait_on_flush_for_trid(overlap_trid);  // LAGGED: free this trid's DEPTH-ago use before reuse
+            wait_on_flush_for_trid(overlap_trid);  // LAGGED: retire this trid's DEPTH-ago send
+            // TORN-PAYLOAD FIX: the send that just retired read the slot it used DEPTH tokens ago; only
+            // NOW is that slot's payload read complete, so return ONE credit (lagged by DEPTH). Returning
+            // the credit at send-ISSUE time (the previous behavior) let the sender overwrite the slot
+            // while the non-blocking read was still draining -> torn content / bad PCC. Skipped for the
+            // first DEPTH tokens (warmup: nothing has retired yet); the tail is settled after the loop.
+            if (consumed >= OVERLAP_POOL_DEPTH) {
+                noc_semaphore_inc<true>(sender_credits_noc_addr, 1);
+            }
             const uint64_t t1 = get_timestamp();
 
             ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_for_route_helper(overlap_hdr), pkt_route_info);
@@ -323,20 +340,58 @@ void kernel_main() {
             mock_bin(mock_wait_buckets, t1 - t0);
             mock_bin(mock_send_buckets, t2 - t1);
             hist_record(t2);
-            bw_total_payload_bytes += aligned_output_page_size;
-
-            // Return the slot's credit so the sender can refill it (ring depth >> overlap depth, so the
-            // in-flight payload read has completed well before the sender wraps back to this slot).
-            noc_semaphore_inc<true>(sender_credits_noc_addr, 1);
             overlap_slot = (overlap_slot + 1 == OVERLAP_POOL_DEPTH) ? 0u : overlap_slot + 1u;
+#else
+            // Main-only blocking send: fabric_send_noc_unicast + noc_async_writes_flushed(), exactly the
+            // writer_combine !OVERLAPING_TOKEN_WRITE path (uses only fabric utils present on main). The
+            // flush completes the slot's payload read before we free the slot below, so returning the
+            // credit is race-free. One send in flight at a time (no overlap).
+            const uint64_t t0 = get_timestamp();
+            ccl_routing_utils::fabric_set_line_unicast_route(
+                pkt_hdr_for_route_helper(unicast_packet_header), pkt_route_info);
+            fabric_send_noc_unicast<fabric_max_packet_size>(
+                output_addr_gen,
+                payload_sender,
+                unicast_packet_header,
+                payload_addr,
+                output_page_idx,
+                (int)aligned_output_page_size,
+                l1_alignment);
+            noc_async_writes_flushed();  // slot payload has departed L1 -> safe to free / overwrite
+            const uint64_t t1 = get_timestamp();
+
+            // Read complete -> return this slot's credit immediately (no torn read possible).
+            noc_semaphore_inc<true>(sender_credits_noc_addr, 1);
+            mock_bin(mock_wait_buckets, 0);  // no lagged trid-wait in this flavor
+            mock_bin(mock_send_buckets, t1 - t0);
+            hist_record(t1);
+#endif
+            bw_total_payload_bytes += aligned_output_page_size;
             consumed++;
         }
+
+#if RELAY_TRID_OVERLAP_SEND
+        // Retire the last up-to-DEPTH still-in-flight overlapped reads, then return the credits withheld
+        // during warmup so the sender's credit sem nets exactly one credit per consumed slot (same total
+        // as the pre-fix code; matters only if sems aren't re-initialized between invocations — the
+        // sender itself has already queued everything and returned by now). Done inside this scope so
+        // sender_credits_noc_addr is in view.
+        for (uint32_t t = 1; t <= OVERLAP_POOL_DEPTH; t++) {
+            wait_on_flush_for_trid(t);
+        }
+        {
+            const uint32_t real_tokens = consumed - 1;  // consumed counted the sentinel slot too
+            const uint32_t outstanding = real_tokens < OVERLAP_POOL_DEPTH ? real_tokens : OVERLAP_POOL_DEPTH;
+            for (uint32_t i = 0; i < outstanding; i++) {
+                noc_semaphore_inc<true>(sender_credits_noc_addr, 1);
+            }
+        }
+#endif
     }
 
-    // Drain the up-to-OVERLAP_POOL_DEPTH still-in-flight overlapped sends before the exit handshake.
-    for (uint32_t t = 1; t <= OVERLAP_POOL_DEPTH; t++) {
-        wait_on_flush_for_trid(t);
-    }
+    // (Under RELAY_TRID_OVERLAP_SEND the trid drain + tail credit return happened inside the consumer
+    // scope above. In the main-only flavor each send was already blocking+flushed, so nothing is in
+    // flight here.) A full local-write barrier before the exit handshake / connection teardown.
     noc_async_write_barrier();
 
     // [debug] END marker (0) after the barrier, so the last data packet has departed L1.

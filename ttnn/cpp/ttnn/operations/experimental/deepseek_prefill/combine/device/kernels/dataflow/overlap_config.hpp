@@ -115,6 +115,22 @@
 // within the relay core's L1 (it holds essentially nothing else). Reduce if program creation OOMs.
 #define RELAY_SLOTS 64
 
+// RELAY_TRID_OVERLAP_SEND — selects the relay's c_24 -> eth send flavor (writer_relay only):
+//   1 (default): the OVERLAPING_TOKEN_WRITE trid-pipelined path. Each token is sent non-blocking
+//       (fabric_send_noc_unicast_with_trid) with a pool of OVERLAP_POOL_DEPTH trids + headers, and the
+//       completion wait (wait_on_flush_for_trid) lags by the pool depth so up to DEPTH sends overlap.
+//       The slot credit is returned only AFTER that lagged wait retires the slot's read (see the loop),
+//       so the sender never overwrites a slot whose payload read is still in flight. These trid helpers
+//       (send_current_slot_non_blocking_with_trid, noc_async_write_barrier_with_trid on the fabric worker
+//       NOC) were ADDED on this branch — they do NOT exist on main.
+//   0: main-only flavor. Each token is sent with the blocking fabric_send_noc_unicast +
+//       noc_async_writes_flushed() (exactly the writer_combine !OVERLAPING_TOKEN_WRITE path on main),
+//       using a single reusable packet header. The flush completes the slot's payload read before the
+//       credit is returned, so it is race-free without trids. Uses ONLY fabric utils present on main;
+//       no overlap (one send in flight at a time). Use this to A/B correctness + perf against flavor 1.
+// Kernel-only (JIT) toggle -> no libttnn rebuild. HW-only verification.
+#define RELAY_TRID_OVERLAP_SEND 0
+
 // RELAY_ROUNDROBIN_ROUTE — BW-spread experiment. When 1, the relay OVERRIDES each token's route +
 // distance (from the CB slot) with round-robin values so traffic spreads across both active fabric
 // directions and a range of hop-distances: route = i-th active direction alternating (i%num_active),
