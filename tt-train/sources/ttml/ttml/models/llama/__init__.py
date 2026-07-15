@@ -14,6 +14,7 @@ from ttml.modules import (
     AbstractModuleBase,
     ColumnParallelLinear,
     Embedding,
+    FeatureParallelEmbedding,
     LinearLayer,
     ModuleList,
     VocabParallelEmbedding,
@@ -144,15 +145,31 @@ class Llama(AbstractModuleBase):
                 gather_output=False,
                 axis_name="tp",
             )
-            # Shard the embedding table on the vocab dim to mirror the LM head:
-            # each device keeps only its vocab slice instead of a full replicated
-            # table, and the matching layout allows a tied weight (below).
-            self.tok_emb = VocabParallelEmbedding(
-                self.padded_vocab_size,
-                config.hidden_size,
-                weight_init=ttml.init.normal(0.0, 0.02),
-                axis_name="tp",
-            )
+            if True:
+                # Shard the embedding table on the hidden dim.
+                if config.weight_tying == ttml.models.WeightTyingType.Enabled:
+                    raise ValueError(
+                        "FeatureParallelEmbedding shards the token embedding on the feature "
+                        "(hidden) dimension, which is not layout-compatible with the "
+                        "vocab-parallel LM head; weight tying cannot be used. Set "
+                        "weight_tying=Disabled."
+                    )
+                self.tok_emb = FeatureParallelEmbedding(
+                    self.padded_vocab_size,
+                    config.hidden_size,
+                    weight_init=ttml.init.normal(0.0, 0.02),
+                    axis_name="tp",
+                )
+            else:
+                # Shard the embedding table on the vocab dim to mirror the LM head:
+                # each device keeps only its vocab slice instead of a full replicated
+                # table, and the matching layout allows a tied weight (below).
+                self.tok_emb = VocabParallelEmbedding(
+                    self.padded_vocab_size,
+                    config.hidden_size,
+                    weight_init=ttml.init.normal(0.0, 0.02),
+                    axis_name="tp",
+                )
         else:
             self.padded_vocab_size = ((config.vocab_size + 31) // 32) * 32
             self.fc = LinearLayer(

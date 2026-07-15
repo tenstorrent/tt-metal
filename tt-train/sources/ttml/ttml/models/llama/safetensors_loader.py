@@ -96,6 +96,31 @@ def _make_tp_mapper(shard_type):
     return ttml.mesh().axis_mapper("tp", tdim=dim)
 
 
+def _param_tp_shard_type(param):
+    """Shard type of *param* along the 'tp' mesh axis, read from its live layout.
+
+    Mirrors ``checkpointing._load_params``: instead of hard-coding which module
+    produced the weight, ask the destination parameter how it is sharded.
+      - sharded on dim 2 (rows / output features) -> ``"col_w"``
+      - sharded on dim 3 (cols / hidden features)  -> ``"row_w"``
+      - replicated, or no 'tp' axis                -> ``None``
+    """
+    placements = ttml.Sharding.from_tensor(param).placements
+    if placements is None:  # unit mesh / no topology
+        return None
+    tp_axis = ttml.mesh().axis_index("tp")
+    if tp_axis >= len(placements):
+        return None
+    p = placements[tp_axis]
+    if not isinstance(p, ttnn.PlacementShard):  # replicated on the tp axis
+        return None
+    if p.dim == 2:
+        return "col_w"
+    if p.dim == 3:
+        return "row_w"
+    raise ValueError(f"weight is sharded on dim {p.dim} over the 'tp' axis; expected dim 2 (rows) or dim 3 (hidden).")
+
+
 def load_from_safetensors(
     model: ttml.modules.AbstractModuleBase,
     safetensors_path: str | os.PathLike,
@@ -194,12 +219,14 @@ def load_from_safetensors(
         ):
             from ttml.models import WeightTyingType
 
-            emb_param_name = "Llama/fc/weight" if weight_tying == WeightTyingType.Enabled else "Llama/tok_emb/weight"
+            tied = weight_tying == WeightTyingType.Enabled
+            emb_param_name = "Llama/fc/weight" if tied else "Llama/tok_emb/weight"
             param = get_param(emb_param_name)
             tgt = param.shape()
-            shard_type = "col_w" if use_tp else None
+            shard_type = _param_tp_shard_type(param) if use_tp else None
             full_rows = tgt[-2] * tp_size if shard_type == "col_w" else tgt[-2]
-            resized = _pad_and_resize(hf_arr, full_rows, tgt[-1])
+            full_cols = tgt[-1] * tp_size if shard_type == "row_w" else tgt[-1]
+            resized = _pad_and_resize(hf_arr, full_rows, full_cols)
             mapper = _make_tp_mapper(shard_type)
             _assign_tensor(param, _to_bf16_4d(resized), mapper=mapper)
             continue

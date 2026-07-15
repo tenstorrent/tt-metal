@@ -9,7 +9,7 @@
 from _ttml.modules import InferenceMode, ModuleBase, RunMode
 
 # Python implementations
-from .embedding import Embedding, VocabParallelEmbedding
+from .embedding import Embedding, FeatureParallelEmbedding, VocabParallelEmbedding
 from .linear import LinearLayer, ColumnParallelLinear, RowParallelLinear
 from .lora import LoraConfig, LoraLinear, LoraColumnParallelLinear, LoraRowParallelLinear, LoraModel
 from .module_base import AbstractModuleBase, ModuleDict, ModuleList
@@ -26,6 +26,7 @@ __all__ = [
     "AbstractModuleBase",
     "Buffer",
     "Embedding",
+    "FeatureParallelEmbedding",
     "LinearLayer",
     "LoraColumnParallelLinear",
     "LoraConfig",
