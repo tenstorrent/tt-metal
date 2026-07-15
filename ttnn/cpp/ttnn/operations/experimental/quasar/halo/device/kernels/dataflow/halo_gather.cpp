@@ -296,10 +296,11 @@ void kernel_main() {
     // (borrowed_from = IN), so we only need to advance the FIFO front pointer so the
     // compute's wait_front(src) succeeds.  No data is moved.
     {
-        constexpr uint32_t input_npages = get_arg(args::input_npages);
-        DataflowBuffer src_cb(dfb::src);
-        src_cb.reserve_back(static_cast<uint16_t>(input_npages));
-        src_cb.push_back(static_cast<uint16_t>(input_npages));
+        // [DIAG: compute-sync disabled — REVERT] src reserve/push feed compute's wait_front(src)
+        // constexpr uint32_t input_npages = get_arg(args::input_npages);
+        // DataflowBuffer src_cb(dfb::src);
+        // src_cb.reserve_back(static_cast<uint16_t>(input_npages));
+        // src_cb.push_back(static_cast<uint16_t>(input_npages));
     }
 #endif
 
@@ -355,7 +356,8 @@ void kernel_main() {
 #ifndef SKIP_UNTILIZE
         {
             DataflowBuffer in_cb(dfb::untilize_out);
-            in_cb.wait_front(total_tiles_in_single_block);
+            // [DIAG: compute-sync disabled — REVERT] llk_wait_tiles (drains compute's untilize_out)
+            // in_cb.wait_front(total_tiles_in_single_block);
             in_base_l1_addr = in_cb.get_read_ptr();
 
             while (number_of_segments_remaining) {
@@ -374,8 +376,9 @@ void kernel_main() {
                     // Pop blocks until we have the right one (transfers are globally ordered by ascending block id).
                     while (src_offset >= block_boundary_offset) {
                         noc.async_write_barrier();
-                        in_cb.pop_front(total_tiles_in_single_block);
-                        in_cb.wait_front(total_tiles_in_single_block);
+                        // [DIAG: compute-sync disabled — REVERT] llk_pop_tiles / llk_wait_tiles (untilize_out)
+                        // in_cb.pop_front(total_tiles_in_single_block);
+                        // in_cb.wait_front(total_tiles_in_single_block);
                         in_base_l1_addr = in_cb.get_read_ptr();
                         block_boundary_offset += block_size_height * block_stride;
                         block_id += block_stride;
@@ -393,7 +396,8 @@ void kernel_main() {
                 }
                 number_of_segments_remaining--;
             }
-            in_cb.pop_front(total_tiles_in_single_block);
+            // [DIAG: compute-sync disabled — REVERT] llk_pop_tiles (untilize_out)
+            // in_cb.pop_front(total_tiles_in_single_block);
         }
 #else
         {

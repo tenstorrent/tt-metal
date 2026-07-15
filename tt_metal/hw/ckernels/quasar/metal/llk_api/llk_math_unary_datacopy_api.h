@@ -8,6 +8,7 @@
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_math_unary_broadcast.h"
 #include "llk_operands.h"
+#include "api/debug/dprint.h"  // [DIAG: init-count instrumentation — REVERT]
 
 /*************************************************************************
  * LLK ELTWISE UNARY DATACOPY
@@ -33,6 +34,7 @@ template <
     [[maybe_unused]] bool is_int_fpu_en = false,
     [[maybe_unused]] bool tilize = false>
 inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
+    DPRINT("[DIAG] datacopy_init ENTER\n");  // [DIAG — REVERT]
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
@@ -54,6 +56,7 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
         _llk_math_eltwise_unary_broadcast_init_<src_b_bcast_type, false /*unpack_to_dest*/, EN_32BIT_DEST>(
             tensor_shape);
     }
+    DPRINT("[DIAG] datacopy_init DONE\n");  // [DIAG — REVERT]
 }
 
 /**

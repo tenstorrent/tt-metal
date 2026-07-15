@@ -16,6 +16,7 @@
 #include "llk_pack_common.h"
 #include "llk_pack_untilize.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/debug/dprint.h"  // [DIAG: init-count instrumentation — REVERT]
 
 /*************************************************************************
  * LLK PACK UNTILIZE
@@ -31,11 +32,13 @@
  */
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim = block_ct_dim>
 inline void llk_pack_untilize_init(std::uint32_t pack_output) {
+    DPRINT("[DIAG] pack_untilize_init ENTER\n");  // [DIAG — REVERT]
     const std::uint32_t output_id = get_output_id(pack_output);
 
     const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
 
     _llk_pack_untilize_init_<full_ct_dim, block_ct_dim>(output_id, tensor_shape);
+    DPRINT("[DIAG] pack_untilize_init DONE\n");  // [DIAG — REVERT]
 }
 
 /**

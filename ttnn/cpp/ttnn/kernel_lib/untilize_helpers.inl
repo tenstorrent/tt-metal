@@ -89,7 +89,9 @@ struct UntilizeDispatchConfig {
 template <untilize_config::WaitMode wait_mode>
 ALWI void untilize_wait_for_block(DataflowBuffer& in_dfb, const uint32_t tile_count) {
     if constexpr (wait_mode == untilize_config::WaitMode::WaitBlock) {
-        in_dfb.wait_front(tile_count);
+        // [DIAG: CB-sync disabled for LLK trap test — REVERT] llk_wait_tiles
+        //in_dfb.wait_front(tile_count);
+        (void)tile_count;
     }
 }
 
@@ -211,8 +213,9 @@ ALWI void untilize(uint32_t num_blocks) {
     DataflowBuffer out_dfb(output_dfb);
 
     if constexpr (wait_mode == untilize_config::WaitMode::WaitUpfront) {
-        uint32_t total_tiles = block_width_tiles * num_blocks;
-        in_dfb.wait_front(total_tiles);
+        // [DIAG: CB-sync disabled for LLK trap test — REVERT] llk_wait_tiles
+        //uint32_t total_tiles = block_width_tiles * num_blocks;
+        //in_dfb.wait_front(total_tiles);
     }
 
     // =================================================================
@@ -226,10 +229,11 @@ ALWI void untilize(uint32_t num_blocks) {
 
         for (uint32_t r = 0; r < num_blocks; ++r) {
             untilize_wait_for_block<wait_mode>(in_dfb, block_width_tiles);
-            out_dfb.reserve_back(block_width_tiles);
+            // [DIAG: CB-sync disabled for LLK trap test — REVERT] llk_wait_free / llk_pop_tiles / llk_push_tiles
+            //out_dfb.reserve_back(block_width_tiles);
             fast_untilize_block<block_width_tiles>(input_dfb, output_dfb);
-            in_dfb.pop_front(block_width_tiles);
-            out_dfb.push_back(block_width_tiles);
+            //in_dfb.pop_front(block_width_tiles);
+            //out_dfb.push_back(block_width_tiles);
         }
 
     } else if constexpr (dispatch::use_block_based_pack_path) {
@@ -240,13 +244,16 @@ ALWI void untilize(uint32_t num_blocks) {
         // =============================================================
 
         for (uint32_t r = 0; r < num_blocks; ++r) {
-            out_dfb.reserve_back(block_width_tiles);
+            // [DIAG: CB-sync disabled for LLK trap test — REVERT] llk_wait_free
+            //out_dfb.reserve_back(block_width_tiles);
             for (uint32_t b = 0; b < dispatch::num_sub_blocks; ++b) {
                 untilize_wait_for_block<wait_mode>(in_dfb, dispatch::sub_block_width);
                 pack_untilize_block<dispatch::sub_block_width, block_width_tiles>(input_dfb, 1, output_dfb, b);
-                in_dfb.pop_front(dispatch::sub_block_width);
+                // [DIAG: CB-sync disabled for LLK trap test — REVERT] llk_pop_tiles
+                //in_dfb.pop_front(dispatch::sub_block_width);
             }
-            out_dfb.push_back(block_width_tiles);
+            // [DIAG: CB-sync disabled for LLK trap test — REVERT] llk_push_tiles
+            //out_dfb.push_back(block_width_tiles);
         }
 
     } else {
@@ -257,10 +264,11 @@ ALWI void untilize(uint32_t num_blocks) {
 
         for (uint32_t r = 0; r < num_blocks; ++r) {
             untilize_wait_for_block<wait_mode>(in_dfb, block_width_tiles);
-            out_dfb.reserve_back(block_width_tiles);
+            // [DIAG: CB-sync disabled for LLK trap test — REVERT] llk_wait_free / llk_pop_tiles / llk_push_tiles
+            //out_dfb.reserve_back(block_width_tiles);
             pack_untilize_block<block_width_tiles, block_width_tiles>(input_dfb, 1, output_dfb, 0);
-            in_dfb.pop_front(block_width_tiles);
-            out_dfb.push_back(block_width_tiles);
+            //in_dfb.pop_front(block_width_tiles);
+            //out_dfb.push_back(block_width_tiles);
         }
     }
 
