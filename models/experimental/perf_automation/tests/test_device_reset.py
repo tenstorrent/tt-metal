@@ -53,3 +53,28 @@ def test_reset_arg_sets_is_board_aware(monkeypatch):
     monkeypatch.setenv("TT_HW_PLANNER_GALAXY", "1")
     P.note_board("p300 L", 4)
     assert P._reset_arg_sets()[0] == ["-glx_reset_auto"]
+
+
+def test_salient_tail_surfaces_error_not_frames():
+    """A failed run's terminal tail shows the real error/signal, not the Python frame stack or benign
+    warnings — so 'Segmentation fault' + the exception line survive and `File "..."`/`raise X(`/DtypeWarning
+    noise is dropped."""
+    from agent.probes import _salient_tail
+
+    log = (
+        "Traceback (most recent call last):\n"
+        '  File "/x/tracy/__main__.py", line 493, in <module>\n'
+        "    main()\n"
+        '  File "/x/process_ops_logs.py", line 648, in _enrich\n'
+        "    raise AssertionError(\n"
+        "process_ops_logs.py:450: DtypeWarning: Columns (4,8) have mixed types.\n"
+        "PASSED\nFatal Python error: Segmentation fault\n"
+        "Aborted (core dumped)\n"
+        "AssertionError: cpp_device_perf_report.csv not found in .logs.\n"
+    )
+    out = _salient_tail(log)
+    assert "AssertionError: cpp_device_perf_report.csv not found in .logs." in out
+    assert "Segmentation fault" in out and "Aborted (core dumped)" in out
+    assert 'File "' not in out  # no frames
+    assert "raise AssertionError(" not in out  # no source line
+    assert "DtypeWarning" not in out  # no benign warning

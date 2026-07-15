@@ -41,7 +41,7 @@ DEFAULT_CACHE = PKG_ROOT / ".cache" / "playbook_index.json"
 FIXTURES = PKG_ROOT / "tests" / "fixtures"
 
 METRIC_UNITS = {"device_ms": "ms", "wall_ms": "ms", "fps": "fps", "throughput_tok_s": "tok/s"}
-N_STAGES = 8
+N_STAGES = 10
 
 
 _SHAPE_CONFIG_CRASH_RE = re.compile(
@@ -219,7 +219,7 @@ def before_loop(
             )
         except Exception as exc:
             print(f"      WARN --box {box}: {exc}; using auto-detected single-chip env", file=sys.stderr, flush=True)
-    stages.done(f"{env['card']} · {env['arch']} · {env['worker_cores']} cores")
+    stages.done(f"{env['card']} ({env['arch']}), {env['worker_cores']} cores")
     from .probes import note_board
 
     chips = max(physical_chips, int(env.get("mesh_chips") or env.get("device_count") or 0))
@@ -333,8 +333,8 @@ def before_loop(
             agent_totals[k] += usage.get(k) or 0
         agent_totals["cost_usd"] += usage.get("cost_usd") or 0.0
         if not usage:
-            return " · usage n/a"
-        return f" · tok {usage.get('tokens_in')}/{usage.get('tokens_out')} · ${usage.get('cost_usd') or 0:.4f}"
+            return ""
+        return f"  [{usage.get('tokens_in')}/{usage.get('tokens_out')} tok, ${usage.get('cost_usd') or 0:.4f}]"
 
     # discover is a non-deterministic sub-agent: it intermittently returns a glob/list instead of a
     # concrete file ("...test_*.py is not a file") or exhausts its turn budget ("Reached maximum
@@ -400,11 +400,18 @@ def before_loop(
                 print(f"      ⚠ {msg}", file=sys.stderr, flush=True)
                 stages._event("note", msg)
                 case = corrected
-    for w in pathmap.get("warnings", []):
-        print(f"      ⚠ {w.get('code')}: {w.get('detail')}", file=sys.stderr, flush=True)
+    _warnings = pathmap.get("warnings", [])
+    _verbose = bool(os.environ.get("TT_HW_PLANNER_VERBOSE"))
+    if _warnings and _verbose:
+        for w in _warnings:
+            print(f"      note - {w.get('code')}: {w.get('detail')}", file=sys.stderr, flush=True)
+    _gates = " and ".join(pathmap["pcc"]) or "none"
+    _caveats = ""
+    if _warnings and not _verbose:
+        _caveats = f", plus {len(_warnings)} caveats (run with TT_HW_PLANNER_VERBOSE to read them)"
     stages.done(
-        f"perf_test={perf_rel} -k {case} · pcc={list(pathmap['pcc'])} · "
-        f"components={list(pathmap['components'])} · {len(pathmap['model_files'])} files" + usage_suffix
+        f"built {Path(perf_rel).name} for '{case}', covering {len(pathmap['components'])} "
+        f"components across {len(pathmap['model_files'])} files; correctness gate(s): {_gates}{_caveats}" + usage_suffix
     )
 
     user_input = config.get("input")
@@ -515,8 +522,8 @@ def before_loop(
             f"Inspect {run.profiles_dir}/run0_tracy.log for a crash or profiler-marker overflow."
         )
     stages.done(
-        f"device {profile['device_ms']:.3f} ms · wall {profile['wall_ms']:.0f} ms "
-        f"· {len(profile['buckets'])} buckets"
+        f"baseline {profile['device_ms']:.3f} ms on device "
+        f"(wall {profile['wall_ms']:.0f} ms incl. compile), {len(profile['buckets'])} op-class buckets"
     )
 
     metric_name = config.get("metric") or "device_ms"
@@ -724,7 +731,9 @@ def main(argv: list[str] | None = None) -> int:
 
         result = before_loop(config, env_probe, model_runner, factory, preflight, review, collect)
     except Exception as exc:
-        print(f"BEFORE-LOOP FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(f"\n  ✗ discovery failed ({type(exc).__name__}):", file=sys.stderr)
+        for _ln in str(exc).splitlines():
+            print(f"      {_ln}", file=sys.stderr)
         return 1
 
     p = result["profile"]

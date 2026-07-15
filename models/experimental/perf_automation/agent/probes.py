@@ -246,6 +246,34 @@ class TracyHangError(TracyRunError):
     crash. Retriable: reset the device and re-profile."""
 
 
+_ERR_RE = re.compile(
+    r"^[A-Za-z_][\w.]*(Error|Exception|Interrupt|Fault):"  # `ExceptionType: message` (not a `raise X(` line)
+    r"|Segmentation fault|Aborted|core dumped|TT_FATAL|terminate called|Fatal Python error",
+)
+
+
+def _salient_tail(text: str, n: int = 4) -> str:
+    """The human-meaningful last lines of a failed run's log — the actual error/signal, not the Python
+    frame stack. Prefers lines that look like an error or a fatal signal (so a terminal shows e.g.
+    'Segmentation fault' + 'AssertionError: cpp_device_perf_report.csv not found' instead of 15 lines of
+    traceback), de-duped, most recent last. Falls back to non-frame lines if nothing matches. The full
+    log path is always printed alongside for the details."""
+    hits, seen = [], set()
+    for ln in text.splitlines():
+        s = ln.strip()
+        if s and _ERR_RE.search(s) and s not in seen:
+            seen.add(s)
+            hits.append(s)
+    if hits:
+        return "\n".join(hits[-n:])
+    keep = [
+        ln.strip()
+        for ln in text.splitlines()
+        if ln.strip() and not ln.lstrip().startswith('File "') and set(ln.strip()) != {"^"}
+    ]
+    return "\n".join(keep[-n:])
+
+
 # A device-op runtime crash (the edit broke the model), distinct from a benign
 # perf-threshold AssertionError (the model ran fully — valid measurement). TT_FATAL is
 # the unambiguous device-op abort; a ttnn-op RuntimeError (decorators.py) is the wrapper.
@@ -707,8 +735,8 @@ def make_run_profiled(
                         raise
                     device_reset()
             if code != 0:
-                tail = "\n".join(log_path.read_text().splitlines()[-15:]) if log_path.is_file() else ""
-                raise TracyRunError(f"tracy run exit {code}; log {log_path}; tail:\n{tail}")
+                tail = _salient_tail(log_path.read_text()) if log_path.is_file() else ""
+                raise TracyRunError(f"tracy run exit {code} (log: {log_path})\n{tail}")
             log_text = log_path.read_text() if log_path.is_file() else ""
             # `python -m tracy -m pytest` exits 0 even when the inner test FAILS, so a device-op
             # crash (the edit broke the model) leaves a PARTIAL CSV that would be misread as an
