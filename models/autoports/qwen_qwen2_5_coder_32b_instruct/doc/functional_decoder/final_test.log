@@ -1,0 +1,26 @@
+Command:
+TT_LOGGER_LEVEL=fatal TT_VISIBLE_DEVICES=2,3 QWEN2_5_CODER_32B_REAL_WEIGHT_DIR=/home/mvasiljevic/hf-cache/hub/models--Qwen--Qwen2.5-Coder-32B-Instruct/snapshots/381fc969f78efac66bc87ff7ddeadb7e73c218a7 pytest -q -s models/autoports/qwen_qwen2_5_coder_32b_instruct/tests/test_functional_decoder.py
+
+Results:
+test_runtime_forwards_have_no_host_fallback PASSED
+synthetic prefill seq=4 output: 0.9994472111850196
+synthetic prefill seq=4 key cache: 0.9998692738927055
+synthetic prefill seq=4 value cache: 0.9998704917732992
+synthetic prefill seq=17 output: 0.9995370096559786
+synthetic prefill seq=17 key cache: 0.9998690415174054
+synthetic prefill seq=17 value cache: 0.9998728927206835
+synthetic prefill seq=128 output: 0.9996479480349033
+synthetic prefill seq=128 key cache: 0.9998651750012248
+synthetic prefill seq=128 value cache: 0.9998713348875905
+synthetic decode key append: 0.9998501798498328
+synthetic decode value append: 0.9998522709621698
+synthetic decode output: 0.9995728532256756
+test_synthetic_prefill_and_decode_match_hf PASSED
+real prefill output: 0.9987814814053544
+real prefill key cache: 0.9998766862235358
+real prefill value cache: 0.9998666144206994
+real decode key append: 0.9998826504165282
+real decode value append: 0.9998565871763356
+real decode output: 0.998928575933325
+test_real_weight_prefill_and_decode_match_hf PASSED
+3 passed in 16.03s

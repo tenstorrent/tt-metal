@@ -1,0 +1,7 @@
+Command:
+TT_LOGGER_LEVEL=fatal TT_VISIBLE_DEVICES=2,3 QWEN2_5_CODER_32B_CONTEXT_PROBE_LEN=4000 QWEN2_5_CODER_32B_CONTEXT_EXPECT_OOM=1 pytest -q -s models/autoports/qwen_qwen2_5_coder_32b_instruct/tests/test_context_capacity.py
+
+Result:
+capacity probe EXPECTED OOM: batch=32, seq_len=4000: Out of Memory: Not enough space to allocate 1310720000 B DRAM buffer across 8 banks, where each bank needs to store 163840000 B, but bank size is 4272341376 B (allocated: 3958320768 B, free: 314020608 B, largest free block: 160768000 B)
+PASSED
+1 passed in 10.79s

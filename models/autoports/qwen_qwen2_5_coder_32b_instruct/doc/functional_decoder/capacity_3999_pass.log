@@ -1,0 +1,7 @@
+Command:
+TT_LOGGER_LEVEL=fatal TT_VISIBLE_DEVICES=2,3 QWEN2_5_CODER_32B_CONTEXT_PROBE_LEN=3999 pytest -q -s models/autoports/qwen_qwen2_5_coder_32b_instruct/tests/test_context_capacity.py
+
+Result:
+capacity probe PASS: batch=32, seq_len=3999, output_shape=(1, 32, 3999, 5120)
+PASSED
+1 passed in 12.59s
