@@ -11,6 +11,7 @@ Usage:
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 from ttnn.device import is_blackhole as ttnn_is_blackhole
@@ -420,7 +421,14 @@ def layernorm_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_siz
     if max_seq_len == 512 and max_batch in (1, 8, 16, 32):
         return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch_size)
     # N300 B12/S8192: HiFi2 LN reduction (bf8/bf16), PCC headroom large.
+    # DP has PCC headroom (0.9551 vs 0.94 gate): fp32_dest_acc_en=False cuts the
+    # LN kernel ~28% standalone (1285us->925us) by dropping the fp32 dest accum
+    # pass. Gated to DP so the SP/single-chip PCC-tighter paths keep fp32.
     if max_seq_len == 8192:
+        if os.environ.get("BGE_M3_DATA_PARALLEL", "0") == "1":
+            return _make_compute_kernel(
+                mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch_size, fp32_dest_acc_en=False
+            )
         return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch_size)
     return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi4, max_seq_len, max_batch_size)
 
