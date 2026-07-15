@@ -130,11 +130,12 @@ MGD_BLITZ_16="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_p
 MGD_BLITZ_48="tt_metal/fabric/mesh_graph_descriptors/bh_glx_split_4x2.textproto"
 MGD_BLITZ_64="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto"
 MGD_BLITZ_80="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_supercluster_20.textproto"
-# Non-pod-aligned ring lengths (20/24/28/36 stages) for the long-running bh-ring-stress group.
+# Non-pod-aligned ring lengths (20/24/28/32/36 stages) for the long-running bh-ring-stress group.
 # Each is N x M0(4x2) meshes wired in a closed ring; used to stress the mapper's general-SAT fallback.
 MGD_BLITZ_20="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_ring_20stage_mesh_graph_descriptor.textproto"
 MGD_BLITZ_24="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_ring_24stage_mesh_graph_descriptor.textproto"
 MGD_BLITZ_28="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_ring_28stage_mesh_graph_descriptor.textproto"
+MGD_BLITZ_32="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_ring_32stage_mesh_graph_descriptor.textproto"
 MGD_BLITZ_36="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_ring_36stage_mesh_graph_descriptor.textproto"
 
 GTEST_GALAXY_LAYOUT_CHECK="ControlPlaneFixture.TestGalaxyLayoutCheck"
@@ -649,20 +650,20 @@ fi # bh-blitz-decode
 
 ######################################
 # BH Galaxy: ring-mapping stress test (LONG RUNNING -- own group)
-# Non-pod-aligned Blitz-decode ring lengths (20/24/28/36 stages) mapped onto the full 36-host SC36 revC
+# Non-pod-aligned Blitz-decode ring lengths (20/24/28/32/36 stages) mapped onto the full 36-host SC36 revC
 # subtorus aisleD mock. These lengths don't align to pod (4-host) / galaxy boundaries, so they exercise
 # the topology mapper's general-SAT host-minimization fallback -- erratic cost that scales with ring
-# length (36-stage ~38s vs sub-second for 20/24/28). The subtorus wrap-around lets every length close
-# and map. Own shard, measured ~2 min end-to-end.
+# length (36-stage ~42s vs sub-second for 20/24/28/32). The subtorus wrap-around lets every length close
+# and map. Own shard, measured ~1.5 min end-to-end for the 5 maps.
 ######################################
 if run_group "bh-ring-stress"; then
 
-# Per-op mapper watchdog: 300s -- ~8x the worst observed solve (~38s), and below the shard step timeout
-# (10 min, see tests/pipeline_reorg/fabric_cpu_only_unit_tests.yaml) so a stuck solve is caught/reported
+# Per-op mapper watchdog: 240s -- ~5x the worst observed solve (~42s), and below the shard step timeout
+# (6 min, see tests/pipeline_reorg/fabric_cpu_only_unit_tests.yaml) so a stuck solve is caught/reported
 # here rather than cancelled mid-shard by GitHub Actions.
-RING_STRESS_TIMEOUT=300
+RING_STRESS_TIMEOUT=240
 for entry in \
-    "SC36_revC_subtorus_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:20 24 28 36" ; do
+    "SC36_revC_subtorus_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:20 24 28 32 36" ; do
   rest="${entry#*:}"; cluster_map="${rest%%:*}"; stages="${rest#*:}"
   for stage in ${stages}; do
     mgd_var="MGD_BLITZ_${stage}"

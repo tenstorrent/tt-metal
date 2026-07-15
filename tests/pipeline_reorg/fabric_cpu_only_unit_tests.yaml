@@ -128,9 +128,9 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-ring-stress
   skus:
     cpu_medium:
-      # Long-running: 4 non-pod-aligned ring maps (20/24/28/36 stages) on the 36-host SC36 revC subtorus
-      # aisleD mock. Erratic general-SAT solves (36-stage ~38s). Measured ~2 min locally; 10 min margin.
-      timeout: 10
+      # Long-running: 5 non-pod-aligned ring maps (20/24/28/32/36 stages) on the 36-host SC36 revC subtorus
+      # aisleD mock. Erratic general-SAT solves (36-stage ~42s). Measured ~1.5 min locally; 6 min margin.
+      timeout: 6
   team: scaleout
   arch: wormhole_b0
   owner_id: U03FJB5TM5Y # Ridvan Song
