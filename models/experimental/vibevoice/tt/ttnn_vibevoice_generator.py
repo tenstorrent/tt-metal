@@ -515,6 +515,22 @@ class TTVibeVoiceGenerator:
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        # Precompute the per-step timestep embeddings once (fixed timesteps → identical every
+        # frame); removes the sin/cos/concat + 2 MLP matmuls from every diffusion step.
+        if getattr(self, "_eager_t_embs", None) is None:
+            self.scheduler.set_timesteps(self.num_diffusion_steps)
+            self._eager_t_tensors = [
+                ttnn.full(
+                    (2, 1, 1, 1),
+                    float(t),
+                    dtype=ttnn.bfloat16,
+                    device=self.device,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                for t in self.scheduler.timesteps
+            ]
+            self._eager_t_embs = self.diffusion_head.precompute_t_embs(self._eager_t_tensors)
         return sample_speech_latents(
             self.diffusion_head,
             condition,
@@ -524,6 +540,8 @@ class TTVibeVoiceGenerator:
             cfg_scale=self.cfg_scale,
             num_steps=self.num_diffusion_steps,
             head_runner=None,
+            t_tensors=self._eager_t_tensors,
+            t_embs=self._eager_t_embs,
         )
 
     def _reset_segment_frame_trace(self) -> None:
@@ -611,6 +629,9 @@ class TTVibeVoiceGenerator:
                 )
                 for t in self.scheduler.timesteps
             ]
+            # Precompute per-step timestep embeddings once (outside capture); persistent
+            # device tensors, trace-safe.  Removes the timestep embedder from every step.
+            self._sf_t_embs = self.diffusion_head.precompute_t_embs(self._sf_t_tensors)
 
         if seg_frame_idx == 0:
             # Capture the segment-start condition source ([1,1,1,H], last position of the
@@ -638,6 +659,7 @@ class TTVibeVoiceGenerator:
                 num_steps=self.num_diffusion_steps,
                 head_runner=None,
                 t_tensors=self._sf_t_tensors,
+                t_embs=self._sf_t_embs,
             )
             fused, audio = self._run_post_pipeline(latent)
             logits, new_hidden = lm.forward_decode_traced_embeds_dev_rope(

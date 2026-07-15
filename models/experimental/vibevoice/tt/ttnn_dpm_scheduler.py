@@ -280,6 +280,7 @@ def sample_speech_latents(
     num_steps: int = 10,
     head_runner=None,
     t_tensors=None,
+    t_embs=None,
 ) -> ttnn.Tensor:
     """Run the DPM multistep loop using TT diffusion head.
 
@@ -331,8 +332,9 @@ def sample_speech_latents(
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        # Run diffusion head on CFG batch
-        eps_combined = head_runner(sample_expanded, t_tensor, cond_combined)
+        # Run diffusion head on CFG batch (t_emb precomputed once per step-index when supplied)
+        t_emb = t_embs[step_idx] if t_embs is not None else None
+        eps_combined = head_runner(sample_expanded, t_tensor, cond_combined, t_emb=t_emb)
 
         # Split CFG outputs
         eps_uncond = ttnn.slice(eps_combined, [0, 0, 0, 0], [1, 1, 1, eps_combined.shape[-1]])
