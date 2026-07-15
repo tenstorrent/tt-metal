@@ -2585,6 +2585,7 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_with_state(
 FORCE_INLINE
 void noc_async_write_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NWTW");
+    RECORD_NOC_EVENT(NocEventType::WRITE_BARRIER_WITH_TRID, false, noc);
     while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc, trid)) {
         continue;
     }

@@ -65,7 +65,8 @@ void RunWritesTest(
     NOCDebuggingFixture* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     bool use_barrier,
-    bool use_trid = false) {
+    bool use_trid = false,
+    bool use_trid_barrier = false) {
     auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
 
     CoreCoord grid_start = {0, 0};
@@ -101,6 +102,9 @@ void RunWritesTest(
     if (use_trid) {
         defines["USE_TRID"] = "1";
     }
+    if (use_trid_barrier) {
+        defines["USE_TRID_BARRIER"] = "1";
+    }
 
     tt_metal::CreateKernel(
         program,
@@ -130,7 +134,7 @@ void RunWritesTest(
         mesh_device,
         grid_start,
         grid_end,
-        /*expect_issue=*/!use_barrier,
+        /*expect_issue=*/!(use_barrier || use_trid_barrier),
         [fixture](ChipId chip_id, CoreCoord core, int processor_id) {
             return fixture->has_write_barrier_issue(chip_id, core, processor_id);
         },
@@ -394,6 +398,19 @@ TEST_F(NOCDebuggingFixture, TridWritesWithBarrier) {
         this->RunTestOnDevice<NOCDebuggingFixture>(
             [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunWritesTest(fixture, mesh_device, /*use_barrier=*/true, /*use_trid=*/true);
+            },
+            mesh_device);
+    }
+}
+
+// The dedicated trid write barrier (noc_async_write_barrier_with_trid) must clear the trid writes it waits on,
+// so no same-src issue is reported. Exercises the Stage-3b device emission + host mapping of WRITE_BARRIER_WITH_TRID.
+TEST_F(NOCDebuggingFixture, TridWritesWithTridBarrier) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice<NOCDebuggingFixture>(
+            [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunWritesTest(
+                    fixture, mesh_device, /*use_barrier=*/false, /*use_trid=*/true, /*use_trid_barrier=*/true);
             },
             mesh_device);
     }

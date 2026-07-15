@@ -171,8 +171,8 @@ NOCDebugEvent make_noc_debug_event(
             TT_ASSERT(!event.posted);
             return NOCDebugEvent(NocWriteFlushEvent{
                 src_x, src_y, static_cast<bool>(event.posted), event.noc_type == EMD::NocType::NOC_1});
-        case EMD::NocEventType::WRITE_FLUSH_WITH_TRID:
-            // Kept separate from the non-trid flushes so a future per-trid model can treat it differently.
+        case EMD::NocEventType::WRITE_FLUSH_WITH_TRID: [[fallthrough]];
+        case EMD::NocEventType::WRITE_BARRIER_WITH_TRID:
             TT_ASSERT(!event.posted);
             return NOCDebugEvent(NocWriteFlushEvent{
                 src_x, src_y, static_cast<bool>(event.posted), event.noc_type == EMD::NocType::NOC_1});
