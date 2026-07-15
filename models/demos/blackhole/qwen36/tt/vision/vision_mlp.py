@@ -10,7 +10,7 @@ Mirrors the LLM TP convention from `tt_transformers.tt.mlp`:
   in:  replicated x (the wrapping DistributedLayerNorm produced this)
   fc1: column-sharded W1, b1  ──▶  GELU            (no comm)
   fc2: row-sharded   W2       ──▶  partial sums
-                              ──▶  tt_all_reduce(dim=3)  (reduce_scatter on T3K)
+                              ──▶  tt_all_reduce(dim=3)  (reduce_scatter on T3K/QB2)
                               ──▶  + b2 (sharded along dim=3)
   out: fractured along dim=3 (each device owns dim/TP)
 
@@ -45,9 +45,9 @@ class MLP(LightweightModule):
         self.args = args
         self.dim = args.dim
         self.cluster_shape = args.cluster_shape
-        # We TP across cluster axis 1 (the row axis on T3K, i.e. all 8 devices).
+        # We TP across cluster axis 1 (the row axis on T3K/QB2).
         self.tp = self.cluster_shape[1]
-        # For T3K (1, 8), `tt_all_reduce` ignores `cluster_axis` and falls
+        # For T3K/QB2, `tt_all_reduce` ignores `cluster_axis` and falls
         # straight into `reduce_scatter_minimal_async` over the non-1 axis,
         # so any cluster_axis other than 1 (which is short-circuited) works.
         self.ccl_cluster_axis = 0
@@ -152,7 +152,7 @@ class MLP(LightweightModule):
         )
         ttnn.deallocate(w1_out)
 
-        # On T3K (1, 8) `tt_all_reduce(dim=3)` is implemented as a
+        # On T3K/QB2 `tt_all_reduce(dim=3)` is implemented as a
         # reduce_scatter, so the result is fractured along dim=3 -- exactly
         # the block I/O contract that the LLM uses.
         w2_frac = tt_all_reduce(

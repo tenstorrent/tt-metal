@@ -16,7 +16,7 @@ two-matmul merger MLP:
   fc1: column-sharded W1, b1  + GELU                              -> fractured
        per-device [B, 1, S/sms^2, mlp_size/TP]
   fc2: row-sharded   W2       -> partial sums of out_hidden_size
-       tt_all_reduce(dim=3)   (reduce_scatter on T3K)             -> fractured
+       tt_all_reduce(dim=3)   (reduce_scatter on T3K/QB2)             -> fractured
        + b2 (sharded along dim=3)
   out: fractured along dim=3, per-device [B, 1, S/sms^2, out_hidden_size/TP]
 
@@ -59,9 +59,9 @@ class PatchMerger(LightweightModule):
         self.tt_ccl = tt_ccl
         self.postshuffle_norm = postshuffle_norm
         self.cluster_shape = args.cluster_shape
-        # TP across cluster axis 1 (the row axis on T3K, i.e. all 8 devices).
+        # TP across cluster axis 1 (the row axis on T3K/QB2).
         self.tp = self.cluster_shape[1]
-        # On T3K (1, 8) `tt_all_reduce` short-circuits the cluster_axis arg and
+        # On QB2 (1, 4) `tt_all_reduce` short-circuits the cluster_axis arg and
         # falls into `reduce_scatter_minimal_async` over the non-1 axis. Any
         # cluster_axis value other than 1 works; mirror MLP/VisionAttention.
         self.ccl_cluster_axis = 0
@@ -187,7 +187,7 @@ class PatchMerger(LightweightModule):
         )
         ttnn.deallocate(w1_out)
 
-        # On T3K (1, 8) `tt_all_reduce(dim=3)` is a reduce_scatter, so the result
+        # On T3K/QB2 `tt_all_reduce(dim=3)` is a reduce_scatter, so the result
         # is fractured along dim=3 -- the same contract as the rest of the TP
         # path and as the LLM's lm_head output.
         w2_frac = tt_all_reduce(

@@ -11,7 +11,7 @@ Mirrors the LLM TP convention from `tt_transformers.tt.attention`:
   ──▶ column-sharded W_qkv (head-fractured) ──▶ per-device n_local_heads
   ──▶ SDPA → nlp_concat_heads
   ──▶ row-sharded W_o ──▶ partial sums
-  ──▶ tt_all_reduce(dim=3)  -> on T3K this is a reduce_scatter
+  ──▶ tt_all_reduce(dim=3)  -> on T3K/QB2 this is a reduce_scatter
   out: fractured along dim=3 (each device owns dim/TP)
 
 The fractured output then re-enters the next block's DistributedLayerNorm,
@@ -73,9 +73,9 @@ class VisionAttention(LightweightModule):
         self.tt_ccl = tt_ccl
         self.configuration = configuration
         self.cluster_shape = configuration.cluster_shape
-        # We TP across cluster axis 1 (e.g. all 8 devices on T3K).
+        # We TP across cluster axis 1.
         self.tp = self.cluster_shape[1]
-        # `tt_all_reduce` for T3K (1, 8) ignores the supplied cluster_axis and
+        # `tt_all_reduce` for T3K/QB2 ignores the supplied cluster_axis and
         # reduce_scatters across the non-1 axis; keep this at 0 to avoid the
         # cluster_axis==1 short-circuit.
         self.ccl_cluster_axis = 0
@@ -414,7 +414,7 @@ class VisionAttention(LightweightModule):
         if seq_len > 1024:
             output_partial = ttnn.reshape(output_partial, [1, 1, seq_len, -1])
 
-        # On T3K (1, 8) `tt_all_reduce(dim=3)` is implemented as a
+        # On T3K/QB2 `tt_all_reduce(dim=3)` is implemented as a
         # reduce_scatter, so the result is fractured along dim=3 -- exactly
         # the block I/O contract that the LLM uses.
         output_frac = tt_all_reduce(

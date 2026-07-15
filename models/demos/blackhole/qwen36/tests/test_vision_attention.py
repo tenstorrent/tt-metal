@@ -54,8 +54,6 @@ def test_vision_attention_inference(
 
     model_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=seq_len)
     reference_model = model_args.reference_attention()
-    # reference_model = Qwen2_5_VLVisionAttention(model_args.hf_config.vision_config.hidden_size, model_args.hf_config.vision_config.num_heads)
-    # reference_model.load_state_dict(model_args.reference_attention().state_dict())
 
     state_dict = standardize_hf_keys_multimodal(reference_model.state_dict())
     state_dict = convert_hf_to_meta(state_dict, model_args.head_dim)
@@ -64,8 +62,6 @@ def test_vision_attention_inference(
 
     # Example inputs and preprocessing
     pt_attention_input = torch.randn(1, 1, ref_seq_len, model_args.dim, dtype=torch.bfloat16)
-    # pt_attention_input = torch.load("ref_1_attn_norm.pt").unsqueeze(0).unsqueeze(0)
-    print("model_args.head_dim", model_args.head_dim)
     cu_seqlens, position_embeddings = qwen3_5_vision_transformer_preprocess(
         seq_len=ref_seq_len,
         grid_thw=image_grid_thw,
@@ -76,7 +72,6 @@ def test_vision_attention_inference(
     # pre-compute the rotational embedding matrix and send to device
     cos, sin = position_embeddings
 
-    # thanks, gemini 2.5 pro
     cos, sin = convert_rope_style_hf_to_meta(cos, sin)
 
     # pad sequence length with cos = 1, sin = 0 (identity rotation)

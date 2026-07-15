@@ -102,7 +102,7 @@ class VisionBlock(LightweightModule):
         # The norm gathers along dim=3 and outputs a replicated tensor.
         attn_in = self.attention_norm(x)
         # Attention takes replicated input and produces a tensor fractured
-        # along dim=3 (because tt_all_reduce reduce-scatters on T3K).
+        # along dim=3 (because tt_all_reduce reduce-scatters on T3K/QB2).
         attn_out = self.attention.forward(
             attn_in,
             rot_mats=rot_mats,

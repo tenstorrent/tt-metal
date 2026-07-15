@@ -6,7 +6,7 @@
 DistributedLayerNorm: vision counterpart of `tt_transformers.tt.distributed_norm.DistributedNorm`.
 
 The vision tower's hidden dim (1152) is small enough that
-`is_distributed_norm` returns False on T3K (the LLM uses 4k as the cutoff).
+`is_distributed_norm` returns False on T3K/QB2 (the LLM uses 4k as the cutoff).
 For that regime the LLM's DistributedNorm just all-gathers the fractured
 input back to replicated and runs a regular norm locally. We mirror that
 pattern here, but with `LayerNorm` (mean + variance + scale + bias) instead
