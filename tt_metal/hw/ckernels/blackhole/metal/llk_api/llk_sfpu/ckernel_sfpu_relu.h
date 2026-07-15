@@ -92,6 +92,9 @@ inline void relu_clamp_int(uint threshold) {
 #pragma GCC unroll 8
             for (int d = 0; d < ITERATIONS; d++) {
                 vInt x = dst_reg[0].mode<sfpi::DataLayout::I32>();
+                // v_if(x < 0) is NOT redundant: the SFPU signed compare subtracts and tests the sign,
+                // which overflows when x and t are >= 2^31 apart and wrongly gives x>=t. Lifting negatives
+                // up to t first leaves only non-negative lanes for the x < t compare, which then cannot overflow.
                 v_if(x < 0) { x = t; }
                 v_endif;
                 v_if(x < t) { x = t; }

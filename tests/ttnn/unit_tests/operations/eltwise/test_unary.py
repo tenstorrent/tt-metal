@@ -763,6 +763,35 @@ def test_relu_min_int32_full_range(device, input_shapes, value_ranges, lower_lim
     assert torch.equal(output_tensor, torch_output_tensor)
 
 
+@pytest.mark.parametrize(
+    "op, limit, values",
+    [
+        (ttnn.relu_max, 2**24 + 1, [2**24, 2**24 + 1, 2**24 + 2, 2**26, -5]),
+        (ttnn.relu_max, 2**31 - 1, [2**31 - 3, 2**31 - 2, 2**31 - 1, 0, -5]),
+        (ttnn.relu_min, 2**24 + 1, [2**24, 2**24 + 1, 2**24 + 2, -100, 2**26]),
+        (ttnn.relu_min, 2**31 - 1, [2**31 - 3, 2**31 - 2, 2**31 - 1, -(2**31), 0]),
+    ],
+)
+def test_relu_min_max_int32_edge_cases(device, op, limit, values):
+    n = 32 * 32
+    filled = (values * (n // len(values) + 1))[:n]
+    torch_input_tensor = torch.tensor(filled, dtype=torch.int32).reshape(1, 1, 32, 32)
+
+    golden_function = ttnn.get_golden_function(op)
+    torch_output_tensor = golden_function(torch_input_tensor.to(torch.int64), limit).to(torch.int32)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(op(input_tensor, limit), dtype=torch.int32)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
 @pytest.mark.parametrize("input_shapes", [torch.Size([1, 2, 32, 128])])
 @pytest.mark.parametrize("value_ranges", [INT32_BANDED_RANGES])
 def test_relu6_int32_full_range(device, input_shapes, value_ranges):
