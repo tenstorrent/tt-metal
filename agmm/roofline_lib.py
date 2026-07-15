@@ -20,9 +20,11 @@ LINK_PEAK = 50e9  # bytes/s per unidirectional ethernet link
 CYCLES = {"LoFi": 1, "HiFi2": 2, "HiFi3": 3, "HiFi4": 4}  # cycles per 8x16x16 MAC block
 
 # Achievable fractions of peak for the best-case projection.
-EFF_FLOP = 0.50
-EFF_DRAM = 0.90
-EFF_FABRIC = 0.80
+# Set to 100% of peak on every resource: the "ideal" is now the hard physical
+# roofline (full FLOP/DRAM/fabric BW), not a de-rated achievable target.
+EFF_FLOP = 1.0
+EFF_DRAM = 1.0
+EFF_FABRIC = 1.0
 
 
 def compute_roofline(

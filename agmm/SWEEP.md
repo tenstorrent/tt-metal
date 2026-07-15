@@ -129,10 +129,11 @@ After all shapes, `sweep_latest.csv` is regenerated (most-recent best per shape)
 `roofline_lib.compute_roofline(M, K_gathered, N, ring_size, num_links, grid,
 math_fidelity, time_us)` returns the best-case `ideal_us`, the binding resource
 `limiter` (compute / dram / fabric), and — given a measured time — the
-achieved utilizations and `speedup = measured / ideal`. This is the same math,
-and same efficiency ceilings (50% FLOP, 90% DRAM, 80% fabric), documented in
-`AGMM_roofline_analysis.md`; both this harness and `roofline.py` import it so
-there is one source of truth. Each history row is therefore self-contained:
+achieved utilizations and `speedup = measured / ideal`. The efficiency ceilings
+are now **100% of peak** on every resource (FLOP, DRAM BW, fabric BW) — `ideal`
+is the hard physical roofline, so `speedup` is the full gap to peak hardware.
+Both this harness and `roofline.py` import it so there is one source of truth.
+Each history row is therefore self-contained:
 measured best **and** distance-to-ideal for that commit.
 
 ## Output schema (`sweep_history.csv`)
