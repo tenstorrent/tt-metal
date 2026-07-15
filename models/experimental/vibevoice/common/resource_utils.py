@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import urllib.error
 import urllib.request
@@ -26,14 +27,35 @@ from models.experimental.vibevoice.common.config import (
 PathLike = Union[str, Path]
 
 _GITHUB_API = "https://api.github.com/repos/{repo}/contents/{path}?ref={ref}"
+_GITHUB_RAW = "https://raw.githubusercontent.com/{repo}/{ref}/{path}"
 _USER_AGENT = "tt-metal-vibevoice-resource-sync"
 
+# Fallback when the GitHub Contents API is rate-limited (unauthenticated 403).
+_FALLBACK_TEXT_FILES = (
+    "1p_vibevoice.txt",
+    "1p_abs.txt",
+    "1p_Ch2EN.txt",
+    "2p_goat.txt",
+    "3p_gpt5.txt",
+    "4p_climate_45min.txt",
+    "4p_climate_100min.txt",
+)
+_FALLBACK_VOICE_FILES = (
+    "en-Alice_woman.wav",
+    "en-Carter_man.wav",
+    "en-Frank_man.wav",
+    "en-Maya_woman.wav",
+)
 
-def _github_headers() -> dict[str, str]:
-    return {
-        "Accept": "application/vnd.github+json",
-        "User-Agent": _USER_AGENT,
-    }
+
+def _github_headers(*, json_api: bool = True) -> dict[str, str]:
+    headers = {"User-Agent": _USER_AGENT}
+    if json_api:
+        headers["Accept"] = "application/vnd.github+json"
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
 
 def _list_github_dir(repo_path: str, *, repo: str = GITHUB_DEMO_REPO, ref: str = GITHUB_DEMO_BRANCH) -> list[dict]:
@@ -48,10 +70,32 @@ def _list_github_dir(repo_path: str, *, repo: str = GITHUB_DEMO_REPO, ref: str =
 
 def _download_file(url: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+    request = urllib.request.Request(url, headers=_github_headers(json_api=False))
     with urllib.request.urlopen(request, timeout=120) as response:
         data = response.read()
     dest.write_bytes(data)
+
+
+def _download_raw_files(
+    repo_path: str,
+    filenames: Iterable[str],
+    local_dir: Path,
+    *,
+    repo: str = GITHUB_DEMO_REPO,
+    ref: str = GITHUB_DEMO_BRANCH,
+) -> list[Path]:
+    """Download fixed basenames via raw.githubusercontent.com (avoids API rate limits)."""
+    downloaded: list[Path] = []
+    local_dir.mkdir(parents=True, exist_ok=True)
+    for name in filenames:
+        dest = local_dir / name
+        if dest.is_file() and dest.stat().st_size > 0:
+            continue
+        url = _GITHUB_RAW.format(repo=repo, ref=ref, path=f"{repo_path.rstrip('/')}/{name}")
+        logger.info(f"Downloading (raw) {repo}/{repo_path}/{name} -> {dest}")
+        _download_file(url, dest)
+        downloaded.append(dest)
+    return downloaded
 
 
 def _sync_github_tree(
@@ -141,36 +185,46 @@ def download_demo_resources(
     voices_dir.mkdir(parents=True, exist_ok=True)
     text_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"Syncing demo text examples from {repo}@{ref} -> {text_dir}")
-    _sync_github_tree(
-        "demo/text_examples",
-        text_dir,
-        repo=repo,
-        ref=ref,
-        extensions=(".txt",),
-        recursive=False,
-    )
-
-    logger.info(f"Syncing demo voice WAVs from {repo}@{ref} -> {voices_dir}")
-    _sync_github_tree(
-        "demo/voices",
-        voices_dir,
-        repo=repo,
-        ref=ref,
-        extensions=(".wav",),
-        recursive=False,
-    )
-
-    if include_streaming_voices:
-        logger.info(f"Syncing streaming_model voice presets -> {voices_dir / 'streaming_model'}")
+    try:
+        logger.info(f"Syncing demo text examples from {repo}@{ref} -> {text_dir}")
         _sync_github_tree(
-            "demo/voices/streaming_model",
-            voices_dir / "streaming_model",
+            "demo/text_examples",
+            text_dir,
             repo=repo,
             ref=ref,
-            extensions=(".pt",),
+            extensions=(".txt",),
             recursive=False,
         )
+
+        logger.info(f"Syncing demo voice WAVs from {repo}@{ref} -> {voices_dir}")
+        _sync_github_tree(
+            "demo/voices",
+            voices_dir,
+            repo=repo,
+            ref=ref,
+            extensions=(".wav",),
+            recursive=False,
+        )
+
+        if include_streaming_voices:
+            logger.info(f"Syncing streaming_model voice presets -> {voices_dir / 'streaming_model'}")
+            _sync_github_tree(
+                "demo/voices/streaming_model",
+                voices_dir / "streaming_model",
+                repo=repo,
+                ref=ref,
+                extensions=(".pt",),
+                recursive=False,
+            )
+    except urllib.error.HTTPError as exc:
+        if exc.code not in (403, 429):
+            raise
+        logger.warning(
+            f"GitHub API rate-limited ({exc.code}); falling back to raw.githubusercontent.com. "
+            "Set GH_TOKEN or GITHUB_TOKEN for authenticated API access."
+        )
+        _download_raw_files("demo/text_examples", _FALLBACK_TEXT_FILES, text_dir, repo=repo, ref=ref)
+        _download_raw_files("demo/voices", _FALLBACK_VOICE_FILES, voices_dir, repo=repo, ref=ref)
 
     return root.resolve()
 
