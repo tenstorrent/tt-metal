@@ -203,7 +203,19 @@ class DistributedRMSNorm(Module):
         trans_mat=None,
         dtype=None,
         dynamic_weight=None,
+        per_head_norm=None,
     ) -> ttnn.Tensor:
+        # per_head_norm selects the normalization semantics when the activation is
+        # head-split (num_heads_per_device > 1):
+        #   True  -> RMSNorm INDEPENDENTLY over each head's head_dim (FLUX.2 / Ideogram4
+        #            QK-norm). No cross-device all-gather (each head is device-local).
+        #   False -> one RMSNorm over the FULL per-device row, then reshape to heads
+        #            (WAN2.2 / LTX "norm before splitting heads").
+        # The two are NOT equivalent, and defaulting to whole-row silently gave head-split
+        # models (Ideogram4) the wrong normalization. Default to per-head whenever the input
+        # is head-split; whole-row callers (WAN/LTX) pass per_head_norm=False explicitly.
+        if per_head_norm is None:
+            per_head_norm = num_heads_per_device > 1
         expected_dim = self.embedding_dim // self.mesh_width
         if x.shape[-1] != expected_dim:
             msg = (
@@ -235,12 +247,16 @@ class DistributedRMSNorm(Module):
                 # forwarded to create_stats_buffer and affects its sizing). Guards against
                 # a shared-cache collision between two same-shape modules differing only
                 # in affine geometry.
-                ("rms", tuple(x.shape), num_heads_per_device, rope_cos is not None, weight_key),
+                # per_head_norm changes the stats geometry (per-head reduces locally -> no
+                # all-gather scratch), so it MUST be part of the key and forwarded to
+                # create_stats_buffer (which returns None for the per-head/local path).
+                ("rms", tuple(x.shape), num_heads_per_device, per_head_norm, rope_cos is not None, weight_key),
                 lambda: ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
                     x,
                     self.mesh_axis,
                     self.mesh_device,
                     num_heads_per_device=num_heads_per_device,
+                    per_head_norm=per_head_norm,
                     num_links=self.ccl_manager.num_links,
                     weight=weight,
                     transformation_mat=trans_mat,
@@ -250,6 +266,7 @@ class DistributedRMSNorm(Module):
             ),
             epsilon=self.norm_eps,
             num_heads_per_device=num_heads_per_device,
+            per_head_norm=per_head_norm,
             weight=weight,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
             num_preferred_links=self.ccl_manager.num_links,  # must match create_stats_buffer above

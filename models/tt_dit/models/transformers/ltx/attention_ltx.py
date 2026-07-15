@@ -451,8 +451,9 @@ class LTXAttention(Module):
             )
 
         # RMSNorm on Q/K fused with the head split (emits BHNE via num_heads_per_device).
-        q_BHNE = self.norm_q(q_1BNF, num_heads_per_device=self.n_local_heads)
-        k_BHNE = self.norm_k(k_1BNF, num_heads_per_device=self.n_local_heads)
+        # LTX normalizes over the full per-device row before splitting heads (whole-row).
+        q_BHNE = self.norm_q(q_1BNF, num_heads_per_device=self.n_local_heads, per_head_norm=False)
+        k_BHNE = self.norm_k(k_1BNF, num_heads_per_device=self.n_local_heads, per_head_norm=False)
 
         def create_heads(inp):
             out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
