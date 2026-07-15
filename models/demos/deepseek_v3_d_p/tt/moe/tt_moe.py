@@ -200,7 +200,6 @@ class TtMoe(LightweightModule):
         """
         super().__init__()
         self.mesh_device = mesh_device
-        self.layer_idx = layer_idx
         # Shared per-mesh CCL singleton: persistent global semaphores for the TP all-gather of x,
         # so all_gather_async reuses them instead of leaking fresh L1 semaphores every layer.
         self.tt_ccl = get_tt_ccl(mesh_device)
@@ -390,8 +389,6 @@ class TtMoe(LightweightModule):
         )
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
-        # Keep a handle so per-layer dispatch metadata capture can save the local->global map too.
-        self.global_expert_idx_tt = global_expert_idx_tt
 
         # Initialize routed expert
         self.routed_expert = TtRoutedExpert(
@@ -439,67 +436,7 @@ class TtMoe(LightweightModule):
         # Load debug flags from environment
         self.debug_token_count = os.getenv("TT_DS_PREFILL_DEBUG_TOKEN_COUNT", "0").lower() in ("1", "true", "yes")
 
-        # Per-layer dispatch-metadata capture: when TT_DS_CAPTURE_DISPATCH_META_DIR is set, dump this
-        # layer's expert_token_counts / expert_region_offsets (the "how many tokens are valid" metadata)
-        # to disk so the masked decompression perf test can be driven with realistic per-layer fills.
-        self.capture_dispatch_meta_dir = os.getenv("TT_DS_CAPTURE_DISPATCH_META_DIR", "")
-
         logger.debug("TtMoe initialization complete")
-
-    def _capture_dispatch_meta(self, tt_expert_token_counts, tt_expert_region_offsets):
-        """Dump this MoE layer's dispatch metadata (expert_token_counts / expert_region_offsets /
-        global_expert_idx_table) to disk, one .pt file per layer, into
-        TT_DS_CAPTURE_DISPATCH_META_DIR. The dispatch-buffer contents are intentionally not saved --
-        only the per-expert valid-token metadata that determines how full the buffer is (which is what
-        drives masked decompression work-split / timing). Reloaders can rebuild a fake buffer.
-
-        Each tensor is read back per EP device (dims=[1, 0] mesh composer), so the saved arrays are
-        [num_ep_devices, num_routed_experts]."""
-        out_dir = Path(self.capture_dispatch_meta_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        # dims=[1, 0] concatenates BOTH mesh axes, so every physical chip in the mesh (e.g. all 32 on a
-        # Galaxy 8x4) contributes its own slice -- this is the same composer the debug print uses.
-        ep_composer = ttnn.create_mesh_composer(self.mesh_device, ttnn.MeshComposerConfig(dims=[1, 0]))
-
-        counts = ttnn.to_torch(ttnn.unsqueeze_to_4D(tt_expert_token_counts), mesh_composer=ep_composer).squeeze(2)
-        offsets = ttnn.to_torch(ttnn.unsqueeze_to_4D(tt_expert_region_offsets), mesh_composer=ep_composer).squeeze(2)
-        table = ttnn.to_torch(ttnn.unsqueeze_to_4D(self.global_expert_idx_tt), mesh_composer=ep_composer).squeeze(2)
-
-        # The composed tensors are multi-dim over the mesh axes (e.g. [num_dispatch_groups,
-        # dispatch_group_size, num_routed_experts]). Flatten every mesh axis into a single leading
-        # "device" axis so each saved row is exactly one physical chip. counts/offsets keep
-        # num_routed_experts as the trailing dim; the table keeps experts_per_chip.
-        # Each device holds counts/offsets for ALL num_routed_experts; which experts that specific
-        # chip actually owns (and thus its valid prefix) is given by that chip's table row.
-        counts = counts.reshape(-1, counts.shape[-1]).to(torch.int64)
-        offsets = offsets.reshape(-1, offsets.shape[-1]).to(torch.int64)
-        table = table.reshape(-1, table.shape[-1]).to(torch.int64)
-
-        # Dispatch-buffer row capacity (M): the masked op's input_e4m3 is [capacity, emb_dim] and the
-        # op only touches the valid prefix, so a faithful fake buffer must use exactly this M.
-        capacity = self.dispatch_module.max_dispatch_buffer_token_size
-
-        save_path = out_dir / f"layer_{self.layer_idx}_dispatch_meta.pt"
-        torch.save(
-            {
-                "layer_idx": self.layer_idx,
-                "experts_per_chip": self.experts_per_chip,
-                "num_routed_experts": self.num_routed_experts,
-                "seq_len_per_chip": self.seq_len_per_chip,
-                "emb_dim": self.emb_dim,  # H (dispatch buffer width; scale width = H // 128)
-                "dispatch_buffer_capacity": int(capacity),  # M (dispatch buffer row count)
-                "mesh_shape": tuple(self.mesh_device.shape),  # e.g. (8, 4)
-                "num_devices": int(counts.shape[0]),  # physical chips captured (rows below)
-                "expert_token_counts": counts,  # [num_devices, num_routed_experts]
-                "expert_region_offsets": offsets,  # [num_devices, num_routed_experts]
-                "global_expert_idx_table": table,  # [num_devices, experts_per_chip]
-            },
-            save_path,
-        )
-        logger.info(
-            f"[TtMoe.forward] captured dispatch meta for layer {self.layer_idx} -> {save_path} "
-            f"(counts shape {tuple(counts.shape)})"
-        )
 
     def forward(
         self,
@@ -589,9 +526,6 @@ class TtMoe(LightweightModule):
             _offsets_4d = ttnn.unsqueeze_to_4D(tt_expert_region_offsets)
             _offsets_host = ttnn.to_torch(_offsets_4d, mesh_composer=_ep_composer).squeeze(2)
             logger.info(f"[TtMoe.forward] expert_region_offsets: {_offsets_host.flatten().tolist()}")
-
-        if self.capture_dispatch_meta_dir:
-            self._capture_dispatch_meta(tt_expert_token_counts, tt_expert_region_offsets)
 
         # Ensure ROW_MAJOR layout for dispatch compatibility
         indices = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)

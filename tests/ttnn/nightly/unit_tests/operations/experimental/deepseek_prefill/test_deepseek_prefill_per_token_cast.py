@@ -301,3 +301,103 @@ def test_round_trip_random(device, dtype, shape, layout):
 
     # fp8 quantization (~12% worst-case relative error) bounds the reconstruction.
     assert_quality(y, x_in, pcc_threshold=0.999, rtol=0.1, atol=0.2, label=f"roundtrip {dtype} shape={shape}")
+
+
+# ---------------------------------------------------------------------------
+# masked_per_token_cast_back: functional dequant over sparse dispatch buffers.
+# Each expert's valid tokens are packed into a tile-aligned region (region_offsets = cumulative
+# ceil_tile(counts)); the op decompresses only the packed prefix (sum of ceil_tile(counts)) and
+# leaves the tail untouched. Verifies it recovers e4m3 * scale on the valid prefix.
+# ---------------------------------------------------------------------------
+
+TILE = 32
+
+# (label, per-expert token counts); experts_per_chip == len(counts). Includes zero-count experts and
+# partial / multi tile-rows to exercise the on-device work-split and prefix computation.
+MASKED_CASES = [
+    ("uniform_4x64", [64, 64, 64, 64]),
+    ("irregular_8", [130, 74, 200, 12, 96, 41, 160, 33]),
+    ("tiny_single_row", [1, 0, 0, 0]),
+    ("one_dominant", [512, 32, 0, 96]),
+]
+
+
+def _ceil_tile(n):
+    return ((n + TILE - 1) // TILE) * TILE
+
+
+def _make_u32(device, values):
+    return ttnn.from_torch(
+        torch.tensor(values, dtype=torch.int32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+@pytest.mark.parametrize("bf16_scale", [False, True])
+@pytest.mark.parametrize("label, counts", MASKED_CASES, ids=[c[0] for c in MASKED_CASES])
+def test_masked_cast_back_dequant(device, label, counts, bf16_scale):
+    torch.manual_seed(0)
+    H = 1024  # H / BLOCK_W = 8 scale blocks per row
+
+    experts_per_chip = len(counts)
+    # Tile-aligned, contiguously packed expert regions: region_offsets = exclusive cumsum of
+    # ceil_tile(counts). The op writes [0, total_valid_rows); the extra tail rows stay untouched.
+    region = []
+    acc = 0
+    for c in counts:
+        region.append(acc)
+        acc += _ceil_tile(c)
+    total_valid_rows = acc
+    capacity = total_valid_rows + 2 * TILE  # untouched garbage tail
+
+    input_e4m3 = (torch.randn(capacity, H) * 3.0).clamp(-E4M3_MAX, E4M3_MAX).to(torch.float8_e4m3fn)
+    input_scale = torch.rand(capacity, H // BLOCK_W) * 4.0 - 2.0  # fp32; op always reads fp32
+
+    e4m3_tt = _make_e4m3_from_torch(input_e4m3, device=device)
+    scale_tt = ttnn.from_torch(
+        input_scale,
+        dtype=ttnn.float32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    region_tt = _make_u32(device, region)
+    counts_tt = _make_u32(device, counts)
+    table_tt = _make_u32(device, list(range(experts_per_chip)))  # identity: local slot -> global id
+
+    out_tt = ttnn.experimental.deepseek_prefill.masked_per_token_cast_back(
+        e4m3_tt,
+        scale_tt,
+        region_tt,
+        counts_tt,
+        table_tt,
+        experts_per_chip=experts_per_chip,
+        output_dtype=ttnn.bfloat16,
+        bf16_scale=bf16_scale,
+    )
+    out = ttnn.to_torch(out_tt).float()
+
+    assert tuple(out_tt.shape) == (capacity, H)
+
+    # bf16_scale narrows the scale on-device; match the golden to what the op multiplies by.
+    golden_scale = input_scale.to(torch.bfloat16).float() if bf16_scale else input_scale
+    golden = (input_e4m3.float() * golden_scale.repeat_interleave(BLOCK_W, dim=-1)).to(torch.bfloat16).float()
+
+    # Only the valid packed prefix is written; the tail is intentionally garbage.
+    prefix_out = out[:total_valid_rows]
+    prefix_golden = golden[:total_valid_rows]
+    normal = input_e4m3.float()[:total_valid_rows].abs() > 2.0**-6
+    # bf16 output + bf16-narrowed scale round a few values one bf16 ULP past a 1e-3 band; PCC stays the
+    # quality gate, so loosen the absolute tolerance for the bf16-scale path only.
+    atol = 1e-2 if bf16_scale else 1e-3
+    assert_quality(
+        prefix_out[normal],
+        prefix_golden[normal],
+        pcc_threshold=0.999,
+        rtol=1e-2,
+        atol=atol,
+        label=f"masked dequant {label} bf16_scale={bf16_scale}",
+    )
