@@ -176,20 +176,35 @@ def _height_sharded_assignment(input_tensor, total_tile_rows, is_row_major):
 # true scheme-change runs for the cases it applies to (both loose cases + clean grids).
 
 
-def _sharded_cross_core_plan(input_tensor, total_tile_rows, memory_layout):
+def _sharded_cross_core_plan(input_tensor, total_tile_rows, memory_layout, is_row_major):
     """Derive the per-core cross-core reduction plan from the shard spec.
 
-    Returns (rectangular, group_size, assignment, groups):
+    Returns (rectangular, group_size, assignment, groups, shard_shape):
       * assignment: one dict per core — core, start_tile_row, num_tile_rows,
-        w_tile_start, num_w_tiles, my_index (slot in its group), is_root, group_id.
+        w_tile_start (TILE), w_col_start (RM gamma col offset), num_w_tiles (local
+        W-tiles), my_index (slot in its group), is_root, group_id.
       * groups: one dict per reduction group — rect (CoreRangeSet), root (CoreCoord).
-    rectangular=False signals a non-mcastable geometry (caller uses the fallback)."""
+      * shard_shape: (Hs, Ws) — the uniform per-core shard extent (elements).
+    rectangular=False signals a non-mcastable geometry (caller uses the fallback for
+    TILE; RM never reaches a non-rectangular case — {RM, WIDTH, w_non} is EXCLUDED).
+
+    R5a: for the ROW_MAJOR leg each core owns a resident [Hs, Ws] shard read
+    directly from local L1, so the per-core W-tile count is the ceil-of-shard
+    `local_Wt = ceil(Ws/32)` (sub-tile Ws is common — a single zero-padded tile),
+    and the per-core tile-row count is `ceil(Hs/32)` (the RM shard flattens the
+    leading dims without per-image tile padding). The TILE leg is unchanged
+    (whole-tile shards, per-image `total_tile_rows`)."""
     shard = input_tensor.memory_config().shard_spec
     grid = shard.grid
     Hs = int(shard.shape[0])
     Ws = int(shard.shape[1])
-    per_h = Hs // TILE_DIM
-    per_w = Ws // TILE_DIM
+    if is_row_major:
+        # RM: zero-pad each sub-tile shard slice to whole tiles (single source of truth).
+        per_w = math.ceil(Ws / TILE_DIM)  # local W-tiles per core
+        rm_tile_rows = math.ceil(Hs / TILE_DIM)  # local tile-rows per core
+    else:
+        per_h = Hs // TILE_DIM
+        per_w = Ws // TILE_DIM
     bbox = grid.bounding_box()
     x0, y0 = int(bbox.start.x), int(bbox.start.y)
     x1, y1 = int(bbox.end.x), int(bbox.end.y)
@@ -197,7 +212,7 @@ def _sharded_cross_core_plan(input_tensor, total_tile_rows, memory_layout):
     ny = y1 - y0 + 1
     ncores = grid.num_cores()
     if ncores != nx * ny or per_w < 1:
-        return False, 0, [], []  # ragged grid -> not mcastable
+        return False, 0, [], [], (Hs, Ws)  # ragged grid -> not mcastable
 
     cores = ttnn.corerange_to_cores(grid, None, True)  # row-major fill order
     assignment = []
@@ -209,13 +224,15 @@ def _sharded_cross_core_plan(input_tensor, total_tile_rows, memory_layout):
         root = cores[-1]
         rect = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1))])
         groups.append({"rect": rect, "root": root})
+        num_tile_rows = rm_tile_rows if is_row_major else total_tile_rows
         for i, c in enumerate(cores):
             assignment.append(
                 {
                     "core": c,
                     "start_tile_row": 0,
-                    "num_tile_rows": total_tile_rows,
+                    "num_tile_rows": num_tile_rows,
                     "w_tile_start": i * per_w,
+                    "w_col_start": i * Ws,
                     "num_w_tiles": per_w,
                     "my_index": i,
                     "is_root": (int(c.x) == int(root.x) and int(c.y) == int(root.y)),
@@ -229,8 +246,14 @@ def _sharded_cross_core_plan(input_tensor, total_tile_rows, memory_layout):
             root = members[-1]
             rect = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x0, gy), ttnn.CoreCoord(x1, gy))])
             groups.append({"rect": rect, "root": root})
-            st = (gy - y0) * per_h
-            num = max(min(per_h, total_tile_rows - st), 0)
+            if is_row_major:
+                # RM: each core reads its own resident shard from local L1 (start=0),
+                # bounded by the uniform shard height Hs.
+                st = 0
+                num = rm_tile_rows
+            else:
+                st = (gy - y0) * per_h
+                num = max(min(per_h, total_tile_rows - st), 0)
             for idx, c in enumerate(members):
                 assignment.append(
                     {
@@ -238,13 +261,14 @@ def _sharded_cross_core_plan(input_tensor, total_tile_rows, memory_layout):
                         "start_tile_row": st,
                         "num_tile_rows": num,
                         "w_tile_start": (int(c.x) - x0) * per_w,
+                        "w_col_start": (int(c.x) - x0) * Ws,
                         "num_w_tiles": per_w,
                         "my_index": idx,
                         "is_root": (int(c.x) == int(root.x) and int(c.y) == int(root.y)),
                         "group_id": gy - y0,
                     }
                 )
-    return True, group_size, assignment, groups
+    return True, group_size, assignment, groups, (Hs, Ws)
 
 
 # Cross-core semaphore ids (progress = gather counter; the mcast pipe owns two more).
@@ -268,11 +292,20 @@ def _build_cross_core_descriptor(
     group_size,
     assignment,
     groups,
+    is_row_major,
+    shard_hw,
 ):
-    """Build the WIDTH/BLOCK cross-core reduce-root program (see the section header)."""
+    """Build the WIDTH/BLOCK cross-core reduce-root program (see the section header).
+
+    R5a: `is_row_major` selects the ROW_MAJOR leg — each core reads/writes its OWN
+    resident [Hs, Ws] shard directly from local L1 (the sharded reader/writer local
+    legs), compute tilizes/untilizes it (the shared IS_ROW_MAJOR compute branch), and
+    the cross-core combine + mcast broadcast are REUSED UNCHANGED. `shard_hw = (Hs, Ws)`
+    is the uniform per-core shard extent driving the local-shard stride + padding."""
     device = input_tensor.device()
     has_gamma = gamma is not None
     gamma_is_row_major = has_gamma and gamma.layout == ttnn.ROW_MAJOR_LAYOUT
+    shard_h, shard_w = int(shard_hw[0]), int(shard_hw[1])
 
     in_dtype = input_tensor.dtype
     out_dtype = output_tensor.dtype
@@ -307,11 +340,13 @@ def _build_cross_core_descriptor(
     all_cores = input_tensor.memory_config().shard_spec.grid
 
     # --- CB indices (semantic; 27/28/29 are the cross-core additions) ---
+    CB_INPUT_RM = 0
     CB_INPUT_TILES = 1
     CB_SCALER = 2
     CB_GAMMA_RM = 3
     CB_GAMMA_TILES = 4
     CB_OUTPUT_TILES = 16
+    CB_OUTPUT_RM = 17
     CB_XSQ = 24
     CB_SUMSQ = 25
     CB_NORM = 26
@@ -321,6 +356,8 @@ def _build_cross_core_descriptor(
     CB_COMBINE = 30
 
     double = 2
+    in_rm_page = wblock_cols * input_elt  # RM leg: one W-block-wide local stick slice
+    out_rm_page = out_tile  # untilize emits tile-sized pages
 
     def cb(index, dtype, page_size, num_pages):
         return ttnn.CBDescriptor(
@@ -348,6 +385,10 @@ def _build_cross_core_descriptor(
         # root's combine accumulator (churns per fold block; compute-internal, fp32)
         cb(CB_COMBINE, stat_dtype, stat_tile, 2),
     ]
+    if is_row_major:
+        # R5a: RM leg — local shard sticks -> compute tilize; compute untilize -> local shard.
+        cbs.append(cb(CB_INPUT_RM, in_dtype, in_rm_page, double * TILE_DIM))
+        cbs.append(cb(CB_OUTPUT_RM, out_dtype, out_rm_page, double * W_BLOCK_TILES))
     if has_gamma:
         if gamma_is_row_major:
             cbs.append(cb(CB_GAMMA_RM, gamma_dtype, gamma_rm_page, double))
@@ -374,6 +415,7 @@ def _build_cross_core_descriptor(
     # ================= Reader (sharded cross-core) =================
     reader_ct_args = [
         1 if has_gamma else 0,
+        1 if is_row_major else 0,  # IS_ROW_MAJOR (R5a): local-shard RM read leg
         scaler_bits,
         origin_W,
         Wt,
@@ -383,8 +425,11 @@ def _build_cross_core_descriptor(
         1 if gamma_is_row_major else 0,
         group_size,
         _SEM_PROGRESS,
+        shard_h,  # RM leg: local shard rows (Hs)
+        shard_w,  # RM leg: local shard cols (Ws)
+        input_elt,  # RM leg: input element bytes (local shard stride)
     ]
-    reader_ct_args.extend(mcast_ct)  # 5-word McastArgs block (CT base = 10)
+    reader_ct_args.extend(mcast_ct)  # 5-word McastArgs block (CT base = 14)
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct_args.extend(
         ttnn.TensorAccessorArgs(gamma).get_compile_time_args()
@@ -410,6 +455,7 @@ def _build_cross_core_descriptor(
             1 if a["is_root"] else 0,
             int(root_v.x),
             int(root_v.y),
+            a["w_col_start"],  # RM leg: this core's global W-col start (gamma slice)
         ] + mcast_rt
         writer_rt_args[c.x][c.y] = [output_addr, a["start_tile_row"], a["num_tile_rows"], a["w_tile_start"]]
         compute_rt_args[c.x][c.y] = [a["num_tile_rows"], a["start_tile_row"], eps_bits, 1 if a["is_root"] else 0]
@@ -422,9 +468,9 @@ def _build_cross_core_descriptor(
         config=ttnn.ReaderConfigDescriptor(),
     )
 
-    # ================= Writer (shared kernel; w_tile_start selects the local slice) =================
+    # ================= Writer (shared kernel; TILE global-page or RM local-shard) =================
     writer_ct_args = [
-        0,  # IS_ROW_MAJOR (cross-core is TILE-only)
+        1 if is_row_major else 0,  # IS_ROW_MAJOR (R5a: RM local-shard writeback leg)
         origin_W,
         origin_H,
         tiles_per_image,
@@ -432,6 +478,9 @@ def _build_cross_core_descriptor(
         W_BLOCK_TILES,
         num_w_blocks,
         _elt(output_tensor),
+        1,  # IS_CROSS_CORE (selects the local-shard writeback on the RM leg)
+        shard_h,
+        shard_w,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_kernel = ttnn.KernelDescriptor(
@@ -444,9 +493,9 @@ def _build_cross_core_descriptor(
 
     # ================= Compute (shared kernel; IS_CROSS_CORE branch) =================
     compute_ct_args = [
-        0,  # IS_ROW_MAJOR (TILE-only)
+        1 if is_row_major else 0,  # IS_ROW_MAJOR (R5a: tilize/untilize the local shard)
         1 if has_gamma else 0,
-        0,  # HAS_PARTIAL_W (ttnn tile zero-padding covers a non-aligned global W)
+        0,  # HAS_PARTIAL_W (zero-padded W-tail covers a non-aligned W; no partial scaler)
         origin_H,
         tiles_per_image,
         Wt,
@@ -613,11 +662,22 @@ def create_program_descriptor(
     # otherwise fall through to the interleaved streaming path below (a correct,
     # verified fallback: one core streams the whole W of each tile-row from the
     # resident shards via TensorAccessor — no cross-core sync, no hang).
-    if is_width_or_block and not is_row_major and not has_partial_w:
-        rectangular, group_size, cc_assignment, cc_groups = _sharded_cross_core_plan(
-            input_tensor, total_tile_rows, memory_layout
+    # R5a extends the cross-core route to ROW_MAJOR input. RM width-sharding splits each
+    # logical row's W across cores at sub-tile (stick) granularity, so a row is not
+    # contiguous in any one core's L1; each core instead reads/writes its OWN resident
+    # [Hs, Ws] shard from local L1, zero-pads the sub-tile W (and H) tail to whole tiles,
+    # and the SAME reduce-root gather + mcast broadcast combine runs unchanged. All RM
+    # cross-core groups are rectangular (BLOCK grids always are; {RM, WIDTH, w_non} — the
+    # only ragged RM geometry — is op-side EXCLUDED), so the mcast transport is reused.
+    if is_width_or_block:
+        rectangular, group_size, cc_assignment, cc_groups, cc_shard_hw = _sharded_cross_core_plan(
+            input_tensor, total_tile_rows, memory_layout, is_row_major
         )
-        if rectangular and group_size > 1:
+        # TILE cross-core (R5): tile-aligned W + rectangular; else -> interleaved fallback.
+        # RM cross-core (R5a): rectangular (guaranteed by the exclusion); no partial-W gate
+        # (the zero-padded W-tail handles a non-aligned W without a partial scaler).
+        tile_eligible = (not is_row_major) and (not has_partial_w)
+        if (is_row_major or tile_eligible) and rectangular and group_size > 1:
             return _build_cross_core_descriptor(
                 input_tensor,
                 output_tensor,
@@ -633,6 +693,17 @@ def create_program_descriptor(
                 group_size,
                 cc_assignment,
                 cc_groups,
+                is_row_major,
+                cc_shard_hw,
+            )
+        if is_row_major:
+            # RM cross-core needs a rectangular mcastable group. {RM, WIDTH, w_non} (the only
+            # ragged RM geometry) is EXCLUDED op-side, so this is unreachable — guard so the
+            # interleaved-collapse fallback (which reads a split RM stick as one page -> garbage)
+            # never runs for RM width/block sharding.
+            raise NotImplementedError(
+                "rms_norm: ROW_MAJOR WIDTH/BLOCK sharding requires a rectangular reduction group "
+                f"(got group_size={group_size}, rectangular={rectangular})"
             )
 
     if is_height_sharded:
@@ -742,6 +813,9 @@ def create_program_descriptor(
         W_BLOCK_TILES,
         num_w_blocks,
         output_elt,
+        0,  # IS_CROSS_CORE (interleaved/HEIGHT use TensorAccessor global-stick addressing)
+        0,  # shard_h (unused off the cross-core RM leg)
+        0,  # shard_w (unused off the cross-core RM leg)
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_rt_args = ttnn.RuntimeArgs()

@@ -113,15 +113,37 @@ EXCLUSIONS = [
     # zero-padding keeps the block-float shared exponent clean, the masked
     # partial-W reduce zeros the W-tail, and H-padding rows reduce to 0 and are
     # dropped by the writer. So bf8b is FULLY supported — no exclusion added.
-    # R5: ROW_MAJOR + WIDTH/BLOCK_SHARDED. Width-sharding an RM tensor splits each
-    # row's W across cores at sub-tile (stick) granularity, so a logical row is NOT
-    # contiguous in any one core's L1. The TILE-only cross-core reduce path can't be
-    # reached (RM), and the interleaved-collapse fallback reads a full-W stick as one
-    # NoC page — which for a split stick returns garbage (measured PCC 0.0098). A
-    # correct RM cross-core path would tilize each core's partial-width stick slice
-    # before the combine — a structural extension (follow-up Refinement 5a).
-    {"layout": ttnn.ROW_MAJOR_LAYOUT, "memory_layout": ttnn.TensorMemoryLayout.WIDTH_SHARDED},
-    {"layout": ttnn.ROW_MAJOR_LAYOUT, "memory_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED},
+    # R5a landed ROW_MAJOR + WIDTH/BLOCK_SHARDED cross-core reduction: each core reads
+    # its OWN resident [Hs, Ws] shard directly from local L1, zero-pads the sub-tile W
+    # (and H) tail to whole tiles, tilizes, and the SAME R5 reduce-root gather + mcast
+    # broadcast combine runs unchanged. Two structural gaps remain, carved out below:
+    #
+    # (a) RM + WIDTH_SHARDED + non-tile-aligned W. auto_shard_config splits a
+    #     non-aligned W into a RAGGED grid (ncores != nx*ny), so the WIDTH reduction
+    #     group (= the whole shard grid) is not a rectangle the mcast broadcast can
+    #     address. BLOCK grids are always rectangular, and RM+WIDTH tile/h-aligned
+    #     grids are too, so those are supported. Follow-up: unicast broadcast for the
+    #     ragged tail group.
+    {
+        "layout": ttnn.ROW_MAJOR_LAYOUT,
+        "memory_layout": ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        "alignment": "w_non_aligned",
+    },
+    # (b) RM cross-core + TILE gamma. Each core owns a sub-tile W-slice at a sub-tile
+    #     global column offset, so a TILE-stored gamma can't be read as whole tiles
+    #     aligned to the core's LOCAL column 0 (its cols 0..Ws map to global cols
+    #     w_col_start..). RM gamma (read as a column-slice stick at w_col_start) and
+    #     no_gamma are supported. Follow-up: sub-tile gamma tile-column extract.
+    {
+        "layout": ttnn.ROW_MAJOR_LAYOUT,
+        "memory_layout": ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        "gamma_layout": ttnn.TILE_LAYOUT,
+    },
+    {
+        "layout": ttnn.ROW_MAJOR_LAYOUT,
+        "memory_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        "gamma_layout": ttnn.TILE_LAYOUT,
+    },
 ]
 
 

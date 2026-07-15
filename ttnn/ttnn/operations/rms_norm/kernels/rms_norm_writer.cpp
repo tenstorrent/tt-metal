@@ -8,6 +8,13 @@
 // ROW_MAJOR regime: the compute untilizes each W-block; the writer streams the
 // valid sticks back per (tile-row, W-block), matching the reader's stick
 // geometry (only the true rows/cols of each partial block are written).
+//
+// R5a cross-core ROW_MAJOR leg (IS_CROSS_CORE): the WIDTH/BLOCK cross-core path
+// writes each core's OWN resident output shard directly to local L1 (mirror of
+// the sharded reader's local-shard read): stick for local row `lr` is at
+// output_addr + lr*shard_w*out_elt + block col offset. Only the `shard_h` real
+// rows and each block's real cols are written; the sub-tile W-tail and H-tail
+// (produced by the padded tilize) are dropped.
 
 #include <stdint.h>
 
@@ -30,20 +37,52 @@ void kernel_main() {
     constexpr uint32_t W_BLOCK_TILES = get_compile_time_arg_val(5);
     constexpr uint32_t num_w_blocks = get_compile_time_arg_val(6);
     constexpr uint32_t output_elt = get_compile_time_arg_val(7);
-    constexpr auto dst_args = TensorAccessorArgs<8>();
+    // R5a: cross-core ROW_MAJOR local-shard writeback geometry.
+    constexpr uint32_t IS_CROSS_CORE = get_compile_time_arg_val(8);
+    constexpr uint32_t shard_h = get_compile_time_arg_val(9);   // Hs (RM cross-core)
+    constexpr uint32_t shard_w = get_compile_time_arg_val(10);  // Ws (RM cross-core)
+    constexpr auto dst_args = TensorAccessorArgs<11>();
 
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t start_tile_row = get_arg_val<uint32_t>(1);
     uint32_t num_tile_rows = get_arg_val<uint32_t>(2);
     // R5: W-tile offset of this core's local W-slice within the GLOBAL row (tiled
     // stride is `Wt`). 0 for interleaved/HEIGHT (full-W core); the W/BLOCK-sharded
-    // cross-core path passes the core's w_tile_start so tiles land in the right
-    // global output page (own local shard). num_w_blocks is the LOCAL W-block count.
+    // cross-core TILE path passes the core's w_tile_start so tiles land in the right
+    // global output page. Unused on the RM cross-core leg (local-shard addressing).
     uint32_t w_tile_start = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t wblock_cols = W_BLOCK_TILES * TILE_W;
 
-    if constexpr (IS_ROW_MAJOR) {
+    if constexpr (IS_ROW_MAJOR && IS_CROSS_CORE) {
+        // ---- Cross-core RM: write each core's own resident output shard (local L1) ----
+        constexpr uint32_t shard_row_bytes = shard_w * output_elt;       // local shard stride
+        constexpr uint32_t padded_row_bytes = wblock_cols * output_elt;  // untilized block row stride
+        for (uint32_t t = 0; t < num_tile_rows; ++t) {
+            uint32_t local_row_base = t * TILE_H;
+            uint32_t num_real_rows = shard_h > local_row_base ? (shard_h - local_row_base) : 0;
+            if (num_real_rows > TILE_H) {
+                num_real_rows = TILE_H;
+            }
+            for (uint32_t b = 0; b < num_w_blocks; ++b) {
+                uint32_t cols = shard_w - b * wblock_cols;  // real cols of this block within the shard
+                if (cols > wblock_cols) {
+                    cols = wblock_cols;
+                }
+                uint32_t real_bytes = cols * output_elt;
+                uint32_t col_off = b * wblock_cols * output_elt;
+                cb_wait_front(cb_output_rm, W_BLOCK_TILES);
+                uint32_t l1 = get_read_ptr(cb_output_rm);
+                for (uint32_t r = 0; r < num_real_rows; ++r) {
+                    uint32_t dst = dst_addr + (local_row_base + r) * shard_row_bytes + col_off;
+                    noc_async_write(
+                        l1 + r * padded_row_bytes, get_noc_addr(my_x[noc_index], my_y[noc_index], dst), real_bytes);
+                }
+                noc_async_write_barrier();
+                cb_pop_front(cb_output_rm, W_BLOCK_TILES);
+            }
+        }
+    } else if constexpr (IS_ROW_MAJOR) {
         const auto acc = TensorAccessor(dst_args, dst_addr);
         for (uint32_t t = 0; t < num_tile_rows; ++t) {
             uint32_t tr = start_tile_row + t;
