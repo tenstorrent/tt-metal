@@ -105,10 +105,13 @@ def run_one(M, K, N, cfg, mask, iters=8, timeout=150):
     for line in r.stdout.splitlines():
         if "DIAGPCC" in line:
             maxrel = float(line.split("max_rel_err=")[1])
+    # masks 0 (public path) and 32 (DIAG_IN0_SCATTER variant) are correctness-checked by the gtest -> require
+    # the PASS; the pure ablations produce garbage and are not checked.
+    checked = mask in (0, 32)
     return {
         "cfg": list(cfg),
         "mask": mask,
-        "ok": bool(wall_us) and (mask != 0 or passed),
+        "ok": bool(wall_us) and (not checked or passed),
         "cls": "ok",
         "wall_us": wall_us,
         "risc": risc,
@@ -264,6 +267,57 @@ def mscale():
     print("MSCALE DONE", flush=True)
 
 
+def scatter():
+    # Benchmark the DIAG_IN0_SCATTER variant (mask 32) vs ring (mask 0) at each shape's winner config.
+    # Targets = narrow-N (must show >=8-10% stable end-to-end to justify porting); controls = wide-N (must
+    # NOT materially regress). Both masks are correctness-checked (PCC) by the gtest.
+    groups = {"target": [(256, 2048, 1024), (256, 6144, 768)], "control": [(256, 6144, 2304), (256, 6144, 4608)]}
+    out = []
+    for grp, shapes in groups.items():
+        for M, K, N in shapes:
+            cfgs = pick_configs(M, K, N)
+            winner = next((c for c, labels in cfgs.items() if "winner" in labels), None)
+            if winner is None:
+                print(f"[scatter] {M}x{K}x{N}: no winner cfg (sweep missing); skipping", flush=True)
+                continue
+            res = {}
+            for name, mask in (("ring", 0), ("scatter", 32)):
+                runs = [run_one(M, K, N, winner, mask) for _ in range(3)]
+                oks = [x for x in runs if x.get("ok") and x["wall_us"]]
+                walls = [x["wall_us"] for x in oks]
+                res[name] = {
+                    "walls": walls,
+                    "med": statistics.median(walls) if walls else None,
+                    "min": min(walls) if walls else None,
+                    "n_ok": len(oks),
+                    "pcc": [x.get("max_rel_err") for x in runs],
+                }
+            rm, sm = res["ring"]["med"], res["scatter"]["med"]
+            delta = (sm / rm - 1) * 100 if (rm and sm) else None  # negative = scatter faster
+            rec = {
+                "group": grp,
+                "M": M,
+                "K": K,
+                "N": N,
+                "cfg": list(winner),
+                "ideal_us": ideal_us(M, K, N),
+                "ring": res["ring"],
+                "scatter": res["scatter"],
+                "scatter_vs_ring_pct": delta,
+            }
+            out.append(rec)
+            print(
+                f"[scatter/{grp}] {M}x{K}x{N} cfg={winner} ring={rm if rm is None else round(rm,1)}us "
+                f"scatter={sm if sm is None else round(sm,1)}us "
+                f"delta={delta if delta is None else round(delta,1)}% "
+                f"ring_all={[round(w,1) for w in res['ring']['walls']]} "
+                f"scat_all={[round(w,1) for w in res['scatter']['walls']]}",
+                flush=True,
+            )
+            json.dump(out, open(f"{HERE}/regime_a_scatter_bench.json", "w"), indent=2)
+    print("SCATTER DONE", flush=True)
+
+
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "smoke"
-    {"smoke": smoke, "matrix": matrix, "mscale": mscale}[mode]()
+    {"smoke": smoke, "matrix": matrix, "mscale": mscale, "scatter": scatter}[mode]()

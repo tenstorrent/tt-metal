@@ -73,20 +73,45 @@ fraction of a tiny total workload; there isn't enough in1 (N) work to amortize i
 "efficiency tracks total DRAM work" — not a fixed per-invocation overhead, and not an in1-delivery problem.
 
 ## Decision gate (Part 7) — no production change made this phase
-Candidate with ≥8–10% stable potential on two Mt=8 shapes (the gate):
-- **in0 ring-forward reduction** — `skipfwd` frees −25% (256x2048x1024) and −30% (256x6144x768): two
-  narrow-N Mt=8 shapes over the bar. `skipfwd` keeps the ring semaphore signal, so this isolates the
-  *payload-write* cost specifically (an upper bound; the realizable fraction is unknown until prototyped).
-  Wide-N (4608) `skipfwd` is only −10% and reduction is hidden there, so a narrow-N-targeted in0-delivery
-  change would not touch the healthy wide-N path.
+Candidate that appeared to have ≥8–10% *upper-bound* potential on two Mt=8 shapes:
+- **in0 ring-forward reduction** — `skipfwd` frees −25% (256x2048x1024) and −30% (256x6144x768). But
+  `skipfwd` only removes the payload write (keeping the per-step push pipeline and running compute on
+  garbage), so it is an UPPER BOUND, not a realizable gain. The direct-scatter prototype below tests the
+  realizable version and refutes it.
 
-**Recommended single experiment:** prototype a lower-cost in0 delivery for narrow-N Mt=8 (reduce the ring
-payload — fewer forwarded bytes / fewer hops / read-once-scatter instead of G-1 rotations), as a test-only
-diag mode or in the retained oracle if repaired, and measure the *realizable* fraction of the `skipfwd`
-headroom while verifying (a) wide-N (N≥2304) and (b) Mt≤4 are unchanged. Only port to the op if it holds
-≥8–10% stable on 256x2048x1024 AND 256x6144x768. The compute+ring-sync floor (the larger narrow-N chunk)
-is a secondary target that would need a tiny-shape kernel path, not justified until the in0-forward lever
-is exhausted.
+**Recommended experiment (RUN — see result below):** a test-only direct-scatter in0 delivery
+(`DIAG_IN0_SCATTER`, mask 32): read own shard, scatter it to the G-1 cores ahead in ONE round, receive the
+G-1 shards from the cores behind — replacing the G-1 serial ring rotations while reproducing the identical
+cb0 layout (so compute/in1-pairing/reduction/output are unchanged). Note (per review): scatter does NOT
+reduce total forwarded bytes (each shard still reaches 7 consumers); it removes serial rotations / critical
+-path hops. `skipfwd`'s −25/−30% is an upper bound, not the expected scatter gain.
+
+### RESULT — direct-scatter REFUTED (do NOT port)
+Correct (PCC max_rel_err 0.0 on both targets). Benchmark (winner config, median of 3 relaunches; raw in
+`regime_a_scatter_bench.json`):
+
+| shape | group | ring µs | scatter µs | scatter vs ring |
+|---|---|---|---|---|
+| 256x2048x1024 | target | 30.2 | 33.1 | **+9.8% (slower)** |
+| 256x6144x768 | target | 54.0 | 59.8 | **+10.8% (slower)** |
+| 256x6144x2304 | control | 93.5 | 97.1 | +3.8% |
+| 256x6144x4608 | control | 153.5 | 158.5 | +3.3% |
+
+Direct-scatter **regresses on every shape**, worst on the two narrow-N targets — the opposite of the
+`skipfwd` upper bound. Mechanism: the ring **overlaps forwarding with compute** — it `cb_push_back`s each
+shard as it arrives, so compute starts consuming while later shards still rotate. The barrier-style scatter
+must wait for all G-1 shards before pushing (single-count semaphore), losing that pipelining, and issues
+G-1 concurrent NoC writes per core (8×7 in flight) that contend. So the ring's "serial" rotation is not
+wasted latency — it is what hides the in0 delivery behind compute. `skipfwd` looked like headroom only
+because it removed the payload write while keeping both the per-step push pipeline AND (garbage) compute.
+**Per the ≥8–10% gate this does not clear — no production change made.**
+
+**Next hypothesis (not run):** an *incremental-arrival* scatter (per-slot semaphores so each shard is
+`cb_push_back`ed the moment it lands) could remove the serial-rotation dependency while keeping the
+compute-overlap the ring relies on. This is the only remaining in0-delivery lever with a plausible path to
+the `skipfwd` headroom; everything simpler (this barrier scatter) is refuted. If it too fails to clear
+≥8–10%, narrow-N Mt=8 is at its practical floor for the current ring/compute architecture and the residual
+is the compute+ring-sync schedule (a tiny-shape kernel-path question), not an in0-delivery one.
 
 ## Notes / limitations
 - Ablations are counterfactual upper bounds, not additive; realizable gains are smaller.
