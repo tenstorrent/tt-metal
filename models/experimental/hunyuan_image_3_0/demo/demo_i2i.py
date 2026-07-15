@@ -314,8 +314,11 @@ def _build_backbone(
         if os.environ.get("HY_BF16_LAYERS")
         else default_bf16_layers(num_layers)
     )
+    # Denoise feeds pre-embedded tokens (base_embeds / text_pre); only AR
+    # recaption needs on-device wte + ln_f. Skipping wte here frees ~1GB DRAM
+    # for the [S,S] attention mask at I2I seq lengths.
     norm_sd = {"model.ln_f.weight": weights.load("model.ln_f.weight")} if apply_final_norm else None
-    embed_sd = {"model.wte.weight": weights.load("model.wte.weight")}
+    embed_sd = {"model.wte.weight": weights.load("model.wte.weight")} if apply_final_norm else None
     return HunyuanTtModel(
         mesh_device,
         num_layers=num_layers,
@@ -677,6 +680,52 @@ def main():
             print(f"[demo_i2i] host denoise done ({time.time() - t0:.0f}s), latent {tuple(latent.shape)}")
             t = _mark("5_denoise_loop", t)
         else:
+            # Build [S,S] attention masks BEFORE the backbone fills DRAM. At I2I
+            # seq_len the bf16 mask is ~400MB; after a resident backbone there is
+            # often <150MB free. Packed dtypes (bf4/bf8) are not usable: SP pad
+            # rejects them. Skipping unused denoise wte frees the headroom.
+            def _span_key(spans):
+                out = []
+                for s in spans or []:
+                    if isinstance(s, slice):
+                        out.append((s.start, s.stop))
+                    else:
+                        out.append((int(s[0]), int(s[1])))
+                return tuple(out)
+
+            print(
+                "[demo_i2i] building cond/uncond attention masks (bf16, before backbone) ...",
+                flush=True,
+            )
+            cond_slices = bundle.full_attn_slices[0] if bundle.full_attn_slices else None
+            cond_tt = upload_denoise_cond_mesh(
+                cond_row,
+                seq_len=seq_len,
+                mesh_device=mesh_device,
+                replicate_fn=rep,
+                full_attn_slices=cond_slices,
+            )
+            uncond_tt = None
+            if uncond_row is not None:
+                uncond_slices = bundle.full_attn_slices[1] if len(bundle.full_attn_slices) > 1 else None
+                if uncond_slices is not None and _span_key(uncond_slices) == _span_key(cond_slices):
+                    uncond_tt = upload_denoise_cond_mesh(
+                        uncond_row,
+                        seq_len=seq_len,
+                        mesh_device=mesh_device,
+                        replicate_fn=rep,
+                        attention_mask=cond_tt["attention_mask"],
+                    )
+                    print("[demo_i2i] CFG uncond shares cond attention_mask", flush=True)
+                else:
+                    uncond_tt = upload_denoise_cond_mesh(
+                        uncond_row,
+                        seq_len=seq_len,
+                        mesh_device=mesh_device,
+                        replicate_fn=rep,
+                        full_attn_slices=uncond_slices,
+                    )
+
             print("[demo_i2i] building patch_embed + final_layer ...", flush=True)
             patch_embed = HunyuanTtUNetDown(
                 mesh_device,
@@ -727,24 +776,6 @@ def main():
                 grid_hw=grid,
                 seq_len=seq_len,
             )
-
-            print("[demo_i2i] uploading cond/uncond (device attention masks) ...", flush=True)
-            cond_tt = upload_denoise_cond_mesh(
-                cond_row,
-                seq_len=seq_len,
-                mesh_device=mesh_device,
-                replicate_fn=rep,
-                full_attn_slices=bundle.full_attn_slices[0],
-            )
-            uncond_tt = None
-            if uncond_row is not None:
-                uncond_tt = upload_denoise_cond_mesh(
-                    uncond_row,
-                    seq_len=seq_len,
-                    mesh_device=mesh_device,
-                    replicate_fn=rep,
-                    full_attn_slices=bundle.full_attn_slices[1],
-                )
 
             sched = HunyuanTtScheduler(mesh_device)
             sched.set_timesteps(steps)
