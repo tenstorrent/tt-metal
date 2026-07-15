@@ -29,7 +29,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     buffer_descriptor_u bd_val_A {};
     bd_val_A.f.l1_addr_16B = L1_ADDRESS(params.buffer_A[0]);
     bd_val_A.f.format      = static_cast<std::uint8_t>(formats.unpack_A_src);
-    bd_val_A.f.x_dim       = TEST_FACE_C_DIM;
+    bd_val_A.f.x_dim       = params.TEST_FACE_C_DIM;
     bd_val_A.f.y_dim       = 1;
     bd_val_A.f.z_dim       = 1;
 
@@ -41,9 +41,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     buffer_descriptor_u bd_val_B {};
     bd_val_B.f.l1_addr_16B = L1_ADDRESS(params.buffer_B[0]);
     bd_val_B.f.format      = static_cast<std::uint8_t>(formats.unpack_B_src);
-    bd_val_B.f.x_dim       = TEST_FACE_C_DIM;
-    bd_val_B.f.y_dim       = TEST_FACE_R_DIM;
-    bd_val_B.f.z_dim       = num_faces;
+    bd_val_B.f.x_dim       = params.TEST_FACE_C_DIM;
+    bd_val_B.f.y_dim       = params.TEST_FACE_R_DIM;
+    bd_val_B.f.z_dim       = params.num_faces;
 
     tdma_descriptor_t td_val_B;
     td_val_B.buf_desc        = bd_val_B;
@@ -55,13 +55,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A, td_val_B);
 
     constexpr ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE;
-    _llk_unpack_reduce_col_tilizeA_strided_init_(buf_desc_id_a, buf_desc_id_b, FULL_CT_DIM, tensor_shape);
+    _llk_unpack_reduce_col_tilizeA_strided_init_(buf_desc_id_a, buf_desc_id_b, params.FULL_CT_DIM, tensor_shape);
 
-    std::uint32_t y_stride_external = FULL_CT_DIM * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
-    for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
+    std::uint32_t y_stride_external = params.FULL_CT_DIM * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
+    for (std::uint32_t block_rt = 0; block_rt < params.BLOCK_RT_DIM; block_rt++)
     {
         std::uint32_t offset = block_rt * y_stride_external;
-        for (std::uint32_t block_ct = 0; block_ct < BLOCK_CT_DIM; block_ct++)
+        for (std::uint32_t block_ct = 0; block_ct < params.BLOCK_CT_DIM; block_ct++)
         {
             const std::uint32_t l1_unpack_tilize_idx = offset + block_ct;
             _llk_unpack_reduce_col_tilizeA_strided_(tensor_shape, l1_unpack_tilize_idx, 0);
@@ -100,7 +100,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, MATH_FIDELITY>(ckernel::DEFAULT_TENSOR_SHAPE);
 
-    for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+    for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
         _llk_math_reduce_(i);
     }
@@ -122,16 +122,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     std::uint32_t const buf_desc_id        = 8;
-    const std::uint32_t num_tiles_per_pack = TILE_CNT;
+    const std::uint32_t num_tiles_per_pack = params.TILE_CNT;
 
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
     buffer_descriptor_u bd_val = {0};
     bd_val.f.l1_addr_16B       = L1_ADDRESS(params.buffer_Res[0]);
     bd_val.f.format            = static_cast<std::uint8_t>(formats.pack_dst);
-    bd_val.f.x_dim             = TEST_FACE_C_DIM;
-    bd_val.f.y_dim             = TEST_FACE_R_DIM;
-    bd_val.f.z_dim             = num_faces;
+    bd_val.f.x_dim             = params.TEST_FACE_C_DIM;
+    bd_val.f.y_dim             = params.TEST_FACE_R_DIM;
+    bd_val.f.z_dim             = params.num_faces;
 
     tdma_descriptor_t tdma_desc;
     tdma_desc.buf_desc        = bd_val;
@@ -142,7 +142,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
 
     _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_pack);
-    _llk_pack_reduce_mask_config_<REDUCE_DIM>();
+    _llk_pack_reduce_mask_config_<REDUCE_DIM>(ckernel::DEFAULT_TENSOR_SHAPE);
     _llk_pack_(0, 0, ckernel::DEFAULT_TENSOR_SHAPE);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
     _llk_pack_reduce_mask_clear_();

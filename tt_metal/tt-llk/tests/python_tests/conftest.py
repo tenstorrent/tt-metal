@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import atexit
@@ -271,6 +271,15 @@ def pytest_addoption(parser):
         help="Export raw hardware counter values to a separate .counters.csv file (implies --enable-perf-counters)",
     )
 
+    parser.addoption(
+        "--disable-sfploadmacro",
+        action="store_true",
+        default=False,
+        help="Compile kernels with -DDISABLE_SFPLOADMACRO so SFPLOADMACRO-based SFPU "
+        "kernels fall back to their plain sfpi/TTI calculate path (equivalent to "
+        "setting TT_METAL_DISABLE_SFPLOADMACRO=1).",
+    )
+
 
 _RECORD_TEST_ORDER: bool = False
 _UNIFIED_ORDER_FILE: str = "DEFAULT"
@@ -287,6 +296,11 @@ def pytest_configure(config):
     if log_level is not None:
         config.option.log_cli_level = log_level
         config.option.log_cli = True
+
+    # Let the CLI flag drive the compile define; test_config reads the env var
+    # when assembling per-variant compile options.
+    if config.getoption("--disable-sfploadmacro", default=False):
+        os.environ["TT_METAL_DISABLE_SFPLOADMACRO"] = "1"
 
     config.coverage_enabled = config.getoption("--coverage", default=False)
     TestConfig.DUMP_RAW_COUNTERS = config.getoption(
@@ -422,7 +436,42 @@ def pytest_ignore_collect(collection_path, config):
     return None
 
 
+def _collapse_runtime_only_variants(config, items):
+    """Keep only one test per unique compile key, dropping runtime only duplicates.
+
+    Tests decorated with ``@parametrize`` that use ``runtime()`` markers carry a
+    ``compile_key_fn`` on their ``runtime_axes`` pytest mark.  That function extracts
+    the compile time subset of each item's params.  Items that share the same compile
+    key produce identical ELFs, so only the first is kept for the compile-producer pass.
+    """
+    from helpers.param_config import RUNTIME_AXES_MARK
+
+    seen = set()
+    keep = []
+    deselected = []
+    for item in items:
+        marker = item.get_closest_marker(RUNTIME_AXES_MARK)
+        if marker is None:
+            keep.append(item)
+            continue
+        compile_key_fn = marker.kwargs["compile_key_fn"]
+        key = (item.nodeid.split("[")[0], repr(compile_key_fn(item.callspec.params)))
+        if key not in seen:
+            seen.add(key)
+            keep.append(item)
+        else:
+            deselected.append(item)
+
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = keep
+
+
+@pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
+        _collapse_runtime_only_variants(config, items)
+
     test_order_file = config.getoption("--test-order-file")
 
     if not test_order_file:
@@ -715,6 +764,10 @@ def counter_report(request, worker_id):
     if PerfConfig.TEST_COUNTER == 0:
         return
 
+    temp_report.assert_single_schema(
+        context=f"{test_module} counters (worker {worker_id})"
+    )
+
     counters_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.counters.csv"
 
     if counters_path.exists():
@@ -740,6 +793,11 @@ def perf_report(request, worker_id):
 
     if PerfConfig.TEST_COUNTER == 0:
         return
+
+    # Fail loud before writing: a single CSV must hold exactly one column schema.
+    # More than one means two unrelated tests/ops share this module (split them
+    # into separate files) or one test emits inconsistent columns across its sweep.
+    temp_report.assert_single_schema(context=f"{test_module} (worker {worker_id})")
 
     raw_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.csv"
     post_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.post.csv"

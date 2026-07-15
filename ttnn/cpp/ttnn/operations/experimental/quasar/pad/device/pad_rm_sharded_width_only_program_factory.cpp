@@ -13,6 +13,7 @@
 
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
@@ -145,7 +146,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
              {"W_front_pad_bytes", W_padding_front_bytes},
              {"unpadded_stick_step", unpadded_stick_step},
              {"padded_stick_step", padded_stick_step}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(input_tensor.device()->arch()),
     };
 
     KernelSpec writer_spec{
@@ -160,16 +161,14 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
              {"padded_shard_height", shard_height_padded},
              {"padding_value_as_u32", padding_value_as_u32},
              {"padding_value_num_bytes", static_cast<uint32_t>(output.element_size())}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device()->arch()),
     };
 
+    // Both kernels take no named runtime args (data flows via CBs/compile-time args), so
+    // runtime_arg_values stays empty; the kernels still run on their nodes per the work unit's
+    // target_nodes.
     KernelRunArgs reader_run{.kernel = READER_KERNEL};
     KernelRunArgs writer_run{.kernel = WRITER_KERNEL};
-    for (const auto& core : ordered_cores_with_data) {
-        const NodeCoord node = core;
-        reader_run.runtime_arg_values.push_back({node, {}});
-        writer_run.runtime_arg_values.push_back({node, {}});
-    }
 
     WorkUnitSpec wu{
         .name = "pad_rm_sharded_width_only",

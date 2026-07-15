@@ -263,8 +263,10 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactor
                         id,
                         work_per_core,
                         tensor_args.indices.has_value()
-                            ? static_cast<uint32_t>(tensor_args.indices->mesh_tensor().address())
-                            : 0u,  // Optional indices tensor
+                            ? std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>{std::cref(
+                                  tensor_args.indices->mesh_tensor())}
+                            : std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>{0u},  // Optional indices
+                                                                                                     // tensor
                     });
                 writer_desc.emplace_runtime_args(
                     core,

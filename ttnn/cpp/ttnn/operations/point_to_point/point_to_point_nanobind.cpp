@@ -21,7 +21,7 @@ ttnn::Tensor point_to_point_wrapper(
     const MeshCoordinate& receiver_coord,
     const std::optional<ttnn::Tensor>& output_tensor,
     const std::optional<ttnn::Tensor>& intermediate_tensor,
-    const ccl::Topology topology) {
+    const ::ttnn::ccl::Topology topology) {
     return ttnn::point_to_point(
         input_tensor, receiver_coord, sender_coord, topology, output_tensor, intermediate_tensor);
 }
@@ -31,7 +31,10 @@ ttnn::Tensor point_to_point_wrapper(
 void bind_point_to_point(nb::module_& mod) {
     const auto* doc =
         R"doc(
-            Point-to-point send and receive operation. Send a tensor from one device to another.
+            Point-to-point send and receive operation. Send a tensor shard from one device to
+            another over the fabric. If sender_coord == receiver_coord (same device), it performs a
+            local on-device copy of the shard into output_tensor (no fabric); if output_tensor
+            aliases input_tensor this is a no-op.
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.
@@ -72,7 +75,7 @@ void bind_point_to_point(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("output_tensor") = nb::none(),
         nb::arg("intermediate_tensor") = nb::none(),
-        nb::arg("topology").noconvert() = ccl::Topology::Linear);
+        nb::arg("topology").noconvert() = ::ttnn::ccl::Topology::Linear);
     mod.def(
         "p2p_compute_intermediate_tensor_spec",
         operations::point_to_point::p2p_compute_intermediate_tensor_spec,

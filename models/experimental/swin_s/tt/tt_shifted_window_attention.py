@@ -5,6 +5,8 @@
 import ttnn
 import torch.nn as nn
 
+from models.common.tensor_utils import align_shape_to_tile
+
 
 def roll(tensor, shifts, dims):
     if isinstance(shifts, int):
@@ -140,7 +142,7 @@ class TtShiftedWindowAttention(nn.Module):
 
         input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         if input_tensor.shape[0] == 361:
-            shape = ttnn.pad_to_tile_shape([1, 384, 49, 96])
+            shape = align_shape_to_tile([1, 384, 49, 96])
             mem_config = ttnn.create_sharded_memory_config_(
                 shape=shape,
                 core_grid=ttnn.CoreGrid(y=self.core_grid.y, x=self.core_grid.x),
@@ -152,7 +154,7 @@ class TtShiftedWindowAttention(nn.Module):
             input_tensor = ttnn.unsqueeze(input_tensor, dim=0)
             input_tensor = ttnn.interleaved_to_sharded(input_tensor, mem_config)
         elif input_tensor.shape[0] == 100:
-            shape = ttnn.pad_to_tile_shape([1, 128, 49, 192])
+            shape = align_shape_to_tile([1, 128, 49, 192])
             mem_config = ttnn.create_sharded_memory_config_(
                 shape=shape,
                 core_grid=ttnn.CoreGrid(y=self.core_grid.y, x=self.core_grid.x),
@@ -163,7 +165,7 @@ class TtShiftedWindowAttention(nn.Module):
             input_tensor = ttnn.unsqueeze(input_tensor, dim=0)
             input_tensor = ttnn.interleaved_to_sharded(input_tensor, mem_config)
         elif input_tensor.shape[0] == 25:
-            shape = ttnn.pad_to_tile_shape([1, 32, 49, 384])
+            shape = align_shape_to_tile([1, 32, 49, 384])
             mem_config = ttnn.create_sharded_memory_config_(
                 shape=shape,
                 core_grid=ttnn.CoreGrid(y=self.core_grid.y, x=self.core_grid.x),
@@ -172,7 +174,7 @@ class TtShiftedWindowAttention(nn.Module):
                 use_height_and_width_as_shard_shape=False,
             )
         elif input_tensor.shape[0] == 9:
-            shape = ttnn.pad_to_tile_shape([1, 9, 49, 768])
+            shape = align_shape_to_tile([1, 9, 49, 768])
             mem_config = ttnn.create_sharded_memory_config_(
                 shape=shape,
                 core_grid=ttnn.CoreGrid(y=self.core_grid.y, x=self.core_grid.x),
@@ -250,7 +252,7 @@ class TtShiftedWindowAttention(nn.Module):
 
         input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         if input_tensor.shape[0] == 361:
-            shape = ttnn.pad_to_tile_shape([1, 384, 49, 96])
+            shape = align_shape_to_tile([1, 384, 49, 96])
             mem_config = ttnn.create_sharded_memory_config_(
                 shape=shape,
                 core_grid=ttnn.CoreGrid(y=self.core_grid.y, x=self.core_grid.x),
@@ -261,7 +263,7 @@ class TtShiftedWindowAttention(nn.Module):
             input_tensor = ttnn.unsqueeze(input_tensor, dim=0)
             input_tensor = ttnn.interleaved_to_sharded(input_tensor, mem_config)
         elif input_tensor.shape[0] == 100:
-            shape = ttnn.pad_to_tile_shape([1, 128, 49, 192])
+            shape = align_shape_to_tile([1, 128, 49, 192])
             mem_config = ttnn.create_sharded_memory_config_(
                 shape=shape,
                 core_grid=ttnn.CoreGrid(y=self.core_grid.y, x=self.core_grid.x),
@@ -272,7 +274,7 @@ class TtShiftedWindowAttention(nn.Module):
             input_tensor = ttnn.unsqueeze(input_tensor, dim=0)
             input_tensor = ttnn.interleaved_to_sharded(input_tensor, mem_config)
         elif input_tensor.shape[0] == 25:
-            shape = ttnn.pad_to_tile_shape([1, 32, 49, 384])
+            shape = align_shape_to_tile([1, 32, 49, 384])
             mem_config = ttnn.create_sharded_memory_config_(
                 shape=shape,
                 core_grid=ttnn.CoreGrid(y=self.core_grid.y, x=self.core_grid.x),
@@ -281,7 +283,7 @@ class TtShiftedWindowAttention(nn.Module):
                 use_height_and_width_as_shard_shape=False,
             )
         elif input_tensor.shape[0] == 9:
-            shape = ttnn.pad_to_tile_shape([1, 9, 49, 768])
+            shape = align_shape_to_tile([1, 9, 49, 768])
             mem_config = ttnn.create_sharded_memory_config_(
                 shape=shape,
                 core_grid=ttnn.CoreGrid(y=self.core_grid.y, x=self.core_grid.x),

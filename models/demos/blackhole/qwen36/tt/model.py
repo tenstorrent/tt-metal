@@ -1047,30 +1047,83 @@ class Qwen36Model:
         return ttnn.reshape(logits, (1, 1, logits.shape[-1]))
 
     def warmup_prefill_masked_buckets(self, page_table, buckets=None):
-        """Compile every masked-bucket prefill program up front (warmup).
+        """Compile every masked-bucket prefill program up front, so a request never compiles after
+        a trace is parked (a post-park compile clobbers the trace -> second-request hang, #48536).
 
-        For each bucket runs two dummy prefills: one at the exact bucket length (the no-mask
-        program) and one shorter (the masked program — the GDN mask multiply + the conv-state
-        and logit one-hot matmuls). After this, a real short prompt of ANY length rounds up to
-        an already-compiled bucket and never compiles at request time — the root cause of the
-        trace-clobber hang. MUST run while the GDN is in its serving state mode and BEFORE any
-        trace is parked; capture_prefill_trace_chunked calls this just before begin_trace_capture.
-        Requires page_table to cover the largest bucket (max 2048 -> 32 blocks of 64)."""
+        Two program kinds:
+          * bucket-keyed (SDPA / GDN mask / norm / MLP-or-MoE): one per (bucket, is_full). Warmed
+            by a dummy forward at each bucket, once masked (actual_len < bucket) and once full (==).
+          * fill-width-keyed (paged_fill_cache): hashes on the fill shape, so it recompiles per
+            fill width. Warmed directly by _warmup_paged_fill_widths (no full forward).
+
+        MUST run in GDN serving state, before any trace is parked (capture_prefill_trace_chunked
+        calls this just before begin_trace_capture). page_table must cover the largest bucket."""
         if buckets is None:
             buckets = self._PREFILL_MASK_BUCKETS
         block_size = get_block_size(self._paged_kv_caches)
-        # The masked GDN/SDPA/sel programs key on the bucket; paged_fill_cache keys on the
-        # real-block FILL WIDTH = ceil(valid_len/64), which a real prompt/tail can land on at any
-        # value in 1..max_width. Warm each width via a vlen=width*block_size: w*64 rounds to its
-        # bucket and produces fill width w. This sweep also covers, per bucket, both the no-mask
-        # variant (vlen == bucket) and the masked variant (vlen < bucket).
-        max_width = max(buckets) // block_size
-        for w in range(1, max_width + 1):
-            vlen = w * block_size
-            b = self._mask_bucket_for(vlen)
-            toks = torch.zeros(1, vlen, dtype=torch.int32)
-            self.prefill_masked_bucket(toks, page_table, actual_len=vlen, bucket=b)
+
+        # Bucket-keyed programs: one masked + one no-mask forward per bucket.
+        seen = set()
+        for bucket in sorted(buckets):
+            for actual_len in (max(1, bucket // 2), bucket):
+                actual_len = max(1, min(actual_len, bucket))
+                key = (bucket, actual_len == bucket)
+                if key in seen:
+                    continue
+                seen.add(key)
+                toks = torch.zeros(1, actual_len, dtype=torch.int32)
+                self.prefill_masked_bucket(toks, page_table, actual_len=actual_len, bucket=bucket)
+        # Fill-width-keyed programs: warm every width directly (no full forward).
+        self._warmup_paged_fill_widths(page_table, buckets, block_size)
         ttnn.synchronize_device(self.device)
+
+    def _warmup_paged_fill_widths(self, page_table, buckets, block_size):
+        """Warm the per-fill-width programs in TPAttention.forward_prefill_paged's KV-fill sub-path
+        (ttnn.slice + paged_fill_cache) without a full-model forward. Both hash on the fill shape
+        (seq = fill_blocks * block_size), so each width is a fresh program; an un-warmed width would
+        compile after the trace is parked and clobber it (hang).
+
+        The ops are shape-keyed, so warming one layer's cache serves every layer -- far cheaper than
+        the old per-width all-layer forward. Cover EVERY fill-width-dependent op here; a new one is
+        caught by test_prefill_warmup_no_recompile (width sweep under misses-disallowed)."""
+        if not self._paged_kv_caches:
+            return
+        k_cache, v_cache = self._paged_kv_caches[0]
+        nkv, hd = k_cache.shape[1], k_cache.shape[3]
+        mapper = ttnn.ReplicateTensorToMesh(self.device) if self.num_devices > 1 else None
+        seen = set()
+        for bucket in sorted(buckets):
+            k_full = ttnn.from_torch(
+                torch.zeros(1, nkv, bucket, hd, dtype=torch.bfloat16),
+                dtype=k_cache.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mapper,
+            )
+            for w in range(1, num_blocks_in_seq(bucket, block_size) + 1):
+                page_len = min(w * block_size, bucket)
+                key = (bucket, page_len)
+                if key in seen:
+                    continue
+                seen.add(key)
+                pt = ttnn.from_torch(
+                    page_table[:, :w].contiguous(),
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.device,
+                    mesh_mapper=mapper,
+                )
+                if page_len < bucket:
+                    fill = ttnn.slice(k_full, (0, 0, 0, 0), (1, nkv, page_len, hd))
+                else:
+                    fill = k_full
+                ttnn.experimental.paged_fill_cache(k_cache, fill, pt, batch_idx=0)
+                ttnn.experimental.paged_fill_cache(v_cache, fill, pt, batch_idx=0)
+                if page_len < bucket:
+                    ttnn.deallocate(fill)
+                ttnn.deallocate(pt)
+            ttnn.deallocate(k_full)
 
     def prefill_traced_chunked(self, token_ids, page_table, actual_len):
         """Prefill by replaying the captured per-chunk trace for each FULL 2048-token chunk,
@@ -1105,6 +1158,25 @@ class Qwen36Model:
         # shared by short prompts and the long-prompt tail; prefill_dispatch routes every traced
         # prefill here so the short/long seam is defined once.
         if num_full == 0:
+            # Pad/clip the SDPA page table to the warmed/captured width so the short-prompt forward
+            # REPLAYS the pre-warmed programs instead of recompiling at request time (which clobbers
+            # parked decode/chunk traces -> second-request hang). vLLM pads to its own
+            # max_num_blocks_per_req, which differs from the warmed width. Trailing entries index
+            # blocks past the prompt and are never read by causal SDPA (as in the long-prompt branch
+            # below). No-op when no chunk buffer was captured or the widths already match.
+            buf = getattr(self, "_chunk_full_page_table_buf", None)
+            if buf is not None:
+                buf_blocks = int(buf.shape[-1])
+                if page_table.shape[1] < buf_blocks:
+                    page_table = torch.cat(
+                        [
+                            page_table,
+                            torch.zeros(page_table.shape[0], buf_blocks - page_table.shape[1], dtype=page_table.dtype),
+                        ],
+                        dim=1,
+                    )
+                elif page_table.shape[1] > buf_blocks:
+                    page_table = page_table[:, :buf_blocks]
             return self.prefill_masked_bucket(
                 token_ids[:, :actual_len], page_table, actual_len=actual_len, chunk_start=0
             )

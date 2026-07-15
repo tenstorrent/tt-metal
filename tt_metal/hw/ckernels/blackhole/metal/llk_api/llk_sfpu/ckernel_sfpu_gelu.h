@@ -88,11 +88,11 @@ sfpi_inline sfpi::vFloat x_times_exp_negative_tail(sfpi::vFloat x, sfpi::vFloat 
     sfpi::vFloat x_poly = x * poly;  // x * poly ≈ -9 to -13 (safe range)
 
     // Step 5: Exponent bit manipulation on the FUSED result
-    sfpi::vInt xpoly_exp = sfpi::exexp(x_poly, sfpi::ExponentMode::NoDebias);  // Extract exponent of x*poly
-    sfpi::vInt new_exp = xpoly_exp + k_int;                                    // Shift by 2^k
+    sfpi::vInt xpoly_exp = sfpi::exexp(x_poly, sfpi::ExponentMode::Biased);  // Extract exponent of x*poly
+    sfpi::vInt new_exp = xpoly_exp + k_int;                                  // Shift by 2^k
 
     // Step 6: FTZ check on FINAL result (x * exp(t)), not intermediate exp(t)
-    sfpi::vFloat result = sfpi::vConst0;
+    sfpi::vFloat result = 0.0f;
     v_if(new_exp > 0) { result = sfpi::setexp(x_poly, new_exp); }
     v_endif;
 
@@ -147,7 +147,7 @@ constexpr float GELU_HCORR_C3 = 7.5950479368e-04f;
 // Forward GELU Evaluation with CDF Polynomial Approximation
 // GELU(x) = x * Phi(x) where Phi is approximated piecewise
 sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
-    sfpi::vFloat result = sfpi::vConst0;  // Default: 0 for x <= -5.54259443 (torch saturation)
+    sfpi::vFloat result = 0.0f;  // Default: 0 for x <= -5.54259443 (torch saturation)
     sfpi::vFloat x2 = x * x;
 
     v_if(x > -5.54259443f) {
@@ -156,7 +156,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
         sfpi::vFloat xlog2 = x2 * NEG_HALF_ONE_LN2 + 127.0f;
 
         sfpi::vInt z = _float_to_int32_for_exp_21f_(xlog2);
-        sfpi::vInt exponential_part = sfpi::exexp(sfpi::as<sfpi::vFloat>(z), sfpi::ExponentMode::NoDebias);
+        sfpi::vInt exponential_part = sfpi::exexp(sfpi::as<sfpi::vFloat>(z), sfpi::ExponentMode::Biased);
         sfpi::vMag fractional_part = sfpi::exman(sfpi::as<sfpi::vFloat>(z));
 
         sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
@@ -309,20 +309,16 @@ inline void calculate_gelu() {
 #pragma GCC unroll 0
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat x = sfpi::dst_reg[0];
-            sfpi::vFloat result = sfpi::vConst0;  // default 0 for x <= GELU_SAT
+            sfpi::vFloat result = 0.0f;  // default 0 for x <= GELU_SAT
             v_if(x > GELU_SAT) {
                 sfpi::vFloat scaled = x * INV_SQRT2;
-                sfpi::vFloat threshold = 10.0f;
-                sfpi::vec_min_max(scaled, threshold);
+                scaled = sfpi::min(scaled, 10.0f);
                 sfpi::vFloat x2 = scaled * scaled;
                 sfpi::vFloat erf_n, erf_d;
                 piecewise_rational_eval_parity_numer_denom<16, 16>(
                     GELU_ERF_NUM, GELU_ERF_DEN, scaled, x2, erf_n, erf_d);
                 sfpi::vFloat erf_val = erf_n * sfpu_reciprocal<false>(erf_d);
-                sfpi::vFloat neg_one = sfpi::vConstNeg1;
-                sfpi::vFloat pos_one = sfpi::vConst1;
-                sfpi::vec_min_max(neg_one, erf_val);
-                sfpi::vec_min_max(erf_val, pos_one);
+                erf_val = sfpi::clamp(erf_val, -1.0f, 1.0f);
                 result = x * (0.5f + 0.5f * erf_val);
                 // Stuck-erff guard: when rational rounds erf to -1.0 inside computation zone,
                 // glibc/torch overestimates erfc → first stuck level = x * 2^-25.
@@ -357,42 +353,23 @@ template <bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu_tanh() {
     constexpr float SQRT_2_OVER_PI = 0.7978845608028654f;
     constexpr float GELU_TANH_K = 0.044715f;
-    // Saturation threshold for tanh -> +/- 1.
-    // Empirically calibrated to torch's CPU tanh saturation point.
-    constexpr float TANH_SAT_THRESHOLD = 8.6643f;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
 
-        // x^3.
         sfpi::vFloat x2 = x * x;
-        sfpi::vFloat x3 = x2 * x;
+        sfpi::vFloat p = GELU_TANH_K * x2 + 1.0f;
+        sfpi::vFloat q = x * p;
+        sfpi::vFloat u = SQRT_2_OVER_PI * q;
+        sfpi::vFloat t = _sfpu_tanh_fp32_accurate_(u);
 
-        // x + (0.044715 * x^3).
-        sfpi::vFloat kx3 = x3 * GELU_TANH_K;
-        sfpi::vFloat inner = x + kx3;
+        // reload due to register pressure
+        x = sfpi::dst_reg[0];
+        sfpi::vFloat result = sfpi::copysgn(sfpi::vFloat(0.0f), x);
 
-        sfpi::vFloat scaled = inner * SQRT_2_OVER_PI;
-
-        // Handle +-0 by using the sign of x to prevent 1 ULP difference.
-        // NOTE: vConst0 is a vCReg<vFloat>, not a vFloat. copysgn's overloads are
-        // constrained templates whose argument deduction does not apply the implicit
-        // vCReg->vFloat conversion, so materialize a real vFloat first.
-        sfpi::vFloat zero = sfpi::vConst0;
-        sfpi::vFloat result = sfpi::copysgn(zero, x);
-
-        v_if(scaled >= TANH_SAT_THRESHOLD) {
-            // Saturated positive tail: gelu_tanh(x) = x.
-            result = x;
-        }
-        v_elseif(scaled > -TANH_SAT_THRESHOLD) {
-            sfpi::vFloat t = _sfpu_tanh_fp32_accurate_<true>(scaled);
-            sfpi::vFloat one_plus = 1.0f + t;
-            sfpi::vFloat half_x = 0.5f * x;
-            result = half_x * one_plus;
-        }
-        v_endif;
+        sfpi::vFloat half_x = 0.5f * x;
+        result = half_x * t + half_x;
 
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
@@ -404,13 +381,8 @@ inline void calculate_gelu_tanh() {
 
 template <bool is_fp32_dest_acc_en>
 inline void gelu_tanh_init() {
-    // _sfpu_tanh_fp32_accurate_ calls _sfpu_sigmoid_ -> _sfpu_reciprocal_
-    // regardless of is_fp32_dest_acc_en, so we always need reciprocal init.
-    // Calling tanh_init<false, is_fp32_dest_acc_en>() does NOT work when
-    // is_fp32_dest_acc_en=false: it loads polynomial constants for the
-    // BF16 polynomial tanh path that this kernel doesn't take, and skips
-    // reciprocal init.
-    sigmoid_init<false>();
+    // initialise constants for _sfpu_tanh_fp32_accurate_
+    tanh_init<false, true>();
 }
 
 // =============================================================================
@@ -451,10 +423,10 @@ constexpr float GELU_DERIV_H8 = 4.2734988881e-09f;
 // Note: GELU'(x) has a "hump" exceeding 1.0 for x in [0.77, 3.16]
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
-    sfpi::vFloat result = sfpi::vConst0;  // Default: 0 for x <= -13.375
+    sfpi::vFloat result = 0.0f;  // Default: 0 for x <= -13.375
 
     // For x >= 3.1719, output saturates to 1 (verified saturation threshold)
-    v_if(x >= 3.1719f) { result = sfpi::vConst1; }
+    v_if(x >= 3.1719f) { result = 1.0f; }
     // Core region [-3, 3.1719]: GELU'(x) = 0.5 + x * h(x²)
     // Odd-function decomposition: GELU'(x) + GELU'(-x) = 1, so GELU'(x) - 0.5
     // is odd and can be written as x * h(x²). Degree-8 in u=x² (~12 ops vs ~32).
@@ -497,7 +469,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
         } else {
             // 1 NR step suffices for BF16 (7 mantissa bits); FP32 needs 2 steps (23 bits).
             sfpi::vFloat inv_x2 = sfpu_reciprocal_iter<is_fp32_dest_acc_en ? 2 : 1>(x2);  // 1/x²
-            sfpi::vFloat inv_x4 = inv_x2 * inv_x2;           // 1/x⁴
+            sfpi::vFloat inv_x4 = inv_x2 * inv_x2;                                        // 1/x⁴
             sfpi::vFloat correction = 1.0f - inv_x2 + inv_x4;
             result = x_exp * INV_SQRT_2PI * correction;
         }

@@ -65,14 +65,24 @@ uint32_t _start() {
     uint32_t launch_idx = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
     launch_msg_t tt_l1_ptr* launch_msg = &(*GET_MAILBOX_ADDRESS_DEV(launch))[launch_idx];
 
+    // Materialize &__tdata_lma[0] EXACTLY ONCE. Both uses below otherwise emit their own
+    // `lui %hi(__tdata_lma)` + `addi %lo(...)`; instruction scheduling can sink one `lui` to after
+    // its `addi`. tt-metalium's ELF relocator (tt_elffile.cpp) rewrites absolute addressing to
+    // PC-relative and pairs HI20<->LO12 by searching backwards for the nearest preceding HI20, so a
+    // `lui` placed after its `addi` is never matched, throwing "R_RISCV_HI20 ... has no matching
+    // R_RISCV_LO12" at kernel load. The opaque asm pins the address into one register so only a
+    // single HI20/LO12 pair is emitted and reused.
+    uint32_t* tdata_lma = __tdata_lma;
+    asm volatile("" : "+r"(tdata_lma));
+
     // NEO0 initializes shared .bss/.data (do_crt1) for this TRISC role, then publishes GO. All NEOs must wait
     // before do_thread_crt1: running TLS init on non-NEO0 before NEO0 finishes do_crt1 races the shared LDM image.
     if (neo_id == 0) {
-        do_crt1(&__tdata_lma[__ldm_tdata_end - __ldm_tdata_start]);
+        do_crt1(&tdata_lma[__ldm_tdata_end - __ldm_tdata_start]);
         (*GET_MAILBOX_ADDRESS_DEV(shared_globals_ready))[MaxDMProcessorsPerCoreType + trisc_id] =
             SHARED_GLOBALS_READY_GO;
     }
-    do_thread_crt1(__tdata_lma);
+    do_thread_crt1(tdata_lma);
     // Wait until first thread in the group has set its slot to GO.
     while ((*GET_MAILBOX_ADDRESS_DEV(shared_globals_ready))[MaxDMProcessorsPerCoreType + trisc_id] !=
            SHARED_GLOBALS_READY_GO) {

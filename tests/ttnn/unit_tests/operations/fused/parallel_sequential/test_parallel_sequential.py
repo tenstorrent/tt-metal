@@ -244,7 +244,19 @@ class TestInfrastructure:
 class TestSequentialExecution:
     """Core sequential chain execution tests."""
 
-    @pytest.mark.parametrize("num_phases", [2, 3, 4])
+    @pytest.mark.parametrize(
+        "num_phases",
+        [
+            2,
+            3,
+            # TT_METAL_LLK_ASSERTS run overflows the TENSIX kernel config buffer
+            # for this fused 4-phase LN/RMS chain (70800 > 70656 bytes).
+            pytest.param(
+                4,
+                marks=skip_with_llk_assert("4-phase norm chain exceeds kernel config buffer with LLK asserts enabled."),
+            ),
+        ],
+    )
     @stress_test_program_cache
     def test_norm_chain(self, device, num_phases):
         """Mixed LN/RMS chain of varying length on single core."""
@@ -759,7 +771,7 @@ class TestMatmulFusion:
         check_pcc(g, out, pcc=0.97, label=f"MM->{num_rms}xRMS")
 
     @stress_test_program_cache
-    def test_fp32_mismatch_error(self, device):
+    def test_fp32_mismatch_error(self, device, expect_error):
         """MM(fp32=off) + LN(fp32=on) should raise."""
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm
@@ -787,7 +799,7 @@ class TestMatmulFusion:
             epsilon=1e-5,
         )
 
-        with pytest.raises((ValueError, RuntimeError)):
+        with expect_error((ValueError, RuntimeError), "fp32_dest_acc_en mismatch"):
             Sequential(mm, ln).build(device)
 
 
@@ -997,7 +1009,7 @@ class TestBranchingTopology:
             check_pcc(goldens[i], outs[i], label=label)
 
     @stress_test_program_cache
-    def test_overlapping_branches_error(self, device):
+    def test_overlapping_branches_error(self, device, expect_error):
         """Overlapping branch core ranges should raise ValueError."""
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
@@ -1014,7 +1026,7 @@ class TestBranchingTopology:
             stem.output_tensors[0], core_range_set=cores(1, 0, 3, 0), weight=t["tt_weights"][2], epsilon=1e-5
         )
 
-        with pytest.raises(ValueError, match="overlapping"):
+        with expect_error(ValueError, "overlapping"):
             Sequential(stem, Parallel(a, b)).build(device)
 
 
@@ -3338,7 +3350,7 @@ class TestMatmulFactories:
         check_pcc(golden_l, out_l, pcc=0.97, label="left (reuse->rms)")
         check_pcc(golden_r, out_r, pcc=0.97, label="right (mcast2d->rms)")
 
-    def test_gather_in0_raises(self, device):
+    def test_gather_in0_raises(self, device, expect_error):
         """gather_in0=True should raise (MeshWorkload factory not supported)."""
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
 
@@ -3361,7 +3373,7 @@ class TestMatmulFactories:
             gather_in0=True,
             allowed_worker_cores=cr,
         )
-        with pytest.raises(ValueError, match="MeshWorkload"):
+        with expect_error(ValueError, "MeshWorkload"):
             matmul_desc(
                 tt(torch_a, device),
                 tt(torch_b, device),

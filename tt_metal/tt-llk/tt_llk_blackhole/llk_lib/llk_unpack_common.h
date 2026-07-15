@@ -133,6 +133,11 @@ inline void _llk_unpack_configure_stoch_rnd_()
  * @param tile_size: New tile size of operand A stored to the tile-size GPR.
  * @param unpack_face_r_dim: Rows per face, used when reprogramming dim/stride.
  * @param unpack_num_faces: Number of faces, valid values = <1, 2, 4>.
+ * @note Caller contract: the SrcA-unsigned ALU bit (ALU_FORMAT_SPEC_REG0_SrcAUnsigned), and the math-side
+ *       INT8 math-enable in @ref _llk_math_reconfig_data_format_srca_, are only reprogrammed when
+ *       to_from_int8 is set. Set to_from_int8 = true for ANY reconfig that transitions to OR from an
+ *       8-bit-integer / Int8 / Int32 format (e.g. UInt8 -> float); otherwise the previous unsigned/INT8
+ *       state is left stale and the next op misinterprets the operand.
  */
 // TODO NC: Clean up as the part of tt-metal#34499
 template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
@@ -177,13 +182,16 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
 
     if constexpr (dim_stride_target == p_dim_stride_target::FACE_ROW_MAJOR)
     {
-        std::uint32_t unpack_ch1_x_stride = (std::uint32_t)(unpack_dst_format & 0x3) == (std::uint32_t)DataFormat::Float32   ? 4
-                                            : (std::uint32_t)(unpack_dst_format & 0x3) == (std::uint32_t)DataFormat::Float16 ? 2
-                                                                                                                             : 1;
-        // FACE_R_DIM constant is used here because data is not stored densely in src/dest registers
-        // so we want to keep standard stride for one face
-        std::uint32_t unpack_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpack_ch1_x_stride;
-        cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_ZW_REG_1_Zstride_RMW>(unpack_ch1_z_stride);
+        // Re-establish the canonical Z-stride baseline for srcA. Per-op brackets that mutate
+        // this register (unpack-to-dest in unpack_A / unpack_tilize) restore to this baseline,
+        // so it must be re-committed whenever the dst format changes.
+        cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_ZW_REG_1_Zstride_RMW>(canonical_unpA_z_stride(unpack_dst_format));
+
+        // Re-establish the canonical Y-stride baseline for srcA. Per-op inits that mutate
+        // this register (e.g. tilizeA_B) restore back to this baseline on uninit, so the
+        // baseline must be re-committed whenever the dst format changes.
+        cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32, UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT, UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK>(
+            canonical_unpA_y_stride(unpack_dst_format));
 
         // Program unpacker0 per context x_dim (face size in l1)
         // Overrides value set by tile descriptor when thread override bit is set in unpack instruction
@@ -191,7 +199,7 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
         cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, 0, 0xffffffff>(face_dim | (face_dim << 16));
 
         // Set Z-dim to number of faces
-        cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, 0xffff0000>(0 | (unpack_num_faces << 16));
+        cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, TILE_DESC_UPPER_HALFWORD_MASK>(0 | (unpack_num_faces << 16));
     }
 }
 
@@ -209,6 +217,11 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
  * @param tile_size: New tile size of operand B stored to the tile-size GPR.
  * @param unpack_face_r_dim: Rows per face, used when reprogramming dim/stride.
  * @param unpack_num_faces: Number of faces, valid values = <1, 2, 4>.
+ * @note Caller contract: the SrcB-unsigned ALU bit (ALU_FORMAT_SPEC_REG0_SrcBUnsigned), and the math-side
+ *       INT8 math-enable in @ref _llk_math_reconfig_data_format_srcb_, are only reprogrammed when
+ *       to_from_int8 is set. Set to_from_int8 = true for ANY reconfig that transitions to OR from an
+ *       8-bit-integer / Int8 / Int32 format (e.g. UInt8 -> float); otherwise the previous unsigned/INT8
+ *       state is left stale and the next op misinterprets the operand.
  */
 // TODO NC: Clean up as the part of tt-metal#34499
 template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
@@ -253,17 +266,15 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
 
     if constexpr (dim_stride_target == p_dim_stride_target::FACE_ROW_MAJOR)
     {
-        std::uint32_t unpack_ch1_x_stride = (std::uint32_t)(unpack_dst_format & 0x3) == (std::uint32_t)DataFormat::Float32   ? 4
-                                            : (std::uint32_t)(unpack_dst_format & 0x3) == (std::uint32_t)DataFormat::Float16 ? 2
-                                                                                                                             : 1;
+        std::uint32_t unpack_ch1_x_stride = datum_size_in_bytes(unpack_dst_format);
         std::uint32_t unpack_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpack_ch1_x_stride;
         cfg_reg_rmw_tensix<UNP1_ADDR_CTRL_ZW_REG_1_Zstride_RMW>(unpack_ch1_z_stride);
 
         // Set X-dim to face_r_dim * FACE_C_DIM
-        cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 0, 0xffff0000>((unpack_face_r_dim * FACE_C_DIM) << 16);
+        cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 0, TILE_DESC_UPPER_HALFWORD_MASK>((unpack_face_r_dim * FACE_C_DIM) << 16);
 
         // Set Z-dim to number of faces
-        cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32 + 1, 0, 0xffff0000>(0 | (unpack_num_faces << 16));
+        cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32 + 1, 0, TILE_DESC_UPPER_HALFWORD_MASK>(0 | (unpack_num_faces << 16));
     }
 }
 

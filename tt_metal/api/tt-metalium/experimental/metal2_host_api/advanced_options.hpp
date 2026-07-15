@@ -36,10 +36,11 @@ namespace tt::tt_metal::experimental {
 //
 // ============================================================================
 
-// Canonical definition of DFBSpecName. It lives in this lower-level header
-// (rather than dataflow_buffer_spec.hpp) because AdvancedOptions members here
-// reference it, and dataflow_buffer_spec.hpp includes this header.
+// Name identifying a DataflowBufferSpec within a ProgramSpec.
 using DFBSpecName = ttsl::StrongType<std::string, struct DFBSpecNameTag>;
+// NOTE: DFBSpecName is also declared at the top of dataflow_buffer_spec.hpp, but is
+//       re-declared here for use in AdvancedOptions to avoid circular dependency.
+//       This is legal so long as the declarations are identical, which is compiler-enforced.
 
 struct KernelAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////

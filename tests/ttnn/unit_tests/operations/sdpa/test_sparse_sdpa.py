@@ -122,6 +122,61 @@ def test_sparse_sdpa_oversized_persistent_kv(device):
     assert n == 1, f"oversized persistent kv reuse recompiled: {n} program-cache entries (expected 1)"
 
 
+# ---- block-cyclic remap: indices are NATURAL token positions but the kv cache is stored block-cyclic. `sp` is
+# ---- DERIVED from the mesh (block_cyclic_sp_axis = the mesh axis the cache was striped over). On ONE device the
+# ---- mesh is 1x1 so sp=1 and the remap reduces to identity (shard=0 and BC_SLAB_STRIDE_GAP=0 => page=n) — enough
+# ---- to smoke the whole BC path here (API, the chunk_local cross-check, the BC_ENABLE kernel branch). All remap
+# ---- constants incl. BC_SHARD_STRIDE_GAP (= T/sp - chunk_local) are compile-time, with cache length T folded into the program hash, so
+# ---- each DISTINCT cache size T is its own program (the cache is expected to be a consistent-size prealloc).
+# ---- The sp>1 PERMUTATION arithmetic needs a real SP mesh; that multi-device coverage lives in
+# ---- tests/nightly/blackhole/sdpa/test_sparse_sdpa_multidevice.py (run on QuietBox-2 in BH post-commit — a
+# ---- mesh_device fixture can't share this single-device use_module_device file). ----
+@run_for_blackhole()
+def test_sparse_sdpa_block_cyclic_sp1_identity(device):
+    """sp=1 (read from the 1x1 device-mesh): block-cyclic == natural, so the op must reproduce the natural golden
+    while exercising the BC_ENABLE path, across cache sizes T. Since T is hashed for this path (BC_SHARD_STRIDE_GAP
+    is a compile-time define), each distinct T is a DISTINCT program — asserted below."""
+    H, S, TOPK, kc = 32, 64, 64, 32
+    Ts = (256, 512, 1024)
+    device.clear_program_cache()
+    for T in Ts:
+        q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK, seed=T)
+        out = ttnn.transformer.sparse_sdpa(
+            to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16),
+            to_dev(kv.to(torch.bfloat16), device, ttnn.bfloat16),  # sp=1 => block-cyclic order == natural
+            to_dev(indices.to(torch.int32), device, ttnn.uint32),
+            V_DIM,
+            scale=K_DIM**-0.5,
+            k_chunk_size=kc,
+            block_cyclic_sp_axis=0,
+            block_cyclic_chunk_local=S,  # == q_isl (sp=1, tp=1)
+        )
+        p = pcc(ttnn.to_torch(out), golden(q, kv, indices, K_DIM**-0.5, V_DIM))
+        assert p >= 0.99, f"PCC {p:.5f} (sp=1 identity block-cyclic, T={T})"
+    # T is hashed for the block-cyclic path (compile-time BC_SHARD_STRIDE_GAP), so each distinct cache size is its own program.
+    n = device.num_program_cache_entries()
+    assert n == len(Ts), f"block-cyclic should hash cache size T: got {n} program-cache entries (expected {len(Ts)})"
+
+
+@run_for_blackhole()
+def test_sparse_sdpa_block_cyclic_chunk_local_rejected(device, expect_error):
+    """The chunk_local cross-check rejects a value that is neither q_isl nor tp*q_isl — the footgun guard. On a
+    single device sp=1/tp=1, so the only legal chunk_local is q_isl (= S); any other value must raise."""
+    H, S, T, TOPK, kc = 32, 64, 256, 64, 32
+    q, kv_nat, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK, seed=1)
+    with expect_error(RuntimeError, "block_cyclic_chunk_local"):
+        ttnn.transformer.sparse_sdpa(
+            to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16),
+            to_dev(kv_nat.to(torch.bfloat16), device, ttnn.bfloat16),
+            to_dev(indices.to(torch.int32), device, ttnn.uint32),
+            V_DIM,
+            scale=K_DIM**-0.5,
+            k_chunk_size=kc,
+            block_cyclic_sp_axis=0,
+            block_cyclic_chunk_local=S - 16,  # != S (=q_isl); rejected before dispatch
+        )
+
+
 def _indexed_inputs(H, S, T, TOPK, B, seed=0):
     gen = torch.Generator().manual_seed(seed)
     q = torch.randn(1, H, S, K_DIM, generator=gen, dtype=torch.float32)

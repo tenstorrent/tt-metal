@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/eltwise_binary.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     // Define all compile-time arguments at the beginning
@@ -17,15 +18,18 @@ void kernel_main() {
     constexpr uint32_t total_pages = num_devices * num_pages_per_packet;
     constexpr uint32_t num_device_pairs = num_devices / 2;  // num_devices is always even
 
+    CircularBuffer cb_fabric_receiver(fabric_receiver_cb_id);
+    CircularBuffer cb_accumulator(accumulator_cb_id);
+
     // Initialize binary operations - use the same constants consistently
     binary_op_init_common(fabric_receiver_cb_id, fabric_receiver_cb_id, accumulator_cb_id);
     add_tiles_init(fabric_receiver_cb_id, fabric_receiver_cb_id, true);
 
     // Wait for input data once before beginning processing
-    cb_wait_front(fabric_receiver_cb_id, total_pages);
+    cb_fabric_receiver.wait_front(total_pages);
 
     // Reserve output space once before processing
-    cb_reserve_back(accumulator_cb_id, num_pages_per_packet);
+    cb_accumulator.reserve_back(num_pages_per_packet);
 
     // Process tiles in pairs for efficient addition
     tile_regs_acquire();
@@ -54,6 +58,6 @@ void kernel_main() {
     }
     tile_regs_release();
 
-    cb_pop_front(fabric_receiver_cb_id, total_pages);
-    cb_push_back(accumulator_cb_id, num_pages_per_packet);
+    cb_fabric_receiver.pop_front(total_pages);
+    cb_accumulator.push_back(num_pages_per_packet);
 }
