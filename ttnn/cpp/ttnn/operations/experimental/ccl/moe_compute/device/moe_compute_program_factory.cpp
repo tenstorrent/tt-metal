@@ -188,12 +188,42 @@ MoEComputeMeshWorkloadFactory::cached_mesh_workload_t MoEComputeMeshWorkloadFact
 
         const auto& combine_core_range_set = std::get<combine_core_range_set_return_index>(core_ret);
 
-        init_barrier_semaphore =
-            ttnn::global_semaphore::create_global_semaphore(mesh_device, combine_core_range_set, 0);
-        final_barrier_semaphore = args.combine_params->optional_cross_device_semaphore.value_or(
-            ttnn::global_semaphore::create_global_semaphore(mesh_device, combine_core_range_set, 0));
+        // Trace-capture compatibility: create_global_semaphore(..., initial_value)
+        // does a host-side write (reset_semaphore_value -> write_shard_to_device),
+        // which is fatal ("Writes are not supported during trace capture") when
+        // this program is (re)built inside a trace. The combine's init barrier is
+        // compiled OUT of the writer kernel exactly when both optional_output_tensor
+        // and optional_cross_device_semaphore are supplied (use_init_semaphore ==
+        // false in selective_reduce_combine's program factory); in that case the
+        // init_barrier_semaphore value is never read, so reuse the external combine
+        // semaphore instead of creating (and host-writing) a fresh one. Likewise the
+        // final barrier reuses the external semaphore when supplied. Only Synchronize
+        // when we actually created a semaphore that needs host-side init. This mirrors
+        // all_to_all_dispatch_metadata's skip_init_semaphore persistent mode.
+        const bool combine_use_init_semaphore =
+            !tensor_args.optional_output_tensor.has_value() ||
+            !args.combine_params->optional_cross_device_semaphore.has_value();
+        bool created_barrier_semaphore = false;
+        if (combine_use_init_semaphore) {
+            init_barrier_semaphore =
+                ttnn::global_semaphore::create_global_semaphore(mesh_device, combine_core_range_set, 0);
+            created_barrier_semaphore = true;
+        } else {
+            // init barrier inactive: value never read; reuse the external semaphore
+            // (guaranteed present in this branch) to avoid a host write.
+            init_barrier_semaphore = args.combine_params->optional_cross_device_semaphore;
+        }
+        if (args.combine_params->optional_cross_device_semaphore.has_value()) {
+            final_barrier_semaphore = args.combine_params->optional_cross_device_semaphore;
+        } else {
+            final_barrier_semaphore =
+                ttnn::global_semaphore::create_global_semaphore(mesh_device, combine_core_range_set, 0);
+            created_barrier_semaphore = true;
+        }
 
-        tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
+        if (created_barrier_semaphore) {
+            tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
+        }
     }
 
     for (const auto& coord : mesh_coordinates.coords()) {
