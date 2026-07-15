@@ -29,12 +29,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Install syft (https://github.com/anchore/syft, Apache-2.0 license) + oras
 # once per job when SBOM enrichment is requested (see enrich-sbom input).
-# Pinned versions and sha256 checksums - do not float to latest. Checksums
-# verified against each project's published *_checksums.txt release asset.
-SYFT_VERSION="v1.46.0"
-SYFT_SHA256="d654f678b709eb53c393d38519d5ed7d2e57205529404018614cfefa0fb2b5ca"
-ORAS_VERSION="1.3.3"
-ORAS_SHA256="9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59"
+# Caller-settable via env vars (e.g. to bump a version), defaulting to the
+# current pinned values below - do not change the defaults to float to
+# latest. Checksums verified against each project's published
+# *_checksums.txt release asset; if you override the version, override the
+# matching sha256 too.
+SYFT_VERSION="${SYFT_VERSION:-v1.46.0}"
+SYFT_SHA256="${SYFT_SHA256:-d654f678b709eb53c393d38519d5ed7d2e57205529404018614cfefa0fb2b5ca}"
+ORAS_VERSION="${ORAS_VERSION:-1.3.3}"
+ORAS_SHA256="${ORAS_SHA256:-9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59}"
 
 # Populated by parse_inputs; referenced by later functions.
 CLEAN_TARGETS=()

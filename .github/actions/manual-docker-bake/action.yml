@@ -24,7 +24,7 @@ inputs:
   retries:
     description: "Number of attempts before failing"
     required: false
-    default: "3"
+    default: "1"
   retry-delay-seconds:
     description: "Delay between retries"
     required: false
