@@ -25,6 +25,9 @@ void kernel_main() {
     constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
     constexpr uint32_t do_beta = get_compile_time_arg_val(2);
     constexpr uint32_t num_cores_per_mcast_group = get_compile_time_arg_val(3);
+    // True when a reconfig-relevant operand is fp32: the per-group reconfig_data_format calls below
+    // are then required. All-bf16 compiles them out (no-ops). See program factory.
+    constexpr bool enable_fp32_reconfig = get_named_compile_time_arg_val("enable_fp32_reconfig") != 0;
 
     constexpr uint32_t batch = get_compile_time_arg_val(4);
     constexpr uint32_t group = get_compile_time_arg_val(5);
@@ -298,10 +301,11 @@ void kernel_main() {
             }
             // x - E[x]
             sub_tiles_bcast_scalar_init_short(dfb_x_id, dfb_ex_global_id);
-            // fp32: reset both srcs (1-arg) so fp32 x/mean aren't read through the partial-E[x] bf16 cb_ones format;
-            // no-op for bf16.
-            reconfig_data_format_srca(dfb_x_id);
-            reconfig_data_format_srcb(dfb_ex_global_id);
+            // fp32: reset both srcs so fp32 x/mean aren't read through the partial-E[x] bf16 cb_ones format.
+            if constexpr (enable_fp32_reconfig) {
+                reconfig_data_format_srca(dfb_x_id);
+                reconfig_data_format_srcb(dfb_ex_global_id);
+            }
 
             dfb_ex_global.wait_front(1);
             for (uint32_t i = 0; i < block_h; i++) {
@@ -415,8 +419,10 @@ void kernel_main() {
             tile_regs_acquire();
             add_tiles_init(dfb_ex_global_id, dfb_eps_id);
             // fp32: reset both srcs so bf16 eps isn't read through the (x-Ex)^2 fp32 format (else garbage var+eps).
-            reconfig_data_format_srca(dfb_ex_global_id);
-            reconfig_data_format_srcb(dfb_eps_id);
+            if constexpr (enable_fp32_reconfig) {
+                reconfig_data_format_srca(dfb_ex_global_id);
+                reconfig_data_format_srcb(dfb_eps_id);
+            }
             add_tiles(dfb_ex_global_id, dfb_eps_id, 0, 0, dst0);
             // 1/[sqrt(Var + eps)]
             rsqrt_tile_init<true>();
@@ -431,8 +437,10 @@ void kernel_main() {
             index_h_offset = 0;
             mul_tiles_bcast_scalar_init_short(dfb_x_id, dfb_ex2pe_id);
             // fp32: reset both srcs so fp32 x/rstd aren't read through the (var+eps) bf16 cb_eps format.
-            reconfig_data_format_srca(dfb_x_id);
-            reconfig_data_format_srcb(dfb_ex2pe_id);
+            if constexpr (enable_fp32_reconfig) {
+                reconfig_data_format_srca(dfb_x_id);
+                reconfig_data_format_srcb(dfb_ex2pe_id);
+            }
 
             dfb_ex2pe.wait_front(1);
             for (uint32_t i = 0; i < block_h; i++) {
@@ -612,8 +620,10 @@ void kernel_main() {
         if constexpr (use_negative_mask == false) {
             mul_bcast_rows_init_short(dfb_out_id, dfb_gamma_id);
             // fp32: reset both srcs so bf16 gamma isn't read through the normalization loop's fp32 format.
-            reconfig_data_format_srca(dfb_out_id);
-            reconfig_data_format_srcb(dfb_gamma_id);
+            if constexpr (enable_fp32_reconfig) {
+                reconfig_data_format_srca(dfb_out_id);
+                reconfig_data_format_srcb(dfb_gamma_id);
+            }
             dfb_outgamma.reserve_back(per_core_MN);
             dfb_gamma.wait_front(per_core_N);
             for (uint32_t i = 0; i < per_core_M; ++i) {
@@ -636,8 +646,10 @@ void kernel_main() {
             // cb in has data required for gamma, so we do it inplace
             mul_bcast_rows_init_short(dfb_in_id, dfb_gamma_id);
             // fp32: see non-negative-mask branch above.
-            reconfig_data_format_srca(dfb_in_id);
-            reconfig_data_format_srcb(dfb_gamma_id);
+            if constexpr (enable_fp32_reconfig) {
+                reconfig_data_format_srca(dfb_in_id);
+                reconfig_data_format_srcb(dfb_gamma_id);
+            }
             dfb_gamma.wait_front(per_core_N);
             dfb_in.wait_front(per_core_MN);
             for (uint32_t i = 0; i < per_core_M; i++) {
@@ -661,8 +673,10 @@ void kernel_main() {
             index_h_offset = 0;
             add_bcast_rows_init_short(dfb_inbeta_id, dfb_beta_id);
             // fp32: reset both srcs so bf16 beta isn't read as fp32 (matters especially when do_gamma=false).
-            reconfig_data_format_srca(dfb_inbeta_id);
-            reconfig_data_format_srcb(dfb_beta_id);
+            if constexpr (enable_fp32_reconfig) {
+                reconfig_data_format_srca(dfb_inbeta_id);
+                reconfig_data_format_srcb(dfb_beta_id);
+            }
             dfb_outbeta.reserve_back(per_core_MN);
             dfb_beta.wait_front(per_core_N);
             for (uint32_t i = 0; i < per_core_M; ++i) {
@@ -684,8 +698,10 @@ void kernel_main() {
             // cb_in_id has data required for beta, so we do it inplace
             add_bcast_rows_init_short(dfb_in_id, dfb_beta_id);
             // fp32: see non-negative-mask branch above.
-            reconfig_data_format_srca(dfb_in_id);
-            reconfig_data_format_srcb(dfb_beta_id);
+            if constexpr (enable_fp32_reconfig) {
+                reconfig_data_format_srca(dfb_in_id);
+                reconfig_data_format_srcb(dfb_beta_id);
+            }
             dfb_beta.wait_front(per_core_N);
             dfb_in.wait_front(per_core_MN);
             for (uint32_t i = 0; i < per_core_M; i++) {

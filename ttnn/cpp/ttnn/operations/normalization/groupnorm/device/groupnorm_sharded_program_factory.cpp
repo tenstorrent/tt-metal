@@ -775,18 +775,26 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     }
 
     // Welford-fp32 alias args. Only attached on the welford compute kernel; the non-welford
-    // groupnorm_sharded_v2.cpp never references these names. Read by welford_groupnorm_sharded_v2.cpp.
+    // groupnorm_sharded_v2.cpp never references these alias names. Read by welford_groupnorm_sharded_v2.cpp.
     const uint32_t cb_in0_welford_arg =
         welford_fp32_alias ? static_cast<uint32_t>(tt::CBIndex::c_29) : static_cast<uint32_t>(tt::CBIndex::c_0);
     const uint32_t cb_in_welford_arg =
         welford_fp32_alias ? static_cast<uint32_t>(tt::CBIndex::c_31) : static_cast<uint32_t>(tt::CBIndex::c_1);
-    KernelDescriptor::NamedCompileTimeArgs welford_named_compile_time_args;
+    // True when any reconfig-relevant operand is fp32, so the compute kernel must run its per-group
+    // reconfig_data_format calls. When all are bf16 they're no-ops and the kernel skips them.
+    const bool enable_fp32_reconfig =
+        !(in_data_format == tt::DataFormat::Float16_b && out_data_format == tt::DataFormat::Float16_b &&
+          cb_data_format == tt::DataFormat::Float16_b && gamma_beta_cb_data_format == tt::DataFormat::Float16_b &&
+          in_mask_cb_data_format == tt::DataFormat::Float16_b &&
+          in_negative_mask_cb_data_format == tt::DataFormat::Float16_b);
+    // enable_fp32_reconfig is read by both compute kernels; the alias args only by the welford one.
+    KernelDescriptor::NamedCompileTimeArgs compute_named_compile_time_args = {
+        {"enable_fp32_reconfig", static_cast<uint32_t>(enable_fp32_reconfig)},
+    };
     if (use_welford) {
-        welford_named_compile_time_args = {
-            {"welford_fp32_alias", static_cast<uint32_t>(welford_fp32_alias)},
-            {"cb_in0_welford", cb_in0_welford_arg},
-            {"cb_in_welford", cb_in_welford_arg},
-        };
+        compute_named_compile_time_args.push_back({"welford_fp32_alias", static_cast<uint32_t>(welford_fp32_alias)});
+        compute_named_compile_time_args.push_back({"cb_in0_welford", cb_in0_welford_arg});
+        compute_named_compile_time_args.push_back({"cb_in_welford", cb_in_welford_arg});
     }
 
     KernelDescriptor compute_sender_desc;
@@ -798,7 +806,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     compute_sender_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_sender_desc.core_ranges = mcast_sender_cores;
     compute_sender_desc.compile_time_args = mcast_sender_compute_compile_time_args;
-    compute_sender_desc.named_compile_time_args = welford_named_compile_time_args;
+    compute_sender_desc.named_compile_time_args = compute_named_compile_time_args;
     compute_sender_desc.defines =
         KernelDescriptor::Defines(eltwise_binary_defines.begin(), eltwise_binary_defines.end());
     compute_sender_desc.config = ComputeConfigDescriptor{
@@ -818,7 +826,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     compute_receiver_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_receiver_desc.core_ranges = mcast_receiver_cores;
     compute_receiver_desc.compile_time_args = mcast_receiver_compute_compile_time_args;
-    compute_receiver_desc.named_compile_time_args = std::move(welford_named_compile_time_args);
+    compute_receiver_desc.named_compile_time_args = std::move(compute_named_compile_time_args);
     compute_receiver_desc.defines =
         KernelDescriptor::Defines(eltwise_binary_defines.begin(), eltwise_binary_defines.end());
     compute_receiver_desc.config = ComputeConfigDescriptor{
