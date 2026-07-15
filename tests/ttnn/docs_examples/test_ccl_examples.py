@@ -13,7 +13,18 @@ import torch
 import ttnn
 
 
-@pytest.mark.skipif(ttnn.get_num_devices() < 2, reason="ttnn.all_gather requires at least 2 devices")
+def _num_devices():
+    # skipif conditions are evaluated at import time, and this module is imported by the
+    # docs build (via examples_mapping -> doc_modifier) on machines with no TT devices,
+    # where ttnn.get_num_devices() raises "No chips detected". Treat that as zero devices
+    # so the guards resolve to "skip" instead of crashing the import / doc build.
+    try:
+        return ttnn.get_num_devices()
+    except Exception:
+        return 0
+
+
+@pytest.mark.skipif(_num_devices() < 2, reason="ttnn.all_gather requires at least 2 devices")
 def test_all_gather():
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 2))
@@ -35,7 +46,7 @@ def test_all_gather():
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
-@pytest.mark.skipif(ttnn.get_num_devices() < 2, reason="ttnn.all_broadcast requires at least 2 devices")
+@pytest.mark.skipif(_num_devices() < 2, reason="ttnn.all_broadcast requires at least 2 devices")
 def test_all_broadcast():
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 2))
@@ -57,7 +68,7 @@ def test_all_broadcast():
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
-@pytest.mark.skipif(ttnn.get_num_devices() < 2, reason="ttnn.broadcast requires at least 2 devices")
+@pytest.mark.skipif(_num_devices() < 2, reason="ttnn.broadcast requires at least 2 devices")
 def test_broadcast():
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 2))
@@ -79,7 +90,7 @@ def test_broadcast():
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
-@pytest.mark.skipif(ttnn.get_num_devices() < 2, reason="ttnn.all_reduce requires at least 2 devices")
+@pytest.mark.skipif(_num_devices() < 2, reason="ttnn.all_reduce requires at least 2 devices")
 def test_all_reduce():
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 2))
@@ -101,7 +112,7 @@ def test_all_reduce():
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
-@pytest.mark.skipif(ttnn.get_num_devices() < 2, reason="ttnn.reduce_scatter requires at least 2 devices")
+@pytest.mark.skipif(_num_devices() < 2, reason="ttnn.reduce_scatter requires at least 2 devices")
 def test_reduce_scatter():
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 2))
@@ -124,7 +135,7 @@ def test_reduce_scatter():
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
-@pytest.mark.skipif(ttnn.get_num_devices() < 2, reason="ttnn.mesh_partition requires a cluster axis of size > 1")
+@pytest.mark.skipif(_num_devices() < 2, reason="ttnn.mesh_partition requires a cluster axis of size > 1")
 def test_mesh_partition():
     # mesh_partition is a per-device slice and does not use the fabric.
     mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 2))
@@ -146,7 +157,7 @@ def test_mesh_partition():
     ttnn.close_mesh_device(mesh_device)
 
 
-@pytest.mark.skipif(ttnn.get_num_devices() < 2, reason="ttnn.point_to_point requires at least 2 devices")
+@pytest.mark.skipif(_num_devices() < 2, reason="ttnn.point_to_point requires at least 2 devices")
 def test_point_to_point():
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 2))
@@ -170,7 +181,7 @@ def test_point_to_point():
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
-@pytest.mark.skipif(ttnn.get_num_devices() < 4, reason="ttnn.reduce_to_root uses a fixed 4-device line topology")
+@pytest.mark.skipif(_num_devices() < 4, reason="ttnn.reduce_to_root uses a fixed 4-device line topology")
 def test_reduce_to_root():
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 2))
@@ -201,7 +212,7 @@ def test_reduce_to_root():
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
-@pytest.mark.skipif(ttnn.get_num_devices() < 8, reason="ttnn.all_to_all_dispatch example uses an 8-device mesh")
+@pytest.mark.skipif(_num_devices() < 8, reason="ttnn.all_to_all_dispatch example uses an 8-device mesh")
 def test_all_to_all_dispatch():
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
     mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 4))
@@ -249,7 +260,7 @@ def test_all_to_all_dispatch():
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
-@pytest.mark.skipif(ttnn.get_num_devices() < 8, reason="ttnn.all_to_all_combine example uses an 8-device mesh")
+@pytest.mark.skipif(_num_devices() < 8, reason="ttnn.all_to_all_combine example uses an 8-device mesh")
 def test_all_to_all_combine():
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
     mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 4))
