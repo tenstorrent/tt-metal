@@ -759,10 +759,18 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
-    # pytest is installed into the worker venv by the multihost job install step; bare pytest
-    # is not on PATH, so invoke via the interpreter, matching demo_sp_multihost_tests.yaml.
-    python3 -m pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k flux_dev
-    python3 -m pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_transformer_flux1.py -k flux_dev
+    # Run pytest as the payload of tt-run (ttrun.py), which launches it under mpirun on the
+    # allocated ranks, so the test executes in the worker venv (with ttnn + pytest) rather than
+    # directly on the runner's system python. Mirrors demo_sp_multihost_tests.yaml; the rankfile
+    # and rank_bindings.yaml are written to /etc/ttop by the allocation.
+    TTRUN_DIR=/etc/ttop
+    TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
+    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+    MPI_ARGS="--host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}"
+    python3 "${TTRUN_PY}" --tcp-interface ens5f0np0 --mpi-args "${MPI_ARGS}" --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" \
+      python3 -m pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k flux_dev
+    python3 "${TTRUN_PY}" --tcp-interface ens5f0np0 --mpi-args "${MPI_ARGS}" --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" \
+      python3 -m pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_transformer_flux1.py -k flux_dev
   model: flux-multihost-tests
   skus:
     bh_spsg:
