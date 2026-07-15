@@ -178,12 +178,14 @@ void py_device_module_types(nb::module_& m_device) {
             [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
                 return std::vector<std::string>(record.kernel_sources.begin(), record.kernel_sources.end());
             },
-            "Kernel source paths associated with this runtime ID. Resolve during the callback; invalid after device "
-            "or context teardown.");
+            "Kernel source paths associated with this runtime ID; valid until the callback returns");
 
     nb::class_<PythonProgramRealtimeRecordBatch>(
         m_device, "ProgramRealtimeRecordBatch", "Batch of real-time profiler records delivered to a callback.")
-        .def_ro("records", &PythonProgramRealtimeRecordBatch::records, "ProgramRealtimeRecord entries in this batch")
+        .def_ro(
+            "records",
+            &PythonProgramRealtimeRecordBatch::records,
+            "ProgramRealtimeRecord entries in this batch; non-empty, oldest first")
         .def_ro(
             "dropped",
             &PythonProgramRealtimeRecordBatch::dropped,
@@ -738,7 +740,8 @@ void device_module(nb::module_& m_device) {
         R"doc(
             Register a callback to be invoked when real-time profiler data arrives from a device.
             The callback receives a ProgramRealtimeRecordBatch and is called from its own thread.
-            Callbacks that are too slow to keep up with incoming profiler data may miss records.
+            Callbacks that are too slow to keep up with incoming profiler data may miss records;
+            this is reported by ProgramRealtimeRecordBatch.dropped.
 
             Multiple callbacks can be registered.
 
