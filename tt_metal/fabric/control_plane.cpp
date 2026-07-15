@@ -3501,6 +3501,7 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
                 dst_port_id_by_cable_hash.emplace(dst_proposal.connection_hash, dst_proposal.port_id);
             }
             std::size_t dbg_hash_match = 0;  // diagnostics for TT_INTERMESH_DEBUG
+            std::size_t dbg_drop_zmismatch = 0, dbg_drop_chipz = 0;  // contention drop tallies per boundary
 
             for (const auto& src_proposal : src_side_proposals) {
                 FabricNodeId src_exit_node(src_mesh, chip_id_for_port(*src_mesh, src_proposal.port_id));
@@ -3553,12 +3554,46 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
                         }
                     }
                     if (!z_mismatch_resolved) {
-                        log_warning(
-                            tt::LogFabric,
-                            "Z/non-Z mismatch M{}<->M{} (hash={}); no swap possible, dropping",
-                            *src_mesh,
-                            *dst_mesh,
-                            src_proposal.connection_hash);
+                        dbg_drop_zmismatch++;
+                        if (intermesh_debug) {
+                            const ChipId z_chip = chip_id_for_port(z_side_mesh, z_side_port);
+                            const ChipId nesw_chip = chip_id_for_port(nesw_side_mesh, nesw_side_port);
+                            // Why the swap failed: demote wants a free NESW on the Z-side chip; promote wants a
+                            // free Z on the NESW-side chip whose single Z-lane isn't already owned by another mesh.
+                            const bool demote_blocked_by_policy =
+                                mesh_graph.should_assign_z_direction(src_mesh, dst_mesh);
+                            const bool nesw_side_free_z = find_free_port(nesw_side_mesh, nesw_chip, true).has_value();
+                            log_warning(
+                                tt::LogFabric,
+                                "[contention] DROP z-mismatch M{}<->M{} hash={} | Z-side M{}/chip{} port({},{}) "
+                                "NESW-side M{}/chip{} port({},{}) | demote_failed(no free NESW on Z-chip{}) "
+                                "demote_blocked_by_should_assign_z={} | promote_failed: NESW-chip Z-lane owner={} "
+                                "free_Z_on_NESW_chip={}",
+                                *src_mesh,
+                                *dst_mesh,
+                                src_proposal.connection_hash,
+                                z_side_mesh,
+                                z_chip,
+                                (int)z_side_port.first,
+                                z_side_port.second,
+                                nesw_side_mesh,
+                                nesw_chip,
+                                (int)nesw_side_port.first,
+                                nesw_side_port.second,
+                                demote_blocked_by_policy ? "(demote skipped)" : "yes",
+                                demote_blocked_by_policy,
+                                (chip_to_z_neighbor_mesh_id.count({nesw_side_mesh, nesw_chip})
+                                     ? std::to_string(chip_to_z_neighbor_mesh_id.at({nesw_side_mesh, nesw_chip}))
+                                     : std::string("none")),
+                                nesw_side_free_z);
+                        } else {
+                            log_warning(
+                                tt::LogFabric,
+                                "Z/non-Z mismatch M{}<->M{} (hash={}); no swap possible, dropping",
+                                *src_mesh,
+                                *dst_mesh,
+                                src_proposal.connection_hash);
+                        }
                         continue;
                     }
                 }
@@ -3570,12 +3605,37 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
                 };
                 if (!chip_allows_z_to_neighbor(*src_mesh, src_port_id, *dst_mesh) ||
                     !chip_allows_z_to_neighbor(*dst_mesh, dst_port_id, *src_mesh)) {
-                    log_warning(
-                        tt::LogFabric,
-                        "Chip already has Z to another mesh M{}<->M{} (hash={}); dropping",
-                        *src_mesh,
-                        *dst_mesh,
-                        src_proposal.connection_hash);
+                    dbg_drop_chipz++;
+                    if (intermesh_debug) {
+                        // Which side's chip Z-lane is contended, and which neighbor mesh already owns it.
+                        auto owner = [&](uint32_t mesh_id, port_id_t port) -> std::string {
+                            if (port.first != RoutingDirection::Z) {
+                                return "n/a(not-Z)";
+                            }
+                            auto it = chip_to_z_neighbor_mesh_id.find({mesh_id, chip_id_for_port(mesh_id, port)});
+                            return it == chip_to_z_neighbor_mesh_id.end() ? "free" : ("M" + std::to_string(it->second));
+                        };
+                        log_warning(
+                            tt::LogFabric,
+                            "[contention] DROP chip-Z-taken M{}<->M{} hash={} | src M{}/chip{} Z-owner={} | "
+                            "dst M{}/chip{} Z-owner={} (this boundary loses the single Z-lane)",
+                            *src_mesh,
+                            *dst_mesh,
+                            src_proposal.connection_hash,
+                            *src_mesh,
+                            chip_id_for_port(*src_mesh, src_port_id),
+                            owner(*src_mesh, src_port_id),
+                            *dst_mesh,
+                            chip_id_for_port(*dst_mesh, dst_port_id),
+                            owner(*dst_mesh, dst_port_id));
+                    } else {
+                        log_warning(
+                            tt::LogFabric,
+                            "Chip already has Z to another mesh M{}<->M{} (hash={}); dropping",
+                            *src_mesh,
+                            *dst_mesh,
+                            src_proposal.connection_hash);
+                    }
                     continue;
                 }
                 auto record_z_port_commit = [&](uint32_t mesh_id, port_id_t port, uint32_t neighbor_mesh_id) {
@@ -3595,16 +3655,32 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
             if (intermesh_debug) {
                 log_warning(
                     tt::LogFabric,
-                    "[intermesh-dbg] M{}->M{}: src_props={} dst_props={} hash_match={} assigned={} requested={}",
+                    "[intermesh-dbg] M{}->M{}: src_props={} dst_props={} hash_match={} assigned={} requested={} "
+                    "| DROPS: z_mismatch={} chip_z_taken={}{}",
                     *src_mesh,
                     *dst_mesh,
                     src_side_proposals.size(),
                     port_descriptors.at(dst_mesh).at(src_mesh).size(),
                     dbg_hash_match,
                     assigned_cable_count,
-                    strict_intermesh_port_binding ? 0 : requested_cable_count);
+                    strict_intermesh_port_binding ? 0 : requested_cable_count,
+                    dbg_drop_zmismatch,
+                    dbg_drop_chipz,
+                    (assigned_cable_count == 0 ? "  <<< STRANDED (zero resolved -- fatal boundary)" : ""));
             }
             processed_neighbor_pair_keys.insert({*src_mesh, *dst_mesh});
+        }
+    }
+    if (intermesh_debug) {
+        // Per-chip Z-lane contention summary: each chip has a single internal Z lane, so at most one neighbor
+        // mesh can win it. This map is the crux of the ring-closing-hop contention -- boundaries whose Z-lane
+        // was already claimed by another neighbor on the shared chip get dropped above.
+        std::map<std::pair<uint32_t, ChipId>, uint32_t> sorted_z(
+            chip_to_z_neighbor_mesh_id.begin(), chip_to_z_neighbor_mesh_id.end());
+        log_warning(tt::LogFabric, "[contention] === Z-lane owners ({} chips claimed) ===", sorted_z.size());
+        for (const auto& [mesh_chip, neighbor] : sorted_z) {
+            log_warning(
+                tt::LogFabric, "[contention]   M{}/chip{} Z-lane -> M{}", mesh_chip.first, mesh_chip.second, neighbor);
         }
     }
     return annotated_intermesh;
