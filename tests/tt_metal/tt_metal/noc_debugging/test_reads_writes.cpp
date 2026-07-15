@@ -141,6 +141,84 @@ void RunWritesTest(
         "write barrier");
 }
 
+// Every core issues repeated non-posted remote atomic increments (noc_semaphore_inc) to one destination core.
+// Atomics are released only by an atomic/full barrier (they use a NIU counter separate from writes), so without a
+// barrier they remain outstanding at kernel end and the tool reports an unflushed-semaphore issue; an atomic
+// barrier drains them. Exercises the Stage-3c SEMAPHORE_INC + ATOMIC_BARRIER host mapping and atomics tracking.
+void RunSemaphoreIncTest(
+    NOCDebuggingFixture* fixture,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    bool use_barrier,
+    bool use_full_barrier = false) {
+    auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
+
+    CoreCoord grid_start = {0, 0};
+    CoreCoord grid_end = {compute_grid_size.x - 1, compute_grid_size.y - 1};
+    CoreRange core_range(grid_start, grid_end);
+
+    auto dest_core_virtual = mesh_device->worker_core_from_logical_core(grid_end);
+
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    tt_metal::Program program = tt_metal::CreateProgram();
+
+    constexpr uint32_t buffer_page_size = 4096;
+    constexpr uint32_t buffer_size = buffer_page_size * 4;
+
+    distributed::DeviceLocalBufferConfig l1_config{
+        .page_size = buffer_page_size, .buffer_type = tt::tt_metal::BufferType::L1};
+    distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
+
+    auto l1_buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
+
+    std::map<std::string, std::string> defines = {
+        {"OTHER_CORE_X", std::to_string(dest_core_virtual.x)},
+        {"OTHER_CORE_Y", std::to_string(dest_core_virtual.y)},
+        {"DST_ADDR", std::to_string(l1_buffer->address())},
+        {"NUM_ITERATIONS", "10"},
+    };
+
+    if (use_barrier) {
+        defines["USE_ATOMIC_BARRIER"] = "1";
+    } else if (use_full_barrier) {
+        defines["USE_FULL_BARRIER"] = "1";
+    }
+
+    tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_semaphore_inc.cpp",
+        core_range,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
+
+    tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_semaphore_inc.cpp",
+        core_range,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .defines = defines});
+
+    workload.add_program(device_range, std::move(program));
+
+    fixture->RunProgram(mesh_device, workload);
+
+    ReadMeshDeviceProfilerResults(*mesh_device);
+
+    VerifyIssuesOnAllCores(
+        mesh_device,
+        grid_start,
+        grid_end,
+        /*expect_issue=*/!(use_barrier || use_full_barrier),
+        [fixture](ChipId chip_id, CoreCoord core, int processor_id) {
+            return fixture->has_unflushed_semaphore_issue(chip_id, core, processor_id);
+        },
+        "unflushed semaphore inc");
+}
+
 // Single core + single RISC issues writes and then a full barrier. Exercises the FULL_BARRIER host
 // mapping via the end-of-kernel unflushed-write check: with the mapping the full barrier clears the
 // pending writes so nothing is reported; without it the full barrier is ignored and the writes are
@@ -411,6 +489,39 @@ TEST_F(NOCDebuggingFixture, TridWritesWithTridBarrier) {
             [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunWritesTest(
                     fixture, mesh_device, /*use_barrier=*/false, /*use_trid=*/true, /*use_trid_barrier=*/true);
+            },
+            mesh_device);
+    }
+}
+
+// Non-posted semaphore increments with no barrier stay outstanding at kernel end -> unflushed-semaphore issue.
+TEST_F(NOCDebuggingFixture, SemaphoreIncNoBarrier) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice<NOCDebuggingFixture>(
+            [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunSemaphoreIncTest(fixture, mesh_device, /*use_barrier=*/false);
+            },
+            mesh_device);
+    }
+}
+
+// An atomic barrier drains the outstanding increments, so nothing is reported.
+TEST_F(NOCDebuggingFixture, SemaphoreIncWithBarrier) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice<NOCDebuggingFixture>(
+            [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunSemaphoreIncTest(fixture, mesh_device, /*use_barrier=*/true);
+            },
+            mesh_device);
+    }
+}
+
+// A full barrier also drains outstanding atomics (it waits on reads, writes AND atomics), so nothing is reported.
+TEST_F(NOCDebuggingFixture, SemaphoreIncWithFullBarrier) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice<NOCDebuggingFixture>(
+            [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunSemaphoreIncTest(fixture, mesh_device, /*use_barrier=*/false, /*use_full_barrier=*/true);
             },
             mesh_device);
     }

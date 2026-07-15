@@ -178,6 +178,17 @@ NOCDebugEvent make_noc_debug_event(
                 src_x, src_y, static_cast<bool>(event.posted), event.noc_type == EMD::NocType::NOC_1});
         case EMD::NocEventType::FULL_BARRIER:
             return NOCDebugEvent(NocFullBarrierEvent{src_x, src_y, event.noc_type == EMD::NocType::NOC_1});
+        case EMD::NocEventType::SEMAPHORE_INC:
+            return NOCDebugEvent(NocSemaphoreIncEvent{
+                trailer.getDstAddr(),
+                src_x,
+                src_y,
+                event.dst_x,
+                event.dst_y,
+                static_cast<bool>(event.posted),
+                event.noc_type == EMD::NocType::NOC_1});
+        case EMD::NocEventType::ATOMIC_BARRIER:
+            return NOCDebugEvent(NocAtomicBarrierEvent{src_x, src_y, event.noc_type == EMD::NocType::NOC_1});
         default: return NOCDebugEvent(UnknownNocEvent{});
     }
 }

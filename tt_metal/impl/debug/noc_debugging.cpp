@@ -197,10 +197,36 @@ void NOCDebugState::handle_full_barrier_event(
     uint8_t noc_id = event.noc;
     update_latest_risc_timestamp(core, processor_id, timestamp);
 
-    // A full barrier waits for all outstanding reads and writes to complete, so both pending sets clear.
+    // A full barrier waits for all outstanding reads, writes and atomics to complete, so every pending set clears.
     state.reads_not_flushed[noc_id].clear();
     state.posted_writes_pending[noc_id].clear();
     state.nonposted_writes_pending[noc_id].clear();
+    state.atomics_pending[noc_id].clear();
+}
+
+void NOCDebugState::handle_semaphore_inc_event(
+    tt_cxy_pair core, int processor_id, uint64_t timestamp, NocSemaphoreIncEvent event) {
+    CoreDebugState& state = get_state(core);
+    uint8_t noc_id = event.noc;
+    update_latest_risc_timestamp(core, processor_id, timestamp);
+
+    // An atomic increment carries no source buffer and does not advance the NIU write counter, so neither the
+    // source-reuse nor the counter-monotonicity check applies. Only a non-posted increment expects an ack and must
+    // be flushed (via an atomic/full barrier) before kernel end; a posted increment is fire-and-forget.
+    if (!event.posted) {
+        state.atomics_pending[noc_id][event.dst_addr] = {processor_id, /*is_semaphore=*/true, /*is_mcast=*/false};
+    }
+}
+
+void NOCDebugState::handle_atomic_barrier_event(
+    tt_cxy_pair core, int processor_id, uint64_t timestamp, NocAtomicBarrierEvent event) {
+    CoreDebugState& state = get_state(core);
+    uint8_t noc_id = event.noc;
+    update_latest_risc_timestamp(core, processor_id, timestamp);
+
+    // An atomic barrier waits only for outstanding atomics (separate NIU counter from writes), so it clears the
+    // atomics pending set and leaves reads/writes untouched.
+    state.atomics_pending[noc_id].clear();
 }
 
 void NOCDebugState::handle_scoped_lock_event(
@@ -240,6 +266,10 @@ void NOCDebugState::finish_cores() {
                 state.issue[info.processor_id].set_issue(get_unflushed_write_issue_type(info));
             }
             for (const auto& [addr, info] : state.nonposted_writes_pending[noc_id]) {
+                state.issue[info.processor_id].set_issue(get_unflushed_write_issue_type(info));
+            }
+            // Non-posted atomics (semaphore incs) left outstanding at kernel end (no atomic/full barrier).
+            for (const auto& [addr, info] : state.atomics_pending[noc_id]) {
                 state.issue[info.processor_id].set_issue(get_unflushed_write_issue_type(info));
             }
         }
@@ -448,6 +478,12 @@ void NOCDebugState::process_accumulated_events_all_chips() {
                 } else if constexpr (std::is_same_v<T, NocFullBarrierEvent>) {
                     tt_cxy_pair key{chip_id, {static_cast<size_t>(e.src_x), static_cast<size_t>(e.src_y)}};
                     handle_full_barrier_event(key, processor_id, timestamp, e);
+                } else if constexpr (std::is_same_v<T, NocSemaphoreIncEvent>) {
+                    tt_cxy_pair key{chip_id, {static_cast<size_t>(e.src_x), static_cast<size_t>(e.src_y)}};
+                    handle_semaphore_inc_event(key, processor_id, timestamp, e);
+                } else if constexpr (std::is_same_v<T, NocAtomicBarrierEvent>) {
+                    tt_cxy_pair key{chip_id, {static_cast<size_t>(e.src_x), static_cast<size_t>(e.src_y)}};
+                    handle_atomic_barrier_event(key, processor_id, timestamp, e);
                 } else if constexpr (std::is_same_v<T, ScopedLockEvent>) {
                     tt_cxy_pair key{chip_id, {static_cast<size_t>(e.src_x), static_cast<size_t>(e.src_y)}};
                     handle_scoped_lock_event(key, processor_id, timestamp, e);

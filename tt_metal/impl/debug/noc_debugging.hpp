@@ -69,9 +69,32 @@ struct NocWriteFlushEvent {
     uint8_t noc;
 };
 
-// A full barrier (noc_async_full_barrier) waits for all outstanding reads AND writes to complete, so it
-// clears both pending sets for the noc.
+// A full barrier (noc_async_full_barrier) waits for all outstanding reads, writes AND atomics to complete, so it
+// clears every pending set for the noc.
 struct NocFullBarrierEvent {
+    int8_t src_x;
+    int8_t src_y;
+    uint8_t noc;
+};
+
+// A unicast remote atomic increment (noc_semaphore_inc). Unlike a write it carries no source buffer (the increment
+// value is immediate) and does not advance the NIU write counter, so the source-reuse and counter-monotonicity
+// checks do not apply. Only a non-posted increment must be flushed before kernel end. (Multicast increments are not
+// modeled yet: SEMAPHORE_INC_MULTICAST is emitted via the unicast record path on device, so its coordinates are not
+// populated correctly — that needs a device-side fix first.)
+struct NocSemaphoreIncEvent {
+    uint32_t dst_addr;
+    int8_t src_x;
+    int8_t src_y;
+    int8_t dst_x;
+    int8_t dst_y;
+    bool posted;
+    uint8_t noc;
+};
+
+// An atomic barrier (noc_async_atomic_barrier) waits only for outstanding atomics; on device it uses a counter
+// separate from writes, so it clears the atomics pending set for the noc but leaves reads/writes untouched.
+struct NocAtomicBarrierEvent {
     int8_t src_x;
     int8_t src_y;
     uint8_t noc;
@@ -99,6 +122,8 @@ using NOCDebugEvent = std::variant<
     NocWriteBarrierEvent,
     NocWriteFlushEvent,
     NocFullBarrierEvent,
+    NocSemaphoreIncEvent,
+    NocAtomicBarrierEvent,
     ScopedLockEvent,
     UnknownNocEvent>;
 
@@ -220,6 +245,11 @@ private:
         std::array<std::unordered_map<uint32_t, PendingWriteInfo>, MAX_NOCS> posted_writes_pending{};
         std::array<std::unordered_map<uint32_t, PendingWriteInfo>, MAX_NOCS> nonposted_writes_pending{};
 
+        // Pending non-posted atomic increments (semaphore inc) not yet flushed for each NOC (dst_addr -> info).
+        // Kept separate from writes because on device atomics use their own counter: they are released by an
+        // atomic/full barrier, never by a write barrier.
+        std::array<std::unordered_map<uint32_t, PendingWriteInfo>, MAX_NOCS> atomics_pending{};
+
         // Captures if any read or write has occurred yet for each NOC
         std::array<bool, MAX_NOCS> any_reads{};
         std::array<bool, MAX_NOCS> any_posted_writes{};
@@ -244,6 +274,9 @@ private:
     void handle_write_barrier_event(tt_cxy_pair core, int processor_id, uint64_t timestamp, NocWriteBarrierEvent event);
     void handle_write_flush_event(tt_cxy_pair core, int processor_id, uint64_t timestamp, NocWriteFlushEvent event);
     void handle_full_barrier_event(tt_cxy_pair core, int processor_id, uint64_t timestamp, NocFullBarrierEvent event);
+    void handle_semaphore_inc_event(tt_cxy_pair core, int processor_id, uint64_t timestamp, NocSemaphoreIncEvent event);
+    void handle_atomic_barrier_event(
+        tt_cxy_pair core, int processor_id, uint64_t timestamp, NocAtomicBarrierEvent event);
     void handle_scoped_lock_event(tt_cxy_pair core, int processor_id, uint64_t timestamp, ScopedLockEvent event);
 
     void update_latest_risc_timestamp(tt_cxy_pair core, int processor_id, uint64_t timestamp);
