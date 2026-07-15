@@ -2,7 +2,16 @@
 
 **Date:** 2026-07-15
 **Branch:** `fibo-pipeline`
-**Status:** Approved (design)
+**Status:** Implemented
+
+> **Outcome:** Trace is bit-exact (traced == untraced, PCC 100.0000% on the JSON prompt). Encode
+> dropped ~12.5 s → **10.8 s (~13%)** — smaller than hoped: the device forward is only ~14 ms, so the
+> encode is **host-readback-bound** (the 37-tensor `to_torch` of hidden states gathered over the SP
+> axis, ~260 MB device→host per prompt), which the trace does not cover. Also discovered: the encoder's
+> vs-HF accuracy is 99.97% for realistic (833-token) prompts and only dips to 98.5% for pathologically
+> short (4-token) ones — a pre-existing small-sample/padding effect, not a bug, and unrelated to tracing.
+> **Next lever: the hidden-state readback** (concat device-side before one `to_torch`, or keep them
+> on-device for the DiT to skip the device→host→device round-trip).
 
 ## Goal
 
