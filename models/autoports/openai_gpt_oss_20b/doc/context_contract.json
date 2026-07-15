@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "hf_model": "openai/gpt-oss-20b",
+  "stage": "functional_decoder",
+  "hf_advertised_context": 131072,
+  "current_supported_context": 21248,
+  "limiting_reason": "device_dram",
+  "capacity_evidence": {
+    "device": "single Blackhole chip selected through a 1x1 mesh",
+    "dram_channels": 8,
+    "dram_view_size_per_channel_bytes": 4278190080,
+    "allocator_bank_size_bytes": 4272341376,
+    "total_dram_view_bytes": 34225520640,
+    "total_dram_view_gib": 31.875,
+    "probe": "tests/functional_decoder_capacity_probe.py executes one complete prefill, including dense 32-expert MoE, and synchronizes the output back to the host",
+    "passing_sequence_lengths": [512, 1024, 2048, 4096, 8192, 16384, 20480, 20992, 21248],
+    "failing_sequence_lengths": [21249, 21280, 21312, 21376, 21504, 22528, 24576, 32768],
+    "largest_passing_sequence_length": 21248,
+    "first_failing_sequence_length": 21249,
+    "first_failure_physical_tile_length": 21280,
+    "first_failure_operation": "MoE up-value ttnn.slice after dense gate/up projection",
+    "first_failure_request_bytes": 3922329600,
+    "first_failure_request_bytes_per_bank": 490291200,
+    "first_failure_free_bytes_per_bank": 566160768,
+    "first_failure_largest_free_block_bytes_per_bank": 457193856,
+    "full_context_gate_up_intermediate_bytes": 48318382080,
+    "full_context_gate_up_intermediate_gib": 45.0,
+    "full_context_formula": "32 experts * 131072 tokens * 5760 gate/up values * 2 BF16 bytes",
+    "descriptor_source": "tt_metal/soc_descriptors/blackhole_140_arch.yaml: dram_view_size=4278190080 and an 8-channel DRAM grid",
+    "boundary_note": "The exact logical length 21249 pads to 21280 for TILE storage. It is the first length above 21248 and fails because its requested per-bank allocation exceeds the largest contiguous free block. The constructor now rejects lengths above the measured boundary before allocating weights."
+  },
+  "notes": "This correctness-first dense TP collapse evaluates all 32 experts simultaneously. A bounded serialized device sweep established 21248 as the largest complete prefill that fits and 21249 as the first failure. Later expert dispatch or chunking may extend context, but that optimization is outside this stage.",
+  "paths": {
+    "prefill": {
+      "status": "implemented",
+      "captured_sequence_length": 17,
+      "pcc_validated_sequence_lengths": [17, 128, 256],
+      "capacity_validated_sequence_length": 21248,
+      "current_supported_context": 21248,
+      "cache_behavior": "fills the linear key/value cache from position zero"
+    },
+    "decode": {
+      "status": "implemented",
+      "captured_sequence_length": 1,
+      "validated_cache_position": 17,
+      "current_supported_cache_length": 21248,
+      "cache_behavior": "updates the persistent linear key/value cache in place and runs decode SDPA"
+    }
+  }
+}
