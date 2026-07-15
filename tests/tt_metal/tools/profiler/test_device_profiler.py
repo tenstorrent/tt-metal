@@ -328,7 +328,7 @@ def test_zone_id_budget():
     # Then verify the structural zone-id invariants directly from the zone-locations log.
     run_device_profiler_test(testName="build/test/tt_metal/tools/profiler/test_zone_id_budget", noPostProcess=True)
 
-    LOCAL_BITS = 7  # keep in sync with KERNEL_PROFILER_LOCAL_BITS in profiler_common.h
+    LOCAL_BITS = 6  # keep in sync with KERNEL_PROFILER_LOCAL_BITS in profiler_common.h
     zone_log = PROFILER_LOGS_DIR / "new_zone_src_locations.log"
     assert zone_log.exists(), f"zone source-location log not found: {zone_log}"
 
@@ -352,10 +352,10 @@ def test_zone_id_budget():
     # firmware TUs + the kernel TU) is guaranteed on any arch; real runs typically span more.
     assert len(ids_per_file) >= 6, f"expected zones from several translation units, got {len(ids_per_file)}"
 
-    # One TU (the zone_budget kernel) holds ~120 zones -- confirms high per-TU counts really work,
+    # One TU (the zone_budget kernel) holds ~40 zones -- confirms high per-TU counts really work,
     # not just that the run did not crash.
     max_zones_in_one_tu = max(len(ids) for ids in ids_per_file.values())
-    assert max_zones_in_one_tu >= 120, f"expected a TU with >=120 zones, got max {max_zones_in_one_tu}"
+    assert max_zones_in_one_tu >= 40, f"expected a TU with >=40 zones, got max {max_zones_in_one_tu}"
 
 
 def wildcard_match(pattern, words):

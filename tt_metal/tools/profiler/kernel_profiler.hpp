@@ -47,10 +47,10 @@
 #define RecordZoneMeta(id, name)                                                                                     \
     {                                                                                                                \
         static const struct __attribute__((packed)) {                                                                \
-            uint16_t zid;                                                                                            \
+            uint32_t zid;                                                                                            \
             char str[sizeof(PROFILER_MSG_NAME(name))];                                                               \
         } zone_meta                                                                                                  \
-            __attribute__((section(".tt_zone_meta"), used, aligned(4))) = {(uint16_t)(id), PROFILER_MSG_NAME(name)}; \
+            __attribute__((section(".tt_zone_meta"), used, aligned(4))) = {(uint32_t)(id), PROFILER_MSG_NAME(name)}; \
         (void)zone_meta;                                                                                             \
     }
 
@@ -58,19 +58,20 @@
 // profiler namespace opens (kernel_profiler::zone_counter_base, below).
 #define TT_ZONE_LOCAL(ctr) ((uint32_t)((ctr) - kernel_profiler::zone_counter_base - 1u))
 
-// Compute this zone's collision-free 16-bit id = (host file id << LOCAL_BITS) | local index, declare it
-// as `hash`, and emit its metadata record. The static_asserts turn any budget overflow into a build
-// error instead of a silent id collision. `ctr` must be a single __COUNTER__ value (passed once by the
-// caller) so the numeric id and the emitted record agree.
+// Compute this zone's collision-free structural id = (host file id << LOCAL_BITS) | local index (18 bits;
+// see the layout in profiler_common.h), declare it as `hash`, and emit its metadata record. The
+// static_asserts turn any budget overflow into a build error instead of a silent id collision. `ctr`
+// must be a single __COUNTER__ value (passed once by the caller) so the numeric id and the emitted
+// record agree.
 #define TT_ZONE_META(name, ctr)                                                                               \
     static_assert(                                                                                            \
         TT_ZONE_LOCAL(ctr) <= ((1u << KERNEL_PROFILER_LOCAL_BITS) - 1u),                                      \
         "too many KERNEL_PROFILER zones in one translation unit for KERNEL_PROFILER_LOCAL_BITS");             \
     static_assert(                                                                                            \
-        (uint32_t)(KERNEL_PROFILER_FILE_ID) < (1u << (16 - KERNEL_PROFILER_LOCAL_BITS)),                      \
+        (uint32_t)(KERNEL_PROFILER_FILE_ID) < KERNEL_PROFILER_FILE_ID_COUNT,                                  \
         "KERNEL_PROFILER_FILE_ID exceeds the file-id budget for KERNEL_PROFILER_LOCAL_BITS");                 \
     auto constexpr hash =                                                                                     \
-        (uint16_t)(((uint32_t)(KERNEL_PROFILER_FILE_ID) << KERNEL_PROFILER_LOCAL_BITS) | TT_ZONE_LOCAL(ctr)); \
+        (uint32_t)(((uint32_t)(KERNEL_PROFILER_FILE_ID) << KERNEL_PROFILER_LOCAL_BITS) | TT_ZONE_LOCAL(ctr)); \
     RecordZoneMeta(hash, name)
 
 #define RecordDeviceZoneId(name) TT_ZONE_META(name, __COUNTER__)
@@ -199,10 +200,14 @@ __attribute__((noinline)) void init_profiler(
 #endif
 }
 
-constexpr uint32_t get_const_id(uint32_t id, PacketTypes type) { return ((id & 0xFFFF) | ((type << 16) & 0x7FFFF)); }
+constexpr uint32_t get_const_id(uint32_t id, PacketTypes type) {
+    return (
+        (id & KERNEL_PROFILER_ZONE_ID_MASK) | ((type << KERNEL_PROFILER_ZONE_ID_BITS) & KERNEL_PROFILER_TIMER_ID_MASK));
+}
 
 inline __attribute__((always_inline)) uint32_t get_id(uint32_t id, PacketTypes type) {
-    return ((id & 0xFFFF) | ((type << 16) & 0x7FFFF));
+    return (
+        (id & KERNEL_PROFILER_ZONE_ID_MASK) | ((type << KERNEL_PROFILER_ZONE_ID_BITS) & KERNEL_PROFILER_TIMER_ID_MASK));
 }
 
 template <DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
@@ -222,14 +227,17 @@ inline __attribute__((always_inline)) bool bufferHasRoom(uint32_t additional_slo
 inline __attribute__((always_inline)) void mark_time_at_index_inlined(uint32_t index, uint32_t timer_id) {
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
     profiler_data_buffer[myRiscID].data[index] =
-        0x80000000 | ((timer_id & 0x7FFFF) << 12) | (p_reg[WALL_CLOCK_HIGH_INDEX] & 0xFFF);
+        0x80000000 | ((timer_id & KERNEL_PROFILER_TIMER_ID_MASK) << KERNEL_PROFILER_TIMESTAMP_HI_BITS) |
+        (p_reg[WALL_CLOCK_HIGH_INDEX] & KERNEL_PROFILER_TIMESTAMP_HI_MASK);
     profiler_data_buffer[myRiscID].data[index + 1] = p_reg[WALL_CLOCK_LOW_INDEX];
 }
 
 // Like mark_time_at_index_inlined but writes a pre-captured timestamp (time_h/time_l) instead of sampling now.
 inline __attribute__((always_inline)) void mark_time_at_index_with_stamp(
     uint32_t index, uint32_t timer_id, uint32_t time_h, uint32_t time_l) {
-    profiler_data_buffer[myRiscID].data[index] = 0x80000000 | ((timer_id & 0x7FFFF) << 12) | (time_h & 0xFFF);
+    profiler_data_buffer[myRiscID].data[index] =
+        0x80000000 | ((timer_id & KERNEL_PROFILER_TIMER_ID_MASK) << KERNEL_PROFILER_TIMESTAMP_HI_BITS) |
+        (time_h & KERNEL_PROFILER_TIMESTAMP_HI_MASK);
     profiler_data_buffer[myRiscID].data[index + 1] = time_l;
 }
 
@@ -270,7 +278,8 @@ inline __attribute__((always_inline)) void risc_finished_profiling() {
         if (sums[i] > 0) {
             if (wIndex < PROFILER_L1_VECTOR_SIZE) {
                 profiler_data_buffer[myRiscID].data[wIndex] =
-                    0x80000000 | ((get_id(sumIDs[i], ZONE_TOTAL) & 0x7FFFF) << 12);
+                    0x80000000 | ((get_id(sumIDs[i], ZONE_TOTAL) & KERNEL_PROFILER_TIMER_ID_MASK)
+                                  << KERNEL_PROFILER_TIMESTAMP_HI_BITS);
                 profiler_data_buffer[myRiscID].data[wIndex + 1] = sums[i];
                 wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
             }

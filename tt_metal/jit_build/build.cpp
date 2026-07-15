@@ -119,8 +119,8 @@ uint32_t get_or_assign_profiler_file_id(const std::string& registry_path, const 
         }
     } registry_lock(registry_path);
 
-    // 16-bit zone id = (file_id << KERNEL_PROFILER_LOCAL_BITS) | local, so file_id has this many values.
-    constexpr uint32_t max_file_id = 1u << (16 - KERNEL_PROFILER_LOCAL_BITS);
+    // zone id = (file_id << KERNEL_PROFILER_LOCAL_BITS) | local, so file_id has this many values.
+    constexpr uint32_t max_file_id = KERNEL_PROFILER_FILE_ID_COUNT;
     std::vector<bool> reserved(max_file_id, false);  // ids owned by a still-present translation unit
 
     std::ifstream in(registry_path);
@@ -841,10 +841,11 @@ void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const
             std::ofstream zone_log(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, std::ios::app);
             const auto* cursor = reinterpret_cast<const unsigned char*>(zone_meta.data());
             const auto* end = cursor + zone_meta.size();
-            while (end - cursor >= 3) {  // at least a 2-byte id + 1 string byte
-                uint16_t id = static_cast<uint16_t>(cursor[0] | (cursor[1] << 8));
-                const char* str = reinterpret_cast<const char*>(cursor + 2);
-                size_t len = ::strnlen(str, static_cast<size_t>(end - (cursor + 2)));
+            while (end - cursor >= 5) {  // at least a 4-byte id + 1 string byte
+                uint32_t id = static_cast<uint32_t>(cursor[0]) | (static_cast<uint32_t>(cursor[1]) << 8) |
+                              (static_cast<uint32_t>(cursor[2]) << 16) | (static_cast<uint32_t>(cursor[3]) << 24);
+                const char* str = reinterpret_cast<const char*>(cursor + 4);
+                size_t len = ::strnlen(str, static_cast<size_t>(end - (cursor + 4)));
                 if (len == 0) {
                     break;  // trailing ALIGN padding (zero bytes)
                 }
@@ -852,8 +853,8 @@ void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const
                 zone_log.write(str, static_cast<std::streamsize>(len));
                 zone_log << '\n';
                 // Each record is emitted 4-byte aligned (see RecordZoneMeta's aligned(4)); round the
-                // id(2) + string + NUL length up to the next 4-byte boundary to reach the next record.
-                size_t record_bytes = (2 + len + 1 + 3) & ~static_cast<size_t>(3);
+                // id(4) + string + NUL length up to the next 4-byte boundary to reach the next record.
+                size_t record_bytes = (4 + len + 1 + 3) & ~static_cast<size_t>(3);
                 cursor += record_bytes;
             }
         } catch (const std::exception& e) {
