@@ -335,7 +335,7 @@ def test_bw_tensor_prefetcher_recv_contig(device, op_name, shape):
     gcb_size = _gcb_size_bytes(page_size, pages_per_layer)
     dual_senders = os.environ.get("BENCH_DUAL_SENDERS", "0") == "1"
     gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
-        device, bank_to_receivers, gcb_size, dual_senders_per_bank=dual_senders
+        device, bank_to_receivers, gcb_size, support_multi_receiver_shards=not dual_senders
     )
 
     ttnn.experimental.start_tensor_prefetcher(device)
@@ -421,7 +421,7 @@ def test_bw_tensor_prefetcher_streaming(device, op_name, shape):
     gcb_size = window_blocks * page_size
     dual_senders = os.environ.get("BENCH_DUAL_SENDERS", "0") == "1"
     gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
-        device, bank_to_receivers, gcb_size, dual_senders_per_bank=dual_senders
+        device, bank_to_receivers, gcb_size, support_multi_receiver_shards=not dual_senders
     )
 
     logger.info(

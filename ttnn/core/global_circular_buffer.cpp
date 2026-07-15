@@ -40,9 +40,9 @@ GlobalCircularBuffer create_global_circular_buffer_with_dram_senders(
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
     BufferType buffer_type,
-    bool dual_senders_per_bank) {
-    return tt::tt_metal::experimental::CreateGlobalCircularBufferWithDramSenders(
-        *mesh_device, bank_to_receivers, size, buffer_type, dual_senders_per_bank);
+    bool support_multi_receiver_shards) {
+    return tt::tt_metal::experimental::CreateGlobalCircularBufferForTensorPrefetcher(
+        *mesh_device, bank_to_receivers, size, buffer_type, support_multi_receiver_shards);
 }
 
 GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d(
@@ -255,7 +255,7 @@ GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d(
         size,
         kMaxCbPagesBytes);
 
-    return tt::tt_metal::experimental::CreateGlobalCircularBufferWithDramSenders(
+    return tt::tt_metal::experimental::CreateGlobalCircularBufferForTensorPrefetcher(
         *mesh_device, bank_to_receivers, size, buffer_type);
 }
 
@@ -360,7 +360,7 @@ GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d_recv_contig(
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
     BufferType buffer_type,
-    bool dual_senders_per_bank) {
+    bool support_multi_receiver_shards) {
     TT_FATAL(!program_configs.empty(), "Must provide at least one program config");
     TT_FATAL(
         program_configs.size() == weights.size(),
@@ -441,8 +441,8 @@ GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d_recv_contig(
         size,
         kMaxCbPagesBytes);
 
-    return tt::tt_metal::experimental::CreateGlobalCircularBufferWithDramSenders(
-        *mesh_device, bank_to_receivers, size, buffer_type, dual_senders_per_bank);
+    return tt::tt_metal::experimental::CreateGlobalCircularBufferForTensorPrefetcher(
+        *mesh_device, bank_to_receivers, size, buffer_type, support_multi_receiver_shards);
 }
 
 }  // namespace ttnn::global_circular_buffer

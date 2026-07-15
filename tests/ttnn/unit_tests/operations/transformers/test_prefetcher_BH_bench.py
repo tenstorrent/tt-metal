@@ -634,7 +634,7 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
         [tt_weight],
         bank_to_receivers,
         gcb_size,
-        dual_senders_per_bank=dual_senders,
+        support_multi_receiver_shards=not dual_senders,
     )
     output_mem_config = ttnn.create_sharded_memory_config(
         shape=(_M, _N // ring_size),

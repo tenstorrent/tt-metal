@@ -34,7 +34,7 @@ GlobalCircularBuffer create_global_circular_buffer_with_dram_senders(
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
     BufferType buffer_type = BufferType::L1,
-    bool dual_senders_per_bank = false);
+    bool support_multi_receiver_shards = true);
 
 // Build a DRAM-sender GCB shaped to feed one or more 1D ring matmuls (gather_in0=true)
 // from the given weight tensors. The caller supplies `bank_to_receivers` (the same layout
@@ -100,7 +100,8 @@ uint32_t tensor_prefetcher_block_count_for_matmul_1d(
 //   * `size` minimum is ring_size * largest per-receiver page (= (K_tiles/ring_size) * per_core_N * tile);
 //   * receivers need NOT be uniform per bank and the bank->ring mapping is the strided round-robin one,
 //     so no per-bank-count / contiguous-ring assertions (the matmul op asserts the strided walk);
-//   * `dual_senders_per_bank` may split each bank's receivers across two DRISC sender cores
+//   * clearing `support_multi_receiver_shards` (i.e. promising each receiver owns a disjoint
+//     contiguous shard) lets each bank split its receivers across two DRISC sender cores
 //     (a single-receiver bank falls back to one sender, so mixed single/dual banks are allowed).
 //     The Tensor prefetcher always provisions both cores and targets the subset mapped by this GCB.
 //
@@ -114,6 +115,6 @@ GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d_recv_contig(
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
     BufferType buffer_type = BufferType::L1,
-    bool dual_senders_per_bank = false);
+    bool support_multi_receiver_shards = true);
 
 }  // namespace ttnn::global_circular_buffer

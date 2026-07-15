@@ -154,9 +154,11 @@ void bind_tensor_prefetcher(nb::module_& mod) {
                 bank_to_receivers: List of (bank_id, receivers) pairs.
                 size: Per-receiver fifo size in bytes.
                 buffer_type: Buffer type (L1 or L1_SMALL).
-                dual_senders_per_bank: If True, split each bank's receivers across two DRISC
-                    sender cores (receiver-contiguous layout only). Otherwise, the GCB targets
-                    only the primary sender and the second provisioned prefetcher sender remains idle.
+                support_multi_receiver_shards: If True (default), a bank's shard may feed multiple
+                    receivers (legacy interleaved layout), which requires a single sender per bank.
+                    Set False to promise each receiver owns a disjoint contiguous shard
+                    (receiver-contiguous layout); a bank with two or more receivers may then split
+                    them across two DRISC sender cores for higher bandwidth.
         )doc",
         &ttnn::global_circular_buffer::create_global_circular_buffer_with_dram_senders,
         nb::keep_alive<0, 1>(),
@@ -164,7 +166,7 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         nb::arg("bank_to_receivers"),
         nb::arg("size"),
         nb::arg("buffer_type") = tt::tt_metal::BufferType::L1,
-        nb::arg("dual_senders_per_bank") = false);
+        nb::arg("support_multi_receiver_shards") = true);
 
     ttnn::bind_function<"create_global_circular_buffer_for_matmul_1d", "ttnn.experimental.">(
         mod,
@@ -228,8 +230,10 @@ void bind_tensor_prefetcher(nb::module_& mod) {
                 bank_to_receivers: List of (bank_id, receivers) pairs (strided round-robin placement).
                 size: GCB size in bytes (>= ring_size * largest per-receiver page).
                 buffer_type: Buffer type (L1 or L1_SMALL).
-                dual_senders_per_bank: If True, split each bank's receivers across two DRISC sender cores
-                    instead of targeting only the primary sender.
+                support_multi_receiver_shards: If True (default), a bank's shard may feed multiple
+                    receivers (single sender per bank). Set False to promise each receiver owns a
+                    disjoint contiguous shard, letting a bank split its receivers across two DRISC
+                    sender cores for higher bandwidth.
         )doc",
         &ttnn::global_circular_buffer::create_global_circular_buffer_for_matmul_1d_recv_contig,
         nb::keep_alive<0, 1>(),
@@ -239,7 +243,7 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         nb::arg("bank_to_receivers"),
         nb::arg("size"),
         nb::arg("buffer_type") = tt::tt_metal::BufferType::L1,
-        nb::arg("dual_senders_per_bank") = false);
+        nb::arg("support_multi_receiver_shards") = true);
 }
 
 }  // namespace ttnn::operations::experimental

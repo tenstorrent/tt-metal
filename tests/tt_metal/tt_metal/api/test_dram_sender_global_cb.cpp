@@ -71,7 +71,7 @@ TEST_F(DramSenderGCBFixture, SmokeOneSenderFourReceivers) {
 
     // Size: per-receiver fifo. Use 1KB.
     constexpr uint32_t kGcbSize = 1024;
-    auto gcb = experimental::CreateGlobalCircularBufferWithDramSenders(
+    auto gcb = experimental::CreateGlobalCircularBufferForTensorPrefetcher(
         *mesh_device_, bank_to_receivers, kGcbSize, BufferType::L1);
     // Use the sender coord the factory resolved; recomputing via pick_unused_dram_logical_core
     // would couple this test to the picker's current strategy.
@@ -215,7 +215,7 @@ TEST_F(DramSenderGCBFixture, SmokeTwoProgramsAsyncSlowDispatch) {
     const uint32_t bank_id = 0;
     CoreRangeSet receiver_cores(CoreRange({0, 0}, {kNumReceivers - 1, 0}));
     std::vector<std::pair<uint32_t, CoreRangeSet>> bank_to_receivers = {{bank_id, receiver_cores}};
-    auto gcb = experimental::CreateGlobalCircularBufferWithDramSenders(
+    auto gcb = experimental::CreateGlobalCircularBufferForTensorPrefetcher(
         *mesh_device_, bank_to_receivers, kGcbSize, BufferType::L1);
     const CoreCoord sender_logical = gcb.sender_receiver_core_mapping().at(0).first;
 
@@ -343,9 +343,9 @@ TEST_F(DramSenderGCBFixture, MultiGcbDisjointPagesSent) {
     // GCB A: receiver at worker (0, 0). GCB B: receiver at worker (1, 0). Same bank.
     CoreRangeSet recv_a(CoreRange({0, 0}, {0, 0}));
     CoreRangeSet recv_b(CoreRange({1, 0}, {1, 0}));
-    auto gcb_a = experimental::CreateGlobalCircularBufferWithDramSenders(
+    auto gcb_a = experimental::CreateGlobalCircularBufferForTensorPrefetcher(
         *mesh_device_, {{bank_id, recv_a}}, kGcbSize, BufferType::L1);
-    auto gcb_b = experimental::CreateGlobalCircularBufferWithDramSenders(
+    auto gcb_b = experimental::CreateGlobalCircularBufferForTensorPrefetcher(
         *mesh_device_, {{bank_id, recv_b}}, kGcbSize, BufferType::L1);
 
     const DeviceAddr pa = experimental::pages_sent_drisc_l1_base(gcb_a);
@@ -498,7 +498,7 @@ TEST_F(DramSenderGCBFixture, RejectsDuplicateSender) {
     CoreRangeSet recv0(CoreRange({0, 0}, {0, 0}));
     CoreRangeSet recv1(CoreRange({1, 0}, {1, 0}));
     std::vector<std::pair<uint32_t, CoreRangeSet>> bank_to_receivers = {{0, recv0}, {0, recv1}};
-    EXPECT_ANY_THROW(experimental::CreateGlobalCircularBufferWithDramSenders(
+    EXPECT_ANY_THROW(experimental::CreateGlobalCircularBufferForTensorPrefetcher(
         *mesh_device_, bank_to_receivers, 1024, BufferType::L1));
 }
 
