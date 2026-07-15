@@ -13,7 +13,7 @@
 #     Runs one group only (same as a single CI matrix job).
 #     Groups: unit, phys-grouping, control-plane, t3k, wh-galaxy,
 #       bh-6u, bh-single-galaxy, bh-dual-galaxy,
-#       bh-subtorus, bh-subtorus-sc16, bh-subtorus-sc20, bh-sp4-glx, bh-blitz-decode, bh-pod-pipeline, bh-misc
+#       bh-subtorus, bh-subtorus-sc16, bh-subtorus-sc20, bh-sp4-glx, bh-blitz-decode, bh-pod-pipeline, bh-ring-stress, bh-misc
 #
 #   Parallel (all groups at once):
 #     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --parallel
@@ -97,6 +97,13 @@ SC4_REVAB_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING="${SUBTORUS_REVAB_AISLEC_CLUSTE
 # Full 20-host SC20 revC subtorus galaxy (system-110, hosts bh-glx-110-c01..c10). Used for the 80-stage Blitz
 # decode ring, which needs the subtorus wrap-around to close (the revAB subtorus mock above cannot).
 SC20_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC20_32x4_revC_subtorus_aisleC/SC20_32x4_revC_subtorus_aisleC_mapping.yaml"
+# Full 20-host NON-subtorus SC20 galaxy (revAB, Aisle C). Same 20-host / 80-mesh scale as the subtorus
+# mock but without the torus wrap-around links -- used by the long-running bh-ring-stress group as the
+# worst case (the ring's closing hop has no direct link, driving the mapper's general-SAT fallback).
+SC20_REVAB_AISLEC_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC20_32x4_revAB_aisleC/SC20_32x4_revAB_aisleC_mapping.yaml"
+# Full 36-host subtorus SC36 galaxy (revC, Aisle D, hosts bh-glx-120-d01..d10). 36 hosts / 144 mesh
+# slots -- the largest all-hosts mock; used by bh-ring-stress to exercise the mapper at scale.
+SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC36_32x4_revC_subtorus_aisleD/SC36_32x4_revC_subtorus_aisleD_mapping.yaml"
 # (The non-subtorus flat SC20 revAB Aisle C mock was removed: real revAB systems are subtorus, and the
 # flat mock only exposes 12 physical meshes, so the SC20 rings can't map onto it. Use the revAB subtorus
 # mock (SC20_REVAB_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING) instead.)
@@ -127,6 +134,12 @@ MGD_BLITZ_16="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_p
 MGD_BLITZ_48="tt_metal/fabric/mesh_graph_descriptors/bh_glx_split_4x2.textproto"
 MGD_BLITZ_64="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto"
 MGD_BLITZ_80="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_supercluster_20.textproto"
+# Non-pod-aligned ring lengths (20/24/28/36 stages) for the long-running bh-ring-stress group.
+# Each is N x M0(4x2) meshes wired in a closed ring; used to stress the mapper's general-SAT fallback.
+MGD_BLITZ_20="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_ring_20stage_mesh_graph_descriptor.textproto"
+MGD_BLITZ_24="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_ring_24stage_mesh_graph_descriptor.textproto"
+MGD_BLITZ_28="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_ring_28stage_mesh_graph_descriptor.textproto"
+MGD_BLITZ_36="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_ring_36stage_mesh_graph_descriptor.textproto"
 
 GTEST_GALAXY_LAYOUT_CHECK="ControlPlaneFixture.TestGalaxyLayoutCheck"
 GTEST_GALAXY_4X4_SPLIT_HOST_LAYOUT_CHECK="ControlPlaneFixture.TestGalaxy4x4SplitHostLayoutCheck"
@@ -226,7 +239,7 @@ done
 
 CURRENT_GROUP="$GROUP"
 
-VALID_GROUPS="all unit phys-grouping control-plane t3k wh-galaxy bh-6u bh-single-galaxy bh-dual-galaxy bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-misc"
+VALID_GROUPS="all unit phys-grouping control-plane t3k wh-galaxy bh-6u bh-single-galaxy bh-dual-galaxy bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-misc"
 if ! echo "$VALID_GROUPS" | tr ' ' '\n' | grep -qx "$GROUP"; then
   echo "Invalid --group value '$GROUP'. Valid groups: $VALID_GROUPS" >&2; exit 1
 fi
@@ -238,7 +251,7 @@ if [[ "$GROUP" == "all" && "$PARALLEL" -eq 1 ]]; then
   GROUPS=(
     unit phys-grouping control-plane t3k wh-galaxy
     bh-6u bh-single-galaxy bh-dual-galaxy
-    bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-misc
+    bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-misc
   )
   tmpdir=$(mktemp -d)
   trap 'rm -rf "$tmpdir"' EXIT
@@ -629,6 +642,34 @@ done
 #run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/llama_8b_2x1_pod_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC20_REVAB_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}:${GTEST_PIPELINE_BUILDER_CHECK}"
 
 fi # bh-blitz-decode
+
+######################################
+# BH Galaxy: ring-mapping stress tests (LONG RUNNING -- own group, extended per-op timeout)
+# Non-pod-aligned Blitz-decode ring lengths (20/24/28/36 stages) embedded into the FULL host graph of
+# each mock. Because the ring length does not align to pod (4-host) / galaxy boundaries and (on the
+# non-subtorus mock) its closing hop has no direct physical link, these fall into the topology mapper's
+# general-SAT host-minimization fallback, whose cost scales erratically with topology, ring length, and
+# host count. Observed rank-0 solve times (mock CPU sim) range from sub-second up to ~90s (28/36-stage on
+# non-subtorus 20-host SC20) and ~40s (36-stage on the full 36-host SC36) -- far above the fast
+# bh-blitz-decode matrix, hence a separate group with a longer per-op timeout.
+######################################
+if run_group "bh-ring-stress"; then
+
+# 30-min per-op timeout (vs the 600s default) so a slow general-SAT solve never trips the guard; the
+# CI shard step timeout bounds total wall-clock (see tests/pipeline_reorg/fabric_cpu_only_unit_tests.yaml).
+RING_STRESS_TIMEOUT=1800
+for entry in \
+    "SC20_revAB_aisleC:${SC20_REVAB_AISLEC_CLUSTER_DESC_MAPPING}:20 24 28 36" \
+    "SC20_revC_subtorus_aisleC:${SC20_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:20 24 28 36" \
+    "SC36_revC_subtorus_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:20 24 28 36" ; do
+  rest="${entry#*:}"; cluster_map="${rest%%:*}"; stages="${rest#*:}"
+  for stage in ${stages}; do
+    mgd_var="MGD_BLITZ_${stage}"
+    run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${RING_STRESS_TIMEOUT} tt-run --mesh-graph-descriptor "${!mgd_var}" --mock-cluster-rank-binding "${cluster_map}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder"
+  done
+done
+
+fi # bh-ring-stress
 
 ######################################
 # BH Galaxy: pod pipeline MGDs (TestGalaxyLayoutCheck + TestGalaxyCornerPins)
