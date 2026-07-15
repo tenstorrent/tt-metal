@@ -121,6 +121,21 @@ void RemoteCompileCoordinator::finish() {
 
                 for (std::size_t j = 0; j < pend.descriptor.expected_elf_paths.size(); ++j) {
                     write_elf_blob(pend.descriptor.expected_elf_paths[j], resp.elf_blobs[j]);
+                    // FIX (write-ordering desync): write the source-complete .dephash ONLY now that
+                    // the ELF blob is on disk, so the sidecar and the artifact it validates are always
+                    // written together — never a fresh .dephash next to a stale ELF. If we die between
+                    // the ELF write and here, the slot has {fresh ELF, old/no dephash}, which fails safe
+                    // (a source change no longer matches the old dephash → recompile).
+                    if (j < pend.descriptor.elf_dephash_contents.size() &&
+                        !pend.descriptor.elf_dephash_contents[j].empty()) {
+                        const std::string dephash_path = pend.descriptor.expected_elf_paths[j] + ".dephash";
+                        std::ofstream hash_file(dephash_path);
+                        hash_file << pend.descriptor.elf_dephash_contents[j];
+                        hash_file.close();
+                        if (hash_file.fail()) {
+                            std::filesystem::remove(dephash_path);
+                        }
+                    }
                 }
 
                 pend.dedup_promise->set_value();

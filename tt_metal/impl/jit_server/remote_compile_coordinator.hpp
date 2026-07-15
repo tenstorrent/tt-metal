@@ -28,6 +28,11 @@ struct KernelCompileDescriptor {
     jit_server::CompileRequest request;
     // Local file paths where the resulting ELF blobs should be written.
     std::vector<std::string> expected_elf_paths;
+    // Source-complete .dephash CONTENT for each expected ELF (parallel to expected_elf_paths;
+    // empty string = none). Computed at descriptor-build time from the preprocess .d, but written
+    // to disk by the coordinator ONLY AFTER the ELF blob lands (see finish()), so a failed or
+    // interrupted compile can never leave a fresh .dephash validating a stale ELF.
+    std::vector<std::string> elf_dephash_contents;
 };
 
 // Orchestrates remote JIT compilation for a batch of kernels.
