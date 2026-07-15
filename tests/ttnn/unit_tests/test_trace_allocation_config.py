@@ -69,7 +69,16 @@ def test_trace_allocation_config_is_captured_at_startup(env, expected):
 
 
 def test_invalid_referrer_depth_uses_default():
-    assert read_config({"TT_METAL_TRACE_ALLOC_REFERRER_DEPTH": "invalid"})["depth"] == 10
+    assert (
+        read_config(
+            {
+                "TT_METAL_TRACE_ALLOC_TRACKING": "1",
+                "TT_METAL_TRACE_ALLOC_TRACEBACKS": "1",
+                "TT_METAL_TRACE_ALLOC_REFERRER_DEPTH": "invalid",
+            }
+        )["depth"]
+        == 10
+    )
 
 
 def test_disabled_tracking_uses_direct_execute_trace_binding():
