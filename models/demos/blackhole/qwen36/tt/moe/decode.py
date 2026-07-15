@@ -81,13 +81,13 @@ def decode_forward(
     sparsity = ttnn.to_layout(routing_weights, ttnn.ROW_MAJOR_LAYOUT)
     output_tile = ttnn.Tile([32, 32])
 
-    # gate/up fused into ONE sparse_matmul over concatenated weights (N = 2*full_intermediate),
+    # up/gate fused into ONE sparse_matmul over concatenated weights (N = 2*full_intermediate),
     # widening the N-gridded core count (8 -> 32) vs the old intermediate-parallel layout; the
-    # fused output is sliced back into gate | up halves (mathematically identical).
+    # fused output feeds ttnn.swiglu directly as [up | gate].
     gate_up_config = _build_sparse_matmul_config(batch_size, 2 * intermediate_size)
     down_config = _build_sparse_matmul_config(batch_size, config.hidden_size)
 
-    gate_up = ttnn.sparse_matmul(
+    up_gate = ttnn.sparse_matmul(
         hidden_states,
         weights.gate_up_proj,
         sparsity=sparsity,
@@ -97,15 +97,13 @@ def decode_forward(
         program_config=gate_up_config,
         dtype=ttnn.bfloat16,
     )
-    sm2 = gate_up.shape[-1]  # 2 * intermediate
-    gate_up = ttnn.reshape(gate_up, (batch_size, num_experts, 1, sm2))
-    gate_up = ttnn.transpose(gate_up, 1, 2)
-    gate_up = ttnn.reshape(gate_up, (batch_size, num_experts, sm2))
-    gate = ttnn.slice(gate_up, (0, 0, 0), (batch_size, num_experts, intermediate_size))
-    up = ttnn.slice(gate_up, (0, 0, intermediate_size), (batch_size, num_experts, 2 * intermediate_size))
-    gate_up.deallocate(True)
+    sm2 = up_gate.shape[-1]  # 2 * intermediate
+    up_gate = ttnn.reshape(up_gate, (batch_size, num_experts, 1, sm2))
+    up_gate = ttnn.transpose(up_gate, 1, 2)  # (batch, 1, num_experts, sm2) — keep 4D for ttnn.swiglu
 
-    down_input = apply_swiglu(gate, up)
+    down_input = apply_swiglu(up_gate)  # 4D swiglu over [up|gate] -> (batch, 1, num_experts, intermediate)
+    up_gate.deallocate(True)
+    down_input = ttnn.reshape(down_input, (batch_size, num_experts, intermediate_size))
 
     down_input = ttnn.transpose(down_input, 1, 0)
     down_input = ttnn.reshape(down_input, (1, num_experts, batch_size, intermediate_size))

@@ -7,7 +7,8 @@ dense routing weights zero out the inactive ones after down_proj) with SwiGLU an
 qwen reduce-scatter. The sequence is processed in chunks of PREFILL_CHUNK_SIZE tokens;
 within a chunk gate and up run as ONE fused sparse_matmul over concatenated weights
 (N = 2*intermediate), which doubles the N-gridded core count (4 -> 8) vs two separate
-matmuls; the fused output is then sliced back into gate | up halves. group_size = chunk/32
+matmuls; the fused output stays [up | gate] and is consumed directly by ttnn.swiglu
+(up * silu(gate)) — no split slices. group_size = chunk/32
 folds into the sparse batch dim so per_core_M stays 1 tile. The down projection's M *is*
 the chunk length, so its program config is sized from the real chunk_len (per_core_M =
 chunk_len/32); PREFILL_CHUNK_SIZE bounds that so the down grid/L1 never overflows.
@@ -67,14 +68,14 @@ def _process_prefill_chunk(hidden_states, routing_weights, weights: ExpertWeight
 
     output_tile = ttnn.Tile([32, 32])
     intermediate_size = weights.intermediate_size_per_device
-    # gate/up fused into ONE sparse_matmul: N = 2*full_intermediate (gate|up concatenated), so
+    # up/gate fused into ONE sparse_matmul: N = 2*full_intermediate ([up|gate] concatenated), so
     # the N-gridded core count is 32 (vs 8 for the old intermediate-parallel N=256). M is one
     # 32-row tile per group (group_size folded into the sparse batch dim), per_core_M stays 1.
     # down: M is the full chunk_len, so its per_core_M reflects the real M (= chunk_len/32).
     gate_up_config = _build_sparse_matmul_config(TILE_SIZE, 2 * intermediate_size)
     down_config = _build_sparse_matmul_config(chunk_len, hidden_size)
 
-    gate_up = ttnn.sparse_matmul(
+    up_gate = ttnn.sparse_matmul(
         hidden_grouped,
         weights.gate_up_proj,
         sparsity=sparsity,
@@ -87,14 +88,11 @@ def _process_prefill_chunk(hidden_states, routing_weights, weights: ExpertWeight
     # NB: do NOT deallocate hidden_grouped — it is a reshape *view* of the caller's
     # input x, which Qwen36MoE.forward reuses for the shared expert after the routed
     # experts run. Freeing it here frees x (TT_FATAL: input not allocated).
-    gate_up = ttnn.transpose(gate_up, 1, 3)
-    gate_up = ttnn.reshape(gate_up, (1, num_experts, chunk_len, 2 * intermediate_size))
-    # Split the fused N back into gate | up halves (mathematically identical to two matmuls).
-    gate = ttnn.slice(gate_up, (0, 0, 0, 0), (1, num_experts, chunk_len, intermediate_size))
-    up = ttnn.slice(gate_up, (0, 0, 0, intermediate_size), (1, num_experts, chunk_len, 2 * intermediate_size))
-    gate_up.deallocate(True)
+    up_gate = ttnn.transpose(up_gate, 1, 3)
+    up_gate = ttnn.reshape(up_gate, (1, num_experts, chunk_len, 2 * intermediate_size))
 
-    down_input = apply_swiglu(gate, up)
+    down_input = apply_swiglu(up_gate)
+    up_gate.deallocate(True)
     down_input = ttnn.reshape(down_input, (1, num_experts, chunk_len, intermediate_size))
 
     down = ttnn.sparse_matmul(
