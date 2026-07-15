@@ -111,4 +111,4 @@ Fresh independent review `/root/stage_review_qwen25_coder32` returned `Verdict: 
 
 The reviewer noted that the three evidence logs match the repository-wide `*.log` ignore rule; they are intentionally force-added to the checkpoint. It also classified the paired-p300 selector failure, nanobind teardown warnings, fixed decode head-padding issue, corrected context-padding assumption, and measured 4,000-token OOM as controlled or fixed rather than stage blockers.
 
-The local checkpoint SHA is recorded below after the reviewed tree is committed. No push is performed.
+Reviewed stage checkpoint: `72f6e948c5e9e0d9794a98c9e9ac4088a67bd800` (`Add Qwen2.5 Coder 32B IR functional decoder`). The three `.log` artifacts were force-added as required. No push was performed.
