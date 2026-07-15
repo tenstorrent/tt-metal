@@ -260,6 +260,16 @@ class TTVibeVoiceGenerator:
         self._sf_t_tensors: Optional[list] = None
         self._sf_audio_out: Optional[ttnn.Tensor] = None
         self._sf_logits_out: Optional[ttnn.Tensor] = None
+        # fp32 RoPE (VV_FP32_ROPE=1, default on): host-write the exact fp32 cos/sin rows per frame
+        # into persistent buffers so the traced decode matches the EAGER fp32-rope path (which slices
+        # the fp32 _cos_tt/_sin_tt table).  Off (=0) keeps the bf16 on-device embedding gather (A/B).
+        self._sf_fp32_rope = os.environ.get("VV_FP32_ROPE", "1") == "1"
+        self._sf_cos_pos: Optional[ttnn.Tensor] = None
+        self._sf_sin_pos: Optional[ttnn.Tensor] = None
+        self._sf_cos_neg: Optional[ttnn.Tensor] = None
+        self._sf_sin_neg: Optional[ttnn.Tensor] = None
+        self._sf_pos_pos_host = 0  # host mirror of the device _sf_pos_pos (for fp32 rope row select)
+        self._sf_neg_pos_host = 0
 
     _SF_WARMUP = 2
 
@@ -531,6 +541,15 @@ class TTVibeVoiceGenerator:
             buf,
         )
 
+    def _sf_write_rope(self, cos_buf: ttnn.Tensor, sin_buf: ttnn.Tensor, pos: int) -> None:
+        """Host-write the exact fp32 RoPE cos/sin row for `pos` into a persistent [1,1,1,hd] buffer
+        (host->device copy, no device alloc — same numerics as the eager sliced-fp32-table path)."""
+        hd = self.lm.cfg.head_dim
+        cos = torch.from_numpy(self.lm._cos_np[pos : pos + 1]).to(torch.float32).reshape(1, 1, 1, hd)
+        sin = torch.from_numpy(self.lm._sin_np[pos : pos + 1]).to(torch.float32).reshape(1, 1, 1, hd)
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(cos, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT), cos_buf)
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(sin, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT), sin_buf)
+
     def _sf_set_inputs(self, seg_frame_idx: int, start_pos: int, noise_2x) -> None:
         """Per-frame non-allocating writes into the persistent trace buffers.  A segment's first
         frame (seg_frame_idx==0) rewinds the device positions, re-seeds the loop-carried hidden from
@@ -542,10 +561,18 @@ class TTVibeVoiceGenerator:
         if seg_frame_idx == 0:
             self._sf_write_int(self._sf_pos_pos, start_pos)
             self._sf_write_int(self._sf_neg_pos, 0)
+            self._sf_pos_pos_host = start_pos
+            self._sf_neg_pos_host = 0
             ttnn.copy(input_a=self._sf_hidden_seed, input_b=self._sf_hidden_buf)  # device->device seed
             ttnn.copy(input_a=self._sf_neg_start, input_b=self._sf_neg_embed)
         else:
+            self._sf_pos_pos_host += 1  # mirror the on-device plus_one from the prior frame
+            self._sf_neg_pos_host += 1
             ttnn.copy(input_a=self._sf_neg_diff, input_b=self._sf_neg_embed)
+        if self._sf_fp32_rope:
+            # fp32 rope rows for the current positions (device positions self-advance for KV/sdpa).
+            self._sf_write_rope(self._sf_cos_pos, self._sf_sin_pos, self._sf_pos_pos_host)
+            self._sf_write_rope(self._sf_cos_neg, self._sf_sin_neg, self._sf_neg_pos_host)
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(noise_2x[:1].to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
             self._sf_noise,
@@ -585,6 +612,11 @@ class TTVibeVoiceGenerator:
             self._sf_neg_embed = _z([1, 1, 1, H], self._sf_neg_start.dtype, ttnn.TILE_LAYOUT)
             self._sf_pos_pos = _z([1], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
             self._sf_neg_pos = _z([1], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            _hd = lm.cfg.head_dim
+            self._sf_cos_pos = _z([1, 1, 1, _hd], ttnn.float32, ttnn.TILE_LAYOUT)
+            self._sf_sin_pos = _z([1, 1, 1, _hd], ttnn.float32, ttnn.TILE_LAYOUT)
+            self._sf_cos_neg = _z([1, 1, 1, _hd], ttnn.float32, ttnn.TILE_LAYOUT)
+            self._sf_sin_neg = _z([1, 1, 1, _hd], ttnn.float32, ttnn.TILE_LAYOUT)
             self._sf_noise = _z([1, 1, 1, 64], ttnn.bfloat16, ttnn.TILE_LAYOUT)
             self.scheduler.set_timesteps(self.num_diffusion_steps)
             self._sf_t_tensors = [
@@ -611,9 +643,19 @@ class TTVibeVoiceGenerator:
 
         def _frame():
             cond_pos = _condition_from_hidden(self._sf_hidden_buf)
-            _, neg_hidden = lm.forward_decode_traced_embeds_dev_rope(
-                self._sf_neg_embed, self._sf_neg_pos, kv_neg, return_last_hidden=True
-            )
+            if self._sf_fp32_rope:
+                _, neg_hidden = lm.forward_decode_traced_embeds(
+                    self._sf_neg_embed,
+                    self._sf_cos_neg,
+                    self._sf_sin_neg,
+                    self._sf_neg_pos,
+                    kv_neg,
+                    return_last_hidden=True,
+                )
+            else:
+                _, neg_hidden = lm.forward_decode_traced_embeds_dev_rope(
+                    self._sf_neg_embed, self._sf_neg_pos, kv_neg, return_last_hidden=True
+                )
             cond_neg = _condition_from_hidden(neg_hidden)
             latent = sample_speech_latents(
                 self.diffusion_head,
@@ -627,9 +669,14 @@ class TTVibeVoiceGenerator:
                 t_tensors=self._sf_t_tensors,
             )
             fused, audio = self._run_post_pipeline(latent)
-            logits, new_hidden = lm.forward_decode_traced_embeds_dev_rope(
-                fused, self._sf_pos_pos, kv_pos, return_last_hidden=True
-            )
+            if self._sf_fp32_rope:
+                logits, new_hidden = lm.forward_decode_traced_embeds(
+                    fused, self._sf_cos_pos, self._sf_sin_pos, self._sf_pos_pos, kv_pos, return_last_hidden=True
+                )
+            else:
+                logits, new_hidden = lm.forward_decode_traced_embeds_dev_rope(
+                    fused, self._sf_pos_pos, kv_pos, return_last_hidden=True
+                )
             ttnn.copy(input_a=new_hidden, input_b=self._sf_hidden_buf)  # loop-carry on device
             ttnn.plus_one(self._sf_pos_pos)
             ttnn.plus_one(self._sf_neg_pos)
