@@ -127,13 +127,14 @@ class Cosmos3OmniTransformer(Module):
         if (enable_proj_in or enable_proj_out) and patch_latent_dim is None:
             msg = "patch_latent_dim is required when enable_proj_in or enable_proj_out is True"
             raise ValueError(msg)
+        # proj_in uses float32 weights. The host-side reference accumulates 192 bf16 products
+        # in float32 — matching that requires float32 on device. bf16 weights with HiFi4 still
+        # carry ~5.9% quantization error (sqrt(192) × bf16_eps) that compounds over 64 layers.
         self.proj_in = (
-            Linear(patch_latent_dim, hidden_size, bias=True, mesh_device=mesh_device, dtype=dtype)
+            Linear(patch_latent_dim, hidden_size, bias=True, mesh_device=mesh_device, dtype=ttnn.float32)
             if enable_proj_in
             else None
         )
-        # proj_in is [192→5120]: CPU bfloat16 matmul uses float32 accumulators, so the
-        # device must match with HiFi4 to avoid RMSE drift that compounds over 64 layers.
         self._proj_in_compute_kernel_config = (
             ttnn.init_device_compute_kernel_config(
                 mesh_device.arch(),
@@ -206,7 +207,13 @@ class Cosmos3OmniTransformer(Module):
         # multiply by 0, noisy rows by 1. Uses matmul (K=1) instead of ttnn.multiply because
         # ttnn.multiply's 2D broadcast ([1,1,1,H] × [1,1,N,1]) corrupts tile boundaries.
         if self.proj_in is not None:
-            gen_seq = self.proj_in(gen_seq, compute_kernel_config=self._proj_in_compute_kernel_config)
+            # Cast input to float32 to match the host-side reference: without this the
+            # bf16 input quantization adds sqrt(192) × bf16_eps ≈ 5.9% error per output
+            # element, which compounds visibly over 64 layers at large sequence lengths.
+            gen_seq_fp32 = ttnn.typecast(gen_seq, ttnn.float32)
+            gen_seq = self.proj_in(gen_seq_fp32, compute_kernel_config=self._proj_in_compute_kernel_config)
+            ttnn.deallocate(gen_seq_fp32)
+            gen_seq = ttnn.typecast(gen_seq, und_seq.dtype)
             if time_embed is not None and noisy_mask_gen is not None:
                 gen_seq = ttnn.add(gen_seq, ttnn.matmul(noisy_mask_gen, time_embed))
 
