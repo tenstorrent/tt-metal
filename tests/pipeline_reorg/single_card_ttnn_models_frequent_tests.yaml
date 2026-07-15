@@ -42,7 +42,7 @@
       timeout: 30
     wh_n300:
       timeout: 30
-  owner_id: U03PUAKE719 # TODO: verify owner. CODEOWNERS: @tenstorrent/metalium-developers-convolutions (team, no individual)
+  owner_id: U085GDCAZTN # Pavle Josipovic (top contributor; CODEOWNERS team @tenstorrent/metalium-developers-convolutions)
   team: models
 - name: openpdn_mnist nightly
   cmd: $PYTEST_CMD tests/nightly/single_card/openpdn_mnist
@@ -52,7 +52,7 @@
       timeout: 30
     wh_n300:
       timeout: 30
-  owner_id: U03PUAKE719 # TODO: verify owner. CODEOWNERS: @tenstorrent/cse-developer-ttnn (team, no individual)
+  owner_id: U088413NP0Q # Ashai Reddy Ginuga (CODEOWNERS team @tenstorrent/cse-developer-ttnn)
   team: models
 - name: vit nightly
   cmd: |
