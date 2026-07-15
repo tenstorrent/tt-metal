@@ -66,7 +66,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/streaming_reduce_helpers.hpp"
-#include "api/debug/device_print.h"
 
 // CROSS-CORE COMBINE (Refinement 5 — WIDTH_SHARDED / BLOCK_SHARDED). When
 // IS_CROSS_CORE is set the hidden W is split across a reduction GROUP of cores,
@@ -254,12 +253,6 @@ void kernel_main() {
         }
 
         // ---------- Pass 2: x * (1/rms) * gamma ----------
-        if constexpr (IS_CROSS_CORE) {
-            if (t == 0) {
-                cb_wait_front(cb_sumsq, 1);
-                DEVICE_PRINT("DBG sumsq(1/rms) row0: {}\n", TSLICE(cb_sumsq, 0, SliceRange::hw0_32_16()));
-            }
-        }
         for (uint32_t b = 0; b < num_w_blocks; ++b) {
             if constexpr (IS_ROW_MAJOR) {
                 ckl::tilize<W_BLOCK_TILES, cb_input_rm, cb_input_tiles>(1, TILE_H);
@@ -284,23 +277,8 @@ void kernel_main() {
                     ckl::PackTileReconfig::Output,
                     ckl::OperandKind::Scalar,
                     ckl::OperandKind::Scalar>(wshape);
-                if constexpr (IS_CROSS_CORE) {
-                    if (t == 0 && b == 0) {
-                        cb_wait_front(cb_norm, W_BLOCK_TILES);
-                        DEVICE_PRINT("DBG norm(x/rms) b0t0 row0: {}\n", TSLICE(cb_norm, 0, SliceRange::hw0_32_16()));
-                        cb_wait_front(cb_gamma_tiles, W_BLOCK_TILES);
-                        DEVICE_PRINT("DBG gamma b0t0 row0: {}\n", TSLICE(cb_gamma_tiles, 0, SliceRange::hw0_32_16()));
-                    }
-                }
                 // * gamma: gamma weight is valid in row 0, broadcast down all rows (Row).
                 ckl::mul<cb_norm, cb_gamma_tiles, cb_output_tiles, ckl::BroadcastDim::Row>(wshape);
-                if constexpr (IS_CROSS_CORE) {
-                    if (t == 0 && b == 0) {
-                        cb_wait_front(cb_output_tiles, W_BLOCK_TILES);
-                        DEVICE_PRINT(
-                            "DBG out(x/rms*g) b0t0 row0: {}\n", TSLICE(cb_output_tiles, 0, SliceRange::hw0_32_16()));
-                    }
-                }
             } else {
                 ckl::mul<
                     cb_input_tiles,
