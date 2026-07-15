@@ -260,6 +260,7 @@ triage:
 llk:
   pr_gate:
     wh_n150_civ2: 40
+    bh_p150b_civ2: 40
     bh_p150b_civ2_viommu_prio: 40
   unit:
     wh_n150_civ2: 40
