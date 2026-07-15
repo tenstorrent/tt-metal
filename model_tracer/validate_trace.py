@@ -11,26 +11,24 @@ can fix problems locally before triggering long test runs.
 It checks the elements called out in the tracing issue:
 
   1. Required fields and supported enum values in the master JSON.
-  2. Artifact path resolution and file existence (no silent "degraded mode").
+  2. Artifact file existence (no silent "degraded mode").
   3. Tensor shape consistency (internal well-formedness and, when inline tensor
      ``values`` are present, that the element count matches ``original_shape``).
   4. Optional: print resolved artifact info for the first N records.
 
-The master JSON here is ``ttnn_operations_master.json``; when it is not passed
-explicitly it is resolved the same way ``MasterConfigLoader`` resolves it, so
-this tool catches the exact case where the loader would otherwise fall back to
-empty configs. An optional trace-selection registry YAML can also be validated
-(``status`` enum and ``targets`` -> ``registry`` cross references).
+The master JSON here is ``ttnn_operations_master.json`` and must be passed
+explicitly via ``--manifest``. An optional trace-selection registry YAML can
+also be validated (``status`` enum and ``targets`` -> ``registry`` cross
+references).
 
 Usage:
     python model_tracer/validate_trace.py --manifest <master.json>
     python model_tracer/validate_trace.py --manifest <master.json> --print-resolved 5
     python model_tracer/validate_trace.py --manifest <master.json> \\
         --registry model_tracer/trace_selection_registry.yaml
-    python model_tracer/validate_trace.py            # resolve master JSON automatically
 
 Exit codes:
-    0  Manifest is valid (no errors; no warnings unless --strict)
+    0  Manifest is valid (no errors)
     1  Validation failed, or the manifest could not be found / parsed
 """
 
@@ -74,71 +72,11 @@ MEMORY_CONFIG_ENUM_PREFIXES = {
 }
 
 
-def get_base_dir():
-    """Resolve the tt-metal base directory.
-
-    Resolution order (matches master_config_loader_v2.get_base_dir):
-      1. Walk up from this file to find ``model_tracer/traced_operations``
-      2. ``TT_METAL_HOME`` env var (validated to contain that marker)
-      3. ``PYTHONPATH`` entries
-      4. Current working directory
-    """
-    marker = os.path.join("model_tracer", "traced_operations")
-
-    def walk_up(start_dir):
-        current = os.path.abspath(start_dir)
-        while True:
-            if os.path.isdir(os.path.join(current, marker)):
-                return current
-            parent = os.path.dirname(current)
-            if parent == current:
-                return None
-            current = parent
-
-    base = walk_up(os.path.dirname(os.path.abspath(__file__)))
-    if base:
-        return base
-
-    tt_metal_home = os.environ.get("TT_METAL_HOME", "").strip()
-    if tt_metal_home and os.path.isdir(os.path.join(tt_metal_home, marker)):
-        return tt_metal_home
-
-    for path in os.environ.get("PYTHONPATH", "").split(":"):
-        if path:
-            base = walk_up(path)
-            if base:
-                return base
-
-    base = walk_up(os.getcwd())
-    return base or os.getcwd()
-
-
-def resolve_master_path(explicit_path):
-    """Resolve the master JSON path without touching the filesystem.
-
-    Order mirrors MasterConfigLoader.__init__:
-      1. Explicit ``--manifest`` argument
-      2. ``TTNN_MASTER_JSON_PATH`` environment variable
-      3. Canonical ``model_tracer/traced_operations/ttnn_operations_master.json``
-
-    Returns ``(resolved_path, source_description)``. Existence is checked
-    separately so a missing path can be reported as an actionable error.
-    """
-    if explicit_path:
-        return str(explicit_path), "--manifest argument"
-    env_path = os.environ.get("TTNN_MASTER_JSON_PATH")
-    if env_path:
-        return env_path, "TTNN_MASTER_JSON_PATH env var"
-    canonical = os.path.join(get_base_dir(), "model_tracer", "traced_operations", "ttnn_operations_master.json")
-    return canonical, "canonical default path"
-
-
 class Report:
     """Accumulates validation findings so all problems surface in one pass."""
 
     def __init__(self):
         self.errors = []
-        self.warnings = []
         self.operations = 0
         self.configurations = 0
         self.executions = 0
@@ -146,13 +84,6 @@ class Report:
 
     def error(self, context, message):
         self.errors.append(f"{context}: {message}")
-
-    def warn(self, context, message):
-        self.warnings.append(f"{context}: {message}")
-
-    @property
-    def passed(self):
-        return not self.errors
 
 
 def _is_positive_int(value):
@@ -278,7 +209,7 @@ def validate_master_data(data, report):
         report.error("master JSON", "missing or invalid 'operations' object")
         return
     if not operations:
-        report.warn("master JSON", "'operations' is empty (no traced configurations)")
+        report.error("master JSON", "'operations' is empty (no traced configurations)")
 
     metadata_trace_uid = None
     if isinstance(data.get("metadata"), dict):
@@ -425,31 +356,24 @@ def print_resolved(data, limit):
         print("  (no configurations found)")
 
 
-def format_report(resolved_path, path_source, report, strict):
+def format_report(manifest_path, report):
     """Build the human-readable validation report."""
     lines = [
         "Trace manifest validation",
-        f"  Manifest:        {resolved_path}",
-        f"  Resolved via:    {path_source}",
+        f"  Manifest:        {manifest_path}",
         f"  Operations:      {report.operations}",
         f"  Configurations:  {report.configurations}",
         f"  Executions:      {report.executions}",
         f"  Tensor args:     {report.tensor_args}",
         f"  Errors:          {len(report.errors)}",
-        f"  Warnings:        {len(report.warnings)}",
     ]
     if report.errors:
         lines.append("")
         lines.append("Errors:")
         for err in report.errors:
             lines.append(f"  - {err}")
-    if report.warnings:
-        lines.append("")
-        lines.append("Warnings:")
-        for warn in report.warnings:
-            lines.append(f"  - {warn}")
 
-    failed = bool(report.errors) or (strict and bool(report.warnings))
+    failed = bool(report.errors)
     lines.append("")
     lines.append(f"  Decision:        {'fail' if failed else 'pass'}")
     return "\n".join(lines) + "\n", failed
@@ -463,9 +387,8 @@ def main(argv=None):
     parser.add_argument(
         "--manifest",
         type=Path,
-        default=None,
-        help="Path to the master JSON to validate. If omitted, resolves via "
-        "TTNN_MASTER_JSON_PATH or the canonical traced_operations path.",
+        required=True,
+        help="Path to the master JSON to validate.",
     )
     parser.add_argument(
         "--registry",
@@ -481,30 +404,24 @@ def main(argv=None):
         default=0,
         help="Print resolved artifact info for the first N configurations.",
     )
-    parser.add_argument(
-        "--strict",
-        action="store_true",
-        help="Treat warnings as failures (non-zero exit).",
-    )
     args = parser.parse_args(argv)
 
-    resolved_path, path_source = resolve_master_path(args.manifest)
+    manifest_path = str(args.manifest)
 
-    if not os.path.exists(resolved_path):
-        print(f"Error: master JSON not found: {resolved_path} (resolved via {path_source})", file=sys.stderr)
+    if not os.path.exists(manifest_path):
+        print(f"Error: master JSON not found: {manifest_path}", file=sys.stderr)
         print(
             "  Re-trace with model_tracer/generic_ops_tracer.py or reconstruct with "
-            "tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest, "
-            "or pass --manifest explicitly.",
+            "tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest.",
             file=sys.stderr,
         )
         return 1
 
     try:
-        with open(resolved_path) as f:
+        with open(manifest_path) as f:
             data = json.load(f)
     except json.JSONDecodeError as exc:
-        print(f"Error: {resolved_path} is not valid JSON: {exc}", file=sys.stderr)
+        print(f"Error: {manifest_path} is not valid JSON: {exc}", file=sys.stderr)
         return 1
 
     report = Report()
@@ -513,7 +430,7 @@ def main(argv=None):
     if args.registry is not None:
         validate_registry(str(args.registry), report)
 
-    report_text, failed = format_report(resolved_path, path_source, report, args.strict)
+    report_text, failed = format_report(manifest_path, report)
 
     print("")
     print("=" * 60)

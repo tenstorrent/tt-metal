@@ -109,7 +109,7 @@ See **[GUIDE.md](GUIDE.md)** for the full workflow: tracing, loading into the da
 Trace problems (missing files, malformed manifests, inconsistent shapes) otherwise surface late during pytest or CI replay. Run the standalone validator locally to catch them up-front. It runs independently of pytest and the database.
 
 ```bash
-# Validate the canonical master JSON (path auto-resolved when --manifest is omitted)
+# Validate a master JSON (--manifest is required)
 python model_tracer/validate_trace.py --manifest model_tracer/traced_operations/ttnn_operations_master.json
 
 # Print resolved artifact info (op, config_hash, hardware, source) for the first N records
@@ -122,11 +122,11 @@ python model_tracer/validate_trace.py --manifest <master.json> --registry model_
 What it checks:
 
 - **Required fields**: `config_hash` per configuration; `source`, provenance (`trace_uid` or `trace_run_ids`), and `machine_info.{board_type, device_series, card_count, mesh_device_shape, device_count}` per execution.
-- **Artifact resolution**: the master JSON is resolved (via `--manifest`, then `TTNN_MASTER_JSON_PATH`, then the canonical path) and must exist and parse as JSON — no silent degraded mode.
+- **Artifact existence**: the `--manifest` master JSON must exist and parse as JSON — no silent degraded mode.
 - **Enum values**: `layout`/`storage_type`/`original_dtype` and `memory_config.{buffer_type, memory_layout}` carry their expected prefixes; registry `status` is one of `draft`/`active`/`deprecated`.
 - **Tensor shapes**: `original_shape`/`logical_shape` are well-formed; when inline tensor `values` are present their element count matches `original_shape`.
 
-**Exit codes**: `0` = valid (no errors; no warnings unless `--strict`); `1` = validation failed, or the manifest could not be found / parsed.
+**Exit codes**: `0` = valid (no errors); `1` = validation failed, or the manifest could not be found / parsed.
 
 ---
 

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """Unit tests for model_tracer.validate_trace.
@@ -19,9 +19,6 @@ import json
 import pytest
 
 from model_tracer.validate_trace import main
-
-
-# ── Fixtures ─────────────────────────────────────────────────────────────
 
 
 N150_MACHINE_INFO = {
@@ -88,9 +85,6 @@ def _write(tmp_path, data, name="master.json"):
     return path
 
 
-# ── §1 Valid case ────────────────────────────────────────────────────────
-
-
 def test_valid_master_passes_and_prints_resolved(tmp_path, capsys):
     path = _write(tmp_path, _master())
     exit_code = main(["--manifest", str(path), "--print-resolved", "1"])
@@ -111,9 +105,6 @@ def test_reconstructed_dialect_with_trace_run_ids_passes(tmp_path):
     }
     path = _write(tmp_path, _master([_config(executions=[execution])]))
     assert main(["--manifest", str(path)]) == 0
-
-
-# ── §2 Missing required fields ─────────────────────────────────────────────
 
 
 def test_missing_config_hash_fails(tmp_path, capsys):
@@ -156,9 +147,6 @@ def test_empty_executions_fails(tmp_path, capsys):
     assert "executions" in capsys.readouterr().out
 
 
-# ── §3 Invalid enum values ─────────────────────────────────────────────────
-
-
 def test_invalid_layout_enum_fails(tmp_path, capsys):
     arg = _tensor_arg()
     arg["layout"] = "TILE"  # missing the "Layout." prefix
@@ -175,9 +163,6 @@ def test_invalid_memory_config_enum_fails(tmp_path, capsys):
     assert "buffer_type" in capsys.readouterr().out
 
 
-# ── §4 Missing / malformed manifest ────────────────────────────────────────
-
-
 def test_missing_manifest_fails(tmp_path, capsys):
     missing = tmp_path / "does_not_exist.json"
     assert main(["--manifest", str(missing)]) == 1
@@ -189,9 +174,6 @@ def test_malformed_json_fails(tmp_path, capsys):
     path.write_text("{ this is not valid json ")
     assert main(["--manifest", str(path)]) == 1
     assert "not valid JSON" in capsys.readouterr().err
-
-
-# ── §5 Tensor shape consistency ────────────────────────────────────────────
 
 
 def test_scalar_shape_allowed(tmp_path):
@@ -222,9 +204,6 @@ def test_inline_values_count_match_passes(tmp_path):
     assert main(["--manifest", str(path)]) == 0
 
 
-# ── §6 --print-resolved bounds ─────────────────────────────────────────────
-
-
 def test_print_resolved_limit(tmp_path, capsys):
     configs = [_config(config_hash=f"hash{i}", config_id=i) for i in range(5)]
     path = _write(tmp_path, _master(configs))
@@ -233,9 +212,6 @@ def test_print_resolved_limit(tmp_path, capsys):
     assert "[1] ttnn.add" in out
     assert "[2] ttnn.add" in out
     assert "[3] ttnn.add" not in out
-
-
-# ── §7 Registry validation ─────────────────────────────────────────────────
 
 
 def _write_registry(tmp_path, text):

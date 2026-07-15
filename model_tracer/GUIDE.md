@@ -500,10 +500,9 @@ The global `--schema <name>` flag can appear anywhere on the command line and ap
 
 | Option | Description |
 |---|---|
-| `--manifest <master.json>` | Master JSON to validate. If omitted, resolves via `TTNN_MASTER_JSON_PATH`, then the canonical `model_tracer/traced_operations/ttnn_operations_master.json`. |
+| `--manifest <master.json>` | Master JSON to validate (required). |
 | `--registry <registry.yaml>` | Also validate a trace-selection registry: `status` enum (`draft`/`active`/`deprecated`) and pinned `targets.trace` IDs present in `registry`. |
 | `--print-resolved N` | Print resolved artifact info (op, `config_hash`, hardware, `source`) for the first N configurations. |
-| `--strict` | Treat warnings as failures. |
 
 Checks: required fields (`config_hash`; per-execution `source`, provenance via `trace_uid` or `trace_run_ids`, and `machine_info.{board_type, device_series, card_count, mesh_device_shape, device_count}`), artifact path resolution/existence, enum prefixes (`Layout.`/`StorageType.`/`DataType.`/`BufferType.`/`TensorMemoryLayout.`), and tensor shape consistency (well-formed `original_shape`/`logical_shape`, and inline `values` element count vs `original_shape`).
 
