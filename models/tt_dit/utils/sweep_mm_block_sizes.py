@@ -239,6 +239,32 @@ SHAPES = [
     (32, 256, 3072, 11, 10, False, "plain"),  # timestep_embedder linear_1
     (32, 3072, 3072, 11, 10, False, "plain"),  # timestep_embedder linear_2
     (32, 3072, 6144, 11, 10, False, "plain"),  # time_embed_out (inner -> 2*inner)
+    # --- FIBO SmolLM3 text encoder on the 4x8 Galaxy (tensor-parallel, tp=8), all non-AGMM. Captured
+    # 2026-07-15 from get_matmul_config [fallback] warnings in test_fibo_encode_device_profile[mesh_device1]
+    # (short free-text prompt -> M=32, one tile). K=2048=hidden; N/K tp=8-sharded (q/k/v/o + SwiGLU MLP).
+    (32, 2048, 256, 12, 10, False, "plain"),  # SmolLM3 kv proj (grouped-query, sharded)
+    (32, 2048, 512, 12, 10, False, "plain"),  # SmolLM3 q proj / attn out (sharded)
+    (32, 2048, 1376, 12, 10, False, "plain"),  # SmolLM3 MLP gate/up proj (intermediate/tp)
+    (32, 1376, 2048, 12, 10, False, "plain"),  # SmolLM3 MLP down proj (RowParallel)
+    (32, 2048, 256, 11, 10, False, "plain"),  # SmolLM3 kv proj (11x10 fallback)
+    (32, 2048, 512, 11, 10, False, "plain"),  # SmolLM3 q proj / attn out
+    (32, 2048, 1376, 11, 10, False, "plain"),  # SmolLM3 MLP gate/up proj
+    (32, 1376, 2048, 11, 10, False, "plain"),  # SmolLM3 MLP down proj
+    # --- FIBO DiT prompt-branch matmuls at M=32 (short / empty-CFG-uncond prompt; the M=128 twins above
+    # are for a ~128-token prompt). Prompt M = padded token count, so short prompts hit M=32. Captured
+    # 2026-07-15 from the pipeline smoke (real short prompt). Same use_cases as the M=128 prompt shapes.
+    (32, 1536, 3072, 12, 10, False, "plain"),  # ff_context.ff2 prompt (M=32)
+    (32, 1920, 3072, 12, 10, False, "plain"),  # single proj_out prompt (M=32)
+    (32, 2048, 1536, 12, 10, False, "plain"),  # caption_projection (M=32)
+    (32, 3072, 1536, 12, 10, False, "plain_gelu"),  # ff_context.ff1 prompt (M=32, fused GELU)
+    (32, 3072, 384, 12, 10, False, "to_out"),  # attn to_add_out prompt (M=32, addcmul)
+    (32, 4096, 384, 12, 10, False, "plain"),  # context_embedder (M=32)
+    (32, 1536, 3072, 11, 10, False, "plain"),
+    (32, 1920, 3072, 11, 10, False, "plain"),
+    (32, 2048, 1536, 11, 10, False, "plain"),
+    (32, 3072, 1536, 11, 10, False, "plain_gelu"),
+    (32, 3072, 384, 11, 10, False, "to_out"),
+    (32, 4096, 384, 11, 10, False, "plain"),
 ]
 
 SHAPE_IDS = [f"{M}_{K}_{N}_{cgx}x{cgy}_{'agmm' if agmm else 'mm'}_{uc}" for M, K, N, cgx, cgy, agmm, uc in SHAPES]

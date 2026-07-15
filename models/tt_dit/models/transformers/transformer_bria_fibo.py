@@ -87,6 +87,24 @@ def _register_fibo_matmul_configs() -> None:
                 (128, 4096, 384): (2, 8, 2, (2, 2)),  # context_embedder — 25822 ns
                 (32, 3072, 1152): (2, 8, 6, (2, 2)),  # single-block time_embed — 37902 ns
                 (32, 3072, 2304): (2, 6, 6, (2, 2)),  # norm1 modulation — 64667 ns
+                # SmolLM3 text encoder (tensor-parallel, tp=8) matmuls on the 4x8 Galaxy. M=32 (short
+                # prompt, one tile), K=2048=hidden. Swept 2026-07-15 (bh_4x8_fibo). SmolLM3 has no matmul
+                # registration of its own and FIBO is its only user, so its configs live here (additive,
+                # K=2048 keys distinct from the DiT's). Longer prompts give larger M -> a follow-up.
+                (32, 2048, 256): (2, 8, 4, (2, 2)),  # kv proj (grouped-query) — 16107 ns
+                (32, 2048, 512): (2, 8, 2, (2, 2)),  # q proj / attn out — 21747 ns
+                (32, 2048, 1376): (2, 8, 4, (2, 2)),  # MLP gate/up proj — 33838 ns
+                (32, 1376, 2048): (2, 43, 2, (2, 2)),  # MLP down proj (RowParallel) — 49293 ns
+                # DiT prompt-branch matmuls at M=32 (short / empty-CFG-uncond prompt; the M=128 twins are
+                # for a ~128-token prompt). The 2 small-N shapes swept cleanly; the 4 large-N shapes hit a
+                # profiler-buffer failure at M=32, so they reuse their M=128 prompt winners (M=32 is 1 tile
+                # -> only M_block differs and it clamps; far better than the generic fallback). 2026-07-15.
+                (32, 3072, 384): (2, 8, 2, (2, 2)),  # to_add_out prompt (M=32) — 21061 ns
+                (32, 4096, 384): (2, 8, 4, (2, 2)),  # context_embedder (M=32) — 25547 ns
+                (32, 1536, 3072): (2, 4, 14, (2, 2)),  # ff_context.ff2 prompt (M=32, reuse M=128)
+                (32, 1920, 3072): (2, 4, 10, (2, 2)),  # single proj_out prompt (M=32, reuse M=128)
+                (32, 2048, 1536): (2, 8, 4, (2, 2)),  # caption_projection (M=32, reuse M=128)
+                (32, 3072, 1536): (2, 8, 4, (2, 2)),  # ff_context.ff1 prompt (M=32, reuse M=128)
             },
             # FIBO denoise on the 4x8 Galaxy at 11x10 (the historical Galaxy grid clamp). FIBO registered
             # nothing at 11x10 before, so all 19 4x8 shapes are added. Kept as a fallback for when the
@@ -112,6 +130,19 @@ def _register_fibo_matmul_configs() -> None:
                 (32, 256, 3072): (2, 2, 10, (2, 2)),  # timestep_embedder linear_1 — 15618 ns
                 (32, 3072, 3072): (2, 4, 16, (2, 2)),  # timestep_embedder linear_2 — 89023 ns
                 (32, 3072, 6144): (2, 8, 12, (2, 2)),  # time_embed_out — 164954 ns
+                # SmolLM3 encoder at 11x10 (fallback grid). (32,2048,256) produced no OK sweep rows at
+                # 11x10, so it reuses its 12x10 winner (same matmul, adjacent grid; beats the generic default).
+                (32, 2048, 256): (2, 8, 4, (2, 2)),  # kv proj (reused 12x10 winner)
+                (32, 2048, 512): (2, 8, 2, (2, 2)),  # q proj / attn out — 21460 ns
+                (32, 2048, 1376): (2, 8, 4, (2, 2)),  # MLP gate/up proj — 33524 ns
+                (32, 1376, 2048): (2, 43, 2, (2, 2)),  # MLP down proj — 47616 ns
+                # DiT prompt-branch matmuls at M=32 (11x10 fallback grid), same rationale as the 12x10 block.
+                (32, 3072, 384): (2, 8, 2, (2, 2)),  # to_add_out prompt (M=32) — 28426 ns
+                (32, 4096, 384): (4, 16, 2, (2, 2)),  # context_embedder (M=32) — 35392 ns
+                (32, 3072, 1536): (2, 6, 5, (2, 1)),  # ff_context.ff1 prompt (M=32) — 76036 ns
+                (32, 1536, 3072): (2, 3, 10, (2, 2)),  # ff_context.ff2 prompt (M=32, reuse M=128)
+                (32, 1920, 3072): (2, 4, 10, (2, 2)),  # single proj_out prompt (M=32, reuse M=128)
+                (32, 2048, 1536): (2, 4, 6, (2, 2)),  # caption_projection (M=32, reuse M=128)
             },
         }
     )
