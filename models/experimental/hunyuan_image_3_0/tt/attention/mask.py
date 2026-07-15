@@ -41,6 +41,7 @@ def build_attention_mask_tt(
                       lists. None / empty -> pure causal mask.
         bsz:          batch size.
         dtype:        TTNN dtype for the returned mask (default bfloat16).
+                      Prefer bf16: SP ``ttnn.pad`` rejects packed dtypes.
 
     Note:
         Per-batch-distinct spans are supported by passing a list-of-lists; the
@@ -61,8 +62,10 @@ def build_attention_mask_tt(
 
 def _build_one(device, S, spans, dtype):
     """Additive mask for a single batch item -> [1, 1, S, S]."""
+    # Build in bf16 (not float32) so peak DRAM for S^2 stays ~half.
+    work = ttnn.bfloat16 if dtype != ttnn.float32 else ttnn.float32
     # Causal keep (1.0 lower-tri incl. diagonal, 0.0 above).
-    ones = ttnn.ones([1, 1, S, S], dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ones = ttnn.ones([1, 1, S, S], dtype=work, layout=ttnn.TILE_LAYOUT, device=device)
     keep = ttnn.tril(ones, diagonal=0)
     ttnn.deallocate(ones)
 
