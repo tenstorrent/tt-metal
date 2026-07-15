@@ -44,10 +44,6 @@ void kernel_main() {
     // Tile dims from the tensor's tile spec.
     constexpr uint32_t tile_h = get_compile_time_arg_val(6);
     constexpr uint32_t tile_w = get_compile_time_arg_val(7);
-    // 1 when the compute datapath is bf16 (compute_df != Float32). Only then can tilize decode e4m3
-    // directly: llk_unpack_tilize's Float32-dest "lossless" mode mishandles an 8-bit source, so an fp32
-    // compute datapath must decode e4m3 via a separate copy first.
-    constexpr uint32_t compute_is_bf16 = get_compile_time_arg_val(8);
     constexpr uint32_t block_w = 128;                // BlockW
     constexpr uint32_t block_wt = block_w / tile_w;  // BlockWt
     constexpr uint32_t block_ht = 1;                 // BlockHt
@@ -61,48 +57,33 @@ void kernel_main() {
 
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         {
-            if constexpr (compute_is_bf16) {
-                // ----- Phase 1+2a (bf16): tilize e4m3 row-major directly into bf16 tiles -----
-                // tilize's unpacker decodes e4m3 and reshapes row-major -> tile in one pass, removing the
-                // separate copy-decode step and the cb_in_rm round-trip. Valid only for a non-Float32 dest.
-                reconfig_data_format_srca(cb_input_e4m3_id);
-                pack_reconfig_data_format(cb_in_tile_id);
-                tilize_init(cb_input_e4m3_id, tiles_per_block, cb_in_tile_id);
-                cb_input_e4m3.wait_front(tiles_per_block);
-                cb_in_tile.reserve_back(tiles_per_block);
-                tilize_block(cb_input_e4m3_id, tiles_per_block, cb_in_tile_id);
-                cb_in_tile.push_back(tiles_per_block);
-                cb_input_e4m3.pop_front(tiles_per_block);
-                tilize_uninit(cb_input_e4m3_id, cb_in_tile_id);
-            } else {
-                // ----- Phase 1 (fp32): decode e4m3 -> fp32 row-major, then tilize fp32 -> tile -----
-                // tilize cannot decode e4m3 into a Float32 dest, so decode first via copy_tile.
-                reconfig_data_format_srca(cb_input_e4m3_id);
-                pack_reconfig_data_format(cb_in_rm_id);
-                copy_tile_init(cb_input_e4m3_id);
-                for (uint32_t s = 0; s < tiles_per_block; ++s) {
-                    cb_input_e4m3.wait_front(1);
-                    cb_in_rm.reserve_back(1);
-                    tile_regs_acquire();
-                    copy_tile(cb_input_e4m3_id, 0, IDST0);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_tile(IDST0, cb_in_rm_id);
-                    tile_regs_release();
-                    cb_in_rm.push_back(1);
-                    cb_input_e4m3.pop_front(1);
-                }
-
-                reconfig_data_format_srca(cb_in_rm_id);
-                pack_reconfig_data_format(cb_in_tile_id);
-                tilize_init(cb_in_rm_id, tiles_per_block, cb_in_tile_id);
-                cb_in_rm.wait_front(tiles_per_block);
-                cb_in_tile.reserve_back(tiles_per_block);
-                tilize_block(cb_in_rm_id, tiles_per_block, cb_in_tile_id);
-                cb_in_tile.push_back(tiles_per_block);
-                cb_in_rm.pop_front(tiles_per_block);
-                tilize_uninit(cb_in_rm_id, cb_in_tile_id);
+            // ----- Phase 1 (fp32): decode e4m3 -> fp32 row-major, then tilize fp32 -> tile -----
+            // tilize cannot decode e4m3 into a Float32 dest, so decode first via copy_tile.
+            reconfig_data_format_srca(cb_input_e4m3_id);
+            pack_reconfig_data_format(cb_in_rm_id);
+            copy_tile_init(cb_input_e4m3_id);
+            for (uint32_t s = 0; s < tiles_per_block; ++s) {
+                cb_input_e4m3.wait_front(1);
+                cb_in_rm.reserve_back(1);
+                tile_regs_acquire();
+                copy_tile(cb_input_e4m3_id, 0, IDST0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(IDST0, cb_in_rm_id);
+                tile_regs_release();
+                cb_in_rm.push_back(1);
+                cb_input_e4m3.pop_front(1);
             }
+
+            reconfig_data_format_srca(cb_in_rm_id);
+            pack_reconfig_data_format(cb_in_tile_id);
+            tilize_init(cb_in_rm_id, tiles_per_block, cb_in_tile_id);
+            cb_in_rm.wait_front(tiles_per_block);
+            cb_in_tile.reserve_back(tiles_per_block);
+            tilize_block(cb_in_rm_id, tiles_per_block, cb_in_tile_id);
+            cb_in_tile.push_back(tiles_per_block);
+            cb_in_rm.pop_front(tiles_per_block);
+            tilize_uninit(cb_in_rm_id, cb_in_tile_id);
 
             // ----- Phase 2c+3: broadcast multiply, then untilize straight from DEST -----
             // The mul writes all tiles_per_block(=4) tiles into DEST (indices 0..3); pack_untilize_dest then

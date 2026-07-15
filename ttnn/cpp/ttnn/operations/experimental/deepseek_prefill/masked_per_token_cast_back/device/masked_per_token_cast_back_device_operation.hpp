@@ -40,5 +40,6 @@ ttnn::Tensor masked_per_token_cast_back(
     uint32_t experts_per_chip,
     tt::tt_metal::DataType output_dtype,
     const tt::tt_metal::MemoryConfig& output_memory_config,
-    bool scales_from_metadata = false);
+    bool scales_from_metadata = false,
+    bool bf16_scale = false);
 }  // namespace ttnn::prim

@@ -19,7 +19,8 @@ ttnn::Tensor masked_per_token_cast_back(
     uint32_t experts_per_chip,
     const std::optional<tt::tt_metal::DataType>& output_dtype,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    const std::optional<ttnn::Tensor>& metadata) {
+    const std::optional<ttnn::Tensor>& metadata,
+    bool bf16_scale) {
     // Exactly one scale source: either a plain fp32 (M, H/128) scale tensor, or the dispatch metadata
     // tensor whose row tail holds the per-token fp32 scales (read via scale_col_offset in the kernel).
     TT_FATAL(
@@ -36,7 +37,8 @@ ttnn::Tensor masked_per_token_cast_back(
         experts_per_chip,
         output_dtype.value_or(tt::tt_metal::DataType::BFLOAT16),
         memory_config.value_or(input_e4m3.memory_config()),
-        scales_from_metadata);
+        scales_from_metadata,
+        bf16_scale);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::masked_per_token_cast_back

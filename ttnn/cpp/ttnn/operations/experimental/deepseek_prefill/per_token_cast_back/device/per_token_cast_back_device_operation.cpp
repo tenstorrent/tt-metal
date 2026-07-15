@@ -58,9 +58,8 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
         input_e4m3.dtype() == tt::tt_metal::DataType::FP8_E4M3,
         "per_token_cast_back: input_e4m3 dtype must be FP8_E4M3");
     TT_FATAL(
-        input_scale.dtype() == tt::tt_metal::DataType::FLOAT32 ||
-            input_scale.dtype() == tt::tt_metal::DataType::BFLOAT16,
-        "per_token_cast_back: input_scale dtype must be FLOAT32 or BFLOAT16, got {}",
+        input_scale.dtype() == tt::tt_metal::DataType::FLOAT32,
+        "per_token_cast_back: input_scale dtype must be FLOAT32, got {}",
         input_scale.dtype());
     const auto tile_shape = input_e4m3.tensor_spec().tile().get_tile_shape();
     const uint32_t tile_h = tile_shape[0];
@@ -153,8 +152,6 @@ ttsl::hash::hash_t PerTokenCastBackDeviceOperation::compute_program_hash(
         attrs,
         tensor_args.input_e4m3.dtype(),
         tensor_args.input_e4m3.memory_config(),
-        // Scale dtype selects the compute datapath (bf16 vs fp32), so it must key the program cache.
-        tensor_args.input_scale.dtype(),
         tensor_args.input_scale.memory_config(),
         tensor_args.input_e4m3.logical_shape(),
         tensor_args.input_scale.logical_shape(),

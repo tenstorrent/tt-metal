@@ -46,6 +46,12 @@ void kernel_main() {
     // directly: llk_unpack_tilize's Float32-dest "lossless" mode mishandles an 8-bit source, so an fp32
     // compute datapath must decode e4m3 via a separate copy first.
     constexpr uint32_t compute_is_bf16 = get_compile_time_arg_val(9);
+    // 1 => the fp32 scale must be narrowed to bf16 on-device: the packer converts it (into
+    // cb_scale_bcast_bf16) before the bcast multiply. 0 => the scale is consumed directly from cb_scale_bcast.
+    constexpr uint32_t convert_scale = get_compile_time_arg_val(10);
+    constexpr uint32_t cb_scale_bcast_bf16_id = get_compile_time_arg_val(11);
+    CircularBuffer cb_scale_bcast_bf16(cb_scale_bcast_bf16_id);
+    constexpr uint32_t cb_scale_mul_id = convert_scale ? cb_scale_bcast_bf16_id : cb_scale_bcast_id;
     constexpr uint32_t block_w = 128;                // BlockW
     constexpr uint32_t block_wt = block_w / tile_w;  // BlockWt
     constexpr uint32_t block_ht = 1;                 // BlockHt
@@ -105,20 +111,43 @@ void kernel_main() {
                 tilize_uninit(cb_in_rm_id, cb_in_tile_id);
             }
 
+            // ----- Scale convert: packer narrows the fp32 scale operand to bf16 -----
+            // copy_tile lands the fp32 scale in DEST; pack_tile with a bf16 pack-reconfig does the
+            // round-to-bf16 on the pack path, so the multiply below sees a bf16 SrcB matching SrcA.
+            if constexpr (convert_scale) {
+                reconfig_data_format_srca(cb_scale_bcast_id);
+                pack_reconfig_data_format(cb_scale_bcast_bf16_id);
+                copy_tile_init(cb_scale_bcast_id);
+                cb_scale_bcast.wait_front(block_ht);
+                cb_scale_bcast_bf16.reserve_back(block_ht);
+                tile_regs_acquire();
+                copy_tile(cb_scale_bcast_id, 0, IDST0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(IDST0, cb_scale_bcast_bf16_id);
+                tile_regs_release();
+                cb_scale_bcast_bf16.push_back(block_ht);
+                cb_scale_bcast.pop_front(block_ht);
+            }
+
             // ----- Phase 2c+3: broadcast multiply, then untilize straight from DEST -----
             // The mul writes all tiles_per_block(=4) tiles into DEST (indices 0..3); pack_untilize_dest then
             // untilizes them to the row-major output in the packer. This removes the separate cb_out_tile
             // round-trip and the standalone untilize datacopy pass. In 32-bit DEST (fp32_dest_acc), the
             // half-sync pack-untilize block cap is 4 tiles, which is exactly one 128-wide block.
-            reconfig_data_format(cb_in_tile_id, cb_scale_bcast_id);
-            mul_bcast_cols_init_short(cb_in_tile_id, cb_scale_bcast_id);
+            reconfig_data_format(cb_in_tile_id, cb_scale_mul_id);
+            mul_bcast_cols_init_short(cb_in_tile_id, cb_scale_mul_id);
             pack_untilize_dest_init<tiles_per_block, tiles_per_block>(cb_out_fp32_id);
             cb_in_tile.wait_front(tiles_per_block);
-            cb_scale_bcast.wait_front(block_ht);
+            if constexpr (convert_scale) {
+                cb_scale_bcast_bf16.wait_front(block_ht);
+            } else {
+                cb_scale_bcast.wait_front(block_ht);
+            }
             cb_out_fp32.reserve_back(tiles_per_block);
             tile_regs_acquire();
             for (uint32_t k = 0; k < block_wt; ++k) {
-                mul_tiles_bcast_cols(cb_in_tile_id, cb_scale_bcast_id, k, 0, k);
+                mul_tiles_bcast_cols(cb_in_tile_id, cb_scale_mul_id, k, 0, k);
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -126,7 +155,11 @@ void kernel_main() {
             tile_regs_release();
             cb_out_fp32.push_back(tiles_per_block);
             cb_in_tile.pop_front(tiles_per_block);
-            cb_scale_bcast.pop_front(block_ht);
+            if constexpr (convert_scale) {
+                cb_scale_bcast_bf16.pop_front(block_ht);
+            } else {
+                cb_scale_bcast.pop_front(block_ht);
+            }
             pack_untilize_uninit(cb_out_fp32_id);
         }
     }

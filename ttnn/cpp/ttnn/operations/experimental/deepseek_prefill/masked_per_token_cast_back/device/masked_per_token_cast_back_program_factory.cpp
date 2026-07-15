@@ -107,15 +107,20 @@ MaskedPerTokenCastBackProgramFactory::cached_program_t MaskedPerTokenCastBackPro
     const DataFormat fp32_df = DataFormat::Float32;
     const DataFormat output_df = datatype_to_dataformat_converter(operation_attributes.output_dtype);
     const DataFormat idx_df = datatype_to_dataformat_converter(expert_token_counts.dtype());
-    // When the scale is bf16, run the whole compute datapath in bf16: decode E4M3 -> bf16 (lossless),
-    // then tilize / bcast-multiply / untilize in bf16. The FPU eltwise/bcast path addresses SrcA and SrcB
-    // with a shared stride, so both multiply operands must share a format — matching the input tile to the
-    // bf16 scale (rather than upcasting the scale) also halves the datacopy traffic through copy/tilize/untilize.
-    // The metadata scale path stores fp32 scales (int32-backed), so it always takes the fp32 datapath.
+    // Scale values are always fp32 (plain fp32 tensor or the int32-backed metadata tail). When bf16_scale
+    // is set, narrow them to bf16 on-device (the packer, in the compute kernel) and run the whole datapath
+    // in bf16 (HiFi2): decode E4M3 -> bf16, then tilize / bcast-multiply / untilize in bf16. The FPU bcast
+    // path addresses SrcA and SrcB with a shared stride, so the narrowed bf16 scale matches the bf16 input.
     const uint32_t scale_elem_bytes = input_scale.element_size();
-    const bool compute_bf16 = input_scale.dtype() == tt::tt_metal::DataType::BFLOAT16;
+    const bool bf16_scale = operation_attributes.bf16_scale;
+    const bool convert_scale = bf16_scale;  // fp32 scale -> bf16 on-device when the bf16 datapath is requested
+    const bool compute_bf16 = bf16_scale;
     const DataFormat compute_df = compute_bf16 ? DataFormat::Float16_b : fp32_df;
     const uint32_t compute_tile_bytes = tile_h * tile_w * (compute_bf16 ? 2u : 4u);
+    // The scale bcast operand is always the raw fp32 scale (the reader copies col-0 values); it is narrowed
+    // to bf16 on-device only when convert_scale is set.
+    const DataFormat scale_bcast_df = fp32_df;
+    const uint32_t scale_bcast_tile_bytes = tile_h * tile_w * scale_elem_bytes;
 
     constexpr uint32_t cb_input_e4m3_idx = CBIndex::c_0;
     constexpr uint32_t cb_in_rm_idx = CBIndex::c_1;
@@ -130,6 +135,7 @@ MaskedPerTokenCastBackProgramFactory::cached_program_t MaskedPerTokenCastBackPro
     constexpr uint32_t cb_region_scratch_w_idx = CBIndex::c_10;
     constexpr uint32_t cb_counts_scratch_w_idx = CBIndex::c_11;
     constexpr uint32_t cb_table_scratch_w_idx = CBIndex::c_12;
+    constexpr uint32_t cb_scale_bcast_bf16_idx = CBIndex::c_13;  // packer fp32->bf16 scale (convert_scale)
     constexpr uint32_t cb_out_idx = CBIndex::c_16;
 
     auto make_compute_tile_cb = [&](uint32_t cb_idx, uint32_t num_tiles) {
@@ -155,8 +161,17 @@ MaskedPerTokenCastBackProgramFactory::cached_program_t MaskedPerTokenCastBackPro
     // UNPACK/MATH/PACK sub-threads) can run one block ahead of each other without stalling.
     make_compute_tile_cb(cb_in_rm_idx, 2 * tiles_per_block);     // input_e4m3 -> compute_df RM
     make_compute_tile_cb(cb_in_tile_idx, 2 * tiles_per_block);   // tilized input (compute_df)
-    make_compute_tile_cb(cb_scale_bcast_idx, 2 * block_ht);      // col0 = scale, compute_df (matches SrcA)
     make_compute_tile_cb(cb_out_tile_idx, 2 * tiles_per_block);  // multiplied tiles -> untilize
+
+    // cb_scale_bcast: col0 = raw fp32 scale. In the fp32 datapath the multiply consumes it directly; in the
+    // bf16 datapath the packer narrows it into cb_scale_bcast_bf16 first.
+    CircularBufferConfig cb_scale_bcast_cfg =
+        CircularBufferConfig(2 * block_ht * scale_bcast_tile_bytes, {{cb_scale_bcast_idx, scale_bcast_df}})
+            .set_page_size(cb_scale_bcast_idx, scale_bcast_tile_bytes);
+    CreateCircularBuffer(program, all_cores, cb_scale_bcast_cfg);
+    if (convert_scale) {
+        make_compute_tile_cb(cb_scale_bcast_bf16_idx, 2 * block_ht);  // packer fp32->bf16 scale operand
+    }
 
     // cb_out: row-major output (bf16/fp32), one tile per page; tiles_per_block pages = one block,
     // double-buffered.
@@ -255,17 +270,22 @@ MaskedPerTokenCastBackProgramFactory::cached_program_t MaskedPerTokenCastBackPro
         tile_h,
         tile_w,
         cb_control_idx,
-        static_cast<uint32_t>(compute_bf16)};
+        static_cast<uint32_t>(compute_bf16),
+        static_cast<uint32_t>(convert_scale),
+        cb_scale_bcast_bf16_idx};
     // fp32_dest_acc_en=True required (input_e4m3 CB on core). A bf16 scale carries only 8 mantissa bits
     // and the input is fp8 (3), so the broadcast multiply does not need HiFi4's full fp32 passes — use
     // HiFi2 for the bf16-scale path; fp32 scale keeps HiFi4.
-    const MathFidelity math_fidelity =
-        input_scale.dtype() == tt::tt_metal::DataType::BFLOAT16 ? MathFidelity::HiFi2 : MathFidelity::HiFi4;
+    const MathFidelity math_fidelity = bf16_scale ? MathFidelity::HiFi2 : MathFidelity::HiFi4;
     // The fp8 input CB forces a 32-bit DEST (fp32_dest_acc_en). Unpack the e4m3 input straight to a
     // 32-bit DEST so the bf16 datapath decodes/accumulates correctly (mirrors typecast's fp8 path).
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     unpack_to_dest_mode[cb_input_e4m3_idx] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    // The fp32 scale operand must unpack losslessly to DEST before the packer rounds it to bf16.
+    if (convert_scale) {
+        unpack_to_dest_mode[cb_scale_bcast_idx] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
     KernelHandle compute_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/masked_per_token_cast_back/device/kernels/compute/"
