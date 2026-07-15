@@ -98,18 +98,10 @@ def _build_pipe(mesh_device, height, width, *, run_allocation_pass=True):
     from models.tt_dit.pipelines.bria_fibo.pipeline_bria_fibo import BriaFiboPipeline, BriaFiboPipelineConfig
 
     ckpt = _fibo_local()
-    # FIBO_ENC_SP_AXIS selects the encoder's sequence-parallel mesh axis (1 -> SP=mesh[1] x TP=mesh[0],
-    # the default and ~2x faster on 4x8; 0 -> SP=mesh[0] x TP=mesh[1]). Dev-harness knob for the SP/TP
-    # layout perf comparison.
-    encoder_sp_axis = int(os.environ.get("FIBO_ENC_SP_AXIS", "1"))
     return BriaFiboPipeline(
         device=mesh_device,
         config=BriaFiboPipelineConfig.default(
-            mesh_shape=mesh_device.shape,
-            checkpoint_name=ckpt,
-            height=height,
-            width=width,
-            encoder_sp_axis=encoder_sp_axis,
+            mesh_shape=mesh_device.shape, checkpoint_name=ckpt, height=height, width=width
         ),
         run_allocation_pass=run_allocation_pass,
     )
@@ -346,10 +338,9 @@ def test_fibo_encode_perf(*, mesh_device):
     Builds the full ``BriaFiboPipeline`` and times ONLY ``pipe._encode(prompt, negative_prompt, do_cfg=True)``
     -- the same encode the pipeline runs under CFG, encoding both prompts SEQUENTIALLY and returning
     ``(cond_embeds, cond_hidden_states, uncond_embeds, uncond_hidden_states)``. On the 4x8 Galaxy the encoder
-    runs SP=8 x TP=4 on the whole mesh (the default; set ``FIBO_ENC_SP_AXIS=0`` for the SP=4 x TP=8 layout):
-    the token sequence (padded to the fixed 1024 bucket) is sharded across the SP axis (all-gather K/V per
-    attention layer) and Q/K/V/O are tensor-parallel on the TP axis. Measured ~12.5 s/encode for SP=8 x TP=4
-    vs ~23.8 s for SP=4 x TP=8. Positive prompt is FIBO's intended structured-JSON caption (the committed
+    runs SP=8 (axis 1) x TP=4 (axis 0) on the whole mesh: the token sequence (padded to the fixed 1024 bucket)
+    is sharded across the SP axis (all-gather K/V per attention layer) and Q/K/V/O are tensor-parallel on the
+    TP axis (measured ~12.5 s/encode). Positive prompt is FIBO's intended structured-JSON caption (the committed
     ``fibo_vlm_prompt.json``, ~833 tokens); negative is a short free-text string. 1 warmup (absorbs op
     compilation) + N measured passes with boundary device syncs; logs encode seconds (avg/min/max) and the
     produced output shapes. Plain pytest -- no Tracy, no signposts, no device-op CSV. Use ``-s`` to see the

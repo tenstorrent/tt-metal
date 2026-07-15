@@ -78,7 +78,6 @@ class BriaFiboPipelineConfig:
         width: int = 1024,
         topology: ttnn.Topology = ttnn.Topology.Linear,
         num_links: int | None = None,
-        encoder_sp_axis: int = 1,
     ) -> BriaFiboPipelineConfig:
         mesh = tuple(mesh_shape)
         if len(mesh) != 2:
@@ -102,15 +101,13 @@ class BriaFiboPipelineConfig:
             cfg=(1, 0), sp=(sp_factor, sp_axis), tp=(tp_factor, tp_axis)
         )
 
-        # Encoder: sequence-parallel across tokens x tensor-parallel, on the whole mesh (same submesh as
-        # the DiT). ``encoder_sp_axis`` picks which mesh axis carries SP; the other carries TP. Default 1
-        # -> SP=mesh[1] (8 on 4x8) x TP=mesh[0] (4); set 0 -> SP=mesh[0] (4) x TP=mesh[1] (8). The token
-        # sequence is padded to a fixed 1024 bucket and sharded over the SP axis; SmolLM3Attention
-        # all-gathers K/V over the SP axis and Q/K/V/O over the TP axis. PCC-validated (both axes) by
-        # tests/encoders/smollm3/test_smollm3.py::test_smollm3_encoder_sp. On the 4x8 Galaxy SP=8 x TP=4
-        # measured ~12.5 s/encode vs ~23.8 s for SP=4 x TP=8 (test_fibo_encode_perf), hence the default.
-        enc_sp_axis = encoder_sp_axis
-        enc_tp_axis = 1 - enc_sp_axis
+        # Encoder: sequence-parallel across tokens on axis 1 (SP = mesh[1] = 8 on 4x8) x tensor-parallel
+        # on axis 0 (TP = mesh[0] = 4), on the whole mesh (same submesh as the DiT). The token sequence is
+        # padded to a fixed 1024 bucket and sharded over the SP axis; SmolLM3Attention all-gathers K/V over
+        # the SP axis and Q/K/V/O over the TP axis. PCC-validated by
+        # tests/encoders/smollm3/test_smollm3.py::test_smollm3_encoder_sp. On the 4x8 Galaxy this SP=8 x
+        # TP=4 layout measured ~12.5 s/encode vs ~23.8 s for SP=4 x TP=8 (test_fibo_encode_perf).
+        enc_sp_axis, enc_tp_axis = 1, 0
         encoder_parallel_config = EncoderParallelConfig.from_tuples(
             tp=(mesh[enc_tp_axis], enc_tp_axis),
             sp=(mesh[enc_sp_axis], enc_sp_axis),
