@@ -45,7 +45,9 @@ ttnn::Tensor all_gather_async(
     std::optional<uint32_t> num_workers_per_link = std::nullopt,
     std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
     bool reverse_order = false,
-    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    std::optional<uint32_t> batch_slice_idx = std::nullopt,
+    std::optional<uint32_t> valid_gather_extent = std::nullopt);
 
 // Overload with multi-device input
 std::vector<ttnn::Tensor> all_gather_async(

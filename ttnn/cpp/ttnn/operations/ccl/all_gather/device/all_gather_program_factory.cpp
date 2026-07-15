@@ -130,7 +130,9 @@ AllGatherDeviceOperation::AllGatherProgram::create_at(
         operation_attributes.num_buffers_per_channel,
         first_coord,  // first core in the subdevice is our offset as we don't use this version for fusions
         false,        // reverse_order = false
-        operation_attributes.sub_core_grid);
+        operation_attributes.sub_core_grid,
+        operation_attributes.batch_slice_idx,
+        operation_attributes.valid_gather_extent);
 
     return {
         std::move(program),
@@ -154,6 +156,14 @@ void AllGatherDeviceOperation::AllGatherProgram::override_runtime_arguments(
             range.end_coord());
         const auto& shared_variables = cached_workload.shared_variables.at(range);
 
+        // Re-resolve slice/partial-gather values so a value-only change (e.g. growing valid_gather_extent
+        // during decode) is re-patched into the cached program without a recompile.
+        const auto slice_params = ttnn::compute_all_gather_slice_params(
+            tensor_args.input_tensor,
+            operation_attributes.dim,
+            operation_attributes.batch_slice_idx,
+            operation_attributes.valid_gather_extent);
+
         all_gather_async_minimal_default_helper_override_runtime_arguments(
             program,
             shared_variables.program_artifacts.reader_kernel_id,
@@ -167,7 +177,9 @@ void AllGatherDeviceOperation::AllGatherProgram::override_runtime_arguments(
             shared_variables.barrier_semaphore,
             shared_variables.multidevice_semaphores,
             tensor_args.input_tensor,
-            tensor_return_value);
+            tensor_return_value,
+            slice_params.input_batch_base,
+            slice_params.valid_pages);
     }
 }
 

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <limits>
+
 #include "all_gather_async_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -50,6 +52,24 @@ private:
 namespace ttnn {
 using AllGatherProgramArtifacts = experimental::prim::AllGatherProgramArtifacts;
 
+// Resolved per-op values for the single-batch-slice and partial (overallocated) gather features.
+// Computed once from the input tensor + attributes and shared between program build (compile/runtime
+// arg emission) and override_runtime_arguments (re-patch on cache hit) so the two never disagree.
+struct AllGatherSliceParams {
+    uint32_t batch_head_size = 0;   // batch*head loop count; reduced to one batch's heads when slicing
+    uint32_t input_batch_base = 0;  // page offset into the input to the sliced batch slot (0 = full batch)
+    uint32_t valid_pages = 0;       // per-batch-head valid page count; == full page count when not clamping
+};
+
+// Resolve the slice/partial-gather values. batch_slice_idx selects one index along dim 0 (requires the
+// gather dim != 0); valid_gather_extent is the valid extent (elements, tile-aligned) along the gather
+// dim, which must be the height dim (rank-2). Both default to std::nullopt => feature off (inert values).
+AllGatherSliceParams compute_all_gather_slice_params(
+    const Tensor& input_tensor,
+    int32_t dim,
+    std::optional<uint32_t> batch_slice_idx,
+    std::optional<uint32_t> valid_gather_extent);
+
 // Builder function that creates kernels and returns artifacts
 AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifacts(
     tt::tt_metal::Program& program,
@@ -73,7 +93,9 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     std::optional<uint32_t> num_buffers_per_channel,
     CoreCoord core_grid_offset,
     bool reverse_order,
-    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    std::optional<uint32_t> batch_slice_idx = std::nullopt,
+    std::optional<uint32_t> valid_gather_extent = std::nullopt);
 
 // Runtime argument override function
 void all_gather_async_minimal_default_helper_override_runtime_arguments(
@@ -89,6 +111,8 @@ void all_gather_async_minimal_default_helper_override_runtime_arguments(
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::vector<GlobalSemaphore>& semaphore,
     const Tensor& input,
-    const Tensor& output);
+    const Tensor& output,
+    uint32_t input_batch_base = 0,
+    uint32_t valid_pages = std::numeric_limits<uint32_t>::max());
 
 }  // namespace ttnn

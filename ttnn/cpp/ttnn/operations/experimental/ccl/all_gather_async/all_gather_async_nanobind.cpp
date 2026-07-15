@@ -97,8 +97,13 @@ ttnn::Tensor all_gather_async_wrapper_persistent_buffer(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    std::optional<uint32_t> batch_slice_idx = std::nullopt,
+    std::optional<uint32_t> valid_gather_extent = std::nullopt) {
     if constexpr (Reversed) {
+        TT_FATAL(
+            !batch_slice_idx.has_value() && !valid_gather_extent.has_value(),
+            "batch_slice_idx / valid_gather_extent are not supported on all_gather_async_reversed");
         return ttnn::experimental::all_gather_async_reversed(
             input_tensor,
             persistent_output_buffer,
@@ -135,7 +140,9 @@ ttnn::Tensor all_gather_async_wrapper_persistent_buffer(
             num_workers_per_link,
             num_buffers_per_channel,
             false,
-            sub_core_grids);
+            sub_core_grids,
+            batch_slice_idx,
+            valid_gather_extent);
     }
 }
 
@@ -222,6 +229,8 @@ void bind_all_gather_async(nb::module_& mod) {
             num_links (int, optional): Number of links to use for the all-gather operation. Defaults to the maximum available.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
             topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring` for overloads without `cluster_axis`; the cluster-axis overload requires an explicit value.
+            batch_slice_idx (int, optional): Gather only this index along dim 0. The gather dim must not be 0; the output dim-0 extent becomes 1. Available on the persistent-buffer overload. Defaults to `None`.
+            valid_gather_extent (int, optional): Positive, tile-aligned prefix extent along the height gather dim. Row-major gathers produce a tight `num_devices * valid_gather_extent` output; the tiled primitive retains the full allocation and limits data movement. Available on the persistent-buffer overload. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -277,7 +286,9 @@ void bind_all_gather_async(nb::module_& mod) {
             nb::arg("chunks_per_sync") = nb::none(),
             nb::arg("num_workers_per_link") = nb::none(),
             nb::arg("num_buffers_per_channel") = nb::none(),
-            nb::arg("sub_core_grids") = std::nullopt),
+            nb::arg("sub_core_grids") = std::nullopt,
+            nb::arg("batch_slice_idx") = nb::none(),
+            nb::arg("valid_gather_extent") = nb::none()),
         ttnn::overload_t(
             &all_gather_async_wrapper_mesh_device<false>,
             nb::arg("input_tensor"),
@@ -359,7 +370,9 @@ void bind_all_gather_async(nb::module_& mod) {
             nb::arg("chunks_per_sync") = nb::none(),
             nb::arg("num_workers_per_link") = nb::none(),
             nb::arg("num_buffers_per_channel") = nb::none(),
-            nb::arg("sub_core_grids") = std::nullopt),
+            nb::arg("sub_core_grids") = std::nullopt,
+            nb::arg("batch_slice_idx") = nb::none(),
+            nb::arg("valid_gather_extent") = nb::none()),
         ttnn::overload_t(
             &all_gather_async_wrapper_mesh_device<true>,
             nb::arg("input_tensor"),

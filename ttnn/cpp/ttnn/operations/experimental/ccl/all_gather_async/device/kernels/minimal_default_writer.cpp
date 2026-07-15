@@ -118,10 +118,20 @@ void kernel_main() {
 
     const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 0 is forward, 1 is backward
     const auto input_tile_id_start = get_arg_val<uint32_t>(arg_idx++);
-    const auto input_tile_id_end = get_arg_val<uint32_t>(arg_idx++);
+    auto input_tile_id_end = get_arg_val<uint32_t>(arg_idx++);
     const auto start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     const auto start_row_offset = get_arg_val<uint32_t>(arg_idx++);
     const auto chunks_per_sync = get_arg_val<uint32_t>(arg_idx++);
+    // valid_pages: clamp the gather to the valid prefix of an overallocated input. Must match the
+    // reader's clamp (same uniform value) so producer/consumer page counts and the ring slice
+    // protocol stay matched. Floor at input_tile_id_start to avoid unsigned underflow for a worker
+    // whose whole range is past the valid boundary; applied here (before split-forwarding is
+    // computed) so total_tiles/first_half use the clamped range. Default (== input_tile_id_end)
+    // leaves the range unchanged.
+    const auto valid_pages = get_arg_val<uint32_t>(arg_idx++);
+    if (valid_pages < input_tile_id_end) {
+        input_tile_id_end = (valid_pages < input_tile_id_start) ? input_tile_id_start : valid_pages;
+    }
 #ifdef USE_WORKER_MUX
     bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
     const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++);

@@ -53,6 +53,11 @@ void kernel_main() {
     const address_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
     uint32_t row_id_start = get_arg_val<uint32_t>(arg_idx++);
     uint32_t row_id_end = get_arg_val<uint32_t>(arg_idx++);
+#ifdef DIRECT_GATHER_OUTPUT_ROWS
+    const uint32_t local_height = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t gathered_height = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t sender_index = get_arg_val<uint32_t>(arg_idx++);
+#endif
     bool wait_output_semaphore = get_arg_val<uint32_t>(arg_idx++);
     bool reset_global_semaphore = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
@@ -132,6 +137,15 @@ void kernel_main() {
 
     // 1. mcast via fabric to remote tensor addresses
     if (is_sender) {
+        const auto get_output_row_id = [&](uint32_t local_row_id) {
+#ifdef DIRECT_GATHER_OUTPUT_ROWS
+            const uint32_t batch_middle_index = local_row_id / local_height;
+            const uint32_t height_index = local_row_id % local_height;
+            return batch_middle_index * gathered_height + sender_index * local_height + height_index;
+#else
+            return local_row_id;
+#endif
+        };
         uint32_t row_id = row_id_start;
         while (row_id < row_id_end) {
             size_t l1_read_addr = get_read_ptr(cb0_id);
@@ -143,14 +157,16 @@ void kernel_main() {
                 for (uint32_t j = 0; j < num_packets_per_row && bytes_remaining > 0; j++) {
                     uint32_t packet_size = std::min(max_packet_size, bytes_remaining);
 
-                    noc_async_write(l1_read_addr + offset, tensor0_addrgen.get_noc_addr(row_id, offset), packet_size);
+                    const uint32_t output_row_id = get_output_row_id(row_id);
+                    noc_async_write(
+                        l1_read_addr + offset, tensor0_addrgen.get_noc_addr(output_row_id, offset), packet_size);
                     fabric_multicast_noc_unicast_write_with_state<
                         UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
                         fabric_connection,
                         unicast_route_id,
                         l1_read_addr + offset,
                         tt::tt_fabric::NocUnicastCommandHeader{
-                            linear::addrgen_detail::get_noc_address(tensor0_addrgen, row_id, offset)},
+                            linear::addrgen_detail::get_noc_address(tensor0_addrgen, output_row_id, offset)},
                         packet_size);
                     noc_async_writes_flushed();
                     offset += packet_size;
@@ -160,33 +176,50 @@ void kernel_main() {
             } else {
                 uint32_t num_pages_for_current_packet = std::min<uint32_t>(row_id_end - row_id, num_rows_per_packet);
                 if (num_pages_for_current_packet == 1) {
-                    noc_async_write(l1_read_addr, tensor0_addrgen.get_noc_addr(row_id, 0), page_size);
+                    const uint32_t output_row_id = get_output_row_id(row_id);
+                    noc_async_write(l1_read_addr, tensor0_addrgen.get_noc_addr(output_row_id, 0), page_size);
                     fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                         fabric_connection,
                         unicast_route_id,
                         l1_read_addr,
                         tt::tt_fabric::NocUnicastCommandHeader{
-                            linear::addrgen_detail::get_noc_address(tensor0_addrgen, row_id, 0)},
+                            linear::addrgen_detail::get_noc_address(tensor0_addrgen, output_row_id, 0)},
                         page_size);
                     noc_async_writes_flushed();
                     l1_read_addr += page_size;
                     row_id++;
-                } else if (num_pages_for_current_packet == 2) {
-                    noc_async_write(l1_read_addr, tensor0_addrgen.get_noc_addr(row_id, 0), page_size);
-                    noc_async_write(l1_read_addr + page_size, tensor0_addrgen.get_noc_addr(row_id + 1, 0), page_size);
-                    fabric_multicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
-                        fabric_connection,
-                        scatter_route_id,
-                        l1_read_addr,
-                        tt::tt_fabric::NocUnicastScatterCommandHeader(
-                            {linear::addrgen_detail::get_noc_address(tensor0_addrgen, row_id, 0),
-                             linear::addrgen_detail::get_noc_address(tensor0_addrgen, row_id + 1, 0)}),
-                        page_size * 2);
-                    noc_async_writes_flushed();
-                    l1_read_addr += page_size * 2;
-                    row_id += 2;
                 } else {
-                    ASSERT(false);
+                    while (num_pages_for_current_packet >= 2) {
+                        const uint32_t output_row_id0 = get_output_row_id(row_id);
+                        const uint32_t output_row_id1 = get_output_row_id(row_id + 1);
+                        noc_async_write(l1_read_addr, tensor0_addrgen.get_noc_addr(output_row_id0, 0), page_size);
+                        noc_async_write(
+                            l1_read_addr + page_size, tensor0_addrgen.get_noc_addr(output_row_id1, 0), page_size);
+                        fabric_multicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
+                            fabric_connection,
+                            scatter_route_id,
+                            l1_read_addr,
+                            tt::tt_fabric::NocUnicastScatterCommandHeader(
+                                {linear::addrgen_detail::get_noc_address(tensor0_addrgen, output_row_id0, 0),
+                                 linear::addrgen_detail::get_noc_address(tensor0_addrgen, output_row_id1, 0)}),
+                            page_size * 2);
+                        l1_read_addr += page_size * 2;
+                        row_id += 2;
+                        num_pages_for_current_packet -= 2;
+                    }
+                    if (num_pages_for_current_packet == 1) {
+                        const uint32_t output_row_id = get_output_row_id(row_id);
+                        noc_async_write(l1_read_addr, tensor0_addrgen.get_noc_addr(output_row_id, 0), page_size);
+                        fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                            fabric_connection,
+                            unicast_route_id,
+                            l1_read_addr,
+                            tt::tt_fabric::NocUnicastCommandHeader{
+                                linear::addrgen_detail::get_noc_address(tensor0_addrgen, output_row_id, 0)},
+                            page_size);
+                        row_id++;
+                    }
+                    noc_async_writes_flushed();
                 }
             }
             cb_pop_front(cb0_id, num_rows_per_packet);

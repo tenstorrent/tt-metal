@@ -89,12 +89,20 @@ ttnn::Tensor all_gather_async(
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     bool reverse_order,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    std::optional<uint32_t> batch_slice_idx,
+    std::optional<uint32_t> valid_gather_extent) {
     auto* mesh_device_ptr = input_tensor.device();
     TT_FATAL(mesh_device_ptr != nullptr, "Mesh device is required for all_gather_async operation");
     uint32_t resolved_num_links =
         num_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device_ptr, cluster_axis));
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
+    const int32_t rank = input_tensor.logical_shape().rank();
+    const int32_t normalized_dim = dim < 0 ? rank + dim : dim;
+    const bool direct_nd_row_major = input_tensor.layout() == ttnn::ROW_MAJOR_LAYOUT &&
+                                     input_tensor.memory_config().created_with_nd_shard_spec() &&
+                                     normalized_dim == rank - 2;
+    use_all_gather_async_via_broadcast = use_all_gather_async_via_broadcast || direct_nd_row_major;
     bool composite_all_gather_case =
         !use_all_gather_async_via_broadcast && composite_common::use_composite_all_gather(input_tensor, dim);
     bool all_gather_async_llama_sharded_case = composite_common::use_all_gather_async_llama_sharded(
@@ -102,8 +110,18 @@ ttnn::Tensor all_gather_async(
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
         log_debug(tt::LogOp, "Using composite_all_gather");
         TT_FATAL(!sub_core_grid.has_value(), "Composite All Gather OP does not currently support sub core grid");
+        // The composite path fuses row-major batch/prefix selection into its broadcast reader;
+        // tiled inputs retain the staged-slice fallback. valid_gather_extent yields a tight output.
         return composite_common::composite_all_gather(
-            input_tensor, dim, resolved_num_links, memory_config, subdevice_id, cluster_axis);
+            input_tensor,
+            dim,
+            resolved_num_links,
+            memory_config,
+            subdevice_id,
+            cluster_axis,
+            /*use_l1_small_for_semaphores*/ false,
+            batch_slice_idx,
+            valid_gather_extent);
     }
     log_debug(tt::LogOp, "Using minimal_all_gather_async");
     return ttnn::prim::all_gather_async(
@@ -125,7 +143,9 @@ ttnn::Tensor all_gather_async(
         num_buffers_per_channel,
         reverse_order,
         sub_core_grid,
-        /*mesh_device*/ nullptr);
+        /*mesh_device*/ nullptr,
+        batch_slice_idx,
+        valid_gather_extent);
 }
 
 // Overload with multi-device input

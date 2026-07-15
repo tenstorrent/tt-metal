@@ -95,7 +95,9 @@ DefaultMeshWorkloadFactory::cached_program_t DefaultMeshWorkloadFactory::create_
                 num_buffers_per_channel,
                 core_grid_offset,
                 reverse_order,
-                sub_core_grid);
+                sub_core_grid,
+                operation_attributes.batch_slice_idx,
+                operation_attributes.valid_gather_extent);
 
     return {
         std::move(program),
@@ -124,6 +126,13 @@ void DefaultMeshWorkloadFactory::override_runtime_arguments(
         auto semaphore = operation_attributes.semaphore;
         auto barrier_semaphore = operation_attributes.barrier_semaphore;
 
+        // Re-resolve the slice/partial-gather values so a value-only change reuses the cached program.
+        const auto slice_params = compute_all_gather_slice_params(
+            input,
+            operation_attributes.dim,
+            operation_attributes.batch_slice_idx,
+            operation_attributes.valid_gather_extent);
+
         all_gather_async_minimal_default_helper_override_runtime_arguments(
             program,
             shared_vars.reader_kernel_id,
@@ -137,7 +146,9 @@ void DefaultMeshWorkloadFactory::override_runtime_arguments(
             barrier_semaphore,
             semaphore,
             input,
-            output);
+            output,
+            slice_params.input_batch_base,
+            slice_params.valid_pages);
     }
 }
 
@@ -208,6 +219,38 @@ uint32_t default_workers(
 
 using namespace tt::constants;
 
+AllGatherSliceParams compute_all_gather_slice_params(
+    const Tensor& input_tensor,
+    int32_t /*dim*/,
+    std::optional<uint32_t> batch_slice_idx,
+    std::optional<uint32_t> valid_gather_extent) {
+    constexpr uint32_t TILE_SIZE = 32;
+    const auto& shape = input_tensor.padded_shape();
+    const uint32_t input_tensor_Wt = shape[-1] / TILE_SIZE;
+    const uint32_t input_tensor_Ht = shape[-2] / TILE_SIZE;
+    const uint32_t single_batch_head_num_pages = input_tensor_Ht * input_tensor_Wt;
+    const uint32_t batch_head_size = std::accumulate(shape.cbegin(), shape.cend() - 2, 1u, std::multiplies<uint32_t>());
+
+    AllGatherSliceParams params;
+    params.batch_head_size = batch_head_size;
+    params.input_batch_base = 0;
+    params.valid_pages = single_batch_head_num_pages;  // default: clamp is a no-op
+
+    if (batch_slice_idx.has_value()) {
+        // Slice a single index along dim 0: read only that batch's heads, into output slot 0.
+        const uint32_t dim0_extent = shape[0];
+        const uint32_t heads_per_batch = batch_head_size / dim0_extent;
+        params.batch_head_size = heads_per_batch;
+        params.input_batch_base = batch_slice_idx.value() * heads_per_batch * single_batch_head_num_pages;
+    }
+    if (valid_gather_extent.has_value()) {
+        // Valid prefix of an overallocated height (rank-2) dim, expressed as a page count.
+        const uint32_t valid_Ht = valid_gather_extent.value() / TILE_SIZE;
+        params.valid_pages = valid_Ht * input_tensor_Wt;
+    }
+    return params;
+}
+
 AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifacts(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
@@ -230,7 +273,9 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset,
     const bool reverse_order,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    std::optional<uint32_t> batch_slice_idx,
+    std::optional<uint32_t> valid_gather_extent) {
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto& input_tensor_shape = input_tensor.padded_shape();
@@ -512,6 +557,14 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     uint32_t output_tensor_Wt = output_tensor_shape[-1] / TILE_SIZE;
     uint32_t output_tensor_Ht = output_tensor_shape[-2] / TILE_SIZE;
 
+    // Single-batch-slice / partial-gather resolution. `single_batch_head_num_pages` above stays keyed
+    // on the FULL batch_head_size (per-plane page count is slice-independent); only the loop count
+    // (input_batch_head_count CT arg) and the two new RT args change.
+    const auto slice_params = compute_all_gather_slice_params(input_tensor, dim, batch_slice_idx, valid_gather_extent);
+    const uint32_t effective_batch_head_size = slice_params.batch_head_size;
+    const uint32_t input_batch_base = slice_params.input_batch_base;
+    const uint32_t valid_pages = slice_params.valid_pages;
+
     auto num_full_size_channels = num_workers_per_direction;
     auto num_header_only_channels = 0;
     size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
@@ -534,7 +587,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         num_targets_backward,             // num_slices_backward_direction
         static_cast<uint32_t>(topology),  // topology
         normalized_dim,                   // gather_dim
-        batch_head_size,                  // input_batch_head_count (product of the first two dims)
+        effective_batch_head_size,        // input_batch_head_count (reduced to one batch's heads when slicing)
         input_tensor_Wt,                  // input_tensor_Wt
         input_tensor_Ht,                  // input_tensor_Ht
         input_tensor_C,                   // input_tensor_C
@@ -572,7 +625,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         num_targets_backward,             // num_targets_backward_direction
         static_cast<uint32_t>(topology),  // topology
         normalized_dim,                   // gather_dim
-        batch_head_size,                  // input_batch_head_count (product of the first two dims)
+        effective_batch_head_size,        // input_batch_head_count (reduced to one batch's heads when slicing)
         input_tensor_Wt,                  // input_tensor_Wt
         input_tensor_Ht,                  // input_tensor_Ht
         input_tensor_C,                   // input_tensor_C
@@ -698,6 +751,8 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                     start_pages_read_in_row,            // start_pages_read_in_row RT ARG
                     start_row_offset,                   // start_row_offset RT ARG
                     chunks_per_sync_val,                // chunks_per_sync RT ARG
+                    input_batch_base,                   // input_batch_base RT ARG (single-batch slice)
+                    valid_pages,                        // valid_pages RT ARG (partial/overallocated gather)
                 };
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
@@ -742,7 +797,8 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                     input_tile_id_end,        // input_tile_id_end
                     start_pages_read_in_row,  // start_pages_read_in_row
                     start_row_offset,         // start_row_offset
-                    chunks_per_sync_val};     // chunks_per_sync
+                    chunks_per_sync_val,      // chunks_per_sync
+                    valid_pages};             // valid_pages RT ARG (partial/overallocated gather)
 
                 if (num_mux_cores_per_direction_per_link) {
                     ccl::fabric_mux_connection_rt_args(
@@ -820,7 +876,9 @@ void all_gather_async_minimal_default_helper_override_runtime_arguments(
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::vector<GlobalSemaphore>& semaphore,
     const Tensor& input,
-    const Tensor& output) {
+    const Tensor& output,
+    uint32_t input_batch_base,
+    uint32_t valid_pages) {
     // Update runtime arguments for all worker cores
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
@@ -839,11 +897,17 @@ void all_gather_async_minimal_default_helper_override_runtime_arguments(
                 worker_reader_sender_runtime_args[0] = input.buffer()->address();
                 worker_reader_sender_runtime_args[1] = output.buffer()->address();
                 worker_reader_sender_runtime_args[2] = out_ready_semaphore.address();
+                // Re-patch slice/partial-gather args so a value-only change (e.g. growing kv_actual_isl
+                // during decode) reuses the cached program without a recompile. Indices must match the
+                // reader RT arg order emitted in the builder.
+                worker_reader_sender_runtime_args[9] = input_batch_base;
+                worker_reader_sender_runtime_args[10] = valid_pages;
 
                 // sender writer
                 auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
                 worker_writer_sender_runtime_args[0] = output.buffer()->address();
                 worker_writer_sender_runtime_args[3] = out_ready_semaphore.address();
+                worker_writer_sender_runtime_args[14] = valid_pages;
 
                 if (barrier_semaphore.has_value()) {
                     worker_writer_sender_runtime_args[5] = barrier_semaphore.value().address();

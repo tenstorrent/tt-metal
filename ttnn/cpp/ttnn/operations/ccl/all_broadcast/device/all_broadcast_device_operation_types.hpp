@@ -18,6 +18,11 @@ struct AllBroadcastParams {
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     tt::tt_fabric::Topology topology{};
     bool use_l1_small_for_semaphores = false;
+    // Row-major composite all-gather can select a single batch and/or a valid
+    // height prefix in the broadcast reader.  The outputs are compact; no
+    // intermediate unshard or slice tensor is materialized.
+    std::optional<uint32_t> batch_slice_idx;
+    std::optional<uint32_t> valid_gather_extent;
 };
 
 }  // namespace ttnn::prim

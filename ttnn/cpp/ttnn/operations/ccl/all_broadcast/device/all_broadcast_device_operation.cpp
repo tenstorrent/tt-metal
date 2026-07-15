@@ -31,15 +31,61 @@ void AllBroadcastDeviceOperation::validate_on_program_cache_miss(
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
-            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED,
         "Unsupported memory layout {}.",
         input_tensor.memory_config().memory_layout());
+
+    if (input_tensor.layout() == Layout::ROW_MAJOR &&
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED) {
+        const auto& shape = input_tensor.logical_shape();
+        const auto& shard_shape = input_tensor.nd_shard_spec()->shard_shape;
+        TT_FATAL(
+            shard_shape[-1] == shape[-1],
+            "ROW_MAJOR all_broadcast requires each ND shard to contain the full row width; shard width {} != tensor "
+            "width {}",
+            shard_shape[-1],
+            shape[-1]);
+    }
+
+    if (operation_attributes.batch_slice_idx.has_value() || operation_attributes.valid_gather_extent.has_value()) {
+        const auto& shape = input_tensor.logical_shape();
+        TT_FATAL(
+            input_tensor.layout() == Layout::ROW_MAJOR,
+            "Fused all_broadcast selection requires ROW_MAJOR input, got {}",
+            input_tensor.layout());
+        TT_FATAL(shape.rank() >= 3, "Fused all_broadcast selection requires rank >= 3, got {}", shape.rank());
+        TT_FATAL(
+            input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED &&
+                input_tensor.memory_config().memory_layout() != TensorMemoryLayout::BLOCK_SHARDED,
+            "Fused all_broadcast selection does not support rows split across WIDTH/BLOCK shards");
+        if (operation_attributes.batch_slice_idx.has_value()) {
+            TT_FATAL(
+                *operation_attributes.batch_slice_idx < shape[0],
+                "batch_slice_idx {} is out of range for dim-0 extent {}",
+                *operation_attributes.batch_slice_idx,
+                shape[0]);
+        }
+        if (operation_attributes.valid_gather_extent.has_value()) {
+            TT_FATAL(
+                *operation_attributes.valid_gather_extent > 0 && *operation_attributes.valid_gather_extent <= shape[-2],
+                "valid_gather_extent {} must be in [1, {}]",
+                *operation_attributes.valid_gather_extent,
+                shape[-2]);
+        }
+    }
 }
 
 std::vector<TensorSpec> AllBroadcastDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const Tensor& input) {
     const auto& input_tensor = input;
-    const auto& shape = input_tensor.logical_shape();
+    auto shape = input_tensor.logical_shape();
+    if (operation_attributes.batch_slice_idx.has_value()) {
+        shape[0] = 1;
+    }
+    if (operation_attributes.valid_gather_extent.has_value()) {
+        shape[-2] = *operation_attributes.valid_gather_extent;
+    }
     const uint32_t ring_size = operation_attributes.ring_size;
     std::vector<TensorSpec> output_specs;
     output_specs.reserve(ring_size);
@@ -103,7 +149,9 @@ std::vector<ttnn::Tensor> all_broadcast(
     const ttnn::MemoryConfig& output_mem_config,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
-    bool use_l1_small_for_semaphores) {
+    bool use_l1_small_for_semaphores,
+    std::optional<uint32_t> batch_slice_idx,
+    std::optional<uint32_t> valid_gather_extent) {
     const auto& tensor_topology = input_tensor.tensor_topology();
     const auto& tensor_topology_shape = tensor_topology.distribution_shape();
 
@@ -132,7 +180,9 @@ std::vector<ttnn::Tensor> all_broadcast(
             .cluster_axis = cluster_axis,
             .sub_device_id = sub_device_id,
             .topology = topology,
-            .use_l1_small_for_semaphores = use_l1_small_for_semaphores},
+            .use_l1_small_for_semaphores = use_l1_small_for_semaphores,
+            .batch_slice_idx = batch_slice_idx,
+            .valid_gather_extent = valid_gather_extent},
         input_tensor);
 }
 }  // namespace ttnn::prim

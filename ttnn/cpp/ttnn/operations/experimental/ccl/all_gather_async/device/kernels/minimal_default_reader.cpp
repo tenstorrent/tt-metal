@@ -51,10 +51,22 @@ void kernel_main() {
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 0 is forward, 1 is backward
     const auto input_tile_id_start = get_arg_val<uint32_t>(arg_idx++);
-    const auto input_tile_id_end = get_arg_val<uint32_t>(arg_idx++);
+    auto input_tile_id_end = get_arg_val<uint32_t>(arg_idx++);
     const auto start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     const auto start_row_offset = get_arg_val<uint32_t>(arg_idx++);
     const auto chunks_per_sync = get_arg_val<uint32_t>(arg_idx++);
+    // Phase-1 input page base: nonzero only for single-batch-slice gather (skip to the sliced
+    // input slot). The slice is emitted into output slot 0. Default 0 => gather the full batch.
+    const auto input_batch_base = get_arg_val<uint32_t>(arg_idx++);
+    // valid_pages: clamp the gather to the valid prefix of an overallocated input so only valid
+    // data moves. Uniform across cores/devices, so producer/consumer page counts and the ring
+    // slice protocol stay matched. Default (== input_tile_id_end) leaves the range unchanged.
+    // Floor at input_tile_id_start so a worker whose whole range is past the valid boundary gets
+    // an empty range instead of an unsigned underflow (which would corrupt split-forwarding).
+    const auto valid_pages = get_arg_val<uint32_t>(arg_idx++);
+    if (valid_pages < input_tile_id_end) {
+        input_tile_id_end = (valid_pages < input_tile_id_start) ? input_tile_id_start : valid_pages;
+    }
 
     constexpr uint32_t ct_idx = 18;
 
@@ -116,9 +128,10 @@ void kernel_main() {
     }
 
     // Push out our local slice
+    // For a single-batch-slice gather this starts at the sliced batch slot; otherwise 0 (full batch).
     uint32_t tiles_read = input_tile_id_start;
     uint32_t tiles_to_read = input_tile_id_end;
-    uint32_t output_tile_id_start = 0;
+    uint32_t output_tile_id_start = input_batch_base;
     for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
         while (tiles_read < tiles_to_read) {
             uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;

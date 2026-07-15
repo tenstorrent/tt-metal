@@ -38,9 +38,11 @@ void bind_all_gather(nb::module_& mod) {
             num_buffers_per_channel (int, optional): Hyperparameter.
             sub_core_grids (CoreRangeSet, optional): Specifies sub-core grid ranges for advanced core selection control. Default uses all the cores in the device.
             use_l1_small_for_semaphores (bool, optional): If True, allocate internal global semaphores in L1_SMALL instead of L1 to reduce L1 fragmentation. Defaults to `False`.
+            batch_slice_idx (int, optional): Gather only this single index along dim 0 instead of the whole tensor. The input must have rank 3 or greater and the gather dim must not be 0; the gathered output collapses dim 0 to 1 (a B-fold memory saving). Tiled layout only. Defaults to `None`.
+            valid_gather_extent (int, optional): Positive, tile-aligned valid extent (in elements) along the gather dim of an overallocated input. Only this prefix of each device's slab is gathered, leaving the remainder of a persistent output buffer untouched and moving less data. The gather dim must be the height dim (rank-2). Tiled layout only. Defaults to `None`.
 
         Returns:
-            ttnn.Tensor: The gathered tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] * num_devices, where num_devices is the number of devices along the `cluster_axis` if specified, else the total number of devices along the mesh.
+            ttnn.Tensor: The gathered tensor. Unspecified dimensions retain their input extents, except dim 0 becomes 1 when `batch_slice_idx` is set. The gather dimension is `input_shape[dim] * num_devices`; `valid_gather_extent` limits data movement but retains this full allocation.
 
         Example:
             >>> full_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
@@ -74,7 +76,9 @@ void bind_all_gather(nb::module_& mod) {
         nb::arg("num_workers_per_link") = nb::none(),
         nb::arg("num_buffers_per_channel") = nb::none(),
         nb::arg("sub_core_grids") = nb::none(),
-        nb::arg("use_l1_small_for_semaphores") = false);
+        nb::arg("use_l1_small_for_semaphores") = false,
+        nb::arg("batch_slice_idx") = nb::none(),
+        nb::arg("valid_gather_extent") = nb::none());
 }
 
 }  // namespace ttnn::operations::ccl

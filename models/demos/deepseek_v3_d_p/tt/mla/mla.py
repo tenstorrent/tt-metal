@@ -1227,7 +1227,19 @@ class ttMLA:
             kv_actual_global=kv_actual_isl,
             cluster_axis=self.sp_axis,
         )
-        kvpe_dev = self._gather_kvpe_prefix(kvpe_cache, cache_batch_idx)
+        # Gather only the block-cyclic slabs that actually hold valid tokens, dropping the unwritten padded
+        # tail. logical_n is the valid length INCLUDING the just-written current chunk (kv_actual_isl is the
+        # prior prefix; the current chunk adds chunk_global) — matches the dense ring_mla path. The valid
+        # prefix spans ceil(logical_n / chunk_global) global slabs == valid_slabs * seq_len_local rows per
+        # device (slab-major → a contiguous leading prefix). Pass it only when it truly shrinks the gather.
+        # block_cyclic_chunk_local stays seq_len_local below, so the tight gathered T keeps T/sp
+        # (= valid_slabs*seq_len_local) divisible by chunk_local for sparse_sdpa.
+        chunk_global = seq_len_local * self.sp_factor
+        logical_n = kv_actual_isl + chunk_global
+        valid_slabs = (logical_n + chunk_global - 1) // chunk_global
+        valid_per_dev = valid_slabs * seq_len_local
+        gather_valid = valid_per_dev if valid_per_dev < kvpe_cache.shape[2] else None
+        kvpe_dev = self._gather_kvpe_prefix(kvpe_cache, cache_batch_idx, valid_gather_extent=gather_valid)
         ttnn.deallocate(tt_kvpe)
 
         # Sparse attention runs over latent V; project to v_head_dim afterwards. The prefix is already
@@ -1322,11 +1334,23 @@ class ttMLA:
     # only sparse-specific gather/attention helpers live below.
     # ----------------------------------------------------------------------------------------
 
-    def _all_gather(self, t, dim, cluster_axis):
+    def _all_gather(self, t, dim, cluster_axis, batch_slice_idx=None, valid_gather_extent=None):
         """All-gather across a mesh cluster axis → replicated on that axis. factor==1: no-op.
-        cluster_axis picks SP (sequence) or TP; the guard reads the matching mesh factor."""
+        cluster_axis picks SP (sequence) or TP; the guard reads the matching mesh factor.
+
+        batch_slice_idx: gather only that single index along dim 0 (output dim-0 collapses to 1). The
+        slot-select is fused into the all-gather (no separate ttnn.slice). When there is no gather to do
+        (factor==1) the slot-select still happens here via a plain slice so the contract is uniform.
+
+        valid_gather_extent: gather only the leading `valid_gather_extent` elements along `dim` per device.
+        The direct-output path used by the sparse cache produces a tight (factor * valid_gather_extent) output;
+        the tiled primitive retains the full output allocation and only reduces data movement. At factor==1
+        this is a no-op, which is safe because the downstream consumer is index-driven and never reads past
+        the valid length."""
         factor = self.sp_factor if cluster_axis == self.sp_axis else self.tp_factor
         if factor == 1:
+            if batch_slice_idx is not None and t.shape[0] > 1:
+                return ttnn.slice(t, [batch_slice_idx, 0, 0, 0], [batch_slice_idx + 1, 1, t.shape[2], t.shape[3]])
             return t
         return ttnn.experimental.all_gather_async(
             t,
@@ -1337,6 +1361,8 @@ class ttMLA:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=self.ccl_topology,
             cluster_axis=cluster_axis,
+            batch_slice_idx=batch_slice_idx,
+            valid_gather_extent=valid_gather_extent,
         )
 
     @property
@@ -1437,37 +1463,52 @@ class ttMLA:
             ttnn.deallocate(out_all_heads)
         return ret
 
-    def _gather_kvpe_prefix(self, kvpe_cache, cache_batch_idx):
+    def _gather_kvpe_prefix(self, kvpe_cache, cache_batch_idx, valid_gather_extent=None):
         """On-device read-back of the chunked KVPE prefix for sparse attention. The cache is
         ND-sharded / block-cyclic across SP, in the op's format (bf16 or fp8_e4m3, ROW_MAJOR — the
         sparse cache is uncompressed). sparse_sdpa consumes it replicated and remaps the
         natural-position indices to physical block-cyclic pages in-kernel (invP), so the buffer is
         LEFT in block-cyclic order — no host reorder.
 
-        SLOT SELECT BEFORE THE GATHER: the persistent cache is [B, 1, seq_len_cache, 576], B =
-        num_users*num_layers (user-major slots). Slice the active (user, layer) slot out of dim 0 FIRST,
-        then all-gather only that single [1, 1, seq_len_cache, 576] slot over SP — NOT the whole B-slot
-        cache. At 78 layers the full-cache gather is ~5 GB (×2 in-flight → OOM against the near-full
-        78-layer weights); the single-slot gather is B× smaller. The gathered kv is then batch-1, so
-        sparse_sdpa needs NO cache_batch_idx (the op requires B==1 when cache_batch_idx is unset). This
-        mirrors the dense ring_mla single-slot gather (kv_cache_batch_idx → batch-1 scratch).
+        SLOT SELECT FUSED INTO THE GATHER: the persistent cache is [B, 1, seq_len_cache, 576], B =
+        num_users*num_layers (user-major slots). The active (user, layer) slot along dim 0 is selected by
+        the all-gather itself via batch_slice_idx — the direct-output reader maps its compact output rows
+        directly to that slot, so only that single [1, 1, seq_len_cache, 576] slot is moved over SP — NOT
+        the whole B-slot cache (no separate ttnn.slice). At 78 layers the full-cache gather is ~5 GB (×2
+        in-flight → OOM against the near-full 78-layer weights); the single-slot gather is B× smaller. The
+        gathered kv is then batch-1, so sparse_sdpa needs NO cache_batch_idx (the op requires B==1 when
+        cache_batch_idx is unset). This mirrors the dense ring_mla single-slot gather (kv_cache_batch_idx
+        → batch-1 scratch).
 
-        Pipeline (all on device): ND→interleaved, slot slice (no-op for a single-slot cache), SP
-        all-gather to full-T (no-op at sp==1). The cache is already in the op format, so there is NO
-        read-back dtype/layout conversion. The unwritten suffix is never addressed since indices stay
-        < populated."""
-        cache_i = ttnn.to_memory_config(kvpe_cache, ttnn.DRAM_MEMORY_CONFIG)  # ND_SHARDED → INTERLEAVED
-        if cache_i.shape[0] > 1:  # user-major slot select BEFORE the gather (single-slot cache → skip)
-            sel = ttnn.slice(
-                cache_i,
-                [cache_batch_idx, 0, 0, 0],
-                [cache_batch_idx + 1, 1, cache_i.shape[2], cache_i.shape[3]],
-            )
-            ttnn.deallocate(cache_i)
-            cache_i = sel
-        full = self._all_gather(
-            cache_i, dim=2, cluster_axis=self.sp_axis
-        )  # → [1,1,seq_len_cache,576] repl, block-cyclic
-        if self.sp_factor > 1:
-            ttnn.deallocate(cache_i)
-        return full
+        Pipeline (all on device): for SP>1, the broadcast all-gather reads the ND-sharded cache directly, selects
+        the slot and valid row prefix in its reader, and writes compact interleaved output. For SP==1, retain the former
+        ND→interleaved + local slice path so the returned tensor is a disposable view/copy rather than the
+        persistent cache itself. The cache is already in the op format, so there is no dtype/layout conversion.
+        The unwritten suffix is never addressed since indices stay below the populated length."""
+        if self.sp_factor == 1:
+            # There is no collective to fuse the conversion/slice into. Always materialize an interleaved
+            # result: the caller owns and deallocates the returned tensor, while kvpe_cache remains persistent.
+            cache_i = ttnn.to_memory_config(kvpe_cache, ttnn.DRAM_MEMORY_CONFIG)
+            if cache_i.shape[0] > 1:
+                assert cache_batch_idx is not None, "multi-slot KVPE cache requires cache_batch_idx"
+                selected = ttnn.slice(
+                    cache_i,
+                    [cache_batch_idx, 0, 0, 0],
+                    [cache_batch_idx + 1, 1, cache_i.shape[2], cache_i.shape[3]],
+                )
+                ttnn.deallocate(cache_i)
+                return selected
+            return cache_i
+
+        # The ND-sharded cache is gathered directly: the broadcast reader selects the user-major slot and
+        # valid row prefix from ND_SHARDED storage, then writes compact interleaved outputs. There is no
+        # intermediate to_memory_config or ttnn.slice. For a single-slot cache there is nothing to select;
+        # pass None so the whole (already batch-1) tensor is gathered.
+        slice_idx = cache_batch_idx if kvpe_cache.shape[0] > 1 else None
+        return self._all_gather(
+            kvpe_cache,
+            dim=2,
+            cluster_axis=self.sp_axis,
+            batch_slice_idx=slice_idx,
+            valid_gather_extent=valid_gather_extent,
+        )  # → [1,1,valid_or_full,576] repl, block-cyclic

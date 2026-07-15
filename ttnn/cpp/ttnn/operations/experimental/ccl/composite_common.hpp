@@ -55,7 +55,14 @@ ttnn::Tensor composite_all_gather(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis,
-    bool use_l1_small_for_semaphores = false);
+    bool use_l1_small_for_semaphores = false,
+    // Gather only a single index along dim 0 (gather dim must be != 0). Row-major inputs select the
+    // slot in the broadcast reader, so only one batch's data is moved and the output dim-0 is 1.
+    std::optional<uint32_t> batch_slice_idx = std::nullopt,
+    // Gather only the leading, tile-aligned valid_gather_extent elements along the height gather dim (per-device
+    // shard), producing a tight (ring_size * valid_gather_extent) output. Pass a whole number of block-cyclic slabs so
+    // a downstream block-cyclic consumer keeps T/sp divisible by its chunk.
+    std::optional<uint32_t> valid_gather_extent = std::nullopt);
 // same as above but for vector of mesh
 std::vector<ttnn::Tensor> composite_all_gather(
     const std::vector<ttnn::Tensor>& input_tensors,

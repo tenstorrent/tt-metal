@@ -92,20 +92,24 @@ void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_gather need to be allocated in buffers on device!");
+
+    validate_on_program_cache_hit(args, tensor_args);
+
     TT_FATAL(args.num_links > 0, "Error, num_links should be more than 0 but has {}", args.num_links);
     TT_FATAL(
         args.num_links <= input_tensor.device()->compute_with_storage_grid_size().y,
         "Worker cores used by links are parallelizaed over rows");
 
+    const AllGatherAsyncVersion version = select_version(args);
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
-            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+            (version == AllGatherAsyncVersion::VIA_BROADCAST &&
+             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED),
         "Unsupported input tensor memory layout {}.",
         input_tensor.memory_config().memory_layout());
-
-    AllGatherAsyncVersion version = select_version(args);
 
     if (tensor_args.persistent_output_buffer.has_value()) {
         const auto& output_tensor = tensor_args.persistent_output_buffer.value();
@@ -145,18 +149,39 @@ void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
             output_shape.size());
         for (size_t i = 0; i < input_shape.size(); ++i) {
             if (i == args.dim) {
-                TT_FATAL(
-                    output_shape[i] <= input_shape[i] * args.ring_size,
-                    "Error, Output tensor shape at dimension {} should be {} but has {}",
-                    i,
-                    input_shape[i] * args.ring_size,
-                    output_shape[i]);
+                const uint32_t full_gather_extent = input_shape[i] * args.ring_size;
+                if (version == AllGatherAsyncVersion::VIA_BROADCAST && args.valid_gather_extent.has_value()) {
+                    const uint32_t compact_gather_extent = *args.valid_gather_extent * args.ring_size;
+                    TT_FATAL(
+                        output_shape[i] == compact_gather_extent,
+                        "Direct broadcast all-gather output shape at dimension {} should be {} but has {}",
+                        i,
+                        compact_gather_extent,
+                        output_shape[i]);
+                } else if (args.batch_slice_idx.has_value() || args.valid_gather_extent.has_value()) {
+                    // The feature kernels retain the full per-device slab stride; a smaller persistent
+                    // buffer would make later devices write out of bounds even when each valid prefix is short.
+                    TT_FATAL(
+                        output_shape[i] == full_gather_extent,
+                        "Feature-enabled all-gather output shape at dimension {} should be {} but has {}",
+                        i,
+                        full_gather_extent,
+                        output_shape[i]);
+                } else {
+                    TT_FATAL(
+                        output_shape[i] <= full_gather_extent,
+                        "Error, Output tensor shape at dimension {} should be {} but has {}",
+                        i,
+                        full_gather_extent,
+                        output_shape[i]);
+                }
             } else {
+                const uint32_t expected_extent = (i == 0 && args.batch_slice_idx.has_value()) ? 1 : input_shape[i];
                 TT_FATAL(
-                    output_shape[i] == input_shape[i],
+                    output_shape[i] == expected_extent,
                     "Error, Output tensor shape at dimension {} should be {} but has {}",
                     i,
-                    input_shape[i],
+                    expected_extent,
                     output_shape[i]);
             }
         }
@@ -170,7 +195,7 @@ void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
                     output_tensor.memory_config().buffer_type() == BufferType::L1,
                     "We don't support output DRAM block sharding");
             }
-        } else {
+        } else if (version != AllGatherAsyncVersion::VIA_BROADCAST) {
             // Checks specific to cases that are not MINIMAL_DEFAULT
 
             TT_FATAL(
@@ -190,17 +215,73 @@ void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
         }
         TT_FATAL(input_tensor.logical_shape().rank() >= 2, "AllGatherAsync requires tensor of rank 2 or greater");
     } else {
-        TT_FATAL(input_tensor.logical_shape().rank() == 4, "Llama specific all_gather requires tensor of rank 4");
+        TT_FATAL(input_tensor.logical_shape().rank() == 4, "Broadcast/llama all-gather requires tensor rank 4");
     }
 
     if (version == AllGatherAsyncVersion::VIA_BROADCAST) {
+        if (input_tensor.layout() == Layout::TILE) {
+            TT_FATAL(
+                via_broadcast_has_contiguous_output_slice(input_tensor, args.dim),
+                "Tiled broadcast all-gather requires gather dims whose preceding page-ordered dimensions are "
+                "singleton. Got dim {} with padded shape {}",
+                args.dim,
+                input_tensor.padded_shape());
+        } else {
+            TT_FATAL(
+                args.dim == static_cast<int32_t>(input_tensor.logical_shape().rank()) - 2,
+                "Row-major broadcast all-gather requires the height gather dim");
+        }
+    }
+}
+
+void AllGatherAsyncDeviceOperation::validate_on_program_cache_hit(
+    const AllGatherAsyncParams& args, const AllGatherAsyncInputs& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+
+    const auto version = select_version(args);
+    // Selection is implemented by the tiled minimal-default kernels and the row-major direct-broadcast reader.
+    if (args.batch_slice_idx.has_value() || args.valid_gather_extent.has_value()) {
         TT_FATAL(
-            via_broadcast_has_contiguous_output_slice(input_tensor, args.dim),
-            "Broadcast all-gather currently only supports gather dims whose preceding page-ordered dimensions are "
-            "singleton. Got dim {} with padded shape {} and layout {}",
+            version == AllGatherAsyncVersion::MINIMAL_DEFAULT ||
+                (version == AllGatherAsyncVersion::VIA_BROADCAST && input_tensor.layout() == Layout::ROW_MAJOR),
+            "batch_slice_idx / valid_gather_extent require tiled minimal-default or row-major direct-broadcast "
+            "all-gather");
+    }
+    if (args.batch_slice_idx.has_value()) {
+        const auto& s = input_tensor.logical_shape();
+        TT_FATAL(s.rank() >= 3, "batch_slice_idx requires an input tensor of rank 3 or greater, got rank {}", s.rank());
+        TT_FATAL(
+            input_tensor.layout() == Layout::TILE ||
+                (version == AllGatherAsyncVersion::VIA_BROADCAST && input_tensor.layout() == Layout::ROW_MAJOR),
+            "batch_slice_idx requires tiled or row-major direct-broadcast all-gather");
+        TT_FATAL(args.dim != 0, "batch_slice_idx is not supported when gathering along dim 0");
+        TT_FATAL(
+            args.batch_slice_idx.value() < static_cast<uint32_t>(s[0]),
+            "batch_slice_idx {} is out of range for dim-0 extent {}",
+            args.batch_slice_idx.value(),
+            s[0]);
+    }
+    if (args.valid_gather_extent.has_value()) {
+        const auto& s = input_tensor.logical_shape();
+        const auto rank = s.rank();
+        TT_FATAL(rank >= 2, "valid_gather_extent requires an input tensor of rank 2 or greater, got rank {}", rank);
+        TT_FATAL(
+            input_tensor.layout() == Layout::TILE ||
+                (version == AllGatherAsyncVersion::VIA_BROADCAST && input_tensor.layout() == Layout::ROW_MAJOR),
+            "valid_gather_extent requires tiled or row-major direct-broadcast all-gather");
+        TT_FATAL(
+            args.dim == rank - 2,
+            "valid_gather_extent is only supported when gathering along the height dim (rank-2), got dim {} of rank {}",
             args.dim,
-            input_tensor.padded_shape(),
-            input_tensor.layout());
+            rank);
+        const uint32_t valid = args.valid_gather_extent.value();
+        TT_FATAL(valid > 0, "valid_gather_extent must be greater than 0");
+        TT_FATAL(valid % 32 == 0, "valid_gather_extent {} must be tile-aligned (a multiple of 32)", valid);
+        TT_FATAL(
+            valid <= s[args.dim],
+            "valid_gather_extent {} exceeds the input extent {} along the gather dim",
+            valid,
+            s[args.dim]);
     }
 }
 
@@ -208,7 +289,15 @@ AllGatherAsyncDeviceOperation::spec_return_value_t AllGatherAsyncDeviceOperation
     const AllGatherAsyncParams& args, const AllGatherAsyncInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     auto shape = input_tensor.logical_shape();
-    shape[args.dim] *= args.ring_size;
+    if (select_version(args) == AllGatherAsyncVersion::VIA_BROADCAST && args.valid_gather_extent.has_value()) {
+        shape[args.dim] = *args.valid_gather_extent * args.ring_size;
+    } else {
+        shape[args.dim] *= args.ring_size;
+    }
+    // Single-batch slice: the gathered output holds only one batch (dim-0 == 1).
+    if (args.batch_slice_idx.has_value()) {
+        shape[0] = 1;
+    }
     return TensorSpec(
         shape,
         tt::tt_metal::TensorLayout(
@@ -267,7 +356,9 @@ std::tuple<AllGatherAsyncParams, AllGatherAsyncInputs> all_gather_async_build_op
     const std::optional<uint32_t>& num_buffers_per_channel,
     bool reverse_order,
     const std::optional<CoreRangeSet>& sub_core_grid,
-    const MeshDevice* optional_mesh_device) {
+    const MeshDevice* optional_mesh_device,
+    std::optional<uint32_t> batch_slice_idx,
+    std::optional<uint32_t> valid_gather_extent) {
     // Combine 3 implementations of the old all_gather_async_op.cpp::all_gather_async_impl
     // 1. only input_tensor, no output or optional mesh device
     // 2. has input tensor and output tensor but not optional mesh device
@@ -324,7 +415,9 @@ std::tuple<AllGatherAsyncParams, AllGatherAsyncInputs> all_gather_async_build_op
             num_workers_per_link,
             num_buffers_per_channel,
             reverse_order,
-            sub_core_grid),
+            sub_core_grid,
+            batch_slice_idx,
+            valid_gather_extent),
         AllGatherAsyncInputs{.input_tensor = input_tensor, .persistent_output_buffer = persistent_output_buffer}};
 }
 
@@ -467,7 +560,9 @@ Tensor all_gather_async(
     const std::optional<uint32_t>& num_buffers_per_channel,
     bool reverse_order,
     const std::optional<CoreRangeSet>& sub_core_grid,
-    const MeshDevice* optional_mesh_device) {
+    const MeshDevice* optional_mesh_device,
+    std::optional<uint32_t> batch_slice_idx,
+    std::optional<uint32_t> valid_gather_extent) {
     auto [params, inputs] = experimental::prim::all_gather_async_build_operation_args(
         input_tensor,
         persistent_output_buffer,
@@ -487,7 +582,9 @@ Tensor all_gather_async(
         num_buffers_per_channel,
         reverse_order,
         sub_core_grid,
-        optional_mesh_device);
+        optional_mesh_device,
+        batch_slice_idx,
+        valid_gather_extent);
     return ttnn::device_operation::launch<experimental::prim::AllGatherAsyncDeviceOperation>(params, inputs);
 }
 

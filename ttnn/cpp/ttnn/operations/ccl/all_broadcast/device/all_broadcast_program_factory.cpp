@@ -19,6 +19,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <algorithm>
+#include <string>
 
 namespace ttnn::prim {
 
@@ -58,7 +59,14 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         input_tensor, sender_device_coord, -1, operation_attributes.topology, operation_attributes.cluster_axis);
     TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "DEBUG: forward_coord or backward_coord is null");
 
-    bool sharded = input_tensor.memory_config().memory_layout() != TensorMemoryLayout::INTERLEAVED;
+    const auto input_memory_layout = input_tensor.memory_config().memory_layout();
+    const bool input_legacy_sharded = input_memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
+                                      input_memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
+                                      input_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED;
+    const auto output_memory_layout = output_tensors[ring_index].memory_config().memory_layout();
+    const bool output_legacy_sharded = output_memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
+                                       output_memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
+                                       output_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED;
     bool tilized = input_tensor.layout() == ttnn::TILE_LAYOUT;
 
     uint32_t num_width_shards = 1;
@@ -83,11 +91,23 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     uint32_t row_size = input_tensor.logical_shape()[-1] * input_tensor.element_size();
     uint32_t page_size = input_tensor.buffer()->aligned_page_size();
 
-    uint32_t num_rows = std::accumulate(
-        input_tensor.logical_shape().cbegin(),
-        input_tensor.logical_shape().cend() - 1,
-        1u,
-        std::multiplies<uint32_t>());
+    const auto& output_shape = output_tensors[ring_index].logical_shape();
+    uint32_t num_rows =
+        std::accumulate(output_shape.cbegin(), output_shape.cend() - 1, 1u, std::multiplies<uint32_t>());
+
+    // The reader consumes compact output row IDs and maps them back into the
+    // selected source batch/height prefix.  Middle dimensions remain intact.
+    const uint32_t input_height = input_tensor.logical_shape()[-2];
+    const uint32_t output_height = output_shape[-2];
+    uint32_t middle_volume = 1;
+    for (uint32_t dim = 1; dim + 2 < input_tensor.logical_shape().rank(); ++dim) {
+        middle_volume *= input_tensor.logical_shape()[dim];
+    }
+    const uint32_t input_rows_per_batch = middle_volume * input_height;
+    const uint32_t output_rows_per_batch = middle_volume * output_height;
+    const uint32_t batch_begin = operation_attributes.batch_slice_idx.value_or(0);
+    const bool select_input_rows =
+        operation_attributes.batch_slice_idx.has_value() || operation_attributes.valid_gather_extent.has_value();
 
     // L1 Scratch CB Creation
     DataType dtype = input_tensor.dtype();
@@ -107,6 +127,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     uint32_t cb_page_size = l1_scratch_cb_page_size_bytes;
 
     uint32_t buffer_page_size = page_size;
+    uint32_t rm_rows_per_packet = 1;
     uint32_t num_packets_per_page =
         static_cast<uint32_t>(std::ceil(static_cast<double>(buffer_page_size) / max_packet_size));
     if (!tilized) {
@@ -114,8 +135,14 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
             buffer_page_size = input_tensor.memory_config().shard_spec()->shape[1] * input_tensor.element_size();
         }
 
-        uint32_t num_rows_per_packet = (max_packet_size / buffer_page_size >= 2) ? 2 : 1;
-        cb_total_size = 3 * buffer_page_size * num_rows_per_packet;
+        rm_rows_per_packet = (max_packet_size / buffer_page_size >= 2) ? 2 : 1;
+        if (input_memory_layout == TensorMemoryLayout::ND_SHARDED) {
+            // ND full-width caches keep consecutive rows in one DRAM bank. Keep
+            // more reads in flight so bank latency is pipelined; the writer
+            // drains these as two-row fabric scatters below.
+            rm_rows_per_packet = std::max<uint32_t>(1, std::min<uint32_t>(max_packet_size / buffer_page_size, 8));
+        }
+        cb_total_size = 3 * buffer_page_size * rm_rows_per_packet;
         cb_page_size = buffer_page_size;
     }
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
@@ -142,11 +169,11 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
 
     if (!tilized) {
         reader_compile_args = {
-            src0_cb_index,                                      // cb0_id
-            buffer_page_size,                                   // page_size
-            row_size,                                           // row_size
-            (max_packet_size / buffer_page_size >= 2) ? 2 : 1,  // num_rows_per_packet
-            num_packets_per_page,                               // num_packets_per_page
+            src0_cb_index,     // cb0_id
+            buffer_page_size,  // page_size
+            row_size,          // row_size
+            rm_rows_per_packet,
+            num_packets_per_page,  // num_packets_per_page
             max_packet_size,
             true,  // is_sender
         };
@@ -168,11 +195,11 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
             buffer_page_size,
             row_size,
             max_packet_size,
-            (max_packet_size / buffer_page_size >= 2) ? 2 : 1,  // num_rows_per_packet
-            num_packets_per_page,                               // num_packets_per_row
-            num_targets_forward,                                // num_targets_forward_direction
-            num_targets_backward,                               // num_targets_backward_direction
-            true,                                               // is_sender
+            rm_rows_per_packet,
+            num_packets_per_page,  // num_packets_per_row
+            num_targets_forward,   // num_targets_forward_direction
+            num_targets_backward,  // num_targets_backward_direction
+            true,                  // is_sender
         };
     }
     std::vector<uint32_t> mcast_forward_args(2, 0);
@@ -187,14 +214,36 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     }
     writer_compile_args.insert(writer_compile_args.end(), mcast_forward_args.begin(), mcast_forward_args.end());
     writer_compile_args.insert(writer_compile_args.end(), mcast_backward_args.begin(), mcast_backward_args.end());
-    std::map<std::string, std::string> kernel_defines;
-    if (sharded) {
-        kernel_defines["SHARDED"] = "1";
+    std::map<std::string, std::string> reader_kernel_defines;
+    std::map<std::string, std::string> writer_kernel_defines;
+    if (select_input_rows) {
+        reader_kernel_defines["SELECT_INPUT_ROWS"] = "1";
+    }
+    // Sparse MLA's ND cache is physically a sequence of full-width row blocks.
+    // Let the reader address a row as (shard, byte-offset-within-shard), avoiding
+    // the generic N-D page-coordinate division in the innermost transfer loop.
+    if (!tilized && input_memory_layout == TensorMemoryLayout::ND_SHARDED) {
+        const auto& input_shape = input_tensor.logical_shape();
+        const auto& shard_shape = input_tensor.nd_shard_spec()->shard_shape;
+        const bool contiguous_row_blocks = input_shape.rank() == 4 && shard_shape.rank() == 4 && input_shape[1] == 1 &&
+                                           shard_shape[0] == 1 && shard_shape[1] == 1 &&
+                                           shard_shape[-1] == input_shape[-1] && input_shape[-2] % shard_shape[-2] == 0;
+        if (contiguous_row_blocks) {
+            reader_kernel_defines["ND_FULL_WIDTH_ROW_BLOCKS"] = "1";
+            reader_kernel_defines["ND_ROWS_PER_SHARD"] = std::to_string(shard_shape[-2]);
+        }
+    }
+    if (input_legacy_sharded) {
+        reader_kernel_defines["SHARDED"] = "1";
         shard_builder::extend_sharding_compile_time_args(input_tensor, reader_compile_args);
-        shard_builder::extend_sharding_compile_time_args(input_tensor, writer_compile_args);
     } else {
         tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
-        tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);
+    }
+    if (output_legacy_sharded) {
+        writer_kernel_defines["SHARDED"] = "1";
+        shard_builder::extend_sharding_compile_time_args(output_tensors[ring_index], writer_compile_args);
+    } else {
+        tt::tt_metal::TensorAccessorArgs(output_tensors[ring_index].buffer()).append_to(writer_compile_args);
     }
 
     // Build kernel descriptors.  Push them onto desc.kernels NOW (before the
@@ -209,7 +258,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     reader_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     reader_kernel_desc.core_ranges = sender_worker_core_range;
     reader_kernel_desc.compile_time_args = std::move(reader_compile_args);
-    reader_kernel_desc.defines = {kernel_defines.begin(), kernel_defines.end()};
+    reader_kernel_desc.defines = {reader_kernel_defines.begin(), reader_kernel_defines.end()};
     reader_kernel_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
 
     tt::tt_metal::KernelDescriptor writer_kernel_desc;
@@ -219,7 +268,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     writer_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel_desc.core_ranges = sender_worker_core_range;
     writer_kernel_desc.compile_time_args = std::move(writer_compile_args);
-    writer_kernel_desc.defines = {kernel_defines.begin(), kernel_defines.end()};
+    writer_kernel_desc.defines = {writer_kernel_defines.begin(), writer_kernel_defines.end()};
     writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
 
     desc.kernels.push_back(std::move(reader_kernel_desc));
@@ -245,7 +294,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         if (!tilized) {
             base_pages_per_worker = num_rows / operation_attributes.num_links;
         }
-        uint32_t remainder = input_tensor_num_pages % operation_attributes.num_links;
+        uint32_t remainder = (tilized ? input_tensor_num_pages : num_rows) % operation_attributes.num_links;
         uint32_t input_tile_id_start = (link * base_pages_per_worker) + std::min(link, remainder);
         uint32_t input_tile_id_end = ((link + 1) * base_pages_per_worker) + std::min(link + 1, remainder);
 
@@ -256,8 +305,13 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         reader_rt_args.push_back(input_tensor.buffer());                   // tensor_address0
         reader_rt_args.push_back(input_tile_id_start * num_width_shards);  // tile_id_start
         reader_rt_args.push_back(input_tile_id_end * num_width_shards);    // tile_id_end
+        reader_rt_args.push_back(input_rows_per_batch);
+        reader_rt_args.push_back(output_rows_per_batch);
+        reader_rt_args.push_back(input_height);
+        reader_rt_args.push_back(output_height);
+        reader_rt_args.push_back(batch_begin);
 
-        if (sharded) {
+        if (input_legacy_sharded) {
             // shard_builder still writes raw uint32_t into a std::vector; append
             // those onto the RTArgList builder.
             std::vector<uint32_t> sharding_rt_args;
@@ -295,8 +349,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         };
         auto num_connections = (int)forward_coord.has_value() + (int)backward_coord.has_value();
         writer_rt_args.push_back(num_connections);
-        if (sharded) {
-            shard_builder::extend_sharding_run_time_args(input_tensor, writer_rt_args);
+        if (output_legacy_sharded) {
+            shard_builder::extend_sharding_run_time_args(output_tensors[ring_index], writer_rt_args);
         }
 
         const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);

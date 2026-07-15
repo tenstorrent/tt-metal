@@ -34,6 +34,11 @@ struct AllGatherDeviceOperation {
         const std::optional<uint32_t> num_buffers_per_channel;
         const std::optional<CoreRangeSet> sub_core_grid;
         const bool use_l1_small_for_semaphores = false;
+        // Gather only a single index along dim 0 (requires the gather dim != 0); output dim-0 collapses to 1.
+        const std::optional<uint32_t> batch_slice_idx;
+        // Gather only the valid prefix (elements, tile-aligned) along the gather dim of an overallocated
+        // input; the gather dim must be the height dim (rank-2). The output retains the full slab stride.
+        const std::optional<uint32_t> valid_gather_extent;
     };
 
     struct tensor_args_t {
@@ -78,6 +83,7 @@ struct AllGatherDeviceOperation {
     using program_factory_t = std::variant<AllGatherProgram>;
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static topology_return_value_t compute_output_topologies(const operation_attributes_t&, const tensor_args_t&);
@@ -102,5 +108,7 @@ ttnn::Tensor all_gather(
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     const std::optional<CoreRangeSet>& sub_core_grid,
-    bool use_l1_small_for_semaphores = false);
+    bool use_l1_small_for_semaphores = false,
+    std::optional<uint32_t> batch_slice_idx = std::nullopt,
+    std::optional<uint32_t> valid_gather_extent = std::nullopt);
 }  // namespace ttnn::prim

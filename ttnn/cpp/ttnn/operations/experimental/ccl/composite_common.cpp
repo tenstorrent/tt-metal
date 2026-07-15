@@ -348,15 +348,17 @@ ttnn::Tensor composite_all_gather(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis,
-    bool use_l1_small_for_semaphores) {
+    bool use_l1_small_for_semaphores,
+    std::optional<uint32_t> batch_slice_idx,
+    std::optional<uint32_t> valid_gather_extent) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
 
-    auto input_shape = input_tensor.logical_shape();
-
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
+
+    auto input_shape = input_tensor.logical_shape();
 
     // If we need to convert to row-major, then if the input dtype is bfloat8_b we need to typecast before untilizing
     // and after re-tilizing
@@ -371,6 +373,10 @@ ttnn::Tensor composite_all_gather(
         "If input memory config is sharded, then output memory config must be provided. Defaulting the output memory "
         "config to the input sharded memory config will break the op as the input and output shapes are different.");
     auto output_memory_config = memory_config.value_or(input_memory_config);
+    // all_broadcast writes compact outputs. Sharded inputs retain the established
+    // interleaved staging path; persistent row-major ND input is routed to the
+    // direct-output broadcast all-gather factory before reaching this composite.
+    auto broadcast_memory_config = input_memory_config;
 
     if (input_memory_config.is_sharded()) {
         /*
@@ -380,7 +386,64 @@ ttnn::Tensor composite_all_gather(
          */
         auto intermediate_memory_config =
             output_memory_config.is_sharded() ? ttnn::DRAM_MEMORY_CONFIG : output_memory_config;
+        broadcast_memory_config = intermediate_memory_config;
         input_tensor = ttnn::to_memory_config(input_tensor, intermediate_memory_config);
+    }
+
+    // Single-batch-slice and partial (valid-prefix) gather.  For row-major input the all_broadcast reader
+    // maps compact output row IDs directly to the selected source rows, so neither an ND->interleaved copy
+    // nor a standalone slice is materialized.  The older tiled fallback still slices its staged tensor:
+    //   - batch_slice_idx: keep one index along dim 0 (gather dim must be != 0); output dim-0 collapses to 1.
+    //   - valid_gather_extent: keep the leading valid_gather_extent elements along the gather dim, so the
+    //     gathered output is tight (sp * valid_gather_extent). The layout is slab-major per device, so the
+    //     valid tokens are a contiguous leading prefix; the caller must pass a whole number of block-cyclic
+    //     slabs so any downstream block-cyclic consumer (e.g. sparse_sdpa) keeps T/sp divisible by its chunk.
+    std::optional<uint32_t> broadcast_batch_slice_idx;
+    std::optional<uint32_t> broadcast_valid_gather_extent;
+    if (batch_slice_idx.has_value() || valid_gather_extent.has_value()) {
+        const auto& s = input_tensor.logical_shape();
+        ttsl::SmallVector<int32_t> begins(rank, 0), ends(rank), steps(rank, 1);
+        for (int32_t i = 0; i < rank; ++i) {
+            ends[i] = static_cast<int32_t>(s[i]);
+        }
+        if (batch_slice_idx.has_value()) {
+            TT_FATAL(rank >= 2, "batch_slice_idx requires an input tensor of rank 2 or greater, got rank {}", rank);
+            TT_FATAL(gather_dim != 0, "batch_slice_idx is not supported when gathering along dim 0");
+            TT_FATAL(
+                batch_slice_idx.value() < static_cast<uint32_t>(s[0]),
+                "batch_slice_idx {} is out of range for dim-0 extent {}",
+                batch_slice_idx.value(),
+                s[0]);
+            begins[0] = static_cast<int32_t>(batch_slice_idx.value());
+            ends[0] = begins[0] + 1;
+        }
+        if (valid_gather_extent.has_value()) {
+            TT_FATAL(rank >= 2, "valid_gather_extent requires an input tensor of rank 2 or greater, got rank {}", rank);
+            TT_FATAL(
+                gather_dim == rank - 2,
+                "valid_gather_extent is only supported when gathering along the height dim (rank-2), got dim {} of "
+                "rank {}",
+                gather_dim,
+                rank);
+            TT_FATAL(valid_gather_extent.value() > 0, "valid_gather_extent must be greater than 0");
+            TT_FATAL(
+                valid_gather_extent.value() % 32 == 0,
+                "valid_gather_extent {} must be tile-aligned (a multiple of 32)",
+                valid_gather_extent.value());
+            TT_FATAL(
+                valid_gather_extent.value() <= static_cast<uint32_t>(s[gather_dim]),
+                "valid_gather_extent {} exceeds the per-device gather-dim extent {}",
+                valid_gather_extent.value(),
+                s[gather_dim]);
+            ends[gather_dim] = static_cast<int32_t>(valid_gather_extent.value());
+        }
+        if (input_tensor.layout() == ttnn::Layout::ROW_MAJOR && rank >= 3) {
+            broadcast_batch_slice_idx = batch_slice_idx;
+            broadcast_valid_gather_extent = valid_gather_extent;
+        } else {
+            input_tensor = ttnn::slice(input_tensor, begins, ends, steps, broadcast_memory_config);
+            input_shape = input_tensor.logical_shape();
+        }
     }
 
     if (convert_to_bfloat16_for_composite) {
@@ -391,10 +454,12 @@ ttnn::Tensor composite_all_gather(
         input_tensor,
         cluster_axis,
         subdevice_id,
-        input_tensor.memory_config(),
+        broadcast_memory_config,
         num_links,
         ttnn::ccl::Topology::Linear,
-        use_l1_small_for_semaphores);
+        use_l1_small_for_semaphores,
+        broadcast_batch_slice_idx,
+        broadcast_valid_gather_extent);
 
     // Do the gather itself
     ttnn::Tensor all_gather_output_tensor = ttnn::concat(broadcasted_tensors, gather_dim);

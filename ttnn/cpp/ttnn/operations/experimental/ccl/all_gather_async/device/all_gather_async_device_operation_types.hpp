@@ -38,6 +38,11 @@ struct AllGatherAsyncParams {
     std::optional<uint32_t> num_buffers_per_channel;
     bool reverse_order = false;
     std::optional<CoreRangeSet> sub_core_grid;
+    // Gather only a single index along dim 0 (gather dim must be != 0); output dim-0 collapses to 1.
+    std::optional<uint32_t> batch_slice_idx;
+    // Gather only the valid prefix (elements, tile-aligned) along the height (rank-2) gather dim of an
+    // overallocated input; limits data movement without shrinking the output.
+    std::optional<uint32_t> valid_gather_extent;
 
     AllGatherAsyncParams(
         int32_t dim,
@@ -57,7 +62,9 @@ struct AllGatherAsyncParams {
         std::optional<uint32_t> num_workers_per_link,
         std::optional<uint32_t> num_buffers_per_channel,
         bool reverse_order,
-        const std::optional<CoreRangeSet>& sub_core_grid) :
+        const std::optional<CoreRangeSet>& sub_core_grid,
+        std::optional<uint32_t> batch_slice_idx = std::nullopt,
+        std::optional<uint32_t> valid_gather_extent = std::nullopt) :
         dim(dim),
         num_links(num_links),
         ring_size(ring_size),
@@ -75,7 +82,9 @@ struct AllGatherAsyncParams {
         num_workers_per_link(num_workers_per_link),
         num_buffers_per_channel(num_buffers_per_channel),
         reverse_order(reverse_order),
-        sub_core_grid(sub_core_grid) {}
+        sub_core_grid(sub_core_grid),
+        batch_slice_idx(batch_slice_idx),
+        valid_gather_extent(valid_gather_extent) {}
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dim",
@@ -94,7 +103,13 @@ struct AllGatherAsyncParams {
         "num_workers_per_link",
         "num_buffers_per_channel",
         "reverse_order",
-        "sub_core_grid");
+        "sub_core_grid",
+        // The tiled path patches the batch index and valid extent through runtime args. The direct-broadcast
+        // factory currently builds its row mapping into runtime args at program creation, so include both values
+        // in its cache key. Its valid extent also changes the compact output shape.
+        "batch_slice_present",
+        "direct_broadcast_batch_slice_idx",
+        "direct_broadcast_valid_gather_extent");
     auto attribute_values() const {
         return std::make_tuple(
             dim,
@@ -113,7 +128,10 @@ struct AllGatherAsyncParams {
             num_workers_per_link,
             num_buffers_per_channel,
             reverse_order,
-            sub_core_grid);
+            sub_core_grid,
+            batch_slice_idx.has_value(),
+            use_all_gather_async_via_broadcast ? batch_slice_idx : std::nullopt,
+            use_all_gather_async_via_broadcast ? valid_gather_extent : std::nullopt);
     }
 };
 

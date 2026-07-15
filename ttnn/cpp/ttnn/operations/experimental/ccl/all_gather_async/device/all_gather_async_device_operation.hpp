@@ -25,6 +25,7 @@ struct AllGatherAsyncDeviceOperation {
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
@@ -55,7 +56,9 @@ std::tuple<AllGatherAsyncParams, AllGatherAsyncInputs> all_gather_async_build_op
     const std::optional<uint32_t>& num_buffers_per_channel,
     bool reverse_order,
     const std::optional<CoreRangeSet>& sub_core_grid,
-    const MeshDevice* optional_mesh_device);
+    const MeshDevice* optional_mesh_device,
+    std::optional<uint32_t> batch_slice_idx = std::nullopt,
+    std::optional<uint32_t> valid_gather_extent = std::nullopt);
 
 enum class AllGatherAsyncVersion {
     LLAMA_MINIMAL_SHARDED = 0,
@@ -88,6 +91,8 @@ Tensor all_gather_async(
     const std::optional<uint32_t>& num_buffers_per_channel,
     bool reverse_order,
     const std::optional<CoreRangeSet>& sub_core_grid,
-    const MeshDevice* optional_mesh_device);
+    const MeshDevice* optional_mesh_device,
+    std::optional<uint32_t> batch_slice_idx = std::nullopt,
+    std::optional<uint32_t> valid_gather_extent = std::nullopt);
 
 }  // namespace ttnn::prim

@@ -31,7 +31,9 @@ ttnn::Tensor all_gather(
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     const std::optional<CoreRangeSet>& sub_core_grid,
-    bool use_l1_small_for_semaphores) {
+    bool use_l1_small_for_semaphores,
+    std::optional<uint32_t> batch_slice_idx,
+    std::optional<uint32_t> valid_gather_extent) {
     // If cluster_axis is None, but mesh shape is not 1xM or Mx1, then we call all-gather on cluster_axis=1, then
     // all-gather on cluster_axis=0
     if (cluster_axis == std::nullopt) {
@@ -39,6 +41,11 @@ ttnn::Tensor all_gather(
         // Check if flat mesh (1x...M...x1) where M = total mesh volume
         // if it is not flat, then we need to call all-gather on dim=-1 to dim=0
         if (!mesh_shape.is_line_topology()) {
+            // Multi-axis recursive gather would apply the slice/clamp on every axis, which is not
+            // meaningful; these features target 1D line/ring meshes (the ring_mla decode case).
+            TT_FATAL(
+                !batch_slice_idx.has_value() && !valid_gather_extent.has_value(),
+                "batch_slice_idx / valid_gather_extent are only supported on 1D (line/ring) meshes");
             Tensor tensor = input_tensor;
             // Iterate through mesh dimensions in reverse order using reverse iterator
             auto mesh_view = mesh_shape.view();
@@ -70,6 +77,12 @@ ttnn::Tensor all_gather(
     auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
     uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, cluster_axis));
     if (composite_common::use_composite_all_gather(input_tensor, dim)) {
+        // The single-batch-slice and partial-gather features are implemented only on the tiled
+        // minimal-default primitive path; the composite (broadcast) path cannot honor them.
+        TT_FATAL(
+            !batch_slice_idx.has_value() && !valid_gather_extent.has_value(),
+            "batch_slice_idx / valid_gather_extent are not supported on the composite all-gather path "
+            "(row-major or tile-padded gather dim)");
         TT_FATAL(!sub_core_grid.has_value(), "Composite OP does not currently support sub core grid");
         return composite_common::composite_all_gather(
             input_tensor, dim, num_links_, memory_config_, subdevice_id, cluster_axis, use_l1_small_for_semaphores);
@@ -87,7 +100,9 @@ ttnn::Tensor all_gather(
         num_workers_per_link,
         num_buffers_per_channel,
         sub_core_grid,
-        use_l1_small_for_semaphores);
+        use_l1_small_for_semaphores,
+        batch_slice_idx,
+        valid_gather_extent);
 }
 
 }  // namespace ttnn

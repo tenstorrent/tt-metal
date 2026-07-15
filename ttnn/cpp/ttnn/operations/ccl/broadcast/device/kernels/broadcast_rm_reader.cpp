@@ -35,6 +35,11 @@ void kernel_main() {
         address_t tensor_address0 = get_arg_val<address_t>(arg_idx++);
         uint32_t row_id_start = get_arg_val<uint32_t>(arg_idx++);
         uint32_t row_id_end = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t input_rows_per_batch = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t output_rows_per_batch = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t input_height = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t output_height = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t batch_begin = get_arg_val<uint32_t>(arg_idx++);
 
 #ifdef SHARDED
         typedef ShardedInfo<
@@ -61,7 +66,22 @@ void kernel_main() {
             cb_reserve_back(cb0_id, num_rows_per_packet);
             uint32_t l1_write_addr = get_write_ptr(cb0_id);
             for (uint32_t i = 0; i < num_rows_per_packet && row_id < row_id_end; ++i) {
-                uint64_t noc_src_addr = tensor0_addrgen.get_noc_addr(row_id);
+                uint32_t input_row_id = row_id;
+#ifdef SELECT_INPUT_ROWS
+                const uint32_t output_batch = row_id / output_rows_per_batch;
+                const uint32_t row_in_output_batch = row_id % output_rows_per_batch;
+                const uint32_t middle_index = row_in_output_batch / output_height;
+                const uint32_t height_index = row_in_output_batch % output_height;
+                input_row_id =
+                    (output_batch + batch_begin) * input_rows_per_batch + middle_index * input_height + height_index;
+#endif
+#ifdef ND_FULL_WIDTH_ROW_BLOCKS
+                constexpr uint32_t rows_per_shard = ND_ROWS_PER_SHARD;
+                uint64_t noc_src_addr = tensor0_addrgen.get_shard_noc_addr(
+                    input_row_id / rows_per_shard, (input_row_id % rows_per_shard) * page_size);
+#else
+                uint64_t noc_src_addr = tensor0_addrgen.get_noc_addr(input_row_id);
+#endif
                 uint32_t bytes_remaining = page_size;
                 uint32_t offset = 0;
                 for (uint32_t pkt = 0; pkt < num_packets_per_page && bytes_remaining > 0; ++pkt) {

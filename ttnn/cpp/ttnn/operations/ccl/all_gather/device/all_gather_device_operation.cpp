@@ -55,12 +55,47 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             input_tensor.memory_config().buffer_type() == BufferType::L1, "We don't support input DRAM block sharding");
     }
-
-    validate_on_program_cache_hit(operation_attributes, tensor_args);
 }
 
 void AllGatherDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // These values are runtime arguments and are intentionally omitted from the program hash. Validate
+    // them on every dispatch so an invalid value cannot bypass validation by hitting a cached program.
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& input_shape = input_tensor.logical_shape();
+    const uint32_t rank = input_shape.rank();
+    if (operation_attributes.batch_slice_idx.has_value()) {
+        TT_FATAL(rank >= 3, "batch_slice_idx requires an input tensor of rank 3 or greater, got rank {}", rank);
+        TT_FATAL(
+            input_tensor.layout() == Layout::TILE,
+            "batch_slice_idx is only supported on the tiled all-gather path (TILE layout)");
+        TT_FATAL(operation_attributes.dim != 0, "batch_slice_idx is not supported when gathering along dim 0");
+        TT_FATAL(
+            operation_attributes.batch_slice_idx.value() < input_shape[0],
+            "batch_slice_idx {} is out of range for dim-0 extent {}",
+            operation_attributes.batch_slice_idx.value(),
+            input_shape[0]);
+    }
+    if (operation_attributes.valid_gather_extent.has_value()) {
+        TT_FATAL(rank >= 2, "valid_gather_extent requires an input tensor of rank 2 or greater, got rank {}", rank);
+        TT_FATAL(
+            input_tensor.layout() == Layout::TILE,
+            "valid_gather_extent is only supported on the tiled all-gather path (TILE layout)");
+        TT_FATAL(
+            operation_attributes.dim == rank - 2,
+            "valid_gather_extent is only supported when gathering along the height dim (rank-2), got dim {} of rank {}",
+            operation_attributes.dim,
+            rank);
+        const uint32_t valid = operation_attributes.valid_gather_extent.value();
+        TT_FATAL(valid > 0, "valid_gather_extent must be greater than 0");
+        TT_FATAL(valid % 32 == 0, "valid_gather_extent {} must be tile-aligned (a multiple of 32)", valid);
+        TT_FATAL(
+            valid <= input_shape[operation_attributes.dim],
+            "valid_gather_extent {} exceeds the input extent {} along the gather dim",
+            valid,
+            input_shape[operation_attributes.dim]);
+    }
+
     if (tensor_args.optional_output_tensor.has_value()) {
         auto output_tensor = tensor_args.optional_output_tensor.value();
         auto output_spec = compute_output_specs(operation_attributes, tensor_args);
@@ -99,12 +134,49 @@ void AllGatherDeviceOperation::validate_on_program_cache_hit(
     }
 }
 
+tt::stl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
+    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+    // Exclude the *values* of the two feature knobs from the program hash so a value-only change
+    // reuses the cached program (KV-cache decode grows valid_gather_extent every step; batch_slice_idx
+    // may pick a different index). Both flow purely through runtime args re-patched in
+    // override_runtime_arguments. Only whether batch_slice_idx is engaged changes the compiled program
+    // (it alters the input_batch_head_count compile-time arg and the output shape), so hash its
+    // has_value() but not the index. valid_gather_extent affects no compile-time arg or shape, so it is
+    // excluded entirely. tensor_args carries the input shape/layout that the rest of the program keys on.
+    return tt::stl::hash::hash_objects_with_default_seed(
+        tt::stl::hash::type_hash<AllGatherDeviceOperation>,
+        attrs.memory_config,
+        attrs.dim,
+        attrs.cluster_axis,
+        attrs.subdevice_id,
+        attrs.topology,
+        attrs.num_links,
+        attrs.chunks_per_sync,
+        attrs.num_workers_per_link,
+        attrs.num_buffers_per_channel,
+        attrs.sub_core_grid,
+        attrs.use_l1_small_for_semaphores,
+        attrs.batch_slice_idx.has_value(),
+        tensor_args);
+}
+
 AllGatherDeviceOperation::spec_return_value_t AllGatherDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
+
     auto output_shape = input_tensor.logical_shape();
     uint32_t target_ring_size = ::ttnn::ccl::get_topological_dimension(input_tensor, operation_attributes.cluster_axis);
+
+    // Each device writes its slab at a stride of the FULL (padded) input extent, so the gathered
+    // output keeps the normal ring_size * input_extent size even under partial gather. valid_gather_extent
+    // does not shrink the output — it only limits data movement and lets a fixed persistent buffer be
+    // reused across steps (the padded tail of each slab is simply left unwritten).
     output_shape[operation_attributes.dim] *= target_ring_size;
+
+    // Single-batch slice: the gathered output holds only one batch (M1) — a B-fold memory saving.
+    if (operation_attributes.batch_slice_idx.has_value()) {
+        output_shape[0] = 1;
+    }
 
     auto mem_config = operation_attributes.memory_config;
     return TensorSpec(
@@ -272,7 +344,9 @@ ttnn::Tensor all_gather(
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     const std::optional<CoreRangeSet>& sub_core_grid,
-    bool use_l1_small_for_semaphores) {
+    bool use_l1_small_for_semaphores,
+    std::optional<uint32_t> batch_slice_idx,
+    std::optional<uint32_t> valid_gather_extent) {
     using OperationType = ttnn::operations::ccl::AllGatherDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -286,7 +360,9 @@ ttnn::Tensor all_gather(
             .num_workers_per_link = num_workers_per_link,
             .num_buffers_per_channel = num_buffers_per_channel,
             .sub_core_grid = sub_core_grid,
-            .use_l1_small_for_semaphores = use_l1_small_for_semaphores},
+            .use_l1_small_for_semaphores = use_l1_small_for_semaphores,
+            .batch_slice_idx = batch_slice_idx,
+            .valid_gather_extent = valid_gather_extent},
         OperationType::tensor_args_t{.input_tensor = input_tensor, .optional_output_tensor = optional_output_tensor});
 }
 }  // namespace ttnn::prim
