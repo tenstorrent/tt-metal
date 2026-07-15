@@ -763,7 +763,9 @@ def test_dequantize_int8_edge_cases(device):
     out_tt = ttnn.dequantize(q_in_tt, scale, zero_point, dtype=ttnn.float32)
     assert out_tt.dtype == ttnn.float32
     result = ttnn.to_torch(out_tt)
-    assert torch.allclose(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
+    # All operands/results are exactly representable in fp32 and dequant (cast+add+mul, no stochastic
+    # rounding) is deterministic, so the device output is bit-exact: assert exact equality.
+    assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
 
 
 @pytest.mark.parametrize(

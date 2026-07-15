@@ -353,6 +353,16 @@ Tensor requantize(
         "Per-channel (axis) requantize does not support int8/uint8 output yet; use int32 output or per-tensor "
         "requantize");
 
+    if (a_dtype == DataType::INT8) {
+        const bool all_params_scalar =
+            std::holds_alternative<float>(in_scale) && std::holds_alternative<int32_t>(in_zero_point) &&
+            std::holds_alternative<float>(out_scale) && std::holds_alternative<int32_t>(out_zero_point);
+        TT_FATAL(
+            !axis.has_value() && all_params_scalar,
+            "Requantize with int8 input is only supported on the per-tensor fast path (scalar scales and "
+            "zero-points, no axis); other paths fall back to composite ops that do not support int8 yet.");
+    }
+
     constexpr ttsl::Span<const operations::unary::EltwiseUnaryWithParam> none{};
 
     const bool has_axis = axis.has_value();
@@ -502,6 +512,13 @@ Tensor dequantize(
     TT_FATAL(
         c_dtype == DataType::FLOAT32 || c_dtype == DataType::BFLOAT16,
         "Dequantize only supports bf16/f32 outputs for now");
+
+    if (a_dtype == DataType::INT8) {
+        TT_FATAL(
+            !axis.has_value() && std::holds_alternative<int32_t>(zero_point),
+            "Dequantize with int8 input is only supported on the per-tensor fast path (scalar zero-point, no axis); "
+            "other paths fall back to composite typecast/binary ops that do not support int8 yet.");
+    }
 
     constexpr ttsl::Span<const operations::unary::EltwiseUnaryWithParam> none{};
 
