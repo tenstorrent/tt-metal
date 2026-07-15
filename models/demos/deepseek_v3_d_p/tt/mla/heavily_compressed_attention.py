@@ -16,17 +16,6 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
 
 
-def window_softmax_pool(
-    kv: torch.Tensor, gate: torch.Tensor, position_bias: torch.Tensor, compress_rate: int
-) -> torch.Tensor:
-    batch = kv.shape[0]
-    n_windows = kv.shape[1] // compress_rate
-    kv = kv.view(batch, n_windows, compress_rate, -1)
-    gate = gate.view(batch, n_windows, compress_rate, -1) + position_bias
-    weights = gate.softmax(dim=2, dtype=torch.float32).to(kv.dtype)
-    return (kv * weights).sum(dim=2)
-
-
 def rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
     input_dtype = x.dtype
     x = x.to(torch.float32)
@@ -84,11 +73,11 @@ class TtHCACompressor(LightweightModule):
         self.compress_rope_theta = float(compress_rope_theta)
         self.rms_norm_eps = float(rms_norm_eps)
 
-        self.position_bias = position_bias.detach().float().contiguous()
         self.kv_norm_weight = kv_norm_weight.detach().float().contiguous()
 
         self.wkv = self._to_tt_linear_weight(kv_proj_weight)
         self.wgate = self._to_tt_linear_weight(gate_proj_weight)
+        self.position_bias = self._from_torch(position_bias.detach().reshape(1, 1, self.compress_rate, self.head_dim))
         self.trans_mat = ttnn.from_torch(
             get_rot_transformation_mat(),
             device=device,
@@ -143,17 +132,21 @@ class TtHCACompressor(LightweightModule):
 
         kv = ttnn.linear(hidden_states, self.wkv, memory_config=self.memory_config)
         gate = ttnn.linear(hidden_states, self.wgate, memory_config=self.memory_config)
-        # host boundary: pool + RMSNorm still run on host (fp32); RoPE runs on device.
-        kv = ttnn.to_torch(kv)[:, 0].float()
-        gate = ttnn.to_torch(gate)[:, 0].float()
-
         usable = (seq_len // self.compress_rate) * self.compress_rate
         if usable > 0:
-            pooled = window_softmax_pool(
-                kv[:, :usable], gate[:, :usable], self.position_bias.to(kv.dtype), self.compress_rate
-            )
+            n_windows = usable // self.compress_rate
+
+            # device: +position_bias then softmax over the window axis (per channel)
+            gate = ttnn.slice(gate, [0, 0, 0, 0], [batch, 1, usable, self.head_dim])
+            gate = ttnn.reshape(gate, [batch, n_windows, self.compress_rate, self.head_dim])
+            gate = ttnn.add(gate, self.position_bias)
+            weights = ttnn.softmax(gate, dim=2, numeric_stable=True)
+
+            # host boundary: weighted sum + RMSNorm on host (fp32); RoPE on device
+            weights = ttnn.to_torch(weights).float()
+            kv = ttnn.to_torch(kv)[:, 0, :usable].float().view(batch, n_windows, self.compress_rate, self.head_dim)
+            pooled = (kv * weights).sum(dim=2)
             compressed = rms_norm(pooled, self.kv_norm_weight.to(pooled.dtype), self.rms_norm_eps)
-            n_windows = compressed.shape[1]
 
             # RoPE (device) on the trailing rope_head_dim channels only (op caps head_dim <= 256).
             compressed_dev = self._from_torch(compressed.unsqueeze(1))
