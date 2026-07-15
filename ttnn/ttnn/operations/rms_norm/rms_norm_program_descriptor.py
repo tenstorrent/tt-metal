@@ -472,6 +472,27 @@ def _build_cross_core_descriptor(
         config=compute_config,
     )
 
+    import os as _os
+
+    if _os.environ.get("RMS_DEBUG_ARGS"):
+        print("=== CROSS-CORE DESC DEBUG ===")
+        print("origin_H", origin_H, "origin_W", origin_W, "Wt", Wt, "group_size", group_size)
+        print("num_w_tiles(per_w)", num_w_tiles, "W_BLOCK_TILES", W_BLOCK_TILES, "num_w_blocks", num_w_blocks)
+        print("in_dtype", in_dtype, "interm_dtype", interm_dtype, "gamma_tiles_dtype", gamma_tiles_dtype)
+        print(
+            "in_tile", in_tile, "interm_tile", interm_tile, "gamma_tiles_tile", gamma_tiles_tile, "stat_tile", stat_tile
+        )
+        print("compute_ct_args", list(compute_ct_args))
+        print("reader_ct_args", list(reader_ct_args))
+        print("writer_ct_args", list(writer_ct_args))
+        print("num groups", len(groups), "num cores", len(assignment))
+        for a in assignment[:2]:
+            c = a["core"]
+            print("  core", (int(c.x), int(c.y)), "assign", {k: v for k, v in a.items() if k != "core"})
+            print("    reader_rt", reader_rt_args[c.x][c.y])
+            print("    compute_rt", compute_rt_args[c.x][c.y])
+        print("=== END DESC DEBUG ===")
+
     return ttnn.ProgramDescriptor(
         kernels=[reader_kernel, writer_kernel, compute_kernel],
         semaphores=semaphores,
