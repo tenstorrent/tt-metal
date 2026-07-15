@@ -2217,6 +2217,9 @@ void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh
 
 void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     TTZoneScopedD(PROGRAM);
+
+    const auto& cluster = MetalContext::instance(extract_context_id(device)).get_cluster();
+
     const auto& build_env =
         BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id());
 
@@ -2231,6 +2234,13 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     }
 
     Inspector::program_compile_started(this, device, build_env.build_key());
+
+    // Currently JIT compile on Quasar mock devices is non functional
+    if (cluster.get_target_device_type() == tt::TargetDevice::Mock && device->arch() == tt::ARCH::QUASAR) {
+        compiled_.insert(build_env.build_key());
+        Inspector::program_compile_finished(this, device, build_env.build_key());
+        return;
+    }
 
     TT_FATAL(
         device->is_initialized(),

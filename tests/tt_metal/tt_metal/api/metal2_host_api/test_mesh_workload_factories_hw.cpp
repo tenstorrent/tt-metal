@@ -136,7 +136,7 @@ void SetScratchpadArgs(Program& program) {
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = KernelSpecName{kScratchKernel},
-        .runtime_arg_values = {{NodeCoord{0, 0}, {{"report_addr", kReportAddr}}}},
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(NodeCoord{0, 0}, {{"report_addr", kReportAddr}}),
     }};
     SetProgramRunArgs(program, params);
 }
