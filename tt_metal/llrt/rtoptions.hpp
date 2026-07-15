@@ -701,6 +701,7 @@ public:
 
     void set_fast_dispatch(bool enable) { fast_dispatch = enable; }
 
+    // If this fallback is removed, should also remove dispatch_cores entry from core descriptor YAML files.
     bool get_use_quasar_tensix_dispatch_cores() const { return use_quasar_tensix_dispatch_cores; }
 
     bool get_skip_eth_cores_with_retrain() const { return skip_eth_cores_with_retrain; }
