@@ -114,8 +114,8 @@ tt::tt_metal::ProgramDescriptor GeluBwProgramFactory::create_descriptor(
     std::string compute_kernel_path;
     if (args.approximate) {
         compute_kernel_path =
-            "ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/"
-            "kernels/compute/eltwise_bw_gelu_approx_tanh.cpp";
+            "ttnn/cpp/ttnn/operations/eltwise/unary_backward/gelu_bw/device/"
+            "kernels/compute/eltwise_bw_gelu_tanh.cpp";
     } else {
         compute_kernel_path =
             "ttnn/cpp/ttnn/operations/eltwise/unary_backward/gelu_bw/device/"

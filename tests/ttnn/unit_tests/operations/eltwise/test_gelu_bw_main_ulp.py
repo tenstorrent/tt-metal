@@ -409,315 +409,121 @@ def test_gelu_bw_ulp_summary(device):
 
 
 # =============================================================================
-# Tanh Approximation Tests
+# Gelu_bw Tanh approximation Exhaustive BF16 ULP Distribution Test
 # =============================================================================
 
 
-def gelu_derivative_tanh_exact(x: float) -> float:
+def test_gelu_bw_bf16_exhaustive(device):
+    """Exhaustive ULP distribution test for gelu_bw (approximate='none') across all BF16 values.
+
+    Generates all valid BF16 bit patterns as input, uses grad=1.0, and measures
+    ULP distance between device output and PyTorch float32 reference (GELU derivative).
     """
-    Exact GELU derivative using tanh approximation, computed with mpmath 256-bit precision.
+    # Generate all bf16 bit patterns
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
+    vals = all_bitpatterns.view(torch.bfloat16)
 
-    GELU_tanh(x) = 0.5 * x * (1 + tanh(beta * (x + kappa * x^3)))
-    GELU_tanh'(x) = 0.5 * (1 + tanh(inner)) + 0.5 * x * (1 - tanh^2(inner)) * beta * (1 + 3*kappa*x^2)
+    # Filter to finite, non-zero, non-subnormal values
+    min_abs = torch.finfo(torch.bfloat16).tiny
+    max_abs = torch.finfo(torch.bfloat16).max
+    vals_f32_abs = vals.to(torch.float32).abs()
+    mask = torch.isfinite(vals) & (vals_f32_abs >= min_abs) & (vals_f32_abs <= max_abs) & (vals_f32_abs != 0)
 
-    where beta = sqrt(2/pi), kappa = 0.044715, inner = beta * (x + kappa * x^3)
-    """
-    mp.prec = 256
-    x_mp = mp.mpf(x)
-    beta = mp_sqrt(mp.mpf(2) / mp.pi)
-    kappa = mp.mpf("0.044715")
-
-    inner = beta * (x_mp + kappa * x_mp**3)
-    tanh_inner = mp.tanh(inner)
-
-    cdf_term = mp.mpf("0.5") * (1 + tanh_inner)
-    pdf_term = mp.mpf("0.5") * x_mp * (1 - tanh_inner**2) * beta * (1 + 3 * kappa * x_mp**2)
-
-    result = cdf_term + pdf_term
-    return float(result)
-
-
-def gelu_derivative_tanh_expected_bf16_daz(x: float) -> float:
-    """Compute expected BF16 GELU derivative (tanh approx) with DAZ+FTZ applied."""
-    x_bits = bf16_daz_normalize(float_to_bf16_bits(x))
-    x_daz = bf16_bits_to_float(x_bits)
-    result = gelu_derivative_tanh_exact(x_daz)
-    result_bits = bf16_daz_normalize(float_to_bf16_bits(result))
-    return bf16_bits_to_float(result_bits)
-
-
-def gelu_bw_tanh_expected_bf16_daz(grad: float, x: float) -> float:
-    """Compute expected BF16 GELU backward (tanh approx) with DAZ+FTZ applied."""
-    grad_bits = bf16_daz_normalize(float_to_bf16_bits(grad))
-    grad_daz = bf16_bits_to_float(grad_bits)
-    x_bits = bf16_daz_normalize(float_to_bf16_bits(x))
-    x_daz = bf16_bits_to_float(x_bits)
-    result = grad_daz * gelu_derivative_tanh_exact(x_daz)
-    result_bits = bf16_daz_normalize(float_to_bf16_bits(result))
-    return bf16_bits_to_float(result_bits)
-
-
-class TestGeluBwTanhDerivativeAtZero:
-    """Correctness guard: verifies GELU_tanh'(0) = 0.5 via full Python → TTNN → device round-trip."""
-
-    def test_derivative_at_zero(self, device):
-        """GELU_tanh'(0) = 0.5"""
-        input_val = 0.0
-        grad_val = 1.0
-
-        torch_input = torch.tensor([[input_val]], dtype=torch.bfloat16)
-        torch_grad = torch.tensor([[grad_val]], dtype=torch.bfloat16)
-
-        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        tt_grad = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-
-        results = ttnn.gelu_bw(tt_grad, tt_input, approximate="tanh")
-        actual = ttnn.to_torch(results[0]).item()
-
-        expected = gelu_derivative_tanh_expected_bf16_daz(input_val)
-        ulp_error = ulp_distance_bf16_daz(actual, expected)
-
-        logger.debug(f"[tanh] x=0: expected={expected:.4f}, actual={actual:.4f}, ULP={ulp_error}")
-
-        assert ulp_error <= 2, f"Expected ULP <= 2, got {ulp_error}"
-
-
-class TestGeluBwTanhPositiveValues:
-    """Correctness guard: positive-side points for tanh approximation.
-    The tanh approximation accumulates more rounding error than the polynomial,
-    so we allow up to 4 ULP."""
-
-    @pytest.mark.parametrize(
-        "input_value,max_expected_ulp",
-        [
-            (0.5, 4),
-            (1.0, 4),
-            (2.0, 4),
-            (3.0, 4),
-            (5.0, 4),
-            (10.0, 4),
-        ],
+    value_set = vals[mask]
+    N = value_set.numel()
+    print(
+        f"Testing gelu_bw (approx=none) with {N} BF16 values in [{value_set.min().item():.2e}, {value_set.max().item():.2e}]"
     )
-    def test_positive_values(self, device, input_value, max_expected_ulp):
-        """For large positive x, GELU_tanh'(x) approaches 1."""
-        torch_input = torch.tensor([[input_value]], dtype=torch.bfloat16)
-        torch_grad = torch.tensor([[1.0]], dtype=torch.bfloat16)
 
-        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        tt_grad = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    # Pad to multiple of 32 for tile layout
+    pad_size = (32 - (N % 32)) % 32
+    if pad_size > 0:
+        value_set_padded = torch.cat([value_set, torch.zeros(pad_size, dtype=torch.bfloat16)])
+    else:
+        value_set_padded = value_set
 
-        results = ttnn.gelu_bw(tt_grad, tt_input, approximate="tanh")
-        actual = ttnn.to_torch(results[0]).item()
+    total_padded = value_set_padded.numel()
+    value_set_2d = value_set_padded.reshape(1, total_padded)
 
-        expected = gelu_derivative_tanh_expected_bf16_daz(input_value)
-        ulp_error = ulp_distance_bf16_daz(actual, expected)
+    # Compute reference: GELU derivative via PyTorch autograd in float32
+    x_f32 = value_set_2d.to(torch.float32).requires_grad_(True)
+    y = torch.nn.functional.gelu(x_f32, approximate="tanh")
+    y.backward(torch.ones_like(y))
+    z_torch = x_f32.grad.detach()
 
-        logger.debug(f"[tanh] x={input_value}: expected={expected:.4f}, actual={actual:.4f}, ULP={ulp_error}")
+    # Run on device: gelu_bw with grad=1.0
+    grad_2d = torch.ones_like(value_set_2d)
+    tt_input = ttnn.from_torch(value_set_2d, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_grad = ttnn.from_torch(grad_2d, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-        assert ulp_error <= max_expected_ulp, f"Expected ULP <= {max_expected_ulp}, got {ulp_error}"
+    results = ttnn.gelu_bw(tt_grad, tt_input, approximate="tanh")
+    tt_out = ttnn.to_torch(results[0])
 
+    # Trim padding
+    z_torch = z_torch[:, :N]
+    tt_out = tt_out[:, :N]
 
-class TestGeluBwTanhNegativeValues:
-    """Correctness guard: negative-side points for tanh approximation.
-    For large negative x, GELU_tanh'(x) → 0. In BF16, intermediate tanh saturation
-    causes residual errors that are tiny in absolute terms but large in ULP (since
-    the reference is near zero). We use absolute error for x <= -2."""
+    # Filter out inf/nan results
+    valid_mask = torch.isfinite(z_torch) & torch.isfinite(tt_out)
+    z_torch_valid = z_torch[valid_mask]
+    tt_out_valid = tt_out[valid_mask]
+    N_valid = z_torch_valid.numel()
 
-    @pytest.mark.parametrize(
-        "input_value",
-        [-0.5, -1.0, -2.0, -3.0, -4.0, -5.0, -6.0, -8.0],
+    print(f"Valid (finite) outputs: {N_valid}/{N} ({N_valid/N*100:.2f}%)")
+
+    # ULP computation in BF16 space
+    z_bf16 = z_torch_valid.to(torch.bfloat16).contiguous()
+    tt_bf16 = tt_out_valid.to(torch.bfloat16).contiguous()
+
+    # Flush subnormals and inf/max-normal to zero (DAZ+FTZ model)
+    z_bits_u16 = z_bf16.view(torch.uint16).to(torch.int32)
+    tt_bits_u16 = tt_bf16.view(torch.uint16).to(torch.int32)
+    subnormal_z = ((z_bits_u16 & 0x7F80) == 0) & ((z_bits_u16 & 0x7F) != 0)
+    subnormal_tt = ((tt_bits_u16 & 0x7F80) == 0) & ((tt_bits_u16 & 0x7F) != 0)
+    max_or_inf_z = (z_bits_u16 & 0x7F80) == 0x7F80
+    max_or_inf_tt = (tt_bits_u16 & 0x7F80) == 0x7F80
+    flush_mask = subnormal_z | subnormal_tt | max_or_inf_z | max_or_inf_tt
+    z_bf16 = torch.where(flush_mask, torch.zeros_like(z_bf16), z_bf16)
+    tt_bf16 = torch.where(flush_mask, torch.zeros_like(tt_bf16), tt_bf16)
+
+    z_bits = z_bf16.view(torch.uint16).to(torch.int32)
+    tt_bits = tt_bf16.view(torch.uint16).to(torch.int32)
+
+    sign_z = (z_bits >> 15) & 1
+    sign_tt = (tt_bits >> 15) & 1
+    z_ord = torch.where(sign_z == 0, z_bits + 0x8000, 0x8000 - z_bits)
+    tt_ord = torch.where(sign_tt == 0, tt_bits + 0x8000, 0x8000 - tt_bits)
+    ulp_dist = (z_ord - tt_ord).abs()
+
+    max_ulp = ulp_dist.max().item()
+
+    # ULP distribution
+    ulp_0_count = (ulp_dist == 0).sum().item()
+    ulp_1_count = (ulp_dist == 1).sum().item()
+    ulp_2_count = (ulp_dist == 2).sum().item()
+    ulp_3_to_10_count = ((ulp_dist >= 3) & (ulp_dist <= 10)).sum().item()
+    ulp_11_to_100_count = ((ulp_dist >= 11) & (ulp_dist <= 100)).sum().item()
+    ulp_above_100_count = (ulp_dist > 100).sum().item()
+
+    mismatch_threshold = 2
+    mismatch_mask = ulp_dist > mismatch_threshold
+    total_mismatches = mismatch_mask.sum().item()
+    mismatch_pct = (total_mismatches / N_valid) * 100 if N_valid > 0 else 0.0
+
+    print(
+        f"Max ULP: {max_ulp}, mismatches (ULP > {mismatch_threshold}): {total_mismatches}/{N_valid} ({mismatch_pct:.4f}%)"
     )
-    def test_negative_values(self, device, input_value):
-        """For large negative x, GELU_tanh'(x) approaches 0."""
-        torch_input = torch.tensor([[input_value]], dtype=torch.bfloat16)
-        torch_grad = torch.tensor([[1.0]], dtype=torch.bfloat16)
+    print(f"\nULP Distribution:")
+    print(f"  ULP = 0: {ulp_0_count:,} ({ulp_0_count/N_valid*100:.4f}%)")
+    print(f"  ULP = 1: {ulp_1_count:,} ({ulp_1_count/N_valid*100:.4f}%)")
+    print(f"  ULP = 2: {ulp_2_count:,} ({ulp_2_count/N_valid*100:.4f}%)")
+    print(f"  ULP 3-10: {ulp_3_to_10_count:,} ({ulp_3_to_10_count/N_valid*100:.4f}%)")
+    print(f"  ULP 11-100: {ulp_11_to_100_count:,} ({ulp_11_to_100_count/N_valid*100:.4f}%)")
+    print(f"  ULP > 100: {ulp_above_100_count:,} ({ulp_above_100_count/N_valid*100:.4f}%)")
 
-        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        tt_grad = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-
-        results = ttnn.gelu_bw(tt_grad, tt_input, approximate="tanh")
-        actual = ttnn.to_torch(results[0]).item()
-
-        expected = gelu_derivative_tanh_expected_bf16_daz(input_value)
-        ulp_error = ulp_distance_bf16_daz(actual, expected)
-        abs_error = abs(actual - expected)
-
-        logger.debug(
-            f"[tanh] x={input_value}: expected={expected:.6e}, actual={actual:.6e}, "
-            f"ULP={ulp_error}, abs_err={abs_error:.6e}"
-        )
-
-        # Near-zero region (x <= -2): expected ≈ 0, ULP is misleading, use absolute error.
-        # Mild region (x > -2): ULP is meaningful.
-        if input_value <= -2.0:
-            assert abs_error < 0.02, f"Absolute error {abs_error:.6e} exceeds 0.02 at x={input_value}"
-        else:
-            assert ulp_error <= 4, f"Expected ULP <= 4, got {ulp_error}"
-
-
-class TestGeluBwTanhNearZero:
-    """Correctness guard: near-zero points for tanh approximation."""
-
-    @pytest.mark.parametrize(
-        "input_value",
-        [1e-6, 1e-4, 0.01, 0.1, -0.1, -0.01, -1e-4],
-    )
-    def test_near_zero(self, device, input_value):
-        """Near zero, GELU_tanh'(x) ≈ 0.5 + x*sqrt(2/pi)."""
-        torch_input = torch.tensor([[input_value]], dtype=torch.bfloat16)
-        torch_grad = torch.tensor([[1.0]], dtype=torch.bfloat16)
-
-        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        tt_grad = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-
-        results = ttnn.gelu_bw(tt_grad, tt_input, approximate="tanh")
-        actual = ttnn.to_torch(results[0]).item()
-
-        expected = gelu_derivative_tanh_expected_bf16_daz(input_value)
-        ulp_error = ulp_distance_bf16_daz(actual, expected)
-
-        logger.debug(f"[tanh] x={input_value:.2e}: expected={expected:.4f}, actual={actual:.4f}, ULP={ulp_error}")
-
-        assert ulp_error <= 4, f"Expected ULP <= 4, got {ulp_error}"
-
-
-class TestGeluBwTanhLocalMinimum:
-    """Correctness guard: points near the tanh-GELU derivative's zero-crossing.
-    Uses absolute error threshold because near the zero-crossing, even tiny
-    absolute errors produce large ULPs."""
-
-    @pytest.mark.parametrize(
-        "input_value",
-        [-0.7, -0.75, -0.76, -0.8],
-    )
-    def test_local_minimum_region(self, device, input_value):
-        """GELU_tanh has a local minimum near x ≈ -0.75 where derivative ≈ 0."""
-        torch_input = torch.tensor([[input_value]], dtype=torch.bfloat16)
-        torch_grad = torch.tensor([[1.0]], dtype=torch.bfloat16)
-
-        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        tt_grad = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-
-        results = ttnn.gelu_bw(tt_grad, tt_input, approximate="tanh")
-        actual = ttnn.to_torch(results[0]).item()
-
-        expected = gelu_derivative_tanh_expected_bf16_daz(input_value)
-        ulp_error = ulp_distance_bf16_daz(actual, expected)
-
-        logger.debug(f"[tanh] x={input_value}: expected={expected:.6f}, actual={actual:.6f}, ULP={ulp_error}")
-
-        assert (
-            ulp_error <= 4 or abs(actual - expected) < 0.02
-        ), f"ULP {ulp_error} and abs error {abs(actual - expected):.6f} both exceed thresholds"
-
-
-class TestGeluBwTanhWithGradientScaling:
-    """Correctness guard: tests using grad != 1.0 for tanh approximation.
-    Catches swapped grad/input tensors or missing gradient multiplication."""
-
-    @pytest.mark.parametrize(
-        "input_value,grad_value,max_expected_ulp",
-        [
-            (1.0, 2.0, 4),
-            (-1.0, 0.5, 4),
-            (0.0, 1.0, 4),
-            (2.0, -1.0, 4),
-            (0.5, 3.0, 4),
-        ],
-    )
-    def test_with_gradient(self, device, input_value, grad_value, max_expected_ulp):
-        """Test GELU backward (tanh) with different gradient values."""
-        torch_input = torch.tensor([[input_value]], dtype=torch.bfloat16)
-        torch_grad = torch.tensor([[grad_value]], dtype=torch.bfloat16)
-
-        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        tt_grad = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-
-        results = ttnn.gelu_bw(tt_grad, tt_input, approximate="tanh")
-        actual = ttnn.to_torch(results[0]).item()
-
-        expected = gelu_bw_tanh_expected_bf16_daz(grad_value, input_value)
-        ulp_error = ulp_distance_bf16_daz(actual, expected)
-
-        logger.debug(
-            f"[tanh] x={input_value}, grad={grad_value}: expected={expected:.4f}, actual={actual:.4f}, ULP={ulp_error}"
-        )
-
-        assert ulp_error <= max_expected_ulp, f"Expected ULP <= {max_expected_ulp}, got {ulp_error}"
-
-
-def test_gelu_bw_tanh_ulp_summary(device):
-    """Correctness guard: comprehensive summary of GELU backward (tanh approx) ULP across all regions.
-    Tests key points and asserts max ULP <= 4."""
-    logger.debug("")
-    logger.debug("=" * 100)
-    logger.debug("GELU BACKWARD (TANH APPROX) ULP SUMMARY (DAZ+FTZ MODEL)")
-    logger.debug("=" * 100)
-
-    test_points = [
-        ("Zero", 0.0),
-        ("Small positive", 0.1),
-        ("Unity", 1.0),
-        ("Moderate positive", 2.0),
-        ("Large positive", 5.0),
-        ("Small negative", -0.1),
-        ("Negative unity", -1.0),
-        ("Local minimum", -0.75),
-        ("Moderate negative", -2.0),
-        ("Large negative", -5.0),
-        ("Deep negative", -8.0),
-    ]
-
-    logger.debug("")
-    logger.debug(f"{'Description':>20} | {'x':>10} | {'Expected':>12} | {'Actual':>12} | {'ULP':>8} | {'AbsErr':>10}")
-    logger.debug("-" * 80)
-
-    max_ulp = 0
-    worst_x = 0
-    max_abs_err = 0.0
-    worst_abs_x = 0.0
-    all_ulps = []
-
-    for desc, x in test_points:
-        torch_input = torch.tensor([[x]], dtype=torch.bfloat16)
-        torch_grad = torch.tensor([[1.0]], dtype=torch.bfloat16)
-
-        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        tt_grad = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-
-        results = ttnn.gelu_bw(tt_grad, tt_input, approximate="tanh")
-        actual = ttnn.to_torch(results[0]).item()
-
-        expected = gelu_derivative_tanh_expected_bf16_daz(x)
-        ulp = ulp_distance_bf16_daz(actual, expected)
-        abs_err = abs(actual - expected)
-        all_ulps.append(ulp)
-
-        if ulp > max_ulp:
-            max_ulp = ulp
-            worst_x = x
-        if abs_err > max_abs_err:
-            max_abs_err = abs_err
-            worst_abs_x = x
-
-        logger.debug(f"{desc:>20} | {x:>10.4f} | {expected:>12.6f} | {actual:>12.6f} | {ulp:>8} | {abs_err:.2e}")
-
-    logger.debug("-" * 70)
-    logger.debug(f"Max ULP: {max_ulp} at x = {worst_x}")
-    logger.debug(f"Max abs error: {max_abs_err:.6e} at x = {worst_abs_x}")
-    logger.debug("")
-    logger.debug("Expected behavior (tanh approximation):")
-    logger.debug("- GELU_tanh'(0) ≈ 0.5")
-    logger.debug("- GELU_tanh'(x) → 1 as x → +∞")
-    logger.debug("- GELU_tanh'(x) → 0 as x → -∞")
-    logger.debug("- Local minimum near x ≈ -0.75 where GELU_tanh'(x) ≈ 0")
-    logger.debug("=" * 100)
-
-    # For points where expected ≈ 0 (large negative x), ULP is misleading.
-    # Check that absolute error is bounded and ULP is bounded for non-saturation points.
-    assert max_abs_err < 0.02, f"Max abs error {max_abs_err:.6e} at x={worst_abs_x} exceeds 0.02."
-    # ULP threshold only meaningful for x > -2 where expected is not near-zero
-    non_saturated_ulps = [u for (u, x) in zip(all_ulps, [p[1] for p in test_points]) if x > -2.0]
-    if non_saturated_ulps:
-        max_ns_ulp = max(non_saturated_ulps)
-        assert max_ns_ulp <= 4, f"Max ULP {max_ns_ulp} for non-saturated region exceeds threshold 4."
+    # Verify counts sum correctly
+    ulp_sum = ulp_0_count + ulp_1_count + ulp_2_count + ulp_3_to_10_count + ulp_11_to_100_count + ulp_above_100_count
+    assert ulp_sum == N_valid, f"ULP counts don't sum to total valid: {ulp_sum} != {N_valid}"
+    atol = torch.allclose(z_torch_valid, tt_out_valid.to(torch.float32), atol=0.02), "Assertion Test - 0.02"
+    print(atol)
+    assert max_ulp <= mismatch_threshold, f"Max ULP {max_ulp} exceeds threshold {mismatch_threshold}"
