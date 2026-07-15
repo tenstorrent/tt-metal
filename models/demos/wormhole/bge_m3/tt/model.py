@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from dataclasses import replace
 
 import ttnn
@@ -40,8 +41,24 @@ class BgeM3Model(LightweightModule):
         # attention all-gathers K/V. The dense pad mask is skipped (the unpadded
         # serving shape needs none) and position_ids must be supplied host-side
         # (device cumsum over a sharded sequence would be wrong).
+        # Data-parallel serving path (DP=2): inputs are sharded on the BATCH dim
+        # across a 1x2 N300 mesh. Each chip is an independent replica running the
+        # full single-chip forward on its batch shard (B/2), full sequence. NO
+        # inter-chip collectives (no K/V all-gather) — attention is standard
+        # single-chip SDPA over the full local sequence. Exact full attention.
+        # Gated by BGE_M3_DATA_PARALLEL=1; takes precedence over sequence-parallel.
+        self._data_parallel = (
+            os.environ.get("BGE_M3_DATA_PARALLEL", "0") == "1"
+            and args.max_seq_len == 8192
+            and mesh_device is not None
+            and mesh_device.get_num_devices() == 2
+            and tuple(mesh_device.shape) == (2, 1)
+        )
+        # Sequence-parallel serving path: inputs sharded on the sequence dim;
+        # attention all-gathers K/V. Disabled when data-parallel is active.
         self._sequence_parallel = (
-            args.max_seq_len == 8192
+            not self._data_parallel
+            and args.max_seq_len == 8192
             and mesh_device is not None
             and mesh_device.get_num_devices() == 2
             and tuple(mesh_device.shape) == (2, 1)
@@ -232,8 +249,9 @@ class BgeM3Model(LightweightModule):
                 past_key_values_length=0,
             )
 
-        # Sequence-parallel serving skips the dense pad mask (unpadded shape).
-        if self._sequence_parallel:
+        # Sequence-parallel and data-parallel serving skip the dense pad mask
+        # (unpadded serving shape). DP runs exact full attention per replica.
+        if self._sequence_parallel or self._data_parallel:
             prepared_attention_mask = None
         else:
             prepared_attention_mask = self._prepare_attention_mask(input_ids=input_ids, attention_mask=attention_mask)

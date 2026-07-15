@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from dataclasses import replace
 
 import ttnn
@@ -172,7 +173,11 @@ def _attention_qkv_dtype(dtype, max_seq_len, max_batch_size):
 
 def _sequence_parallel_axis(mesh_device, max_seq_len):
     """Return the mesh axis to shard the sequence over, or None. Enabled for the
-    S8192 serving shape on a 1x2 N300 (mesh (2, 1))."""
+    S8192 serving shape on a 1x2 N300 (mesh (2, 1)). Disabled in data-parallel
+    mode (BGE_M3_DATA_PARALLEL=1), where each chip owns a full-sequence batch
+    shard and attention needs no K/V all-gather."""
+    if os.environ.get("BGE_M3_DATA_PARALLEL", "0") == "1":
+        return None
     if (
         max_seq_len == 8192
         and mesh_device is not None
