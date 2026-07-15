@@ -29,7 +29,7 @@ GlobalCircularBuffer create_global_circular_buffer(
 // DRAM-sender variant: senders are programmable DRAM cores identified by DRAM bank id.
 // The returned GlobalCircularBuffer is the same type as the worker variant; the sender
 // domain is queryable via tt::tt_metal::experimental::sender_core_type(gcb).
-GlobalCircularBuffer create_global_circular_buffer_with_dram_senders(
+GlobalCircularBuffer create_global_circular_buffer_for_tensor_prefetcher(
     MeshDevice* mesh_device,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
@@ -38,7 +38,7 @@ GlobalCircularBuffer create_global_circular_buffer_with_dram_senders(
 
 // Build a DRAM-sender GCB shaped to feed one or more 1D ring matmuls (gather_in0=true)
 // from the given weight tensors. The caller supplies `bank_to_receivers` (the same layout
-// the low-level `create_global_circular_buffer_with_dram_senders` takes), and the factory
+// the low-level `create_global_circular_buffer_for_tensor_prefetcher` takes), and the factory
 // validates it is compatible with the matmul program configs and weight shapes.
 //
 // One (program_config, weight) pair per matmul. Each pair is validated independently:

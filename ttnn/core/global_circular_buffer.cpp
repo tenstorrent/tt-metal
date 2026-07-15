@@ -35,7 +35,7 @@ GlobalCircularBuffer create_global_circular_buffer(
         device, sender_receiver_core_mapping, size, buffer_type);
 }
 
-GlobalCircularBuffer create_global_circular_buffer_with_dram_senders(
+GlobalCircularBuffer create_global_circular_buffer_for_tensor_prefetcher(
     MeshDevice* mesh_device,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,

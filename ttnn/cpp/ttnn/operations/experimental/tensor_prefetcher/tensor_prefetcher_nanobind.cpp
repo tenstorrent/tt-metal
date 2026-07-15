@@ -82,7 +82,7 @@ void bind_tensor_prefetcher(nb::module_& mod) {
                     = r reproduces the natural topology order; the matmul must consume in the
                     matching order, else it deadlocks.
                 global_cb (GlobalCircularBuffer): a DRAM-sender GCB (created via
-                    ttnn.experimental.create_global_circular_buffer_with_dram_senders).
+                    ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher).
                 device_subset (Optional[MeshCoordinateRangeSet]): subset of the mesh that
                     processes this request. Defaults to the full mesh.
                 cq_id (Optional[int]): command queue that may be recording a trace. When that
@@ -142,7 +142,7 @@ void bind_tensor_prefetcher(nb::module_& mod) {
 
     // DRAM-sender GCB factories. MeshDevice-only (the per-mesh DRISC L1 arena lives on
     // MeshDeviceImpl) and only ever paired with the Tensor prefetcher above.
-    ttnn::bind_function<"create_global_circular_buffer_with_dram_senders", "ttnn.experimental.">(
+    ttnn::bind_function<"create_global_circular_buffer_for_tensor_prefetcher", "ttnn.experimental.">(
         mod,
         R"doc(
             Create a GlobalCircularBuffer where senders are programmable DRAM cores (Blackhole DRISCs).
@@ -160,7 +160,7 @@ void bind_tensor_prefetcher(nb::module_& mod) {
                     (receiver-contiguous layout); a bank with two or more receivers may then split
                     them across two DRISC sender cores for higher bandwidth.
         )doc",
-        &ttnn::global_circular_buffer::create_global_circular_buffer_with_dram_senders,
+        &ttnn::global_circular_buffer::create_global_circular_buffer_for_tensor_prefetcher,
         nb::keep_alive<0, 1>(),
         nb::arg("mesh_device"),
         nb::arg("bank_to_receivers"),

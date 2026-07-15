@@ -280,7 +280,7 @@ def test_tensor_prefetcher_BH_param(
 # create_global_circular_buffer_for_matmul_1d factory
 # ---------------------------------------------------------------------------
 # Drive the same shape as the qkv_small case (K=256, N=8*32, bf16) but build the GCB
-# via the matmul-aware factory instead of calling create_global_circular_buffer_with_dram_senders
+# via the matmul-aware factory instead of calling create_global_circular_buffer_for_tensor_prefetcher
 # directly. End-to-end PCC check confirms the factory's bank-to-receivers mapping +
 # size validation match what the matmul + prefetcher expect.
 @pytest.mark.parametrize(
@@ -549,7 +549,7 @@ def test_tensor_prefetcher_multi_tensor(device, num_tensors, num_layers):
         (b, _bank_receivers_row_major(b, _MT_NUM_RECV_PER_BANK, ring_cols=num_dram_banks))
         for b in range(num_dram_banks)
     ]
-    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
+    gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(device, bank_to_receivers, gcb_size)
 
     # Per receiver per (layer, tensor): ring_size pushes.
     num_iters_total = num_layers * num_tensors * ring_size
@@ -615,7 +615,7 @@ def test_tensor_prefetcher_recv_contig_smoke(device, num_tensors, num_layers):
         (b, _bank_receivers_strided(b, num_recv_per_bank, num_dram_banks, ring_cols=num_dram_banks))
         for b in range(num_dram_banks)
     ]
-    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
+    gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(device, bank_to_receivers, gcb_size)
 
     num_iters_total = num_layers * num_tensors * ring_size
 
@@ -910,7 +910,7 @@ def test_tensor_prefetcher_streaming_matmul(
     # The recv-contig matmul factory validates the (program_config, weight, bank_to_receivers) triple
     # and, because program_config.stream_in1 is set, relaxes its size floor from a full layer down to a
     # double-buffer window -- so the shallow streaming GCB is accepted here instead of only via the raw
-    # create_global_circular_buffer_with_dram_senders path.
+    # create_global_circular_buffer_for_tensor_prefetcher path.
     gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d_recv_contig(
         device, [program_config], [tt_weight], bank_to_receivers=bank_to_receivers, size=gcb_size
     )

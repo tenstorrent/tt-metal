@@ -509,7 +509,7 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
         ring positions [b, b+num_banks, b+2*num_banks, ...]. Under BDS round-robin,
         bank b's slab s == shard (b + s*num_banks), so this delivers shard r to ring
         position r (PCC-verified below).
-      - GCB built via create_global_circular_buffer_with_dram_senders (the _for_matmul_1d
+      - GCB built via create_global_circular_buffer_for_tensor_prefetcher (the _for_matmul_1d
         wrapper asserts a K-row-major single-wide-shard-per-bank layout, which recv-contig
         is not; the underlying GCB object is identical).
     """
