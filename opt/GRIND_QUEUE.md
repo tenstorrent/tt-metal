@@ -1128,6 +1128,13 @@ regression a live outcome if the gathers are already overlapped. **Both landed i
       realizable, but un-measured in-fold). Wiring = source edit to `_quant_cross_attn` + own PCC gate (cross-attn K/V ≠
       self-attn tensor class; QA2's self-attn PCC pass does not transfer) + prewarm + traced pipeline = WARM-authoring, NOT
       cron. The a2v audio-K/V mirror is negligible (`sp_ag_audio_kv` 16.2 µs = 1 tile, not seq-scaled).
+      - **↳ MEASURED at E2E (2026-07-15 02:40Z, harvested from the HUMAN's traced A/B jobs 606/607/608, gen#1 replay): the
+        ~90 ms UPPER-BOUND does NOT realize — it is NULL in-fold.** `LTX_QUANT_XATTN_SDPA_BF8` OFF (P1/P2) vs ON (Q), same
+        `all_bf8_lofi`+activations base: **S2 929.68→927.37 = −2.31 ms/step (−0.25%)**, **S1 296.16→296.79 = +0.63 ms/step
+        (ON slower/noise)**. Per-step ceiling was 48 blk×380.96 µs = 18.3 ms/S2-step; realized −2.31 ms = **~13%**, S1
+        null/negative ⇒ E2E ≈ **−7 ms/gen = sub-noise, NOT a shippable gate win.** The gather bytes are largely NOT on the
+        exposed critical path — a PAYLOAD shrink on a dispatch-bound step (same as H0 bf8 −1.1%, Batch B SDPA-LoFi null).
+        ⇒ **v2a cross-K/V bf8 is DE-PRIORITIZED as a perf lever** (funding it buys ≤7 ms, not 90). Audio-QUALITY gate is orthogonal.
 - [ ] **NEXT: make `LTX_QUALITY=medium/fast` carry both QA flags AND (once funded) the v2a cross-K/V bf8 cast** — gated on
       the 1080p decoded-video quality sign-off. The v2a cast (~90 ms ceiling) stacks on top of QA2's −411 ms.
   - 🔴 **LIVE (human, in-flight as of 2026-07-15 02:13Z) — DO NOT re-dispatch; this lever is CLAIMED.** The worktree holds an
