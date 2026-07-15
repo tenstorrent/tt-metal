@@ -1,11 +1,11 @@
 # --- Mesh Descriptors ------------------------------------------------------
-# Subtorus quad-galaxy mock: single 4x2 LINE+RING tray-pair torus on one host rank (8 ASICs).
+# Subtorus quad-galaxy mock: 4x2 LINE+RING torus spanning 2x1 host ranks (2x2 slice per rank, 8 ASICs).
 
 mesh_descriptors {
   name: "M0"
   arch: BLACKHOLE
   device_topology { dims: [ 4, 2 ] dim_types: [ LINE, RING ] }
-  host_topology   { dims: [ 1, 1 ] }
+  host_topology   { dims: [ 2, 1 ] }
   channels { count: 2 policy: RELAXED }
 }
 

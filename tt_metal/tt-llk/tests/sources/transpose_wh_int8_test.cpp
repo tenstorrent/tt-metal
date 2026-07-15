@@ -36,7 +36,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, params.num_faces, params.num_faces);
     // Mirror transpose_init i8 branch: acc_to_dest=true, transpose_of_faces=1, within_face_16x16_transpose=1.
     _llk_unpack_A_init_<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE, false /* unpack_to_dest */>(
-        1 /* transpose_of_faces */, 1 /* within_face_16x16_transpose */, FACE_R_DIM, params.num_faces, formats.unpack_A_src, formats.unpack_A_dst);
+        1 /* transpose_of_faces */,
+        1 /* within_face_16x16_transpose */,
+        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces),
+        formats.unpack_A_src,
+        formats.unpack_A_dst);
 
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
