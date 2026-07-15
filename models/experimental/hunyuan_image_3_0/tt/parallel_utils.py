@@ -79,6 +79,63 @@ def moe_full_seq_mem_config(seq_len: int) -> ttnn.MemoryConfig:
     return ttnn.L1_MEMORY_CONFIG if seq_len <= MOE_L1_MAX_SEQ else ttnn.DRAM_MEMORY_CONFIG
 
 
+def _largest_divisor_leq(x: int, cap: int) -> int:
+    """Largest d in [1, cap] with x % d == 0."""
+    for d in range(min(x, cap), 0, -1):
+        if x % d == 0:
+            return d
+    return 1
+
+
+def wide_mm_program_config(device, M: int, K: int, N: int):
+    """2D-multicast matmul config for a large-M (prefill) projection.
+
+    ttnn's auto-heuristic mis-schedules some large-M bf16 x bf8 shapes onto all 110
+    worker cores at ~3%% FLOP / ~9 GB/s (measured: the QKV/o_proj/shared-MLP linears
+    ran 900-1350 us each, vs the routed-expert matmul of the SAME 512x3072x4096 shape
+    at 147 us / 49%% FLOP on a rectangular 64-core grid). This returns an explicit 2D
+    MultiCast config on a rectangular grid where M and N tiles divide evenly across
+    the grid rows/cols — the schedule that the fast expert matmuls already use — so
+    the projection is deterministic regardless of the input tensor's memory state.
+
+    Returns None (=> auto) unless every dim is tile-aligned and M is more than one
+    tile (the single-M-tile decode path uses the 1D config instead), so it is always
+    safe to pass at any tp_factor / seq.
+    """
+    if M % TILE or K % TILE or N % TILE:
+        return None
+    Mt, Kt, Nt = M // TILE, K // TILE, N // TILE
+    if Mt <= 1:  # single-M-tile (decode) shape: use the 1D config, not this
+        return None
+
+    grid = device.compute_with_storage_grid_size()
+    # 2D mcast tiles M across grid rows (y) and N across grid cols (x). Pick the
+    # largest grid dims that divide Mt/Nt evenly so no core is left idle or ragged.
+    gy = _largest_divisor_leq(Mt, grid.y)
+    gx = _largest_divisor_leq(Nt, grid.x)
+    per_core_M = Mt // gy
+    per_core_N = Nt // gx
+
+    # out_subblock_h * out_subblock_w <= 4 (dest register tiles). Prefer wide subblocks.
+    out_subblock_w = next((w for w in (4, 3, 2, 1) if per_core_N % w == 0), 1)
+    out_subblock_h = next((hh for hh in range(4 // out_subblock_w, 0, -1) if per_core_M % hh == 0), 1)
+
+    # K reduction chunk: a divisor of Kt, capped so the in0/in1 blocks stay L1-sized.
+    in0_block_w = _largest_divisor_leq(Kt, 4)
+
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(gx, gy),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=False,
+    )
+
+
 # --- L1-residency seq gate for per-device (sp-sharded) residual-stream / attention
 # ops (input/post-attn RMSNorm, residual adds, QKV/create-heads/RoPE/SDPA/concat/
 # o_proj). These run on the PER-DEVICE sequence Sd = S/sp_factor. Above a sequence
