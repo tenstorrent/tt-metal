@@ -143,7 +143,7 @@ class Flux2VaeDecoder(Module):
         z = self.post_quant_conv.forward(z)
 
         z = self.conv_in.forward(z)
-        z = self.mid_block.forward(z)
+        z = self.mid_block.forward(z)  # output of this will be gathered?
 
         for block in self.up_blocks:
             z = block.forward(z)
