@@ -750,12 +750,12 @@ def bh_2d_mesh_device_context(device_params):
     fabric_router_config = updated_device_params.pop("fabric_router_config", None)
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
     if os.environ.get("TT_MESH_GRAPH_DESC_PATH"):
-        # A custom mesh graph descriptor defines the system-mesh shape (e.g. a 4x4
-        # sub-mesh carved from the galaxy). get_num_devices() still reports the
-        # physical count (32), so open the MGD's system mesh directly instead of the
-        # count-based hardcode. mesh_shape=None => the global system-mesh shape.
+        # A custom mesh-graph descriptor defines the system-mesh shape (e.g. a 4x4
+        # sub-mesh of the galaxy). Open exactly that shape — the device-count
+        # hardcodes below don't apply when the topology is MGD-defined.
+        mesh_shape = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape()
         mesh_device = ttnn.open_mesh_device(
-            mesh_shape=None,
+            mesh_shape=mesh_shape,
             **updated_device_params,
         )
     elif ttnn.get_num_devices() == 8:
