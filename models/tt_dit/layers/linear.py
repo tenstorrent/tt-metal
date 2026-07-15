@@ -231,6 +231,10 @@ class ColParallelLinear(Module):
             )
             _ck = compute_kernel_config or self.compute_config
             _census("AGMM", M, K, N, self.chunks if self.chunks is not None else 1, self.fused_activation_fn, _ck)
+            # Fabric-mux channel depth: transport-only credit knob, matmul math unaffected.
+            # BH clamps to 24 (a Wan-inherited tracing-L1 workaround); TT_DIT_AGMM_NUM_BUFFERS
+            # overrides it, default-off byte-identical.
+            agmm_num_buffers = int(os.environ.get("TT_DIT_AGMM_NUM_BUFFERS") or (24 if is_blackhole() else 48))
             outputs = ttnn.experimental.all_gather_minimal_matmul_async(
                 input_tensor=x,
                 weight_tensor=weight,
@@ -246,7 +250,7 @@ class ColParallelLinear(Module):
                 barrier_semaphore=None,
                 force_transpose=True,
                 num_workers_per_link=full_grid.x // self.ccl_manager.num_links,
-                num_buffers_per_channel=48 if not is_blackhole() else 24,
+                num_buffers_per_channel=agmm_num_buffers,
                 chunks=self.chunks if self.chunks is not None else 1,
                 dtype=dtype,
             )
