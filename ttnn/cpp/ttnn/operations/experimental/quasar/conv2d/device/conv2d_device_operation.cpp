@@ -45,13 +45,17 @@ TensorSpec Conv2dDeviceOperation::compute_output_specs(
     // OPTION B — PROGRAM A (tilize-only). When TT_METAL_QSR_CONV_SPLIT_PROGRAM is set on the height-sharded
     // path, the conv op runs only gather+tilize and OUTPUTS the tilized activations (Program B / matmul is
     // chained at the host level later). The output tensor is the per-core tilized activation shard:
-    // [per_core_out_matrix_height_ntile*32 rows, act_block_w_ntiles(=K)*32 cols], height-sharded TILE. This
-    // must match the OUT DFB the factory sizes for split_program_tilize_only (num_entries = M*K tiles).
+    // [per_core_out_matrix_height_ntile*32 rows, FULL_K*32 cols], height-sharded TILE, where FULL_K = the whole
+    // im2col contraction dim = in_ch*kh*kw/32 = act_block_w_ntiles * filter_h (act_block_w_ntiles is only ONE
+    // window row = in_ch*kw/32; on Quasar full_inner_dim does NOT collapse K into act_block_w). This matches the
+    // prepared weights' K-height [full_K, N] so Program B's plain matmul works, and matches the OUT DFB the
+    // factory sizes for the split path (num_entries = M * full_K tiles).
     if (((std::getenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM") != nullptr) ||
          (std::getenv("TT_METAL_QSR_CONV_UNPACK_TILIZE") != nullptr)) &&
         args.memory_config.is_sharded() && args.memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
         const uint32_t m_ntiles = args.parallelization_config.per_core_out_matrix_height_ntile;
-        const uint32_t k_ntiles = args.block_config.act_block_w_ntiles;
+        const uint32_t filter_h = static_cast<uint32_t>(args.sliding_window_config.window_hw.first);
+        const uint32_t k_ntiles = args.block_config.act_block_w_ntiles * filter_h;
         const uint32_t num_cores_nhw = args.parallelization_config.num_cores_nhw;
         const uint32_t padded_w = num_cores_nhw * m_ntiles * tt::constants::TILE_HEIGHT;
         const uint32_t padded_c = k_ntiles * tt::constants::TILE_WIDTH;

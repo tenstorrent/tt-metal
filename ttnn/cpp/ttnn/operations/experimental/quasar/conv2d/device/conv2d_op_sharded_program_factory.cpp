@@ -748,6 +748,17 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         dst_full_sync_en = true;
     }
 
+    // OPTION B — Program A must produce the FULL im2col contraction dim K, not just one act_block_w K-sub-block.
+    // On Quasar force_conv_no_spill is off, so full_inner_dim does NOT bump act_block_w to the full K; here
+    // act_block_w_ntiles = in_ch*kw/32 (ONE window row) while the true matmul K = in_ch*kh*kw/32 = the prepared
+    // weights' K-height (b_shape[-2]) = act_block_w_ntiles * filter_h. The fused conv contracts the extra
+    // filter_h window-rows via a window-accumulation loop; the split's single tilize must instead tilize ALL
+    // filter_h K-sub-blocks into a contiguous [M, full_K] activation so Program B's plain matmul matches the
+    // [full_K, N] weights. The reader already gathers the full window (ACTFILL nt = full_K tiles per tile-row);
+    // we just tilize all of it. (RISK: the reader's gathered K-ordering — window-position x channel — must match
+    // the weights' [r][s][c] flattening; if not, PCC needs a weight reorder. Verified by the e2e PCC test.)
+    const uint32_t full_k_ntiles = act_block_w_ntiles * filter_h;
+
     TT_FATAL(
         act_matrix_height_ntiles % per_core_out_matrix_height_ntiles == 0,
         "Activation matrix height in tiles ({}) must be divisible by per-core output matrix height in tiles ({})",
@@ -1159,15 +1170,16 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     {
         m2::DataflowBufferSpec dfb;
         if (split_program_tilize_only) {
-            // OPTION B / Program A: the op output IS the tilized activation. Size OUT to hold ALL height
-            // blocks of tilized activation for the core (num_blocks_act_h_per_core blocks x one block of
-            // ACT_TILIZED tiles = per_core_out_matrix_height_ntiles x in0_block_w tiles). compute_output_specs
-            // sizes the output tensor to the same [M*32, in0_block_w*32] shard, so the borrowed OUT matches.
+            // OPTION B / Program A: the op output IS the FULL tilized im2col activation — M tile-rows x full_K
+            // tile-cols (full_K = act_block_w_ntiles * filter_h = the prepared weights' K-height), so Program B's
+            // matmul [M, full_K] x [full_K, N] matches. compute_output_specs sizes the output tensor to the same
+            // [M*32, full_K*32] shard, so the borrowed OUT matches. (Was mis-sized to M x act_block_w = one
+            // window-row's K-sub-block, causing the K=128 vs 512 matmul mismatch.)
             const CBInfo& tilized_info = cb(Conv2dCb::ACT_TILIZED);
             dfb = m2::DataflowBufferSpec{
                 .unique_id = DFB_OUT,
                 .entry_size = tilized_info.page_size,
-                .num_entries = tilized_info.num_pages * num_blocks_act_h_per_core,
+                .num_entries = per_core_out_matrix_height_ntiles * full_k_ntiles,
                 .data_format_metadata = tilized_info.data_format,
             };
         } else {
@@ -1802,8 +1814,15 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             {"in0_num_subblocks", act_num_subblocks},
             {"in0_block_num_tiles", act_block_num_tiles},
             {"in0_subblock_num_tiles", act_subblock_num_tiles},
+            // OPTION B / Program A (tilize-only, NOT the reduce probe): the tilize kernel computes
+            // num_blocks = in0_num_blocks_h * reader_num_h_subblocks and tilizes num_blocks x in0_block_w
+            // (=act_block_w) tiles. To cover the FULL im2col K (act_block_w * filter_h tiles) rather than just
+            // one window-row, scale reader_num_h_subblocks by filter_h so num_blocks = M * filter_h and the
+            // tilize produces [M, full_K] into OUT. (Only the tilize-only kernel reads this; the fused kernel and
+            // the reduce probe keep the un-scaled value.)
             {"reader_num_h_subblocks",
-             enable_split_reader ? act_block_h_ntiles : act_subblock_h_ntiles * act_num_subblocks},
+             (enable_split_reader ? act_block_h_ntiles : act_subblock_h_ntiles * act_num_subblocks) *
+                 ((split_program_tilize_only && !split_program_unpack_tilize) ? filter_h : 1u)},
             {"in1_num_subblocks", weight_num_subblocks},
             {"in1_block_num_tiles", weight_block_num_tiles},
             {"in1_block_w", weight_block_w_ntiles},
