@@ -65,10 +65,8 @@ class UnsafeAllocationTracker:
 
         Reports allocation context (op name + compile args) and Python-side referrers.
         """
-        import ttnn as _ttnn
         from ttnn._ttnn.operations.trace import get_unsafe_tracked_ids
 
-        _ttnn.synchronize_device(self.mesh_device)
         gc.collect()
 
         # get_unsafe_tracked_ids returns dict[int, str] mapping buffer_id -> allocation context
