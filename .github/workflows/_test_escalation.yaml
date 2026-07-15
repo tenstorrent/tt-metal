@@ -1,12 +1,5 @@
 name: "(infra) Test Owner Escalation"
 
-# Daily poll of Slack for deactivated accounts. Any pipeline-reorg test
-# (tests/pipeline_reorg/*.yaml) still owned by a deactivated Slack user is
-# escalated to a fresh GitHub issue (one per day) labelled `test-escalation`,
-# listing the departed owners, their tests, and the team lead each test should
-# move to per .github/TESTOWNERS. No issue is filed on days with nothing to
-# reassign.
-
 on:
   schedule:
     # 04:00 UTC every day.
@@ -79,8 +72,7 @@ jobs:
             fi
           done
 
-          # Active == registered as non-DEACTIVATED (Slack marks deactivated
-          # accounts with "deleted": true).
+          # Active == registered as non-DEACTIVATED
           jq '[.[] | select(.deleted != true) | .id]' "$MEMBERS_FILE" > "${RUNNER_TEMP}/active_ids.json"
           echo "Fetched $(jq length "$MEMBERS_FILE") users across $PAGE_COUNT pages; $(jq length "${RUNNER_TEMP}/active_ids.json") active."
 
