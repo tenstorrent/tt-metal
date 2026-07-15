@@ -618,3 +618,70 @@
   — replaced the `test_rms_norm_rejects_row_major_width_block_remaining` guard with
   `test_rms_norm_row_major_cross_core_bf8b_tile_gamma` (acceptance, 12 cases). `test_rms_norm_r5c_debug.py`
   — flipped `test_r5c_bf8b_tile_gamma_still_excluded` to `test_r5c_bf8b_tile_gamma_now_supported`.
+
+## Perf 1 — Batch the ROW_MAJOR reader's per-stick barrier (PERF)
+- Date: 2026-07-15
+- What was done: Applied the `double_buffer` lever to the ONE remaining per-stick
+  data-movement site R3 left un-batched. R3 batched the TILE reader/writer and the RM
+  writer (`write_sticks_after_untilize` issues a whole tile-row of writes then ONE
+  barrier), but the RM **input** reader (`read_wblock` in `rms_norm_reader.cpp`) still
+  did `reserve(1) → read → noc_async_read_barrier() → push(1)` **per stick** — 32 serial
+  barriers per W-block. Serial barriers give the NoC no chance to pipeline the 32 stick
+  reads, so the reads were latency-bound even though their bytes are hidden (R3). Rewrote
+  `read_wblock` to reserve the whole `rows_to_push` run, zero any padding/W-tail pages,
+  issue ALL real stick reads, then **ONE** barrier, then push the run.
+  - **Bottleneck first (per /perf-measure).** A reader-payload ablation (stub the RM
+    input `noc_async_read` + barrier, KEEP the reserve/zero/push CB scaffolding + loop
+    counts) dropped RM bf16 device-ns from **429→93 µs (W=4096)** and **850→181 µs
+    (W=8192)** — the RM reader was **~78–79 %** of device time and squarely on the
+    critical path. Classified reader-latency-bound (bytes hidden per R3, so the exposed
+    cost is the barrier serialization) — the exact regime the `double_buffer` /
+    `tile_reorder` "issue a block then one barrier" gist targets. TILE is untouched
+    (already batched in R3) and is the byte-identical control.
+  - **Lever = one barrier per stick-run.** After batching, the RM bf16 no-gamma times
+    (**93.7 / 182.0 µs**) essentially EQUAL the reader-stubbed ablation lower bound
+    (**93.0 / 180.6 µs**) — the reader is now fully overlapped by compute; the entire
+    ~79 % reader overhead is recovered and RM is now compute-bound (tilize/untilize +
+    square/reduce/mul), same bound as TILE modulo the RM-only format conversions.
+  - **Reused / unchanged:** the CB set + sizing are untouched — `cb_input_rm` was
+    already `2*STICK_BLOCK = 64` pages deep (STICK_BLOCK = one tile-row = 32), so a
+    32-page reserve fits and, since both this push and the compute `tilize` consume are
+    STICK_BLOCK-granular, the reserved run at the write pointer never wraps. The CB page
+    stride equals the manual `padded_bytes` stride (`in_rm_page = wblock_cols*input_elt`),
+    so `l1_base + r*padded_bytes` addresses each page correctly. Gamma RM calls
+    `read_wblock` with `rows_to_push=1` → byte-identical there. No new CB, no descriptor
+    change, no SUPPORTED change, no compute/writer change.
+  - **Scope:** `read_wblock` is only used by the interleaved / HEIGHT_SHARDED reader
+    (`rms_norm_reader.cpp`); the WIDTH/BLOCK cross-core path uses the separate
+    `rms_norm_sharded_reader.cpp` (untouched). The lever is numerically neutral — it
+    reads bit-identical bytes into bit-identical L1 positions; only WHEN the barrier
+    fires changes.
+- Perf (median device-ns, WH B0, 1 core; PAIRED baseline→after, each on a FRESH
+  isolated `TT_METAL_CACHE`; 11 post-warmup trials/point, CV ≤ 0.2 %):
+  | RM path | 1x1x32x4096 | 1x1x32x8192 | 1x1x64x8192 |
+  |---------|-------------|-------------|-------------|
+  | bf16 no_gamma | 429.3 → 93.7 (**4.58×**) | 853.3 → 181.9 (**4.69×**) | 852.9 → 181.9 (**4.69×**) |
+  | bf16 gamma    | 429.0 → 124.2 (**3.46×**) | 848.9 → 239.4 (**3.55×**) | 874.0 → 239.5 (**3.65×**) |
+  | fp32 no_gamma | 459.5 → 130.9 (**3.51×**) | 911.4 → 255.8 (**3.56×**) | 903.7 → 255.5 (**3.54×**) |
+  | fp32 gamma    | 459.9 → 167.2 (**2.75×**) | 908.5 → 328.0 (**2.77×**) | 938.7 → 328.0 (**2.86×**) |
+  TILE control (byte-identical path) unchanged at **1.00×** across all 12 configs
+  (e.g. bf16 no_gamma 88.1→88.2, fp32 gamma 194.4→194.3). Every RM cell improved
+  2.75–4.69×; nothing regressed.
+- Guard-set: `eval/golden_tests/rms_norm/` — `test_regression.py` + `test_translated.py`
+  **99 passed / 0 failed**; a representative `test_golden.py` cartesian slice across 11
+  diverse shapes (small, wide-W single-core, multi-tile-row multi-core, 2D/3D/4D, w_non,
+  h_non — covering INTERLEAVED / HEIGHT / WIDTH / BLOCK × all dtypes × all gamma combos):
+  **1914 passed / 0 failed / 0 xpassed / 480 xfailed** (the xfails are the permanent
+  `{fp32, False}` + carve-outs). Unit dir: `test_rms_norm.py` **86 passed**,
+  `test_rms_norm_sharded.py` + `test_rms_norm_debug.py` **164 passed** (--dev + non-dev,
+  no race — the batched reserve/push is still STICK_BLOCK-granular, matching the
+  consumer). No correctness change (numerically neutral).
+- Issues encountered: The shared `TT_METAL_CACHE=/localdev/.../built` served STALE JIT
+  binaries across back-to-back baseline/after runs (the R5-documented stale-cache
+  pathology) — after `git stash pop` restored the batched source, some kernel variants
+  kept reporting baseline numbers. Resolved by measuring each side on a FRESH isolated
+  `TT_METAL_CACHE` temp dir (forces a clean compile; the perf harness's warm-up iter
+  absorbs it), which gave reproducible, ablation-consistent numbers. This is the
+  /perf-measure "fresh kernel cache → N trials" requirement made explicit for this box.
+- Tests added: none new — reused `test_rms_norm_perf.py` (the RM shapes it already
+  parametrizes were the measurement targets). Kept as the reusable perf harness.

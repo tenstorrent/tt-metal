@@ -54,6 +54,18 @@ FORCE_INLINE void zero_l1_page(uint32_t l1, uint32_t nbytes) {
 // (2) the masked reduce never multiplies uninitialized L1 by the partial scaler
 // (0 * NaN = NaN). So H-padding rows reduce to 0 (discarded) and W-padding cols
 // are exactly 0.
+//
+// DOUBLE_BUFFER (Trailing Perf 1): reserve the whole run of `rows_to_push` sticks,
+// zero padding/W-tail pages, issue ALL real stick reads, then ONE barrier —
+// instead of the old read-one/barrier/push per stick. The per-stick barrier
+// serialized the 32 reads of a tile-row (no NoC pipelining); a payload ablation
+// showed the RM reader was ~79% of RM device time (the read BYTES are hidden per
+// R3 — the exposed cost was the barrier latency). Issuing the run's reads before
+// a single barrier lets them overlap on the NoC. The CB page stride equals
+// `padded_bytes` (in_rm_page = wblock_cols*input_elt); cb_input_rm is
+// 2*STICK_BLOCK deep and both this push and the tilize consume are STICK_BLOCK-
+// granular, so the reserved run at the write pointer never wraps. (Gamma RM calls
+// this with rows_to_push=1, so it is byte-identical there.)
 template <uint32_t cb, typename Acc>
 FORCE_INLINE void read_wblock(
     const Acc& acc,
@@ -64,19 +76,20 @@ FORCE_INLINE void read_wblock(
     uint32_t padded_bytes,
     uint32_t col_off) {
     const bool w_tail = real_bytes < padded_bytes;
+    cb_reserve_back(cb, rows_to_push);
+    uint32_t l1_base = get_write_ptr(cb);
     for (uint32_t r = 0; r < rows_to_push; ++r) {
-        cb_reserve_back(cb, 1);
-        uint32_t l1 = get_write_ptr(cb);
+        uint32_t l1 = l1_base + r * padded_bytes;
         const bool is_real = r < num_real_rows;
         if (!is_real || w_tail) {
             zero_l1_page(l1, padded_bytes);
         }
         if (is_real) {
             noc_async_read(acc.get_noc_addr(base_stick + r, col_off), l1, real_bytes);
-            noc_async_read_barrier();
         }
-        cb_push_back(cb, 1);
     }
+    noc_async_read_barrier();
+    cb_push_back(cb, rows_to_push);
 }
 
 // Read one gamma W-block, dispatching on the gamma LAYOUT (independent of the
