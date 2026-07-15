@@ -285,11 +285,8 @@ def pytest_addoption(parser):
         action="append",
         default=[],
         metavar="OP",
-        help="Run only tests for the given SFPU op(s), matched by MathOperation "
-        "name (case-insensitive, EXACT — so '--op exp' does not also select "
-        "Exp2). Repeatable: --op exp --op log. Every SFPU op is accepted, but "
-        "ops not defined in helpers/include/sfpu_operations.h are still selected "
-        "with a warning (their tests may not build/run).",
+        help="Run only tests for the given SFPU op(s), by MathOperation name "
+        "(case-insensitive, exact). Repeatable: --op=exp --op=log.",
     )
 
 
@@ -479,82 +476,10 @@ def _collapse_runtime_only_variants(config, items):
         items[:] = keep
 
 
-# SFPU ops that --op accepts, as lowercased MathOperation names. These are the
-# ops with a `SfpuType::<name>` case in tests/helpers/include/sfpu_operations.h.
-# Keep this in sync with that header: when you add a new `SfpuType::` case there,
-# add its MathOperation name here too, otherwise `--op <op>` errors out (by
-# design: it forces the table to stay current with the header).
-SUPPORTED_SFPU_OPS = frozenset(
-    {
-        "abs",
-        "atanh",
-        "asinh",
-        "acosh",
-        "celu",
-        "cos",
-        "elu",
-        "exp",
-        "exp2",
-        "fill",
-        "gelu",
-        "gelutanh",
-        "hardsigmoid",
-        "log",
-        "log1p",
-        "neg",
-        "reciprocal",
-        "rsqrt",
-        "sigmoid",
-        "sin",
-        "silu",
-        "signbit",
-        "sqrt",
-        "square",
-        "erfinv",
-        "heaviside",
-        "softshrink",
-        "softsign",
-        "mish",
-        "selu",
-        "i0",
-        "rdiv",
-        "clamp",
-        "hardtanh",
-        "tanhshrink",
-        "floor",
-        "ceil",
-        "trunc",
-        "frac",
-        "equalzero",
-        "notequalzero",
-        "lessthanzero",
-        "greaterthanzero",
-        "lessthanequalzero",
-        "greaterthanequalzero",
-        "tanh",
-        "typecast",
-        "threshold",
-        "relumax",
-        "relumin",
-        "lrelu",
-        "addint32",
-        "subint32",
-        "topklocalsort",
-        "topkmerge",
-        "topkrebuild",
-        "sfpuaddcmul",
-        "sfpuaddcdiv",
-        "sfpulerp",
-        "sfpusnakebeta",
-    }
-)
-
-
 def _item_op_names(item) -> set:
-    """Return the SFPU op name(s) a test covers, lowercased (e.g. {"exp"}).
+    """Return the op name(s) a test covers, lowercased.
 
-    First looks for a MathOperation in the test's parameters. If there isn't
-    one, it reads the op name from the test id instead (e.g. "MathOperation.Exp").
+    Reads the MathOperation from the test's parameters, falling back to the op name in the test id.
     """
     from helpers.llk_params import MathOperation
 
@@ -574,24 +499,24 @@ def _item_op_names(item) -> set:
 def _select_tests_by_op(config, items):
     """Run only the tests for the op(s) passed with --op.
 
-    Matching is case-insensitive and exact, so "exp" selects Exp but not Exp2.
-    Each op must be listed in SUPPORTED_SFPU_OPS; an op that isn't (a typo, or a
-    new op added to sfpu_operations.h but not to the table) raises an error.
-    Does nothing when --op isn't given.
+    Each op is a MathOperation name, matched case-insensitively and exactly. An
+    unknown name raises an error; a valid op with no matching test selects
+    nothing. Does nothing without --op.
     """
     requested = config.getoption("--op") or []
     if not requested:
         return
 
+    from helpers.llk_params import MathOperation
+
+    valid = {op.name.lower() for op in MathOperation}
     wanted = set()
     for raw in requested:
         key = raw.lower()
-        if key not in SUPPORTED_SFPU_OPS:
+        if key not in valid:
             raise pytest.UsageError(
-                f"--op {raw!r}: not a supported SFPU op. Supported ops are listed "
-                f"in SUPPORTED_SFPU_OPS in tests/python_tests/conftest.py. If you "
-                f"added this op to sfpu_operations.h, add its MathOperation name "
-                f"to that table too."
+                f"--op {raw!r}: not a known SFPU op. Expected a MathOperation "
+                f"name (case-insensitive), e.g. Exp, Reciprocal, Gelu."
             )
         wanted.add(key)
 
