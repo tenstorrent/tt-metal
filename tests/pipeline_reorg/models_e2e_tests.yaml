@@ -702,7 +702,7 @@
 
 # ── Stable Diffusion XL ────────────────────────────────────────────
 
-- name: Stable Diffusion XL UNet-loop e2e tests (WH)
+- name: SDXL unet-loop base + refiner 10 steps (WH)
   cmd: |
     export HF_HUB_OFFLINE=0
     export TT_MM_THROTTLE_PERF=5
@@ -721,12 +721,13 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
-- name: Stable Diffusion XL UNet-loop e2e tests (BH)
+- name: SDXL unet-loop base + refiner 10 steps + base 50 steps (BH)
   cmd: |
     export HF_HUB_OFFLINE=0
     exit_code=0
     pytest --timeout 1800 tests/nightly/single_card/stable_diffusion_xl_base/test_unet_loop.py || exit_code=$?
     pytest --timeout 1800 tests/nightly/single_card/stable_diffusion_xl_base/refiner/test_unet_loop.py || exit_code=$?
+    TT_MM_THROTTLE_PERF=0 pytest models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600 || exit_code=$?
     exit $exit_code
   model: sdxl-nightly
   skus:
@@ -736,7 +737,7 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
-- name: ttnn nightly sdxl base unet-loop (wormhole)
+- name: SDXL unet-loop base 50 steps (WH)
   cmd: |
     export HF_HUB_OFFLINE=0
     export TT_MM_THROTTLE_PERF=5
@@ -752,7 +753,7 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
-- name: ttnn nightly sdxl refiner + lora (wormhole)
+- name: SDXL unet-loop refiner 50 steps + lora (WH)
   cmd: |
     export HF_HUB_OFFLINE=0
     export TT_MM_THROTTLE_PERF=5
@@ -771,20 +772,7 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
-- name: ttnn nightly sdxl base unet-loop (blackhole)
-  cmd: |
-    export HF_HUB_OFFLINE=0
-    export TT_MM_THROTTLE_PERF=0
-    pytest models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600
-  model: sdxl-nightly
-  skus:
-    bh_p150:
-      timeout: 40
-      tier: 2
-  owner_id: U08SXRPCTJ5 # Janko Mitrovic
-  team: shield
-
-- name: ttnn nightly sdxl refiner unet-loop (blackhole)
+- name: SDXL unet-loop refiner 50 steps (BH)
   cmd: |
     export HF_HUB_OFFLINE=0
     export TT_MM_THROTTLE_PERF=0
@@ -797,7 +785,7 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
-- name: ttnn nightly sdxl demo tests (base + lora)
+- name: SDXL demo tests base + lora
   cmd: |
     export HF_HUB_OFFLINE=0
     exit_code=0
@@ -810,12 +798,12 @@
       timeout: 40
       tier: 2
     bh_p150:
-      timeout: 30
+      timeout: 20
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
-- name: ttnn nightly sdxl demo tests (base + refiner)
+- name: SDXL demo tests base + refiner
   cmd: |
     export HF_HUB_OFFLINE=0
     pytest models/demos/stable_diffusion_xl_base/demo/demo_base_and_refiner.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
@@ -825,12 +813,12 @@
       timeout: 35
       tier: 2
     bh_p150:
-      timeout: 30
+      timeout: 20
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
-- name: ttnn nightly sdxl demo tests (img2img + inpainting)
+- name: SDXL demo tests img2img + inpainting
   cmd: |
     export HF_HUB_OFFLINE=0
     exit_code=0
@@ -843,12 +831,12 @@
       timeout: 30
       tier: 2
     bh_p150:
-      timeout: 25
+      timeout: 20
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
-- name: ttnn nightly sdxl demo tests (N300 cfg-parallel)
+- name: SDXL demo tests cfg-parallel (WH)
   cmd: |
     export HF_HUB_OFFLINE=0
     export TT_MM_THROTTLE_PERF=5
@@ -862,23 +850,46 @@
   team: shield
 
 # Device-perf, migrated from perf-device-models (single-card-perf-test :: stable_diffusion_xl).
-- name: ttnn nightly sdxl device-perf
+- name: SDXL device-perf unet + vae (WH)
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    export TRACY_NO_INVARIANT_CHECK=1
+    pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal -k "(unet and not refiner) or vae"
+  model: sdxl-perf
+  skus:
+    wh_n150:
+      timeout: 35
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: SDXL device-perf refiner + clip (WH)
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    export TRACY_NO_INVARIANT_CHECK=1
+    pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal -k "refiner or clip"
+  model: sdxl-perf
+  skus:
+    wh_n150:
+      timeout: 35
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: SDXL device-perf (BH)
   cmd: |
     export HF_HUB_OFFLINE=0
     export TRACY_NO_INVARIANT_CHECK=1
     pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal
   model: sdxl-perf
   skus:
-    wh_n150:
-      timeout: 35
-      tier: 2
     bh_p150:
       timeout: 35
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
-- name: ttnn nightly sdxl lora device-perf (wormhole N150)
+- name: SDXL lora device-perf (WH)
   cmd: |
     export HF_HUB_OFFLINE=0
     export TRACY_NO_INVARIANT_CHECK=1
