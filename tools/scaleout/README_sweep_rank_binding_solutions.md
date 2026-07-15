@@ -1,6 +1,13 @@
 # Plan: `sweep_rank_binding_solutions.py` — run a command across every generated solution
 
-Status: **design / plan** (this doc only; the script is a follow-up).
+Status: **implemented**. `tools/scaleout/sweep_rank_binding_solutions.py` is in the
+tree and was validated end-to-end on the SC20 mock (5 solutions generated, swept a
+fabric unit test across them, `sweep_report.yaml` produced, `2/2 passed`).
+
+> **New-mode only.** The sweep drives off `--mesh-graph-descriptor` + `--hosts`
+> (real cluster) or `--mock-cluster-rank-binding` (mock), or an existing
+> `--solutions-dir`. tt-run's legacy `--rank-binding` (a single explicit binding)
+> is intentionally **not** exposed — a sweep needs an MGD to enumerate solutions.
 
 Tracking: epic [#49514](https://github.com/tenstorrent/tt-metal/issues/49514) ·
 ticket [#49515](https://github.com/tenstorrent/tt-metal/issues/49515) (topology
@@ -84,7 +91,7 @@ sweep_rank_binding_solutions.py [OPTIONS] -- <command> [args...]
 | `--mock-cluster-rank-binding PATH` | (generate mode, mock) per-rank mock mapping YAML. |
 | `--max-solutions N` | (generate mode) forwarded to `generate_rank_bindings`. |
 | `--distinct-host-sets` | (generate mode) forwarded to `generate_rank_bindings`. |
-| `--output-dir PATH` | (generate mode) where solutions are written (default `generated/ttrun/sweep`). |
+| `--solutions-output-dir PATH` | (generate mode) where solutions are written (default `generated/ttrun/sweep`). |
 | `--select id[,id...]` | Only sweep these solution ids (default: all in the index). |
 | `--limit N` | Sweep at most the first N solutions (by index order / solver preference). |
 | `--mpi-args "..."` | Extra MPI args forwarded to each launch (e.g. `--allow-run-as-root --oversubscribe`). |
@@ -92,7 +99,7 @@ sweep_rank_binding_solutions.py [OPTIONS] -- <command> [args...]
 | `--tcp-interface IFACE` | Forwarded (multi-host TCP exclusions). |
 | `--per-solution-timeout SECONDS` | Kill a launch that exceeds this; record as `timeout`. |
 | `--continue-on-failure / --stop-on-failure` | Whether to keep sweeping after a failing solution (default: continue). |
-| `--report PATH` | Where to write `sweep_report.yaml` (default `<solutions-dir>/sweep_report.yaml`). |
+| `--sweep-report PATH` | Where to write `sweep_report.yaml` (default `<solutions-dir>/sweep_report.yaml`). |
 | `--dry-run` | Print the tt-run command per solution; do not launch. |
 | `-- <command>` | Everything after `--` is the command to run per solution (e.g. `./build/test/... --gtest_filter=...`, or `true`). |
 
@@ -119,13 +126,14 @@ symbols (all present today):
 | `build_phase2_mock_mapping(...)`, `load_mock_rank_to_descriptors(...)`, `parse_rank_bindings_mapping(...)` | Mock-mode Phase-2 routing from `phase2_mock_mapping.yaml`. |
 | `default_multihost_mpi_args(tcp_interface)` | Sensible multi-host defaults. |
 
-**Execution strategy (decision):** prefer importing `build_mpi_command` and
-running the returned argv with `subprocess.run` — this keeps per-rank env,
-rankfile syntax, and oversubscribe logic identical to `tt-run`. A `--use-tt-run-cli`
-fallback shells out to `tt-run --rank-binding <sol>/rank_bindings.yaml --mpi-args
-"... rankfile ..." -- <command>` (legacy mode) for environments where importing
-ttrun is undesirable. Both paths produce the same launch; the import path avoids a
-process hop and gives structured access to the command for `--dry-run`.
+**Execution strategy (as implemented):** Phase 1 reuses the generate helpers
+directly (imported). Per-solution Phase 2 **shells out to the `tt-run` CLI in
+legacy mode** — `tt-run --rank-binding <sol>/rank_bindings.yaml
+[--mock-cluster-rank-binding <sol>/phase2_mock_mapping.yaml |
+--mpi-args "... --map-by rankfile:file=<sol>/rankfile"] -- <command>` — forwarding
+the user's tt-run passthrough args. Shelling out to the real CLI is the most robust
+reuse (identical launch semantics, no coupling to tt-run internals); `--dry-run`
+prints each fully-built `tt-run` command.
 
 ---
 
@@ -185,12 +193,13 @@ enumeration: { mode: distinct-host-sets, max_solutions: 5, found: 5, truncated: 
 summary: { total: 5, passed: 4, failed: 1, timed_out: 0, skipped: 0 }
 results:
   - id: 44f80c400ca963a4
-    status: pass          # pass | fail | timeout | skipped
+    status: pass          # pass | fail | timeout | dry-run
     returncode: 0
     duration_s: 42.1
     num_hosts: 4
     host_set: [bh-glx-...c01u02, bh-glx-...c01u08, bh-glx-...c02u02, bh-glx-...c02u08]
-    log: <solution_dir>/sweep_run.log
+    tt_run_command: "tt-run --rank-binding .../rank_bindings.yaml --mock-cluster-rank-binding ... -- <program>"
+    log: <log-dir>/44f80c400ca963a4.log
   - id: 03765a03004d0370
     status: fail
     returncode: 1
@@ -198,7 +207,11 @@ results:
     ...
 ```
 
-Console prints a compact table (id, host count, status, duration) and a final
+Each result carries `tt_run_command` — the exact, copy-paste-reproducible `tt-run` invocation for that
+solution — so a failing solution can be re-run standalone. (Deliberately no parsed failure-reason field:
+the full per-solution log is the source of truth; log-scraping was too brittle to be trustworthy.)
+
+Console prints per-solution progress + result lines and a final
 `PASSED n/N`. Exit code is non-zero if any solution failed (so CI can gate on it).
 
 ---
