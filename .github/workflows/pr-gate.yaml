@@ -415,9 +415,9 @@ jobs:
            || needs.find-changed-files.outputs.llk-ci-changed == 'true'
            || (needs.find-changed-files.outputs.llk-wormhole-changed == 'true'
                && needs.find-changed-files.outputs.llk-blackhole-changed == 'true'))
-          && 'wh_n150_civ2,bh_p150b_civ2'
+          && 'wh_n150_civ2,bh_p150b_civ2_viommu_prio'
           || (needs.find-changed-files.outputs.llk-wormhole-changed == 'true' && 'wh_n150_civ2')
-          || (needs.find-changed-files.outputs.llk-blackhole-changed == 'true' && 'bh_p150b_civ2')
+          || (needs.find-changed-files.outputs.llk-blackhole-changed == 'true' && 'bh_p150b_civ2_viommu_prio')
           || '' }}
       pytest-markers: "not perf and not nightly and not quasar and not accuracy"
 

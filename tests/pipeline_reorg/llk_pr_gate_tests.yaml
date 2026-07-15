@@ -30,6 +30,6 @@
       --timeout=60 \
       --junitxml=pytest-report-blackhole.xml .
   skus:
-    bh_p150b_civ2:
+    bh_p150b_civ2_viommu_prio:
       timeout: 40
   owner_id: U07J3K6KS1K # LLK team
