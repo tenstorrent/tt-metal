@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Sequential page writer for interleaved tensors (TILE and RM).
 // Supports optional batching via BATCH compile-time arg.
 // When BATCH > 1: pipelined — overlaps NOC DMA of batch N with compute
