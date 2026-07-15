@@ -34,7 +34,6 @@ def generate_cb_reg_name(cb_index: int) -> str:
 
 
 def check_cb_idle(location: OnChipCoordinate, noc_id: NocId):
-    noc_str = f"noc{noc_id}"
     noc_block = location.device.get_block(location)
     register_store = noc_block.get_register_store(noc_id)
     # Read all CB command control registers and emit errors immediately
@@ -44,17 +43,19 @@ def check_cb_idle(location: OnChipCoordinate, noc_id: NocId):
         log_check_location(
             location,
             value == 0,
-            f"{noc_str} CB{cb_index} active (0x{value:08X}). NoC is likely hung.",
+            f"{noc_id.name} CB{cb_index} active (0x{value:08X}). NoC is likely hung.",
         )
 
 
 def run(args, context: Context):
     BLOCK_TYPES_TO_CHECK = ["tensix", "eth"]
     run_checks = get_run_checks(args, context)
-    for noc_id in run_checks.devices[0].available_nocs:
-        run_checks.run_per_block_check(
-            lambda location: check_cb_idle(location, noc_id), block_filter=BLOCK_TYPES_TO_CHECK
-        )
+    run_checks.run_per_block_check(
+        lambda location: check_cb_idle(location, NocId.NOC0), block_filter=BLOCK_TYPES_TO_CHECK
+    )
+    run_checks.run_per_block_check(
+        lambda location: check_cb_idle(location, NocId.NOC1), block_filter=BLOCK_TYPES_TO_CHECK
+    )
 
 
 if __name__ == "__main__":

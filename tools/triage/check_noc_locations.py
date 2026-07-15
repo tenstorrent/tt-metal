@@ -25,7 +25,7 @@ script_config = ScriptConfig(
 
 
 def check_noc_location(location: OnChipCoordinate, noc_id: NocId):
-    noc_str = f"noc{noc_id.value}"
+    noc_str = noc_id.name.lower()
     noc_block = location.device.get_block(location)
     register_store = noc_block.get_register_store(noc_id)
     data = register_store.read_register("NOC_NODE_ID")
@@ -42,10 +42,12 @@ def check_noc_location(location: OnChipCoordinate, noc_id: NocId):
 def run(args, context: Context):
     BLOCK_TYPES_TO_CHECK = ["tensix", "eth"]
     run_checks = get_run_checks(args, context)
-    for noc_id in run_checks.devices[0].available_nocs:
-        run_checks.run_per_block_check(
-            lambda location: check_noc_location(location, noc_id), block_filter=BLOCK_TYPES_TO_CHECK
-        )
+    run_checks.run_per_block_check(
+        lambda location: check_noc_location(location, NocId.NOC0), block_filter=BLOCK_TYPES_TO_CHECK
+    )
+    run_checks.run_per_block_check(
+        lambda location: check_noc_location(location, NocId.NOC1), block_filter=BLOCK_TYPES_TO_CHECK
+    )
 
 
 if __name__ == "__main__":

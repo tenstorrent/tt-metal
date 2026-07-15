@@ -15,7 +15,7 @@ Owner:
     jbaumanTT
 """
 
-from ttexalens.context import Context, NocId
+from ttexalens.context import Context, NocId, to_noc_id
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.memory_access import create_memory_access
 from ttexalens.tt_exalens_lib import read_register
@@ -52,7 +52,7 @@ def check_noc_status(
     if dispatcher_core_data.kernel_path is not None:
         kernel_elf = elfs_cache[dispatcher_core_data.kernel_path]
 
-    message = f"{risc_name} NOC{noc_id.value}: "
+    message = f"{risc_name} {noc_id.name}: "
     passed = True
 
     loc_mem_access = create_memory_access(location.noc_block.get_risc_debug(risc_name))
@@ -68,8 +68,8 @@ def check_noc_status(
             return
 
         # Also validate that BRISC's runtime-selected NOC matches the NOC being checked.
-        active_noc_index = fw_elf.get_global("noc_index", loc_mem_access).read_value()
-        if active_noc_index != noc_id.value:
+        active_noc_index = to_noc_id(int(fw_elf.get_global("noc_index", loc_mem_access).read_value()))
+        if active_noc_index != noc_id:
             return
     elif kernel_elf is not None:
         # On erisc, the firmware doesn't necessarily select a NOC, so we need to check the kernel ELF.
@@ -78,8 +78,8 @@ def check_noc_status(
             message += "    Skipping NOC status check: noc_mode != DM_DEDICATED_NOC\n"
             log_check_location(location, True, message)
             return
-        noc_index = kernel_elf.get_global("noc_index", loc_mem_access).read_value()
-        if noc_index != noc_id.value:
+        noc_index = to_noc_id(int(kernel_elf.get_global("noc_index", loc_mem_access).read_value()))
+        if noc_index != noc_id:
             return
 
     # Check if variables match with corresponding register
@@ -125,7 +125,7 @@ def run(args, context: Context):
     dispatcher_data = get_dispatcher_data(args, context)
     elfs_cache = get_elfs_cache(args, context)
     run_checks = get_run_checks(args, context)
-    for noc_id in run_checks.devices[0].available_nocs:
+    for noc_id in (NocId.NOC0, NocId.NOC1):
         run_checks.run_per_core_check(
             lambda location, risc_name, _noc_id=noc_id: check_noc_status(
                 location, risc_name, dispatcher_data, VAR_TO_REG_MAP, elfs_cache, _noc_id
