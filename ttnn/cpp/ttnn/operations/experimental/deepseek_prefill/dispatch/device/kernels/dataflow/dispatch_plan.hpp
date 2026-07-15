@@ -33,22 +33,19 @@ struct alignas(PLAN_L1_ALIGNMENT) PlanHeader {
     uint32_t entry_count;
 };
 
-// Routing entry: 9 × u32 of payload, alignas rounds sizeof up to 48 B (12 B trailing pad)
+// Routing entry: 8 × u32 of payload; alignas keeps sizeof a multiple of PLAN_L1_ALIGNMENT
 // so every entry starts on an L1 line boundary.
 //
 // NOTE: every field is a 32-bit word and the struct is built directly in L1 by the reader.
 // Baby-RISC (BRISC/NCRISC) sub-word stores to L1 — `sh` (half-word) / `sb` (byte) — are
 // unreliable on Blackhole (unaligned half-words corrupt / drop a byte across the 16B boundary;
-// only aligned 32-bit `sw` stores are safe). So weight (signed) + k (top-k slot) are packed
-// into a single 32-bit word `weight_k` and written/read via the helpers below — never as
-// separate 16-bit fields.
+// only aligned 32-bit `sw` stores are safe), so k (top-k slot) is kept as a full 32-bit field.
 struct alignas(PLAN_L1_ALIGNMENT) PlanEntry {
     uint32_t flags;    // PLAN_FLAG_* bits (bit 0 = is_local, bit 31 = end sentinel)
     uint32_t token_t;  // offset within the batch (0 .. read_batch_size - 1)
-    uint32_t routed_expert;
     uint32_t page_idx;   // destination DRAM page (local + remote)
     uint32_t token_idx;  // global token index, for metadata
-    uint32_t weight_k;   // packed: low 16 bits = int16_t routing weight, high 16 bits = uint16_t top-k slot
+    uint32_t k;          // top-k slot, for metadata
     uint32_t route;      // cross-device only (1D EDM index)
     uint32_t distance;   // cross-device only (1D hop count)
     uint32_t dst_chip;   // cross-device only (linearized dest device index; consumed by the 2D fabric route)
@@ -56,10 +53,5 @@ struct alignas(PLAN_L1_ALIGNMENT) PlanEntry {
 
 static_assert(sizeof(PlanHeader) == PLAN_L1_ALIGNMENT, "PlanHeader must be 1 u32 padded up to PLAN_L1_ALIGNMENT");
 static_assert(alignof(PlanHeader) == PLAN_L1_ALIGNMENT, "PlanHeader must be PLAN_L1_ALIGNMENT-aligned");
-static_assert(sizeof(PlanEntry) == 48, "PlanEntry must be 48 bytes (9 u32 + 12B pad for 16B alignment)");
+static_assert(sizeof(PlanEntry) == 32, "PlanEntry must be 32 bytes (8 u32, 16B-aligned)");
 static_assert(alignof(PlanEntry) == PLAN_L1_ALIGNMENT, "PlanEntry must be PLAN_L1_ALIGNMENT-aligned");
-
-// weight (signed) + k packed into one 32-bit word so the reader emits a single aligned L1 store.
-inline uint32_t pack_weight_k(int16_t weight, uint16_t k) { return ((uint32_t)(uint16_t)weight) | ((uint32_t)k << 16); }
-inline int16_t unpack_weight(uint32_t weight_k) { return (int16_t)(weight_k & 0xFFFFu); }
-inline uint16_t unpack_k(uint32_t weight_k) { return (uint16_t)(weight_k >> 16); }

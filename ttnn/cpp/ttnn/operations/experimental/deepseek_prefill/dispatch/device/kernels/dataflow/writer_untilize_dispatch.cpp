@@ -179,9 +179,7 @@ void kernel_main() {
     uint32_t bk_count[MCAST_NUM_DIRS];
     uint32_t bk_dist[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
     uint32_t bk_page[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
-    uint32_t bk_expert[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
     uint32_t bk_k[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
-    int32_t bk_weight[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
     for (uint32_t d = 0; d < MCAST_NUM_DIRS; d++) {
         bk_count[d] = 0;
     }
@@ -243,22 +241,17 @@ void kernel_main() {
             // Sort this direction's destinations by hop distance (ascending) so equal-distance
             // (same-chip) destinations become adjacent for run-aware packing below.
             for (uint32_t a = 1; a < n; a++) {
-                uint32_t dv = bk_dist[dir][a], pv = bk_page[dir][a], ev = bk_expert[dir][a], kv = bk_k[dir][a];
-                int32_t wv = bk_weight[dir][a];
+                uint32_t dv = bk_dist[dir][a], pv = bk_page[dir][a], kv = bk_k[dir][a];
                 int32_t b = (int32_t)a - 1;
                 while (b >= 0 && bk_dist[dir][b] > dv) {
                     bk_dist[dir][b + 1] = bk_dist[dir][b];
                     bk_page[dir][b + 1] = bk_page[dir][b];
-                    bk_expert[dir][b + 1] = bk_expert[dir][b];
                     bk_k[dir][b + 1] = bk_k[dir][b];
-                    bk_weight[dir][b + 1] = bk_weight[dir][b];
                     b--;
                 }
                 bk_dist[dir][b + 1] = dv;
                 bk_page[dir][b + 1] = pv;
-                bk_expert[dir][b + 1] = ev;
                 bk_k[dir][b + 1] = kv;
-                bk_weight[dir][b + 1] = wv;
             }
             // Pack MCAST_MAX_DESTS pages per slot, in the ascending-distance order from the sort above. A
             // same-distance run (one chip hit by multiple experts of this token) may span a slot
@@ -270,13 +263,11 @@ void kernel_main() {
                 uint32_t gcount = (n - a < MCAST_MAX_DESTS) ? (n - a) : MCAST_MAX_DESTS;
                 uint16_t hop_mask = 0;
                 for (uint32_t r = 0; r < gcount; r++) {
-                    // Grouped route_info (23 u32): [0]=direction, [1]=num_dests, [2]=token_idx,
-                    // [3..6]=page[4], [7..10]=dist[4], [11..14]=expert[4], [15..18]=k[4], [19..22]=weight[4].
+                    // Grouped route_info (15 u32): [0]=direction, [1]=num_dests, [2]=token_idx,
+                    // [3..6]=page[4], [7..10]=dist[4], [11..14]=k[4].
                     route_info_scratch[3 + r] = bk_page[dir][a + r];
                     route_info_scratch[7 + r] = bk_dist[dir][a + r];
-                    route_info_scratch[11 + r] = bk_expert[dir][a + r];
-                    route_info_scratch[15 + r] = bk_k[dir][a + r];
-                    route_info_scratch[19 + r] = (uint32_t)bk_weight[dir][a + r];
+                    route_info_scratch[11 + r] = bk_k[dir][a + r];
                     hop_mask |= static_cast<uint16_t>(1u << (bk_dist[dir][a + r] - 1));
                 }
                 a += gcount;
@@ -344,8 +335,7 @@ void kernel_main() {
                 uint32_t token_t = entry->token_t;
                 uint32_t page_idx = entry->page_idx;
                 uint32_t token_idx = entry->token_idx;
-                uint32_t weight_k = entry->weight_k;
-                uint32_t k = unpack_k(weight_k);
+                uint32_t k = entry->k;
 
                 // Payload source: this token's untilized row inside the compute output CB.
                 uint32_t src_addr = untilize_read_ptr + token_t * aligned_output_page_size;
@@ -396,9 +386,7 @@ void kernel_main() {
                         bk_count[dir] = dst + 1;
                         bk_dist[dir][dst] = entry->distance;
                         bk_page[dir][dst] = page_idx;
-                        bk_expert[dir][dst] = routed_expert;
                         bk_k[dir][dst] = k;
-                        bk_weight[dir][dst] = weight;
                     }
 #else
                     // Cross-device: stage this token into one sender slot as three NOC writes —

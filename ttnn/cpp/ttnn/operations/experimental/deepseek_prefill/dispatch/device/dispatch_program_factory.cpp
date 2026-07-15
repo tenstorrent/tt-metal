@@ -357,8 +357,8 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         /*cb_id=*/tt::CBIndex::c_13,
         "untilize_metadata_scratch");
     // Per-page sparse-multicast grouping (1D Ring, any top-k): widen the sender ring's route_info slot
-    // to carry a grouped record — [dir, num_dests, token_idx, page[4], dist[4], expert[4], k[4],
-    // weight[4]] = 23 u32 — so a token's co-directional destinations become sparse-multicast payload
+    // to carry a grouped record — [dir, num_dests, token_idx, page[4], dist[4], k[4]]
+    // = 15 u32 — so a token's co-directional destinations become sparse-multicast payload
     // writes, each covering up to 4 destinations (writer_untilize spills wider groups into extra
     // slots). The payload/metadata rings are unchanged; the sender builds each destination's metadata
     // from this record (fields kept unpacked so the sender needs no unpack helpers). Every other config
@@ -367,16 +367,17 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     // enabled only for a 1D line: Ring, or Linear with one mesh dimension == 1. Excludes 2D meshes
     // (both dims > 1) whose Topology::Linear would otherwise match — those route along an axis and were
     // never validated for the grouped path.
-    const bool enable_sparse_mcast =
-        (topology == tt::tt_fabric::Topology::Ring || topology == tt::tt_fabric::Topology::Linear) &&
-        (mesh_view.num_rows() == 1 || mesh_view.num_cols() == 1) && (operation_attributes.num_links > 0);
+    // const bool enable_sparse_mcast =
+    //     (topology == tt::tt_fabric::Topology::Ring || topology == tt::tt_fabric::Topology::Linear) &&
+    //     (mesh_view.num_rows() == 1 || mesh_view.num_cols() == 1) && (operation_attributes.num_links > 0);
+    const bool enable_sparse_mcast = true;
     log_info(
         tt::LogOp,
         "[dispatch][tile] enable_sparse_mcast={} (topology={}, num_links={})",
         enable_sparse_mcast,
         (int)topology,
         operation_attributes.num_links);
-    constexpr uint32_t grouped_route_info_u32 = 23;
+    constexpr uint32_t grouped_route_info_u32 = 15;
     const uint32_t route_info_slot_stride_bytes =
         enable_sparse_mcast ? (((grouped_route_info_u32 * 4u + l1_alignment - 1) / l1_alignment) * l1_alignment)
                             : l1_alignment;
@@ -399,7 +400,7 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     }
     // c_14: per-batch route plan (reader RISC → writer RISC, on same untilize core).
     // Layout (PlanHeader + PlanEntry[]) is defined in kernels/dataflow/dispatch_plan.hpp:
-    // [PlanHeader: 16B][PlanEntry: 48B each] (both alignas(16)). Sized straight from sizeof so the
+    // [PlanHeader: 16B][PlanEntry: 32B each] (both alignas(16)). Sized straight from sizeof so the
     // page size always tracks the structs.
     {
         uint32_t max_plan_entries = read_batch_size * operation_attributes.num_experts_per_tok;

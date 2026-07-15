@@ -272,8 +272,6 @@ void kernel_main() {
             uint32_t mcast_dist[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
             uint32_t mcast_page[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
             uint32_t mcast_k[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
-            uint32_t mcast_expert[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
-            uint32_t mcast_weight[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
 #endif
 
             for (uint32_t k = 0; k < num_experts_per_tok; ++k) {
@@ -333,8 +331,6 @@ void kernel_main() {
                         mcast_dist[route][bslot] = distance;
                         mcast_page[route][bslot] = page_idx;
                         mcast_k[route][bslot] = k;
-                        mcast_expert[route][bslot] = routed_expert;
-                        mcast_weight[route][bslot] = weights[k];
                         mcast_bucket_count[route] = bslot + 1;
 #else
                         // route_info layout: [0]=route, [1]=distance, [2]=page_idx, [3]=expert_chip.
@@ -379,22 +375,17 @@ void kernel_main() {
                     continue;
                 }
                 for (uint32_t a = 1; a < n; ++a) {  // insertion sort by ascending hop distance
-                    uint32_t dd = mcast_dist[d][a], pp = mcast_page[d][a], kk = mcast_k[d][a], ee = mcast_expert[d][a],
-                             ww = mcast_weight[d][a];
+                    uint32_t dd = mcast_dist[d][a], pp = mcast_page[d][a], kk = mcast_k[d][a];
                     int b = (int)a - 1;
                     while (b >= 0 && mcast_dist[d][b] > dd) {
                         mcast_dist[d][b + 1] = mcast_dist[d][b];
                         mcast_page[d][b + 1] = mcast_page[d][b];
                         mcast_k[d][b + 1] = mcast_k[d][b];
-                        mcast_expert[d][b + 1] = mcast_expert[d][b];
-                        mcast_weight[d][b + 1] = mcast_weight[d][b];
                         b--;
                     }
                     mcast_dist[d][b + 1] = dd;
                     mcast_page[d][b + 1] = pp;
                     mcast_k[d][b + 1] = kk;
-                    mcast_expert[d][b + 1] = ee;
-                    mcast_weight[d][b + 1] = ww;
                 }
 
                 // Pack MCAST_MAX_DESTS pages per slot, in ascending-distance order. A same-distance run
@@ -428,7 +419,7 @@ void kernel_main() {
                     noc_async_read_barrier();
                     cb_push_back(cb_payload_for_writer_id, 1);
 
-                    // Per-destination metadata (differs by top-k slot / expert), in sorted order.
+                    // Per-destination metadata (differs by top-k slot), in sorted order.
                     for (uint32_t i = 0; i < g_count; ++i) {
                         cb_reserve_back(cb_metadata_for_writer_id, 1);
                         volatile tt_l1_ptr int32_t* meta_dst =
@@ -436,8 +427,6 @@ void kernel_main() {
                         meta_dst[0] = linearized_mesh_coord;
                         meta_dst[1] = token_idx;
                         meta_dst[2] = mcast_k[d][g_start + i];
-                        meta_dst[3] = mcast_expert[d][g_start + i];
-                        meta_dst[4] = static_cast<int16_t>(mcast_weight[d][g_start + i]);
                         cb_push_back(cb_metadata_for_writer_id, 1);
                     }
                 }
