@@ -10,7 +10,6 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "ckernel_sfpu_isinf_isnan.h"
 #include "sfpi.h"
 
 namespace ckernel
@@ -18,59 +17,72 @@ namespace ckernel
 namespace sfpu
 {
 
-// #41922: CONSTRUCTION ZONE
-// Implemented:Standard calling API, old bodies
-// ToDo: use sfpi API
-
-// compute truncate to zero
-sfpi_inline sfpi::vFloat _trunc_body_(sfpi::vFloat val)
+// Truncate toward zero. Implemented purely in sfpi: take the magnitude, round-to-nearest
+// into int16, correct any overshoot back down, pass through values outside the int16 range
+// (which have no fractional part in that range), then restore the sign.
+sfpi_inline sfpi::vFloat _trunc_body_(sfpi::vFloat in)
 {
-    sfpi::l_reg[sfpi::LRegs::LReg0] = val;
-    // set L3=23.  TODO: this could be stored in a constant register, but use by rdiv prevents this for now.
-    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_SHORT, 23);
-    // mask = 0x8000_0000
-    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0x8000);
-    // disable lanes where exp < 0
-    TTI_SFPEXEXP(0, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPEXEXP_MOD1_SET_CC_SGN_EXP | sfpi::SFPEXEXP_MOD1_SET_CC_COMP_EXP);
-    // mask = 0xffff_ffff
-    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_SHORT, 0xffff);
-    // exp = 23 - exp
-    TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_GTE0);
-    // mask <<= exp
-    TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
-    // reset lanes
-    TTI_SFPENCC(0, 0, 0, 0);
-    // apply mask
-    TTI_SFPAND(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+    sfpi::vFloat result = in;
 
-    sfpi::l_reg[sfpi::LRegs::LReg2].in_use();
-    sfpi::l_reg[sfpi::LRegs::LReg3].in_use();
+    v_if (in < 0)
+    {
+        result = 0 - result;
+    }
+    v_endif;
 
-    return sfpi::l_reg[sfpi::LRegs::LReg1];
+    sfpi::vFloat mag = result;
+    result           = sfpi::int32_to_float(sfpi::float_to_int16(mag, sfpi::RoundMode::Nearest), sfpi::RoundMode::Nearest);
+
+    // Round-to-nearest may overshoot the magnitude; correct down toward zero.
+    v_if (result > mag)
+    {
+        result = result - 1;
+    }
+    v_endif;
+
+    // float_to_int16 only spans [0, SHRT_MAX] for the magnitude; larger values have no
+    // fractional part representable here, so pass them through unchanged.
+    v_if (mag >= SHRT_MAX)
+    {
+        result = mag;
+    }
+    v_endif;
+
+    v_if (in < 0)
+    {
+        result = 0 - result;
+    }
+    v_endif;
+
+    return result;
 }
 
-// compute floor
-sfpi_inline sfpi::vFloat _floor_body_(sfpi::vFloat val)
+// Floor: round toward -inf. Equal to trunc for non-negative inputs; for negative
+// non-integers trunc rounds up (toward zero), so subtract one.
+sfpi_inline sfpi::vFloat _floor_body_(sfpi::vFloat v)
 {
-    sfpi::l_reg[sfpi::LRegs::LReg1] = _trunc_body_(val);
-    // if v>u, set v=v-1.
-    TTI_SFPGT(0, p_sfpu::LREG0, p_sfpu::LREG1, 1); // SFPGT_MOD1_SET_CC
-    TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LCONST_neg1, p_sfpu::LREG1, 0);
-    TTI_SFPENCC(0, 0, 0, 0);
-
-    return sfpi::l_reg[sfpi::LRegs::LReg1];
+    sfpi::vFloat t      = _trunc_body_(v);
+    sfpi::vFloat result = t;
+    v_if (t > v)
+    {
+        result = t - 1;
+    }
+    v_endif;
+    return result;
 }
 
-// computes ceil
-sfpi_inline sfpi::vFloat _ceil_body_(sfpi::vFloat val)
+// Ceil: round toward +inf. Equal to trunc for non-positive inputs; for positive
+// non-integers trunc rounds down (toward zero), so add one.
+sfpi_inline sfpi::vFloat _ceil_body_(sfpi::vFloat v)
 {
-    sfpi::l_reg[sfpi::LRegs::LReg1] = _trunc_body_(val);
-    // if v<u, set v=v+1.
-    TTI_SFPGT(0, p_sfpu::LREG1, p_sfpu::LREG0, 1); // SFPGT_MOD1_SET_CC
-    TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG1, 0);
-    TTI_SFPENCC(0, 0, 0, 0);
-
-    return sfpi::l_reg[sfpi::LRegs::LReg1];
+    sfpi::vFloat t      = _trunc_body_(v);
+    sfpi::vFloat result = t;
+    v_if (t < v)
+    {
+        result = t + 1;
+    }
+    v_endif;
+    return result;
 }
 
 inline constexpr std::array<float, 84> PRECOMPUTED_POW10_TABLE = {
