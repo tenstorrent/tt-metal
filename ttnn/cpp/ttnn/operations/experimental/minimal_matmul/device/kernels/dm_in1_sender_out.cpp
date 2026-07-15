@@ -31,6 +31,9 @@ void kernel_main() {
     uint32_t in1_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
     uint32_t in1_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(15));
     uint32_t in1_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
+    Semaphore<> in1_sender_sem(get_compile_time_arg_val(14));
+    Semaphore<> in1_receiver_sem(get_compile_time_arg_val(15));
+    Semaphore<> in1_valid_sem(get_compile_time_arg_val(16));
     constexpr uint32_t is_output_writer = get_compile_time_arg_val(17);
     constexpr uint32_t is_injector_core = get_compile_time_arg_val(18);
     constexpr uint32_t N_chunks = get_compile_time_arg_val(19);
@@ -165,12 +168,7 @@ void kernel_main() {
     }
 #endif
 
-    volatile tt_l1_ptr uint32_t* in1_valid_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_valid_semaphore_addr);
-    *(in1_valid_semaphore_addr_ptr) = VALID;
-
-    Semaphore<> in1_receiver_sem(get_compile_time_arg_val(15));
-    Semaphore<> in1_sender_sem(get_compile_time_arg_val(14));
+    in1_valid_sem.set(VALID);
 
     const uint64_t in1_sender_semaphore_noc_addr =
         get_noc_addr(in1_sender_noc_x, in1_sender_noc_y, in1_sender_semaphore_addr);
