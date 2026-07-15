@@ -56,10 +56,6 @@ enum class UnpackMode : uint8_t { UnpackToSrc, UnpackToDest };
  * The choice is relative: neither value denotes an absolute precision.
  */
 enum class Precision : uint8_t { Approximate, Precise };
-// TODO: finalize the value names during review. Some alternatives:
-//  - Precision : {Higher, Lower}
-//  - Precision : {MorePrecise, LessPrecise}
-//  - Precision : {More, Less}
 
 }  // namespace tt::tt_metal
 

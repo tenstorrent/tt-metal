@@ -104,7 +104,8 @@ struct ComputeGen1Config {
     //
     // UnpackToSrc is the default.
     //  - Both FPU and SFPU can consume the data (copied to Dest for the SFPU).
-    //  - Data precision is reduced to ~19 bits for FP formats. (TODO: what happens to int formats?)
+    //  - Data precision is reduced to 19 bits.
+    //    (Precision is lost for FP32; 32-bit integers are truncated).
     //  - This is the fastest option on Wormhole and Blackhole.
     //
     // UnpackToDest should be used (on Gen1 architectures) only if:
