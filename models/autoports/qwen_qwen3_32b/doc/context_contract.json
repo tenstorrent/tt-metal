@@ -1,0 +1,73 @@
+{
+  "model": "Qwen/Qwen3-32B",
+  "hf_advertised_context": 40960,
+  "current_supported_context": 4096,
+  "limiting_reason": "device_dram",
+  "notes": "This correctness-first functional implementation proves the largest feasible batch-32 prefill length on one Blackhole device. The reduction from the HF-advertised context is a measured device-DRAM limit, not a convenience cap; downstream optimization or multichip stages may extend it.",
+  "capacity_evidence": {
+    "hardware": "Blackhole p300c, one device (1x1 mesh), eight DRAM banks",
+    "workload": "one translated layer, batch 32, BF16/TILE/DRAM functional defaults",
+    "largest_passing_probe": {
+      "sequence_length": 4096,
+      "result": "pass",
+      "output_shape": [1, 32, 4096, 5120],
+      "log": "doc/functional_decoder/capacity_4096_pass.log"
+    },
+    "adjacent_failing_probe": {
+      "sequence_length": 4097,
+      "padded_sequence_length": 4128,
+      "result": "expected_out_of_memory",
+      "requested_allocation_bytes": 1352663040,
+      "largest_free_block_bytes": 98279424,
+      "log": "doc/functional_decoder/capacity_4097_oom.log"
+    },
+    "advertised_context_impossibility": {
+      "single_mlp_activation_bytes": 67108864000,
+      "single_hidden_tensor_bytes": 13421772800,
+      "two_kv_cache_tensor_bytes": 5368709120,
+      "device_dram_bytes": 34178731008,
+      "note": "The BF16 gate or up activation alone at batch 32 and sequence 40960 exceeds total device DRAM."
+    }
+  },
+  "paths": {
+    "prefill": {
+      "status": "translated_and_tested",
+      "compiler_graph": "ttnn_qwen_3_32b_tp_qb2_bs32_isl128_runcf4a_g0_1784008145090.mlir",
+      "classifier_signals": {
+        "fill_cache": 4096,
+        "paged_update_cache": 0,
+        "scaled_dot_product_attention_decode": 0,
+        "logits": false,
+        "runtime_graph": false
+      },
+      "emitted_shape": [1, 32, 17, 5120],
+      "tested_sequence_lengths": [4, 17, 128, 1024, 2048, 4096]
+    },
+    "decode": {
+      "status": "translated_and_tested",
+      "compiler_graph": "ttnn_qwen_3_32b_tp_qb2_bs32_isl128_runcf4a_g1_1784008729649.mlir",
+      "classifier_signals": {
+        "fill_cache": 0,
+        "paged_update_cache": 128,
+        "scaled_dot_product_attention_decode": 64,
+        "logits": false,
+        "runtime_graph": false
+      },
+      "emitted_shape": [1, 32, 1, 5120],
+      "tested_positions": [17]
+    }
+  },
+  "translation": {
+    "representative_layer": 32,
+    "source_layer_count": 64,
+    "source_mesh": [1, 4],
+    "source_tensor_parallel_degree": 4,
+    "functional_mesh": [1, 1],
+    "collective_policy": "collapsed_to_equivalent_dense_math_over_full_unsharded_hf_weights",
+    "source_precision_policy": {
+      "qkv_o_gate_up_down_weights": "BFLOAT8_B after load-time fusion or transposition",
+      "normalization_weights": "BFLOAT16"
+    },
+    "functional_precision_policy": "All weights and activations use BFLOAT16 for this correctness-first stage; source BFLOAT8_B weight casts are intentionally not retained."
+  }
+}

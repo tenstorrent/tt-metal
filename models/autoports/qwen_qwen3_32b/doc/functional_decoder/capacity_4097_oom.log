@@ -1,0 +1,59 @@
+2026-07-15 22:43:46.106 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/qwen_qwen3_32b/tests/test_context_capacity.py::test_batch32_prefill_capacity_probe[blackhole-1] 2026-07-15 22:43:47.934 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-15 22:43:47.935 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-15 22:43:48.588 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+2026-07-15 22:43:56.599 | critical |          Always | TT_FATAL: Out of Memory: Not enough space to allocate 1352663040 B DRAM buffer across 8 banks, where each bank needs to store 169082880 B, but bank size is 4272341376 B (allocated: 4081033280 B, free: 191308096 B, largest free block: 98279424 B) (assert.hpp:104)
+capacity probe EXPECTED OOM: batch=32, seq_len=4097: Out of Memory: Not enough space to allocate 1352663040 B DRAM buffer across 8 banks, where each bank needs to store 169082880 B, but bank size is 4272341376 B (allocated: 4081033280 B, free: 191308096 B, largest free block: 98279424 B)
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/mvasiljevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+8.12s call     models/autoports/qwen_qwen3_32b/tests/test_context_capacity.py::test_batch32_prefill_capacity_probe[blackhole-1]
+1.73s teardown models/autoports/qwen_qwen3_32b/tests/test_context_capacity.py::test_batch32_prefill_capacity_probe[blackhole-1]
+1.18s setup    models/autoports/qwen_qwen3_32b/tests/test_context_capacity.py::test_batch32_prefill_capacity_probe[blackhole-1]
+=========================== short test summary info ============================
+PASSED models/autoports/qwen_qwen3_32b/tests/test_context_capacity.py::test_batch32_prefill_capacity_probe[blackhole-1]
+============================== 1 passed in 11.68s ==============================
+nanobind: leaked 2 instances!
+ - leaked instance 0x7f7414aa53f8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7f741458ae08 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function ""
+ - leaked function "tensor_topology"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "from_json"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html
