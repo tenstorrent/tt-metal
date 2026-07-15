@@ -11,7 +11,6 @@ import os
 import re
 import subprocess
 import sys
-from contextlib import contextmanager
 from dataclasses import dataclass
 from multiprocessing import Process
 from pathlib import Path
@@ -279,17 +278,77 @@ def get_github_pipeline_id() -> int | None:
         return None
 
 
-@contextmanager
-def device_context(test_module, output_queue):
-    try:
-        yield from get_devices(test_module)
-    except AssertionError as e:
-        output_queue.put([False, "DEVICE EXCEPTION: " + str(e), None, None])
-    finally:
-        return
+# Worker close sentinel: the persistent worker keeps the device open across
+# modules and only exits when the parent sends this on the input queue.
+_WORKER_CLOSE = "__worker_close__"
+
+# Op-name markers for modules that open/close their OWN device inside run()
+# (their own sub-device / fabric / dispatch-axis mesh): conv2d (WORKER + FABRIC_1D
+# reshard), the CCL family, and the matmul/linear gather_in0 ring path. The
+# persistent worker must NOT share its reusable device with these — it opens each
+# one's own fixture device (kept across that module's vectors, exactly like the
+# old per-module child) and tears it down when the module changes.
+_EXCLUSIVE_DEVICE_MARKERS = (
+    "conv2d",
+    "all_gather",
+    "all_reduce",
+    "reduce_scatter",
+    "all_to_all",
+    "all_broadcast",
+    "matmul",
+    "linear",
+)
 
 
-def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
+def _module_device_key(module_name):
+    """Device-sharing key for the persistent worker.
+
+    Modules whose op opens/closes its own device return a unique key (their name)
+    so the worker gives them a dedicated device and reopens when the module
+    changes. Every other ("ordinary") module returns ``"shared"`` so the worker
+    opens the standard model-traced device ONCE and reuses it across all of them
+    — this is what keeps Galaxy from doing a fresh (racy) device open per module.
+    """
+    base = module_name.split(".")[-1]
+    if any(m in base for m in _EXCLUSIVE_DEVICE_MARKERS):
+        return module_name
+    return "shared"
+
+
+def _open_worker_device(key, test_module):
+    """Open the device for a worker task.
+
+    Returns ``(device, device_name, generator_or_None)``. ``"shared"`` opens the
+    standard model-traced device directly (the ~104 ordinary modules all use an
+    identical ``create_mesh_device(get_model_traced_mesh_shape())`` fixture, so a
+    single shared open is equivalent and reused across them). An exclusive key
+    uses the module's OWN ``mesh_device_fixture`` generator so its special
+    dispatch/fabric/sub-device config applies; the generator is returned so the
+    worker can close it (drive it to completion) on a module change.
+    """
+    if key == "shared":
+        import ttnn
+        from tests.sweep_framework.sweep_utils.mesh_tensor_utils import create_mesh_device, get_model_traced_mesh_shape
+
+        device = create_mesh_device(get_model_traced_mesh_shape())
+        return device, ttnn.get_arch_name(), None
+    device_gen = get_devices(test_module)
+    device, device_name = next(device_gen)
+    return device, device_name, device_gen
+
+
+def run(input_queue, output_queue, config: SweepsConfig):
+    """Persistent, module-agnostic worker: opens the device ONCE and reuses it
+    across every ordinary module in the job, reopening only when the module's
+    device requirement changes (see ``_module_device_key``). Each queue item is
+    ``(module_name, serialized_vector)``; ``_WORKER_CLOSE`` ends the worker.
+
+    Previously this was spawned per module (a fresh device open each time); on
+    Galaxy every open force-reinits the dispatch kernels and a 2nd open in a job
+    races and wedges a dispatch core. Reusing one device across modules opens the
+    hardware once per job. On a device hang the parent kills + resets + respawns
+    this worker, which reopens the device once — the reset-and-reopen recovery.
+    """
     # Enable operation tracing if --trace-params is set. Capture arguments BEFORE
     # each op runs (not after), so in-place output buffers — e.g. all_gather_async's
     # persistent_output_buffer — are recorded with their input topology, matching
@@ -302,48 +361,81 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
         except Exception as e:
             logger.warning(f"Could not enable operation tracing: {e}")
 
-    test_module = importlib.import_module("sweeps." + test_module_name)
-    with device_context(test_module, output_queue) as (device, device_name):
+    module_cache = {}
+    cur_key = None
+    cur_device = None
+    cur_gen = None  # module fixture generator for an exclusive device (None for shared)
+
+    def _teardown_device():
+        nonlocal cur_device, cur_gen, cur_key
+        try:
+            if cur_gen is not None:
+                # Drive the module fixture past its yield so it closes its own device.
+                for _ in cur_gen:
+                    pass
+            elif cur_device is not None:
+                import ttnn
+
+                ttnn.close_mesh_device(cur_device)
+        except Exception as e:
+            logger.warning(f"Persistent worker device teardown failed (continuing): {e}")
+        cur_device = None
+        cur_gen = None
+        cur_key = None
+
+    try:
         while True:
             try:
-                test_vector = input_queue.get(block=True, timeout=5)
+                item = input_queue.get(block=True, timeout=5)
             except Empty:
-                logger.info("Test suite complete")
+                # No work right now — the parent is between modules or preparing
+                # the next vector. Keep the device open and keep waiting; the
+                # worker only exits on the close sentinel (or when killed).
+                continue
+            if item == _WORKER_CLOSE:
                 return
+
+            module_name, test_vector = item
+            test_module = module_cache.get(module_name)
+            if test_module is None:
+                test_module = importlib.import_module("sweeps." + module_name)
+                module_cache[module_name] = test_module
+
+            key = _module_device_key(module_name)
+            if key != cur_key or cur_device is None:
+                _teardown_device()
+                try:
+                    cur_device, _device_name, cur_gen = _open_worker_device(key, test_module)
+                    cur_key = key
+                except AssertionError as e:
+                    output_queue.put([False, "DEVICE EXCEPTION: " + str(e), None, None, None])
+                    continue
+
             test_vector = deserialize_vector_structured(test_vector)
             try:
                 if config.measure_perf_with_cache:
                     status, message, e2e_perf, device_perf, peak_memory = run_with_cache_comparison(
-                        test_module, test_vector, device, config
-                    )
-                    output_queue.put(
-                        [
-                            status,
-                            message,
-                            e2e_perf,
-                            device_perf if config.measure_device_perf else None,
-                            peak_memory if config.measure_memory else None,
-                        ]
+                        test_module, test_vector, cur_device, config
                     )
                 else:
                     status, message, e2e_perf, device_perf, peak_memory = run_single(
-                        test_module, test_vector, device, config
+                        test_module, test_vector, cur_device, config
                     )
-                    output_queue.put(
-                        [
-                            status,
-                            message,
-                            e2e_perf,
-                            device_perf if config.measure_device_perf else None,
-                            peak_memory if config.measure_memory else None,
-                        ]
-                    )
+                output_queue.put(
+                    [
+                        status,
+                        message,
+                        e2e_perf,
+                        device_perf if config.measure_device_perf else None,
+                        peak_memory if config.measure_memory else None,
+                    ]
+                )
             except Exception as e:
                 if config.main_proc_verbose:
                     logger.exception(e)
-                status, message = False, str(e)
-                e2e_perf = None
-                output_queue.put([status, message, e2e_perf, None, None])
+                output_queue.put([False, str(e), None, None, None])
+    finally:
+        _teardown_device()
 
 
 MAX_RETRIES = 1
@@ -434,13 +526,14 @@ def _attempt_vector(
     Raises Empty on timeout.
     """
     if child_mode and (p is None or not p.is_alive()):
-        p = Process(target=run, args=(module_name, input_queue, output_queue, config))
+        p = Process(target=run, args=(input_queue, output_queue, config))
         p.start()
 
     if p is None and main_proc_runner is not None:
         main_proc_runner(test_vector)
     else:
-        input_queue.put(test_vector)
+        # The persistent worker is module-agnostic: tag each vector with its module.
+        input_queue.put((module_name, test_vector))
 
     response = output_queue.get(block=True, timeout=timeout)
     return response, p
@@ -688,7 +781,7 @@ def _execute_vector_with_retry(
                 p = None
                 reset_util.reset()
                 if child_mode:
-                    p = Process(target=run, args=(module_name, input_queue, output_queue, config))
+                    p = Process(target=run, args=(input_queue, output_queue, config))
                     p.start()
                 continue
 
@@ -704,7 +797,7 @@ def _execute_vector_with_retry(
                 result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
                 reset_util.reset()
                 if child_mode:
-                    p = Process(target=run, args=(module_name, input_queue, output_queue, config))
+                    p = Process(target=run, args=(input_queue, output_queue, config))
                     p.start()
                 result["_child_process"] = p
                 result["_abort_suite"] = config.skip_on_timeout
@@ -728,7 +821,7 @@ def _execute_vector_with_retry(
                 result["exception"] = str(result.get("message", "DEVICE FATAL"))
                 reset_util.reset()
                 if child_mode:
-                    p = Process(target=run, args=(module_name, input_queue, output_queue, config))
+                    p = Process(target=run, args=(input_queue, output_queue, config))
                     p.start()
                 result["_child_process"] = p
                 result["_abort_suite"] = False
@@ -751,7 +844,7 @@ def _execute_vector_with_retry(
                 p = None
                 reset_util.reset()
                 if child_mode:
-                    p = Process(target=run, args=(module_name, input_queue, output_queue, config))
+                    p = Process(target=run, args=(input_queue, output_queue, config))
                     p.start()
                 continue
 
@@ -771,7 +864,7 @@ def _execute_vector_with_retry(
                 )
                 reset_util.reset()
                 if child_mode:
-                    p = Process(target=run, args=(module_name, input_queue, output_queue, config))
+                    p = Process(target=run, args=(input_queue, output_queue, config))
                     p.start()
                 continue
 
@@ -788,7 +881,7 @@ def _execute_vector_with_retry(
             reset_util.reset()
 
             if child_mode:
-                p = Process(target=run, args=(module_name, input_queue, output_queue, config))
+                p = Process(target=run, args=(input_queue, output_queue, config))
                 p.start()
 
             result["_child_process"] = p
@@ -800,21 +893,32 @@ def _execute_vector_with_retry(
     return result
 
 
-def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_info, config: SweepsConfig):
+def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_info, config: SweepsConfig, worker=None):
     # runs a single suite in a test vector
     results = []
     invalid_vectors_count = 0
-    input_queue = Queue()
-    output_queue = Queue()
-    p = None
+    # child_mode is False if any of dry_run, vector_id, or main_proc_verbose are truthy
+    child_mode = not (config.dry_run or config.vector_id or config.main_proc_verbose)
+    # A ``worker`` dict (from run_sweeps) means the child worker + queues persist
+    # across modules for the whole job: the device is opened once and reused, so
+    # we must NOT spawn or close it here — just borrow its queues/process and hand
+    # the (possibly respawned-on-reset) process back. Without one (debug/standalone
+    # runs), create per-suite queues + worker as before.
+    owns_worker = worker is None
+    if owns_worker:
+        input_queue = Queue()
+        output_queue = Queue()
+        p = None
+    else:
+        input_queue = worker["input_queue"]
+        output_queue = worker["output_queue"]
+        p = worker["p"]
     timeout = get_timeout(module_name)
     suite_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Suite: {suite_name}", leave=False)
     reset_util = tt_smi_util.ResetUtil(config.arch_name)
     # Consecutive device-fatal resets; reset to 0 on any vector that runs without
     # a device-fatal wedge. Abort the suite if it exceeds the cap (device won't recover).
     consecutive_device_recoveries = 0
-    # child_mode is False if any of dry_run, vector_id, or main_proc_verbose are truthy
-    child_mode = not (config.dry_run or config.vector_id or config.main_proc_verbose)
     timeout_before_rejoin = 5
 
     # For main process mode, create a persistent runner that keeps device open
@@ -824,8 +928,8 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
         logger.info("Running in main process mode - device will remain open for all vectors in suite")
         main_proc_runner, main_proc_context = _create_main_proc_runner(module_name, input_queue, output_queue, config)
 
-    if child_mode:
-        p = Process(target=run, args=(module_name, input_queue, output_queue, config))
+    if child_mode and owns_worker:
+        p = Process(target=run, args=(input_queue, output_queue, config))
         p.start()
 
     for i, test_vector in enumerate(test_vectors):
@@ -975,19 +1079,24 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
             if p and p.is_alive():
                 p.terminate()
                 p.join()
+            p = None  # dead; run_sweeps respawns a fresh worker for the next module
             break
 
-    if p is not None:
-        p.join()
-
-    # Cleanup main process context (close device)
-    if main_proc_context is not None:
-        try:
-            next(main_proc_context)
-        except StopIteration:
-            # generator already exhausted (device already closed) — nothing left to clean up
-            pass
-        logger.info("Device closed in main process mode")
+    if owns_worker:
+        if p is not None:
+            p.join()
+        # Cleanup main process context (close device)
+        if main_proc_context is not None:
+            try:
+                next(main_proc_context)
+            except StopIteration:
+                # generator already exhausted (device already closed) — nothing left to clean up
+                pass
+            logger.info("Device closed in main process mode")
+    else:
+        # Persistent worker: hand the (possibly respawned/killed) process back to
+        # run_sweeps so it (and its one open device) carry over to the next module.
+        worker["p"] = p
 
     suite_pbar.close()
     return results, invalid_vectors_count
@@ -1124,6 +1233,36 @@ def run_sweeps(
     status_counts = {}
 
     module_pbar = pbar_manager.counter(total=len(module_names), desc="Modules", leave=False)
+
+    # One persistent worker for the whole job (child_mode only): it opens the
+    # device once and reuses it across every module, reopening only when a module
+    # needs its own device (see run()/_module_device_key). This replaces the old
+    # per-module child (a fresh device open each module) — critical on Galaxy where
+    # each open force-reinits dispatch and a 2nd open in a job wedges a core.
+    # Debug modes (dry_run/vector_id/main_proc_verbose) keep per-suite workers.
+    job_child_mode = not (config.dry_run or config.vector_id or config.main_proc_verbose)
+
+    # Prime the cached device count in THIS (main) process before the persistent
+    # worker opens the device. result_destination's card-type fallback calls
+    # ttnn.GetNumAvailableDevices(), which constructs a cluster; doing that here —
+    # while the device is still free — caches the count so the per-module result
+    # export never opens a device that would collide with the worker's held one
+    # (CHIP_IN_USE deadlock). No-op when RUNNER_LABEL is set (the fallback isn't
+    # reached) or when device perf/count is otherwise unavailable.
+    if job_child_mode and not os.environ.get("RUNNER_LABEL"):
+        try:
+            from framework.result_destination import prime_device_count
+
+            prime_device_count()
+        except Exception:
+            pass
+
+    job_worker = None
+    if job_child_mode:
+        job_worker = {"input_queue": Queue(), "output_queue": Queue(), "p": None}
+        job_worker["p"] = Process(target=run, args=(job_worker["input_queue"], job_worker["output_queue"], config))
+        job_worker["p"].start()
+
     try:
         for module_name in module_names:
             if config.suite_name:
@@ -1160,7 +1299,7 @@ def run_sweeps(
                     continue
                 header_info, test_vectors = sanitize_inputs(vectors)
                 results, invalid_vectors_count = execute_suite(
-                    test_vectors, pbar_manager, suite, module_name, header_info, config
+                    test_vectors, pbar_manager, suite, module_name, header_info, config, worker=job_worker
                 )
                 total_invalid_vectors += invalid_vectors_count
 
@@ -1201,6 +1340,17 @@ def run_sweeps(
         final_status = "failure"
         raise
     finally:
+        # Shut down the persistent job worker (closes its one open device).
+        if job_worker is not None:
+            wp = job_worker.get("p")
+            try:
+                if wp is not None and wp.is_alive():
+                    job_worker["input_queue"].put(_WORKER_CLOSE)
+                    wp.join(timeout=30)
+            except Exception:
+                pass
+            if wp is not None and wp.is_alive():
+                _kill_child(wp, 5)
         if not config.dry_run:
             result_dest.finalize_run(run_id, final_status)
             logger.info(f"Finalized run with status: {final_status}")

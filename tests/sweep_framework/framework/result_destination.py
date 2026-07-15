@@ -31,6 +31,30 @@ from infra.data_collection.pydantic_models import (
     TestStatus,
 )
 
+# Cached available-device count. ttnn.GetNumAvailableDevices() constructs a
+# cluster, and the sweeps runner keeps a device open persistently across modules,
+# so this must be queried ONCE while the device is free (see prime_device_count,
+# called from run_sweeps before the worker opens) and reused thereafter.
+_CACHED_NUM_DEVICES = None
+
+
+def prime_device_count():
+    """Return the available device count, querying ttnn at most once and caching
+    it. Call this from the main process before any persistent device is opened;
+    later callers reuse the cached value instead of constructing a cluster (which
+    would collide with the runner's held device — a CHIP_IN_USE deadlock).
+    Returns 0 if ttnn is unavailable or the query fails."""
+    global _CACHED_NUM_DEVICES
+    if _CACHED_NUM_DEVICES is None:
+        try:
+            import ttnn
+
+            _CACHED_NUM_DEVICES = int(ttnn.GetNumAvailableDevices())
+        except Exception:
+            _CACHED_NUM_DEVICES = 0
+    return _CACHED_NUM_DEVICES
+
+
 # Optional numpy import for numeric handling in hot paths
 try:
     import numpy as np
@@ -161,17 +185,14 @@ def _get_card_type_str(run_metadata: dict[str, Any] | None) -> str:
     if runner_label:
         return f"{arch} ({runner_label})"
 
-    # Priority 2 fallback: query ttnn for device count at runtime
-    try:
-        import ttnn
-
-        num_devices = ttnn.GetNumAvailableDevices()
-        if num_devices and num_devices > 0:
-            device_label = "device" if num_devices == 1 else "devices"
-            return f"{arch} ({num_devices} {device_label})"
-    except Exception:
-        # ttnn not available or query failed - fall through to arch-only
-        pass
+    # Priority 2 fallback: query ttnn for device count (cached — see
+    # prime_device_count). Must use the cache: ttnn.GetNumAvailableDevices()
+    # constructs a cluster, and the sweeps runner keeps a persistent device open
+    # across modules, so a live query here would collide (CHIP_IN_USE deadlock).
+    num_devices = prime_device_count()
+    if num_devices and num_devices > 0:
+        device_label = "device" if num_devices == 1 else "devices"
+        return f"{arch} ({num_devices} {device_label})"
 
     # Final fallback: just the architecture name
     return arch
