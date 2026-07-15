@@ -37,6 +37,11 @@ class TtResBlock1(LightweightModule):
 
     def __init__(self, device, state_dict, prefix, kernel_size, dilation):
         super().__init__()
+        # The leaky_relu that sits between convs1 and convs2 is fused onto the
+        # convs1 output (post-bias) — convs1's output feeds only that activation, so
+        # ``leaky_relu(convs1(a))`` folds into the conv exactly. The pre-activation
+        # before convs1 cannot fuse (its input is reused raw by the residual add).
+        mid_act = ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, LRELU_SLOPE)
         self.convs1 = [
             TtConv1d(
                 device,
@@ -44,6 +49,7 @@ class TtResBlock1(LightweightModule):
                 state_dict[f"{prefix}convs1.{j}.bias"],
                 padding=get_padding(kernel_size, d),
                 dilation=d,
+                activation=mid_act,
             )
             for j, d in enumerate(dilation)
         ]
@@ -64,12 +70,10 @@ class TtResBlock1(LightweightModule):
         # other MRF resblocks); later residuals are internal and freed.
         for idx, (c1, c2) in enumerate(zip(self.convs1, self.convs2)):
             a = ttnn.leaky_relu(x, negative_slope=LRELU_SLOPE)
-            b = c1(a)
+            b = c1(a)  # leaky_relu(0.1) is fused onto this conv's output
             ttnn.deallocate(a)
-            c = ttnn.leaky_relu(b, negative_slope=LRELU_SLOPE)
+            d = c2(b)
             ttnn.deallocate(b)
-            d = c2(c)
-            ttnn.deallocate(c)
             nxt = ttnn.add(d, x)
             ttnn.deallocate(d)
             if idx > 0:
