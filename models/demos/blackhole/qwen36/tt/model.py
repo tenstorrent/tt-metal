@@ -1170,17 +1170,10 @@ class Qwen36Model:
         )
         ttnn.copy_host_to_device_tensor(pt_host, self._chunk_full_page_table_buf)
 
-        # Replay trace per full chunk. Host input-prep (from_torch tilize of cos/sin + DMA copies) and
-        # device trace exec share cq_id=0, so the queue already ORDERS each chunk's copies AFTER the
-        # prior chunk's trace reads them (no double-buffering needed). The old code did a full
-        # synchronize_device every chunk, which forced the host to wait and serialized chunk N+1's CPU
-        # prep behind chunk N's device exec. Instead we hold host-tensor refs alive (so their in-flight
-        # DMAs aren't GC'd) and sync only every _SYNC_EVERY chunks — the host software-pipelines chunk
-        # N+1's from_torch/tilize over chunk N's device exec. Periodic (not fully removed) sync bounds
-        # in-flight queue depth so very long context (e.g. traced_128k = 64 chunks) can't overrun the
-        # command queue. QWEN36_PREFILL_OVERLAP=0 restores the per-chunk sync.
+        # Replay per chunk. cq_id=0 orders copies after prior-chunk reads; hold host refs + sync every
+        # _SYNC_EVERY chunks so host prep pipelines over device exec without unbounded CQ depth.
         _log_every = max(1, num_full // 4)
-        _overlap = os.environ.get("QWEN36_PREFILL_OVERLAP", "1") != "0"
+        _overlap = True
         _SYNC_EVERY = 8 if _overlap else 1
         _host_refs = []  # keep host tensors alive until the next sync frees their DMAs
         for c in range(num_full):
@@ -1316,6 +1309,9 @@ class Qwen36Model:
     def allocate_kv_caches(self, kv_cache_shape, dtype, batch_size=1):
         """Allocate caches for all 32 layers. Returns only the attention KV caches (for vLLM)."""
         assert self._deltanet_external_states is None, "allocate_kv_caches already called; deallocate first"
+        # QWEN_SDPA_BF8: bf8 paged KV for SDPA; halves KV memory (gated — validate PCC at long ctx).
+        if os.environ.get("QWEN_SDPA_BF8", "0") == "1":
+            dtype = ttnn.bfloat8_b
         if self.num_devices > 1:
             return self._allocate_kv_caches_tp(kv_cache_shape, dtype, batch_size)
 

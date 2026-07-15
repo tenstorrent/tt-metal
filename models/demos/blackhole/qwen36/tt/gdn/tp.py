@@ -23,6 +23,17 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet i
 from models.tt_transformers.tt.ccl import tt_all_reduce
 
 
+def _softplus_add(a, bias):
+    """g-gate: softplus(a + bias) fused into one op (softplus as a post-activation on the add)."""
+    return ttnn.add(a, bias, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)])
+
+
+def _silu_mul(x, z, memory_config):
+    """out-gate: x * silu(z). NOT fused into one op: fusing silu via input_tensor_b_activations
+    overflows to NaN in the real layer for large-magnitude z (op-level PCC hid it — small inputs)."""
+    return ttnn.multiply(x, ttnn.silu(z, memory_config=memory_config), memory_config=memory_config)
+
+
 def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     """Shard one GDN layer's linear_attn.* weights across the mesh."""
     tp = args.num_devices
@@ -136,6 +147,14 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     # Conv taps (4), sharded per Q/K/V head grouping
     taps = tpc.prepare_conv_taps(conv1d_w, key_dim, nk, dk, nv, dv, args.gdn_conv_kernel_size, tp)
     tw["conv_taps"] = [tpc.shard_small(taps[j], mesh, c(f"tap{j}")) for j in range(args.gdn_conv_kernel_size)]
+    # Depthwise conv1d weight [qkv_dim, 1, K], host-held mesh-sharded (dim=0) for prepare_conv_weights / _conv1d_prefill.
+    W1d = torch.stack(taps, dim=-1).reshape(args.gdn_qkv_dim, 1, args.gdn_conv_kernel_size).contiguous()
+    tw["conv_w1d"] = ttnn.from_torch(
+        W1d,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+    )
     return tw
 
 
@@ -171,31 +190,11 @@ class TPGatedDeltaNet:
         # Fuse prefill norm-allgather + qkvzab in-proj into all_gather_minimal_matmul_async.
         # Requires the folded qkvzab weight; norm's post-AG is disabled in layer.py (GDN, prefill).
         self._fuse_agmm = self._fuse_ab
-        # Fuse decode out-proj + reduce-scatter (matmul_reduce_scatter_async). DEFAULT OFF because
-        # decode MM-RS regresses: the fused op's 2D matmul collapses to ~8 cores at M=1. The fused op
-        # takes the DRAM-interleaved out weight, not the DRAM-width-sharded path).
-        self._fuse_out_mmrs = (
-            not self._out_sharded and args.num_devices > 1 and os.environ.get("QWEN36_FUSE_GDN_OUT_MMRS", "0") == "1"
-        )
-        if self._fuse_out_mmrs:
-            # GDN out-proj input (gated) is FLOAT32 (GDN keeps fp32 for stability) -> fp32 buffers.
-            self._out_mmrs_pc, self._out_mmrs_interm, self._out_mmrs_out = tpc.build_mmrs_decode_state(
-                mesh, args.max_batch_size, self.value_dim_tp, args.dim, args.num_devices, dtype=ttnn.float32
-            )
-        # PREFILL out-proj fusion (matmul_reduce_scatter, (8,8) grid) — default on. Slight TTFT cost at
-        # small ISL (~13k crossover from a fixed warmup/compile overhead) but a large win at long ISL
-        # (e.g. 128k ~-2s); overlaps the fp32 GDN-out reduce-scatter with the matmul. Opt out with =0.
-        self._fuse_out_mmrs_prefill = (
-            not self._out_sharded
-            and args.num_devices > 1
-            and os.environ.get("QWEN36_FUSE_GDN_OUT_MMRS_PREFILL", "1") == "1"
-        )
+        # Prefill out-proj: matmul_reduce_scatter on (8,8) overlaps RS with matmul (long-ISL win).
+        self._fuse_out_mmrs_prefill = not self._out_sharded and args.num_devices > 1
         # Pre-build chunk masks once (trace-safe; avoids from_torch inside captured trace)
         self.chunk_seq_masks = create_chunk_masks_seq(args.gdn_chunk_size, mesh)
-        # Pre-build the fused-op constant tiles once here (eager, before any trace capture). Owned by
-        # this layer so their lifetime tracks the model (freed before the device closes) and passed
-        # into ttnn.transformer.chunk_gated_delta_rule, so the op holds no device-tensor cache of its
-        # own (a process-lifetime C++ static would deallocate after the device is gone and segfault).
+        # Prefill fused-op constant tiles, owned by this layer (avoids process-lifetime C++ cache vs device lifetime).
         from models.demos.blackhole.qwen36.tt.gdn.fused_chunk import _FUSED_CHUNK_SIZE, build_fused_const_tiles
 
         self._fused_const_tiles = build_fused_const_tiles(mesh, _FUSED_CHUNK_SIZE)
@@ -204,6 +203,10 @@ class TPGatedDeltaNet:
         # In-place state updates for decode/prefill traces (set by model allocate_kv_caches)
         self._stable_state = False
         self.conv_carry = None  # cross-chunk prefill conv carry [1, K-1, qkv_dim_tp]
+        # Native ttnn.conv1d depthwise prefill; L1_FULL slice keeps it trace-safe.
+        # Only used when valid_len is None (masked buckets keep the MAC FIR).
+        self._gdn_conv1d = True
+        self._conv1d_wprep = None  # prepared depthwise weight (populated on first prefill call)
         # Persistent zero sources for trace-safe reset_state_inplace (alloc before any trace)
         self._zero_conv0 = None
         self._zero_conv_carry = None
@@ -357,6 +360,88 @@ class TPGatedDeltaNet:
         ttnn.deallocate(ab)
         return qkv, z, a, b
 
+    def _conv1d_prefill(self, qkv, T, conv_state):
+        """Depthwise causal conv1d + SiLU via ttnn.conv1d. Returns (out [1,T,C], new_state [1,K-1,C]) DRAM TILE.
+
+        Prepends K-1 carry rows with padding=0 so one program serves every chunk (native pad only zeros,
+        so it can't inject cross-chunk carry into a shared trace).
+        """
+        dev, K, C = self.mesh, self.K, self.qkv_dim_tp
+        _dram = ttnn.DRAM_MEMORY_CONFIG
+        Lin = (K - 1) + T
+        # new_state: last K-1 real input tokens (for the next chunk's carry), TILE/DRAM.
+        new_state = ttnn.slice(qkv, (0, T - (K - 1), 0), (1, T, C))
+        new_state = ttnn.to_memory_config(ttnn.to_layout(new_state, ttnn.TILE_LAYOUT), _dram)
+        if conv_state is None:
+            pad = ttnn.zeros(
+                [1, K - 1, C], device=dev, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=_dram
+            )
+            xin = ttnn.concat([pad, qkv], dim=1, memory_config=_dram)
+            ttnn.deallocate(pad)
+        else:
+            xin = ttnn.concat([conv_state, qkv], dim=1, memory_config=_dram)
+        xin = ttnn.to_layout(xin, ttnn.ROW_MAJOR_LAYOUT, memory_config=_dram)
+        xin = ttnn.reshape(xin, (1, Lin, 1, C))
+        cc = ttnn.init_device_compute_kernel_config(
+            dev.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
+        )
+        # Needs l1_small_size on the device (prefill/demo set 24576); matches the validated A/B config.
+        conv_cfg = ttnn.Conv1dConfig(
+            weights_dtype=ttnn.bfloat16,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        )
+        # Prepare conv weight once (warmup); avoids host reprocess + keeps traced replay device-only.
+        if self._conv1d_wprep is None:
+            self._conv1d_wprep = ttnn.prepare_conv_weights(
+                weight_tensor=self.tw["conv_w1d"],
+                input_memory_config=_dram,
+                input_layout=ttnn.ROW_MAJOR_LAYOUT,
+                weights_format="OIHW",
+                in_channels=C,
+                out_channels=C,
+                batch_size=1,
+                input_height=1,
+                input_width=Lin,
+                kernel_size=(1, K),
+                stride=(1, 1),
+                padding=(0, 0),
+                dilation=(1, 1),
+                has_bias=False,
+                groups=C,
+                device=dev,
+                input_dtype=ttnn.bfloat16,
+                conv_config=conv_cfg,
+                compute_config=cc,
+            )
+        out = ttnn.conv1d(
+            input_tensor=xin,
+            weight_tensor=self._conv1d_wprep,
+            device=dev,
+            in_channels=C,
+            out_channels=C,
+            batch_size=1,
+            input_length=Lin,
+            kernel_size=K,
+            stride=1,
+            padding=0,
+            dilation=1,
+            groups=C,
+            dtype=ttnn.bfloat16,
+            conv_config=conv_cfg,
+            compute_config=cc,
+            # L1_FULL slice: keep the conv in L1 instead of DRAM-width-slicing. The DRAM-slice path does
+            # host reads that begin_trace_capture rejects (see uniad); L1_FULL is trace-safe (as UNet).
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
+            return_output_dim=False,
+            return_weights_and_bias=False,
+        )
+        ttnn.deallocate(xin)
+        out = ttnn.sharded_to_interleaved(out, _dram)
+        out = ttnn.reshape(out, (1, T, C))
+        out = ttnn.to_layout(out, ttnn.TILE_LAYOUT, memory_config=_dram)
+        # SiLU stays separate (folding via conv_config.activation drops PCC to ~0.84 on this depthwise).
+        return ttnn.silu(out, memory_config=_dram), new_state
+
     def forward_prefill(self, x, chunk_size=128, valid_len=None, capture_state=False):
         """Causal chunk-prefill from scratch. x [1,1,T,dim]: K-sharded (dim/tp per device) when the
         fused in-proj AG-matmul path is active (``_fuse_agmm`` and T>TILE — the norm skips its
@@ -377,19 +462,24 @@ class TPGatedDeltaNet:
         qkv, z, a, b = self._project_qkvzab(x, T, out_mc=ttnn.L1_MEMORY_CONFIG)
 
         # FIR conv1d; conv_state = previous chunk's last K-1 inputs (None/zero from scratch)
-        conv, conv_new_state = _causal_conv1d_fir(
-            qkv,
-            None,
-            None,
-            self.K,
-            self.mesh,
-            # Conv in L1 (output freed before chunk kernel; new_state lands in DRAM internally)
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            conv_state=self.conv_carry if carry else None,
-            weight_taps=tw["conv_taps"],
-            bias_dev=None,
-            valid_len=valid_len,
-        )
+        _cstate = self.conv_carry if carry else None
+        if self._gdn_conv1d and valid_len is None:
+            # Native depthwise ttnn.conv1d (masked buckets keep the MAC FIR: valid_len new_state differs)
+            conv, conv_new_state = self._conv1d_prefill(qkv, T, _cstate)
+        else:
+            conv, conv_new_state = _causal_conv1d_fir(
+                qkv,
+                None,
+                None,
+                self.K,
+                self.mesh,
+                # Conv in L1 (output freed before chunk kernel; new_state lands in DRAM internally)
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                conv_state=_cstate,
+                weight_taps=tw["conv_taps"],
+                bias_dev=None,
+                valid_len=valid_len,
+            )
         ttnn.deallocate(qkv)
 
         # q/k/v/beta/g stay DRAM — alive across chunk kernel; L1 crashes it.
@@ -409,18 +499,16 @@ class TPGatedDeltaNet:
         # GQA late-expand: adapter L2-norms at Nk, expands to Nv after
         beta = ttnn.reshape(ttnn.sigmoid(b), (1, T, Nv))
         ttnn.deallocate(b)
-        g = ttnn.reshape(ttnn.multiply(tw["neg_exp_A"], ttnn.softplus(ttnn.add(a, tw["dt_bias"]))), (1, T, Nv))
+        g = ttnn.reshape(ttnn.multiply(tw["neg_exp_A"], _softplus_add(a, tw["dt_bias"])), (1, T, Nv))
         ttnn.deallocate(a)
 
-        # Fused-op path (default for prefill): the single-op ttnn.transformer.chunk_gated_delta_rule
-        # replaces the Python/ttnn preprocessing + gated_delta_attn_seq scan. Masked buckets
-        # (valid_len set) fall back to the seq adapter, which the fused op doesn't handle yet.
+        # Fused chunk_gated_delta_rule; also used for masked valid_len.
         from models.demos.blackhole.qwen36.tt.gdn.fused_chunk import (
             chunk_gated_delta_rule_fused_adapter,
             fused_chunk_enabled,
         )
 
-        _use_fused = fused_chunk_enabled() and valid_len is None
+        _use_fused = fused_chunk_enabled()
         _delta_fn = chunk_gated_delta_rule_fused_adapter if _use_fused else chunk_gated_delta_rule_seq_adapter
         # const_tiles only applies to the fused op; the seq adapter has no such param.
         _extra = {"const_tiles": self._fused_const_tiles} if _use_fused else {}
@@ -484,7 +572,7 @@ class TPGatedDeltaNet:
             ttnn.deallocate(o)
             out_f = ttnn.reshape(out_n, (1, T, self.value_dim_tp), memory_config=_L1)
             ttnn.deallocate(out_n)
-        gated = ttnn.multiply(out_f, ttnn.silu(z, memory_config=_L1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        gated = _silu_mul(out_f, z, ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(out_f)
         ttnn.deallocate(z)
         # Prefill: fused out-proj matmul + reduce-scatter (matmul_reduce_scatter_async), flag-gated.
@@ -550,7 +638,7 @@ class TPGatedDeltaNet:
 
         beta = ttnn.reshape(ttnn.sigmoid(b, memory_config=_L1), (B, 1, Nv))
         ttnn.deallocate(b)
-        g = ttnn.multiply(tw["neg_exp_A"], ttnn.softplus(ttnn.add(a, tw["dt_bias"])), memory_config=_L1)
+        g = ttnn.multiply(tw["neg_exp_A"], _softplus_add(a, tw["dt_bias"]), memory_config=_L1)
         ttnn.deallocate(a)
         g = ttnn.reshape(g, (B, 1, Nv))
 
@@ -578,25 +666,10 @@ class TPGatedDeltaNet:
         ttnn.deallocate(out_r)
         out_f = ttnn.reshape(out_n, (1, B, self.value_dim_tp))
         ttnn.deallocate(out_n)
-        gated = ttnn.multiply(out_f, ttnn.silu(z, memory_config=_L1), memory_config=_L1)
+        gated = _silu_mul(out_f, z, _L1)
         ttnn.deallocate(out_f)
         ttnn.deallocate(z)
 
-        # Fused out-proj + reduce-scatter (matmul_reduce_scatter_async), flag-gated.
-        if self._fuse_out_mmrs:
-            x_out = ttnn.reshape(gated, (1, 1, B, gated.shape[-1]))
-            out = tpc.matmul_reduce_scatter_decode(
-                x_out,
-                tw["out"],
-                self.tt_ccl,
-                self._out_mmrs_interm,
-                self._out_mmrs_out,
-                self._out_mmrs_pc,
-                self.cfg,
-                self.args.ccl_topology(),
-            )
-            ttnn.deallocate(gated)
-            return out
         partial = self._row_proj(gated, tw["out"])
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
