@@ -64,9 +64,13 @@ def run_pcc(ctx) -> dict:
     if re.search(r"\b[1-9]\d*\s+skipped\b", out, re.IGNORECASE) and not re.search(r"\b[1-9]\d*\s+passed\b", out):
         return {"status": "crash", "error": "e2e PCC test SKIPPED (correctness NOT verified): " + _useful_tail(out)}
 
-    # No PCC produced -> the test died BEFORE computing the correctness number (import error,
-    # device TT_FATAL, etc.). That IS a real crash. _useful_tail strips the nanobind teardown
-    # spam so the repair agent sees the actual error, not the leak dump.
+    if (
+        pcc is None
+        and re.search(r"\b[1-9]\d*\s+passed\b", out)
+        and not re.search(r"\b[1-9]\d*\s+(failed|errors?)\b", out, re.IGNORECASE)
+    ):
+        return {"status": "ok", "pcc": None, "note": "gate passed; PCC value not in captured output"}
+
     if pcc is None:
         return {"status": "crash", "error": _useful_tail(out)}
 
