@@ -922,3 +922,62 @@ def test_tilize_block_sharded_shapes(device, tensor_shape, grid_shape, dtype):
     assert tt_output.layout == ttnn.TILE_LAYOUT
     assert tt_output.memory_config().memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
     assert_equal(torch_input, ttnn.to_torch(tt_output))
+
+
+@pytest.mark.parametrize(
+    "tensor_shape, tile_shape",
+    [
+        ([1, 1, 32, 64], (16, 32)),
+        ([1, 1, 64, 128], (16, 32)),
+        ([1, 1, 32, 32], (1, 32)),
+        ([1, 1, 64, 64], (16, 16)),
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+def test_tilize_row_major_to_tiny_tile(device, tensor_shape, tile_shape, dtype):
+    """Tilize a ROW_MAJOR input directly into a tiny (non-32x32) tile shape."""
+    torch.manual_seed(42)
+    tile_h, tile_w = tile_shape
+    H, W = tensor_shape[-2], tensor_shape[-1]
+    assert H % tile_h == 0 and W % tile_w == 0, "tensor dims must be divisible by tile dims"
+
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    torch_input = torch.rand(tensor_shape, dtype=torch_dtype)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_output = ttnn.tilize(tt_input, tile=ttnn.Tile(list(tile_shape)))
+
+    assert tt_output.layout == ttnn.TILE_LAYOUT
+    assert_equal(torch_input, ttnn.to_torch(tt_output))
+
+
+@pytest.mark.xfail(reason="Retile program factory (changing tile shape of a tiled input) is not yet implemented")
+@pytest.mark.parametrize(
+    "tensor_shape, input_tile_shape, output_tile_shape",
+    [
+        ([1, 1, 32, 64], (32, 32), (16, 32)),
+        ([1, 1, 64, 128], (32, 32), (16, 32)),
+        ([1, 1, 64, 64], (32, 32), (16, 16)),
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_tilize_retile(device, tensor_shape, input_tile_shape, output_tile_shape, dtype):
+    """Retile an already-tiled input into a different tile shape (invokes the retile factory)."""
+    torch.manual_seed(42)
+    torch_input = torch.rand(tensor_shape, dtype=torch.bfloat16)
+
+    # Build an already-tiled input using the source tile shape.
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        tile=ttnn.Tile(list(input_tile_shape)),
+    )
+    assert tt_input.layout == ttnn.TILE_LAYOUT
+
+    # Re-tilize into a different tile shape; input and output tile shapes differ.
+    tt_output = ttnn.tilize(tt_input, tile=ttnn.Tile(list(output_tile_shape)))
+
+    assert tt_output.layout == ttnn.TILE_LAYOUT
+    assert_equal(torch_input, ttnn.to_torch(tt_output))

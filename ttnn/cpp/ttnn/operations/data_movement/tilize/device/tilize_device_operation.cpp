@@ -8,6 +8,7 @@
 #include "tilize_multi_core_block_program_factory.hpp"
 #include "tilize_single_core_program_factory.hpp"
 #include "tilize_multi_core_sharded_program_factory.hpp"
+#include "tilize_multi_core_retile_program_factory.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
@@ -18,6 +19,20 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 
 namespace {
+// A "retile" tilize takes an already-tiled input whose tile shape differs from the tile shape
+// requested on the op, and re-lays it out into the requested tile shape.
+bool is_retile(
+    const TilizeDeviceOperation::operation_attributes_t& operation_attributes,
+    const TilizeDeviceOperation::tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    if (input_tensor.layout() != Layout::TILE) {
+        return false;
+    }
+    const auto& input_tile = input_tensor.tensor_spec().tile();
+    const auto& output_tile = operation_attributes.tile;
+    return input_tile.get_width() != output_tile.get_width() || input_tile.get_height() != output_tile.get_height();
+}
+
 bool can_use_sharded_optimized_factories(
     const TilizeDeviceOperation::operation_attributes_t& operation_attributes,
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
@@ -127,7 +142,15 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor_a = tensor_args.input_tensor;
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to tilize need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to tilize need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
+
+    // The retile path accepts an already-tiled input as long as its tile shape differs from the
+    // requested output tile shape. All other paths require row-major input.
+    const bool retile = is_retile(operation_attributes, tensor_args);
+    if (retile) {
+        TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Retile tilize (changing tile shape) requires a tiled input");
+    } else {
+        TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
+    }
 
     const uint32_t tile_width = operation_attributes.tile.get_width();
     const uint32_t tile_height = operation_attributes.tile.get_height();
@@ -224,6 +247,12 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
     const TilizeDeviceOperation::operation_attributes_t& operation_attributes,
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor;
+
+    // A tiled input whose tile shape differs from the requested tile shape is re-laid out by the
+    // dedicated retile factory.
+    if (is_retile(operation_attributes, tensor_args)) {
+        return ttnn::prim::TilizeMultiCoreRetileProgramFactory{};
+    }
 
     bool use_single_core = (operation_attributes.use_low_perf) || (!operation_attributes.use_multicore) ||
                            (operation_attributes.sub_core_grids.has_value() &&
