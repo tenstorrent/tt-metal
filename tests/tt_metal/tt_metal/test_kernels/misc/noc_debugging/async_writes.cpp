@@ -28,8 +28,14 @@ void kernel_main() {
             });
 #if defined(USE_WRITE_BARRIER)
         noc.async_write_barrier();
+#elif defined(USE_FULL_BARRIER)
+        noc.async_full_barrier();
 #endif
     }
 
+#if defined(USE_FULL_BARRIER)
+    noc.async_full_barrier();
+#else
     noc.async_write_barrier();
+#endif
 }

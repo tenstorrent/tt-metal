@@ -131,6 +131,63 @@ void RunWritesTest(
         "write barrier");
 }
 
+// Single core + single RISC issues writes and then a full barrier. Exercises the FULL_BARRIER host
+// mapping via the end-of-kernel unflushed-write check: with the mapping the full barrier clears the
+// pending writes so nothing is reported; without it the full barrier is ignored and the writes are
+// falsely reported as unflushed at kernel end. (The unflushed check is keyed by source address, so it is
+// robust to the pre-existing duplicate-event processing that makes the same-src write-barrier check
+// unreliable here.)
+void RunFullBarrierWritesSingleCore(
+    NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
+    if (compute_grid_size.x < 2) {
+        return;
+    }
+
+    const CoreCoord writer_core = {0, 0};
+    const CoreCoord dest_core = {1, 0};
+    auto writer_virtual = mesh_device->worker_core_from_logical_core(writer_core);
+    auto dest_virtual = mesh_device->worker_core_from_logical_core(dest_core);
+
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    tt_metal::Program program = tt_metal::CreateProgram();
+
+    constexpr uint32_t buffer_page_size = 4096;
+    distributed::DeviceLocalBufferConfig l1_config{
+        .page_size = buffer_page_size, .buffer_type = tt::tt_metal::BufferType::L1};
+    distributed::ReplicatedBufferConfig buffer_config{.size = buffer_page_size};
+    auto l1_buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
+
+    std::map<std::string, std::string> defines = {
+        {"L1_BUFFER_ADDR", std::to_string(l1_buffer->address())},
+        {"OTHER_CORE_X", std::to_string(dest_virtual.x)},
+        {"OTHER_CORE_Y", std::to_string(dest_virtual.y)},
+        {"DST_ADDR", std::to_string(l1_buffer->address())},
+        {"NUM_ITERATIONS", "10"},
+        {"USE_FULL_BARRIER", "1"},
+    };
+
+    tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_writes.cpp",
+        CoreRange(writer_core),
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
+
+    workload.add_program(device_range, std::move(program));
+    fixture->RunProgram(mesh_device, workload);
+    ReadMeshDeviceProfilerResults(*mesh_device);
+
+    for (IDevice* device : mesh_device->get_devices()) {
+        EXPECT_FALSE(fixture->has_unflushed_write_issue(device->id(), writer_virtual, 0))
+            << "A full barrier must flush pending writes by kernel end; the FULL_BARRIER host mapping was not "
+               "applied so the writes were falsely reported as unflushed.";
+    }
+}
+
 void RunReadsTest(
     NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device, bool use_barrier) {
     auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
@@ -301,6 +358,16 @@ TEST_F(NOCDebuggingFixture, WritesWithBarrier) {
         this->RunTestOnDevice<NOCDebuggingFixture>(
             [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunWritesTest(fixture, mesh_device, true);
+            },
+            mesh_device);
+    }
+}
+
+TEST_F(NOCDebuggingFixture, WritesWithFullBarrier) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice<NOCDebuggingFixture>(
+            [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunFullBarrierWritesSingleCore(fixture, mesh_device);
             },
             mesh_device);
     }

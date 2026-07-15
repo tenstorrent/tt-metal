@@ -157,13 +157,26 @@ NOCDebugEvent make_noc_debug_event(
         }
         case EMD::NocEventType::READ_BARRIER_END:
             return NOCDebugEvent(NocReadBarrierEvent{src_x, src_y, event.noc_type == EMD::NocType::NOC_1});
+        case EMD::NocEventType::READ_BARRIER_WITH_TRID:
+            // Kept as its own case (not folded into READ_BARRIER_END) so a future per-trid model can treat
+            // it differently. For now the debug model tracks reads by address, not trid, so a trid read
+            // barrier is treated as a full read barrier (may under-report a same-address read racing across
+            // different trids, but never false-positives).
+            return NOCDebugEvent(NocReadBarrierEvent{src_x, src_y, event.noc_type == EMD::NocType::NOC_1});
         case EMD::NocEventType::WRITE_BARRIER_END: [[fallthrough]];
         case EMD::NocEventType::WRITE_FLUSH:
-            // This event is only being emitted from noc_async_writes_flushed which is non posted
-            // event.posted should always be false; if true, data was corrupted during read
+            // Non-posted barrier/flush. event.posted should always be false; if true, data was corrupted
+            // during read.
             TT_ASSERT(!event.posted);
             return NOCDebugEvent(NocWriteFlushEvent{
                 src_x, src_y, static_cast<bool>(event.posted), event.noc_type == EMD::NocType::NOC_1});
+        case EMD::NocEventType::WRITE_FLUSH_WITH_TRID:
+            // Kept separate from the non-trid flushes so a future per-trid model can treat it differently.
+            TT_ASSERT(!event.posted);
+            return NOCDebugEvent(NocWriteFlushEvent{
+                src_x, src_y, static_cast<bool>(event.posted), event.noc_type == EMD::NocType::NOC_1});
+        case EMD::NocEventType::FULL_BARRIER:
+            return NOCDebugEvent(NocFullBarrierEvent{src_x, src_y, event.noc_type == EMD::NocType::NOC_1});
         default: return NOCDebugEvent(UnknownNocEvent{});
     }
 }

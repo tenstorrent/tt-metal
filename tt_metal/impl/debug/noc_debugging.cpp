@@ -191,6 +191,18 @@ void NOCDebugState::handle_write_flush_event(
     }
 }
 
+void NOCDebugState::handle_full_barrier_event(
+    tt_cxy_pair core, int processor_id, uint64_t timestamp, NocFullBarrierEvent event) {
+    CoreDebugState& state = get_state(core);
+    uint8_t noc_id = event.noc;
+    update_latest_risc_timestamp(core, processor_id, timestamp);
+
+    // A full barrier waits for all outstanding reads and writes to complete, so both pending sets clear.
+    state.reads_not_flushed[noc_id].clear();
+    state.posted_writes_pending[noc_id].clear();
+    state.nonposted_writes_pending[noc_id].clear();
+}
+
 void NOCDebugState::handle_scoped_lock_event(
     tt_cxy_pair core, int processor_id, uint64_t timestamp, ScopedLockEvent event) {
     CoreDebugState& state = get_state(core);
@@ -433,6 +445,9 @@ void NOCDebugState::process_accumulated_events_all_chips() {
                 } else if constexpr (std::is_same_v<T, NocWriteFlushEvent>) {
                     tt_cxy_pair key{chip_id, {static_cast<size_t>(e.src_x), static_cast<size_t>(e.src_y)}};
                     handle_write_flush_event(key, processor_id, timestamp, e);
+                } else if constexpr (std::is_same_v<T, NocFullBarrierEvent>) {
+                    tt_cxy_pair key{chip_id, {static_cast<size_t>(e.src_x), static_cast<size_t>(e.src_y)}};
+                    handle_full_barrier_event(key, processor_id, timestamp, e);
                 } else if constexpr (std::is_same_v<T, ScopedLockEvent>) {
                     tt_cxy_pair key{chip_id, {static_cast<size_t>(e.src_x), static_cast<size_t>(e.src_y)}};
                     handle_scoped_lock_event(key, processor_id, timestamp, e);

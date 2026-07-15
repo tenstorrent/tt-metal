@@ -69,13 +69,21 @@ struct NocWriteFlushEvent {
     uint8_t noc;
 };
 
+// A full barrier (noc_async_full_barrier) waits for all outstanding reads AND writes to complete, so it
+// clears both pending sets for the noc.
+struct NocFullBarrierEvent {
+    int8_t src_x;
+    int8_t src_y;
+    uint8_t noc;
+};
+
 struct UnknownNocEvent {};
 
 struct ScopedLockEvent {
     int8_t src_x;
     int8_t src_y;
     NocDebuggingEventMetadata::NocDebugEventType event_type;
-    uint32_t locked_address_base;  // 16b aligned
+    uint32_t locked_address_base;
     uint32_t num_bytes;
 
     bool is_lock() const {
@@ -90,6 +98,7 @@ using NOCDebugEvent = std::variant<
     NocReadBarrierEvent,
     NocWriteBarrierEvent,
     NocWriteFlushEvent,
+    NocFullBarrierEvent,
     ScopedLockEvent,
     UnknownNocEvent>;
 
@@ -234,6 +243,7 @@ private:
     void handle_read_barrier_event(tt_cxy_pair core, int processor_id, uint64_t timestamp, NocReadBarrierEvent event);
     void handle_write_barrier_event(tt_cxy_pair core, int processor_id, uint64_t timestamp, NocWriteBarrierEvent event);
     void handle_write_flush_event(tt_cxy_pair core, int processor_id, uint64_t timestamp, NocWriteFlushEvent event);
+    void handle_full_barrier_event(tt_cxy_pair core, int processor_id, uint64_t timestamp, NocFullBarrierEvent event);
     void handle_scoped_lock_event(tt_cxy_pair core, int processor_id, uint64_t timestamp, ScopedLockEvent event);
 
     void update_latest_risc_timestamp(tt_cxy_pair core, int processor_id, uint64_t timestamp);
