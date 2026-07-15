@@ -1457,15 +1457,16 @@ void pytensor_module(nb::module_& mod) {
                 if (!is_device_tensor(self) || !self.is_allocated()) {
                     return std::nullopt;
                 }
-                auto* backing = self.mesh_buffer().get_backing_buffer();
+                auto* backing = self.device_storage().get_root_mesh_buffer().get_backing_buffer();
                 if (!backing) {
                     return std::nullopt;
                 }
                 return backing->unique_id();
             },
             R"doc(
-            Get the unique ID of this tensor's backing device buffer, or None
-            if the tensor is not on device / not allocated.  This ID matches
+            Get the unique ID of this tensor's root backing device buffer, or
+            None if the tensor is not on device / not allocated. Views return
+            the ID of the buffer that owns their device memory. This ID matches
             the IDs reported by the unsafe-allocation tracker.
         )doc")
         .def(
