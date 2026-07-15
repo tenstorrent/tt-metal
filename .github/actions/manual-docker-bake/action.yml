@@ -219,27 +219,56 @@ runs:
                 else
                   echo "  Registry image validated: $target_tag"
 
-                  # Verbose: print manifest/attestation-manifest sizes, provenance, and SBOM summary.
-                  # Never fails validation itself (all commands below are best-effort/informational).
+                  # Verbose: print real content sizes (sum of layer sizes, not manifest-document
+                  # byte count), provenance, and SBOM summary. Never fails validation itself (all
+                  # commands below are best-effort/informational).
                   IMAGETOOLS_JSON=$(docker buildx imagetools inspect "$target_tag" --format '{{json .}}' 2>/dev/null || echo "")
                   if [ -n "$IMAGETOOLS_JSON" ]; then
-                    echo "$IMAGETOOLS_JSON" | jq -r '
-                      "  Manifest: \(.manifest.mediaType // "unknown") digest=\(.manifest.digest // "?")",
-                      (if .manifest.manifests then
-                        (.manifest.manifests[] | "    - " + (.platform.architecture // "?") + "/" + (.platform.os // "?") + " " + .mediaType + " size=" + (.size | tostring) + " bytes" + (if .annotations["vnd.docker.reference.type"] then " [" + .annotations["vnd.docker.reference.type"] + "]" else "" end))
-                      else
-                        "    (single manifest, size=" + (.manifest.size // 0 | tostring) + " bytes)"
-                      end)
-                    ' 2>/dev/null || echo "    (could not parse imagetools manifest output)"
+                    echo "  Manifest: $(echo "$IMAGETOOLS_JSON" | jq -r '.manifest.mediaType // "unknown"') digest=$(echo "$IMAGETOOLS_JSON" | jq -r '.manifest.digest // "?"')"
+                    image_repo="${target_tag%:*}"
+                    if echo "$IMAGETOOLS_JSON" | jq -e '.manifest.manifests' > /dev/null 2>&1; then
+                      while IFS= read -r entry; do
+                        child_digest=$(echo "$entry" | jq -r '.digest')
+                        child_platform=$(echo "$entry" | jq -r '(.platform.architecture // "?") + "/" + (.platform.os // "?")')
+                        child_kind=$(echo "$entry" | jq -r '.annotations["vnd.docker.reference.type"] // ""')
+                        child_manifest=$(docker manifest inspect "${image_repo}@${child_digest}" 2>/dev/null || echo "")
+                        if [ -n "$child_manifest" ]; then
+                          content_bytes=$(echo "$child_manifest" | jq -r '[.layers[]?.size] | add // 0')
+                          layer_count=$(echo "$child_manifest" | jq -r '.layers | length')
+                          content_human=$(numfmt --to=iec --suffix=B "$content_bytes" 2>/dev/null || echo "${content_bytes} bytes")
+                          if [ -n "$child_kind" ]; then
+                            echo "    - ${child_platform} [${child_kind}]: ${layer_count} layer(s), ${content_human}"
+                          else
+                            echo "    - ${child_platform}: ${layer_count} layer(s), real content size = ${content_human}"
+                          fi
+                        else
+                          echo "    - ${child_platform}: (could not fetch child manifest ${child_digest})"
+                        fi
+                      done < <(echo "$IMAGETOOLS_JSON" | jq -c '.manifest.manifests[]')
+                    else
+                      content_bytes=$(echo "$IMAGETOOLS_JSON" | jq -r '[.manifest.layers[]?.size] | add // 0')
+                      layer_count=$(echo "$IMAGETOOLS_JSON" | jq -r '.manifest.layers | length')
+                      content_human=$(numfmt --to=iec --suffix=B "$content_bytes" 2>/dev/null || echo "${content_bytes} bytes")
+                      echo "    (single manifest, ${layer_count} layer(s), real content size = ${content_human})"
+                    fi
                   else
                     echo "  WARNING: docker buildx imagetools inspect failed for $target_tag - skipping size/attestation details"
                   fi
 
                   PROVENANCE_JSON=$(docker buildx imagetools inspect "$target_tag" --format '{{json .Provenance}}' 2>/dev/null || echo "")
                   if [ -n "$PROVENANCE_JSON" ] && [ "$PROVENANCE_JSON" != "null" ]; then
-                    echo "  Provenance (SLSA):"
-                    echo "$PROVENANCE_JSON" | jq -c '.SLSA | {builder, buildType, materialsCount: (.materials // [] | length)}' 2>/dev/null \
-                      | sed 's/^/    /' || echo "    (could not parse provenance JSON)"
+                    echo "  Provenance (SLSA v1.0 predicate: https://slsa.dev/provenance/v1):"
+                    echo "$PROVENANCE_JSON" | jq -r '
+                      .SLSA as $p |
+                      "    buildType: " + ($p.buildDefinition.buildType // "unknown"),
+                      "    builder.id: " + (if ($p.runDetails.builder.id // "") == "" then "(not set by BuildKit)" else $p.runDetails.builder.id end),
+                      "    invocation: " + ($p.runDetails.metadata.startedOn // "?") + " -> " + ($p.runDetails.metadata.finishedOn // "?"),
+                      (if $p.runDetails.metadata.buildkit_metadata.vcs then
+                        "    vcs: " + ($p.runDetails.metadata.buildkit_metadata.vcs.source // "?") + "@" + ($p.runDetails.metadata.buildkit_metadata.vcs.revision // "?")
+                      else empty end),
+                      "    resolvedDependencies (" + (($p.buildDefinition.resolvedDependencies // []) | length | tostring) + "):",
+                      (($p.buildDefinition.resolvedDependencies // [])[] | "      - " + .uri)
+                    ' 2>/dev/null || echo "    (could not parse provenance JSON - see raw with 'docker buildx imagetools inspect ${target_tag} --format \"{{json .Provenance}}\"')"
                   else
                     echo "  WARNING: no provenance attestation found for $target_tag"
                   fi
@@ -248,8 +277,8 @@ runs:
                   if [ -n "$SBOM_JSON" ] && [ "$SBOM_JSON" != "null" ]; then
                     SBOM_PKG_COUNT=$(echo "$SBOM_JSON" | jq -r '.SPDX.packages // [] | length' 2>/dev/null || echo "?")
                     SBOM_BYTES=$(echo -n "$SBOM_JSON" | wc -c)
-                    echo "  SBOM (SPDX): ${SBOM_PKG_COUNT} packages, ${SBOM_BYTES} bytes" \
-                      "(full document not printed here - too large for logs; fetch with" \
+                    echo "  SBOM (SPDX): ${SBOM_PKG_COUNT} package(s) cataloged, ${SBOM_BYTES} bytes" \
+                      "(full document not printed here - a real SBOM can run to hundreds of KB; fetch with" \
                       "'docker buildx imagetools inspect ${target_tag} --format \"{{json .SBOM}}\"')"
                   else
                     echo "  WARNING: no SBOM attestation found for $target_tag"
