@@ -20,6 +20,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <sstream>  // FIX: std::ostringstream for deferred .dephash content
 #include <functional>
 #include <future>
 #include <initializer_list>
@@ -307,6 +308,7 @@ KernelCompileDescriptor build_kernel_descriptor(
         desc.request.targets.push_back(bs.export_target_recipe(kernel.get()));
         desc.expected_elf_paths.push_back(bs.get_target_out_path(kernel->get_full_kernel_name()));
     }
+    desc.elf_dephash_contents.resize(desc.expected_elf_paths.size());
 
     // Preprocess-and-ship (TT_METAL_JIT_PREPROCESS=1): run each source through the
     // preprocessor (-E) on the client and ship the self-contained .ii as content. The
@@ -367,12 +369,15 @@ KernelCompileDescriptor build_kernel_descriptor(
                         tt::jit_build::ParsedDependencies deps = tt::jit_build::parse_dependency_file(d_file);
                         if (!deps.empty()) {
                             const std::string& dep_key = deps.begin()->first;
-                            const std::string dephash_path = desc.expected_elf_paths[t] + ".dephash";
-                            std::ofstream hash_file(dephash_path);
-                            tt::jit_build::write_dependency_hashes(deps, client_out_dir + "/", dep_key, hash_file);
-                            hash_file.close();
-                            if (hash_file.fail()) {
-                                std::filesystem::remove(dephash_path);
+                            // FIX (write-ordering desync): compute the .dephash CONTENT now, but DO
+                            // NOT write it to disk here. The coordinator writes it only AFTER the ELF
+                            // blob lands (finish()), so an interrupted/failed compile can never leave a
+                            // fresh .dephash next to a stale ELF. Mirrors the local link() invariant
+                            // (ELF + dephash written together).
+                            std::ostringstream hash_ss;
+                            tt::jit_build::write_dependency_hashes(deps, client_out_dir + "/", dep_key, hash_ss);
+                            if (!hash_ss.fail()) {
+                                desc.elf_dephash_contents[t] = hash_ss.str();
                             }
                         }
                     }
