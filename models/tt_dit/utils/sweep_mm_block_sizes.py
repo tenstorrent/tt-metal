@@ -274,6 +274,27 @@ def get_k_block_candidates(K_per_device):
     return cands if cands else [K_per_device]
 
 
+# Isolated all-gather (op_type="ag") knob sweep. num_links stays at the device
+# config value; the AG "combo" varies the two knobs that matter for the minimal
+# all-gather — encoded as a 5-tuple (num_workers_per_link, chunks_per_sync, 0,0,0)
+# so it flows through the same warmup/measure/record machinery as block combos.
+AG_WORKERS_PER_LINK = [1, 2, 4, 8]
+AG_CHUNK_FRACTIONS = [1, 2, 4, 8]  # chunks_per_sync = max(1, MAX // frac)
+
+
+def get_ag_max_chunks_per_sync(gathered_elems, ring_size, num_links):
+    """Upper bound on chunks_per_sync (mirrors tests/.../get_max_chunks_per_sync)."""
+    packet_elems = 2048
+    return max(1, (gathered_elems // packet_elems) // (ring_size * num_links))
+
+
+def generate_ag_combos(gathered_elems, ring_size, num_links):
+    """(num_workers_per_link, chunks_per_sync, 0, 0, 0) combos for the AG knob sweep."""
+    mx = get_ag_max_chunks_per_sync(gathered_elems, ring_size, num_links)
+    chunks = sorted({max(1, mx // f) for f in AG_CHUNK_FRACTIONS})
+    return [(nw, cps, 0, 0, 0) for nw in AG_WORKERS_PER_LINK for cps in chunks]
+
+
 def get_per_core_dims(shape, cluster_size):
     """Compute (M_per_core, K_per_device, N_per_core) for a shape.
 
@@ -489,15 +510,84 @@ def parse_ops_log(subdir, expected_ops=None):
 
 
 def _build_op_runner(
-    cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_grid, math_fidelity=ttnn.MathFidelity.HiFi2
+    cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_grid, math_fidelity=ttnn.MathFidelity.HiFi2, op="agmm"
 ):
-    """Allocate tensors + return a run_op(m_blk, k_blk, n_blk, sb_h, sb_w, sync=True) closure.
+    """Allocate tensors + return a run_op(*combo, sync=True) closure.
 
     AGMM path: sharded input, dummy bias/addcmul (when use_addcmul), CCL semaphores,
     persistent output buffer.
-    Non-AGMM path: replicated input/weight/bias; minimal_matmul or minimal_matmul_split
-    based on use_case.
+    Non-AGMM path: replicated input/weight/bias; minimal_matmul or minimal_matmul_split.
+    AG path ("ag"): sharded input + CCL semaphores; run_op(num_workers_per_link,
+    chunks_per_sync, ...) runs the isolated all_gather_async that AGMM fuses.
     """
+    mesh_shape = tuple(mesh_device.shape)
+
+    # ---- Isolated all-gather (op="ag") ----------------------------------------
+    # Reproduce exactly the activation gather AGMM performs: input (full_M, K)
+    # sharded [sp_axis -> M, tp_axis -> K], all-gathered along cluster_axis so
+    # each device reconstructs the full K. Sweeps AG knobs, not block sizes.
+    if op == "ag":
+        sp_axis, tp_axis = cfg["sp_axis"], cfg["tp_axis"]
+        full_M = M * cfg["mesh_shape"][sp_axis]
+        tt_input = ttnn.from_torch(
+            torch.randn((full_M, K), dtype=torch.float32),
+            dtype=dtype,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=[sp_axis, tp_axis]),
+        )
+        full_grid = mesh_device.compute_with_storage_grid_size()
+        ccl_cores = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_grid.x - 1, full_grid.y - 1))}
+        )
+        ag_semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_cores, 0) for _ in range(2)]
+
+        # Match the tuned all_gather_async setup (run_all_gather_impl in
+        # test_minimal_all_gather_async.py, the same path the fused AGMM op uses):
+        # set the worker sub-device stall group and pass subdevice_id, a
+        # persistent DRAM output buffer, memory_config, and num_buffers_per_channel.
+        # Bare all_gather_async (no persistent buffer / no stall group) falls back
+        # to a per-call allocate+sync path (~710us vs the ~75us fabric roofline).
+        worker_sub_device_id = ttnn.SubDeviceId(0)
+        mesh_device.set_sub_device_stall_group([worker_sub_device_id])
+
+        # all_gather_async validates the persistent buffer against the tensor's
+        # GLOBAL logical shape, so it must be (full_M, K) — not the per-device
+        # (M, K). The gather runs along cluster_axis (reconstructing K), so M
+        # stays sharded on sp_axis while K is replicated across the ring:
+        # dims=[None, None] with [sp_axis]=0 (same mapping the addcmul path uses).
+        # Per device this still lands (full_M/sp_size, K) = (M, K) in DRAM.
+        out_dims = [None, None]
+        out_dims[sp_axis] = 0
+        persistent_output_buffer = ttnn.from_torch(
+            torch.empty((full_M, K), dtype=torch.float32),
+            layout=ttnn.TILE_LAYOUT,
+            dtype=dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=out_dims),
+        )
+
+        def run_op(num_workers_per_link, chunks_per_sync, _n=0, _sb_h=0, _sb_w=0, sync=True):
+            ttnn.experimental.all_gather_async(
+                tt_input,
+                persistent_output_buffer=persistent_output_buffer,
+                dim=1,  # gather along K (tt_input is (full_M, K))
+                cluster_axis=cfg["cluster_axis"],
+                multi_device_global_semaphore=ag_semaphores,
+                num_links=cfg["num_links"],
+                topology=cfg["topology"],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                num_workers_per_link=int(num_workers_per_link),
+                chunks_per_sync=int(chunks_per_sync),
+                num_buffers_per_channel=48,
+                subdevice_id=worker_sub_device_id,
+            )
+            if sync:
+                ttnn.synchronize_device(mesh_device)
+
+        return run_op
+
     compute_config = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
         math_fidelity=math_fidelity,
@@ -509,7 +599,6 @@ def _build_op_runner(
     fused_activation = uc_cfg.get("fused_activation", None)
     chunks = uc_cfg.get("chunks", 1)
     scalar = uc_cfg.get("scalar", None)
-    mesh_shape = tuple(mesh_device.shape)
 
     def _matmul_config(m_blk, k_blk, n_blk, sb_h, sb_w):
         return ttnn.MinimalMatmulConfig(
@@ -769,20 +858,29 @@ _MATH_FIDELITY_MAP = {
 EXTERNAL_USE_CASE = "__external__"
 
 
-def _run_shape_sweep(device_config, M, K, N, cgx, cgy, is_agmm, use_case, uc_cfg, dtype, math_fidelity):
-    """Sweep ALL (M_block, K_block, N_block) combos for one (device_config, shape).
+def _run_shape_sweep(device_config, M, K, N, cgx, cgy, is_agmm, use_case, uc_cfg, dtype, math_fidelity, op=None):
+    """Sweep one (device_config, shape) and record the best config.
 
     Shared by the parametrized worker (SHAPES table) and the external worker
     (spec-file / env-driven). Opens the mesh once, sweeps every candidate, and
     periodically flushes the device profiler buffer to avoid overflow.
 
-    Reads optional MM_SWEEP_EXPLICIT_COMBOS env var (JSON list of [m, k, n, sb_h, sb_w])
-    to test a specific set of combos instead of the auto-generated grid.
-    Writes the combos that survived warmup to MM_SWEEP_VALID_COMBOS_FILE if set,
-    so the orchestrator/runner can line CSV rows up with combos.
+    `op` selects what is swept:
+      - "agmm"/"mm": (M_block, K_block, N_block, sb_h, sb_w) block-size grid.
+      - "ag":        isolated all-gather; the "combo" is
+                     (num_workers_per_link, chunks_per_sync, 0, 0, 0).
+    (Defaults from is_agmm for the SHAPES-table path.)
+
+    Reads optional MM_SWEEP_EXPLICIT_COMBOS env var (JSON list of 5-tuples) to
+    test a specific set of combos instead of the auto-generated grid. Writes the
+    combos that survived warmup to MM_SWEEP_VALID_COMBOS_FILE if set, so the
+    orchestrator/runner can line CSV rows up with combos.
     """
+    if op is None:
+        op = "agmm" if is_agmm else "mm"
+    gathers_k = op in ("agmm", "ag")  # both split K across the ring
     cfg = resolve_config(device_config)
-    shape = (M, K, N, cgx, cgy, is_agmm, use_case)
+    shape = (M, K, N, cgx, cgy, gathers_k, use_case)
 
     cluster_size = cfg["mesh_shape"][cfg["cluster_axis"]]
     M_per_core, K_per_device, N_per_core = get_per_core_dims(shape, cluster_size)
@@ -794,6 +892,15 @@ def _run_shape_sweep(device_config, M, K, N, cgx, cgy, is_agmm, use_case, uc_cfg
         m_cands = sorted({c[0] for c in combos})
         k_cands = sorted({c[1] for c in combos})
         n_cands = sorted({c[2] for c in combos})
+    elif op == "ag":
+        # Isolated all-gather: sweep AG knobs, not block sizes. Gathered tensor is
+        # (full_M, K) elements; full_M = M * sp_size (the sequence-parallel axis).
+        sp_size = cfg["mesh_shape"][cfg["sp_axis"]]
+        gathered_elems = (M * sp_size) * K
+        combos = generate_ag_combos(gathered_elems, cluster_size, cfg["num_links"])
+        m_cands = sorted({c[0] for c in combos})  # num_workers_per_link
+        k_cands = sorted({c[1] for c in combos})  # chunks_per_sync
+        n_cands = [0]
     else:
         m_cands = get_mn_block_candidates(M_per_core)
         k_cands = get_k_block_candidates(K_per_device)
@@ -805,25 +912,38 @@ def _run_shape_sweep(device_config, M, K, N, cgx, cgy, is_agmm, use_case, uc_cfg
                 sb_h, sb_w = pick_subblock(m_block, n_blk)
                 combos.append((m_block, k_blk, n_blk, sb_h, sb_w))
 
-    op_type = "agmm" if is_agmm else "mm"
-    shape_id = f"{M}_{K}_{N}_{cgx}x{cgy}_{op_type}_{use_case}"
+    shape_id = f"{M}_{K}_{N}_{cgx}x{cgy}_{op}_{use_case}"
 
-    # Header: clean, one-time print of candidate lists + post-L1 combo total
+    # Header: clean, one-time print of candidate lists + post-filter combo total
     print(f"\n=== {shape_id} on {device_config} ===", flush=True)
     print(f"  per_core: M={M_per_core}  K_per_device={K_per_device}  N={N_per_core}", flush=True)
-    print(f"  M_blocks ({len(m_cands)}): {m_cands}", flush=True)
-    print(f"  K_blocks ({len(k_cands)}): {k_cands}", flush=True)
-    print(f"  N_blocks ({len(n_cands)}): {n_cands}", flush=True)
-    src = " (explicit)" if explicit_combos_str else " (post-L1 filter)"
+    if op == "ag":
+        print(f"  num_workers_per_link ({len(m_cands)}): {m_cands}", flush=True)
+        print(f"  chunks_per_sync ({len(k_cands)}): {k_cands}", flush=True)
+    else:
+        print(f"  M_blocks ({len(m_cands)}): {m_cands}", flush=True)
+        print(f"  K_blocks ({len(k_cands)}): {k_cands}", flush=True)
+        print(f"  N_blocks ({len(n_cands)}): {n_cands}", flush=True)
+    src = " (explicit)" if explicit_combos_str else " (post-filter)"
     print(f"  combos to measure: {len(combos)}{src}", flush=True)
 
     if not combos:
-        pytest.skip("No valid (M, K, N) combos after L1 filter")
+        pytest.skip("No valid combos after filter")
 
     parent_mesh, mesh_device = open_mesh(cfg, trace_region_size=4194304)  # 4MB trace region (one trace at a time)
     try:
         run_op = _build_op_runner(
-            cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, ttnn.CoreCoord(cgx, cgy), math_fidelity=math_fidelity
+            cfg,
+            mesh_device,
+            M,
+            K,
+            N,
+            dtype,
+            is_agmm,
+            uc_cfg,
+            ttnn.CoreCoord(cgx, cgy),
+            math_fidelity=math_fidelity,
+            op=op,
         )
 
         valid_combos, skipped = _execute_sweep(mesh_device, run_op, combos)
@@ -896,14 +1016,15 @@ def test_mm_sweep_worker_external():
     device_config = spec.get("device_config", DEFAULT_DEVICE_CONFIG)
     M, K, N = spec["M"], spec["K"], spec["N"]
     cgx, cgy = spec["grid"]
-    is_agmm = spec["op_type"] == "agmm"
+    op = spec["op_type"]  # "agmm" | "mm" | "ag"
+    is_agmm = op == "agmm"
     dtype = _DTYPE_MAP.get(spec.get("dtype", "bfloat16"), ttnn.bfloat16)
     math_fidelity = _MATH_FIDELITY_MAP.get(spec.get("math_fidelity", "HiFi2"), ttnn.MathFidelity.HiFi2)
 
     uc_cfg = _uc_cfg_from_fusion(spec.get("fusion"))
     # Register so estimate_l1_kb() (keyed by use_case) sees use_addcmul for this shape.
     USE_CASE_CONFIGS[EXTERNAL_USE_CASE] = uc_cfg
-    _run_shape_sweep(device_config, M, K, N, cgx, cgy, is_agmm, EXTERNAL_USE_CASE, uc_cfg, dtype, math_fidelity)
+    _run_shape_sweep(device_config, M, K, N, cgx, cgy, is_agmm, EXTERNAL_USE_CASE, uc_cfg, dtype, math_fidelity, op=op)
 
 
 # ============================================================================
