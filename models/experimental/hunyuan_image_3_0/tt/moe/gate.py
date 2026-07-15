@@ -96,6 +96,9 @@ class HunyuanTtTopKGate(LightweightModule):
         if self.weight_dtype == ttnn.float32 and x.get_dtype() != ttnn.float32:
             x = ttnn.typecast(x, ttnn.float32)
 
+        # Router projection (small M, K=4096, N=num_experts=64). l1_sharded_linear's
+        # small-M width-sharded (split-N) path is the measured-optimal schedule for
+        # this shape (~6.8x vs auto; a gather-K split does not help — see gate sweep).
         logits = l1_sharded_linear(
             x,
             self.wg,
