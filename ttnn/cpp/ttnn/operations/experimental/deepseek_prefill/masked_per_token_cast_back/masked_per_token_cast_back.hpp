@@ -21,7 +21,8 @@ ttnn::Tensor masked_per_token_cast_back(
     uint32_t experts_per_chip,
     const std::optional<tt::tt_metal::DataType>& output_dtype = std::nullopt,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<ttnn::Tensor>& metadata = std::nullopt);
+    const std::optional<ttnn::Tensor>& metadata = std::nullopt,
+    bool bf16_scale = false);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::masked_per_token_cast_back
 

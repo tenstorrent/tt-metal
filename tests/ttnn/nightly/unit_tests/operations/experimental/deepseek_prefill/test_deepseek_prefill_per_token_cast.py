@@ -159,9 +159,10 @@ def test_cast_to_fp8_scale_values(device, dtype, shape, layout):
     assert_quality(scale, ref, pcc_threshold=0.999, rtol=1e-2, atol=1e-9, label=f"scale {dtype} shape={shape}")
 
 
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
 @pytest.mark.parametrize("shape", [(1, 512), (30, 512), (2, 3, 32, 512)])
-def test_cast_to_fp8_power_of_two_scale_for_sparse_kv(device, dtype, shape):
+def test_cast_to_fp8_power_of_two_scale_for_sparse_kv(device, dtype, shape, layout):
     """Opt-in sparse-KV mode keeps the existing op contract but emits TT-safe UE8M0-style scales."""
     torch.manual_seed(23)
     torch_dtype = getattr(torch, dtype)
@@ -169,9 +170,7 @@ def test_cast_to_fp8_power_of_two_scale_for_sparse_kv(device, dtype, shape):
     x = (torch.randn(*shape) * 0.01).to(torch_dtype)
     # Give the four 128-wide blocks distinct dynamic ranges.
     x = x * torch.tensor([1.0, 8.0, 64.0, 512.0], dtype=torch_dtype).repeat_interleave(BLOCK_W)
-    x_tt = ttnn.from_torch(
-        x, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
+    x_tt = ttnn.from_torch(x, dtype=ttnn_dtype, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     e4m3_tt, scale_tt = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x_tt, round_scale_to_power_of_two=True)
     scale = ttnn.to_torch(scale_tt).float()
@@ -237,22 +236,20 @@ def test_cast_to_fp8_power_of_two_scale_e4m3fn_boundary(device):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("scale_dtype", ["float32", "bfloat16"])
 @pytest.mark.parametrize("out_dtype", ["bfloat16", "float32"])
 @pytest.mark.parametrize("shape", SHAPES)
-def test_cast_back_dequant(device, out_dtype, scale_dtype, shape):
+def test_cast_back_dequant(device, out_dtype, shape):
     torch.manual_seed(0)
     torch_dtype = getattr(torch, out_dtype)
     ttnn_dtype = getattr(ttnn, out_dtype)
 
     input_e4m3 = (torch.randn(*shape) * 3.0).clamp(-E4M3_MAX, E4M3_MAX).to(torch.float8_e4m3fn)
-    # Round the scale to its storage dtype up front so the golden multiplies by exactly what the op sees.
-    input_scale = (torch.rand(*_scale_shape(shape)) * 4.0 - 2.0).to(getattr(torch, scale_dtype))
+    input_scale = torch.rand(*_scale_shape(shape)) * 4.0 - 2.0  # fp32
 
     e4m3_tt = _make_e4m3_from_torch(input_e4m3, device=device)
     scale_tt = ttnn.from_torch(
         input_scale,
-        dtype=getattr(ttnn, scale_dtype),
+        dtype=ttnn.float32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -276,7 +273,7 @@ def test_cast_back_dequant(device, out_dtype, scale_dtype, shape):
         pcc_threshold=0.999,
         rtol=1e-2,
         atol=1e-3,
-        label=f"dequant {out_dtype} scale={scale_dtype} shape={shape}",
+        label=f"dequant {out_dtype} shape={shape}",
     )
 
 
@@ -289,9 +286,8 @@ def test_cast_back_dequant(device, out_dtype, scale_dtype, shape):
 # always receives the forward op's ROW_MAJOR e4m3 / scale outputs.
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
-@pytest.mark.parametrize("scale_dtype", ["float32", "bfloat16"])
 @pytest.mark.parametrize("shape", ROUNDTRIP_SHAPES)
-def test_round_trip_random(device, dtype, scale_dtype, shape, layout):
+def test_round_trip_random(device, dtype, shape, layout):
     torch.manual_seed(0)
     torch_dtype = getattr(torch, dtype)
     ttnn_dtype = getattr(ttnn, dtype)
@@ -300,20 +296,8 @@ def test_round_trip_random(device, dtype, scale_dtype, shape, layout):
     x_in = x.float()
     x_tt = ttnn.from_torch(x, dtype=ttnn_dtype, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     e4m3_tt, scale_tt = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x_tt)
-    # The forward op emits fp32 scales; downcast to bf16 here to exercise the bf16 scale path in cast_back.
-    if scale_dtype == "bfloat16":
-        scale_bf16 = ttnn.to_torch(scale_tt).to(torch.bfloat16)
-        scale_tt = ttnn.from_torch(
-            scale_bf16,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
     y_tt = ttnn.experimental.deepseek_prefill.per_token_cast_back(e4m3_tt, scale_tt, output_dtype=ttnn.float32)
     y = ttnn.to_torch(y_tt).float()
 
     # fp8 quantization (~12% worst-case relative error) bounds the reconstruction.
-    assert_quality(
-        y, x_in, pcc_threshold=0.999, rtol=0.1, atol=0.2, label=f"roundtrip {dtype} scale={scale_dtype} shape={shape}"
-    )
+    assert_quality(y, x_in, pcc_threshold=0.999, rtol=0.1, atol=0.2, label=f"roundtrip {dtype} shape={shape}")

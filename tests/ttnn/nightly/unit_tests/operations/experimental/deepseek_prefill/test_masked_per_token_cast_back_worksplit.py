@@ -27,6 +27,7 @@ import ttnn
 from loguru import logger
 
 from models.common.utility_functions import is_blackhole
+from tests.ttnn.utils_for_testing import comp_pcc
 
 pytestmark = pytest.mark.use_module_device
 
@@ -134,8 +135,19 @@ def _make_u32(device, values):
     )
 
 
+def assert_quality(result, ref, *, pcc_threshold, rtol, atol, label=""):
+    """PCC + allclose gate (mirrors test_deepseek_prefill_per_token_cast.assert_quality)."""
+    passed_pcc, pcc = comp_pcc(result, ref, pcc_threshold)
+    close = torch.allclose(result, ref, rtol=rtol, atol=atol)
+    status = "PASS" if passed_pcc and close else "FAIL"
+    logger.info(f"[{status}] {label}: pcc={pcc:.6f} (min={pcc_threshold}), allclose={close} (rtol={rtol}, atol={atol})")
+    assert passed_pcc, f"{label}: PCC {pcc:.6f} below {pcc_threshold}"
+    assert close, f"{label}: values not allclose (rtol={rtol}, atol={atol})"
+
+
+@pytest.mark.parametrize("bf16_scale", [False, True])
 @pytest.mark.parametrize("label, counts", CASES, ids=[c[0] for c in CASES])
-def test_masked_decompress_worksplit(device, label, counts):
+def test_masked_decompress_worksplit(device, label, counts, bf16_scale):
     experts_per_chip = len(counts)
 
     # region offsets = exclusive cumsum of tile-aligned counts (dispatch packs from row 0).
@@ -187,17 +199,30 @@ def test_masked_decompress_worksplit(device, label, counts):
         table_tt,
         experts_per_chip=experts_per_chip,
         output_dtype=ttnn.bfloat16,
+        bf16_scale=bf16_scale,
     )
     out = ttnn.to_torch(out_tt).float()
 
     assert tuple(out_tt.shape) == (CAPACITY, H)
 
     # Functional check on the valid prefix only (garbage tail is intentionally left untouched).
-    golden = x_e4m3.float() * scale.repeat_interleave(BLOCK_W, dim=-1)
+    # bf16_scale narrows the scale on-device; match the golden to what the op multiplies by.
+    golden_scale = scale.to(torch.bfloat16).float() if bf16_scale else scale
+    golden = x_e4m3.float() * golden_scale.repeat_interleave(BLOCK_W, dim=-1)
     golden = golden.to(torch.bfloat16).float()
     prefix_out = out[:total_valid_rows]
     prefix_golden = golden[:total_valid_rows]
     normal = x_e4m3.float()[:total_valid_rows].abs() > 2.0**-6
     max_abs_err = (prefix_out[normal] - prefix_golden[normal]).abs().max().item()
     logger.info(f"[{label}] valid-prefix max_abs_err (normal e4m3 values) = {max_abs_err:.4f}")
-    torch.testing.assert_close(prefix_out[normal], prefix_golden[normal], atol=1e-2, rtol=1e-2)
+    # bf16 output + bf16-narrowed scale round a few values one bf16 ULP past a 1e-3 band; PCC stays the
+    # quality gate, so loosen the absolute tolerance for the bf16-scale path only.
+    atol = 1e-2 if bf16_scale else 1e-3
+    assert_quality(
+        prefix_out[normal],
+        prefix_golden[normal],
+        pcc_threshold=0.999,
+        rtol=1e-2,
+        atol=atol,
+        label=f"masked dequant {label} bf16_scale={bf16_scale}",
+    )

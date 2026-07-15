@@ -42,6 +42,8 @@ void bind_experimental_masked_per_token_cast_back_operation(nb::module_& mod) {
                 * :attr:`output_dtype`: BFLOAT16 (default) or FLOAT32.
                 * :attr:`memory_config`: optional DRAM interleaved output memory config
                   (default: same as input_e4m3).
+                * :attr:`bf16_scale`: when True, narrow the fp32 scale to bf16 on-device and run the
+                  bf16 (HiFi2) compute datapath; when False (default), keep the fp32 (HiFi4) datapath.
 
             Returns:
                 A ROW_MAJOR tensor of the same logical shape as input_e4m3, dtype = output_dtype. Only the
@@ -56,7 +58,8 @@ void bind_experimental_masked_per_token_cast_back_operation(nb::module_& mod) {
         nb::arg("experts_per_chip"),
         nb::arg("output_dtype") = std::nullopt,
         nb::arg("memory_config") = std::nullopt,
-        nb::arg("metadata").noconvert() = std::nullopt);
+        nb::arg("metadata").noconvert() = std::nullopt,
+        nb::arg("bf16_scale") = false);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::masked_per_token_cast_back::detail

@@ -103,14 +103,9 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     const DataFormat fp8_df = DataFormat::Fp8_e4m3;
     const DataFormat fp32_df = DataFormat::Float32;
     const DataFormat output_df = datatype_to_dataformat_converter(operation_attributes.output_dtype);
-    // When the scale is bf16, run the whole compute datapath in bf16: decode E4M3 -> bf16 (lossless),
-    // then tilize / bcast-multiply / untilize in bf16. The FPU eltwise/bcast path addresses SrcA and SrcB
-    // with a shared stride, so both multiply operands must share a format — matching the input tile to the
-    // bf16 scale (rather than upcasting the scale) also halves the datacopy traffic through copy/tilize/untilize.
-    const uint32_t scale_elem_bytes = input_scale.element_size();
-    const bool compute_bf16 = input_scale.dtype() == tt::tt_metal::DataType::BFLOAT16;
-    const DataFormat compute_df = compute_bf16 ? DataFormat::Float16_b : fp32_df;
-    const uint32_t compute_tile_bytes = tile_h * tile_w * (compute_bf16 ? 2u : 4u);
+    // The scale is fp32: decode E4M3 -> fp32, then tilize / bcast-multiply / untilize in fp32 (HiFi4).
+    const DataFormat compute_df = fp32_df;
+    const uint32_t compute_tile_bytes = tile_h * tile_w * 4u;
 
     constexpr uint32_t cb_input_e4m3_idx = CBIndex::c_0;
     constexpr uint32_t cb_in_rm_idx = CBIndex::c_1;
@@ -165,8 +160,7 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
         tile_h,
         tile_w,
         face_h,
-        face_w,
-        scale_elem_bytes};
+        face_w};
     TensorAccessorArgs(src_e4m3_buffer).append_to(reader_ct_args);
     TensorAccessorArgs(src_scale_buffer).append_to(reader_ct_args);
     KernelHandle reader_kernel_id = CreateKernel(
@@ -197,15 +191,10 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
         cb_out_tile_idx,
         cb_out_idx,
         tile_h,
-        tile_w,
-        static_cast<uint32_t>(compute_bf16)};
-    // fp32_dest_acc_en=True required (input_e4m3 CB on core). A bf16 scale carries only 8 mantissa bits
-    // and the input is fp8 (3), so the broadcast multiply does not need HiFi4's full fp32 passes — use
-    // HiFi2 for the bf16-scale path; fp32 scale keeps HiFi4.
-    const MathFidelity math_fidelity =
-        input_scale.dtype() == tt::tt_metal::DataType::BFLOAT16 ? MathFidelity::HiFi2 : MathFidelity::HiFi4;
+        tile_w};
+    const MathFidelity math_fidelity = MathFidelity::HiFi4;
     // The fp8 input CB forces a 32-bit DEST (fp32_dest_acc_en). Unpack the e4m3 input straight to a
-    // 32-bit DEST so the bf16 datapath decodes/accumulates correctly (mirrors typecast's fp8 path).
+    // 32-bit DEST so the fp32 datapath decodes/accumulates correctly (mirrors typecast's fp8 path).
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     unpack_to_dest_mode[cb_input_e4m3_idx] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
