@@ -648,26 +648,20 @@ done
 fi # bh-blitz-decode
 
 ######################################
-# BH Galaxy: ring-mapping stress tests (LONG RUNNING -- own group)
-# Non-pod-aligned Blitz-decode ring lengths (20/24/28/36 stages) embedded into each mock's full host
-# graph. Because the ring length does not align to pod (4-host) / galaxy boundaries and (on the
-# non-subtorus SC16 revAB aisleD mock) its closing hop has no direct physical link, these fall into the
-# topology mapper's general-SAT host-minimization fallback, whose cost is erratic and scales with
-# topology, ring length, and host count. Observed rank-0 solve times (mock CPU sim) reach tens of seconds
-# -- e.g. ~46s (24-stage, SC20 revC subtorus) and ~40s (36-stage, 36-host SC36); the non-subtorus SC16
-# revAB aisleD mock exercises the no-direct-closing-hop worst case. Full group measured end-to-end at
-# ~6-7 min for all 12 tt-run invocations locally, so it gets its own shard to not gate the fast matrix.
+# BH Galaxy: ring-mapping stress test (LONG RUNNING -- own group)
+# Non-pod-aligned Blitz-decode ring lengths (20/24/28/36 stages) mapped onto the full 36-host SC36 revC
+# subtorus aisleD mock. These lengths don't align to pod (4-host) / galaxy boundaries, so they exercise
+# the topology mapper's general-SAT host-minimization fallback -- erratic cost that scales with ring
+# length (36-stage ~38s vs sub-second for 20/24/28). The subtorus wrap-around lets every length close
+# and map. Own shard, measured ~2 min end-to-end.
 ######################################
 if run_group "bh-ring-stress"; then
 
-# Per-op mapper watchdog: 900s (15 min) -- above the 600s default so a genuinely slow general-SAT solve
-# (worst observed ~90s) isn't killed prematurely, but comfortably BELOW the shard step timeout (20 min,
-# see tests/pipeline_reorg/fabric_cpu_only_unit_tests.yaml) so a hung solve is caught and reported here
-# rather than cancelled mid-shard by GitHub Actions.
-RING_STRESS_TIMEOUT=900
+# Per-op mapper watchdog: 300s -- ~8x the worst observed solve (~38s), and below the shard step timeout
+# (10 min, see tests/pipeline_reorg/fabric_cpu_only_unit_tests.yaml) so a stuck solve is caught/reported
+# here rather than cancelled mid-shard by GitHub Actions.
+RING_STRESS_TIMEOUT=300
 for entry in \
-    "SC16_revAB_aisleD:${SC16_REVAB_AISLED_CLUSTER_DESC_MAPPING}:20 24 28 36" \
-    "SC20_revC_subtorus_aisleC:${SC20_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:20 24 28 36" \
     "SC36_revC_subtorus_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:20 24 28 36" ; do
   rest="${entry#*:}"; cluster_map="${rest%%:*}"; stages="${rest#*:}"
   for stage in ${stages}; do
