@@ -46,9 +46,13 @@ class _Entry:
 class TraceManager:
     """Per-shape-bucket metal-trace capture/replay with persistent input buffers."""
 
-    def __init__(self, device: ttnn.Device, *, cq_id: int = 0) -> None:
+    def __init__(self, device: ttnn.Device, *, cq_id: int = 0, sync_replay: bool = False) -> None:
         self.device = device
         self.cq_id = cq_id
+        # When this trace runs on a non-default CQ, its input tensors are produced/copied on another
+        # CQ; a full device sync before execute orders those cross-CQ writes ahead of the replay read.
+        # Only needed for the multi-CQ two-trace path; the default (single-CQ) path leaves this off.
+        self.sync_replay = sync_replay
         self._entries: dict = {}
         self._prep_enabled = False
         self.captures = 0  # number of first-time captures (cache misses)
@@ -115,6 +119,9 @@ class TraceManager:
         # Replay: copy fresh inputs into the persistent buffers (device->device), then execute.
         for name, t in inputs.items():
             ttnn.copy(t, entry.persistent[name])
+        if self.sync_replay:
+            # Order the (other-CQ) input copies ahead of this CQ's trace execute.
+            ttnn.synchronize_device(self.device)
         ttnn.execute_trace(self.device, entry.tid, cq_id=self.cq_id, blocking=True)
         self.replays += 1
         return entry.output

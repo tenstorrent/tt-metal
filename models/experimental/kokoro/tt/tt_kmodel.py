@@ -293,7 +293,15 @@ class TTKModel:
         # on the device and the checkpoint's deterministic RNG path. Upstream (BERT/prosody) stays
         # eager — the duration readback splits the pipeline (see docs/generator_perf_optimizations.md).
         self._trace = trace
-        self._trace_mgr = TraceManager(device) if trace else None
+        # KOKORO_TRACE_A two-trace path: Trace A on CQ0, decoder Trace B on CQ1 — a second trace
+        # coexisting on the SAME CQ hangs the decoder replay, so the two live on separate command
+        # queues (device must be opened with num_command_queues=2). Default path keeps Trace B on CQ0.
+        self._two_trace = trace and os.environ.get("KOKORO_TRACE_A") == "1"
+        self._trace_mgr = (
+            TraceManager(device, cq_id=1, sync_replay=True)
+            if self._two_trace
+            else (TraceManager(device) if trace else None)
+        )
         # Trace A (prosody→duration + ASR TextEncoder): the fixed-shape T_tokens device region that
         # runs BEFORE the duration readback splits the pipeline. Captured once per identical input
         # (keyed by exact ids/speed/style — the token uploads are baked into the graph) and replayed
@@ -308,7 +316,7 @@ class TTKModel:
         # tests/test_tt_prosody_asr_trace.py); the unsolved piece is co-existing with Trace B, which
         # needs an allocation-ordering redesign (pre-allocate all persistent buffers for both traces,
         # no interleaved eager allocation). Off by default so the decoder-only trace path is unchanged.
-        self._trace_mgr_a = TraceManager(device) if (trace and os.environ.get("KOKORO_TRACE_A") == "1") else None
+        self._trace_mgr_a = TraceManager(device, cq_id=0) if self._two_trace else None
 
     # ------------------------------------------------------------------
     # Decoder cache
@@ -629,6 +637,23 @@ class TTKModel:
         deterministic: bool = False,
     ) -> "tuple[ttnn.Tensor, torch.LongTensor]":
         """Full forward steps 1–10. Returns ``(audio_tt, pred_dur_cpu)``."""
+        # Two-trace path (KOKORO_TRACE_A=1): Trace A (prosody+ASR, T_tokens) + a Trace B that folds
+        # en_matmul/F0Ntrain/asr_matmul in front of the decoder so NO eager buffer stays alive across a
+        # trace execute (the allocator "unsafe allocation while a trace is live" rule). Isolated here so
+        # the default single-decoder-trace path below is untouched.
+        if self._trace_mgr_a is not None:
+            return self._device_forward_two_trace(
+                input_ids,
+                input_lengths,
+                lengths_list,
+                s_pred_cpu,
+                s_style_cpu,
+                speed,
+                mc,
+                ck,
+                deterministic=deterministic,
+            )
+
         asr_nlc, F0, N, T_aligned, pred_dur_cpu = self._device_forward_prosody_stages(
             input_ids, input_lengths, lengths_list, s_pred_cpu, speed, mc, ck
         )
@@ -727,6 +752,223 @@ class TTKModel:
         ttnn.deallocate(N_in)
         ttnn.deallocate(s_style_tt)
 
+        return audio, pred_dur_cpu
+
+    def _device_forward_two_trace(
+        self,
+        input_ids: torch.LongTensor,
+        input_lengths: torch.LongTensor,
+        lengths_list: list,
+        s_pred_cpu: torch.Tensor,
+        s_style_cpu: torch.Tensor,
+        speed: float,
+        mc: "ttnn.MemoryConfig",
+        ck,
+        *,
+        deterministic: bool = False,
+    ) -> "tuple[ttnn.Tensor, torch.LongTensor]":
+        """Folded two-trace forward (``KOKORO_TRACE_A=1``); see :meth:`_device_forward`.
+
+        Trace A: ``input_ids -> BERT -> prosody -> (dur_clipped, d_nlc, t_en_bct)`` (fixed at T_tokens).
+        host:    duration readback -> alignment (T_aligned).
+        Trace B: ``(d_nlc, t_en, aln, s_pred, s_style[, rng]) -> en_matmul -> F0Ntrain -> asr_matmul
+                 -> decoder -> audio`` (fixed at ``(T_tokens, dec_len)``).
+
+        Trace A's persistent OUTPUT buffers feed straight into Trace B's inputs, and the en/F0N/asr work
+        lives INSIDE Trace B's captured graph — so no buffer allocated while a trace is live survives a
+        trace execute (the allocator's "unsafe allocation" hazard that hung the eager-middle wiring).
+        ``dec_len == t_mel`` on the default ``_TRACE_ALIGN_STEP=1`` (no padding) => folding F0Ntrain into
+        the trace is numerically exact.
+        """
+        p = self.params
+        dev = self.device
+        B, T = input_ids.shape
+        prosody_dtype = ttnn.float32
+        full_length = _batch_is_full_length(input_lengths, T)
+        text_mask = None if full_length else _text_mask_from_input_lengths(input_lengths, T)
+
+        # ---- Trace A persistent inputs (style + keep-mask) ----
+        s_pred_tt = ttnn.from_torch(
+            s_pred_cpu, dtype=prosody_dtype, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=mc
+        )
+        if full_length:
+            keep_mask = ttnn.ones([B, T, 1], dtype=prosody_dtype, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=mc)
+        else:
+            keep_mask = _keep_mask_btl_tt(input_lengths, T, device=dev, dtype=prosody_dtype, memory_config=mc)
+
+        def _trace_a_region(pers: dict):
+            s_pred = pers["s_pred"]
+            keep = pers["keep_mask"]
+            if full_length:
+                bert_out = self._bert(input_ids, attention_mask=None)
+            else:
+                bert_out = self._bert(input_ids, attention_mask=_attention_keep_mask_bt(input_lengths, T).int())
+            bfe = bert_out
+            owns = False
+            if bert_out.dtype != ttnn.float32:
+                bfe = ttnn.typecast(bert_out, ttnn.float32, memory_config=mc)
+                owns = True
+            d_en = ttnn.linear(
+                bfe,
+                p.bert_encoder_w,
+                bias=p.bert_encoder_b,
+                transpose_b=True,
+                memory_config=mc,
+                compute_kernel_config=ck,
+            )
+            ttnn.deallocate(bfe if owns else bert_out)
+            while len(d_en.shape) > 3:
+                d_en = ttnn.squeeze(d_en, 0)
+            d_en_bct = ttnn.permute(d_en, (0, 2, 1), memory_config=mc)
+            ttnn.deallocate(d_en)
+            if d_en_bct.dtype != prosody_dtype:
+                tmp = ttnn.typecast(d_en_bct, prosody_dtype, memory_config=mc)
+                ttnn.deallocate(d_en_bct)
+                d_en_bct = tmp
+            d_nlc_r = self._predictor._text_encoder.forward(
+                d_en_bct=d_en_bct,
+                style_bs=s_pred,
+                sequence_lengths=lengths_list,
+                keep_mask_btl=keep,
+                compute_kernel_config=ck,
+                memory_config=mc,
+                wire_dtype=prosody_dtype,
+            )
+            ttnn.deallocate(d_en_bct)
+            x_lstm = tt_bilstm_nlc(
+                x_nlc=d_nlc_r,
+                fwd=p.predictor.lstm_fwd,
+                rev=p.predictor.lstm_rev,
+                compute_kernel_config=ck,
+                memory_config=mc,
+                sequence_lengths=lengths_list,
+            )
+            duration = self._predictor._duration_proj.forward(x_lstm, compute_kernel_config=ck, memory_config=mc)
+            ttnn.deallocate(x_lstm)
+            dur_sig = ttnn.sigmoid(duration, memory_config=mc)
+            ttnn.deallocate(duration)
+            dur_sum = ttnn.sum(dur_sig, dim=-1, memory_config=mc)
+            ttnn.deallocate(dur_sig)
+            if speed != 1.0:
+                sc = ttnn.multiply(dur_sum, 1.0 / speed, memory_config=mc)
+                ttnn.deallocate(dur_sum)
+                dur_sum = sc
+            dur_r = ttnn.round(dur_sum, memory_config=mc)
+            ttnn.deallocate(dur_sum)
+            dur_clipped_r = ttnn.clip(dur_r, min=1.0, memory_config=mc)
+            ttnn.deallocate(dur_r)
+            t_en_r = self._text_encoder(input_ids, input_lengths=input_lengths, text_mask=text_mask)
+            return dur_clipped_r, d_nlc_r, t_en_r
+
+        key_a = (
+            "traceA",
+            int(T),
+            tuple(int(v) for v in input_ids.reshape(-1).tolist()),
+            round(float(speed), 6),
+            hash(s_pred_cpu.detach().cpu().contiguous().numpy().tobytes()),
+        )
+        dur_c, d_nlc_p, t_en_p = self._trace_mgr_a.run(
+            key_a, {"s_pred": s_pred_tt, "keep_mask": keep_mask}, _trace_a_region
+        )
+
+        # ---- host alignment (the pipeline split) ----
+        pred_dur = ttnn.to_torch(dur_c).long().squeeze()
+        pred_dur_cpu = pred_dur.clone()
+        aln_cpu = _build_alignment(pred_dur)
+        t_mel = int(aln_cpu.shape[2])
+        dec_len = _bucket_t_aligned(t_mel)
+        decoder = self._get_decoder(dec_len)
+        gen = decoder._generator
+        if dec_len != t_mel:
+            # Pad the alignment's T_aligned dim so en/asr come out at the bucket length (non-default
+            # KOKORO_TRACE_A bucketing; F0Ntrain then runs on the padded en — approximate at the tail).
+            aln_cpu = torch.nn.functional.pad(aln_cpu, (0, dec_len - t_mel))
+        aln_tt = ttnn.from_torch(aln_cpu, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=mc)
+        s_style_tt = ttnn.from_torch(
+            s_style_cpu, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=mc
+        )
+
+        rng_tt = None
+        inputs_b = {"d_nlc": d_nlc_p, "t_en": t_en_p, "aln": aln_tt, "s_pred": s_pred_tt, "s_style": s_style_tt}
+        if deterministic:
+            from models.experimental.kokoro.m_source_rng import (
+                deallocate_m_source_rng_tt,
+                make_zero_m_source_rng,
+                upload_m_source_rng,
+            )
+
+            T_har = (2 * dec_len) * int(gen.params.upsample_scale_full)  # F0 length is 2*dec_len
+            dim = int(gen.params.m_source.sinegen.dim)
+            rng_cpu = make_zero_m_source_rng(B, T_har, dim)
+            rng_tt = upload_m_source_rng(rng_cpu, dev, memory_config=mc)
+            inputs_b["rand_ini"] = rng_tt.rand_ini
+            inputs_b["sinegen_noise"] = rng_tt.sinegen_noise
+            inputs_b["source_noise"] = rng_tt.source_noise
+
+        def _folded_fwd(pb: dict) -> ttnn.Tensor:
+            # Clone persistent inputs (the trace reuses pb across replays; en/F0N/asr + decoder consume).
+            aln_c = ttnn.clone(pb["aln"])
+            d_c = ttnn.clone(pb["d_nlc"])
+            # en_nlc = alignment^T @ d_nlc  -> [B, dec_len, C]
+            aln_Ta_T = ttnn.permute(aln_c, (0, 2, 1), memory_config=mc)
+            d_mat, owns_d = _to_fp32_if_needed(d_c, mc)
+            if owns_d:
+                ttnn.deallocate(d_c)
+            en_nlc = _en_matmul_nlc(aln_Ta_T, d_mat, memory_config=mc, compute_kernel_config=ck)
+            ttnn.deallocate(d_mat)
+            ttnn.deallocate(aln_Ta_T)
+            s_c = ttnn.clone(pb["s_pred"])
+            F0, N = self._predictor.F0Ntrain(en_nlc, s_c, memory_config=mc)
+            ttnn.deallocate(en_nlc)
+            # asr_bct = t_en @ alignment  -> [B, C, dec_len]
+            t_c = ttnn.clone(pb["t_en"])
+            asr_bct = ttnn.matmul(t_c, aln_c, memory_config=mc, compute_kernel_config=ck)
+            ttnn.deallocate(t_c)
+            ttnn.deallocate(aln_c)
+            asr_nlc = ttnn.permute(asr_bct, (0, 2, 1), memory_config=mc)
+            ttnn.deallocate(asr_bct)
+            if asr_nlc.dtype != ttnn.float32:
+                t = ttnn.typecast(asr_nlc, ttnn.float32, memory_config=mc)
+                ttnn.deallocate(asr_nlc)
+                asr_nlc = t
+            if F0.dtype != ttnn.float32:
+                t = ttnn.typecast(F0, ttnn.float32, memory_config=mc)
+                ttnn.deallocate(F0)
+                F0 = t
+            if N.dtype != ttnn.float32:
+                t = ttnn.typecast(N, ttnn.float32, memory_config=mc)
+                ttnn.deallocate(N)
+                N = t
+            kwargs: dict = {}
+            if deterministic:
+                kwargs = {
+                    "sinegen_rand_ini": ttnn.clone(pb["rand_ini"]),
+                    "sinegen_noise_raw": ttnn.clone(pb["sinegen_noise"]),
+                    "source_noise_raw": ttnn.clone(pb["source_noise"]),
+                }
+            # decoder consumes (deallocates) asr_nlc/F0/N; clone the persistent style.
+            return decoder(asr_nlc, F0, N, ttnn.clone(pb["s_style"]), memory_config=mc, **kwargs)
+
+        # Drain CQ0 (Trace A execute + all the uploads above) before the decoder trace runs on CQ1.
+        ttnn.synchronize_device(dev)
+        key_b = (int(T), int(dec_len))
+        audio_full = ttnn.clone(self._trace_mgr.run(key_b, inputs_b, _folded_fwd))
+        if dec_len != t_mel:
+            bl = int(audio_full.shape[-1])
+            real_len = bl * t_mel // dec_len
+            audio = ttnn.slice(
+                audio_full, [0, 0, 0], [int(audio_full.shape[0]), 1, real_len], [1, 1, 1], memory_config=mc
+            )
+            ttnn.deallocate(audio_full)
+        else:
+            audio = audio_full
+
+        if deterministic and rng_tt is not None:
+            deallocate_m_source_rng_tt(rng_tt)
+        ttnn.deallocate(aln_tt)
+        ttnn.deallocate(s_style_tt)
+        ttnn.deallocate(s_pred_tt)
+        ttnn.deallocate(keep_mask)
         return audio, pred_dur_cpu
 
 
