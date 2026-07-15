@@ -137,8 +137,15 @@ def _server_env(args) -> tuple[dict[str, str], dict[str, str]]:
         # Leave the newly selected self-conditioning defaults selector-free.
         "DG_SELFCOND_PRECHUNK_EMBED",
         "DG_SELFCOND_LOGITS_L1",
+        "DG_DENOISE_FROZEN_PREFIX",
     ):
         env.pop(key, None)
+    # New default serving perf config (set AFTER the pop so the sweep's choice is authoritative):
+    # early-halt (bit-exact; converges post tanh-fix so it fires) + frozen-prefix capture-once
+    # (restores steady speed by reusing the block-0 trace instead of per-block recapture).
+    env["DG_DENOISE_EARLY_HALT"] = "0" if args.fixed_budget else "1"
+    if not args.growing_prefix:
+        env["DG_DENOISE_FROZEN_PREFIX"] = "1"
     return env, selected
 
 
@@ -311,7 +318,11 @@ def _request_summary(
             "expected one session/block0/release event, got "
             f"{len(session_events)}/{len(block0_events)}/{len(release_events)}"
         )
-    if session_events[0]["denoise_path"] != "traced_denoise_block":
+    # Accept any traced denoise variant. Early-halt is now the default traced/serving variant
+    # (traced_early_halt_block); multistep and single-step are the other traced loops. Only an
+    # eager fallback (or a non-traced path) is unexpected here.
+    valid_denoise_paths = {"traced_denoise_block", "traced_denoise_multistep_block", "traced_early_halt_block"}
+    if session_events[0]["denoise_path"] not in valid_denoise_paths:
         raise AssertionError(f"unexpected denoise path: {session_events[0]}")
     if int(session_events[0]["max_denoise_steps"]) != max_denoise_steps:
         raise AssertionError(
@@ -360,8 +371,11 @@ def _request_summary(
     trace_ids = captures[0]["trace_ids"] if captures else []
     expected_execute_calls = max_denoise_steps * blocks_requested
     denoise_steps = [int(block["denoise_steps"]) for block in blocks]
-    if denoise_steps != [max_denoise_steps] * blocks_requested:
-        raise AssertionError(f"expected fixed {max_denoise_steps} steps per block, got {denoise_steps}")
+    # Early-halt (the default traced/serving variant) commits fewer than the full budget once the
+    # trajectory converges; the realized per-block step counts are recorded below. Only a count
+    # ABOVE the budget is unexpected.
+    if any(steps > max_denoise_steps for steps in denoise_steps):
+        raise AssertionError(f"denoise steps exceed budget {max_denoise_steps}: {denoise_steps}")
 
     usage = response["usage"]
     actual_prompt_tokens = int(usage["prompt_tokens"])
@@ -509,6 +523,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-denoise-steps", type=_parse_max_denoise_steps, default=MAX_DENOISE_STEPS)
     parser.add_argument("--warmup-requests", type=int, default=0)
     parser.add_argument("--repetitions", type=int, default=1)
+    parser.add_argument(
+        "--fixed-budget",
+        action="store_true",
+        help="Disable early-halt: run the full --max-denoise-steps budget every block (baseline).",
+    )
+    parser.add_argument(
+        "--growing-prefix",
+        action="store_true",
+        help="Disable DG_DENOISE_FROZEN_PREFIX: per-block trace recapture (multi-block-correct, ~4x slower).",
+    )
     parser.add_argument("--require-no-compile-markers", action="store_true")
     parser.add_argument("--checkpoint", type=Path, default=Path("/home/zni/dg_models/diffusiongemma-26B-A4B-it"))
     parser.add_argument("--tt-metal", type=Path, default=Path("/home/zni/tt-metal"))
