@@ -192,6 +192,55 @@ def matrix():
     print("MATRIX DONE", flush=True)
 
 
+def mscale():
+    # full + key ablations across M, at each shape's auto (picker) config, to see which component's excess
+    # grows with M. Two series: small-N (2048,1024) and wide-N (6144,4608).
+    key = [
+        ("full", 0),
+        ("skipin1", 1),
+        ("skipfwd", 4),
+        ("noreduce", 8),
+        ("skipin0+in1", 3),
+        ("skipin0+in1+noreduce", 11),
+    ]
+    series = {
+        "smallN": [(M, 2048, 1024) for M in (32, 64, 128, 256)],
+        "wideN": [(M, 6144, 4608) for M in (32, 64, 128, 256)],
+    }
+    out = []
+    for sname, shapes in series.items():
+        for M, K, N in shapes:
+            cfg = tuple(rb.auto_config(M, K, N))
+            print(f"\n=== {sname} {M}x{K}x{N} cfg={cfg} ideal={ideal_us(M,K,N):.1f}us", flush=True)
+            for name, mask in key:
+                runs = [run_one(M, K, N, cfg, mask) for _ in range(3)]
+                oks = [x for x in runs if x["cls"] == "ok" and x["wall_us"]]
+                med = statistics.median([x["wall_us"] for x in oks]) if oks else None
+                exc = (med - ideal_us(M, K, N)) if med else None
+                out.append(
+                    {
+                        "series": sname,
+                        "M": M,
+                        "K": K,
+                        "N": N,
+                        "cfg": list(cfg),
+                        "ablation": name,
+                        "mask": mask,
+                        "wall_us_med": med,
+                        "excess_us": exc,
+                        "ideal_us": ideal_us(M, K, N),
+                        "n_ok": len(oks),
+                    }
+                )
+                print(
+                    f"  {name:22} wall_med={med if med is None else round(med,1)}us "
+                    f"excess={exc if exc is None else round(exc,1)}us ({len(oks)}/3)",
+                    flush=True,
+                )
+                json.dump(out, open(f"{HERE}/regime_a_diag_mscale.json", "w"), indent=2)
+    print("MSCALE DONE", flush=True)
+
+
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "smoke"
-    {"smoke": smoke, "matrix": matrix}[mode]()
+    {"smoke": smoke, "matrix": matrix, "mscale": mscale}[mode]()
