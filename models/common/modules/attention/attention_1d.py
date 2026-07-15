@@ -80,11 +80,11 @@ def _validate_token_budget(config: "Attention1DConfig") -> None:
     paged_cfg = config.paged_attention_config
     if config.use_vllm_paged_kv_cache and paged_cfg is not None:
         paged_tokens = paged_cfg.max_num_blocks * paged_cfg.block_size
-        if paged_tokens > MAX_TOTAL_TOKENS + config.max_batch_size * paged_cfg.block_size:
+        if paged_tokens > MAX_TOTAL_TOKENS:
             raise ValueError(
                 f"Paged KV token budget exceeded: max_num_blocks ({paged_cfg.max_num_blocks}) x "
                 f"block_size ({paged_cfg.block_size}) = {paged_tokens:,} tokens, "
-                f"but maximum is {MAX_TOTAL_TOKENS:,} tokens plus one block per batch slot. "
+                f"but maximum is {MAX_TOTAL_TOKENS:,} tokens. "
                 f"Reduce max_num_blocks or block_size to fit in device DRAM."
             )
         return

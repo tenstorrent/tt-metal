@@ -842,7 +842,7 @@ def test_attention_1d_resolve_allows_vllm_paged_kv_context_over_static_budget():
         use_vllm_paged_kv_cache=True,
         paged_attention_config=PagedAttentionConfig(
             block_size=32,
-            max_num_blocks=(128 * 1024) // 32 + 8,
+            max_num_blocks=(128 * 1024) // 32,
         ),
     )
 
@@ -873,7 +873,7 @@ def test_attention_1d_resolve_validates_vllm_paged_kv_physical_budget(expect_err
         use_vllm_paged_kv_cache=True,
         paged_attention_config=PagedAttentionConfig(
             block_size=32,
-            max_num_blocks=(128 * 1024) // 32 + 9,
+            max_num_blocks=(128 * 1024) // 32 + 1,
         ),
     )
 
