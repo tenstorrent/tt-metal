@@ -68,6 +68,81 @@ from tests.nightly.tg.ccl.moe.test_moe_compute_6U import (
 )
 
 
+def _build_quantized_weight_tensors_cpu_prepare(
+    mesh_device,
+    torch_w0,
+    torch_w1,
+    torch_w2,
+    torch_b0,
+    torch_b1,
+    torch_b2,
+    num_layers,
+    experts_per_device,
+    hidden_size,
+    N,
+    has_bias,
+    w0_w1_shard_map,
+    w2_shard_map,
+    w0_w1_mem_config,
+    w2_mem_config,
+):
+    """Upload prepared weights as ``bfloat4_b`` HEIGHT_SHARDED device tensors.
+
+    With bias, direct ``from_torch(..., bfloat4_b)`` segfaults in ``pack_as_bfp4_tiles`` for
+    large DeepSeek-shaped tensors; upload bf16 then ``typecast`` on device instead. Full 6U
+    flow (on-device prepare → ``quantize_weights_via_host``) OOMs on single-card WH DRAM.
+    """
+
+    def _upload_bf16_then_typecast(torch_tensor, mem_config):
+        tt_bf16 = ttnn.from_torch(
+            torch_tensor,
+            dtype=ttnn.bfloat16,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=mem_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        tt_b4 = ttnn.typecast(tt_bf16, dtype=ttnn.bfloat4_b)
+        ttnn.deallocate(tt_bf16)
+        return tt_b4
+
+    def _upload_bfloat4_direct(torch_tensor, mem_config):
+        return ttnn.from_torch(
+            torch_tensor,
+            dtype=ttnn.bfloat4_b,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=mem_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+    upload_fn = _upload_bf16_then_typecast if has_bias else _upload_bfloat4_direct
+
+    if has_bias:
+        torch_w0_w1_reordered = prepare_w0_w1_tensor_with_bias(
+            torch_w0, torch_w1, torch_b0, torch_b1, num_layers, experts_per_device, hidden_size, N, w0_w1_shard_map
+        )
+    else:
+        torch_w0_w1_reordered = prepare_w0_w1_tensor_for_moe_compute(
+            torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, w0_w1_shard_map
+        )
+    tt_w0_w1 = upload_fn(torch_w0_w1_reordered, w0_w1_mem_config)
+    del torch_w0_w1_reordered
+
+    if has_bias:
+        torch_w2_reordered = prepare_w2_tensor_with_bias(
+            torch_w2, torch_b2, num_layers, experts_per_device, N, hidden_size, w2_shard_map, w0_w1_shard_map
+        )
+    else:
+        torch_w2_reordered = prepare_w2_tensor_for_moe_compute(
+            torch_w2, num_layers, experts_per_device, N, hidden_size, w2_shard_map, w0_w1_shard_map
+        )
+    tt_w2 = upload_fn(torch_w2_reordered, w2_mem_config)
+    del torch_w2_reordered
+
+    return tt_w0_w1, tt_w2
+
+
 @torch.no_grad()
 def _run_moe_compute_single_card_test(
     mesh_device,
@@ -105,32 +180,15 @@ def _run_moe_compute_single_card_test(
     # (arch-aware core placement); for now we skip on harvested grids.
     arch = mesh_device.arch()
     grid = mesh_device.compute_with_storage_grid_size()
-    if arch == ttnn.device.Arch.WORMHOLE_B0:
-        if grid.y < 10 or grid.x < 7:
-            pytest.skip(
-                f"MoE compute single-card test on WH requires an unharvested grid >=7x10 with "
-                f"dispatch_core_axis=DispatchCoreAxis.COL. Got {grid.x}x{grid.y}. Harvested "
-                f"chips need full arch-aware core placement (issue #41827) to avoid "
-                f"tilize/matmul bounding-box overlap."
-            )
-    elif arch == ttnn.device.Arch.BLACKHOLE:
-        if skip_on_ci:
-            # Matmul output fails PCC on BH; runs locally for regression, skipped in CI pending fix.
-            # https://github.com/tenstorrent/tt-metal/issues/50038
-            pytest.skip(
-                "MoE compute single-card test fails PCC on BH; skipped in CI pending fix "
-                "(https://github.com/tenstorrent/tt-metal/issues/50038)."
-            )
-        # BH layout assumes the 11x10 production worker grid (logical x=0..10, y=0..9).
-        # See moe_compute_program_factory.cpp::get_layout() BH branch.
-        if grid.y < 10 or grid.x < 11:
-            pytest.skip(
-                f"MoE compute single-card test on BH requires an 11x10 production grid. "
-                f"Got {grid.x}x{grid.y}. Smaller/harvested BH grids need additional "
-                f"arch-aware placement work (issue #41827)."
-            )
-    else:
+    if arch not in (ttnn.device.Arch.WORMHOLE_B0, ttnn.device.Arch.BLACKHOLE):
         pytest.skip(f"MoE compute single-card test: arch {arch} is not supported (only WH and BH).")
+    elif arch == ttnn.device.Arch.BLACKHOLE and skip_on_ci:
+        # Matmul output fails PCC on BH; runs locally for regression, skipped in CI pending fix.
+        # https://github.com/tenstorrent/tt-metal/issues/50038
+        pytest.skip(
+            "MoE compute single-card test fails PCC on BH; skipped in CI pending fix "
+            "(https://github.com/tenstorrent/tt-metal/issues/50038)."
+        )
 
     torch.manual_seed(2003)
     random.seed(2003)
@@ -309,38 +367,24 @@ def _run_moe_compute_single_card_test(
         has_bias=has_bias,
     )
 
-    if has_bias:
-        torch_w0_w1_reordered = prepare_w0_w1_tensor_with_bias(
-            torch_w0, torch_w1, torch_b0, torch_b1, num_layers, experts_per_device, hidden_size, N, w0_w1_shard_map
-        )
-    else:
-        torch_w0_w1_reordered = prepare_w0_w1_tensor_for_moe_compute(
-            torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, w0_w1_shard_map
-        )
-    tt_w0_w1 = ttnn.from_torch(
-        torch_w0_w1_reordered,
-        dtype=ttnn.bfloat4_b,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=w0_w1_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-
-    if has_bias:
-        torch_w2_reordered = prepare_w2_tensor_with_bias(
-            torch_w2, torch_b2, num_layers, experts_per_device, N, hidden_size, w2_shard_map, w0_w1_shard_map
-        )
-    else:
-        torch_w2_reordered = prepare_w2_tensor_for_moe_compute(
-            torch_w2, num_layers, experts_per_device, N, hidden_size, w2_shard_map, w0_w1_shard_map
-        )
-    tt_w2 = ttnn.from_torch(
-        torch_w2_reordered,
-        dtype=ttnn.bfloat4_b,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=w2_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    # CPU prepare → bf16 HEIGHT_SHARDED → on-device typecast (see helper docstring).
+    tt_w0_w1, tt_w2 = _build_quantized_weight_tensors_cpu_prepare(
+        mesh_device,
+        torch_w0,
+        torch_w1,
+        torch_w2,
+        torch_b0,
+        torch_b1,
+        torch_b2,
+        num_layers,
+        experts_per_device,
+        hidden_size,
+        N,
+        has_bias,
+        w0_w1_shard_map,
+        w2_shard_map,
+        w0_w1_mem_config,
+        w2_mem_config,
     )
 
     #########################################
@@ -463,7 +507,11 @@ def _run_moe_compute_single_card_test(
     )
 
     base_pcc_threshold = _get_base_pcc_threshold(activation_type, has_bias)
-    base_pcc_threshold = min(base_pcc_threshold, 0.984)
+    if has_bias:
+        # with_bias weights use bf16 upload + on-device typecast (pack_as_bfp4 segfault workaround).
+        base_pcc_threshold = min(base_pcc_threshold, 0.982)
+    else:
+        base_pcc_threshold = min(base_pcc_threshold, 0.984)
 
     per_expert_tokens_all_passed = validate_per_expert_tokens(
         mesh_device,
