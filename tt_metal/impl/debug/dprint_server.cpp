@@ -246,7 +246,7 @@ public:
         // (the one get_device_print_buffer() returns) lives at structure_address +
         // kQuasarDprintComputeSubbufferSize. Only the DM sub-buffer is populated; mirror the DM half of
         // the Quasar TENSIX split above.
-        if (hal.get_arch() == tt::ARCH::QUASAR && programmable_core_type == HalProgrammableCoreType::DISPATCH) {
+        if (programmable_core_type == HalProgrammableCoreType::DISPATCH) {
             const uint16_t dm_count = static_cast<uint16_t>(hal.get_processor_types_count(
                 programmable_core_type, static_cast<uint32_t>(HalProcessorClassType::DM)));
             TT_FATAL(

@@ -239,7 +239,7 @@ void MetalContext::initialize(
         dispatch_mem_map_[enchantum::to_underlying(core_type)] = std::make_unique<DispatchMemMap>(
         core_type, num_hw_cqs, hal(), is_galaxy_cluster, cq_dispatch_layout, rtoptions());
     }
-    if (get_cluster().arch() == tt::ARCH::QUASAR && hal().has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
+    if (hal().has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
         dispatch_mem_map_[enchantum::to_underlying(CoreType::DISPATCH)] = std::make_unique<DispatchMemMap>(
             CoreType::DISPATCH, num_hw_cqs, hal(), is_galaxy_cluster, cq_dispatch_layout, rtoptions());
     }

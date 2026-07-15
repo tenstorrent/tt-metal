@@ -185,9 +185,8 @@ const tt_cxy_pair& dispatch_core_manager::dispatcher_s_core(ChipId device_id, ui
             // dispatch_s is on the same tensix as dispatch_d
             dispatcher_s_coord = this->dispatcher_d_core_locked(device_id, channel, cq_id);
         }
-    } else if (
-        env_.get_cluster().arch() == tt::ARCH::QUASAR && this->get_dispatch_core_type() == CoreType::DISPATCH) {
-        // Quasar 1CQ FD: prefetch (DM0), dispatch (DM1), and dispatch_s (DM2) share one dispatch-engine tile.
+    } else if (this->get_dispatch_core_type() == CoreType::DISPATCH) {
+        // Dispatch-engine 1CQ FD: prefetch (DM0), dispatch (DM1), and dispatch_s (DM2) share one tile.
         dispatcher_s_coord = this->dispatcher_core_locked(device_id, channel, cq_id);
     } else {
         dispatcher_s_coord = this->get_next_available_dispatch_core(device_id);

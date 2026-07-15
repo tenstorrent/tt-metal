@@ -411,7 +411,7 @@ void RiscFirmwareInitializer::assert_dram_cores(tt::ChipId device_id) {
 }
 
 void RiscFirmwareInitializer::assert_dispatch_cores(tt::ChipId device_id) {
-    if (cluster_.arch() != ARCH::QUASAR || !hal_.has_programmable_core_type(HalProgrammableCoreType::DISPATCH) ||
+    if (!hal_.has_programmable_core_type(HalProgrammableCoreType::DISPATCH) ||
         rtoptions_.get_use_quasar_tensix_dispatch_cores()) {
         return;
     }
@@ -924,7 +924,7 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
 
     const std::vector<tt::umd::CoreCoord>& eth_cores = soc_d.get_cores(CoreType::ETH, CoordSystem::NOC0);
     const std::vector<tt::umd::CoreCoord> dispatch_cores =
-        (cluster_.arch() == ARCH::QUASAR && hal_.has_programmable_core_type(HalProgrammableCoreType::DISPATCH))
+        hal_.has_programmable_core_type(HalProgrammableCoreType::DISPATCH)
             ? soc_d.get_cores(CoreType::DISPATCH, CoordSystem::NOC0)
             : std::vector<tt::umd::CoreCoord>{};
 
@@ -1369,7 +1369,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         device_id, HalProgrammableCoreType::TENSIX, start_core, launch_msg.view(), go_msg.view(), end_core);
 
     std::unordered_set<CoreCoord> dispatch_not_done_cores;
-    if (cluster_.arch() == ARCH::QUASAR && hal_.has_programmable_core_type(HalProgrammableCoreType::DISPATCH) &&
+    if (hal_.has_programmable_core_type(HalProgrammableCoreType::DISPATCH) &&
         !rtoptions_.get_use_quasar_tensix_dispatch_cores() &&
         cluster_.get_soc_desc(device_id).get_num_dispatch_engine_cores() > 0) {
         log_debug(tt::LogMetal, "Initializing dispatch-engine cores");
