@@ -731,7 +731,7 @@
   model: sdxl-nightly
   skus:
     bh_p150:
-      timeout: 60
+      timeout: 40
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
@@ -744,10 +744,10 @@
   model: sdxl-nightly
   skus:
     wh_n150:
-      timeout: 80
+      timeout: 40
       tier: 2
     wh_n300:
-      timeout: 80
+      timeout: 40
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
@@ -763,10 +763,10 @@
   model: sdxl-nightly
   skus:
     wh_n150:
-      timeout: 100
+      timeout: 40
       tier: 2
     wh_n300:
-      timeout: 100
+      timeout: 40
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
@@ -779,7 +779,7 @@
   model: sdxl-nightly
   skus:
     bh_p150:
-      timeout: 80
+      timeout: 40
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
