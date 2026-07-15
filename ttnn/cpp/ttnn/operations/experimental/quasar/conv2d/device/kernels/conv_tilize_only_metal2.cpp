@@ -33,41 +33,10 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
-// tilize_in(): identical wrapper to the fused / Option-C kernels — selects the compute_kernel_lib
-// tilize init/uninit/reconfig mode from the two template bools and calls the block tilize. No fast
-// tilize on Quasar (compute_kernel_lib::can_use_fast_tilize returns false there).
-template <
-    uint32_t in_block_w,
-    uint32_t in_cb_id,
-    uint32_t out_cb_id,
-    bool init_tilize = true,
-    bool uninit_tilize = true,
-    compute_kernel_lib::tilize_config::RemapMode remap_mode = compute_kernel_lib::tilize_config::RemapMode::Configure>
-void tilize_in(uint32_t in_num_subblocks) {
-    constexpr compute_kernel_lib::tilize_config::InitUninitMode init_uninit_mode =
-        init_tilize ? (uninit_tilize ? compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit
-                                     : compute_kernel_lib::tilize_config::InitUninitMode::InitOnly)
-                    : (uninit_tilize ? compute_kernel_lib::tilize_config::InitUninitMode::UninitOnly
-                                     : compute_kernel_lib::tilize_config::InitUninitMode::Neither);
-    constexpr auto reconfig_mode =
-        init_tilize ? compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure
-                    : compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure;
-    compute_kernel_lib::tilize<
-        in_block_w,
-        in_cb_id,
-        out_cb_id,
-        init_uninit_mode,
-        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-        reconfig_mode,
-        compute_kernel_lib::tilize_config::Fp32Mode::Fast,
-        remap_mode>(in_num_subblocks);
-}
-
 void kernel_main() {
     constexpr uint32_t in0_block_w = get_arg(args::in0_block_w);
     constexpr uint32_t reader_num_h_subblocks = get_arg(args::reader_num_h_subblocks);
     constexpr uint32_t in0_num_blocks_h = get_arg(args::in0_num_blocks_h);
-    constexpr bool height_sharded = get_arg(args::height_sharded);
 
     constexpr uint32_t in0_cb_id = dfb::act;
     // Program A tilizes STRAIGHT INTO dfb::out. On the height-sharded path OUT is borrowed from the
@@ -77,37 +46,36 @@ void kernel_main() {
     // to the tilized-activation shape [per_core M*32, in0_block_w*32] for the split-program path.
     constexpr uint32_t out_cb_id = dfb::out;
 
-    // This kernel is only selected on the height-sharded path (the factory gate matches the
-    // Option-C eligibility). On that path the reader gathers directly into dfb::act and the
-    // compute tilizes dfb::act -> dfb::out. split_reader / activation_reuse are forced off.
-    constexpr uint32_t in0_num_subblocks_read = reader_num_h_subblocks;
-
     // ==================== TILIZE-ORIENTED HW STARTUP (no matmul) ====================
     // The whole point of Option B: bring the engine up for tilize (in -> out), NOT for matmul.
     // 2-arg form == compute_kernel_hw_startup(in0_cb_id, in0_cb_id, out_cb_id). This is the exact
     // startup the passing standalone tilize op uses. There is no matmul_block_init here.
     compute_kernel_hw_startup(in0_cb_id, out_cb_id);
 
-    if constexpr (height_sharded) {
-        // NB: unlike the fused / Option-C kernels, Program A does NOT need the Quasar pack BD repoint
-        // (llk_pack_init / llk_math_pack_sync_init / llk_pack_dest_init). Those exist there only because
-        // the tilize follows a MATMUL-oriented compute_kernel_hw_startup<Reverse>(mm_in0,in1,out), which
-        // leaves the packer configured for matmul. Here the tilize-oriented compute_kernel_hw_startup(
-        // in0_cb_id, out_cb_id) above already programs the packer for OUT — exactly as the passing
-        // standalone tilize op does — and there is no preceding matmul, so nothing to re-seed.
-        //
-        // Tilize every height block into OUT as one contiguous MOP stream: single init at the first
-        // block, single uninit at the last, nothing in between (no matmul, no reconfig). OUT is
-        // factory-sized to hold all in0_num_blocks_h blocks of tilized activation (the whole output
-        // shard); the compute packs each block into its slice. in0_num_blocks_h is compile-time.
-        if constexpr (in0_num_blocks_h <= 1) {
-            tilize_in<in0_block_w, in0_cb_id, out_cb_id, true, true>(in0_num_subblocks_read);
-        } else {
-            tilize_in<in0_block_w, in0_cb_id, out_cb_id, true, false>(in0_num_subblocks_read);
-            for (uint32_t h = 1; h + 1 < in0_num_blocks_h; ++h) {
-                tilize_in<in0_block_w, in0_cb_id, out_cb_id, false, false>(in0_num_subblocks_read);
-            }
-            tilize_in<in0_block_w, in0_cb_id, out_cb_id, false, true>(in0_num_subblocks_read);
-        }
-    }
+    // MIRROR THE PASSING STANDALONE TILIZE OP EXACTLY (data_movement/tilize/.../compute/tilize.cpp):
+    // ONE compute_kernel_lib::tilize call — InitAndUninit + NoReconfigure — with the per-block loop
+    // INSIDE the helper. The earlier version replicated the FUSED kernel's manual per-height-block loop
+    // of separate tilize_in calls (InitOnly / Neither / UninitOnly + UnpackReconfigure on the first
+    // block). That split exists in the fused kernel only because the matmul interleaves between blocks;
+    // for a pure tilize on Quasar the separate calls desync the MATH<->PACK DEST bank/semaphore phase
+    // across call boundaries -> the datacopy MOP is rejected at issue -> ERROR_TRISC1 0x19. A single
+    // tilize call keeps the whole block stream under one init/uninit and one internal DEST handshake,
+    // exactly as the standalone (which passes on Quasar, wide blocks included).
+    //
+    // block_width_tiles = in0_block_w (K tiles per row-block); num_blocks = every row-block the reader
+    // produced = in0_num_blocks_h * reader_num_h_subblocks. NoReconfigure because compute_kernel_hw_startup
+    // above already configured the unpacker for in0's format (no matmul in1 format to switch away from).
+    // Fp32Mode mirrors the standalone: Lossless for fp32 input (exact), Fast otherwise (bf16 stem path).
+    constexpr auto fp32_mode = compute_kernel_lib::is_fp32_input_format<in0_cb_id>()
+                                   ? compute_kernel_lib::tilize_config::Fp32Mode::Lossless
+                                   : compute_kernel_lib::tilize_config::Fp32Mode::Fast;
+    const uint32_t num_blocks = in0_num_blocks_h * reader_num_h_subblocks;
+    compute_kernel_lib::tilize<
+        in0_block_w,
+        in0_cb_id,
+        out_cb_id,
+        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
+        fp32_mode>(num_blocks);
 }  // void kernel_main()
