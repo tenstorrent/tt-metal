@@ -407,6 +407,8 @@ jobs:
     secrets: inherit
     with:
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
+      # Priority runners only accept merge-queue traffic. Regular PRs and
+      # other triggers must continue using the original non-priority runner.
       enabled-skus: ${{
           (github.ref_name == 'main'
            || needs.find-changed-files.outputs.llk-common-changed == 'true'
@@ -415,9 +417,9 @@ jobs:
            || needs.find-changed-files.outputs.llk-ci-changed == 'true'
            || (needs.find-changed-files.outputs.llk-wormhole-changed == 'true'
                && needs.find-changed-files.outputs.llk-blackhole-changed == 'true'))
-          && 'wh_n150_civ2,bh_p150b_civ2_viommu_prio'
+          && (github.event_name == 'merge_group' && 'wh_n150_civ2,bh_p150b_civ2_viommu_prio' || 'wh_n150_civ2,bh_p150b_civ2')
           || (needs.find-changed-files.outputs.llk-wormhole-changed == 'true' && 'wh_n150_civ2')
-          || (needs.find-changed-files.outputs.llk-blackhole-changed == 'true' && 'bh_p150b_civ2_viommu_prio')
+          || (needs.find-changed-files.outputs.llk-blackhole-changed == 'true' && (github.event_name == 'merge_group' && 'bh_p150b_civ2_viommu_prio' || 'bh_p150b_civ2'))
           || '' }}
       pytest-markers: "not perf and not nightly and not quasar and not accuracy"
 
