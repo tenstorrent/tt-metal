@@ -76,6 +76,7 @@ void kernel_main() {
     CircularBuffer cb_out(cb_out_id);
     CircularBuffer cb_gamma(cb_gamma_id);
     CircularBuffer cb_beta(cb_beta_id);
+    CircularBuffer cb_xmm(cb_xmm_id);
     CircularBuffer cb_ex(cb_ex_id);
     CircularBuffer cb_ex2(cb_ex2_id);
     CircularBuffer cb_xmm2(cb_xmm2_id);
@@ -312,19 +313,29 @@ void kernel_main() {
                     cb_inb_id, i, i);
             }
             cb_inb.pop_front(block.full_block_size());
-            // SrcA last held cb_inb (the pre-add operand); switch it to cb_ex2pe's format.
-            reconfig_data_format_srca(cb_inb_id, cb_ex2pe_id);
-#else
-            // SrcA last held cb_in (the x-E[x] operand); switch it to cb_ex2pe's format.
-            reconfig_data_format_srca(cb_in_id, cb_ex2pe_id);
 #endif
-            // Multiply by 1/(√(Var(X) + ε)) in place: the (x-E[x]) values are reused from DEST as
-            // SrcB while cb_ex2pe is unpacked into SrcA.
-            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                cb_ex2pe_id);
+            tile_regs_commit();
+            tile_regs_wait();
+            // Note: We shouldn't have to pack to
+            // intermediate CB. We should be able to
+            // do a binary dest with reuse (as we used
+            // to). However, tt-llk #868 is preventing
+            // that from working at the moment.
+            cb_xmm.reserve_back(block.full_block_size());
+            pack_reconfig_data_format(cb_xmm_id);
             for (auto i : block.local()) {
-                binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                    cb_ex2pe_id, 0, i);
+                pack_tile(i, cb_xmm_id);
+            }
+            cb_xmm.push_back(block.full_block_size());
+            tile_regs_release();
+
+            cb_xmm.wait_front(block.full_block_size());
+            reconfig_data_format(cb_xmm_id, cb_ex2pe_id);
+            tile_regs_acquire();
+
+            mul_tiles_init(cb_xmm_id, cb_ex2pe_id);
+            for (auto i : block.local()) {
+                mul_tiles(cb_xmm_id, cb_ex2pe_id, i, 0, i);
 #ifdef SFPU_OP_INIT_ACTIVATION
                 // Activation must be applied last. If do_gamma != 0 or do_beta != 0 then
                 // activation will be applied after the gamma/beta multiplication/addition.
@@ -348,6 +359,7 @@ void kernel_main() {
             }
             tile_regs_release();
             CircularBuffer(cb_fusion).push_back(block.full_block_size());
+            cb_xmm.pop_front(block.full_block_size());
 
             if constexpr (do_gamma == 1) {
                 tile_regs_acquire();
