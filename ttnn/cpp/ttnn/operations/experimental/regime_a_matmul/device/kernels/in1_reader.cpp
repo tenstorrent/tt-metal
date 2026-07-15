@@ -114,13 +114,18 @@ void kernel_main() {
     for (uint32_t nb = 0; nb < N_bpc; ++nb) {
         const uint32_t ncol_base = nb * N_block;  // owned-column offset of this subblock
         // valid N columns within this subblock (0 => whole subblock is beyond the owned N range)
-        const uint32_t vcols =
+        [[maybe_unused]] const uint32_t vcols =
             (ncol_base < valid_n) ? (((valid_n - ncol_base) < N_block) ? (valid_n - ncol_base) : N_block) : 0u;
         for (uint32_t step = 0; step < G; ++step) {
-            const uint32_t s = (ring_pos + G - step) % G;
+            [[maybe_unused]] const uint32_t s = (ring_pos + G - step) % G;
             for (uint32_t wb = 0; wb < W; ++wb) {
-                const uint32_t kblk = s * W + wb;
+                [[maybe_unused]] const uint32_t kblk = s * W + wb;
                 cb_reserve_back(in1_cb, in1_blk);
+                // DIAG_SKIP_IN1_READ: suppress the in1 DRAM reads, the read barrier, and the K-tail zero-fill
+                // (diagnostic tail init). CB reserve/push, M-split forwarding, and the ready/valid semaphores
+                // are PRESERVED so downstream back-pressure and M-split delivery are unchanged; the delivered
+                // in1 data is intentionally garbage (output correctness is not checked in diagnostic modes).
+#ifndef DIAG_SKIP_IN1_READ
                 uint32_t w1 = get_write_ptr(in1_cb);
                 if (vcols > 0u) {
                     for (uint32_t kr = 0; kr < K_block; ++kr) {
@@ -141,6 +146,7 @@ void kernel_main() {
                     noc_async_read_barrier();
                 }
                 // vcols == 0 (whole subblock is pad N): no reads; block is garbage, output not written.
+#endif
                 mfwd(get_write_ptr(in1_cb));  // forward the fixed-size block
                 cb_push_back(in1_cb, in1_blk);
             }

@@ -26,6 +26,20 @@ struct RegimeAMatmulConfig {
     uint32_t n_subblock_tiles{0};  // nsb: N-subblock width (tiles). 0 => full N_own.
 };
 
+// Test-only diagnostic ablation bitmask (default 0 = the normal public path). NEVER exposed through the
+// Python / nanobind API; set only via the internal ttnn::prim::regime_a_matmul_diag entry point. It lives
+// in RegimeAMatmulParams::diag_mask so it participates in the program-cache hash — a diagnostic program can
+// never alias (or be aliased by) a normal one. Each bit maps to a DIAG_* kernel #define; mask 0 adds NO
+// defines and the compile is byte-identical to the public path. Ablations are non-additive critical-path
+// counterfactuals (see MT8_FINDINGS.md), not correctness modes — output is intentionally unchecked.
+enum RegimeADiag : uint32_t {
+    DIAG_SKIP_IN1_READ = 1u << 0,     // in1_reader: suppress in1 DRAM reads/barrier/tail-init; keep CB+M-split+sems
+    DIAG_SKIP_IN0_READ = 1u << 1,     // writer: suppress step-0 in0 DRAM read/barrier; keep ptr adv/CB/ring/reduce/out
+    DIAG_SKIP_IN0_FORWARD = 1u << 2,  // writer: suppress ring payload write; still signal next core (no deadlock)
+    DIAG_NO_REDUCE = 1u << 3,         // force bottom-band copy path everywhere; bypass reduce credits/recv/fwd
+    DIAG_LOCAL_FEED = 1u << 4,        // (reserved) purely local CB feed: no DRAM/ring/fwd/M-split/reduce
+};
+
 namespace plan = ttnn::operations::experimental::regime_a_matmul::plan;
 
 // Auto-select a (Pk, Ns, Sm, kb, nsb) config for a shape given in TILE counts. Ported from the

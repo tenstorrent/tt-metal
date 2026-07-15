@@ -82,26 +82,39 @@ void kernel_main() {
             // read our OWN shard (shard index = ring_pos) into slot 0
             uint32_t p = slot;
             for (uint32_t wb = 0; wb < W; ++wb) {
-                uint32_t sb = ring_pos * W + wb;  // capacity-local block index of own shard
+                [[maybe_unused]] uint32_t sb = ring_pos * W + wb;  // capacity-local block index of own shard
                 for (uint32_t m = 0; m < M_block; ++m) {
                     for (uint32_t k = 0; k < K_block; ++k) {
+                        // DIAG_SKIP_IN0_READ: suppress this core's step-0 in0 DRAM reads + read barrier. Pointer
+                        // advancement, CB production, ring forwarding, ring semaphores, compute consumption,
+                        // reduction, and output are all preserved. NOT replaced with zero-fill (that would
+                        // measure L1 init instead of removing the read); the slot holds garbage.
+#ifndef DIAG_SKIP_IN0_READ
                         const uint32_t l = sb * K_block + k;  // capacity-local K index within the slice
                         if (m < valid_m && l < valid_k) {
                             noc_async_read_page((m_start + m) * Kt + (k_start + l), in0, p);
                         } else {
                             zero_tile(p);  // pad M row or K tail -> local zero (no DRAM read)
                         }
+#endif
                         p += tile_bytes;
                     }
                 }
             }
+#ifndef DIAG_SKIP_IN0_READ
             noc_async_read_barrier();
+#endif
         } else {
             noc_semaphore_wait_min(fwd_ptr, step);  // prev forwarded a shard into our slot `step`
         }
         if (step + 1 < G) {  // forward this slot to the next core's slot (step+1)
+            // DIAG_SKIP_IN0_FORWARD: suppress the ring payload write but STILL signal the next core, so every
+            // ring step progresses (no consumer deadlock) and the semaphore-chain latency + CB schedule are
+            // preserved. Isolates payload-forwarding cost, not ring synchronization.
+#ifndef DIAG_SKIP_IN0_FORWARD
             uint64_t dst = get_noc_addr(fwd_next_x, fwd_next_y, base0 + (step + 1) * shard_bytes);
             noc_async_write(slot, dst, shard_bytes);
+#endif
             noc_semaphore_inc(get_noc_addr(fwd_next_x, fwd_next_y, fwd_addr), 1);
         }
         cb_push_back(in0_cb, W * in0_blk);  // compute consumes this shard (W blocks)
@@ -130,8 +143,33 @@ void kernel_main() {
         return;
     }
 
-    // Pk > 1: linear reduction chain. cb_reduce holds 2 blocks (double-buffered). reduce_base captured ONCE
-    // BEFORE any cb_reduce use (the write ptr drifts after receives).
+    // Pk > 1: linear reduction chain.
+#ifdef DIAG_NO_REDUCE
+    // NO_REDUCE: every compute core took the bottom-band copy path (compute.cpp forces copy_block), so each
+    // produced its OWN matmul partial into out_cb. Bypass ALL reduction traffic (credits, receives, partial
+    // -sum forwards) and never touch cb_reduce. Non-top bands consume and DISCARD their partial; only the
+    // original top band writes its partial to DRAM (exactly one top-band output write, unchanged core count
+    // / CB alloc / output production). This removes reduction communication AND the reduction-add compute
+    // together — a COMBINED counterfactual, not a pure reduction-comm isolation.
+    for (uint32_t nb = 0; nb < N_bpc; ++nb) {
+        cb_wait_front(out_cb, out_blk);
+        uint32_t r = get_read_ptr(out_cb);
+        if (is_top) {
+            const uint32_t n_off = n_start + nb * N_block;  // global N tile of this subblock
+            for (uint32_t m = 0; m < M_block; ++m) {
+                for (uint32_t n = 0; n < N_block; ++n) {
+                    if (m < valid_m && (nb * N_block + n) < valid_n) {  // write only valid_m x valid_n
+                        noc_async_write_page((m_start + m) * Nt + (n_off + n), out, r + (m * N_block + n) * tile_bytes);
+                    }
+                }
+            }
+            noc_async_write_barrier();
+        }
+        cb_pop_front(out_cb, out_blk);
+    }
+#else
+    // cb_reduce holds 2 blocks (double-buffered). reduce_base captured ONCE BEFORE any cb_reduce use (the
+    // write ptr drifts after receives).
     const uint32_t reduce_base = get_write_ptr(cb_reduce);
     const uint32_t red_addr = get_semaphore(red_sem_id);
     volatile tt_l1_ptr uint32_t* red_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(red_addr);
@@ -168,4 +206,5 @@ void kernel_main() {
         }
         cb_pop_front(out_cb, out_blk);
     }
+#endif
 }

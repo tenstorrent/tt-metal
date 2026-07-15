@@ -115,7 +115,8 @@ RegimeAMatmulDeviceOperation::invoke(
     const std::optional<const RegimeAMatmulConfig>& config,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    uint32_t diag_mask) {
     const auto arch = input_tensor.device()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
         arch,
@@ -130,7 +131,8 @@ RegimeAMatmulDeviceOperation::invoke(
             .config = config,
             .output_mem_config = memory_config,
             .output_dtype = dtype,
-            .compute_kernel_config = kernel_config_val},
+            .compute_kernel_config = kernel_config_val,
+            .diag_mask = diag_mask},
         tensor_args_t{.input_tensor = input_tensor, .weight_tensor = weight_tensor}};
 }
 
@@ -151,6 +153,23 @@ Tensor regime_a_matmul(
 
     auto [attributes, tensor_args] =
         OperationType::invoke(input_tensor, weight_tensor, config, memory_config, dtype, compute_kernel_config);
+    return ttnn::device_operation::launch<OperationType>(attributes, tensor_args);
+}
+
+Tensor regime_a_matmul_diag(
+    const Tensor& input_tensor,
+    const Tensor& weight_tensor,
+    const std::optional<const experimental::prim::RegimeAMatmulConfig>& config,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<const DataType> dtype,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    uint32_t diag_mask) {
+    using OperationType = experimental::prim::RegimeAMatmulDeviceOperation;
+    const auto arch = input_tensor.device()->arch();
+    ttnn::verify_numerical_configuration(arch, compute_kernel_config);
+
+    auto [attributes, tensor_args] = OperationType::invoke(
+        input_tensor, weight_tensor, config, memory_config, dtype, compute_kernel_config, diag_mask);
     return ttnn::device_operation::launch<OperationType>(attributes, tensor_args);
 }
 

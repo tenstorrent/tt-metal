@@ -40,7 +40,8 @@ struct RegimeAMatmulDeviceOperation {
         const std::optional<const RegimeAMatmulConfig>& config,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<const DataType> dtype,
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config);
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+        uint32_t diag_mask = 0);  // test-only ablations (RegimeADiag); public path always 0
 };
 
 }  // namespace ttnn::experimental::prim
@@ -54,5 +55,17 @@ Tensor regime_a_matmul(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config);
+
+// Test-only / internal entry point that constructs the primitive with a nonzero diagnostic ablation mask
+// (RegimeADiag bits). NOT bound to Python/nanobind; used by the C++ ablation harness only. The public
+// regime_a_matmul() above always runs with mask 0.
+Tensor regime_a_matmul_diag(
+    const Tensor& input_tensor,
+    const Tensor& weight_tensor,
+    const std::optional<const experimental::prim::RegimeAMatmulConfig>& config,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<const DataType> dtype,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    uint32_t diag_mask);
 
 }  // namespace ttnn::prim

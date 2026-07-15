@@ -84,6 +84,31 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     const uint32_t kb = cfg.k_block_tiles ? cfg.k_block_tiles : 1u;
     const uint32_t use_reduce = (Pk > 1u) ? 1u : 0u;
 
+    // Test-only diagnostic ablations: mask 0 (public path) => all three define maps are EMPTY, so the
+    // compile is byte-identical to production. Each DIAG_* define is scoped to the kernel(s) that #ifdef it.
+    const uint32_t diag = operation_attributes.diag_mask;
+    std::map<std::string, std::string> rdefs;  // in1 reader
+    std::map<std::string, std::string> wdefs;  // in0 ring/reduce writer
+    std::map<std::string, std::string> ddefs;  // compute (added to cdefs below)
+    if (diag & RegimeADiag::DIAG_SKIP_IN1_READ) {
+        rdefs["DIAG_SKIP_IN1_READ"] = "1";
+    }
+    if (diag & RegimeADiag::DIAG_SKIP_IN0_READ) {
+        wdefs["DIAG_SKIP_IN0_READ"] = "1";
+    }
+    if (diag & RegimeADiag::DIAG_SKIP_IN0_FORWARD) {
+        wdefs["DIAG_SKIP_IN0_FORWARD"] = "1";
+    }
+    if (diag & RegimeADiag::DIAG_NO_REDUCE) {
+        wdefs["DIAG_NO_REDUCE"] = "1";
+        ddefs["DIAG_NO_REDUCE"] = "1";
+    }
+    if (diag & RegimeADiag::DIAG_LOCAL_FEED) {
+        rdefs["DIAG_LOCAL_FEED"] = "1";
+        wdefs["DIAG_LOCAL_FEED"] = "1";
+        ddefs["DIAG_LOCAL_FEED"] = "1";
+    }
+
     // ---- Core range sets: all cores + split-NoC groups (g0 = noc 0, g1 = noc 1) ----
     std::set<CoreRange> all_set, g0_set, g1_set;
     std::vector<CoreCoord> cores;
@@ -138,11 +163,13 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
                   const CoreRangeSet& g,
                   DataMovementProcessor proc,
                   NOC noc,
-                  const std::vector<uint32_t>& ct) -> KernelHandle {
+                  const std::vector<uint32_t>& ct,
+                  const std::map<std::string, std::string>& defs) -> KernelHandle {
         if (g.num_cores() == 0) {
             return 0;
         }
-        return CreateKernel(program, src, g, DataMovementConfig{.processor = proc, .noc = noc, .compile_args = ct});
+        return CreateKernel(
+            program, src, g, DataMovementConfig{.processor = proc, .noc = noc, .compile_args = ct, .defines = defs});
     };
 
     // writer compile args (in0_ring_reduce_writer.cpp order). TensorAccessorArgs(in0) then (out).
@@ -167,10 +194,10 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     // Split-NOC: reader on the core's in1 NoC, writer on the OTHER NoC.
     //   g0 (noc==0): reader RISCV_0/NOC0, writer RISCV_1/NOC1
     //   g1 (noc==1): reader RISCV_1/NOC1, writer RISCV_0/NOC0
-    KernelHandle readerA = mk(kIn1ReaderKernel, g0, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default, rct);
-    KernelHandle readerB = mk(kIn1ReaderKernel, g1, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default, rct);
-    KernelHandle writerA = mk(kWriterKernel, g0, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default, wct);
-    KernelHandle writerB = mk(kWriterKernel, g1, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default, wct);
+    KernelHandle readerA = mk(kIn1ReaderKernel, g0, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default, rct, rdefs);
+    KernelHandle readerB = mk(kIn1ReaderKernel, g1, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default, rct, rdefs);
+    KernelHandle writerA = mk(kWriterKernel, g0, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default, wct, wdefs);
+    KernelHandle writerB = mk(kWriterKernel, g1, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default, wct, wdefs);
 
     // compute (spec §6c). fp32 DST limit: subblock_h * subblock_w <= 4.
     const uint32_t sbh = largest_div(geo.M_block_capacity, 2u);
@@ -185,6 +212,7 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         sbh,                   // 6 subblock_h
         sbw};                  // 7 subblock_w
     std::map<std::string, std::string> cdefs = {{"REDUCE_K", "1"}, {"IN0_KSLICE_RESIDENT", "1"}};
+    cdefs.insert(ddefs.begin(), ddefs.end());  // test-only diagnostic defines (empty for mask 0)
     KernelHandle compute = CreateKernel(
         program,
         kComputeKernel,

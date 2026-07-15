@@ -355,7 +355,7 @@ void kernel_main() {
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     // split-K plan B: 1 if this is the bottom K-band (no incoming running sum), else 0. Always present.
-    const uint32_t is_reduce_bottom = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const uint32_t is_reduce_bottom = get_arg_val<uint32_t>(argidx++);
 
 #ifdef FUSE_TERNARY
     const uint32_t fused_ternary_scalar_uint = get_arg_val<uint32_t>(argidx++);
@@ -494,6 +494,11 @@ void kernel_main() {
             // adds the running sum forwarded up from the band below. The DM then either forwards out_cb up
             // (non-top bands) or writes it to DRAM (top band). K-par never fuses bias/ternary.
             cb_wait_front(intermediate_cb, out_block_num_tiles);
+#ifdef DIAG_NO_REDUCE
+            // NO_REDUCE ablation: force the bottom-band copy path on EVERY core so it never waits for or adds
+            // cb_reduce. The writer bypasses the matching reduction traffic; only the top band writes.
+            copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
+#else
             if (is_reduce_bottom) {
                 copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
             } else {
@@ -501,6 +506,7 @@ void kernel_main() {
                 reduce_add_block(intermediate_cb, cb_reduce, out_cb, M_block_tiles, N_block_tiles);
                 cb_pop_front(cb_reduce, out_block_num_tiles);
             }
+#endif
             cb_pop_front(intermediate_cb, out_block_num_tiles);
 #elif !defined(FUSE_TERNARY)
             cb_wait_front(intermediate_cb, out_block_num_tiles);

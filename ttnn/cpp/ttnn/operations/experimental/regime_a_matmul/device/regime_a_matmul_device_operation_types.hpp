@@ -20,6 +20,11 @@ struct RegimeAMatmulParams {
     std::optional<tt::tt_metal::DataType> output_dtype;
 
     DeviceComputeKernelConfig compute_kernel_config;
+
+    // Test-only ablation bitmask (RegimeADiag). 0 for the public path. Part of the reflection-based
+    // program-cache hash, so a diagnostic program never aliases a normal one. Set only via the internal
+    // ttnn::prim::regime_a_matmul_diag entry; never through Python/nanobind.
+    uint32_t diag_mask = 0;
 };
 
 struct RegimeAMatmulInputs {
