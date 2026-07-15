@@ -267,7 +267,11 @@ def get_k_block_candidates(K_per_device):
     dispatch-overhead-bound; there's no upper cap because dividing K cleanly
     never adds padding even at larger block sizes.
     """
-    return sorted(d for d in range(K_BLOCK_MIN, K_per_device + 1) if K_per_device % d == 0)
+    cands = [d for d in range(K_BLOCK_MIN, K_per_device + 1) if K_per_device % d == 0]
+    # Fall back to the full-K single-chunk block when K_per_device < K_BLOCK_MIN
+    # (e.g. a single K-tile after the ring split, K_per_device=1): K_block =
+    # K_per_device trivially divides and is the only valid option.
+    return cands if cands else [K_per_device]
 
 
 def get_per_core_dims(shape, cluster_size):
@@ -563,19 +567,29 @@ def _build_op_runner(
         addcmul_tensor1 = None
         addcmul_tensor2 = None
         if uc_cfg.get("use_addcmul", False):
+            # The addcmul (fused ternary) operands are added element-wise onto the
+            # AGMM output, so they must be laid out identically to it: global shape
+            # (full_M, N) with M (tensor dim 0) sharded across sp_axis and N
+            # replicated — matching tt_input's M-sharding. ShardTensor2dMesh dims
+            # are indexed by MESH axis -> tensor dim (same convention tt_input uses),
+            # so we set dims[sp_axis]=0 and leave the other mesh axis unsharded.
+            # Using raw (M, N) replicated fails the op's
+            # "fused_ternary_input_a shape must match output" check.
+            addcmul_dims = [None, None]
+            addcmul_dims[sp_axis] = 0
             addcmul_tensor1 = ttnn.from_torch(
-                torch.randn((M, N), dtype=torch.float32),
+                torch.randn((full_M, N), dtype=torch.float32),
                 dtype=dtype,
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=[None, None]),
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=addcmul_dims),
             )
             addcmul_tensor2 = ttnn.from_torch(
-                torch.randn((M, N), dtype=torch.float32),
+                torch.randn((full_M, N), dtype=torch.float32),
                 dtype=dtype,
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=[None, None]),
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=addcmul_dims),
             )
 
         def run_op(m_blk, k_blk, n_blk, sb_h, sb_w, sync=True):
