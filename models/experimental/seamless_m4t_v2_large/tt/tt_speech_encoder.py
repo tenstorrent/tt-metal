@@ -518,6 +518,40 @@ class TTSeamlessM4Tv2SpeechEncoder:
             return out_flat
         return ttnn.reshape(out_flat, (batch, seq, n))
 
+    def _pv_matmul_pc(self, batch_heads: int, m: int, k: int, n: int):
+        """Tuned batched-reuse PC for the attention ``probs @ V`` (huge-K, narrow-N).
+
+        The auto matmul underutilizes the grid on this shape (M=qc, K=S, N=head_dim); a
+        ``MatmulMultiCoreReuseProgramConfig`` distributes ``batch_heads × M/per_core_M`` blocks
+        across cores and streams K in ``in0_block_w`` chunks. Measured L1 output: 0.28→0.074 ms
+        (P150) / 0.13→0.049 ms (BH-QB) vs auto. ``per_core_N`` must equal the full N tile count.
+        """
+        key = ("pv", batch_heads, m, k, n)
+        cached = self._matmul_pc_cache.get(key)
+        if cached is not None:
+            return cached
+        mt, nt, kt = m // TILE, n // TILE, k // TILE
+        per_core_m = 2 if mt % 2 == 0 else 1
+        ibw = 4 if kt % 4 == 0 else (2 if kt % 2 == 0 else 1)
+        # subblock: width = full N tiles (small), height as tall as the h·w≤4 (fp32_dest_acc_en) cap allows.
+        sw = nt
+        sh = max(1, min(per_core_m, 4 // sw if sw > 0 else 1))
+        while per_core_m % sh != 0:
+            sh -= 1
+        cached = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=(
+                self.device.compute_with_storage_grid_size().x,
+                self.device.compute_with_storage_grid_size().y,
+            ),
+            in0_block_w=ibw,
+            out_subblock_h=sh,
+            out_subblock_w=sw,
+            per_core_M=per_core_m,
+            per_core_N=nt,
+        )
+        self._matmul_pc_cache[key] = cached
+        return cached
+
     def _sdpa_program_config(self, seq_q: int, seq_k: int, *, compact: bool = False) -> ttnn.SDPAProgramConfig:
         key = (seq_q, seq_k, compact)
         cached = self._sdpa_pc_cache.get(key)
@@ -1573,6 +1607,12 @@ class TTSeamlessM4Tv2SpeechEncoder:
         use_windowed_rel = seq_len >= _ATTN_QUERY_CHUNK_MATMUL_THRESHOLD
         k_f32 = ttnn.typecast(k, ttnn.float32)
         ttnn.deallocate(k)
+        # Per-query-block scores ([B,H,qc,S] f32) fit L1 across the core grid on the windowed long-audio
+        # path (qc≤128 on P150 / ≤256 on BH-QB → ≤32 MB at S=4096). Keeping the whole scores lifecycle
+        # (QK matmul, rel-bias add, mask add, softmax) in L1 lets the auto QK matmul pick a fast config
+        # (0.24→0.11 ms) and speeds the interleaved adds/softmax that read it. Restrict to the windowed
+        # path: the mid-range (S<3072) uses qc=256, whose scores grow past the validated L1 footprint.
+        smc = ttnn.L1_MEMORY_CONFIG if use_windowed_rel else ttnn.DRAM_MEMORY_CONFIG
         out_blocks: list[ttnn.Tensor] = []
         for q0 in range(0, seq_len, query_chunk):
             q1 = min(q0 + query_chunk, seq_len)
@@ -1582,7 +1622,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
             scores_f32 = ttnn.matmul(
                 q_f32,
                 k_f32,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=smc,
                 compute_kernel_config=self._attn_compute_cfg,
             )
             ttnn.deallocate(q_f32)
@@ -1601,7 +1641,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
                     seq_len=seq_len,
                     left_max=left_max,
                     right_max=right_max,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    memory_config=smc,
                     compute_kernel_config=self._linear_compute_cfg,
                 )
                 ttnn.deallocate(q_blk)
@@ -1636,10 +1676,10 @@ class TTSeamlessM4Tv2SpeechEncoder:
                 )
                 mask_f32 = ttnn.typecast(mask_blk, ttnn.float32)
                 ttnn.deallocate(mask_blk)
-                scores_f32 = ttnn.add(scores_f32, mask_f32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                scores_f32 = ttnn.add(scores_f32, mask_f32, memory_config=smc)
                 ttnn.deallocate(mask_f32)
             if f32_softmax_fits:
-                probs_f32 = ttnn.softmax(scores_f32, dim=-1, numeric_stable=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                probs_f32 = ttnn.softmax(scores_f32, dim=-1, numeric_stable=True, memory_config=smc)
                 ttnn.deallocate(scores_f32)
                 probs = ttnn.typecast(probs_f32, ttnn.bfloat16)
                 ttnn.deallocate(probs_f32)
@@ -1648,14 +1688,20 @@ class TTSeamlessM4Tv2SpeechEncoder:
                 # CBs as the old bf16 path, so it fits L1 in every device config (incl. the tight
                 # legacy speech-encoder params). The precision win is the f32 QK/bias/mask above; an
                 # fp32-accumulating compute config here would enlarge the CBs and re-clash L1 on TP.
-                scores_bf16 = ttnn.typecast(scores_f32, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                scores_bf16 = ttnn.typecast(scores_f32, ttnn.bfloat16, memory_config=smc)
                 ttnn.deallocate(scores_f32)
-                probs = ttnn.softmax(scores_bf16, dim=-1, numeric_stable=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                probs = ttnn.softmax(scores_bf16, dim=-1, numeric_stable=True, memory_config=smc)
                 ttnn.deallocate(scores_bf16)
+            # probs@V: K=S is a huge reduction, N=head_dim is narrow, so the auto matmul on a DRAM
+            # output picks a slow interleaved config (measured 1.39 ms at S=4096). Writing the small
+            # per-block output ([B,H,qc,D]) to L1 with a tuned batched-reuse PC lets the grid parallelize
+            # the K reduction: 1.39 ms → 0.074 ms (P150) / 0.049 ms (BH-QB). Consumed by the concat below.
+            pv_pc = self._pv_matmul_pc(batch * num_heads, qc, seq_len, head_dim)
             out_blk = ttnn.matmul(
                 probs,
                 v,
-                memory_config=mc,
+                program_config=pv_pc,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self._attn_compute_cfg,
             )
             ttnn.deallocate(probs)
