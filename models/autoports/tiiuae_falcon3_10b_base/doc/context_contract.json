@@ -1,0 +1,47 @@
+{
+  "hf_model": "tiiuae/Falcon3-10B-Base",
+  "hf_advertised_context": 32768,
+  "current_supported_context": 6528,
+  "limiting_reason": "device_dram_capacity",
+  "capacity_evidence": {
+    "workload_batch": 32,
+    "device": "one Blackhole p300c in a 1x1 TTNN mesh",
+    "dtype_layout": "bf16 TILE DRAM",
+    "largest_passing_prefill": 6528,
+    "first_failing_tile_aligned_prefill": 6560,
+    "failure_site": "SwiGLU gate/up multiply output allocation",
+    "failure_kind": "TT_FATAL DRAM allocator out of memory",
+    "failed_allocation_bytes": 9673113600,
+    "single_device_dense_mlp_gate_bytes_at_hf_context_bf16": 48318382080,
+    "single_device_dense_mlp_three_live_buffers_bytes_at_hf_context_bf16": 144955146240,
+    "explanation": "Serialized full translated-layer probes at the preserved batch of 32 passed through device-to-host output materialization at sequence 6528 and failed at the next tile-aligned length, 6560, when the MLP multiply requested a 9.01 GiB bf16 output buffer. At the HF limit, one [batch,32768,23040] bf16 MLP buffer is 45 GiB and gate, up, and product buffers alone require 135 GiB before residuals, weights, caches, and allocator overhead."
+  },
+  "notes": "This is the IR-translated functional starting point, not a reduced Falcon3 architecture limit. The IR emitted length-128 persistent caches; the translation parameterizes them and defaults to the measured 6528-token single-device boundary. Numerical PCC validation covers prefill through 128 and decode at position 17, while 6528 is a full translated-layer execution/capacity validation. Later optimized or chunked stages may extend context without materializing the dense functional-stage intermediates used here.",
+  "paths": {
+    "prefill": {
+      "status": "translated_and_validated",
+      "emitted_batch": 32,
+      "emitted_sequence_length": 17,
+      "pcc_validated_sequence_lengths": [17, 128],
+      "capacity_validated_sequence_lengths": [256, 512, 1024, 2048, 4096, 6144, 6400, 6528],
+      "first_failing_tile_aligned_sequence_length": 6560,
+      "default_cache_length": 6528,
+      "emitted_cache_length": 128,
+      "classification": "compiler g0: fill_cache=2560, paged_update_cache=0, decode_sdpa=0"
+    },
+    "decode": {
+      "status": "translated_and_validated",
+      "emitted_batch": 32,
+      "validated_positions": [17],
+      "default_cache_length": 6528,
+      "emitted_cache_length": 128,
+      "classification": "compiler g1: fill_cache=0, paged_update_cache=80, decode_sdpa=40"
+    }
+  },
+  "ir_provenance": {
+    "mesh_shape": [1, 4],
+    "tp_degree": 4,
+    "collapsed_to_single_device_dense": true,
+    "representative_layer": 20
+  }
+}
