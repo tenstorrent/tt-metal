@@ -87,12 +87,8 @@ struct AllToAllCombineDeviceOperation {
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    // Keys on attributes + tensor specs only; see the .cpp for why the baked semaphore/buffer
-    // addresses stay valid across cache hits. INVARIANT this relies on: the barrier GlobalSemaphores
-    // are op-created inside create_workload_descriptor (never derived from a caller-supplied input),
-    // so no per-call input can hash-equal yet carry a different address. If they are ever moved into
-    // operation_attributes_t/tensor_args_t, this hash must key on them (or use a Metal 2.0
-    // ScalarBinding-style refresh) or it becomes a stale-address bug the buffer-realloc test won't catch.
+    // Keys on attributes + tensor specs only (address-free); see the .cpp for the op-created-semaphore
+    // invariant that keeps baked addresses valid across cache hits.
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 }  // namespace ttnn::operations::ccl
