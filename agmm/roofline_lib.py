@@ -16,7 +16,7 @@ and speedup-to-ideal. See AGMM_roofline_analysis.md for the derivation.
 FREQ = 1.35e9  # Hz, Blackhole Tensix
 BYTES = 2  # bf16
 DRAM_PEAK = 512e9  # bytes/s
-LINK_PEAK = 50e9  # bytes/s per unidirectional ethernet link
+LINK_PEAK = 25e9  # bytes/s per unidirectional ethernet link
 CYCLES = {"LoFi": 1, "HiFi2": 2, "HiFi3": 3, "HiFi4": 4}  # cycles per 8x16x16 MAC block
 
 # Achievable fractions of peak for the best-case projection.
