@@ -188,6 +188,7 @@ def test_ccl_census(mesh_device: ttnn.MeshDevice) -> None:
         device=mesh_device,
     )  # S2 bf4: quarter the payload — does going below bf8 reclaim the ~88us bf8 still leaks?
     ff_v1 = _bf16(torch.randn(1, 1, V_ROWS_S1, 4 * VIDEO_DIM // tp), mesh_device)  # ff2 input (TP-sharded)
+    ff_v2 = _bf16(torch.randn(1, 1, V_ROWS_S2, 4 * VIDEO_DIM // tp), mesh_device)  # ff2 input at S2 (4x tokens)
     gate_col = _bf16(torch.randn(1, 1, 1, v_loc), mesh_device)  # AdaLN gate slice
     # Row-parallel gate candidate: partials (N,32) all-gathered to (N,128), then one tiny matmul
     # both sums the 4 TP partials and selects this device's 8 heads.
@@ -462,6 +463,9 @@ def test_ccl_census(mesh_device: ttnn.MeshDevice) -> None:
         ("mm_gateqkv_video_s2_gathered", lambda: gateqkv_v(x_v2_full), True),
         ("agmm_ff1_video_s2", lambda: ff1_v(x_v2, parallel_config=pc), True),
         ("mm_ff1_video_s2_gathered", lambda: ff1_v(x_v2_full), True),
+        # ff2's reduce-scatter at S2: the block's sole RS collective, priced at the dominant stage.
+        # S1 (rs_ff2_video_s1) vs S2 isolates the RS's fixed cost from its 4x bandwidth.
+        ("rs_ff2_video_s2", lambda: ff2_v.forward_fused_addcmul(ff_v2, x_v2, gate_col), True),
         ("agmm_out_video_s2", lambda: out_v(x_v2, parallel_config=pc), True),
         ("mm_out_video_s2_gathered", lambda: out_v(x_v2_full), True),
         ("agmm_out_video_s2_bf8", lambda: out_v_bf8(x_v2, parallel_config=pc), True),
