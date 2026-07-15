@@ -59,6 +59,7 @@ FORCE_INLINE KernelProfilerNocEventMetadata createNocEventDstTrailer(uint32_t sr
     ev_md.data.local_event_dst_trailer.setDstAddr(dst_addr);
     if constexpr (
         noc_event_type == KernelProfilerNocEventMetadata::NocEventType::WRITE_ ||
+        noc_event_type == KernelProfilerNocEventMetadata::NocEventType::WRITE_WITH_TRID ||
         noc_event_type == KernelProfilerNocEventMetadata::NocEventType::WRITE_MULTICAST ||
         noc_event_type == KernelProfilerNocEventMetadata::NocEventType::SEMAPHORE_SET_REMOTE ||
         noc_event_type == KernelProfilerNocEventMetadata::NocEventType::SEMAPHORE_SET_MULTICAST) {

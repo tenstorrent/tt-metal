@@ -62,7 +62,10 @@ void VerifyIssuesOnAllCores(
 }
 
 void RunWritesTest(
-    NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device, bool use_barrier) {
+    NOCDebuggingFixture* fixture,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    bool use_barrier,
+    bool use_trid = false) {
     auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
 
     CoreCoord grid_start = {0, 0};
@@ -94,6 +97,9 @@ void RunWritesTest(
 
     if (use_barrier) {
         defines["USE_WRITE_BARRIER"] = "1";
+    }
+    if (use_trid) {
+        defines["USE_TRID"] = "1";
     }
 
     tt_metal::CreateKernel(
@@ -366,6 +372,28 @@ TEST_F(NOCDebuggingFixture, WritesWithFullBarrier) {
         this->RunTestOnDevice<NOCDebuggingFixture>(
             [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunFullBarrierWritesSingleCore(fixture, mesh_device);
+            },
+            mesh_device);
+    }
+}
+
+// Transaction-id writes are modeled as ordinary address-keyed writes: the same-src-without-barrier issue must
+// still be detected (no barrier), and a regular write barrier must still clear them (with barrier).
+TEST_F(NOCDebuggingFixture, TridWritesNoBarrier) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice<NOCDebuggingFixture>(
+            [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunWritesTest(fixture, mesh_device, /*use_barrier=*/false, /*use_trid=*/true);
+            },
+            mesh_device);
+    }
+}
+
+TEST_F(NOCDebuggingFixture, TridWritesWithBarrier) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice<NOCDebuggingFixture>(
+            [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunWritesTest(fixture, mesh_device, /*use_barrier=*/true, /*use_trid=*/true);
             },
             mesh_device);
     }

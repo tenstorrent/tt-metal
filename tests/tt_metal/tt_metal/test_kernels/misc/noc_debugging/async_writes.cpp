@@ -16,6 +16,20 @@ void kernel_main() {
     constexpr uint32_t num_bytes = 64;
 
     for (uint32_t i = 0; i < NUM_ITERATIONS; ++i) {
+#if defined(USE_TRID)
+        // Transaction-id write: an ordinary non-posted write tagged with a trid.
+        noc.async_write<NocOptions::TXN_ID>(
+            local_buffer,
+            unicast_endpoint,
+            num_bytes,
+            {},
+            {
+                .noc_x = OTHER_CORE_X,
+                .noc_y = OTHER_CORE_Y,
+                .addr = DST_ADDR,
+            },
+            {.trid = 1});
+#else
         noc.async_write(
             local_buffer,
             unicast_endpoint,
@@ -26,6 +40,7 @@ void kernel_main() {
                 .noc_y = OTHER_CORE_Y,
                 .addr = DST_ADDR,
             });
+#endif
 #if defined(USE_WRITE_BARRIER)
         noc.async_write_barrier();
 #elif defined(USE_FULL_BARRIER)

@@ -132,6 +132,7 @@ NOCDebugEvent make_noc_debug_event(
                 src_y,
                 event.noc_type == EMD::NocType::NOC_1});
         case EMD::NocEventType::WRITE_: [[fallthrough]];
+        case EMD::NocEventType::WRITE_WITH_TRID: [[fallthrough]];
         case EMD::NocEventType::WRITE_MULTICAST: [[fallthrough]];
         case EMD::NocEventType::SEMAPHORE_SET_MULTICAST: [[fallthrough]];
         case EMD::NocEventType::SEMAPHORE_SET_REMOTE: {
