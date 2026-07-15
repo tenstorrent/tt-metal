@@ -330,8 +330,10 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     // R-S-U-U-U-U, with a dedicated relay core prepended to the left of the sender. Coordinates are
     // PHYSICAL NOC0 (== virtual for unharvested BH tensix); we invert virtual_core_from_logical_core
     // to recover the logical worker cores the rest of the factory addresses.
-    //   y=2: R@x1, S@x2, U@x3, U@x4, U@x5, U@x6
-    //   y=3: R@x2, S@x7, U@x10, U@x11, U@x12, U@x13
+    //   y=10: R@x1, S@x2, U@x3, U@x4, U@x5, U@x6
+    //   y=11: R@x2, S@x7, U@x10, U@x11, U@x12, U@x13
+    // (Batteries moved from the top tensix rows y=2/y=3 to the BOTTOM rows y=10/y=11 — farthest from the
+    //  eth cores — to probe whether battery-vs-eth column/row NoC_0 contention on the top rows was limiting.)
     static_assert(!SENDERS_ONLY_MOCK, "USE_RELAY needs untilizers present -> set SENDERS_ONLY_MOCK 0");
     static_assert(!SENDER_ONE_TO_ROW_Y3, "USE_RELAY sets placement explicitly -> set SENDER_ONE_TO_ROW_Y3 0");
     TT_FATAL(num_cores == 2, "USE_RELAY currently supports exactly 2 senders (num_links>=2); got {}", num_cores);
@@ -363,8 +365,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             std::array<uint32_t, 4> untilizer_x;
         };
         const std::array<RelayBattery, 2> relay_batteries = {{
-            {/*phys_y=*/2, /*relay_x=*/1, /*sender_x=*/2, {{3, 4, 5, 6}}},
-            {/*phys_y=*/3, /*relay_x=*/2, /*sender_x=*/7, {{10, 11, 12, 13}}},
+            {/*phys_y=*/10, /*relay_x=*/1, /*sender_x=*/2, {{3, 4, 5, 6}}},
+            {/*phys_y=*/11, /*relay_x=*/2, /*sender_x=*/7, {{10, 11, 12, 13}}},
         }};
 
         // Clear the default split's assignments and rebuild from the explicit table.

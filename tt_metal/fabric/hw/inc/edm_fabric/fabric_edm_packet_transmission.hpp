@@ -139,15 +139,15 @@ FORCE_INLINE void shift_to_next_chunk(uint8_t& chunk_encodings) { chunk_encoding
 // Blackhole-only so Wormhole builds are untouched; this is the BH-LB profiling experiment.
 // ===========================================================================================
 #if defined(ARCH_BLACKHOLE)
-#define FABRIC_SKIP_LOCAL_DRAM_WRITE 1
-// FABRIC_FORWARD_HEADER_ONLY — eth-row NoC bottleneck probe (BH + FABRIC_1D). When defined,
-// forward_payload_to_downstream_edm copies ONLY the packet header (+ its per-packet signal/credit) over
-// the NoC to the local downstream sender, NOT the payload. The header (with its hop count already
-// decremented) is written in full, so: the downstream slot is still allocated full-size, the downstream
-// sender still eth-sends the FULL header-declared payload over the cable (garbage tail bytes), and all
-// signaling is intact — only the intra-chip receiver->downstream-sender NoC copy shrinks. This estimates
-// perf/BW as if that eth-to-eth NoC forwarding were free. Comment out to forward the full payload.
-#define FABRIC_FORWARD_HEADER_ONLY 1
+// #define FABRIC_SKIP_LOCAL_DRAM_WRITE 1
+//  FABRIC_FORWARD_HEADER_ONLY — eth-row NoC bottleneck probe (BH + FABRIC_1D). When defined,
+//  forward_payload_to_downstream_edm copies ONLY the packet header (+ its per-packet signal/credit) over
+//  the NoC to the local downstream sender, NOT the payload. The header (with its hop count already
+//  decremented) is written in full, so: the downstream slot is still allocated full-size, the downstream
+//  sender still eth-sends the FULL header-declared payload over the cable (garbage tail bytes), and all
+//  signaling is intact — only the intra-chip receiver->downstream-sender NoC copy shrinks. This estimates
+//  perf/BW as if that eth-to-eth NoC forwarding were free. Comment out to forward the full payload.
+// #define FABRIC_FORWARD_HEADER_ONLY 1
 #endif
 
 // Core implementation of unicast-to-local-chip dispatch.
