@@ -134,9 +134,7 @@ void RunWritesTest(
 // Single core + single RISC issues writes and then a full barrier. Exercises the FULL_BARRIER host
 // mapping via the end-of-kernel unflushed-write check: with the mapping the full barrier clears the
 // pending writes so nothing is reported; without it the full barrier is ignored and the writes are
-// falsely reported as unflushed at kernel end. (The unflushed check is keyed by source address, so it is
-// robust to the pre-existing duplicate-event processing that makes the same-src write-barrier check
-// unreliable here.)
+// falsely reported as unflushed at kernel end.
 void RunFullBarrierWritesSingleCore(
     NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     auto compute_grid_size = mesh_device->compute_with_storage_grid_size();

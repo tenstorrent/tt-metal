@@ -1969,6 +1969,7 @@ void DeviceProfiler::readTsData16BMarkerData(
     ZoneScoped;
 
     nlohmann::json meta_data;
+    std::optional<NOCDebugEvent> noc_debug_event;
 #if defined(TRACY_ENABLE)
     if ((timer_id & 0xFFFF) == kernel_profiler::NOC_TRACING_STATIC_ID) {
         using EMD = KernelProfilerNocEventMetadata;
@@ -2005,11 +2006,8 @@ void DeviceProfiler::readTsData16BMarkerData(
             const CoreCoord virtual_core =
                 soc_desc.translate_coord_to(physical_core, CoordSystem::NOC0, CoordSystem::TRANSLATED);
             // NOLINTEND
-            noc_debug_state->push_event(
-                device_id,
-                timestamp,
-                get_processor_id(risc_type),
-                make_noc_debug_event(virtual_core, local_noc_event, trailer_metadata.getLocalNocEventDstTrailer()));
+            noc_debug_event =
+                make_noc_debug_event(virtual_core, local_noc_event, trailer_metadata.getLocalNocEventDstTrailer());
         }
     }
 #endif
@@ -2045,6 +2043,19 @@ void DeviceProfiler::readTsData16BMarkerData(
     device_tracy_contexts.try_emplace({device_id, physical_core}, nullptr);
 
     updateFirstTimestamp(timestamp);
+
+#if defined(TRACY_ENABLE)
+    // Emit the NOC-debug event exactly once per genuine device event. The profiler re-parses undrained profiler
+    // buffers many times per run (periodic debug-dump polls + force reads + the Tracy marker pass); the persistent
+    // marker set (device_markers_per_core_risc_map) deduplicates those re-reads, so pushing only when the marker was
+    // newly inserted guarantees each event reaches the NOCDebugState once. This mirrors how readDeviceMarkerData
+    // handles scoped-lock events (its push sits after the same new_marker_inserted early-out).
+    if (noc_debug_event) {
+        MetalContext::instance(context_id)
+            .noc_debug_state()
+            ->push_event(device_id, timestamp, get_processor_id(risc_type), *noc_debug_event);
+    }
+#endif
 }
 
 struct DispatchMetaData {
