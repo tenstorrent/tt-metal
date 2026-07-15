@@ -158,10 +158,19 @@ jobs:
         timeout-minutes: 10
         run: |
           HEALTH_CHECK=./build/test/tt_metal/tt_fabric/test_system_health
-          # The test binary links libtt_metal.so from the extracted build/lib,
-          # which is not on the default LD_LIBRARY_PATH outside the dev container.
+          # The test binary links libtt_metal.so (extracted build/lib) and
+          # libmpi.so.40 (ULFM OpenMPI). Neither is on the default library path
+          # outside the dev container; the OpenMPI RPATH (/opt/openmpi-*-ulfm)
+          # is absent on this bare-metal runner. The ttnn wheel we installed
+          # bundles both, so add its lib dir too.
           export TT_METAL_HOME="$PWD"
-          export LD_LIBRARY_PATH="$PWD/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          TTNN_ROOT=$(python3 -c "import os, ttnn; print(os.path.dirname(ttnn.__file__))" 2>/dev/null || true)
+          MPI_LIB=""
+          if [ -n "$TTNN_ROOT" ]; then
+            MPI_SO=$(find "$TTNN_ROOT" -name 'libmpi.so*' -print -quit 2>/dev/null || true)
+            if [ -n "$MPI_SO" ]; then MPI_LIB=$(dirname "$MPI_SO"); fi
+          fi
+          export LD_LIBRARY_PATH="$PWD/build/lib${MPI_LIB:+:$MPI_LIB}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           # tt-smi lives in the runner provisioning venv, not on the default PATH.
           ACTIVATE=/opt/tt_metal_infra/provisioning/provisioning_env/bin/activate
           reset_cluster() { ( if [ -f "$ACTIVATE" ]; then source "$ACTIVATE"; fi; tt-smi -glx_reset_auto ); }
