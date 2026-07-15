@@ -143,25 +143,28 @@ static inline void bulk_copy_words(uint64_t dst, uint64_t src, uint32_t nwords) 
     }
 }
 
-/* Emit `seg` raw marker-words (even) into the single SPSC page ring at page `pp`, one 64B page at a
- * time (handles page-ring wrap), zero-padding the tail of a partial last page so its unused marker
- * slots have the valid bit (w0 bit31) clear and the host skips them. Returns pages consumed. */
-static inline uint32_t emit_to_single(uint64_t single_store, uint32_t pp, uint64_t src, uint32_t seg) {
-    uint32_t npg = (seg + 15u) / 16u;
-    uint32_t wleft = seg;
-    for (uint32_t p = 0; p < npg; p++) {
-        uint64_t dst = single_store + (uint64_t)((pp + p) % SINGLE_NREC) * PAGE;
-        uint32_t wc = wleft >= 16u ? 16u : wleft; /* words this page (even: markers are 2 words) */
-        if (wc) {
-            bulk_copy_words(dst, src, wc);
-            src += (uint64_t)wc * 4u;
-        }
-        for (uint32_t w = wc; w < 16u; w++) {
-            w32(dst + (uint64_t)w * 4u, 0); /* zero-pad -> valid bit clear -> host skips */
-        }
-        wleft -= wc;
-    }
-    return npg;
+/* Marker packet-type bits: type = (w0 >> 28) & 7. From hostdevcommon PacketTypes. */
+#define PT_ZONE_START 0u
+#define PT_ZONE_END 1u
+#define PT_STICKY_META 6u
+
+/* Inc-2a: the collect hart RESHAPES each raw 2-word marker into a 28B WorkerZoneWire and packs 2 per
+ * 64B single-SPSC page (relay stays a pure page-copy). WorkerZoneWire (realtime_profiler_packets.hpp):
+ *   +0 header{u16 type, u16 reserved}  +4 core_x  +8 core_y  +12 risc  +16 timer_id  +20 time_hi  +24 time_lo
+ * header.type = WorkerZone = 0; we repurpose header.reserved as the WIRE VALIDITY sentinel (0xA5A5 =
+ * valid, 0 = pad) since WorkerZone==0 can't itself flag validity. Identity (core_x/y, risc) is
+ * STRUCTURAL -- taken from the mirror index -- so no STICKY_META / host forward-fill (kills orphans). */
+#define WZ_VALID 0xA5A5u
+#define WZW_BYTES 28u
+static inline void w_wzw(
+    uint64_t dst, uint32_t cx, uint32_t cy, uint32_t risc, uint32_t timer_id, uint32_t time_hi, uint32_t time_lo) {
+    w32(dst + 0, (uint32_t)(WZ_VALID << 16)); /* header: type=0(WorkerZone) low16 | reserved=0xA5A5 high16 */
+    w32(dst + 4, cx);
+    w32(dst + 8, cy);
+    w32(dst + 12, risc);
+    w32(dst + 16, timer_id);
+    w32(dst + 20, time_hi);
+    w32(dst + 24, time_lo);
 }
 
 int main(uint64_t hartid) {
@@ -306,23 +309,32 @@ int main(uint64_t hartid) {
     }
 
     if (hartid == nread) {
-        /* ============ COLLECT: round-robin mirrors -> single SPSC (raw, no reshape) ============== */
+        /* ==== COLLECT (Inc-2a): round-robin mirrors, RESHAPE each raw marker -> WorkerZoneWire with
+         * STRUCTURAL (core,risc) from the mirror index, pack 2/64B page into the single SPSC. ==== */
         /* per-mirror consumer head (collect owns MHEAD). Local cache avoids re-reading LIM. */
         static uint32_t chead[MAX_CORES * NRISC];
         for (uint64_t i = 0; i < nmirror; i++) {
             chead[i] = 0;
         }
         uint32_t single_prod = 0;
-        uint64_t moved = 0, loops = 0; /* moved = markers */
-        uint64_t cyc_copy = 0;         /* time in the mirror->single copy path */
+        uint32_t pending = 0;          /* 0 or 1 WorkerZoneWire already written to the in-progress page */
+        uint64_t moved = 0, loops = 0; /* moved = WorkerZoneWire records emitted (zone start/end only) */
+        uint64_t cyc_copy = 0;         /* time in the reshape+pack path */
         uint64_t t_start = rdcycle_();
-        w64(COLLECT_STATS + 40, 0xC0FFEE01ULL); /* PROBE: "collect entered" sentinel (relay copies to RES 0x138) */
         for (;;) {
             uint64_t progressed = 0;
             loops++;
             for (uint64_t i = 0; i < nmirror; i++) {
                 uint32_t mtail = r32(MTAIL(i));
                 uint32_t mh = chead[i];
+                if (mh == mtail) {
+                    continue;
+                }
+                /* STRUCTURAL identity: mirror i IS (core_idx, risc). No STICKY_META / forward-fill. */
+                uint32_t core_idx = (uint32_t)(i / NRISC);
+                uint32_t risc = (uint32_t)(i % NRISC);
+                uint32_t cx = coords[core_idx * 2 + 0];
+                uint32_t cy = coords[core_idx * 2 + 1];
                 while (mh != mtail) {
                     uint32_t midx = mh % MIRROR_DEPTH;
                     uint32_t seg = MIRROR_DEPTH - midx; /* contiguous mirror words until wrap */
@@ -330,22 +342,48 @@ int main(uint64_t hartid) {
                     if (seg > rem) {
                         seg = rem;
                     }
-                    uint32_t npg = (seg + 15u) / 16u;
-                    /* reserve npg pages in the single SPSC; block on the relay (consumer). */
-                    while ((uint32_t)(single_prod + npg - r32(S_CONS)) > SINGLE_NREC) {
-                        if (r64(P_STOP)) {
-                            goto collect_done;
-                        }
-                    }
+                    volatile uint32_t* mk = (volatile uint32_t*)(MSTORE(i) + (uint64_t)midx * 4);
                     uint64_t tcp = rdcycle_();
-                    single_prod += emit_to_single(single_store, single_prod, MSTORE(i) + (uint64_t)midx * 4, seg);
-                    fence_();
-                    w32(S_PROD, single_prod);
+                    for (uint32_t k = 0; k + 1u < seg; k += 2u) { /* each marker = 2 words */
+                        uint32_t w0 = mk[k];
+                        uint32_t type = (w0 >> 28) & 0x7u;
+                        if (type != PT_ZONE_START && type != PT_ZONE_END) {
+                            continue; /* drop STICKY_META (identity is structural) + non-zone types */
+                        }
+                        uint32_t timer_id = (w0 >> 12) & 0x7FFFFu; /* (type<<16)|hash */
+                        uint32_t thi = w0 & 0xFFFu;
+                        uint32_t w1 = mk[k + 1];
+                        if (pending == 0) {
+                            /* start a new single-SPSC page (2 records/page): reserve 1 page (block on relay) */
+                            while ((uint32_t)(single_prod + 1u - r32(S_CONS)) > SINGLE_NREC) {
+                                if (r64(P_STOP)) {
+                                    cyc_copy += rdcycle_() - tcp;
+                                    goto collect_done;
+                                }
+                            }
+                            w_wzw(
+                                single_store + (uint64_t)(single_prod % SINGLE_NREC) * PAGE,
+                                cx,
+                                cy,
+                                risc,
+                                timer_id,
+                                thi,
+                                w1);
+                            pending = 1;
+                        } else {
+                            uint64_t pg = single_store + (uint64_t)(single_prod % SINGLE_NREC) * PAGE;
+                            w_wzw(pg + WZW_BYTES, cx, cy, risc, timer_id, thi, w1);
+                            fence_();
+                            single_prod++; /* page complete (2 records) */
+                            w32(S_PROD, single_prod);
+                            pending = 0;
+                        }
+                        moved++;
+                    }
                     cyc_copy += rdcycle_() - tcp;
                     mh += seg;
                     w32(MHEAD(i), mh); /* free mirror -> reader unblocks */
                     chead[i] = mh;
-                    moved += seg / 2;
                     progressed = 1;
                 }
             }
@@ -376,17 +414,25 @@ int main(uint64_t hartid) {
             }
         }
     collect_done:;
+        /* Flush a half-filled page: pad slot 1 (WorkerZoneWire header.reserved=0 -> host skips it) and
+         * publish, so the last odd record isn't stranded. (A full 2-record page publishes inline above.) */
+        if (pending) {
+            uint64_t pg = single_store + (uint64_t)(single_prod % SINGLE_NREC) * PAGE;
+            for (uint32_t w = 0; w < WZW_BYTES / 4u; w++) {
+                w32(pg + WZW_BYTES + (uint64_t)w * 4u, 0); /* zero slot 1 -> reserved=0 -> skipped */
+            }
+            fence_();
+            single_prod++;
+            w32(S_PROD, single_prod);
+            pending = 0;
+        }
         const uint64_t cwall = rdcycle_() - t_start;
         w64(COLLECT_STATS + 0, moved);
         w64(COLLECT_STATS + 8, loops);
         w64(COLLECT_STATS + 16, cwall);            /* collect wall */
         w64(COLLECT_STATS + 24, cwall - cyc_copy); /* empty-spin (round-robin over idle mirrors) */
         w64(COLLECT_STATS + 32, cyc_copy);         /* copy time */
-        /* PROBE: collect writes loops DIRECTLY to a fresh RES line (0x130, unshared by relay/readers).
-         * If the host reads this nonzero, collect's OWN RES writes ARE visible (=> the earlier 0 was a
-         * shared-cache-line clobber, not collect failing to run). */
-        w64(RES(0x130), loops);
-        fence_(); /* stats visible to the relay before the done flag */
+        fence_();                                  /* stats visible to the relay before the done flag */
         w64(COLLECT_DONE, 1);
         for (;;) {
             __asm__ volatile("wfi");
@@ -503,7 +549,6 @@ relay_done:
     w64(RES(0xD8), r64(COLLECT_STATS + 16));  /* collect wall */
     w64(RES(0xE0), r64(COLLECT_STATS + 24));  /* collect empty-spin */
     w64(RES(0xE8), r64(COLLECT_STATS + 32));  /* collect copy */
-    w64(RES(0x138), r64(COLLECT_STATS + 40)); /* PROBE: sentinel relay read from COLLECT_STATS (expect 0xC0FFEE01) */
     w64(RES(0x18), DONE_MAGIC);               /* written LAST: host waits on it before reading results */
     for (;;) {
         __asm__ volatile("wfi");

@@ -1480,46 +1480,26 @@ uint32_t RealtimeProfilerManager::drain_x280_device(DeviceState& dev_state) {
         return n;
     }
 
-    // TRANSLATE the raw X280 marker stream into WorkerZoneWire records and PUBLISH to the ring. No enrich
-    // and no Tracy push here -- a consumer thread does both off the receiver (feed-the-ring, exactly like
-    // the program-record path). The X280 relays raw 2-word markers (8 per 64B page, no on-device reshape);
-    // identity is carried in-band by STICKY_META context packets (BRISC emits one per launch into every
-    // RISC ring), so forward-fill the last-seen (core, risc) onto the following timing markers. The context
-    // and the scratch batch persist across drain calls (single receiver thread).
-    static uint32_t ctx_cx = 0, ctx_cy = 0, ctx_risc = 0;
-    static bool ctx_valid = false;
+    // DECODE the X280 stream (Inc-2a) and PUBLISH to the ring. No enrich/Tracy here -- a consumer thread
+    // does both off the receiver. The COLLECT hart already RESHAPED each raw marker into a WorkerZoneWire
+    // with STRUCTURAL identity (core_x/y, risc taken from the mirror index it drained) and packed 2 per
+    // 64B page. So there's no raw decode and no STICKY_META forward-fill here (that was the orphan source):
+    // just lift out the valid slots. Validity: the FW sets header.reserved=0xA5A5 on real records; a padded
+    // slot has reserved=0 -> skip. `wz` persists across drain calls (single receiver thread).
     static std::vector<exp::WorkerZoneWire> wz;
     wz.clear();
-    ZoneScopedN("X280-Translate");  // raw marker -> WorkerZoneWire record -> ring
+    ZoneScopedN("X280-DecodeWZW");  // WorkerZoneWire slots -> ring (reshape already done on the X280 collect hart)
+    constexpr uint16_t kWzValid = 0xA5A5;  // collect-hart validity sentinel
+    const uint32_t kWzPerPage = (page_words * sizeof(uint32_t)) / sizeof(exp::WorkerZoneWire);  // 64B/28B = 2
+    const auto* page_bytes = reinterpret_cast<const uint8_t*>(x280_page_buf.data());
     for (uint32_t pg = 0; pg < n; pg++) {
-        const uint32_t* page = x280_page_buf.data() + static_cast<size_t>(pg) * page_words;
-        for (uint32_t m = 0; m + 1 < page_words; m += 2) {
-            const uint32_t w0 = page[m];
-            const uint32_t w1 = page[m + 1];
-            if (!(w0 & 0x80000000u)) {
-                continue;  // valid bit clear -> stale staging padding in the last page of a segment
+        const uint8_t* page = page_bytes + static_cast<size_t>(pg) * page_words * sizeof(uint32_t);
+        for (uint32_t s = 0; s < kWzPerPage; s++) {
+            exp::WorkerZoneWire rec;
+            std::memcpy(&rec, page + s * sizeof(exp::WorkerZoneWire), sizeof(exp::WorkerZoneWire));
+            if (rec.header.reserved != kWzValid) {
+                continue;  // padded/stale slot -> skip
             }
-            const uint32_t type = (w0 >> 28) & 0x7;  // shares a marker's valid/type bits
-            if (type == kernel_profiler::STICKY_META) {
-                ctx_cx = (w0 >> 22) & 0x3F;  // 6-bit coords (see FW mark_sticky_meta layout)
-                ctx_cy = (w0 >> 16) & 0x3F;
-                ctx_risc = (w0 >> 10) & 0x3F;
-                ctx_valid = true;
-                continue;
-            }
-            if (type != kernel_profiler::ZONE_START && type != kernel_profiler::ZONE_END) {
-                continue;  // only zone start/end handled today
-            }
-            if (!ctx_valid) {
-                continue;  // no sticky context seen yet -> cannot attribute this marker
-            }
-            exp::WorkerZoneWire rec{};
-            rec.core_x = ctx_cx;  // virtual coords; the consumer maps virt->noc0 + resolves the name
-            rec.core_y = ctx_cy;
-            rec.risc = ctx_risc;
-            rec.timer_id = (w0 >> 12) & 0x7FFFF;  // (type<<16)|hash
-            rec.time_hi = w0 & 0xFFF;
-            rec.time_lo = w1;
             wz.push_back(rec);
         }
     }
