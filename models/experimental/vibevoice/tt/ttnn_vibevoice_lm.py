@@ -882,10 +882,17 @@ class TTVibeVoiceLM:
         )
         return out
 
-    def _ffn_layer(self, x: ttnn.Tensor, layer_w: LayerWeights) -> ttnn.Tensor:
-        """SwiGLU FFN: gate_proj(x) * silu(gate_proj(x)) → down_proj."""
+    def _ffn_layer(self, x: ttnn.Tensor, layer_w: LayerWeights, decode: Optional[bool] = None) -> ttnn.Tensor:
+        """SwiGLU FFN: gate_proj(x) * silu(gate_proj(x)) → down_proj.
+
+        ``decode`` selects the swept single-token decode configs (L1 handoffs + the fast w2
+        program config).  Defaults to ``S==1``; the CFG-batched decode passes ``decode=True``
+        because its row-stacked M (=2 streams) still occupies a single tile row, so the
+        per_core_M=1 decode config is valid and ~2.2x faster than the auto config.
+        """
         S = x.shape[2]
-        decode = S == 1
+        if decode is None:
+            decode = S == 1
         act_mc = ttnn.L1_MEMORY_CONFIG if decode else ttnn.DRAM_MEMORY_CONFIG
         x_mm = _matmul_in_l1(x, decode)
         # gate/up use bfp8_b weights → HiFi2 (see _HIFI2); w2 stays HiFi4 (bf16 weight).
@@ -893,14 +900,14 @@ class TTVibeVoiceLM:
         gate = ttnn.linear(x_mm, layer_w.w1, activation="silu", compute_kernel_config=_HIFI2, memory_config=act_mc)
         up = ttnn.linear(x_mm, layer_w.w3, compute_kernel_config=_HIFI2, memory_config=act_mc)
         hidden = ttnn.mul(gate, up, memory_config=act_mc)
-        # Down proj: on a single-token decode step use the swept fast config (2.15x);
+        # Down proj: on a single-token / batched decode step use the swept fast config (2.15x);
         # prefill (S>1) keeps the auto config.
         out = ttnn.linear(
             _matmul_in_l1(hidden, decode),
             layer_w.w2,
             compute_kernel_config=_HIFI4,
-            program_config=_W2_DECODE_PROGCFG if S == 1 else None,
-            memory_config=_QO_DECODE_OUT_MEMCFG if S == 1 else ttnn.DRAM_MEMORY_CONFIG,
+            program_config=_W2_DECODE_PROGCFG if decode else None,
+            memory_config=_QO_DECODE_OUT_MEMCFG if decode else ttnn.DRAM_MEMORY_CONFIG,
         )
         return out
 
@@ -1270,7 +1277,7 @@ class TTVibeVoiceLM:
         x_norm = ttnn.rms_norm(
             x2, weight=lw.ffn_norm_w, epsilon=self.cfg.rms_norm_eps, compute_kernel_config=_HIFI4, memory_config=res_mc
         )
-        ffn_out = self._ffn_layer(x_norm, lw)
+        ffn_out = self._ffn_layer(x_norm, lw, decode=True)  # row-stacked M=2 -> 1 tile: decode config valid
         x2 = ttnn.add(x2, ffn_out, memory_config=res_mc)
         return x2
 
