@@ -209,12 +209,26 @@ def _run(device, op_name, mem_config, dtype_tt, shape, lhs_act=None, post_act=No
         # are #ifndef ARCH_QUASAR-guarded, the no-broadcast operand switch uses copy_tile_to_dst_init_short
         # (Quasar's copy_tile_to_dst_init_short_with_dt is a no-op that cannot switch operands), and the
         # activation pack retargets via pack_init (Quasar's pack_reconfig_data_format is gasket-only).
-        # bf16 multiply and divide both pass, including lhs/rhs activations. fp32 routes SFPU: fp32
-        # multiply/divide work on Quasar, but fp32 add/sub do not — the SFPU float add/sub primitives
-        # are not yet ported to Quasar (add_binary_tile is #ifndef ARCH_QUASAR; only mul/div have Quasar
-        # branches), so they fail to JIT-compile. See binary_ng/QUASAR_PARITY_GAPS.md.
+        # bf16 multiply and divide both pass. fp32 routes SFPU: fp32 multiply/divide work on Quasar, but
+        # fp32 add/sub do not — the SFPU float add/sub primitives are not yet ported to Quasar
+        # (add_binary_tile is #ifndef ARCH_QUASAR; only mul/div have Quasar branches), so they fail to
+        # JIT-compile. See binary_ng/QUASAR_PARITY_GAPS.md.
         if dtype_tt == ttnn.float32 and op_name in ("add", "subtract"):
-            pytest.skip("SFPU float add/sub not yet ported to Quasar (fp32 add/sub route SFPU; fp32 mul/div work)")
+            pytest.skip(
+                "SFPU float add/sub not yet ported to Quasar (tenstorrent/tt-metal#49883; fp32 add/sub route "
+                "SFPU; fp32 mul/div work)"
+            )
+        # Interleaved lhs (pre) activation hangs on the Quasar sim: the post_lhs DFB self-loop (the compute
+        # kernel both produces the pre-activated operand and consumes it) on the 1-deep, async NoC
+        # interleaved ring deadlocks under native timing (and corrupts, PCC ~0.66, under perturbed timing).
+        # A post_lhs ring-depth bump did NOT fix it, so it is a substrate/DFB timing bug, not op ring depth.
+        # Sharded lhs-activation and interleaved post-activation both pass. Tracked in tenstorrent/tt-metal#49937.
+        if lhs_act is not None and not mem_config.is_sharded():
+            pytest.skip(
+                "Quasar sim: interleaved lhs-activation (post_lhs DFB self-loop) hangs/corrupts — "
+                "substrate/DFB timing bug (tenstorrent/tt-metal#49937); sharded lhs-act + interleaved "
+                "post-act pass"
+            )
     torch.manual_seed(0)
     ttnn_fn = _OPS[op_name][0]()
     torch_fn = _OPS[op_name][1]

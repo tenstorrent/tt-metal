@@ -63,8 +63,8 @@ Dtype is called out in the Quasar cell where it differs (bf16 is the model-relev
 ### Arithmetic
 | Op | Route | WH | Quasar | Evidence / to-close |
 |---|---|:--:|---|---|
-| `add` | FPU (bf16) · SFPU (fp32/int) | ✓ | `✓*` bf16 · `✓` int32 · `kernel` fp32 | int32 `ckernel_sfpu_add.h`; fp32 `add_binary_tile` gated + `calculate_sfpu_binary` `static_assert(MUL\|\|DIV)` |
-| `sub` | FPU (bf16) · SFPU (fp32/int) | ✓ | `✓` bf16 · `kernel` int32 · `kernel` fp32 | `sub_int_sfpu.h` + fp32 SFPU sub both WH-only |
+| `add` | FPU (bf16) · SFPU (fp32/int) | ✓ | `✓*` bf16 · `✓` int32 · `kernel` fp32 | int32 `ckernel_sfpu_add.h`; fp32 `add_binary_tile` gated + `calculate_sfpu_binary` `static_assert(MUL\|\|DIV)` — tracked in tenstorrent/tt-metal#49883 |
+| `sub` | FPU (bf16) · SFPU (fp32/int) | ✓ | `✓` bf16 · `kernel` int32 · `kernel` fp32 | `sub_int_sfpu.h` + fp32 SFPU sub both WH-only — tracked in tenstorrent/tt-metal#49883 |
 | `mul` | FPU (bf16) · SFPU | ✓ | `✓*` bf16 · `✓` fp32 · `✓` int32 | `mul_binary_tile` (Quasar branch) + `ckernel_sfpu_mul_int32.h` |
 | `div` | SFPU | ✓ | `✓*` bf16/fp32 · `kernel` int32 | `div_binary_tile` ✓; `div_int32_tile` unported |
 | `rsub` | FPU+`NEG` (bf16) · SFPU | ✓ | `kernel` | bf16 blocked by `NEG` (Tier-2 activation); fp32/int SFPU rsub gated |
@@ -239,6 +239,7 @@ are ternary-select / dtype-cast infra, not activations.)
    already exist; it just doesn't compile. Unblocks `gelu` **and** `bias_gelu` (both `broken` today).
 2. **SFPU float `add`/`sub`** (binary) — unblocks fp32 add/sub, every fp32/int derived op, and (with the
    log/exp2 activations) the `logaddexp`/`ldexp` family. Relax the `MUL||DIV` `static_assert`; mirror mul/div.
+   Tracked in tenstorrent/tt-metal#49883.
 3. **int `lt`/`le`/`ge`** (binary) — `bridge`, trivial (ckernel already handles lt/gt/le/ge).
 4. **`abs`, `leaky_relu`, `relu_max`, `relu_min`** (activations) — `bridge`, cheap (un-gate; ckernels + slots exist).
 5. **`gelu_tanh`** — transformer MLPs using tanh-GELU (`kernel`; plain `gelu` needs the #1 bridge fix first).

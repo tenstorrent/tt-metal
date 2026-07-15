@@ -90,7 +90,7 @@ the factory sets `fp32_dest_acc_en=true` + `unpack_to_dest_mode=UnpackToDestFp32
 - fp32 **add / sub** → **JIT compile fail** — SFPU `add_binary_tile` is unported on Quasar (matrix Table 1,
   `add` row = `kernel` for fp32; MUL/DIV are ported, ADD/SUB are not). The op test **skips** fp32 add/sub.
 
-**Actionable (op-author risk context):** a probe confirmed the fix — mirror the MUL/DIV path across the 3
+**Actionable (op-author risk context; tracked in tenstorrent/tt-metal#49883):** a probe confirmed the fix — mirror the MUL/DIV path across the 3
 LLK layers (compute-API `#else` branch, LLK-API `_add` wrapper, relax the ckernel `static_assert(MUL||DIV)`)
 → fp32 add PCC 1.0, mul/div unchanged. It touches **shared Quasar LLK/compute-API files outside this op
 dir**, so it needs code-review + a WH/BH SFPU-add regression check; also wire `sub_binary_tile`. Once
