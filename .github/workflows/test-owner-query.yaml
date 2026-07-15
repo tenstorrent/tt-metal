@@ -4,6 +4,10 @@ name: "(infra) Test Owner Query"
 # person owns (name, pipeline-reorg file, line number, owning team).
 
 on:
+  # TEMP: fire on push to smoke-test the query flow. REMOVE before merge.
+  push:
+    branches:
+      - tdowdall/test-owner-query
   workflow_dispatch:
     inputs:
       slack_id:
@@ -21,9 +25,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: List tests owned by ${{ inputs.slack_id }}
+      - name: List tests owned by ${{ inputs.slack_id || 'U07J3K6KS1K' }}
         env:
-          SLACK_ID: ${{ inputs.slack_id }}
+          # TEMP: default to example U07J3K6KS1K on push (no dispatch input). REMOVE before merge.
+          SLACK_ID: ${{ inputs.slack_id || 'U07J3K6KS1K' }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
         run: |
