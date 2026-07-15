@@ -190,7 +190,7 @@
 <section id="overview">
 <h2>Overview<a class="headerlink" href="#overview" title="Permalink to this heading"></a>
 </h2>
-<p><a class="reference external" href="https://github.com/wolfpld/tracy">Tracy</a> is an opens-source C++ profiling tool with sampling and code instrumentation profiling capabilities. Metalium uses a fork for Tracy adapted to the the Tensix Processors as it’s primary profiling tool.</p>
+<p><a class="reference external" href="https://github.com/wolfpld/tracy">Tracy</a> is an open-source C++ profiling tool with sampling and code-instrumentation capabilities. Metalium uses a fork for Tracy adapted to the Tensix processors as its primary profiling tool.</p>
 <p>Detailed documentation about Tracy itself can be found here: <a class="reference external" href="https://github.com/wolfpld/tracy/releases/latest/download/tracy.pdf">https://github.com/wolfpld/tracy/releases/latest/download/tracy.pdf</a>. Reading the <code class="docutils literal notranslate"><span class="pre">Quick-start</span> <span class="pre">guide</span></code> section can help with the rest of this documentation.</p>
 <p>All host-side code, including python code in <code class="docutils literal notranslate"><span class="pre">tt_metal</span></code> can be profiled using Tracy.</p>
 </section>
@@ -208,6 +208,25 @@ ninja
 ninja<span class="w"> </span>install
 </pre></div>
 </div>
+<p>Debug-verbosity zones are off by default and gated behind opt-in <em>categories</em>.
+Build with one or more (comma-separated), or <code class="docutils literal notranslate"><span class="pre">all</span></code> for every zone; see
+<code class="docutils literal notranslate"><span class="pre">./build_metal.sh</span> <span class="pre">--help</span></code> for the list:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Via build script</span>
+./build_metal.sh<span class="w"> </span>--build-perf-debug<span class="w"> </span>dispatch,program
+
+<span class="c1"># Or via CMake flags</span>
+cmake<span class="w"> </span>-B<span class="w"> </span>build<span class="w"> </span>-DENABLE_TRACY<span class="o">=</span>ON<span class="w"> </span>-DTRACY_DEBUG_CATEGORY<span class="o">=</span>dispatch,program
+ninja<span class="w"> </span>-C<span class="w"> </span>build
+ninja<span class="w"> </span>-C<span class="w"> </span>build<span class="w"> </span>install
+</pre></div>
+</div>
+<p>The selection is cached and persists across builds until changed;
+<code class="docutils literal notranslate"><span class="pre">--build-perf-debug</span> <span class="pre">off</span></code> disables it.</p>
+<p>To instrument code, tag a zone with a <code class="docutils literal notranslate"><span class="pre">TTZone*D</span></code> macro whose first argument is
+the category as an upper-snake token (<code class="docutils literal notranslate"><span class="pre">rt-profiler</span></code> -&gt; <code class="docutils literal notranslate"><span class="pre">RT_PROFILER</span></code>), e.g.
+<code class="docutils literal notranslate"><span class="pre">TTZoneScopedD(DISPATCH)</span></code> or <code class="docutils literal notranslate"><span class="pre">TTZoneScopedDN(RT_PROFILER,</span> <span class="pre">"name")</span></code>. A zone
+whose category is not selected compiles out.</p>
 </section>
 <section id="gui">
 <h2>GUI<a class="headerlink" href="#gui" title="Permalink to this heading"></a>
