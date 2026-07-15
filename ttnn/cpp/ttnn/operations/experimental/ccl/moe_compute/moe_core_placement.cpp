@@ -105,6 +105,60 @@ std::vector<tt::tt_metal::CoreCoord> pick_combine_cores_from_strip(const CoreRan
     return corerange_to_cores(strip_range_set, num_cores, /*row_wise=*/true);
 }
 
+// Search for any dense width x height rectangle that fits below the tilize rows. Used when the
+// legacy 2-wide eastern strip is too tall for short harvested grids (e.g. WH 7x9 + 16 combine
+// cores needs 8 rows at width 2, but only 7 rows are available below tilize).
+std::optional<CoreRange> find_dense_combine_rectangle_avoiding(
+    const CoreCoordPairSet& avoid, const tt::tt_metal::CoreCoord& worker_grid, uint32_t num_cores, uint32_t max_y_inclusive) {
+    if (num_cores == 0) {
+        return std::nullopt;
+    }
+
+    const uint32_t y_limit = std::min(max_y_inclusive + 1, static_cast<uint32_t>(worker_grid.y));
+
+    std::vector<std::pair<uint32_t, uint32_t>> factorizations;
+    for (uint32_t width = 1; width <= num_cores; ++width) {
+        if (num_cores % width != 0) {
+            continue;
+        }
+        const uint32_t height = num_cores / width;
+        factorizations.emplace_back(width, height);
+    }
+    // Prefer wider rectangles first (legacy combine was 2-wide; 4x4 beats 1x16 on short grids).
+    std::sort(factorizations.begin(), factorizations.end(), [](const auto& a, const auto& b) {
+        if (a.first != b.first) {
+            return a.first > b.first;
+        }
+        return a.second < b.second;
+    });
+
+    for (const auto& [rect_width, rect_height] : factorizations) {
+        if (rect_width > worker_grid.x || rect_height == 0 || rect_height > y_limit) {
+            continue;
+        }
+
+        // Prefer eastern columns (legacy pool was x=5,6 on WH).
+        for (int sx = static_cast<int>(worker_grid.x) - static_cast<int>(rect_width); sx >= 0; --sx) {
+            for (uint32_t sy = 0; sy + rect_height <= y_limit; ++sy) {
+                bool valid = true;
+                for (uint32_t dy = 0; dy < rect_height && valid; ++dy) {
+                    for (uint32_t dx = 0; dx < rect_width && valid; ++dx) {
+                        if (avoid.contains({static_cast<uint32_t>(sx) + dx, sy + dy})) {
+                            valid = false;
+                        }
+                    }
+                }
+                if (valid) {
+                    return CoreRange(
+                        {static_cast<uint32_t>(sx), sy},
+                        {static_cast<uint32_t>(sx) + rect_width - 1, sy + rect_height - 1});
+                }
+            }
+        }
+    }
+    return std::nullopt;
+}
+
 std::optional<CoreRange> find_tilize_2x2_block_avoiding(const CoreCoordPairSet& avoid, const tt::tt_metal::CoreCoord& worker_grid) {
     constexpr uint32_t kTilizeBlockWidth = 2;
     constexpr uint32_t kTilizeBlockHeight = 2;
@@ -324,7 +378,14 @@ std::optional<PlacedWorkers> place_combine_and_tilize(
     if (combine_strip_opt.has_value()) {
         combine_cores = pick_combine_cores_from_strip(combine_strip_opt.value(), num_combine_cores);
     } else {
-        combine_cores = pick_worker_cores_row_major_avoiding(base_avoid, worker_grid, num_combine_cores, combine_max_y);
+        const auto combine_rect_opt =
+            find_dense_combine_rectangle_avoiding(base_avoid, worker_grid, num_combine_cores, combine_max_y);
+        if (combine_rect_opt.has_value()) {
+            combine_cores = pick_combine_cores_from_strip(combine_rect_opt.value(), num_combine_cores);
+        } else {
+            combine_cores =
+                pick_worker_cores_row_major_avoiding(base_avoid, worker_grid, num_combine_cores, combine_max_y);
+        }
     }
     if (combine_cores.size() != num_combine_cores) {
         return std::nullopt;
