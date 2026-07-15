@@ -884,7 +884,9 @@ void RealtimeProfilerManager::boot_x280_drainer(
             !x280_fw.empty()) {
             constexpr int kL2CpuIndex = 0;  // tile (8,3) — proven single-chip path
             constexpr int kX280PllMhz = 1000;
-            constexpr uint32_t kX280ConfigAddr = 0x08019000u;  // X280 LIM: above STAGECTL, below STAGE_BASE
+            // X280 LIM socket md: parked in the gap between MIRRORCTL (0x08018000..~0x0801B000, sized
+            // by the drain list) and SINGLECTL (0x0801C000). See profzone.c D8 LIM map.
+            constexpr uint32_t kX280ConfigAddr = 0x0801B000u;
             constexpr uint64_t kX280MboxParams = 0x08011000ull;
             constexpr uint64_t kX280MboxResults = 0x08011040ull;
             constexpr uint64_t kX280MboxCoords = 0x08011200ull;
@@ -962,11 +964,13 @@ void RealtimeProfilerManager::boot_x280_drainer(
                 D2HSocket::ExternalConfigBuffer{.address = kX280ConfigAddr, .sender_is_l2cpu = true});
             dev_state.x280_socket->set_page_size(kX280PageSize);
 
-            // Reader/relay hart split: nread reader harts drain the L1 rings in parallel and stage
-            // WorkerZone pages in LIM; the last hart relays staged pages to the one D2H socket FIFO.
+            // Hart split (D8 Inc-1): nread reader harts drain L1 rings into per-(core,risc) LIM
+            // mirrors; hart[nread] = collect (merges all mirrors into one SPSC); hart[nread+1] =
+            // relay (single SPSC -> D2H FIFO). 2 read + 1 collect + 1 relay = 4 = all X280 harts.
             constexpr uint64_t kX280NRead = 2;   // reader harts (0..nread-1)
-            constexpr uint64_t kX280NHarts = 3;  // total active harts (nread readers + 1 relay)
-            std::vector<uint8_t> params(64, 0), results(64, 0);
+            constexpr uint64_t kX280NHarts = 4;  // nread readers + 1 collect + 1 relay
+            std::vector<uint8_t> params(64, 0),
+                results(384, 0);  // covers relay+reader+collect RES + probes 0x130/0x138
             auto pk = [&](size_t off, uint64_t val) { std::memcpy(params.data() + off, &val, 8); };
             pk(0x00, kX280ConfigAddr);
             pk(0x08, static_cast<uint64_t>(pc.x));
@@ -978,10 +982,21 @@ void RealtimeProfilerManager::boot_x280_drainer(
             pk(0x38, kX280NHarts);
             zx.write_block(params.data(), (uint32_t)params.size(), kX280MboxParams);
             zx.write_block(results.data(), (uint32_t)results.size(), kX280MboxResults);
-            // Pre-zero the per-reader staging control (STAGECTL @ 0x08018000: PROD/CONS/RDONE per hart)
-            // so the LIM staging SPSC starts clean (no init race with the readers/relay).
-            std::vector<uint8_t> stagectl_zero(256, 0);
-            zx.write_block(stagectl_zero.data(), (uint32_t)stagectl_zero.size(), 0x08018000ull);
+            // Pre-zero the mirror + single-SPSC control so every ring starts clean (no init race).
+            // MIRRORCTL @ 0x08018000: 16 B/mirror (head,tail) for num_cores*5 mirrors — zero the whole
+            // 12 KiB region (covers up to MAX_CORES=140). SINGLECTL @ 0x0801C000: prod/cons/collect_done/
+            // reader_done. (Config md at 0x0801B000 sits between them and is written above, untouched.)
+            std::vector<uint8_t> mirrorctl_zero(0x3000, 0);  // [0x08018000, 0x0801B000)
+            zx.write_block(mirrorctl_zero.data(), (uint32_t)mirrorctl_zero.size(), 0x08018000ull);
+            std::vector<uint8_t> singlectl_zero(256, 0);
+            zx.write_block(singlectl_zero.data(), (uint32_t)singlectl_zero.size(), 0x0801C000ull);
+            if (num_cores > 140) {
+                log_warning(
+                    tt::LogMetal,
+                    "[Real-time profiler] X280: num_cores={} exceeds MAX_CORES=140 -- mirrors would "
+                    "overrun LIM; drainer will refuse to start (no DONE_MAGIC).",
+                    num_cores);
+            }
             dev_state.x280_params_addr = kX280MboxParams;
 
             zx.set_reset_vectors(profiler::X280_LIM_BASE);
@@ -1367,6 +1382,13 @@ struct X280RawStall {
     uint32_t sticky_risc_mask = 0;  // bit r set if a sticky with risc==r was seen (expect 0x1F = all 5)
 };
 X280RawStall g_x280_raw;  // single receiver thread -> no lock
+// PROTO diagnostic: total WorkerZoneWire records the receiver PUBLISHED to the BroadcastRing. Compared
+// against the consumer's ring-dropped at shutdown to tell a real over-publish from a bogus drop count.
+uint64_t g_x280_published = 0;  // single receiver thread -> no lock
+// PROBE (b): total D2H pages the host READ + drain calls. If pages_read >> device-relayed pages, the
+// host over-reads the FIFO (the ~496x re-read behind the 430M over-publish).
+uint64_t g_x280_pages_read = 0;
+uint64_t g_x280_drain_calls = 0;
 }  // namespace
 
 uint32_t RealtimeProfilerManager::drain_x280_device(DeviceState& dev_state) {
@@ -1395,6 +1417,8 @@ uint32_t RealtimeProfilerManager::drain_x280_device(DeviceState& dev_state) {
         ZoneScopedN("X280-SockRead");  // D2H FIFO read (clflush + memcpy) + ack that frees FIFO for the X280
         dev_state.x280_socket->read(x280_page_buf.data(), n);
     }
+    g_x280_pages_read += n;  // PROBE (b): total pages read vs. device-relayed pages
+    g_x280_drain_calls++;
 
     // EXPERIMENT (TT_METAL_X280_DROP=1): the read() above already drained + ACKed the pages, freeing FIFO
     // room for the X280. Skip all host-side decode/enrich/emit and just discard them. Pairs with the FW
@@ -1502,6 +1526,7 @@ uint32_t RealtimeProfilerManager::drain_x280_device(DeviceState& dev_state) {
     if (!wz.empty()) {
         // Publish to the ring; a consumer thread enriches + pushes to Tracy (drain_all_devices wakes it).
         ring_->writer().publish_batch(std::span<const exp::WorkerZoneWire>(wz));
+        g_x280_published += wz.size();
     }
     return n;
 }
@@ -1852,8 +1877,8 @@ void RealtimeProfilerManager::shutdown() {
                     loops,
                     reserve_stalls);
                 // Relay time-split (X280 ~1 GHz => cycles ~= ns). empty-spin = wall - reserve - copy is
-                // time the relay looped over readers finding LIM staging empty (reader too slow); reserve
-                // = time blocked on the host D2H FIFO (host too slow); copy = page_copy + bytes_sent.
+                // time the relay found the single SPSC empty (collect slower than D2H); reserve = time
+                // blocked on the host D2H FIFO (host too slow); copy = page_copy + bytes_sent.
                 {
                     uint64_t rwall = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0xF0);
                     uint64_t rreserve = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0xF8);
@@ -1862,12 +1887,49 @@ void RealtimeProfilerManager::shutdown() {
                     log_info(
                         tt::LogMetal,
                         "[Real-time profiler] Device {}: relay time-split (of {} ms wall): reserve-stall={} ms "
-                        "(host FIFO), copy={} ms, empty-spin={} ms (staging empty / reader slow)",
+                        "(host FIFO), copy={} ms, empty-spin={} ms (single SPSC empty / collect slow)",
                         dev_state.chip_id,
                         rwall / 1000000,
                         rreserve / 1000000,
                         rcopy / 1000000,
                         rempty / 1000000);
+                }
+                // Collect-hart baseline (D8 Inc-1): how busy is the merge hart doing PURE DRAIN (no
+                // reshape)? empty-spin = wall - copy = time round-robining idle mirrors; copy = time in
+                // the mirror->single copy path. moved = markers merged into the single SPSC.
+                {
+                    uint64_t cmoved = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x108);
+                    uint64_t cloops = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x110);
+                    uint64_t cwall = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x118);
+                    uint64_t cempty = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x120);
+                    uint64_t ccopy = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x128);
+                    log_info(
+                        tt::LogMetal,
+                        "[Real-time profiler] Device {}: collect-hart split (of {} ms wall): copy={} ms, "
+                        "empty-spin={} ms (mirrors idle), moved {} markers, {} loops",
+                        dev_state.chip_id,
+                        cwall / 1000000,
+                        ccopy / 1000000,
+                        cempty / 1000000,
+                        cmoved,
+                        cloops);
+                    // PROBE-a: disambiguate the collect-telemetry-0 puzzle.
+                    //  collect_direct_loops (RES 0x130): collect wrote `loops` DIRECTLY to a fresh RES line.
+                    //  relay_read_sentinel (RES 0x138): relay copied COLLECT_STATS entry sentinel (0xC0FFEE01).
+                    // both nonzero+correct => collect ran & visible => cmoved should be right;
+                    // direct nonzero but sentinel 0 => relay can't read COLLECT_STATS;
+                    // direct 0 => collect telemetry code not executing.
+                    uint64_t collect_direct_loops =
+                        dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x170);
+                    uint64_t relay_read_sentinel =
+                        dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x178);
+                    log_info(
+                        tt::LogMetal,
+                        "[Real-time profiler] Device {}: PROBE-a collect_direct_loops={} relay_read_sentinel=0x{:x} "
+                        "(expect sentinel 0xc0ffee01)",
+                        dev_state.chip_id,
+                        collect_direct_loops,
+                        relay_read_sentinel);
                 }
                 // Raw-marker stall decode (DROP mode only): device-side back-pressure straight from the
                 // marker stream. ~1.35 GHz => cycles/1350 = us. START count is the robust metric.
@@ -1976,9 +2038,13 @@ void RealtimeProfilerManager::shutdown() {
             // Should be 0 now that the ring is sized for the device-marker backlog.
             log_info(
                 tt::LogMetal,
-                "[Real-time profiler] X280 consumer {}: ring-dropped {} records",
+                "[Real-time profiler] X280 consumer {}: ring-dropped {} records (receiver published {} total; "
+                "PROBE-b: host read {} pages over {} drain calls -- if >> device-relayed pages, host over-reads)",
                 handle,
-                consumer->dropped);
+                consumer->dropped,
+                g_x280_published,
+                g_x280_pages_read,
+                g_x280_drain_calls);
         }
         consumers_.clear();
     }

@@ -168,3 +168,57 @@ multiple markers per 64B flit (today: one marker per page — wasteful but simpl
   registers for `WorkerZonePacket`; `PushDeviceMarker` removed.
 
 See also `FINDINGS.md` (§16 throughput, drain/pair history) and `PRIMER.md`.
+
+---
+
+## D8 — Per-(core,risc) LIM mirror + dedicated collect/reshape hart (2026-07-15)
+
+Replaces the current "2 readers → per-reader staging → relay" with an identity-preserving,
+reshape-decoupled 4-hart pipeline. Motivation: the sticky-meta forward-fill for (core,risc) is
+fragile (X280 serializes across two regions; a kernel can fill its L1 ring and never return to
+`brisc.cc` to emit a sticky packet). This makes (core,risc) **structural**, not inferred.
+
+**Target architecture (4 harts, all of them):**
+```
+Tensix L1 ring[core][risc] --NoC0 read--> [reader hart]  (2 readers, disjoint core subsets)
+        writes raw markers by identity into ->  LIM MIRROR[core][risc]   (one SPSC PER (core,risc))
+LIM MIRROR[*][*] --coherent LIM--> [collect/reshape hart]  (round-robins all mirrors)
+        --> SINGLE SPSC  --coherent LIM--> [relay hart] --NoC1 write--> host D2H FIFO
+```
+- **Identity by construction:** a mirror's *address* encodes (core,risc). The collect hart knows
+  provenance from *which* mirror it drains — no stamping, no forward-fill, no sticky needed for
+  core/risc. Kills the orphan-attribution bug structurally.
+- **op-ID:** still from the STICKY_META packet. Collect hart keeps a per-core "current op" latch;
+  every marker drained after an op-ID sticky inherits that ID (agreed model). Stale only for the
+  never-returns-to-brisc case — producer-side, out of scope here.
+- **Reshape off the read-release path:** readers do NoC0-read → mirror-write → advance L1 head
+  immediately (producer unblocks fast → the ~200x perturbation win is preserved). All reshape cost
+  is absorbed by the dedicated collect hart in parallel.
+
+**LIM budget (gate) — fits.** LIM = 1.875 MiB (`ld/x280-lim.ld`), ~256 KiB used, ~1.6 MiB free.
+Full-depth 2 KiB mirror (matches producer, 256 markers) per (core,risc): 550 rings (110c x 5) = 1.10 MiB
+OK, 275 rings (55c x 5) = 550 KiB OK -- plus room for the single SPSC + per-core op table. Start full-depth.
+
+**Incremental plan (measure before adding cost):**
+- **Inc-1 (baseline, THIS step): collect hart is a PURE DRAIN -- no reshape.** Move raw markers from
+  the per-(core,risc) mirrors into the single SPSC (raw, 8 markers/64B page); relay unchanged; host
+  translator unchanged. Instrument the collect hart's time-split (wall / empty-spin / copy) + markers
+  moved, exactly like the relay's split. Goal: a clean baseline of "how busy is this hart just
+  collecting/merging," isolated from reshape.
+- **Inc-2:** add full WorkerZoneWire reshape + op-ID stamp on the collect hart; host does nothing.
+  Compare collect-hart busyness vs Inc-1 to price the reshape.
+- **Inc-3 (only if reshape is the ceiling):** intermediate patch-format -- collect hart stamps
+  (core,risc,op-ID) onto raw markers; host does final assembly. Splits reshape cost device/host.
+
+**Open layout choices for Inc-1 (defaults chosen; flag to change):**
+- Mirror depth: **full 2 KiB** (256 markers) per ring -- max burst tolerance, LIM affords it.
+- Mirror format: raw 2-word (8 B) markers; head/tail monotonic word counts, idx = count % depth
+  (same contract as the producer L1 ring).
+- Collect poll: **naive round-robin** over all N mirrors first (that IS the baseline). A reader-set
+  "dirty" summary/doorbell to skip empty mirrors is an Inc-1.5 optimization once we see the cost.
+- Hart map (nharts=4): harts `[0,nread)` = readers, `nread` = collect, `nread+1` = relay.
+- Single SPSC: raw markers packed 8/64B page so the **relay stays a pure page-copy** (unchanged).
+
+**LIM map (Inc-1, additive to current):** keep FW `0x08000000`, RESULTS `0x08011040`, COORDS
+`0x08011200`, SCRATCH `0x08012000`. New: `MIRROR_BASE` (per-(core,risc) ring array) + `MIRRORCTL`
+(head/tail per ring) + `SINGLE_BASE`/`SINGLECTL` above the current staging region.
