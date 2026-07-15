@@ -77,8 +77,10 @@ class Gemma4AssistantModel:
         dtype=ttnn.bfloat16,
         tensor_cache_path=None,
         mesh_config=None,
+        max_local_batch_size=1,
     ):
         self.mesh_device = mesh_device
+        self.max_local_batch_size = max_local_batch_size
         self.args = assistant_args
         self.text_args = assistant_args.text_args
         self.target = target_model
@@ -118,7 +120,7 @@ class Gemma4AssistantModel:
                 tensor_cache_path=f"{tensor_cache_path}/layer_{i}" if tensor_cache_path else None,
                 mesh_config=mesh_config,
                 max_seq_len=self.text_args.max_seq_len,
-                max_local_batch_size=1,
+                max_local_batch_size=max_local_batch_size,
             )
             self.layers.append(layer)
 

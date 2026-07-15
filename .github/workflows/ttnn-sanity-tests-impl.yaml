@@ -243,8 +243,10 @@ jobs:
             --out /work/power_report.json \
             -- bash -c '${{ matrix.test-group.cmd }}'
 
-      # Simulator runs have no hardware power telemetry, so skip the power sidecar
-      # and run the test command directly under the ttsim env set by setup-ttsim.
+      # Simulator runs have no hardware power telemetry, so swap the HW power sidecar for the
+      # host-load sidecar — it reports host CPU/memory/disk/network usage (a "mem report", not
+      # a power report). Written to /work/mem_report.json and uploaded by its own step below.
+      # Runs under the ttsim env from setup-ttsim.
       - name: ${{ matrix.test-group.name }} tests (simulator)
         if: ${{ startsWith(matrix.test-group.sku, 'sim_') }}
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
@@ -256,14 +258,26 @@ jobs:
           # PYTEST_ADDOPTS also sets -p no:timeout). Run that cmd with xdist; if a worker crashes (xdist
           # only reports "worker crashed"), re-run serially (drop -n 4 via the PYTEST_ADDOPTS override)
           # with --lf for actionable diagnostics.
-          cmd=$(printf '%s' '${{ matrix.test-group.cmd }}' | sed -E 's/[[:space:]]+--timeout[[:space:]]+[0-9]+//g')
-          if eval "$cmd"; then
-            exit 0
-          fi
-          echo "::warning::Parallel run failed. Re-running failed tests serially for clear diagnostics..."
-          export PYTEST_ADDOPTS="-p no:timeout ${{ matrix.test-group.sku == 'sim_wormhole_b0' && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || matrix.test-group.sku == 'sim_blackhole' && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}"
-          eval "$cmd --lf --lfnf=all --tb=long -v" || true
-          exit 1
+          export cmd=$(printf '%s' '${{ matrix.test-group.cmd }}' | sed -E 's/[[:space:]]+--timeout[[:space:]]+[0-9]+//g')
+          # PYTEST_ADDOPTS for the serial fallback re-run (drops -n 4); applied only on retry.
+          export SERIAL_ADDOPTS="-p no:timeout ${{ matrix.test-group.sku == 'sim_wormhole_b0' && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || matrix.test-group.sku == 'sim_blackhole' && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}"
+          # Wrap the whole sim run in the host-load sidecar so its usage report covers both
+          # the parallel run and any serial re-run. Written to /work/mem_report.json (even
+          # on failure — emitted before the sidecar exits) so the Upload mem report step
+          # picks it up. The sidecar is the final command, so it propagates the run's exit code.
+          .github/scripts/utils/host-load-sidecar.sh \
+            --interval 1 \
+            --label "${{ matrix.test-group.name }} (simulator)" \
+            --output /work/mem_report.json \
+            -- bash -c '
+              if eval "$cmd"; then
+                exit 0
+              fi
+              echo "::warning::Parallel run failed. Re-running failed tests serially for clear diagnostics..."
+              export PYTEST_ADDOPTS="$SERIAL_ADDOPTS"
+              eval "$cmd --lf --lfnf=all --tb=long -v" || true
+              exit 1
+            '
 
       - name: Upload power report
         if: ${{ !cancelled() && !startsWith(matrix.test-group.sku, 'sim_') }}
@@ -271,9 +285,21 @@ jobs:
         with:
           name: power-report-${{ matrix.test-group.name }}
           # /docker-job/ is the host-side mount of the Docker runner's /work/ directory.
-          # The sidecar writes --out /work/power_report.json inside the container;
+          # The power sidecar writes --out /work/power_report.json inside the container;
           # this host path is what the upload-artifact action reads.
           path: ${{ github.workspace }}/docker-job/power_report.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload mem report
+        if: ${{ !cancelled() && startsWith(matrix.test-group.sku, 'sim_') }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: mem-report-${{ matrix.test-group.name }}
+          # Sim analogue of the HW power report: the host-load sidecar writes its CPU/memory/
+          # disk/network usage report to --output /work/mem_report.json inside the container;
+          # this host path is what the upload-artifact action reads.
+          path: ${{ github.workspace }}/docker-job/mem_report.json
           if-no-files-found: warn
           retention-days: 30
 

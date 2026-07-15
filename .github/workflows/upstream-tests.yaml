@@ -304,6 +304,12 @@ jobs:
       - name: Pull image
         timeout-minutes: 10
         run: docker pull ${{ needs.get-image-tags.outputs.bh-glx-image-tag }}
+      - name: Run deployment tests
+        timeout-minutes: 20
+        run: |
+          docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G \
+            --device /dev/tenstorrent \
+            ${{ needs.get-image-tags.outputs.bh-glx-image-tag }} blackhole_glx_deployment_tests
       - name: Run image
         timeout-minutes: 75
         env:

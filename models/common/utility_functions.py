@@ -629,7 +629,11 @@ def comp_ulp(golden, calculated, ulp_threshold, allow_nonfinite=False):
     if not within_threshold:
         ulp_index = torch.argmax(ulp_tensor)
         ulp_index_tuple = tuple(int(idx) for idx in torch.unravel_index(ulp_index, golden.shape))
-        message += f" @ {list(ulp_index_tuple)} = |{calculated[ulp_index_tuple]} - {golden[ulp_index_tuple]}| / {ulp_value[ulp_index_tuple]}"
+        message += (
+            f" @ {list(ulp_index_tuple)} = "
+            f"|calculated {calculated[ulp_index_tuple]} - golden {golden[ulp_index_tuple]}| "
+            f"/ ULP(golden) {ulp_value[ulp_index_tuple]}"
+        )
     return (within_threshold, message)
 
 

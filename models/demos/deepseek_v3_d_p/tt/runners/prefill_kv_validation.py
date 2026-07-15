@@ -1,30 +1,45 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""KV-cache PCC validation for the DeepSeek / Kimi prefill runner.
+"""KV-cache PCC validation for the DeepSeek / Kimi (MLA) prefill model.
 
-Golden-trace loaders + per-slot block-cyclic KV PCC check + slot->slot and
-multi-pair migration validators. Extracted from prefill_runner.py so the runner
-holds only the serving loop. The runner imports a single public entrypoint,
-validate_after_prefill, which dispatches to validate_migration_kv /
-validate_migrations_pairwise / _kv_cache_pcc_check; everything else is internal.
+The single home for the block-cyclic KV-cache PCC check and its golden-trace
+loaders, plus the slot->slot and multi-pair migration validators. There is ONE
+PCC entrypoint, ``kv_cache_pcc_check``, used by both paths:
+
+  * the runner's standalone bring-up loop, via ``TtPrefillRuntime.kv_cache_pcc_check``
+    (the runtime forwards here) — golden trace dir + per-rank ``first_layer_idx``;
+  * the migration validators here (``validate_after_prefill`` and friends) — golden
+    ``.pt`` or trace dir + ``real_len``.
+
+``validate_after_prefill`` / ``validate_migration_kv`` / ``validate_migrations_pairwise``
+have NO in-repo caller: they are driven by tt-llm-engine (the prefill scheduler /
+migration driver) after it issues migrations. Keep their signatures in sync with that
+caller. Everything prefixed ``_`` is internal.
 """
+
+from __future__ import annotations
 
 import os
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import get_variant
-from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
+from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
+from models.demos.common.prefill.runners.runner_utils import resolve_trace_dir
 
-# Variant-aware golden trace dir, used only when DEEPSEEK_PREFILL_TRACE_{PT,DIR} are unset.
-DEFAULT_PREFILL_TRACE_DIR = get_variant(
-    os.environ.get("PREFILL_MODEL_VARIANT", "deepseek_v3_d_p")
-).prefill_trace_default
+if TYPE_CHECKING:
+    # Type-only: importing the runtime at module load would pull the device/model stack into the
+    # host-only callers of the golden loaders (e.g. test_chunked_trace_helpers). The runtime forwards
+    # into this module lazily, so by the time these functions run the runtime is already imported.
+    from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
+
+# Model-aware golden trace dir, used only when DEEPSEEK_PREFILL_TRACE_{PT,DIR} are unset.
+DEFAULT_PREFILL_TRACE_DIR = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL)).prefill_trace_default
 _kv_pt_trace_cache: dict = {}
 
 
@@ -53,62 +68,64 @@ def _load_kv_pt_trace(pt_path: str) -> dict:
     return cached
 
 
-def _read_sharded_rows(tensor_dir: Path, key: str, start: int, end: int) -> "torch.Tensor":
-    """Read rows [start:end] of `key` from a chunked_group_a_v1 shard directory (Kimi), concatenating
-    the rows_<s>_<e>.safetensors shards that overlap the range. Mirrors the test-side reader in
-    tests/test_prefill_transformer_chunked.py."""
+def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int) -> "torch.Tensor":
+    """[total_len, 576] golden kv_post_transform for one layer, format-agnostic:
+    - DeepSeek: a single kv_cache/layer_N.safetensors holding the full tensor.
+    - Kimi (vllm): kv_cache/layer_N/rows_<start>_<end>.safetensors shards, concatenated by start row.
+    """
+    import torch
     from safetensors import safe_open
 
-    parts = []
-    for shard in sorted(tensor_dir.glob("rows_*.safetensors")):
-        s, e = (int(x) for x in shard.stem.split("_")[1:3])
-        if e <= start or s >= end:
-            continue
+    key = f"kv_post_transform_layer_{layer_idx}"
+    single = Path(trace_dir) / "kv_cache" / f"layer_{layer_idx}.safetensors"
+    if single.exists():
+        with safe_open(single, framework="pt") as f:
+            return f.get_slice(key)[:total_len].to(torch.float32)
+    layer_dir = Path(trace_dir) / "kv_cache" / f"layer_{layer_idx}"
+    shards = sorted(layer_dir.glob("rows_*.safetensors"), key=lambda p: int(p.stem.split("_")[1]))
+    rows, have = [], 0
+    for shard in shards:
         with safe_open(shard, framework="pt") as f:
-            parts.append(f.get_slice(key)[max(start, s) - s : min(end, e) - s].to(torch.float32))
-    assert parts, f"no shards overlap rows [{start}:{end}] in {tensor_dir}"
-    return torch.cat(parts, dim=0)
+            t = f.get_tensor(key)
+        rows.append(t)
+        have += t.shape[0]
+        if have >= total_len:
+            break
+    return torch.cat(rows, dim=0)[:total_len].to(torch.float32)
 
 
-def _load_kv_post_transform(trace_dir: Path, layer: int, total_len: int) -> "torch.Tensor":
-    """Load kv_post_transform_layer_{layer}[:total_len] (float32), auto-detecting the trace layout:
-    single_file (DeepSeek: kv_cache/layer_N.safetensors with the tensor as a key) vs chunked_group_a_v1
-    (Kimi: kv_cache/layer_N/ directory of row-sharded rows_<s>_<e>.safetensors)."""
-    from safetensors import safe_open
-
-    key = f"kv_post_transform_layer_{layer}"
-    sharded_dir = trace_dir / "kv_cache" / f"layer_{layer}"
-    if sharded_dir.is_dir():
-        return _read_sharded_rows(sharded_dir, key, 0, total_len)
-    with safe_open(trace_dir / "kv_cache" / f"layer_{layer}.safetensors", framework="pt") as fsafe:
-        return fsafe.get_slice(key)[:total_len].to(torch.float32)
-
-
-def _kv_cache_pcc_check(
-    pipeline: TtPrefillRuntime,
+def kv_cache_pcc_check(
+    pipeline: "TtPrefillRuntime",
+    kvpe_cache,
+    *,
     slot_id: int,
     n_chunks: int,
+    trace_dir=None,
     pt_path_override: str | None = None,
     real_len: int | None = None,
+    first_layer_idx: int = 0,
 ) -> float:
-    """Gather the device KV cache for `slot_id`, un-rotate the block-cyclic layout to natural order,
-    and PCC-compare each layer against the golden DeepSeek-R1 `kv_post_transform` trace.
+    """Gather the engine-owned KV cache for `slot_id`, un-rotate the block-cyclic layout to natural
+    order, and PCC-compare each layer against the golden DeepSeek-R1 `kv_post_transform` trace.
+    Returns the min per-layer PCC and asserts (unless PREFILL_STANDALONE_CHUNKED_RECORD_ONLY=1) when
+    any layer is below threshold.
 
-    Invoked by the request-loop PCC mode (driven by the external producer over the H2D socket) and
-    by the migration validators in this module; the single-process `run_standalone_loop` uses
-    `runner_utils.kv_cache_pcc_check` instead. Returns the min per-layer PCC and asserts
-    (unless PREFILL_STANDALONE_CHUNKED_RECORD_ONLY=1) when any layer is below threshold.
+    The single PCC entrypoint for both callers. Golden source, in priority order:
+      1. `pt_path_override` / DEEPSEEK_PREFILL_TRACE_PT — a save_reference_cache .pt carrying
+         ref_kvpe_list[layer] ([1, 1, seq, kv_lora + qk_rope_head_dim], already Meta-interleaved).
+         Used by the migration validators.
+      2. `trace_dir` (caller-resolved) — the runner's standalone loop passes the resolved
+         PREFILL_TRACE_DIR golden here; descended via resolve_trace_dir.
+      3. DEEPSEEK_PREFILL_TRACE_DIR env (default: the longbook_qa 56320 trace) — migration fallback.
+    A trace dir holds kv_cache/layer_*.safetensors (or a Kimi row-sharded dir) keyed by
+    kv_post_transform_layer_<global_layer>.
+
+    `real_len` bounds the compare to written, non-pad positions (a partial last chunk overshoots the
+    prompt; falls back to total_len when unset). `first_layer_idx` offsets the golden layer index for
+    a pipeline-parallel rank: the device cache holds this rank's `num_layers` slice at local indices,
+    but the golden is indexed by global layer (golden layer = first_layer_idx + local_idx).
 
     Env:
-      DEEPSEEK_PREFILL_TRACE_PT               golden reference .pt produced by save_reference_cache
-                                              (carries ref_kvpe_list[layer] of shape
-                                              [1, 1, seq, kv_lora + qk_rope_head_dim]). Preferred
-                                              when set — covers ISL/layer configs without a
-                                              standalone safetensors trace dir.
-      DEEPSEEK_PREFILL_TRACE_DIR              golden trace dir (default: the longbook_qa 56320 trace).
-                                              Used only if DEEPSEEK_PREFILL_TRACE_PT is unset.
-                                              Holds kv_cache/layer_*.safetensors keyed by
-                                              kv_post_transform_layer_<i>.
       PREFILL_STANDALONE_CHUNKED_PCC          min per-layer KV-cache PCC threshold (default 0.88)
       PREFILL_STANDALONE_CHUNKED_RECORD_ONLY  "1" -> log PCC only, do not assert
     """
@@ -136,18 +153,23 @@ def _kv_cache_pcc_check(
         if not Path(pt_path).is_file():
             raise FileNotFoundError(f"DEEPSEEK_PREFILL_TRACE_PT={pt_path} does not exist or is not a file")
         kv_pt = _load_kv_pt_trace(pt_path)["ref_kvpe_list"]
-        if len(kv_pt) < num_layers:
+        if len(kv_pt) < first_layer_idx + num_layers:
             raise RuntimeError(
                 f"DEEPSEEK_PREFILL_TRACE_PT={pt_path} has {len(kv_pt)} layers in ref_kvpe_list "
-                f"but pipeline.num_layers={num_layers}; pick a .pt that matches the runner's layer count."
+                f"but this rank needs global layers [{first_layer_idx}, {first_layer_idx + num_layers}); "
+                f"pick a .pt that matches the runner's layer count."
             )
-        trace_dir = None
+        resolved_dir = None
+    elif trace_dir is not None:
+        # Standalone path: caller passes the PREFILL_TRACE_DIR golden; descend to the dir holding it.
+        resolved_dir = resolve_trace_dir(trace_dir)
+        kv_pt = None
     else:
-        trace_dir = Path(os.environ.get("DEEPSEEK_PREFILL_TRACE_DIR", DEFAULT_PREFILL_TRACE_DIR))
-        if not trace_dir.exists():
+        resolved_dir = Path(os.environ.get("DEEPSEEK_PREFILL_TRACE_DIR", DEFAULT_PREFILL_TRACE_DIR))
+        if not resolved_dir.exists():
             raise FileNotFoundError(
-                f"golden trace dir not found: {trace_dir} "
-                "(set DEEPSEEK_PREFILL_TRACE_DIR or DEEPSEEK_PREFILL_TRACE_PT)"
+                f"golden trace dir not found: {resolved_dir} "
+                "(set DEEPSEEK_PREFILL_TRACE_DIR or DEEPSEEK_PREFILL_TRACE_PT, or pass trace_dir)"
             )
         kv_pt = None
 
@@ -158,7 +180,7 @@ def _kv_cache_pcc_check(
 
     # One gather: [num_users*num_layers, tp_replicas, seq_len_cache, kvpe] -> collapse TP via [:, :1].
     cache_full = ttnn.to_torch(
-        pipeline.kvpe_cache,
+        kvpe_cache,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
     ).to(torch.float32)[
         :, :1
@@ -169,24 +191,25 @@ def _kv_cache_pcc_check(
     min_pcc = 1.0
     failures = []
     for i in range(num_layers):
-        # user-major slot layout: cache batch index = slot_id * num_layers + layer_idx
+        # user-major slot layout: cache batch index = slot_id * num_layers + local_layer_idx
         batch_idx = slot_id * num_layers + i
+        global_layer = first_layer_idx + i  # golden trace is indexed by global layer (PP rank offset)
         nat = torch.empty(seq_len_cache, kvpe_dim, dtype=torch.float32)
         nat[p] = cache_full[batch_idx, 0]  # un-rotate block-cyclic -> natural order
         dev_cache = nat[:compare_len]
 
         if kv_pt is not None:
-            # ref_kvpe_list[i] = ref_cache.key_cache[i] from HF's DynamicCache after the HF model's MLA
-            # forward. Per tests/test_prefill_transformer.py (canonical KVPE PCC, lines ~664-671),
-            # this tensor is ALREADY in the device's rotary basis — pe is compared directly with no
-            # re-interleave. Applying HF->Meta to it produces noise (see _ref_pe_for_comp below).
-            g_post = kv_pt[i][0, 0, :compare_len].to(torch.float32)
+            # ref_kvpe_list[global_layer] = ref_cache.key_cache[global_layer] from HF's DynamicCache
+            # after the HF model's MLA forward. Per tests/test_prefill_transformer.py (canonical KVPE
+            # PCC, lines ~664-671), this tensor is ALREADY in the device's rotary basis — pe is compared
+            # directly with no re-interleave. Applying HF->Meta to it produces noise.
+            g_post = kv_pt[global_layer][0, 0, :compare_len].to(torch.float32)
         else:
-            # The safetensors trace stores `kv_post_transform_layer_<i>` in HF half-split layout
-            # (single-file DeepSeek or Kimi's row-sharded dir — _load_kv_post_transform auto-detects);
+            # The safetensors trace stores `kv_post_transform_layer_<global_layer>` in HF half-split
+            # layout (single-file DeepSeek or Kimi's row-sharded dir — _load_golden_kv_post auto-detects);
             # nope (kv_lora) compares directly, the pe slice is re-interleaved to Meta below. Load only
             # the populated [:compare_len] positions.
-            g_post = _load_kv_post_transform(trace_dir, i, compare_len)
+            g_post = _load_golden_kv_post(resolved_dir, global_layer, compare_len)
         _, pcc_nope = comp_pcc(g_post[:, :kv_lora], dev_cache[:, :kv_lora])
         ref_pe = g_post[:, kv_lora:]
         if kv_pt is not None:
@@ -201,9 +224,12 @@ def _kv_cache_pcc_check(
         _, pcc_pe = comp_pcc(ref_pe_for_comp, dev_cache[:, kv_lora:])
         layer_pcc = min(pcc_nope, pcc_pe)
         min_pcc = min(min_pcc, layer_pcc)
-        logger.info(f"  cache layer {i} PCC: nope={pcc_nope:.6f} pe({basis_tag})={pcc_pe:.6f} -> {layer_pcc:.6f}")
+        logger.info(
+            f"  cache layer local={i} global={global_layer} PCC: "
+            f"nope={pcc_nope:.6f} pe({basis_tag})={pcc_pe:.6f} -> {layer_pcc:.6f}"
+        )
         if layer_pcc < threshold:
-            failures.append((i, layer_pcc))
+            failures.append((global_layer, layer_pcc))
 
     logger.info(f"[kv-pcc] KV cache min PCC across {num_layers} layers: {min_pcc:.6f} (threshold {threshold})")
     # stdout, not a log line: callers (tests / orchestrators) parse this.
@@ -223,14 +249,14 @@ def _kv_cache_pcc_check(
 
 
 def validate_migration_kv(
-    pipeline: TtPrefillRuntime, src_slot: int, dst_slot: int, n_chunks: int, real_len: int | None = None
+    pipeline: TtPrefillRuntime, kvpe_cache, src_slot: int, dst_slot: int, n_chunks: int, real_len: int | None = None
 ):
     """Validate the KV cache BEFORE and AFTER a slot->slot migration.
 
     The migration (src_slot -> dst_slot) is driven by tt-llm-engine (the prefill
     scheduler / driver over the migration layer) — the runner never issues migrate
-    itself (see kv_migration_setup; the runner only publishes the table via SET_TABLE).
-    This reuses `_kv_cache_pcc_check` to PCC BOTH endpoints against the SAME golden
+    itself (see kv_chunk_table; the runner only publishes the table via SET_TABLE).
+    This reuses `kv_cache_pcc_check` to PCC BOTH endpoints against the SAME golden
     `kv_post_transform` trace:
 
       * BEFORE: the SRC slot — the model-produced KV that tt-llm-engine migrates.
@@ -241,11 +267,11 @@ def validate_migration_kv(
     `[kv-migrate-validate] BEFORE/AFTER` lines (orchestrators parse these).
     """
     logger.info(f"[kv-migrate-validate] BEFORE migration: validating SRC slot {src_slot} (real_len={real_len})")
-    src_pcc = _kv_cache_pcc_check(pipeline, src_slot, n_chunks, real_len=real_len)
+    src_pcc = kv_cache_pcc_check(pipeline, kvpe_cache, slot_id=src_slot, n_chunks=n_chunks, real_len=real_len)
     print(f"[kv-migrate-validate] BEFORE src_slot={src_slot} min_pcc={src_pcc:.6f}")
 
     logger.info(f"[kv-migrate-validate] AFTER migration: validating DST slot {dst_slot} (real_len={real_len})")
-    dst_pcc = _kv_cache_pcc_check(pipeline, dst_slot, n_chunks, real_len=real_len)
+    dst_pcc = kv_cache_pcc_check(pipeline, kvpe_cache, slot_id=dst_slot, n_chunks=n_chunks, real_len=real_len)
     print(f"[kv-migrate-validate] AFTER dst_slot={dst_slot} min_pcc={dst_pcc:.6f}")
 
     logger.success(
@@ -255,7 +281,7 @@ def validate_migration_kv(
     return src_pcc, dst_pcc
 
 
-def validate_migrations_pairwise(pipeline: TtPrefillRuntime, pairs):
+def validate_migrations_pairwise(pipeline: TtPrefillRuntime, kvpe_cache, pairs):
     """Validate N concurrent slot->slot migrations of distinct prompts.
 
     Asserts each dst slot's KV equals its own src slot's (migration fidelity + cross-talk detection),
@@ -279,7 +305,7 @@ def validate_migrations_pairwise(pipeline: TtPrefillRuntime, pairs):
     # device ([num_layers, 1, seq_len_cache, kvpe] each, ~8 GiB) and free them before the next pair.
     # No un-rotation is needed: both endpoints carry the same block-cyclic rotation, so comparing
     # them directly is rotation-invariant.
-    dev_shape = list(pipeline.kvpe_cache.shape)  # slice dim 0 (user*layer); keep dims 1..3 full
+    dev_shape = list(kvpe_cache.shape)  # slice dim 0 (user*layer); keep dims 1..3 full
 
     def _read_user_block(user: int) -> "torch.Tensor":
         # memory_config=DRAM interleaved is REQUIRED: kvpe_cache is ND-sharded ROUND_ROBIN_1D over
@@ -288,7 +314,7 @@ def validate_migrations_pairwise(pipeline: TtPrefillRuntime, pairs):
         # Forcing an interleaved output makes slice gather from the banks correctly and stay
         # host-readable (verified bit-exact vs the full-cache gather in test_kv_slice_read_repro).
         sl = ttnn.slice(
-            pipeline.kvpe_cache,
+            kvpe_cache,
             [user * num_layers, 0, 0, 0],
             [(user + 1) * num_layers, dev_shape[1], dev_shape[2], dev_shape[3]],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -341,15 +367,16 @@ def validate_migrations_pairwise(pipeline: TtPrefillRuntime, pairs):
         d = next((dd for ss, dd in pairs if ss == s), None)
         gpt = golden_pt[s]
         logger.info(f"[kv-migrate-validate] golden anchor: src slot {s} (n_chunks={gchunks}) pt={gpt or 'global'}")
-        sp = _kv_cache_pcc_check(pipeline, s, gchunks, pt_path_override=gpt)
+        sp = kv_cache_pcc_check(pipeline, kvpe_cache, slot_id=s, n_chunks=gchunks, pt_path_override=gpt)
         print(f"[kv-migrate-validate] GOLDEN src_slot={s} min_pcc={sp:.6f}")
         if d is not None:
-            dp = _kv_cache_pcc_check(pipeline, d, gchunks, pt_path_override=gpt)
+            dp = kv_cache_pcc_check(pipeline, kvpe_cache, slot_id=d, n_chunks=gchunks, pt_path_override=gpt)
             print(f"[kv-migrate-validate] GOLDEN dst_slot={d} min_pcc={dp:.6f}")
 
 
 def validate_after_prefill(
     pipeline: TtPrefillRuntime,
+    kvpe_cache,
     *,
     chunks_per_slot: dict,
     real_end_per_slot: dict,
@@ -411,25 +438,25 @@ def validate_after_prefill(
         ttnn.synchronize_device(pipeline.mesh_device)
         if os.environ.get("PREFILL_MIGRATE_PAIRWISE", "0") == "1":
             # N distinct prompts: dst==src fidelity + optional per-slot golden anchor.
-            validate_migrations_pairwise(pipeline, pairs)
+            validate_migrations_pairwise(pipeline, kvpe_cache, pairs)
         else:
             # Same prompt across slots: PCC each (src, dst) against the shared golden.
             for src_slot, dst_slot in pairs:
                 n_src = chunks_per_slot.get(src_slot, total_chunks)  # per-slot chunk count (NOT the loop total)
                 rl_src = real_end_per_slot.get(src_slot)  # real ISL (excludes pad); dst copies the same range
-                validate_migration_kv(pipeline, src_slot, dst_slot, n_src, real_len=rl_src)
+                validate_migration_kv(pipeline, kvpe_cache, src_slot, dst_slot, n_src, real_len=rl_src)
         logger.success(f"[kv-migrate-validate] ALL {len(pairs)} migrated pair(s) PASSED")
     else:
         # Validate EVERY populated slot, each over its own populated range: chunks_per_slot[s]
         # chunks and real_len = that slot's actual_end (excludes padding). Multi-user prefill
         # fills several slots with different prompts; each is PCC'd against its own golden over
-        # only its real (non-pad) positions. _kv_cache_pcc_check raises on a sub-threshold slot
+        # only its real (non-pad) positions. kv_cache_pcc_check raises on a sub-threshold slot
         # (unless RECORD_ONLY), so any failure aborts here.
         #
         # Per-slot golden: DEEPSEEK_PREFILL_TRACE_PT may be a COMMA-SEPARATED list, one .pt per
         # slot in slot order (slot s -> golden[s]) — for multi-user runs where each slot holds a
         # different prompt. A single value (no comma) is the shared golden for every slot (the
-        # _kv_cache_pcc_check default env read handles that case).
+        # kv_cache_pcc_check default env read handles that case).
         golden_list = [p.strip() for p in os.environ.get("DEEPSEEK_PREFILL_TRACE_PT", "").split(",") if p.strip()]
         multi_golden = len(golden_list) > 1
         slots = sorted(chunks_per_slot)
@@ -449,9 +476,11 @@ def validate_after_prefill(
                     )
                 gpt = golden_list[s]
             else:
-                gpt = None  # _kv_cache_pcc_check reads the single DEEPSEEK_PREFILL_TRACE_PT
+                gpt = None  # kv_cache_pcc_check reads the single DEEPSEEK_PREFILL_TRACE_PT
             logger.info(f"[request]  -> slot={s} n_chunks={n_chunks_s} real_len={real_len} golden={gpt or '<shared>'}")
-            slot_pccs[s] = _kv_cache_pcc_check(pipeline, s, n_chunks_s, pt_path_override=gpt, real_len=real_len)
+            slot_pccs[s] = kv_cache_pcc_check(
+                pipeline, kvpe_cache, slot_id=s, n_chunks=n_chunks_s, pt_path_override=gpt, real_len=real_len
+            )
         logger.success(
             f"[request] all {len(slots)} slot(s) PASSED KV-cache PCC: "
             + ", ".join(f"slot{s}={p:.6f}" for s, p in sorted(slot_pccs.items()))

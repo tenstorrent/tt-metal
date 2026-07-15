@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -25,7 +25,7 @@ void kernel_main() {
     const auto s = TensorAccessor(src_args, src_addr);
 
     Noc noc;
-    CircularBuffer cb(cb_id_in0);
+    DataflowBuffer dfb(cb_id_in0);
 
 // read a ublock of pages from src to CB, and then push the ublock to unpacker
 #ifdef BACKWARDS
@@ -35,9 +35,9 @@ void kernel_main() {
     uint32_t end_id = start_id + num_pages;
     for (uint32_t i = start_id; i < end_id; ++i) {
 #endif
-        cb.reserve_back(onepage);
-        noc.async_read(s, cb, page_bytes, {.page_id = i}, {.offset_bytes = 0});
+        dfb.reserve_back(onepage);
+        noc.async_read(s, dfb, page_bytes, {.page_id = i}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb.push_back(onepage);
+        dfb.push_back(onepage);
     }
 }

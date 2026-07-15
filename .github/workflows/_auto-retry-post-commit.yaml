@@ -14,8 +14,7 @@ on:
   workflow_run:
     workflows:
       - "Sanity tests"
-      - "(Single-card) Tests for new models"
-      - "zzz TG Quick tests"
+      - "(Galaxy) Sanity"
       - "Sanity tests nightly debug run"
     types:
       - completed

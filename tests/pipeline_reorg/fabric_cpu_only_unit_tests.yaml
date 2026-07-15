@@ -71,7 +71,9 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-blitz-decode
   skus:
     cpu_medium:
-      timeout: 15
+      # ~17 tt-run combos incl. slow 48/64/80-stage rings on SC16/SC20 clusters; the
+      # suite has grown past the old 15-min cap (deterministic timeout on main nightly).
+      timeout: 25
   team: scaleout
   arch: wormhole_b0
   owner_id: U03FJB5TM5Y # Ridvan Song

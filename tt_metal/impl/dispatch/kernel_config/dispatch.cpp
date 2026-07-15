@@ -596,9 +596,9 @@ void DispatchKernel::CreateKernel() {
 void DispatchKernel::ConfigureCore() {
     TT_ASSERT(static_config_.dispatch_telemetry_addr.has_value());
     TT_ASSERT(static_config_.dispatch_telemetry_disabled.has_value());
-    DispatchCoreTelemetry zero_dispatch_telemetry{};
+    dispatch_telemetry_types::DispatchCoreTelemetry zero_dispatch_telemetry{};
     if (static_config_.dispatch_telemetry_disabled.value()) {
-        zero_dispatch_telemetry.signature = INVALID_TELEMETRY_SIGNATURE;
+        zero_dispatch_telemetry.signature = dispatch_telemetry_types::INVALID_TELEMETRY_SIGNATURE;
     }
     detail::WriteToDeviceL1(
         device_,

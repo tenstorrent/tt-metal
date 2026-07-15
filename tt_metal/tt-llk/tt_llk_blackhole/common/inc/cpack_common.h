@@ -300,9 +300,7 @@ __attribute__((noinline)) bool is_packer_to_L1_conversion_supported(const DataFo
 template <PackMode pack_mode = PackMode::Default>
 inline void set_packer_strides(const std::uint32_t pack_src_format, const std::uint32_t tile_c_dim)
 {
-    std::uint32_t x_stride = (pack_src_format & 0x3) == to_underlying(DataFormat::Float32)   ? 4
-                             : (pack_src_format & 0x3) == to_underlying(DataFormat::Float16) ? 2
-                                                                                             : 1;
+    std::uint32_t x_stride = datum_size_in_bytes(pack_src_format);
     std::uint32_t y_stride = FACE_C_DIM * x_stride;
     std::uint32_t w_stride = TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * x_stride;
 
@@ -687,12 +685,11 @@ inline void select_packer_dest_registers()
 inline void program_packer_destination(std::uint32_t addr)
 {
     LLK_ASSERT(is_valid_L1_address(addr), "L1 address must be in valid L1 memory region");
-    /*
-       The GPR OUTPUT_ADDR is only used by the packer mop when writing tile headers.
-       Since we do not write tile headers in tt-metal, we do not need to wait for
-       packer to finish or say put a stallwait at this point.
-       We just need to make sure we wait before issuing the WRCFG.
-    */
+    // No packer-drain STALLWAIT is needed before reprogramming the destination: the pack thread issues its
+    // instruction stream in order, so each tile's PACR has already started -- and latched L1_Dest_addr,
+    // sampled at PACR start -- before the next call's WRCFG reprograms it, and the Last=1 PACR that ends each
+    // pack MOP drains the packer and forces the next pack to re-sample L1_Dest_addr. The STALLWAIT below is
+    // only the GPR-producer fence: it ensures the SETDMAREG write to OUTPUT_ADDR retires before WRCFG reads it.
     std::uint32_t new_l1_addr = (1 << 31) | addr;
     TT_SETDMAREG(0, LOWER_HALFWORD(addr), 0, LO_16(p_gpr_pack::OUTPUT_ADDR));
     TT_SETDMAREG(0, UPPER_HALFWORD(new_l1_addr), 0, HI_16(p_gpr_pack::OUTPUT_ADDR));

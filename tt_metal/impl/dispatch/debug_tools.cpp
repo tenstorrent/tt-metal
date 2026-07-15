@@ -259,6 +259,7 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd* cmd, uint32_t cmd_addr, std::ofstream&
             case CQ_DISPATCH_CMD_SEND_GO_SIGNAL:
             case CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL:
             case CQ_DISPATCH_CMD_TERMINATE:
+            case CQ_DISPATCH_CMD_RT_PROFILER_FLUSH:
             case CQ_DISPATCH_CMD_SET_WRITE_OFFSET: break;
             default: TT_THROW("Unrecognized dispatch command: {}", cmd_id); break;
         }

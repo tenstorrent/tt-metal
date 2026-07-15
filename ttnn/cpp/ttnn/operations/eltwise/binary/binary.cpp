@@ -909,7 +909,7 @@ Tensor binary_operation_addalpha(
     float alpha,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    SmallVector<unary::EltwiseUnaryWithParam> rhs_activations{{unary::UnaryOpType::MUL_UNARY_SFPU, alpha}};
+    ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations{{unary::UnaryOpType::MUL_UNARY_SFPU, alpha}};
     return ttnn::detail::invoke_binary_ng(
         lhs,
         rhs,
@@ -931,7 +931,7 @@ Tensor binary_operation_subalpha(
     float alpha,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    SmallVector<unary::EltwiseUnaryWithParam> rhs_activations{{unary::UnaryOpType::MUL_UNARY_SFPU, alpha}};
+    ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations{{unary::UnaryOpType::MUL_UNARY_SFPU, alpha}};
     return ttnn::detail::invoke_binary_ng(
         lhs,
         rhs,

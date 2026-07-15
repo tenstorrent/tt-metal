@@ -79,9 +79,9 @@ void kernel_main() {
     // ---- Phase 2: write-back loop ----
     // Tiles arrive in the same order as the reader and compute kernels.
     //
-    // Local-L1 self-write: no address-generator trait is applicable, so fall back
-    // to raw noc_async_write(..., get_noc_addr(addr), ...). CB wait/pop and the
-    // writes-flushed barrier still go through the experimental API.
+    // Local-L1 self-write via the Noc wrapper's UnicastEndpoint form: no
+    // address-generator trait is applicable, so the endpoint carries explicit
+    // noc_x/noc_y/addr. CB wait/pop and the writes-flushed barrier use the Device 2.0 API.
 
     if (has_bottom_pad_core) {
         // ---- Mode B ----

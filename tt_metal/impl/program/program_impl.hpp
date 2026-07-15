@@ -226,6 +226,9 @@ public:
     // Always used in conjunction with validate_circular_buffer_region and compile
     void allocate_circular_buffers(const IDevice* device);
     void allocate_dataflow_buffers(const IDevice* device);
+    // Metal 2.0 only: allocate Program-scope L1 for each kernel's scratchpads,
+    // and patch the base address into the CRTA buffer
+    void allocate_scratchpads(const IDevice* device);
     bool is_finalized() const;
     bool is_compiled() const { return !compiled_.empty(); }
     void set_finalized();
@@ -272,7 +275,7 @@ public:
         const KernelsGetter& kernels_getter,
         const KernelGroupsGetter& kernel_groups_getter,
         const SemaphoresGetter& semaphores_getter,
-        tt::stl::Span<ProgramImpl*> programs);
+        ttsl::Span<ProgramImpl*> programs);
 
     std::vector<uint32_t>& get_program_config_sizes() noexcept { return program_config_sizes_; }
 
@@ -525,6 +528,12 @@ private:
     std::unordered_set<uint64_t> compiled_;
     bool local_circular_buffer_allocation_needed_{false};
     bool local_dataflow_buffer_allocation_needed_{false};
+
+    // Scratchpads (Metal 2.0 only)
+    // Guards allocate_scratchpads to ensure that it runs once per allocation cycle.
+    // Scratchpad allocation occurs once on Program creation, and is re-run if the DFB layout
+    // is recomputed (due to a DFB size override at runtime).
+    bool scratchpads_allocated_{false};
 
     static constexpr uint8_t core_to_kernel_group_invalid_index = 0xff;
     std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;

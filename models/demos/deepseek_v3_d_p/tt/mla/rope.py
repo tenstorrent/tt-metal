@@ -106,6 +106,19 @@ def interleaved_to_halfsplit_perm(rope_dim: int = 64) -> torch.Tensor:
     return torch.cat([torch.arange(0, rope_dim, 2), torch.arange(1, rope_dim, 2)])
 
 
+def interleaved_perm_matrix(rope_dim: int = 64) -> torch.Tensor:
+    """``[rope_dim, rope_dim]`` permutation matrix that reorders a half-split rope layout into the
+    interleaved one (``out = in @ P``). Purpose: run a half-split (DeepSeek) q/k through the
+    interleaved-only ``rotary_embedding_indexed`` op — applied to BOTH q and k the permutation cancels
+    in ``q·k`` (score/top-k unchanged), while letting the interleaved op pair the right dims with each
+    frequency. Built from ``interleaved_to_halfsplit_perm`` (its inverse), the canonical convention:
+    ``interleaved = halfsplit[argsort(p)]``, so ``P[argsort(p)[j], j] = 1``."""
+    src = torch.argsort(interleaved_to_halfsplit_perm(rope_dim))  # out[j] = in[src[j]]
+    perm = torch.zeros(rope_dim, rope_dim)
+    perm[src, torch.arange(rope_dim)] = 1.0
+    return perm
+
+
 class RotarySetup:
     """Rotary positional embedding setup for MLA prefill with SP sharding and balanced reordering."""
 
@@ -246,3 +259,24 @@ class RotarySetup:
         )
 
         return {"cos_matrix": cos_matrix, "sin_matrix": sin_matrix, "trans_matrix": trans_matrix}
+
+    def get_indexer_rope_tables(self, interleave: bool) -> dict[str, ttnn.Tensor]:
+        """Full-length REPLICATED cos/sin (+ trans_matrix iff ``interleave``) for the DSA lightning
+        indexer's natural-path RoPE. Distinct from ``get_rope_tensors`` (SP-sharded, interleaved-only,
+        for the MLA q_pe/k_pe): the indexer keeps a replicated full/gathered key cache, chooses its
+        convention per config (GLM interleaved -> ``rotary_embedding_llama``; DeepSeek half-split ->
+        ``rotary_embedding_hf``), and slices the tables per chunk itself. Pure rotations (no mscale),
+        same theta/YaRN as the MLA. Returns ``{"cos", "sin", "trans"}`` with ``trans=None`` for the
+        half-split (DeepSeek) convention."""
+        cos, sin = get_cos_sin_matrix(self.hf_config, interleave=interleave)
+
+        def repl(t):
+            return ttnn.from_torch(
+                t.to(torch.bfloat16),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+
+        return {"cos": repl(cos), "sin": repl(sin), "trans": repl(get_rot_transformation_mat()) if interleave else None}

@@ -588,3 +588,89 @@ def test_requant_all_tensors_per_channel_to_per_tensor_2d(device, x0, x1, input_
     result_tr = ttnn.to_torch(derequantized_tt)
     check_pcc(input_tr, result_tr, True)
     check_match_ratio(input_tr, result_tr, input_dtype)
+
+
+@pytest.mark.parametrize("x0", [32, 128])
+@pytest.mark.parametrize("x1", [32, 128])
+@pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("q_max", [127, 255])
+def test_quant_dequant_requant_uint8_per_tensor_2d(device, x0, x1, input_dtype, q_max):
+    """Test quantize, dequantize and requantize (per-tensor) for uint8"""
+    torch.manual_seed(0)
+    input_tr = torch.rand(x0, x1, dtype=torch.float32)
+    scale, zero_point = calculate_scale_zero_point_per_tensor(input_tr, 0, q_max)
+
+    quantized_tr = torch.quantize_per_tensor(input_tr, scale, zero_point, dtype=torch.quint8)
+
+    input_tt = ttnn.from_torch(input_tr, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    quantized_tt = ttnn.quantize(input_tt, scale, zero_point, dtype=ttnn.uint8)
+    assert quantized_tt.dtype == ttnn.uint8
+    result_q = ttnn.to_torch(quantized_tt)
+    check_pcc(quantized_tr.int_repr(), result_q, False)
+    check_match_ratio(quantized_tr, result_q, ttnn.uint8)
+
+    dequantized_tr = torch.dequantize(quantized_tr)
+    dequantized_tt = ttnn.dequantize(quantized_tt, scale, zero_point, dtype=input_dtype)
+    result_dq = ttnn.to_torch(dequantized_tt)
+    check_pcc(dequantized_tr, result_dq, False)
+    check_match_ratio(dequantized_tr, result_dq, input_dtype)
+
+    scale_r, zero_point_r = calculate_scale_zero_point_per_tensor(input_tr, 0, 200)
+    requantized_tt = ttnn.requantize(quantized_tt, scale, zero_point, scale_r, zero_point_r, dtype=ttnn.uint8)
+    assert requantized_tt.dtype == ttnn.uint8
+    rederequantized_tt = ttnn.dequantize(requantized_tt, scale_r, zero_point_r, dtype=input_dtype)
+    result_rq = ttnn.to_torch(rederequantized_tt)
+    check_pcc(input_tr, result_rq, True)
+    check_match_ratio(input_tr, result_rq, input_dtype)
+
+
+def test_quantize_uint8_upper_saturation(device):
+    """Test quantize uint8 upper saturation to 255"""
+    row = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 2.0, 5.0]
+    input_tr = torch.tensor([row], dtype=torch.float32)
+    scale, zero_point = 1.0 / 255.0, 0
+    expected = torch.clamp(torch.round(input_tr / scale + zero_point), 0, 255).to(torch.uint8)
+
+    input_tt = ttnn.from_torch(input_tr, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    out_tt = ttnn.quantize(input_tt, scale, zero_point, dtype=ttnn.uint8)
+    assert out_tt.dtype == ttnn.uint8
+    result = ttnn.to_torch(out_tt)
+    assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
+
+
+def test_requantize_uint8_upper_saturation(device):
+    """Test requantize uint8 upper saturation to 255 on the output side"""
+    q_in = torch.tensor([[0, 50, 100, 200, 255, 300, 1000]], dtype=torch.int32)
+    in_scale, in_zp, out_scale, out_zp = 1.0, 0, 1.0, 0
+    expected = torch.clamp(torch.round((q_in - in_zp) * in_scale / out_scale + out_zp), 0, 255).to(torch.uint8)
+
+    q_in_tt = ttnn.from_torch(q_in, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    out_tt = ttnn.requantize(q_in_tt, in_scale, in_zp, out_scale, out_zp, dtype=ttnn.uint8)
+    assert out_tt.dtype == ttnn.uint8
+    result = ttnn.to_torch(out_tt)
+    assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
+
+
+@pytest.mark.parametrize("in_dtype,in_q_max", [(ttnn.int32, 127), (ttnn.uint8, 255)])
+@pytest.mark.parametrize("out_dtype,out_q_max", [(ttnn.int32, 127), (ttnn.uint8, 255)])
+def test_requant_uint8_mixed_dtype_per_tensor_2d(device, in_dtype, in_q_max, out_dtype, out_q_max):
+    """Test requant across int32/uint8 input and output dtype combinations (per-tensor)"""
+    torch.manual_seed(0)
+    input_tr = torch.rand(64, 64, dtype=torch.float32)
+
+    in_q_min = 0 if in_dtype == ttnn.uint8 else -128
+    scale, zero_point = calculate_scale_zero_point_per_tensor(input_tr, in_q_min, in_q_max)
+
+    input_tt = ttnn.from_torch(input_tr, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    quantized_tt = ttnn.quantize(input_tt, scale, zero_point, dtype=in_dtype)
+    assert quantized_tt.dtype == in_dtype
+
+    out_q_min = 0 if out_dtype == ttnn.uint8 else -100
+    scale_r, zero_point_r = calculate_scale_zero_point_per_tensor(input_tr, out_q_min, out_q_max)
+    requantized_tt = ttnn.requantize(quantized_tt, scale, zero_point, scale_r, zero_point_r, dtype=out_dtype)
+    assert requantized_tt.dtype == out_dtype
+
+    dequantized_tt = ttnn.dequantize(requantized_tt, scale_r, zero_point_r, dtype=ttnn.float32)
+    result_tr = ttnn.to_torch(dequantized_tt)
+    check_pcc(input_tr, result_tr, True)
+    check_match_ratio(input_tr, result_tr, ttnn.float32)

@@ -248,8 +248,6 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
 
     auto* const input_grad_buf = input_grad.buffer();
 
-    const auto gamma_addr = gamma_has_value ? gamma.value().buffer()->address() : 0u;
-
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
@@ -262,35 +260,28 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
             TT_THROW("Core not in specified core ranges.");
         }
 
-        // NOTE: do not pass Buffer* here. gamma_addr is an optional-tensor address
-        // and tile_offset/etc are per-core shape-derived; using BufferBinding would
-        // skip create_descriptor() on cache hits and leave those scalars stale.
-        reader_desc.runtime_args.emplace_back(
-            core,
-            tt::tt_metal::KernelDescriptor::CoreRuntimeArgs{
-                output_grad_buf->address(),
-                input_buf->address(),
-                mean_buf->address(),
-                rstd_buf->address(),
-                gamma_addr,
-                tile_offset,
-                num_rows_per_core,
-                num_inner_tiles,
-                num_channels,
-                num_groups,
-                origin_h,
-                origin_w,
-            });
+        // reader
+        KernelDescriptor::RTArgList reader_args;
+        reader_args.push_back(output_grad_buf);
+        reader_args.push_back(input_buf);
+        reader_args.push_back(mean_buf);
+        reader_args.push_back(rstd_buf);
+        if (gamma_has_value) {
+            reader_args.push_back(gamma.value().buffer());
+        } else {
+            reader_args.push_back(0u);
+        }
+        reader_args.push_back(tile_offset);
+        reader_args.push_back(num_rows_per_core);
+        reader_args.push_back(num_inner_tiles);
+        reader_args.push_back(num_channels);
+        reader_args.push_back(num_groups);
+        reader_args.push_back(origin_h);
+        reader_args.push_back(origin_w);
+        reader_desc.emplace_runtime_args(core, reader_args);
 
         // writer
-        writer_desc.runtime_args.emplace_back(
-            core,
-            tt::tt_metal::KernelDescriptor::CoreRuntimeArgs{
-                input_grad_buf->address(),
-                tile_offset,
-                num_rows_per_core,
-                num_inner_tiles,
-            });
+        writer_desc.emplace_runtime_args(core, {input_grad_buf, tile_offset, num_rows_per_core, num_inner_tiles});
 
         tile_offset += num_rows_per_core * num_inner_tiles;
     }

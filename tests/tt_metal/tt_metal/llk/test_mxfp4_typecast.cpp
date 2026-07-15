@@ -98,9 +98,7 @@ static vector<uint32_t> run_mxfp4_typecast(
         .num_threads = 1,
         .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
         .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::KernelSpec writer_spec{
@@ -111,9 +109,7 @@ static vector<uint32_t> run_mxfp4_typecast(
         .num_threads = 1,
         .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::KernelSpec compute_spec{
@@ -137,7 +133,7 @@ static vector<uint32_t> run_mxfp4_typecast(
              }},
         .compile_time_args = {{"per_core_tile_cnt", num_tiles}},
         .hw_config =
-            experimental::ComputeHardwareConfig{
+            experimental::ComputeGen2Config{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
             },
     };
@@ -168,21 +164,21 @@ static vector<uint32_t> run_mxfp4_typecast(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values =
-                {{node,
-                  {{"src_addr", src_buffer->address()},
-                   {"src_bank_id", 0u},
-                   {"num_tiles", num_tiles},
-                   {"dram_page_stride", src_dram_stride}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src_addr", src_buffer->address()},
+                 {"src_bank_id", 0u},
+                 {"num_tiles", num_tiles},
+                 {"dram_page_stride", src_dram_stride}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values =
-                {{node,
-                  {{"dst_addr", dst_buffer->address()},
-                   {"dst_bank_id", 0u},
-                   {"num_tiles", num_tiles},
-                   {"dram_page_stride", dst_dram_stride}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dst_addr", dst_buffer->address()},
+                 {"dst_bank_id", 0u},
+                 {"num_tiles", num_tiles},
+                 {"dram_page_stride", dst_dram_stride}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
@@ -217,7 +213,7 @@ static vector<uint32_t> create_random_vector_of_mxfp4(
 	}
 
     vector<uint32_t> packed =
-        pack_as_mx_tiles(tt::DataFormat::MxFp4, tt::stl::make_const_span(fp32_vec), /*row_major_input=*/true);
+        pack_as_mx_tiles(tt::DataFormat::MxFp4, ttsl::make_const_span(fp32_vec), /*row_major_input=*/true);
     TT_FATAL(
         packed.size() * sizeof(uint32_t) == num_tiles * single_tile_size,
         "MXFP4 packed size {} bytes does not match expected {} bytes",
@@ -242,7 +238,7 @@ struct TileLayout {
 static TileLayout get_mxfp4_tile_layout() {
     constexpr uint32_t kTileHW = 1024;
     std::vector<float> zeros(kTileHW, 0.0f);
-    auto packed = pack_as_mx_tiles(tt::DataFormat::MxFp4, tt::stl::make_const_span(zeros), /*row_major_input=*/true);
+    auto packed = pack_as_mx_tiles(tt::DataFormat::MxFp4, ttsl::make_const_span(zeros), /*row_major_input=*/true);
     const size_t elem_words = kTileHW / 8;  // 8 nibbles per uint32
     const size_t exp_words = packed.size() - elem_words;
     return TileLayout{.total_words = packed.size(), .exp_bytes = exp_words * 4};

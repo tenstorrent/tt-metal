@@ -46,6 +46,7 @@
 #include "profiler_paths.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
 #include <umd/device/types/arch.hpp>
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 namespace fs = std::filesystem;
 
@@ -179,6 +180,9 @@ void JitBuildEnv::init(
         }
         if (rtoptions.get_profiler_sum()) {
             profiler_options |= PROFILER_OPT_DO_SUM;
+        }
+        if (rtoptions.get_profiler_accumulate()) {
+            profiler_options |= PROFILER_OPT_DO_ACCUMULATE;
         }
         this->defines_ += "-DPROFILE_KERNEL=" + std::to_string(profiler_options) + " ";
 
@@ -510,7 +514,7 @@ void JitBuildState::write_build_state_hash(const string& out_dir) const {
 }
 
 void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* settings, size_t src_index) const {
-    // ZoneScoped;
+    TTZoneScopedD(JIT);
 
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
     string defines = this->defines_;
@@ -599,7 +603,7 @@ bool JitBuildState::need_compile(const string& out_dir, const string& obj) const
 
 std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
     const string& out_dir, const JitBuildSettings* settings, bool state_changed) const {
-    // ZoneScoped;
+    TTZoneScopedD(JIT);
     TT_FATAL(
         this->srcs_.size() <= kMaxBuildBitset,
         "Number of source files ({}) exceeds kMaxBuildBitset ({})",
@@ -687,7 +691,7 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
 // same name don't result in duplicate symbols but B can reference A's symbols. Force the fw_export symbols to remain
 // strong so to propagate link addresses
 void JitBuildState::weaken(const string& out_dir) const {
-    // ZoneScoped;
+    TTZoneScopedD(JIT);
 
     std::string pathname_in = out_dir + target_name_ + ".elf";
     jit_build::utils::FileRenamer out_file(this->weakened_firmware_name_);
@@ -707,7 +711,7 @@ void JitBuildState::weaken(const string& out_dir) const {
 }
 
 void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const {
-    // ZoneScoped;
+    TTZoneScopedD(JIT);
     static std::atomic<bool> new_log = true;
     // Mutex to serialize concurrent writes to the shared zone src locations log file.
     // Multiple kernels are compiled in parallel; without serialization their grep outputs
@@ -730,7 +734,7 @@ void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const
 }
 
 void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitBuildState* const> link_targets) const {
-    // ZoneScoped;
+    TTZoneScopedD(JIT);
     auto t0_build = std::chrono::steady_clock::now();
     auto kernel_name = settings ? std::string_view{settings->get_full_kernel_name()} : "";
     std::string out_dir = fmt::format("{}{}{}/", this->out_path_, kernel_name, this->target_name_);
@@ -883,7 +887,7 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
 }
 
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
-    // ZoneScoped;
+    TTZoneScopedD(JIT);
     auto t0 = std::chrono::steady_clock::now();
     build.build(settings);
     auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();

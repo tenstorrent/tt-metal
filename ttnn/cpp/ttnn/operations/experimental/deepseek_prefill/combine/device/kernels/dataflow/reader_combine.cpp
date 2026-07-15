@@ -179,7 +179,7 @@ void kernel_main() {
     // refer to the same logical sem; pair-scoped allocation guarantees the L1 offset is
     // identical on both cores.
     volatile tt_l1_ptr uint32_t* data_ready_sem_ptrs[num_untilizer_cores_group];
-    uint64_t self_data_ready_noc_addrs[num_untilizer_cores_group];
+    [[maybe_unused]] uint64_t self_data_ready_noc_addrs[num_untilizer_cores_group];
     uint64_t untilizer_credits_noc_addrs[num_untilizer_cores_group];
     uint32_t untilizer_noc_x[num_untilizer_cores_group];
     uint32_t untilizer_noc_y[num_untilizer_cores_group];

@@ -356,6 +356,7 @@ def run_routed_expert(
         torch_weights=torch_weights_list,  # None when run_pcc_check=False
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
+        activation=ttnn.RoutedExpertActivation.Silu,
     )
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_routed_expert_creation")

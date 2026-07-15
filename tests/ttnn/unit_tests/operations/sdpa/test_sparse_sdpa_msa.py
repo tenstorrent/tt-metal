@@ -180,3 +180,75 @@ def test_msa_bad_n_kv_rejected_on_hit(device, expect_error):
     q_bad, k_bad, v_bad, _ = make_msa_inputs(H, 2, S, T, topk, _D, causal=False, seed=42)
     with expect_error(RuntimeError, "indices must be"):
         _msa_op(device, q_bad, _tile(k_bad, device), _tile(v_bad, device), indices)
+
+
+# ---- Causal (diagonal-block token-level mask) coverage ----
+# Block selection alone is causal only at block granularity; a query's own (diagonal) block holds future
+# tokens that must be masked. These exercise the chunk_start_idx path that enables the token-level mask.
+
+
+@pytest.mark.parametrize("H,n_kv", [(16, 1), (64, 4)], ids=["mha", "gqa"])
+def test_golden_all_blocks_causal_equals_dense_causal(H, n_kv):
+    # With every causally-visible block selected, the masked reference must equal full causal attention.
+    d, S, nblk = _D, 320, 4  # S spans blocks 0..2; the diagonal block is partially filled.
+    T = nblk * BLK_KV
+    q, k, v, indices = make_msa_inputs(H, n_kv, S, T, topk=nblk, d=d, causal=True, seed=7)
+    scale = d**-0.5
+    causal_ref = sparse_attention_ref_msa(q, k, v, indices, scale, causal=True)
+    dense_causal = dense_grouped_kv_attention(q, k, v, scale, causal=True)
+    assert (
+        pcc(causal_ref, dense_causal) > REFERENCE_PCC
+    ), f"sparse(causal) != dense(causal), pcc={pcc(causal_ref, dense_causal)}"
+    # And the legacy block-only reference is NOT causal -> the fixed reference genuinely tests something new.
+    block_only = sparse_attention_ref_msa(q, k, v, indices, scale, causal=False)
+    assert pcc(block_only, dense_causal) < 0.95, "block-only reference unexpectedly matches causal"
+
+
+@run_for_blackhole()
+def test_msa_native_causal_pcc(device):
+    # S spans multiple blocks with the diagonal block partially filled, so the token-level mask matters.
+    # nblk/topk=16 keeps TOPK*4 64B-aligned; causal selection still picks only blocks 0..local (rest sentinel).
+    d, H, n_kv, S, nblk = _D, 64, 4, 320, 16
+    T = nblk * BLK_KV
+    q, k, v, indices = make_msa_inputs(H, n_kv, S, T, topk=nblk, d=d, causal=True, seed=31)
+    gold = sparse_attention_ref_msa(q, k, v, indices, d**-0.5, causal=True)
+    # chunk_start_idx=0 enables the token-level diagonal-block causal mask.
+    out = run_op_msa_native(q, k, v, indices, device, chunk_start_idx=0)
+    assert pcc(out, gold) > DEVICE_PCC, f"causal MSA pcc={pcc(out, gold)}"
+
+
+@run_for_blackhole()
+def test_msa_native_causal_multiband_pcc(device):
+    # Query heads per KV group padded to > dst_size tile-rows force the compute kernel to process the heads
+    # in more than one DEST band (qg>0). The token-level causal mask must land on every band, not just the
+    # first. bf16 DEST holds 8 tiles, so H_logical must exceed 256: H=288, n_kv=1 -> Sqt=9 -> 3 bands.
+    d, H, n_kv, S, nblk = _D, 288, 1, 320, 16
+    T = nblk * BLK_KV
+    q, k, v, indices = make_msa_inputs(H, n_kv, S, T, topk=nblk, d=d, causal=True, seed=31)
+    gold = sparse_attention_ref_msa(q, k, v, indices, d**-0.5, causal=True)
+    out = run_op_msa_native(q, k, v, indices, device, chunk_start_idx=0)
+    assert pcc(out, gold) > DEVICE_PCC, f"multi-band causal MSA pcc={pcc(out, gold)}"
+
+
+@run_for_blackhole()
+def test_msa_native_causal_fp8_q_rejected(device, expect_error):
+    # fp8 q is silently inaccurate with the causal mask: fp8-specific, and not fp32-DEST-related -- bf16 q with
+    # fp32_dest_acc_en forced on passes -- but the root cause is not yet identified. The op rejects the combo
+    # rather than returning wrong scores; bf16 q is the supported causal path.
+    d, H, n_kv, S, nblk = _D, 64, 4, 320, 16
+    T = nblk * BLK_KV
+    q, k, v, indices = make_msa_inputs(H, n_kv, S, T, topk=nblk, d=d, causal=True, seed=31)
+    with expect_error(RuntimeError, "fp8_e4m3 q is not supported"):
+        run_op_msa_native(q, k, v, indices, device, kv_dtype=ttnn.bfloat8_b, q_dtype=ttnn.fp8_e4m3, chunk_start_idx=0)
+
+
+@run_for_blackhole()
+def test_msa_native_causal_vs_noncausal_differs(device):
+    # Sanity that the mask is actually applied: with the diagonal block partially filled, the causal output
+    # must differ from the block-only (no chunk_start_idx) output.
+    d, H, S, nblk = _D, 16, 320, 16  # nblk/topk=16 -> TOPK*4 is 64B-aligned
+    T = nblk * BLK_KV
+    q, k, v, indices = make_msa_inputs(H, 1, S, T, topk=nblk, d=d, causal=True, seed=9)
+    out_causal = run_op_msa_native(q, k, v, indices, device, chunk_start_idx=0)
+    out_block_only = run_op_msa_native(q, k, v, indices, device)  # chunk_start_idx=None -> legacy path
+    assert pcc(out_causal, out_block_only) < 0.999, "causal mask had no effect vs block-only"

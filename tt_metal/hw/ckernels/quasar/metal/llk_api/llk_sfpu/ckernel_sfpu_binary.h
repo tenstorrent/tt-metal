@@ -88,7 +88,7 @@ inline void calculate_sfpu_binary(
                 }
                 v_endif;
             }
-            v_elseif(in0 == in1) { result = sfpi::vConst1; }
+            v_elseif(in0 == in1) { result = 1.0f; }
             v_endif;
 
             if constexpr (!is_fp32_dest_acc_en) {

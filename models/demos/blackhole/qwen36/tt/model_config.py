@@ -50,7 +50,8 @@ class Qwen36ModelArgs(ModelArgs):
         if not os.path.isfile(os.path.join(hf_model, "config.json")):
             from huggingface_hub import snapshot_download
 
-            os.environ["HF_MODEL"] = snapshot_download(hf_model)
+            offline = os.getenv("HF_HUB_OFFLINE") == "1" or os.getenv("CI") == "true"
+            os.environ["HF_MODEL"] = snapshot_download(hf_model, local_files_only=offline)
         super().__init__(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len, **kwargs)
 
         # The base resolves the checkpoint dir from HF_MODEL into self.CKPT_DIR; mirror
@@ -227,17 +228,18 @@ class Qwen36ModelArgs(ModelArgs):
     def weight_cache_path(self, dtype=None):
         """Return cache directory path for converted weight tensors.
 
-        Directory is created automatically by ttnn.as_tensor when first cache file is written.
+        Rooted at the framework ``model_cache_path`` (``TT_CACHE_PATH`` + device name), NOT the HF
+        checkpoint snapshot: the snapshot dir is often mounted read-only in CI, so caching there
+        silently never persists and every run regenerates all weights, exceeding the test timeout
+        for the full 64-layer model. Falls back to the checkpoint dir if no cache path resolved.
+        The directory is created by ttnn.as_tensor on first write.
 
-        Multi-device (TP) caches are qualified by mesh shape. Per-device weight
-        layouts differ by mesh shape — e.g. the framework Embedding shards the
-        hidden dim via ShardTensor2dMesh, so it is FULL on a (1,1) mesh but
-        fractured on (1,4) — and ttnn.as_tensor reloads a cache file as-is,
-        IGNORING the mesh_mapper. Without this qualifier a single-device run's
-        full weights would be silently reused as a TP run's shards (loading the
-        full hidden dim onto every device), which then fails the distributed
-        RMSNorm gamma/input alignment check. Single device keeps the original
-        unqualified path so the validated 9B behavior is unchanged.
+        Multi-device (TP) caches are qualified by mesh shape because per-device layouts differ by
+        mesh (e.g. the framework Embedding shards the hidden dim, so it is FULL on (1,1) but
+        fractured on (1,4)) and ttnn.as_tensor reloads a cache file as-is, IGNORING the mesh_mapper.
+        Without this a single-device run's full weights would be reused as a TP run's shards,
+        failing the distributed RMSNorm gamma/input alignment check. Single device keeps the
+        original unqualified path so validated 9B behavior is unchanged.
         """
         if dtype is None:
             dtype = self.weight_dtype
@@ -249,7 +251,8 @@ class Qwen36ModelArgs(ModelArgs):
             suffix = "tensor_cache_bf16"
         if self.num_devices > 1:
             suffix += "_mesh" + "x".join(str(d) for d in self.cluster_shape)
-        return Path(self.checkpoint_dir) / suffix
+        root = getattr(self, "model_cache_path", None) or Path(self.checkpoint_dir)
+        return Path(root) / suffix
 
     def load_state_dict(self):
         """Load + remap this checkpoint's weights via transformers from_pretrained.

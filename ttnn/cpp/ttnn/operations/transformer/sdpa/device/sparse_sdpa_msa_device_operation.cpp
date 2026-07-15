@@ -6,6 +6,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/device.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <bit>
@@ -107,6 +108,10 @@ void SparseSDPAMsaOperation::validate_on_program_cache_miss(
     // q is bf16 or fp8_e4m3. K/V are tiled bf16 or bfp8_b. Indices are uint32 block ids.
     const bool q_is_fp8 = (q.dtype() == DataType::FP8_E4M3);
     TT_FATAL(q.dtype() == DataType::BFLOAT16 || q_is_fp8, "sparse_sdpa_msa: q must be bf16 or fp8_e4m3");
+    // fp8 Q is silently inaccurate with the token-level causal mask (fp8-specific; root cause not yet identified)
+    TT_FATAL(
+        !(attrs.causal_enabled() && q_is_fp8),
+        "sparse_sdpa_msa: causal masking (chunk_start_idx) with fp8_e4m3 q is not supported; use bf16 q");
     TT_FATAL(
         k.dtype() == DataType::BFLOAT16 || k.dtype() == DataType::BFLOAT8_B,
         "sparse_sdpa_msa: k must be bf16 or bfp8_b");
@@ -181,20 +186,41 @@ ttsl::hash::hash_t SparseSDPAMsaOperation::compute_program_hash(
         t.v.memory_config().is_sharded() ? t.v.logical_shape() : tt::tt_metal::Shape{},
         t.v.logical_shape()[3],
         attrs.has_indexed_kv_cache(),
+        attrs.causal_enabled(),
         t.indices.logical_shape(),
         t.indices.dtype());
+}
+
+uint32_t SparseSDPAMsaOperation::compute_chunk_start_local(
+    const SparseSDPAMsaParams& attrs,
+    const SparseSDPAMsaInputs& t,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    // Derived exactly as indexer_score_msa's start, so the mask and the indexer's selection share one
+    // global-position frame.
+    if (!attrs.causal_enabled()) {
+        return 0;
+    }
+    const uint32_t S = t.q.logical_shape()[2];
+    const uint32_t device_index =
+        mesh_dispatch_coordinate.has_value()
+            ? ttnn::ccl::get_linearized_index_from_physical_coord(t.q, *mesh_dispatch_coordinate, attrs.cluster_axis)
+            : 0;
+    return attrs.chunk_start_idx.value() + device_index * S;
 }
 
 std::vector<tt::tt_metal::DynamicRuntimeArg> SparseSDPAMsaOperation::get_dynamic_runtime_args(
     const SparseSDPAMsaParams& attrs,
     const SparseSDPAMsaInputs& t,
     Tensor& /*output*/,
-    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     const uint32_t n_kv = t.k.logical_shape()[1];
-    // n_kv==1 non-indexed programs use zero K/V tile offsets and do not need per-group strides.
-    if (!attrs.has_indexed_kv_cache() && n_kv == 1) {
+    const bool patch_kv = attrs.has_indexed_kv_cache() || n_kv > 1;
+    // n_kv==1 non-indexed programs use zero K/V tile offsets and need no per-group strides; but causal
+    // masking still patches the per-device chunk_start every dispatch, so don't early-return then.
+    if (!patch_kv && !attrs.causal_enabled()) {
         return {};
     }
+    const uint32_t chunk_start_local = compute_chunk_start_local(attrs, t, mesh_dispatch_coordinate);
     // Indexed programs patch per-slot tile offsets on every dispatch. GQA programs also patch per-KV-group strides
     // because interleaved K/V T is intentionally excluded from the program hash.
     constexpr uint32_t tw = tt::constants::TILE_WIDTH;
@@ -212,9 +238,20 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> SparseSDPAMsaOperation::get_dynamic
     const uint32_t num_cores = grid.x * grid.y;
     std::vector<tt::tt_metal::DynamicRuntimeArg> args;
     // Reader and writer both gather K/V halves, so patch both kernels.
-    args.reserve((attrs.has_indexed_kv_cache() ? 4 : 0) * num_cores + (n_kv > 1 ? 4 : 0) * num_cores);
+    args.reserve(
+        (attrs.has_indexed_kv_cache() ? 4 : 0) * num_cores + (n_kv > 1 ? 4 : 0) * num_cores +
+        (attrs.causal_enabled() ? 1 : 0) * num_cores);
     for (uint32_t i = 0; i < num_cores; ++i) {
         const tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
+        if (attrs.causal_enabled()) {
+            // Same per-device chunk_start on every core (the reader derives per-token global pos from it).
+            args.push_back(
+                {sparse_sdpa_msa_rt::kReaderKernelIdx,
+                 core,
+                 sparse_sdpa_msa_rt::kReaderChunkStartArg,
+                 chunk_start_local,
+                 /*is_common=*/false});
+        }
         if (attrs.has_indexed_kv_cache()) {
             args.push_back(
                 {sparse_sdpa_msa_rt::kReaderKernelIdx,
@@ -279,7 +316,9 @@ Tensor sparse_sdpa_msa(
     float scale,
     uint32_t block_size,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<uint32_t> cache_batch_idx) {
+    std::optional<uint32_t> cache_batch_idx,
+    std::optional<uint32_t> chunk_start_idx,
+    std::optional<uint32_t> cluster_axis) {
     using OperationType = ttnn::prim::SparseSDPAMsaOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -287,6 +326,8 @@ Tensor sparse_sdpa_msa(
             .block_size = block_size,
             .compute_kernel_config = compute_kernel_config,
             .cache_batch_idx = cache_batch_idx,
+            .chunk_start_idx = chunk_start_idx,
+            .cluster_axis = cluster_axis,
         },
         OperationType::tensor_args_t{
             .q = q,

@@ -1,0 +1,6 @@
+{
+  "env": {
+    "PREFILL_MODEL": "deepseek_v3_d_p",
+    "PREFILL_GATE_FALLBACK_MODE": "DEVICE_FP32"
+  }
+}

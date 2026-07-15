@@ -32,17 +32,6 @@
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
 
-- name: Galaxy Flux.1-dev demo tests
-  cmd: |
-    export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache NO_PROMPT=1 TT_MM_THROTTLE_PERF=5
-    pytest models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k "4x8sp0tp1-dev" --timeout 1200
-  model: flux1
-  skus:
-    wh_galaxy_perf:
-      timeout: 15
-  owner_id: U08TED0JM9D # Samuel Adesoye
-  team: models
-
 - name: Galaxy Motif-Image-6B-Preview demo tests
   cmd: |
     export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache NO_PROMPT=1

@@ -23,29 +23,6 @@ from ...utils.substate import rename_substate
 from ...utils.tensor import bf16_tensor
 
 
-def _replace_padded_with_registers(
-    hidden_states: torch.Tensor,
-    attention_mask: torch.Tensor,
-    learnable_registers: torch.Tensor,
-    num_registers: int,
-) -> torch.Tensor:
-    """Replace padded tokens with tiled learnable registers, matching reference
-    Embeddings1DConnector._replace_padded_with_learnable_registers: real tokens are
-    left-packed, remaining positions filled with tiled registers."""
-    seq_len = hidden_states.shape[1]
-    registers = learnable_registers.repeat(seq_len // num_registers, 1)  # (seq_len, dim)
-    mask_binary = attention_mask.bool()  # (B, T): 1 = real token, 0 = padding
-
-    result = hidden_states.clone()
-    for b in range(hidden_states.shape[0]):
-        real_tokens = hidden_states[b, mask_binary[b], :]
-        padded = torch.nn.functional.pad(real_tokens, (0, 0, 0, seq_len - real_tokens.shape[0]))
-        # Flip: registers go where attention_mask was 0 (left-padded).
-        flipped_mask = torch.flip(mask_binary[b : b + 1], dims=[1]).squeeze(0).unsqueeze(-1).int()
-        result[b] = flipped_mask.float() * padded + (1 - flipped_mask.float()) * registers.to(padded)
-    return result
-
-
 class ConnectorBlock(Module):
     """Single transformer block for the embeddings connector (pre-norm, self-attn + FF)."""
 
@@ -61,18 +38,22 @@ class ConnectorBlock(Module):
         self.eps = eps
         tp_axis = parallel_config.tensor_parallel.mesh_axis
 
+        # fp32 weights + HiFi4: bf16 rounding here costs audio PCC at no latency saving on BH.
+        lin_dtype = ttnn.float32
+        fidelity = ttnn.MathFidelity.HiFi4
+
         # FSDP: shard weights on the sequence-parallel axis (gathered per-op).
         sp = parallel_config.sequence_parallel
         fsdp_mesh_axis = sp.mesh_axis if (sp is not None and sp.factor > 1) else None
 
-        col_kwargs = {"bias": True, "mesh_device": mesh_device, "mesh_axis": tp_axis}
+        col_kwargs = {"bias": True, "mesh_device": mesh_device, "mesh_axis": tp_axis, "dtype": lin_dtype}
         if fsdp_mesh_axis is not None:
             col_kwargs["fsdp_mesh_axis"] = fsdp_mesh_axis
             col_kwargs["ccl_manager"] = ccl_manager
         self.to_q = ColParallelLinear(dim, dim, **col_kwargs)
         self.to_k = ColParallelLinear(dim, dim, **col_kwargs)
         self.to_v = ColParallelLinear(dim, dim, **col_kwargs)
-        self.to_out = Linear(dim, dim, bias=True, mesh_device=mesh_device)
+        self.to_out = Linear(dim, dim, bias=True, mesh_device=mesh_device, dtype=lin_dtype)
 
         # Gemma-style QK normalization over the full inner dim, applied before RoPE
         # (reference Attention uses torch.nn.RMSNorm(inner_dim): raw weight, no +1).
@@ -81,7 +62,11 @@ class ConnectorBlock(Module):
         # Per-head gated attention: gates = 2*sigmoid(to_gate_logits(x)), applied to attn output.
         # dtype=float32 routes the matmul through HiFi4 + fp32 dest acc to match the host fp32
         # baseline (mirrors attention_ltx; the gate is precision-sensitive over 8 blocks).
-        self.to_gate_logits = Linear(dim, num_heads, bias=True, dtype=ttnn.float32, mesh_device=mesh_device)
+        # Column-parallel on heads so the gate is sharded to match the head-split SDPA output and
+        # multiplies in BHNE before concatenate_heads (no full-activation reshape).
+        self.to_gate_logits = ColParallelLinear(
+            dim, num_heads, bias=True, dtype=ttnn.float32, mesh_device=mesh_device, mesh_axis=tp_axis
+        )
 
         # Feed-forward (GELU gated)
         self.ff1 = ColParallelLinear(
@@ -91,6 +76,7 @@ class ConnectorBlock(Module):
             activation_fn="gelu",
             mesh_device=mesh_device,
             mesh_axis=tp_axis,
+            dtype=lin_dtype,
             **({"fsdp_mesh_axis": fsdp_mesh_axis, "ccl_manager": ccl_manager} if fsdp_mesh_axis is not None else {}),
         )
         self.ff2 = RowParallelLinear(
@@ -101,11 +87,12 @@ class ConnectorBlock(Module):
             mesh_axis=tp_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
+            dtype=lin_dtype,
         )
 
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=fidelity,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -181,14 +168,19 @@ class ConnectorBlock(Module):
 
         n_local_heads = self.num_heads // tp
 
-        # Split heads
+        # Fused head split: QK-norm ran on the full inner dim above, so split here — after norm —
+        # by concatenating q|k|v and using the fused nlp_create_qkv_heads. The SPLIT→INTERLEAVED
+        # channel permute (done at load) is preserved, so RoPE below is unaffected.
         B, S = q.shape[0], q.shape[1]
-        q = ttnn.reshape(q, (B, S, n_local_heads, self.head_dim))
-        q = ttnn.permute(q, (0, 2, 1, 3))
-        k = ttnn.reshape(k, (B, S, n_local_heads, self.head_dim))
-        k = ttnn.permute(k, (0, 2, 1, 3))
-        v = ttnn.reshape(v, (B, S, n_local_heads, self.head_dim))
-        v = ttnn.permute(v, (0, 2, 1, 3))
+        qkv = ttnn.concat([q, k, v], dim=-1)  # (B, S, 3*n_local_heads*D)
+        qkv = ttnn.reshape(qkv, (B, 1, S, 3 * n_local_heads * self.head_dim))
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv,
+            num_heads=n_local_heads,
+            num_kv_heads=n_local_heads,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
         # Interleaved RoPE on the head-split Q/K (cos/sin/trans_mat prepared by the caller).
         if apply_rope:
@@ -213,10 +205,18 @@ class ConnectorBlock(Module):
             is_causal=False,
             program_config=sdpa_config,
             compute_kernel_config=self.compute_config,
-        )
+        )  # (B, n_local_heads, T, D)
+
+        # Per-head gate applied in BHNE, before concatenate_heads: gates = 2*sigmoid(...) are
+        # sharded on heads (ColParallel) to match, so each head's output scales by its gate with a
+        # broadcast over head_dim — no reshape of the full (B,T,H*D) activation. Mirrors attention_ltx.
+        gate_logits = self.to_gate_logits(attn_in)  # (B, T, n_local_heads)
+        gate = ttnn.multiply(ttnn.sigmoid(gate_logits), 2.0)
+        gate = ttnn.unsqueeze(ttnn.permute(gate, (0, 2, 1)), -1)  # (B, n_local_heads, T, 1)
+        attn_out = ttnn.multiply(attn_out, gate)
+
         attn_out = ttnn.transformer.concatenate_heads(attn_out)
         attn_out = ttnn.unsqueeze(attn_out, 0)
-
         if tp > 1:
             attn_out = self.ccl_manager.all_gather(
                 attn_out,
@@ -225,17 +225,6 @@ class ConnectorBlock(Module):
                 use_hyperparams=True,
             )
         attn_out = ttnn.squeeze(attn_out, 0)  # (B, T, H*D), full
-
-        # Per-head gated attention: gates = 2*sigmoid(to_gate_logits(attn_in)), each head's
-        # output scaled by its gate. Done on device (matmul accumulates in fp32 via
-        # compute_config); the gate is a smooth scalar in (0,2) so bf16 sigmoid is adequate.
-        # No compute_kernel_config override: the fp32 weight selects HiFi4 (matching attention_ltx).
-        gate_logits = self.to_gate_logits(attn_in)  # (B,T,H)
-        gates = ttnn.multiply(ttnn.sigmoid(gate_logits), 2.0)  # (B,T,H)
-        b, t = attn_out.shape[0], attn_out.shape[1]
-        ao = ttnn.reshape(attn_out, (b, t, self.num_heads, self.head_dim))
-        ao = ttnn.multiply(ao, ttnn.reshape(gates, (b, t, self.num_heads, 1)))
-        attn_out = ttnn.reshape(ao, (b, t, self.num_heads * self.head_dim))
 
         attn_out = self.to_out(attn_out, compute_kernel_config=self.compute_config)
         x = attn_out + residual
@@ -299,7 +288,7 @@ class EmbeddingsConnector(Module):
             self.learnable_registers = Parameter(
                 total_shape=[num_learnable_registers, output_dim],
                 device=mesh_device,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.float32,
             )
 
         # Transformer blocks
@@ -309,24 +298,20 @@ class EmbeddingsConnector(Module):
             for _ in range(num_blocks)
         )
 
-    def forward(self, features: ttnn.Tensor, attn_mask: torch.Tensor, *, trans_mat: ttnn.Tensor) -> torch.Tensor:
-        """Register replacement → on-device RoPE transformer blocks → final norm, on the
-        aggregate_embed ``features`` from GemmaFeatureExtractor. ``trans_mat`` is built once by
-        the caller (the rotation matrix is a shared constant). Returns the host conditioning."""
+        # RoPE cos/sin are fixed per seq_len; cache the on-device tensors (built once, not per encode).
+        self._rope_cache: dict[int, tuple[ttnn.Tensor, ttnn.Tensor]] = {}
+        # Learnable registers tiled to [1, seq, dim], cached (constant after load).
+        self._reg_cache: dict[int, ttnn.Tensor] = {}
+
+    def _rope_cos_sin(self, seq_len: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Connector RoPE cos/sin for ``seq_len``, cached on device.
+
+        Q/K weights are permuted SPLIT→INTERLEAVED at load, so the interleaved kernel matches the
+        SPLIT checkpoint. Head dim is sharded on the connector TP axis (TP=1 → no-op)."""
+        cached = self._rope_cache.get(seq_len)
+        if cached is not None:
+            return cached
         dim = self.output_dim
-        projected = ttnn.to_torch(ttnn.get_device_tensors(features)[0])
-        ttnn.deallocate(features)
-
-        # Replace padded tokens with learnable registers (on host, matching the reference).
-        if self.num_learnable_registers > 0:
-            registers = ttnn.to_torch(ttnn.get_device_tensors(self.learnable_registers.data)[0])
-            projected = _replace_padded_with_registers(projected, attn_mask, registers, self.num_learnable_registers)
-
-        # Connector RoPE on device. Checkpoint is rope_type=SPLIT, but the block's Q/K (and
-        # q_norm/k_norm) weights were permuted at load (SPLIT→INTERLEAVED), so the on-device
-        # rotary_embedding_llama interleaved kernel is equivalent. cos/sin use the same fp32 freq
-        # grid as the reference.
-        seq_len = projected.shape[1]
         num_heads = self.transformer_1d_blocks[0].num_heads
         indices_grid = torch.arange(seq_len, dtype=torch.float32).reshape(1, seq_len, 1)
         cos_freq, sin_freq = precompute_freqs_cis(
@@ -340,22 +325,71 @@ class EmbeddingsConnector(Module):
         )
         cos_freq = reshape_interleaved_to_bhnd(cos_freq, num_heads)
         sin_freq = reshape_interleaved_to_bhnd(sin_freq, num_heads)
-        # Shard the head dim on the connector's TP axis so cos/sin match the per-device local-head
-        # count rotary_embedding_llama sees (the rope is per-head-varying). TP=1 → no-op.
         conn_tp = self.transformer_1d_blocks[0].parallel_config.tensor_parallel
         shard_kw = {"mesh_axis": conn_tp.mesh_axis, "shard_dim": 1} if conn_tp.factor > 1 else {}
         rope_cos = bf16_tensor(cos_freq, device=self.mesh_device, **shard_kw)
         rope_sin = bf16_tensor(sin_freq, device=self.mesh_device, **shard_kw)
+        self._rope_cache[seq_len] = (rope_cos, rope_sin)
+        return rope_cos, rope_sin
 
-        tt_x = ttnn.from_torch(
-            projected.bfloat16(), device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-        )
+    def _tiled_registers(self, seq_len: int, dim: int) -> ttnn.Tensor:
+        """Learnable registers tiled to [1, seq, dim] on device, cached (constant). Forced to
+        bf16 to match the bf16 activation stream — fp32 registers (fp32-connector mode) blended
+        against bf16 gathered features via ttnn.where produce NaN."""
+        cached = self._reg_cache.get(seq_len)
+        if cached is None:
+            reps = seq_len // self.num_learnable_registers
+            tiled = ttnn.repeat(self.learnable_registers.data, [reps, 1])  # [seq, dim]
+            tiled = ttnn.reshape(tiled, (1, seq_len, dim))
+            cached = ttnn.typecast(tiled, ttnn.bfloat16)
+            self._reg_cache[seq_len] = cached
+        return cached
+
+    def build_indices(self, attention_mask: torch.Tensor, seq_len: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """From the left-padded attention_mask, build the device tensors for on-device register
+        replacement: ``src_idx`` [B, seq] = seq positions of the real tokens packed to the front
+        (ttnn.embedding row-gather), ``keep_mask`` [B, seq, 1] selects real vs register positions.
+        Tiny per-prompt inputs, static shapes → trace-safe."""
+        mask = attention_mask.bool()
+        B = mask.shape[0]
+        idx = torch.zeros(B, seq_len, dtype=torch.int32)
+        keep = torch.zeros(B, seq_len, 1)
+        for b in range(B):
+            real = torch.nonzero(mask[b], as_tuple=False).flatten()  # ascending real positions
+            k = real.numel()
+            idx[b, :k] = real.to(torch.int32)
+            keep[b, :k] = 1.0
+        src_idx = ttnn.from_torch(idx, device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        keep_mask = ttnn.from_torch(keep, device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        return src_idx, keep_mask
+
+    def forward(
+        self, features: ttnn.Tensor, src_idx: ttnn.Tensor, keep_mask: ttnn.Tensor, *, trans_mat: ttnn.Tensor
+    ) -> ttnn.Tensor:
+        """On-device register replacement (gather real tokens left, fill padding with registers) →
+        RoPE transformer blocks → final norm, on the aggregate_embed ``features`` from
+        GemmaFeatureExtractor. ``src_idx``/``keep_mask`` are the (shared) device index/mask built by
+        the caller (build_indices); ``trans_mat`` is a shared constant. Returns a DEVICE tensor so
+        the whole encode traces — the caller does the final to_torch."""
+        seq_len, dim = features.shape[1], features.shape[-1]
+
+        if self.num_learnable_registers > 0:
+            # Row-gather real tokens to the front via ttnn.embedding (tiny [B,seq] index vs a full
+            # [B,seq,dim] gather index). embedding wants a row-major table → convert features.
+            features_tbl = ttnn.reshape(ttnn.to_layout(features, ttnn.ROW_MAJOR_LAYOUT), (seq_len, dim))
+            packed = ttnn.embedding(src_idx, features_tbl, layout=ttnn.TILE_LAYOUT)  # [B, seq, dim]
+            ttnn.deallocate(features)
+            tt_x = ttnn.where(keep_mask, packed, self._tiled_registers(seq_len, dim))
+        else:
+            tt_x = features
+
+        # Connector RoPE on device, cached per seq_len (see _rope_cos_sin).
+        rope_cos, rope_sin = self._rope_cos_sin(seq_len)
+
         for block in self.transformer_1d_blocks:
             tt_x = block(tt_x, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat)
-        tt_x = ttnn.experimental.dit_rms_norm_unary_fused(
-            tt_x, weight=None, epsilon=1e-6, compute_kernel_config=self.rmsnorm_cc
-        )
-
         # Do NOT zero register positions: the reference replaces padding with learnable registers
         # then masks with all-zeros, so every token carries information after the blocks.
-        return ttnn.to_torch(ttnn.get_device_tensors(tt_x)[0]).float()
+        return ttnn.experimental.dit_rms_norm_unary_fused(
+            tt_x, weight=None, epsilon=1e-6, compute_kernel_config=self.rmsnorm_cc
+        )

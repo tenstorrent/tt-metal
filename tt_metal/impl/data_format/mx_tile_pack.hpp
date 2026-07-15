@@ -74,7 +74,7 @@ inline float mx_decode_elem(uint32_t elem_bits, uint8_t scale_exp_biased, const 
 // so the is_integer branch constant-folds away per translation unit.
 template <typename T>
 std::vector<uint32_t> pack_as_mx_tiles_impl(
-    tt::stl::Span<const T> data,
+    ttsl::Span<const T> data,
     bool row_major_input,
     const std::optional<tt::tt_metal::Tile>& tile,
     const FormatParams& params) {
@@ -200,7 +200,7 @@ std::vector<uint32_t> pack_as_mx_tiles_impl(
 // can constant-fold the inner loops, the is_integer branch, and the
 // `convert_from_mxfp_elem_bits` branches.
 inline std::vector<float> unpack_mx_tiles_into_float_vec_impl(
-    tt::stl::Span<const uint32_t> mx_tiles,
+    ttsl::Span<const uint32_t> mx_tiles,
     bool row_major_output,
     const std::optional<tt::tt_metal::Tile>& tile,
     const FormatParams& params) {

@@ -15,7 +15,8 @@ namespace ckernel {
 // clang-format off
 /**
  * Performs element-wise remainder computation on input x by y , where x is each element of a tile
- * in DST register at index tile_index. The input can be of float data type. The value is provided as const param0 The
+ * in DST register at index tile_index. The input can be of float data type. The denominator is provided to
+ * remainder_tile_init and loaded into the SFPU constant registers. The
  * DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available on
  * the compute engine.
  *
@@ -24,13 +25,10 @@ namespace ckernel {
  * | Argument       | Description                                                                 | Type     | Valid Range                                           | Required |
  * |----------------|-----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst           | The index of the tile in DST register buffer to perform remainder operation | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | param0         | Denominator value to perform remainder operation                            | uint32_t |                                                       | True     |
- * | param1         | Reciprocal of param0, calculated on-host                                    | uint32_t |                                                       | False    |
  */
 // clang-format on
-ALWI void remainder_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_remainder, (APPROX), idst, VectorMode::RC, param0, param1));
+ALWI void remainder_tile(uint32_t idst) {
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_remainder, (APPROX), idst, VectorMode::RC));
 }
 
 /**

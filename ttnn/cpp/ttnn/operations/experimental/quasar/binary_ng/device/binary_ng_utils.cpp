@@ -856,7 +856,7 @@ ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::S
     const int rank_a = shape_a.rank();
     const int rank_b = shape_b.rank();
     const int larger_rank = std::max(rank_a, rank_b);
-    SmallVector<uint32_t> output_shape(larger_rank, 1);
+    ttsl::SmallVector<uint32_t> output_shape(larger_rank, 1);
     for (int i = -1; i >= -larger_rank; --i) {
         auto dim_a = (i >= -rank_a) ? shape_a[i] : 1;
         auto dim_b = (i >= -rank_b) ? shape_b[i] : 1;

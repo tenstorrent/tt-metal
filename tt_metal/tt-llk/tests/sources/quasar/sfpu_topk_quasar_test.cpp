@@ -224,8 +224,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const int first_tile_in_pair_idx  = stage_index * NUM_TILES_PER_STAGE;
                     const int second_tile_in_pair_idx = first_tile_in_pair_idx + 1;
 
-                    _llk_math_eltwise_unary_datacopy_(num_rows, first_tile_in_pair_idx);
-                    _llk_math_eltwise_unary_datacopy_(num_rows, second_tile_in_pair_idx);
+                    _llk_math_eltwise_unary_datacopy_(first_tile_in_pair_idx);
+                    _llk_math_eltwise_unary_datacopy_(second_tile_in_pair_idx);
                 }
 
                 // All 4 tiles are in dest: release the FPU dvalid to the SFPU client.

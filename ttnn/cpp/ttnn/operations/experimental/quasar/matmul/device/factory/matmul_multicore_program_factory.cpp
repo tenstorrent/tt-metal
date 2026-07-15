@@ -11,6 +11,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -19,6 +20,7 @@ using namespace tt::tt_metal::experimental;
 namespace ttnn::prim::qsr {
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 // Spec/binding names. The DFB accessor names surface kernel-side as dfb::in0 / dfb::in1 / dfb::out;
 // the tensor accessor names surface as tensor::in0 / tensor::in1 / tensor::out.
@@ -35,12 +37,14 @@ const KernelSpecName WRITER_KERNEL{"writer"};
 const KernelSpecName COMPUTE_KERNEL_G1{"compute_g1"};
 const KernelSpecName COMPUTE_KERNEL_G2{"compute_g2"};
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_program_artifacts(
     const ttnn::prim::qsr::MatmulParams& operation_attributes,
     const ttnn::prim::qsr::MatmulInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;  // resolve the file-local ids below
     if (!tensor_args.optional_input_tensors.empty()) {
         TT_FATAL(!tensor_args.optional_input_tensors[0].has_value(), "Bias is not supported for matmul multi core");
     }
@@ -64,9 +68,6 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
 
     tt::tt_metal::IDevice* device = &a.mutable_device();
     TT_FATAL(operation_attributes.compute_kernel_config.has_value(), "Compute kernel config should have been provided");
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config.value());
-    (void)packer_l1_acc;
 
     const auto& cshape = output.padded_shape();  // C=A*B, N1MK*11KN->N1MN
 
@@ -181,7 +182,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
                      "num_output_tiles",
                      "MtNt"},
             },
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
 
     // ---- Writer kernel ----
@@ -203,7 +204,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
             {
                 .runtime_arg_names = {"num_pages", "start_id"},
             },
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
 
     // ---- Compute kernel(s) — one KernelSpec per core group, preserving the per-group tile-count CTA ----
@@ -216,12 +217,8 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
     // Table has no iterator-pair constructor; use the single-argument range constructor over the std::map.
     KernelSpec::CompilerOptions::Defines compute_defines(mm_kernel_defines);
 
-    ComputeHardwareConfig compute_hw_config{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .dst_full_sync_en = dst_full_sync_en,
-        .math_approx_mode = math_approx_mode,
-    };
+    ComputeHardwareConfig compute_hw_config =
+        ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config.value());
 
     // bmm compute kernel: B, Mt, Nt are just 3 for loops that act as 1 large loop,
     // so only set Nt for simplicity
@@ -290,30 +287,30 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
         } else {
             TT_THROW("Core not in specified core ranges");
         }
-        reader_run_args.runtime_arg_values.push_back(ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args =
-                {
-                    {"Mt", Mt},
-                    {"Kt", Kt},
-                    {"Nt", Nt},
-                    {"MtKt", MtKt},
-                    {"KtNt", KtNt},
-                    {"batch", B},
-                    {"bcast_B", uint32_t(bcast_batch)},
-                    {"output_tile_start_id", num_tiles_written},
-                    {"num_output_tiles", num_output_tiles_per_core},
-                    {"MtNt", MtNt},
-                },
-        });
-        writer_run_args.runtime_arg_values.push_back(ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args =
-                {
-                    {"num_pages", num_output_tiles_per_core},
-                    {"start_id", num_tiles_written},
-                },
-        });
+        ProgramRunArgs::KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run_args.runtime_arg_values;
+        AddRuntimeArgsForNode(
+            reader_rtas,
+            core,
+            {
+                {"Mt", Mt},
+                {"Kt", Kt},
+                {"Nt", Nt},
+                {"MtKt", MtKt},
+                {"KtNt", KtNt},
+                {"batch", B},
+                {"bcast_B", uint32_t(bcast_batch)},
+                {"output_tile_start_id", num_tiles_written},
+                {"num_output_tiles", num_output_tiles_per_core},
+                {"MtNt", MtNt},
+            });
+        ProgramRunArgs::KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run_args.runtime_arg_values;
+        AddRuntimeArgsForNode(
+            writer_rtas,
+            core,
+            {
+                {"num_pages", num_output_tiles_per_core},
+                {"start_id", num_tiles_written},
+            });
         num_tiles_written += num_output_tiles_per_core;
     }
 

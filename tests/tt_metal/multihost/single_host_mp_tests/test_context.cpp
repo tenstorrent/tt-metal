@@ -18,8 +18,8 @@ using Key = tt::tt_metal::distributed::multihost::Key;
 using RequestPtr = std::shared_ptr<tt::tt_metal::distributed::multihost::Request>;
 using ContextPtr = std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>;
 
-tt::stl::Span<std::byte> int_to_byte_span(int* val_ptr) {
-    return tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(val_ptr), sizeof(int));
+ttsl::Span<std::byte> int_to_byte_span(int* val_ptr) {
+    return ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(val_ptr), sizeof(int));
 }
 }  // namespace
 
@@ -38,11 +38,11 @@ TEST(DistributedContextTest, TestSendRecv) {
         orig_bytes[i] = static_cast<std::byte>(i);
     }
     if (*context->rank() == 0) {
-        tt::stl::Span<std::byte> view(orig_bytes.data(), orig_bytes.size());
+        ttsl::Span<std::byte> view(orig_bytes.data(), orig_bytes.size());
         context->send(view, Rank{1}, Tag{0});
     } else if (*context->rank() == 1) {
         std::vector<std::byte> bytes(10);
-        tt::stl::Span<std::byte> view(bytes.data(), bytes.size());
+        ttsl::Span<std::byte> view(bytes.data(), bytes.size());
         context->recv(view, Rank{0}, Tag{0});
         for (int i = 0; i < 10; ++i) {
             EXPECT_EQ(orig_bytes[i], bytes[i]);
@@ -63,8 +63,8 @@ TEST(DistributedContextTest, AllReduceInt) {
         data[i] = *context->rank() + i;
     }
     std::vector<int> result(10);
-    tt::stl::Span<int> view(data.data(), data.size());
-    tt::stl::Span<int> result_view(result.data(), result.size());
+    ttsl::Span<int> view(data.data(), data.size());
+    ttsl::Span<int> result_view(result.data(), result.size());
     context->all_reduce(view, result_view, tt::tt_metal::distributed::multihost::ReduceOp::SUM);
     for (int i = 0; i < 10; ++i) {
         int expected = 0;
@@ -100,7 +100,7 @@ TEST(DistributedContextExtraTest, BroadcastVectorInt) {
     if (*ctx->rank() == 0) {
         std::iota(buffer.begin(), buffer.end(), 42);  // 42,43,…
     }
-    auto span_bytes = tt::stl::as_writable_bytes(tt::stl::Span<int>{buffer.data(), buffer.size()});
+    auto span_bytes = ttsl::as_writable_bytes(ttsl::Span<int>{buffer.data(), buffer.size()});
     ctx->broadcast(span_bytes, Rank{0});
 
     for (std::size_t i = 0; i < buffer.size(); ++i) {
@@ -120,7 +120,7 @@ TEST(DistributedContextExtraTest, GatherIntToRoot) {
     std::vector<int> recv_buf(world_size, -1);
 
     auto send_span = int_to_byte_span(&send_val);
-    auto recv_span = tt::stl::as_writable_bytes(tt::stl::Span<int>{recv_buf.data(), recv_buf.size()});
+    auto recv_span = ttsl::as_writable_bytes(ttsl::Span<int>{recv_buf.data(), recv_buf.size()});
 
     ctx->gather(send_span, recv_span, Rank{0});
 
@@ -143,8 +143,8 @@ TEST(DistributedContextExtraTest, ScatterIntFromRoot) {
         std::iota(send_vec.begin(), send_vec.end(), 100);  // 100,101,…
     }
     auto send_span = *ctx->rank() == 0
-                         ? tt::stl::as_writable_bytes(tt::stl::Span<int>{send_vec.data(), send_vec.size()})
-                         : tt::stl::Span<std::byte>{};
+                         ? ttsl::as_writable_bytes(ttsl::Span<int>{send_vec.data(), send_vec.size()})
+                         : ttsl::Span<std::byte>{};
     auto recv_span = int_to_byte_span(&recv_val);
 
     ctx->scatter(send_span, recv_span, Rank{0});
@@ -163,7 +163,7 @@ TEST(DistributedContextExtraTest, AllGatherRankInt) {
     std::vector<int> recv_buf(world_size);
 
     ctx->all_gather(
-        int_to_byte_span(&send_val), tt::stl::as_writable_bytes(tt::stl::Span<int>{recv_buf.data(), recv_buf.size()}));
+        int_to_byte_span(&send_val), ttsl::as_writable_bytes(ttsl::Span<int>{recv_buf.data(), recv_buf.size()}));
 
     for (int r = 0; r < world_size; ++r) {
         EXPECT_EQ(recv_buf[r], r);
@@ -183,8 +183,8 @@ TEST(DistributedContextExtraTest, AllToAllInt) {
     }
 
     ctx->all_to_all(
-        tt::stl::as_writable_bytes(tt::stl::Span<int>{send_buf.data(), send_buf.size()}),
-        tt::stl::as_writable_bytes(tt::stl::Span<int>{recv_buf.data(), recv_buf.size()}));
+        ttsl::as_writable_bytes(ttsl::Span<int>{send_buf.data(), send_buf.size()}),
+        ttsl::as_writable_bytes(ttsl::Span<int>{recv_buf.data(), recv_buf.size()}));
 
     for (int i = 0; i < world_size; ++i) {
         EXPECT_EQ(recv_buf[i], i * 100 + *ctx->rank());
@@ -254,12 +254,12 @@ TEST(DistributedContextExtraTest, IsendIrecvWait) {
 
     if (*ctx->rank() == 0) {
         auto req = ctx->isend(
-            tt::stl::as_writable_bytes(tt::stl::Span<int>{buf_send.data(), buf_send.size()}), Rank{1}, Tag{7});
+            ttsl::as_writable_bytes(ttsl::Span<int>{buf_send.data(), buf_send.size()}), Rank{1}, Tag{7});
         [[maybe_unused]] auto status = req->wait();
         // EXPECT_EQ(status.count, buf_send.size());
     } else if (*ctx->rank() == 1) {
         auto req = ctx->irecv(
-            tt::stl::as_writable_bytes(tt::stl::Span<int>{buf_recv.data(), buf_recv.size()}), Rank{0}, Tag{7});
+            ttsl::as_writable_bytes(ttsl::Span<int>{buf_recv.data(), buf_recv.size()}), Rank{0}, Tag{7});
         [[maybe_unused]] auto status = req->wait();
         // EXPECT_EQ(status.count, buf_send.size());
         for (int i = 0; i < 4; ++i) {

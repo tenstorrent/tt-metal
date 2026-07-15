@@ -31,6 +31,8 @@ ProgramDescriptor TilizeMultiCoreShardedProgramFactory::create_descriptor(
     uint32_t num_tiles_per_row = shard_spec.shape[1] / TILE_WIDTH;
     const CoreRangeSet& all_cores = shard_spec.grid;
 
+    const bool output_is_interleaved = output.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED;
+
     const uint32_t src0_cb_index = tt::CBIndex::c_0;
     const uint32_t output_cb_index = tt::CBIndex::c_16;
 
@@ -39,8 +41,7 @@ ProgramDescriptor TilizeMultiCoreShardedProgramFactory::create_descriptor(
 
     ProgramDescriptor desc;
 
-    // Sharded input CB — globally allocated to the input buffer; framework patches
-    // the CB address on cache hits via cb.buffer.
+    // Sharded input CB — aliased to the input shard buffer for zero-copy read.
     {
         CBDescriptor cb_src0;
         cb_src0.total_size = num_tiles_per_shard * input_single_tile_size;
@@ -54,67 +55,98 @@ ProgramDescriptor TilizeMultiCoreShardedProgramFactory::create_descriptor(
         desc.cbs.push_back(std::move(cb_src0));
     }
 
-    // Sharded output CB — globally allocated to the output buffer.
+    // Output CB:
+    //   Sharded output  → aliased to the output shard buffer (zero-copy write); full shard size.
+    //   Interleaved output → local CB sized to one tile-row; writer drains it row-by-row via
+    //     TensorAccessor, so the full shard does not need to fit in L1 at once.
     {
         CBDescriptor cb_output;
-        cb_output.total_size = num_tiles_per_shard * output_single_tile_size;
+        const uint32_t cb_output_tiles = output_is_interleaved ? num_tiles_per_row : num_tiles_per_shard;
+        cb_output.total_size = cb_output_tiles * output_single_tile_size;
         cb_output.core_ranges = all_cores;
         cb_output.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(output_cb_index),
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
         });
-        cb_output.buffer = dst_buffer;
+        if (!output_is_interleaved) {
+            cb_output.buffer = dst_buffer;
+        }
         desc.cbs.push_back(std::move(cb_output));
     }
 
-    std::vector<uint32_t> reader_compile_time_args = {src0_cb_index};
-    std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
-
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
-
-    // Sharded readers/writers consume only the (constant per-launch) num_tiles_per_shard
-    // count; no Buffer* slot is needed because the CB itself carries the buffer binding.
-    for (const auto& core : corerange_to_cores(all_cores)) {
-        reader_desc.emplace_runtime_args(core, {num_tiles_per_shard});
-        writer_desc.emplace_runtime_args(core, {num_tiles_per_shard});
+    // Reader: sharded unary — reads from the local input shard CB.
+    {
+        KernelDescriptor reader_desc;
+        reader_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp";
+        reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        reader_desc.core_ranges = all_cores;
+        reader_desc.compile_time_args = {src0_cb_index};
+        reader_desc.config = ReaderConfigDescriptor{};
+        for (const auto& core : corerange_to_cores(all_cores)) {
+            reader_desc.emplace_runtime_args(core, {num_tiles_per_shard});
+        }
+        desc.kernels.push_back(std::move(reader_desc));
     }
 
-    std::vector<uint32_t> compute_args = {
-        uint32_t(num_tiles_per_shard / num_tiles_per_row), uint32_t(num_tiles_per_row)};
+    // Writer: sharded or interleaved depending on output memory layout.
+    if (output_is_interleaved) {
+        // Scatter tiles from the local output CB to interleaved (L1 or DRAM) addresses.
+        // HEIGHT_SHARDED with ROW_MAJOR orientation: each core's shard maps to a contiguous
+        // tile range in the output, so start_id = i * num_tiles_per_shard.
+        std::vector<uint32_t> writer_ct_args = {output_cb_index};
+        TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
 
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    if (fp32_llk_acc) {
-        unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
+        KernelDescriptor writer_desc;
+        writer_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
+        writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        writer_desc.core_ranges = all_cores;
+        writer_desc.compile_time_args = std::move(writer_ct_args);
+        writer_desc.config = WriterConfigDescriptor{};
+
+        const auto cores = corerange_to_cores(all_cores, std::nullopt, /*row_wise=*/true);
+        uint32_t tile_start_id = 0;
+        for (const auto& core : cores) {
+            writer_desc.emplace_runtime_args(core, {dst_buffer, num_tiles_per_shard, tile_start_id});
+            tile_start_id += num_tiles_per_shard;
+        }
+        desc.kernels.push_back(std::move(writer_desc));
+    } else {
+        // Zero-copy: output CB is aliased to the output shard buffer; writer just synchronises.
+        KernelDescriptor writer_desc;
+        writer_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp";
+        writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        writer_desc.core_ranges = all_cores;
+        writer_desc.compile_time_args = {output_cb_index};
+        writer_desc.config = WriterConfigDescriptor{};
+        for (const auto& core : corerange_to_cores(all_cores)) {
+            writer_desc.emplace_runtime_args(core, {num_tiles_per_shard});
+        }
+        desc.kernels.push_back(std::move(writer_desc));
     }
 
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source = "ttnn/cpp/ttnn/kernel/compute/tilize.cpp";
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = all_cores;
-    compute_desc.compile_time_args = std::move(compute_args);
-    compute_desc.config = ComputeConfigDescriptor{
-        .fp32_dest_acc_en = fp32_llk_acc,
-        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
-    };
+    // Compute: standard tilize kernel (same for both output paths).
+    {
+        std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+        if (fp32_llk_acc) {
+            unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
+        }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc));
+        KernelDescriptor compute_desc;
+        compute_desc.kernel_source = "ttnn/cpp/ttnn/kernel/compute/tilize.cpp";
+        compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        compute_desc.core_ranges = all_cores;
+        compute_desc.compile_time_args = {
+            uint32_t(num_tiles_per_shard / num_tiles_per_row), uint32_t(num_tiles_per_row)};
+        compute_desc.config = ComputeConfigDescriptor{
+            .fp32_dest_acc_en = fp32_llk_acc,
+            .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+        };
+        desc.kernels.push_back(std::move(compute_desc));
+    }
 
     return desc;
 }

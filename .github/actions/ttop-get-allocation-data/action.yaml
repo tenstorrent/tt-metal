@@ -19,6 +19,14 @@ inputs:
 runs:
   using: 'composite'
   steps:
+    - name: Get github ID token
+      shell: bash
+      id: token
+      run: |
+        IDTOKEN=$(curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" $ACTIONS_ID_TOKEN_REQUEST_URL -H "Accept: application/json; api-version=2.0" -H "Content-Type: application/json" -d "{}" | jq -r '.value')
+        echo "::add-mask::${IDTOKEN}"
+        echo "idToken=${IDTOKEN}" >> $GITHUB_OUTPUT
+
     - name: Get allocation configs
       shell: bash
       id: get-configs
@@ -31,7 +39,7 @@ runs:
         sudo chmod 755 "${{ inputs.path }}"
 
         # Find config map with the allocation label
-        configmap_name=$(kubectl get configmaps -n "${{ inputs.allocationNamespace }}" \
+        configmap_name=$(kubectl --token ${{ steps.token.outputs.idToken }} get configmaps -n "${{ inputs.allocationNamespace }}" \
           -l "allocation.tenstorrent.com/generated-by=${{ inputs.allocationName }}" \
           -o jsonpath='{.items[0].metadata.name}')
 
@@ -43,11 +51,11 @@ runs:
         echo "Found config map: $configmap_name"
 
         # Get all keys from the config map and dump them to files
-        kubectl get configmap "$configmap_name" -n "${{ inputs.allocationNamespace }}" -o json | \
+        kubectl --token ${{ steps.token.outputs.idToken }} get configmap "$configmap_name" -n "${{ inputs.allocationNamespace }}" -o json | \
           jq -r '.data | keys[]' | \
           while IFS= read -r key; do
             echo "Writing key: $key"
-            kubectl get configmap "$configmap_name" -n "${{ inputs.allocationNamespace }}" -o json | \
+            kubectl --token ${{ steps.token.outputs.idToken }} get configmap "$configmap_name" -n "${{ inputs.allocationNamespace }}" -o json | \
               jq -r --arg k "$key" '.data[$k]' > "${{ inputs.path }}/$key"
             echo "Contents of $key:"
             cat "${{ inputs.path }}/$key"

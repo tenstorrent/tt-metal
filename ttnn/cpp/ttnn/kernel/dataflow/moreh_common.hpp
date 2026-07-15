@@ -12,7 +12,7 @@
 #include "tt-metalium/constants.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "noc/noc_parameters.h"
 #include "api/numeric/bfloat16.h"
@@ -53,7 +53,7 @@ public:
 };
 
 template <typename T>
-FORCE_INLINE void process_data(CircularBuffer cb, uint32_t value, int32_t num_of_elems) {
+FORCE_INLINE void process_data(DataflowBuffer cb, uint32_t value, int32_t num_of_elems) {
     T* ptr = reinterpret_cast<T*>(cb.get_write_ptr());
     for (int j = 0; j < num_of_elems; j++) {
         ptr[j] = static_cast<T>(value);
@@ -61,7 +61,7 @@ FORCE_INLINE void process_data(CircularBuffer cb, uint32_t value, int32_t num_of
 }
 
 template <>
-FORCE_INLINE void process_data<uint16_t>(CircularBuffer cb, uint32_t value, int32_t num_of_elems) {
+FORCE_INLINE void process_data<uint16_t>(DataflowBuffer cb, uint32_t value, int32_t num_of_elems) {
     uint16_t* ptr = reinterpret_cast<uint16_t*>(cb.get_write_ptr());
     for (int j = 0; j < num_of_elems; j++) {
         ptr[j] = static_cast<uint16_t>(value >> 16);
@@ -69,7 +69,7 @@ FORCE_INLINE void process_data<uint16_t>(CircularBuffer cb, uint32_t value, int3
 }
 
 template <typename T = uint16_t>
-FORCE_INLINE void generate_bcast_scaler(CircularBuffer cb_scaler, uint32_t scaler) {
+FORCE_INLINE void generate_bcast_scaler(DataflowBuffer cb_scaler, uint32_t scaler) {
     union {
         float f;
         uint32_t u;
@@ -95,9 +95,9 @@ FORCE_INLINE void generate_bcast_scaler(CircularBuffer cb_scaler, uint32_t scale
     cb_scaler.push_back(1);
 }
 
-FORCE_INLINE void fill_cb_with_value(CircularBuffer cb, uint32_t value, int32_t num_of_elems = 1024) {
+FORCE_INLINE void fill_cb_with_value(DataflowBuffer cb, uint32_t value, int32_t num_of_elems = 1024) {
     cb.reserve_back(1);
-    const DataFormat data_format = get_dataformat(cb.get_cb_id());
+    const DataFormat data_format = get_dataformat(cb.get_id());
     switch ((uint)data_format & 0x1F) {
         case ((uint8_t)DataFormat::Float32):
         case ((uint8_t)DataFormat::Int32):
@@ -180,7 +180,7 @@ FORCE_INLINE void fill_subtile_mask_w(
 }
 
 template <typename T = uint16_t>
-FORCE_INLINE void generate_mask_h(CircularBuffer cb_mask, uint32_t mask_h) {
+FORCE_INLINE void generate_mask_h(DataflowBuffer cb_mask, uint32_t mask_h) {
     Scalar one = {};
     Scalar zero = {};
 
@@ -220,7 +220,7 @@ FORCE_INLINE void generate_mask_h(CircularBuffer cb_mask, uint32_t mask_h) {
 }
 
 template <typename T = uint16_t>
-FORCE_INLINE void generate_mask_w(CircularBuffer cb_mask, uint32_t mask_w) {
+FORCE_INLINE void generate_mask_w(DataflowBuffer cb_mask, uint32_t mask_w) {
     Scalar one = {};
     Scalar zero = {};
 
@@ -260,7 +260,7 @@ FORCE_INLINE void generate_mask_w(CircularBuffer cb_mask, uint32_t mask_w) {
 }
 
 FORCE_INLINE void generate_mask_h_w(
-    CircularBuffer cb_mask_h_w, uint32_t mask_h, uint32_t mask_w, uint32_t single_tile_size = 2048) {
+    DataflowBuffer cb_mask_h_w, uint32_t mask_h, uint32_t mask_w, uint32_t single_tile_size = 2048) {
     Scalar one = {};
     Scalar zero = {};
 
@@ -393,7 +393,7 @@ FORCE_INLINE void generate_mask_h_w(
     cb_mask_h_w.push_back(2);
 }
 
-FORCE_INLINE void generate_mask_h_w_if_needed(CircularBuffer cb_mask_h_w, uint32_t origin_h, uint32_t origin_w) {
+FORCE_INLINE void generate_mask_h_w_if_needed(DataflowBuffer cb_mask_h_w, uint32_t origin_h, uint32_t origin_w) {
     constexpr uint32_t TILE_H = 32;
     constexpr uint32_t TILE_W = 32;
 
@@ -404,7 +404,7 @@ FORCE_INLINE void generate_mask_h_w_if_needed(CircularBuffer cb_mask_h_w, uint32
     const uint32_t mask_w = do_mask_w ? (origin_w % TILE_W) : TILE_W;
 
     if (do_mask_h || do_mask_w) {
-        const uint32_t mask_tile_bytes = get_tile_size(cb_mask_h_w.get_cb_id());
+        const uint32_t mask_tile_bytes = get_tile_size(cb_mask_h_w.get_id());
         generate_mask_h_w(cb_mask_h_w, mask_h, mask_w, mask_tile_bytes);
     }
 }
@@ -471,7 +471,7 @@ FORCE_INLINE void mask_tile_if_need(uint32_t l1_addr, uint32_t origin_h, uint32_
 }
 
 FORCE_INLINE void generate_mask_tiles(
-    CircularBuffer cb_mask, uint32_t mask_h, uint32_t mask_w, uint32_t single_tile_size = 2048) {
+    DataflowBuffer cb_mask, uint32_t mask_h, uint32_t mask_w, uint32_t single_tile_size = 2048) {
     constexpr uint32_t num_mask_tiles = 3;
     Scalar one = {};
     Scalar zero = {};
@@ -664,7 +664,7 @@ void get_noc_offset(uint32_t h, uint32_t w, uint32_t element_size, uint32_t& noc
 // It reads values from one tile.
 template <typename AddrGen>
 void read_tile(
-    CircularBuffer cb,
+    DataflowBuffer cb,
     AddrGen addrgen,
     uint32_t noc_id,
     uint32_t size = 0,
@@ -680,7 +680,7 @@ void read_tile(
 
     // If the size is 0, it reads one tile.
     if (size == 0) {
-        size = get_tile_size(cb.get_cb_id());
+        size = get_tile_size(cb.get_id());
     }
 
     noc.async_read(addrgen, cb, size, {.page_id = noc_id, .offset_bytes = offset}, {.offset_bytes = 0});
@@ -693,7 +693,7 @@ void read_tile(
 
 template <typename AddrGen>
 void read_value(
-    CircularBuffer cb,
+    DataflowBuffer cb,
     AddrGen addrgen,
     uint32_t noc_id,
     uint32_t tilized_idx = 0,
@@ -706,7 +706,7 @@ void read_value(
         cb.reserve_back(onetile);
     }
 
-    const uint32_t element_size = get_tile_size(cb.get_cb_id()) / 1024;
+    const uint32_t element_size = get_tile_size(cb.get_id()) / 1024;
     const uint32_t byte_offset = tilized_idx * element_size;
 
     noc.async_read(
@@ -727,8 +727,8 @@ void read_value(
  *
  * | Argument                     | Description                             | Data type        | Valid range                    | required |
  * |------------------------------|-----------------------------------------|------------------|--------------------------------|----------|
- * | cb                           | Destination CB for the read data        | CircularBuffer   | Any valid CB                   | True     |
- * | cb_scratch                   | CB to use as scratch storage            | CircularBuffer   | Any valid CB                   | True     |
+ * | cb                           | Destination CB for the read data        | DataflowBuffer   | Any valid CB                   | True     |
+ * | cb_scratch                   | CB to use as scratch storage            | DataflowBuffer   | Any valid CB                   | True     |
  * | addrgen                      | Address generator object                | AddrGen          | N/A                            | True     |
  * | num_tiles                    | Number of tiles to read                 | uint32_t         | Any uint32_t number            | True     |
  * | do_reserve                   | Whether to reserve space in the CB      | bool             | true or false                  | False    |
@@ -737,8 +737,8 @@ void read_value(
 // clang-format on
 template <typename AddrGen>
 void read_line(
-    CircularBuffer cb,
-    CircularBuffer cb_scratch,
+    DataflowBuffer cb,
+    DataflowBuffer cb_scratch,
     AddrGen addrgen,
     uint32_t num_tiles,
     bool do_reserve = true,
@@ -750,7 +750,7 @@ void read_line(
         cb.reserve_back(num_tiles);
     }
 
-    const auto tile_bytes = get_tile_size(cb.get_cb_id());
+    const auto tile_bytes = get_tile_size(cb.get_id());
     const auto element_bytes = tile_bytes / (TILE_HEIGHT * TILE_WIDTH);
     const auto valid_elements_bytes = FACE_WIDTH * element_bytes;
 

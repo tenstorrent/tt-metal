@@ -106,12 +106,14 @@ FORCE_INLINE void load_to_cb(
     CircularBuffer cb_obj(cb);
     cb_obj.reserve_back(ONE_PAGE);
 
-    const uint64_t source_noc_address = addr_gtor.get_noc_addr(FIRST_STICK);
-    const uint32_t l1_write_address = cb_obj.get_write_ptr();
     const uint32_t subchunk_size_bytes = subchunk_size * datum_size;
     const uint32_t offset_bytes = offset * datum_size;
-    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
-    noc_async_read(source_noc_address + offset_bytes, l1_write_address, subchunk_size_bytes);
+    noc.async_read(
+        addr_gtor,
+        cb_obj,
+        subchunk_size_bytes,
+        {.page_id = FIRST_STICK, .offset_bytes = offset_bytes},
+        {.offset_bytes = 0});
     noc.async_read_barrier();
 
     cb_obj.push_back(ONE_PAGE);
@@ -129,12 +131,14 @@ FORCE_INLINE void write_to_dram(
     CircularBuffer cb_obj(cb);
     cb_obj.wait_front(ONE_PAGE);
 
-    const uint64_t destination_noc_address = addr_gtor.get_noc_addr(FIRST_STICK);
-    const uint32_t l1_read_address = cb_obj.get_read_ptr();
     const uint32_t subchunk_size_bytes = subchunk_size * datum_size;
     const uint32_t offset_bytes = offset * datum_size;
-    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
-    noc_async_write(l1_read_address, destination_noc_address + offset_bytes, subchunk_size_bytes);
+    noc.async_write(
+        cb_obj,
+        addr_gtor,
+        subchunk_size_bytes,
+        {.offset_bytes = 0},
+        {.page_id = FIRST_STICK, .offset_bytes = offset_bytes});
     noc.async_write_barrier();
 
     cb_obj.pop_front(ONE_PAGE);

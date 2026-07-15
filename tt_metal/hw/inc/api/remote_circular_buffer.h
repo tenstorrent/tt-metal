@@ -416,6 +416,14 @@ FORCE_INLINE void align_local_cbs_to_remote_cb(
     // We assert that the offset of sender and receiver common attributes are the same
     // so we can use either interface here
     const RemoteReceiverCBInterface& remote_cb = get_remote_receiver_cb_interface(remote_cb_index);
+    // The align define is emitted per-kernel, so a kernel spanning a core range where only some cores
+    // own this remote CB also runs here on cores that don't. setup_remote_cb_interfaces zeroes
+    // fifo_start_addr on those cores, so fifo_start_addr == 0 means "remote CB not present here" (a real
+    // start is an L1 buffer address, never 0): nothing to align, and the interface may hold stale state
+    // from a prior program, so skip.
+    if (remote_cb.fifo_start_addr == 0) {
+        return;
+    }
     uint32_t fifo_limit = remote_cb.fifo_limit_page_aligned >> cb_addr_shift;
     uint32_t fifo_size = fifo_limit - (remote_cb.fifo_start_addr >> cb_addr_shift);
     uint32_t fifo_ptr = remote_cb.fifo_rd_ptr >> cb_addr_shift;

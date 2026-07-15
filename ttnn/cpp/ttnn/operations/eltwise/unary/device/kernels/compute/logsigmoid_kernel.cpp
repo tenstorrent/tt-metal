@@ -10,7 +10,7 @@
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/logsigmoid.h"
 #include "api/compute/eltwise_unary/negative.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -18,14 +18,14 @@ void kernel_main() {
     constexpr auto cb_input = tt::CBIndex::c_0;
     constexpr auto cb_output = tt::CBIndex::c_2;
 
-    CircularBuffer cb_in(cb_input);
-    CircularBuffer cb_out(cb_output);
+    DataflowBuffer dfb_in(cb_input);
+    DataflowBuffer dfb_out(cb_output);
 
     init_sfpu(cb_input, cb_output);
 
     for (uint32_t i = 0; i < num_tiles; ++i) {
-        cb_in.wait_front(1);
-        cb_out.reserve_back(1);
+        dfb_in.wait_front(1);
+        dfb_out.reserve_back(1);
 
         tile_regs_acquire();
 
@@ -48,7 +48,7 @@ void kernel_main() {
         pack_tile(0, cb_output);
         tile_regs_release();
 
-        cb_in.pop_front(1);
-        cb_out.push_back(1);
+        dfb_in.pop_front(1);
+        dfb_out.push_back(1);
     }
 }

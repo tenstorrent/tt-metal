@@ -56,7 +56,7 @@ sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x) {
         y = y * (sfpi::vConstFloatPrgm1 + c * (sfpi::vConstFloatPrgm2 + c));
         xy = x * y;
         negative_y = -y;
-        sfpi::vFloat one_minus_xyy = sfpi::vConst1 + (negative_y * xy);
+        sfpi::vFloat one_minus_xyy = 1.0f + (negative_y * xy);
 
         if constexpr (RECIPROCAL) {
             sfpi::vFloat half_y = sfpi::addexp(y, -1);

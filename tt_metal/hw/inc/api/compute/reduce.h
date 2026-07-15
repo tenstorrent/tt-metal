@@ -7,6 +7,7 @@
 #include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
+#include "llk_assert.h"
 #include "tensor_shape.h"
 
 #ifdef TRISC_MATH
@@ -73,13 +74,11 @@ ALWI void reduce_init(
     } else {
         state_configure(icb, icb_scaler, ocb, call_line);
     }
-    UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim>(icb, icb_scaler)));
-    MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(icb, icb_scaler)));
 #else
     state_configure(icb, icb_scaler, ocb, call_line);
-    UNPACK((llk_unpack_AB_reduce_init<reduce_dim>(icb, icb_scaler)));
-    MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(icb, icb_scaler)));
 #endif
+    UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim>(icb, icb_scaler)));
+    MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(icb, icb_scaler)));
     PACK((llk_pack_reduce_mask_config<reduce_dim, PackMode::Default>(ocb)));
 }
 
@@ -196,6 +195,7 @@ ALWI void reduce_tile_math(std::uint32_t idst, std::uint32_t num_faces = 4) {
         (num_faces <= MAX_NUM_FACES_C_DIM) ? static_cast<std::uint8_t>(num_faces) : MAX_NUM_FACES_C_DIM};
     MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(idst, tensor_shape)));
 #else
+    LLK_ASSERT(num_faces == 4, "non-default num_faces not supported on Quasar");
     MATH((llk_math_reduce(idst)));
 #endif
 }
@@ -217,6 +217,12 @@ ALWI void reduce_tile_math(std::uint32_t idst, const ckernel::TensorShape& tenso
 #ifndef ARCH_QUASAR
     MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(idst, tensor_shape)));
 #else
+    LLK_ASSERT(
+        tensor_shape.face_r_dim == DEFAULT_TENSOR_SHAPE.face_r_dim &&
+            tensor_shape.face_c_dim == DEFAULT_TENSOR_SHAPE.face_c_dim &&
+            tensor_shape.num_faces_r_dim == DEFAULT_TENSOR_SHAPE.num_faces_r_dim &&
+            tensor_shape.num_faces_c_dim == DEFAULT_TENSOR_SHAPE.num_faces_c_dim,
+        "non-default tensor_shape not supported on Quasar");
     MATH((llk_math_reduce(idst)));
 #endif
 }

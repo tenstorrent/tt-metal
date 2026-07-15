@@ -588,6 +588,10 @@ void append_worker_to_fabric_edm_sender_rt_args(
     connection_info.edm_worker_location_info_addr = connection.edm_worker_location_info_addr;
     connection_info.buffer_size_bytes = connection.buffer_size_bytes;
     connection_info.buffer_index_semaphore_id = connection.buffer_index_semaphore_id;
+    // This non-device-init path is the local worker-style VC0 contract, so preserve
+    // the standard sender-channel-0 free-slots stream id when rewriting the entry.
+    connection_info.worker_free_slots_stream_id =
+        StreamRegAssignments::IncrementOnWrite::sender_channel_0_free_slots_stream_id;
     // NOTE: valid_connections_mask is not copied to L1 from performance reason
     //       because this callstack will be deprecated and not used in WorkerToFabricEdmSenderImpl yet
     //       we want to reduce the number of write_core calls

@@ -52,6 +52,10 @@ void kernel_main() {
             // tt::data_movement::common::print_bf16_pages(
             //     l1_scratch_write_addr + src_offset, remote_unit_size_padded / 2, units_to_transfer);
 
+            // Re-stride each row from the remote-aligned scratch layout into the local buffer.
+            // Both src (remote_unit_size_padded) and dst (local_unit_size_padded) strides are
+            // L1-aligned, so the per-row copy keeps the output shard's aligned page layout
+            // (each row padded to local_unit_size_padded) that to_torch expects.
             uint32_t pad_align_addr = l1_scratch_read_addr + src_offset;
             for (uint32_t j = 0; j < units_to_transfer; ++j) {
                 CoreLocalMem<uint32_t> dst(l1_write_addr);
@@ -64,7 +68,7 @@ void kernel_main() {
                      .addr = pad_align_addr},
                     {.offset_bytes = 0});
                 // tt::data_movement::common::print_bf16_pages(l1_write_addr, unit_size / 2, 1);
-                l1_write_addr += unit_size;
+                l1_write_addr += local_unit_size_padded;
                 pad_align_addr += remote_unit_size_padded;
             }
             noc.async_read_barrier();

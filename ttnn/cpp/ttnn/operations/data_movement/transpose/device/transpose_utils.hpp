@@ -17,7 +17,11 @@ bool is_native_transpose_sharding(
 std::optional<tt::tt_metal::ShardSpec> adjust_shard_spec_to_shape(
     const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape);
 
+// Build a sharded spec over the full compute grid from the post-transform shape.
 tt::tt_metal::ShardSpec generate_transpose_shard_spec(
-    const Tensor& input_tensor, const ttnn::Shape& padded_out_shape, tt::tt_metal::TensorMemoryLayout memory_layout);
+    const Tensor& input_tensor,
+    const ttnn::Shape& padded_out_shape,
+    tt::tt_metal::TensorMemoryLayout memory_layout,
+    std::optional<tt::tt_metal::ShardOrientation> orientation_hint = std::nullopt);
 
 }  // namespace ttnn::operations::data_movement::transpose

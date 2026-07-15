@@ -5,6 +5,7 @@
 #include "permute.hpp"
 
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
+#include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 
 #include <tt-metalium/hal.hpp>
@@ -27,7 +28,7 @@ inline bool is_rm_block_or_width_sharded(const ttnn::Tensor& t) {
 
 ttnn::Tensor permute_impl(
     const ttnn::Tensor& a,
-    const ttnn::SmallVector<uint32_t>& dims,
+    const ttsl::SmallVector<uint32_t>& dims,
     const std::optional<MemoryConfig>& output_mem_config,
     float pad_value = 0.0f) {
     uint32_t rank = a.logical_shape().rank();
@@ -39,10 +40,29 @@ ttnn::Tensor permute_impl(
     const bool irregular_hw = input_logical.rank() >= 2 && (input_logical[-1] % tt::constants::TILE_WIDTH != 0 ||
                                                             input_logical[-2] % tt::constants::TILE_HEIGHT != 0);
     if (is_rm_block_or_width_sharded(a) && irregular_hw) {
+        // Snapshot orientation before the L1-interleaved staging hop strips it.
+        std::optional<tt::tt_metal::ShardOrientation> input_orientation_hint;
+        if (a.shard_spec().has_value()) {
+            input_orientation_hint = a.shard_spec()->orientation;
+        }
+        auto resolved_mc = output_mem_config;
+        if (output_mem_config.has_value() && output_mem_config->is_sharded() &&
+            !output_mem_config->shard_spec().has_value()) {
+            const auto& padded_in = a.padded_shape();
+            ttsl::SmallVector<uint32_t> out_padded_vec(padded_in.rank());
+            for (size_t i = 0; i < dims.size(); ++i) {
+                out_padded_vec[i] = padded_in[dims[i]];
+            }
+            auto output_padded_shape = ttnn::Shape(std::move(out_padded_vec));
+            auto spec = ttnn::operations::data_movement::transpose::generate_transpose_shard_spec(
+                a, output_padded_shape, output_mem_config->memory_layout(), input_orientation_hint);
+            resolved_mc =
+                MemoryConfig(output_mem_config->memory_layout(), output_mem_config->buffer_type(), std::move(spec));
+        }
         const auto interleaved_l1 =
             MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
         auto x = ttnn::to_memory_config(a, interleaved_l1, std::nullopt);
-        return permute_impl(x, dims, output_mem_config, pad_value);
+        return permute_impl(x, dims, resolved_mc, pad_value);
     }
 
     auto prim_permute = [&](const ttnn::Tensor& input) -> ttnn::Tensor {
@@ -129,13 +149,13 @@ ttnn::Tensor permute_impl(
 
 ttnn::Tensor permute_launch(
     const ttnn::Tensor& a,
-    const ttnn::SmallVector<uint32_t>& dims,
+    const ttsl::SmallVector<uint32_t>& dims,
     const std::optional<MemoryConfig>& output_mem_config,
     float pad_value = 0.0f) {
     return permute_impl(a, dims, output_mem_config, pad_value);
 }
 
-bool is_permute_nop(const ttnn::Tensor& a, const ttnn::SmallVector<uint32_t>& dims) {
+bool is_permute_nop(const ttnn::Tensor& a, const ttsl::SmallVector<uint32_t>& dims) {
     // Rank <= 1 is always a no-op.
     const auto rank = a.logical_shape().rank();
     if (rank <= 1) {
@@ -143,7 +163,7 @@ bool is_permute_nop(const ttnn::Tensor& a, const ttnn::SmallVector<uint32_t>& di
     }
 
     // Identity permutation.
-    ttnn::SmallVector<uint32_t> seq_dims(rank);
+    ttsl::SmallVector<uint32_t> seq_dims(rank);
     std::iota(seq_dims.begin(), seq_dims.end(), 0);
     if (dims == seq_dims) {
         return true;
@@ -157,7 +177,7 @@ bool is_permute_nop(const ttnn::Tensor& a, const ttnn::SmallVector<uint32_t>& di
 
     // Shape change → not a no-op.
     const auto& shape = a.logical_shape();
-    ttnn::SmallVector<uint32_t> perm_shape(rank);
+    ttsl::SmallVector<uint32_t> perm_shape(rank);
     for (uint32_t i = 0; i < rank; ++i) {
         perm_shape[i] = shape[dims[i]];
     }
@@ -183,7 +203,7 @@ namespace ttnn {
 
 ttnn::Tensor permute(
     const ttnn::Tensor& input_tensor,
-    const SmallVector<int64_t>& dims,
+    const ttsl::SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
     float pad_value) {
     const auto input_rank = input_tensor.logical_shape().rank();
@@ -192,7 +212,7 @@ ttnn::Tensor permute(
         "The number of dimensions in the tensor input does not match the length of the desired ordering");
     TT_FATAL(is_device_tensor(input_tensor), "Tensor must already be on device");
 
-    SmallVector<uint32_t> normalized_dims(dims.size());
+    ttsl::SmallVector<uint32_t> normalized_dims(dims.size());
     std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [input_tensor](std::int64_t idx) {
         return input_tensor.logical_shape().get_normalized_index(idx);
     });
@@ -200,8 +220,8 @@ ttnn::Tensor permute(
         return ttnn::to_memory_config(input_tensor, memory_config.value_or(input_tensor.memory_config()));
     }
 
-    auto adjust_order = [](const ttnn::SmallVector<uint32_t>& dims) {
-        ttnn::SmallVector<uint32_t> new_order;
+    auto adjust_order = [](const ttsl::SmallVector<uint32_t>& dims) {
+        ttsl::SmallVector<uint32_t> new_order;
         TT_FATAL(dims.size() <= 4, "Minimum rank of tensor required is 4");
         int additional_ranks = 4 - dims.size();
         for (int i = 0; i < additional_ranks; i++) {
@@ -235,7 +255,7 @@ ttnn::Tensor permute(
     return output_tensor;
 }
 
-ttnn::Tensor permute(const ttnn::Tensor& input_tensor, const SmallVector<int64_t>& dims, float pad_value) {
+ttnn::Tensor permute(const ttnn::Tensor& input_tensor, const ttsl::SmallVector<int64_t>& dims, float pad_value) {
     return permute(input_tensor, dims, std::nullopt, pad_value);
 }
 

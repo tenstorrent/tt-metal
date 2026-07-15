@@ -94,9 +94,9 @@ DispatchMemMap::DispatchMemMap(
                 hal.get_realtime_profiler_msgs_factory(HalProgrammableCoreType::TENSIX)
                     .size_of<realtime_profiler_msgs::realtime_profiler_msg_t>();
         } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_TELEMETRY) {
-            device_cq_addr_sizes_[dev_addr_idx] = DISPATCH_TELEMETRY_SIZE;
+            device_cq_addr_sizes_[dev_addr_idx] = dispatch_telemetry_types::DISPATCH_TELEMETRY_SIZE;
         } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_TELEMETRY_CONTROL) {
-            device_cq_addr_sizes_[dev_addr_idx] = sizeof(DispatchTelemetryControl);
+            device_cq_addr_sizes_[dev_addr_idx] = sizeof(dispatch_telemetry_types::DispatchTelemetryControl);
         } else if (dev_addr_type == CommandQueueDeviceAddrType::WORKER_COMPLETION_SEMAPHORES) {
             device_cq_addr_sizes_[dev_addr_idx] =
                 has_stream_registers_ ? 0 : DispatchSettings::DISPATCH_MESSAGE_ENTRIES * l1_alignment;

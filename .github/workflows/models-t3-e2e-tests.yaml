@@ -25,6 +25,8 @@ on:
           - phi-3-mini
           # phi-4-mini: disabled — assert freqs.shape[-1] == ext_factors.shape[-1]
           - mamba-2.8b
+          - gemma-4-e2b
+          - gemma-4-e4b
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false

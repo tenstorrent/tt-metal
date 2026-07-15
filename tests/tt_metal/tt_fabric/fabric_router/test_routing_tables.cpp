@@ -570,11 +570,10 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
     auto physical_chip_id_0 = control_plane->get_physical_chip_id_from_fabric_node_id(fabric_node_id_0);
     const auto& chip_unique_ids = cluster.get_unique_chip_ids();
     uint64_t asic_id_0 = 0;
-    for (const auto& [chip_id, unique_id] : chip_unique_ids) {
-        if (chip_id == physical_chip_id_0) {
-            asic_id_0 = unique_id;
-            break;
-        }
+    auto it0 = std::find_if(
+        chip_unique_ids.begin(), chip_unique_ids.end(), [&](const auto& p) { return p.first == physical_chip_id_0; });
+    if (it0 != chip_unique_ids.end()) {
+        asic_id_0 = it0->second;
     }
     EXPECT_GT(asic_id_0, 0) << "ASIC ID should be greater than 0 for fabric node id 0";
     auto tray_id_0 = physical_system_descriptor->get_tray_id(tt::tt_metal::AsicID{asic_id_0});
@@ -586,11 +585,10 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
     FabricNodeId fabric_node_id_1(MeshId{0}, 1);
     auto physical_chip_id_1 = control_plane->get_physical_chip_id_from_fabric_node_id(fabric_node_id_1);
     uint64_t asic_id_1 = 0;
-    for (const auto& [chip_id, unique_id] : chip_unique_ids) {
-        if (chip_id == physical_chip_id_1) {
-            asic_id_1 = unique_id;
-            break;
-        }
+    auto it1 = std::find_if(
+        chip_unique_ids.begin(), chip_unique_ids.end(), [&](const auto& p) { return p.first == physical_chip_id_1; });
+    if (it1 != chip_unique_ids.end()) {
+        asic_id_1 = it1->second;
     }
     EXPECT_GT(asic_id_1, 0) << "ASIC ID should be greater than 0 for fabric node id 1";
     auto tray_id_1 = physical_system_descriptor->get_tray_id(tt::tt_metal::AsicID{asic_id_1});
@@ -603,11 +601,11 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
     FabricNodeId fabric_node_id_y_size(MeshId{0}, y_size);
     auto physical_chip_id_y_size = control_plane->get_physical_chip_id_from_fabric_node_id(fabric_node_id_y_size);
     uint64_t asic_id_y_size = 0;
-    for (const auto& [chip_id, unique_id] : chip_unique_ids) {
-        if (chip_id == physical_chip_id_y_size) {
-            asic_id_y_size = unique_id;
-            break;
-        }
+    auto it_ys = std::find_if(chip_unique_ids.begin(), chip_unique_ids.end(), [&](const auto& p) {
+        return p.first == physical_chip_id_y_size;
+    });
+    if (it_ys != chip_unique_ids.end()) {
+        asic_id_y_size = it_ys->second;
     }
     EXPECT_GT(asic_id_y_size, 0) << "ASIC ID should be greater than 0 for fabric node id " << y_size;
     auto tray_id_y_size = physical_system_descriptor->get_tray_id(tt::tt_metal::AsicID{asic_id_y_size});
@@ -1470,13 +1468,8 @@ void validate_sp5_blitz_decode_pipeline_stages(
         auto pairs =
             control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(curr_mesh_id, next_mesh_id);
 
-        bool found = false;
-        for (const auto& [exit_node, peer_node] : pairs) {
-            if (exit_node == exit_fn && peer_node == entry_fn) {
-                found = true;
-                break;
-            }
-        }
+        bool found = std::any_of(
+            pairs.begin(), pairs.end(), [&](const auto& p) { return p.first == exit_fn && p.second == entry_fn; });
         EXPECT_TRUE(found) << "Stages [" << i << "]->[" << (i + 1) << "]: exit (M" << *curr_mesh_id << "D"
                            << exit_chip_id << ") coord " << coord_str(curr.exit_node_coord)
                            << " is not physically connected to entry (M" << *next_mesh_id << "D" << entry_chip_id

@@ -151,9 +151,8 @@ jobs:
     if: ${{ needs.determine-tests.outputs.run-ttnn-models-frequent == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
-    uses: ./.github/workflows/fast-dispatch-full-regressions-and-models-impl.yaml
+    uses: ./.github/workflows/single-card-ttnn-models-frequent-tests-impl.yaml
     with:
-      extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

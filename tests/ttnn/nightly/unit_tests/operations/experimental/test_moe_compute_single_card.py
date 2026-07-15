@@ -414,15 +414,7 @@ def _run_moe_compute_single_card_test(
     )
 
     base_pcc_threshold = _get_base_pcc_threshold(activation_type, has_bias)
-
-    # Arch- and sim-aware PCC floor (see #41827).
-    # ttsim has known partial fidelity (e.g. pack_untilize_dest), so the floor on sim is
-    # lower than on real silicon. Take the min with the helper's default so we don't
-    # accidentally relax a tighter threshold that might land later.
-    # WH and BH currently share the same floor; differentiate here when they diverge.
-    _on_simulator = bool(os.environ.get("TT_METAL_SIMULATOR"))
-    _arch_floor = 0.84 if _on_simulator else 0.984
-    base_pcc_threshold = min(base_pcc_threshold, _arch_floor)
+    base_pcc_threshold = min(base_pcc_threshold, 0.984)
 
     per_expert_tokens_all_passed = validate_per_expert_tokens(
         mesh_device,

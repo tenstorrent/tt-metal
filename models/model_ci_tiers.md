@@ -147,4 +147,3 @@ Captures device timing for a single layer of each target model, used to track pe
 | vLLM nightly tests | [`vLLM nightly tests`](../.github/workflows/vllm-nightly-tests.yaml) |
 | vLLM nightly impl | [`[internal] vLLM nightly tests impl`](../.github/workflows/vllm-nightly-tests-impl.yaml) |
 | Galaxy stress tests | [`(Galaxy) Stress`](../.github/workflows/galaxy-stress-tests.yaml) |
-| TTNN stress tests | [`ttnn stress tests`](../.github/workflows/ttnn-stress-tests.yaml) |

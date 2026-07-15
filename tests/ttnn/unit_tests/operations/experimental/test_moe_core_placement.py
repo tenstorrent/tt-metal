@@ -5,6 +5,7 @@
 import pytest
 import ttnn
 
+from models.common.utility_functions import is_wormhole_b0
 from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim, effective_matmul_ring_size
 
 
@@ -82,6 +83,7 @@ def test_get_moe_tilize_drain_core_structural(device):
     assert drain_core.y >= grid.y - 2, "drain core should be in the top two worker rows (tilize region)"
 
 
+@pytest.mark.skipif(is_wormhole_b0(), reason="mux placement geometry is Blackhole-only")
 def test_get_moe_combine_cores_avoids_mux_cores(device):
     """Combine and tilize cores must not overlap a caller-specified mux region."""
     hidden_size = 4096
@@ -105,6 +107,7 @@ def test_get_moe_combine_cores_avoids_mux_cores(device):
     }, "tilize drain core overlaps mux region"
 
 
+@pytest.mark.skipif(is_wormhole_b0(), reason="mux placement geometry is Blackhole-only")
 def test_moe_worker_mcast_bbox_consistent_with_mux_placement(device):
     """get_moe_worker_mcast_bounding_box must agree with the worker placement
     the op actually uses when mux cores are present.

@@ -26,7 +26,7 @@ Tensor pool_sum(
 // Generic reductions
 Tensor sum(
     const Tensor& input_tensor_arg,
-    const std::optional<std::variant<int, int64_t, SmallVector<int>>>& dim_arg = std::nullopt,
+    const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim_arg = std::nullopt,
     bool keepdim = false,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
@@ -36,7 +36,7 @@ Tensor sum(
 
 Tensor mean(
     const Tensor& input_tensor_arg,
-    const std::optional<std::variant<int, int64_t, SmallVector<int>>>& dim_arg = std::nullopt,
+    const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim_arg = std::nullopt,
     bool keepdim = false,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
@@ -46,7 +46,7 @@ Tensor mean(
 
 Tensor max(
     const Tensor& input_tensor_arg,
-    const std::optional<std::variant<int, int64_t, SmallVector<int>>>& dim_arg = std::nullopt,
+    const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim_arg = std::nullopt,
     bool keepdim = false,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
@@ -56,7 +56,7 @@ Tensor max(
 
 Tensor min(
     const Tensor& input_tensor_arg,
-    const std::optional<std::variant<int, int64_t, SmallVector<int>>>& dim_arg = std::nullopt,
+    const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim_arg = std::nullopt,
     bool keepdim = false,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
@@ -68,7 +68,7 @@ Tensor min(
 // used. The parameter is kept only for API compatibility and will be removed.
 Tensor std(
     const Tensor& input_tensor_arg,
-    const std::optional<std::variant<int, int64_t, SmallVector<int>>>& dim_arg = std::nullopt,
+    const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim_arg = std::nullopt,
     bool keepdim = false,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
@@ -81,7 +81,7 @@ Tensor std(
 // used. The parameter is kept only for API compatibility and will be removed.
 Tensor var(
     const Tensor& input_tensor_arg,
-    const std::optional<std::variant<int, int64_t, SmallVector<int>>>& dim_arg = std::nullopt,
+    const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim_arg = std::nullopt,
     bool keepdim = false,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,

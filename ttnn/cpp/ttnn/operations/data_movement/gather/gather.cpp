@@ -66,9 +66,9 @@ Tensor pre_gather_transform_tensor(
     // Since index_tensor.size(d) <= input_tensor.size(d) for all dimensions d != dim we slice input tensor to be the
     // same shape ignoring the dimension of the operation as the index tensor - this allows easy mapping of cells
     // between tensors
-    const ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
-    const ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-    const ttnn::SmallVector<uint32_t> end_index = {
+    const ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
+    const ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+    const ttsl::SmallVector<uint32_t> end_index = {
         index_tensor_padded_shape[0],
         index_tensor_padded_shape[1],
         index_tensor_padded_shape[2],
@@ -131,7 +131,7 @@ Tensor post_gather_transform_tensor(
                 (orig_rank <= 4) ? index_dim : (index_dim + (output_tensor.padded_shape().rank() - orig_rank));
             output_tensor = ttnn::transpose(output_tensor, dim_adj, -1, index_tensor.memory_config());
         }
-        ttnn::SmallVector<uint32_t> result_shape(input_shape.cbegin(), input_shape.cend());
+        ttsl::SmallVector<uint32_t> result_shape(input_shape.cbegin(), input_shape.cend());
         output_tensor = ttnn::reshape(output_tensor, ttnn::Shape{result_shape});
     }
 

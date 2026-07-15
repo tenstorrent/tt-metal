@@ -6,13 +6,17 @@
 
 wormhole_b0:
   # Job-level timeouts -- can be cut down still
+  - tests/ttnn/unit_tests/base_functionality/test_copy.py::test_copy_rm_interleaved_to_nd_sharded_large_row
+  - tests/ttnn/unit_tests/base_functionality/test_copy.py::test_copy_rm_interleaved_to_legacy_2D_sharded_large_row
+  - tests/ttnn/unit_tests/base_functionality/test_copy.py::test_copy_rm_nd_sharded_to_interleaved_large_row
   - tests/ttnn/unit_tests/base_functionality/test_graph_report.py::test_resnet50_e2e_graph_capture
+  - tests/ttnn/unit_tests/base_functionality/test_to_memory_config.py::test_to_memory_config_rm_interleaved_to_nd_sharded_large_row
+  - tests/ttnn/unit_tests/base_functionality/test_to_memory_config.py::test_to_memory_config_rm_interleaved_to_legacy_2D_sharded_large_row
+  - tests/ttnn/unit_tests/base_functionality/test_to_memory_config.py::test_to_memory_config_rm_nd_sharded_to_interleaved_large_row
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
-  - tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
   - tests/ttnn/unit_tests/operations/fused/test_softmax.py
-  - tests/ttnn/unit_tests/operations/matmul/test_matmul.py
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
@@ -22,7 +26,6 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
-  # (sparse_sdpa is Blackhole-only via run_for_blackhole, so it is skipped on WH already -- see blackhole section.)
 
   # Likely OOM killer related failures -- probably need to run these tests serially
   - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob
@@ -32,22 +35,13 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/reduce/test_reduction.py
   - tests/ttnn/unit_tests/operations/reduce/test_sum.py
 
-  # MOVD2B failures
-  # https://github.com/tenstorrent/tt-metal/issues/47164
-  - tests/ttnn/unit_tests/operations/sdpa/test_windowed_sdpa.py::test_windowed_sdpa_smoke
-
-  # ERROR: UnsupportedFunctionality: tensix_gmpool: src_b_val=0x0 must be 1.0f
-  - tests/ttnn/unit_tests/operations/reduce/test_moe.py
-
 blackhole:
   # Job-level timeouts
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv_transpose2d.py
   - tests/ttnn/unit_tests/operations/conv/test_prepare_conv_weights.py
-  - tests/ttnn/unit_tests/operations/fused/test_group_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py
-  - tests/ttnn/unit_tests/operations/matmul/test_matmul.py
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
@@ -59,28 +53,11 @@ blackhole:
 
   # tensix_cfg_wr32 reg=119 (THCON_SEC1_REG1, the fp8/LF8 SEC1 config)
   - tests/ttnn/unit_tests/base_functionality/test_to_layout.py::test_to_layout_fp8_input_to_tile
-
-  # Two ttsim gaps (op runs correctly on silicon): (1) BH fast tilize unpacks into src_a row 64 -- FIXED in
-  # ttsim releases newer than the pinned v1.8.2 (ttsim-private c753f3bc); (2) tensix_cfg_wr32 reg=119
-  # (THCON_SEC1_REG1, the fp8/LF8 SEC1 config) is still unimplemented even in latest ttsim, hit on a data-format
-  # reconfig after an fp8 program. The skip stays for (2); remove once a ttsim release with both lands in CI.
   - tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py
   - tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py
 
   # Likely OOM killer related failures -- probably need to run these tests serially
   - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob
-
-  # MOVD2B failures
-  # https://github.com/tenstorrent/tt-metal/issues/41286
-  # https://github.com/tenstorrent/tt-metal/issues/40583
-  # https://github.com/tenstorrent/tt-metal/issues/43295
-  - tests/ttnn/unit_tests/operations/data_movement/test_concat.py::test_tiled_concat
-  - tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
-  - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
-  - tests/ttnn/unit_tests/operations/fused/test_rms_norm.py::test_rms_norm_row_major
-  - tests/ttnn/unit_tests/operations/fused/test_softmax.py
-  - tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py
-  - tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py
 
   # ZEROACC failures
   # https://github.com/tenstorrent/ttsim-private/issues/326
@@ -90,6 +67,3 @@ blackhole:
   # https://github.com/tenstorrent/tt-metal/issues/41530
   - tests/ttnn/unit_tests/operations/reduce/test_reduction.py
   - tests/ttnn/unit_tests/operations/reduce/test_sum.py
-
-  # ERROR: UnsupportedFunctionality: tensix_gmpool: src_b_val=0x0 must be 1.0f
-  - tests/ttnn/unit_tests/operations/reduce/test_moe.py
