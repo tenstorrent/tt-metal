@@ -190,27 +190,43 @@ def sound_entropy_step_fidelity(
     pcc_tol: float = 0.95,
     abs_tol: float = 0.5,
 ) -> SoundEntropyVerdict:
-    """Variance-gated per-step entropy fidelity — sound where raw PCC is not (#48291).
+    """Well-conditioned per-step entropy-fidelity diagnostic (#48291).
 
-    Pearson correlation of a near-constant vector is ill-conditioned: as a denoise
-    step converges, per-token entropy collapses toward a uniform tiny value, its
-    across-position variance -> 0, and ``_pearson`` is then dominated by rounding
-    noise (it can even go negative) even when the ABSOLUTE entropy error is
-    negligible. This is a property of the metric, not of the decisions — a
-    self-consistency control (the SAME HF model in fp32 vs bf16, identical injected
-    noise) reproduces the collapse, so the reference cannot pass a strict per-step
-    PCC bar against itself (see ``doc/decision_fidelity/``).
+    This is a per-step DIAGNOSTIC that is well-conditioned where raw per-step
+    entropy PCC is not — it is NOT proposed as a whole-trajectory pass/fail gate
+    for a bf16-vs-fp32 chaotic comparison (see the caveat below).
 
-    Gate PCC only where the reference entropy profile still carries real structure
-    (std >= ``min_std``); where it does not, require the mathematically sound
-    ABSOLUTE tolerance instead. This does not weaken fidelity — it replaces an
-    ill-conditioned test with a well-conditioned one at converged steps.
+    Two failure modes are handled together:
+
+    - *Degenerate denominator.* As a denoise step converges, per-token entropy
+      collapses toward a uniform tiny value; its across-position variance -> 0 and
+      Pearson correlation is then dominated by rounding noise (it can even go
+      negative) even when the ABSOLUTE entropy error is negligible. So PCC is only
+      required where the reference entropy profile still carries structure
+      (``std >= min_std``).
+    - *Affine blindness.* PCC is invariant to a constant offset/scale, so a
+      systematic entropy error (wrong log base, missing temperature) would pass
+      PCC ~= 1. So the ABSOLUTE tolerance ``abs_tol`` is enforced on BOTH branches,
+      never dropped on the structured branch.
+
+    ``passed`` iff ``max|Δ| <= abs_tol`` AND (the profile is near-constant OR its
+    shape correlates at ``pcc >= pcc_tol``). ``mode`` records whether PCC was
+    evaluated ("pcc") or the step was near-constant ("abs").
+
+    CAVEAT (do not misread as a reachable gate): under a genuinely chaotic
+    bf16-vs-fp32 comparison, transition steps carry real ~1-3 nat entropy
+    divergence that this metric (correctly) fails — the SAME HF model in fp32 vs
+    bf16 fails it against itself at those steps. That confirms the intrinsic bf16
+    floor; it is not evidence the candidate is defective. Use this to separate the
+    converged-step artifact from genuine divergence, and gate the stage on
+    output quality / fidelity-to-the-fp32-ideal, not on this per-step verdict.
     """
     ref = ref_entropy.flatten().float()
     cand = cand_entropy.flatten().float()
     max_abs = float((ref - cand).abs().max()) if ref.numel() else 0.0
     std = float(ref.std()) if ref.numel() > 1 else 0.0
+    abs_ok = max_abs <= abs_tol
     if std >= min_std:
         pcc = _pearson(ref, cand)
-        return SoundEntropyVerdict(passed=pcc >= pcc_tol, mode="pcc", std=std, pcc=pcc, max_abs=max_abs)
-    return SoundEntropyVerdict(passed=max_abs <= abs_tol, mode="abs", std=std, pcc=None, max_abs=max_abs)
+        return SoundEntropyVerdict(passed=abs_ok and pcc >= pcc_tol, mode="pcc", std=std, pcc=pcc, max_abs=max_abs)
+    return SoundEntropyVerdict(passed=abs_ok, mode="abs", std=std, pcc=None, max_abs=max_abs)

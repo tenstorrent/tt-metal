@@ -151,6 +151,57 @@ perturbation of the model logits, independent of any TT implementation.
 - Artifacts: `/tmp/dg48291_hf_fp32_seed0.pt`, `/tmp/dg48291_hf_fp32_seed1.pt`
   (fp32 HF trajectories); `/tmp/dg48291_tanh_seed{0,1}.pt` (bf16 HF + TT).
 
+### bf16 floor at the production 48-step budget (not an 8-step artifact)
+
+The 8-step gate disables early-halt; production runs up to 48 steps with
+`entropy_stop_threshold = 0.005`. Re-running the fp32-vs-bf16 control at the
+production config (`scratch hf_floor_prod48`): both sides converge and halt
+(`halted=True`) at 7–15 steps, and the floor is unchanged.
+
+- seed 0: fp32 halts at 7 steps, bf16 at 8; committed `0.867188` (34 differ). The
+  fp32/bf16 sentences are character-identical except a leading "A" (one-token
+  left-shift) — the 34 "misses" are pure alignment.
+- seed 1: fp32 halts at 14 steps, bf16 at 15; committed `0.914062` (22 differ);
+  both coherent, correct, equivalent definitions.
+- Artifacts: `/tmp/dg48291_hf_{fp32,bf16}_prod48_seed{0,1}.pt`. So the intrinsic
+  bf16 floor (`0.863`/`0.914` at 8 steps) is confirmed at production scale
+  (`0.867`/`0.914`), where the trajectory actually converges.
+
+Direct TT at the production 48-step config (seed 1, canonical prompt, early-halt,
+device P150x4, `DG_SPARSE_MOE=1`; non-degenerate, 36 content tokens, both halted):
+committed `TT-vs-fp32 = 0.99219` (2 differ), `fp32-vs-bf16 = 0.91406`,
+`TT-vs-bf16 = 0.91016`. TT tracks the fp32 ideal more closely than the bf16
+reference does, and TT's decoded text is essentially identical to fp32's. Artifact
+`/tmp/dg48291_tt_prod48_seed1_fixed.pt`. (A first attempt collapsed to all-EOS
+because it defaulted to the "Once upon a time" prompt — HF collapsed identically,
+so it was prompt/invocation, not the device; corrected run recorded.)
+
+## Metric caveats and disclosures
+
+- **Positional token-match is corrupted by paraphrase alignment.** Non-EOS
+  committed agreement (over the reference's non-EOS positions): seed 0
+  `fp32-vs-bf16 = 0.0000` (!), `fp32-vs-TT = 0.0000`, `bf16-vs-TT = 0.9714`;
+  seed 1 `fp32-vs-bf16 = 0.4286`, `fp32-vs-TT = 0.8571`, `bf16-vs-TT = 0.4054`.
+  The seed-0 `0.0000` is the alignment artifact in its purest form: the fp32
+  output drops the leading "A" (a one-token left shift), so every non-EOS
+  position misaligns even though the text is essentially identical. This is why
+  neither positional `committed_match` nor non-EOS agreement is a valid fidelity
+  metric for a paraphrase-generating diffusion model.
+- **Converged-step entropy abs error is not tiny.** The self-consistency control
+  reaches max |Δ entropy| up to ~`1.1` (seed 0 step 5) and ~`2.8` at transition
+  steps (seed 1 step 2) — the reference vs itself in fp32. The degenerate-
+  denominator PCC collapse and the genuine transition-step divergence coexist;
+  `sound_entropy_step_fidelity` separates them but does not make the transition
+  steps pass (the reference fails them too — that is the floor).
+- **Inherited shared-`gemma4` gate failure (NOT dg-05).**
+  `check_no_shared_gemma4_edits.sh` (vs the origin/main merge-base) is RED on
+  `models/demos/gemma4/tt/experts/operations.py` (+1 `deallocate`, commit
+  `bf98aaf2e23`, #47464) and `models/demos/gemma4/tt/model.py` (sharded-terminal,
+  commit `a22107f0447`). This session (dg-05) made ZERO shared edits — the
+  working tree and staged diffs are empty of `gemma4`. The violation is inherited
+  from #47464 / sharded-terminal and is those stages' cleanup, but it is a live
+  HARD-RULE gate failure on the branch and is flagged for owner action.
+
 ## Current conclusion
 
 The tanh-GELU semantic fix clears the core seed-0 committed-decision bar at

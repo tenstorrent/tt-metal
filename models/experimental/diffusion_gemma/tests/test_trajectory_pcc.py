@@ -174,3 +174,15 @@ def test_sound_entropy_fails_structured_step_when_decorrelated():
     cand = torch.rand(256) * 2.0  # unrelated structured profile
     verdict = sound_entropy_step_fidelity(ref, cand)
     assert verdict.mode == "pcc" and not verdict.passed
+
+
+def test_sound_entropy_pcc_branch_catches_affine_offset():
+    # Structured, PERFECTLY correlated, but a systematic +1.5-nat offset (wrong log
+    # base / missing temperature). PCC ~= 1.0, but the absolute guard must fail it
+    # on the PCC branch too (affine blindness fix).
+    torch.manual_seed(3)
+    ref = torch.rand(256) * 2.0
+    cand = ref + 1.5
+    assert _pearson(ref, cand) > 0.999
+    verdict = sound_entropy_step_fidelity(ref, cand)
+    assert verdict.mode == "pcc" and not verdict.passed and verdict.max_abs > 0.5
