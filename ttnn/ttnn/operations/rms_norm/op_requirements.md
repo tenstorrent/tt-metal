@@ -326,7 +326,7 @@ regression + translated 105; unit dir 414. Reused the R5a `cb_gamma_rm` + comput
 transport UNCHANGED; added one reader leg (`GAMMA_TILE_EXTRACT`) + a reader-local `cb_gamma_src` scratch
 + the `gamma_via_rm` descriptor flag. One structural carve-out remains EXCLUDED → 5d.
 
-### [ ] Refinement 5d — RM cross-core + bf8b TILE gamma (block-float sub-tile column dequant)
+### [x] Refinement 5d — RM cross-core + bf8b TILE gamma (block-float sub-tile column dequant)
 
 **Goal**: lift the `{ROW_MAJOR, WIDTH_SHARDED, gamma_dtype=bf8b, gamma_layout=TILE}` /
 `{ROW_MAJOR, BLOCK_SHARDED, gamma_dtype=bf8b, gamma_layout=TILE}` EXCLUSIONS (the last 5c carve-out).
@@ -343,6 +343,22 @@ priority.
 
 **Done when**: `{RM, WIDTH/BLOCK, gamma_dtype=bf8b, gamma_layout=TILE}` moves out of EXCLUSIONS into
 passing golden cells; no regression on the R5c fp32/bf16 TILE-gamma surface.
+
+**Landed (2026-07-15)**: both `{RM, WIDTH/BLOCK, gamma_dtype=bf8b, gamma_layout=TILE}` EXCLUSIONS are
+lifted — bf8b TILE gamma is now the LAST 5c carve-out closed. Chose the **in-reader block-float
+dequant** lever: the 5c `GAMMA_TILE_EXTRACT` reader leg became 3-valued (0 off / 1 fp32-bf16 byte-copy /
+2 bf8b dequant); for bf8b the reader reads the containing global gamma tile(s) into the `cb_gamma_src`
+scratch (whole 1088B bf8b tiles → tile-aligned DRAM reads) and **decodes each row-0 sub-column datum**
+(`bfp8b_datum_to_f32_bits` — mirrors the host `convert_bfp_to_u32` Bfp8_b branch: shared exponent byte
+0/16 is the fp32-biased exp, mantissa byte `64+sc` / `320+(sc-16)`, normalize + drop the hidden bit) into
+the float `cb_gamma_rm` stick, then the SAME RM-gamma compute tilize + `mul<Row>` leg runs UNCHANGED. The
+dequant is a lossless widening, so the result is numerically identical to the R2 INTERLEAVED bf8b-gamma
+FPU-unpack path. `SUPPORTED` unchanged (bf8b `gamma_dtype` + TILE `gamma_layout` were already listed; the
+two `gamma_dtype=bf8b` EXCLUSIONS were the only gate). Golden: bf8b-gamma RM WIDTH/BLOCK **490 passed / 0
+failed / 0 xpassed** (70 xfailed = permanent `{fp32,False}`); R5c fp32/bf16 TILE-gamma RM cross-core
+regression **1200 / 0 / 0**; TILE-input WIDTH R5 regression **701 / 0 / 0**; loose 6/6; regression+translated
+99; unit dir **444**. Reused the R5c `cb_gamma_rm`/`cb_gamma_src` + compute tilize + mcast/unicast transport
+UNCHANGED; the only new code is the reader dequant branch + descriptor dtype/elt plumbing.
 
 > **Trailing perf (once generality is exhausted, after Refinement 5)**: the wide-W / few-tile-row
 > interleaved cells (W=16384/32768, 1–2 tile-rows) are latency-bound on one core — the cross-core

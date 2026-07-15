@@ -333,24 +333,44 @@ def _build_cross_core_descriptor(
     out_dtype = output_tensor.dtype
     gamma_dtype = gamma.dtype if has_gamma else in_dtype
     interm_dtype = ttnn.bfloat16 if in_dtype == ttnn.bfloat8_b else in_dtype
-    # R5c: RM cross-core + TILE gamma (fp32/bf16). Each core owns a SUB-TILE global
-    # W-column offset (w_col_start = i*Ws), so a TILE-stored gamma can't be read as whole
-    # tiles aligned to local col 0. The reader extracts the containing gamma tile(s)' row-0
-    # sub-columns into cb_gamma_rm (face-aware L1 byte copy), then the SAME RM-gamma compute
-    # tilize leg produces cb_gamma_tiles — so the gamma is "fed via RM" even though it is
-    # TILE-stored. bf8b TILE gamma is EXCLUDED op-side (block-float sub-tile extraction needs
-    # an in-reader dequant — filed as Refinement 5d).
-    gamma_tile_extract = is_row_major and gamma_is_tile and gamma_dtype in (ttnn.float32, ttnn.bfloat16)
+    # R5c/R5d: RM cross-core + TILE gamma. Each core owns a SUB-TILE global W-column offset
+    # (w_col_start = i*Ws), so a TILE-stored gamma can't be read as whole tiles aligned to
+    # local col 0. The reader extracts the containing gamma tile(s)' row-0 sub-columns into
+    # cb_gamma_rm, then the SAME RM-gamma compute tilize leg produces cb_gamma_tiles — so the
+    # gamma is "fed via RM" even though it is TILE-stored.
+    #   * R5c (fp32/bf16): a face-aware L1 byte copy.
+    #   * R5d (bf8b): a bf8b tile is block-float (16 elements share one 8-bit exponent), so a
+    #     byte copy is meaningless — the reader DEQUANTS each row-0 datum (block-float decode)
+    #     into a real float stick. bf8b gamma is always TILE (bf8b + RM is INVALID).
+    gamma_is_bf8b = has_gamma and gamma_is_tile and gamma_dtype == ttnn.bfloat8_b
+    gamma_tile_extract = (
+        is_row_major
+        and gamma_is_tile
+        and gamma_dtype
+        in (
+            ttnn.float32,
+            ttnn.bfloat16,
+            ttnn.bfloat8_b,
+        )
+    )
     gamma_via_rm = gamma_is_row_major or gamma_tile_extract
     # Partials / gathered stats / broadcast 1/rms are fp32 so the cross-core sum
     # does not truncate (same rationale as the R1/R2a AccumulateViaAdd accumulator).
     stat_dtype = ttnn.float32
-    # Gamma-via-RM (RM gamma, or the R5c TILE-extract leg) is tilized by compute, so its
+    # Gamma-via-RM (RM gamma, or the R5c/R5d TILE-extract leg) is tilized by compute, so its
     # tiles carry interm precision; a direct TILE read keeps the on-disk gamma dtype.
     gamma_tiles_dtype = gamma_dtype if (has_gamma and not gamma_via_rm) else interm_dtype
+    # cb_gamma_rm holds the float RM stick compute tilizes. fp32/bf16 TILE gamma keeps the
+    # gamma dtype (byte copy). A bf8b tile has NO per-element form, so the reader dequants it
+    # to a real float — interm_dtype (bf16 for bf8b/bf16 input, fp32 for fp32 input).
+    gamma_rm_dtype = interm_dtype if gamma_is_bf8b else gamma_dtype
 
     input_elt = _elt(input_tensor)
     gamma_elt = _elt(gamma) if has_gamma else input_elt
+    if gamma_is_bf8b:
+        # _elt(bf8b) is the stand-in 1 (block-float has no per-element size); the extract dest
+        # (cb_gamma_rm stick) stride is the dequant-output element size (bf16=2 / fp32=4).
+        gamma_elt = 2 if gamma_rm_dtype == ttnn.bfloat16 else 4
 
     # LOCAL W-block geometry: every core owns `num_w_tiles` W-tiles (uniform per
     # scheme). Derive the block factor from that local count (single source of truth).
@@ -425,17 +445,20 @@ def _build_cross_core_descriptor(
         cbs.append(cb(CB_OUTPUT_RM, out_dtype, out_rm_page, double * W_BLOCK_TILES))
     if has_gamma:
         if gamma_via_rm:
-            # RM gamma / R5c TILE-extract leg both feed a per-core gamma stick into
+            # RM gamma / R5c/R5d TILE-extract leg all feed a per-core float gamma stick into
             # cb_gamma_rm (compute tilizes it). The real-RM leg reads a column-slice from a
             # 32B-aligned DRAM base, so add DRAM_ALIGN(32B) of page slack for the aligned-read
             # overshoot (shift-copy places the slice at local col 0). The extract leg fills
-            # cb_gamma_rm by L1 copy (no DRAM sub-align), so the slack is unused there.
+            # cb_gamma_rm by L1 copy/dequant (no DRAM sub-align), so the slack is unused there.
+            # For bf8b gamma, gamma_rm_dtype is the dequant-output float (not the bf8b on-disk
+            # dtype) — cb_gamma_rm never carries the block format.
             gamma_rm_alloc = gamma_rm_page + (32 if is_row_major else 0)
-            cbs.append(cb(CB_GAMMA_RM, gamma_dtype, gamma_rm_alloc, double))
+            cbs.append(cb(CB_GAMMA_RM, gamma_rm_dtype, gamma_rm_alloc, double))
         if gamma_tile_extract:
-            # R5c scratch: hold the up-to-(W_BLOCK_TILES+1) containing global gamma tiles a
+            # R5c/R5d scratch: hold the up-to-(W_BLOCK_TILES+1) containing global gamma tiles a
             # W-block's sub-tile slice can span (aligned span W_BLOCK_TILES + 1 for a
-            # misaligned start). Reader-local (read whole tiles -> extract row 0 -> pop).
+            # misaligned start). Reader-local (read whole tiles -> extract/dequant row 0). Sized
+            # at the on-disk gamma tile (bf8b -> 1088B block-float tiles the reader decodes).
             gamma_src_tile = ttnn.tile_size(gamma_dtype)
             cbs.append(cb(CB_GAMMA_SRC, gamma_dtype, gamma_src_tile, W_BLOCK_TILES + 1))
         cbs.append(cb(CB_GAMMA_TILES, gamma_tiles_dtype, gamma_tiles_tile, double * W_BLOCK_TILES))
@@ -475,7 +498,8 @@ def _build_cross_core_descriptor(
         shard_w,  # RM leg: local shard cols (Ws)
         input_elt,  # RM leg: input element bytes (local shard stride)
         1 if ragged else 0,  # USE_UNICAST_BCAST (R5b): ragged WIDTH group -> unicast 1/rms
-        1 if gamma_tile_extract else 0,  # GAMMA_TILE_EXTRACT (R5c): extract TILE gamma row-0 sub-cols
+        # GAMMA_TILE_EXTRACT: 0=off, 1=fp32/bf16 byte copy (R5c), 2=bf8b block-float dequant (R5d)
+        (2 if gamma_is_bf8b else 1) if gamma_tile_extract else 0,
     ]
     reader_ct_args.extend(mcast_ct)  # McastArgs block (CT base = 16)
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())

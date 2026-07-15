@@ -564,3 +564,57 @@
   acceptance) and re-pointed `test_rms_norm_rejects_row_major_width_block_remaining` from bf16 (now
   supported) to bf8b TILE gamma (the 5d carve-out). Probe `probe_5c_geom` / `probe_5c_min` capture the
   Ws geometry + minimal verification.
+
+## Refinement 5d — RM cross-core + bf8b TILE gamma (block-float sub-tile column dequant)
+- Date: 2026-07-15
+- What was done: Lifted the last two 5c carve-outs — `{ROW_MAJOR, WIDTH_SHARDED, gamma_dtype=bf8b,
+  gamma_layout=TILE}` and `{ROW_MAJOR, BLOCK_SHARDED, gamma_dtype=bf8b, gamma_layout=TILE}`. Each RM
+  cross-core core owns a sub-tile W-slice at a sub-tile global column offset (w_col_start = i·Ws), so a
+  TILE-stored gamma can't be read as whole tiles aligned to local col 0. 5c handled fp32/bf16 with a
+  face-aware BYTE copy of the containing gamma tile's row-0 sub-columns; a bf8b tile is block-float (16
+  elements share one 8-bit exponent, so a per-element mantissa byte is meaningless without it), so the
+  byte copy doesn't apply. Chose the **in-reader block-float dequant** lever (of the two the note named):
+  - The reader's `GAMMA_TILE_EXTRACT` leg became **3-valued** (0 = off; 1 = fp32/bf16 face-aware byte
+    copy, the unchanged R5c path refactored into an `else` branch; 2 = bf8b dequant). For bf8b it reads
+    the containing global gamma tile(s) into the existing `cb_gamma_src` scratch (whole 1088-byte bf8b
+    tiles → tile-aligned DRAM reads) and **decodes each row-0 sub-column datum** into the float
+    `cb_gamma_rm` stick via `bfp8b_datum_to_f32_bits` — a new reader helper mirroring the host
+    `convert_bfp_to_u32` Bfp8_b branch (`blockfloat_common.cpp`): row-0 exponent byte is index 0 (cols
+    0–15, face 0) / 16 (cols 16–31, face 1); mantissa byte is `64+sc` / `320+(sc-16)`; sign = bit 7,
+    magnitude = bits 6–0, normalize left until bit 6, drop the hidden bit, and the shared exponent is the
+    fp32-biased exp directly (bias 127, no rebias). Writes bf16 (top 16 bits, lossless) or fp32 by the
+    dest element size.
+  - The **compute is BYTE-IDENTICAL**: `GAMMA_IS_ROW_MAJOR=1` (host `gamma_via_rm`) drives the existing
+    RM-gamma tilize (`tilize cb_gamma_rm -> cb_gamma_tiles`) + `mul<Row>` — the gamma is "fed via RM"
+    though TILE-stored, exactly like 5c. bf8b → float is a lossless widening, so the reconstructed values
+    are identical to the hardware unpacker, i.e. numerically identical to the R2 INTERLEAVED bf8b-gamma
+    FPU-unpack path (which already passes) — that inheritance is why this refinement is low-risk.
+  - **Reused**: the R5c `cb_gamma_rm` + `cb_gamma_src` scratch + compute tilize/`mul<Row>` leg, the whole
+    R5/R5a/R5b/R5c cross-core gather + mcast/unicast broadcast transport (UNCHANGED — the broadcast is
+    topology-agnostic to the gamma leg), all CBs, and the writer. No new kernel file, no new CB, no new
+    transport, no parallel datapath, no shared-CT-base bump (the extract flag was reused as a 3-valued
+    enum instead of adding an arg, so the McastArgs CT base is unchanged).
+  - **Added**: `bfp8b_datum_to_f32_bits` + the `GAMMA_TILE_EXTRACT==2` dequant branch in
+    `rms_norm_sharded_reader.cpp`; descriptor `gamma_is_bf8b` / `gamma_rm_dtype` (cb_gamma_rm carries the
+    dequant-output float, not the block format) / `gamma_elt` override (bf8b `_elt` stand-in is 1; the
+    extract dest stride is the float element size) / the 3-valued `GAMMA_TILE_EXTRACT` CT arg.
+  - **SUPPORTED unchanged**: `bfloat8_b` was already in `gamma_dtype` and `TILE_LAYOUT` in `gamma_layout`
+    (both from R2). The two `gamma_dtype=bf8b` EXCLUSIONS were the only gate; removing them is the whole
+    op-file change.
+- Accuracy achieved (golden tolerances, PCC bf16≥0.995 / fp32≥0.999; the input-dtype tolerance absorbs
+  the bf8b gamma quantization, same contract as the R2 INTERLEAVED bf8b-gamma cells): RM WIDTH/BLOCK +
+  bf8b TILE gamma, bf16 + fp32 input, all alignments (sub-tile Ws=8/4, tile-aligned Ws=64, w_non
+  rectangular + ragged, narrow-H BLOCK), 2D/3D/4D, multi-round groups — all pass. Minimal `(1,1,32,64)`
+  WIDTH bf16 + bf8b-TILE-gamma passes on the first implementation.
+- Golden test progress: bf8b-gamma RM WIDTH/BLOCK slice **490 passed / 0 failed / 0 xpassed / 70 xfailed**
+  (the 70 = permanent `{float32, fp32_dest_acc_en=False}`); R5c fp32/bf16 TILE-gamma RM cross-core
+  regression **1200 / 0 / 0 / 400**; TILE-input WIDTH R5 regression **701 / 0 / 0 / 140**; `test_op_loose`
+  6/6; `test_regression.py` + `test_translated.py` **99 passed**; unit dir **444 passed** (non-dev) with
+  the r5d/r5c debug files green under `--dev`.
+- Issues encountered: None. The dequant matched on the first run — the correctness inheritance from the
+  R2 INTERLEAVED bf8b-gamma path (lossless bf8b→float widening == the hardware unpack) held on device.
+- Tests added: `tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_r5d_debug.py` (RM WIDTH/BLOCK ×
+  bf16/fp32 input × bf8b TILE gamma, 9-shape matrix + a minimal case, 19 total). `test_rms_norm_sharded.py`
+  — replaced the `test_rms_norm_rejects_row_major_width_block_remaining` guard with
+  `test_rms_norm_row_major_cross_core_bf8b_tile_gamma` (acceptance, 12 cases). `test_rms_norm_r5c_debug.py`
+  — flipped `test_r5c_bf8b_tile_gamma_still_excluded` to `test_r5c_bf8b_tile_gamma_now_supported`.

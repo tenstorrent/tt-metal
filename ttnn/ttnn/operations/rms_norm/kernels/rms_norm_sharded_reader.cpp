@@ -90,6 +90,29 @@ FORCE_INLINE void zero_l1_page(uint32_t l1, uint32_t nbytes) {
         p[i] = 0;
     }
 }
+
+// R5d: decode ONE bfloat8_b datum (block-float) to fp32 bits. Mirrors the host
+// convert_bfp_to_u32 Bfp8_b branch (blockfloat_common.cpp): the shared exponent
+// byte is already the fp32-biased exponent (bias 127 — NO rebias for the _b
+// variant); the mantissa byte is [sign:1][magnitude:7] with an implied leading 1
+// at bit 6. Normalize the magnitude (shift left until bit 6 is set, decrementing
+// the exponent), drop the hidden bit, and assemble the fp32 word. bf8b -> fp32 is
+// a lossless widening, so this reconstructs exactly what the hardware unpacker
+// would produce (== the R2 INTERLEAVED bf8b-gamma FPU-unpack path).
+FORCE_INLINE uint32_t bfp8b_datum_to_f32_bits(uint8_t shared_exp, uint8_t mantissa_byte) {
+    uint32_t sign = static_cast<uint32_t>(mantissa_byte) >> 7;
+    uint32_t man = static_cast<uint32_t>(mantissa_byte) & 0x7f;
+    if (man == 0) {
+        return sign << 31;  // signed zero
+    }
+    uint32_t exp = shared_exp;
+    while ((man & 0x40) == 0) {
+        man <<= 1;
+        --exp;  // exp = shared_exp - shift_cnt
+    }
+    man = (man << 1) & 0x7f;  // drop the hidden leading 1
+    return (sign << 31) | (exp << 23) | (man << 16);
+}
 }  // namespace
 
 void kernel_main() {
@@ -111,13 +134,15 @@ void kernel_main() {
     // of one mcast to the bbox rectangle (which would hit phantom cores). The gather leg
     // and the non-root ReceiverPipe are topology-agnostic and unchanged.
     constexpr uint32_t USE_UNICAST_BCAST = get_compile_time_arg_val(14);
-    // R5c: RM cross-core + TILE gamma (fp32/bf16). This core owns a SUB-TILE global
-    // W-column offset (w_col_start), so a TILE-stored gamma can't be read as whole tiles
-    // aligned to local col 0. When set, the reader extracts the gamma's ROW 0 sub-columns
-    // from the containing global gamma tile(s) into cb_gamma_rm (see pass-2 gamma leg), and
-    // the SAME RM-gamma compute tilize leg (GAMMA_IS_ROW_MAJOR=1 on the compute side)
-    // produces cb_gamma_tiles unchanged. bf8b TILE gamma is EXCLUDED op-side (block-float
-    // sub-tile extraction needs an in-reader dequant).
+    // R5c/R5d: RM cross-core + TILE gamma. This core owns a SUB-TILE global W-column
+    // offset (w_col_start), so a TILE-stored gamma can't be read as whole tiles aligned
+    // to local col 0. When set, the reader extracts the gamma's ROW 0 sub-columns from the
+    // containing global gamma tile(s) into cb_gamma_rm (see pass-2 gamma leg), and the SAME
+    // RM-gamma compute tilize leg (GAMMA_IS_ROW_MAJOR=1 on the compute side) produces
+    // cb_gamma_tiles unchanged. Three-valued: 0 = off; 1 = fp32/bf16 face-aware byte copy
+    // (R5c); 2 = bf8b block-float dequant of the row-0 sub-columns into the float
+    // cb_gamma_rm (R5d — a bf8b tile shares one exponent per 16 elements, so a byte copy is
+    // meaningless; the reader decodes each datum via bfp8b_datum_to_f32_bits).
     constexpr uint32_t GAMMA_TILE_EXTRACT = get_compile_time_arg_val(15);
     // mcast wire (host Mcast2D) at CT 16; TensorAccessors chained after it.
     constexpr auto mc = McastArgs</*CT=*/16, /*RT=*/10>();
@@ -356,16 +381,24 @@ void kernel_main() {
                     }
                     cb_push_back(cb_gamma_rm, 1);
                 } else if constexpr (GAMMA_TILE_EXTRACT) {
-                    // R5c: RM cross-core + TILE gamma (fp32/bf16). This core owns global
-                    // cols [g_col0, g_col0+cols) at a SUB-TILE column offset, so a
-                    // TILE-stored gamma can't be read as whole tiles aligned to local col 0.
-                    // Read the containing global gamma tile(s) into an L1 scratch (whole
-                    // tile pages -> tile-aligned DRAM reads, no sub-32B source issue), then
-                    // extract their ROW 0 sub-columns (face-aware byte offset: cols 0..15 in
-                    // face 0 at byte c*elt; cols 16..31 in face 1 at byte (256+(c-16))*elt)
-                    // into cb_gamma_rm at local col 0 with an alignment-free L1->L1 copy,
-                    // zero-padding the W-tail. The compute then tilizes cb_gamma_rm exactly
-                    // like the RM-gamma leg (GAMMA_IS_ROW_MAJOR=1) -> cb_gamma_tiles unchanged.
+                    // R5c/R5d: RM cross-core + TILE gamma. This core owns global cols
+                    // [g_col0, g_col0+cols) at a SUB-TILE column offset, so a TILE-stored
+                    // gamma can't be read as whole tiles aligned to local col 0. Read the
+                    // containing global gamma tile(s) into an L1 scratch (whole tile pages ->
+                    // tile-aligned DRAM reads, no sub-32B source issue), then extract their
+                    // ROW 0 sub-columns into cb_gamma_rm at local col 0, zero-padding the
+                    // W-tail. The compute then tilizes cb_gamma_rm exactly like the RM-gamma
+                    // leg (GAMMA_IS_ROW_MAJOR=1) -> cb_gamma_tiles unchanged.
+                    //   * GAMMA_TILE_EXTRACT==1 (R5c, fp32/bf16): face-aware alignment-free
+                    //     L1->L1 byte copy (cols 0..15 in face 0 at byte c*elt; cols 16..31
+                    //     in face 1 at byte (256+(c-16))*elt).
+                    //   * GAMMA_TILE_EXTRACT==2 (R5d, bf8b): a bf8b tile is block-float, so a
+                    //     byte copy is meaningless — DEQUANT each row-0 datum to the dest
+                    //     float (gamma_elt = 2 -> bf16, 4 -> fp32). Row-0 layout in a 1088B
+                    //     bf8b tile: exponent section bytes 0..63 (one byte per face-row: face
+                    //     f row r -> byte f*16+r), mantissa section bytes 64..1087 (face f base
+                    //     64+f*256, row-major 16x16). Row 0 -> cols 0..15 in face 0 (exp byte 0,
+                    //     man bytes 64..79), cols 16..31 in face 1 (exp byte 16, man 320..335).
                     const uint32_t g_tile_bytes = get_tile_size(cb_gamma_src);
                     const auto g_acc = TensorAccessor(gamma_args, gamma_addr, g_tile_bytes);
                     uint32_t g_col0 = w_col_start + b * wblock_cols;
@@ -393,13 +426,33 @@ void kernel_main() {
                             uint32_t g = g_col0 + j;
                             uint32_t local_t = (g / TILE_W) - gt_first;
                             uint32_t sc = g % TILE_W;
-                            uint32_t face_off = (sc < 16 ? sc : (256 + (sc - 16))) * gamma_elt;
-                            volatile tt_l1_ptr uint8_t* sptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(
-                                src_base + local_t * g_tile_bytes + face_off);
                             volatile tt_l1_ptr uint8_t* dptr =
                                 reinterpret_cast<volatile tt_l1_ptr uint8_t*>(gl1 + j * gamma_elt);
-                            for (uint32_t k = 0; k < gamma_elt; ++k) {
-                                dptr[k] = sptr[k];
+                            if constexpr (GAMMA_TILE_EXTRACT == 2) {
+                                // bf8b: dequant the row-0 datum, then write dest float bytes.
+                                volatile tt_l1_ptr uint8_t* tile =
+                                    reinterpret_cast<volatile tt_l1_ptr uint8_t*>(src_base + local_t * g_tile_bytes);
+                                uint32_t exp_idx = (sc < 16) ? 0u : 16u;
+                                uint32_t man_idx = (sc < 16) ? (64u + sc) : (320u + (sc - 16u));
+                                uint32_t f32 = bfp8b_datum_to_f32_bits(tile[exp_idx], tile[man_idx]);
+                                if (gamma_elt == 2) {
+                                    uint16_t bf16 = static_cast<uint16_t>(f32 >> 16);  // bf8b->bf16 lossless
+                                    dptr[0] = static_cast<uint8_t>(bf16 & 0xff);
+                                    dptr[1] = static_cast<uint8_t>(bf16 >> 8);
+                                } else {
+                                    dptr[0] = static_cast<uint8_t>(f32 & 0xff);
+                                    dptr[1] = static_cast<uint8_t>((f32 >> 8) & 0xff);
+                                    dptr[2] = static_cast<uint8_t>((f32 >> 16) & 0xff);
+                                    dptr[3] = static_cast<uint8_t>((f32 >> 24) & 0xff);
+                                }
+                            } else {
+                                // fp32/bf16 (R5c): face-aware byte copy from the containing tile.
+                                uint32_t face_off = (sc < 16 ? sc : (256 + (sc - 16))) * gamma_elt;
+                                volatile tt_l1_ptr uint8_t* sptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(
+                                    src_base + local_t * g_tile_bytes + face_off);
+                                for (uint32_t k = 0; k < gamma_elt; ++k) {
+                                    dptr[k] = sptr[k];
+                                }
                             }
                         }
                     }

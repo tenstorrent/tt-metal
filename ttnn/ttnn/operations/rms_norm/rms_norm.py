@@ -134,24 +134,13 @@ EXCLUSIONS = [
     #     TILE gamma is SUPPORTED (no exclusion). See rms_norm_sharded_reader.cpp
     #     (GAMMA_TILE_EXTRACT) + _build_cross_core_descriptor.
     #
-    # (5d follow-up) RM cross-core + TILE gamma, gamma_dtype=bf8b. A bf8b tile is
-    #     block-float (16 elements share an 8-bit exponent; per-element bytes are meaningless
-    #     without the shared exponent), so the row-0 sub-column extraction above is not a byte
-    #     copy — it needs an in-reader block-float dequant. Deferred to a follow-up; the
-    #     fp32/bf16 TILE-gamma surface is landed. bf8b gamma is always TILE (bf8b+RM INVALID),
-    #     so gamma_dtype=bf8b names exactly the deferred cells.
-    {
-        "layout": ttnn.ROW_MAJOR_LAYOUT,
-        "memory_layout": ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        "gamma_layout": ttnn.TILE_LAYOUT,
-        "gamma_dtype": ttnn.bfloat8_b,
-    },
-    {
-        "layout": ttnn.ROW_MAJOR_LAYOUT,
-        "memory_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        "gamma_layout": ttnn.TILE_LAYOUT,
-        "gamma_dtype": ttnn.bfloat8_b,
-    },
+    # (5d landed) RM cross-core + TILE gamma, gamma_dtype=bf8b. A bf8b tile is block-float
+    #     (16 elements share an 8-bit exponent; per-element bytes are meaningless without it),
+    #     so the row-0 sub-column extraction is not a byte copy — the reader now DEQUANTS each
+    #     row-0 datum (block-float decode, GAMMA_TILE_EXTRACT==2 / bfp8b_datum_to_f32_bits)
+    #     into the float cb_gamma_rm and reuses the SAME RM-gamma compute tilize leg. The
+    #     dequant matches the hardware unpacker (bf8b->float lossless == the R2 INTERLEAVED
+    #     bf8b-gamma FPU-unpack path), so bf8b TILE gamma is now SUPPORTED (no exclusion).
 ]
 
 

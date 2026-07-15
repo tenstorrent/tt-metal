@@ -81,19 +81,19 @@ def test_r5c_rm_cross_core_tile_gamma(device, shape, memory_layout, dtype, gamma
     assert_with_pcc(expected, actual, PCC[dtype])
 
 
-def test_r5c_bf8b_tile_gamma_still_excluded(device, expect_error):
-    """bf8b TILE gamma + RM cross-core stays refused (5d follow-up: block-float
-    sub-tile extraction needs an in-reader dequant)."""
+def test_r5c_bf8b_tile_gamma_now_supported(device):
+    """R5d lifted the last 5c carve-out: bf8b TILE gamma + RM cross-core is now SUPPORTED.
+    The reader dequants the block-float row-0 sub-columns into the float cb_gamma_rm and
+    reuses the RM-gamma tilize leg (see test_rms_norm_r5d_debug.py for the full matrix)."""
     torch.manual_seed(0)
     shape = (1, 1, 64, 512)
     x = torch.randn(shape, dtype=torch.bfloat16)
     mc = auto_shard_config(list(shape), BLOCK, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device)
     xin = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mc)
-    gin = ttnn.from_torch(
-        torch.randn(512, dtype=torch.bfloat16).reshape(1, 1, 1, 512),
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-    )
-    with expect_error((NotImplementedError, RuntimeError), ".*"):
-        rms_norm(xin, gamma=gin, compute_kernel_config=_cfg(), memory_config=xin.memory_config())
+    g = torch.randn(512, dtype=torch.bfloat16)
+    gin = ttnn.from_torch(g.reshape(1, 1, 1, 512), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    out = rms_norm(xin, gamma=gin, compute_kernel_config=_cfg(), memory_config=xin.memory_config())
+    assert out.memory_config().memory_layout == BLOCK
+    actual = ttnn.to_torch(out).reshape(shape).to(torch.float32)
+    expected = _ref(x, g).to(torch.float32)
+    assert_with_pcc(expected, actual, PCC[ttnn.bfloat16])
