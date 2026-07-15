@@ -54,19 +54,26 @@ def build(device, torch_module):
         # [bs, H*3C, T] -> [bs*H, 3C, T] (head-major), then split q|k|v.
         x = ttnn.reshape(ttnn.to_layout(qkv, ttnn.ROW_MAJOR_LAYOUT), (bs * n_heads, 3 * ch, length))
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        q = ttnn.slice(x, [0, 0, 0], [bs * n_heads, ch, length])            # [B, ch, T]
-        k = ttnn.slice(x, [0, ch, 0], [bs * n_heads, 2 * ch, length])
-        v = ttnn.slice(x, [0, 2 * ch, 0], [bs * n_heads, 3 * ch, length])
+        B = bs * n_heads
+        q = ttnn.slice(x, [0, 0, 0], [B, ch, length])                       # [B, ch, T]
+        k = ttnn.slice(x, [0, ch, 0], [B, 2 * ch, length])
+        v = ttnn.slice(x, [0, 2 * ch, 0], [B, 3 * ch, length])
 
-        # weight[b,t,s] = sum_c q[b,c,t]*k[b,c,s] = (qᵀ @ k)
-        qt = ttnn.transpose(q, -2, -1)                                       # [B, T, ch]
-        weight = ttnn.matmul(qt, k, compute_kernel_config=compute_config)    # [B, T, T]
-        weight = ttnn.multiply(weight, scale2)
-        weight = ttnn.softmax(weight, dim=-1)
-
-        # a[b,c,t] = sum_s weight[b,t,s]*v[b,c,s] = v @ weightᵀ
-        wt = ttnn.transpose(weight, -2, -1)                                  # [B, s, t]
-        a = ttnn.matmul(v, wt, compute_kernel_config=compute_config)         # [B, ch, T]
+        # STRUCTURAL: fuse (qᵀ@k)*scale -> softmax -> v@weightᵀ into ONE FlashAttention
+        # SDPA op — full (bidirectional) attention, no mask. This keeps the [B,T,T]
+        # score matrix in L1 instead of materializing it to DRAM and reading it back
+        # (the memory-bound cost of the two explicit BMMs). The heads are the batch
+        # axis: treat [B, ch, T] per-head as [1 batch, B heads, T seq, ch head_dim].
+        # SDPA scale = ch**-0.5 == scale2 (the folded qk scale).
+        # SDPA requires bf16/bf8/bf4 inputs; cast (internal accumulation stays fp32
+        # via the HiFi4 + fp32_dest_acc compute config).
+        q4 = ttnn.typecast(ttnn.reshape(ttnn.transpose(q, -2, -1), (1, B, length, ch)), ttnn.bfloat16)
+        k4 = ttnn.typecast(ttnn.reshape(ttnn.transpose(k, -2, -1), (1, B, length, ch)), ttnn.bfloat16)
+        v4 = ttnn.typecast(ttnn.reshape(ttnn.transpose(v, -2, -1), (1, B, length, ch)), ttnn.bfloat16)
+        attn = ttnn.transformer.scaled_dot_product_attention(
+            q4, k4, v4, is_causal=False, scale=scale2, compute_kernel_config=compute_config,
+        )                                                                    # [1,B,T,ch]
+        a = ttnn.reshape(ttnn.transpose(attn, -2, -1), (B, ch, length))      # [B,ch,T]
 
         # [bs*H, ch, T] -> [bs, H*ch, T]
         a = ttnn.reshape(ttnn.to_layout(a, ttnn.ROW_MAJOR_LAYOUT), (bs, n_heads * ch, length))
