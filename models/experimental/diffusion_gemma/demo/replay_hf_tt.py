@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict
+import hashlib
 import json
 import os
 from pathlib import Path
+from types import MethodType
 
 import torch
 
@@ -59,6 +61,88 @@ def _top_counts(tokens: torch.Tensor, *, limit: int = 8) -> list[list[int]]:
     values, counts = torch.unique(tokens.cpu(), return_counts=True)
     pairs = sorted([(int(tok), int(count)) for tok, count in zip(values, counts)], key=lambda x: -x[1])
     return [[tok, count] for tok, count in pairs[:limit]]
+
+
+def _tensor_sha256(tensor: torch.Tensor) -> str:
+    array = tensor.detach().cpu().contiguous().numpy()
+    return hashlib.sha256(memoryview(array)).hexdigest()
+
+
+def _make_replay_noise(
+    *,
+    seed: int,
+    steps: int,
+    canvas_length: int,
+    vocab_size: int,
+    mode: str,
+) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+    if mode == "zero":
+        return (
+            [torch.zeros((1, canvas_length, vocab_size), dtype=torch.float32) for _ in range(steps)],
+            [torch.zeros((1, canvas_length), dtype=torch.long) for _ in range(steps)],
+        )
+    generator = torch.Generator(device="cpu").manual_seed(seed + 1_000_003)
+    gumbel_noise = []
+    renoise_tokens = []
+    for _step in range(steps):
+        uniform = torch.rand((1, canvas_length, vocab_size), dtype=torch.float32, generator=generator)
+        uniform = uniform.clamp_(min=torch.finfo(torch.float32).tiny, max=1.0 - torch.finfo(torch.float32).eps)
+        gumbel_noise.append(-torch.log(-torch.log(uniform)))
+        renoise_tokens.append(torch.randint(0, vocab_size, (1, canvas_length), dtype=torch.long, generator=generator))
+    return gumbel_noise, renoise_tokens
+
+
+def _logits_topk_summary(logits: torch.Tensor, positions: list[int], *, k: int, step: int) -> dict:
+    logits = logits.float().cpu()
+    if logits.dim() == 4:
+        logits = logits.squeeze(1)
+    rows = []
+    for pos in positions:
+        values, token_ids = torch.topk(logits[0, pos], k=k)
+        rows.append(
+            {
+                "pos": pos,
+                "token_ids": [int(token_id) for token_id in token_ids],
+                "values": [float(value) for value in values],
+            }
+        )
+    return {"step": step, "rows": rows}
+
+
+def _pcc(lhs: torch.Tensor, rhs: torch.Tensor) -> float:
+    lhs = lhs.float().flatten()
+    rhs = rhs.float().flatten()
+    lhs = lhs - lhs.mean()
+    rhs = rhs - rhs.mean()
+    denominator = lhs.norm() * rhs.norm()
+    if denominator == 0:
+        return 1.0 if torch.equal(lhs, rhs) else 0.0
+    return float(torch.dot(lhs, rhs) / denominator)
+
+
+def _layer_hidden_summary(hf_layers, tt_layers, positions: list[int]) -> list[dict]:
+    summaries = []
+    for layer_idx, (hf_hidden, tt_hidden) in enumerate(zip(hf_layers, tt_layers)):
+        per_position = []
+        for row_idx, pos in enumerate(positions):
+            hf_row = hf_hidden[0, row_idx]
+            tt_row = tt_hidden[0, row_idx]
+            per_position.append(
+                {
+                    "pos": pos,
+                    "pcc": _pcc(hf_row, tt_row),
+                    "max_abs": float((hf_row - tt_row).abs().max()),
+                }
+            )
+        summaries.append(
+            {
+                "layer": layer_idx,
+                "pcc": _pcc(hf_hidden, tt_hidden),
+                "max_abs": float((hf_hidden - tt_hidden).abs().max()),
+                "per_position": per_position,
+            }
+        )
+    return summaries
 
 
 def _trajectory_summary(prefix: str, trajectory, *, eos_token_id: int | None) -> dict:
@@ -182,7 +266,25 @@ def _hf_text_vocab_size(model, tokenizer) -> int:
     return int(len(tokenizer))
 
 
-def _run_hf_reference(model, tokenizer, prompt: str, host_canvas: torch.Tensor, config: DiffusionConfig):
+def _run_hf_reference(
+    model,
+    tokenizer,
+    prompt: str,
+    host_canvas: torch.Tensor,
+    config: DiffusionConfig,
+    *,
+    capture_positions: list[int] | None = None,
+    capture_top_k: int = 8,
+    capture_layer_hidden: bool = False,
+    capture_prompt_kv: bool = False,
+    capture_routing: bool = False,
+    capture_hidden_injection_layer: int | None = None,
+    capture_attention_injection_layer: int | None = None,
+    capture_all_layer_inputs: bool = False,
+    capture_all_encoder_layer_inputs: bool = False,
+    gumbel_noise: list[torch.Tensor],
+    renoise_tokens: list[torch.Tensor],
+):
     prompt_tokens = tokenize_prompt(tokenizer, prompt)
     prompt_tokens = _pad_prompt_tokens_for_hf_prefill(prompt_tokens)
     cache_len = prompt_tokens.shape[1]
@@ -190,11 +292,93 @@ def _run_hf_reference(model, tokenizer, prompt: str, host_canvas: torch.Tensor, 
     position_ids = torch.arange(cache_len, dtype=torch.int64).unsqueeze(0)
     decoder_position_ids = torch.arange(cache_len, cache_len + canvas_len, dtype=torch.int64).unsqueeze(0)
     vocab_size = _hf_text_vocab_size(model, tokenizer)
+    layer_hidden = []
+    attention_hidden = []
+    routing = []
+    hidden_injection_inputs = []
+    attention_injection_outputs = []
+    all_layer_inputs = []
+    all_encoder_layer_inputs = []
+    layer_hooks = []
+    if capture_layer_hidden:
+        for layer in model.model.decoder.layers:
+
+            def capture_layer(_module, _inputs, output):
+                hidden = output[0] if isinstance(output, (tuple, list)) else output
+                layer_hidden.append(hidden[:, capture_positions, :].detach().float().cpu())
+
+            layer_hooks.append(layer.register_forward_hook(capture_layer))
+
+            def capture_attention(_module, _inputs, output):
+                hidden = output[0] if isinstance(output, (tuple, list)) else output
+                attention_hidden.append(hidden[:, capture_positions, :].detach().float().cpu())
+
+            layer_hooks.append(layer.self_attn.register_forward_hook(capture_attention))
+    if capture_routing:
+        for layer in model.model.decoder.layers:
+
+            def capture_router(module, _inputs, output):
+                _, top_k_weights, top_k_indices = output
+                dense = torch.zeros(
+                    (top_k_indices.shape[0], module.config.num_experts),
+                    dtype=top_k_weights.dtype,
+                    device=top_k_weights.device,
+                )
+                dense.scatter_(dim=-1, index=top_k_indices, src=top_k_weights)
+                routing.append(dense.reshape(1, 1, canvas_len, module.config.num_experts).detach().cpu())
+
+            layer_hooks.append(layer.router.register_forward_hook(capture_router))
+    if capture_hidden_injection_layer is not None:
+        if capture_hidden_injection_layer <= 0:
+            raise ValueError("hidden injection currently requires a target layer greater than zero")
+
+        def capture_injection_input(_module, _inputs, output):
+            hidden = output[0] if isinstance(output, (tuple, list)) else output
+            hidden_injection_inputs.append(hidden.detach().to(torch.bfloat16).cpu())
+
+        layer_hooks.append(
+            model.model.decoder.layers[capture_hidden_injection_layer - 1].register_forward_hook(
+                capture_injection_input
+            )
+        )
+    if capture_attention_injection_layer is not None:
+
+        def capture_attention_injection(_module, _inputs, output):
+            hidden = output[0] if isinstance(output, (tuple, list)) else output
+            attention_injection_outputs.append(hidden.detach().to(torch.bfloat16).cpu())
+
+        layer_hooks.append(
+            model.model.decoder.layers[capture_attention_injection_layer].self_attn.register_forward_hook(
+                capture_attention_injection
+            )
+        )
+    if capture_all_layer_inputs:
+        for layer in model.model.decoder.layers:
+
+            def capture_layer_input(_module, args, kwargs):
+                hidden = kwargs.get("hidden_states")
+                if hidden is None:
+                    hidden = args[0]
+                all_layer_inputs.append(hidden.detach().to(torch.bfloat16).cpu())
+
+            layer_hooks.append(layer.register_forward_pre_hook(capture_layer_input, with_kwargs=True))
+    if capture_all_encoder_layer_inputs:
+        for layer in model.model.encoder.language_model.layers:
+
+            def capture_encoder_layer_input(_module, args, kwargs):
+                hidden = kwargs.get("hidden_states")
+                if hidden is None:
+                    hidden = args[0]
+                all_encoder_layer_inputs.append(hidden.detach().to(torch.bfloat16).cpu())
+
+            layer_hooks.append(layer.register_forward_pre_hook(capture_encoder_layer_input, with_kwargs=True))
 
     class HfLogits:
         def __init__(self) -> None:
             self.prev_raw = None
             self.prev_step = None
+            self.captures = []
+            self.prompt_kv = None
 
         def __call__(self, canvas, step):
             prev_sc = None
@@ -215,27 +399,294 @@ def _run_hf_reference(model, tokenizer, prompt: str, host_canvas: torch.Tensor, 
                     self_conditioning_logits=prev_sc,
                 )
             logits = out.logits.float().cpu()
+            if capture_prompt_kv and self.prompt_kv is None:
+                self.prompt_kv = [
+                    (layer.keys.detach().cpu(), layer.values.detach().cpu()) for layer in out.past_key_values.layers
+                ]
+            if capture_positions:
+                self.captures.append(_logits_topk_summary(logits, capture_positions, k=capture_top_k, step=step))
             self.prev_raw = logits
             self.prev_step = step
             return logits
 
-    zero_gumbel = lambda _step: torch.zeros((1, canvas_len, vocab_size), dtype=torch.float32)  # noqa: E731
-    zero_noise = lambda _step: torch.zeros((1, canvas_len), dtype=torch.long)  # noqa: E731
-    trajectory = denoise_block(
-        HfLogits(),
-        host_canvas,
-        config,
+    logits_fn = HfLogits()
+    try:
+        trajectory = denoise_block(
+            logits_fn,
+            host_canvas,
+            config,
+            vocab_size,
+            sampler=S.SAMPLER_GUMBEL,
+            gumbel_noise_fn=lambda step: gumbel_noise[step],
+            noise_tokens_fn=lambda step: renoise_tokens[step],
+        )
+    finally:
+        for hook in layer_hooks:
+            hook.remove()
+    return (
+        prompt_tokens,
+        trajectory,
         vocab_size,
-        sampler=S.SAMPLER_GUMBEL,
-        gumbel_noise_fn=zero_gumbel,
-        noise_tokens_fn=zero_noise,
+        logits_fn.captures,
+        layer_hidden,
+        attention_hidden,
+        routing,
+        hidden_injection_inputs,
+        attention_injection_outputs,
+        all_layer_inputs,
+        all_encoder_layer_inputs,
+        logits_fn.prompt_kv,
     )
-    return prompt_tokens, trajectory, vocab_size
 
 
-def _run_tt_replay(args, prompt: str, host_canvas: torch.Tensor, config: DiffusionConfig, vocab_size: int):
-    zero_gumbel = [[torch.zeros((1, config.canvas_length, vocab_size), dtype=torch.float32)]]
-    zero_noise = [[torch.zeros((1, config.canvas_length), dtype=torch.long)]]
+def _run_tt_replay(
+    args,
+    prompt: str,
+    host_canvas: torch.Tensor,
+    config: DiffusionConfig,
+    vocab_size: int,
+    *,
+    capture_positions: list[int] | None = None,
+    capture_top_k: int = 8,
+    capture_layer_hidden: bool = False,
+    hf_prompt_kv=None,
+    hf_routing=None,
+    hf_router_modules=None,
+    hf_router_use_tt_norm: bool = False,
+    hf_router_norm_only: bool = False,
+    hf_router_live_layers: set[int] | None = None,
+    hf_router_live_steps: set[int] | None = None,
+    routing_layers: set[int] | None = None,
+    hidden_injection_layer: int | None = None,
+    hf_hidden_injection_inputs=None,
+    attention_injection_layer: int | None = None,
+    hf_attention_injection_outputs=None,
+    hf_all_layer_inputs=None,
+    hf_all_encoder_layer_inputs=None,
+    gumbel_noise: list[torch.Tensor],
+    renoise_tokens: list[torch.Tensor],
+):
+    import ttnn
+
+    from models.experimental.diffusion_gemma.tt import denoise_forward as denoise_forward_module
+
+    DenoiseLogitsAdapter = denoise_forward_module.DenoiseLogitsAdapter
+
+    replay_gumbel = [gumbel_noise]
+    replay_renoise = [renoise_tokens]
+    captures = []
+    layer_hidden = []
+    attention_hidden = []
+    final_hidden = []
+
+    original_call = DenoiseLogitsAdapter.__call__
+    original_layer_forward = denoise_forward_module._denoise_layer_forward
+    original_denoise_attention = denoise_forward_module.denoise_attention
+    original_prefix_reader_call = denoise_forward_module.MutablePrefixKVReader.__call__
+    original_router_forward = denoise_forward_module._denoise_router_forward
+    injected_prompt_kv = []
+    prompt_kv_summary = []
+    router_call_index = 0
+    hidden_injection_index = 0
+    attention_call_index = 0
+    attention_injection_index = 0
+    all_layer_input_index = 0
+
+    def capturing_call(adapter, canvas_tokens, step):
+        logits = original_call(adapter, canvas_tokens, step)
+        if capture_positions:
+            tile_start = min(capture_positions) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
+            tile_end = (max(capture_positions) + 1 + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
+            logits_slice = ttnn.slice(
+                logits,
+                [0, 0, tile_start, 0],
+                [1, 1, tile_end, logits.shape[-1]],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            logits_shard = ttnn.get_device_tensors(logits_slice)[0]
+            host_logits = ttnn.to_torch(logits_shard).float().cpu()
+            logits_slice.deallocate(True)
+            local_positions = [pos - tile_start for pos in capture_positions]
+            capture = _logits_topk_summary(host_logits, local_positions, k=capture_top_k, step=step)
+            for row, absolute_pos in zip(capture["rows"], capture_positions):
+                row["pos"] = absolute_pos
+            captures.append(capture)
+        return logits
+
+    def capturing_layer_forward(*layer_args, **layer_kwargs):
+        nonlocal hidden_injection_index, all_layer_input_index
+        mutable_args = list(layer_args)
+        layer_idx = mutable_args[1]
+        if hf_all_layer_inputs is not None:
+            original_hidden = mutable_args[2]
+            mutable_args[2] = ttnn.from_torch(
+                hf_all_layer_inputs[all_layer_input_index].unsqueeze(1),
+                device=original_hidden.device(),
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(original_hidden.device()),
+            )
+            original_hidden.deallocate(True)
+            all_layer_input_index += 1
+        elif hidden_injection_layer is not None and layer_idx == hidden_injection_layer:
+            original_hidden = mutable_args[2]
+            mutable_args[2] = ttnn.from_torch(
+                hf_hidden_injection_inputs[hidden_injection_index].unsqueeze(1),
+                device=original_hidden.device(),
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(original_hidden.device()),
+            )
+            original_hidden.deallocate(True)
+            hidden_injection_index += 1
+        output = original_layer_forward(*mutable_args, **layer_kwargs)
+        if capture_layer_hidden:
+            tile_start = min(capture_positions) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
+            tile_end = (max(capture_positions) + 1 + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
+            hidden_slice = ttnn.slice(
+                output,
+                [0, 0, tile_start, 0],
+                [1, 1, tile_end, output.shape[-1]],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            hidden_shard = ttnn.get_device_tensors(hidden_slice)[0]
+            host_hidden = ttnn.to_torch(hidden_shard).float().cpu().squeeze(1)
+            hidden_slice.deallocate(True)
+            local_positions = [pos - tile_start for pos in capture_positions]
+            layer_hidden.append(host_hidden[:, local_positions, :])
+        return output
+
+    def capturing_denoise_attention(*attention_args, **attention_kwargs):
+        nonlocal attention_call_index, attention_injection_index
+        output = original_denoise_attention(*attention_args, **attention_kwargs)
+        layer_idx = attention_call_index % 30
+        if attention_injection_layer is not None and layer_idx == attention_injection_layer:
+            injected = ttnn.from_torch(
+                hf_attention_injection_outputs[attention_injection_index].unsqueeze(1),
+                device=output.device(),
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(output.device()),
+            )
+            output.deallocate(True)
+            output = injected
+            attention_injection_index += 1
+        attention_call_index += 1
+        if capture_layer_hidden:
+            tile_start = min(capture_positions) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
+            tile_end = (max(capture_positions) + 1 + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
+            hidden_slice = ttnn.slice(
+                output,
+                [0, 0, tile_start, 0],
+                [1, 1, tile_end, output.shape[-1]],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            hidden_shard = ttnn.get_device_tensors(hidden_slice)[0]
+            host_hidden = ttnn.to_torch(hidden_shard).float().cpu().squeeze(1)
+            hidden_slice.deallocate(True)
+            local_positions = [pos - tile_start for pos in capture_positions]
+            attention_hidden.append(host_hidden[:, local_positions, :])
+        return output
+
+    def injected_router_forward(router, hidden_states):
+        nonlocal router_call_index
+        if hf_router_modules is not None:
+            layer_idx = router_call_index % 30
+            step_idx = router_call_index // 30
+            if (hf_router_live_layers is not None and layer_idx not in hf_router_live_layers) or (
+                hf_router_live_steps is not None and step_idx not in hf_router_live_steps
+            ):
+                router_call_index += 1
+                return original_router_forward(router, hidden_states)
+            hf_router = hf_router_modules[layer_idx]
+            if hf_router_norm_only:
+                hidden_shard = ttnn.get_device_tensors(hidden_states)[0]
+                hidden_host = ttnn.to_torch(hidden_shard).squeeze(1).to(torch.bfloat16)
+                with torch.no_grad():
+                    normed_host = hf_router.norm(hidden_host)
+                normed = ttnn.from_torch(
+                    normed_host.unsqueeze(1),
+                    device=hidden_states.device(),
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat16,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(hidden_states.device()),
+                )
+                scaled = ttnn.mul(normed, router.scale)
+                normed.deallocate(True)
+                scaled_root = ttnn.mul(scaled, router.scalar_root_size)
+                scaled.deallocate(True)
+                scores = ttnn.linear(scaled_root, router.proj_weight)
+                scaled_root.deallocate(True)
+                probabilities = ttnn.softmax(scores, dim=-1)
+                scores.deallocate(True)
+                top_weights, top_indices = ttnn.topk(probabilities, k=router.top_k, dim=-1)
+                top_sum = ttnn.sum(top_weights, dim=-1, keepdim=True)
+                normalized = ttnn.div(top_weights, top_sum)
+                top_weights.deallocate(True)
+                top_sum.deallocate(True)
+                dense = ttnn.scatter(
+                    ttnn.zeros_like(probabilities),
+                    dim=-1,
+                    index=top_indices,
+                    src=normalized,
+                )
+                probabilities.deallocate(True)
+                normalized.deallocate(True)
+                top_indices.deallocate(True)
+                if router.per_expert_scale is not None:
+                    scaled_dense = ttnn.mul(dense, router.per_expert_scale)
+                    dense.deallocate(True)
+                    dense = scaled_dense
+                router_call_index += 1
+                return dense
+            if hf_router_use_tt_norm:
+                normed = denoise_forward_module._chunked_norm_forward(router.norm, hidden_states)
+                hidden_shard = ttnn.get_device_tensors(normed)[0]
+                hidden_host = ttnn.to_torch(hidden_shard).squeeze(1).to(torch.bfloat16)
+                normed.deallocate(True)
+            else:
+                hidden_shard = ttnn.get_device_tensors(hidden_states)[0]
+                hidden_host = ttnn.to_torch(hidden_shard).squeeze(1).to(torch.bfloat16)
+            with torch.no_grad():
+                if hf_router_use_tt_norm:
+                    scaled = hidden_host * hf_router.scale * hf_router.scalar_root_size
+                    scores = hf_router.proj(scaled)
+                    probabilities = torch.softmax(scores, dim=-1, dtype=torch.float32)
+                    top_weights, top_indices = torch.topk(probabilities, k=hf_router.config.top_k_experts, dim=-1)
+                    top_weights /= top_weights.sum(dim=-1, keepdim=True)
+                    top_weights *= hf_router.per_expert_scale[top_indices]
+                else:
+                    _probabilities, top_weights, top_indices = hf_router(hidden_host)
+            dense_host = torch.zeros(
+                (*top_weights.shape[:-1], hf_router.config.num_experts),
+                dtype=torch.float32,
+            )
+            dense_host.scatter_(-1, top_indices.cpu(), top_weights.float().cpu())
+            dense = ttnn.from_torch(
+                dense_host.to(torch.bfloat16).unsqueeze(1),
+                device=hidden_states.device(),
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(hidden_states.device()),
+            )
+            router_call_index += 1
+            return dense
+        if router_call_index >= len(hf_routing):
+            return original_router_forward(router, hidden_states)
+        layer_idx = router_call_index % 30
+        use_oracle = routing_layers is not None and layer_idx in routing_layers
+        if use_oracle:
+            dense = ttnn.from_torch(
+                hf_routing[router_call_index],
+                device=hidden_states.device(),
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(hidden_states.device()),
+            )
+        else:
+            dense = original_router_forward(router, hidden_states)
+        router_call_index += 1
+        return dense
 
     checkpoint_inputs = load_checkpoint_inputs(
         args.checkpoint,
@@ -244,7 +695,14 @@ def _run_tt_replay(args, prompt: str, host_canvas: torch.Tensor, config: Diffusi
         device="cpu",
     )
     mesh_device = _open_mesh_device(args.mesh)
+    prefill_layer_type = None
+    original_prefill_layer_call = None
     try:
+        DenoiseLogitsAdapter.__call__ = capturing_call
+        denoise_forward_module._denoise_layer_forward = capturing_layer_forward
+        denoise_forward_module.denoise_attention = capturing_denoise_attention
+        if hf_routing is not None or hf_router_modules is not None:
+            denoise_forward_module._denoise_router_forward = injected_router_forward
         _log_mesh_dram(mesh_device, "replay-baseline")
         checkpoint_model_inputs = build_tt_model_from_checkpoint_inputs(
             mesh_device,
@@ -254,21 +712,142 @@ def _run_tt_replay(args, prompt: str, host_canvas: torch.Tensor, config: Diffusi
             num_layers=args.num_layers,
             bounded_sliding_kv_cache=args.bounded_sliding_kv_cache,
         )
+        tt_model = checkpoint_model_inputs.tt_model
+        if hf_all_encoder_layer_inputs is not None:
+            prefill_layer_type = type(tt_model.layers[0])
+            original_prefill_layer_call = prefill_layer_type.__call__
+            prefill_layer_indices = {id(layer): idx for idx, layer in enumerate(tt_model.layers)}
+
+            def teacher_forced_prefill_layer_call(layer, hidden_states, *layer_args, **layer_kwargs):
+                layer_idx = prefill_layer_indices[id(layer)]
+                if not layer_kwargs.get("is_decode", False):
+                    injected = ttnn.from_torch(
+                        hf_all_encoder_layer_inputs[layer_idx].unsqueeze(1),
+                        device=hidden_states.device(),
+                        layout=ttnn.TILE_LAYOUT,
+                        dtype=ttnn.bfloat16,
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(hidden_states.device()),
+                    )
+                    hidden_states.deallocate(True)
+                    hidden_states = injected
+                return original_prefill_layer_call(layer, hidden_states, *layer_args, **layer_kwargs)
+
+            prefill_layer_type.__call__ = teacher_forced_prefill_layer_call
+        if hf_prompt_kv is not None:
+            tp = int(mesh_device.shape[1])
+            mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(1, tp), dims=(None, 1))
+            for key, value in hf_prompt_kv:
+                if key.shape[1] < tp:
+                    repeats = tp // key.shape[1]
+                    key = key.repeat_interleave(repeats, dim=1)
+                    value = value.repeat_interleave(repeats, dim=1)
+                injected_prompt_kv.append(
+                    (
+                        ttnn.from_torch(
+                            key,
+                            device=mesh_device,
+                            layout=ttnn.TILE_LAYOUT,
+                            dtype=ttnn.bfloat16,
+                            mesh_mapper=mapper,
+                        ),
+                        ttnn.from_torch(
+                            value,
+                            device=mesh_device,
+                            layout=ttnn.TILE_LAYOUT,
+                            dtype=ttnn.bfloat16,
+                            mesh_mapper=mapper,
+                        ),
+                    )
+                )
+
+            def injected_prefix_reader(_reader, layer_idx):
+                key, value = injected_prompt_kv[layer_idx]
+                if layer_idx >= len(prompt_kv_summary):
+                    tt_key, tt_value = original_prefix_reader_call(_reader, layer_idx)
+                    layer_summary = {"layer": layer_idx}
+                    for name, tt_tensor, hf_tensor in (
+                        ("key", tt_key, key),
+                        ("value", tt_value, value),
+                    ):
+                        per_device = []
+                        for device_idx, (tt_shard, hf_shard) in enumerate(
+                            zip(ttnn.get_device_tensors(tt_tensor), ttnn.get_device_tensors(hf_tensor))
+                        ):
+                            tt_host = ttnn.to_torch(tt_shard).float().cpu()
+                            hf_host = ttnn.to_torch(hf_shard).float().cpu()
+                            per_device.append(
+                                {
+                                    "device": device_idx,
+                                    "pcc": _pcc(tt_host, hf_host),
+                                    "max_abs": float((tt_host - hf_host).abs().max()),
+                                }
+                            )
+                        layer_summary[name] = per_device
+                    prompt_kv_summary.append(layer_summary)
+                    tt_key.deallocate(True)
+                    tt_value.deallocate(True)
+                return (
+                    ttnn.clone(key, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                    ttnn.clone(value, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                )
+
+            denoise_forward_module.MutablePrefixKVReader.__call__ = injected_prefix_reader
+        original_lm_head = tt_model._apply_lm_head
+
+        def capturing_lm_head(_model, hidden_states, *lm_args, **lm_kwargs):
+            if capture_positions and hidden_states.shape[-2] == config.canvas_length:
+                tile_start = min(capture_positions) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
+                tile_end = (max(capture_positions) + 1 + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
+                hidden_slice = ttnn.slice(
+                    hidden_states,
+                    [0, 0, tile_start, 0],
+                    [1, 1, tile_end, hidden_states.shape[-1]],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                hidden_shard = ttnn.get_device_tensors(hidden_slice)[0]
+                host_hidden = ttnn.to_torch(hidden_shard).float().cpu().squeeze(1)
+                if hidden_slice is not hidden_states:
+                    hidden_slice.deallocate(True)
+                local_positions = [pos - tile_start for pos in capture_positions]
+                final_hidden.append(host_hidden[:, local_positions, :])
+            return original_lm_head(hidden_states, *lm_args, **lm_kwargs)
+
+        tt_model._apply_lm_head = MethodType(capturing_lm_head, tt_model)
         _log_mesh_dram(mesh_device, "replay-post-build")
-        generation = generate_text_from_checkpoint_model_inputs(
-            checkpoint_model_inputs,
-            prompt,
-            num_blocks=1,
-            config=config,
-            init_canvas_fn=make_host_canvas_init_fn(mesh_device, [host_canvas]),
-            gumbel_noise_fn=make_host_gumbel_noise_fn(mesh_device, zero_gumbel),
-            noise_tokens_fn=make_host_noise_tokens_fn(mesh_device, zero_noise),
-            max_new_tokens=config.canvas_length,
-            eos_token_id=None,
-            stop_token_ids=None,
+        try:
+            generation = generate_text_from_checkpoint_model_inputs(
+                checkpoint_model_inputs,
+                prompt,
+                num_blocks=1,
+                config=config,
+                init_canvas_fn=make_host_canvas_init_fn(mesh_device, [host_canvas]),
+                gumbel_noise_fn=make_host_gumbel_noise_fn(mesh_device, replay_gumbel),
+                noise_tokens_fn=make_host_noise_tokens_fn(mesh_device, replay_renoise),
+                max_new_tokens=config.canvas_length,
+                eos_token_id=None,
+                stop_token_ids=None,
+            )
+        finally:
+            tt_model._apply_lm_head = original_lm_head
+        return (
+            generation.generation.trajectories[0],
+            captures,
+            layer_hidden,
+            attention_hidden,
+            final_hidden,
+            prompt_kv_summary,
         )
-        return generation.generation.trajectories[0]
     finally:
+        DenoiseLogitsAdapter.__call__ = original_call
+        denoise_forward_module._denoise_layer_forward = original_layer_forward
+        denoise_forward_module.denoise_attention = original_denoise_attention
+        denoise_forward_module.MutablePrefixKVReader.__call__ = original_prefix_reader_call
+        denoise_forward_module._denoise_router_forward = original_router_forward
+        if prefill_layer_type is not None:
+            prefill_layer_type.__call__ = original_prefill_layer_call
+        for key, value in injected_prompt_kv:
+            key.deallocate(True)
+            value.deallocate(True)
         _close_mesh_device(mesh_device)
 
 
@@ -296,6 +875,71 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--local-files-only", action="store_true")
     parser.add_argument("--bounded-sliding-kv-cache", action="store_true")
     parser.add_argument("--hf-only", action="store_true", help="Save only the HF reference trajectory.")
+    parser.add_argument(
+        "--capture-logits-topk",
+        action="store_true",
+        help="Capture top logits at --capture-positions for #48291 localization.",
+    )
+    parser.add_argument("--capture-positions", default="2,3,4")
+    parser.add_argument("--capture-top-k", type=int, default=8)
+    parser.add_argument("--noise-mode", choices=("zero", "seeded"), default="zero")
+    parser.add_argument(
+        "--capture-layer-hidden",
+        action="store_true",
+        help="Capture failing-position hidden states after every decoder layer.",
+    )
+    parser.add_argument(
+        "--inject-hf-prompt-kv",
+        action="store_true",
+        help="Diagnostic control: replace TT frozen prompt KV reads with the exact HF encoder cache.",
+    )
+    parser.add_argument(
+        "--inject-hf-routing-layers",
+        help="Diagnostic control: comma-separated decoder layers (or 'all') using exact HF dense routing.",
+    )
+    parser.add_argument(
+        "--inject-hf-router-on-tt-hidden",
+        action="store_true",
+        help="Diagnostic control: run each HF router on its live TT hidden state and upload the routing.",
+    )
+    parser.add_argument(
+        "--inject-hf-router-on-tt-hidden-layers",
+        help="Diagnostic control: comma-separated layers whose HF router runs on the live TT hidden state.",
+    )
+    parser.add_argument(
+        "--inject-hf-router-on-tt-hidden-steps",
+        help="Diagnostic control: comma-separated denoise steps on which the HF router handles live TT hidden states.",
+    )
+    parser.add_argument(
+        "--inject-hf-router-tail-on-tt-norm",
+        action="store_true",
+        help="Diagnostic control: use TT router RMSNorm, then run the HF projection/softmax/top-k tail.",
+    )
+    parser.add_argument(
+        "--inject-hf-router-norm-on-tt-hidden",
+        action="store_true",
+        help="Diagnostic control: run only HF router RMSNorm, then use the normal TT router tail.",
+    )
+    parser.add_argument(
+        "--inject-hf-hidden-layer",
+        type=int,
+        help="Diagnostic control: replace this TT layer's input with the exact HF hidden state.",
+    )
+    parser.add_argument(
+        "--inject-hf-attention-layer",
+        type=int,
+        help="Diagnostic control: replace this TT layer's raw attention output with the exact HF output.",
+    )
+    parser.add_argument(
+        "--teacher-force-all-layer-inputs",
+        action="store_true",
+        help="Diagnostic control: execute every TT denoise layer from its exact HF input hidden state.",
+    )
+    parser.add_argument(
+        "--teacher-force-prefill-layer-inputs",
+        action="store_true",
+        help="Diagnostic control: execute every TT causal-prefill layer from its exact HF encoder input.",
+    )
     parser.add_argument("--output", default="/tmp/dg_replay_hf_tt_compare.pt")
     return parser
 
@@ -309,8 +953,80 @@ def main(argv: list[str] | None = None) -> int:
     vocab_size = _hf_text_vocab_size(hf_model, tokenizer)
     generator = torch.Generator(device="cpu").manual_seed(args.seed)
     host_canvas = torch.randint(0, vocab_size, (1, config.canvas_length), dtype=torch.long, generator=generator)
+    gumbel_noise, renoise_tokens = _make_replay_noise(
+        seed=args.seed,
+        steps=config.max_denoise_steps,
+        canvas_length=config.canvas_length,
+        vocab_size=vocab_size,
+        mode=args.noise_mode,
+    )
+    capture_positions = (
+        [int(pos.strip()) for pos in args.capture_positions.split(",") if pos.strip()]
+        if args.capture_logits_topk or args.capture_layer_hidden
+        else None
+    )
+    routing_layers = None
+    if args.inject_hf_routing_layers:
+        routing_layers = (
+            set(range(30))
+            if args.inject_hf_routing_layers == "all"
+            else {int(layer.strip()) for layer in args.inject_hf_routing_layers.split(",") if layer.strip()}
+        )
+    router_oracle_count = sum(
+        (
+            args.inject_hf_router_on_tt_hidden,
+            bool(args.inject_hf_router_on_tt_hidden_layers),
+            args.inject_hf_router_tail_on_tt_norm,
+            args.inject_hf_router_norm_on_tt_hidden,
+        )
+    )
+    if router_oracle_count > 1:
+        raise ValueError("select only one live-TT HF router oracle mode")
+    if router_oracle_count and routing_layers is not None:
+        raise ValueError("live-TT HF router controls cannot be combined with --inject-hf-routing-layers")
+    hf_router_modules = [layer.router for layer in hf_model.model.decoder.layers] if router_oracle_count else None
+    hf_router_live_layers = (
+        {int(layer.strip()) for layer in args.inject_hf_router_on_tt_hidden_layers.split(",") if layer.strip()}
+        if args.inject_hf_router_on_tt_hidden_layers
+        else None
+    )
+    hf_router_live_steps = (
+        {int(step.strip()) for step in args.inject_hf_router_on_tt_hidden_steps.split(",") if step.strip()}
+        if args.inject_hf_router_on_tt_hidden_steps
+        else None
+    )
 
-    prompt_tokens, hf_traj, vocab_size = _run_hf_reference(hf_model, tokenizer, args.prompt, host_canvas, config)
+    (
+        prompt_tokens,
+        hf_traj,
+        vocab_size,
+        hf_logits_topk,
+        hf_layer_hidden,
+        hf_attention_hidden,
+        hf_routing,
+        hf_hidden_injection_inputs,
+        hf_attention_injection_outputs,
+        hf_all_layer_inputs,
+        hf_all_encoder_layer_inputs,
+        hf_prompt_kv,
+    ) = _run_hf_reference(
+        hf_model,
+        tokenizer,
+        args.prompt,
+        host_canvas,
+        config,
+        capture_positions=capture_positions,
+        capture_top_k=args.capture_top_k,
+        capture_layer_hidden=args.capture_layer_hidden,
+        capture_prompt_kv=args.inject_hf_prompt_kv,
+        capture_routing=routing_layers is not None,
+        capture_hidden_injection_layer=args.inject_hf_hidden_layer,
+        capture_attention_injection_layer=args.inject_hf_attention_layer,
+        capture_all_layer_inputs=args.teacher_force_all_layer_inputs,
+        capture_all_encoder_layer_inputs=args.teacher_force_prefill_layer_inputs,
+        gumbel_noise=gumbel_noise,
+        renoise_tokens=renoise_tokens,
+    )
     eos_token_id = getattr(tokenizer, "eos_token_id", None)
     artifact = {
         "prompt": args.prompt,
@@ -319,6 +1035,12 @@ def main(argv: list[str] | None = None) -> int:
         "prompt_tokens": prompt_tokens,
         "host_canvas": host_canvas,
         "hf_traj": hf_traj,
+        "hf_logits_topk": hf_logits_topk,
+        "replay_input_hashes": {
+            "initial_canvas": _tensor_sha256(host_canvas),
+            "gumbel_noise": [_tensor_sha256(noise) for noise in gumbel_noise],
+            "renoise_tokens": [_tensor_sha256(tokens) for tokens in renoise_tokens],
+        },
     }
     summary = {
         "prompt": args.prompt,
@@ -331,9 +1053,75 @@ def main(argv: list[str] | None = None) -> int:
     }
 
     if not args.hf_only:
-        tt_traj = _run_tt_replay(args, args.prompt, host_canvas, config, vocab_size)
+        (
+            tt_traj,
+            tt_logits_topk,
+            tt_layer_hidden,
+            tt_attention_hidden,
+            tt_final_hidden,
+            prompt_kv_summary,
+        ) = _run_tt_replay(
+            args,
+            args.prompt,
+            host_canvas,
+            config,
+            vocab_size,
+            capture_positions=capture_positions,
+            capture_top_k=args.capture_top_k,
+            capture_layer_hidden=args.capture_layer_hidden,
+            hf_prompt_kv=hf_prompt_kv,
+            hf_routing=hf_routing,
+            hf_router_modules=hf_router_modules,
+            hf_router_use_tt_norm=args.inject_hf_router_tail_on_tt_norm,
+            hf_router_norm_only=args.inject_hf_router_norm_on_tt_hidden,
+            hf_router_live_layers=hf_router_live_layers,
+            hf_router_live_steps=hf_router_live_steps,
+            routing_layers=routing_layers,
+            hidden_injection_layer=args.inject_hf_hidden_layer,
+            hf_hidden_injection_inputs=hf_hidden_injection_inputs,
+            attention_injection_layer=args.inject_hf_attention_layer,
+            hf_attention_injection_outputs=hf_attention_injection_outputs,
+            hf_all_layer_inputs=hf_all_layer_inputs if args.teacher_force_all_layer_inputs else None,
+            hf_all_encoder_layer_inputs=(
+                hf_all_encoder_layer_inputs if args.teacher_force_prefill_layer_inputs else None
+            ),
+            gumbel_noise=gumbel_noise,
+            renoise_tokens=renoise_tokens,
+        )
         comparison, summary = _compare_summary(args.prompt, args.seed, hf_traj, tt_traj, eos_token_id=eos_token_id)
-        artifact.update({"tt_traj": tt_traj, "comparison": asdict(comparison)})
+        layer_hidden_summary = (
+            _layer_hidden_summary(hf_layer_hidden, tt_layer_hidden, capture_positions)
+            if args.capture_layer_hidden
+            else []
+        )
+        attention_hidden_summary = (
+            _layer_hidden_summary(hf_attention_hidden, tt_attention_hidden, capture_positions)
+            if args.capture_layer_hidden
+            else []
+        )
+        hf_lm_head_on_tt_hidden_topk = []
+        if capture_positions and tt_final_hidden:
+            with torch.no_grad():
+                lm_head_dtype = next(hf_model.lm_head.parameters()).dtype
+                logits = hf_model.lm_head(tt_final_hidden[0].to(lm_head_dtype)).float()
+                softcap = float(hf_model.config.text_config.final_logit_softcapping)
+                logits = torch.tanh(logits / softcap) * softcap
+            hf_lm_head_on_tt_hidden_topk.append(
+                _logits_topk_summary(logits, list(range(len(capture_positions))), k=args.capture_top_k, step=0)
+            )
+            for row, absolute_pos in zip(hf_lm_head_on_tt_hidden_topk[0]["rows"], capture_positions):
+                row["pos"] = absolute_pos
+        artifact.update(
+            {
+                "tt_traj": tt_traj,
+                "tt_logits_topk": tt_logits_topk,
+                "hf_lm_head_on_tt_hidden_topk": hf_lm_head_on_tt_hidden_topk,
+                "layer_hidden_summary": layer_hidden_summary,
+                "attention_hidden_summary": attention_hidden_summary,
+                "prompt_kv_summary": prompt_kv_summary,
+                "comparison": asdict(comparison),
+            }
+        )
 
     artifact["summary"] = summary
     output = Path(args.output)

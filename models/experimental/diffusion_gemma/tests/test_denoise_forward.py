@@ -461,6 +461,30 @@ def test_denoise_router_forward_uses_chunked_norm(monkeypatch):
     assert ("scatter", "zeros", -1, "topk-indices", "topk-normalized") in calls
 
 
+def test_denoise_sparse_moe_defaults_to_zero_drop_canvas_capacity(monkeypatch):
+    from models.experimental.diffusion_gemma.tt import sparse_moe
+
+    monkeypatch.setenv("DG_SPARSE_MOE", "1")
+    monkeypatch.delenv("DG_SPARSE_MOE_CAPACITY", raising=False)
+    dense_routing = _FakeTensor([1, 1, 256, 128])
+    expert_input = _FakeTensor([1, 1, 256, 2816])
+    calls = []
+
+    monkeypatch.setattr(DF, "_denoise_router_forward", lambda router, hidden: dense_routing)
+
+    def fake_sparse_experts_forward(experts, hidden, routing, *, capacity):
+        calls.append((experts, hidden, routing, capacity))
+        return "sparse-output"
+
+    monkeypatch.setattr(sparse_moe, "sparse_experts_forward", fake_sparse_experts_forward)
+    experts = object()
+    moe = SimpleNamespace(router=object(), experts=experts)
+
+    assert DF._denoise_moe_forward(moe, _FakeTensor([1, 1, 256, 2816]), expert_input) == "sparse-output"
+    assert calls == [(experts, expert_input, dense_routing, 256)]
+    assert dense_routing.deallocated is True
+
+
 def test_denoise_logits_adapter_threads_canvas_rope_offset():
     calls = []
 

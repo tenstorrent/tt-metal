@@ -326,9 +326,12 @@ def _manual_gqa_attention(tt_q, tt_k, tt_v):
         scores.deallocate(True)
         probs.deallocate(True)
 
-    out = ttnn.concat(outputs, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    for tensor in outputs:
-        tensor.deallocate(True)
+    if len(outputs) == 1:
+        out = outputs[0]
+    else:
+        out = ttnn.concat(outputs, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for tensor in outputs:
+            tensor.deallocate(True)
     return out
 
 

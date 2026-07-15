@@ -9,7 +9,6 @@ denoise pass is single-user, so ``validate_q_rope_offset`` only enforces tile
 alignment (no batched-prefill case).
 """
 
-import pytest
 import torch
 from types import SimpleNamespace
 
@@ -23,16 +22,16 @@ from models.experimental.diffusion_gemma.tt.diffusion_attention import (
 from models.experimental.diffusion_gemma.tt.model import DiffusionGemma4Model
 
 
-def test_q_rope_offset_must_be_tile_aligned():
+def test_q_rope_offset_must_be_tile_aligned(expect_error):
     validate_q_rope_offset(32)
     validate_q_rope_offset(0)
-    with pytest.raises(ValueError, match="q_rope_offset must be a multiple of 32"):
+    with expect_error(ValueError, "q_rope_offset must be a multiple of 32"):
         validate_q_rope_offset(1)
-    with pytest.raises(ValueError, match="RoPE cache start must be a multiple of 32"):
+    with expect_error(ValueError, "RoPE cache start must be a multiple of 32"):
         _slice_rope_cache(None, 1, 32)
 
 
-def test_get_rope_mats_reaches_256k_and_rejects_overflow():
+def test_get_rope_mats_reaches_256k_and_rejects_overflow(expect_error):
     cache_len = 262144
     model = SimpleNamespace(
         hf_config=SimpleNamespace(layer_types=["sliding_attention"]),
@@ -47,18 +46,19 @@ def test_get_rope_mats_reaches_256k_and_rejects_overflow():
     cos, sin = DiffusionGemma4Model._get_rope_mats(model, 0, seq_len=cache_len)
     assert cos.shape[-2] == cache_len
     assert sin.shape[-2] == cache_len
-    with pytest.raises(ValueError, match="requested RoPE seq_len 262176 exceeds cache length 262144"):
+    with expect_error(ValueError, "requested RoPE seq_len 262176 exceeds cache length 262144"):
         DiffusionGemma4Model._get_rope_mats(model, 0, seq_len=cache_len + 32)
 
 
-def test_slice_rope_cache_rejects_overflow():
+def test_slice_rope_cache_rejects_overflow(expect_error):
     cache = SimpleNamespace(shape=[1, 1, 262144, 8])
-    with pytest.raises(ValueError, match=r"RoPE cache slice \[262144, 262176\) exceeds cache length 262144"):
+    with expect_error(ValueError, r"RoPE cache slice \[262144, 262176\) exceeds cache length 262144"):
         _slice_rope_cache(cache, 262144, 32)
 
 
 def test_apply_rope_chunked_slices_tensor_and_cache(monkeypatch):
     calls = []
+    monkeypatch.setenv("DG_ROPE_FULLCANVAS", "0")
 
     class _Tensor:
         def __init__(self, name, shape):
@@ -120,6 +120,7 @@ def test_apply_rope_chunked_slices_tensor_and_cache(monkeypatch):
 
 def test_apply_rope_chunked_keeps_single_sequence_chunk_allocated(monkeypatch):
     calls = []
+    monkeypatch.setenv("DG_ROPE_FULLCANVAS", "0")
 
     class _Tensor:
         def __init__(self, name, shape):
@@ -172,6 +173,7 @@ def test_apply_rope_chunked_keeps_single_sequence_chunk_allocated(monkeypatch):
 
 def test_sdpa_q_chunked_slices_q_and_mask(monkeypatch):
     calls = []
+    monkeypatch.setenv("DG_SDPA_FULLCANVAS", "0")
 
     class _Tensor:
         def __init__(self, name, shape):
@@ -283,9 +285,11 @@ def test_sdpa_q_chunked_falls_back_to_manual_gqa_on_l1_clash(monkeypatch):
             return _Tensor(f"permute({tensor.name})", shape)
 
         @staticmethod
-        def matmul(lhs, rhs, *, memory_config):
-            calls.append(("matmul", lhs.name, rhs.name, memory_config))
-            return _Tensor(f"matmul({lhs.name},{rhs.name})", [lhs.shape[0], lhs.shape[1], lhs.shape[2], rhs.shape[3]])
+        def matmul(lhs, rhs, *, transpose_b=False, memory_config):
+            calls.append(("matmul", lhs.name, rhs.name, transpose_b, memory_config))
+            rhs_name = f"transpose({rhs.name})" if transpose_b else rhs.name
+            out_width = rhs.shape[-2] if transpose_b else rhs.shape[-1]
+            return _Tensor(f"matmul({lhs.name},{rhs_name})", [lhs.shape[0], lhs.shape[1], lhs.shape[2], out_width])
 
         @staticmethod
         def softmax(tensor, *, dim, numeric_stable):
@@ -311,8 +315,8 @@ def test_sdpa_q_chunked_falls_back_to_manual_gqa_on_l1_clash(monkeypatch):
     assert out.shape == [1, 4, 32, 256]
     assert [call[0] for call in calls].count("sdpa") == 1
     assert [call for call in calls if call[0] == "softmax"] == [
-        ("softmax", "matmul(q[h0:2,s0:32],permute(concat1))", -1, True),
-        ("softmax", "matmul(q[h2:4,s0:32],permute(concat1))", -1, True),
+        ("softmax", "matmul(q[h0:2,s0:32],transpose(concat1))", -1, True),
+        ("softmax", "matmul(q[h2:4,s0:32],transpose(concat1))", -1, True),
     ]
 
 

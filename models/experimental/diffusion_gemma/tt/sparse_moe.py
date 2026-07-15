@@ -1177,7 +1177,7 @@ def sparse_experts_forward(
     # OPT-004 tuned matmul geometry (opt-in). None -> the auto-config path (bit-identical prototype).
     tuned = (
         build_tuned_configs(hidden_states.device(), E, C, H, weights.intermediate_size_per_device, S)
-        if (tuned_configs_enabled())
+        if tuned_configs_enabled() and C == DEFAULT_CAPACITY
         else None
     )
 

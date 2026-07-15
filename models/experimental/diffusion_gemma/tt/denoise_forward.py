@@ -369,7 +369,10 @@ def _denoise_moe_forward(moe, router_input, expert_input):
     if os.environ.get("DG_SPARSE_MOE", "0") == "1":
         from models.experimental.diffusion_gemma.tt.sparse_moe import sparse_experts_forward
 
-        capacity = int(os.environ.get("DG_SPARSE_MOE_CAPACITY", "32"))
+        # Capacity must be zero-drop for diffusion correctness: real routing is highly
+        # concentrated (measured max expert load 156-256 for a 256-token canvas), so the
+        # old default of 32 silently discarded 41-84% of active routes per layer.
+        capacity = int(os.environ.get("DG_SPARSE_MOE_CAPACITY", str(expert_input.shape[2])))
         out = sparse_experts_forward(moe.experts, expert_input, dense_routing, capacity=capacity)
         dense_routing.deallocate(True)
         return out
