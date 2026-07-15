@@ -37,11 +37,20 @@ _HIFI4 = ttnn.WormholeComputeKernelConfig(
 # HiFi2 (2 phases vs HiFi4's 4) pairs with bfp8_b weights: the weight already carries
 # only a 7-bit block-float mantissa, so the extra activation bits HiFi4 keeps are wasted.
 # Used for the FFN gate/up decode matmuls (~1.69x vs 1.53x on HiFi4).
+# packer_l1_acc=True: isolation probe (matmul_l1_probe) preferred it for gate/up on BH.
 _HIFI2 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi2,
     math_approx_mode=False,
     fp32_dest_acc_en=True,
-    packer_l1_acc=False,
+    packer_l1_acc=True,
+)
+
+# HiFi4 with packer for decode matmuls that write L1 (wo / lm_head). Norms keep _HIFI4.
+_HIFI4_MATMUL = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_approx_mode=False,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=True,
 )
 
 # Without program_config, SDPA decode uses the full device grid; on Blackhole that
@@ -94,13 +103,29 @@ _QKV_DECODE_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
 )
 
 
+# Decode-only program config for the FFN gate/up (32x1536x8960, bf8_b).  Isolation
+# sweep over interleaved / width / height / block / DRAM-sharded weights found
+# WIDTH/HEIGHT/BLOCK and DRAM-sharded weights all slower on this 1-tile-tall decode
+# shape; winner is 1D mcast_in0 11x8, in0_block_w=4, per_core_N=4, out_subblock 1x2,
+# L1 interleaved in+out + packer_l1_acc (~47us vs ~54us auto L1).  per_core_M=1 →
+# decode / CFG-batched row-stack only.
+_W1_DECODE_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    compute_with_storage_grid_size=ttnn.CoreCoord(11, 8),
+    in0_block_w=4,
+    out_subblock_h=1,
+    out_subblock_w=2,
+    per_core_M=1,
+    per_core_N=4,
+    fuse_batch=True,
+    fused_activation=None,
+    mcast_in0=True,
+)
+
 # Decode-only program config for the FFN down projection w2 (32x8960x1536, single-
 # token step).  Sweep winner: same 8x3=24-core / per_core_N=2 / out_subblock 1x2
 # shape as _QO, but in0_block_w=8 (K=8960 is deep, wider block amortizes) -> 6.6us
-# vs 14.2us auto baseline (2.15x).  The gate/up matmuls (32x1536x8960) are already
-# DRAM-BW-bound under the auto config, so no config beats them and they stay auto.
-# per_core_M=1 makes this valid ONLY for S==1 decode.  Output reuses _QO_DECODE_OUT_MEMCFG
-# (L1 interleaved, same N=1536).
+# vs 14.2us auto baseline (2.15x).  per_core_M=1 makes this valid ONLY for S==1
+# decode.  Output reuses _QO_DECODE_OUT_MEMCFG (L1 interleaved, same N=1536).
 _W2_DECODE_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     compute_with_storage_grid_size=ttnn.CoreCoord(8, 3),
     in0_block_w=8,
@@ -876,7 +901,7 @@ class TTVibeVoiceLM:
         out = ttnn.linear(
             _matmul_in_l1(out, decode),
             layer_w.wo,
-            compute_kernel_config=_HIFI4,
+            compute_kernel_config=_HIFI4_MATMUL if decode else _HIFI4,
             program_config=_QO_DECODE_PROGCFG if decode else None,
             memory_config=_QO_DECODE_OUT_MEMCFG if decode else ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -885,8 +910,8 @@ class TTVibeVoiceLM:
     def _ffn_layer(self, x: ttnn.Tensor, layer_w: LayerWeights, decode: Optional[bool] = None) -> ttnn.Tensor:
         """SwiGLU FFN: gate_proj(x) * silu(gate_proj(x)) → down_proj.
 
-        ``decode`` selects the swept single-token decode configs (L1 handoffs + the fast w2
-        program config).  Defaults to ``S==1``; the CFG-batched decode passes ``decode=True``
+        ``decode`` selects the swept single-token decode configs (L1 handoffs + the fast w1/w2
+        program configs).  Defaults to ``S==1``; the CFG-batched decode passes ``decode=True``
         because its row-stacked M (=2 streams) still occupies a single tile row, so the
         per_core_M=1 decode config is valid and ~2.2x faster than the auto config.
         """
@@ -897,15 +922,24 @@ class TTVibeVoiceLM:
         x_mm = _matmul_in_l1(x, decode)
         # gate/up use bfp8_b weights → HiFi2 (see _HIFI2); w2 stays HiFi4 (bf16 weight).
         # Fuse silu into the gate matmul (drops a separate Unary op on decode).
-        gate = ttnn.linear(x_mm, layer_w.w1, activation="silu", compute_kernel_config=_HIFI2, memory_config=act_mc)
-        up = ttnn.linear(x_mm, layer_w.w3, compute_kernel_config=_HIFI2, memory_config=act_mc)
+        # Keep gate/up/mul in L1 so down_proj reads the intermediate without a DRAM round-trip.
+        w1_pc = _W1_DECODE_PROGCFG if decode else None
+        gate = ttnn.linear(
+            x_mm,
+            layer_w.w1,
+            activation="silu",
+            compute_kernel_config=_HIFI2,
+            program_config=w1_pc,
+            memory_config=act_mc,
+        )
+        up = ttnn.linear(x_mm, layer_w.w3, compute_kernel_config=_HIFI2, program_config=w1_pc, memory_config=act_mc)
         hidden = ttnn.mul(gate, up, memory_config=act_mc)
         # Down proj: on a single-token / batched decode step use the swept fast config (2.15x);
         # prefill (S>1) keeps the auto config.
         out = ttnn.linear(
             _matmul_in_l1(hidden, decode),
             layer_w.w2,
-            compute_kernel_config=_HIFI4,
+            compute_kernel_config=_HIFI4_MATMUL if decode else _HIFI4,
             program_config=_W2_DECODE_PROGCFG if decode else None,
             memory_config=_QO_DECODE_OUT_MEMCFG if decode else ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -1000,9 +1034,10 @@ class TTVibeVoiceLM:
             logits = ttnn.linear(
                 _matmul_in_l1(x, S == 1),
                 self.w.lm_head_w,
-                compute_kernel_config=_HIFI4,
+                compute_kernel_config=_HIFI4_MATMUL if S == 1 else _HIFI4,
                 program_config=_LM_HEAD_DECODE_PROGCFG if S == 1 else None,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                # Decode: L1 out (probe: ~1202 vs ~1243 us DRAM); consumer reads once then frees.
+                memory_config=ttnn.L1_MEMORY_CONFIG if S == 1 else ttnn.DRAM_MEMORY_CONFIG,
             )
 
         return logits, last_hidden
@@ -1074,7 +1109,7 @@ class TTVibeVoiceLM:
         out = ttnn.linear(
             _matmul_in_l1(out, True),
             layer_w.wo,
-            compute_kernel_config=_HIFI4,
+            compute_kernel_config=_HIFI4_MATMUL,
             program_config=_QO_DECODE_PROGCFG,
             memory_config=_QO_DECODE_OUT_MEMCFG,
         )
@@ -1147,9 +1182,9 @@ class TTVibeVoiceLM:
             logits = ttnn.linear(
                 _matmul_in_l1(x, True),
                 self.w.lm_head_w,
-                compute_kernel_config=_HIFI4,
+                compute_kernel_config=_HIFI4_MATMUL,
                 program_config=_LM_HEAD_DECODE_PROGCFG,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
         return logits, last_hidden
 
@@ -1260,7 +1295,7 @@ class TTVibeVoiceLM:
         out = ttnn.linear(
             _matmul_in_l1(out, True),
             layer_w.wo,
-            compute_kernel_config=_HIFI4,
+            compute_kernel_config=_HIFI4_MATMUL,
             program_config=_QO_DECODE_PROGCFG,
             memory_config=_QO_DECODE_OUT_MEMCFG,
         )
@@ -1311,9 +1346,9 @@ class TTVibeVoiceLM:
         logits = ttnn.linear(
             _matmul_in_l1(x_pos, True),
             self.w.lm_head_w,
-            compute_kernel_config=_HIFI4,
+            compute_kernel_config=_HIFI4_MATMUL,
             program_config=_LM_HEAD_DECODE_PROGCFG,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         return logits, hidden2
 

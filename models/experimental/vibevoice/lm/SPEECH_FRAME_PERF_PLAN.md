@@ -89,6 +89,42 @@ zero quality risk (batching doesn't change math). `scratchpad/batch2_iso.py`.
 - **L1 vs DRAM I/O:** the LM decode already keeps residual/act in L1 (res_mc); the big conv activations
   can't go blanket-L1 interleaved (size), but selective L1 on the conv chain is the glue probe above.
 
+## MATMUL LAYOUT SWEEP (exp6 → wiring) — L1 / DRAM / WS / HS / BS
+Isolation: `tests/perf/matmul_l1_probe.py` → `lm/matmul_l1_probe_out.txt` (BH P150, M=32 decode).
+
+**Verdict for this regime (1-tile-tall acts):**
+- **Width / height / block-sharded activations and DRAM-sharded weights are slower** than
+  L1-interleaved + `MatmulMultiCoreReuseMultiCast1D` (WS often illegal until `in0_block_w` divides
+  per-core K; when legal, still loses). Do **not** chase the report's blanket DRAM-sharded advice here.
+- **Best I/O:** keep **activations in L1 interleaved** through decode islands; weights stay DRAM
+  interleaved (bf8 where already used). L1 out on skinny final/lm_head paths is a small win.
+
+**Winners wired (PCC-gated):**
+| Op | Config | Mem |
+|---|---|---|
+| LM gate/up 1536→8960 | `1d 11×8 bw4 pcn4 osw2` + HiFi2 + packer | L1→L1 |
+| LM down / QO / lm_head | keep prior 1D + HiFi4+packer; lm_head L1 out | L1 |
+| Diff final 1536→64 | `1d 2×1 bw12 pcn1 osw1` pcm=2 | L1 island (CFG B=2) |
+| Diff noisy 64→1536 | `1d 8×3 bw2 pcn2` pcm=2 | L1 island (CFG B=2) |
+| Tok up 2048→8192 | `1d 8×8 bw8 pcn4` | FFN island L1 when T≤32 |
+
+P7 ("DRAM-sharded gate/up") **REJECTED** for this M=32 path — L1 MultiCast1D wins.
+
+### exp7 re-profile (after wiring)
+Same capture: frame 2, `1p_CH2EN`, eager, BH P150. Report: `lm/speech_frame_exp7.txt`.
+
+| | exp6 | exp7 | Δ |
+|---|---:|---:|---:|
+| **Frame device time** | **31.70 ms** | **30.31 ms** | **−1.39 ms (−4.4%)** |
+| Matmul total | 15.30 ms | 14.58 ms | −0.72 |
+| Matmul in0 L1 / DRAM | 6.16 / 9.14 | 13.74 / 0.84 | mostly L1 now |
+| Diff final 1536×64 | 36.1 µs | **10.0 µs** | −26 µs ×30 ≈ −0.78 ms |
+| Diff noisy 64×1536 | 3.8 µs | 2.9 µs | small |
+| LM gate/up 1536×8960 | 40.0 µs | 40.1 µs | flat (Tracy already ~ceiling) |
+| LM down | 65.2 µs | 65.5 µs | flat |
+| lm_head | 1232 µs | 1178 µs | −54 µs |
+| Tok up 2048×8192 | 50.4 µs | 57.6 µs | **+7 µs** (L1-island regress; revisit) |
+
 ## Campaign total: 41.06 → 31.79 ms device time (−22.6%), all PCC-gated
 diffusion fusions −0.55, CFG-batched LM −6.73, FFN-down config −2.36.
 

@@ -56,7 +56,7 @@ _HIFI2 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi2,
     math_approx_mode=False,
     fp32_dest_acc_en=True,
-    packer_l1_acc=False,
+    packer_l1_acc=True,
 )
 
 
@@ -86,11 +86,12 @@ _FFN_DOWN_PROGCFG = {
     1024: _mm1d_post(8, 2, 8, 2),  # 4096x1024   60 -> 40 us (1.5x)
 }
 
-# Up-proj (linear1, dim->ffn) was on the auto config.  dim1024 (1024x4096) auto 21 -> 13 us (1.6x,
-# PCC 1.0, swept in tests/perf/matmul_slow_sweep.py).  dim2048 (2048x8192) is BW-bound (~48 us either
-# way) so it stays auto.  per_core_M=1 -> valid only when rows (T) <= 32.
+# Up-proj (linear1, dim->ffn).  dim1024 (1024x4096) auto 21 -> 13 us (1.6x, PCC 1.0).
+# dim2048 (2048x8192): isolation sweep preferred 8x8 / in0_block_w=8 / per_core_N=4 over auto
+# (~64 vs ~67 us, L1 out).  per_core_M=1 -> valid only when rows (T) <= 32.
 _FFN_UP_PROGCFG = {
     1024: _mm1d_post(8, 8, 8, 2),  # 1024x4096   21 -> 13 us (1.6x)
+    2048: _mm1d_post(8, 8, 8, 4),  # 2048x8192   Nt=256, 64 cores → pcn4
 }
 
 
@@ -555,39 +556,43 @@ class TTBlock1DDevice:
             x = ttnn.mul(x, self.gamma, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x = ttnn.add(residual, x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # FFN path — linear ops on last dim (C), no explicit permute needed in NHWC
-        residual = x
+        # FFN path — linear ops on last dim (C), no explicit permute needed in NHWC.
+        # Single-frame / short T (<=32): keep the FFN island in L1 interleaved so
+        # up → gelu → down → residual add avoid DRAM round-trips.
+        decode_ffn = x.shape[2] <= 32
+        ffn_mc = ttnn.L1_MEMORY_CONFIG if decode_ffn else ttnn.DRAM_MEMORY_CONFIG
+        residual = ttnn.to_memory_config(x, ffn_mc) if decode_ffn else x
         x = ttnn.rms_norm(
-            x,
+            residual,
             weight=self.ffn_norm_w,
             epsilon=self.eps,
             compute_kernel_config=_HIFI4,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ffn_mc,
         )
         # per_core_M=1 config valid only when T<=32 rows (M_tiles=1); else auto.
-        l1_pc = self._l1_progcfg if (self._l1_progcfg is not None and x.shape[2] <= 32) else None
+        l1_pc = self._l1_progcfg if (self._l1_progcfg is not None and decode_ffn) else None
         x = ttnn.linear(
             x,
             self.linear1_w,
             bias=self.linear1_b,
             compute_kernel_config=_HIFI2,
             program_config=l1_pc,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ffn_mc,
         )
-        x = ttnn.gelu(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.gelu(x, memory_config=ffn_mc)
         # per_core_M=1 config valid only when T<=32 rows (M_tiles=1); else auto.
-        l2_pc = self._l2_progcfg if (self._l2_progcfg is not None and x.shape[2] <= 32) else None
+        l2_pc = self._l2_progcfg if (self._l2_progcfg is not None and decode_ffn) else None
         x = ttnn.linear(
             x,
             self.linear2_w,
             bias=self.linear2_b,
             compute_kernel_config=_HIFI2,
             program_config=l2_pc,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ffn_mc,
         )
         if self.ffn_gamma is not None:
-            x = ttnn.mul(x, self.ffn_gamma, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        x = ttnn.add(residual, x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            x = ttnn.mul(x, self.ffn_gamma, memory_config=ffn_mc)
+        x = ttnn.add(residual, x, memory_config=ffn_mc)
         return x
 
 

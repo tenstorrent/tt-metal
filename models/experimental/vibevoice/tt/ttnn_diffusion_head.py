@@ -36,12 +36,14 @@ _COMPUTE_KERNEL_FP32 = ttnn.WormholeComputeKernelConfig(
 # family and recover 1.5-3.8x device time.  Precision-neutral (PCC vs auto ~1.0);
 # validated in tests/perf/diffusion_progcfg_probe.py.  per_core_M=2 makes each config
 # valid ONLY for the B=2 path — callers gate on input.shape[0]==2 (else auto).
-def _mm1d(cx, cy, in0_block_w, per_core_n):
+def _mm1d(cx, cy, in0_block_w, per_core_n, out_subblock_w=None):
+    # out_subblock_w must divide per_core_N (and out_block_w defaults to pcn).
+    osw = out_subblock_w if out_subblock_w is not None else min(2, per_core_n)
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(cx, cy),
         in0_block_w=in0_block_w,
         out_subblock_h=1,
-        out_subblock_w=2,
+        out_subblock_w=osw,
         per_core_M=2,
         per_core_N=per_core_n,
         fuse_batch=True,
@@ -55,11 +57,35 @@ _MM_ADALN = _mm1d(8, 9, 4, 2)  # layer adaLN     [.,1536]@[1536,4608]  73->40us 
 _MM_GATEUP = _mm1d(8, 9, 6, 2)  # ffn gate/up bf8 [.,1536]@[1536,4608]  61->35us  (1.7x)
 _MM_HSQ = _mm1d(8, 3, 12, 2)  # cond_proj/t_mlp2[.,1536]@[1536,1536]  50->33us  (1.5x)
 _MM_FADALN = _mm1d(8, 6, 12, 2)  # final adaLN     [.,1536]@[1536,3072]  70->34us  (2.0x)
+# Untuned on auto (2 cores / ~36us SLOW in speech_frame_exp6). Isolation sweep
+# (interleaved/WS/HS/BS/DRAMW): width/height/block/DRAM-sharded all lose on M=32;
+# L1-interleaved 1D wins — final 1536→64 ~43us, noisy 64→1536 ~42us.
+_MM_FINAL = _mm1d(2, 1, 12, 1)  # final_linear   [.,1536]@[1536,64]  (osw=1)
+_MM_NOISY = _mm1d(8, 3, 2, 2)  # noisy_images   [.,64]@[64,1536]
+
+
+def _is_cfg_batch2(x: ttnn.Tensor) -> bool:
+    """CFG-batched path: B=2, each stream is one tile row (per_core_M=2 configs)."""
+    return x.shape[0] == 2
 
 
 def _pc(x: ttnn.Tensor, cfg):
     """Tuned config only on the B=2 CFG path (per_core_M=2); auto otherwise."""
-    return cfg if x.shape[0] == 2 else None
+    return cfg if _is_cfg_batch2(x) else None
+
+
+def _act_mc(x: ttnn.Tensor):
+    """Keep CFG-batch activations in L1 interleaved (tiny tensors; kills DRAM round-trips)."""
+    return ttnn.L1_MEMORY_CONFIG if _is_cfg_batch2(x) else ttnn.DRAM_MEMORY_CONFIG
+
+
+def _to_act_mc(x: ttnn.Tensor) -> ttnn.Tensor:
+    """Move/ensure activation is on the preferred mem config for this path."""
+    want = _act_mc(x)
+    mc = x.memory_config()
+    if mc.buffer_type == want.buffer_type and mc.memory_layout == want.memory_layout:
+        return x
+    return ttnn.to_memory_config(x, want)
 
 
 @dataclass
@@ -221,50 +247,53 @@ class TTDiffusionHead:
         """Full timestep embedder: sin_emb → MLP (silu → linear) → cond_dim."""
         w = self.w
         t_freq = self._timestep_embedding(t_tt)  # [B, 1, 1, freq_emb_size]
+        mc = _act_mc(t_freq)
         # MLP layer 0 + SiLU
         h = ttnn.linear(
             t_freq,
             w.t_mlp0_w,
             compute_kernel_config=_COMPUTE_KERNEL_FP32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=mc,
         )
-        h = ttnn.silu(h, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        h = ttnn.silu(h, memory_config=mc)
         # MLP layer 2
         h = ttnn.linear(
             h,
             w.t_mlp2_w,
             compute_kernel_config=_COMPUTE_KERNEL_FP32,
             program_config=_pc(h, _MM_HSQ),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=mc,
         )
         return h  # [B, 1, 1, hidden_size]
 
     def _swiglu_ffn(self, x: ttnn.Tensor, layer_idx: int) -> ttnn.Tensor:
         """SwiGLU FFN: gate * silu(gate) project → down."""
         w = self.w
+        mc = _act_mc(x)
         # Fuse silu into the gate matmul (drops a separate Unary op per layer).
+        # Keep gate/up/mul/down in L1 on the CFG path so the FFN stays DRAM-roundtrip-free.
         gate = ttnn.linear(
             x,
             w.layer_ffn_gate_w[layer_idx],
             activation="silu",
             compute_kernel_config=_COMPUTE_KERNEL_FP32,
             program_config=_pc(x, _MM_GATEUP),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=mc,
         )
         up = ttnn.linear(
             x,
             w.layer_ffn_up_w[layer_idx],
             compute_kernel_config=_COMPUTE_KERNEL_FP32,
             program_config=_pc(x, _MM_GATEUP),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=mc,
         )
-        hidden = ttnn.mul(gate, up, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        hidden = ttnn.mul(gate, up, memory_config=mc)
         out = ttnn.linear(
             hidden,
             w.layer_ffn_down_w[layer_idx],
             compute_kernel_config=_COMPUTE_KERNEL_FP32,
             program_config=_pc(hidden, _MM_DOWN),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=mc,
         )
         return out
 
@@ -275,13 +304,14 @@ class TTDiffusionHead:
         sc: [B, 1, 1, hidden]  silu(conditioning), precomputed once per step (same for all layers)
         """
         w = self.w
+        mc = _act_mc(x)
         # adaLN_modulation(silu(c)) → [B, 1, 1, 3*hidden]
         modulation = ttnn.linear(
             sc,
             w.layer_adaLN_w[layer_idx],
             compute_kernel_config=_COMPUTE_KERNEL_FP32,
             program_config=_pc(sc, _MM_ADALN),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=mc,
         )
         # chunk into 3 parts along last dim
         hidden_size = w.hidden_size
@@ -295,22 +325,22 @@ class TTDiffusionHead:
             weight=w.layer_norm_w[layer_idx],
             epsilon=w.norm_eps,
             compute_kernel_config=_COMPUTE_KERNEL_FP32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=mc,
         )
         # modulate: x_norm * (1 + scale) + shift  (scalar +1.0 avoids a ones_like alloc op)
         x_mod = ttnn.add(
             ttnn.mul(
                 x_norm,
-                ttnn.add(scale, 1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                ttnn.add(scale, 1.0, memory_config=mc),
+                memory_config=mc,
             ),
             shift,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=mc,
         )
         # FFN + gated residual
         ffn_out = self._swiglu_ffn(x_mod, layer_idx)
-        gated = ttnn.mul(gate, ffn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        out = ttnn.add(x, gated, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        gated = ttnn.mul(gate, ffn_out, memory_config=mc)
+        out = ttnn.add(x, gated, memory_config=mc)
         return out
 
     def _final_layer(self, x: ttnn.Tensor, sc: ttnn.Tensor) -> ttnn.Tensor:
@@ -319,12 +349,13 @@ class TTDiffusionHead:
         sc: silu(conditioning), precomputed once per step.
         """
         w = self.w
+        mc = _act_mc(x)
         modulation = ttnn.linear(
             sc,
             w.final_adaLN_w,
             compute_kernel_config=_COMPUTE_KERNEL_FP32,
             program_config=_pc(sc, _MM_FADALN),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=mc,
         )
         hidden_size = w.hidden_size
         shift = ttnn.slice(modulation, [0, 0, 0, 0], [modulation.shape[0], 1, 1, hidden_size])
@@ -335,23 +366,24 @@ class TTDiffusionHead:
             x,
             epsilon=w.norm_eps,
             compute_kernel_config=_COMPUTE_KERNEL_FP32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=mc,
         )
         # modulate: x_norm * (1 + scale) + shift  (scalar +1.0 avoids a ones_like alloc op)
         x_mod = ttnn.add(
             ttnn.mul(
                 x_norm,
-                ttnn.add(scale, 1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                ttnn.add(scale, 1.0, memory_config=mc),
+                memory_config=mc,
             ),
             shift,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=mc,
         )
         out = ttnn.linear(
             x_mod,
             w.final_linear_w,
             compute_kernel_config=_COMPUTE_KERNEL_FP32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=_pc(x_mod, _MM_FINAL),
+            memory_config=mc,
         )
         return out
 
@@ -384,18 +416,26 @@ class TTDiffusionHead:
             [B, 1, 1, latent_size]
         """
         w = self.w
+        # CFG batch-2: park activations in L1 for the whole head (tensors are tiny).
+        noisy_images = _to_act_mc(noisy_images)
+        condition = _to_act_mc(condition)
+        if t_emb is not None:
+            t_emb = _to_act_mc(t_emb)
+        mc = _act_mc(noisy_images)
 
         # Project noisy latent to hidden_size
         x = ttnn.linear(
             noisy_images,
             w.noisy_images_proj_w,
             compute_kernel_config=_COMPUTE_KERNEL_FP32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=_pc(noisy_images, _MM_NOISY),
+            memory_config=mc,
         )
 
         # Timestep embedding (precomputed once per step-index when supplied)
         if t_emb is None:
             t_emb = self._timestep_embedder(timesteps)  # [B, 1, 1, hidden]
+            t_emb = _to_act_mc(t_emb)
 
         # Project condition
         cond_proj = ttnn.linear(
@@ -403,14 +443,14 @@ class TTDiffusionHead:
             w.cond_proj_w,
             compute_kernel_config=_COMPUTE_KERNEL_FP32,
             program_config=_pc(condition, _MM_HSQ),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=mc,
         )
 
         # Combine: c = cond_proj + t_emb
-        c = ttnn.add(cond_proj, t_emb, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        c = ttnn.add(cond_proj, t_emb, memory_config=mc)
         # silu(c) is the input to every adaLN modulation and is identical across all
         # head layers + the final layer — compute it once per step instead of 5×.
-        sc = ttnn.silu(c, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        sc = ttnn.silu(c, memory_config=mc)
 
         # HeadLayers
         num_layers = len(w.layer_adaLN_w)
