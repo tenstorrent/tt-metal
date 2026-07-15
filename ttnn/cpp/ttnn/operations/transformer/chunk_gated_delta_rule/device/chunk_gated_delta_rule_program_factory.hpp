@@ -14,9 +14,7 @@ namespace ttnn::prim {
 
 struct ChunkGatedDeltaRuleProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const ChunkGatedDeltaRuleParams& operation_attributes,
-        const ChunkGatedDeltaRuleInputs& tensor_args,
-        std::vector<Tensor>& tensor_return_value);
+        const ChunkGatedDeltaRuleParams& attrs, const ChunkGatedDeltaRuleInputs& in, std::vector<Tensor>& outputs);
 };
 
 }  // namespace ttnn::prim
