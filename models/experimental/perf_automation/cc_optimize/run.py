@@ -621,6 +621,9 @@ def _emit_summary(
         residual=residual,
         before_ms=before_ms,
         after_ms=after_ms,
+        baseline_profile=json.loads(Path(report_csv).parent.joinpath("baseline_profile.json").read_text())
+        if report_csv and Path(report_csv).parent.joinpath("baseline_profile.json").is_file()
+        else None,
     )
     print("\n" + text + "\n")
     md = _latest_manifest(repo_root / PERF_DIR)

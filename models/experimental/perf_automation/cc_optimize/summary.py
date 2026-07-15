@@ -64,6 +64,35 @@ def _read_json(path) -> object:
         return None
 
 
+def _baseline_bucket_lines(baseline_profile: dict | None, report_csv: str = "") -> list:
+    """Render the baseline op-class breakdown (device time per op class, ranked) so an operator can
+    read WHAT to target directly from RUN_REPORT.md instead of the terminal/CSV. Sourced from the
+    baseline profile's `buckets`; falls back to the baseline_profile.json beside report_csv. Empty
+    list when no bucket data is available, so the section silently skips rather than blocking."""
+    prof = baseline_profile
+    if not (isinstance(prof, dict) and prof.get("buckets")) and report_csv:
+        prof = _read_json(Path(report_csv).parent / "baseline_profile.json") or {}
+    buckets = prof.get("buckets") if isinstance(prof, dict) else None
+    if not buckets:
+        return []
+    out = ["Op breakdown — device time by op class (latest profile · what to target, ranked):"]
+    hdr = f"{'op class':<15} {'device_ms':>10} {'%':>6} {'count':>7} {'bound':>6}  dominant op (shape)"
+    out.append(hdr)
+    out.append("-" * min(len(hdr) + 30, 118))
+    for b in sorted(buckets, key=lambda x: -(x.get("device_ms") or 0.0)):
+        if not isinstance(b, dict):
+            continue
+        top = (b.get("top_ops") or [{}])[0] if b.get("top_ops") else {}
+        dom = str(top.get("op_code", "") or top.get("shape", "")).strip()
+        ms = b.get("device_ms") or 0.0
+        pct = b.get("pct") or 0.0
+        cnt = b.get("count") or 0
+        bound = (b.get("tags") or {}).get("bound") or "—"
+        out.append(f"{str(b.get('id', '?')):<15} {ms:>10.2f} {pct:>5.1f}% {cnt:>7} {bound:>6}  {dom[:52]}")
+    out.append("")
+    return out
+
+
 def render_summary(
     kernel_log_path: str | Path,
     baseline_ms: float | None = None,
@@ -78,6 +107,7 @@ def render_summary(
     residual: dict | None = None,
     before_ms: float | None = None,
     after_ms: float | None = None,
+    baseline_profile: dict | None = None,
 ) -> str:
     """Return a markdown summary. Degrades gracefully when data is partial."""
     attempts = _read_json(kernel_log_path) or []
@@ -129,6 +159,8 @@ def render_summary(
     elif before_ms:
         lines.append(f"trace+2CQ full-pipeline e2e:  before {before_ms:.2f} ms  ->  (after not measured)")
     lines.append("")
+
+    lines.extend(_baseline_bucket_lines(baseline_profile, report_csv))
 
     if by_op:
         hdr = f"{'op':<34} " + " ".join(f"{c:>7}" for c in _LEVEL_COLS) + f" {'best ms':>9}"

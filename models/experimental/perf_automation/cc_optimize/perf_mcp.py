@@ -173,6 +173,15 @@ def _report_baseline_ms():
     return None
 
 
+def _read_baseline_profile():
+    try:
+        if _BASELINE_PATH.exists():
+            return json.loads(_BASELINE_PATH.read_text())
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 def _rebuild_optimize_report(model_root=None) -> None:
     import time as _t
 
@@ -190,6 +199,7 @@ def _rebuild_optimize_report(model_root=None) -> None:
             task=os.environ.get("PERF_MCP_TASK", "main"),
             metric=os.environ.get("PERF_MCP_METRIC", "device_ms"),
             perf_test=perf_test,
+            baseline_profile=_read_baseline_profile(),
         )
         when = (
             f"Updated live: {_t.strftime('%Y-%m-%d %H:%M:%S %Z')} · {len(attempts)} lever attempt(s) so far — "
