@@ -4,6 +4,8 @@
 
 #include "ttnn/operations/data_movement/repeat_interleave/codegen/repeat_interleave_codegen_supported.hpp"
 
+#include <tt-metalium/hal.hpp>
+
 namespace ttnn::operations::data_movement::repeat_interleave {
 
 ImplementationSelector parse_implementation(std::string_view implementation) {
@@ -60,7 +62,21 @@ bool supported_by_codegen(const Tensor& input_tensor, uint32_t repeats, int32_t 
         if (logical_shape[-1] < 2) {
             return false;
         }
-        return nd != ndim - 1;
+        if (nd == ndim - 1) {
+            return false;
+        }
+        // RM higher-dim (whole-stick) path only: RepeatInterleaveCodegen.repeat_interleave
+        // (ops/repeat_interleave/repeat_interleave.py) gates unaligned stick widths here -- the
+        // batched stick transport packs CB pages at raw stick width, and a stick size that isn't a
+        // multiple of the buffer's page alignment silently overlaps successive output pages
+        // (torch-golden caught this with BF16 W=133). Not reachable via invalidate_vector (the
+        // sweep has no alignment-aware gate), so transcribed directly from the op guard.
+        const uint32_t elem_size = input_tensor.element_size();
+        const uint32_t stick_bytes = logical_shape[-1] * elem_size;
+        const uint32_t alignment = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::L1
+                                       ? tt::tt_metal::hal::get_l1_alignment()
+                                       : tt::tt_metal::hal::get_dram_alignment();
+        return stick_bytes % alignment == 0;
     }
 
     return false;
