@@ -60,11 +60,15 @@ FORCE_INLINE KernelProfilerNocEventMetadata createNocEventDstTrailer(uint32_t sr
     if constexpr (
         noc_event_type == KernelProfilerNocEventMetadata::NocEventType::WRITE_ ||
         noc_event_type == KernelProfilerNocEventMetadata::NocEventType::WRITE_WITH_TRID ||
+        noc_event_type == KernelProfilerNocEventMetadata::NocEventType::WRITE_WITH_STATE ||
+        noc_event_type == KernelProfilerNocEventMetadata::NocEventType::WRITE_WITH_TRID_WITH_STATE ||
         noc_event_type == KernelProfilerNocEventMetadata::NocEventType::WRITE_MULTICAST ||
         noc_event_type == KernelProfilerNocEventMetadata::NocEventType::SEMAPHORE_SET_REMOTE ||
         noc_event_type == KernelProfilerNocEventMetadata::NocEventType::SEMAPHORE_SET_MULTICAST) {
         ev_md.data.local_event_dst_trailer.counter_value = get_noc_counter_for_debug<true, posted>(noc_index);
-    } else if constexpr (noc_event_type == KernelProfilerNocEventMetadata::NocEventType::READ) {
+    } else if constexpr (
+        noc_event_type == KernelProfilerNocEventMetadata::NocEventType::READ ||
+        noc_event_type == KernelProfilerNocEventMetadata::NocEventType::READ_WITH_STATE) {
         ev_md.data.local_event_dst_trailer.counter_value = get_noc_counter_for_debug<false, posted>(noc_index);
     } else {
         ev_md.data.local_event_dst_trailer.counter_value = 0;

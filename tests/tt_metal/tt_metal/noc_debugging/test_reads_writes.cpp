@@ -305,6 +305,136 @@ void RunInlineWriteTest(
         "inline write same-src false positive");
 }
 
+// Every core issues repeated stateful writes (noc_async_write_one_packet_with_state) from the same source address
+// to one destination core. Same-source-without-barrier must still be detected. Exercises the Stage-3e
+// WRITE_WITH_STATE host mapping + counter whitelist.
+void RunStatefulWriteTest(
+    NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device, bool use_barrier) {
+    auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
+
+    CoreCoord grid_start = {0, 0};
+    CoreCoord grid_end = {compute_grid_size.x - 1, compute_grid_size.y - 1};
+    CoreRange core_range(grid_start, grid_end);
+
+    auto dest_core_virtual = mesh_device->worker_core_from_logical_core(grid_end);
+
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    tt_metal::Program program = tt_metal::CreateProgram();
+
+    constexpr uint32_t buffer_page_size = 4096;
+    constexpr uint32_t buffer_size = buffer_page_size * 4;
+
+    distributed::DeviceLocalBufferConfig l1_config{
+        .page_size = buffer_page_size, .buffer_type = tt::tt_metal::BufferType::L1};
+    distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
+
+    auto l1_buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
+
+    std::map<std::string, std::string> defines = {
+        {"L1_BUFFER_ADDR", std::to_string(l1_buffer->address())},
+        {"OTHER_CORE_X", std::to_string(dest_core_virtual.x)},
+        {"OTHER_CORE_Y", std::to_string(dest_core_virtual.y)},
+        {"DST_ADDR", std::to_string(l1_buffer->address())},
+        {"NUM_ITERATIONS", "10"},
+    };
+
+    if (use_barrier) {
+        defines["USE_WRITE_BARRIER"] = "1";
+    }
+
+    for (auto processor : {tt_metal::DataMovementProcessor::RISCV_0, tt_metal::DataMovementProcessor::RISCV_1}) {
+        auto noc = processor == tt_metal::DataMovementProcessor::RISCV_0 ? tt_metal::NOC::RISCV_0_default
+                                                                         : tt_metal::NOC::RISCV_1_default;
+        tt_metal::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_stateful_writes.cpp",
+            core_range,
+            tt_metal::DataMovementConfig{.processor = processor, .noc = noc, .defines = defines});
+    }
+
+    workload.add_program(device_range, std::move(program));
+
+    fixture->RunProgram(mesh_device, workload);
+
+    ReadMeshDeviceProfilerResults(*mesh_device);
+
+    VerifyIssuesOnAllCores(
+        mesh_device,
+        grid_start,
+        grid_end,
+        /*expect_issue=*/!use_barrier,
+        [fixture](ChipId chip_id, CoreCoord core, int processor_id) {
+            return fixture->has_write_barrier_issue(chip_id, core, processor_id);
+        },
+        "stateful write barrier");
+}
+
+// Every core issues repeated stateful reads (noc_async_read_one_packet_with_state) that land at the same local
+// address. Same-destination-without-barrier must still be detected. Exercises the Stage-3e READ_WITH_STATE host
+// mapping + counter whitelist.
+void RunStatefulReadTest(
+    NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device, bool use_barrier) {
+    auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
+
+    CoreCoord grid_start = {0, 0};
+    CoreCoord grid_end = {compute_grid_size.x - 1, compute_grid_size.y - 1};
+    CoreRange core_range(grid_start, grid_end);
+
+    auto dest_core_virtual = mesh_device->worker_core_from_logical_core(grid_end);
+
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    tt_metal::Program program = tt_metal::CreateProgram();
+
+    constexpr uint32_t buffer_page_size = 4096;
+    constexpr uint32_t buffer_size = buffer_page_size * 4;
+
+    distributed::DeviceLocalBufferConfig l1_config{
+        .page_size = buffer_page_size, .buffer_type = tt::tt_metal::BufferType::L1};
+    distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
+
+    auto l1_buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
+
+    std::map<std::string, std::string> defines = {
+        {"L1_BUFFER_ADDR", std::to_string(l1_buffer->address())},
+        {"OTHER_CORE_X", std::to_string(dest_core_virtual.x)},
+        {"OTHER_CORE_Y", std::to_string(dest_core_virtual.y)},
+        {"SRC_ADDR", std::to_string(l1_buffer->address())},
+        {"NUM_ITERATIONS", "10"},
+    };
+
+    if (use_barrier) {
+        defines["USE_READ_BARRIER"] = "1";
+    }
+
+    for (auto processor : {tt_metal::DataMovementProcessor::RISCV_0, tt_metal::DataMovementProcessor::RISCV_1}) {
+        auto noc = processor == tt_metal::DataMovementProcessor::RISCV_0 ? tt_metal::NOC::RISCV_0_default
+                                                                         : tt_metal::NOC::RISCV_1_default;
+        tt_metal::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_stateful_reads.cpp",
+            core_range,
+            tt_metal::DataMovementConfig{.processor = processor, .noc = noc, .defines = defines});
+    }
+
+    workload.add_program(device_range, std::move(program));
+
+    fixture->RunProgram(mesh_device, workload);
+
+    ReadMeshDeviceProfilerResults(*mesh_device);
+
+    VerifyIssuesOnAllCores(
+        mesh_device,
+        grid_start,
+        grid_end,
+        /*expect_issue=*/!use_barrier,
+        [fixture](ChipId chip_id, CoreCoord core, int processor_id) {
+            return fixture->has_read_barrier_issue(chip_id, core, processor_id);
+        },
+        "stateful read barrier");
+}
+
 // Single core + single RISC issues writes and then a full barrier. Exercises the FULL_BARRIER host
 // mapping via the end-of-kernel unflushed-write check: with the mapping the full barrier clears the
 // pending writes so nothing is reported; without it the full barrier is ignored and the writes are
@@ -631,6 +761,46 @@ TEST_F(NOCDebuggingFixture, InlineWritesWithBarrier) {
         this->RunTestOnDevice<NOCDebuggingFixture>(
             [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunInlineWriteTest(fixture, mesh_device, /*use_barrier=*/true);
+            },
+            mesh_device);
+    }
+}
+
+TEST_F(NOCDebuggingFixture, StatefulWritesNoBarrier) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice<NOCDebuggingFixture>(
+            [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunStatefulWriteTest(fixture, mesh_device, /*use_barrier=*/false);
+            },
+            mesh_device);
+    }
+}
+
+TEST_F(NOCDebuggingFixture, StatefulWritesWithBarrier) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice<NOCDebuggingFixture>(
+            [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunStatefulWriteTest(fixture, mesh_device, /*use_barrier=*/true);
+            },
+            mesh_device);
+    }
+}
+
+TEST_F(NOCDebuggingFixture, StatefulReadsNoBarrier) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice<NOCDebuggingFixture>(
+            [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunStatefulReadTest(fixture, mesh_device, /*use_barrier=*/false);
+            },
+            mesh_device);
+    }
+}
+
+TEST_F(NOCDebuggingFixture, StatefulReadsWithBarrier) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice<NOCDebuggingFixture>(
+            [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunStatefulReadTest(fixture, mesh_device, /*use_barrier=*/true);
             },
             mesh_device);
     }

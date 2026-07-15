@@ -120,6 +120,7 @@ NOCDebugEvent make_noc_debug_event(
     int8_t src_x = static_cast<int8_t>(src_core.x);
     int8_t src_y = static_cast<int8_t>(src_core.y);
     switch (event.noc_xfer_type) {
+        case EMD::NocEventType::READ_WITH_STATE: [[fallthrough]];
         case EMD::NocEventType::READ:
             return NOCDebugEvent(NocReadEvent{
                 trailer.getDstAddr(),
@@ -133,6 +134,8 @@ NOCDebugEvent make_noc_debug_event(
                 event.noc_type == EMD::NocType::NOC_1});
         case EMD::NocEventType::WRITE_: [[fallthrough]];
         case EMD::NocEventType::WRITE_WITH_TRID: [[fallthrough]];
+        case EMD::NocEventType::WRITE_WITH_STATE: [[fallthrough]];
+        case EMD::NocEventType::WRITE_WITH_TRID_WITH_STATE: [[fallthrough]];
         case EMD::NocEventType::WRITE_MULTICAST: [[fallthrough]];
         case EMD::NocEventType::SEMAPHORE_SET_MULTICAST: [[fallthrough]];
         case EMD::NocEventType::SEMAPHORE_SET_REMOTE: {
