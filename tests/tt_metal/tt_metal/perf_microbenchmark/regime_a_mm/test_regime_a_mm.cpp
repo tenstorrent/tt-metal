@@ -362,6 +362,30 @@ int main(int argc, char** argv) {
         }
         CoreRangeSet all_cores(cs);
 
+        // COREMAP (diagnostic, Part-6 role mapping; env-gated, no timing impact): emit one line per compute
+        // core so the profiler driver can join physical (x,y) -> logical role. Sharded/unified factorizer
+        // only. Core index i = bank*preaders + p; within a bank p is the g-index g=k*(Ns*Sm)+n*Sm+m, so
+        // kslice=p/(Ns*Sm), nslice=(p%(Ns*Sm))/Sm, mslice=p%Sm. Reduction chains over k -> redpos=kslice.
+        if (sharded && std::getenv("RA_COREMAP")) {
+            uint32_t NsSm = (mfac ? mfac : 1u);  // == Ns*Sm
+            for (uint32_t i = 0; i < cores.size(); ++i) {
+                uint32_t p = (preaders ? i % preaders : 0u);
+                uint32_t kk = p / NsSm, rem = p % NsSm;
+                uint32_t nn = (msplit ? rem / msplit : 0u), mm = (msplit ? rem % msplit : 0u);
+                log_info(
+                    LogTest,
+                    "COREMAP x={} y={} bank={} kslice={} nslice={} mslice={} redpos={} noc={}",
+                    cores[i].x,
+                    cores[i].y,
+                    core_bank[i],
+                    kk,
+                    nn,
+                    mm,
+                    kk,
+                    (i < core_noc.size() ? core_noc[i] : 0u));
+            }
+        }
+
         // DRAM interleaved buffers
         auto mk_buf = [&](uint64_t ntiles) {
             tt_metal::distributed::DeviceLocalBufferConfig l{
