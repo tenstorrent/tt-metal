@@ -53,6 +53,8 @@ _ALLOWED_TOOLS = [
 
 _PROMPT = """You are optimizing the TTNN model {model} ({task} pipeline) for {metric} via the perf-mcp tools. Drive {metric} toward the roofline floor. Run CONTINUOUSLY.
 
+HANDS OFF THE HARDWARE — device and process recovery is NOT your job. NEVER run kill, pkill, tt-smi, fuser, or any command that kills a process or resets the device, and NEVER open or close a mesh device yourself. Device wedges, hangs, and leaked device handles are recovered AUTOMATICALLY by the harness (watchdog + supervisor + device reclaim) between rounds. If a perf-mcp tool returns a device error or a measurement appears stuck, do NOT try to fix the device: if you have a measurement, record the attempt; otherwise just note it and move on — the harness will reclaim, reset, and restart as needed. Killing processes or resetting the device yourself WILL BREAK THE RUN (the agent has killed its own orchestrator this way). Your ONLY job is to choose and apply optimizations via the perf-mcp tools and source edits.
+
 termination_check() is the SOLE authority on whether more optimization is needed. It returns a DETERMINISTIC per-op CHECKLIST and a single next_target = {{op, op_class, grid, bound_by, rung}} you MUST work next. The per-op ladder ORDER is: knob:grid -> knob:dtype -> tt-lang -> cpp. An op is "nothing left" ONLY when every rung is ticked; you may STOP ONLY when can_stop=true.
 
 LOOP:
