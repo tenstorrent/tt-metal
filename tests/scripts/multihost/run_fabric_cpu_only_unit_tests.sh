@@ -97,10 +97,6 @@ SC4_REVAB_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING="${SUBTORUS_REVAB_AISLEC_CLUSTE
 # Full 20-host SC20 revC subtorus galaxy (system-110, hosts bh-glx-110-c01..c10). Used for the 80-stage Blitz
 # decode ring, which needs the subtorus wrap-around to close (the revAB subtorus mock above cannot).
 SC20_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC20_32x4_revC_subtorus_aisleC/SC20_32x4_revC_subtorus_aisleC_mapping.yaml"
-# Full 20-host NON-subtorus SC20 galaxy (revAB, Aisle C). Same 20-host / 80-mesh scale as the subtorus
-# mock but without the torus wrap-around links -- used by the long-running bh-ring-stress group as the
-# worst case (the ring's closing hop has no direct link, driving the mapper's general-SAT fallback).
-SC20_REVAB_AISLEC_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC20_32x4_revAB_aisleC/SC20_32x4_revAB_aisleC_mapping.yaml"
 # Full 36-host subtorus SC36 galaxy (revC, Aisle D, hosts bh-glx-120-d01..d10). 36 hosts / 144 mesh
 # slots -- the largest all-hosts mock; used by bh-ring-stress to exercise the mapper at scale.
 SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC36_32x4_revC_subtorus_aisleD/SC36_32x4_revC_subtorus_aisleD_mapping.yaml"
@@ -652,22 +648,25 @@ done
 fi # bh-blitz-decode
 
 ######################################
-# BH Galaxy: ring-mapping stress tests (LONG RUNNING -- own group, extended per-op timeout)
-# Non-pod-aligned Blitz-decode ring lengths (20/24/28/36 stages) embedded into the FULL host graph of
-# each mock. Because the ring length does not align to pod (4-host) / galaxy boundaries and (on the
-# non-subtorus mock) its closing hop has no direct physical link, these fall into the topology mapper's
-# general-SAT host-minimization fallback, whose cost scales erratically with topology, ring length, and
-# host count. Observed rank-0 solve times (mock CPU sim) range from sub-second up to ~90s (28/36-stage on
-# non-subtorus 20-host SC20) and ~40s (36-stage on the full 36-host SC36) -- far above the fast
-# bh-blitz-decode matrix, hence a separate group with a longer per-op timeout.
+# BH Galaxy: ring-mapping stress tests (LONG RUNNING -- own group)
+# Non-pod-aligned Blitz-decode ring lengths (20/24/28/36 stages) embedded into each mock's full host
+# graph. Because the ring length does not align to pod (4-host) / galaxy boundaries and (on the
+# non-subtorus SC16 revAB aisleD mock) its closing hop has no direct physical link, these fall into the
+# topology mapper's general-SAT host-minimization fallback, whose cost is erratic and scales with
+# topology, ring length, and host count. Observed rank-0 solve times (mock CPU sim) reach tens of seconds
+# -- e.g. ~46s (24-stage, SC20 revC subtorus) and ~40s (36-stage, 36-host SC36); the non-subtorus SC16
+# revAB aisleD mock exercises the no-direct-closing-hop worst case. Full group measured end-to-end at
+# ~6-7 min for all 12 tt-run invocations locally, so it gets its own shard to not gate the fast matrix.
 ######################################
 if run_group "bh-ring-stress"; then
 
-# 30-min per-op timeout (vs the 600s default) so a slow general-SAT solve never trips the guard; the
-# CI shard step timeout bounds total wall-clock (see tests/pipeline_reorg/fabric_cpu_only_unit_tests.yaml).
-RING_STRESS_TIMEOUT=1800
+# Per-op mapper watchdog: 900s (15 min) -- above the 600s default so a genuinely slow general-SAT solve
+# (worst observed ~90s) isn't killed prematurely, but comfortably BELOW the shard step timeout (20 min,
+# see tests/pipeline_reorg/fabric_cpu_only_unit_tests.yaml) so a hung solve is caught and reported here
+# rather than cancelled mid-shard by GitHub Actions.
+RING_STRESS_TIMEOUT=900
 for entry in \
-    "SC20_revAB_aisleC:${SC20_REVAB_AISLEC_CLUSTER_DESC_MAPPING}:20 24 28 36" \
+    "SC16_revAB_aisleD:${SC16_REVAB_AISLED_CLUSTER_DESC_MAPPING}:20 24 28 36" \
     "SC20_revC_subtorus_aisleC:${SC20_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:20 24 28 36" \
     "SC36_revC_subtorus_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:20 24 28 36" ; do
   rest="${entry#*:}"; cluster_map="${rest%%:*}"; stages="${rest#*:}"
