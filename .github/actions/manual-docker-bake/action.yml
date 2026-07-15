@@ -30,9 +30,15 @@ inputs:
     required: false
     default: "5"
   use-default-builder:
-    description: "Select buildx default builder before invoking bake"
+    description: >-
+      Select the buildx 'default' builder before invoking bake. Every current
+      caller of this action runs docker/setup-buildx-action beforehand to
+      provision a docker-container builder capable of the zstd/OCI-mediatype
+      image exporter, so this must stay false or bake silently switches back
+      to the classic driver and loses that exporter support. Only set true if
+      a caller intentionally wants the classic default driver instead.
     required: false
-    default: "true"
+    default: "false"
   validate-images:
     description: "Validate that built images can be inspected after build"
     required: false
