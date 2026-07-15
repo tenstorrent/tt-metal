@@ -16,7 +16,12 @@ namespace tt::tt_metal {
 // Suppression markers can be checked against the entire active stack so
 // outer scopes (for example corruptible_allocation_scope) can suppress
 // allocations from nested operation contexts as well.
-void push_allocation_context(std::string ctx);
+// Process-start configuration, cached when tt-metal is loaded.
+bool trace_allocation_tracking_enabled();
+bool trace_allocation_diagnostics_enabled();
+bool trace_allocation_skip_program_cache_enabled();
+
+void push_allocation_context(std::string_view ctx);
 void pop_allocation_context();
 const std::string& current_allocation_context();
 bool allocation_context_contains(std::string_view ctx);
@@ -25,10 +30,21 @@ bool allocation_context_contains(std::string_view ctx);
 // While this guard is alive, any tracked allocation records the context for later reporting.
 class AllocationContextGuard {
 public:
-    explicit AllocationContextGuard(std::string ctx) { push_allocation_context(std::move(ctx)); }
-    ~AllocationContextGuard() { pop_allocation_context(); }
+    explicit AllocationContextGuard(std::string_view ctx) : active_(trace_allocation_tracking_enabled()) {
+        if (active_) {
+            push_allocation_context(ctx);
+        }
+    }
+    ~AllocationContextGuard() {
+        if (active_) {
+            pop_allocation_context();
+        }
+    }
     AllocationContextGuard(const AllocationContextGuard&) = delete;
     AllocationContextGuard& operator=(const AllocationContextGuard&) = delete;
+
+private:
+    bool active_;
 };
 
 }  // namespace tt::tt_metal
