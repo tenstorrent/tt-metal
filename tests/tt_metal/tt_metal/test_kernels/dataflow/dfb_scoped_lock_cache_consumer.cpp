@@ -9,11 +9,13 @@
 #include "experimental/kernel_args.h"
 #include "dev_mem_map.h"
 #include "risc_common.h"
+#include "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_scoped_lock_cache_common.h"
 
 void kernel_main() {
     DataflowBuffer dfb(dfb::in);
     const uint32_t is_active = get_arg(args::is_active);
-    const uint32_t mode = get_arg(args::test_mode);           // 0 = flush-on-release, 1 = invalidate-on-acquire
+    const auto mode =
+        static_cast<DfbCacheTestMode>(get_arg(args::test_mode));  // flush-on-release vs invalidate-on-acquire
     const uint32_t lock_n = get_arg(args::lock_n);            // entries to lock (held window)
     const uint32_t num_entries = get_arg(args::num_entries);  // total ring entries to drive
     const uint32_t ring_base = get_arg(args::ring_base);      // cacheable L1 byte addr of the DFB ring
@@ -52,7 +54,7 @@ void kernel_main() {
         return;
     }
 
-    if (mode == 0) {
+    if (mode == DfbCacheTestMode::FlushOnRelease) {
         // FLUSH-on-release through a CONSUMER lock. Write inside the lock (after acquire-invalidate); a
         // CONSUMER release does NOT flush, so every slot stays cache-resident and TL1 stays OLD for all.
         {
