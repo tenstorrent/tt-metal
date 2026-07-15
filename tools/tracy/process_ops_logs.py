@@ -106,15 +106,7 @@ OPS_CSV_HEADER = [
     "DATA MOVEMENT KERNEL HASH",
     "PROGRAM HASH",
     "PROGRAM CACHE HIT",
-    "TENSIX DM 0 MAX KERNEL SIZE [B]",
-    "TENSIX DM 1 MAX KERNEL SIZE [B]",
-    "TENSIX COMPUTE 0 MAX KERNEL SIZE [B]",
-    "TENSIX COMPUTE 1 MAX KERNEL SIZE [B]",
-    "TENSIX COMPUTE 2 MAX KERNEL SIZE [B]",
-    "ACTIVE ETH DM 0 MAX KERNEL SIZE [B]",
-    "ACTIVE ETH DM 1 MAX KERNEL SIZE [B]",
-    "IDLE ETH DM 0 MAX KERNEL SIZE [B]",
-    "IDLE ETH DM 1 MAX KERNEL SIZE [B]",
+    # "... MAX KERNEL SIZE [B]" columns are inserted here dynamically
     "PM IDEAL [ns]",
     "PM COMPUTE [ns]",
     "PM BANDWIDTH [ns]",
@@ -130,6 +122,18 @@ OPS_CSV_HEADER = [
 ]
 
 _PERF_COUNTER_CSV_HEADERS_SET = set(PERF_COUNTER_CSV_HEADERS)
+
+# Kernel-size columns ("<PROCESSOR CLASS> <index> MAX KERNEL SIZE [B]") are grouped by processor class
+# in this fixed order and by ascending processor index within a class
+_KERNEL_SIZE_SUFFIX = " MAX KERNEL SIZE [B]"
+_KERNEL_SIZE_CLASS_ORDER = ["TENSIX DM", "TENSIX COMPUTE", "ACTIVE ETH DM", "IDLE ETH DM"]
+
+
+def _kernel_size_sort_key(column):
+    group, _, index = column[: -len(_KERNEL_SIZE_SUFFIX)].rpartition(" ")
+    rank = _KERNEL_SIZE_CLASS_ORDER.index(group) if group in _KERNEL_SIZE_CLASS_ORDER else len(_KERNEL_SIZE_CLASS_ORDER)
+    return rank, int(index)
+
 
 # On Quasar, device durations that belong to a single processor type are reported per type in ns.
 # Each per-type value is (max <type>-<phase> ZONE_END - min <type>-<phase> ZONE_START, over all cores
@@ -1881,6 +1885,13 @@ def generate_reports(
         # kernel- and FW-duration columns (ns).
         if is_quasar_report:
             head_part = shape_device_headers_for_quasar(head_part)
+        kernel_size_headers = sorted(
+            {key for row in csv_rows for key in row if key.endswith(_KERNEL_SIZE_SUFFIX)},
+            key=_kernel_size_sort_key,
+        )
+        if kernel_size_headers:
+            anchor = tail_part.index("PROGRAM CACHE HIT") + 1
+            tail_part[anchor:anchor] = kernel_size_headers
         allHeaders = (
             head_part
             + tensorCSVData["INPUT"]["headers"]
@@ -1889,11 +1900,6 @@ def generate_reports(
             + active_perf_headers
             + sorted(list(childCallKeys))
         )
-        existing_headers = set(allHeaders)
-        extra_kernel_size_headers = sorted(
-            key for key in all_row_keys if key.endswith("MAX KERNEL SIZE [B]") and key not in existing_headers
-        )
-        allHeaders = allHeaders + extra_kernel_size_headers
         writer = csv.DictWriter(allOpsCSV, fieldnames=allHeaders)
         writer.writeheader()
         for csv_row in csv_rows:
