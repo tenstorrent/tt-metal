@@ -9,6 +9,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <algorithm>
 
 namespace ttnn::prim {
 
@@ -93,14 +94,23 @@ tt::tt_metal::ProgramDescriptor EmbeddingsTilizedIndicesProgramFactory::create_d
     });
 
     constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;
+    // The reader (embedding_ind_tilized.cpp) brings in the index tensor one *page* at a time via
+    // noc_async_read_page(), which always transfers the input buffer's full aligned page size
+    // (for a TILE_LAYOUT index tensor that is one 32x32 tile = 4096B for uint32 indices). The CB
+    // must therefore be at least one full input page; sizing it to FACE_HEIGHT index sticks
+    // (16*32=512B) under-allocates and the NOC read overruns the CB (watcher NOC-sanitizer halt).
     uint32_t index_page_size = round_up_to_mul32(input_element_size_bytes);
+    // Preserve the over-read fix (befb2e10e32) in main's CBDescriptor API: size the CB to at
+    // least one full aligned input page so noc_async_read_page() cannot overrun it.
+    uint32_t index_cb_page_size =
+        std::max<uint32_t>(FACE_HEIGHT * index_page_size, static_cast<uint32_t>(a.buffer()->aligned_page_size()));
     desc.cbs.push_back(CBDescriptor{
-        .total_size = FACE_HEIGHT * index_page_size,
+        .total_size = index_cb_page_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = src1_cb_index,
             .data_format = input_cb_data_format,
-            .page_size = FACE_HEIGHT * index_page_size,
+            .page_size = index_cb_page_size,
         }}},
     });
 

@@ -352,6 +352,12 @@ class Tracer:
 
     def _update_input(self, prev: Any, new: Any, *, path_label: str) -> None:
         """Copy ``new`` into the slot ``prev`` in place."""
+        if new is None:
+            # ``None`` means "reuse the captured input unchanged" — the traced function updates
+            # this slot in place across replays (e.g. a persistent recurrence/latent buffer that
+            # is both read and written each step), so there is nothing to copy in. Callers pass the
+            # real tensor on the first invocation (capture) and ``None`` thereafter.
+            return
         if type(new) is not type(prev):
             msg = f"input '{path_label}' type {type(new)} does not match the initial type {type(prev)}"
             raise TypeError(msg)

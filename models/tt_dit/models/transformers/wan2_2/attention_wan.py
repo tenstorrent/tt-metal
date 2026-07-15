@@ -387,6 +387,7 @@ class WanAttention(Module):
             rope_sin=rope_sin,
             trans_mat=trans_mat,
             dtype=norm_output_dtype,
+            per_head_norm=False,  # Wan2.2: RMSNorm over the full row before splitting heads
         )
         k_BHNE = self.norm_k(
             k_1BNF,
@@ -395,6 +396,7 @@ class WanAttention(Module):
             rope_sin=rope_sin,
             trans_mat=trans_mat,
             dtype=norm_output_dtype,
+            per_head_norm=False,  # Wan2.2: RMSNorm over the full row before splitting heads
         )
 
         def create_heads(inp):
