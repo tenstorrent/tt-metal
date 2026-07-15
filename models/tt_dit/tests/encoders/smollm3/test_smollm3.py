@@ -439,3 +439,97 @@ def test_fibo_wrapper_bucket_pick(*, expect_error):
         pick_bucket(3000, (1024, 2048), sp_factor=4)
     with expect_error(ValueError, "not divisible"):
         pick_bucket(10, (1000,), sp_factor=4)  # 1000 % (4*32) != 0
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 8192}],
+    indirect=["device_params"],
+)
+def test_smollm3_sp_bias_cached(*, mesh_device):
+    """The SP causal bias is built once per local seq length and reused across forwards."""
+    from models.tt_dit.encoders.smollm3.model_smollm3 import SmolLM3TextEncoder
+
+    torch.manual_seed(0)
+    sp_axis, tp_axis, seq = 1, 0, 512
+    sp_factor, tp_factor = mesh_device.shape[sp_axis], mesh_device.shape[tp_axis]
+    hf = _load_hf_smollm3()
+    cfg = SmolLM3Config.from_hf_config(hf.config)
+    ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    pc = EncoderParallelConfig.from_tuples(tp=(tp_factor, tp_axis), sp=(sp_factor, sp_axis))
+    enc = SmolLM3TextEncoder(cfg, device=mesh_device, parallel_config=pc, ccl_manager=ccl)
+    enc.load_torch_state_dict(hf.model.state_dict())
+
+    tokens = torch.randint(0, hf.config.vocab_size, (1, seq))
+    cos, sin = enc.create_rope_tensors(1, seq)
+    tt_ids = tt_tensor.from_torch(
+        tokens, device=mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[None, sp_axis]
+    )
+    tt_cos = tt_tensor.from_torch(cos, device=mesh_device, mesh_axes=[None, None, sp_axis, None])
+    tt_sin = tt_tensor.from_torch(sin, device=mesh_device, mesh_axes=[None, None, sp_axis, None])
+
+    enc.encode(tt_ids, attention_mask=None, pos_embeds=(tt_cos, tt_sin))
+    assert len(enc._sp_bias_cache) == 1
+    first = next(iter(enc._sp_bias_cache.values()))
+    enc.encode(tt_ids, attention_mask=None, pos_embeds=(tt_cos, tt_sin))
+    assert len(enc._sp_bias_cache) == 1
+    assert next(iter(enc._sp_bias_cache.values())) is first  # same tensor object reused
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 8192, "trace_region_size": 90000000}],
+    indirect=["device_params"],
+)
+def test_fibo_wrapper_traced(*, mesh_device):
+    """Trace fidelity: the traced encode_prompt (capture then replay) reproduces the untraced path.
+
+    Tracing replays the identical captured device program, so its output must match the untraced
+    forward. Validated directly (traced vs untraced), independent of prompt length -- the encoder's own
+    vs-HF accuracy is covered by test_smollm3_encoder_sp (~0.9997 for realistic prompts, dipping only
+    for pathologically short ones where a few real tokens sit among the 1024-bucket padding). Uses one
+    wrapper (single weight load) toggling ``_use_trace``: all untraced encodes run first, then the
+    traced ones, so no untraced op desyncs the captured trace's ping-pong state.
+    """
+    from pathlib import Path
+
+    from huggingface_hub import snapshot_download
+
+    from models.tt_dit.pipelines.bria_fibo.text_encoder import SmolLM3TextEncoderWrapper
+
+    sp_axis, tp_axis = 1, 0
+    pc = EncoderParallelConfig.from_tuples(
+        tp=(mesh_device.shape[tp_axis], tp_axis), sp=(mesh_device.shape[sp_axis], sp_axis)
+    )
+    try:
+        ckpt = snapshot_download(FIBO_PATH, local_files_only=True)
+    except Exception as e:
+        pytest.skip(f"FIBO unavailable: {e}")
+
+    # FIBO's realistic structured-JSON caption (full = capture; truncated half = replay with new inputs).
+    json_path = Path(__file__).resolve().parents[2] / "models" / "bria_fibo" / "fibo_vlm_prompt.json"
+    if not json_path.is_file():
+        pytest.skip(f"JSON prompt fixture missing: {json_path}")
+    json_prompt = json_path.read_text().strip()
+    prompts = (json_prompt, json_prompt[: len(json_prompt) // 2])
+
+    ccl = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Linear)
+    wrapper = SmolLM3TextEncoderWrapper(
+        ckpt, device=mesh_device, ccl_manager=ccl, parallel_config=pc, pad_buckets=(1024,), use_trace=True
+    )
+
+    wrapper._use_trace = False
+    refs = [wrapper.encode_prompt(p) for p in prompts]  # untraced, before any capture
+    wrapper._use_trace = True
+    outs = [wrapper.encode_prompt(p) for p in prompts]  # 1st captures, 2nd replays with new inputs
+
+    for (ref_embeds, ref_hidden), (embeds, hidden) in zip(refs, outs):
+        assert list(embeds.shape) == list(ref_embeds.shape)
+        assert len(hidden) == len(ref_hidden)
+        assert_quality(ref_embeds.float(), embeds.float(), pcc=0.999, relative_rmse=0.05)
+
+    assert set(wrapper._tracers) == {1024}
+    assert wrapper._tracers[1024].trace_captured

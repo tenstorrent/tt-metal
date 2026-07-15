@@ -25,6 +25,7 @@ import ttnn
 from ...encoders.smollm3.config import SmolLM3Config
 from ...encoders.smollm3.model_smollm3 import SmolLM3TextEncoder
 from ...utils import tensor as tt_tensor
+from ...utils.tracing import Tracer
 
 if TYPE_CHECKING:
     from ...parallel.config import EncoderParallelConfig
@@ -81,6 +82,7 @@ class SmolLM3TextEncoderWrapper:
         ccl_manager: "CCLManager | None",
         parallel_config: "EncoderParallelConfig",
         pad_buckets=(1024,),
+        use_trace: bool = True,
         use_torch: bool = False,
     ) -> None:
         self._device = device
@@ -89,6 +91,10 @@ class SmolLM3TextEncoderWrapper:
         sp = parallel_config.sequence_parallel
         self._sp_axis = sp.mesh_axis if (sp is not None and sp.factor > 1) else None
         self._sp_factor = sp.factor if (sp is not None) else 1
+        # Trace the device forward (one trace per padding bucket): the forward is host-dispatch-bound,
+        # and the fixed bucket gives it a static shape. Off for the torch path.
+        self._use_trace = use_trace and not use_torch
+        self._tracers: dict[int, Tracer] = {}
 
         self.tokenizer = AutoTokenizer.from_pretrained(checkpoint, subfolder="tokenizer")
 
@@ -133,16 +139,41 @@ class SmolLM3TextEncoderWrapper:
             prompt_embeds = torch.cat([all_hidden_states[-1], all_hidden_states[-2]], dim=-1)
             return prompt_embeds, all_hidden_states
 
-        # Pad to a fixed bucket length (stable shape for SP sharding + program-cache reuse). The
-        # tokenized attention_mask is all-ones, so we run with attention_mask=None: at sp=1 that is
-        # the is_causal SDPA path (padded tail never influences leading tokens under causal masking);
-        # at sp>1 the encoder builds a per-shard rectangular causal bias internally.
+        tt_ids, tt_cos, tt_sin, bucket = self._prep_inputs(input_ids, seq_len)
+
+        # The device forward is host-dispatch-bound; trace it (per bucket) and replay. First call for a
+        # bucket captures (prep_run compiles + warms CCL/bias caches outside the captured region), later
+        # calls copy the new inputs into the trace buffers and replay. Pos+neg share the 1024 trace.
+        if self._use_trace:
+            tracer = self._tracers.get(bucket)
+            if tracer is None:
+                tracer = Tracer(self._forward, device=self._device, prep_run=True, clone_prep_inputs=False)
+                self._tracers[bucket] = tracer
+            outputs = tracer(tt_ids, tt_cos, tt_sin)
+        else:
+            outputs = self._forward(tt_ids, tt_cos, tt_sin)
+        prompt_embeds, all_hidden_states = outputs[0], list(outputs[1:])
+
+        # Under SP the outputs are sequence-sharded; gather them back over the sp axis on readback.
+        gather = (
+            dict(mesh_axes=[None, self._sp_axis, None], composer_device=self._device) if self._sp_factor > 1 else {}
+        )
+        host_prompt_embeds = tt_tensor.to_torch(prompt_embeds, **gather)[:, :seq_len, :]
+        host_hidden_states = [tt_tensor.to_torch(h, **gather)[:, :seq_len, :] for h in all_hidden_states]
+        return host_prompt_embeds, host_hidden_states
+
+    def _prep_inputs(self, input_ids: torch.Tensor, seq_len: int) -> tuple:
+        """Host prep: pad to a fixed bucket, build RoPE, move to device (sharded on the SP axis).
+
+        A fixed bucket gives a stable shape (SP sharding + trace/program-cache reuse). The tokenized
+        attention_mask is all-ones, so the encoder runs with attention_mask=None: at sp=1 that is the
+        is_causal SDPA path (the padded tail never influences leading tokens under causal masking); at
+        sp>1 the encoder builds/caches a per-shard rectangular causal bias internally.
+        """
         bucket = pick_bucket(seq_len, self._pad_buckets, self._sp_factor)
         padded_ids = torch.nn.functional.pad(input_ids, (0, bucket - seq_len), value=0)
         cos, sin = self._encoder.create_rope_tensors(1, bucket)
-
         if self._sp_factor > 1:
-            # Shard input_ids + RoPE tables along the sequence dim across the sp axis.
             tt_ids = tt_tensor.from_torch(
                 padded_ids,
                 device=self._device,
@@ -158,15 +189,11 @@ class SmolLM3TextEncoderWrapper:
             )
             tt_cos = tt_tensor.from_torch(cos, device=self._device)
             tt_sin = tt_tensor.from_torch(sin, device=self._device)
+        return tt_ids, tt_cos, tt_sin, bucket
 
+    def _forward(self, tt_ids: ttnn.Tensor, tt_cos: ttnn.Tensor, tt_sin: ttnn.Tensor) -> tuple:
+        """Device forward (the traced unit): flat tuple ``(prompt_embeds, *all_hidden_states)``."""
         prompt_embeds, all_hidden_states = self._encoder.encode(
             tt_ids, attention_mask=None, pos_embeds=(tt_cos, tt_sin)
         )
-
-        # Under SP the outputs are sequence-sharded; gather them back over the sp axis on readback.
-        gather = (
-            dict(mesh_axes=[None, self._sp_axis, None], composer_device=self._device) if self._sp_factor > 1 else {}
-        )
-        host_prompt_embeds = tt_tensor.to_torch(prompt_embeds, **gather)[:, :seq_len, :]
-        host_hidden_states = [tt_tensor.to_torch(h, **gather)[:, :seq_len, :] for h in all_hidden_states]
-        return host_prompt_embeds, host_hidden_states
+        return (prompt_embeds, *all_hidden_states)
