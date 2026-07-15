@@ -1,0 +1,487 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AGMM shape database — roofline sweep results</title>
+<style>html,body{margin:0;padding:0}</style>
+</head>
+<body>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --plane:#f4f3ef; --surface-1:#fcfcfb; --surface-2:#f0efe9; --surface-3:#eae9e2;
+    --ink:#14130f; --ink-2:#52514e; --muted:#898781;
+    --grid:#e4e3db; --baseline:#c9c8bf; --border:rgba(20,19,15,0.10); --border-strong:rgba(20,19,15,0.16);
+    --r-compute:#2a78d6; --r-dram:#1baf7a; --r-fabric:#eda100;
+    --track:#eae9e2; --band:rgba(137,135,129,0.10);
+    --shadow:0 1px 2px rgba(20,19,15,0.05),0 8px 24px rgba(20,19,15,0.06);
+    --drawer-sh:-8px 0 40px rgba(20,19,15,0.14);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --plane:#0d0d0c; --surface-1:#1a1a19; --surface-2:#201f1d; --surface-3:#26251f;
+      --ink:#f5f4ef; --ink-2:#c3c2b7; --muted:#918f88;
+      --grid:#2c2c2a; --baseline:#3a3a37; --border:rgba(255,255,255,0.10); --border-strong:rgba(255,255,255,0.16);
+      --r-compute:#3987e5; --r-dram:#199e70; --r-fabric:#d69200;
+      --track:#26251f; --band:rgba(145,143,136,0.12);
+      --shadow:0 1px 2px rgba(0,0,0,0.4),0 10px 30px rgba(0,0,0,0.45);
+      --drawer-sh:-8px 0 40px rgba(0,0,0,0.5);
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --plane:#0d0d0c; --surface-1:#1a1a19; --surface-2:#201f1d; --surface-3:#26251f;
+    --ink:#f5f4ef; --ink-2:#c3c2b7; --muted:#918f88;
+    --grid:#2c2c2a; --baseline:#3a3a37; --border:rgba(255,255,255,0.10); --border-strong:rgba(255,255,255,0.16);
+    --r-compute:#3987e5; --r-dram:#199e70; --r-fabric:#d69200;
+    --track:#26251f; --band:rgba(145,143,136,0.12);
+    --shadow:0 1px 2px rgba(0,0,0,0.4),0 10px 30px rgba(0,0,0,0.45);
+    --drawer-sh:-8px 0 40px rgba(0,0,0,0.5);
+  }
+  .viz-root {
+    --sans:system-ui,-apple-system,"Segoe UI",sans-serif;
+    --mono:ui-monospace,"SF Mono","Menlo","Cascadia Code","Roboto Mono",monospace;
+    font-family:var(--sans); background:var(--plane); color:var(--ink); line-height:1.5;
+    -webkit-font-smoothing:antialiased; min-height:100vh; padding:clamp(14px,3vw,40px);
+  }
+  .viz-root *,.viz-root *::before,.viz-root *::after{box-sizing:border-box;}
+  .tnum{font-variant-numeric:tabular-nums;} .mono{font-family:var(--mono);}
+  .wrap{max-width:1120px;margin:0 auto;}
+
+  /* header */
+  .eyebrow{font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:600;}
+  h1.title{font-size:clamp(22px,3.4vw,30px);font-weight:650;letter-spacing:-0.01em;margin:8px 0 0;text-wrap:balance;}
+  .lede{color:var(--ink-2);font-size:14px;margin:10px 0 0;max-width:76ch;}
+  .lede b{color:var(--ink);font-weight:600;}
+
+  /* summary strip */
+  .summary{display:grid;grid-template-columns:1.35fr 1fr 1fr;gap:1px;background:var(--border);
+    border:1px solid var(--border);border-radius:14px;overflow:hidden;margin:22px 0 20px;box-shadow:var(--shadow);}
+  .sm{background:var(--surface-1);padding:18px 20px;}
+  .sm .k{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600;}
+  .sm .big{font-size:26px;font-weight:650;margin-top:6px;letter-spacing:-0.01em;}
+  .sm .big small{font-size:.5em;color:var(--muted);font-weight:600;}
+  .sm .sub{font-size:12px;color:var(--ink-2);margin-top:3px;}
+  /* limiter distribution stacked bar */
+  .dist{display:flex;height:16px;border-radius:5px;overflow:hidden;margin-top:10px;gap:2px;background:transparent;}
+  .dist span{height:100%;border-radius:3px;}
+  .dist-legend{display:flex;gap:14px;margin-top:9px;flex-wrap:wrap;font-size:12px;}
+  .dist-legend .li{display:inline-flex;align-items:center;gap:6px;color:var(--ink-2);}
+  .dist-legend .sw{width:10px;height:10px;border-radius:3px;}
+  .dist-legend b{color:var(--ink);font-weight:650;font-variant-numeric:tabular-nums;}
+
+  /* toolbar */
+  .toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;}
+  .toolbar .grp{display:inline-flex;align-items:center;gap:6px;}
+  .lbl{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600;}
+  .chip{font-size:12.5px;font-weight:600;color:var(--ink-2);background:var(--surface-1);
+    border:1px solid var(--border);border-radius:999px;padding:5px 12px;cursor:pointer;transition:all .12s;}
+  .chip:hover{border-color:var(--border-strong);color:var(--ink);}
+  .chip.on{background:var(--ink);color:var(--surface-1);border-color:var(--ink);}
+  .chip .sw{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle;}
+  .spacer{flex:1;}
+  .toggle{font-size:12.5px;font-weight:600;color:var(--ink-2);background:var(--surface-1);border:1px solid var(--border);
+    border-radius:8px;padding:6px 12px;cursor:pointer;}
+  .toggle.on{background:color-mix(in srgb,var(--r-compute) 14%,var(--surface-1));border-color:color-mix(in srgb,var(--r-compute) 45%,transparent);color:var(--ink);}
+
+  /* table */
+  .tbl-card{background:var(--surface-1);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);overflow:hidden;}
+  .tbl-scroll{overflow-x:auto;}
+  table{border-collapse:collapse;width:100%;min-width:860px;font-size:13px;}
+  thead th{font-size:10.5px;letter-spacing:.04em;color:var(--muted);font-weight:600;text-transform:uppercase;
+    text-align:left;padding:13px 14px;border-bottom:1px solid var(--border-strong);white-space:nowrap;background:var(--surface-1);position:sticky;top:0;}
+  thead th.sortable{cursor:pointer;user-select:none;}
+  thead th.sortable:hover{color:var(--ink);}
+  thead th .ar{opacity:0;margin-left:4px;font-size:9px;}
+  thead th.act .ar{opacity:1;color:var(--ink);}
+  thead th.num{text-align:right;}
+  .grp-head td{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;font-weight:700;color:var(--ink);
+    padding:12px 14px 6px;background:var(--surface-2);}
+  tbody tr.row{border-bottom:1px solid var(--border);cursor:pointer;transition:background .1s;}
+  tbody tr.row:hover{background:var(--surface-2);}
+  tbody tr.row:last-child{border-bottom:none;}
+  tbody td{padding:12px 14px;vertical-align:middle;}
+  td.num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;}
+  .sid{font-family:var(--mono);font-weight:600;font-size:12.5px;color:var(--ink);}
+  .sdim{font-size:11px;color:var(--muted);font-family:var(--mono);margin-top:2px;}
+  .fuse{display:inline-block;font-size:10px;color:var(--ink-2);background:var(--surface-3);border-radius:4px;padding:1px 5px;margin-left:6px;}
+
+  .lchip{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:650;padding:3px 9px;border-radius:999px;white-space:nowrap;}
+  .lchip .sw{width:8px;height:8px;border-radius:50%;}
+
+  /* mini roofline sparbar: 3 stacked segments */
+  .spark{display:flex;flex-direction:column;gap:3px;width:118px;}
+  .spark .seg{height:5px;background:var(--track);border-radius:3px;position:relative;overflow:hidden;}
+  .spark .seg i{position:absolute;left:0;top:0;height:100%;border-radius:3px;display:block;}
+
+  /* headroom bar */
+  .hr{display:flex;align-items:center;gap:9px;justify-content:flex-end;}
+  .hr .track{width:74px;height:8px;background:var(--track);border-radius:4px;overflow:hidden;}
+  .hr .track i{display:block;height:100%;border-radius:4px;background:var(--ink);}
+  .hr .v{font-family:var(--mono);font-weight:650;font-variant-numeric:tabular-nums;min-width:44px;text-align:right;}
+  .pending{font-size:11.5px;color:var(--muted);font-style:italic;}
+
+  /* util cell */
+  .util{display:flex;align-items:center;gap:8px;justify-content:flex-end;}
+  .util .track{width:56px;height:8px;background:var(--track);border-radius:4px;overflow:hidden;position:relative;}
+  .util .track i{display:block;height:100%;border-radius:4px;}
+  .util .v{font-family:var(--mono);font-weight:600;font-variant-numeric:tabular-nums;min-width:38px;text-align:right;color:var(--ink);}
+
+  .statustag{font-size:10.5px;font-weight:600;padding:2px 8px;border-radius:5px;white-space:nowrap;}
+  .st-swept{color:var(--ink);background:color-mix(in srgb,var(--r-compute) 15%,var(--surface-1));border:1px solid color-mix(in srgb,var(--r-compute) 40%,transparent);}
+  .st-proj{color:var(--muted);background:var(--surface-2);border:1px solid var(--border);}
+
+  /* drawer */
+  .scrim{position:fixed;inset:0;background:rgba(10,10,9,0.42);opacity:0;pointer-events:none;transition:opacity .18s;z-index:40;}
+  .scrim.on{opacity:1;pointer-events:auto;}
+  .drawer{position:fixed;top:0;right:0;height:100%;width:min(560px,94vw);background:var(--surface-1);
+    box-shadow:var(--drawer-sh);transform:translateX(100%);transition:transform .24s cubic-bezier(.22,.61,.36,1);
+    z-index:41;overflow-y:auto;border-left:1px solid var(--border);}
+  .drawer.on{transform:translateX(0);}
+  .dw-pad{padding:clamp(20px,3vw,30px);}
+  .dw-close{position:absolute;top:16px;right:16px;width:32px;height:32px;border-radius:8px;border:1px solid var(--border);
+    background:var(--surface-1);color:var(--ink-2);font-size:18px;cursor:pointer;line-height:1;}
+  .dw-close:hover{color:var(--ink);border-color:var(--border-strong);}
+  .dw-eyebrow{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:600;}
+  .dw-title{font-family:var(--mono);font-size:22px;font-weight:600;margin:6px 0 0;}
+  .dw-verdict{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;margin-top:12px;
+    padding:5px 11px;border-radius:999px;}
+  .dw-sec{font-size:12px;font-weight:650;letter-spacing:.02em;margin:26px 0 4px;}
+  .dw-note{font-size:12px;color:var(--ink-2);margin:0 0 16px;}
+  .dl{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;font-size:13px;margin-top:4px;}
+  .dl dt{color:var(--ink-2);} .dl dd{margin:0;text-align:right;font-family:var(--mono);font-size:12.5px;}
+  /* drawer roofline */
+  .rf{margin-bottom:14px;}
+  .rf-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px;}
+  .rf-name{font-size:12.5px;font-weight:600;display:inline-flex;align-items:center;gap:7px;}
+  .rf-name .sw{width:10px;height:10px;border-radius:3px;}
+  .rf-name .lim{font-size:9.5px;font-weight:700;letter-spacing:.07em;padding:1px 6px;border-radius:5px;
+    background:color-mix(in srgb,var(--r-fabric) 22%,var(--surface-1));border:1px solid color-mix(in srgb,var(--r-fabric) 55%,transparent);}
+  .rf-track{position:relative;height:13px;background:var(--track);border-radius:5px;}
+  .rf-bar{position:absolute;left:0;top:0;height:100%;border-radius:5px;}
+  .rf-val{position:absolute;top:50%;transform:translateY(-50%);font-size:11.5px;font-family:var(--mono);font-weight:650;padding-left:7px;white-space:nowrap;}
+  .rf-plot{position:relative;}
+  .mk{position:absolute;top:-4px;bottom:16px;width:0;z-index:3;}
+  .mk .ln{position:absolute;inset:0;}
+  .mk.ideal .ln{border-left:2px dashed var(--baseline);}
+  .mk.meas .ln{background:var(--ink);width:2px;}
+  .mk .tag{position:absolute;top:-3px;transform:translateX(-50%);white-space:nowrap;font-size:10px;font-weight:600;padding:2px 6px;border-radius:5px;}
+  .mk.ideal .tag{color:var(--ink-2);background:var(--surface-2);border:1px solid var(--border);}
+  .mk.meas .tag{color:var(--surface-1);background:var(--ink);}
+  .rf-axis{position:relative;height:16px;margin-top:2px;}
+  .rf-axis .tk{position:absolute;top:2px;transform:translateX(-50%);font-size:10px;color:var(--muted);font-family:var(--mono);}
+  .band{position:absolute;top:-4px;bottom:16px;background:var(--band);border-radius:2px;z-index:1;}
+  .mtr{margin-bottom:14px;}
+  .mtr-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px;}
+  .mtr-val{font-size:12px;font-family:var(--mono);font-weight:650;} .mtr-val span{color:var(--muted);font-weight:500;}
+  .mtr-track{position:relative;height:13px;background:var(--track);border-radius:5px;}
+  .mtr-fill{position:absolute;left:0;top:0;height:100%;border-radius:5px;}
+  .ceil{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--muted);}
+  .ceil .cl{position:absolute;top:-15px;transform:translateX(-50%);font-size:9px;color:var(--muted);white-space:nowrap;font-family:var(--mono);}
+  .awaiting{font-size:12.5px;color:var(--ink-2);background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-top:8px;}
+
+  .foot{font-size:12px;color:var(--ink-2);margin:16px 4px 0;max-width:80ch;}
+  .foot b{color:var(--ink);} .foot code{font-family:var(--mono);font-size:11.5px;background:var(--surface-2);padding:1px 5px;border-radius:4px;}
+
+  @media (max-width:720px){ .summary{grid-template-columns:1fr;} }
+</style>
+
+<main class="viz-root">
+  <div class="wrap">
+    <div class="eyebrow">AGMM roofline · shape database</div>
+    <h1 class="title">Block-size sweep tracker — 7 shapes</h1>
+    <p class="lede"><b>ideal</b> is the hard <b>100%-of-peak</b> roofline (full FLOP / DRAM BW / fabric BW), so <b>headroom = measured ÷ ideal</b> is the full gap to peak hardware. Sort by headroom to rank opportunities; filter by <b>limiter</b> or <b>model</b>; group by limiter to see what kind of work unlocks them. Click any row for the full card.</p>
+
+    <!-- SUMMARY -->
+    <div class="summary" id="summary"></div>
+
+    <!-- TOOLBAR -->
+    <div class="toolbar">
+      <span class="grp"><span class="lbl">Limiter</span>
+        <button class="chip on" data-filter="all">All</button>
+        <button class="chip" data-filter="compute"><span class="sw" style="background:var(--r-compute)"></span>compute</button>
+        <button class="chip" data-filter="dram"><span class="sw" style="background:var(--r-dram)"></span>dram</button>
+        <button class="chip" data-filter="fabric"><span class="sw" style="background:var(--r-fabric)"></span>fabric</button>
+      </span>
+      <span class="grp"><span class="lbl">Model</span>
+        <button class="chip on" data-model="all">All</button>
+        <button class="chip" data-model="ltx">LTX</button>
+        <button class="chip" data-model="flux">FLUX</button>
+      </span>
+      <span class="spacer"></span>
+      <button class="toggle" id="groupToggle">Group by limiter</button>
+    </div>
+
+    <!-- TABLE -->
+    <div class="tbl-card">
+      <div class="tbl-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th class="sortable" data-sort="id">Shape<span class="ar"></span></th>
+              <th class="sortable" data-sort="limiter">Limiter<span class="ar"></span></th>
+              <th>Roofline bounds<br><span style="text-transform:none;letter-spacing:0;color:var(--muted);font-weight:500">compute · dram · fabric</span></th>
+              <th class="sortable num" data-sort="ideal">Ideal µs<span class="ar"></span></th>
+              <th class="num">Measured µs</th>
+              <th class="sortable num act" data-sort="speedup">Headroom<span class="ar">▼</span></th>
+              <th class="num">Util @ best</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <p class="foot"><b>Reading it.</b> The <b>roofline bounds</b> sparbar shows each resource's best-case time scaled to that row's ideal — the full segment is the <b>limiter</b>. <b>Headroom</b> = measured ÷ ideal (higher = more to gain); only measured rows have it. <b>Util @ best</b> shows the limiter resource's achieved % of peak. Color follows the resource everywhere (<code>compute</code>/<code>dram</code>/<code>fabric</code>), never the shape.</p>
+  </div>
+
+  <div class="scrim" id="scrim"></div>
+  <aside class="drawer" id="drawer" aria-hidden="true" aria-label="Shape detail"><button class="dw-close" id="dwClose" aria-label="Close">×</button><div class="dw-pad" id="dwBody"></div></aside>
+</main>
+
+<script>
+(function(){
+  var PEAK_TFLOPS=298.6, PEAK_DRAM=512, PEAK_LINK=50, AXMAX_PAD=1.08;
+  var RES=['compute','dram','fabric'];
+  var RESVAR={compute:'--r-compute',dram:'--r-dram',fabric:'--r-fabric'};
+  function cv(v){return getComputedStyle(document.querySelector('.viz-root')).getPropertyValue(v).trim();}
+
+  var DATA=[
+   {id:"ltx_m1216_k4096_n8",M:1216,K:4096,N:8,fusion:"\u2014",tag:"ltx",ring:4,t_compute:0.3,t_dram:19.6,t_fabric:37.4,ideal:37.4,limiter:"fabric",m:{measured:161.6,speedup:4.33,blocking:"M4 K8 N2 sb(2,2)",flop:0.2,dram:12.1,fabric:23.1,tflops:0.5,dram_gbps:62.1,fabric_gbps:11.6},fail:null},
+   {id:"ltx_m1216_k4096_n512",M:1216,K:4096,N:512,fusion:"\u2014",tag:"ltx",ring:4,t_compute:17.1,t_dram:27.6,t_fabric:37.4,ideal:37.4,limiter:"fabric",m:{measured:162.8,speedup:4.36,blocking:"M4 K8 N4 sb(2,2)",flop:10.5,dram:17.0,fabric:22.9,tflops:31.3,dram_gbps:86.9,fabric_gbps:11.5},fail:null},
+   {id:"ltx_m1216_k4096_n1024",M:1216,K:4096,N:1024,fusion:"\u2014",tag:"ltx",ring:4,t_compute:34.2,t_dram:35.8,t_fabric:37.4,ideal:37.4,limiter:"fabric",m:{measured:167.1,speedup:4.47,blocking:"M4 K8 N4 sb(2,2)",flop:20.4,dram:21.4,fabric:22.3,tflops:61.0,dram_gbps:109.8,fabric_gbps:11.2},fail:null},
+   {id:"ltx_m1216_k4096_n1024_ac",M:1216,K:4096,N:1024,fusion:"addcmul",tag:"ltx",ring:4,t_compute:34.2,t_dram:35.8,t_fabric:37.4,ideal:37.4,limiter:"fabric",m:{measured:176.5,speedup:4.72,blocking:"M6 K8 N4 sb(2,2)",flop:19.4,dram:20.3,fabric:21.2,tflops:57.8,dram_gbps:104.0,fabric_gbps:10.6},fail:null},
+   {id:"ltx_m1216_k4096_n3072_c3",M:1216,K:4096,N:3072,fusion:"chunks3",tag:"ltx",ring:4,t_compute:102.5,t_dram:68.6,t_fabric:37.4,ideal:102.5,limiter:"compute",m:{measured:251.5,speedup:2.45,blocking:"M4 K8 N11 sb(4,1)",flop:40.7,dram:27.3,fabric:14.9,tflops:121.7,dram_gbps:139.7,fabric_gbps:7.4},fail:null},
+   {id:"ltx_m1216_k4096_n4096",M:1216,K:4096,N:4096,fusion:"\u2014",tag:"ltx",ring:4,t_compute:136.6,t_dram:85.0,t_fabric:37.4,ideal:136.6,limiter:"compute",m:{measured:311.5,speedup:2.28,blocking:"M4 K8 N10 sb(2,2)",flop:43.9,dram:27.3,fabric:12.0,tflops:131.0,dram_gbps:139.7,fabric_gbps:6.0},fail:null},
+   {id:"ltx_m1216_k2048_n1024",M:1216,K:2048,N:1024,fusion:"\u2014",tag:"ltx",ring:4,t_compute:17.1,t_dram:17.9,t_fabric:18.7,ideal:18.7,limiter:"fabric",m:{measured:101.8,speedup:5.45,blocking:"M4 K8 N6 sb(2,2)",flop:16.8,dram:17.6,fabric:18.4,tflops:50.1,dram_gbps:90.2,fabric_gbps:9.2},fail:null},
+   {id:"ltx_m4864_k4096_n8",M:4864,K:4096,N:8,fusion:"\u2014",tag:"ltx",ring:4,t_compute:1.1,t_dram:78.0,t_fabric:149.4,ideal:149.4,limiter:"fabric",m:{measured:518.0,speedup:3.47,blocking:"M8 K8 N2 sb(2,2)",flop:0.2,dram:15.0,fabric:28.8,tflops:0.6,dram_gbps:77.0,fabric_gbps:14.4},fail:null},
+   {id:"ltx_m4864_k4096_n512",M:4864,K:4096,N:512,fusion:"\u2014",tag:"ltx",ring:4,t_compute:68.3,t_dram:86.0,t_fabric:149.4,ideal:149.4,limiter:"fabric",m:{measured:523.7,speedup:3.51,blocking:"M8 K8 N2 sb(2,2)",flop:13.0,dram:16.4,fabric:28.5,tflops:39.0,dram_gbps:84.1,fabric_gbps:14.3},fail:null},
+   {id:"ltx_m4864_k4096_n1024",M:4864,K:4096,N:1024,fusion:"\u2014",tag:"ltx",ring:4,t_compute:136.6,t_dram:94.2,t_fabric:149.4,ideal:149.4,limiter:"fabric",m:{measured:531.2,speedup:3.56,blocking:"M8 K8 N4 sb(2,2)",flop:25.7,dram:17.7,fabric:28.1,tflops:76.8,dram_gbps:90.8,fabric_gbps:14.1},fail:null},
+   {id:"ltx_m4864_k4096_n1024_ac",M:4864,K:4096,N:1024,fusion:"addcmul",tag:"ltx",ring:4,t_compute:136.6,t_dram:94.2,t_fabric:149.4,ideal:149.4,limiter:"fabric",m:{measured:589.6,speedup:3.95,blocking:"M16 K8 N4 sb(2,2)",flop:23.2,dram:16.0,fabric:25.3,tflops:69.2,dram_gbps:81.8,fabric_gbps:12.7},fail:null},
+   {id:"ltx_m4864_k4096_n3072_c3",M:4864,K:4096,N:3072,fusion:"chunks3",tag:"ltx",ring:4,t_compute:409.9,t_dram:127.0,t_fabric:149.4,ideal:409.9,limiter:"compute",m:{measured:719.0,speedup:1.75,blocking:"M10 K4 N12 sb(2,2)",flop:57.0,dram:17.7,fabric:20.8,tflops:170.2,dram_gbps:90.4,fabric_gbps:10.4},fail:null},
+   {id:"ltx_m4864_k4096_n4096",M:4864,K:4096,N:4096,fusion:"\u2014",tag:"ltx",ring:4,t_compute:546.6,t_dram:143.4,t_fabric:149.4,ideal:546.6,limiter:"compute",m:{measured:949.5,speedup:1.74,blocking:"M8 K8 N10 sb(2,2)",flop:57.6,dram:15.1,fabric:15.7,tflops:171.9,dram_gbps:77.3,fabric_gbps:7.9},fail:null},
+   {id:"ltx_m4864_k2048_n1024",M:4864,K:2048,N:1024,fusion:"\u2014",tag:"ltx",ring:4,t_compute:68.3,t_dram:47.1,t_fabric:74.7,ideal:74.7,limiter:"fabric",m:{measured:309.4,speedup:4.14,blocking:"M8 K4 N6 sb(2,2)",flop:22.1,dram:15.2,fabric:24.1,tflops:65.9,dram_gbps:77.9,fabric_gbps:12.1},fail:null},
+   {id:"ltx_m32_k2048_n8",M:32,K:2048,N:8,fusion:"\u2014",tag:"ltx",ring:4,t_compute:0.0,t_dram:0.3,t_fabric:0.5,ideal:0.5,limiter:"fabric",m:{measured:42.8,speedup:87.04,blocking:"M10 K8 N4 sb(2,2)",flop:0.0,dram:0.7,fabric:1.1,tflops:0.0,dram_gbps:3.8,fabric_gbps:0.6},fail:null},
+   {id:"ltx_m32_k2048_n512",M:32,K:2048,N:512,fusion:"\u2014",tag:"ltx",ring:4,t_compute:0.2,t_dram:4.4,t_fabric:0.5,ideal:4.4,limiter:"dram",m:{measured:42.8,speedup:9.82,blocking:"M2 K8 N6 sb(2,2)",flop:0.5,dram:10.2,fabric:1.1,tflops:1.6,dram_gbps:52.1,fabric_gbps:0.6},fail:null},
+   {id:"ltx_m32_k2048_n512_ac",M:32,K:2048,N:512,fusion:"addcmul",tag:"ltx",ring:4,t_compute:0.2,t_dram:4.4,t_fabric:0.5,ideal:4.4,limiter:"dram",m:{measured:44.2,speedup:10.16,blocking:"M2 K8 N2 sb(2,2)",flop:0.5,dram:9.8,fabric:1.1,tflops:1.5,dram_gbps:50.4,fabric_gbps:0.6},fail:null},
+   {id:"ltx_m32_k2048_n1536_c3",M:32,K:2048,N:1536,fusion:"chunks3",tag:"ltx",ring:4,t_compute:0.7,t_dram:12.5,t_fabric:0.5,ideal:12.5,limiter:"dram",m:{measured:64.1,speedup:5.11,blocking:"M2 K4 N10 sb(2,2)",flop:1.1,dram:19.6,fabric:0.8,tflops:3.1,dram_gbps:100.2,fabric_gbps:0.4},fail:null},
+   {id:"ltx_m32_k2048_n2048",M:32,K:2048,N:2048,fusion:"\u2014",tag:"ltx",ring:4,t_compute:0.9,t_dram:16.6,t_fabric:0.5,ideal:16.6,limiter:"dram",m:{measured:76.7,speedup:4.61,blocking:"M4 K4 N10 sb(2,2)",flop:1.2,dram:21.7,fabric:0.6,tflops:3.5,dram_gbps:111.0,fabric_gbps:0.3},fail:null},
+   {id:"ltx_m256_k2048_n1024_c2",M:256,K:2048,N:1024,fusion:"chunks2",tag:"ltx",ring:4,t_compute:3.6,t_dram:10.2,t_fabric:3.9,ideal:10.2,limiter:"dram",m:{measured:53.1,speedup:5.19,blocking:"M2 K8 N14 sb(2,2)",flop:6.8,dram:19.3,fabric:7.4,tflops:20.2,dram_gbps:98.7,fabric_gbps:3.7},fail:null},
+   {id:"flux_m32_k256_n6144",M:32,K:256,N:6144,fusion:"\u2014",tag:"flux",ring:8,t_compute:0.3,t_dram:6.2,t_fabric:0.1,ideal:6.2,limiter:"dram",m:{measured:68.7,speedup:11.12,blocking:"M2 K1 N14 sb(2,2)",flop:0.5,dram:9.0,fabric:0.1,tflops:1.5,dram_gbps:46.0,fabric_gbps:0.1},fail:null},
+   {id:"flux_m32_k6144_n6144",M:32,K:6144,N:6144,fusion:"\u2014",tag:"flux",ring:8,t_compute:8.1,t_dram:148.2,t_fabric:1.7,ideal:148.2,limiter:"dram",m:{measured:467.7,speedup:3.16,blocking:"M6 K6 N8 sb(2,2)",flop:1.7,dram:31.7,fabric:0.4,tflops:5.2,dram_gbps:162.3,fabric_gbps:0.2},fail:null},
+   {id:"flux_m32_k6144_n4608",M:32,K:6144,N:4608,fusion:"\u2014",tag:"flux",ring:8,t_compute:6.1,t_dram:111.4,t_fabric:1.7,ideal:111.4,limiter:"dram",m:{measured:354.5,speedup:3.18,blocking:"M6 K6 N8 sb(2,2)",flop:1.7,dram:31.4,fabric:0.5,tflops:5.1,dram_gbps:160.8,fabric_gbps:0.2},fail:null},
+   {id:"flux_m32_k6144_n2304",M:32,K:6144,N:2304,fusion:"\u2014",tag:"flux",ring:8,t_compute:3.0,t_dram:56.1,t_fabric:1.7,ideal:56.1,limiter:"dram",m:{measured:185.4,speedup:3.31,blocking:"M4 K6 N8 sb(2,2)",flop:1.6,dram:30.2,fabric:0.9,tflops:4.9,dram_gbps:154.9,fabric_gbps:0.5},fail:null},
+   {id:"flux_m512_k15360_n768",M:512,K:15360,N:768,fusion:"\u2014",tag:"flux",ring:8,t_compute:40.5,t_dram:76.8,t_fabric:68.8,ideal:76.8,limiter:"dram",m:{measured:302.9,speedup:3.94,blocking:"M2 K20 N3 sb(1,3)",flop:13.4,dram:25.4,fabric:22.7,tflops:39.9,dram_gbps:129.8,fabric_gbps:11.4},fail:null},
+   {id:"flux_m1024_k6144_n2304",M:1024,K:6144,N:2304,fusion:"\u2014",tag:"flux",ring:8,t_compute:97.1,t_dram:79.9,t_fabric:55.1,ideal:97.1,limiter:"compute",m:{measured:279.3,speedup:2.88,blocking:"M3 K6 N12 sb(1,4)",flop:34.8,dram:28.6,fabric:19.7,tflops:103.8,dram_gbps:146.4,fabric_gbps:9.9},fail:null},
+   {id:"flux_m512_k6144_n2304",M:512,K:6144,N:2304,fusion:"\u2014",tag:"flux",ring:8,t_compute:48.5,t_dram:67.6,t_fabric:27.5,ideal:67.6,limiter:"dram",m:{measured:224.3,speedup:3.32,blocking:"M4 K8 N14 sb(2,2)",flop:21.6,dram:30.1,fabric:12.3,tflops:64.6,dram_gbps:154.3,fabric_gbps:6.1},fail:null},
+   {id:"flux_m1024_k6144_n768",M:1024,K:6144,N:768,fusion:"\u2014",tag:"flux",ring:8,t_compute:32.4,t_dram:43.0,t_fabric:55.1,ideal:55.1,limiter:"fabric",m:{measured:205.9,speedup:3.74,blocking:"M3 K8 N4 sb(1,4)",flop:15.7,dram:20.9,fabric:26.7,tflops:46.9,dram_gbps:106.9,fabric_gbps:13.4},fail:null},
+   {id:"flux_m512_k6144_n768",M:512,K:6144,N:768,fusion:"\u2014",tag:"flux",ring:8,t_compute:16.2,t_dram:30.7,t_fabric:27.5,ideal:30.7,limiter:"dram",m:{measured:148.4,speedup:4.83,blocking:"M4 K12 N3 sb(4,1)",flop:10.9,dram:20.7,fabric:18.6,tflops:32.6,dram_gbps:106.0,fabric_gbps:9.3},fail:null},
+   {id:"flux_m1024_k6144_n4608",M:1024,K:6144,N:4608,fusion:"\u2014",tag:"flux",ring:8,t_compute:194.2,t_dram:135.2,t_fabric:55.1,ideal:194.2,limiter:"compute",m:{measured:435.4,speedup:2.24,blocking:"M3 K3 N16 sb(1,4)",flop:44.6,dram:31.0,fabric:12.6,tflops:133.2,dram_gbps:158.9,fabric_gbps:6.3},fail:null},
+   {id:"flux_m1024_k2304_n6144",M:1024,K:2304,N:6144,fusion:"\u2014",tag:"flux",ring:8,t_compute:97.1,t_dram:64.5,t_fabric:20.6,ideal:97.1,limiter:"compute",m:{measured:253.5,speedup:2.61,blocking:"M3 K3 N14 sb(3,1)",flop:38.3,dram:25.4,fabric:8.1,tflops:114.4,dram_gbps:130.3,fabric_gbps:4.1},fail:null},
+   {id:"flux_m512_k6144_n4608",M:512,K:6144,N:4608,fusion:"\u2014",tag:"flux",ring:8,t_compute:97.1,t_dram:122.9,t_fabric:27.5,ideal:122.9,limiter:"dram",m:{measured:374.4,speedup:3.05,blocking:"M4 K4 N16 sb(2,2)",flop:25.9,dram:32.8,fabric:7.4,tflops:77.4,dram_gbps:168.1,fabric_gbps:3.7},fail:null},
+   {id:"flux_m512_k2304_n6144",M:512,K:2304,N:6144,fusion:"\u2014",tag:"flux",ring:8,t_compute:48.5,t_dram:59.9,t_fabric:10.3,ideal:59.9,limiter:"dram",m:{measured:207.0,speedup:3.46,blocking:"M2 K3 N14 sb(2,2)",flop:23.5,dram:28.9,fabric:5.0,tflops:70.0,dram_gbps:148.2,fabric_gbps:2.5},fail:null},
+   {id:"flux_m32_k6144_n1536",M:32,K:6144,N:1536,fusion:"\u2014",tag:"flux",ring:8,t_compute:2.0,t_dram:37.6,t_fabric:1.7,ideal:37.6,limiter:"dram",m:{measured:140.6,speedup:3.74,blocking:"M4 K8 N6 sb(2,2)",flop:1.4,dram:26.8,fabric:1.2,tflops:4.3,dram_gbps:137.1,fabric_gbps:0.6},fail:null},
+   {id:"flux_m1024_k6144_n128",M:1024,K:6144,N:128,fusion:"\u2014",tag:"flux",ring:8,t_compute:5.4,t_dram:27.6,t_fabric:55.1,ideal:55.1,limiter:"fabric",m:{measured:204.8,speedup:3.72,blocking:"M6 K8 N2 sb(2,2)",flop:2.6,dram:13.5,fabric:26.9,tflops:7.9,dram_gbps:69.1,fabric_gbps:13.4},fail:null},
+   {id:"flux_m1024_k3072_n6144",M:1024,K:3072,N:6144,fusion:"\u2014",tag:"flux",ring:8,t_compute:129.5,t_dram:86.0,t_fabric:27.5,ideal:129.5,limiter:"compute",m:{measured:302.5,speedup:2.34,blocking:"M6 K6 N11 sb(3,1)",flop:42.8,dram:28.4,fabric:9.1,tflops:127.8,dram_gbps:145.6,fabric_gbps:4.5},fail:null},
+   {id:"flux_m512_k3072_n6144",M:512,K:3072,N:6144,fusion:"\u2014",tag:"flux",ring:8,t_compute:64.7,t_dram:79.9,t_fabric:13.8,ideal:79.9,limiter:"dram",m:{measured:260.0,speedup:3.26,blocking:"M4 K4 N14 sb(2,2)",flop:24.9,dram:30.7,fabric:5.3,tflops:74.3,dram_gbps:157.3,fabric_gbps:2.6},fail:null},
+  ];
+  var CEIL={compute:50,dram:90,fabric:80};
+  var LIMNAME={compute:'Compute',dram:'DRAM',fabric:'Fabric'};
+
+  var state={filter:'all',model:'all',sort:'speedup',dir:-1,group:false};
+
+  // ---------- summary ----------
+  function renderSummary(){
+    var counts={compute:0,dram:0,fabric:0};
+    DATA.forEach(function(d){counts[d.limiter]++;});
+    var total=DATA.length, swept=DATA.filter(function(d){return d.m;}).length;
+    var dom=RES.slice().sort(function(a,b){return counts[b]-counts[a];})[0];
+    var segs=RES.map(function(r){ if(!counts[r])return '';
+      return '<span title="'+counts[r]+' '+r+'-bound" style="flex:'+counts[r]+';background:var('+RESVAR[r]+')"></span>';}).join('');
+    var legend=RES.map(function(r){return '<span class="li"><span class="sw" style="background:var('+RESVAR[r]+')"></span>'+r+' <b>'+counts[r]+'</b></span>';}).join('');
+    var sweptRows=DATA.filter(function(d){return d.m;});
+    var medHead = sweptRows.length? sweptRows.map(function(d){return d.m.speedup;}).sort(function(a,b){return a-b;})[Math.floor((sweptRows.length-1)/2)] : null;
+    document.getElementById('summary').innerHTML =
+      '<div class="sm"><div class="k">Bottleneck mix (by ideal)</div>'+
+        '<div class="dist">'+segs+'</div><div class="dist-legend">'+legend+'</div>'+
+        '<div class="sub" style="margin-top:10px">Workload skews <b style="color:var('+RESVAR[dom]+')">'+dom+'-bound</b> — '+counts[dom]+' of '+total+' shapes.</div></div>'+
+      '<div class="sm"><div class="k">Sweep coverage</div><div class="big tnum">'+swept+'<small> / '+total+' swept</small></div>'+
+        '<div class="sub">'+(total-swept)+' not measured — profiler-hang / no-valid-blocking (see table).</div></div>'+
+      '<div class="sm"><div class="k">Median headroom (swept)</div><div class="big tnum">'+(medHead?medHead.toFixed(2)+'<small>×</small>':'—')+'</div>'+
+        '<div class="sub">'+(medHead?'gap from ideal across measured shapes':'awaiting first measurements')+'</div></div>';
+  }
+
+  // ---------- table ----------
+  function limChip(l){return '<span class="lchip" style="color:var(--ink);background:color-mix(in srgb,var('+RESVAR[l]+') 16%,var(--surface-1))"><span class="sw" style="background:var('+RESVAR[l]+')"></span>'+l+'</span>';}
+  function spark(d){
+    return '<div class="spark">'+RES.map(function(r){
+      var w=Math.max(2,(d['t_'+r]/d.ideal)*100);
+      var isLim=(d.limiter===r);
+      var col='var('+RESVAR[r]+')';
+      return '<div class="seg" title="'+r+' bound '+d['t_'+r].toFixed(0)+' µs"><i style="width:'+w+'%;background:'+col+';opacity:'+(isLim?1:0.42)+'"></i></div>';
+    }).join('')+'</div>';
+  }
+  function headroomCell(d){
+    if(!d.m) return '<span class="pending">'+(d.fail||'—')+'</span>';
+    var HMAX=5;  // bar caps at 5x; dispatch-floor outliers (e.g. 69x) clamp full, value shown
+    var frac=Math.min(1,(d.m.speedup-1)/(HMAX-1));
+    return '<div class="hr"><span class="track"><i style="width:'+(frac*100).toFixed(0)+'%"></i></span><span class="v">'+d.m.speedup.toFixed(2)+'×</span></div>';
+  }
+  function utilCell(d){
+    if(!d.m) return '<span class="pending">—</span>';
+    var UKEY={compute:'flop',dram:'dram',fabric:'fabric'};  // compute util is stored under 'flop'
+    var u=d.m[UKEY[d.limiter]];
+    return '<div class="util"><span class="track"><i style="width:'+u+'%;background:var('+RESVAR[d.limiter]+')"></i></span><span class="v">'+u.toFixed(0)+'%</span></div>';
+  }
+  function rowHTML(d){
+    return '<tr class="row" tabindex="0" role="button" data-id="'+d.id+'">'+
+      '<td><div class="sid">'+d.id+(d.fusion!=='—'?'<span class="fuse">'+d.fusion+'</span>':'')+'</div><div class="sdim">'+d.M+'·'+d.K+'·'+d.N+' · '+d.tag+'</div></td>'+
+      '<td>'+limChip(d.limiter)+'</td>'+
+      '<td>'+spark(d)+'</td>'+
+      '<td class="num">'+d.ideal.toFixed(0)+'</td>'+
+      '<td class="num">'+(d.m?d.m.measured.toFixed(0):'<span class="pending">—</span>')+'</td>'+
+      '<td class="num">'+headroomCell(d)+'</td>'+
+      '<td class="num">'+utilCell(d)+'</td>'+
+      '<td>'+(d.m?'<span class="statustag st-swept">swept</span>':'<span class="statustag st-proj">'+(d.fail||'projected')+'</span>')+'</td>'+
+    '</tr>';
+  }
+  function sortRows(rows){
+    var k=state.sort, dir=state.dir;
+    return rows.slice().sort(function(a,b){
+      var av,bv;
+      if(k==='speedup'){av=a.m?a.m.speedup:-1;bv=b.m?b.m.speedup:-1;}
+      else if(k==='id'){av=a.id;bv=b.id;return dir*av.localeCompare(bv);}
+      else if(k==='limiter'){av=a.limiter;bv=b.limiter;return dir*av.localeCompare(bv);}
+      else {av=a[k];bv=b[k];}
+      return dir*(av-bv);
+    });
+  }
+  function renderTable(){
+    var rows=DATA.filter(function(d){return (state.filter==='all'||d.limiter===state.filter)&&(state.model==='all'||d.tag===state.model);});
+    var tb=document.getElementById('tbody'); var html='';
+    if(state.group){
+      var order=['fabric','compute','dram'];
+      order.forEach(function(l){
+        var g=sortRows(rows.filter(function(d){return d.limiter===l;}));
+        if(!g.length)return;
+        html+='<tr class="grp-head"><td colspan="8">'+LIMNAME[l]+'-bound · '+g.length+'</td></tr>';
+        html+=g.map(rowHTML).join('');
+      });
+    } else {
+      html=sortRows(rows).map(rowHTML).join('');
+    }
+    tb.innerHTML=html;
+    tb.querySelectorAll('tr.row').forEach(function(tr){
+      tr.addEventListener('click',function(){openDrawer(tr.getAttribute('data-id'));});
+      tr.addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();openDrawer(tr.getAttribute('data-id'));}});
+    });
+    document.querySelectorAll('thead th.sortable').forEach(function(th){
+      var on=th.getAttribute('data-sort')===state.sort;
+      th.classList.toggle('act',on);
+      var ar=th.querySelector('.ar'); if(ar) ar.textContent=on?(state.dir<0?'▼':'▲'):'';
+    });
+  }
+
+  // ---------- drawer ----------
+  function bars(d,axmax,showMeas){
+    var plot='<div class="rf-plot"><div>';
+    RES.forEach(function(r){
+      var w=(d['t_'+r]/axmax)*100, isLim=d.limiter===r;
+      plot+='<div class="rf"><div class="rf-top"><span class="rf-name"><span class="sw" style="background:var('+RESVAR[r]+')"></span>'+LIMNAME[r]+
+        (isLim?'<span class="lim">LIMITER</span>':'')+'</span><span style="font-size:11px;color:var(--muted)">'+({compute:'50% FLOP',dram:'90% BW',fabric:'80% link'})[r]+'</span></div>'+
+        '<div class="rf-track"><div class="rf-bar" style="width:'+w+'%;background:var('+RESVAR[r]+');opacity:'+(isLim?1:0.85)+'"></div>'+
+        '<div class="rf-val" style="left:'+w+'%">'+d['t_'+r].toFixed(0)+'</div></div></div>';
+    });
+    plot+='</div>';
+    // markers
+    var idpct=(d.ideal/axmax)*100;
+    plot+='<div class="mk ideal" style="left:'+idpct+'%"><div class="ln"></div><div class="tag">ideal '+d.ideal.toFixed(0)+'</div></div>';
+    if(showMeas){
+      var mpct=(d.m.measured/axmax)*100;
+      plot+='<div class="band" style="left:'+idpct+'%;width:'+(mpct-idpct)+'%"></div>';
+      plot+='<div class="mk meas" style="left:'+mpct+'%"><div class="ln"></div><div class="tag">measured '+d.m.measured.toFixed(0)+'</div></div>';
+    }
+    // axis
+    var ticks=[]; var step=niceStep(axmax); for(var t=0;t<=axmax;t+=step)ticks.push(t);
+    var ax='<div class="rf-axis">'+ticks.map(function(t){return '<span class="tk" style="left:'+(t/axmax*100)+'%">'+t+'</span>';}).join('')+
+      '<span class="tk" style="left:100%;transform:translateX(-100%);color:var(--muted)">µs</span></div>';
+    return '<div style="position:relative;padding-top:8px">'+plot+ax+'</div>';
+  }
+  function niceStep(mx){var raw=mx/5;var p=Math.pow(10,Math.floor(Math.log10(raw)));var n=raw/p;var s=n>=5?5:n>=2?2:1;return s*p;}
+  function meters(d){
+    return RES.map(function(r){
+      var u=d.m[r==='compute'?'flop':r]; var rate=({compute:d.m.tflops+' TFLOP/s',dram:d.m.dram_gbps+' GB/s',fabric:d.m.fabric_gbps+' GB/s/link'})[r];
+      var isLim=d.limiter===r;
+      return '<div class="mtr"><div class="mtr-top"><span class="rf-name"><span class="sw" style="background:var('+RESVAR[r]+')"></span>'+LIMNAME[r]+
+        (isLim?'<span class="lim">LIMITER</span>':'')+'</span><span class="mtr-val">'+u.toFixed(1)+'% <span>· '+rate+'</span></span></div>'+
+        '<div class="mtr-track"><div class="mtr-fill" style="width:'+u+'%;background:var('+RESVAR[r]+')"></div>'+
+        '</div></div>';
+    }).join('');
+  }
+  function openDrawer(id){
+    var d=DATA.find(function(x){return x.id===id;});
+    var lc='var('+RESVAR[d.limiter]+')';
+    var verdict = d.m
+      ? d.limiter.charAt(0).toUpperCase()+d.limiter.slice(1)+'-bound · '+d.m.speedup.toFixed(2)+'× off ideal'
+      : d.limiter.charAt(0).toUpperCase()+d.limiter.slice(1)+'-bound · '+(d.fail||'not measured');
+    var axmax = d.m ? d.m.measured*AXMAX_PAD : d.ideal*1.25;
+    var h='<div class="dw-eyebrow">'+d.tag+' · Ring-'+d.ring+' · 2 links</div>'+
+      '<div class="dw-title">'+d.id+'</div>'+
+      '<span class="dw-verdict" style="color:var(--ink);background:color-mix(in srgb,'+lc+' 18%,var(--surface-1));border:1px solid color-mix(in srgb,'+lc+' 50%,transparent)"><span style="width:8px;height:8px;border-radius:50%;background:'+lc+'"></span>'+verdict+'</span>'+
+      '<div class="dw-sec">Shape</div><dl class="dl">'+
+        '<dt>M · K<sub>gathered</sub> · N</dt><dd>'+d.M+' · '+d.K+' · '+d.N+'</dd>'+
+        '<dt>Fusion</dt><dd>'+d.fusion+'</dd>'+
+        (d.m?'<dt>Best blocking</dt><dd>'+d.m.blocking+'</dd>':'')+
+      '</dl>'+
+      '<div class="dw-sec">Roofline — best-case time per resource</div>'+
+      '<p class="dw-note">Tallest bar is the limiter; ideal equals it.'+(d.m?' Measured sits right — the band is headroom.':'')+'</p>'+
+      bars(d,axmax,!!d.m);
+    if(d.m){
+      h+='<div class="dw-sec">Utilization at current best</div>'+
+         '<p class="dw-note">Achieved % of peak — the full bar is the 100% hardware roofline (the new ceiling).</p>'+meters(d);
+    } else {
+      h+='<div class="dw-sec">Utilization at current best</div>'+
+         '<div class="awaiting">Not measured — <b>'+(d.fail||'')+'</b>. '+(d.fail==='profiler-hang'?'The device sweep finished but tracy report-gen deadlocked on a ~2GB profile dump (harness limit on the largest shape).':'The block-size grid has no valid blocking (single K-tile, or addcmul L1 budget rejects every candidate).')+' Roofline bounds above are exact regardless.</div>';
+    }
+    document.getElementById('dwBody').innerHTML=h;
+    document.getElementById('drawer').classList.add('on');
+    document.getElementById('drawer').setAttribute('aria-hidden','false');
+    document.getElementById('scrim').classList.add('on');
+  }
+  function closeDrawer(){document.getElementById('drawer').classList.remove('on');document.getElementById('drawer').setAttribute('aria-hidden','true');document.getElementById('scrim').classList.remove('on');}
+
+  // ---------- events ----------
+  document.querySelectorAll('.chip[data-filter]').forEach(function(c){
+    c.addEventListener('click',function(){
+      document.querySelectorAll('.chip[data-filter]').forEach(function(x){x.classList.remove('on');});
+      c.classList.add('on'); state.filter=c.getAttribute('data-filter'); renderTable();
+    });
+  });
+  document.querySelectorAll('.chip[data-model]').forEach(function(c){
+    c.addEventListener('click',function(){
+      document.querySelectorAll('.chip[data-model]').forEach(function(x){x.classList.remove('on');});
+      c.classList.add('on'); state.model=c.getAttribute('data-model'); renderTable();
+    });
+  });
+  document.getElementById('groupToggle').addEventListener('click',function(){
+    state.group=!state.group; this.classList.toggle('on',state.group); renderTable();
+  });
+  document.querySelectorAll('thead th.sortable').forEach(function(th){
+    th.addEventListener('click',function(){
+      var k=th.getAttribute('data-sort');
+      if(state.sort===k){state.dir*=-1;} else {state.sort=k;state.dir=(k==='id'||k==='limiter')?1:-1;}
+      renderTable();
+    });
+  });
+  document.getElementById('dwClose').addEventListener('click',closeDrawer);
+  document.getElementById('scrim').addEventListener('click',closeDrawer);
+  document.addEventListener('keydown',function(e){if(e.key==='Escape')closeDrawer();});
+
+  renderSummary(); renderTable();
+})();
+</script>
+</body>
+</html>
