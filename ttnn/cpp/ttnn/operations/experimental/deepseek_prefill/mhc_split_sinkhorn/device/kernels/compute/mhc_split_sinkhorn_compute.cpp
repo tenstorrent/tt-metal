@@ -22,6 +22,7 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/dataflow/circular_buffer.h"
 
 namespace {
 
@@ -43,53 +44,60 @@ constexpr uint32_t RB = 6, CB_COL = 7;
 
 constexpr uint32_t TWO_BITS = 0x40000000u;  // 2.0f
 
+// CB flow-control (wait/reserve/push/pop) goes through Device 2.0 CircularBuffer objects; the
+// compute LLK ops (matmul_tiles/pack_tile/add_tiles/...) still take the raw CB index, so both
+// the index and the object are kept in scope. b_tile is a tile index within CB_CONSTS, not a CB.
+
 // out <- a @ consts[b_tile].  Reads a[0] and consts[b_tile]; pops neither.
 FORCE_INLINE void mm(uint32_t a, uint32_t b_tile, uint32_t out) {
-    cb_wait_front(a, 1);
+    CircularBuffer cb_a(a), cb_out(out);
+    cb_a.wait_front(1);
     reconfig_data_format(a, CB_CONSTS);
     matmul_init(a, CB_CONSTS);
     tile_regs_acquire();
     matmul_tiles(a, CB_CONSTS, 0, b_tile, 0);
     tile_regs_commit();
     tile_regs_wait();
-    cb_reserve_back(out, 1);
+    cb_out.reserve_back(1);
     pack_tile(0, out);
-    cb_push_back(out, 1);
+    cb_out.push_back(1);
     tile_regs_release();
 }
 
 // out <- a + consts[b_tile].  Pops a.
 FORCE_INLINE void add_bias(uint32_t a, uint32_t b_tile, uint32_t out) {
-    cb_wait_front(a, 1);
+    CircularBuffer cb_a(a), cb_out(out);
+    cb_a.wait_front(1);
     reconfig_data_format(a, CB_CONSTS);
     add_tiles_init(a, CB_CONSTS);
     tile_regs_acquire();
     add_tiles(a, CB_CONSTS, 0, b_tile, 0);
     tile_regs_commit();
     tile_regs_wait();
-    cb_reserve_back(out, 1);
+    cb_out.reserve_back(1);
     pack_tile(0, out);
-    cb_push_back(out, 1);
+    cb_out.push_back(1);
     tile_regs_release();
-    cb_pop_front(a, 1);
+    cb_a.pop_front(1);
 }
 
 // out <- a * b (elementwise).  Pops a and b.
 FORCE_INLINE void mul(uint32_t a, uint32_t b, uint32_t out) {
-    cb_wait_front(a, 1);
-    cb_wait_front(b, 1);
+    CircularBuffer cb_a(a), cb_b(b), cb_out(out);
+    cb_a.wait_front(1);
+    cb_b.wait_front(1);
     reconfig_data_format(a, b);
     mul_tiles_init(a, b);
     tile_regs_acquire();
     mul_tiles(a, b, 0, 0, 0);
     tile_regs_commit();
     tile_regs_wait();
-    cb_reserve_back(out, 1);
+    cb_out.reserve_back(1);
     pack_tile(0, out);
-    cb_push_back(out, 1);
+    cb_out.push_back(1);
     tile_regs_release();
-    cb_pop_front(a, 1);
-    cb_pop_front(b, 1);
+    cb_a.pop_front(1);
+    cb_b.pop_front(1);
 }
 
 // SFPU op ids for unary()
@@ -97,7 +105,8 @@ constexpr uint32_t OP_EXP = 0, OP_SIGMOID = 1, OP_RECIP = 2, OP_ADD_EPS = 3, OP_
 
 // out <- op(a).  Pops a.  scalar_bits used by the *_EPS variants.
 FORCE_INLINE void unary(uint32_t a, uint32_t op, uint32_t scalar_bits, uint32_t out) {
-    cb_wait_front(a, 1);
+    CircularBuffer cb_a(a), cb_out(out);
+    cb_a.wait_front(1);
     reconfig_data_format_srca(a);
     copy_tile_to_dst_init_short(a);
     tile_regs_acquire();
@@ -126,11 +135,11 @@ FORCE_INLINE void unary(uint32_t a, uint32_t op, uint32_t scalar_bits, uint32_t 
 
     tile_regs_commit();
     tile_regs_wait();
-    cb_reserve_back(out, 1);
+    cb_out.reserve_back(1);
     pack_tile(0, out);
-    cb_push_back(out, 1);
+    cb_out.push_back(1);
     tile_regs_release();
-    cb_pop_front(a, 1);
+    cb_a.pop_front(1);
 }
 
 // m_out <- m_in / (m_in @ K [+ eps]).  m_in is popped (consumed by the final mul).
@@ -148,10 +157,11 @@ void kernel_main() {
     constexpr uint32_t eps_bits = get_compile_time_arg_val(1);
 
     compute_kernel_hw_startup(CB_MIXES, CB_CONSTS, CB_COMB);
-    cb_wait_front(CB_CONSTS, 8);  // constants resident for the whole op
+    CircularBuffer cb_consts(CB_CONSTS), cb_mixes(CB_MIXES);
+    cb_consts.wait_front(8);  // constants resident for the whole op
 
     for (uint32_t t = 0; t < num_token_tiles; ++t) {
-        cb_wait_front(CB_MIXES, 1);  // reused by comb/pre/post; popped at the end
+        cb_mixes.wait_front(1);  // reused by comb/pre/post; popped at the end
 
         // ---- comb = Sinkhorn(exp(mixes @ SEL_comb + base_comb)) ----
         mm(CB_MIXES, SEL_COMB, CB_TMP);
@@ -178,6 +188,6 @@ void kernel_main() {
         unary(CB_MA, OP_SIGMOID, 0, CB_MB);
         unary(CB_MB, OP_MUL2, TWO_BITS, CB_POST);
 
-        cb_pop_front(CB_MIXES, 1);
+        cb_mixes.pop_front(1);
     }
 }
