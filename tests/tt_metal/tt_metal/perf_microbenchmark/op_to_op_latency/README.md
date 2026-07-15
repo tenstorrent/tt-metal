@@ -60,14 +60,17 @@ reduces the logs to:
 | Metric | Role | Meaning |
 |--------|------|---------|
 | `official_op2op_us` | **GATED** | Per-core adjacent-op gap from standard KERNEL zones: last KERNEL end(k) → first DM-KERNEL start(k+1). Canonical tools/tracy device number; works on every platform; no custom markers. |
+| `pack_to_unpack_op2op_us` | **GATED** | Per-core pack-finish → next-unpack-start (the research benchmark's op2op definition). Uses the lean compute markers, so it is portable across WH/BH. |
 | `device_kernel_dur_us` | context | Per-op kernel span (first KERNEL start → last KERNEL end). |
-| `pack_to_unpack_op2op_us` | context | Per-core pack-finish → next-unpack-start (the research benchmark's op2op definition). |
 | `rt_gap_to_next_go_ns` | optional | Chip-dispatcher done→go gap from the realtime profiler. Cleaner/absolute, but only produced when `--use-realtime-profiler` is passed (research); empty (n=0) in the CI run. |
 
-We gate on the KERNEL-zone metric because it is portable across all CI
-single-card platforms (Wormhole and Blackhole) and needs only the standard device
-profiler. The RT metric is not part of the CI flow; it can be captured locally where
-the realtime profiler is active.
+Both gated metrics come from the standard device profiler, so they are portable across
+all CI single-card platforms (Wormhole and Blackhole). The gate fails the job if *either*
+metric drifts outside its golden band (`tolerance_pct`); the post-processor gates every
+non-null value in the golden's `golden` block. A metric left `null` in the golden is in
+record mode (printed, not gated), so the gate can be armed one metric at a time. The RT
+metric is not part of the CI flow; it can be captured locally where the realtime profiler
+is active.
 
 ## Where it runs
 
