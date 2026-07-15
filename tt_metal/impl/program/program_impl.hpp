@@ -428,6 +428,9 @@ public:
     // finalize_offsets can compute dispatch sizes before SetProgramRunArgs fills values.
     void reserve_runtime_arg_buffers();
 
+    bool program_run_args_initialized() const { return program_run_args_initialized_; }
+    void mark_program_run_args_initialized() { program_run_args_initialized_ = true; }
+
 private:
     HWCommandQueue* last_used_command_queue_for_testing = nullptr;
 
@@ -439,6 +442,7 @@ private:
     ProgramTransferInfo program_transfer_info;
 
     bool finalized_{false};
+    bool program_run_args_initialized_{false};
     // Used only when devices do not have virtualization enabled and used to check that programs are only rerun on
     // the same device
     std::optional<uint64_t> cached_device_hash_;
