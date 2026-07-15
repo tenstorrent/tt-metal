@@ -165,6 +165,10 @@ ttsim:
 shield:
   e2e:
     wh_llmbox: 110
+  e2e_tier3:
+    bh_p150b_civ2: 18
+  unit_tier3:
+    bh_p150b_civ2: 20
   unit:
     wh_n150: 90
     wh_n300: 115
@@ -294,7 +298,7 @@ models:
     wh_galaxy_perf: 500
   e2e:
     wh_llmbox: 198
-    bh_p150b_civ2: 63
+    bh_p150b_civ2: 8
     bh_p300: 20
     bh_loudbox: 190
     bh_quietbox_2: 80
