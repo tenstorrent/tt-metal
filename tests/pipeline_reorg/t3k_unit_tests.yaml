@@ -56,7 +56,8 @@
   cmd: run_t3000_tt_dit_tests
   skus:
     wh_llmbox:
-      timeout: 20
+      # TEMPORARY: bumped from 20 to 60 for the /mnt/MLPerf seeding pass. Revert to 20 after the cache is populated.
+      timeout: 60
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
   model-name: dits

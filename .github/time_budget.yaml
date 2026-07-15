@@ -306,7 +306,8 @@ models:
     bh_p300: 8
     bh_quietbox_2: 30
   unit:
-    wh_llmbox: 100
+    # TEMPORARY: bumped from 100 to 140 to accommodate the t3k_dits_tests /mnt/MLPerf seeding pass (t3k_dits_tests raised 20 → 60). Revert to 100 after the cache is populated and t3k_dits_tests goes back to 20.
+    wh_llmbox: 140
     wh_galaxy_perf: 10
   # Per-tier unit budgets. Consumed by the tiered model pipelines; the plain `unit`
   # key is used for the non-tiered pipelines (galaxy-unit, t3000-unit).
