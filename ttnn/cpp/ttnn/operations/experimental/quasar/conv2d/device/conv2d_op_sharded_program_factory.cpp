@@ -927,8 +927,12 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // ---- compute defines ----
     std::map<std::string, std::string> compute_defines;
     if (fused_activation.has_value() && !pack_relu) {
+        // Pass the activation input dtype: several unary ops (RELU, SIGNBIT, ...) branch float-vs-int in
+        // get_op_init_and_func and TT_FATAL if it is absent. On Quasar RELU takes this SFPU path (packer-relu
+        // is disabled above), so the dtype is now required. The activation runs on the accumulated conv
+        // result that becomes the output, so use the output dtype (bf16 => the float relu_tile path).
         compute_defines.merge(ttnn::operations::unary::utils::get_defines(
-            fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
+            fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i", output.dtype()));
     }
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device->arch(), output_cores.num_cores(), compute_defines, ttnn::get_throttle_level(compute_kernel_config));

@@ -203,8 +203,9 @@ def _report_error_pattern(golden, tt, oh, ow, c):
         # goes through the SFPU activation path (full-tile) instead. Expected with the fix built:
         pytest.param("relu", True, "relu", True, True, id="relu_now_sfpu"),  # was 0.85; expect ~1.0 after fix
         pytest.param("none", True, "none", True, True, id="none"),  # control (~1.0)
-        # gelu always used SFPU (no packer fast-path) -- independent confirmation the SFPU path is correct.
-        pytest.param("gelu_sfpu", True, "gelu", True, True, id="gelu_sfpu"),
+        # (gelu_sfpu dropped: Quasar GELU SFPU is UNPORTED -- ckernel_sfpu_gelu.h fails to compile
+        #  (_sfpu_load_config32_ undeclared). RELU SFPU (ckernel_sfpu_relu.h / relu_tile) IS ported/clean,
+        #  so the fix routes RELU -- not GELU -- through SFPU.)
     ],
 )
 def test_conv2d_correctness_bisect(mesh_device, label, with_bias, activation, packer_l1_acc, reshard):
