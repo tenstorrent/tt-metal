@@ -5,6 +5,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -66,9 +67,15 @@ GlobalCircularBuffer create_global_circular_buffer_for_tensor_prefetcher(
 // remote-CB page-count limit; larger-than-one-layer buffering does not raise throughput (the DRISC
 // stalls on remote_cb_reserve_back).
 //
-// `support_multi_receiver_shards` (receiver-contiguous only): leave true (default) for one sender
-// per bank; set false to fan a bank's receivers across two DRISC senders for higher bandwidth. It is
-// an error to pass false with a legacy weight (that layout is inherently single-sender).
+// `support_multi_receiver_shards` is an optional override for the per-bank sender count; leave it
+// unset (nullopt) in production — the sender count is derived from the detected layout:
+//   * legacy K-row-major -> single sender per bank (the only option);
+//   * receiver-contiguous -> DUAL senders per bank (the higher-bandwidth default; single-receiver
+//     banks fall back to one sender automatically).
+// An explicit value overrides that default, mainly for tests/benchmarks: true forces single sender,
+// false forces dual senders. Recall the sense — true = a bank's shard may feed multiple receivers
+// (single sender); false = each receiver owns its own shard (dual senders). Forcing false (dual) on
+// a legacy weight is an error (that layout is inherently single-sender per bank).
 GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d(
     MeshDevice* mesh_device,
     const std::vector<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>& program_configs,
@@ -76,7 +83,7 @@ GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d(
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
     BufferType buffer_type = BufferType::L1,
-    bool support_multi_receiver_shards = true);
+    std::optional<bool> support_multi_receiver_shards = std::nullopt);
 
 // Compute the validated `block_count` to pair with `weight` in a TensorPrefetcherInput when feeding a
 // gather_in0 1D matmul (`program_config`) from a *receiver-contiguous* DRAM weight via `gcb`. This is the

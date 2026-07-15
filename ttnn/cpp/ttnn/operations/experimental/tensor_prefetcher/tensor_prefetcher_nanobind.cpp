@@ -185,10 +185,13 @@ void bind_tensor_prefetcher(nb::module_& mod) {
                 bank_to_receivers: List of (bank_id, receivers) pairs.
                 size: GCB size in bytes.
                 buffer_type: Buffer type (L1 or L1_SMALL).
-                support_multi_receiver_shards: If True (default), a bank's shard may feed multiple
-                    receivers (single sender per bank). Set False on a receiver-contiguous weight to
-                    fan a bank's receivers across two DRISC senders for higher bandwidth. Error if
-                    False with a legacy weight (that layout is always single-sender).
+                support_multi_receiver_shards: Optional per-bank sender-count override; leave None
+                    (default) in production. When None the sender count follows the detected layout:
+                    legacy WIDTH_SHARDED -> single sender per bank; receiver-contiguous -> dual
+                    senders per bank (higher bandwidth; single-receiver banks fall back to one).
+                    Pass an explicit value to override, mainly for tests/benchmarks: True forces
+                    single sender, False forces dual senders. Forcing False (dual) on a legacy
+                    weight raises (that layout is always single-sender).
         )doc",
         &ttnn::global_circular_buffer::create_global_circular_buffer_for_matmul_1d,
         nb::keep_alive<0, 1>(),
@@ -198,7 +201,7 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         nb::arg("bank_to_receivers"),
         nb::arg("size"),
         nb::arg("buffer_type") = tt::tt_metal::BufferType::L1,
-        nb::arg("support_multi_receiver_shards") = true);
+        nb::arg("support_multi_receiver_shards") = std::nullopt);
 
     ttnn::bind_function<"tensor_prefetcher_block_count_for_matmul_1d", "ttnn.experimental.">(
         mod,

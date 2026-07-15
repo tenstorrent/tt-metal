@@ -464,7 +464,7 @@ GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d(
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
     BufferType buffer_type,
-    bool support_multi_receiver_shards) {
+    std::optional<bool> support_multi_receiver_shards) {
     TT_FATAL(!program_configs.empty(), "Must provide at least one program config");
     TT_FATAL(
         program_configs.size() == weights.size(),
@@ -485,14 +485,20 @@ GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d(
     }
 
     if (recv_contig) {
+        // Dual senders are the production default for receiver-contiguous weights (highest per-bank
+        // bandwidth); single-receiver banks fall back to one sender automatically. An explicit value
+        // overrides (e.g. a benchmark forcing single-sender for an A/B comparison). Recall the flag's
+        // sense: false => dual senders, true => single sender.
+        const bool single_sender = support_multi_receiver_shards.value_or(false);
         return build_matmul_1d_gcb_recv_contig(
-            mesh_device, program_configs, weights, bank_to_receivers, size, buffer_type, support_multi_receiver_shards);
+            mesh_device, program_configs, weights, bank_to_receivers, size, buffer_type, single_sender);
     }
 
     // Legacy K-row-major is single-sender per bank by construction (a bank's shard feeds all its
-    // receivers), so it cannot honor a dual-sender request.
+    // receivers), so it cannot honor a dual-sender request. The layout-derived default is single; an
+    // explicit request for dual (support_multi_receiver_shards=false) is an error here.
     TT_FATAL(
-        support_multi_receiver_shards,
+        support_multi_receiver_shards.value_or(true),
         "support_multi_receiver_shards=false (dual senders) requires a receiver-contiguous (NdShardSpec) weight; the "
         "supplied weight is legacy K-row-major (WIDTH_SHARDED), which is always single-sender per bank");
     return build_matmul_1d_gcb_krow_major(mesh_device, program_configs, weights, bank_to_receivers, size, buffer_type);
