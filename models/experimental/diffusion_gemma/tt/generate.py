@@ -30,6 +30,7 @@ from models.experimental.diffusion_gemma.tt.denoise_loop import denoise_block as
 from models.experimental.diffusion_gemma.tt.denoise_loop import device_loop_denoise_block
 from models.experimental.diffusion_gemma.tt.traced_denoise import (
     traced_denoise_block,
+    early_halt_explicitly_on,
     traced_denoise_enabled,
     traced_denoise_multistep_block,
     traced_denoise_multistep_enabled,
@@ -843,20 +844,25 @@ def _resolve_default_denoise_block_fn() -> Callable[..., DenoiseTrajectory]:
     the traced dispatch savings while recovering the eager StableAndConfident early-halt. When
     halt does NOT fire it runs the full budget and commits the byte-identical argmax of the
     fixed-48 traced path (Guard 1). Dynamic Gumbel requires a one-step halt window; contiguous-cache
-    only, same as the traced paths. Takes precedence over the fixed-budget traced flags. Default
-    off: under #48291 the entropy gate never clears the 0.005 threshold so early-halt is a no-op
-    (runs ~48), and the
-    per-window host sync adds orchestration overhead — see ``doc/optimize_perf/early_halt.md``.
+    only, same as the traced paths. It is the DEFAULT traced variant (``DG_DENOISE_EARLY_HALT``
+    default ON; set ``=0`` for the fixed budget): post the tanh-GELU decision-fidelity fix the
+    coherent trajectory converges, so the 0.005 gate now clears and early-halt fires well before the
+    full budget (device-verified [9,17,2]/48, bit-exact) — see ``doc/optimize_perf/early_halt.md``.
 
-    All non-eager loops stay opt-in until early-halt is either recovered in a trace-safe shape
-    or confirmed unneeded for the serving contract.
+    Early-halt being the default *variant* does NOT force tracing: the eager loop stays the default
+    unless a traced path is selected (``DG_DENOISE_TRACED``/``_MULTISTEP``, the serving trace pref,
+    or an EXPLICIT ``DG_DENOISE_EARLY_HALT=1``). Pair with ``DG_DENOISE_FROZEN_PREFIX=1`` for the
+    capture-once steady-serving speedup (the recapture cost otherwise dominates).
     """
-    if traced_early_halt_enabled():
-        return traced_early_halt_block
+    # Early-halt is the DEFAULT traced variant (bit-exact, converges post tanh-fix) but does NOT
+    # itself force tracing: it only wins once a traced path is otherwise selected, or when it is
+    # EXPLICITLY opted in. The eager loop stays the default when no traced signal is present.
     if traced_denoise_multistep_enabled():
-        return traced_denoise_multistep_block
+        return traced_early_halt_block if traced_early_halt_enabled() else traced_denoise_multistep_block
     if traced_denoise_enabled():
-        return traced_denoise_block
+        return traced_early_halt_block if traced_early_halt_enabled() else traced_denoise_block
+    if early_halt_explicitly_on():
+        return traced_early_halt_block
     if os.environ.get("DG_DENOISE_DEVICE_LOOP", "0").lower() in ("1", "true", "yes", "on"):
         return device_loop_denoise_block
     return tt_denoise_block
@@ -875,8 +881,13 @@ def select_denoise_block_fn() -> Callable[..., DenoiseTrajectory]:
 
 
 def denoise_flags_select_traced() -> bool:
-    """True when any DG_DENOISE_* traced/early-halt flag is set (⇒ the dispatcher picks a traced loop)."""
-    return traced_early_halt_enabled() or traced_denoise_multistep_enabled() or traced_denoise_enabled()
+    """True when an EXPLICIT DG_DENOISE_* traced flag forces a traced loop.
+
+    Uses ``early_halt_explicitly_on`` (not the default-on ``traced_early_halt_enabled``) so that
+    early-halt being the DEFAULT *variant* does not by itself make callers (e.g. the vLLM
+    ``_resolve_trace_pref`` fallback) auto-enable tracing — tracing is still an explicit opt-in.
+    """
+    return early_halt_explicitly_on() or traced_denoise_multistep_enabled() or traced_denoise_enabled()
 
 
 def select_traced_denoise_block_fn() -> Callable[..., DenoiseTrajectory]:

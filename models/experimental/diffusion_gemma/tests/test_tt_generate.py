@@ -1325,7 +1325,12 @@ def test_generate_text_from_checkpoint_state_builds_logits_and_delegates():
     )
 
     assert out is result
-    assert calls["builder"] == ({"raw": "state"}, {"adapter": "kwarg"})
+    # generate_text_from_checkpoint_state threads the config's denoise-step budget + temperature
+    # schedule into adapter_kwargs via setdefault (DiffusionConfig defaults: 48 / 0.8 -> 0.4).
+    assert calls["builder"] == (
+        {"raw": "state"},
+        {"adapter": "kwarg", "max_denoise_steps": 48, "temperature_start": 0.8, "temperature_end": 0.4},
+    )
     assert calls["generate"][0:4] == ("model", None, "tokenizer", "hello")
     kwargs = calls["generate"][4]
     assert kwargs["num_blocks"] == 2
@@ -1358,7 +1363,10 @@ def test_generate_text_from_checkpoint_state_uses_model_config_for_adapter():
     )
 
     assert out == "result"
-    assert calls["builder"] == ({"raw": "state"}, {"config": "model-config"})
+    assert calls["builder"] == (
+        {"raw": "state"},
+        {"config": "model-config", "max_denoise_steps": 48, "temperature_start": 0.8, "temperature_end": 0.4},
+    )
 
 
 def test_generate_text_from_checkpoint_state_preserves_explicit_adapter_config():
@@ -1384,7 +1392,16 @@ def test_generate_text_from_checkpoint_state_preserves_explicit_adapter_config()
         generate_text_fn=lambda *args, **kwargs: "result",
     )
 
-    assert calls["builder"] == ({"raw": "state"}, {"config": "explicit-config", "dtype": "bf16"})
+    assert calls["builder"] == (
+        {"raw": "state"},
+        {
+            "config": "explicit-config",
+            "dtype": "bf16",
+            "max_denoise_steps": 48,
+            "temperature_start": 0.8,
+            "temperature_end": 0.4,
+        },
+    )
 
 
 def test_generate_text_from_checkpoint_state_derives_num_blocks_from_max_new_tokens():

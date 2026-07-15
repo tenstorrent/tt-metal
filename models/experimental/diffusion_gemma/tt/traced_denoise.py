@@ -789,8 +789,30 @@ def traced_denoise_multistep_block(
 
 
 def traced_early_halt_enabled() -> bool:
-    """True when the traced early-halt loop is opted in (``DG_DENOISE_EARLY_HALT``)."""
-    return os.environ.get("DG_DENOISE_EARLY_HALT", "0").lower() in ("1", "true", "yes", "on")
+    """Whether early-halt is the preferred traced denoise variant (``DG_DENOISE_EARLY_HALT``, default ON).
+
+    Post the tanh-GELU decision-fidelity fix the coherent trajectory converges, so the 0.005 entropy
+    gate now clears and early-halt fires well before the full budget (device-verified [9,17,2]/48,
+    bit-exact vs the fixed budget). It is therefore the default traced variant. Set
+    ``DG_DENOISE_EARLY_HALT=0`` for the fixed-budget traced loop.
+
+    IMPORTANT: this default selects the *variant when the denoise path is traced*; it does NOT by
+    itself enable tracing. The eager loop stays the default unless a traced path is selected
+    (``DG_DENOISE_TRACED``/``_MULTISTEP``, the serving trace pref, or an EXPLICIT
+    ``DG_DENOISE_EARLY_HALT=1``) — see ``early_halt_explicitly_on`` and
+    ``generate._resolve_default_denoise_block_fn``.
+    """
+    return os.environ.get("DG_DENOISE_EARLY_HALT", "1").lower() in ("1", "true", "yes", "on")
+
+
+def early_halt_explicitly_on() -> bool:
+    """True only when ``DG_DENOISE_EARLY_HALT`` is EXPLICITLY set truthy.
+
+    Used to decide whether early-halt should FORCE tracing on its own (explicit opt-in) vs merely
+    being the preferred variant once some other signal has selected the traced path (default-on).
+    """
+    raw = os.environ.get("DG_DENOISE_EARLY_HALT")
+    return raw is not None and raw.lower() in ("1", "true", "yes", "on")
 
 
 def early_halt_window(default: int = 1) -> int:
