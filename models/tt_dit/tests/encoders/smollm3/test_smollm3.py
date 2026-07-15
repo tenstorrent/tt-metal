@@ -390,18 +390,20 @@ def test_smollm3_encoder_full_mesh(*, mesh_device, seq):
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 8192}],
     indirect=["device_params"],
 )
-@pytest.mark.parametrize("seq", [128, 512])  # divisible by sp_factor(4)*32
-def test_smollm3_encoder_sp(*, mesh_device, seq):
-    """Sequence-parallel (all-gather K/V) encoder: seq sharded on sp_axis=0, tp on axis 1.
+@pytest.mark.parametrize("seq", [512])  # divisible by max sp_factor(8)*32 = 256 (and by 4*32)
+@pytest.mark.parametrize("sp_axis", [0, 1])  # 0 -> SP=4/TP=8 ; 1 -> SP=8/TP=4 (axis-swapped)
+def test_smollm3_encoder_sp(*, mesh_device, seq, sp_axis):
+    """Sequence-parallel (all-gather K/V) encoder: seq sharded on sp_axis, tp on the other axis.
 
+    Covers both layouts on the 4x8 mesh: sp_axis=0 (SP=4 x TP=8) and sp_axis=1 (SP=8 x TP=4).
     Inputs (input_ids, rope cos/sin) are sharded along the seq dim over sp_axis; outputs are
     gathered back over the same axis. PCC vs. HF proves the RoPE-shard-offset + rectangular
-    causal-bias math.
+    causal-bias math for either axis assignment.
     """
     from models.tt_dit.encoders.smollm3.model_smollm3 import SmolLM3TextEncoder
 
     torch.manual_seed(0)
-    sp_axis, tp_axis = 0, 1
+    tp_axis = 1 - sp_axis
     sp_factor = mesh_device.shape[sp_axis]
     tp_factor = mesh_device.shape[tp_axis]
     hf = _load_hf_smollm3()

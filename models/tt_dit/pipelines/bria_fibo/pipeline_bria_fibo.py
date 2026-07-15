@@ -78,6 +78,7 @@ class BriaFiboPipelineConfig:
         width: int = 1024,
         topology: ttnn.Topology = ttnn.Topology.Linear,
         num_links: int | None = None,
+        encoder_sp_axis: int = 1,
     ) -> BriaFiboPipelineConfig:
         mesh = tuple(mesh_shape)
         if len(mesh) != 2:
@@ -101,12 +102,19 @@ class BriaFiboPipelineConfig:
             cfg=(1, 0), sp=(sp_factor, sp_axis), tp=(tp_factor, tp_axis)
         )
 
-        # Encoder: tensor-parallel on the same axis as the DiT (tp_axis), factor = mesh[tp_axis]
-        # (tp=2 on 2x2, tp=8 on 4x8). SmolLM3Attention shards Q/K/V/O over this axis and pads the
-        # GQA heads (optimal_groups/split_factor) so factors > num_kv_heads (4) work; the encoder
-        # all-gathers over tp_axis via the ccl_manager the pipeline already passes it. PCC-validated
-        # by tests/encoders/smollm3/test_smollm3.py::test_smollm3_encoder_full_mesh.
-        encoder_parallel_config = EncoderParallelConfig.from_tuple((tp_factor, tp_axis))
+        # Encoder: sequence-parallel across tokens x tensor-parallel, on the whole mesh (same submesh as
+        # the DiT). ``encoder_sp_axis`` picks which mesh axis carries SP; the other carries TP. Default 1
+        # -> SP=mesh[1] (8 on 4x8) x TP=mesh[0] (4); set 0 -> SP=mesh[0] (4) x TP=mesh[1] (8). The token
+        # sequence is padded to a fixed 1024 bucket and sharded over the SP axis; SmolLM3Attention
+        # all-gathers K/V over the SP axis and Q/K/V/O over the TP axis. PCC-validated (both axes) by
+        # tests/encoders/smollm3/test_smollm3.py::test_smollm3_encoder_sp. On the 4x8 Galaxy SP=8 x TP=4
+        # measured ~12.5 s/encode vs ~23.8 s for SP=4 x TP=8 (test_fibo_encode_perf), hence the default.
+        enc_sp_axis = encoder_sp_axis
+        enc_tp_axis = 1 - enc_sp_axis
+        encoder_parallel_config = EncoderParallelConfig.from_tuples(
+            tp=(mesh[enc_tp_axis], enc_tp_axis),
+            sp=(mesh[enc_sp_axis], enc_sp_axis),
+        )
 
         # VAE: height/width parallel matched to the physical mesh (mirrors wan's (2,2) BH preset:
         # height on the tp axis, width on the sp axis). The Wan 2.2 residual decoder decodes on the full
@@ -131,7 +139,9 @@ class BriaFiboPipelineConfig:
 
 
 class BriaFiboPipeline:
-    def __init__(self, *, device: ttnn.MeshDevice, config: BriaFiboPipelineConfig) -> None:
+    def __init__(
+        self, *, device: ttnn.MeshDevice, config: BriaFiboPipelineConfig, run_allocation_pass: bool = True
+    ) -> None:
         self._mesh_device = device
         self._config = config
         self._parallel_config = config.dit_parallel_config
@@ -168,11 +178,19 @@ class BriaFiboPipeline:
         self._solver = EulerSolver()
 
         logger.info("creating text encoder...")
+        # Encoder on the whole mesh (same submesh as the DiT): SP across tokens x TP. It gets its OWN
+        # CCLManager (like the VAE, not the transformer's): the transformer's CCLManager carries the
+        # resident denoise trace, and an untraced encoder all-gather on it between traced generations
+        # would desync the baked ping-pong state. A second CCLManager on the same whole-mesh submesh is
+        # the established pattern (see the VAE below); it does NOT hit the overlapping-submesh CCL hang
+        # that separate cfg-parallel encoder submeshes did.
+        self._encoder_ccl_manager = CCLManager(self._submesh, num_links=config.num_links, topology=config.topology)
         self._text_encoder = SmolLM3TextEncoderWrapper(
             config.checkpoint_name,
             device=self._submesh,
-            ccl_manager=self._ccl_manager,
+            ccl_manager=self._encoder_ccl_manager,
             parallel_config=config.encoder_parallel_config,
+            pad_buckets=(1024,),
         )
         ttnn.synchronize_device(self._submesh)
 
@@ -204,9 +222,14 @@ class BriaFiboPipeline:
         # only then allocates the VAE buffers *during an active trace*, which corrupts the decoded image
         # (verified: no alloc-run -> traced image std 0.85/degenerate; with it -> bit-identical to
         # untraced). Cheap 2-step run; op compilation is amortized here too.
-        logger.info("pipeline allocation run (untraced)...")
-        self(prompt="", num_inference_steps=2, guidance_scale=2.0, traced=False, force_device_decode=True)
-        ttnn.synchronize_device(self._submesh)
+        #
+        # run_allocation_pass=False skips it -- ONLY safe when the caller never captures a denoise trace
+        # (e.g. an encode-only harness that just calls _encode). It avoids the full 2-step generation and
+        # its on-device VAE decode (conv3d). The VAE/transformer are still constructed either way.
+        if run_allocation_pass:
+            logger.info("pipeline allocation run (untraced)...")
+            self(prompt="", num_inference_steps=2, guidance_scale=2.0, traced=False, force_device_decode=True)
+            ttnn.synchronize_device(self._submesh)
 
     @torch.no_grad()
     def __call__(
@@ -266,6 +289,8 @@ class BriaFiboPipeline:
         encoded and the uncond entries are returned as ``None`` (the diffusers reference skips it too).
         """
         logger.info("encoding prompts...")
+        # SP x TP encoder on the whole mesh; positive and negative prompts are encoded sequentially,
+        # each padded to the 1024 bucket and sequence-parallel across tokens.
         cond_embeds, cond_hidden_states = self._text_encoder.encode_prompt(prompt)
         if do_cfg:
             uncond_embeds, uncond_hidden_states = self._text_encoder.encode_prompt(negative_prompt)

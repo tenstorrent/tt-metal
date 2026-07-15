@@ -94,15 +94,24 @@ def _num_links(mesh_device):
     return {(2, 2): 4, (4, 8): 2}.get(tuple(mesh_device.shape), 1)
 
 
-def _build_pipe(mesh_device, height, width):
+def _build_pipe(mesh_device, height, width, *, run_allocation_pass=True):
     from models.tt_dit.pipelines.bria_fibo.pipeline_bria_fibo import BriaFiboPipeline, BriaFiboPipelineConfig
 
     ckpt = _fibo_local()
+    # FIBO_ENC_SP_AXIS selects the encoder's sequence-parallel mesh axis (1 -> SP=mesh[1] x TP=mesh[0],
+    # the default and ~2x faster on 4x8; 0 -> SP=mesh[0] x TP=mesh[1]). Dev-harness knob for the SP/TP
+    # layout perf comparison.
+    encoder_sp_axis = int(os.environ.get("FIBO_ENC_SP_AXIS", "1"))
     return BriaFiboPipeline(
         device=mesh_device,
         config=BriaFiboPipelineConfig.default(
-            mesh_shape=mesh_device.shape, checkpoint_name=ckpt, height=height, width=width
+            mesh_shape=mesh_device.shape,
+            checkpoint_name=ckpt,
+            height=height,
+            width=width,
+            encoder_sp_axis=encoder_sp_axis,
         ),
+        run_allocation_pass=run_allocation_pass,
     )
 
 
@@ -321,6 +330,71 @@ def test_fibo_pipeline_perf_breakdown_json(
         num_inference_steps=num_inference_steps,
         num_measured_runs=num_measured_runs,
         traced=traced,
+    )
+
+
+# Run the 4x8 encode-only wall-clock perf (-k "mesh_device1" selects the 4x8 mesh). Use -s to print the timing:
+#   HF_HUB_OFFLINE=1 TT_METAL_HOME=$PWD PYTHONPATH=$PWD ARCH_NAME=blackhole \
+#     python_env/bin/python -m pytest \
+#     models/tt_dit/tests/models/bria_fibo/test_performance_bria_fibo.py::test_fibo_encode_perf \
+#     -k "mesh_device1" -v -s --timeout=1800
+@pytest.mark.parametrize("mesh_device", [(2, 2), (4, 8)], indirect=["mesh_device"])
+@pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=["device_params"])
+def test_fibo_encode_perf(*, mesh_device):
+    """Encode-only wall-clock perf: time the pipeline's ``_encode`` (positive + negative prompt), no perf-report.
+
+    Builds the full ``BriaFiboPipeline`` and times ONLY ``pipe._encode(prompt, negative_prompt, do_cfg=True)``
+    -- the same encode the pipeline runs under CFG, encoding both prompts SEQUENTIALLY and returning
+    ``(cond_embeds, cond_hidden_states, uncond_embeds, uncond_hidden_states)``. On the 4x8 Galaxy the encoder
+    runs SP=8 x TP=4 on the whole mesh (the default; set ``FIBO_ENC_SP_AXIS=0`` for the SP=4 x TP=8 layout):
+    the token sequence (padded to the fixed 1024 bucket) is sharded across the SP axis (all-gather K/V per
+    attention layer) and Q/K/V/O are tensor-parallel on the TP axis. Measured ~12.5 s/encode for SP=8 x TP=4
+    vs ~23.8 s for SP=4 x TP=8. Positive prompt is FIBO's intended structured-JSON caption (the committed
+    ``fibo_vlm_prompt.json``, ~833 tokens); negative is a short free-text string. 1 warmup (absorbs op
+    compilation) + N measured passes with boundary device syncs; logs encode seconds (avg/min/max) and the
+    produced output shapes. Plain pytest -- no Tracy, no signposts, no device-op CSV. Use ``-s`` to see the
+    timing. Runtime ~ (1 warmup + N) encodes + ~44s model build, per mesh.
+    """
+    if not _JSON_PROMPT_PATH.is_file():
+        pytest.skip(f"JSON prompt fixture missing: {_JSON_PROMPT_PATH}")
+    prompt = _JSON_PROMPT_PATH.read_text().strip()  # FIBO's intended structured-JSON caption
+    negative_prompt = "blurry, low quality, distorted, watermark, text"
+    num_measured_runs = 3
+
+    # encode is spatial-size independent; 1024x1024 just satisfies _build_pipe's DiT/VAE build.
+    # run_allocation_pass=False: this test only calls _encode (never captures a denoise trace), so we
+    # skip the __init__ full-generation warmup and its on-device VAE decode (conv3d).
+    pipe = _build_pipe(mesh_device, 1024, 1024, run_allocation_pass=False)
+    submesh = pipe._submesh
+
+    def encode_once():
+        ttnn.synchronize_device(submesh)  # drain enqueued work so t0 is a real boundary
+        t0 = perf_counter()
+        encoded = pipe._encode(prompt, negative_prompt, do_cfg=True)
+        ttnn.synchronize_device(submesh)  # wait for this encode's device work to finish
+        return perf_counter() - t0, encoded
+
+    logger.info("encode perf: warmup run...")
+    encode_once()  # warmup: compile/populate the program cache
+
+    times = []
+    encoded = None
+    for r in range(num_measured_runs):
+        logger.info(f"encode perf: measured run {r + 1}/{num_measured_runs}...")
+        dt, encoded = encode_once()
+        times.append(dt)
+
+    # Produce/verify the outputs -- the same 4-tuple the pipeline's _encode returns under CFG.
+    cond_embeds, cond_hidden_states, uncond_embeds, uncond_hidden_states = encoded
+    assert cond_embeds is not None and len(cond_hidden_states) > 0, "positive branch produced no output"
+    assert uncond_embeds is not None and len(uncond_hidden_states) > 0, "negative branch produced no output"
+
+    avg, lo, hi = sum(times) / len(times), min(times), max(times)
+    logger.info(
+        f"\nFIBO encode perf -- avg of {num_measured_runs} runs (after 1 warmup)"
+        f"\n  encode (pos+neg)  {avg:6.3f} s  [min {lo:.3f} / max {hi:.3f}]"
+        f"\n  cond_embeds   {list(cond_embeds.shape)}  ({len(cond_hidden_states)} hidden-state layers)"
+        f"\n  uncond_embeds {list(uncond_embeds.shape)}  ({len(uncond_hidden_states)} hidden-state layers)"
     )
 
 
