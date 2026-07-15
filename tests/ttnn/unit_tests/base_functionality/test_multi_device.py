@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
@@ -9,6 +9,7 @@ import tempfile
 from loguru import logger
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
+from models.common.utility_functions import is_single_chip, ti_skip
 
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
 
@@ -475,6 +476,7 @@ def test_multi_device_permute(mesh_device, layout, memory_config, dtype):
     assert_with_pcc(torch_golden, torch_loop_back_tensor, pcc=0.9999)
 
 
+@ti_skip(is_single_chip(), "Test is not supported on single-chip")
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -587,6 +589,7 @@ def test_sharded_matmul(mesh_device):
     print(attn_1B4P)
 
 
+@ti_skip(is_single_chip(), "Test is not supported on single-chip")
 def test_4b_tensor(mesh_device):
     tensor = ttnn.from_torch(
         torch.randn(1, 1, 32, 32),
@@ -614,6 +617,7 @@ def test_4b_tensor(mesh_device):
     )
 
 
+@ti_skip(is_single_chip(), "Test is not supported on single-chip")
 def test_slicing(mesh_device):
     tensor = ttnn.from_torch(
         torch.randn(1, 32, 32, 32),
@@ -627,6 +631,7 @@ def test_slicing(mesh_device):
     assert all([device_tensor.shape == tensor.shape for device_tensor in ttnn.get_device_tensors(tensor)])
 
 
+@ti_skip(is_single_chip(), "Test is not supported on single-chip")
 def test_clone(mesh_device):
     results_11BH = ttnn.from_torch(
         torch.randn(1, 1, 32, 128),

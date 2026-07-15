@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,6 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/reflection.hpp>
 #include "erisc_datamover_builder.hpp"
@@ -26,7 +25,7 @@
 namespace tt::tt_fabric {
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_fabric::Topology& topology) {
-    tt::stl::reflection::operator<<(os, topology);
+    ttsl::reflection::operator<<(os, topology);
     return os;
 }
 

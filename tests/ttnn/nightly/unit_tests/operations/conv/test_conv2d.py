@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -280,6 +280,9 @@ def run_conv(
 
     if config_override and "act_block_w_div" in config_override and not auto_shard:
         conv_config.act_block_w_div = config_override["act_block_w_div"]
+
+    if config_override and "reshard_if_not_optimal" in config_override:
+        conv_config.reshard_if_not_optimal = config_override["reshard_if_not_optimal"]
 
     if not use_dram_slicing:
         slice_config = ttnn.Conv2dL1FullSliceConfig
@@ -3131,9 +3134,7 @@ def test_conv2d_model_fruit(
 @pytest.mark.parametrize(
     "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, shard_layout, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, act_db, w_db",
     (
-        # 1024x1024 resolution
-
-        # UNet
+        ################################################################## START: 1024x1024 resolution ##################################################################
         # kernel 3x3
         (1, 1280, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, True, True),
         (1, 1280, 1280, 64, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, True, ttnn.MathFidelity.HiFi2, False, True, True, True),
@@ -3156,15 +3157,46 @@ def test_conv2d_model_fruit(
 
         # output_channels 4
         (1, 320, 4, 128, 128,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 128,  1, True, ttnn.MathFidelity.HiFi2, False, False, True, False),
-        # # input_channels 4
+        # input_channels 4
         (1, 4, 320, 128, 128,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 0,  1, True, ttnn.MathFidelity.HiFi2, False, False, True, False),
 
         # # input_channels 9
         (1, 9, 320, 128, 128,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 0,  1, True, ttnn.MathFidelity.HiFi2, False, False, True, False),
+        ################################################################### END: 1024x1024 resolution ###################################################################
 
+
+
+        ################################################################### START: 512x512 resolution ###################################################################
+        # conv_in
+        (1, 4, 320, 64, 64,     ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 0, 1, True, ttnn.MathFidelity.HiFi2, False, False, True, False),
+        (1, 9, 320, 64, 64,     ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 0, 1, True, ttnn.MathFidelity.HiFi2, False, False, True, False),
+
+        # regular 3x3 kernel
+        (1, 320, 320, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 512, 1, True, ttnn.MathFidelity.HiFi2, False, True, True, True),
+        (1, 320, 640, 32, 32,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, True, ttnn.MathFidelity.HiFi2, False, True, True, True),
+        (1, 640, 640, 32, 32,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, True, ttnn.MathFidelity.HiFi2, True, False, True, True),
+        (1, 640, 1280, 16, 16,  ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, True, True),
+        (1, 1280, 1280, 16, 16, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, True, True),
+        (1, 2560, 1280, 16, 16, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, True, True),
+        (1, 1920, 1280, 16, 16, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, True, True),
+        (1, 1280, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, True, ttnn.MathFidelity.HiFi2, False, True, True, True),
+        (1, 1920, 640, 32, 32,  ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, True, ttnn.MathFidelity.HiFi2, True, False, True, True),
+        (1, 1280, 640, 32, 32,  ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, True, ttnn.MathFidelity.HiFi2, True, False, True, True),
+        (1, 960, 640, 32, 32,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, True, ttnn.MathFidelity.HiFi2, True, False, True, True),
+        (1, 640, 640, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 512, 1, True, ttnn.MathFidelity.HiFi2, True, False, True, True),
+        (1, 960, 320, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, True, ttnn.MathFidelity.HiFi2, True, False, True, True),
+        (1, 640, 320, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, True, ttnn.MathFidelity.HiFi2, True, False, True, True),
+
+        # down_blocks.0.downsamplers.0
+        (1, 320, 320, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), BS, 128, 1, False, ttnn.MathFidelity.HiFi2, False, False, True, True),
+        # down_blocks.1.downsamplers.0
+        (1, 640, 640, 32, 32,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), BS, 32, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, False),
+
+        # conv_out
+        (1, 320, 4, 64, 64,     ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 0, 1, True, ttnn.MathFidelity.HiFi2, False, False, True, False),
+        #################################################################### END: 512x512 resolution ####################################################################
     ),
 )
-
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2 * 16384}], indirect=True)
 def test_conv2d_sdxl(
     device,
@@ -3207,6 +3239,7 @@ def test_conv2d_sdxl(
     config_override = {}
     config_override["act_block_h"] = act_block_h_override
     config_override["act_block_w_div"] = act_block_w_div
+    config_override["reshard_if_not_optimal"] = True
 
     run_conv(
         device=device,
@@ -3354,9 +3387,7 @@ def test_conv2d_sdxl_refiner(
 @pytest.mark.parametrize(
     "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, shard_layout, deallocate_activation, slice_type, num_slices, act_block_h_override, throttle",
     (
-        # 1024x1024 resolution
-
-        # VAE
+        ################################################################## START: VAE 1024x1024 resolution ##################################################################
         # Decoder
         # kernel 3x3
         (1, 128, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dDRAMSliceWidth,  8,   32, 3),
@@ -3373,21 +3404,35 @@ def test_conv2d_sdxl_refiner(
         (1,   4, 512,  128,  128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False,                      None, 1,     0, 0),
 
         # Encoder
-
         # kernel 3x3
         (1, 128, 256,  512,  512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dDRAMSliceWidth,  4,    64, 0),
         (1, 256, 512,  256,  256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dDRAMSliceWidth,  2,  1024, 0),
-
         # input_channels 3,
         (1,   3, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dDRAMSliceWidth, 8,   1024, 0),
-
         # input_channels 8,
         (1, 512,   8, 128,   128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dDRAMSliceWidth, 2,     0,  0),
-
         # stride 2x2
         (1, 128,   128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (0, 1, 0, 1), (1, 1), HS, False, ttnn.Conv2dDRAMSliceWidth, 8,   256, 0),
         (1, 256,   256,  512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (0, 1, 0, 1), (1, 1), BS, False, ttnn.Conv2dDRAMSliceWidth, 4,   1024, 0),
         (1, 512,   512,  256, 256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (0, 1, 0, 1), (1, 1), BS, False, ttnn.Conv2dDRAMSliceWidth, 2,   512, 0),
+        ################################################################### END: VAE 1024x1024 resolution ###################################################################
+
+        ################################################################### START: VAE 512x512 resolution ###################################################################
+        # Decoder
+        # kernel 3x3
+        (1, 128, 128, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dDRAMSliceWidth,  8,   32, 3),
+        (1, 256, 128, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dDRAMSliceWidth, 16,   32, 0),
+        (1, 256, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dDRAMSliceWidth, 16,  512, 0),
+        (1, 256, 256, 256, 256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dDRAMSliceWidth,  4,  512, 0),
+        (1, 512, 512,  64,  64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False,                      None,  1,  512, 0),
+        (1, 512, 512, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dDRAMSliceWidth,  2,  256, 0),
+        (1, 512, 256, 256, 256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dDRAMSliceWidth,  8,  512, 0),
+        (1, 512, 512, 256, 256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dDRAMSliceWidth,  8,  256, 0),
+        # output_channels 3
+        (1, 128,   3, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dDRAMSliceWidth, 2,   256, 0),
+        # input_channels 4
+        (1,   4, 512,  64,  64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False,                      None, 1,     0, 0),
+        #################################################################### END: VAE 512x512 resolution ####################################################################
     ),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 27 * 1024}], indirect=True)
@@ -5425,3 +5470,357 @@ def test_conv_fp32_accum_auto_default(device,torch_tensor_map):
     assert not torch.equal(tt_output_auto_torch, tt_output_explicit_false_torch), \
         "Auto-default output matches explicit fp32_dest_acc_en=False. " \
         "This suggests FP32 accumulation was NOT enabled (unexpected)."
+
+
+def run_conv2d_replicate_pad(
+    device,
+    torch_tensor_map,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    padding,
+    has_bias=True,
+    weights_dtype=ttnn.bfloat16,
+    output_dtype=ttnn.bfloat16,
+    groups=1,
+    dilation_h=1,
+    dilation_w=1,
+    shard_layout=HS,
+    padding_mode=ttnn.PaddingMode.Replicate,
+):
+    torch.manual_seed(0)
+    conv_input_shape = (batch_size, input_channels, input_height, input_width)
+    conv_weight_shape = (output_channels, input_channels // groups, filter_height, filter_width)
+    # randomize_torch_tensor caches by (shape, dtype); clone before mutating edges so the
+    # cached tensor stays pristine for other tests sharing this fixture.
+    torch_input_tensor_nchw = randomize_torch_tensor(torch_tensor_map, conv_input_shape).clone()
+
+    # Set edge values to large numbers so replicate padding has a measurable effect on output.
+    # Without this, random values near 0 make replicate vs zero padding hard to distinguish via PCC.
+    torch_input_tensor_nchw[:, :, 0, :] = 10.0   # top edge
+    torch_input_tensor_nchw[:, :, -1, :] = -10.0  # bottom edge
+    torch_input_tensor_nchw[:, :, :, 0] = 8.0     # left edge
+    torch_input_tensor_nchw[:, :, :, -1] = -8.0   # right edge
+
+    torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
+    torch_weight_tensor = randomize_torch_tensor(torch_tensor_map, conv_weight_shape)
+    torch_bias_tensor = randomize_torch_tensor(torch_tensor_map, (output_channels,)) if has_bias else None
+
+    if hasattr(padding, "__len__"):
+        if len(padding) == 2:
+            pad_top = pad_bottom = padding[0]
+            pad_left = pad_right = padding[1]
+        elif len(padding) == 4:
+            pad_top, pad_bottom, pad_left, pad_right = padding
+        else:
+            raise ValueError("Padding should be 2 or 4 elements")
+    else:
+        pad_top = pad_bottom = pad_left = pad_right = padding
+
+    # Golden: explicit pad (matching the mode under test) + conv2d with no padding.
+    pad_mode_str = "replicate" if padding_mode == ttnn.PaddingMode.Replicate else "constant"
+    torch_padded_input = torch.nn.functional.pad(
+        torch_input_tensor_nchw,
+        (pad_left, pad_right, pad_top, pad_bottom),
+        mode=pad_mode_str,
+    )
+    torch_out_golden = torch.nn.functional.conv2d(
+        torch_padded_input,
+        torch_weight_tensor,
+        bias=torch_bias_tensor,
+        stride=(stride_h, stride_w),
+        padding=(0, 0),
+        dilation=(dilation_h, dilation_w),
+        groups=groups,
+    )
+
+    tt_weight_tensor = ttnn.from_torch(
+        torch_weight_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
+    )
+    tt_bias_tensor = None
+    if has_bias:
+        tt_bias_tensor = ttnn.from_torch(
+            torch_bias_tensor.reshape(1, 1, 1, -1), weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
+        )
+
+    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
+
+    conv_config = ttnn.Conv2dConfig(
+        weights_dtype=weights_dtype,
+        shard_layout=shard_layout,
+        deallocate_activation=True,
+        padding_mode=padding_mode,
+    )
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+    )
+
+    [tt_output_tensor_on_device, [out_height, out_width]] = ttnn.conv2d(
+        input_tensor=tt_input_tensor,
+        weight_tensor=tt_weight_tensor,
+        in_channels=input_channels,
+        out_channels=output_channels,
+        device=device,
+        bias_tensor=tt_bias_tensor,
+        kernel_size=(filter_height, filter_width),
+        stride=(stride_h, stride_w),
+        padding=padding,
+        dilation=(dilation_h, dilation_w),
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        conv_config=conv_config,
+        compute_config=compute_config,
+        groups=groups,
+        dtype=output_dtype,
+        return_output_dim=True,
+        return_weights_and_bias=False,
+    )
+
+    tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
+    torch_output_tensor = torch.Tensor(ttnn.to_torch(tt_output_tensor))
+    torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, output_channels)
+    torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
+
+    pcc = 0.99
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden, pcc=pcc)
+    assert passing, pcc_msg
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, padding, dilation_h, dilation_w",
+    (
+        (1, 64, 32, 32, 32, 3, 3, 1, 1, (1, 1), 1, 1),
+        (1, 64, 32, 32, 32, 5, 5, 1, 1, (2, 2), 1, 1),
+        (1, 64, 32, 32, 32, 3, 3, 2, 2, (1, 1), 1, 1),
+        (2, 64, 32, 32, 32, 3, 3, 1, 1, (1, 1), 1, 1),
+        (1, 64, 32, 32, 32, 3, 3, 1, 1, (1, 2, 1, 2), 1, 1),
+        (1, 64, 32, 16, 64, 3, 3, 1, 1, (1, 1), 1, 1),
+        (1, 64, 32, 32, 32, 5, 5, 1, 1, (4, 4), 1, 1),
+        # dilation > 1: padding must equal dilation for 3x3 kernel to preserve spatial size.
+        (1, 64, 32, 32, 32, 3, 3, 1, 1, (2, 2), 2, 2),
+    ),
+)
+def test_conv2d_replicate_pad(
+    device, torch_tensor_map, batch_size, output_channels, input_channels, input_height, input_width,
+    filter_height, filter_width, stride_h, stride_w, padding, dilation_h, dilation_w,
+):
+    run_conv2d_replicate_pad(
+        device,
+        torch_tensor_map,
+        batch_size=batch_size,
+        output_channels=output_channels,
+        input_channels=input_channels,
+        input_height=input_height,
+        input_width=input_width,
+        filter_height=filter_height,
+        filter_width=filter_width,
+        stride_h=stride_h,
+        stride_w=stride_w,
+        padding=padding,
+        dilation_h=dilation_h,
+        dilation_w=dilation_w,
+    )
+
+
+# Width-sharded smoke test: replicate padding should work for WS halo as well.
+# WS needs enough channels per core; use larger input_channels and act_block_w.
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, padding",
+    (
+        (1, 128, 128, 16, 16, 3, 3, 1, 1, (1, 1)),
+    ),
+)
+def test_conv2d_replicate_pad_width_sharded(
+    device, torch_tensor_map, batch_size, output_channels, input_channels, input_height, input_width,
+    filter_height, filter_width, stride_h, stride_w, padding,
+):
+    run_conv2d_replicate_pad(
+        device,
+        torch_tensor_map,
+        batch_size=batch_size,
+        output_channels=output_channels,
+        input_channels=input_channels,
+        input_height=input_height,
+        input_width=input_width,
+        filter_height=filter_height,
+        filter_width=filter_width,
+        stride_h=stride_h,
+        stride_w=stride_w,
+        padding=padding,
+        shard_layout=WS,
+    )
+
+
+# bfloat8_b weights coverage — exercises the non-bfloat16 weights-dtype path through the helper.
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv2d_replicate_pad_bfloat8b_weights(device, torch_tensor_map):
+    run_conv2d_replicate_pad(
+        device,
+        torch_tensor_map,
+        batch_size=1,
+        output_channels=64,
+        input_channels=32,
+        input_height=32,
+        input_width=32,
+        filter_height=3,
+        filter_width=3,
+        stride_h=1,
+        stride_w=1,
+        padding=(1, 1),
+        weights_dtype=ttnn.bfloat8_b,
+    )
+
+
+# Regression: padding_mode=Zeros must behave identically to default zero padding.
+# Uses the same helper pipeline to exercise the enum-selection branch end-to-end.
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv2d_zeros_pad_regression(device, torch_tensor_map):
+    run_conv2d_replicate_pad(
+        device,
+        torch_tensor_map,
+        batch_size=1,
+        output_channels=64,
+        input_channels=32,
+        input_height=32,
+        input_width=32,
+        filter_height=3,
+        filter_width=3,
+        stride_h=1,
+        stride_w=1,
+        padding=(1, 1),
+        padding_mode=ttnn.PaddingMode.Zeros,
+    )
+
+
+# Regression for issue #43229: fp32 conv with TILE input + padding caps output magnitude at
+# ~131K (= fp16 max ±65504 widened to fp32). The halo's untilize compute kernel passed fp32
+# values through the unpacker's default conditional dst format — which was Float16 (5-bit
+# exponent), saturating fp32 magnitudes. The fix in tt_metal/jit_build/data_format.cpp
+# escalates the conditional from Float16 to Tf32 (8-bit exponent) for fp32 src, preserving
+# the magnitude. Threading compute_kernel_config through ttnn::halo() is the corresponding
+# API change so the halo's compute kernel knows fp32_dest_acc_en=true is required.
+#
+# We feed inputs scaled to ~5e6 — well above fp16's ±65504 — and check that the conv output
+# tracks torch's fp32 reference (PCC ≈ 1). Pre-fix the same test produced PCC ≈ 0.82 with
+# max_abs ≈ 2.5e7 (the cap propagated through the matmul reduction).
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv2d_fp32_input_no_fp16_saturation(device):
+    torch.manual_seed(0)
+    batch_size, input_channels, input_height, input_width = 1, 64, 32, 32
+    output_channels = 64
+    filter_height, filter_width = 3, 3
+    pad_h, pad_w = 1, 1
+    input_scale = 1.0e6  # values comparable to the chained-conv regime in the issue
+
+    torch_input_nchw = (torch.randn(batch_size, input_channels, input_height, input_width) * input_scale).float()
+    torch_weight = torch.randn(output_channels, input_channels, filter_height, filter_width).float()
+    torch_bias = torch.zeros(output_channels).float()
+
+    ref = torch.nn.functional.conv2d(
+        torch_input_nchw, torch_weight, bias=torch_bias, stride=(1, 1), padding=(pad_h, pad_w)
+    )
+    # Sanity: input is scaled large enough that pre-fix output would saturate.
+    assert ref.abs().max().item() > 1.0e7, "regression test must exercise magnitudes past the fp16 cap"
+
+    torch_input = torch.permute(torch_input_nchw, (0, 2, 3, 1))
+    tt_input = ttnn.from_torch(torch_input, ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_weight = ttnn.from_torch(torch_weight, ttnn.float32)
+    tt_bias = ttnn.from_torch(torch_bias.reshape(1, 1, 1, -1), ttnn.float32)
+
+    conv_config = ttnn.Conv2dConfig(weights_dtype=ttnn.float32, deallocate_activation=False, shard_layout=None)
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    tt_out, _, _ = ttnn.conv2d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        in_channels=input_channels,
+        out_channels=output_channels,
+        device=device,
+        bias_tensor=tt_bias,
+        kernel_size=(filter_height, filter_width),
+        stride=(1, 1),
+        padding=(pad_h, pad_w),
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        dtype=ttnn.float32,
+        conv_config=conv_config,
+        compute_config=compute_config,
+        groups=1,
+        return_output_dim=True,
+        return_weights_and_bias=True,
+    )
+    out_nhwc = ttnn.to_torch(tt_out).reshape(batch_size, input_height, input_width, output_channels).float()
+    out_nchw = torch.permute(out_nhwc, (0, 3, 1, 2))
+
+    # Pre-fix this would be ~2.5e7. Post-fix it tracks the reference.
+    assert out_nchw.abs().max().item() > 5.0e7, (
+        f"output max_abs {out_nchw.abs().max().item():.3e} suggests fp16-cap regression (issue #43229)"
+    )
+    passed, msg = check_with_pcc_without_tensor_printout(ref, out_nchw, pcc=0.99)
+    assert passed, msg
+
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "shard_layout, output_channels, input_channels, input_height, input_width, config",
+    (
+        # Unaligned input channels (not a multiple of 32) -> create_device_tensor alignment path.
+        (WS, 384, 353, 8, 8, None),
+        (BS, 128, 129, 32, 32, None),
+        # Aligned VGG-like block-sharded shapes -> pad-after-shard path.
+        (BS, 256, 256, 56, 56, None),
+        (BS, 512, 512, 28, 28, None),
+        # Height-sharded row-major host input needing H/W padding -> pad-before-shard path.
+        (HS, 64, 64, 224, 224, {"act_block_h": 32}),
+    ),
+)
+def test_conv2d_row_major_host_sharding_alignment_regression(
+    device,
+    torch_tensor_map,
+    shard_layout,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    config,
+):
+    run_conv(
+        device,
+        torch_tensor_map,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        output_dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat16,
+        batch_size=1,
+        output_channels=output_channels,
+        input_channels=input_channels,
+        input_height=input_height,
+        input_width=input_width,
+        filter_height=3,
+        filter_width=3,
+        stride_h=1,
+        stride_w=1,
+        padding=(1, 1, 1, 1),
+        config_override=config,
+        shard_layout=shard_layout,
+        input_dtype=ttnn.bfloat16,
+        input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        output_layout=ttnn.TILE_LAYOUT,
+        has_bias=True,
+    )

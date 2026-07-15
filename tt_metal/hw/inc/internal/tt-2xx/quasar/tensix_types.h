@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,7 +15,7 @@
 //  tensix_types.h
 //  This file contains tensix structures used by RISCV firmware and test-bench/tests
 //
-//  Copyright © 2018 Tenstorrent. All rights reserved.
+//  Copyright © 2018 Tenstorrent USA, Inc. All rights reserved.
 //
 
 /////////////
@@ -255,27 +255,31 @@ enum class DataFormat : std::uint8_t {
     Int32 = 8,
     Int8 = 14,
     Int16 = 9,
-    Uint8 = 17,    // Unsigned INT with 8-bit magnitude
-    Uint16 = 130,  // Unsigned INT with 16-bit magnitude
-    // Special-case encodings used only for MXFP4 2x-packed Src Reg Storage :
-    MxFp4_2x_A = 27,  // store MXFP4 in Src Regs as 2x-packed format with 5-bit exp
-    MxFp4_2x_B = 24,  // store MXFP4 in Src Regs as 2x-packed format with 8-bit exp
+    UInt8 = 17,    // Unsigned INT with 8-bit magnitude
+    UInt16 = 130,  // Unsigned INT with 16-bit magnitude
     Int4 = 23,
-    Uint4 = 25,
+    UInt4 = 25,
     // Special-case encodings used only for int 2x-packed Src Reg Storage :
-    Int8_2x = 26,
-    Uint8_2x = 28,
-
-    Lf8 = 10,
-    UInt8 = 30,
-    UInt16 = 9,
-    UInt32 = 24,
-    testMan7 = 0x82,  // intermediate format for testing: 7bit mantissa (6+hidden)
-    testMan2 = 0x8A,  // intermediate format for testing: 2bit mantissa (2+hidden)
+    MxFp4_2x_A = 27,  // store MXFP4 in Src Regs as 2x-packed format with 5-bit exp this is supported in Quasar only
+                      // (not supported in Trinity)
+    MxFp4_2x_B = 24,  // store MXFP4 in Src Regs as 2x-packed format with 8-bit exp this is supported in Quasar only
+                      // (not supported in Trinity)
+    Int8_2x =
+        26,  // store INT8 in Src Regs as 2x-Packed INT8;   this is supported in Trinity only (not supported in Quasar)
+    UInt8_2x =
+        28,  // store UINT8 in Src Regs as 2x Packed UINT8; this is supported in Trinity only (not supported in Quasar)
 
     automatic = 0xfe,  // Not a valid HW enum value, but useful to have it here for SW
     Invalid = 0xff     // Not a valid HW enum value, but useful to have it here for SW
 };
+
+// True for the 2x-packed, src-register-only DataFormats (one Src register lane holds two packed
+// sub-elements, driving the matmul EN_X2 traversal). These never appear as L1/CB formats — only as
+// an unpack_dst (Src register) format. MxFp4_2x_A/B are Quasar-only; Int8_2x/UInt8_2x are Trinity.
+constexpr inline bool is_2x_format(DataFormat format) {
+    return format == DataFormat::MxFp4_2x_A || format == DataFormat::MxFp4_2x_B || format == DataFormat::Int8_2x ||
+           format == DataFormat::UInt8_2x;
+}
 
 typedef struct {
     unsigned l1_addr_16B : 20 __attribute__((packed));

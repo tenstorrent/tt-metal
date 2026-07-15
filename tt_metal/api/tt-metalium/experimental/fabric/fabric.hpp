@@ -1,18 +1,20 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <stdint.h>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
-#include <vector>
+#include <tt-metalium/device_types.hpp>
+// UMD: re-exports CoreType (used in append_fabric_connection/FabricHandle default params).
 #include <umd/device/types/core_coordinates.hpp>
+#include <string>
+#include <unordered_map>
+#include <vector>
 #include <optional>
 #include <hostdevcommon/fabric_common.h>
 
@@ -34,11 +36,11 @@ size_t get_tt_fabric_channel_buffer_size_bytes();
 size_t get_tt_fabric_packet_header_size_bytes();
 size_t get_tt_fabric_max_payload_size_bytes();
 
-// Used to get the run-time args for estabilishing connection with the fabric router.
-// The API appends the connection specific run-time args to the set of exisiting
+// Used to get the run-time args for establishing connection with the fabric router.
+// The API appends the connection specific run-time args to the set of existing
 // run-time args for the worker programs, which allows the workers to conveniently
 // build connection management object(s) using the run-time args.
-// It is advised to call the API once all the other run-time args for the prgram are
+// It is advised to call the API once all the other run-time args for the program are
 // determined/pushed to keep things clean and avoid any extra arg management.
 //
 // Template parameter ProgramOrDescriptor defaults to Program. When ProgramDescriptor is passed,
@@ -66,7 +68,7 @@ void append_fabric_connection_rt_args(
     const FabricNodeId& dst_fabric_node_id,
     uint32_t link_idx,
     ProgramOrDescriptor& worker_program_or_desc,
-    const CoreCoord& worker_core,
+    const tt::tt_metal::CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
     CoreType core_type = CoreType::WORKER);
 
@@ -89,7 +91,7 @@ void append_routing_plane_connection_manager_rt_args(
     const std::vector<uint32_t>& connection_link_indices,
     ProgramOrDescriptor& worker_program_or_desc,
     tt::tt_metal::KernelHandle& kernel_id,
-    const CoreCoord& worker_core,
+    const tt::tt_metal::CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
     FabricApiType api_type = FabricApiType::Linear,
     CoreType core_type = CoreType::WORKER);
@@ -103,7 +105,7 @@ uint32_t append_routing_plane_connection_manager_rt_args(
     const std::vector<uint32_t>& connection_link_indices,
     ProgramOrDescriptor& worker_program_or_desc,
     tt::tt_metal::KernelHandle& kernel_id,
-    const CoreCoord& worker_core,
+    const tt::tt_metal::CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
     FabricApiType api_type = FabricApiType::Linear,
     CoreType core_type = CoreType::WORKER);
@@ -122,12 +124,26 @@ std::unordered_map<MeshId, tt::tt_metal::distributed::MeshShape> get_physical_me
 
 tt::tt_fabric::Topology get_fabric_topology();
 
+struct FabricEriscDatamoverKernelConfig {
+    tt::tt_metal::Program& program;
+    const std::string& kernel_path;
+    const tt::tt_metal::CoreCoord& eth_core;
+    tt::tt_metal::DataMovementProcessor risc_id;
+    tt::tt_metal::NOC noc_id;
+    const std::vector<uint32_t>& compile_time_args;
+    const std::unordered_map<std::string, uint32_t>& named_compile_time_args;
+    const std::vector<uint32_t>& runtime_args;
+    std::optional<tt::tt_metal::KernelBuildOptLevel> opt_level;
+};
+
+tt::tt_metal::KernelHandle generate_erisc_datamover_kernel(const FabricEriscDatamoverKernelConfig& edm_kernel_config);
+
 /**
  * Call before CreateDevices to enable fabric, which uses the specified number of routing planes.
  * Currently, setting num_routing_planes dictates how many routing planes the fabric should be active on
  * for that init sequence. The number of routing planes fabric will be initialized on will be the max
  * of all the values specified by different clients. If a client wants to initialize fabric on all the
- * available routing planes, num_routing_planes can be left unspecifed.
+ * available routing planes, num_routing_planes can be left unspecified.
  * NOTE: This does not 'reserve' routing planes for any clients, but is rather a global setting.
  *
  * Return value: void
@@ -201,7 +217,7 @@ public:
         const FabricNodeId& dst_fabric_node_id,
         uint32_t link_idx,
         ProgramOrDescriptor& mux_program_or_desc,
-        const CoreCoord& mux_logical_core) const;
+        const tt::tt_metal::CoreCoord& mux_logical_core) const;
 
     uint8_t get_num_channels(FabricMuxChannelType channel_type) const;
     uint8_t get_num_buffers(FabricMuxChannelType channel_type) const;
@@ -282,6 +298,108 @@ private:
     size_t memory_map_end_address_;
 };
 
+/*
+ * Transient dual-RISC fabric mux (forwarder on RISCV_0, manager on RISCV_1).
+ * Auto-terminates after all clients disconnect. Supports up to 64 logical
+ * channels. Uses the full WH/BH NOC transaction-ID pool for the shared TRID
+ * ring (kTridRingCapacity).
+ *
+ * Host surface is intentionally narrow so callers wire through
+ * append_client_connection_rt_args + add_fabric_mux_v2_to_program and the
+ * device-side FabricMuxV2Sender, rather than reconstructing V1-style per-field
+ * address getters. get_memory_map_end_address() is for L1 budgeting only.
+ */
+class FabricMuxV2Config {
+public:
+    // Fixed to the full WH/BH NOC transaction ID pool (NOC_MAX_TRANSACTION_ID + 1).
+    static constexpr uint32_t kTridRingCapacity = 16;
+
+    struct ClientSemaphores {
+        uint32_t flow_control_sem_id = 0;
+        uint32_t teardown_sem_id = 0;
+    };
+
+    FabricMuxV2Config(
+        uint8_t num_channels,
+        uint8_t num_buffers_per_channel,
+        size_t channel_buffer_size_bytes,
+        size_t base_l1_address);
+
+    void append_client_connection_rt_args(
+        const CoreCoord& mux_virtual_core,
+        uint8_t logical_channel_id,
+        const ClientSemaphores& client_semaphores,
+        std::vector<uint32_t>& worker_args) const;
+
+    // Exclusive end of the mux L1 map (for host-side L1 budgeting / placement).
+    size_t get_memory_map_end_address() const;
+
+private:
+    friend void add_fabric_mux_v2_to_program(
+        tt::tt_metal::Program& program,
+        const FabricMuxV2Config& config,
+        const CoreCoord& mux_logical_core,
+        const std::vector<uint32_t>& downstream_sender_rt_args,
+        tt::tt_metal::NOC forwarder_noc);
+    friend void add_fabric_mux_v2_to_program(
+        tt::tt_metal::Program& program,
+        const FabricMuxV2Config& config,
+        const CoreCoord& mux_logical_core,
+        const FabricNodeId& src_fabric_node_id,
+        const FabricNodeId& dst_fabric_node_id,
+        uint32_t link_idx,
+        tt::tt_metal::NOC forwarder_noc);
+
+    std::unordered_map<std::string, uint32_t> get_fabric_mux_v2_named_compile_time_args() const;
+    void validate_logical_channel_id(uint8_t logical_channel_id) const;
+
+    struct MemoryRegion {
+        size_t base_address = 0;
+        size_t unit_size = 0;
+        size_t num_units = 0;
+
+        MemoryRegion() = default;
+        MemoryRegion(size_t base, size_t unit_sz, size_t count);
+
+        size_t get_address(size_t offset = 0) const;
+        size_t get_end_address() const;
+    };
+
+    size_t noc_aligned_address_size_bytes_ = 0;
+    uint8_t num_channels_ = 0;
+    uint8_t num_buffers_per_channel_ = 0;
+    size_t channel_buffer_size_bytes_ = 0;
+    size_t per_channel_scalar_region_stride_bytes_ = 0;
+    uint32_t forwarder_service_burst_size_ = 0;
+    uint32_t trid_ring_capacity_ = 0;
+
+    MemoryRegion status_region_{};
+    MemoryRegion connection_info_region_{};
+    MemoryRegion connection_handshake_region_{};
+    MemoryRegion shared_ring_region_{};
+    MemoryRegion channel_region_{};
+    MemoryRegion shared_control_region_{};
+    MemoryRegion credit_notify_scratch_region_{};
+
+    size_t memory_map_end_address_ = 0;
+};
+
+void add_fabric_mux_v2_to_program(
+    tt::tt_metal::Program& program,
+    const FabricMuxV2Config& config,
+    const CoreCoord& mux_logical_core,
+    const std::vector<uint32_t>& downstream_sender_rt_args,
+    tt::tt_metal::NOC forwarder_noc = tt::tt_metal::NOC::RISCV_0_default);
+
+void add_fabric_mux_v2_to_program(
+    tt::tt_metal::Program& program,
+    const FabricMuxV2Config& config,
+    const CoreCoord& mux_logical_core,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
+    uint32_t link_idx,
+    tt::tt_metal::NOC forwarder_noc = tt::tt_metal::NOC::RISCV_0_default);
+
 // Returns the eth direction in which the data should be forwarded from the src to reach the dest
 std::optional<eth_chan_directions> get_eth_forwarding_direction(
     FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id);
@@ -290,6 +408,7 @@ bool is_1d_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
 
 bool is_2d_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
 
-size_t get_num_available_routing_planes_in_direction(FabricNodeId fabric_node_id, RoutingDirection routing_direction);
+// Routing planes usable for workload traffic
+size_t get_num_usable_routing_planes(FabricNodeId fabric_node_id, RoutingDirection routing_direction);
 
 }  // namespace tt::tt_fabric

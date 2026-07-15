@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -20,15 +20,17 @@ IMG_PATH = Path("models/tt_transformers/demo/sample_prompts/llama_models").resol
 import os
 import time
 
-import numpy as np
 import pytest
 import torch
 
 import ttnn
+from models.common.sampling import SamplingParams
+from models.demos.multimodal.gemma3.tt.gemma_e2e_model import GemmaMultimodalGenerator
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
+from models.demos.utils.model_targets import resolve_perf_targets
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import hf_multimodal_encode
-from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import DecodersPrecision
 
 
@@ -53,13 +55,6 @@ def get_batch_sampler(temperature, top_p, tokenizer):
     return sample
 
 
-def create_random_image(width, height):
-    """Create a random RGB image of specified dimensions."""
-    # Generate random RGB values
-    random_array = np.random.randint(0, 256, (height, width, 3), dtype=np.uint8)
-    return PIL_Image.fromarray(random_array, "RGB")
-
-
 def create_multimodal_model(
     mesh_device,
     max_batch_size,
@@ -70,13 +65,20 @@ def create_multimodal_model(
     optimizations=None,
     num_layers=None,
     paged_attention_config=None,
+    dummy_weights: bool = False,
+    enable_program_trace: bool = False,
 ):
     from models.demos.multimodal.gemma3.tt.gemma_e2e_model import TtGemmaModel
     from models.demos.multimodal.gemma3.tt.model_config import ModelArgs
 
     # limit length or we'll run out of space
     tt_model_args = ModelArgs(
-        mesh_device, max_batch_size=max_batch_size, optimizations=optimizations, max_seq_len=max_seq_len
+        mesh_device,
+        max_batch_size=max_batch_size,
+        max_seq_len=max_seq_len,
+        optimizations=optimizations,
+        dummy_weights=dummy_weights,
+        enable_program_trace=enable_program_trace,
     )
     assert tt_model_args.is_multimodal, "This model is multimodal"
 
@@ -114,6 +116,8 @@ def prepare_generator_args(
     use_paged_kv_cache=False,
     optimizations=None,
     num_layers=None,
+    dummy_weights: bool = False,
+    enable_program_trace: bool = False,
 ):
     submesh_devices = create_submeshes(mesh_device, data_parallel)
     state_dict = None
@@ -131,11 +135,23 @@ def prepare_generator_args(
             checkpoint=state_dict,
             optimizations=optimizations,
             num_layers=num_layers,
+            dummy_weights=dummy_weights,
+            enable_program_trace=enable_program_trace,
         )
         model_args.append(model_args_i)
         model.append(model_i)
 
     return model_args, model
+
+
+def _gemma3_vision_demo_device_params():
+    # trace_region_size is resolved by the mesh_device fixture from the logical submesh SKU.
+    return {
+        "fabric_config": True,
+        TRACE_MODEL_KEY_PARAM: "gemma-3-27b-vision",
+        "num_command_queues": 2,
+        "l1_small_size": 24576,
+    }
 
 
 @pytest.mark.parametrize(
@@ -190,7 +206,7 @@ def prepare_generator_args(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": True, "trace_region_size": 21448704, "num_command_queues": 2, "l1_small_size": 24576}],
+    [_gemma3_vision_demo_device_params()],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -215,6 +231,7 @@ def test_multimodal_demo_text(
     optimizations,
     max_gen_len,
     num_layers,
+    request,
     temperature: float = 0,
     top_p: float = 0.9,
     model_parallel_size: Optional[int] = None,
@@ -230,6 +247,8 @@ def test_multimodal_demo_text(
     num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
     max_batch_size *= data_parallel  # input batch_size is interpreted as size per DP group
 
+    dummy_weights = request.config.getoption("--dummy_weights") or False
+
     model_args, model = prepare_generator_args(
         num_devices=num_devices,
         data_parallel=data_parallel,
@@ -238,6 +257,8 @@ def test_multimodal_demo_text(
         max_seq_len=max_seq_len,
         optimizations=optimizations,
         num_layers=num_layers,
+        dummy_weights=dummy_weights,
+        enable_program_trace=enable_trace,
     )
 
     from transformers import AutoProcessor
@@ -246,22 +267,32 @@ def test_multimodal_demo_text(
         model_args[0].CKPT_DIR, local_files_only=os.getenv("CI") == "true", use_fast=True, do_convert_rgb=True
     )
 
-    generator = Generator(model, model_args, mesh_device)
+    generator = GemmaMultimodalGenerator(model, model_args, mesh_device)
 
-    xattn_caches = [None for i, model in enumerate(generator.model)]
+    can_sample_on_device = getattr(model[0], "_supports_on_device_sampling", False) and model[0].sampling is not None
+    greedy_only = temperature <= 0
+    if can_sample_on_device:
+        if temperature <= 0:
+            device_sampling_params = SamplingParams(temperature=0.0, top_k=1, top_p=1.0)
+        else:
+            device_sampling_params = SamplingParams(temperature=temperature, top_k=32, top_p=top_p)
+    else:
+        device_sampling_params = None
 
-    # Create random images for trace capture with specific dimensions
-
-    trace_img_1120x560 = create_random_image(1120, 560)
+    logger.info("Warming up model...")
+    generator.warmup_model_prefill(
+        kv_cache=None,
+        enable_trace=enable_trace,
+        can_sample_on_device=can_sample_on_device,
+        greedy_only=greedy_only,
+    )
+    logger.info("Warmup complete")
 
     with open(IMG_PATH / "ocr_image.jpeg", "rb") as f:
         ocr_image = PIL_Image.open(f).convert("RGB")
 
-    with open(IMG_PATH / "clutter.jpeg", "rb") as f:
-        clutter = PIL_Image.open(f).convert("RGB")
-
     with open(IMG_PATH / "dog.jpg", "rb") as f:
-        img = PIL_Image.open(f).convert("RGB")
+        dog_img = PIL_Image.open(f).convert("RGB")
 
     if multi_image:
         handwriting_dataset_base_url = (
@@ -283,8 +314,7 @@ def test_multimodal_demo_text(
         ]
         num_handwritten_images = len(handwriting_dataset_images)
 
-        # Trace capture dialogs with random images
-        multi_image_dialogs = [
+        dialogs = [
             [
                 UserMessage(
                     content=[ImageMedia(image=handwriting_dataset_images[i]) for i in range(num_handwritten_images)]
@@ -292,47 +322,16 @@ def test_multimodal_demo_text(
                 )
             ],
         ]
-
-    # Trace capture dialogs with random images
-    trace_dialogs = [
-        [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
-    ]
-
-    if multi_image:
-        trace_dialogs = multi_image_dialogs
-
-    if len(trace_dialogs) < max_batch_size:
-        trace_dialogs *= max_batch_size // len(trace_dialogs)
-
-    num_trace_batches = len(trace_dialogs) // max_batch_size
-
-    if not include_text_only_prompts:
-        with open(IMG_PATH / "dog.jpg", "rb") as f:
-            img = PIL_Image.open(f).convert("RGB")
-        logger.info(f"Dog image dimensions: {img.size} (width x height)")
-
-        with open(IMG_PATH / "pasta.jpeg", "rb") as f:
-            img2 = PIL_Image.open(f).convert("RGB")
-        logger.info(f"Pasta image dimensions: {img2.size} (width x height)")
-
-        # Regular testing dialogs with original images
+    elif include_text_only_prompts:
         dialogs = [
-            [UserMessage(content=[ImageMedia(image=img), "Write a haiku for this image."])],
-            [UserMessage(content=[ImageMedia(image=img2), "What is for dinner?"])],
+            [UserMessage(content=["Write a haiku."])],
             [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
-            [UserMessage(content=[ImageMedia(image=clutter), "What objects are in this image?"])],
         ]
     else:
         dialogs = [
-            # image understanding + text-only prompts
-            [UserMessage(content=["Write a haiku."])],
-            [UserMessage(content=["What is for dinner?"])],
+            [UserMessage(content=[ImageMedia(image=dog_img), "Write a haiku for this image."])],
             [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
-            [UserMessage(content=[ImageMedia(image=clutter), "What objects are in this image?"])],
         ]
-
-    if multi_image:
-        dialogs = multi_image_dialogs + dialogs
 
     if len(dialogs) < max_batch_size:
         dialogs *= max_batch_size // len(dialogs)
@@ -341,7 +340,7 @@ def test_multimodal_demo_text(
     total_users = len(dialogs)
     num_batches = total_users // max_batch_size
 
-    sampler = get_batch_sampler(temperature, top_p, model_args[0].tokenizer)
+    sampler = None if can_sample_on_device else get_batch_sampler(temperature, top_p, model_args[0].tokenizer)
     _num_prefill_tokens = 0
     _num_decode_tokens = 0
 
@@ -349,9 +348,8 @@ def test_multimodal_demo_text(
 
     for iter_num in range(warmup_iters + 1):
         logger.info(f"Iteration {iter_num}")
-        current_dialogs = trace_dialogs + dialogs
         for batch_idx in range(num_batches):
-            batch_dialogs = current_dialogs[batch_idx * max_batch_size : (batch_idx + 1) * max_batch_size]
+            batch_dialogs = dialogs[batch_idx * max_batch_size : (batch_idx + 1) * max_batch_size]
             for dialog in batch_dialogs:
                 for msg in dialog:
                     print(f"{msg.role.capitalize()}: {msg.content}\n")
@@ -384,42 +382,25 @@ def test_multimodal_demo_text(
                 tokens[i, : len(seq)] = torch.tensor(seq, dtype=torch.long)
 
             prefill_start = time.perf_counter()
-            if batch_idx < num_trace_batches:  # Get compile time for first batch
-                with profiler("compile_prefill", iteration=batch_idx):
-                    (
-                        batch_logits,
-                        prefill_batch_xattn_masks,
-                        prefill_batch_text_masks,
-                        decode_batch_xattn_masks,
-                        decode_batch_text_masks,
-                    ) = generator.prefill_forward(
-                        vision_images,
-                        vision_mask,
-                        tokens,
-                        xattn_caches,
-                        total_lens,
-                        prefill_lens,
-                    )
-
-            # Get cached prefill time
             with profiler("inference_prefill", iteration=batch_idx):
-                (
-                    batch_logits,
-                    prefill_batch_xattn_masks,
-                    prefill_batch_text_masks,
-                    decode_batch_xattn_masks,
-                    decode_batch_text_masks,
-                ) = generator.prefill_forward(
+                # prefill_forward returns (tokens, log_probs) when sampling on device, logits otherwise.
+                prefill_out = generator.prefill_forward(
                     vision_images,
                     vision_mask,
                     tokens,
-                    xattn_caches,
+                    None,  # xattn_caches not used for Gemma3
                     total_lens,
                     prefill_lens,
+                    sampling_params=device_sampling_params,
                 )
 
             prefill_end = time.perf_counter()
-            next_tokens, next_texts = sampler(batch_logits)
+            if device_sampling_params is not None:
+                prefill_toks, _prefill_lp = prefill_out
+                next_tokens = prefill_toks.long().squeeze(-1).reshape(-1)[:max_batch_size]
+                next_texts = [tokenizer.decode([next_tokens[i].item()]) for i in range(next_tokens.shape[0])]
+            else:
+                next_tokens, next_texts = sampler(prefill_out)
             for i, (next_token, next_text) in enumerate(zip(next_tokens, next_texts)):
                 tokens[i, prefill_lens[i]] = next_token
             print(f"Next tokens: {next_tokens}")
@@ -428,41 +409,37 @@ def test_multimodal_demo_text(
 
             with profiler(f"inference_decode", iteration=batch_idx):
                 for gen_idx in range(max_gen_len - 1):
-                    if batch_idx == 0 and gen_idx == 0:  # First decode accounts for compile time
-                        profiler.start(f"compile_decode", iteration=batch_idx)
-
                     decode_start = time.perf_counter()
                     position_id = prefill_lens + gen_idx
                     next_token_tensor = next_tokens.reshape(max_batch_size, 1)
 
-                    logits = generator.decode_forward_llama_vision(
-                        position_id,
-                        next_token_tensor,
-                        prefill_batch_xattn_masks,
-                        prefill_batch_text_masks,
-                        decode_batch_xattn_masks,
-                        decode_batch_text_masks,
-                        xattn_caches,
-                        enable_trace=enable_trace,
-                    )
-
-                    if isinstance(logits, tuple):
-                        logits = logits[0]
-
-                    next_tokens, next_texts = sampler(logits)
+                    if device_sampling_params is not None:
+                        tok, _ = generator.decode_forward(
+                            next_token_tensor,
+                            position_id,
+                            enable_trace=enable_trace,
+                            sampling_params=device_sampling_params,
+                        )
+                        next_tokens = tok.long().reshape(-1)[:max_batch_size]
+                    else:
+                        logits, _ = generator.decode_forward(
+                            next_token_tensor,
+                            position_id,
+                            enable_trace=enable_trace,
+                        )
+                        next_tokens, next_texts = sampler(logits)
                     # Update next token
                     tokens[torch.arange(max_batch_size), position_id + 1] = next_tokens
                     decode_end = time.perf_counter()
                     decode_times.append(decode_end - decode_start)
-                    if batch_idx == 0 and gen_idx == 0:
-                        profiler.end(f"compile_decode", iteration=batch_idx)
 
-                    # Disable checking for eot until I have more robust code for batch > 1
                     if any([t in stop_tokens for t in next_tokens]):
                         break
                 _num_decode_tokens += (
                     gen_idx * max_batch_size
                 )  # gen_idx is (num_tokens - 1) to avoid counting compile iter
+
+            next_texts = [tokenizer.decode([next_tokens[i].item()]) for i in range(next_tokens.shape[0])]
 
             # Log full text output for each user in batch
             # For HF models, get vision tokens from the processor if they exist
@@ -488,19 +465,14 @@ def test_multimodal_demo_text(
     profiler.end("run")
 
     # Calculate measurements
-    compile_prefill_time = profiler.get_duration("compile_prefill")
-    compile_decode_time = profiler.get_duration("compile_decode")
     total_inference_prefill_time = profiler.get_duration_sum("inference_prefill")
-    total_inference_decode_time = profiler.get_duration_sum("inference_decode", start_iteration=0) - compile_decode_time
+    total_inference_decode_time = profiler.get_duration_sum("inference_decode", start_iteration=0)
     avg_ttft = total_inference_prefill_time / num_batches  # One first token per batch
     avg_prefill_t_s = _num_prefill_tokens / total_inference_prefill_time
     avg_decode_t_s = _num_decode_tokens / total_inference_decode_time
     avg_decode_t_s_u = _num_decode_tokens / total_inference_decode_time / max_batch_size
 
     measurements = {
-        # Required measurements
-        "compile_prefill": compile_prefill_time,
-        "compile_decode": compile_decode_time,
         "inference_prefill": total_inference_prefill_time,
         "inference_decode": total_inference_decode_time,
         "prefill_time_to_token": avg_ttft,
@@ -511,15 +483,13 @@ def test_multimodal_demo_text(
 
     # Print performance metrics
     logger.info("")
-    logger.info(f"Performance metrics for batch 0")
-    logger.info(f"Prefill compile time: {round(measurements['compile_prefill'], 4)}s")
-    logger.info(f"Decode compile time: {round(measurements['compile_decode'], 4)}s")
+    logger.info(f"Performance metrics")
     logger.info(f"Prefill inference time per user: {round(avg_ttft, 4)}s")
     logger.info(
         f"Total Decode inference time ({max_gen_len} iterations): {round(measurements['inference_decode'], 4)}s"
     )
     logger.info("")
-    logger.info(f"Time to first token: {round(measurements['prefill_time_to_token']* 1000, 2)}ms")
+    logger.info(f"Time to first token: {round(measurements['prefill_time_to_token'] * 1000, 2)}ms")
     logger.info(f"Prefill t/s: {round(measurements['prefill_t/s'], 2)} tok/s")
     logger.info(
         f"Average speed: {round(1/avg_decode_t_s_u * 1000, 2)}ms @ {round(avg_decode_t_s_u, 2)} tok/s/user ({round(avg_decode_t_s, 2)} tok/s throughput)"
@@ -530,49 +500,58 @@ def test_multimodal_demo_text(
     if is_ci_env and max_batch_size == 1 and enable_trace:  # Only profiling these parametrizations
         tt_device_name = model_args[0].device_name
         base_model_name = model_args[0].base_model_name
-        target_prefill_tok_s = {
-            "N300_Llama-3.2-11B": 23,
-            "T3K_Llama-3.2-11B": 20,
-            "T3K_Llama-3.2-90B": 3,
-            "N150_gemma-3-4b": 285,
-            "N300_gemma-3-4b": 390,
-            "T3K_gemma-3-27b": 265,
-        }[f"{tt_device_name}_{base_model_name}"]
-
-        target_decode_tok_s_u = {
-            "N300_Llama-3.2-11B": 21.5,
-            "T3K_Llama-3.2-11B": 35,
-            "T3K_Llama-3.2-90B": 6,
-            "N150_gemma-3-4b": 24,
-            "N300_gemma-3-4b": 28,
-            "T3K_gemma-3-27b": 13,
-        }[f"{tt_device_name}_{base_model_name}"]
-
-        target_decode_tok_s = target_decode_tok_s_u * max_batch_size
-        targets = {
-            "prefill_t/s": target_prefill_tok_s,
-            "decode_t/s": target_decode_tok_s,
-            "decode_t/s/u": target_decode_tok_s_u,
-        }
-
-        # Save benchmark data for CI
-        N_warmup_iter = {"inference_prefill": 0, "inference_decode": 0}
-        benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets)
-        benchmark_data.save_partial_run_json(
-            profiler,
-            run_type=f"{tt_device_name}-demo",
-            ml_model_name=f"{base_model_name}-Vision",
-            ml_model_type="vlm",
-            num_layers=model_args[0].n_layers,
+        perf_key = f"{tt_device_name}_{base_model_name}"
+        resolved_targets = resolve_perf_targets(
+            model_name=base_model_name,
+            sku=tt_device_name,
             batch_size=max_batch_size,
-            config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},
-            input_sequence_length=max(prefill_lens).item(),
-            output_sequence_length=max_gen_len,
+            seq_len=max_seq_len,
         )
 
-        skip_perf_verification = [
-            "gemma-3-4b",  # Gemma-3 functional only - perf tests are not reliable yet
-            "gemma-3-27b",  # Gemma-3 functional only - perf tests are not reliable yet
-        ]
-        if base_model_name not in skip_perf_verification:
-            verify_perf(measurements, targets, high_tol_percentage=1.15)
+        if not resolved_targets:
+            logger.warning(
+                f"No centralized CI vision perf targets for {perf_key}; skipping benchmark save and verify_perf."
+            )
+        else:
+            targets = {}
+            if resolved_targets.get("prefill_t/s") is not None:
+                targets["prefill_t/s"] = float(resolved_targets["prefill_t/s"])
+            if resolved_targets.get("decode_t/s/u") is not None:
+                targets["decode_t/s/u"] = float(resolved_targets["decode_t/s/u"])
+            if resolved_targets.get("decode_t/s") is not None:
+                targets["decode_t/s"] = float(resolved_targets["decode_t/s"])
+            elif "decode_t/s/u" in targets:
+                targets["decode_t/s"] = targets["decode_t/s/u"] * max_batch_size
+
+            # Save benchmark data for CI
+            N_warmup_iter = {"inference_prefill": 0, "inference_decode": 0}
+            benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets)
+            benchmark_data.save_partial_run_json(
+                profiler,
+                run_type="demo_perf",
+                ml_model_name=f"{base_model_name}-Vision",
+                ml_model_type="vlm",
+                num_layers=model_args[0].n_layers,
+                batch_size=max_batch_size,
+                config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},
+                input_sequence_length=max(prefill_lens).item(),
+                output_sequence_length=max_gen_len,
+            )
+
+            skip_perf_verification = [
+                "gemma-3-4b",  # Gemma-3 functional only - perf tests are not reliable yet
+                "gemma-3-27b",  # Gemma-3 functional only - perf tests are not reliable yet
+            ]
+            if base_model_name not in skip_perf_verification:
+                expected_measurements = {
+                    key: True for key in ("prefill_t/s", "decode_t/s", "decode_t/s/u") if key in targets
+                }
+                if expected_measurements:
+                    verify_perf(
+                        measurements,
+                        expected_measurements=expected_measurements,
+                        model_name=base_model_name,
+                        sku=tt_device_name,
+                        batch_size=max_batch_size,
+                        seq_len=max_seq_len,
+                    )

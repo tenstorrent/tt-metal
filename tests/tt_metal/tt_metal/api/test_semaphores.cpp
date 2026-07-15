@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,13 +15,12 @@
 
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/buffers/semaphore.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -72,7 +71,7 @@ void initialize_program(
 
     tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         core_range,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
@@ -106,7 +105,7 @@ void create_and_read_max_num_semaphores(
     }
     tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/blank.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
         core_range,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
@@ -220,6 +219,27 @@ TEST_F(MeshDeviceFixture, TensixCreateMultipleSemaphoresOnSameCore) {
     EXPECT_EQ(sem4_id, 2);
     EXPECT_EQ(sem5_id, 3);
     EXPECT_EQ(sem6_id, 0);
+}
+
+TEST_F(MeshDeviceFixture, TensixCreateSemaphoreOnMultipleRanges) {
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    tt_metal::Program program = tt_metal::CreateProgram();
+    workload.add_program(device_range, std::move(program));
+    auto& program_ = workload.get_programs().at(device_range);
+
+    CoreCoord core_a(0, 0);
+    CoreCoord core_b(2, 0);
+    CoreCoord core_c(4, 0);
+
+    CoreRangeSet ac_set(std::set<CoreRange>{CoreRange(core_a), CoreRange(core_c)});
+    CoreRangeSet bc_set(std::set<CoreRange>{CoreRange(core_b), CoreRange(core_c)});
+    CoreRangeSet ab_set(std::set<CoreRange>{CoreRange(core_a), CoreRange(core_b)});
+
+    EXPECT_EQ(tt_metal::CreateSemaphore(program_, ac_set, 0), 0u);
+    EXPECT_EQ(tt_metal::CreateSemaphore(program_, bc_set, 0), 1u);
+    EXPECT_EQ(tt_metal::CreateSemaphore(program_, ab_set, 0), 2u);
 }
 
 }  // namespace tt::tt_metal

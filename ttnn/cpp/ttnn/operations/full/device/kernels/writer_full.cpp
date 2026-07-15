@@ -1,27 +1,13 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-
 #include "api/dataflow/dataflow_api.h"
-
-union value {
-    float f;
-    uint32_t u;
-};
-constexpr uint32_t onepage = 1;
-
-void zero_buffer(uint32_t write_addr, int bytes) {
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    while (bytes > 0) {
-        uint32_t curr_bytes = std::min(bytes, MEM_ZEROS_SIZE);
-        noc_async_read(zeros_noc_addr, write_addr, curr_bytes);
-        write_addr += curr_bytes;
-        bytes -= curr_bytes;
-    }
-    noc_async_read_barrier();
-}
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "full_kernel_common.hpp"
 
 void kernel_main() {
     uint32_t output_addr = get_arg_val<uint32_t>(0);
@@ -37,12 +23,15 @@ void kernel_main() {
     value val;
     val.u = fill_value;
 
-    cb_reserve_back(cb_value, onepage);
+    Noc noc;
+    CircularBuffer cb(cb_value);
 
-    uint32_t write_addr = get_write_ptr(cb_value);
+    cb.reserve_back(onepage);
+
+    uint32_t write_addr = cb.get_write_ptr();
 
     if (val.u == 0) {
-        zero_buffer(write_addr, page_size);
+        zero_buffer(cb_value, page_size);
     } else {
 #ifdef OUTPUT_DTYPE_BFLOAT16
         auto ptr = reinterpret_cast<uint16_t*>(write_addr);
@@ -64,18 +53,17 @@ void kernel_main() {
 #endif
     }
 
-    cb_push_back(cb_value, 1);
+    cb.push_back(1);
 
-    const auto s = TensorAccessor(dst_args, output_addr, page_size);
+    const auto s = TensorAccessor(dst_args, output_addr);
 
-    cb_wait_front(cb_value, 1);
+    cb.wait_front(1);
 
     uint32_t end_id = start_id + num_pages_per_core;
     for (std::uint32_t i = start_id; i < end_id; i++) {
-        const auto cb_value_addr = get_read_ptr(cb_value);
-        noc_async_write_page(i, s, cb_value_addr);
+        noc.async_write(cb, s, s.get_aligned_page_size(), {}, {.page_id = i});
     }
-    noc_async_writes_flushed();
-    cb_pop_front(cb_value, 1);
-    noc_async_write_barrier();
+    noc.async_writes_flushed();
+    cb.pop_front(1);
+    noc.async_write_barrier();
 }

@@ -1,6 +1,7 @@
+# grid is the full NOC coordinate-space extent and must contain every core's coords
 grid:
-  x_size: 8
-  y_size: 4
+  x_size: 10
+  y_size: 8
 
 arc:
   []
@@ -21,7 +22,7 @@ dram_views:
       address_offset: 0
     },
     {
-      channel: 0,
+      channel: 1,
       eth_endpoint: [0,0],
       worker_endpoint: [0,0],
       address_offset: 0
@@ -47,7 +48,7 @@ router_only:
   [0-2]
 
 worker_l1_size:
-  1499136
+  4194304
 
 dram_bank_size:
   1073741824

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "minimal_matmul.hpp"
@@ -9,17 +9,18 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::minimal_matmul {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteMinimalMatmul::invoke(
+ttnn::Tensor minimal_matmul(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const std::optional<ttnn::Tensor>& bias_tensor,
-    std::optional<unary::UnaryWithParam> fused_activation,
+    std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
     const std::optional<const ttnn::experimental::prim::MinimalMatmulConfig>& config,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    bool fuse_swiglu) {
     // Call device operation with chunks=1 (default), which returns a vector with 1 element
     auto outputs = ttnn::prim::minimal_matmul(
         input_tensor,
@@ -29,11 +30,17 @@ ttnn::Tensor ExecuteMinimalMatmul::invoke(
         config,
         memory_config,
         dtype,
-        compute_kernel_config);
+        compute_kernel_config,
+        /*chunks=*/1,
+        /*dim=*/-1,
+        /*fused_ternary_scalar=*/std::nullopt,
+        /*fused_ternary_input_a=*/std::nullopt,
+        /*fused_ternary_input_b=*/std::nullopt,
+        fuse_swiglu);
 
     // Extract and return the single output
     TT_FATAL(outputs.size() == 1, "Expected single output from minimal_matmul, got {}", outputs.size());
     return outputs[0];
 }
 
-}  // namespace ttnn::operations::experimental::minimal_matmul
+}  // namespace ttnn::experimental

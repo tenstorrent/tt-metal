@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -99,10 +99,10 @@ void kernel_main() {
                         expected_val);
 
                     if (!match) {
-                        DPRINT << "Data mismatch at provider " << prov << " packet " << i << "\n";
-                        DPRINT << "  Mismatch addr: " << mismatch_addr << "\n";
-                        DPRINT << "  Mismatch val: " << mismatch_val << "\n";
-                        DPRINT << "  Expected val: " << expected_val << "\n";
+                        DPRINT("Data mismatch at provider {} packet {}\n", prov, i);
+                        DPRINT("  Mismatch addr: {}\n", mismatch_addr);
+                        DPRINT("  Mismatch val: {}\n", mismatch_val);
+                        DPRINT("  Expected val: {}\n", expected_val);
                     }
                 } break;
                 default: {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,7 @@ namespace ttnn::operations::moreh::moreh_sum {
 MorehSumOperation::program_factory_t MorehSumOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Case for int32
-    const auto input_rank = tensor_args.input.padded_shape().rank();
+    const auto input_rank = tensor_args.input.logical_shape().rank();
 
     if (tensor_args.input.dtype() == DataType::INT32) {
         if (operation_attributes.dim == input_rank - 1) {
@@ -85,7 +85,7 @@ MorehSumOperation::spec_return_value_t MorehSumOperation::compute_output_specs(
         // e.g. (2, 64, 64) with dim 0 to be (1, 64, 64)
         output_shape[operation_attributes.dim] = 1;
     } else {
-        ttnn::SmallVector<uint32_t> shape;
+        ttsl::SmallVector<uint32_t> shape;
 
         // e.g. (2, 64, 64) with dim 1 to be (2, 1[32], 64)
         // e.g. (2, 64, 64) with dim 0 to be (64, 64)
@@ -134,7 +134,7 @@ ttnn::operations::moreh::moreh_sum::MorehSumOperation::tensor_return_value_t mor
         dim,
         keepdim,
         memory_config.value_or(input.memory_config()),
-        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{input, output};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

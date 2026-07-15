@@ -1,8 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "accumulation_common.hpp"
+#include "ttnn/operations/data_movement/clone/clone.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 
 namespace ttnn::operations::reduction::accumulation::common {
@@ -24,7 +26,7 @@ Tensor preprocess_input_tensor(
         int32_t final_rank = input_rank;
         int32_t final_cum_axis = cum_axis;
         if (input_rank < FOUR_DIMENSIONS) {
-            ttnn::SmallVector<uint32_t> new_dims = {};
+            ttsl::SmallVector<uint32_t> new_dims = {};
             for (int32_t i = input_rank; i < FOUR_DIMENSIONS; ++i) {
                 new_dims.push_back(1);
             }
@@ -71,6 +73,7 @@ Tensor postprocess_output_tensor(
 }
 
 void validate_output_tensor(const Tensor& input_tensor, const Tensor& output_tensor) {
+    TT_FATAL(is_device_tensor(output_tensor), "Preallocated output tensor must be on device");
     TT_FATAL(
         input_tensor.logical_shape() == output_tensor.logical_shape(),
         "Shape mismatch: input tensor shape {} does not match output tensor shape {}.",
@@ -89,8 +92,22 @@ Tensor accumulation_invoke(
     const auto& input_shape = input_tensor.logical_shape();
     const int32_t& input_rank = input_shape.rank();
 
+    if (optional_out.has_value()) {
+        validate_output_tensor(input_tensor, *optional_out);
+    }
+
     if (input_rank == 0 || input_tensor.logical_volume() == 0) {
-        return input_tensor;
+        if (!optional_out.has_value()) {
+            return ttnn::clone(
+                input_tensor, /*dtype=*/std::nullopt, memory_config, /*compute_kernel_config=*/std::nullopt);
+        }
+
+        Tensor& preallocated_tensor = optional_out.value();
+        // It only makes sense to copy non-zero volume tensor.
+        if (input_tensor.logical_volume() > 0) {
+            ttnn::copy(input_tensor, preallocated_tensor);
+        }
+        return preallocated_tensor;
     }
 
     TT_FATAL(
@@ -103,12 +120,8 @@ Tensor accumulation_invoke(
     // Normalize negative dim
     const int32_t cum_axis = (dim < 0) ? (dim + input_rank) : dim;
 
-    if (optional_out.has_value()) {
-        validate_output_tensor(input_tensor, *optional_out);
-    }
-
     Tensor wip_tensor = input_tensor;
-    ttnn::SmallVector<int64_t> permutation;
+    ttsl::SmallVector<int64_t> permutation;
     int32_t accumulation_axis;
     wip_tensor = common::preprocess_input_tensor(wip_tensor, cum_axis, permutation, accumulation_axis, dtype);
     wip_tensor = ttnn::prim::accumulation(

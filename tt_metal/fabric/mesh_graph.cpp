@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,6 +15,8 @@
 #include <iomanip>
 #include <optional>
 
+#include <tt_stl/fmt.hpp>
+#include <tt_stl/reflection.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -24,7 +26,7 @@
 #include <tt_stl/caseless_comparison.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
-#include "physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "protobuf/mesh_graph_descriptor.pb.h"
 #include <numeric>
 #include <set>
@@ -32,7 +34,7 @@
 
 // Implementation of hash function for port_id_t
 std::size_t std::hash<tt::tt_fabric::port_id_t>::operator()(const tt::tt_fabric::port_id_t& p) const {
-    return tt::stl::hash::hash_objects_with_default_seed(p.first, p.second);
+    return ttsl::hash::hash_objects_with_default_seed(p.first, p.second);
 }
 
 namespace tt::tt_fabric {
@@ -58,15 +60,17 @@ RoutingDirection routing_direction_to_port_direction(const proto::RoutingDirecti
         case proto::RoutingDirection::W: return RoutingDirection::W;
         case proto::RoutingDirection::C: return RoutingDirection::C;
         case proto::RoutingDirection::NONE: return RoutingDirection::NONE;
-        default: TT_THROW("Invalid routing direction: {}", routing_direction);
+        default: TT_THROW(
+            "Invalid routing direction: {}",
+            static_cast<std::underlying_type_t<proto::RoutingDirection>>(routing_direction));
     }
 }
 
 using ClusterToDescriptorMap = std::unordered_map<tt::tt_metal::ClusterType, std::string_view>;
 using FabricToClusterDescriptorMap = std::unordered_map<tt::tt_fabric::FabricType, ClusterToDescriptorMap>;
 
-const tt::stl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mesh_graph_descriptor =
-    tt::stl::Indestructible<FabricToClusterDescriptorMap>(FabricToClusterDescriptorMap{
+const ttsl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mesh_graph_descriptor =
+    ttsl::Indestructible<FabricToClusterDescriptorMap>(FabricToClusterDescriptorMap{
         {tt::tt_fabric::FabricType::MESH,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::N150, "n150_mesh_graph_descriptor.textproto"},
@@ -248,7 +252,7 @@ void MeshGraph::initialize_from_mgd(
 
     this->inter_mesh_connectivity_.resize(total_mesh_count);
 
-    // This is to make sure emtpy elements are filled
+    // This is to make sure empty elements are filled
     for (const auto& mesh : mgd.all_meshes()) {
         const auto& mesh_instance = mgd.get_instance(mesh);
         this->inter_mesh_connectivity_[mesh_instance.local_id].resize(mesh_instance.sub_instances.size());
@@ -459,35 +463,39 @@ void MeshGraph::initialize_from_mgd(
             mesh_instance.local_id, tt_metal::distributed::MeshContainer<ChipId>(mesh_shape, chip_ids));
 
         // Get the edge ports of each mesh
-        // North, start from NW corner
         std::uint32_t chan_id = 0;
-        for (std::uint32_t chip_id = 0; chip_id < mesh_shape[1]; chip_id++) {
-            for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::N, chan_id++}] = chip_id;
+        if (!has_flag(effective_fabric_type, FabricType::TORUS_Y)) {
+            // North, start from NW corner
+            for (std::uint32_t chip_id = 0; chip_id < mesh_shape[1]; chip_id++) {
+                for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
+                    mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::N, chan_id++}] = chip_id;
+                }
+            }
+            // South, start from SW corner
+            chan_id = 0;
+            for (std::uint32_t chip_id = ((mesh_shape[0] * mesh_shape[1]) - mesh_shape[1]);
+                 chip_id < (mesh_shape[0] * mesh_shape[1]);
+                 chip_id++) {
+                for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
+                    mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::S, chan_id++}] = chip_id;
+                }
             }
         }
-        // South, start from SW corner
-        chan_id = 0;
-        for (std::uint32_t chip_id = ((mesh_shape[0] * mesh_shape[1]) - mesh_shape[1]);
-             chip_id < (mesh_shape[0] * mesh_shape[1]);
-             chip_id++) {
-            for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::S, chan_id++}] = chip_id;
+        if (!has_flag(effective_fabric_type, FabricType::TORUS_X)) {
+            // East, start from NE corner
+            chan_id = 0;
+            for (std::uint32_t chip_id = (mesh_shape[1] - 1); chip_id < (mesh_shape[0] * mesh_shape[1]);
+                 chip_id += mesh_shape[1]) {
+                for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
+                    mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::E, chan_id++}] = chip_id;
+                }
             }
-        }
-        // East, start from NE corner
-        chan_id = 0;
-        for (std::uint32_t chip_id = (mesh_shape[1] - 1); chip_id < (mesh_shape[0] * mesh_shape[1]);
-             chip_id += mesh_shape[1]) {
-            for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::E, chan_id++}] = chip_id;
-            }
-        }
-        // West, start from NW corner
-        chan_id = 0;
-        for (std::uint32_t chip_id = 0; chip_id < (mesh_shape[0] * mesh_shape[1]); chip_id += mesh_shape[1]) {
-            for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
+            // West, start from NW corner
+            chan_id = 0;
+            for (std::uint32_t chip_id = 0; chip_id < (mesh_shape[0] * mesh_shape[1]); chip_id += mesh_shape[1]) {
+                for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
+                    mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
+                }
             }
         }
         // Z, for all chips (only if using blackhole)
@@ -593,34 +601,39 @@ void MeshGraph::initialize_from_mgd(
         mesh_edge_ports_to_chip_id_.resize(
             std::max(mesh_edge_ports_to_chip_id_.size(), static_cast<size_t>(*switch_mesh_id + 1)));
         std::uint32_t chan_id = 0;
-        // North
-        for (std::uint32_t chip_id = 0; chip_id < switch_shape[1]; chip_id++) {
-            for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id_[*switch_mesh_id][{RoutingDirection::N, chan_id++}] = chip_id;
+
+        if (!has_flag(effective_fabric_type, FabricType::TORUS_Y)) {
+            // North
+            for (std::uint32_t chip_id = 0; chip_id < switch_shape[1]; chip_id++) {
+                for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
+                    mesh_edge_ports_to_chip_id_[*switch_mesh_id][{RoutingDirection::N, chan_id++}] = chip_id;
+                }
+            }
+            // South
+            chan_id = 0;
+            for (std::uint32_t chip_id = ((switch_shape[0] * switch_shape[1]) - switch_shape[1]);
+                 chip_id < (switch_shape[0] * switch_shape[1]);
+                 chip_id++) {
+                for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
+                    mesh_edge_ports_to_chip_id_[*switch_mesh_id][{RoutingDirection::S, chan_id++}] = chip_id;
+                }
             }
         }
-        // South
-        chan_id = 0;
-        for (std::uint32_t chip_id = ((switch_shape[0] * switch_shape[1]) - switch_shape[1]);
-             chip_id < (switch_shape[0] * switch_shape[1]);
-             chip_id++) {
-            for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id_[*switch_mesh_id][{RoutingDirection::S, chan_id++}] = chip_id;
+        if (!has_flag(effective_fabric_type, FabricType::TORUS_X)) {
+            // East
+            chan_id = 0;
+            for (std::uint32_t chip_id = (switch_shape[1] - 1); chip_id < (switch_shape[0] * switch_shape[1]);
+                 chip_id += switch_shape[1]) {
+                for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
+                    mesh_edge_ports_to_chip_id_[*switch_mesh_id][{RoutingDirection::E, chan_id++}] = chip_id;
+                }
             }
-        }
-        // East
-        chan_id = 0;
-        for (std::uint32_t chip_id = (switch_shape[1] - 1); chip_id < (switch_shape[0] * switch_shape[1]);
-             chip_id += switch_shape[1]) {
-            for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id_[*switch_mesh_id][{RoutingDirection::E, chan_id++}] = chip_id;
-            }
-        }
-        // West
-        chan_id = 0;
-        for (std::uint32_t chip_id = 0; chip_id < (switch_shape[0] * switch_shape[1]); chip_id += switch_shape[1]) {
-            for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id_[*switch_mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
+            // West
+            chan_id = 0;
+            for (std::uint32_t chip_id = 0; chip_id < (switch_shape[0] * switch_shape[1]); chip_id += switch_shape[1]) {
+                for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
+                    mesh_edge_ports_to_chip_id_[*switch_mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
+                }
             }
         }
         // Z, for all chips (only if using blackhole)
@@ -636,6 +649,9 @@ void MeshGraph::initialize_from_mgd(
 }
 
 void MeshGraph::load_intermesh_connections(const AnnotatedIntermeshConnections& intermesh_connections) {
+    // The connection_hash (std::get<2>) is intentionally unused here: MeshGraph models the
+    // chip-level topology and doesn't need per-cable identification. ControlPlane uses the
+    // hash for its own per-cable bookkeeping.
     for (const auto& connection : intermesh_connections) {
         auto src_mesh = std::get<0>(connection).first;
         auto dst_mesh = std::get<1>(connection).first;
@@ -838,7 +854,12 @@ MeshCoordinate MeshGraph::chip_to_coordinate(MeshId mesh_id, ChipId chip_id) con
     return MeshCoordinate(ns, ew);
 }
 
-ChipId MeshGraph::coordinate_to_chip(MeshId mesh_id, MeshCoordinate coordinate) const {
+ChipId MeshGraph::coordinate_to_chip(
+    MeshId mesh_id, MeshCoordinate coordinate, std::optional<MeshHostRankId> host_rank) const {
+    if (host_rank.has_value()) {
+        auto offset = get_coord_range(mesh_id, host_rank).start_coord();
+        coordinate = MeshCoordinate(offset[0] + coordinate[0], offset[1] + coordinate[1]);
+    }
     const auto& mesh_shape = mesh_to_chip_ids_.at(mesh_id).shape();
     return (coordinate[0] * mesh_shape[1]) + coordinate[1];
 }
@@ -1051,7 +1072,10 @@ std::filesystem::path MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type
         }
     }
 
-    TT_THROW("Cannot find mesh graph descriptor for fabric type {} and cluster type {}", fabric_type, cluster_type);
+    TT_THROW(
+        "Cannot find mesh graph descriptor for fabric type {} and cluster type {}",
+        enchantum::to_string(fabric_type),
+        enchantum::to_string(cluster_type));
 }
 
 }  // namespace tt::tt_fabric

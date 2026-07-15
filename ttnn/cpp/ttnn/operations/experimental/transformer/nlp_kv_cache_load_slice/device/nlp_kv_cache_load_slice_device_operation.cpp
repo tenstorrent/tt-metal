@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -78,7 +78,7 @@ NlpKVCacheLoadSliceDeviceOperation::spec_return_value_t NlpKVCacheLoadSliceDevic
     const auto& input_tensor_a = tensor_args.input;
     const auto& input_shape = input_tensor_a.padded_shape();
 
-    SmallVector<uint32_t> out_shape;
+    ttsl::SmallVector<uint32_t> out_shape;
     auto rank = input_shape.rank();
     out_shape.reserve(rank);
     for (uint32_t i = 0; i < rank; i++) {

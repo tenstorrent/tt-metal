@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,8 +9,7 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import comp_pcc
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 
 layouts = [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT]
 
@@ -77,14 +76,10 @@ def test_repeat(device, layout, dtype, shape, repeat_shape):
         output.shape == torch_result.shape
     ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
 
-    # Convert unsigned PyTorch dtypes to int32 for PCC check since comp_pcc doesn't support uint dtypes
-    pcc_torch_result = torch_result
-    pcc_output = output
-    if torch_dtype == torch.uint16:
-        pcc_torch_result = torch_result.to(torch.int32)
-        pcc_output = output.to(torch.int32)
-
-    assert_with_pcc(pcc_torch_result, pcc_output, 0.9999)
+    if ttnn_dtype == ttnn.bfloat8_b:
+        assert_with_pcc(torch_result, output, 0.9999)
+    else:
+        assert_equal(torch_result, output)
 
 
 @pytest.mark.parametrize("layout", layouts)
@@ -107,19 +102,18 @@ def test_pc_repeat(device, layout, shape, repeat_shape):
         torch_results.append(torch_tensor.repeat(repeat_shape))
         input_tensors.append(ttnn.from_torch(torch_tensor, layout=layout, device=device, dtype=ttnn.bfloat16))
     for i in range(num_iters):
-        output = ttnn.repeat(input_tensors[i], ttnn.Shape(repeat_shape))
+        with device.cache_entries_counter.measure():
+            output = ttnn.repeat(input_tensors[i], ttnn.Shape(repeat_shape))
         output = ttnn.to_torch(output)
         assert (
             output.shape == torch_results[i].shape
         ), f"Output shape {output.shape} does not match torch shape {torch_results[i].shape}"
 
-        assert_with_pcc(torch_results[i], output, 0.9999)
+        assert_equal(torch_results[i], output)
         if i == 0:
-            base_program_cache_entries = device.num_program_cache_entries()
+            base_count = device.cache_entries_counter.total
         else:
-            assert (
-                device.num_program_cache_entries() == base_program_cache_entries
-            ), "program cache entries differ on same configs"
+            assert device.cache_entries_counter.total == base_count, "program cache entries differ on same configs"
 
 
 # 17975 test cases
@@ -153,11 +147,10 @@ def test_pc_with_different_shapes_in_sequence(device):
         x = torch.zeros((4, 1, 32, 32), dtype=torch.bfloat16)
         x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-        base_program_cache_entries = device.num_program_cache_entries()
-        ttnn.repeat(y_tt, [4, 1, 1, 1])
-        assert (
-            device.num_program_cache_entries() == base_program_cache_entries
-        ), "program cache entries differ on same configs"
+        base_count = device.cache_entries_counter.total
+        with device.cache_entries_counter.measure():
+            ttnn.repeat(y_tt, [4, 1, 1, 1])
+        assert device.cache_entries_counter.total == base_count, "program cache entries differ on same configs"
         z_tt = ttnn.add(x_tt, y_tt)
         z_tt = x_tt + y_tt
 
@@ -176,12 +169,11 @@ def test_pc_with_different_shapes_in_sequence(device):
         y = torch.rand((1, 1, 256, 384), dtype=torch.bfloat16)
         y_tt = ttnn.from_torch(y, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-        base_program_cache_entries = device.num_program_cache_entries()
-        z_tt = ttnn.repeat(y_tt, ttnn.Shape([64, 1, 1, 1]))
+        base_count = device.cache_entries_counter.total
+        with device.cache_entries_counter.measure():
+            z_tt = ttnn.repeat(y_tt, ttnn.Shape([64, 1, 1, 1]))
 
-        assert (
-            device.num_program_cache_entries() == base_program_cache_entries
-        ), "program cache entries differ on same configs"
+        assert device.cache_entries_counter.total == base_count, "program cache entries differ on same configs"
 
         for i in range(64):
             z_torch = ttnn.to_torch(z_tt[i : i + 1])

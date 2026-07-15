@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -94,9 +94,12 @@ CreateQKVHeadsResultSpec CreateQKVHeadsDeviceOperation::compute_output_specs(
     auto k_spec = tt::tt_metal::ShardSpec(all_cores, {k_shard_h, k_shape[-1]}, shard_orientation);
     auto v_spec = tt::tt_metal::ShardSpec(all_cores, {v_shard_h, v_shape[-1]}, shard_orientation);
     // create sharded tensors
-    auto mem_config_q = args.output_mem_config.with_shard_spec(q_spec);
-    auto mem_config_k = args.output_mem_config.with_shard_spec(k_spec);
-    auto mem_config_v = args.output_mem_config.with_shard_spec(v_spec);
+    auto mem_config_q = tt::tt_metal::MemoryConfig(
+        args.output_mem_config.memory_layout(), args.output_mem_config.buffer_type(), q_spec);
+    auto mem_config_k = tt::tt_metal::MemoryConfig(
+        args.output_mem_config.memory_layout(), args.output_mem_config.buffer_type(), k_spec);
+    auto mem_config_v = tt::tt_metal::MemoryConfig(
+        args.output_mem_config.memory_layout(), args.output_mem_config.buffer_type(), v_spec);
 
     TensorSpec out_tensor_q(
         q_shape,
@@ -124,7 +127,7 @@ CreateQKVHeadsResult CreateQKVHeadsDeviceOperation::create_output_tensors(
     };
 }
 
-tt::stl::hash::hash_t CreateQKVHeadsDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t CreateQKVHeadsDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
 

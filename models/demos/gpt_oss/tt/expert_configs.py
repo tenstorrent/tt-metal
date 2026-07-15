@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """GPT-OSS expert program configurations."""
@@ -30,4 +30,4 @@ class GPTOSSProgramConfig(ProgramConfig):
 
     # Memory
     sequence_chunk_size: int = 4 * 1024
-    down_split_size: int = 1024
+    base_down_split_size: int = 1024

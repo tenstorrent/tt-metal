@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 import os
@@ -25,7 +25,7 @@ from models.tt_transformers.tt.model_config import ModelArgs
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150x8": (1, 8)}.get(
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
@@ -125,10 +125,7 @@ def test_vision_attention_inference(
 
     tt_attention_input = pt_attention_input.clone()
     tt_attention_input = torch.nn.functional.pad(tt_attention_input, (0, 0, 0, seq_len - ref_seq_len))
-    attention_input = model_args.prepare_residual_tensor_prefill(
-        tt_attention_input,
-        force_replicated=False if model_args.is_galaxy else True,
-    )
+    attention_input = model_args.prepare_residual_tensor_prefill(tt_attention_input)
 
     tt_out = tt_model(
         attention_input,

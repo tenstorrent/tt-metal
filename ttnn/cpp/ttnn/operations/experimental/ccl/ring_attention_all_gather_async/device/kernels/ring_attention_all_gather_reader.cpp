@@ -1,8 +1,13 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include <cstdint>
@@ -26,6 +31,63 @@ constexpr uint32_t num_inputs = get_compile_time_arg_val(8);
 constexpr bool direction = get_compile_time_arg_val(9);  // 1 is forward, 0 is backward
 constexpr bool fuse_op = get_compile_time_arg_val(10);
 
+// Prefetch: batch multiple packets of DRAM reads before a single barrier.
+// This keeps more reads in flight across interleaved DRAM banks, hiding latency.
+// CB depth must be >= 2 * PREFETCH_PACKETS * packet_size_in_pages (see program_factory cb_num_pages).
+constexpr uint32_t PREFETCH_PACKETS = 4;
+
+// Batch-read tiles into the output CB with DRAM prefetch and FIFO wrapping.
+// next_page_id is called once per tile-group read; it returns the source TensorAccessor
+// page id and may perform per-tile side effects (e.g. row-stride tracking).
+//
+// Manual ring-buffer wrapping: batched reads may write across the FIFO boundary, which
+// bypasses the CB's normal contiguous-write assumption (see cb_push_back). This is safe because
+// reads target raw L1 addresses via CoreLocalMem and cb_push_back is called per-packet
+// (packet_size_in_pages always divides cb_num_pages evenly).
+template <typename Accessor, typename PageIdFn>
+FORCE_INLINE void prefetch_batch_read_tiles(
+    const Noc& noc_obj,
+    CircularBuffer& cb_output,
+    uint32_t& tiles_read,
+    uint32_t tiles_to_read,
+    uint32_t cb_fifo_limit,
+    uint32_t cb_fifo_size,
+    const Accessor& accessor,
+    PageIdFn&& next_page_id) {
+    constexpr uint32_t payload_size_bytes = input_tensor_page_size * contig_pages_advanced;
+    while (tiles_read < tiles_to_read) {
+        uint32_t remaining_tiles = tiles_to_read - tiles_read;
+        uint32_t remaining_packets = (remaining_tiles + packet_size_in_pages - 1) / packet_size_in_pages;
+        uint32_t batch_packets = std::min(remaining_packets, PREFETCH_PACKETS);
+        uint32_t batch_pages = batch_packets * packet_size_in_pages;
+
+        cb_output.reserve_back(batch_pages);
+        uint32_t l1_write_addr = cb_output.get_write_ptr();
+
+        for (uint32_t p = 0; p < batch_packets; p++) {
+            uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
+            for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
+                if (l1_write_addr >= cb_fifo_limit) {
+                    l1_write_addr -= cb_fifo_size;
+                }
+                noc_obj.async_read(
+                    accessor,
+                    CoreLocalMem<uint8_t>(l1_write_addr),
+                    input_tensor_page_size,
+                    {.page_id = next_page_id(tiles_read)},
+                    {});
+                l1_write_addr += payload_size_bytes;
+                tiles_read += contig_pages_advanced;
+            }
+            l1_write_addr += (packet_size_in_pages - num_pages_to_read) * input_tensor_page_size;
+        }
+        noc_obj.async_read_barrier();
+        for (uint32_t p = 0; p < batch_packets; p++) {
+            cb_output.push_back(packet_size_in_pages);
+        }
+    }
+}
+
 void kernel_main() {
     constexpr uint32_t page_size_base_idx = 11;
     constexpr auto inputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
@@ -38,21 +100,43 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     uint32_t arg_idx = 0;
     // Load the input tensor spec
-    uint32_t input_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t output_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t output_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
     uint32_t gather_dim = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_batch_head_count = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_tile_id_start = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_tile_id_end = get_arg_val<uint32_t>(arg_idx++);
     uint32_t ring_size = get_arg_val<uint32_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
 
-    auto inputs_tuple = make_tensor_accessor_tuple(inputs_args, arg_idx, page_size_base_idx);
+    std::array<uint32_t, num_inputs> input_tensor_Wt;
+    std::array<uint32_t, num_inputs> input_tensor_Ht;
+    std::array<uint32_t, num_inputs> output_tensor_Wt;
+    std::array<uint32_t, num_inputs> output_tensor_Ht;
+    std::array<uint32_t, num_inputs> input_batch_head_count;
+    std::array<uint32_t, num_inputs> input_tile_id_start;
+    std::array<uint32_t, num_inputs> input_tile_id_end;
+    // Phase-1 input page base: nonzero only for single-slot gather (skip to the sliced input slot).
+    // The slice is always emitted into output slot 0, whatever the output batch size.
+    std::array<uint32_t, num_inputs> input_batch_base;
+
+    for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+        input_tensor_Wt[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        input_tensor_Ht[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        output_tensor_Wt[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        output_tensor_Ht[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        input_batch_head_count[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        input_tile_id_start[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        input_tile_id_end[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        input_batch_base[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        // valid_pages_per_batch_head: clamp the gather to the logical_n-valid slab prefix so only
+        // kv_actual-sized data moves. Uniform across cores/devices, so producer/consumer page counts
+        // and the ring slice protocol stay matched. Default (full input) leaves the range unchanged.
+        const uint32_t valid_pages = get_arg_val<uint32_t>(arg_idx++);
+        if (valid_pages < input_tile_id_end[input_idx]) {
+            input_tile_id_end[input_idx] = valid_pages;
+        }
+    }
+
+    auto inputs_tuple = make_tensor_accessor_tuple(inputs_args, arg_idx);
     arg_idx += num_inputs;
     auto input_tensor_addrgens = make_abstract_tensor_accessor_wrappers(inputs_tuple);
-    auto outputs_tuple = make_tensor_accessor_tuple(outputs_args, arg_idx, page_size_base_idx);
+    auto outputs_tuple = make_tensor_accessor_tuple(outputs_args, arg_idx);
     arg_idx += num_inputs;
     auto output_tensor_addrgens = make_abstract_tensor_accessor_wrappers(outputs_tuple);
 
@@ -61,31 +145,33 @@ void kernel_main() {
         op_signaler = OpSignaler(arg_idx);
     }
 
-    const uint32_t payload_size_bytes = input_tensor_page_size * contig_pages_advanced;
-    // Push out our local slice
+    const uint32_t cb_fifo_limit = get_local_cb_interface(cb_output_id).fifo_limit;
+    const uint32_t cb_fifo_size = get_local_cb_interface(cb_output_id).fifo_size;
 
-    uint32_t tiles_read = input_tile_id_start;
-    uint32_t tiles_to_read = input_tile_id_end;
+    Noc noc_obj;
+    CircularBuffer cb_output(cb_output_id);
+
+    // Push out our local slice
+    // For a single-slot gather this starts at the sliced batch slot; otherwise 0 (full batch).
     uint32_t output_tile_id_start = 0;
+    // Read local slice to our buffers, before sending them over
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-        for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
-            while (tiles_read < tiles_to_read) {
-                uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
-                cb_reserve_back(cb_output_id, packet_size_in_pages);
-                const uint32_t l1_write_addr_base = get_write_ptr(cb_output_id);
-                uint32_t l1_write_addr = l1_write_addr_base;
-                for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
-                    auto read_addr = input_tensor_addrgens[input_idx].get_noc_addr(output_tile_id_start + tiles_read);
-                    noc_async_read(read_addr, l1_write_addr, input_tensor_page_size);
-                    l1_write_addr += payload_size_bytes;
-                    tiles_read += contig_pages_advanced;
-                }
-                noc_async_read_barrier();
-                cb_push_back(cb_output_id, packet_size_in_pages);
-            }
-            tiles_read = input_tile_id_start;
-            tiles_to_read = input_tile_id_end;
-            output_tile_id_start += input_tensor_Wt * input_tensor_Ht;
+        output_tile_id_start = input_batch_base[input_idx];
+        uint32_t tiles_read = input_tile_id_start[input_idx];
+        uint32_t tiles_to_read = input_tile_id_end[input_idx];
+        for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
+            prefetch_batch_read_tiles(
+                noc_obj,
+                cb_output,
+                tiles_read,
+                tiles_to_read,
+                cb_fifo_limit,
+                cb_fifo_size,
+                input_tensor_addrgens[input_idx],
+                [&](uint32_t tr) { return output_tile_id_start + tr; });
+            tiles_read = input_tile_id_start[input_idx];
+            tiles_to_read = input_tile_id_end[input_idx];
+            output_tile_id_start += input_tensor_Wt[input_idx] * input_tensor_Ht[input_idx];
         }
         output_tile_id_start = 0;
     }
@@ -120,6 +206,10 @@ void kernel_main() {
         // In the linear case, I expect num_targets_forward_direction slices from the right
         // In the ring case, I expect num_targets_forward_direction slices from the right (keep in mind this differs for
         // odd/even chips)
+
+        // Device 2.0: legacy primitive retained, out_ready_sem is the address of a GlobalSemaphore
+        // Semaphore<> binds to per-program ids via get_semaphore<>(id), so it cannot wrap a
+        // GlobalSemaphore.
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), slices_received + 1);
         // Got it
         slices_received++;
@@ -147,51 +237,49 @@ void kernel_main() {
         if ((topology == Topology::Linear && writes_expected > 0) ||
             (topology == Topology::Ring && (slices_received < (writes_expected + 1)))) {
             for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-                // read the next backward slice out of memory, and put it in CB
-                tiles_read = input_tile_id_start;
-                tiles_to_read = input_tile_id_end;
+                uint32_t tiles_read = input_tile_id_start[input_idx];
+                uint32_t tiles_to_read = input_tile_id_end[input_idx];
 
                 uint32_t output_tile_id_start = 0;
-                uint32_t pages_read_in_row = input_tile_id_start % input_tensor_Wt;
-                uint32_t row_offset = (input_tile_id_start / input_tensor_Wt) * output_tensor_Wt;
-                uint32_t slice_Wt = input_tensor_Wt;
-                uint32_t stride_Wt = output_tensor_Wt;
+                uint32_t pages_read_in_row = input_tile_id_start[input_idx] % input_tensor_Wt[input_idx];
+                uint32_t row_offset =
+                    (input_tile_id_start[input_idx] / input_tensor_Wt[input_idx]) * output_tensor_Wt[input_idx];
+                uint32_t slice_Wt = input_tensor_Wt[input_idx];
+                uint32_t stride_Wt = output_tensor_Wt[input_idx];
                 if (gather_dim == 3) {
-                    output_tile_id_start = actual_sender_chip_id * input_tensor_Wt;
+                    output_tile_id_start = actual_sender_chip_id * input_tensor_Wt[input_idx];
                 } else {
-                    output_tile_id_start = actual_sender_chip_id * input_tensor_Ht * input_tensor_Wt;
+                    output_tile_id_start =
+                        actual_sender_chip_id * input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
                 }
-                for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
-                    while (tiles_read < tiles_to_read) {
-                        uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);  // 2
-                        cb_reserve_back(cb_output_id, packet_size_in_pages);
-                        size_t l1_write_addr = get_write_ptr(cb_output_id);
-                        for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
-                            auto read_addr = output_tensor_addrgens[input_idx].get_noc_addr(
-                                output_tile_id_start + row_offset + pages_read_in_row);
-                            noc_async_read(read_addr, l1_write_addr, input_tensor_page_size);
-                            l1_write_addr += payload_size_bytes;
-                            tiles_read += contig_pages_advanced;
-
+                for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
+                    prefetch_batch_read_tiles(
+                        noc_obj,
+                        cb_output,
+                        tiles_read,
+                        tiles_to_read,
+                        cb_fifo_limit,
+                        cb_fifo_size,
+                        output_tensor_addrgens[input_idx],
+                        [&](uint32_t /* tiles_read */) {
+                            const uint32_t pid = output_tile_id_start + row_offset + pages_read_in_row;
                             pages_read_in_row++;
                             if (pages_read_in_row >= slice_Wt) {
                                 row_offset += stride_Wt;
                                 pages_read_in_row = 0;
                             }
-                        }
-                        noc_async_read_barrier();
-                        cb_push_back(cb_output_id, packet_size_in_pages);
-                    }
-                    pages_read_in_row = input_tile_id_start % input_tensor_Wt;
-                    row_offset = (input_tile_id_start / input_tensor_Wt) * output_tensor_Wt;
-                    tiles_read = input_tile_id_start;
-                    tiles_to_read = input_tile_id_end;
-                    output_tile_id_start += output_tensor_Wt * output_tensor_Ht;
+                            return pid;
+                        });
+                    pages_read_in_row = input_tile_id_start[input_idx] % input_tensor_Wt[input_idx];
+                    row_offset =
+                        (input_tile_id_start[input_idx] / input_tensor_Wt[input_idx]) * output_tensor_Wt[input_idx];
+                    tiles_read = input_tile_id_start[input_idx];
+                    tiles_to_read = input_tile_id_end[input_idx];
+                    output_tile_id_start += output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
                 }
             }
         }
     }
-
-    const uint64_t dest_noc_addr = get_noc_addr(my_x[0], my_y[0], out_ready_sem);
-    noc_inline_dw_write(dest_noc_addr, 0);
+    // Device 2.0 migration: legacy primitive retained, out_ready_sem is a GlobalSemaphore address.
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
 }

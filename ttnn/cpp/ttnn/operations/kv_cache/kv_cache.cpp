@@ -1,14 +1,15 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "kv_cache.hpp"
 #include "ttnn/operations/kv_cache/device/update_cache_device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include <tt-metalium/constants.hpp>
 
-namespace ttnn::operations::kv_cache {
+namespace ttnn {
 
-ttnn::Tensor ExecuteUpdateCache::invoke(
+ttnn::Tensor update_cache_for_token_(
     const ttnn::Tensor& cache,
     const ttnn::Tensor& input,
     const uint32_t update_index,
@@ -20,13 +21,13 @@ ttnn::Tensor ExecuteUpdateCache::invoke(
     return cache;
 }
 
-ttnn::Tensor ExecuteFillCache::invoke(
-    const ttnn::Tensor& cache, const ttnn::Tensor& input, const uint32_t batch_index) {
-    ttnn::prim::update_cache(cache, input, batch_index, 0, 0, ttnn::prim::UpdateCacheOpType::FILL);
+ttnn::Tensor fill_cache_for_user_(
+    const ttnn::Tensor& cache, const ttnn::Tensor& input, const uint32_t batch_index, const uint32_t update_idx) {
+    ttnn::prim::update_cache(cache, input, batch_index, update_idx, 0, ttnn::prim::UpdateCacheOpType::FILL);
     return cache;
 }
 
-ttnn::Tensor UpdateCacheOperation::invoke(
+ttnn::Tensor update_cache(
     const ttnn::Tensor& cache,
     const ttnn::Tensor& input,
     const uint32_t update_idx,
@@ -38,10 +39,13 @@ ttnn::Tensor UpdateCacheOperation::invoke(
     return cache;
 }
 
-ttnn::Tensor FillCacheOperation::invoke(
-    const ttnn::Tensor& cache_tensor, const ttnn::Tensor& input_tensor, const uint32_t batch_idx) {
-    ttnn::prim::update_cache(cache_tensor, input_tensor, batch_idx, 0, 0, ttnn::prim::UpdateCacheOpType::FILL);
+ttnn::Tensor fill_cache(
+    const ttnn::Tensor& cache_tensor,
+    const ttnn::Tensor& input_tensor,
+    const uint32_t batch_idx,
+    const uint32_t update_idx) {
+    ttnn::prim::update_cache(cache_tensor, input_tensor, batch_idx, update_idx, 0, ttnn::prim::UpdateCacheOpType::FILL);
     return cache_tensor;
 }
 
-}  // namespace ttnn::operations::kv_cache
+}  // namespace ttnn

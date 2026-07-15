@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 std::vector<BufferCorePageMapping::ContiguousHostPages> to_host_page_ranges(
-    tt::stl::Span<const uint32_t> host_page_indices) {
+    ttsl::Span<const uint32_t> host_page_indices) {
     std::vector<BufferCorePageMapping::ContiguousHostPages> result;
 
     uint32_t start_host_page_idx = 0;

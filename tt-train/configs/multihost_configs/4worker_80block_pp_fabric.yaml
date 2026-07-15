@@ -1,0 +1,11 @@
+multihost_config:
+  enabled: true
+  num_workers: 4
+  socket_type: fabric
+  pipeline_parallel_config:
+    num_blocks: 80
+    blocks_per_rank:
+      0: 20
+      1: 20
+      2: 20
+      3: 20

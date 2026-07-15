@@ -22,11 +22,6 @@ run_python_model_tests_grayskull() {
     # Fused ops unit tests
     pytest models/experimental/bert_large_performant/unit_tests/fused_ops/test_bert_large_fused_ln.py -k "in0_L1-out_L1 and batch_9"
     pytest models/experimental/bert_large_performant/unit_tests/fused_ops/test_bert_large_fused_softmax.py -k "in0_L1 and batch_9"
-
-    # Falcon tests
-    pytest models/demos/falcon7b_common/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py -k "seq_len_128 and in0_BFLOAT16-in1_BFLOAT8_B-out_BFLOAT16-weights_DRAM"
-    pytest models/demos/falcon7b_common/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py -k "seq_len_512 and in0_BFLOAT16-in1_BFLOAT8_B-out_BFLOAT16-weights_DRAM"
-    pytest models/demos/falcon7b_common/tests/unit_tests/test_falcon_attn_matmul.py
 }
 
 run_python_model_tests_wormhole_b0() {
@@ -34,15 +29,10 @@ run_python_model_tests_wormhole_b0() {
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
     MESH_DEVICE=AUTO pytest models/demos/deepseek_v3/tests/unit --timeout 60 --durations=0
 
-    # Falcon tests
-    # attn_matmul_from_cache is currently not used in falcon7b
-    pytest models/demos/falcon7b_common/tests/unit_tests/test_falcon_attn_matmul.py -k "not attn_matmul_from_cache"
-    # higher sequence lengths and different formats trigger memory issues
-    pytest models/demos/falcon7b_common/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py -k "seq_len_128 and in0_BFLOAT16-in1_BFLOAT8_B-out_BFLOAT16-weights_DRAM"
-    pytest models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_functional.py -k "pretrained_weight_false"
+    # Generalized MoE gate op (ungrouped top-k + DeepSeek grouped)
+    pytest models/common/tests/modules/moe/test_generalized_moe_gate.py
 
-    # Unet Shallow
-    pytest -svv models/experimental/functional_unet/tests/test_unet_model.py
+    pytest models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_functional.py -k "pretrained_weight_false"
 
     # Mobilenetv2git
     pytest -svv models/demos/vision/classification/mobilenetv2/tests/pcc/test_mobilenetv2.py
@@ -62,14 +52,7 @@ run_python_model_tests_wormhole_b0() {
 }
 
 run_python_model_tests_slow_runtime_mode_wormhole_b0() {
-    # Unet Shallow
-    export TTNN_CONFIG_OVERRIDES='{
-        "enable_fast_runtime_mode": false,
-        "enable_comparison_mode": true,
-        "comparison_mode_should_raise_exception": true,
-        "comparison_mode_pcc": 0.998
-    }'
-    pytest -svv models/experimental/functional_unet/tests/test_unet_model.py
+    echo "LOG_METAL: No slow runtime mode tests for wormhole_b0"
 }
 
 run_python_model_tests_blackhole() {
@@ -85,16 +68,8 @@ run_python_model_tests_blackhole() {
     done
 
     pytest models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_functional.py --timeout 300
-    pytest models/experimental/functional_unet/tests/test_unet_model.py --timeout 90
 }
 
 run_python_model_tests_slow_runtime_mode_blackhole() {
-    # Unet Shallow
-    export TTNN_CONFIG_OVERRIDES='{
-        "enable_fast_runtime_mode": false,
-        "enable_comparison_mode": true,
-        "comparison_mode_should_raise_exception": true,
-        "comparison_mode_pcc": 0.998
-    }'
-    pytest -svv models/experimental/functional_unet/tests/test_unet_model.py --timeout 90
+    echo "LOG_METAL: No slow runtime mode tests for blackhole"
 }

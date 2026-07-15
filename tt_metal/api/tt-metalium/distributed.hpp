@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,6 @@
 #include <vector>
 
 #include <tt_stl/span.hpp>
-#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
@@ -57,7 +56,8 @@ void ReadShard(
     // TODO: #26591 - `is_local` Handling should be done under `MeshCommandQueue`.
     // Tracking removal of free function APIs in this file in this issue.
     auto* mesh_device = mesh_cq.device();
-    if (!mesh_device->is_local(coord)) {
+    auto devices = mesh_device->get_view().get_devices(MeshCoordinateRange(coord, coord));
+    if (devices.empty()) {
         return;
     }
 
@@ -73,6 +73,12 @@ void EnqueueWriteMeshBuffer(
     std::shared_ptr<MeshBuffer>& mesh_buffer,
     const std::vector<DType>& src,
     bool blocking = false) {
+    TT_FATAL(src.size() * sizeof(DType) >= mesh_buffer->size(),
+        "Source vector is too small for mesh buffer: mesh buffer size={} bytes, source size={} * {} bytes",
+        mesh_buffer->size(),
+        src.size(),
+        sizeof(DType));
+
     mesh_cq.enqueue_write_mesh_buffer(mesh_buffer, src.data(), blocking);
 }
 
@@ -102,9 +108,9 @@ bool EventQuery(const MeshEvent& event);
 MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id);
 
 void Synchronize(
-    MeshDevice* device, std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    MeshDevice* device, std::optional<uint8_t> cq_id, ttsl::Span<const SubDeviceId> sub_device_ids = {});
 
-void Finish(MeshCommandQueue& mesh_cq, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+void Finish(MeshCommandQueue& mesh_cq, ttsl::Span<const SubDeviceId> sub_device_ids = {});
 
 // Returns true if the distributed environment is initialized and world_size > 1.
 bool UsingDistributedEnvironment();

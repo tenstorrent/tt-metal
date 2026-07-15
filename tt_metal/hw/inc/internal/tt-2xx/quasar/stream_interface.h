@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,9 @@
 
 #include "noc_overlay_parameters.h"
 #include "noc_parameters.h"
+#if !defined(COMPILE_FOR_TRISC)
 #include "noc_nonblocking_api.h"
+#endif
 
 // Low-level chip-dependent stream/NOC functions
 

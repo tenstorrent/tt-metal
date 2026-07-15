@@ -1,12 +1,14 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
 #include <gtest/gtest.h>
+#include <tt_stl/reflection.hpp>
 #include <cstdint>
 #include <vector>
 #include <algorithm>
+#include <numeric>
 #include <unordered_map>
 #include <string_view>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>

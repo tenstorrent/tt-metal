@@ -1,8 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/tensor_accessor_args.hpp>
+
+#include <limits>
 
 #include <tt-metalium/device.hpp>
 
@@ -35,19 +37,35 @@ void append_sharded_args(
     size_t n_args =
         add_rank + add_num_banks + (rank * add_tensor_shape) + (rank * add_shard_shape) + (n_banks * add_bank_coords);
     if (!is_runtime) {
-        n_args += 1;  // +1 for the args_config config
+        n_args += 2;  // +1 for args_config, +1 for aligned_page_size
     }
     args.reserve(args.size() + n_args);
 
     if (!is_runtime) {
         args.push_back(args_config.raw());
+        auto aligned_page_size = buffer.aligned_page_size();
+        TT_FATAL(
+            aligned_page_size <= std::numeric_limits<uint32_t>::max(),
+            "Aligned page size {} exceeds uint32_t max {}",
+            aligned_page_size,
+            std::numeric_limits<uint32_t>::max());
+        args.push_back(static_cast<uint32_t>(aligned_page_size));
     }
 
     if (add_rank) {
         args.push_back(rank);
     }
     if (add_num_banks) {
-        args.push_back(n_banks);
+        // The num_banks word (compile-time or runtime) carries the shard-contiguous flag in its top bit, so the
+        // distribution strategy needs no extra arg/slot and no ArgConfig bit. pack/unpack (arg_config.hpp) are the
+        // single source of truth for this layout.
+        const bool pack_shard_contiguous =
+            buffer_distribution_spec.shard_distribution_strategy() == ShardDistributionStrategy::CONTIGUOUS_1D;
+        TT_FATAL(
+            n_banks < tensor_accessor::ShardContiguousBit,
+            "num_banks {} is too large to pack the shard-contiguous flag",
+            n_banks);
+        args.push_back(tensor_accessor::pack_num_banks(static_cast<uint32_t>(n_banks), pack_shard_contiguous));
     }
     if (add_tensor_shape) {
         args.insert(args.end(), tensor_shape.cbegin(), tensor_shape.cend());
@@ -108,6 +126,15 @@ TensorAccessorArgs::TensorAccessorArgs(
     const std::shared_ptr<distributed::MeshBuffer>& buffer, tensor_accessor::ArgsConfig args_config) :
     TensorAccessorArgs(buffer.get(), args_config) {}
 
+TensorAccessorArgs::TensorAccessorArgs(const MeshTensor& tensor, tensor_accessor::ArgsConfig args_config) :
+    TensorAccessorArgs(tensor.mesh_buffer(), args_config) {}
+
+TensorAccessorArgs::TensorAccessorArgs(
+    ttsl::optional_reference<const MeshTensor> tensor, tensor_accessor::ArgsConfig args_config) :
+    buffer_(tensor ? tensor->mesh_buffer().get_reference_buffer() : nullptr), args_config_(args_config) {
+    update_args_config();
+}
+
 TensorAccessorArgs TensorAccessorArgs::create_dram_interleaved() {
     TensorAccessorArgs args;
     args.args_config_ = tensor_accessor::ArgConfig::IsDram;
@@ -149,6 +176,13 @@ void TensorAccessorArgs::append_to(
         CMAKE_UNIQUE_NAMESPACE::append_sharded_args(*buffer_, args_config_, common_runtime_args, /* is_runtime */ true);
     } else {
         compile_time_args.push_back(args_config_.raw());
+        auto aligned_page_size = buffer_ ? buffer_->aligned_page_size() : 0;
+        TT_FATAL(
+            aligned_page_size <= std::numeric_limits<uint32_t>::max(),
+            "Aligned page size {} exceeds uint32_t max {}",
+            aligned_page_size,
+            std::numeric_limits<uint32_t>::max());
+        compile_time_args.push_back(static_cast<uint32_t>(aligned_page_size));
     }
 }
 
@@ -161,6 +195,13 @@ void TensorAccessorArgs::append_to(std::vector<uint32_t>& compile_time_args) con
         CMAKE_UNIQUE_NAMESPACE::append_sharded_args(*buffer_, args_config_, compile_time_args, /* is_runtime */ false);
     } else {
         compile_time_args.push_back(args_config_.raw());
+        auto aligned_page_size = buffer_ ? buffer_->aligned_page_size() : 0;
+        TT_FATAL(
+            aligned_page_size <= std::numeric_limits<uint32_t>::max(),
+            "Aligned page size {} exceeds uint32_t max {}",
+            aligned_page_size,
+            std::numeric_limits<uint32_t>::max());
+        compile_time_args.push_back(static_cast<uint32_t>(aligned_page_size));
     }
 }
 
@@ -170,6 +211,13 @@ std::vector<uint32_t> TensorAccessorArgs::get_compile_time_args() const {
         CMAKE_UNIQUE_NAMESPACE::append_sharded_args(*buffer_, args_config_, compile_time_args, /* is_runtime */ false);
     } else {
         compile_time_args.push_back(args_config_.raw());
+        auto aligned_page_size = buffer_ ? buffer_->aligned_page_size() : 0;
+        TT_FATAL(
+            aligned_page_size <= std::numeric_limits<uint32_t>::max(),
+            "Aligned page size {} exceeds uint32_t max {}",
+            aligned_page_size,
+            std::numeric_limits<uint32_t>::max());
+        compile_time_args.push_back(static_cast<uint32_t>(aligned_page_size));
     }
     return compile_time_args;
 }

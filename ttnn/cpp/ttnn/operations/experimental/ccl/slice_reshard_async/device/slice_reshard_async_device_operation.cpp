@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -42,21 +42,6 @@ TensorSpec SliceReshardAsyncDeviceOperation::compute_output_specs(
 Tensor SliceReshardAsyncDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.device());
-}
-
-tt::stl::hash::hash_t SliceReshardAsyncDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "SliceReshardAsyncDeviceOperation::compute_program_hash is called");
-    return tt::tt_metal::operation::hash_operation<SliceReshardAsyncDeviceOperation>(
-        args.dim,
-        args.output_dim_offset,
-        args.output_dim_shape,
-        args.cluster_axis,
-        args.num_links,
-        args.output_mem_config,
-        args.topology,
-        args.ring_size,
-        tensor_args);
 }
 
 }  // namespace ttnn::experimental::prim

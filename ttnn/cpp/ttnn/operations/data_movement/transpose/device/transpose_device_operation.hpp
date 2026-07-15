@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -13,11 +13,12 @@
 #include "transpose_wh_sharded_program_factory.hpp"
 #include "transpose_wh_sharded_rm_program_factory.hpp"
 
-#include "ttnn/decorators.hpp"
-#include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 #include <variant>
+#include "ttnn/operation.hpp"
+#include "ttnn/distributed/types.hpp"
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 namespace ttnn::prim {
 
@@ -53,6 +54,14 @@ struct TransposeDeviceOperation {
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, const Tensor& output);
+
+    // #48928: opt the CB-bound height-sharded factories into the descriptor fast-path. Defined in
+    // transpose_hc_sharded_program_factory.cpp so it can reuse that factory's per-core arg builders.
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t&,
+        const tensor_args_t&,
+        tensor_return_value_t&,
+        const std::optional<ttnn::MeshCoordinate>& = std::nullopt);
 };
 
 }  // namespace ttnn::prim

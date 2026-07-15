@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,12 @@
 #include <cstdint>
 #include <type_traits>
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
+
+namespace tt::tt_fabric {
+// Forward declaration to avoid pulling the full V2 sender header into this widely-included file.
+template <bool EAGER_STAGING, uint8_t NUM_BUFFERS>
+class FabricMuxV2Sender;
+}  // namespace tt::tt_fabric
 
 namespace tt::tt_fabric::common::experimental {
 
@@ -172,11 +178,22 @@ struct is_edm_sender<tt::tt_fabric::WorkerToFabricEdmSender> : std::true_type {}
 template <typename T>
 constexpr bool is_edm_sender_v = is_edm_sender<T>::value;
 
+// Type trait to detect if a type is a FabricMuxV2Sender (transient self-poll Mux V2)
+template <typename T>
+struct is_fabric_mux_v2_sender : std::false_type {};
+
+template <bool E, uint8_t N>
+struct is_fabric_mux_v2_sender<tt::tt_fabric::FabricMuxV2Sender<E, N>> : std::true_type {};
+
+template <typename T>
+constexpr bool is_fabric_mux_v2_sender_v = is_fabric_mux_v2_sender<T>::value;
+
 template <typename FabricSenderType>
 struct CheckFabricSenderType {
     static_assert(
-        is_edm_sender_v<FabricSenderType> || is_mux_sender_v<FabricSenderType>,
-        "FabricSenderType must be WorkerToFabricEdmSender or WorkerToFabricMuxSender");
+        is_edm_sender_v<FabricSenderType> || is_mux_sender_v<FabricSenderType> ||
+            is_fabric_mux_v2_sender_v<FabricSenderType>,
+        "FabricSenderType must be WorkerToFabricEdmSender, WorkerToFabricMuxSender, or FabricMuxV2Sender");
 };
 
 // ========================
@@ -312,10 +329,6 @@ static FORCE_INLINE void populate_unicast_fused_atomic_inc_fields(
             "UnicastFusedAtomicIncUpdateMask requires command_header but std::nullptr_t was provided");
     }
 
-    // Chunk count = 2 unicast write chunks + 1 semaphore increment chunk (constant)
-    packet_header->command_fields.unicast_scatter_write.chunk_count =
-        NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS + 1;
-
     if constexpr (has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::WriteDstAddr)) {
         auto comps = get_noc_address_components(command_header.noc_address);
         auto noc_addr = safe_get_noc_addr(comps.first.x, comps.first.y, comps.second, edm_to_local_chip_noc);
@@ -349,6 +362,10 @@ static FORCE_INLINE void populate_unicast_fused_scatter_write_atomic_inc_fields(
                 !has_flag(UpdateMask, UnicastFusedScatterWriteAtomicIncUpdateMask::Flush),
             "UnicastFusedScatterWriteAtomicIncUpdateMask requires command_header but std::nullptr_t was provided");
     }
+
+    // Chunk count = 2 unicast write chunks + 1 semaphore increment chunk (constant)
+    packet_header->command_fields.unicast_scatter_write.chunk_count =
+        NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS + 1;
 
     // Don't clear destination addresses, since the packet will always have 2 unicast write chunks and 1 semaphore
     // increment chunk.
@@ -395,13 +412,11 @@ static FORCE_INLINE void populate_unicast_fused_scatter_write_atomic_inc_fields(
         for (uint8_t i = 0; i < NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS; i++) {
             set_chunk_encoding(chunk_encodings, NocScatterWriteChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE, i);
         }
-        if (command_header.flush) {
-            set_chunk_encoding(
-                chunk_encodings,
-                (command_header.flush ? NocScatterWriteChunkEncoding::CHUNK_ENCODING_SEMINC_FLUSH
-                                      : NocScatterWriteChunkEncoding::CHUNK_ENCODING_SEMINC_NO_FLUSH),
-                NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS);
-        }
+        set_chunk_encoding(
+            chunk_encodings,
+            (command_header.flush ? NocScatterWriteChunkEncoding::CHUNK_ENCODING_SEMINC_FLUSH
+                                  : NocScatterWriteChunkEncoding::CHUNK_ENCODING_SEMINC_NO_FLUSH),
+            NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS);
         packet_header->command_fields.unicast_scatter_write.chunk_encoding = chunk_encodings;
     }
 

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,12 +8,14 @@ import torch
 
 import ttnn
 
+from ...layers.embeddings import Embedding
 from ...layers.linear import ColParallelLinear, RowParallelLinear
 from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import RMSNorm
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils.substate import pop_substate, rename_substate
+from ...utils.tracing import traced_function
 
 
 # Make this a dataclass. Also consider using HF config directly.
@@ -89,7 +91,7 @@ class T5Encoder(Module):
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
 
-        self.token_embeddings = TokenEmbeddings(config, self.mesh_device)
+        self.token_embeddings = Embedding(config.vocab_size, config.embed_dim, device=self.mesh_device)
         self.encoder = T5Stack(config, self.mesh_device, self.ccl_manager, self.parallel_config)
         self.final_layer_norm = T5RMSNorm(  # final layer norm
             embedding_dim=self.config.embed_dim,
@@ -103,10 +105,15 @@ class T5Encoder(Module):
         rename_substate(state, "encoder.final_layer_norm", "final_layer_norm")
         pop_substate(state, "shared")
 
-    def forward(self, prompt: ttnn.Tensor, *, attention_mask: ttnn.Tensor | None = None) -> ttnn.Tensor:
+    @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
+    def forward(
+        self, prompt: ttnn.Tensor, *, attention_mask: ttnn.Tensor | None = None, zero_masking: bool = False
+    ) -> list[ttnn.Tensor]:
         embeddings = self.token_embeddings(prompt)
         hidden_states = self.encoder(embeddings, attention_mask=attention_mask)
         output = self.final_layer_norm(hidden_states[-1])
+        if zero_masking and attention_mask is not None:
+            output = output * ttnn.unsqueeze(attention_mask, -1)
         hidden_states.append(output)
         return hidden_states
 
@@ -250,7 +257,7 @@ class T5DenseGatedActDense(Module):
             in_features=self.config.embed_dim,
             out_features=self.config.ff_dim,
             bias=False,
-            activation_fn="gelu",
+            activation_fn="gelu_tanh",
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
         )
@@ -284,7 +291,11 @@ class T5DenseGatedActDense(Module):
 
         if self.parallel_config.tensor_parallel.factor > 1:
             hidden_states = self.ccl_manager.all_gather(
-                hidden_states, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis, use_hyperparams=True
+                hidden_states,
+                dim=3,
+                mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+                use_hyperparams=True,
+                use_persistent_buffer=True,
             )
         hidden_states = ttnn.squeeze(hidden_states, 0)
         return hidden_states
@@ -420,14 +431,22 @@ class T5Attention(Module):
         orig_shape = list(attn_output.shape)
         if self.parallel_config.tensor_parallel.factor > 1:
             attn_output = self.ccl_manager.all_gather(
-                attn_output, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis, use_hyperparams=True
+                attn_output,
+                dim=3,
+                mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+                use_hyperparams=True,
+                use_persistent_buffer=True,
             )
 
         dense_out = self.o_proj(attn_output)
 
         if self.parallel_config.tensor_parallel.factor > 1:
             dense_out = self.ccl_manager.all_gather(
-                dense_out, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis, use_hyperparams=True
+                dense_out,
+                dim=3,
+                mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+                use_hyperparams=True,
+                use_persistent_buffer=True,
             )
 
         dense_out_shape = list(dense_out.shape)
@@ -459,19 +478,6 @@ def _relative_position_bucket(relative_position: torch.Tensor, num_buckets: int,
     relative_buckets += torch.where(is_small, relative_position, relative_position_if_large)
     return relative_buckets
 
-
-# TODO: Replace with Embedding layer from embeddings.py
-class TokenEmbeddings(Module):
-    def __init__(self, config: T5Config, mesh_device: ttnn.Device):
-        super().__init__()
-        self.config = config
-        self.mesh_device = mesh_device
-        self.weight = Parameter(
-            total_shape=[config.vocab_size, config.embed_dim], layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh_device
-        )
-
-    def forward(self, prompt: ttnn.Tensor) -> ttnn.Tensor:
-        return ttnn.embedding(prompt, self.weight.data, layout=ttnn.TILE_LAYOUT)
 
 
 class RelativePositionEmbeddings(Module):

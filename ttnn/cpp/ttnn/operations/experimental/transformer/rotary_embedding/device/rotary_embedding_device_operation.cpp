@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -33,9 +33,20 @@ void RotaryEmbeddingDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL((cos.layout() == Layout::TILE), "Inputs to rotary embedding must be tilized");
     TT_FATAL((sin.layout() == Layout::TILE), "Inputs to rotary embedding must be tilized");
 
-    TT_FATAL(input_tensor.padded_shape()[-1] % (TILE_WIDTH * 2) == 0, "Input X dim must be divisible into tiles");
+    TT_FATAL(
+        input_tensor.padded_shape()[-1] == TILE_WIDTH || input_tensor.padded_shape()[-1] % (TILE_WIDTH * 2) == 0,
+        "Input X dim ({}) must be either {} (single tile) or divisible by {} (rotate_half midpoint must "
+        "align with a tile boundary).",
+        input_tensor.padded_shape()[-1],
+        TILE_WIDTH,
+        TILE_WIDTH * 2);
     uint32_t seq_len = input_tensor.padded_shape()[-2];
     uint32_t X = input_tensor.padded_shape()[-1];
+    // The single-tile (Wt == 1) path rotates via matmul_tiles against an in-L1
+    // bfloat16 transformation matrix. On Wormhole LLK the mixed-precision
+    // combination "bfp8 input @ bf16 trans_mat" corrupts the matmul output
+    // pack, so constrain input/cos/sin to bfloat16 here until that LLK
+    // interaction is resolved.
     TT_FATAL(cos.dtype() == sin.dtype(), "Cos and Sin dtypes must match");
     TT_FATAL(cos.padded_shape() == sin.padded_shape(), "Cos and Sin dims must match");
     TT_FATAL(
@@ -113,7 +124,8 @@ TensorSpec RotaryEmbeddingDeviceOperation::compute_output_specs(
             shard_spec.shape = {Ht * TILE_HEIGHT, input_tensor.padded_shape()[-1]};
             shard_spec.orientation = ShardOrientation::ROW_MAJOR;
         }
-        auto mem_config = args.output_mem_config.with_shard_spec(shard_spec);
+        auto mem_config = tt::tt_metal::MemoryConfig(
+            args.output_mem_config.memory_layout(), args.output_mem_config.buffer_type(), shard_spec);
         return TensorSpec(
             shape,
             tt::tt_metal::TensorLayout(
@@ -131,7 +143,7 @@ Tensor RotaryEmbeddingDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-tt::stl::hash::hash_t RotaryEmbeddingDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t RotaryEmbeddingDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<RotaryEmbeddingDeviceOperation>(
         args.seq_len, args.output_mem_config, tensor_args.input, tensor_args.cos, tensor_args.sin);

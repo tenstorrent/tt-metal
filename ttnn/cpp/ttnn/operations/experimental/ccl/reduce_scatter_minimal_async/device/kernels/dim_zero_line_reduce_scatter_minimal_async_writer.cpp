@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -141,7 +141,7 @@ void kernel_main() {
 #else
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx>();
     constexpr uint32_t ct_offset = intermediate_tensor_args.num_compile_time_args();
-    auto intermediate_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_address, page_size);
+    auto intermediate_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_address);
 #endif
 
 #ifdef OUTPUT_IS_SHARDED
@@ -164,7 +164,7 @@ void kernel_main() {
     arg_idx += output_rt_increment;
 #else
     constexpr auto output_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
-    auto output_addrgen = TensorAccessor(output_tensor_args, output_address, page_size);
+    auto output_addrgen = TensorAccessor(output_tensor_args, output_address);
 #endif
 
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
@@ -365,7 +365,7 @@ void kernel_main() {
                 size_t l1_read_addr = get_read_ptr(cb_compute_output_id);
                 for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                     uint32_t output_tile_id = output_tile_id_start + tiles_read;
-                    uint64_t local_noc_addr = get_noc_addr(output_tile_id, output_addrgen);
+                    uint64_t local_noc_addr = output_addrgen.get_noc_addr(output_tile_id);
                     noc_async_write(l1_read_addr, local_noc_addr, page_size);
                     l1_read_addr += page_size;
                     tiles_read++;

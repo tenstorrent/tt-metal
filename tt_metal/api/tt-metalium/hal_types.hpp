@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@ using DeviceAddr = std::uint64_t;
 
 enum class HalProcessorClassType : uint8_t { DM = 0, COMPUTE = 1 };
 
-enum class HalProgrammableCoreType { TENSIX = 0, ACTIVE_ETH = 1, IDLE_ETH = 2, COUNT = 3 };
+enum class HalProgrammableCoreType { TENSIX = 0, ACTIVE_ETH = 1, IDLE_ETH = 2, DRAM = 3, COUNT = 4 };
 
 static constexpr uint32_t NumHalProgrammableCoreTypes = static_cast<uint32_t>(HalProgrammableCoreType::COUNT);
 
@@ -26,7 +26,7 @@ enum class HalL1MemAddrType : uint8_t {
     DPRINT_BUFFERS,
     PROFILER,
     KERNEL_CONFIG,  // End is start of unreserved memory
-    UNRESERVED,     // Only for ethernet cores
+    UNRESERVED,     // For ethernet and DRAM cores
     DEFAULT_UNRESERVED,
     CORE_INFO,
     GO_MSG,
@@ -39,10 +39,16 @@ enum class HalL1MemAddrType : uint8_t {
     APP_ROUTING_INFO,
     RETRAIN_COUNT,
     RETRAIN_FORCE,
-    CRC_ERR,    // Link status - CRC error count
-    CORR_CW,    // Link status - Corrected Codewords count
-    UNCORR_CW,  // Link status - Uncorrected Codewords count
-    LINK_UP,    // Link status - Link up status
+    CRC_ERR,          // Link status - CRC error count
+    CORR_CW,          // Link status - Corrected Codewords count
+    UNCORR_CW,        // Link status - Uncorrected Codewords count
+    TXQ0_RESEND_CNT,  // Link status - TX queue 0 packet resend count (Blackhole only)
+    TXQ1_RESEND_CNT,  // Link status - TX queue 1 packet resend count (Blackhole only)
+    TXQ2_RESEND_CNT,  // Link status - TX queue 2 packet resend count (Blackhole only)
+    RXQ0_PKT_DROP,    // Link status - RX queue 0 packet drop count (Blackhole only)
+    RXQ1_PKT_DROP,    // Link status - RX queue 1 packet drop count (Blackhole only)
+    RXQ2_PKT_DROP,    // Link status - RX queue 2 packet drop count (Blackhole only)
+    LINK_UP,          // Link status - Link up status
     FABRIC_TELEMETRY,
     ROUTING_TABLE,
     ROUTER_STATE,

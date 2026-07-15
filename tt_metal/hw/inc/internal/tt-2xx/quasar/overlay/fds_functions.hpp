@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 // Version: FFN1.3.0
@@ -13,6 +13,8 @@
 
 #define TRAP_INT_MASK 0x8000000000000000  // Mask to identify interrupt traps
 #define CORE_OFFSET 0x1000                // Offset between mhartid cores
+
+namespace overlay {
 
 namespace FdsDispatch {
 // Configure filter length: how many cycles a done signal from a NEO must be stable (through the deglitcher)
@@ -70,4 +72,7 @@ void fds_clear_de_status(uint32_t dispatch_inst);
 // Configure interrupts for groupIDs: set bit for the groupIDs to generate interrupts
 void fds_config_interrupt_en(uint32_t mask);
 }  // namespace FdsNeo
+
+}  // namespace overlay
+
 #endif

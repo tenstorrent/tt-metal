@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 import os
@@ -6,7 +6,7 @@ import os
 import pytest
 import torch
 from loguru import logger
-from transformers import AutoConfig, AutoModelForVision2Seq
+from transformers import AutoConfig, AutoModelForImageTextToText
 from transformers.models.mllama.modeling_mllama import MllamaVisionAttention
 
 import ttnn
@@ -51,13 +51,13 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds, ensure
     ntok = model_args.vision_chunk_ntok
 
     model_repo_name = os.getenv("HF_MODEL")
-    # config contains paramters for the whole multimodal network the subeset of vision branch is chosen instead
+    # config contains parameters for the whole multimodal network the subeset of vision branch is chosen instead
     config = AutoConfig.from_pretrained(model_repo_name)
     config.vision_config._attn_implementation = "sdpa"
     reference_model = MllamaVisionAttention(config.vision_config)
     # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
     partial_state_dict = load_partial_weights(
-        AutoModelForVision2Seq, model_repo_name, "model.vision_model.transformer.layers.0.self_attn."
+        AutoModelForImageTextToText, model_repo_name, "model.vision_model.transformer.layers.0.self_attn."
     )
     reference_model.load_state_dict(partial_state_dict)
 

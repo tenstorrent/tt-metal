@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,10 +6,10 @@
 
 #include "device/convert_to_chw_device_operation.hpp"
 
-namespace ttnn::operations::experimental::cnn {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteConvertToCHW::invoke(const Tensor& a, const std::optional<DataType>& dtype) {
-    return ttnn::prim::convert_to_chw(a, dtype);
+ttnn::Tensor convert_to_chw(const Tensor& input, const std::optional<DataType>& dtype) {
+    return ttnn::prim::convert_to_chw(input, dtype);
 }
 
-}  // namespace ttnn::operations::experimental::cnn
+}  // namespace ttnn::experimental

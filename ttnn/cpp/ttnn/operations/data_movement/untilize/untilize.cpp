@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,13 +34,17 @@ MassagedUntilize build_ndiml_untilize(BaseUntilizeType base_untilize) {
         .operation = std::move(base_untilize)});
 }
 
-ttnn::Tensor ExecuteUntilize::invoke(
+}  // namespace ttnn::operations::data_movement
+
+namespace ttnn {
+
+ttnn::Tensor untilize(
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
-    bool use_pack_untilize,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    bool fp32_dest_acc_en = input_tensor.dtype() == DataType::UINT32 || input_tensor.dtype() == DataType::FLOAT32;
+    bool fp32_dest_acc_en = input_tensor.dtype() == DataType::INT32 || input_tensor.dtype() == DataType::UINT32 ||
+                            input_tensor.dtype() == DataType::FLOAT32;
 
     auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
@@ -49,10 +53,10 @@ ttnn::Tensor ExecuteUntilize::invoke(
     uint32_t num_tiles_per_row = input_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH;
     uint32_t num_tiles_per_col = input_tensor.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
 
-    bool enough_space_width =
-        is_enough_space(input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_col);
-    bool enough_space_height =
-        is_enough_space(input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
+    bool enough_space_width = operations::data_movement::is_enough_space(
+        input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_col);
+    bool enough_space_height = operations::data_movement::is_enough_space(
+        input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
 
     auto base_untilize = [=](const ttnn::Tensor& input_tensor) {
         auto pf_type = ttnn::operations::data_movement::get_pf_type(
@@ -62,7 +66,6 @@ ttnn::Tensor ExecuteUntilize::invoke(
             input_tensor,
             memory_config.value_or(input_tensor.memory_config()),
             use_multicore,
-            use_pack_untilize,
             fp32_dest_acc_en,
             sub_core_grids,
             enough_space_width,
@@ -70,7 +73,7 @@ ttnn::Tensor ExecuteUntilize::invoke(
             pf_type);
     };
 
-    return build_ndiml_untilize(base_untilize)(input_tensor);
+    return operations::data_movement::build_ndiml_untilize(base_untilize)(input_tensor);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn

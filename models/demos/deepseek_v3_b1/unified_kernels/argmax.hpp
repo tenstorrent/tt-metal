@@ -1,11 +1,13 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include "kernel_op_api.hpp"
 #include "kernel_utils.hpp"
+#include "socket_send.hpp"
 #include "api/numeric/bfloat16.h"
+#include "api/debug/dprint.h"
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
 #include <type_traits>
@@ -25,8 +27,8 @@ struct Sampling {
         uint32_t WinnerPageBytes,
         uint32_t NumSenders,
         uint32_t ExpectedRemoteIncs,
-        uint32_t ReceiverSemaphoreId,
-        uint32_t LocalReadySemaphoreId,
+        uint32_t ReceiverSemaphoreAddr,
+        uint32_t LocalReadySemaphoreAddr,
         uint32_t MeshMode,
         uint32_t Stage1Sender,
         uint32_t Stage1Receiver,
@@ -44,14 +46,18 @@ struct Sampling {
         uint32_t SenderIdx,
         uint32_t SocketMode = 0,
         uint32_t SocketCBId = 0,
-        uint32_t SocketPageSizeBytes = 0>
+        uint32_t SocketPageSizeBytes = 0,
+        uint32_t ScoresCBId = 0xFFFFFFFF,
+        uint32_t ScoresNumPages = 0,
+        uint32_t GatherCBId = 0xFFFFFFFF,
+        uint32_t DeferSocketOutput = 0>
     struct ReaderCTArgs {
         static constexpr uint32_t num_values = NumValues;
         static constexpr uint32_t winner_page_bytes = WinnerPageBytes;
         static constexpr uint32_t num_senders = NumSenders;
         static constexpr uint32_t expected_remote_incs = ExpectedRemoteIncs;
-        static constexpr uint32_t receiver_semaphore_id = ReceiverSemaphoreId;
-        static constexpr uint32_t local_ready_semaphore_id = LocalReadySemaphoreId;
+        static constexpr uint32_t receiver_semaphore_addr = ReceiverSemaphoreAddr;
+        static constexpr uint32_t local_ready_semaphore_addr = LocalReadySemaphoreAddr;
         static constexpr bool mesh_mode = MeshMode == 1;
         static constexpr bool stage1_sender = Stage1Sender == 1;
         static constexpr bool stage1_receiver = Stage1Receiver == 1;
@@ -70,21 +76,29 @@ struct Sampling {
         static constexpr uint32_t socket_mode = SocketMode;
         static constexpr uint32_t socket_cb_id = SocketCBId;
         static constexpr uint32_t socket_page_size_bytes = SocketPageSizeBytes;
+        static constexpr uint32_t scores_cb_id = ScoresCBId;
+        static constexpr uint32_t scores_num_pages = ScoresNumPages;
+        static constexpr uint32_t gather_cb_id = GatherCBId;
+        static constexpr bool defer_socket_output = DeferSocketOutput == 1;
     };
 
     template <
         uint32_t WinnerPageBytes,
-        uint32_t LocalReadySemaphoreId,
+        uint32_t LocalReadySemaphoreAddr,
         uint32_t SocketMode = 0,
         uint32_t SocketCBId = 0,
-        uint32_t SocketPageSizeBytes = 0>
+        uint32_t SocketPageSizeBytes = 0,
+        uint32_t DeferSocketOutput = 0>
     struct WriterCTArgs {
         static constexpr uint32_t winner_page_bytes = WinnerPageBytes;
-        static constexpr uint32_t local_ready_semaphore_id = LocalReadySemaphoreId;
+        static constexpr uint32_t local_ready_semaphore_addr = LocalReadySemaphoreAddr;
         static constexpr uint32_t socket_mode = SocketMode;
         static constexpr uint32_t socket_cb_id = SocketCBId;
         static constexpr uint32_t socket_page_size_bytes = SocketPageSizeBytes;
+        static constexpr bool defer_socket_output = DeferSocketOutput == 1;
     };
+
+    struct ComputeCTArgs {};
 
     struct ReaderArgs {
         uint32_t scores_addr;
@@ -103,6 +117,13 @@ struct Sampling {
         uint32_t final_noc_y;
         uint32_t scratch_addr;
         uint32_t socket_config_addr = 0;
+        // Optional persistent-mode next-iteration signal routing (BRISC path).
+        uint32_t persistent_enable = 0;
+        uint32_t persistent_dst_noc_x = 0;
+        uint32_t persistent_dst_noc_y = 0;
+        uint32_t persistent_dst_mesh_id = 0;
+        uint32_t persistent_dst_chip_id = 0;
+        uint32_t persistent_dst_sem_addr = 0;
     };
 
     struct ComputeArgs {};
@@ -122,7 +143,43 @@ struct Sampling {
     template <typename CTArgs, bool IsActiveCore, bool IsFinalCore, bool IsMeshSenderCore>
     class Op {
     public:
+        size_t persistent_fabric_arg_idx = 0;
         void operator()(const RTArgs& args) { impl(args); }
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+        FORCE_INLINE void send_persistent_next_iter_inc_via_fabric_brisc(const WriterArgs& args, size_t& arg_idx) {
+            if (args.persistent_enable == 0) {
+                return;
+            }
+            constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
+            auto route_id = PacketHeaderPool::allocate_header_n(1);
+            volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = PacketHeaderPool::header_table[route_id].first;
+            set_unicast_route(
+                packet_header,
+                static_cast<uint16_t>(args.persistent_dst_chip_id),
+                static_cast<uint16_t>(args.persistent_dst_mesh_id),
+                1);
+            packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                get_noc_addr(args.persistent_dst_noc_x, args.persistent_dst_noc_y, args.persistent_dst_sem_addr), 1});
+
+            auto fabric_sender =
+                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+            fabric_sender.open();
+            fabric_sender.wait_for_empty_write_slot();
+            fabric_sender.send_payload_flush_blocking_from_address(
+                reinterpret_cast<uint32_t>(packet_header), packet_header_size_bytes);
+            fabric_sender.close();
+            noc_async_full_barrier();
+        }
+#endif
+#if defined(COMPILE_FOR_BRISC)
+        FORCE_INLINE void send_deferred_socket_output_brisc(const WriterArgs& args) {
+            if constexpr (IsFinalCore && CTArgs::defer_socket_output && CTArgs::socket_mode == 1) {
+                send_d2h_token_from_cb_brisc(args);
+            } else if constexpr (IsFinalCore && CTArgs::defer_socket_output && CTArgs::socket_mode == 2) {
+                send_d2d_token_from_cb_brisc(args);
+            }
+        }
+#endif
 
     private:
 #if defined(COMPILE_FOR_NCRISC)
@@ -152,8 +209,7 @@ struct Sampling {
             uint32_t src_slot_addr, uint32_t dst_slot_addr, uint32_t final_noc_x, uint32_t final_noc_y) {
             const uint64_t final_noc_base = get_noc_addr(final_noc_x, final_noc_y, 0);
             const uint64_t dst_data_noc_addr = final_noc_base | static_cast<uint64_t>(dst_slot_addr);
-            const uint64_t dst_sem_noc_addr =
-                final_noc_base | static_cast<uint64_t>(get_semaphore(CTArgs::receiver_semaphore_id));
+            const uint64_t dst_sem_noc_addr = final_noc_base | static_cast<uint64_t>(CTArgs::receiver_semaphore_addr);
             noc_async_write_one_packet<true, true>(src_slot_addr, dst_data_noc_addr, CTArgs::winner_page_bytes);
             noc_semaphore_inc(dst_sem_noc_addr, 1);
             noc_async_posted_writes_flushed();
@@ -240,7 +296,7 @@ struct Sampling {
             uint32_t final_noc_y,
             uint32_t local_slot_addr,
             const BriscMeshSendMetadata& metadata,
-            size_t arg_idx) {
+            size_t& arg_idx) {
             constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
             auto route_id = PacketHeaderPool::allocate_header_n(1);
             volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = PacketHeaderPool::header_table[route_id].first;
@@ -268,70 +324,32 @@ struct Sampling {
             noc_async_full_barrier();
         }
 
-        FORCE_INLINE void send_d2h_token_from_cb_brisc(uint32_t socket_config_addr) {
-            SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);
-            set_sender_socket_page_size(sender_socket, CTArgs::socket_page_size_bytes);
-            const uint32_t write_addr_hi = sender_socket.d2h.data_addr_hi;
-            const uint32_t pcie_xy_enc = sender_socket.d2h.pcie_xy_enc;
-
-            socket_reserve_pages(sender_socket, 1);
-            cb_wait_front(CTArgs::socket_cb_id, 1);
-            const uint32_t read_addr = get_read_ptr(CTArgs::socket_cb_id);
-
-            noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
-            noc_async_wide_write_any_len_with_state(
-                NOC_INDEX,
-                read_addr,
-                pcie_xy_enc,
-                ((static_cast<uint64_t>(write_addr_hi) << 32) | sender_socket.downstream_fifo_addr) +
-                    sender_socket.write_ptr,
-                sizeof(uint32_t));
-            noc_async_writes_flushed();
-
-            cb_pop_front(CTArgs::socket_cb_id, 1);
-            socket_push_pages(sender_socket, 1);
-            socket_notify_receiver(sender_socket);
-            update_socket_config(sender_socket);
-            noc_async_write_barrier();
+        FORCE_INLINE void send_d2h_token_from_cb_brisc(const WriterArgs& args) {
+            unified_kernels::socket_send_from_cb<1>(
+                args.socket_config_addr, CTArgs::socket_cb_id, 1, CTArgs::socket_page_size_bytes);
         }
 
-        FORCE_INLINE void send_d2d_token_from_cb_brisc(uint32_t socket_config_addr) {
-            SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);
-            set_sender_socket_page_size(sender_socket, CTArgs::socket_page_size_bytes);
-
-            socket_reserve_pages(sender_socket, 1);
-            cb_wait_front(CTArgs::socket_cb_id, 1);
-            const uint32_t read_addr = get_read_ptr(CTArgs::socket_cb_id);
-
-            for (uint32_t i = 0; i < sender_socket.num_downstreams; i++) {
-                sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, i);
-                noc_async_write(
-                    read_addr,
-                    get_noc_addr(
-                        downstream_enc.d2d.downstream_noc_x,
-                        downstream_enc.d2d.downstream_noc_y,
-                        sender_socket.write_ptr + sender_socket.downstream_fifo_addr),
-                    CTArgs::socket_page_size_bytes);
-            }
-            noc_async_write_barrier();
-
-            cb_pop_front(CTArgs::socket_cb_id, 1);
-            socket_push_pages(sender_socket, 1);
-            socket_notify_receiver(sender_socket);
-            update_socket_config(sender_socket);
+        FORCE_INLINE void send_d2d_token_from_cb_brisc(const WriterArgs& args) {
+            unified_kernels::socket_send_from_cb<2>(
+                args.socket_config_addr, CTArgs::socket_cb_id, 1, CTArgs::socket_page_size_bytes);
         }
 #endif
 
         void impl(const RTArgs& args) {
 #if defined(COMPILE_FOR_NCRISC)
             const uint32_t slot_offset = CTArgs::sender_idx * CTArgs::winner_page_bytes;
-            const uint32_t gather_addr = args.gather_addr;
-
+            const uint32_t gather_addr =
+                (CTArgs::gather_cb_id != 0xFFFFFFFF) ? get_write_ptr(CTArgs::gather_cb_id) : args.gather_addr;
+            uint32_t scores_addr = args.scores_addr;
+            if constexpr (IsActiveCore && (CTArgs::scores_cb_id != 0xFFFFFFFF)) {
+                cb_wait_front(CTArgs::scores_cb_id, CTArgs::scores_num_pages);
+                scores_addr = get_read_ptr(CTArgs::scores_cb_id);
+            }
             invalidate_l1_cache();
 
             // Phase 1: per-core local argmax and delivery to the final core.
             if constexpr (IsActiveCore) {
-                auto scores_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(args.scores_addr);
+                auto scores_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scores_addr);
                 auto indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.indices_addr);
                 uint16_t best_score = NEG_INF_BFLOAT16;
                 uint32_t best_index = 0xFFFFFFFF;
@@ -346,11 +364,13 @@ struct Sampling {
                         local_slot_addr, gather_addr + slot_offset, args.final_noc_x, args.final_noc_y);
                 }
             }
+            if constexpr (IsActiveCore && (CTArgs::scores_cb_id != 0xFFFFFFFF)) {
+                cb_pop_front(CTArgs::scores_cb_id, CTArgs::scores_num_pages);
+            }
 
             // Phase 2: final-core intra-device reduction across all active cores.
             if constexpr (IsFinalCore) {
-                auto recv_sem_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CTArgs::receiver_semaphore_id));
+                auto recv_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::receiver_semaphore_addr);
                 wait_and_reset_semaphore(recv_sem_ptr, CTArgs::expected_remote_incs);
 
                 uint16_t global_best_score = NEG_INF_BFLOAT16;
@@ -393,14 +413,15 @@ struct Sampling {
                             args.scratch_addr + CTArgs::mesh_local_send_slot_offset,
                             global_best_score,
                             global_best_index);
-                        auto local_ready_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                            get_semaphore(CTArgs::local_ready_semaphore_id));
+                        auto local_ready_sem_ptr =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::local_ready_semaphore_addr);
                         noc_semaphore_set(local_ready_sem_ptr, 1);
                     }
 
                     if constexpr (CTArgs::stage2_receiver) {
                         write_winner_slot(
                             args.scratch_addr + CTArgs::stage2_local_slot_offset, global_best_score, global_best_index);
+
                         auto global_stage2_sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.global_stage2_sem_addr);
                         wait_and_reset_semaphore(global_stage2_sem_ptr, CTArgs::stage2_expected_remote_incs);
@@ -426,22 +447,30 @@ struct Sampling {
             }
 #elif defined(COMPILE_FOR_BRISC)
             invalidate_l1_cache();
-            if constexpr (IsFinalCore && CTArgs::socket_mode == 1) {
-                send_d2h_token_from_cb_brisc(args.socket_config_addr);
-            } else if constexpr (IsFinalCore && CTArgs::socket_mode == 2) {
-                send_d2d_token_from_cb_brisc(args.socket_config_addr);
+            size_t arg_idx = 0;
+            PacketHeaderPool::reset();
+            if constexpr (!CTArgs::defer_socket_output) {
+                if constexpr (IsFinalCore && CTArgs::socket_mode == 1) {
+                    send_d2h_token_from_cb_brisc(args);
+                } else if constexpr (IsFinalCore && CTArgs::socket_mode == 2) {
+                    send_d2d_token_from_cb_brisc(args);
+                }
             }
             if constexpr (IsFinalCore && IsMeshSenderCore) {
                 auto local_ready_sem_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CTArgs::local_ready_semaphore_id));
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::local_ready_semaphore_addr);
                 noc_semaphore_wait(local_ready_sem_ptr, 1);
                 noc_semaphore_set(local_ready_sem_ptr, 0);
-
-                size_t arg_idx = 0;
                 const BriscMeshSendMetadata metadata = load_mesh_send_metadata(arg_idx);
                 const uint32_t local_slot_addr = args.scratch_addr + metadata.local_slot_offset;
                 send_mesh_winner_via_fabric_brisc(
                     args.final_noc_x, args.final_noc_y, local_slot_addr, metadata, arg_idx);
+            }
+            if constexpr (IsFinalCore) {
+                persistent_fabric_arg_idx = arg_idx;
+                if constexpr (!CTArgs::defer_socket_output) {
+                    send_persistent_next_iter_inc_via_fabric_brisc(args, arg_idx);
+                }
             }
 #elif defined(COMPILE_FOR_TRISC)
             // No-op for k=1 argmax fast path.

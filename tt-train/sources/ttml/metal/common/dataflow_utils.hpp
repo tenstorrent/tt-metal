@@ -1,23 +1,52 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <tt-metalium/constants.hpp>
 
+#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
 #include "api/debug/dprint_pages.h"
+#include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 
-constexpr uint32_t TILE_WIDTH = 32U;
-constexpr uint32_t TILE_HEIGHT = 32U;
-constexpr uint32_t FACE_WIDTH = 16U;
-constexpr uint32_t FACE_HEIGHT = 16U;
 constexpr uint32_t onetile = 1U;
 
+inline constexpr uint32_t round_up(uint32_t a, uint32_t b) {
+    if ((b & (b - 1U)) == 0U) {
+        return (a + (b - 1U)) & -b;
+    }
+    return ((a + b - 1U) / b) * b;
+}
+
+// Resolve a semaphore id to its volatile L1 pointer. Wraps the boilerplate
+// reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(...)) used at
+// every cross-RISC / cross-core sync site.
+inline volatile tt_l1_ptr uint32_t* get_sem_ptr(uint32_t sem_id) {
+    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_id));
+}
+
+// IEEE 754 bit representations for compile-time template parameters
+constexpr uint32_t FP32_ONE_BITS = 0x3F800000;    // 1.0f
+constexpr uint32_t FP32_ZERO_BITS = 0x00000000;   // 0.0f
+constexpr uint16_t BF16_ONE_BITS = 0x3F80;        // 1.0 in bfloat16
+constexpr uint16_t BF16_ZERO_BITS = 0x0000;       // 0.0 in bfloat16
+constexpr uint32_t BF16_ONE_PACKED = 0x3f803f80;  // BF16(1.0) packed twice into u32
+
+// Large-negative bit patterns used by SDPA pre-transformed masks (mask values directly add to
+// pre-softmax scores so a "masked" entry must dominate any plausible Q@K^T magnitude).
+// We reuse the existing 1e9F magnitude from `custom_inf` (see sdpa_fw_program_factory.cpp) so
+// post-softmax behavior is identical to the runtime apply_mask_on_reg path.
+constexpr uint32_t FP32_NEG_LARGE_BITS = 0xCE6E6B28;  // bit_cast<u32>(-1e9F)
+constexpr uint16_t BF16_NEG_LARGE_BITS = 0xCE6E;      // upper 16 bits of -1e9F (bfloat16)
+
 inline uint32_t get_tilized_idx(uint32_t h, uint32_t w) {
+    using namespace tt::constants;
     // Get local coordinates within the tile
     uint32_t local_row = h % TILE_HEIGHT;
     uint32_t local_col = w % TILE_WIDTH;
@@ -52,7 +81,8 @@ inline std::pair<uint32_t, uint32_t> get_page_and_offset(uint32_t tiled_row, uin
 
 // Generator the mask tile with horizontal masking.
 // Each tile face is 16x16, and there are 4 faces per tile.
-void generate_mask_tile(uint32_t cb_id, uint16_t fill_value, uint16_t mask_fill_value, uint32_t mask_width) {
+void generate_mask_tile(
+    const uint32_t cb_id, const uint16_t fill_value, const uint16_t mask_fill_value, const uint32_t mask_width) {
     cb_reserve_back(cb_id, onetile);
 
     uint16_t* tile_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_id));
@@ -73,7 +103,7 @@ void generate_mask_tile(uint32_t cb_id, uint16_t fill_value, uint16_t mask_fill_
 // where each 32-bit word contains two identical bfloat16 values.
 // This improves performance by writing 512 uint32_t values instead of 1024 uint16_t values.
 // The packed data is written into the circular buffer `cb_id`.
-void generate_tile_with_packed_bfloat16_value(uint32_t cb_id, uint32_t packed_bf16_value) {
+void generate_tile_with_packed_bfloat16_value(const uint32_t cb_id, const uint32_t packed_bf16_value) {
     cb_reserve_back(cb_id, onetile);
     uint32_t* ptr = reinterpret_cast<uint32_t*>(get_write_ptr(cb_id));
     // 512 = 32x16
@@ -83,19 +113,68 @@ void generate_tile_with_packed_bfloat16_value(uint32_t cb_id, uint32_t packed_bf
     cb_push_back(cb_id, onetile);
 }
 
+// Fills a tile with one repeated 32-bit word.
+// Useful for Float32 scalar tiles (all elements equal to the same fp32 bit pattern).
+void generate_tile_with_uint32_value(const uint32_t cb_id, const uint32_t value_u32) {
+    cb_reserve_back(cb_id, onetile);
+    uint32_t* ptr = reinterpret_cast<uint32_t*>(get_write_ptr(cb_id));
+    const uint32_t num_u32 = get_tile_size(cb_id) / sizeof(uint32_t);
+    for (uint32_t i = 0; i < num_u32; ++i) {
+        ptr[i] = value_u32;
+    }
+    cb_push_back(cb_id, onetile);
+}
+
 // Generates a tile for broadcasting a scalar bfloat16 value.
 // Only the first element of the tile is set to the scalar value (upper 16 bits of packed_scalar).
 // This is used for efficient broadcast operations where only the first value is needed.
-void generate_bcast_scalar_bfloat16(uint32_t cb_id, uint32_t packed_scalar) {
+void generate_bcast_scalar_bfloat16(const uint32_t cb_id, const uint32_t packed_scalar) {
     cb_reserve_back(cb_id, onetile);
     uint32_t* ptr = reinterpret_cast<uint32_t*>(get_write_ptr(cb_id));
     ptr[0] = packed_scalar >> 16;
     cb_push_back(cb_id, onetile);
 }
 
+// Zero-fill a tile in L1 using async NOC reads from the hardware zero-memory region.
+inline void fill_tile_zeros(uint32_t write_addr, uint32_t tile_bytes) {
+    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
+    uint32_t bytes_left = tile_bytes;
+    while (bytes_left > 0) {
+        uint32_t read_size = (bytes_left > MEM_ZEROS_SIZE) ? MEM_ZEROS_SIZE : bytes_left;
+        noc_async_read(zeros_noc_addr, write_addr, read_size);
+        write_addr += read_size;
+        bytes_left -= read_size;
+    }
+}
+
+// Zero-fills already-reserved tile slots in a CB (e.g. tail padding so compute always sees block_size tiles).
+inline void fill_reserved_tiles_with_zero(uint32_t cb_id, uint32_t start_slot, uint32_t num_slots, uint32_t tile_size) {
+    if (num_slots == 0) {
+        return;
+    }
+    uint32_t l1_base = get_write_ptr(cb_id) + start_slot * tile_size;
+    const uint32_t num_u32_per_tile = tile_size / sizeof(uint32_t);
+    for (uint32_t s = 0; s < num_slots; ++s) {
+        volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_base + s * tile_size);
+        for (uint32_t i = 0; i < num_u32_per_tile; ++i) {
+            ptr[i] = 0;
+        }
+    }
+}
+
+/**
+ * Zero-fill an L1 region asynchronously via Noc::async_write_zeros.
+ *
+ * Caller must call `noc.write_zeros_l1_barrier()` before consuming the CB's contents.
+ */
+inline void fill_zeros_async(const Noc& noc, uint32_t cb_id, uint32_t bytes, uint32_t offset_bytes = 0) {
+    CircularBuffer cb(cb_id);
+    noc.async_write_zeros(cb, bytes, {.offset_bytes = offset_bytes});
+}
+
 // Fills a tile (32x32 bfloat16 values) with a single bfloat16 value.
 // This avoids writing 1024 individual 16-bit values by packing them into 512 32-bit writes.
-void generate_tile_with_bfloat16_value(uint32_t cb_id, uint16_t bf16_value) {
+void generate_tile_with_bfloat16_value(const uint32_t cb_id, const uint16_t bf16_value) {
     // Pack the same bfloat16 value into both halves of a 32-bit word
     uint32_t packed_value = (static_cast<uint32_t>(bf16_value) << 16) | bf16_value;
 
@@ -127,10 +206,6 @@ inline void generate_matmul_row_reduce_tile(uint32_t cb_id) {
 
     cb_reserve_back(cb_id, onetile);
 
-    // IEEE 754 bit representations for compile-time template parameters
-    constexpr uint32_t FP32_ONE_BITS = 0x3F800000;  // 1.0f
-    constexpr uint16_t BF16_ONE_BITS = 0x3F80;      // 1.0 in bfloat16
-
     switch (data_format) {
         case DataFormat::Float32: fill_matmul_row_reduce_tile<uint32_t, FP32_ONE_BITS>(cb_id); break;
         case DataFormat::Int32:
@@ -150,6 +225,7 @@ inline void generate_matmul_row_reduce_tile(uint32_t cb_id) {
 // This creates a triangular pattern within the 32x32 tile for causal attention.
 template <typename T, T one_value, T zero_value>
 inline void fill_causal_mask_tile(uint32_t cb_id) {
+    using namespace tt::constants;
     T* tile_ptr = reinterpret_cast<T*>(get_write_ptr(cb_id));
 
     for (uint32_t face = 0; face < 4; ++face) {
@@ -174,16 +250,29 @@ inline void generate_causal_mask_tile(uint32_t cb_id) {
 
     cb_reserve_back(cb_id, onetile);
 
-    // IEEE 754 bit representations for compile-time template parameters
-    constexpr uint32_t FP32_ONE_BITS = 0x3F800000;   // 1.0f
-    constexpr uint32_t FP32_ZERO_BITS = 0x00000000;  // 0.0f
-    constexpr uint16_t BF16_ONE_BITS = 0x3F80;       // 1.0 in bfloat16
-    constexpr uint16_t BF16_ZERO_BITS = 0x0000;      // 0.0 in bfloat16
-
     switch (data_format) {
         case DataFormat::Float32: fill_causal_mask_tile<uint32_t, FP32_ONE_BITS, FP32_ZERO_BITS>(cb_id); break;
         default:  // BFloat16
             fill_causal_mask_tile<uint16_t, BF16_ONE_BITS, BF16_ZERO_BITS>(cb_id);
+            break;
+    }
+
+    cb_push_back(cb_id, onetile);
+}
+
+// F10: generate a *pre-transformed* causal mask tile so the compute kernel can stamp it
+// directly onto QK^T scores via the packer's L1-accumulate path (no DST→SRC conversion,
+// score stays at full FP32 in L1). Result: mask[row, col] = 0.0 (kept) if col <= row, else
+// -1e9 (effectively -inf for softmax). Used in the diagonal chunk for CAUSAL/BALANCED.
+inline void generate_pretransformed_causal_mask_tile(uint32_t cb_id) {
+    const DataFormat data_format = get_dataformat(cb_id);
+
+    cb_reserve_back(cb_id, onetile);
+
+    switch (data_format) {
+        case DataFormat::Float32: fill_causal_mask_tile<uint32_t, FP32_ZERO_BITS, FP32_NEG_LARGE_BITS>(cb_id); break;
+        default:  // BFloat16
+            fill_causal_mask_tile<uint16_t, BF16_ZERO_BITS, BF16_NEG_LARGE_BITS>(cb_id);
             break;
     }
 
@@ -198,7 +287,7 @@ inline void generate_causal_mask_tile(uint32_t cb_id) {
 // Converts a bfloat16 (stored in the lower 16 bits) to a float.
 // This is done by shifting the bfloat16 to the upper 16 bits of a 32-bit integer
 // and reinterpreting it as a float using memcpy.
-inline float bfloat16_to_float(uint16_t bf16) {
+inline float bfloat16_to_float(const uint16_t bf16) {
     uint32_t tmp = static_cast<uint32_t>(bf16) << 16;
     float result;
     std::memcpy(&result, &tmp, sizeof(result));
@@ -207,14 +296,14 @@ inline float bfloat16_to_float(uint16_t bf16) {
 
 // Converts a float to bfloat16 by extracting the upper 16 bits
 // of the float's 32-bit binary representation.
-inline uint16_t float_to_bfloat16(float value) {
+inline uint16_t float_to_bfloat16(const float value) {
     uint32_t tmp;
     std::memcpy(&tmp, &value, sizeof(tmp));
     return static_cast<uint16_t>(tmp >> 16);
 }
 
 // Converts a uint32_t bit pattern to a float (bitwise reinterpretation)
-inline float uint32_to_float(uint32_t bits) {
+inline float uint32_to_float(const uint32_t bits) {
     float value;
     std::memcpy(&value, &bits, sizeof(float));
     return value;
@@ -236,6 +325,37 @@ inline void read_one_tile(const uint32_t cb_idx, const AddrGen& addr_gen, const 
     noc_async_read_page(tile_idx, addr_gen, l1_addr);
     noc_async_read_barrier();
     cb_push_back(cb_idx, onetile);
+}
+
+/**
+ * Read one tile, extract a single bfloat16 scalar at (row, col), and return it.
+ *
+ * The function uses a caller-provided scratch CB slot for the temporary tile readback.
+ * It assumes row/col refer to logical 32x32 tile coordinates and uses tilized indexing.
+ *
+ * @param addr_gen Address generator for DRAM access
+ * @param row Logical row in the tile [0, 31]
+ * @param col Logical col in the tile [0, 31]
+ * @param cb_scratch Scratch CB index used for temporary tile storage
+ * @param tile_idx Tile index in DRAM (default: 0)
+ * @return Extracted bfloat16 scalar value
+ */
+template <typename AddrGen>
+inline uint16_t read_bfloat16_scalar_from_tile(
+    const AddrGen& addr_gen,
+    const uint32_t row,
+    const uint32_t col,
+    const uint32_t cb_scratch,
+    const uint32_t tile_idx = 0U) {
+    cb_reserve_back(cb_scratch, onetile);
+    const uint32_t l1_addr = get_write_ptr(cb_scratch);
+    noc_async_read_page(tile_idx, addr_gen, l1_addr);
+    noc_async_read_barrier();
+    const auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr);
+    const uint16_t scalar_bf16 = ptr[get_tilized_idx(row, col)];
+    cb_push_back(cb_scratch, onetile);
+    cb_pop_front(cb_scratch, onetile);
+    return scalar_bf16;
 }
 
 /**
@@ -272,38 +392,66 @@ inline void read_tiles_by_row(
 }
 
 /**
- * Utility: read contiguous tiles in column-major order from DRAM to CB.
+ * F10 helper: read a `rows x cols` block of tiles from a row-major source (DRAM) and lay them
+ * out *column-major* in the destination circular buffer. Each source tile at logical position
+ * (r, c) — DRAM tile id `start_idx + r * cols + c` — is written to CB position `c * rows + r`.
  *
- * @param cb_idx Circular buffer index to write to
- * @param addr_gen Address generator for DRAM access
- * @param start_idx Starting tile index in DRAM
- * @param num_tiles_to_read Number of tiles to actually read (may be less than num_tiles_to_push for tail blocks)
- * @param tile_bytes Size of each tile in bytes
- * @param stride Stride between consecutive tiles in column-major order
- * @param num_tiles_to_push Number of tiles to reserve/push in CB (buffer capacity)
- * @param UseBarrier Whether to call noc_async_read_barrier() (compile-time)
+ * Used for K in `matmul_block`: that LLK walks ct_dim B tiles contiguously per K-step, so the
+ * K block must be stored with feat (the contraction dim) on the outer axis and seq (the output
+ * width axis) on the inner axis. The standard row-major reader would interleave them the wrong
+ * way (seq outer, feat inner) and matmul_block's MOP would read garbage.
+ *
+ * Mirrors TTNN's `read_chunk_with_padding(..., transpose=true)` in
+ * `ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/reader_interleaved.cpp`.
  */
 template <bool UseBarrier = true, typename AddrGen>
-inline void read_tiles_by_col(
+inline void read_tile_block_transposed(
     const uint32_t cb_idx,
     const AddrGen& addr_gen,
     const uint32_t start_idx,
-    const uint32_t num_tiles_to_read,
-    const uint32_t tile_bytes,
-    const uint32_t stride,
-    const uint32_t num_tiles_to_push) {
-    cb_reserve_back(cb_idx, num_tiles_to_push);
-    uint32_t l1_addr = get_write_ptr(cb_idx);
-    for (uint32_t t = 0; t < num_tiles_to_read; ++t) {
-        uint32_t tile_idx = start_idx + t * stride;
-        noc_async_read_page(tile_idx, addr_gen, l1_addr);
-        l1_addr += tile_bytes;
+    const uint32_t rows,
+    const uint32_t cols,
+    const uint32_t tile_bytes) {
+    const uint32_t total = rows * cols;
+    cb_reserve_back(cb_idx, total);
+    const uint32_t base_l1_addr = get_write_ptr(cb_idx);
+    uint32_t src_tile_id = start_idx;
+    for (uint32_t r = 0; r < rows; ++r) {
+        uint32_t l1_addr = base_l1_addr + r * tile_bytes;
+        for (uint32_t c = 0; c < cols; ++c) {
+            noc_async_read_page(src_tile_id, addr_gen, l1_addr);
+            src_tile_id += 1;
+            l1_addr += rows * tile_bytes;
+        }
     }
-    // Note: If UseBarrier is false, caller must ensure noc_async_read_barrier() is called later as well as
-    // cb_push_back()
     if constexpr (UseBarrier) {
         noc_async_read_barrier();
-        cb_push_back(cb_idx, num_tiles_to_push);
+        cb_push_back(cb_idx, total);
+    }
+}
+
+/**
+ * Zero the width-padded region inside a tile after read_tiles_by_row (last tile of a row when
+ * logical width is not a multiple of TILE_WIDTH). DRAM delivers a full tile; padding within the
+ * tile must be numeric zero so downstream compute that uses the whole tile does not sum garbage.
+ *
+ * @tparam mask_w  logical_width % TILE_WIDTH (compile-time 0 means no call sites should invoke, or use
+ *                 if constexpr(mask_w > 0) at the caller)
+ * @param cb_id     Circular buffer containing the tile
+ * @param tile_index_in_reserved_block  Index of the tile in the current cb_reserve_back region [0, num_tiles_to_push)
+ */
+template <uint32_t mask_w>
+inline void pad_last_tile_with_zeroes(uint32_t cb_id, uint32_t tile_index_in_reserved_block) {
+    if constexpr (mask_w == 0) {
+        return;
+    }
+    const uint32_t l1_addr = get_write_ptr(cb_id) + tile_index_in_reserved_block * get_tile_size(cb_id);
+    const DataFormat df = get_dataformat(cb_id);
+    using namespace tt::constants;
+    if (df == DataFormat::Float32) {
+        fill_pad_tile<uint32_t, mask_w, TILE_HEIGHT>(l1_addr, 0u);
+    } else {
+        fill_pad_tile<uint16_t, mask_w, TILE_HEIGHT>(l1_addr, static_cast<uint16_t>(0));
     }
 }
 
@@ -352,7 +500,7 @@ inline void read_full_row_tiles(
     const uint32_t tile_bytes,
     const uint32_t row_start_idx) {
     for (uint32_t j = 0; j < Wt; j += block_size) {
-        uint32_t current_block_size = (j + block_size <= Wt) ? block_size : (Wt - j);
+        uint32_t current_block_size = std::min(block_size, Wt - j);
         read_tiles_by_row(cb_idx, addr_gen, row_start_idx + j, current_block_size, tile_bytes, block_size);
     }
 }
@@ -367,31 +515,104 @@ inline void write_full_row_tiles(
     const uint32_t tile_bytes,
     const uint32_t row_start_idx) {
     for (uint32_t j = 0; j < Wt; j += block_size) {
-        uint32_t current_block_size = (j + block_size <= Wt) ? block_size : (Wt - j);
+        uint32_t current_block_size = std::min(block_size, Wt - j);
         write_tiles_by_row(cb_idx, addr_gen, row_start_idx + j, current_block_size, tile_bytes, block_size);
+    }
+}
+
+/**
+ * Read a 2D batch of tiles (num_rows × tiles_per_row) from DRAM into L1.
+ * Uses padding: for row >= valid_num_rows or tile >= valid_tiles_per_row, reuses the last valid row/tile.
+ * Caller must reserve CB (or have writable L1) and call cb_push_back() after when using a CB.
+ *
+ * @param UseBarrier If true, call noc_async_read_barrier() at the end. If false, caller must call it later.
+ * @param addr_gen Address generator for DRAM (get_noc_addr(tile_idx))
+ * @param l1_addr L1 address to write to (contiguous region of num_rows * tiles_per_row * tile_bytes)
+ * @param first_row_start Tile index of the first row start
+ * @param row_stride Tile stride between rows (e.g. full row length)
+ * @param num_rows Number of rows to read (batch height)
+ * @param tiles_per_row Number of tiles per row (batch width)
+ * @param valid_num_rows Valid rows (rows beyond this are padded from last valid row)
+ * @param valid_tiles_per_row Valid tiles per row (columns beyond this are padded from last valid tile)
+ * @param tile_bytes Bytes per tile
+ */
+template <bool UseBarrier = true, typename AddrGen>
+inline void read_batched_rows_with_padding(
+    const AddrGen& addr_gen,
+    uint32_t l1_addr,
+    const uint32_t first_row_start,
+    const uint32_t row_stride,
+    const uint32_t num_rows,
+    const uint32_t tiles_per_row,
+    const uint32_t valid_num_rows,
+    const uint32_t valid_tiles_per_row,
+    const uint32_t tile_bytes) {
+    for (uint32_t row = 0U; row < num_rows; ++row) {
+        const uint32_t actual_row = std::min(row, valid_num_rows - 1U);
+        const uint32_t row_tile_start = first_row_start + actual_row * row_stride;
+        for (uint32_t t = 0U; t < tiles_per_row; ++t) {
+            const uint32_t actual_t = std::min(t, valid_tiles_per_row - 1U);
+            const uint64_t noc_addr = addr_gen.get_noc_addr(row_tile_start + actual_t);
+            noc_async_read(noc_addr, l1_addr, tile_bytes);
+            l1_addr += tile_bytes;
+        }
+    }
+    if constexpr (UseBarrier) {
+        noc_async_read_barrier();
     }
 }
 
 // ----- Printing helper functions -----
 
-void print_tile(uint32_t cb_idx, uint32_t tile_idx, bool untilize = false) {
-    DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
-    DPRINT << "======" << ENDL();
+void print_tile(const uint32_t cb_idx, const uint32_t tile_idx, const bool untilize = false) {
+    DPRINT("cb_idx: {} tile_idx: {}\n", cb_idx, tile_idx);
+    DPRINT("======\n");
     for (uint16_t r = 0; r < 32; ++r) {
-        DPRINT << (uint)r << " : "
-               << TileSlice(
-                      cb_idx,
-                      tile_idx,
-                      SliceRange{
-                          .h0 = (uint8_t)r,
-                          .h1 = (uint8_t)(r + 1),
-                          .hs = (uint8_t)1,
-                          .w0 = (uint8_t)0,
-                          .w1 = (uint8_t)32,
-                          .ws = (uint8_t)1},
-                      true,
-                      untilize)
-               << ENDL();
+        DPRINT(
+            "{} : {}\n",
+            (uint)r,
+            TileSlice(
+                cb_idx,
+                tile_idx,
+                SliceRange{
+                    .h0 = (uint8_t)r,
+                    .h1 = (uint8_t)(r + 1),
+                    .hs = (uint8_t)1,
+                    .w0 = (uint8_t)0,
+                    .w1 = (uint8_t)32,
+                    .ws = (uint8_t)1},
+                true,
+                untilize));
     }
-    DPRINT << "++++++" << ENDL();
+    DPRINT("++++++\n");
+}
+
+// ----- Multicast synchronization helper functions -----
+
+/**
+ * Sender side (with loopback): Signal all receivers INCLUDING self that data is ready.
+ * For the loopback case, we also set our own semaphore since we're a receiver too.
+ *
+ * @param receiver_sem_ptr Local pointer to receiver semaphore
+ * @param receiver_sem_addr L1 address of receiver semaphore (same on all receivers)
+ * @param noc_start_x Start X coordinate in NOC space
+ * @param noc_start_y Start Y coordinate in NOC space
+ * @param noc_end_x End X coordinate in NOC space
+ * @param noc_end_y End Y coordinate in NOC space
+ * @param num_dests_including_self Number of destination cores INCLUDING the sender
+ */
+inline void mcast_sender_signal_receivers_loopback(
+    volatile tt_l1_ptr uint32_t* receiver_sem_ptr,
+    const uint32_t receiver_sem_addr,
+    const uint32_t noc_start_x,
+    const uint32_t noc_start_y,
+    const uint32_t noc_end_x,
+    const uint32_t noc_end_y,
+    const uint32_t num_dests_including_self) {
+    noc_semaphore_set(receiver_sem_ptr, 1U);
+    const uint64_t receiver_sem_noc_addr =
+        get_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, receiver_sem_addr);
+    // Use loopback multicast for semaphore as well
+    noc_semaphore_set_multicast_loopback_src(receiver_sem_addr, receiver_sem_noc_addr, num_dests_including_self);
+    noc_async_atomic_barrier();
 }

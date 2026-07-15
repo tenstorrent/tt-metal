@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,7 @@
 #include "command_generated.h"
 #include <optional>
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/fmt.hpp>
 
 #include <host_api.hpp>
 #include "env_lib.hpp"
@@ -511,7 +512,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueReadBu
     // One idea is to store in map by global_read_id that caller can access.
     if (show_reads_) {
         for (size_t i = 0; i < readback_data.size(); i++) {
-            log_info(tt::LogMetalTrace, " rd_data i: {:3d} => data: {} ({:x})", i, readback_data[i], readback_data[i]);
+            log_trace(tt::LogMetalTrace, " rd_data i: {:3d} => data: {} ({:x})", i, readback_data[i], readback_data[i]);
         }
     }
 }
@@ -543,7 +544,11 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::CreateKernelC
 
     auto core_spec = core_spec_from_flatbuffer(cmd);
     auto kernel_config = kernel_config_from_flatbuffer(cmd);
-    auto kernel_id = CreateKernel(*program, cmd->file_name()->c_str(), core_spec, kernel_config);
+    KernelHandle kernel_id = std::visit(
+        [&](const auto& cfg) -> KernelHandle {
+            return CreateKernel(*program, cmd->file_name()->c_str(), core_spec, cfg);
+        },
+        kernel_config);
     add_kernel_handle_to_map(cmd->global_id(), kernel_id);
     // Some APIs use Kernel, so convert to and store Kernel.
     std::shared_ptr<Kernel> kernel = program->impl().get_kernel(kernel_id);
@@ -666,7 +671,7 @@ void LightMetalReplayImpl::execute(const ::tt::tt_metal::flatbuffer::LightMetalC
         if (show_reads_) {
             for (size_t i = 0; i < rd_data.size(); i++) {
                 bool match = rd_data[i] == cmd->golden_data()->Get(i);
-                log_info(
+                log_trace(
                     tt::LogMetalTrace,
                     "LightMetalCompare i: {:3d} match: {} RdData: {:x} Golden: {:x}",
                     i,

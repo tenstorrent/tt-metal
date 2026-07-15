@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,8 +7,6 @@
 #include <algorithm>
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include "ttnn/operations/math.hpp"
@@ -162,6 +160,7 @@ void MatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
             shared_vars.reduce_scatter_artifacts.num_workers_per_direction,
             shared_vars.reduce_scatter_artifacts.num_mux_cores_per_direction_per_link,
             shared_vars.reduce_scatter_artifacts.num_cores_per_link,
+            shared_vars.reduce_scatter_artifacts.normalized_dim,
             args.reduce_scatter_params.barrier_semaphore,
             args.reduce_scatter_params.semaphore,
             output_tensors.mm,

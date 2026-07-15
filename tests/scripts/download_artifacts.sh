@@ -60,8 +60,8 @@ if [ -z "$runs" ]; then
   exit 1
 fi
 
-# First try to find "All post-commit tests" workflow specifically
-build_run_id="$(echo "$runs" | jq -r '.[] | select(.workflowName == "All post-commit tests") | .databaseId' | head -1)"
+# First try to find "Sanity tests" workflow specifically
+build_run_id="$(echo "$runs" | jq -r '.[] | select(.workflowName == "Sanity tests") | .databaseId' | head -1)"
 
 # If not found, fall back to other build workflow patterns
 if [ -z "$build_run_id" ]; then

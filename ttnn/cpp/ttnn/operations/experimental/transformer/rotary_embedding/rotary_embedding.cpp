@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,9 +8,9 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::experimental {
 
-ttnn::Tensor RotaryEmbeddingOperation::invoke(
+ttnn::Tensor rotary_embedding(
     const Tensor& input_tensor,
     const Tensor& cos_cache,
     const Tensor& sin_cache,
@@ -21,9 +21,11 @@ ttnn::Tensor RotaryEmbeddingOperation::invoke(
 
     using tt::tt_metal::PadValue;
     TT_FATAL(
-        input_tensor.padded_shape()[-1] % (TILE_WIDTH * 2) == 0,
-        "Input X dimension ({}) must be divisible by {} for tiling.",
+        input_tensor.padded_shape()[-1] == TILE_WIDTH || input_tensor.padded_shape()[-1] % (TILE_WIDTH * 2) == 0,
+        "Input X dimension ({}) must be either {} (single tile) or divisible by {} (rotate_half midpoint "
+        "must align with a tile boundary).",
         input_tensor.padded_shape()[-1],
+        TILE_WIDTH,
         TILE_WIDTH * 2);
 
     uint32_t seq_len = input_tensor.padded_shape()[-2];
@@ -31,7 +33,7 @@ ttnn::Tensor RotaryEmbeddingOperation::invoke(
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
     TT_FATAL(
-        cos_cache.padded_shape() == sin_cache.padded_shape(),
+        cos_cache.logical_shape() == sin_cache.logical_shape(),
         "Cosine and Sine cache dimensions must match. Cos cache dimensions: {}, Sin cache dimensions: {}.",
         cos_cache.padded_shape(),
         sin_cache.padded_shape());
@@ -42,6 +44,7 @@ ttnn::Tensor RotaryEmbeddingOperation::invoke(
         X,
         cos_cache.padded_shape());
 
+    uint32_t cos_seq_len = cos_cache.logical_shape()[-2];
     if (token_index.has_value()) {
         seq_len = input_tensor.padded_shape()[0];
         TT_FATAL(
@@ -50,21 +53,23 @@ ttnn::Tensor RotaryEmbeddingOperation::invoke(
             seq_len);
 
         TT_FATAL(
-            cos_cache.padded_shape()[-2] >= token_index,
-            "Cosine cache dimensions must cover the token index. Token index: {}, Cos cache dimension: {}.",
+            cos_seq_len > token_index.value(),
+            "Cosine cache must cover the token index. Token index: {}, Cos cache sequence length: {}.",
             token_index.value(),
-            cos_cache.padded_shape()[-2]);
+            cos_seq_len);
     } else {
+        uint32_t input_seq_len = input_tensor.logical_shape()[-2];
         TT_FATAL(
-            cos_cache.padded_shape()[-2] >= seq_len,
-            "Cosine cache dimensions must cover the sequence length. Sequence length: {}, Cos cache dimension: {}.",
-            seq_len,
-            cos_cache.padded_shape()[-2]);
+            cos_seq_len >= input_seq_len,
+            "Cosine cache must cover the input sequence length. Input sequence length: {}, "
+            "Cos cache sequence length: {}.",
+            input_seq_len,
+            cos_seq_len);
     }
 
     auto arch = input_tensor.device()->arch();
     auto kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+        init_device_compute_kernel_config(arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
 
     tt::tt_metal::MemoryConfig default_memory_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
     if (input_tensor.storage_type() == StorageType::DEVICE) {
@@ -91,4 +96,4 @@ ttnn::Tensor RotaryEmbeddingOperation::invoke(
         kernel_config_val);
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::experimental

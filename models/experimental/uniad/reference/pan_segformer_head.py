@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -300,6 +300,9 @@ class PansegformerHead(nn.Module):
             "args_tuple": args_tuple,
             "reference": reference,
         }
+        # Retained so the e2e seg-head PCC gate (test_ttnn_uniad) can read the
+        # continuous forward outputs on the real BEV embedding.
+        self._last_forward_outs = {"outputs_classes": outputs_classes, "outputs_coords": outputs_coords}
 
         return outs
 
@@ -510,7 +513,7 @@ class PansegformerHead(nn.Module):
                 mask_pred.dtype
             )
             for i, scores in enumerate(scores_all):
-                # MDS: things and sutff have different threholds may perform a little bit better
+                # MDS: things and stuff have different thresholds may perform a little bit better
                 if labels_all[i] < self.num_things_classes and scores < self.quality_threshold_things:
                     continue
                 elif labels_all[i] >= self.num_things_classes and scores < self.quality_threshold_stuff:

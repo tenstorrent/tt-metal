@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -591,10 +591,6 @@ op_map = {
     "matmul": {
         "tt_op": tt_lib_ops.matmul,
         "pytorch_op": pytorch_ops.matmul,
-    },
-    "outer": {
-        "tt_op": tt_lib_ops.outer,
-        "pytorch_op": pytorch_ops.outer,
     },
     # Broadcast
     "bcast-add-h": {

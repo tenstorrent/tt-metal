@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,6 +11,7 @@
 
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions_nanobind.hpp"
+#include "ttnn/operations/reduction/generic/std_var_reductions_nanobind.hpp"
 #include "ttnn/operations/reduction/argmax/argmax_nanobind.hpp"
 #include "ttnn/operations/reduction/accumulation/cumprod/cumprod_nanobind.hpp"
 #include "ttnn/operations/reduction/accumulation/cumsum/cumsum_nanobind.hpp"
@@ -20,14 +21,16 @@
 #include "ttnn/operations/reduction/sampling/sampling_nanobind.hpp"
 #include "ttnn/operations/reduction/topk/topk_nanobind.hpp"
 #include "ttnn/operations/reduction/manual_seed/manual_seed_nanobind.hpp"
+#include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 
 namespace ttnn::operations::reduction {
 
 void py_module(nb::module_& mod) {
-    export_enum<ttnn::operations::reduction::ReduceType>(mod, "ReduceType");
+    export_enum<reduction_common::ReduceType>(mod, "ReduceType");
 
     // Generic reductions
     detail::bind_generic_reductions(mod);
+    detail::bind_std_var_reductions(mod);
 
     // Special reductions
     detail::bind_reduction_argmax_operation(mod);

@@ -4,12 +4,381 @@ This guide explains how to configure and run distributed training with TTML, cov
 
 ## Overview
 
-TTML supports three types of distributed parallelism:
+TTML supports four types of distributed parallelism:
 - **Data Parallel (DP/DDP)**: Replicate model across devices, shard data, synchronize gradients
 - **Tensor Parallel (TP)**: Shard model parameters across devices, gather/reduce as needed
-- **Pipeline Parallel (PP)**: Shard layers sequentially across devices
+- **Context Parallel (CP)**: Shard sequence length across devices for long-context training
+- **Pipeline Parallel (PP)**: Shard layers sequentially across devices (multi-host)
 
-These can be combined (e.g., TP + DDP) to scale training across large device meshes.
+These can be combined (e.g., TP + DDP, or CP + TP) to scale training across large device meshes.
+
+---
+
+## Parallelism Context
+
+### What is ParallelismContext?
+
+`ParallelismContext` is the central configuration object that manages distributed training in TTML. It determines:
+- Which parallelism strategies are active (DDP, TP, CP)
+- Which mesh axis each strategy uses
+- How many devices participate in each parallelism dimension
+
+### Why Do We Need It?
+
+When training on multiple devices, different operations need to know:
+1. **How to shard tensors**: Should weights be split across devices (TP) or replicated (DDP)?
+2. **How to communicate**: Which devices need to synchronize gradients? Which need to all-gather parameters?
+3. **Which axis to use**: In a 2D mesh `[4, 8]`, does axis 0 represent DP groups or TP groups?
+
+`ParallelismContext` provides a single source of truth for these decisions.
+
+### How It Works
+
+```cpp
+// ParallelismContext stores:
+struct ParallelismContext {
+    std::optional<uint32_t> m_ddp_axis;  // Which mesh axis for data parallelism
+    std::optional<uint32_t> m_tp_axis;   // Which mesh axis for tensor parallelism
+    std::optional<uint32_t> m_cp_axis;   // Which mesh axis for context parallelism
+    uint32_t m_num_ddp_devices;          // Number of DDP replicas
+    uint32_t m_num_tp_devices;           // Number of TP shards
+    uint32_t m_num_cp_devices;           // Number of CP shards
+};
+```
+
+### Initialization
+
+Initialize the parallelism context **after** opening the device but **before** creating any distributed tensors:
+
+```cpp
+// C++
+auto& ctx = ttml::autograd::ctx();
+ctx.open_device({4, 8});  // 4×8 = 32 devices
+ctx.initialize_parallelism_context({
+    .enable_ddp = true,   // Data parallelism on axis 0
+    .enable_tp = true,    // Tensor parallelism on axis 1
+    .enable_cp = false    // No context parallelism
+});
+
+// Now you can query:
+auto& pctx = ctx.get_parallelism_context();
+uint32_t dp_size = pctx.get_ddp_size();  // Returns 4
+uint32_t tp_size = pctx.get_tp_size();   // Returns 8
+```
+
+```python
+# Python
+autograd_ctx = ttml.autograd.AutoContext.get_instance()
+autograd_ctx.open_device([4, 8])
+autograd_ctx.initialize_parallelism_context(
+    DistributedConfig(enable_ddp=True, enable_tp=True)
+)
+```
+
+---
+
+## Parallelism Strategies Explained
+
+### Data Parallelism (DDP)
+
+**Concept**: Replicate the entire model on each device, split the data batch across devices, and synchronize gradients after each backward pass.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Data Parallelism (DDP)                   │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│   Batch = [B0, B1, B2, B3]                                  │
+│              ↓                                              │
+│   ┌─────────────────────────────────────────────────────┐   │
+│   │  Device 0    Device 1    Device 2    Device 3       │   │
+│   │  ┌───────┐   ┌───────┐   ┌───────┐   ┌───────┐      │   │
+│   │  │Model  │   │Model  │   │Model  │   │Model  │      │   │
+│   │  │(full) │   │(full) │   │(full) │   │(full) │      │   │
+│   │  └───┬───┘   └───┬───┘   └───┬───┘   └───┬───┘      │   │
+│   │      │           │           │           │          │   │
+│   │      ↓           ↓           ↓           ↓          │   │
+│   │   B0→Loss     B1→Loss     B2→Loss     B3→Loss       │   │
+│   │      │           │           │           │          │   │
+│   │      └───────────┴─────┬─────┴───────────┘          │   │
+│   │                        │                            │   │
+│   │                   All-Reduce                        │   │
+│   │                   (gradients)                       │   │
+│   │                        │                            │   │
+│   │                        ↓                            │   │
+│   │                 Averaged Gradients                  │   │
+│   └─────────────────────────────────────────────────────┘   │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Implementation in TTML**:
+```cpp
+// After backward pass, synchronize gradients across DDP devices
+loss->backward();
+ttml::core::distributed::synchronize_gradients(model->parameters());
+optimizer.step();
+```
+
+**When to Use**:
+- Model fits in single device memory
+- Want to increase effective batch size
+- Simple to implement and debug
+
+**Tradeoffs**:
+| Pros | Cons |
+|------|------|
+| Simple implementation | Full model on each device (memory inefficient) |
+| Linear speedup with devices | Communication scales with model size |
+| No model code changes needed | Gradient sync can be bottleneck |
+
+---
+
+### Tensor Parallelism (TP)
+
+**Concept**: Shard model parameters across devices. Each device holds a slice of the weights and computes a partial result, then devices communicate to combine results.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                   Tensor Parallelism (TP)                   │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│   Weight Matrix W [4096 × 4096]                             │
+│   ┌─────────────────────────────────────────────────────┐   │
+│   │  W₀        W₁        W₂        W₃                   │   │
+│   │ [4096×    [4096×    [4096×    [4096×                │   │
+│   │  1024]     1024]     1024]     1024]                │   │
+│   └─────────────────────────────────────────────────────┘   │
+│              ↓           ↓           ↓           ↓          │
+│   ┌─────────────────────────────────────────────────────┐   │
+│   │  Device 0    Device 1    Device 2    Device 3       │   │
+│   │  ┌───────┐   ┌───────┐   ┌───────┐   ┌───────┐      │   │
+│   │  │  W₀   │   │  W₁   │   │  W₂   │   │  W₃   │      │   │
+│   │  └───┬───┘   └───┬───┘   └───┬───┘   └───┬───┘      │   │
+│   │      │           │           │           │          │   │
+│   │      ↓           ↓           ↓           ↓          │   │
+│   │   X @ W₀ᵀ     X @ W₁ᵀ     X @ W₂ᵀ     X @ W₃ᵀ       │   │
+│   │      │           │           │           │          │   │
+│   │      └───────────┴─────┬─────┴───────────┘          │   │
+│   │                        │                            │   │
+│   │                   All-reduce                        │   │
+│   │                   (outputs)                         │   │
+│   │                        │                            │   │
+│   │                        ↓                            │   │
+│   │              Y = [Y₀, Y₁, Y₂, Y₃]                   │   │
+│   └─────────────────────────────────────────────────────┘   │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Two Sharding Strategies**:
+
+1. **Column Parallel** (`ColumnParallelLinear`): Shard output features
+   - Each device computes `Y_local = X @ W_local^T` where `W_local` has `out_features/tp_size` rows
+   - Output is sharded; optionally `all_gather` to get full output
+
+2. **Row Parallel** (`RowParallelLinear`): Shard input features
+   - Input must be sharded (or scatter it first)
+   - Each device computes partial output, then `all_reduce` to sum
+
+```cpp
+// Column parallel: shard along output dimension
+auto weight_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(
+    *device,
+    /*dim=*/2,      // out_features dimension
+    shard_dim       // which mesh axis to shard across
+);
+
+// Row parallel: shard along input dimension
+auto weight_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(
+    *device,
+    /*dim=*/3,      // in_features dimension
+    shard_dim
+);
+```
+
+**When to Use**:
+- Model too large for single device memory
+- Want to reduce memory footprint per device
+- Training very large models (billions of parameters)
+
+**Tradeoffs**:
+| Pros | Cons |
+|------|------|
+| Enables training larger models | More complex implementation |
+| Lower memory per device | Communication overhead (all-gather, reduce-scatter) |
+| Can combine with DDP | Requires model code changes |
+
+---
+
+### Context Parallelism (CP)
+
+**Concept**: Shard the sequence length across devices. Each device processes a chunk of the sequence, and devices communicate during attention computation using **Ring Attention**.
+
+This is essential for training with very long sequences (e.g., 128K+ tokens) that don't fit in single device memory.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                  Context Parallelism (CP)                   │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│   Sequence: [Token₀ ... Token₁₀₂₃ | Token₁₀₂₄ ... Token₂₀₄₇│
+│              | Token₂₀₄₈ ... Token₃₀₇₁ | Token₃₀₇₂ ... ]   │
+│                                                             │
+│   ┌─────────────────────────────────────────────────────┐   │
+│   │  Device 0    Device 1    Device 2    Device 3       │   │
+│   │  ┌───────┐   ┌───────┐   ┌───────┐   ┌───────┐      │   │
+│   │  │Q₀,K₀, │   │Q₁,K₁, │   │Q₂,K₂, │   │Q₃,K₃, │      │   │
+│   │  │V₀     │   │V₁     │   │V₂     │   │V₃     │      │   │
+│   │  └───┬───┘   └───┬───┘   └───┬───┘   └───┬───┘      │   │
+│   │      │           │           │           │          │   │
+│   │      └───────────┴─────┬─────┴───────────┘          │   │
+│   │                        │                            │   │
+│   │              Ring Attention Algorithm               │   │
+│   │      ┌─────────────────────────────────────┐        │   │
+│   │      │  Step 0: Compute local attention    │        │   │
+│   │      │  Step 1: Ring-shift K,V → compute   │        │   │
+│   │      │  Step 2: Ring-shift K,V → compute   │        │   │
+│   │      │  Step 3: Ring-shift K,V → compute   │        │   │
+│   │      │  Combine with online softmax        │        │   │
+│   │      └─────────────────────────────────────┘        │   │
+│   │                        │                            │   │
+│   │                        ↓                            │   │
+│   │              Full Attention Output                  │   │
+│   └─────────────────────────────────────────────────────┘   │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Ring Attention Algorithm**:
+```
+For each device d holding Q_local, K_local, V_local:
+    Initialize: O = 0, L = -inf (log-sum-exp accumulator)
+    For step in 0..cp_size:
+        # Compute attention with current K, V chunk
+        local_attn = softmax(Q_local @ K_current^T) @ V_current
+
+        # Online softmax: combine with running accumulator
+        O, L = online_softmax_combine(O, L, local_attn)
+
+        # Ring-shift K and V to next device
+        K_current, V_current = ring_shift(K_current, V_current)
+    Return O
+```
+
+**Causal Masking in Ring Attention**:
+- Step where source == current device: Apply causal mask (diagonal chunk)
+- Step where source < current device: Full attention (earlier tokens)
+- Step where source > current device: Skip computation (future tokens masked)
+
+**When to Use**:
+- Training with very long sequences (32K, 64K, 128K+ tokens)
+- Sequence length exceeds single device memory
+- Models with attention mechanisms
+
+**Tradeoffs**:
+| Pros | Cons |
+|------|------|
+| Enables very long sequences | Ring communication overhead |
+| Memory scales with 1/cp_size | More complex attention implementation |
+| Mathematically equivalent to full attention | Limited to attention-based models |
+
+---
+
+### Pipeline Parallelism (PP)
+
+**Concept**: Shard model layers sequentially across devices (typically across hosts). Each device processes a subset of layers, passing activations to the next device.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                  Pipeline Parallelism (PP)                  │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│   Model: 24 Transformer Blocks                              │
+│                                                             │
+│   ┌─────────────────────────────────────────────────────┐   │
+│   │  Host 0       Host 1       Host 2       Host 3      │   │
+│   │  (Rank 0)     (Rank 1)     (Rank 2)     (Rank 3)    │   │
+│   │  ┌───────┐    ┌───────┐    ┌───────┐    ┌───────┐   │   │
+│   │  │Embed  │    │Block  │    │Block  │    │Block  │   │   │
+│   │  │Block  │    │6-11   │    │12-17  │    │18-23  │   │   │
+│   │  │0-5    │    │       │    │       │    │LM Head│   │   │
+│   │  └───┬───┘    └───┬───┘    └───┬───┘    └───┬───┘   │   │
+│   │      │            │            │            │       │   │
+│   │      │   Send     │   Send     │   Send     │       │   │
+│   │      │───────────→│───────────→│───────────→│       │   │
+│   │      │ activations│ activations│ activations│       │   │
+│   │      │            │            │            │       │   │
+│   │      │←───────────│←───────────│←───────────│       │   │
+│   │      │   Send     │   Send     │   Send     │       │   │
+│   │      │ gradients  │ gradients  │ gradients  │       │   │
+│   └─────────────────────────────────────────────────────┘   │
+│                                                             │
+│   Forward: Input → Rank 0 → Rank 1 → Rank 2 → Rank 3 → Loss │
+│   Backward: Loss → Rank 3 → Rank 2 → Rank 1 → Rank 0        │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Configuration**:
+```yaml
+multihost_config:
+  enabled: true
+  num_workers: 4
+  socket_type: "fabric"
+  pipeline_parallel_config:
+    num_blocks: 24
+    blocks_per_rank:
+      0: 6   # Embedding + Blocks 0-5
+      1: 6   # Blocks 6-11
+      2: 6   # Blocks 12-17
+      3: 6   # Blocks 18-23 + LM Head
+```
+
+**When to Use**:
+- Model too large for single host (multiple hosts needed)
+- Want to scale across many hosts
+- Can tolerate pipeline bubbles
+
+**Tradeoffs**:
+| Pros | Cons |
+|------|------|
+| Scales across hosts | Pipeline bubbles reduce efficiency |
+| Each host has subset of layers | Complex gradient flow |
+| Can combine with TP within host | Requires careful load balancing |
+
+---
+
+## Tradeoffs Summary
+
+| Strategy | Memory Efficiency | Communication | Complexity | Best For |
+|----------|-------------------|---------------|------------|----------|
+| **DDP** | Low (full model replicated) | Gradient all-reduce | Low | Small-medium models, scaling batch size |
+| **TP** | High (params sharded) | All-gather, reduce-scatter | Medium | Large models, single-host multi-device |
+| **CP** | High (sequence sharded) | Ring communication | Medium | Very long sequences |
+| **PP** | High (layers sharded) | Activation/gradient transfer | High | Multi-host, very large models |
+
+### Combining Strategies
+
+Common combinations:
+- **TP + DDP** (`mesh_shape: [4, 8]`): 4 DP groups × 8 TP devices
+  - Use when model needs TP for memory, but want more parallelism
+- **CP + TP** (`mesh_shape: [4, 8]` with CP on axis 0): 4 CP devices × 8 TP devices
+  - Use for long sequences with large models
+- **PP + TP** (multi-host): Pipeline across hosts, TP within each host
+  - Use for very large models across many hosts
+
+### Decision Guide
+
+```
+Is your model too large for one device?
+├── Yes → Use Tensor Parallelism (TP)
+│         └── Still too large? → Add Pipeline Parallelism (PP)
+└── No  → Is your sequence too long?
+          ├── Yes → Use Context Parallelism (CP)
+          └── No  → Use Data Parallelism (DDP)
+                    └── Want more throughput? → Combine with TP
+```
 
 ## Mesh Graph Descriptors (MGD Files)
 
@@ -30,10 +399,10 @@ export TT_MESH_GRAPH_DESC_PATH="/path/to/your/mesh_graph_descriptor.textproto"
 
 ### Where to Find MGD Files
 
-Default MGD files are located in the tt-metal repository:
+The default MGD directory used by the training scripts is:
 
 ```
-$TT_METAL_HOME/tests/tt_metal/tt_fabric/custom_mesh_descriptors/
+$TT_METAL_RUNTIME_ROOT/tt_metal/fabric/mesh_graph_descriptors/
 ```
 
 Common examples include:
@@ -42,15 +411,17 @@ Common examples include:
 
 You can also find additional MGD files in:
 - `$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/` - Standard mesh descriptors
+- `$TT_METAL_HOME/tt-train/configs/mgd/` - Training-oriented MGDs paired with ready-to-run llama8b training configs (see [Ready-to-Run Examples](#ready-to-run-examples) below)
 - `$TT_METAL_HOME/tt-train/sources/examples/python/multihost/*/configurations/` - Example configurations for multihost training
 
 ### Automatic MGD Selection
 
-If `TT_MESH_GRAPH_DESC_PATH` is not set, the training script will automatically select an MGD file based on the number of devices:
-- **8 devices**: Uses `t3k_1x8_mesh_graph_descriptor.textproto`
-- **32 devices**: Uses `galaxy_1x32_mesh_graph_descriptor.textproto`
+If `TT_MESH_GRAPH_DESC_PATH` is not set, the training binary (via `get_mgd_path` in `tt-train/sources/ttml/ttnn_fixed/distributed/tt_metal.cpp`) will automatically select an MGD file based on the number of devices:
+- **8 devices**: `$TT_METAL_RUNTIME_ROOT/tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto`
+- **32 devices**: `$TT_METAL_RUNTIME_ROOT/tt_metal/fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.textproto`
+- Anything else: no default — you must set `TT_MESH_GRAPH_DESC_PATH` explicitly.
 
-This automatic selection requires `TT_METAL_HOME` to be set.
+This automatic selection requires `TT_METAL_RUNTIME_ROOT` to be set.
 
 ### MGD File Format
 
@@ -68,7 +439,13 @@ mesh_descriptors {
 top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 ```
 
-**Important**: The `device_topology` dimensions in the MGD file define the physical device arrangement, which must be compatible with your logical mesh shape.
+You can also specify if you want wrap around connections to be visible to ccls like this:
+
+```
+device_topology { dims: [ 1, 32 ], dim_types: [RING, LINE] }
+```
+
+**Important**: The `device_topology` dimensions in the MGD file define the physical device arrangement, which must be compatible with your logical mesh shape specified in the device config.
 
 ## Device Configuration
 
@@ -89,7 +466,7 @@ In your training configuration YAML file, specify the device configuration:
 device_config:
   enable_tp: true      # Enable tensor parallelism
   enable_ddp: true     # Enable data parallelism
-  mesh_shape: [4, 8]   # 4 DP groups × 8 TP devices = 32 devices
+  mesh_shape: [4, 8]   # 4 DP groups × 8 TP devices = 32 devices, should be the same as in MGD file
   device_ids: []       # Optional: specific device IDs to use
 ```
 
@@ -100,6 +477,7 @@ In the device config, you can specify which parallelism strategies to use:
 - **`enable_tp`**: Enable tensor parallelism (shard model parameters)
 - **`enable_ddp`**: Enable data parallelism (replicate model, shard data)
 - **`enable_pp`**: Enable pipeline parallelism (shard layers sequentially)
+- **`enable_cp`**: Enable context parallelism (shard input along sequence dimension)
 
 ### Mesh Shape Determination
 
@@ -120,39 +498,52 @@ The mesh shape must match the total number of devices available and be compatibl
 
 ### Automatic Axis Determination
 
-The parallelism axes are **automatically determined** based on the order you enable parallelism strategies in your device config:
+The mesh is always **2-dimensional** (`mesh_shape: [R, C]`). The `ParallelismContext` classifies it as one of two cases and assigns axes accordingly:
 
-1. **Data Parallel (DP) axis**: Always assigned to **axis 0** (first dimension) if `enable_ddp` is true
-2. **Tensor Parallel (TP) axis**: Assigned to **axis 1** (second dimension) if `enable_tp` is true
+**Case 1 — Line topology** (one dimension is 1, e.g. `[1, 32]` or `[32, 1]`):
+- Exactly **one** parallelism strategy must be enabled
+- It is assigned to whichever axis has size > 1
 
-This means:
-- For `mesh_shape: [4, 8]` with both DDP and TP enabled:
-  - DP uses axis 0 → 4 DP groups
-  - TP uses axis 1 → 8 TP devices per group
-- For `mesh_shape: [1, 32]` with only TP enabled:
-  - TP uses axis 0 → 32 TP devices
-- For `mesh_shape: [32, 1]` with only DDP enabled:
-  - DP uses axis 0 → 32 DP groups
+**Case 2 — True 2D mesh** (both dimensions > 1, e.g. `[4, 8]`, `[8, 4]`):
+- Exactly **two** parallelism strategies must be enabled (matching the 2 mesh dims)
+- Axes are assigned in the fixed order **DDP → CP → TP**, starting at axis 0
+
+So for a 2D mesh, DDP always takes axis 0 if enabled. If DDP is not enabled, CP takes axis 0; otherwise CP takes axis 1. TP takes whichever axis is left.
+
+Examples:
+- `mesh_shape: [1, 32]`, `enable_tp: true` → TP on axis 1 (the non-trivial axis), 32 TP devices
+- `mesh_shape: [32, 1]`, `enable_ddp: true` → DDP on axis 0 (the non-trivial axis), 32 DDP replicas
+- `mesh_shape: [4, 8]`, `enable_ddp: true` + `enable_tp: true` → DDP on axis 0 (4 replicas), TP on axis 1 (8 devices/replica)
+- `mesh_shape: [8, 4]`, `enable_ddp: true` + `enable_cp: true` → DDP on axis 0 (8 replicas), CP on axis 1 (4 shards)
+- `mesh_shape: [4, 8]`, `enable_cp: true` + `enable_tp: true` → CP on axis 0, TP on axis 1
 
 ### Implementation Details
 
-The axis assignment happens in `ParallelismContext`:
+From `ParallelismContext::ParallelismContext` in `tt-train/sources/ttml/autograd/auto_context.cpp`:
 
 ```cpp
-uint32_t axis = 0;
-if (config.enable_ddp) {
-    m_ddp_axis = axis++;  // DP gets axis 0
-    m_num_ddp_devices = mesh_device.shape()[m_ddp_axis.value()];
-}
-if (config.enable_tp) {
-    m_tp_axis = axis++;    // TP gets axis 1 (if DP was enabled)
-    m_num_tp_devices = mesh_device.shape()[m_tp_axis.value()];
+if (is_line_topology) {
+    // Exactly one parallelism; find the non-trivial axis and assign it
+    uint32_t active_axis = 0;
+    for (uint32_t i = 0; i < mesh_shape.dims(); ++i) {
+        if (mesh_shape[i] > 1) { active_axis = i; break; }
+    }
+    if (config.enable_ddp)      m_ddp_axis = active_axis;
+    else if (config.enable_cp)  m_cp_axis  = active_axis;
+    else if (config.enable_tp)  m_tp_axis  = active_axis;
+} else {
+    // 2D mesh: must enable exactly 2 parallelisms; assign in order DDP -> CP -> TP
+    uint32_t axis = 0;
+    if (config.enable_ddp) { m_ddp_axis = axis++; }
+    if (config.enable_cp)  { m_cp_axis  = axis++; }
+    if (config.enable_tp)  { m_tp_axis  = axis++; }
 }
 ```
 
-**Key constraint**: The number of enabled parallelism strategies must equal the number of mesh shape dimensions:
-- 1D mesh `[N]`: Can use either DP or TP (but not both)
-- 2D mesh `[M, N]`: Can use both DP and TP together
+**Key constraints** (enforced via `TT_FATAL`):
+- **Line topology** (`[N, 1]` or `[1, N]`): exactly one of DDP/CP/TP enabled
+- **2D mesh** (`[M, N]` with both > 1): number of enabled parallelisms must equal 2 (i.e. exactly two of DDP/CP/TP)
+- At most two parallelism strategies can ever be active at once (mesh is 2D)
 
 ## Complete Example
 
@@ -175,14 +566,14 @@ device_config:
 ### 2. Set MGD File
 
 ```bash
-export TT_METAL_HOME=/path/to/tt-metal
-export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.textproto
+export TT_METAL_RUNTIME_ROOT=/path/to/tt-metal
+export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_RUNTIME_ROOT/tt_metal/fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.textproto
 ```
 
 Or let it auto-select (for 32 devices):
 ```bash
-export TT_METAL_HOME=/path/to/tt-metal
-# TT_MESH_GRAPH_DESC_PATH will be auto-set to galaxy_1x32_mesh_graph_descriptor.textproto
+export TT_METAL_RUNTIME_ROOT=/path/to/tt-metal
+# TT_MESH_GRAPH_DESC_PATH will be auto-set to single_galaxy_mesh_graph_descriptor.textproto
 ```
 
 ### 3. Run Training
@@ -203,6 +594,29 @@ export TT_METAL_HOME=/path/to/tt-metal
 5. Model parameters are sharded across TP devices
 6. Data batches are distributed across DP groups
 
+## Ready-to-Run Examples
+
+The table below lists pre-built training configs paired with matching MGDs for llama 8B on a single Blackhole Galaxy (32 devices). Each pair is self-contained: just export the MGD and run.
+
+| Strategy | Mesh shape | Training config | MGD |
+|---|---|---|---|
+| TP=8 only | `[8, 1]` | [`training_configs/llama8b/training_shakespeare_llama_8b_tp8.yaml`](../configs/training_configs/llama8b/training_shakespeare_llama_8b_tp8.yaml) | [`mgd/bh_galaxy_1_8_ring_ring.textproto`](../configs/mgd/bh_galaxy_1_8_ring_ring.textproto) |
+| TP=8, DDP=4 | `[4, 8]` | [`training_configs/llama8b/training_shakespeare_llama_8b_tp8_ddp4.yaml`](../configs/training_configs/llama8b/training_shakespeare_llama_8b_tp8_ddp4.yaml) | [`mgd/bh_galaxy_4_8_line_line.textproto`](../configs/mgd/bh_galaxy_4_8_line_line.textproto) |
+| TP=4, DDP=8 | `[8, 4]` | [`training_configs/llama8b/training_shakespeare_llama_8b_tp4_ddp8.yaml`](../configs/training_configs/llama8b/training_shakespeare_llama_8b_tp4_ddp8.yaml) | [`mgd/bh_galaxy_8_4_line_line.textproto`](../configs/mgd/bh_galaxy_8_4_line_line.textproto) |
+
+### Run command
+
+```bash
+export TT_METAL_RUNTIME_ROOT=/path/to/tt-metal
+cd $TT_METAL_RUNTIME_ROOT
+
+# Pick one of the MGDs from the table
+export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_RUNTIME_ROOT/tt-train/configs/mgd/bh_galaxy_4_8_line_line.textproto
+
+./build/tt-train/sources/examples/nano_gpt/nano_gpt \
+    --config tt-train/configs/training_configs/llama8b/training_shakespeare_llama_8b_tp8_ddp4.yaml
+```
+
 ## Troubleshooting
 
 ### MGD Shape Mismatch
@@ -221,10 +635,10 @@ export TT_METAL_HOME=/path/to/tt-metal
 
 ### MGD File Not Found
 
-**Error**: MGD file path not found or `TT_METAL_HOME` not set
+**Error**: MGD file path not found or `TT_METAL_RUNTIME_ROOT` not set
 
 **Solution**:
-- Set `TT_METAL_HOME` to your tt-metal repository root
+- Set `TT_METAL_RUNTIME_ROOT` to your tt-metal repository root
 - Explicitly set `TT_MESH_GRAPH_DESC_PATH` to your MGD file path
 - Or ensure you're using 8 or 32 devices for automatic selection
 
@@ -296,7 +710,7 @@ You are calling for a chip outside of the fabric cluster.
 Check that your mesh graph descriptor specifies the correct topology
 ```
 
-**Cause**: The hardware topology has not been configured on the system. This error occurs when the fabric control plane cannot find the physical chips specified in your MGD file or mesh configuration.
+**Possible cause**: The hardware topology has not been configured on the system. This error occurs when the fabric control plane cannot find the physical chips specified in your MGD file or mesh configuration.
 
 **Solution**:
 1. **Install and configure topology**:
@@ -330,7 +744,7 @@ Check that your mesh graph descriptor specifies the correct topology
 
 ## Additional Resources
 
-- **MGD Format Documentation**: `$TT_METAL_HOME/tt_metal/fabric/MGD_README.md`
-- **Multihost Training Examples**: `$TT_METAL_HOME/tt-train/sources/examples/python/multihost/`
-- **Device Config Examples**: `$TT_METAL_HOME/tt-train/configs/training_configs/`
-- **TP+DP Example (Python)**: `$TT_METAL_HOME/tt-train/sources/examples/linear_regression_tp_dp/linear_regression_tp_dp.py` - Complete example demonstrating combined Tensor Parallelism and Data Parallelism with proper mesh configuration, parallelism context initialization, and distributed tensor mapping
+- **MGD Format Documentation**: `$TT_METAL_RUNTIME_ROOT/tt_metal/fabric/MGD_README.md`
+- **Multihost Training Examples**: `$TT_METAL_RUNTIME_ROOT/tt-train/sources/examples/python/multihost/`
+- **Device Config Examples**: `$TT_METAL_RUNTIME_ROOT/tt-train/configs/training_configs/`
+- **TP+DP Example (Python)**: `$TT_METAL_RUNTIME_ROOT/tt-train/sources/examples/linear_regression_tp_dp/linear_regression_tp_dp.py` - Complete example demonstrating combined Tensor Parallelism and Data Parallelism with proper mesh configuration, parallelism context initialization, and distributed tensor mapping

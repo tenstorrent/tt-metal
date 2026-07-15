@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "global_semaphore.hpp"
 
+#include <tt_stl/reflection.hpp>
 #include <cstdint>
 
 #include <nanobind/nanobind.h>

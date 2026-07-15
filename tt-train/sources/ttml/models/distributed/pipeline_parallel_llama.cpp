@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -139,8 +139,12 @@ PipelineParallelLlama::PipelineParallelLlama(
     if (is_last_rank()) {
         ln_fc = std::make_shared<ttml::modules::RMSNormLayer>(embedding_dim);
         if (is_tensor_parallel) {
+            fmt::print(
+                "WARNING: Building pipeline-parallel + tensor-parallel LM head with "
+                "gather_output=false. PP+TP end-to-end correctness has not been validated; "
+                "please sanity-check loss values before relying on this path.\n");
             fc = std::make_shared<ttml::modules::distributed::ColumnParallelLinear>(
-                embedding_dim, vocab_size, /* has_bias */ false, /* gather_output */ true);
+                embedding_dim, vocab_size, /* has_bias */ false, /* gather_output */ false);
         } else {
             fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size, /* bias */ false);
         }
@@ -198,12 +202,12 @@ uint32_t PipelineParallelLlama::get_blocks_to_load() const {
 }
 
 autograd::TensorPtr PipelineParallelLlama::operator()(const autograd::TensorPtr& x, const autograd::TensorPtr& mask) {
+    auto distributed_ctx = autograd::ctx().get_distributed_context();
+    int rank = *distributed_ctx->rank();
     auto out = x;
     if (is_first_rank()) {
         out = (*tok_emb)(out);
     } else {
-        auto distributed_ctx = autograd::ctx().get_distributed_context();
-        int rank = *distributed_ctx->rank();
         auto recv_rank = core::distributed::Rank(rank - 1);
 
         auto batch_size = out->get_value().logical_shape()[0];
@@ -217,18 +221,25 @@ autograd::TensorPtr PipelineParallelLlama::operator()(const autograd::TensorPtr&
 
     for (auto& block : blocks) {
         if (runner_type == RunnerType::MemoryEfficient) {
-            out = common::transformer::memory_efficient_runner(*block, out, mask);
+            // Capture block by value (shared_ptr) to avoid object slicing.
+            // Passing *block directly would give memory_efficient_runner a ModuleBase&,
+            // whose value-capture in the grad lambda slices away the derived vtable.
+            out = common::transformer::memory_efficient_runner(
+                [block](const autograd::TensorPtr& inp, const std::optional<autograd::TensorPtr>& msk) {
+                    return (*block)(inp, msk);
+                },
+                out,
+                mask);
         } else if (runner_type == RunnerType::Default) {
             out = (*block)(out, mask);
         }
     }
+    fmt::println("Rank: {} completed all blocks", rank);
 
     if (is_last_rank()) {
         out = (*ln_fc)(out);
         out = (*fc)(out);
     } else {
-        auto distributed_ctx = autograd::ctx().get_distributed_context();
-        int rank = *distributed_ctx->rank();
         auto send_rank = core::distributed::Rank(rank + 1);
         out = ttml::ops::distributed::intermesh_send(out, send_rank);
     }

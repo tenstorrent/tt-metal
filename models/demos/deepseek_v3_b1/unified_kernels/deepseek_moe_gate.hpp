@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -9,8 +9,12 @@
 #include "api/dataflow/dataflow_api.h"
 #elif defined(COMPILE_FOR_TRISC)
 #include <cstdint>
+#ifndef REDUCE_OP
 #define REDUCE_OP PoolType::SUM
+#endif
+#ifndef REDUCE_DIM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
+#endif
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
@@ -43,10 +47,11 @@ struct DeepseekMoeGate {
     struct ReaderCTArgs {};
 
     // Writer CTArgs (BRISC)
-    template <uint32_t output_cb_, uint32_t output_indices_cb_>
+    template <uint32_t output_cb_, uint32_t output_indices_cb_, bool wait_for_output_ = false>
     struct WriterCTArgs {
         static constexpr uint32_t output_cb = output_cb_;
         static constexpr uint32_t output_indices_cb = output_indices_cb_;
+        static constexpr bool wait_for_output = wait_for_output_;
     };
 
     // Compute CTArgs (TRISC)
@@ -94,8 +99,10 @@ struct DeepseekMoeGate {
             // ================================================================
             // BRISC: Wait for compute to finish
             // ================================================================
-            cb_wait_front(CTArgs::output_indices_cb, 1);
-            cb_wait_front(CTArgs::output_cb, 1);
+            if constexpr (CTArgs::wait_for_output) {
+                cb_wait_front(CTArgs::output_indices_cb, 1);
+                cb_wait_front(CTArgs::output_cb, 1);
+            }
 
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================

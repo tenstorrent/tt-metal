@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,8 +12,9 @@
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "all_to_all_dispatch_metadata.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace ttnn::operations::experimental::ccl {
@@ -41,6 +42,46 @@ void bind_all_to_all_dispatch_metadata_enums(nb::module_& mod) {
             "Workers on same link split token payload (not yet implemented)");
 }
 
+namespace {
+
+std::array<ttnn::Tensor, 3> all_to_all_dispatch_metadata_wrapper(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& expert_indices_tensor,
+    const ttnn::Tensor& expert_scores_tensor,
+    const ttnn::Tensor& expert_mapping_tensor,
+    const std::optional<std::vector<uint32_t>>& shared_expert_ids,
+    const std::optional<uint32_t> cluster_axis,
+    const std::optional<std::array<ttnn::Tensor, 3>>& output_tensors,
+    const std::optional<uint32_t> num_links,
+    const std::optional<std::array<uint32_t, 2>>& drain_sync_tilizer_core,
+    WorkerMode worker_mode,
+    DispatchAlgorithm dispatch_algorithm,
+    const std::optional<CoreRangeSet>& worker_core_range_set,
+    const std::optional<CoreRangeSet>& mux_core_range_set,
+    const std::optional<GlobalSemaphore>& cross_device_semaphore) {
+    std::optional<CoreCoord> drain_core = std::nullopt;
+    if (drain_sync_tilizer_core.has_value()) {
+        drain_core = CoreCoord(drain_sync_tilizer_core->at(0), drain_sync_tilizer_core->at(1));
+    }
+    return ttnn::experimental::all_to_all_dispatch_metadata(
+        input_tensor,
+        expert_indices_tensor,
+        expert_scores_tensor,
+        expert_mapping_tensor,
+        shared_expert_ids,
+        cluster_axis,
+        output_tensors,
+        num_links,
+        drain_core,
+        worker_mode,
+        dispatch_algorithm,
+        worker_core_range_set,
+        mux_core_range_set,
+        cross_device_semaphore);
+}
+
+}  // namespace
+
 void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
     // Bind the enums first
     bind_all_to_all_dispatch_metadata_enums(mod);
@@ -64,6 +105,8 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
             expert_mapping_tensor (ttnn.Tensor): The one-hot encoded expert to device mapping tensor containing the location of the experts among each device and each mesh. The tensor is expected to be [1, 1, E, D] per device, fully replicated across all devices. Each row corresponds to an expert, and the value in each corresponding column is 1 if the expert is on the device, 0 otherwise. The tensor is expected to be in Row Major, Interleaved format. This tensor is expected to be the same across all devices.
 
         Keyword Args:
+            shared_expert_ids (List[int], optional): the global expert ids designated as shared experts. Every token is dispatched to all of these experts in addition to its top-K routed experts. Defaults to `None` (no shared experts).
+                Note: the number of ids here (`num_shared_experts`) counts all *logical* shared experts. This differs from `num_shared_experts_per_device` in `ttnn.experimental.moe_compute`, which counts the *physical* shared experts resident per device, eg: 2x routed shared experts each residing on half of the devices would be num_shared_experts=2 here and num_shared_experts_per_device=1 there.
             cluster_axis (int, optional): the cluster axis to dispatch along. Defaults to `None` though we assert out when it is not specified.
             num_links (number, optional): the number of cross-device links to use for dispatching the tokens. Defaults to `None`, for which the number of links is determined automatically.
             output_tensors (Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor], optional): the optional output tensors to use for the dispatched tokens, indices, and scores. Defaults to `None`.
@@ -72,6 +115,7 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
             dispatch_algorithm (ttnn.DispatchAlgorithm, optional): the algorithm for routing tokens to destination devices. Defaults to `ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH`.
             worker_core_range_set (ttnn.CoreRangeSet, optional): the cores to use for dispatch workers. Defaults to cores (0,0) to (0,7) - 8 cores for 4 links.
             mux_core_range_set (ttnn.CoreRangeSet, optional): the cores to use for mux workers when worker_mode uses mux. Defaults to cores (1,0) to (1,7) - 8 cores (2 per link × 4 links).
+            cross_device_semaphore (ttnn.GlobalSemaphore, optional): a persistent global semaphore that enables semaphore-free (persistent) mode. When provided, all three `output_tensors` must also be provided as persistent buffers so all fabric write targets are persistent and the per-call `init_semaphore` can be skipped. Defaults to `None`.
 
         Returns:
             Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: The sparse output tokens tensor, indices tensor, and scores tensor. The output tensor on each device is sparsely populated with all the tokens that are dispatched to that device. The non-dispatched tokens have placeholder rows populated with garbage. The indices and scores tensors are all-gathered and L1 sharded to the drain_sync_tilizer_core.
@@ -93,50 +137,17 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
                             dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH)
         )doc";
 
-    using OperationType = decltype(ttnn::experimental::all_to_all_dispatch_metadata);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"all_to_all_dispatch_metadata", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::all_to_all_dispatch_metadata,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& expert_indices_tensor,
-               const ttnn::Tensor& expert_scores_tensor,
-               const ttnn::Tensor& expert_mapping_tensor,
-               const std::optional<uint32_t> cluster_axis,
-               const std::optional<std::array<ttnn::Tensor, 3>>& output_tensors,
-               const std::optional<uint32_t> num_links,
-               const std::optional<std::array<uint32_t, 2>>& drain_sync_tilizer_core,
-               WorkerMode worker_mode,
-               DispatchAlgorithm dispatch_algorithm,
-               const std::optional<CoreRangeSet>& worker_core_range_set,
-               const std::optional<CoreRangeSet>& mux_core_range_set,
-               const std::optional<GlobalSemaphore>& cross_device_semaphore) /*-> std::array*/ {
-                std::optional<CoreCoord> drain_core = std::nullopt;
-                if (drain_sync_tilizer_core.has_value()) {
-                    drain_core = CoreCoord(drain_sync_tilizer_core->at(0), drain_sync_tilizer_core->at(1));
-                }
-                return self(
-                    input_tensor,
-                    expert_indices_tensor,
-                    expert_scores_tensor,
-                    expert_mapping_tensor,
-                    cluster_axis,
-                    output_tensors,
-                    num_links,
-                    drain_core,
-                    worker_mode,
-                    dispatch_algorithm,
-                    worker_core_range_set,
-                    mux_core_range_set,
-                    cross_device_semaphore);
-            },
+        ttnn::overload_t{
+            all_to_all_dispatch_metadata_wrapper,
             nb::arg("input_tensor").noconvert(),
             nb::arg("expert_indices_tensor").noconvert(),
             nb::arg("expert_scores_tensor").noconvert(),
             nb::arg("expert_mapping_tensor").noconvert(),
             nb::kw_only(),
+            nb::arg("shared_expert_ids") = nb::none(),
             nb::arg("cluster_axis") = nb::none(),
             nb::arg("output_tensors") = nb::none(),
             nb::arg("num_links") = nb::none(),

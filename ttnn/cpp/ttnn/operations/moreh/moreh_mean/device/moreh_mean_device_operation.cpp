@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -71,7 +71,7 @@ MorehMeanOperation::spec_return_value_t MorehMeanOperation::compute_output_specs
                 tensor_args.input.dtype(), PageConfig(tensor_args.input.layout()), operation_attributes.memory_config));
     }
 
-    ttnn::SmallVector<uint32_t> shape;
+    ttsl::SmallVector<uint32_t> shape;
     const bool is_tile_dim = (dim == input_rank - 1 || dim == input_rank - 2);
 
     // e.g. (2, 64, 64) with dim 1 to be (2, 1[32], 64)
@@ -117,7 +117,7 @@ ttnn::operations::moreh::moreh_mean::MorehMeanOperation::tensor_return_value_t m
         keepdim,
         divisor,
         memory_config.value_or(input.memory_config()),
-        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{input, output};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

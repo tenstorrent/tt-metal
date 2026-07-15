@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,7 @@ void StridedAllGatherMinimalMatmulAsync::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     TT_FATAL(
         attributes.strided_all_gather_async_struct.dim == 3,
-        "StridedAllGatherMinimalMatmulAsync requires dim=3 for the AllGather operaitons.");
+        "StridedAllGatherMinimalMatmulAsync requires dim=3 for the AllGather operations.");
     TT_FATAL(
         tensor_args.input_tensor.padded_shape()[0] == 1 && tensor_args.input_tensor.padded_shape()[1] == 1,
         "StridedAllGatherMinimalMatmulAsync requires input tensor to have batch size of 1.");
@@ -51,29 +51,6 @@ StridedAllGatherMinimalMatmulAsync::tensor_return_value_t StridedAllGatherMinima
     ttnn::Tensor minimal_matmul_output_tensor = minimal_matmul_output_tensors_vec[0];
 
     return {strided_all_gather_output_tensor, minimal_matmul_output_tensor};
-}
-
-tt::tt_metal::operation::Hash StridedAllGatherMinimalMatmulAsync::compute_program_hash(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "StridedAllGatherMinimalMatmulAsync::compute_program_hash is called");
-    return tt::tt_metal::operation::hash_operation<StridedAllGatherMinimalMatmulAsync>(
-        attributes.strided_all_gather_async_struct.dim,
-        attributes.strided_all_gather_async_struct.num_links,
-        attributes.strided_all_gather_async_struct.ring_size,
-        attributes.strided_all_gather_async_struct.output_mem_config,
-        attributes.strided_all_gather_async_struct.topology,
-        attributes.strided_all_gather_async_struct.cluster_axis,
-        attributes.strided_all_gather_async_struct.tiles_per_chunk,
-        attributes.strided_all_gather_async_struct.num_workers_per_link,
-        attributes.strided_all_gather_async_struct.num_buffers_per_channel,
-        attributes.strided_all_gather_async_struct.mm_cores_y,
-        attributes.strided_all_gather_async_struct.mm_block_ht,
-        attributes.strided_all_gather_async_struct.mm_block_wt,
-        attributes.matmul_struct,
-        attributes.all_gather_core_grid_offset,
-        attributes.read_local_slice_from_input,
-        attributes.ag_op,
-        tensor_args);
 }
 
 }  // namespace ttnn::experimental::prim
@@ -121,7 +98,6 @@ std::vector<Tensor> strided_all_gather_minimal_matmul_async(
             topology,
             multi_device_global_semaphore,
             cluster_axis,
-            /*tiles_per_chunk=*/std::nullopt,
             num_workers_per_link,
             num_buffers_per_channel,
             config->compute_with_storage_grid_size.y,

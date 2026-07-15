@@ -25,6 +25,25 @@ if(NOT HWLOC_LIBRARY)
 endif()
 
 ############################################################################################################################
+# BLAKE3 : https://github.com/BLAKE3-team/BLAKE3
+############################################################################################################################
+
+CPMAddPackage(
+    NAME blake3
+    GITHUB_REPOSITORY BLAKE3-team/BLAKE3
+    GIT_TAG 1.8.4
+    SOURCE_SUBDIR c
+    PATCHES
+        blake3_install_dir.patch
+    OPTIONS
+        "BUILD_SHARED_LIBS OFF"
+        "BLAKE3_USE_TBB OFF"
+        "BLAKE3_FETCH_TBB OFF"
+        "BUILD_TESTING OFF"
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+)
+
+############################################################################################################################
 # Boost
 ############################################################################################################################
 
@@ -128,7 +147,7 @@ CPMAddPackage(
 ############################################################################################################################
 
 CPMAddPackage(
-    NAME googletest
+    NAME GTest
     GITHUB_REPOSITORY google/googletest
     GIT_TAG v1.13.0
     VERSION 1.13.0
@@ -136,16 +155,22 @@ CPMAddPackage(
         "INSTALL_GTEST OFF"
         "BUILD_SHARED_LIBS OFF"
 )
+CPMRegisterPackage("googletest" "1.13.0")
 
 ############################################################################################################################
 # boost-ext reflect : https://github.com/boost-ext/reflect
 ############################################################################################################################
 
-CPMAddPackage(NAME reflect GITHUB_REPOSITORY boost-ext/reflect GIT_TAG v1.2.6)
-if(reflect_ADDED)
+if(NOT DEFINED reflect_SOURCE_DIR)
+    CPMAddPackage(NAME reflect GITHUB_REPOSITORY boost-ext/reflect GIT_TAG v1.2.6)
+endif()
+if(reflect_ADDED OR DEFINED reflect_SOURCE_DIR)
     add_library(reflect INTERFACE)
     add_library(Reflect::Reflect ALIAS reflect)
     target_include_directories(reflect SYSTEM INTERFACE "$<BUILD_INTERFACE:${reflect_SOURCE_DIR}>")
+    # Disable reflect's built-in static_assert self-tests.  They use unqualified
+    # `detail::` which is ambiguous when fmt::detail is also in scope.
+    target_compile_definitions(reflect INTERFACE NTEST)
 
     target_sources(
         reflect
@@ -167,6 +192,7 @@ CPMAddPackage(
     GIT_TAG 8ca5b0eb7e7ebe0252e5bc6915083f1dd1b8294e
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+    FIND_PACKAGE_ARGUMENTS GLOBAL
 )
 
 ############################################################################################################################
@@ -199,7 +225,7 @@ CPMAddPackage(
     NAME nanobind
     GITHUB_REPOSITORY wjakob/nanobind
     GIT_TAG
-        c5a3a378aa61d104c82ca053cb1e367782cd3618 # v2.10.2
+        2a61ad2494d09fecb2e13322c1383342c299900d # 2.12.0
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "NB_USE_SUBMODULE_DEPS ON"
@@ -258,6 +284,22 @@ CPMAddPackage(
         "XTENSOR_ENABLE_TESTS OFF"
     CUSTOM_CACHE_KEY "0_22_0_patched"
 )
+
+# Mark xtensor stack headers as SYSTEM so clang-tidy and the compiler suppress
+# warnings from vendored headers when they are included in project TUs.
+foreach(_xtensor_target xtl xtensor xtensor-blas)
+    if(TARGET ${_xtensor_target})
+        get_target_property(_incs ${_xtensor_target} INTERFACE_INCLUDE_DIRECTORIES)
+        if(_incs)
+            set_target_properties(
+                ${_xtensor_target}
+                PROPERTIES
+                    INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+                        "${_incs}"
+            )
+        endif()
+    endif()
+endforeach()
 
 ############################################################################################################################
 # benchmark : https://github.com/google/benchmark
@@ -324,8 +366,10 @@ CPMAddPackage(
 # simd-everywhere/simde : https://github.com/simd-everywhere/simde
 ############################################################################################################################
 
-CPMAddPackage(NAME simd-everywhere GITHUB_REPOSITORY simd-everywhere/simde GIT_TAG v0.8.2)
-if(simd-everywhere_ADDED)
+if(NOT DEFINED simd-everywhere_SOURCE_DIR)
+    CPMAddPackage(NAME simd-everywhere GITHUB_REPOSITORY simd-everywhere/simde GIT_TAG v0.8.2)
+endif()
+if(simd-everywhere_ADDED OR DEFINED simd-everywhere_SOURCE_DIR)
     add_library(simde INTERFACE)
     add_library(simde::simde ALIAS simde)
     target_include_directories(simde SYSTEM INTERFACE ${simd-everywhere_SOURCE_DIR})
@@ -344,6 +388,7 @@ CPMAddPackage(
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "SPDLOG_FMT_EXTERNAL_HO ON"
         "SPDLOG_INSTALL ON"
+        "BUILD_SHARED_LIBS OFF"
 )
 set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 
@@ -353,10 +398,50 @@ set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 CPMAddPackage(
     NAME tt-logger
     GITHUB_REPOSITORY tenstorrent/tt-logger
-    VERSION 1.1.7
+    VERSION 1.1.8
     OPTIONS
         "TT_LOGGER_INSTALL ON"
         "TT_LOGGER_BUILD_TESTING OFF"
+)
+
+####################################################################################################################
+# CaDiCaL : https://github.com/arminbiere/cadical
+# Upstream has no CMakeLists.txt; after CPM download we build STATIC from the same sources as makefile.in
+# (src/*.cpp minus cadical/mobical, plus src/*.c). NBUILD avoids generated build.hpp; patch fixes vivify.hpp.
+####################################################################################################################
+if(NOT DEFINED cadical_SOURCE_DIR)
+    CPMAddPackage(
+        NAME cadical
+        GITHUB_REPOSITORY arminbiere/cadical
+        GIT_TAG rel-2.2.1
+        DOWNLOAD_ONLY YES
+        PATCHES
+            cadical_vivify_include_tuple.patch
+    )
+endif()
+
+file(GLOB CADICAL_CXX CONFIGURE_DEPENDS "${cadical_SOURCE_DIR}/src/*.cpp")
+list(FILTER CADICAL_CXX EXCLUDE REGEX ".*/(cadical|mobical)\\.cpp$")
+file(GLOB CADICAL_C CONFIGURE_DEPENDS "${cadical_SOURCE_DIR}/src/*.c")
+add_library(
+    cadical
+    STATIC
+    ${CADICAL_CXX}
+    ${CADICAL_C}
+)
+add_library(cadical::cadical ALIAS cadical)
+target_include_directories(cadical SYSTEM PUBLIC "${cadical_SOURCE_DIR}/src")
+target_compile_definitions(
+    cadical
+    PRIVATE
+        NBUILD
+        $<$<NOT:$<CONFIG:Debug>>:NDEBUG>
+)
+set_target_properties(
+    cadical
+    PROPERTIES
+        POSITION_INDEPENDENT_CODE
+            ON
 )
 
 ####################################################################################################################
@@ -374,4 +459,29 @@ CPMAddPackage(
         "CMAKE_CXX_EXTENSIONS ON"
     PATCHES
         capnproto_capture_this.patch
+        capnproto_pthread.patch
+)
+
+############################################################################################################################
+# tt-emule (software emulation, header-only consumption)
+############################################################################################################################
+if(TT_METAL_USE_EMULE)
+    CPMAddPackage(
+        NAME tt_emule
+        GITHUB_REPOSITORY tenstorrent/tt-emule
+        GIT_TAG 67266c752b51e97d1c73a2abc5910a37901af4eb
+        EXCLUDE_FROM_ALL YES
+    )
+endif()
+
+############################################################################################################################
+# tt-exalens (only native ELF/DWARF parser)
+############################################################################################################################
+CPMAddPackage(
+    NAME ttexalens
+    GITHUB_REPOSITORY tenstorrent/tt-exalens
+    GIT_TAG 6f5720240b7254b25cb3d78aef81769fc12a30f9
+    SOURCE_SUBDIR ttexalens/cpp/elf
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
 )

@@ -1,29 +1,21 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <optional>
-
-#include "ttnn/decorators.hpp"
-
-namespace ttnn::operations::data_movement {
-struct ExecuteGather {
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        int8_t dim,
-        const Tensor& input_index_tensor,
-        bool sparse_grad,
-        const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-        std::optional<Tensor> optional_output_tensor = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-};
-
-}  // namespace ttnn::operations::data_movement
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 
-constexpr auto gather = ttnn::register_operation<"ttnn::gather", ttnn::operations::data_movement::ExecuteGather>();
+Tensor gather(
+    const Tensor& input_tensor,
+    int8_t dim,
+    const Tensor& input_index_tensor,
+    bool sparse_grad,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+    std::optional<Tensor> optional_output_tensor = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 }  // namespace ttnn

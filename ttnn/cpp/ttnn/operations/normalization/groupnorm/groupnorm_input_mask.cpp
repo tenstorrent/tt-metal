@@ -1,13 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "groupnorm_input_mask.hpp"
-#include <tt-metalium/constants.hpp>
 #include <algorithm>
 #include "ttnn/types.hpp"
 
-using namespace tt::constants;
 using tt::tt_metal::DataType;
 using tt::tt_metal::Layout;
 
@@ -32,28 +30,43 @@ static int64_t find_max_tile_span(int64_t W, int64_t group_size, int64_t tile_wi
     return max_tile_span;
 }
 
-ttnn::Tensor create_group_norm_input_mask_impl(int64_t num_channel, int64_t num_groups,
-      int64_t num_cores_across_channel, DataType data_type, bool is_negative_mask) {
-    int64_t block_wt = find_max_tile_span(num_channel, num_channel / num_groups, TILE_WIDTH);
+ttnn::Tensor create_group_norm_input_mask_impl(
+    int64_t num_channel,
+    int64_t num_groups,
+    int64_t num_cores_across_channel,
+    DataType data_type,
+    bool is_negative_mask,
+    int64_t tile_height,
+    int64_t tile_width) {
+    TT_FATAL(num_cores_across_channel > 0, "create_group_norm_input_mask: num_cores_across_channel must be > 0.");
+    TT_FATAL(
+        num_groups % num_cores_across_channel == 0,
+        "create_group_norm_input_mask: num_groups ({}) must be divisible by num_cores_across_channel ({}). "
+        "The num_virtual_cols / num_cores_across_channel value must evenly divide both "
+        "the channels into tiles and the number of groups.",
+        num_groups,
+        num_cores_across_channel);
+    int64_t block_wt = find_max_tile_span(num_channel, num_channel / num_groups, tile_width);
 
     const int64_t out_num_groups = num_groups;
-    const int64_t out_tile_height = TILE_HEIGHT;
-    const int64_t out_mask_width = block_wt * TILE_WIDTH;
+    const int64_t out_tile_height = tile_height;
+    const int64_t out_mask_width = block_wt * tile_width;
 
     const int64_t num_groups_per_core = num_groups / num_cores_across_channel;
     const int64_t num_cols_per_group = num_channel / num_groups;
 
     std::vector<int64_t> start_strides;
+    start_strides.reserve(num_cores_across_channel * num_groups_per_core);
     for (int64_t core = 0; core < num_cores_across_channel; ++core) {
         int64_t row_offset = 0;
         start_strides.push_back(0);
         for (int64_t group = 0; group < num_groups_per_core - 1; ++group) {
-            if (row_offset + (num_cols_per_group % TILE_WIDTH) == TILE_WIDTH) {
+            if (row_offset + (num_cols_per_group % tile_width) == tile_width) {
                 row_offset = 0;
-            } else if (row_offset + (num_cols_per_group % TILE_WIDTH) > TILE_WIDTH) {
-                row_offset = (num_cols_per_group % TILE_WIDTH) + row_offset - TILE_WIDTH;
+            } else if (row_offset + (num_cols_per_group % tile_width) > tile_width) {
+                row_offset = (num_cols_per_group % tile_width) + row_offset - tile_width;
             } else {
-                row_offset += num_cols_per_group % TILE_WIDTH;
+                row_offset += num_cols_per_group % tile_width;
             }
             start_strides.push_back(row_offset);
         }
@@ -71,10 +84,11 @@ ttnn::Tensor create_group_norm_input_mask_impl(int64_t num_channel, int64_t num_
     for (int64_t group = 0; group < out_num_groups; ++group) {
         int64_t start_stride = start_strides[group];
         int64_t end_stride = std::min(end_strides[group], out_mask_width);
+        const int64_t group_base = group * out_tile_height * out_mask_width;
         for (int64_t h = 0; h < out_tile_height; ++h) {
+            const int64_t row_base = group_base + (h * out_mask_width);
             for (int64_t w = start_stride; w < end_stride; ++w) {
-                int64_t idx = (group * out_tile_height * out_mask_width) + (h * out_mask_width) + w;
-                mask_vec[idx] = mask_value;
+                mask_vec[row_base + w] = mask_value;
             }
         }
     }
@@ -90,13 +104,25 @@ ttnn::Tensor create_group_norm_input_mask_impl(int64_t num_channel, int64_t num_
     return mask;
 }
 
-ttnn::Tensor create_group_norm_input_mask(int64_t num_channel, int64_t num_groups,
-      int64_t num_cores_across_channel, DataType data_type) {
-    return create_group_norm_input_mask_impl(num_channel, num_groups, num_cores_across_channel, data_type, false);
+ttnn::Tensor create_group_norm_input_mask(
+    int64_t num_channel,
+    int64_t num_groups,
+    int64_t num_cores_across_channel,
+    DataType data_type,
+    int64_t tile_height,
+    int64_t tile_width) {
+    return create_group_norm_input_mask_impl(
+        num_channel, num_groups, num_cores_across_channel, data_type, false, tile_height, tile_width);
 }
 
 ttnn::Tensor create_group_norm_input_negative_mask(
-    int64_t num_channel, int64_t num_groups, int64_t num_cores_across_channel, DataType data_type) {
-    return create_group_norm_input_mask_impl(num_channel, num_groups, num_cores_across_channel, data_type, true);
+    int64_t num_channel,
+    int64_t num_groups,
+    int64_t num_cores_across_channel,
+    DataType data_type,
+    int64_t tile_height,
+    int64_t tile_width) {
+    return create_group_norm_input_mask_impl(
+        num_channel, num_groups, num_cores_across_channel, data_type, true, tile_height, tile_width);
 }
 }  // namespace normalization

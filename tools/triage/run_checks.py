@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
 """
 Usage:
-    run_checks [--dev=<device_id>]...
+    run_checks [--dev=<device_id>]... [--loc=<location>]...
 
 Options:
-    --dev=<device_id>   Specify the device id. 'all' is also an option  [default: in_use]
+    --dev=<device_id>   Specify the device id. Repeatable. 'all' is also an option  [default: in_use]
+    --loc=<location>    Specify location/core. Repeatable. Logical coordinates only: R,C (tensix), eX,Y (eth), dX,Y / CHn (dram). Default: all locations
 
 Description:
      Data provider script for running checks on devices, block locations and RISC cores. This script provides a single interface for:
@@ -25,50 +26,51 @@ Owner:
     adjordjevic-TT
 """
 
+import os
+from collections import defaultdict
 from collections.abc import Callable
-import threading
+from functools import cached_property
 from dataclasses import dataclass
-from typing import Literal, TypeAlias
-
-from triage import log_warning
+from typing import Literal, TypeAlias, TypeVar, cast, get_args
 
 from inspector_data import run as get_inspector_data, InspectorData
-from triage import triage_singleton, ScriptConfig, triage_field, recurse_field, run_script, log_check, create_progress
+from triage import (
+    triage_singleton,
+    ScriptConfig,
+    TTTriageError,
+    triage_field,
+    recurse_field,
+    run_script,
+    log_warning_device,
+    log_warning_risc,
+    create_progress,
+    log_check,
+)
+from triage_session import get_triage_session
 from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.umd_device import TimeoutDeviceRegisterError
-from ttexalens.hardware.risc_debug import RiscHaltError
+from ttexalens.exceptions import RiscHaltError
 import utils
 from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
 
 script_config = ScriptConfig(
     data_provider=True,
-    depends=["inspector_data", "metal_device_id_mapping"],
 )
 
-# List of block types that script returns, can be extended if other block types are needed
-BLOCK_TYPES = [
-    "idle_eth",
-    "active_eth",
-    "tensix",
-    "eth",
-]
+# Block and core types that scripts return.
+BlockType: TypeAlias = Literal["idle_eth", "active_eth", "tensix", "eth", "dram"]
+CoreType: TypeAlias = Literal["brisc", "trisc0", "trisc1", "trisc2", "ncrisc", "erisc", "erisc0", "erisc1", "drisc"]
 
-# List of RISC cores currently supported
-CORE_TYPES = {
-    "brisc",
-    "trisc0",
-    "trisc1",
-    "trisc2",
-    "ncrisc",
-    "erisc",
-    "erisc0",
-    "erisc1",
+BLOCK_TYPES: list[BlockType] = list(get_args(BlockType))
+CORE_TYPES: set[CoreType] = set(get_args(CoreType))
+
+# We need to map triage block types to inspector block types since we cannot use _ in capnp struct names
+INSPECTOR_BLOCK_TYPES = {
+    "idle_eth": "idleEth",
+    "active_eth": "activeEth",
 }
-
-BlockType: TypeAlias = Literal[BLOCK_TYPES]
-CoreType: TypeAlias = Literal[CORE_TYPES]
 
 
 # Classes for storing check results for devices, blocks and cores
@@ -78,9 +80,9 @@ CoreType: TypeAlias = Literal[CORE_TYPES]
 class CheckResult:
     result: object = recurse_field()
 
-    # Hack to make result the last filed to perserve header order
-    def __post_init__(cls):
-        cls.__dataclass_fields__["result"] = cls.__dataclass_fields__.pop("result")
+    # Hack to make result the last field to preserve header order
+    def __post_init__(self):
+        self.__dataclass_fields__["result"] = self.__dataclass_fields__.pop("result")
 
 
 @dataclass
@@ -91,6 +93,9 @@ class DeviceDescription:
 
 def device_description_serializer(device_desc: DeviceDescription) -> str:
     return hex(device_desc.device.unique_id) if device_desc.use_unique_id else str(device_desc.device.id)
+
+
+CheckResultT = TypeVar("CheckResultT", bound=CheckResult)
 
 
 @dataclass
@@ -108,78 +113,47 @@ class PerCoreCheckResult(PerBlockCheckResult):
     risc_name: str = triage_field("RiscV")
 
 
-def is_galaxy(device: Device) -> bool:
-    import tt_umd
-
-    return device._context.cluster_descriptor.get_board_type(device.id) == tt_umd.BoardType.GALAXY
-
-
-def get_idle_eth_block_locations(device: Device) -> list[OnChipCoordinate]:
-    block_locations = device.idle_eth_block_locations
-    # We remove idle eth blocks that are reserved for syseng use
-    # These are blocks on wormhole mmio capable devices with connections to remote devices
-    # If board type is galaxy, we remove idle eth blocks at locations e0,0 e0,1 e0,2 e0,3 and e0,15,
-    # if not we just remove e0,15
-    if device.is_wormhole() and device.is_local:
-        locations_to_remove = {"e0,0", "e0,1", "e0,2", "e0,3", "e0,15"} if is_galaxy(device) else {"e0,15"}
-        block_locations = [loc for loc in block_locations if loc.to_str("logical") not in locations_to_remove]
-
-    return block_locations
-
-
-def get_block_locations_to_check(block_type: BlockType, device: Device) -> list[OnChipCoordinate]:
-    match block_type:
-        case "idle_eth":
-            return get_idle_eth_block_locations(device)
-        case "active_eth":
-            return device.active_eth_block_locations
-        case _:
-            # In exalens we call tensix blocks functional_workers
-            block_type = "functional_workers" if block_type == "tensix" else block_type
-            return device.get_block_locations(block_type)
-
-
-def _convert_metal_device_ids_to_device_ids(
-    metal_device_ids: list[int],
-    metal_device_id_mapping: MetalDeviceIdMapping,
-    context: Context,
-) -> list[int]:
-    device_ids = []
-    for metal_device_id in metal_device_ids:
-        unique_id = metal_device_id_mapping.get_unique_id(metal_device_id)
-        found = False
-        for device_id, device in context.devices.items():
-            if device.unique_id == unique_id:
-                device_ids.append(int(device_id))
-                found = True
-                break
-        log_check(
-            found,
-            f"Device {metal_device_id} [{unique_id}] not found. There is a mismatch between metal and exalens device IDs, most likely due to use of TT_VISIBLE_DEVICES. Please contact script owner.",
-        )
-    return device_ids
-
-
 def get_devices(
     devices: list[str],
     inspector_data: InspectorData | None,
-    metal_device_id_mapping: MetalDeviceIdMapping,
+    metal_device_id_mapping: MetalDeviceIdMapping | None,
     context: Context,
 ) -> list[Device]:
     if len(devices) == 1 and devices[0].lower() == "in_use":
-        if inspector_data is not None:
-            metal_device_ids = list(inspector_data.getDevicesInUse().metalDeviceIds)
-
-            if len(metal_device_ids) == 0:
+        if inspector_data is None or metal_device_id_mapping is None:
+            # No Inspector. Fall back to TT_METAL_VISIBLE_DEVICES - exalens sees the same subset.
+            if os.environ.get("TT_METAL_VISIBLE_DEVICES"):
                 utils.WARN(
-                    f"  No devices in use found in inspector data. Switching to use all available devices. If you are using ttnn check if you have enabled program cache."
+                    f"  Inspector unavailable; using the {len(context.devices)} device(s) "
+                    f"exposed via TT_METAL_VISIBLE_DEVICES."
                 )
-                device_ids = [int(id) for id in context.devices.keys()]
+                return list(context.devices.values())
+            raise TTTriageError(
+                "Triage (with --dev=in_use) needs Inspector data or TT_METAL_VISIBLE_DEVICES set; "
+                "pass --dev=<id> or --dev=all to override and use specific or all devices correspondingly."
+            )
+        metal_device_ids = list(inspector_data.getDevicesInUse().metalDeviceIds)
+
+        if len(metal_device_ids) == 0:
+            # Live "in use" list is empty — most often because firmware init failed and
+            # devices were torn down. Fall back to the SystemMesh's configured local set.
+            system_mesh = inspector_data.getSystemMesh().systemMesh
+            metal_device_ids = [m.localChipId for m in system_mesh.mappedDevices if m.isLocal]
+            if len(metal_device_ids) > 0:
+                utils.WARN(
+                    f"  No devices in use found in inspector data — firmware init likely failed. "
+                    f"Falling back to the {len(metal_device_ids)} device(s) configured in the System Mesh."
+                )
             else:
-                device_ids = _convert_metal_device_ids_to_device_ids(metal_device_ids, metal_device_id_mapping, context)
-        else:
-            utils.WARN(f"  Using all available devices.")
-            device_ids = [int(id) for id in context.devices.keys()]
+                raise TTTriageError(
+                    "Cannot determine which devices to inspect: no active devices in metal and the "
+                    "System Mesh has no host-local devices."
+                )
+        device_ids = [
+            device_id
+            for metal_device_id in metal_device_ids
+            if (device_id := metal_device_id_mapping.get_device_id(metal_device_id)) is not None
+        ]
     elif len(devices) == 1 and devices[0].lower() == "all":
         device_ids = [int(id) for id in context.devices.keys()]
     else:
@@ -188,61 +162,135 @@ def get_devices(
     return [context.devices[id] for id in device_ids]
 
 
-@dataclass(frozen=True)
-class BrokenCore:
-    location: OnChipCoordinate
-    risc_name: str
+def _convert_to_on_chip_coordinates(
+    device: Device, block_locations: list, block_type: BlockType
+) -> list[OnChipCoordinate]:
+    on_chip_coordinates: list[OnChipCoordinate] = []
+    for location in block_locations:
+        coord_str = f"e{location.x},{location.y}" if "eth" in block_type.lower() else f"{location.x},{location.y}"
+        # We skip e0,15 on wormhole devices since it is reserved for syseng use
+        if coord_str == "e0,15" and device.is_wormhole() and device.is_local:
+            continue
+        on_chip_coordinates.append(OnChipCoordinate.create(coord_str, device))
+    return on_chip_coordinates
 
-    def __hash__(self):
-        return hash((self.location, self.risc_name))
 
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, BrokenCore):
-            return False
-        return self.location == other.location and self.risc_name == other.risc_name
+def _make_device_map(devices: list[Device]) -> dict[int, Device]:
+    return {device.id: device for device in devices}
 
-    def __str__(self) -> str:
-        return f"{self.risc_name} at {self.location.to_user_str()}"
+
+def _exalens_block_locations(device: Device, block_type: BlockType) -> list[OnChipCoordinate]:
+    if block_type == "active_eth":
+        return device.active_eth_block_locations
+    if block_type == "idle_eth":
+        return device.idle_eth_block_locations
+    if block_type == "dram" and not device.is_blackhole():
+        return []
+    return device.get_block_locations("functional_workers" if block_type == "tensix" else block_type)
+
+
+def get_block_locations(
+    devices: list[Device],
+    locations: list[str],
+    inspector_data: InspectorData | None,
+    metal_device_id_mapping: MetalDeviceIdMapping | None,
+) -> dict[Device, dict[BlockType, list[OnChipCoordinate]]]:
+    block_locations: dict[Device, dict[BlockType, list[OnChipCoordinate]]] = defaultdict(dict)
+    covered: set[Device] = set()
+
+    if inspector_data is not None and metal_device_id_mapping is not None:
+        device_map = _make_device_map(devices)
+        chip_blocks_list = inspector_data.getBlocksByType().chips
+        for i in range(len(chip_blocks_list)):
+            metal_device_id = chip_blocks_list[i].chipId
+            device_id = metal_device_id_mapping.get_device_id(metal_device_id)
+            if device_id in device_map:
+                device = device_map[device_id]
+                covered.add(device)
+                for block_type in BLOCK_TYPES:
+                    if block_type in INSPECTOR_BLOCK_TYPES:
+                        block_locations[device][block_type] = _convert_to_on_chip_coordinates(
+                            device, getattr(chip_blocks_list[i].blocks, INSPECTOR_BLOCK_TYPES[block_type]), block_type
+                        )
+                    else:
+                        block_locations[device][block_type] = _exalens_block_locations(device, block_type)
+                # Metal reports the DRAM cores it manages (TRANSLATED coords), excluding the
+                # syseng-owned NOC0 worker endpoints (which serve CMFW DRAM telemetry and run no
+                # DRISC firmware). Prefer that authoritative list over the exalens enumeration, which
+                # would include the NOC0 endpoints and dump garbage from them. TRANSLATED coords avoid
+                # the UMD-vs-metal logical-DRAM numbering mismatch.
+                dram_cores = chip_blocks_list[i].dramCores
+                if len(dram_cores) > 0:
+                    block_locations[device]["dram"] = [
+                        OnChipCoordinate(c.x, c.y, "translated", device, "dram") for c in dram_cores
+                    ]
+
+    # Exalens fallback for any device Inspector didn't cover (no inspector at all, or
+    # Inspector's getBlocksByType is missing this device).
+    for device in devices:
+        if device in covered:
+            continue
+        for block_type in BLOCK_TYPES:
+            block_locations[device][block_type] = _exalens_block_locations(device, block_type)
+
+    # Keep only the requested locations. Only logical coordinates are accepted — physical (noc0)
+    # layout shifts with harvesting, so a logical string maps to the same core on every device.
+    if locations:
+        for loc in locations:
+            if "-" in loc:
+                raise TTTriageError(f"--loc expects a logical coordinate (R,C / eX,Y / dX,Y / CHn), got '{loc}'")
+        for device in devices:
+            wanted = {OnChipCoordinate.create(loc, device) for loc in locations}
+            for block_type in BLOCK_TYPES:
+                block_locations[device][block_type] = [
+                    location for location in block_locations[device][block_type] if location in wanted
+                ]
+
+    return block_locations
 
 
 class RunChecks:
-    def __init__(self, devices: list[Device], metal_device_id_mapping: MetalDeviceIdMapping):
+    def __init__(
+        self,
+        devices: list[Device],
+        block_locations: dict[Device, dict[BlockType, list[OnChipCoordinate]]],
+        metal_device_id_mapping: MetalDeviceIdMapping | None,
+    ):
         self.devices = devices
         self.metal_device_id_mapping = metal_device_id_mapping
-        # If any device has a metal<->exalens mismatch, show all devices as hex unique_id
-        self._use_unique_id = any(
-            metal_device_id_mapping.has_metal_device_id(device.id)
-            and metal_device_id_mapping.get_unique_id(device.id) != device.unique_id
-            for device in devices
-        )
-        self.block_locations: dict[Device, dict[BlockType, list[OnChipCoordinate]]] = {
-            device: {block_type: get_block_locations_to_check(block_type, device) for block_type in BLOCK_TYPES}
-            for device in devices
-        }
+        self.block_locations: dict[Device, dict[BlockType, list[OnChipCoordinate]]] = block_locations
+        # If any device has a metal<->exalens mismatch, show all devices as hex unique_id.
+        if metal_device_id_mapping is not None:
+            self._use_unique_id = metal_device_id_mapping.mismatch_exists()
+        else:
+            self._use_unique_id = bool(os.environ.get("TT_METAL_VISIBLE_DEVICES"))
         # Pre-compute unique_id to device mapping for fast lookup
         self._unique_id_to_device: dict[int, Device] = {device.unique_id: device for device in devices}
-        self._broken_devices: set[Device] = set()
-        self._broken_cores: dict[Device, set[BrokenCore]] = {}
-        self._skip_lock = threading.Lock()
+        self._session = get_triage_session()
+
+    @cached_property
+    def _location_to_block_type_map(self) -> dict[OnChipCoordinate, BlockType]:
+        map: dict[OnChipCoordinate, BlockType] = {}
+        for device in self.devices:
+            for block_type in BLOCK_TYPES:
+                for location in self.block_locations[device][block_type]:
+                    if location not in map:
+                        map[location] = block_type
+        return map
 
     def get_device_by_unique_id(self, unique_id: int) -> Device | None:
         return self._unique_id_to_device.get(unique_id)
 
-    def is_device_broken(self, device: Device) -> bool:
-        with self._skip_lock:
-            return device in self._broken_devices
-
-    def is_device_in_broken_cores(self, device: Device) -> bool:
-        with self._skip_lock:
-            return device in self._broken_cores
-
-    def get_device_broken_cores(self, device: Device) -> set[BrokenCore] | None:
-        with self._skip_lock:
-            return self._broken_cores.get(device).copy()
+    def get_block_type(self, location: OnChipCoordinate):
+        log_check(
+            location in self._location_to_block_type_map,
+            f"Location {location.to_user_str()} not found in location to block type map",
+        )
+        return self._location_to_block_type_map[location]
 
     def _collect_results(
-        self, result: list[CheckResult], check_result: object, result_type: type[CheckResult], **kwargs
-    ) -> list[CheckResult]:
+        self, result: list[CheckResultT], check_result: object, result_type: type[CheckResultT], **kwargs
+    ) -> list[CheckResultT]:
         """Helper to collect and wrap check results consistently."""
         if check_result is None:
             return result
@@ -251,12 +299,12 @@ class RunChecks:
                 if not isinstance(item, CheckResult):
                     result.append(result_type(result=item, **kwargs))
                 else:
-                    result.append(item)
+                    result.append(cast(CheckResultT, item))
         else:
             if not isinstance(check_result, CheckResult):
                 result.append(result_type(result=check_result, **kwargs))
             else:
-                result.append(check_result)
+                result.append(cast(CheckResultT, check_result))
         return result
 
     def run_per_device_check(
@@ -271,30 +319,29 @@ class RunChecks:
             try:
                 for device in self.devices:
                     # Skipping broken devices
-                    with self._skip_lock:
-                        if device in self._broken_devices:
-                            continue
+                    if self._session.is_device_broken(device):
+                        continue
                     try:
                         check_result = check(device)
                     except TimeoutDeviceRegisterError as e:
-                        with self._skip_lock:
-                            self._broken_devices.add(device)
-                            if print_broken_devices:
-                                log_warning(
-                                    f"Triage broke device {device.id} with: {e}. This device will be skipped from now on."
-                                )
-                            if device.is_local:
-                                # We are classifying remote devices as broken since we cannot access them if their local device is broken
-                                for remote_device in device.remote_devices:
-                                    # Broken remote devices will inherit the error from the local device
-                                    self._broken_devices.add(remote_device)
-                                    if print_broken_devices:
-                                        log_warning(
-                                            f"Device {remote_device.id} will be skipped from now on due to its local device (device {device.id}) being broken."
-                                        )
+                        self._session.add_broken_device(device)
+                        if print_broken_devices:
+                            log_warning_device(
+                                device, f"Triage broke device with: {e}. This device will be skipped from now on."
+                            )
+                        if device.is_local:
+                            # We are classifying remote devices as broken since we cannot access them if their local device is broken
+                            for remote_device in device.remote_devices:
+                                # Broken remote devices will inherit the error from the local device
+                                self._session.add_broken_device(remote_device)
+                                if print_broken_devices:
+                                    log_warning_device(
+                                        remote_device,
+                                        f"Will be skipped from now on due to its local device (device {device.id}) being broken.",
+                                    )
                         continue
                     except Exception as e:
-                        log_warning(f"Skipping device {device.id}: {str(e)}")
+                        log_warning_device(device, f"Skipping: {str(e)}")
                         continue
                     # Use the common result collection helper
                     self._collect_results(
@@ -312,8 +359,13 @@ class RunChecks:
         self, check: Callable[[OnChipCoordinate], object], block_filter: list[str] | str | None = None
     ) -> list[PerBlockCheckResult] | None:
         """Run a check function on each block location, collecting results."""
-        block_types_to_check = (
-            BLOCK_TYPES if block_filter is None else [block_filter] if isinstance(block_filter, str) else block_filter
+        # block_filter strings are expected to be valid BlockType values.
+        block_types_to_check: list[BlockType] = (
+            BLOCK_TYPES
+            if block_filter is None
+            else cast("list[BlockType]", [block_filter])
+            if isinstance(block_filter, str)
+            else cast("list[BlockType]", block_filter)
         )
 
         def per_device_blocks_check(device: Device) -> list[PerBlockCheckResult] | None:
@@ -342,8 +394,9 @@ class RunChecks:
                 finally:
                     progress.remove_task(device_task)
 
-        # Reuse the device iteration from run_per_device_check
-        return self.run_per_device_check(per_device_blocks_check)
+        # Reuse the device iteration from run_per_device_check. The nested check wraps results as
+        # PerBlockCheckResult, so the collected list contains PerBlockCheckResult items.
+        return cast("list[PerBlockCheckResult] | None", self.run_per_device_check(per_device_blocks_check))
 
     def run_per_core_check(
         self,
@@ -354,13 +407,13 @@ class RunChecks:
     ) -> list[PerCoreCheckResult] | None:
         """Run a check function on each RISC core in each block location, collecting results."""
 
-        # Filtering cores to check
-        cores_to_check = (
+        # Filtering cores to check. core_filter strings are expected to be valid CoreType values.
+        cores_to_check: set[CoreType] = (
             CORE_TYPES
             if core_filter is None
-            else set([core_filter])
+            else cast("set[CoreType]", {core_filter})
             if isinstance(core_filter, str)
-            else set(core_filter)
+            else cast("set[CoreType]", set(core_filter))
         )
 
         def per_block_cores_check(location: OnChipCoordinate) -> list[PerCoreCheckResult] | None:
@@ -368,7 +421,7 @@ class RunChecks:
             result: list[PerCoreCheckResult] = []
 
             # Get the block and its available RISC cores
-            noc_block = location._device.get_block(location)
+            noc_block = location.device.get_block(location)
             risc_names = noc_block.risc_names
 
             for risc_name in risc_names:
@@ -378,26 +431,12 @@ class RunChecks:
                 try:
                     check_result = check(location, risc_name)
                 except RiscHaltError as e:
-                    with self._skip_lock:
-                        if (
-                            location._device in self._broken_cores.keys()
-                            and BrokenCore(location, risc_name) in self._broken_cores[location._device]
-                        ):
-                            # If the core is already broken we do not need to add it again
-                            continue
-                        if location._device in self._broken_cores.keys():
-                            self._broken_cores[location._device].add(BrokenCore(location, risc_name))
-                        else:
-                            self._broken_cores[location._device] = {BrokenCore(location, risc_name)}
+                    self._session.add_broken_core(location, risc_name)
                     if print_broken_cores:
-                        log_warning(
-                            f"Triage broke {risc_name} at {location.to_user_str()} at device {location.device_id} with: {e}."
-                        )
+                        log_warning_risc(risc_name, location, f"Broken: {e}.")
                     continue
                 except Exception as e:
-                    log_warning(
-                        f"Skipping {risc_name} at {location.to_user_str()} at device {location.device_id}: {str(e)}"
-                    )
+                    log_warning_risc(risc_name, location, f"Skipping: {str(e)}")
                     continue
 
                 # Use the common result collection helper
@@ -405,24 +444,31 @@ class RunChecks:
                     result,
                     check_result,
                     PerCoreCheckResult,
-                    device_description=DeviceDescription(location._device, self._use_unique_id),
+                    device_description=DeviceDescription(location.device, self._use_unique_id),
                     location=location,
                     risc_name=risc_name,
                 )
 
             return result if len(result) > 0 else None
 
-        # Reuse the block iteration from run_per_block_check
-        return self.run_per_block_check(per_block_cores_check, block_filter)
+        # Reuse the block iteration from run_per_block_check. The nested check wraps results as
+        # PerCoreCheckResult, so the collected list contains PerCoreCheckResult items.
+        return cast("list[PerCoreCheckResult] | None", self.run_per_block_check(per_block_cores_check, block_filter))
 
 
 @triage_singleton
 def run(args, context: Context):
     devices_to_check = args["--dev"]
-    inspector_data = get_inspector_data(args, context)
-    metal_device_id_mapping = get_metal_device_id_mapping(args, context)
+    locs_to_check = args["--loc"]
+    try:
+        inspector_data = get_inspector_data(args, context)
+        metal_device_id_mapping = get_metal_device_id_mapping(args, context)
+    except Exception:
+        inspector_data = None
+        metal_device_id_mapping = None
     devices = get_devices(devices_to_check, inspector_data, metal_device_id_mapping, context)
-    return RunChecks(devices, metal_device_id_mapping)
+    block_locations = get_block_locations(devices, locs_to_check, inspector_data, metal_device_id_mapping)
+    return RunChecks(devices, block_locations, metal_device_id_mapping)
 
 
 if __name__ == "__main__":

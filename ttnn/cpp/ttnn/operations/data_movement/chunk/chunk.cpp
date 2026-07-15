@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "chunk.hpp"
@@ -6,9 +6,9 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn {
 
-std::vector<ttnn::Tensor> ChunkOperation::invoke(const ttnn::Tensor& input_tensor, const uint32_t num_chunks, int dim) {
+std::vector<ttnn::Tensor> chunk(const ttnn::Tensor& input_tensor, const uint32_t num_chunks, int dim) {
     TT_FATAL(num_chunks > 0, "Number of chunks must be greater than zero");
 
     auto size = input_tensor.logical_shape();
@@ -29,14 +29,14 @@ std::vector<ttnn::Tensor> ChunkOperation::invoke(const ttnn::Tensor& input_tenso
     while (start < size_along_dim) {
         int end = std::min(start + chunk_size, size_along_dim);
 
-        ttnn::SmallVector<int> slice_start(num_dims, 0);
-        ttnn::SmallVector<int> slice_end(num_dims);
+        ttsl::SmallVector<int> slice_start(num_dims, 0);
+        ttsl::SmallVector<int> slice_end(num_dims);
         for (int i = 0; i < num_dims; ++i) {
             slice_end[i] = size[i];
         }
         slice_start[dim] = start;
         slice_end[dim] = end;
-        ttnn::SmallVector<int> slice_step(num_dims, 1);
+        ttsl::SmallVector<int> slice_step(num_dims, 1);
 
         ttnn::Tensor chunk_tensor = ttnn::slice(input_tensor, slice_start, slice_end, slice_step);
 
@@ -48,4 +48,4 @@ std::vector<ttnn::Tensor> ChunkOperation::invoke(const ttnn::Tensor& input_tenso
     return chunks;
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn

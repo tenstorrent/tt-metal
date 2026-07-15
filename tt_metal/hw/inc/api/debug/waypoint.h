@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,17 +9,16 @@
 // Each riscv processor has a 4 byte debug status mailbox in L1
 // Use the macro WATCHER_WAYPOINT(...) to log up to 4 characters in the mailbox
 // The host watcher thread prints these periodically
-// All functionaly gated behind defined WATCHER_ENABLED
+// All functionality gated behind defined WATCHER_ENABLED
 //
 #pragma once
 
-#include <utility>
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_WAYPOINT) && !defined(FORCE_WATCHER_OFF)
 
 #include "hostdev/dev_msgs.h"
 #include "internal/hw_thread.h"
-
-#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_WAYPOINT) && !defined(FORCE_WATCHER_OFF)
 #include <cstddef>
+#include <utility>
 
 template <size_t N, size_t... Is>
 constexpr uint32_t fold(const char (&s)[N], std::index_sequence<Is...>) {

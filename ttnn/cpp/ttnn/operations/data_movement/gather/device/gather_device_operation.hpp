@@ -1,15 +1,17 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include "gather_device_operation_types.hpp"
-#include "gather_program_factory.hpp"
-
-#include "ttnn/decorators.hpp"
 
 #include <optional>
+#include <variant>
+
+#include "ttnn/types.hpp"
+#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/operation.hpp"
 
 namespace ttnn::prim {
 
@@ -18,8 +20,18 @@ struct GatherDeviceOperation {
     using tensor_args_t = GatherInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t =
-        std::variant<GatherProgramFactorySingleRowSingleCore, GatherProgramFactorySingleRowMultiCore>;
+
+    struct SingleRowSingleCore {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    };
+
+    struct SingleRowMultiCore {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    };
+
+    using program_factory_t = std::variant<SingleRowSingleCore, SingleRowMultiCore>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 

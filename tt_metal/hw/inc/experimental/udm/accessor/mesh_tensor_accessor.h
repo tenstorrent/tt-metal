@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -126,7 +126,7 @@ public:
      * @brief Get the underlying tensor accessor
      */
     constexpr const TensorAccessorType& tensor_accessor() const { return tensor_accessor_; }
-    constexpr uint32_t page_size() const { return tensor_accessor_.page_size; }
+    constexpr uint32_t page_size() const { return tensor_accessor_.get_aligned_page_size(); }
 
     // ==================== Global Page Access Methods ====================
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
@@ -146,7 +146,7 @@ def download_datasets(args):
     # download(DATASETS, args, artifact_type="dataset")
     # datasets are using different structure then models/huggingface_hub and it's better use different API for downloading
     for dataset in DATASETS:
-        _ = load_dataset(dataset, cache_dir=args.cache_dir, ignore_verifications=True)
+        _ = load_dataset(dataset, cache_dir=args.cache_dir, verification_mode="no_checks")
     logger.info("Finished downloading datasets")
 
 

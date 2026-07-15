@@ -1,0 +1,268 @@
+{
+  "results": [
+    {
+      "seq_len": 128,
+      "use_prefix_caching": false,
+      "prefix_cached_ratio": 0.0,
+      "prefill_s": 0.073739
+    },
+    {
+      "seq_len": 128,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.5,
+      "prefill_s": 0.075276
+    },
+    {
+      "seq_len": 128,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.75,
+      "prefill_s": 0.073059
+    },
+    {
+      "seq_len": 128,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.9,
+      "prefill_s": 0.073454
+    },
+    {
+      "seq_len": 256,
+      "use_prefix_caching": false,
+      "prefix_cached_ratio": 0.0,
+      "prefill_s": 0.178742
+    },
+    {
+      "seq_len": 256,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.5,
+      "prefill_s": 0.078797
+    },
+    {
+      "seq_len": 256,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.75,
+      "prefill_s": 0.079025
+    },
+    {
+      "seq_len": 256,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.9,
+      "prefill_s": 0.07919
+    },
+    {
+      "seq_len": 512,
+      "use_prefix_caching": false,
+      "prefix_cached_ratio": 0.0,
+      "prefill_s": 0.178532
+    },
+    {
+      "seq_len": 512,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.5,
+      "prefill_s": 0.181583
+    },
+    {
+      "seq_len": 512,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.75,
+      "prefill_s": 0.081616
+    },
+    {
+      "seq_len": 512,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.9,
+      "prefill_s": 0.081946
+    },
+    {
+      "seq_len": 1024,
+      "use_prefix_caching": false,
+      "prefix_cached_ratio": 0.0,
+      "prefill_s": 0.17851
+    },
+    {
+      "seq_len": 1024,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.5,
+      "prefill_s": 0.178573
+    },
+    {
+      "seq_len": 1024,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.75,
+      "prefill_s": 0.178548
+    },
+    {
+      "seq_len": 1024,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.9,
+      "prefill_s": 0.08889
+    },
+    {
+      "seq_len": 2048,
+      "use_prefix_caching": false,
+      "prefix_cached_ratio": 0.0,
+      "prefill_s": 0.340075
+    },
+    {
+      "seq_len": 2048,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.5,
+      "prefill_s": 0.201801
+    },
+    {
+      "seq_len": 2048,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.75,
+      "prefill_s": 0.207242
+    },
+    {
+      "seq_len": 2048,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.9,
+      "prefill_s": 0.210315
+    },
+    {
+      "seq_len": 4096,
+      "use_prefix_caching": false,
+      "prefix_cached_ratio": 0.0,
+      "prefill_s": 0.622241
+    },
+    {
+      "seq_len": 4096,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.5,
+      "prefill_s": 0.37222
+    },
+    {
+      "seq_len": 4096,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.75,
+      "prefill_s": 0.22326
+    },
+    {
+      "seq_len": 4096,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.9,
+      "prefill_s": 0.228454
+    },
+    {
+      "seq_len": 8192,
+      "use_prefix_caching": false,
+      "prefix_cached_ratio": 0.0,
+      "prefill_s": 0.990983
+    },
+    {
+      "seq_len": 8192,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.5,
+      "prefill_s": 0.823182
+    },
+    {
+      "seq_len": 8192,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.75,
+      "prefill_s": 0.458428
+    },
+    {
+      "seq_len": 8192,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.9,
+      "prefill_s": 0.267491
+    },
+    {
+      "seq_len": 16384,
+      "use_prefix_caching": false,
+      "prefix_cached_ratio": 0.0,
+      "prefill_s": 1.936742
+    },
+    {
+      "seq_len": 16384,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.5,
+      "prefill_s": 1.903611
+    },
+    {
+      "seq_len": 16384,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.75,
+      "prefill_s": 1.165716
+    },
+    {
+      "seq_len": 16384,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.9,
+      "prefill_s": 0.638883
+    },
+    {
+      "seq_len": 32768,
+      "use_prefix_caching": false,
+      "prefix_cached_ratio": 0.0,
+      "prefill_s": 4.281673
+    },
+    {
+      "seq_len": 32768,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.5,
+      "prefill_s": 4.284732
+    },
+    {
+      "seq_len": 32768,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.75,
+      "prefill_s": 3.282638
+    },
+    {
+      "seq_len": 32768,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.9,
+      "prefill_s": 1.874306
+    },
+    {
+      "seq_len": 65536,
+      "use_prefix_caching": false,
+      "prefix_cached_ratio": 0.0,
+      "prefill_s": 10.574215
+    },
+    {
+      "seq_len": 65536,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.5,
+      "prefill_s": 10.578976
+    },
+    {
+      "seq_len": 65536,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.75,
+      "prefill_s": 10.57617
+    },
+    {
+      "seq_len": 65536,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.9,
+      "prefill_s": 6.131773
+    },
+    {
+      "seq_len": 131072,
+      "use_prefix_caching": false,
+      "prefix_cached_ratio": 0.0,
+      "prefill_s": 29.473425
+    },
+    {
+      "seq_len": 131072,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.5,
+      "prefill_s": 29.478944
+    },
+    {
+      "seq_len": 131072,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.75,
+      "prefill_s": 29.486211
+    },
+    {
+      "seq_len": 131072,
+      "use_prefix_caching": true,
+      "prefix_cached_ratio": 0.9,
+      "prefill_s": 22.683371
+    }
+  ]
+}

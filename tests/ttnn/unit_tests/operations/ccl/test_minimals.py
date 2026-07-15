@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -1001,6 +1001,88 @@ def test_rms_fuse(
     )
 
 
+@skip_for_blackhole("This is a wormhole test")
+@pytest.mark.skipif(is_6u(), reason="This test is for N300 (2-chip WH)")
+@pytest.mark.parametrize(
+    "num_devices, elements_per_batch, input_shard_grid, output_shard_grid",
+    [
+        (
+            2,
+            2048,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))}),
+            None,
+        ),
+    ],
+)
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("num_iters", [5])
+@pytest.mark.parametrize("fused_add", [True, False])
+@pytest.mark.parametrize("use_noc1_only", [False])
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 1), id="2x1_grid")], indirect=True)
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("residual_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
+def test_rms_fuse_n300(
+    mesh_device,
+    num_devices,
+    elements_per_batch,
+    num_links,
+    num_iters,
+    function_level_defaults,
+    input_shard_grid,
+    output_shard_grid,
+    fp32_dest_acc_en,
+    fused_add,
+    use_noc1_only,
+    input_dtype,
+    residual_dtype,
+    output_dtype,
+    topology,
+):
+    if mesh_device.get_num_devices() != 2:
+        pytest.skip("Not N300 - this test targets 2-chip Wormhole")
+    atol_threshold = 1.0 if fused_add else 0.6
+    rtol_threshold = 20.0 if fused_add else 0.1
+    # Match the op's default compute_kernel_config (init_device_compute_kernel_config in
+    # rms_allgather_device_operation.cpp) and only flip fp32_dest_acc_en.
+    compute_kernel_config = (
+        ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+        if fp32_dest_acc_en
+        else None
+    )
+    run_rms_fuse_impl_deepseek(
+        mesh_device,
+        num_devices,
+        elements_per_batch,
+        num_links,
+        function_level_defaults,
+        input_shard_grid,
+        output_shard_grid,
+        topology,
+        fused_add,
+        use_noc1_only=use_noc1_only,
+        output_dtype=output_dtype,
+        num_iters=num_iters,
+        input_dtype=input_dtype,
+        residual_dtype=residual_dtype,
+        atol_threshold=atol_threshold,
+        rtol_threshold=rtol_threshold,
+        compute_kernel_config=compute_kernel_config,
+    )
+
+
 # Enumerate the post-commit cases explicitly
 @skip_for_blackhole("This is a wormhole test")
 @pytest.mark.skipif(is_6u(), reason="This test is not for 6U devices")
@@ -1075,120 +1157,6 @@ def test_rms_fuse_qwen(
         num_iters=num_iters,
         input_dtype=input_dtype,
         residual_dtype=residual_dtype,
-    )
-
-
-@skip_for_blackhole("This is a wormhole test")
-@pytest.mark.skipif(is_6u(), reason="This test is not for 6U devices")
-@pytest.mark.parametrize(
-    "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
-    [
-        # Before Concat Heads
-        (
-            4,
-            [1, 32, 32, 128],
-            1,
-            ttnn.ROW_MAJOR_LAYOUT,
-            (32, 128),
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
-                }
-            ),
-            (32, 64),
-            ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(6, 6), ttnn.CoreCoord(6, 6)),
-                    ttnn.CoreRange(ttnn.CoreCoord(6, 7), ttnn.CoreCoord(6, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(6, 9), ttnn.CoreCoord(6, 9)),
-                    ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
-                    ttnn.CoreRange(ttnn.CoreCoord(6, 1), ttnn.CoreCoord(6, 1)),
-                    ttnn.CoreRange(ttnn.CoreCoord(6, 2), ttnn.CoreCoord(6, 2)),
-                    ttnn.CoreRange(ttnn.CoreCoord(6, 4), ttnn.CoreCoord(6, 4)),
-                    ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
-                    ttnn.CoreRange(ttnn.CoreCoord(5, 5), ttnn.CoreCoord(5, 5)),
-                    ttnn.CoreRange(ttnn.CoreCoord(5, 6), ttnn.CoreCoord(5, 6)),
-                    ttnn.CoreRange(ttnn.CoreCoord(5, 7), ttnn.CoreCoord(5, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(5, 9), ttnn.CoreCoord(5, 9)),
-                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 0)),
-                    ttnn.CoreRange(ttnn.CoreCoord(5, 1), ttnn.CoreCoord(5, 1)),
-                    ttnn.CoreRange(ttnn.CoreCoord(5, 2), ttnn.CoreCoord(5, 2)),
-                    ttnn.CoreRange(ttnn.CoreCoord(5, 4), ttnn.CoreCoord(5, 4)),
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 4), ttnn.CoreCoord(1, 4)),
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 5), ttnn.CoreCoord(1, 5)),
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 9), ttnn.CoreCoord(1, 9)),
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0)),
-                    ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0)),
-                    ttnn.CoreRange(ttnn.CoreCoord(2, 4), ttnn.CoreCoord(2, 4)),
-                    ttnn.CoreRange(ttnn.CoreCoord(2, 5), ttnn.CoreCoord(2, 5)),
-                    ttnn.CoreRange(ttnn.CoreCoord(2, 9), ttnn.CoreCoord(2, 9)),
-                ]
-            ),
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ),
-    ],
-)
-@pytest.mark.parametrize("num_links", [3])
-@pytest.mark.parametrize(
-    "input_dtype",
-    [
-        ttnn.bfloat16,
-        # ttnn.bfloat8_b,
-    ],
-)
-@pytest.mark.parametrize("num_iters, warmup_iters", [[75, 5]])
-@pytest.mark.parametrize("trace_mode", [True])
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "trace_region_size": 23887872,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-        }
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
-def test_concat_fuse(
-    mesh_device,
-    num_devices,
-    output_shape,
-    dim,
-    num_links,
-    input_dtype,
-    layout,
-    num_iters,
-    warmup_iters,
-    function_level_defaults,
-    input_shard_shape,
-    input_shard_grid,
-    output_shard_shape,
-    output_shard_grid,
-    tensor_mem_layout,
-    trace_mode,
-):
-    profiler = BenchmarkProfiler()
-    run_concat_fuse_impl(
-        mesh_device,
-        num_devices,
-        output_shape,
-        dim,
-        num_links,
-        input_dtype,
-        layout,
-        function_level_defaults,
-        input_shard_shape,
-        input_shard_grid,
-        all_gather_topology=ttnn.Topology.Linear,
-        warmup_iters=warmup_iters,
-        num_iters=num_iters,
-        output_shard_shape=output_shard_shape,
-        output_shard_grid=output_shard_grid,
-        tensor_mem_layout=tensor_mem_layout,
-        trace_mode=trace_mode,
-        profiler=profiler,
     )
 
 

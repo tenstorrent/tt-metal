@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 import os
@@ -32,7 +32,7 @@ from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-    (128000,),  # For decode-only unit test, there's no need to run with large sequence lengths
+    (4096,),  # Align with the sequence length used in the test input tensor
 )
 @pytest.mark.parametrize("mode", [Mode.PREFILL, Mode.DECODE])
 def test_rms_norm_inference(

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,12 +9,9 @@
 #include <cstdint>
 #include <vector>
 
-#include <tt_stl/assert.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
 namespace ttnn::operations::debug {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -42,7 +42,7 @@ const char* get_reader_name(bool multibank, BcastDim::Enum bcast_dim) {
     }
     if (bcast_dim == BcastDim::HW) {
         return multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bcast_hw_8bank.cpp"
-                         : "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp";
+                         : "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary_diff_lengths.cpp";
     }
     TT_THROW("Unexpected bcast_dim!");
     return "";
@@ -60,7 +60,8 @@ const char* get_compute_name(BcastDim::Enum bcast_dim) {
 
 const char* bdim_to_log_string[] = {"", "BCAST_H", "BCAST_W", "", "BCAST_HW"};
 const char* op_id_to_op_define[] = {"add_tiles_bcast", "sub_tiles_bcast", "mul_tiles_bcast"};
-const char* op_id_to_llkop_define[] = {"ELWADD", "ELWSUB", "ELWMUL"};
+const char* op_id_to_llkop_define[] = {
+    "EltwiseBinaryType::ELWADD", "EltwiseBinaryType::ELWSUB", "EltwiseBinaryType::ELWMUL"};
 const char* bdim_to_llkdim_define[] = {"", "BroadcastType::ROW", "BroadcastType::COL", "", "BroadcastType::SCALAR"};
 const char* op_id_to_op_name[] = {"ADD", "SUB", "MUL"};
 
@@ -208,11 +209,14 @@ void run_bcast_test(IDevice* dev, BcastDim::Enum bcast_dim, BcastOp::Enum bcast_
             .compile_args = reader_compile_time_args});
 
     std::vector<uint32_t> writer_compile_time_args;
+    if (multibank) {
+        writer_compile_time_args.emplace_back(tt::CBIndex::c_16);
+    }
     TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_time_args);
     auto unary_writer_kernel = CreateKernel(
         program,
         multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp"
-                  : "tt_metal/kernels/dataflow/writer_unary.cpp",
+                  : "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         core,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,

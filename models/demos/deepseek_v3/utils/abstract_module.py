@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from abc import ABC, abstractmethod
@@ -33,7 +33,7 @@ class AbstractModule(ABC):
     - `forward_decode` - defines the decode-variant forward pass for the module.
     - `prefill_model_config` - generates the model configuration for prefill mode.
     - `decode_model_config` - generates the model configuration for decode mode.
-    - `convert_weights` - converts PyTorch weights to TTNN format and saves them to the specified path.
+    - `convert_weights` - converts PyTorch weights to TTNN format.
       The weights are in a form of a list of PyTorch state dictionaries. For submodules that can act as a collection
       of layers, for example MLP, the length of the list is expected to be the same as the dimension 0 of the mesh device.
       Use `{get_state_dicts.__module__}` for a convenient way to concatenate the weights from the state dictionaries into
@@ -41,8 +41,8 @@ class AbstractModule(ABC):
     - `create_state` (optional) - creates a new state for the module, which is used to store persistent model state.
 
     Typical usage by a caller would be:
-    1. (one-off) use `convert_weights` to convert PyTorch weights to TTNN format and save them to disk.
-       This returns a `WeightConfig` that contains the paths to the saved weights.
+    1. (one-off/runtime) use `convert_weights` to convert PyTorch weights to TTNN tensors.
+       This returns a `WeightConfig` that contains the converted weights.
     2. (one-off/runtime) call `prefill_model_config` and `decode_model_config` to generate static model configs.
     3. (runtime) call `create_state` to create a new state for the module.
     4. (runtime) create `RunPrefillConfig` for prefill and `RunDecodeConfig` for decode using the `run_config` method.
@@ -68,9 +68,9 @@ class AbstractModule(ABC):
     the field keys (or the dataclass field names). If there is no corresponding key in any of the configurations,
     or if one of the values is `None`, the value from the other configurations is used.
 
-    A special case during the creation of the run config is when loading the weights. If a `FromWeightConfig`
-    is found in a model config, along with a corresponding tensor path in the `WeightConfig`, said weight tensor
-    is loaded to a `ttnn.Tensor` on the device specified by the `mesh_device` argument to the `run_config` method.
+    A special case during the creation of the run config is when resolving the weights. If a `FromWeightConfig`
+    is found in a model config, along with a corresponding converted tensor in the `WeightConfig`, said tensor
+    is threaded into the run config directly. Legacy `SavedWeight` entries are still loaded on demand.
 
     Another special case is when a `MeshDeviceStub` is found in a model config. In this case, it is replaced with the
     `mesh_device` argument passed to the `run_config` method. An additional check is performed to ensure that the shape
@@ -162,18 +162,18 @@ class AbstractModule(ABC):
     ) -> WeightConfig:
         """Convert PyTorch weights to TTNN format for 1D tensor parallelism.
         Subclasses must implement this method to convert a tuple of PyTorch state dicts to a TTNN-compatible format and
-        return a (nested) dictionary of paths created from the `ttnn.Tensor`s saved using `save_and_get_path`.
+        return a (nested) dictionary of converted `ttnn.Tensor`s.
 
         Args:
             hf_config: HuggingFace model configuration object
             state_dicts: Tuple of PyTorch state dicts for the layers of this submodule. This is assumed to have
                          the same length as the dimension 0 of the mesh device. If there is a None instead of a dict,
                          this is supposed to be filled with padding.
-            output_path: Path to save converted weights
+            output_path: Compatibility path for conversion outputs. DeepSeek V3 no longer persists weights here.
             mesh_device: TTNN mesh device
 
         Returns:
-            Dict mapping operation keyword tensor arguments to their save paths
+            Dict mapping operation keyword tensor arguments to their converted tensors
         """
         raise NotImplementedError(f"Subclasses of {AbstractModule.__name__} must implement the convert_weights method")
 

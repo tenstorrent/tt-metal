@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -2059,7 +2059,7 @@ def elu(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.elu(t0, alpha, memory_config=output_mem_config)
+    t1 = ttnn.elu(t0, alpha=alpha, memory_config=output_mem_config)
 
     return ttnn_tensor_to_torch(t1)
 

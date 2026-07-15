@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -62,9 +62,13 @@ static std::vector<bfloat16> golden_reduce_c(
     std::vector<bfloat16> out(rows * stats_cols, static_cast<bfloat16>(0.0f));
 
     for (uint32_t r = 0; r < rows; ++r) {
+        auto row_begin = qk_im_rm.begin() + r * cols;
+        auto row_end = row_begin + cols;
         float row_max = -std::numeric_limits<float>::infinity();
-        for (uint32_t c = 0; c < cols; ++c) {
-            row_max = std::max(row_max, static_cast<float>(qk_im_rm[(r * cols) + c]));
+        if (row_begin != row_end) {
+            row_max = static_cast<float>(*std::max_element(row_begin, row_end, [](bfloat16 a, bfloat16 b) {
+                return static_cast<float>(a) < static_cast<float>(b);
+            }));
         }
         if (do_eltwise_max) {
             float working_row_max = row_max;
@@ -282,7 +286,7 @@ static bool test_sdpa_reduce_c(
 }
 
 // NIGHTLY_ prefix ensures this test only runs in nightly CI pipelines
-TEST_F(UnitMeshCQSingleCardFixture, NIGHTLY_SdpaReduceC) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, NIGHTLY_SdpaReduceC) {
     bool pass = true;
 
     /**

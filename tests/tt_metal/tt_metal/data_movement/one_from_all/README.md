@@ -40,3 +40,6 @@ Each test case has multiple runs, and each run has a unique runtime host id, ass
 1. **One From All Packet Sizes**: Tests different number of transactions and transaction sizes by varying the num_of_transactions and pages_per_transaction parameters. Multiple subordinate cores send data to a single master core.
 
 2. **One From All Directed Ideal**: Tests the most optimal data movement setup from multiple subordinate cores to one master core that maximizes the transaction size and performs enough transactions to amortize initialization overhead. This test uses neighboring cores to minimize latency.
+
+## Quasar Notes
+`TensixDataMovementOneFromAllPacketSizes` and `TensixDataMovementOneFromAllDirectedIdeal` include Quasar-specific code paths inside `GenericMeshDeviceFixture`. Requires `TT_METAL_SLOW_DISPATCH_MODE=1`, the Quasar simulator, and a grid with at least 2 columns (e.g. `emu-quasar-2x3`).

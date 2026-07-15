@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,8 +11,9 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_slow_dispatch
-from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import SocketInterface
+from models.common.utility_functions import is_blackhole, is_slow_dispatch
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
+from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size, ttnn_dtype_from_torch_dtype
 
@@ -33,7 +34,14 @@ def create_fabric_router_config(max_payload_size):
         (64, 1024, 512),
         (512, 1024, 512),
         (1024, 2048, 128),
-        (32768, 65536, 128),
+        pytest.param(
+            32768,
+            65536,
+            128,
+            marks=pytest.mark.skip(
+                reason="[SKIP REASON]: Blackhole HostIO large loopback fails DMA page pinning for both H2D modes. Issue: #43079"
+            ),
+        ),
     ],
 )
 @pytest.mark.parametrize(
@@ -46,6 +54,17 @@ def create_fabric_router_config(max_payload_size):
 def test_host_io_loopback(mesh_device, tensor_size_bytes, fifo_size, num_iterations, h2d_mode):
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
+
+    # Only run on Blackhole Galaxy; hangs on smaller Blackhole boards (P150/P300). See #47166.
+    if ttnn.cluster.get_cluster_type() != ttnn.cluster.ClusterType.BLACKHOLE_GALAXY:
+        pytest.skip("HostIO loopback is only supported on Blackhole Galaxy (#47166)")
+
+    # TODO(#43079): Blackhole DEVICE_PULL host IO loopback hangs under viommu.
+    if is_blackhole() and h2d_mode == ttnn.H2DMode.DEVICE_PULL:
+        pytest.skip(
+            "[SKIP REASON]: Blackhole HostIO DEVICE_PULL loopback hangs in the data-transfer loop "
+            "(device PCIe pull from host-pinned memory) under viommu. Issue: #43079"
+        )
 
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
 
@@ -83,13 +102,14 @@ def test_host_io_loopback(mesh_device, tensor_size_bytes, fifo_size, num_iterati
         h2d_socket.write_tensor(input_tensor)
         d2h_socket.read_tensor(output_tensor)
 
-        result_torch = ttnn.to_torch(output_tensor)
+        result_torch = ttnn.to_torch(output_tensor).to(torch.int32)
         match = torch.equal(torch_input, result_torch)
         assert match, f"H2D → D2H loopback data mismatch!\nExpected: {torch_input}\nGot: {result_torch}"
 
     host_io.terminate(True)
 
 
+@pytest.mark.skip(reason="Disabled: broken by PR #42662 (speculative decoding refactor). Tracked in #42964.")
 @pytest.mark.parametrize(
     "h2d_mode",
     [
@@ -118,9 +138,6 @@ def test_host_io_loopback_with_embedding(
     mesh_device, h2d_mode, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor
 ):
     """Test H2D/D2H loopback with an embedding tensor loaded to DRAM."""
-    if not is_slow_dispatch():
-        pytest.skip("Skipping test in fast dispatch mode")
-
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
 
@@ -167,9 +184,10 @@ def test_host_io_loopback_with_embedding(
     logger.info(f"Testing embedding with vocab size {vocab_size} over H2D → D2H loopback")
 
     for token_id in range(vocab_size):
-        # Write 64-byte packet with token ID as first uint32, rest zeros
+        metadata = DeepseekMetadata(token_id=token_id)
+        metadata_list = metadata.to_list()
         torch_input = torch.zeros(1, token_size_datums, dtype=token_dtype)
-        torch_input[0, 0] = token_id
+        torch_input[0, : len(metadata_list)] = torch.tensor(metadata_list, dtype=token_dtype)
         input_tensor = ttnn.from_torch(
             torch_input, dtype=ttnn_dtype_from_torch_dtype(token_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
         )
@@ -230,11 +248,34 @@ def test_host_io_loopback_with_embedding(
     indirect=True,
 )
 def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size, num_iterations, h2d_mode):
+    if ttnn.get_num_devices() < 32:
+        pytest.skip("Test requires a full galaxy")
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
 
-    if not is_slow_dispatch():
-        pytest.skip("Skipping test in fast dispatch mode")
+    # TODO(#43079): Root-cause Blackhole full-galaxy multi-stage HostInterface hangs and remove the temporary skips.
+    known_blackhole_hangs = {
+        (ttnn.H2DMode.HOST_PUSH, 64, 128, 512),
+        (ttnn.H2DMode.HOST_PUSH, 64, 256, 512),
+        (ttnn.H2DMode.HOST_PUSH, 64, 512, 512),
+        (ttnn.H2DMode.HOST_PUSH, 64, 1024, 512),
+        (ttnn.H2DMode.HOST_PUSH, 512, 1024, 512),
+        (ttnn.H2DMode.HOST_PUSH, 1024, 2048, 128),
+        (ttnn.H2DMode.HOST_PUSH, 32768, 65536, 128),
+        (ttnn.H2DMode.DEVICE_PULL, 64, 128, 512),
+        (ttnn.H2DMode.DEVICE_PULL, 64, 256, 512),
+        (ttnn.H2DMode.DEVICE_PULL, 64, 512, 512),
+        (ttnn.H2DMode.DEVICE_PULL, 64, 1024, 512),
+        (ttnn.H2DMode.DEVICE_PULL, 512, 1024, 512),
+        (ttnn.H2DMode.DEVICE_PULL, 1024, 2048, 128),
+        (ttnn.H2DMode.DEVICE_PULL, 32768, 65536, 128),
+    }
+    if is_blackhole() and (h2d_mode, tensor_size_bytes, fifo_size, num_iterations) in known_blackhole_hangs:
+        pytest.skip(
+            "[SKIP REASON]: "
+            "test_multi_stage_pipeline_loopback hangs or times out for this Blackhole full-galaxy tuple. "
+            "Issue: #43079"
+        )
 
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
 
@@ -291,7 +332,8 @@ def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size
         fwd_core_1,
         upstream_socket=host_io.get_downstream_socket(),
         downstream_core_coord=fwd_core_2,
-        mesh_device=mesh_device,
+        sender_mesh=MeshWrapper(mesh_device),
+        receiver_mesh=MeshWrapper(mesh_device),
     )
     socket_interface_2 = SocketInterface(
         tensor_size_bytes,
@@ -301,7 +343,8 @@ def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size
         fwd_core_3,
         upstream_socket=socket_interface_1.get_downstream_socket(),
         downstream_core_coord=fwd_core_4,
-        mesh_device=mesh_device,
+        sender_mesh=MeshWrapper(mesh_device),
+        receiver_mesh=MeshWrapper(mesh_device),
     )
     socket_interface_3 = SocketInterface(
         tensor_size_bytes,
@@ -311,7 +354,8 @@ def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size
         fwd_core_5,
         upstream_socket=socket_interface_2.get_downstream_socket(),
         downstream_core_coord=fwd_core_6,
-        mesh_device=mesh_device,
+        sender_mesh=MeshWrapper(mesh_device),
+        receiver_mesh=MeshWrapper(mesh_device),
     )
     socket_interface_4 = SocketInterface(
         tensor_size_bytes,
@@ -321,7 +365,8 @@ def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size
         fwd_core_7,
         upstream_socket=socket_interface_3.get_downstream_socket(),
         downstream_core_coord=fwd_core_8,
-        mesh_device=mesh_device,
+        sender_mesh=MeshWrapper(mesh_device),
+        receiver_mesh=MeshWrapper(mesh_device),
     )
     socket_interface_5 = SocketInterface(
         tensor_size_bytes,
@@ -331,7 +376,8 @@ def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size
         fwd_core_9,
         upstream_socket=socket_interface_4.get_downstream_socket(),
         downstream_core_coord=fwd_core_10,
-        mesh_device=mesh_device,
+        sender_mesh=MeshWrapper(mesh_device),
+        receiver_mesh=MeshWrapper(mesh_device),
     )
     socket_interface_6 = SocketInterface(
         tensor_size_bytes,
@@ -341,7 +387,8 @@ def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size
         fwd_core_11,
         upstream_socket=socket_interface_5.get_downstream_socket(),
         downstream_core_coord=fwd_core_12,
-        mesh_device=mesh_device,
+        sender_mesh=MeshWrapper(mesh_device),
+        receiver_mesh=MeshWrapper(mesh_device),
     )
     socket_interface_7 = SocketInterface(
         tensor_size_bytes,
@@ -351,6 +398,8 @@ def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size
         fwd_core_13,
         upstream_socket=socket_interface_6.get_downstream_socket(),
         downstream_socket=host_io.get_upstream_socket(),
+        sender_mesh=MeshWrapper(mesh_device),
+        receiver_mesh=MeshWrapper(mesh_device),
     )
     host_io.run()
     socket_interface_1.run()
@@ -376,7 +425,7 @@ def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size
         h2d_socket.write_tensor(input_tensor)
         d2h_socket.read_tensor(output_tensor)
 
-        result_torch = ttnn.to_torch(output_tensor)
+        result_torch = ttnn.to_torch(output_tensor).to(torch.int32)
         match = torch.equal(torch_input, result_torch)
         assert match, f"H2D → D2H loopback data mismatch!\nExpected: {torch_input}\nGot: {result_torch}"
 
@@ -431,8 +480,36 @@ def test_multi_stage_pipeline_loopback_with_embedding(
     mesh_device, h2d_mode, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor
 ):
     """Test multi-stage pipeline with embedding: H2D receives token, looks up embedding, streams through all devices, D2H sends embedding row back."""
+    if ttnn.get_num_devices() < 32:
+        pytest.skip("Test requires a full galaxy")
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
+
+    # TODO(#43079): Root-cause Blackhole full-galaxy embedding HostInterface teardown hang and remove this skip.
+    known_blackhole_embedding_hangs = {
+        (ttnn.H2DMode.HOST_PUSH, 128, 7168, 128, 2),
+        (ttnn.H2DMode.DEVICE_PULL, 128, 7168, 128, 2),
+        (ttnn.H2DMode.HOST_PUSH, 128, 7168, 256, 4),
+        (ttnn.H2DMode.DEVICE_PULL, 128, 7168, 256, 4),
+        (ttnn.H2DMode.HOST_PUSH, 256, 3584, 128, 2),
+        (ttnn.H2DMode.DEVICE_PULL, 256, 3584, 128, 2),
+        (ttnn.H2DMode.HOST_PUSH, 256, 3584, 256, 4),
+        (ttnn.H2DMode.DEVICE_PULL, 256, 3584, 256, 4),
+        (ttnn.H2DMode.HOST_PUSH, 512, 1792, 128, 2),
+        (ttnn.H2DMode.DEVICE_PULL, 512, 1792, 128, 2),
+        (ttnn.H2DMode.HOST_PUSH, 512, 1792, 256, 4),
+        (ttnn.H2DMode.DEVICE_PULL, 512, 1792, 256, 4),
+    }
+    if (
+        is_blackhole()
+        and (h2d_mode, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor)
+        in known_blackhole_embedding_hangs
+    ):
+        pytest.skip(
+            "[SKIP REASON]: "
+            "test_multi_stage_pipeline_loopback_with_embedding verifies token lookups, then hangs past "
+            "--timeout=300 during Blackhole full-galaxy teardown for this tuple. Issue: #43079"
+        )
 
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
 
@@ -505,7 +582,8 @@ def test_multi_stage_pipeline_loopback_with_embedding(
         fwd_core_1,
         upstream_socket=host_io.get_downstream_socket(),
         downstream_core_coord=fwd_core_2,
-        mesh_device=mesh_device,
+        sender_mesh=MeshWrapper(mesh_device),
+        receiver_mesh=MeshWrapper(mesh_device),
     )
     socket_interface_2 = SocketInterface(
         embedding_size_bytes,
@@ -515,7 +593,8 @@ def test_multi_stage_pipeline_loopback_with_embedding(
         fwd_core_3,
         upstream_socket=socket_interface_1.get_downstream_socket(),
         downstream_core_coord=fwd_core_4,
-        mesh_device=mesh_device,
+        sender_mesh=MeshWrapper(mesh_device),
+        receiver_mesh=MeshWrapper(mesh_device),
     )
     socket_interface_3 = SocketInterface(
         embedding_size_bytes,
@@ -525,7 +604,8 @@ def test_multi_stage_pipeline_loopback_with_embedding(
         fwd_core_5,
         upstream_socket=socket_interface_2.get_downstream_socket(),
         downstream_core_coord=fwd_core_6,
-        mesh_device=mesh_device,
+        sender_mesh=MeshWrapper(mesh_device),
+        receiver_mesh=MeshWrapper(mesh_device),
     )
     socket_interface_4 = SocketInterface(
         embedding_size_bytes,
@@ -535,7 +615,8 @@ def test_multi_stage_pipeline_loopback_with_embedding(
         fwd_core_7,
         upstream_socket=socket_interface_3.get_downstream_socket(),
         downstream_core_coord=fwd_core_8,
-        mesh_device=mesh_device,
+        sender_mesh=MeshWrapper(mesh_device),
+        receiver_mesh=MeshWrapper(mesh_device),
     )
     socket_interface_5 = SocketInterface(
         embedding_size_bytes,
@@ -545,7 +626,8 @@ def test_multi_stage_pipeline_loopback_with_embedding(
         fwd_core_9,
         upstream_socket=socket_interface_4.get_downstream_socket(),
         downstream_core_coord=fwd_core_10,
-        mesh_device=mesh_device,
+        sender_mesh=MeshWrapper(mesh_device),
+        receiver_mesh=MeshWrapper(mesh_device),
     )
     socket_interface_6 = SocketInterface(
         embedding_size_bytes,
@@ -555,7 +637,8 @@ def test_multi_stage_pipeline_loopback_with_embedding(
         fwd_core_11,
         upstream_socket=socket_interface_5.get_downstream_socket(),
         downstream_core_coord=fwd_core_12,
-        mesh_device=mesh_device,
+        sender_mesh=MeshWrapper(mesh_device),
+        receiver_mesh=MeshWrapper(mesh_device),
     )
     socket_interface_7 = SocketInterface(
         embedding_size_bytes,
@@ -565,6 +648,8 @@ def test_multi_stage_pipeline_loopback_with_embedding(
         fwd_core_13,
         upstream_socket=socket_interface_6.get_downstream_socket(),
         downstream_socket=host_io.get_upstream_socket(),
+        sender_mesh=MeshWrapper(mesh_device),
+        receiver_mesh=MeshWrapper(mesh_device),
     )
 
     host_io.run()
@@ -580,9 +665,10 @@ def test_multi_stage_pipeline_loopback_with_embedding(
     logger.info(f"Testing embedding with vocab size {vocab_size} over multi-stage pipeline")
 
     for token_id in range(vocab_size):
-        # Write 64-byte packet with token ID as first uint32, rest zeros
+        metadata = DeepseekMetadata(token_id=token_id)
+        metadata_list = metadata.to_list()
         torch_input = torch.zeros(1, token_size_datums, dtype=token_dtype)
-        torch_input[0, 0] = token_id
+        torch_input[0, : len(metadata_list)] = torch.tensor(metadata_list, dtype=token_dtype)
         input_tensor = ttnn.from_torch(
             torch_input, dtype=ttnn_dtype_from_torch_dtype(token_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
         )

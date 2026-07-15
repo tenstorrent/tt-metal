@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,9 +11,9 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteStridedAllGatherAsync::invoke(
+ttnn::Tensor strided_all_gather_async(
     const ttnn::Tensor& input_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const int32_t dim,
@@ -22,7 +22,6 @@ ttnn::Tensor ExecuteStridedAllGatherAsync::invoke(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<uint32_t> cluster_axis,
-    std::optional<uint32_t> tiles_per_chunk,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     std::optional<uint32_t> mm_cores_y,
@@ -37,11 +36,10 @@ ttnn::Tensor ExecuteStridedAllGatherAsync::invoke(
         memory_config,
         topology,
         cluster_axis,
-        tiles_per_chunk,
         num_workers_per_link,
         num_buffers_per_channel,
         mm_cores_y,
         mm_block_ht,
         mm_block_wt);
 }
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental

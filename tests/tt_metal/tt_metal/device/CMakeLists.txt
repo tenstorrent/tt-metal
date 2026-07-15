@@ -5,6 +5,7 @@ include(sources.cmake)
 add_library(unit_tests_device_smoke OBJECT)
 add_library(TT::Metalium::Test::Device::Smoke ALIAS unit_tests_device_smoke)
 TT_ENABLE_UNITY_BUILD(unit_tests_device_smoke)
+target_precompile_headers(unit_tests_device_smoke REUSE_FROM metal_common_pch)
 target_sources(unit_tests_device_smoke PRIVATE ${UNIT_TESTS_DEVICE_SMOKE_SOURCES})
 target_include_directories(
     unit_tests_device_smoke
@@ -17,7 +18,12 @@ target_link_libraries(unit_tests_device_smoke PRIVATE test_metal_common_libs)
 
 # Non-smoke tests
 add_executable(unit_tests_device)
-target_sources(unit_tests_device PRIVATE test_release_ownership.cpp)
+target_sources(
+    unit_tests_device
+    PRIVATE
+        test_release_ownership.cpp
+        test_mock_device_api_nightly.cpp
+)
 target_include_directories(
     unit_tests_device
     PRIVATE

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "all_gather.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
@@ -37,6 +37,7 @@ void bind_all_gather(nb::module_& mod) {
             num_workers_per_link (int, optional): Hyperparameter.
             num_buffers_per_channel (int, optional): Hyperparameter.
             sub_core_grids (CoreRangeSet, optional): Specifies sub-core grid ranges for advanced core selection control. Default uses all the cores in the device.
+            use_l1_small_for_semaphores (bool, optional): If True, allocate internal global semaphores in L1_SMALL instead of L1 to reduce L1 fragmentation. Defaults to `False`.
 
         Returns:
             ttnn.Tensor: The gathered tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] * num_devices, where num_devices is the number of devices along the `cluster_axis` if specified, else the total number of devices along the mesh.
@@ -56,52 +57,24 @@ void bind_all_gather(nb::module_& mod) {
             [8, 1, 32, 256]
         )doc";
 
-    using OperationType = decltype(ttnn::all_gather);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"all_gather">(
         mod,
-        ttnn::all_gather,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               int32_t dim,
-               const std::optional<uint32_t> cluster_axis,
-               const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor>& optional_output_tensor,
-               const std::optional<uint32_t> num_links,
-               const std::optional<tt::tt_fabric::Topology> topology,
-               const std::optional<uint32_t> chunks_per_sync,
-               const std::optional<uint32_t> num_workers_per_link,
-               const std::optional<uint32_t> num_buffers_per_channel,
-               const std::optional<CoreRangeSet>& sub_core_grids) {
-                return self(
-                    input_tensor,
-                    dim,
-                    cluster_axis,
-                    subdevice_id,
-                    memory_config,
-                    optional_output_tensor,
-                    num_links,
-                    topology,
-                    chunks_per_sync,
-                    num_workers_per_link,
-                    num_buffers_per_channel,
-                    sub_core_grids);
-            },
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("dim"),
-            nb::kw_only(),
-            nb::arg("cluster_axis") = nb::none(),
-            nb::arg("subdevice_id") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none(),
-            nb::arg("num_links") = nb::none(),
-            nb::arg("topology") = nb::none(),
-            nb::arg("chunks_per_sync") = nb::none(),
-            nb::arg("num_workers_per_link") = nb::none(),
-            nb::arg("num_buffers_per_channel") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()});
+        &ttnn::all_gather,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("dim"),
+        nb::kw_only(),
+        nb::arg("cluster_axis") = nb::none(),
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("num_links") = nb::none(),
+        nb::arg("topology") = nb::none(),
+        nb::arg("chunks_per_sync") = nb::none(),
+        nb::arg("num_workers_per_link") = nb::none(),
+        nb::arg("num_buffers_per_channel") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("use_l1_small_for_semaphores") = false);
 }
 
 }  // namespace ttnn::operations::ccl

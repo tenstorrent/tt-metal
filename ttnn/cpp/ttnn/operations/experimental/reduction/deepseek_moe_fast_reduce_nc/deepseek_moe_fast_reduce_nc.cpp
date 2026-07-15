@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,9 +13,9 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::experimental::reduction {
+namespace ttnn::experimental::reduction {
 
-std::vector<ttnn::Tensor> DeepseekMoEFastReduceNCOperation::invoke(
+std::vector<ttnn::Tensor> deepseek_moe_fast_reduce_nc(
     const ttnn::Tensor& input_tensor,
     int32_t dim,
     uint64_t split_size,
@@ -24,7 +24,7 @@ std::vector<ttnn::Tensor> DeepseekMoEFastReduceNCOperation::invoke(
     ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(init_device_compute_kernel_config(
         input_tensor.device()->arch(),
         std::nullopt,
-        MathFidelity::HiFi4,
+        tt::tt_metal::MathFidelity::HiFi4,
         /* default_approx_mode */ false,
         /* default_fp32_acc */ true));
 
@@ -34,4 +34,4 @@ std::vector<ttnn::Tensor> DeepseekMoEFastReduceNCOperation::invoke(
         input_tensor, normalized_dim, split_size, output_memory_config, config);
 }
 
-}  // namespace ttnn::operations::experimental::reduction
+}  // namespace ttnn::experimental::reduction

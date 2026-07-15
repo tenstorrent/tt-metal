@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -39,7 +39,6 @@ void bind_split(nb::module_& mod) {
                 * :attr:`memory_config`: Memory Config of the output tensor
         )doc";
 
-    // Bind the free functions directly - no struct!
     ttnn::bind_function<"split">(
         mod,
         doc,
@@ -54,11 +53,11 @@ void bind_split(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("memory_config") = nb::none()),
 
-        // Overload 2: list of split_sizes (SmallVector<int64_t>)
+        // Overload 2: list of split_sizes (ttsl::SmallVector<int64_t>)
         ttnn::overload_t(
             nb::overload_cast<
                 const ttnn::Tensor&,
-                const ttnn::SmallVector<int64_t>&,
+                const ttsl::SmallVector<int64_t>&,
                 int64_t,
                 const std::optional<ttnn::MemoryConfig>&>(&ttnn::split),
             nb::arg("input_tensor"),

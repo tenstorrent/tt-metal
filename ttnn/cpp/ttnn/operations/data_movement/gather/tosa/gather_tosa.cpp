@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "ttnn/operations/data_movement/expand/expand.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::tosa {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 Tensor pre_tosa_gather_transform_input_index_tensor(const Tensor& input_tensor, const uint32_t C) {
@@ -24,7 +24,7 @@ Tensor pre_tosa_gather_transform_input_index_tensor(const Tensor& input_tensor, 
     // Unsqueeze the input tensor to add a new dimension
     const Tensor unsqueezed_tensor = ttnn::unsqueeze(input_tensor, -1);
     // Create a shape vector for the new tensor
-    ttnn::SmallVector<int32_t> shape_vector = {input_tensor.logical_shape()[0], input_tensor.logical_shape()[1], C};
+    ttsl::SmallVector<int32_t> shape_vector = {input_tensor.logical_shape()[0], input_tensor.logical_shape()[1], C};
     Tensor expanded_tensor = ttnn::expand(unsqueezed_tensor, shape_vector, unsqueezed_tensor.memory_config());
 
     return expanded_tensor;
@@ -32,7 +32,7 @@ Tensor pre_tosa_gather_transform_input_index_tensor(const Tensor& input_tensor, 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-Tensor ExecuteTosaGather::invoke(
+Tensor gather(
     const Tensor& input_tensor,
     const Tensor& input_index_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config) {
@@ -74,4 +74,4 @@ Tensor ExecuteTosaGather::invoke(
         input_tensor, dim, expanded_index_tensor, sparse_grad, memory_config_value, optional_output_tensor_value);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::tosa

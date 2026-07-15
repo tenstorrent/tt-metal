@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/tilize_with_val_padding_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 
@@ -14,13 +14,39 @@ using namespace tt::constants;
 
 namespace ttnn::prim {
 
+namespace {
+bool can_use_sharded_optimized_factory(
+    const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
+    if (input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED) {
+        return false;
+    }
+
+    if (operation_attributes.output_mem_config.memory_layout() != input_tensor.memory_config().memory_layout()) {
+        return false;
+    }
+
+    const auto& padded_shape = input_tensor.padded_shape();
+
+    for (uint32_t i = 0; i < padded_shape.rank(); i++) {
+        if (i != padded_shape.rank() - 2 && (padded_shape[i] != operation_attributes.output_padded_shape[i])) {
+            return false;
+        }
+    }
+    if (operation_attributes.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED) {
+        return false;  // ND_SHARDED output should take the default factory.
+    }
+    return !operation_attributes.sub_core_grids.has_value();
+}
+
+}  // namespace
+
 TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDeviceOperation::select_program_factory(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
     if (input_tensor.memory_config().is_sharded()) {
-        TT_FATAL(
-            !operation_attributes.sub_core_grids.has_value(),
-            "Sharded tilize does not support sub core grid specification");
-        return TilizeWithValPaddingMultiCoreShardedFactory{};
+        if (can_use_sharded_optimized_factory(operation_attributes, input_tensor)) {
+            return TilizeWithValPaddingMultiCoreShardedFactory{};
+        }
+        return TilizeWithValPaddingMultiCoreDefaultFactory{};
     }
     if (!operation_attributes.enough_space_height) {
         return TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
@@ -52,12 +78,12 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
             return TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
         }
     }
-    return TilizeWithValPaddingMultiCoreInterleavedFactory{};
+    return TilizeWithValPaddingMultiCoreDefaultFactory{};
 }
 
 void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
-    const auto& input_shape = input_tensor.padded_shape();
+    const auto& input_shape = input_tensor.logical_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
@@ -65,10 +91,17 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor.dtype() == DataType::BFLOAT16 or input_tensor.dtype() == DataType::INT32 or
             input_tensor.dtype() == DataType::UINT32 or input_tensor.dtype() == DataType::FLOAT32 or
-            input_tensor.dtype() == DataType::UINT16,
-        "Can only tilize bfloat16/float32 or int32/uint32/uint16 tensors");
-
-    TT_FATAL(input_shape.rank() >= 1, "Input tensor must be of rank >= 1, but its shape is {}", input_shape);
+            input_tensor.dtype() == DataType::UINT16 or input_tensor.dtype() == DataType::FP8_E4M3,
+        "Can only tilize bfloat16/float32 or int32/uint32/uint16 or fp8_e4m3 tensors");
+    // fp8 tile INPUT unpacks to fp32 in DEST and packs to any float TILE format. Reject non-float outputs:
+    // fp8 itself is ROW_MAJOR-only, and integer outputs are meaningless for a float input.
+    if (input_tensor.dtype() == DataType::FP8_E4M3) {
+        // Valid TILE float output = a float dtype other than FP8_E4M3 (which is itself ROW_MAJOR-only).
+        const DataType out_dt = operation_attributes.output_dtype;
+        TT_FATAL(
+            is_floating_point(out_dt) && out_dt != DataType::FP8_E4M3,
+            "FP8_E4M3 input to tilize requires a float TILE output (FLOAT32, BFLOAT16, BFLOAT8_B, or BFLOAT4_B)");
+    }
 
     if (input_shape.rank() == 1) {
         // Special case: if input tensor is 1D row-major, output tiled tensor will have 1D logical shape
@@ -101,36 +134,56 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
         TILE_WIDTH,
         TILE_HEIGHT);
 
-    if (input_tensor.memory_config().is_sharded()) {
+    const uint32_t alignment_requirement = hal::get_l1_alignment();
+    if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED) {
+        uint32_t l1_address_increment_size =
+            operation_attributes.output_padded_shape[-1] *
+            input_tensor.element_size();  // For height-sharded and interleaved tensors, the l1 address in the reader
+                                          // kernel gets incremented by the output padded width size.
         TT_FATAL(
-            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
-            "Input tensor must be width sharded");
+            l1_address_increment_size % alignment_requirement == 0,
+            "Output padded width size {} must be aligned to {} bytes for HEIGHT_SHARDED or INTERLEAVED tensors",
+            l1_address_increment_size,
+            alignment_requirement);
+    } else if (input_tensor.memory_config().is_sharded()) {
+        uint32_t shard_width = input_tensor.shard_spec().has_value()
+                                   ? input_tensor.shard_spec().value().shape[1]
+                                   : input_tensor.nd_shard_spec().value().shard_shape[-1];
+
+        const uint32_t page_size_bytes = input_tensor.buffer()->page_size();
         TT_FATAL(
-            operation_attributes.output_mem_config.memory_layout() == input_tensor.memory_config().memory_layout(),
-            "Output tensor must have the same memory layout as input tensor");
-        for (uint32_t i = 0; i < input_tensor.padded_shape().rank(); i++) {
-            if (i != input_shape.rank() - 2) {
-                TT_FATAL(
-                    input_shape[i] == operation_attributes.output_padded_shape[i],
-                    "Input shape[{}] ({}) must equal output padded shape[{}] ({})",
-                    i,
-                    input_shape[i],
-                    i,
-                    operation_attributes.output_padded_shape[i]);
-            }
-        }
+            page_size_bytes == input_tensor.buffer()->aligned_page_size(),
+            "Input row-major shard width {} gives page size {} bytes, which must be aligned to {} bytes L1 SRAM "
+            "buffer alignment "
+            "requirement",
+            shard_width,
+            page_size_bytes,
+            alignment_requirement);  // The shard_width must be an aligned size, or we will face alignment issues when
+                                     // the reader tries to write to the CB, since we might write to unaligned
+                                     // addresses.
     }
 }
 
 TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
-    const auto& input_shape = input_tensor.padded_shape();
+    const auto& input_shape = input_tensor.logical_shape();
 
-    if (input_tensor.memory_config().is_sharded()) {
+    if (can_use_sharded_optimized_factory(operation_attributes, input_tensor)) {
+        // This case only applies when we expect the optimized sharded path to be taken. This bit forces the output
+        // tensor to be width-sharded.
+        log_warning(
+            tt::LogOp,
+            "ttnn::tilize_with_val_padding: Making the output tensor width-sharded because the optimized sharded "
+            "program factory is being used");
         auto shard_spec = input_tensor.shard_spec().value();
         shard_spec.shape[0] =
             operation_attributes.output_padded_shape.volume() / operation_attributes.output_padded_shape[-1];
-        auto mem_config = operation_attributes.output_mem_config.with_shard_spec(shard_spec);
+        auto mem_config = tt::tt_metal::MemoryConfig(
+            input_tensor.memory_config().memory_layout(),
+            operation_attributes.output_mem_config.buffer_type(),
+            shard_spec);  // If the input is using the legacy sharded optimized program
+                          // factory, the output has the same shard spec as the input.
         return TensorSpec(
             input_shape,
             TensorLayout::fromPaddedShape(

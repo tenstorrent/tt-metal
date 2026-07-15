@@ -137,3 +137,81 @@ Without changes:
 With changes:
 
 <img src="images/error_after.png" style="width:600px;"/>
+
+# Welford's Algorithm For Mean and Variance
+As stated above, the LayerNorm and GroupNorm algorithms require computing the mean and variance per layer (LayerNorm) or per group (GroupNorm). By default, the mean and variance are computed with the two-pass method detailed above, namely compute $\mu$ in one pass then use it to compute $\sigma^2$ in the second pass.
+
+LayerNorm and GroupNorm also have the ability to use Welford's online algorithm for computing the mean and variance. See: https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Welford's_online_algorithm. This is a one-pass algorithm where the mean and variance are accumulated in lockstep. Specifically, the sample mean of the first $n$ elements:
+
+$$\bar{x}_n = \bar{x}_{n-1} + \frac{x_n - \bar{x}_{n-1}}{n}$$
+
+is used to accumulate the quantity $M_2$:
+
+$$M_{2,n} = \sum_i^n (x_i - \bar{x}_n)^2 = M_{2,n-1} + (x_n - \bar{x}_{n-1})(x_n - \bar{x}_n)$$
+
+where $M_{2,n}$ is used to compute the variance of the first $n$ samples $\sigma^2_n$:
+
+$$\sigma^2_n = \frac{M_{2,n}}{n}$$
+
+Computationally, Welford's method has a couple distinct advantages:
+
+1. It only requires a single pass through the input data, which cuts down the DRAM/NoC transactions needed to compute $\mu$ and $\sigma^2$.
+2. The two-pass method, even when using sum-then-divide, can still accumulate numerical errors during the first pass (that computes $\mu$) by adding small numbers to a growing sum. Adding numbers of vastly different magnitudes can lose precision if the accumulation data format does not have sufficient bits to resolve the sum. These errors will be amplified in the second pass (that computes $\sigma^2$). This effect is mitigated in the Welford approach by accumulating the _difference_ $x_n - \bar{x}_{n-1}$ in the mean (divided by $n$), which keeps accumulator values smaller than in two-pass, where raw data values are added to a large-and-growing running sum.
+
+The following plot shows the Frobenious error (%) of a skewed random normal distribution $randn() + 100$ for `torch.float32` datatype for three accumulation methods:
+
+1. Legacy: Two-pass, accumulate in `bfloat16` precision
+2. Legacy w/ FP32 reduce: Two-pass, acumulate in `fp32` precision
+3. Welford: Welford, accumulate in `fp32` precision
+
+<img src="images/welford_accuracy.png" style="width:600px;"/>
+
+The global error using Welford's method is lower than the two-pass methods. With a large skewed mean, the accumulated sums in the two-pass methods over widths on the order of ~1000 grow large enough to trigger numerical inaccuracies in the summation. Welford's is able to combat this by accumulating the difference $x_n - \bar{x}_{n-1}$, which tends to stay small.
+
+The Welford method for each op can be invoked as follows:
+
+LayerNorm (specified in program configs):
+
+```python
+# Interleaved
+program_config = ttnn.LayerNormDefaultProgramConfig(<other configs>, use_welford=True)
+# Sharded
+program_config=ttnn.LayerNormShardedMultiCoreProgramConfig(<other configs>, use_welford=True)
+```
+
+GroupNorm (specified as boolean input to `ttnn.group_norm`):
+
+```python
+output_tensor = ttnn.group_norm(<other inputs>, use_welford=use_welford)
+```
+
+While the Welford method invoked as defined above works, it is advisable to create and pass in a tensor of reciprocals to substantially accelerate the calculation. This can be done by the following:
+
+LayerNorm:
+
+```python
+# Create the reciprocals
+w = <your tensor width>
+grid = device.compute_with_storage_grid_size()
+core_range_set = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+reciprocals = ttnn.create_layer_norm_reciprocals(device, core_range_set, w)
+
+# Pass into ttnn.layer_norm()
+output_tensor = ttnn.layer_norm(<other inputs>, recip_tensor=reciprocals)
+```
+
+GroupNorm:
+
+```python
+# Create the reciprocals
+grid_size = device.compute_with_storage_grid_size()
+torch_reciprocals = ttnn.create_group_norm_reciprocals(N, C, H, W, num_groups, grid_size)
+reciprocals = ttnn.from_torch(
+   torch_reciprocals,
+   device=device,
+   memory_config=ttnn.L1_MEMORY_CONFIG,
+   dtype=ttnn.float32)
+
+# Pass into ttnn.group_norm()
+output_tensor = ttnn.group_norm(<other inputs>, reciprocals=reciprocals, use_welford=True)
+```

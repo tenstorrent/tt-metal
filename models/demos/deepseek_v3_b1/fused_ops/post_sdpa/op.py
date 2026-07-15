@@ -1,53 +1,57 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 """
 Post SDPA fused operation with CCL All-Reduce.
 
-This implements Matmul1 + Gather1 + Mcast + Matmul2 + Gather2 + CCL All-Reduce as a fused execution:
-- Matmul1: [1, 512] x [512, 128] -> [1, 128] distributed across 64 cores (8x8 grid)
-- Gather1: Collect results from all 64 cores to [1, 8192] on gather core (12, 9)
-- Mcast: Broadcast [1, 8192] to 130 cores (13x10 grid, rectangular for efficient mcast)
-- Matmul2: [1, 8192] x [8192, 64] -> [1, 64] on 112 active cores (rows 0-8 full 12 + row 9 cols 0-3)
-- Gather2: Collect results from all 112 active cores to [1, 7168] on gather core (12, 9)
+This implements Matmul4 + Gather2 + Mcast3 + Matmul5 + Gather3 + CCL All-Reduce as a fused execution:
+- Matmul4: [1, 512] x [512, 128] -> [1, 128] distributed across 64 cores (kv_b2 grid: 5x8 + 12x2)
+- Gather2: Collect results from all 64 cores to [1, 8192] on gather core (12, 9)
+- Mcast3: Broadcast [1, 8192] to 130 cores (13x10 grid, rectangular for efficient mcast3)
+- Matmul5: [1, 8192] x [8192, 64] -> [1, 64] on 112 active cores (o_proj grid: 12x8 + 8x2)
+- Gather3: Collect results from all 112 active cores to [1, 7168] on sender core (11, 9)
 - CCL All-Reduce: Exchange [1, 7168] between devices and reduce (local + remote + residual)
 
-The 13x10 mcast grid contains 130 cores, but only 112 are active for matmul2.
-The 8 inactive cores (row 9 cols 4-11) receive mcast data but skip matmul via is_matmul2_core=false.
+The 13x10 mcast3 grid contains 130 cores, but only 112 are active for matmul5.
+The 18 inactive cores receive mcast3 data but skip matmul via is_matmul5_core=false.
 
-CCL All-Reduce uses:
-- CCL Receiver core = Gather core (12, 9) - already has local data after Gather2
-- CCL Sender core = Adjacent core (11, 9) - reads from gather core, sends via fabric
+CCL All-Reduce uses two cores:
+- Sender core (11, 9): gather3 receiver + dual fabric writers (NCRISC link 1, BRISC link 0)
+- Receiver core (12, 9): fabric reader (NCRISC) + reduction compute (TRISC)
+Note: sender core (11, 9) is also a matmul4/mcast3 core; gather3 now delivers there directly.
 
 CB Layout:
-- CB 0: matmul1_in0 (8x8 grid)
-- CB 1: matmul1_in1 (8x8 grid)
-- CB 2: matmul1_out (8x8 grid)
-- CB 3: gather1_dst = mcast_src (gather core)
-- CB 4: mcast_dst = matmul2_in0 (13x10 grid)
-- CB 5: matmul2_in1 (112 active matmul2 cores)
-- CB 6: matmul2_out (112 active matmul2 cores)
-- CB 7: gather2_dst = ccl_local_data (gather core)
-- CB 8: ccl_sender_in (ccl sender core)
-- CB 9: ccl_remote_data (gather/receiver core - intermediate tensor)
-- CB 10: ccl_residual (gather/receiver core - optional)
-- CB 11: ccl_temp (gather/receiver core - for compute)
-- CB 12: ccl_output (gather/receiver core - final output)
-- CB 13: ccl_packet_header (sender + receiver cores)
+- CB 44: matmul4_in0 (kv_b2 grid: 5x8 + 12x2)
+- CB 45: matmul4_in1 (kv_b2 grid: 5x8 + 12x2)
+- CB 46: matmul4_out (kv_b2 grid: 5x8 + 12x2)
+- CB 47: gather2_dst = mcast3_src (gather core 12,9)
+- CB 48: mcast3_dst = matmul5_in0 (13x10 grid)
+- CB 49: matmul5_in1 (112 active matmul5 cores)
+- CB 50: matmul5_out (112 active matmul5 cores)
+- CB 51: gather3_dst = ccl_local_data (sender core 11,9)
+- CB 52: ccl_recv_local_data (receiver core 12,9 - NOC-read copy of local data)
+- CB 53: ccl_remote_data (receiver core 12,9 - intermediate tensor)
+- CB 54: ccl_residual (receiver core 12,9 - optional)
+- CB 55: ccl_output (receiver core 12,9 - final output)
 """
+
 
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_b1.circular_buffer_utils import cb_descriptor_from_overlapped_tensor
+from models.demos.deepseek_v3_b1.micro_ops.ccl_all_reduce.op import DeepseekMinimalAllReduce
+from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.config import resolve_sdpa_reduce_config
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
+    PerCoreCompileTimeDescriptor,
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
-
-
-def _round_up(value: int, alignment: int) -> int:
-    return ((value + alignment - 1) // alignment) * alignment
+from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
+    KVB12_PROJ_SingleDeviceOverlapSpec,
+    O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec,
+)
 
 
 def _get_element_size_bytes(dtype):
@@ -58,51 +62,115 @@ def _get_element_size_bytes(dtype):
     raise ValueError(f"Unsupported dtype for sdpa: {dtype}")
 
 
+def _filter_runtime_args(rt_args, core_range_set):
+    """Return a new RuntimeArgs containing only entries for cores in core_range_set."""
+    filtered = ttnn.RuntimeArgs()
+    for coord, args in rt_args:
+        if core_range_set.contains(coord):
+            filtered[coord.x][coord.y] = list(args)
+    return filtered
+
+
+def _extend_runtime_args(existing_rt_args, rt_args, core_range_set):
+    """Extend existing per-core runtime args with additional args for cores in core_range_set.
+
+    For cores that already have runtime args (e.g., MLA args), appends the new args
+    (e.g., SDPA args) so the kernel can read them sequentially.
+    For cores without existing args, sets them to the new args.
+    """
+    for coord, args in rt_args:
+        if core_range_set.contains(coord):
+            existing_rt_args[coord.x][coord.y].extend(list(args))
+
+
 class PostSDPA:
     """
     Post SDPA fused operation implementation using ttnn.generic_op.
 
     Implements the full post_sdpa fusion with CCL all-reduce:
-    - Matmul1 + Gather1 + Mcast + Matmul2 + Gather2 + CCL All-Reduce
+    - Matmul4 + Gather2 + Mcast3 + Matmul5 + Gather3 + CCL All-Reduce
     """
 
     @staticmethod
-    def golden(input_tensors, weights1_tensor, weights2_tensor, residual_tensor=None):
+    def golden(input_tensor, weights1_tensor, weights2_tensor, residual_tensor=None):
         """
-        PyTorch reference implementation for validation.
+        PyTorch reference implementation for a single device.
+
+        Models the hardware pipeline:
+          - Matmul1: batched per-core [1, K1] x [K1, n1_per_core] across num_matmul1_cores cores
+          - Gather1: collect per-core outputs to [1, intermediate]
+          - Matmul2: [1, intermediate] x [intermediate, output_size]
 
         Args:
-            input_tensors: List of input tensors (torch.Tensor) [1, 512], one per device
-            weights1_tensor: First weights tensor (torch.Tensor) [512, 8192]
-            weights2_tensor: Second weights tensor (torch.Tensor) [8192, 7168]
-            residual_tensor: Optional residual tensor to add after reduction [1, 7168]
+            input_tensor: Input tensor (torch.Tensor) [num_matmul1_cores, K1]
+            weights1_tensor: First weights tensor (torch.Tensor) [K1, intermediate]
+                             (intermediate = num_matmul1_cores * n1_per_core)
+            weights2_tensor: Second weights tensor (torch.Tensor) [intermediate, output_size]
+            residual_tensor: Optional residual tensor to add [1, output_size]
 
         Returns:
-            Output tensor [1, 7168] - result of all-reduce across devices
+            Output tensor [1, output_size]
         """
-        # Compute matmul chain for each device
-        device_results = []
-        for input_tensor in input_tensors:
-            intermediate = input_tensor @ weights1_tensor  # [1, 8192]
-            result = intermediate @ weights2_tensor  # [1, 7168]
-            device_results.append(result)
+        num_cores, K1 = input_tensor.shape
+        intermediate = weights1_tensor.shape[1]
+        n1_per_core = intermediate // num_cores
 
-        # All-reduce: sum across all devices
-        reduced = torch.sum(torch.stack(device_results), dim=0)
+        # Batched matmul1: [num_cores, 1, K1] x [num_cores, K1, n1_per_core] -> [num_cores, 1, n1_per_core]
+        inp_batched = input_tensor.unsqueeze(1)  # [num_cores, 1, K1]
+        w1_batched = weights1_tensor.reshape(K1, num_cores, n1_per_core).permute(
+            1, 0, 2
+        )  # [num_cores, K1, n1_per_core]
+        out1 = torch.bmm(inp_batched, w1_batched)  # [num_cores, 1, n1_per_core]
 
-        # Add residual if provided
+        # Gather: [num_cores, 1, n1_per_core] -> [1, intermediate]
+        gathered = out1.reshape(1, intermediate)
+
+        # Matmul2: [1, intermediate] x [intermediate, output_size] -> [1, output_size]
+        result = gathered @ weights2_tensor
+
         if residual_tensor is not None:
-            reduced = reduced + residual_tensor
+            result = result + residual_tensor
 
-        return reduced
+        return result
+
+    SDPA_NUM_GLOBAL_SEMAPHORES = 2  # SdpaReduceToAll recv semaphores (r1, r2)
 
     @staticmethod
-    def op(
+    def get_num_semaphores(num_links=1):
+        """Return the total number of global semaphores required by PostSDPA.
+
+        The flat list contains CCL all-reduce semaphores followed by SDPA
+        reduce-to-all semaphores.  The count is fixed regardless of whether
+        CCL or SDPA are actually enabled at runtime.
+        """
+        return DeepseekMinimalAllReduce.get_num_semaphores(num_links=num_links) + PostSDPA.SDPA_NUM_GLOBAL_SEMAPHORES
+
+    @staticmethod
+    def create_semaphores(mesh_device, num_links=1):
+        """Create all global semaphores required by PostSDPA.
+
+        Args:
+            mesh_device: TT mesh device or submesh.
+            num_links: Number of fabric links (default 1).
+
+        Returns:
+            Flat list of global semaphore objects (CCL semaphores followed by
+            SDPA semaphores).
+        """
+        num_semaphores = PostSDPA.get_num_semaphores(num_links=num_links)
+        device_grid_size = mesh_device.compute_with_storage_grid_size()
+        available_cores = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
+        )
+        return [ttnn.create_global_semaphore(mesh_device, available_cores, 0) for _ in range(num_semaphores)]
+
+    @staticmethod
+    def get_program_context(
         input_tensor_mesh,
         weights1_tensor,
         weights2_tensor,
-        gather1_output_tensor,
         gather2_output_tensor,
+        gather3_output_tensor,
         intermediate_tensor=None,
         output_tensor=None,
         semaphores=None,
@@ -110,62 +178,34 @@ class PostSDPA:
         residual_tensor_mesh=None,
         fp32_dest_acc_en=False,
         ccl_enabled=True,
+        ccl_num_links=1,
         sdpa_kv_cache_buffer=None,
         # SDPA Reduce-to-All parameters (optional - when None, SDPA phase is skipped)
         sdpa_input_l_mesh=None,
         sdpa_input_ms_mesh=None,
         sdpa_output_l_mesh=None,
-        sdpa_r1_recv_mesh=None,
-        sdpa_r2_recv_mesh=None,
+        sdpa_intermediate_recv_mesh=None,
         sdpa_forwarder_scratch_mesh=None,
-        sdpa_semaphores=None,
         sdpa_scale_fp32=1.0,
-        sdpa_forwarder_cores=None,
         sdpa_cluster_axis=0,
         sdpa_position_id_tensor_mesh=None,
         sdpa_per_device_chunk_size=0,
     ):
         """
-        Execute post_sdpa fused operation with optional SDPA reduce-to-all and CCL all-reduce.
+        Compute per-device program context for the post_sdpa fused operation.
 
         Args:
-            input_tensor_mesh: Input tensor mesh [1, 512] (height-sharded across 8x8 matmul1 cores)
-                               When sdpa_enabled, this receives scatter output from SDPA phase
-            weights1_tensor: First weights tensor [512, 8192] (width-sharded across 8x8)
-            weights2_tensor: Second weights tensor [8192, 7168] (width-sharded across 112 cores)
-            gather1_output_tensor: Intermediate tensor [1, 8192] for gather1/mcast (on gather core)
-            gather2_output_tensor: Intermediate tensor mesh [1, 7168] for gather2/CCL (on gather core per device)
-            intermediate_tensor: CCL intermediate tensor mesh for receiving remote data (None when ccl_enabled=False)
-            output_tensor: Final output tensor mesh [1, 7168] (None when ccl_enabled=False)
-            semaphores: List of two global semaphores for CCL synchronization (None when ccl_enabled=False)
-            cluster_axis: Axis for TP all-reduce at the end (default 0, typically 1 for column-wise reduction)
-            residual_tensor_mesh: Optional tensor mesh for residuals [1, 7168] (ignored when ccl_enabled=False)
-            fp32_dest_acc_en: Whether to enable FP32 accumulation in compute kernel
-            ccl_enabled: Whether to enable CCL all-reduce after gather2 (default True)
-            sdpa_kv_cache_buffer: Optional SDPA kv-cache buffer for CB overlap (height-sharded on full
-                device grid, 156672 B/core). When provided, non-tensor-backed CBs (2, 4, 6, 8, 11, 13)
-                are overlapped into the kv-cache L1 buffer to save memory.
-
-            SDPA Reduce-to-All parameters (all None to skip SDPA phase):
-            sdpa_input_l_mesh: L input tensor mesh [8, 4096] (width-sharded across 8 SDPA workers)
-            sdpa_input_ms_mesh: MS input tensor mesh [8, 256] (width-sharded across 8 SDPA workers)
-            sdpa_output_l_mesh: L output tensor mesh [8, 4096] (width-sharded across 8 SDPA workers)
-            sdpa_r1_recv_mesh: R1 receive buffer mesh for SDPA CCL
-            sdpa_r2_recv_mesh: R2 receive buffer mesh for SDPA CCL
-            sdpa_forwarder_scratch_mesh: Forwarder scratch buffer mesh
-            sdpa_semaphores: List of two global semaphores for SDPA CCL
-            sdpa_scale_fp32: Scale value for SDPA reduction (default 1.0)
-            sdpa_forwarder_cores: List of 2 CoreCoord for SDPA forwarders
-            sdpa_cluster_axis: Axis for SDPA all-reduce (default 0, typically reduces across rows)
-            sdpa_position_id_tensor_mesh: Optional position ID tensor mesh (HEIGHT_SHARDED int32 [1,1]
-                per SDPA worker core). When provided with sdpa_per_device_chunk_size > 0, enables
-                position-based device validity masking.
-            sdpa_per_device_chunk_size: Chunk size per device for position validity. Device d in the
-                ring is valid iff position_id >= d * per_device_chunk_size. Default 0 (disabled).
+            semaphores: Flat list of global semaphores created by
+                ``PostSDPA.create_semaphores()``.  The list is split internally
+                into CCL semaphores (first ``DeepseekMinimalAllReduce.get_num_semaphores``
+                entries) followed by SDPA semaphores (next 2 entries).
 
         Returns:
-            When ccl_enabled=True: output_tensor mesh with all-reduced result
-            When ccl_enabled=False: gather2_output_tensor mesh with per-device gather2 result
+            Tuple of (full_device_grid, per_device_contexts) where:
+            - full_device_grid: CoreRangeSet covering all cores used
+            - per_device_contexts: List of dicts, one per device, each containing
+              compile-time args, CB/semaphore descriptors, core descriptors, and
+              pre-computed runtime args for CCL and SDPA fabric setup.
         """
         mesh_device = input_tensor_mesh.device()
         mesh_shape = mesh_device.shape
@@ -174,22 +214,39 @@ class PostSDPA:
 
         # Get per-device tensors
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
-        gather2_output_tensors_per_device = ttnn.get_device_tensors(gather2_output_tensor)
-        if ccl_enabled:
-            intermediate_tensors_per_device = ttnn.get_device_tensors(intermediate_tensor)
-            output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
-        if ccl_enabled and residual_tensor_mesh is not None:
-            residual_tensors_per_device = ttnn.get_device_tensors(residual_tensor_mesh)
+        weights1_fused_tensors_per_device = ttnn.get_device_tensors(weights1_tensor.fused_tensor)
+        weights2_fused_tensors_per_device = ttnn.get_device_tensors(weights2_tensor.fused_tensor)
+        gather3_output_tensors_per_device = ttnn.get_device_tensors(gather3_output_tensor)
         sdpa_kv_cache_buffers_per_device = (
             ttnn.get_device_tensors(sdpa_kv_cache_buffer) if sdpa_kv_cache_buffer is not None else None
         )
 
-        # CCL semaphores (only when CCL is enabled)
+        ccl_num_links = int(ccl_num_links)
+        if ccl_num_links < 1:
+            raise ValueError(f"ccl_num_links must be >= 1, got {ccl_num_links}")
+
+        # Validate and split the flat semaphore list (always required, like AttentionBlock)
+        expected_num_sems = PostSDPA.get_num_semaphores(num_links=ccl_num_links)
+        assert semaphores is not None and len(semaphores) == expected_num_sems, (
+            f"Expected exactly {expected_num_sems} semaphores "
+            f"(from PostSDPA.get_num_semaphores(num_links={ccl_num_links})), "
+            f"got {len(semaphores) if semaphores is not None else 0}"
+        )
+
+        semaphore_index = 0
+        ccl_num_sems = DeepseekMinimalAllReduce.get_num_semaphores(num_links=ccl_num_links)
+        ccl_semaphores = semaphores[semaphore_index : semaphore_index + ccl_num_sems]
+        semaphore_index += ccl_num_sems
+        sdpa_semaphores = semaphores[semaphore_index : semaphore_index + PostSDPA.SDPA_NUM_GLOBAL_SEMAPHORES]
+        semaphore_index += PostSDPA.SDPA_NUM_GLOBAL_SEMAPHORES
+        assert semaphore_index == len(semaphores), "Unexpected PostSDPA semaphore consumption"
+
         if ccl_enabled:
-            ccl_semaphore1 = semaphores[0]
-            ccl_semaphore2 = semaphores[1]
-            ccl_semaphore1_addr = ttnn.get_global_semaphore_address(ccl_semaphore1)
-            ccl_semaphore2_addr = ttnn.get_global_semaphore_address(ccl_semaphore2)
+            intermediate_tensors_per_device = ttnn.get_device_tensors(intermediate_tensor)
+            output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
+            residual_tensors_per_device = (
+                ttnn.get_device_tensors(residual_tensor_mesh) if residual_tensor_mesh is not None else None
+            )
 
         # Get tensor properties from first device
         input_tensor_sample = input_tensors_per_device[0]
@@ -198,72 +255,59 @@ class PostSDPA:
 
         # Tile definitions
         TILE_1x32 = ttnn.Tile((1, 32))
-        TILE_32x32 = ttnn.Tile((32, 32))
         tile_1x32_size = TILE_1x32.get_tile_size(data_format)
+        TILE_32x32 = ttnn.Tile((32, 32))
         tile_32x32_size = TILE_32x32.get_tile_size(data_format)
 
-        # CCL intermediate tensor info (32x32 tiles, only when CCL is enabled)
-        if ccl_enabled:
-            intermediate_tensor_sample = intermediate_tensors_per_device[0]
-            intermediate_tile = intermediate_tensor_sample.tile
-            intermediate_tile_height, intermediate_tile_width = intermediate_tile.tile_shape
-            standard_tile_size_bytes = intermediate_tile_height * intermediate_tile_width * element_size
-
         # ========================================================================
-        # Core grid configuration (same for all devices)
+        # Core grid configuration — derived from production weight overlap specs
         # ========================================================================
-        # Matmul1 grid: 8x8 = 64 cores
-        MATMUL1_GRID_START_X = 0
-        MATMUL1_GRID_START_Y = 0
-        MATMUL1_GRID_END_X = 7  # 8 columns (0-7)
-        MATMUL1_GRID_END_Y = 7  # 8 rows (0-7)
-        matmul1_grid = ttnn.CoreRange(
-            ttnn.CoreCoord(MATMUL1_GRID_START_X, MATMUL1_GRID_START_Y),
-            ttnn.CoreCoord(MATMUL1_GRID_END_X, MATMUL1_GRID_END_Y),
-        )
-        matmul1_core_grid = ttnn.CoreRangeSet([matmul1_grid])
-        num_matmul1_cores = matmul1_grid.grid_size().x * matmul1_grid.grid_size().y  # 64
+        # Matmul4 grid: kv_b2 cores (5×8 + 12×2 = 64 cores)
+        kv_b12_spec = KVB12_PROJ_SingleDeviceOverlapSpec()
+        matmul4_core_grid = kv_b12_spec.kv_b2_core_range_set
+        num_matmul4_cores = matmul4_core_grid.num_cores()  # 64
 
-        # Gather/CCL receiver core: (12, 9)
+        # Per-core gather2 sender index: contiguous 0..63 in row-major order.
+        # Needed because kv_b2 grid is non-rectangular (5×8 + 12×2).
+        matmul4_cores = ttnn.corerange_to_cores(matmul4_core_grid, row_wise=True)
+        gather2_sender_idx_per_core = [(core, idx) for idx, core in enumerate(matmul4_cores)]
+
+        # Gather2/mcast3/CCL receiver core: (12, 9)
         gather_core = ttnn.CoreCoord(12, 9)
         gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
 
-        # CCL sender core: (11, 9) - adjacent to gather core
-        ccl_sender_core = ttnn.CoreCoord(11, 9)
-        ccl_sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ccl_sender_core, ccl_sender_core)])
+        # Gather3 receiver / CCL sender core: (11, 9)
+        sender_core = ttnn.CoreCoord(11, 9)
+        sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(sender_core, sender_core)])
 
-        # Mcast grid: 13x10 = 130 cores (full rectangular for efficient mcast)
+        # Mcast3 grid: 13x10 = 130 cores (full rectangular for efficient mcast3)
         MCAST_GRID_START_X = 0
         MCAST_GRID_START_Y = 0
         MCAST_GRID_END_X = 12  # 13 columns (0-12)
         MCAST_GRID_END_Y = 9  # 10 rows (0-9)
-        mcast_grid = ttnn.CoreRange(
+        mcast3_grid = ttnn.CoreRange(
             ttnn.CoreCoord(MCAST_GRID_START_X, MCAST_GRID_START_Y),
             ttnn.CoreCoord(MCAST_GRID_END_X, MCAST_GRID_END_Y),
         )
-        mcast_core_grid = ttnn.CoreRangeSet([mcast_grid])
-        num_mcast_cores = mcast_grid.grid_size().x * mcast_grid.grid_size().y  # 130
+        mcast3_core_grid = ttnn.CoreRangeSet([mcast3_grid])
+        num_mcast3_cores = mcast3_grid.grid_size().x * mcast3_grid.grid_size().y  # 130
 
-        # Active Matmul2 cores: 112 cores (rows 0-8 full 12 cols + row 9 cols 0-3)
-        matmul2_grid_main = ttnn.CoreRange(
-            ttnn.CoreCoord(0, 0),
-            ttnn.CoreCoord(11, 8),  # 12 columns x 9 rows = 108 cores
-        )
-        matmul2_grid_extra = ttnn.CoreRange(
-            ttnn.CoreCoord(0, 9),
-            ttnn.CoreCoord(3, 9),  # 4 columns x 1 row = 4 cores
-        )
-        matmul2_active_core_grid = ttnn.CoreRangeSet([matmul2_grid_main, matmul2_grid_extra])
-        num_matmul2_cores = 112  # 108 + 4 active cores
+        # Active Matmul5 cores: o_proj cores (12×8 + 8×2 = 112 cores)
+        o_proj_spec = O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec()
+        matmul5_active_core_grid = o_proj_spec.o_proj.core_range_set
+        num_matmul5_cores = matmul5_active_core_grid.num_cores()  # 112
 
-        # Gather2 sender grid bounds (for offset calculation, use bounding box)
-        MATMUL2_GRID_START_X = 0
-        MATMUL2_GRID_START_Y = 0
-        MATMUL2_GRID_END_X = 11  # Same as mcast grid for offset calculation
-        MATMUL2_GRID_END_Y = 9
+        # Per-core gather3 sender index: contiguous 0..111 in row-major order.
+        # Needed because o_proj grid is non-rectangular (12×8 + 8×2).
+        # Row-major (y then x) matches WIDTH_SHARDED shard placement order.
+        matmul5_cores = ttnn.corerange_to_cores(matmul5_active_core_grid, row_wise=True)
+        gather3_sender_idx_per_core = [(core, idx) for idx, core in enumerate(matmul5_cores)]
 
         # Full grid (union of all cores for semaphore allocation)
-        full_grid = matmul1_core_grid.merge(gather_core_grid).merge(mcast_core_grid).merge(ccl_sender_core_grid)
+        full_grid = matmul4_core_grid
+        full_grid = full_grid.merge(gather_core_grid)
+        full_grid = full_grid.merge(mcast3_core_grid)
+        full_grid = full_grid.merge(sender_core_grid)
 
         # ========================================================================
         # SDPA Reduce-to-All configuration (optional)
@@ -273,75 +317,61 @@ class PostSDPA:
             sdpa_enabled and sdpa_position_id_tensor_mesh is not None and sdpa_per_device_chunk_size > 0
         )
         if sdpa_enabled:
-            # SDPA worker grid: 8 cores at (2,8)-(5,8), (2,9)-(5,9)
-            sdpa_worker_grid = ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(2, 8), ttnn.CoreCoord(5, 8)),  # 4 cores
-                    ttnn.CoreRange(ttnn.CoreCoord(2, 9), ttnn.CoreCoord(5, 9)),  # 4 cores
-                ]
-            )
-            num_sdpa_workers = 8
+            # SDPA tensor properties - use same calculation as original sdpa_reduce_to_all op
+            sdpa_input_l_sample = ttnn.get_device_tensors(sdpa_input_l_mesh)[0]
 
-            # SDPA forwarder cores: (6,9), (7,9) - provided by caller or default
-            # Both must be on row 9 with x > 3 to be outside matmul2 grid (same compile-time args)
-            if sdpa_forwarder_cores is None:
-                sdpa_forwarder_cores = [ttnn.CoreCoord(6, 9), ttnn.CoreCoord(7, 9)]
-            sdpa_forwarder_grid = ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(sdpa_forwarder_cores[0], sdpa_forwarder_cores[0]),
-                    ttnn.CoreRange(sdpa_forwarder_cores[1], sdpa_forwarder_cores[1]),
-                ]
-            )
+            sdpa_worker_grid = sdpa_input_l_sample.memory_config().shard_spec.grid
+
+            # SDPA forwarder grid: derived from the scratch buffer's shard spec so that
+            # the kernel runs on exactly the cores where the scratch buffer is allocated.
+            assert (
+                sdpa_forwarder_scratch_mesh is not None
+            ), "sdpa_forwarder_scratch_mesh must be provided when sdpa_enabled=True"
+            sdpa_forwarder_scratch_sample = ttnn.get_device_tensors(sdpa_forwarder_scratch_mesh)[0]
+            sdpa_forwarder_grid = sdpa_forwarder_scratch_sample.memory_config().shard_spec.grid
+            sdpa_forwarder_cores = list(ttnn.corerange_to_cores(sdpa_forwarder_grid, row_wise=True))
 
             # Add SDPA cores to full grid (workers and forwarders both part of unified kernel)
             full_grid = full_grid.merge(sdpa_worker_grid).merge(sdpa_forwarder_grid)
-
-            # SDPA tensor properties - use same calculation as original sdpa_reduce_to_all op
-            sdpa_input_l_sample = ttnn.get_device_tensors(sdpa_input_l_mesh)[0]
-            sdpa_input_ms_sample = ttnn.get_device_tensors(sdpa_input_ms_mesh)[0]
 
             # Get actual tile dimensions from input tensor (matches original op)
             sdpa_tile = sdpa_input_l_sample.tile
             sdpa_tile_height, sdpa_tile_width = sdpa_tile.tile_shape
             sdpa_element_size_bytes = _get_element_size_bytes(sdpa_input_l_sample.dtype)
-            sdpa_input_page_size_bytes = sdpa_element_size_bytes * sdpa_tile_height * sdpa_tile_width
             sdpa_l1_alignment = 16  # L1 alignment for SDPA (matches original op)
-
-            # Get shard spec to calculate tile counts (matches original op)
             sdpa_shard_spec = sdpa_input_l_sample.memory_config().shard_spec
-            sdpa_input_l_num_pages = (sdpa_shard_spec.shape[0] // sdpa_tile_height) * (
-                sdpa_shard_spec.shape[1] // sdpa_tile_width
+
+            # SDPA forwarder parameters (using Type A/B worker split like original op)
+            sdpa_num_workers = 8
+            sdpa_num_forwarders = 2
+            sdpa_config = resolve_sdpa_reduce_config(
+                batch_size=sdpa_shard_spec.shape[0],
+                l_width=sdpa_shard_spec.shape[1],
+                num_cores=sdpa_num_workers,
+                tile_height=sdpa_tile_height,
+                tile_width=sdpa_tile_width,
+                bytes_per_element=sdpa_element_size_bytes,
+                num_links=sdpa_num_forwarders,
+                packet_header_size_bytes=ttnn.get_tt_fabric_packet_header_size_bytes(),
+                l1_alignment=sdpa_l1_alignment,
+                max_payload_size_bytes=ttnn.get_tt_fabric_max_payload_size_bytes(),
             )
-
-            # Calculate out_tiles using same formula as original op
-            PNH = 8
-            DH = sdpa_input_l_num_pages * sdpa_tile_width
-            DHt = DH // sdpa_tile_width
-            PNHt = PNH // sdpa_tile_height
-            Sq_chunk_t = PNHt
-            sdpa_out_tiles = Sq_chunk_t * DHt
-
-            # Chunking formula (identical to original op)
-            sdpa_max_tiles_per_chunk = 8
-            sdpa_min_num_l_chunks = (sdpa_out_tiles + sdpa_max_tiles_per_chunk - 1) // sdpa_max_tiles_per_chunk
-            sdpa_num_l_chunks = max(sdpa_min_num_l_chunks, 4)
-            if sdpa_out_tiles % sdpa_num_l_chunks != 0:
-                raise ValueError(
-                    f"sdpa_out_tiles ({sdpa_out_tiles}) must be divisible by sdpa_num_l_chunks ({sdpa_num_l_chunks})"
-                )
-
-            sdpa_tiles_per_l_chunk = sdpa_out_tiles // sdpa_num_l_chunks
-            sdpa_l_chunk_size_bytes = sdpa_tiles_per_l_chunk * sdpa_input_page_size_bytes
+            sdpa_input_page_size_bytes = sdpa_config.input_page_size_bytes
+            sdpa_out_tiles = sdpa_config.out_tiles
+            sdpa_num_l_chunks = sdpa_config.num_l_chunks
+            sdpa_tiles_per_l_chunk = sdpa_config.tiles_per_l_chunk
+            sdpa_l_chunk_size_bytes = sdpa_config.l_chunk_size_bytes
+            sdpa_compute_block_size = sdpa_config.compute_block_size
 
             # Alias for backward compatibility with CB descriptor code
             sdpa_l_tiles_per_worker = sdpa_out_tiles
 
             # SDPA tile sizes (get from actual tensor, not hardcoded)
             sdpa_l_tile_size = sdpa_input_page_size_bytes  # Actual tile size from input
-            sdpa_ms_tile_size = _round_up(sdpa_input_page_size_bytes, sdpa_l1_alignment)  # Aligned for MS
+            sdpa_ms_tile_size = sdpa_config.ms_tile_size_bytes
 
-            # SDPA scatter parameters (scatter output to matmul1 cores)
-            # Each SDPA worker scatters rows to matmul1 cores (one row per tile when using 8x32 tiles)
+            # SDPA scatter parameters (scatter output to matmul4 cores)
+            # Each SDPA worker scatters rows to matmul4 cores (one row per tile when using 8x32 tiles)
             sdpa_scatter_num_rows = sdpa_tile_height  # Rows per tile (8 for 8x32 tiles)
             sdpa_scatter_num_tiles = sdpa_l_tiles_per_worker  # Tiles per worker
             sdpa_scatter_src_tile_size = sdpa_l_tile_size  # Source tile size
@@ -355,28 +385,19 @@ class PostSDPA:
             # SDPA CB indices (14-24, after existing CBs 0-13)
             sdpa_cb_local_l = 14
             sdpa_cb_local_ms = 15
-            sdpa_cb_r1_neighbor_l = 16
-            sdpa_cb_r1_neighbor_ms = 17
+            sdpa_cb_neighbor_l = 16
+            sdpa_cb_neighbor_ms = 17
             sdpa_cb_r1_result_l = 18
             sdpa_cb_r1_result_ms = 19
-            sdpa_cb_r2_neighbor_l = 20
-            sdpa_cb_r2_neighbor_ms = 21
-            sdpa_cb_l_out = 22
-            sdpa_cb_ms_out = 23
-            sdpa_cb_packet_slot = 24
+            sdpa_cb_l_out = 20
 
-            # SDPA forwarder parameters (using Type A/B worker split like original op)
-            sdpa_num_workers = 8
-            sdpa_num_forwarders = 2
-            sdpa_workers_per_forwarder = sdpa_num_workers // sdpa_num_forwarders  # 4
-            sdpa_workers_per_type = sdpa_workers_per_forwarder // 2  # 2 (Type A and Type B alternate)
-            sdpa_slots_per_worker = 1 + sdpa_num_l_chunks  # MS + L chunks = 5 slots
-            sdpa_fwd_slots_per_round = sdpa_workers_per_type * sdpa_slots_per_worker  # 2 * 5 = 10 slots per direction
-            sdpa_fwd_slot_size = 256 + sdpa_l_chunk_size_bytes  # Header + max payload
-            sdpa_fwd_r2_buffer_offset = sdpa_fwd_slots_per_round * sdpa_fwd_slot_size
+            sdpa_slots_per_worker = sdpa_config.slots_per_worker
+            sdpa_fwd_slots_per_round = sdpa_config.slots_per_round
+            sdpa_fwd_slot_size = sdpa_config.slot_size
+            sdpa_fwd_r2_buffer_offset = sdpa_config.r2_buffer_offset
 
             # SDPA semaphore ID for scatter arrival (new semaphore)
-            scatter_arrival_semaphore_id = 7  # After existing semaphores 0-6
+            scatter_arrival_semaphore_id = 7  # After existing semaphores 0-5
 
             # SDPA forwarder semaphore IDs (on forwarder cores, signaled by workers)
             sdpa_fwd_r1_sem_id = 8
@@ -384,12 +405,9 @@ class PostSDPA:
             sdpa_bwd_r1_sem_id = 10
             sdpa_bwd_r2_sem_id = 11
 
-            # SDPA global semaphores
-            if sdpa_semaphores is not None:
-                sdpa_semaphore1 = sdpa_semaphores[0]
-                sdpa_semaphore2 = sdpa_semaphores[1]
-                sdpa_semaphore1_addr = ttnn.get_global_semaphore_address(sdpa_semaphore1)
-                sdpa_semaphore2_addr = ttnn.get_global_semaphore_address(sdpa_semaphore2)
+            # SDPA global semaphores (sliced from flat semaphore list)
+            sdpa_semaphore1_addr = ttnn.get_global_semaphore_address(sdpa_semaphores[0])
+            sdpa_semaphore2_addr = ttnn.get_global_semaphore_address(sdpa_semaphores[1])
 
             # Convert scale to FP32 bits
             import struct
@@ -397,105 +415,111 @@ class PostSDPA:
             sdpa_scale_fp32_bits = struct.unpack(">I", struct.pack(">f", sdpa_scale_fp32))[0]
 
         # ========================================================================
-        # Matmul1 parameters: [1, 512] x [512, 128] -> [1, 128]
+        # Matmul4 parameters: [1, 512] x [512, 128] -> [1, 128]
         # ========================================================================
-        matmul1_k_num_tiles = 16  # 512 / 32 = 16 tiles
-        matmul1_out_w_per_core = 4  # 128 / 32 = 4 tiles per core
+        matmul4_k_num_tiles = 16  # 512 / 32 = 16 tiles
+        matmul4_out_w_per_core = 4  # 128 / 32 = 4 tiles per core
 
         # ========================================================================
-        # Matmul2 parameters: [1, 8192] x [8192, 64] -> [1, 64]
+        # Matmul5 parameters: [1, 8192] x [8192, 64] -> [1, 64]
         # ========================================================================
-        matmul2_k_num_tiles = 256  # 8192 / 32 = 256 tiles
-        matmul2_out_w_per_core = 2  # 64 / 32 = 2 tiles per core
+        matmul5_k_num_tiles = 256  # 8192 / 32 = 256 tiles
+        matmul5_out_w_per_core = 2  # 64 / 32 = 2 tiles per core
 
         # ========================================================================
         # CB indices
         # ========================================================================
-        matmul1_in0_cb = 0  # Matmul1 input (8x8)
-        matmul1_in1_cb = 1  # Matmul1 weights (8x8)
-        matmul1_out_cb = 2  # Matmul1 output (8x8)
-        gather1_dst_cb = 3  # Gather1 output = Mcast source (gather core)
-        matmul2_in0_cb = 4  # Mcast dst = Matmul2 input (13x10 mcast grid)
-        matmul2_in1_cb = 5  # Matmul2 weights (112 active cores)
-        matmul2_out_cb = 6  # Matmul2 output (112 active cores)
-        gather2_dst_cb = 7  # Gather2 output = CCL local data (gather core)
-        ccl_sender_in_cb = 8  # CCL sender reads gather2 output (sender core)
-        ccl_remote_data_cb = 9  # CCL received remote data (receiver core)
-        ccl_residual_cb = 10  # CCL residual (receiver core)
-        ccl_temp_cb = 11  # CCL temp for compute (receiver core)
-        ccl_output_cb = 12  # CCL output (receiver core)
-        ccl_packet_header_cb = 13  # CCL packet headers (sender + receiver cores)
+        matmul4_in0_cb = 44  # Matmul4 input (kv_b2 grid)
+        matmul4_in1_cb = 45  # Matmul4 weights (kv_b2 grid)
+        matmul4_out_cb = 46  # Matmul4 output (kv_b2 grid)
+        gather2_dst_cb = 47  # Gather2 output = Mcast3 source (gather core)
+        matmul5_in0_cb = 48  # Mcast3 dst = Matmul5 input (13x10 mcast3 grid)
+        matmul5_in1_cb = 49  # Matmul5 weights (112 active cores)
+        matmul5_out_cb = 50  # Matmul5 output (112 active cores)
+        gather3_dst_cb = 51  # Gather3 output = CCL local data (sender core 11,9)
+        ccl_recv_local_data_cb = 52  # CCL receiver-side local data (receiver core 12,9)
+        ccl_remote_data_cb = 53  # CCL received remote data (receiver core 12,9)
+        ccl_residual_cb = 54  # CCL residual (receiver core 12,9)
+        ccl_output_cb = 55  # CCL output (receiver core 12,9)
 
         # ========================================================================
-        # Gather1 parameters: 64 cores -> [1, 8192]
+        # Gather2 parameters: 64 cores -> [1, 8192]
         # ========================================================================
-        gather1_data_size_bytes = matmul1_out_w_per_core * tile_1x32_size
-        gather1_src_num_pages = matmul1_out_w_per_core  # 4 pages per sender
-        gather1_dst_num_pages = num_matmul1_cores * matmul1_out_w_per_core  # 64 * 4 = 256 pages
-        gather1_noc0_num_senders = num_matmul1_cores
-        gather1_noc1_num_senders = 0
-
-        # ========================================================================
-        # Mcast parameters: [1, 8192] to 130 cores (13x10 grid)
-        # ========================================================================
-        mcast_data_size_bytes = gather1_dst_num_pages * tile_1x32_size  # 256 * 64 = 16384 bytes
-        mcast_src_num_pages = gather1_dst_num_pages  # 256 pages
-        mcast_dst_num_pages = gather1_dst_num_pages  # 256 pages per receiver
-
-        # ========================================================================
-        # Gather2 parameters: 112 cores -> [1, 7168]
-        # ========================================================================
-        gather2_data_size_bytes = matmul2_out_w_per_core * tile_1x32_size
-        gather2_src_num_pages = matmul2_out_w_per_core  # 2 pages per sender
-        gather2_dst_num_pages = num_matmul2_cores * matmul2_out_w_per_core  # 112 * 2 = 224 pages
-        gather2_noc0_num_senders = num_matmul2_cores
+        gather2_data_size_bytes = matmul4_out_w_per_core * tile_1x32_size
+        gather2_src_num_pages = matmul4_out_w_per_core  # 4 pages per sender
+        gather2_dst_num_pages = num_matmul4_cores * matmul4_out_w_per_core  # 64 * 4 = 256 pages
+        gather2_noc0_num_senders = num_matmul4_cores
         gather2_noc1_num_senders = 0
+
+        # ========================================================================
+        # Mcast3 parameters: [1, 8192] to 130 cores (13x10 grid)
+        # ========================================================================
+        mcast3_data_size_bytes = gather2_dst_num_pages * tile_1x32_size  # 256 * 64 = 16384 bytes
+        mcast3_src_num_pages = gather2_dst_num_pages  # 256 pages
+        mcast3_dst_num_pages = gather2_dst_num_pages  # 256 pages per receiver
+
+        # ========================================================================
+        # Gather3 parameters: 112 cores -> [1, 7168]
+        # ========================================================================
+        gather3_data_size_bytes = matmul5_out_w_per_core * tile_1x32_size
+        gather3_src_num_pages = matmul5_out_w_per_core  # 2 pages per sender
+        gather3_dst_num_pages = num_matmul5_cores * matmul5_out_w_per_core // 32  # 112 * 2 / 32 = 7 pages
+        gather3_noc0_num_senders = num_matmul5_cores
+        gather3_noc1_num_senders = 0
 
         # ========================================================================
         # CCL parameters: [1, 7168] all-reduce
         # ========================================================================
-        # Using 1x32 tiles to match gather2 output format (for tile-compatible reduction)
-        # 7168 elements = 224 tiles of 1x32 (32 elements each)
-        ccl_num_tiles = gather2_dst_num_pages  # 224 tiles of 1x32
-        ccl_page_size_bytes = tile_1x32_size  # 1x32 tile size
-        ccl_num_pages = gather2_dst_num_pages  # 224 pages of 1x32
-        ccl_payload_size_bytes = ccl_num_pages * ccl_page_size_bytes  # 224 * 64 = 14336 bytes
-        ccl_packet_header_size_bytes = 32
-        l1_alignment = 16
-
-        has_residual = 1 if residual_tensor_mesh is not None else 0
+        # CCL all-reduce uses 32x32 tile format to match gather3 output.
+        ccl_num_tiles = gather3_dst_num_pages  # 7 tiles of 32x32
+        ccl_page_size_bytes = tile_32x32_size
 
         # ========================================================================
         # Semaphore IDs
         # ========================================================================
-        gather1_noc0_receiver_semaphore_id = 0
-        gather1_noc1_receiver_semaphore_id = 1
-        mcast_data_sender_semaphore_id = 2
-        mcast_data_receiver_semaphore_id = 3
-        gather2_noc0_receiver_semaphore_id = 4
-        gather2_noc1_receiver_semaphore_id = 5
-        gather2_completion_semaphore_id = 6  # Gather2 signals, CCL sender waits
+        gather2_noc0_receiver_semaphore_id = 0
+        gather2_noc1_receiver_semaphore_id = 1
+        mcast3_data_sender_semaphore_id = 2
+        mcast3_data_receiver_semaphore_id = 3
+        gather3_noc0_receiver_semaphore_id = 4
+        gather3_noc1_receiver_semaphore_id = 5
         # CCL uses global semaphores (passed via runtime args)
 
-        # Create mesh program descriptor
-        mesh_program_descriptor = ttnn.MeshProgramDescriptor()
+        allreduce_config = DeepseekMinimalAllReduce.configure(
+            mesh_device=mesh_device,
+            intermediate_tensor=None,
+            output_tensor=output_tensor,
+            semaphores=ccl_semaphores,
+            cluster_axis=cluster_axis,
+            num_links=ccl_num_links,
+            chunk_num_tiles=None,
+            local_data_cb_id=gather3_dst_cb,
+            recv_local_data_cb_id=ccl_recv_local_data_cb,
+            remote_data_cb_id=ccl_remote_data_cb,
+            output_cb_id=ccl_output_cb,
+            residual_cb_id=ccl_residual_cb if residual_tensor_mesh is not None else None,
+            skip_local_push=True,
+            skip_ccl=not ccl_enabled,
+            sender_core=sender_core,
+        )
 
-        # For each device in the mesh, create appropriate program
+        if ccl_enabled:
+            allreduce_config.set_local_data_addr(gather3_output_tensors_per_device[0].buffer_address())
+            allreduce_config.set_remote_data_addr(intermediate_tensors_per_device[0].buffer_address())
+
+        per_device_contexts = []
+
+        # For each device in the mesh, compute program context
         for row in range(mesh_rows):
             for col in range(mesh_cols):
                 coord = ttnn.MeshCoordinate(row, col)
                 device_idx = row * mesh_cols + col
 
-                # Ring index along the cluster axis
-                ring_index = row if cluster_axis == 0 else col
-                is_first_chip = ring_index == 0
-
                 # Get the device's tensors
                 input_tensor_device = input_tensors_per_device[device_idx]
-                gather2_output_tensor_device = gather2_output_tensors_per_device[device_idx]
-                if ccl_enabled:
-                    output_tensor_device = output_tensors_per_device[device_idx]
-                    intermediate_tensor_device = intermediate_tensors_per_device[device_idx]
+                weights1_fused_tensor_device = weights1_fused_tensors_per_device[device_idx]
+                weights2_fused_tensor_device = weights2_fused_tensors_per_device[device_idx]
+                gather3_output_tensor_device = gather3_output_tensors_per_device[device_idx]
                 sdpa_kv_cache_buffer_device = (
                     sdpa_kv_cache_buffers_per_device[device_idx]
                     if sdpa_kv_cache_buffers_per_device is not None
@@ -506,97 +530,63 @@ class PostSDPA:
 
                 # Get NOC coordinates for this device
                 gather_dest_noc_core = device.worker_core_from_logical_core(gather_core)
-                mcast_dest_noc_start_core = device.worker_core_from_logical_core(mcast_grid.start)
-                mcast_dest_noc_end_core = device.worker_core_from_logical_core(mcast_grid.end)
-                ccl_sender_noc_core = device.worker_core_from_logical_core(ccl_sender_core)
-                ccl_receiver_noc_core = gather_dest_noc_core  # Same as gather core
-
-                # Determine CCL neighbor and semaphores based on position (only when CCL is enabled)
-                if ccl_enabled:
-                    ccl_sender_link = 0 if is_first_chip else 1
-                    ccl_receiver_link = 1 if is_first_chip else 0
-                    ccl_sender_semaphore_addr = ccl_semaphore1_addr if is_first_chip else ccl_semaphore2_addr
-                    ccl_receiver_semaphore_addr = ccl_semaphore2_addr if is_first_chip else ccl_semaphore1_addr
-
-                    # Calculate neighbor coordinate
-                    if is_first_chip:
-                        neighbor_row = row + 1 if cluster_axis == 0 else row
-                        neighbor_col = col if cluster_axis == 0 else col + 1
-                    else:
-                        neighbor_row = row - 1 if cluster_axis == 0 else row
-                        neighbor_col = col if cluster_axis == 0 else col - 1
+                sender_dest_noc_core = device.worker_core_from_logical_core(sender_core)
+                mcast3_dest_noc_start_core = device.worker_core_from_logical_core(mcast3_grid.start)
+                mcast3_dest_noc_end_core = device.worker_core_from_logical_core(mcast3_grid.end)
 
                 # Buffer addresses
-                gather1_receiver_data_addr = gather1_output_tensor.buffer_address()
-                # Gather2 writes to gather2_output_tensor, CCL reads from there and writes to output_tensor
-                gather2_receiver_data_addr = gather2_output_tensor_device.buffer_address()
+                gather2_receiver_data_addr = gather2_output_tensor.buffer_address()
+                # Gather3 writes to gather3_output_tensor, CCL reads from there and writes to output_tensor
+                gather3_receiver_data_addr = gather3_output_tensor_device.buffer_address()
 
-                mcast_is_part_of_receiver_grid = mcast_grid.contains(gather_core)
+                mcast3_is_part_of_receiver_grid = mcast3_grid.contains(gather_core)
 
                 # ========================================================================
                 # NCRISC compile-time args
                 # ========================================================================
                 ncrisc_named_compile_time_args = [
-                    # Matmul1
-                    ("matmul1_in0", matmul1_in0_cb),
-                    ("matmul1_in1", matmul1_in1_cb),
-                    ("matmul1_out", matmul1_out_cb),
-                    ("matmul1_k_num_tiles", matmul1_k_num_tiles),
-                    ("matmul1_out_w_per_core", matmul1_out_w_per_core),
-                    # Gather1 sender
-                    ("gather1_dest_noc_x", gather_dest_noc_core.x),
-                    ("gather1_dest_noc_y", gather_dest_noc_core.y),
-                    ("gather1_data_size_bytes", gather1_data_size_bytes),
-                    ("gather1_receiver_semaphore_id", gather1_noc0_receiver_semaphore_id),
-                    ("gather1_src_cb", matmul1_out_cb),
-                    ("gather1_src_num_pages", gather1_src_num_pages),
-                    ("gather1_sender_grid_start_x", MATMUL1_GRID_START_X),
-                    ("gather1_sender_grid_start_y", MATMUL1_GRID_START_Y),
-                    ("gather1_sender_grid_end_x", MATMUL1_GRID_END_X),
-                    ("gather1_sender_grid_end_y", MATMUL1_GRID_END_Y),
-                    ("gather1_row_major", 1),
-                    ("gather1_receiver_data_addr", gather1_receiver_data_addr),
-                    # Mcast receiver
-                    ("mcast_data_receiver_semaphore", mcast_data_receiver_semaphore_id),
-                    ("mcast_dst_cb", matmul2_in0_cb),
-                    ("mcast_dst_num_pages", mcast_dst_num_pages),
-                    # Matmul2
-                    ("matmul2_in0", matmul2_in0_cb),
-                    ("matmul2_in1", matmul2_in1_cb),
-                    ("matmul2_out", matmul2_out_cb),
-                    ("matmul2_k_num_tiles", matmul2_k_num_tiles),
-                    ("matmul2_out_w_per_core", matmul2_out_w_per_core),
+                    # Matmul4
+                    ("matmul4_in0", matmul4_in0_cb),
+                    ("matmul4_in1", matmul4_in1_cb),
+                    ("matmul4_out", matmul4_out_cb),
+                    ("matmul4_k_num_tiles", matmul4_k_num_tiles),
+                    ("matmul4_out_w_per_core", matmul4_out_w_per_core),
                     # Gather2 sender
                     ("gather2_dest_noc_x", gather_dest_noc_core.x),
                     ("gather2_dest_noc_y", gather_dest_noc_core.y),
                     ("gather2_data_size_bytes", gather2_data_size_bytes),
                     ("gather2_receiver_semaphore_id", gather2_noc0_receiver_semaphore_id),
-                    ("gather2_src_cb", matmul2_out_cb),
+                    ("gather2_src_cb", matmul4_out_cb),
                     ("gather2_src_num_pages", gather2_src_num_pages),
-                    ("gather2_sender_grid_start_x", MATMUL2_GRID_START_X),
-                    ("gather2_sender_grid_start_y", MATMUL2_GRID_START_Y),
-                    ("gather2_sender_grid_end_x", MATMUL2_GRID_END_X),
-                    ("gather2_sender_grid_end_y", MATMUL2_GRID_END_Y),
+                    ("gather2_sender_grid_start_x", 0),
+                    ("gather2_sender_grid_start_y", 0),
+                    ("gather2_sender_grid_end_x", 0),
+                    ("gather2_sender_grid_end_y", 0),
                     ("gather2_row_major", 1),
                     ("gather2_receiver_data_addr", gather2_receiver_data_addr),
-                    # CCL sender (NCRISC reads from gather core)
-                    ("ccl_sender_cb0_id", ccl_sender_in_cb),
-                    ("ccl_sender_num_tiles", ccl_num_pages),
-                    ("ccl_sender_tensor_page_size", ccl_page_size_bytes),
-                    ("ccl_sender_data_noc_x", ccl_receiver_noc_core.x),
-                    ("ccl_sender_data_noc_y", ccl_receiver_noc_core.y),
-                    ("ccl_sender_gather2_completion_semaphore_id", gather2_completion_semaphore_id),
-                    # CCL receiver (NCRISC waits for remote data)
-                    ("ccl_receiver_packet_header_cb_id", ccl_packet_header_cb),
-                    ("ccl_receiver_cb_in1", ccl_remote_data_cb),
-                    ("ccl_receiver_l1_alignment", l1_alignment),
-                    ("ccl_receiver_cb_in2", gather2_dst_cb),  # Local data from gather2
-                    ("ccl_receiver_remote_sender_noc_x", ccl_sender_noc_core.x),
-                    ("ccl_receiver_remote_sender_noc_y", ccl_sender_noc_core.y),
-                    ("ccl_receiver_num_standard_tiles", ccl_num_tiles),
-                    ("ccl_receiver_cb_residual", ccl_residual_cb),
-                    ("ccl_receiver_has_residual", has_residual),
-                    ("ccl_receiver_skip_local_push", 1),  # Skip local push since gather2 already pushed to CB7
+                    # Mcast3 receiver
+                    ("mcast3_data_receiver_semaphore", mcast3_data_receiver_semaphore_id),
+                    ("mcast3_dst_cb", matmul5_in0_cb),
+                    ("mcast3_dst_num_pages", mcast3_dst_num_pages),
+                    # Matmul5
+                    ("matmul5_in0", matmul5_in0_cb),
+                    ("matmul5_in1", matmul5_in1_cb),
+                    ("matmul5_out", matmul5_out_cb),
+                    ("matmul5_k_num_tiles", matmul5_k_num_tiles),
+                    ("matmul5_out_w_per_core", matmul5_out_w_per_core),
+                    # Gather3 sender (destination = sender core 11,9)
+                    ("gather3_dest_noc_x", sender_dest_noc_core.x),
+                    ("gather3_dest_noc_y", sender_dest_noc_core.y),
+                    ("gather3_data_size_bytes", gather3_data_size_bytes),
+                    ("gather3_receiver_semaphore_id", gather3_noc0_receiver_semaphore_id),
+                    ("gather3_src_cb", matmul5_out_cb),
+                    ("gather3_src_num_pages", gather3_src_num_pages),
+                    ("gather3_sender_grid_start_x", 0),
+                    ("gather3_sender_grid_start_y", 0),
+                    ("gather3_sender_grid_end_x", 0),
+                    ("gather3_sender_grid_end_y", 0),
+                    ("gather3_row_major", 1),
+                    ("gather3_receiver_data_addr", gather3_receiver_data_addr),
                 ]
 
                 # Add SDPA NCRISC compile-time args when enabled
@@ -606,10 +596,8 @@ class PostSDPA:
                             # SDPA CB indices
                             ("sdpa_cb_local_l", sdpa_cb_local_l),
                             ("sdpa_cb_local_ms", sdpa_cb_local_ms),
-                            ("sdpa_cb_r1_neighbor_l", sdpa_cb_r1_neighbor_l),
-                            ("sdpa_cb_r1_neighbor_ms", sdpa_cb_r1_neighbor_ms),
-                            ("sdpa_cb_r2_neighbor_l", sdpa_cb_r2_neighbor_l),
-                            ("sdpa_cb_r2_neighbor_ms", sdpa_cb_r2_neighbor_ms),
+                            ("sdpa_cb_neighbor_l", sdpa_cb_neighbor_l),
+                            ("sdpa_cb_neighbor_ms", sdpa_cb_neighbor_ms),
                             # SDPA tile/chunk sizes
                             ("sdpa_ms_tile_size_bytes", sdpa_ms_tile_size),
                             ("sdpa_l_chunk_size_bytes", sdpa_l_chunk_size_bytes),
@@ -631,29 +619,9 @@ class PostSDPA:
                 # BRISC compile-time args
                 # ========================================================================
                 brisc_named_compile_time_args = [
-                    # Matmul1/2 (no-op)
-                    ("matmul1_out", matmul1_out_cb),
-                    ("matmul2_out", matmul2_out_cb),
-                    # Gather1 receiver
-                    ("gather1_noc0_num_senders", gather1_noc0_num_senders),
-                    ("gather1_noc1_num_senders", gather1_noc1_num_senders),
-                    ("gather1_noc0_receiver_semaphore_id", gather1_noc0_receiver_semaphore_id),
-                    ("gather1_noc1_receiver_semaphore_id", gather1_noc1_receiver_semaphore_id),
-                    ("gather1_dst_cb", gather1_dst_cb),
-                    ("gather1_dst_num_pages", gather1_dst_num_pages),
-                    # Mcast sender
-                    ("mcast_dest_noc_start_x", mcast_dest_noc_start_core.x),
-                    ("mcast_dest_noc_start_y", mcast_dest_noc_start_core.y),
-                    ("mcast_dest_noc_end_x", mcast_dest_noc_end_core.x),
-                    ("mcast_dest_noc_end_y", mcast_dest_noc_end_core.y),
-                    ("mcast_num_cores", num_mcast_cores),
-                    ("mcast_data_sender_semaphore", mcast_data_sender_semaphore_id),
-                    ("mcast_data_receiver_semaphore", mcast_data_receiver_semaphore_id),
-                    ("mcast_data_size_bytes", mcast_data_size_bytes),
-                    ("mcast_src_cb", gather1_dst_cb),
-                    ("mcast_src_num_pages", mcast_src_num_pages),
-                    ("mcast_dst_cb", matmul2_in0_cb),
-                    ("mcast_is_part_of_receiver_grid", mcast_is_part_of_receiver_grid),
+                    # Matmul4/2 (no-op)
+                    ("matmul4_out", matmul4_out_cb),
+                    ("matmul5_out", matmul5_out_cb),
                     # Gather2 receiver
                     ("gather2_noc0_num_senders", gather2_noc0_num_senders),
                     ("gather2_noc1_num_senders", gather2_noc1_num_senders),
@@ -661,23 +629,26 @@ class PostSDPA:
                     ("gather2_noc1_receiver_semaphore_id", gather2_noc1_receiver_semaphore_id),
                     ("gather2_dst_cb", gather2_dst_cb),
                     ("gather2_dst_num_pages", gather2_dst_num_pages),
-                    # Gather2 completion signal for CCL sender synchronization
-                    ("gather2_completion_semaphore_id", gather2_completion_semaphore_id),
-                    ("ccl_sender_noc_x", ccl_sender_noc_core.x),
-                    ("ccl_sender_noc_y", ccl_sender_noc_core.y),
-                    # CCL sender (BRISC sends via fabric)
-                    ("ccl_sender_packet_header_cb_id", ccl_packet_header_cb),
-                    ("ccl_sender_packet_cb_id", ccl_sender_in_cb),
-                    ("ccl_sender_l1_alignment", l1_alignment),
-                    ("ccl_sender_input_num_tiles", ccl_num_pages),
-                    ("ccl_sender_page_size_bytes", ccl_page_size_bytes),
-                    ("ccl_sender_payload_size_bytes", ccl_payload_size_bytes),
-                    ("ccl_sender_data_noc_x", ccl_receiver_noc_core.x),
-                    ("ccl_sender_data_noc_y", ccl_receiver_noc_core.y),
-                    ("ccl_sender_remote_receiver_noc_x", ccl_receiver_noc_core.x),
-                    ("ccl_sender_remote_receiver_noc_y", ccl_receiver_noc_core.y),
-                    ("ccl_sender_dst_num_hops", 1),
-                    ("ccl_sender_num_connections", 1),
+                    # Mcast3 sender
+                    ("mcast3_dest_noc_start_x", mcast3_dest_noc_start_core.x),
+                    ("mcast3_dest_noc_start_y", mcast3_dest_noc_start_core.y),
+                    ("mcast3_dest_noc_end_x", mcast3_dest_noc_end_core.x),
+                    ("mcast3_dest_noc_end_y", mcast3_dest_noc_end_core.y),
+                    ("mcast3_num_cores", num_mcast3_cores),
+                    ("mcast3_data_sender_semaphore", mcast3_data_sender_semaphore_id),
+                    ("mcast3_data_receiver_semaphore", mcast3_data_receiver_semaphore_id),
+                    ("mcast3_data_size_bytes", mcast3_data_size_bytes),
+                    ("mcast3_src_cb", gather2_dst_cb),
+                    ("mcast3_src_num_pages", mcast3_src_num_pages),
+                    ("mcast3_dst_cb", matmul5_in0_cb),
+                    ("mcast3_is_part_of_receiver_grid", mcast3_is_part_of_receiver_grid),
+                    # Gather3 receiver
+                    ("gather3_noc0_num_senders", gather3_noc0_num_senders),
+                    ("gather3_noc1_num_senders", gather3_noc1_num_senders),
+                    ("gather3_noc0_receiver_semaphore_id", gather3_noc0_receiver_semaphore_id),
+                    ("gather3_noc1_receiver_semaphore_id", gather3_noc1_receiver_semaphore_id),
+                    ("gather3_dst_cb", gather3_dst_cb),
+                    ("gather3_dst_num_pages", gather3_dst_num_pages),
                 ]
 
                 # Add SDPA BRISC compile-time args when enabled
@@ -689,14 +660,13 @@ class PostSDPA:
                             ("sdpa_cb_local_ms", sdpa_cb_local_ms),
                             ("sdpa_cb_r1_result_l", sdpa_cb_r1_result_l),
                             ("sdpa_cb_r1_result_ms", sdpa_cb_r1_result_ms),
-                            ("sdpa_cb_packet_slot", sdpa_cb_packet_slot),
                             ("sdpa_cb_l_out", sdpa_cb_l_out),
                             # SDPA tile/chunk sizes
                             ("sdpa_ms_tile_size_bytes", sdpa_ms_tile_size),
                             ("sdpa_l_chunk_size_bytes", sdpa_l_chunk_size_bytes),
                             ("sdpa_num_l_chunks", sdpa_num_l_chunks),
                             ("sdpa_tiles_per_l_chunk", sdpa_tiles_per_l_chunk),
-                            ("sdpa_l1_alignment", l1_alignment),
+                            ("sdpa_l1_alignment", sdpa_l1_alignment),
                             ("sdpa_page_size_bytes", sdpa_l_tile_size),
                             ("sdpa_slot_size", sdpa_fwd_slot_size),
                             # SDPA scatter params
@@ -718,26 +688,18 @@ class PostSDPA:
                 # TRISC compile-time args
                 # ========================================================================
                 trisc_named_compile_time_args = [
-                    # Matmul1
-                    ("matmul1_in0", matmul1_in0_cb),
-                    ("matmul1_in1", matmul1_in1_cb),
-                    ("matmul1_out", matmul1_out_cb),
-                    ("matmul1_k_num_tiles", matmul1_k_num_tiles),
-                    ("matmul1_out_w_per_core", matmul1_out_w_per_core),
-                    # Matmul2
-                    ("matmul2_in0", matmul2_in0_cb),
-                    ("matmul2_in1", matmul2_in1_cb),
-                    ("matmul2_out", matmul2_out_cb),
-                    ("matmul2_k_num_tiles", matmul2_k_num_tiles),
-                    ("matmul2_out_w_per_core", matmul2_out_w_per_core),
-                    # CCL receiver compute (reduction)
-                    ("ccl_receiver_cb_in0", ccl_remote_data_cb),
-                    ("ccl_receiver_cb_in1", gather2_dst_cb),  # Local data
-                    ("ccl_receiver_cb_out0", ccl_output_cb),
-                    ("ccl_receiver_cb_residual", ccl_residual_cb),
-                    ("ccl_receiver_cb_temp", ccl_temp_cb),
-                    ("ccl_receiver_has_residual", has_residual),
-                    ("ccl_receiver_num_tiles", ccl_num_tiles),
+                    # Matmul4
+                    ("matmul4_in0", matmul4_in0_cb),
+                    ("matmul4_in1", matmul4_in1_cb),
+                    ("matmul4_out", matmul4_out_cb),
+                    ("matmul4_k_num_tiles", matmul4_k_num_tiles),
+                    ("matmul4_out_w_per_core", matmul4_out_w_per_core),
+                    # Matmul5
+                    ("matmul5_in0", matmul5_in0_cb),
+                    ("matmul5_in1", matmul5_in1_cb),
+                    ("matmul5_out", matmul5_out_cb),
+                    ("matmul5_k_num_tiles", matmul5_k_num_tiles),
+                    ("matmul5_out_w_per_core", matmul5_out_w_per_core),
                 ]
 
                 # Add SDPA TRISC compile-time args when enabled
@@ -747,244 +709,232 @@ class PostSDPA:
                             # SDPA CB indices
                             ("sdpa_cb_local_l", sdpa_cb_local_l),
                             ("sdpa_cb_local_ms", sdpa_cb_local_ms),
-                            ("sdpa_cb_r1_neighbor_l", sdpa_cb_r1_neighbor_l),
-                            ("sdpa_cb_r1_neighbor_ms", sdpa_cb_r1_neighbor_ms),
+                            ("sdpa_cb_neighbor_l", sdpa_cb_neighbor_l),
+                            ("sdpa_cb_neighbor_ms", sdpa_cb_neighbor_ms),
                             ("sdpa_cb_r1_result_l", sdpa_cb_r1_result_l),
                             ("sdpa_cb_r1_result_ms", sdpa_cb_r1_result_ms),
-                            ("sdpa_cb_r2_neighbor_l", sdpa_cb_r2_neighbor_l),
-                            ("sdpa_cb_r2_neighbor_ms", sdpa_cb_r2_neighbor_ms),
                             ("sdpa_cb_l_out", sdpa_cb_l_out),
-                            ("sdpa_cb_ms_out", sdpa_cb_ms_out),
                             # SDPA compute params
                             ("sdpa_scale_fp32", sdpa_scale_fp32_bits),
                             ("sdpa_tiles_per_l_chunk", sdpa_tiles_per_l_chunk),
                             ("sdpa_num_l_chunks", sdpa_num_l_chunks),
+                            ("sdpa_compute_block_size", sdpa_compute_block_size),
                             # SDPA position
                             ("sdpa_position_enabled", 1 if sdpa_position_enabled else 0),
                             ("sdpa_per_device_chunk_size", sdpa_per_device_chunk_size),
                         ]
                     )
 
+                ncrisc_named_compile_time_args.extend(allreduce_config.get_ncrisc_named_ct_args(coord))
+                brisc_named_compile_time_args.extend(allreduce_config.get_brisc_named_ct_args(coord))
+                trisc_named_compile_time_args.extend(allreduce_config.get_trisc_named_ct_args(coord))
+
                 # ========================================================================
                 # Circular buffer descriptors
                 # ========================================================================
                 running_address_offset = 0
 
-                # CB 0: Matmul1 input (from sharded tensor, 8x8 grid)
-                matmul1_in0_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul1_in0_cb, input_tensor_device)
+                # CB 0: Matmul4 input (from sharded tensor, kv_b2 grid)
+                matmul4_in0_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul4_in0_cb, input_tensor_device)
 
-                # CB 1: Matmul1 weights (from sharded tensor, 8x8 grid)
-                matmul1_in1_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul1_in1_cb, weights1_tensor)
+                # CB 1: Matmul4 weights (from kv_b2 overlapped tensor)
+                matmul4_in1_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+                    matmul4_in1_cb, weights1_tensor, weights1_fused_tensor_device
+                )
 
-                # CB 2: Matmul1 output (4 tiles of 1x32 per core, 8x8 grid)
+                # CB 2: Matmul4 output (4 tiles of 1x32 per core, kv_b2 grid)
                 # When kv_cache buffer is available, overlap into it. Otherwise standalone.
-                matmul1_out_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
-                matmul1_out_cb_format = ttnn.CBFormatDescriptor(
-                    buffer_index=matmul1_out_cb,
+                matmul4_out_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
+                matmul4_out_cb_format = ttnn.CBFormatDescriptor(
+                    buffer_index=matmul4_out_cb,
                     data_format=data_format,
                     page_size=tile_1x32_size,
-                    tile=matmul1_out_tile_descriptor,
+                    tile=matmul4_out_tile_descriptor,
                 )
                 if sdpa_kv_cache_buffer_device is not None:
-                    matmul1_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                        matmul1_out_cb,
+                    matmul4_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        matmul4_out_cb,
                         sdpa_kv_cache_buffer_device,
                         address_offset=running_address_offset,
-                        total_size=matmul1_out_w_per_core * tile_1x32_size,
+                        total_size=matmul4_out_w_per_core * tile_1x32_size,
                     )
-                    matmul1_out_cb_descriptor.format_descriptors = [matmul1_out_cb_format]
-                    running_address_offset += matmul1_out_cb_descriptor.total_size
+                    matmul4_out_cb_descriptor.format_descriptors = [matmul4_out_cb_format]
+                    running_address_offset += matmul4_out_cb_descriptor.total_size
                 else:
-                    matmul1_out_cb_descriptor = ttnn.CBDescriptor(
-                        total_size=matmul1_out_w_per_core * tile_1x32_size,
-                        core_ranges=matmul1_core_grid,
-                        format_descriptors=[matmul1_out_cb_format],
+                    matmul4_out_cb_descriptor = ttnn.CBDescriptor(
+                        total_size=matmul4_out_w_per_core * tile_1x32_size,
+                        core_ranges=matmul4_core_grid,
+                        format_descriptors=[matmul4_out_cb_format],
                     )
 
-                # CB 3: Gather1 output = Mcast source (from sharded tensor, gather core)
-                gather1_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    gather1_dst_cb, gather1_output_tensor
-                )
-
-                # CB 4: Mcast destination = Matmul2 input (256 tiles of 1x32 per core)
-                matmul2_in0_cb_format = ttnn.CBFormatDescriptor(
-                    buffer_index=matmul2_in0_cb,
-                    data_format=data_format,
-                    page_size=tile_1x32_size,
-                    tile=matmul1_out_tile_descriptor,
-                )
-                matmul2_in0_cb_grid = mcast_core_grid.merge(gather_core_grid)
-                if sdpa_kv_cache_buffer_device is not None:
-                    matmul2_in0_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                        matmul2_in0_cb,
-                        sdpa_kv_cache_buffer_device,
-                        address_offset=running_address_offset,
-                        total_size=mcast_dst_num_pages * tile_1x32_size,
-                    )
-                    matmul2_in0_cb_descriptor.format_descriptors = [matmul2_in0_cb_format]
-                    running_address_offset += matmul2_in0_cb_descriptor.total_size
-                else:
-                    matmul2_in0_cb_descriptor = ttnn.CBDescriptor(
-                        total_size=mcast_dst_num_pages * tile_1x32_size,
-                        core_ranges=matmul2_in0_cb_grid,
-                        format_descriptors=[matmul2_in0_cb_format],
-                    )
-
-                # CB 5: Matmul2 weights (from sharded tensor, 112 active matmul2 cores)
-                matmul2_in1_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul2_in1_cb, weights2_tensor)
-
-                # CB 6: Matmul2 output (2 tiles of 1x32 per core, 112 active matmul2 cores)
-                matmul2_out_cb_format = ttnn.CBFormatDescriptor(
-                    buffer_index=matmul2_out_cb,
-                    data_format=data_format,
-                    page_size=tile_1x32_size,
-                    tile=matmul1_out_tile_descriptor,
-                )
-                if sdpa_kv_cache_buffer_device is not None:
-                    matmul2_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                        matmul2_out_cb,
-                        sdpa_kv_cache_buffer_device,
-                        address_offset=running_address_offset,
-                        total_size=matmul2_out_w_per_core * tile_1x32_size,
-                    )
-                    matmul2_out_cb_descriptor.format_descriptors = [matmul2_out_cb_format]
-                    running_address_offset += matmul2_out_cb_descriptor.total_size
-                else:
-                    matmul2_out_cb_descriptor = ttnn.CBDescriptor(
-                        total_size=matmul2_out_w_per_core * tile_1x32_size,
-                        core_ranges=matmul2_active_core_grid,
-                        format_descriptors=[matmul2_out_cb_format],
-                    )
-
-                # CB 7: Gather2 output = CCL local data (backed by tensor on gather core)
-                # CCL sender reads from this tensor via NOC, not from local CB
+                # CB 3: Gather2 output = Mcast3 source (from sharded tensor, gather core)
                 gather2_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    gather2_dst_cb, gather2_output_tensor_device
+                    gather2_dst_cb, gather2_output_tensor
                 )
 
-                cb_list = [
-                    matmul1_in0_cb_descriptor,
-                    matmul1_in1_cb_descriptor,
-                    matmul1_out_cb_descriptor,
-                    gather1_dst_cb_descriptor,
-                    matmul2_in0_cb_descriptor,
-                    matmul2_in1_cb_descriptor,
-                    matmul2_out_cb_descriptor,
-                    gather2_dst_cb_descriptor,
+                # CB 4: Mcast3 destination = Matmul5 input (256 tiles of 1x32 per core)
+                matmul5_in0_cb_format = ttnn.CBFormatDescriptor(
+                    buffer_index=matmul5_in0_cb,
+                    data_format=data_format,
+                    page_size=tile_1x32_size,
+                    tile=matmul4_out_tile_descriptor,
+                )
+                matmul5_in0_cb_grid = mcast3_core_grid.merge(gather_core_grid)
+                if sdpa_kv_cache_buffer_device is not None:
+                    matmul5_in0_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        matmul5_in0_cb,
+                        sdpa_kv_cache_buffer_device,
+                        address_offset=running_address_offset,
+                        total_size=mcast3_dst_num_pages * tile_1x32_size,
+                    )
+                    matmul5_in0_cb_descriptor.format_descriptors = [matmul5_in0_cb_format]
+                    running_address_offset += matmul5_in0_cb_descriptor.total_size
+                else:
+                    matmul5_in0_cb_descriptor = ttnn.CBDescriptor(
+                        total_size=mcast3_dst_num_pages * tile_1x32_size,
+                        core_ranges=matmul5_in0_cb_grid,
+                        format_descriptors=[matmul5_in0_cb_format],
+                    )
+
+                # CB 5: Matmul5 weights (from o_proj overlapped tensor)
+                matmul5_in1_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+                    matmul5_in1_cb, weights2_tensor, weights2_fused_tensor_device
+                )
+
+                # CB 6: Matmul5 output (2 tiles of 1x32 per core, 112 active matmul5 cores)
+                matmul5_out_cb_format = ttnn.CBFormatDescriptor(
+                    buffer_index=matmul5_out_cb,
+                    data_format=data_format,
+                    page_size=tile_1x32_size,
+                    tile=matmul4_out_tile_descriptor,
+                )
+                if sdpa_kv_cache_buffer_device is not None:
+                    matmul5_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        matmul5_out_cb,
+                        sdpa_kv_cache_buffer_device,
+                        address_offset=running_address_offset,
+                        total_size=matmul5_out_w_per_core * tile_1x32_size,
+                    )
+                    matmul5_out_cb_descriptor.format_descriptors = [matmul5_out_cb_format]
+                    running_address_offset += matmul5_out_cb_descriptor.total_size
+                else:
+                    matmul5_out_cb_descriptor = ttnn.CBDescriptor(
+                        total_size=matmul5_out_w_per_core * tile_1x32_size,
+                        core_ranges=matmul5_active_core_grid,
+                        format_descriptors=[matmul5_out_cb_format],
+                    )
+
+                # CB 51: gather3 output = CCL local data (backed by gather3_output_tensor)
+                gather3_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    gather3_dst_cb, gather3_output_tensor_device
+                )
+                gather3_dst_cb_descriptor.format_descriptors = [
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=gather3_dst_cb,
+                        data_format=data_format,
+                        page_size=tile_32x32_size,
+                        tile=ttnn.TileDescriptor(TILE_32x32),
+                    )
                 ]
 
-                # CCL CBs (8-13): only when CCL is enabled
+                cb_list = [
+                    matmul4_in0_cb_descriptor,
+                    matmul4_in1_cb_descriptor,
+                    matmul4_out_cb_descriptor,
+                    gather2_dst_cb_descriptor,
+                    matmul5_in0_cb_descriptor,
+                    matmul5_in1_cb_descriptor,
+                    matmul5_out_cb_descriptor,
+                    gather3_dst_cb_descriptor,
+                ]
+
+                # CCL CBs: fused op owns all CCL CB descriptors (no-ownership mode)
                 if ccl_enabled:
-                    # CB 8: CCL sender input (reads from gather2 output via NOC)
-                    ccl_sender_in_cb_format = ttnn.CBFormatDescriptor(
-                        buffer_index=ccl_sender_in_cb,
+                    ccl_32x32_tile_descriptor = ttnn.TileDescriptor(TILE_32x32)
+
+                    # CB 52: recv local data (overlapped with kv_cache when available)
+                    ccl_recv_local_data_cb_format = ttnn.CBFormatDescriptor(
+                        buffer_index=ccl_recv_local_data_cb,
                         data_format=data_format,
-                        page_size=tile_1x32_size,
-                        tile=matmul1_out_tile_descriptor,
+                        page_size=ccl_page_size_bytes,
+                        tile=ccl_32x32_tile_descriptor,
                     )
                     if sdpa_kv_cache_buffer_device is not None:
-                        ccl_sender_in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                            ccl_sender_in_cb,
+                        ccl_recv_local_data_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                            ccl_recv_local_data_cb,
                             sdpa_kv_cache_buffer_device,
                             address_offset=running_address_offset,
-                            total_size=ccl_num_pages * tile_1x32_size,
+                            total_size=ccl_num_tiles * ccl_page_size_bytes,
                         )
-                        ccl_sender_in_cb_descriptor.format_descriptors = [ccl_sender_in_cb_format]
-                        running_address_offset += ccl_sender_in_cb_descriptor.total_size
+                        ccl_recv_local_data_cb_descriptor.format_descriptors = [ccl_recv_local_data_cb_format]
+                        running_address_offset += ccl_recv_local_data_cb_descriptor.total_size
                     else:
-                        ccl_sender_in_cb_descriptor = ttnn.CBDescriptor(
-                            total_size=ccl_num_pages * tile_1x32_size,
-                            core_ranges=ccl_sender_core_grid,
-                            format_descriptors=[ccl_sender_in_cb_format],
+                        ccl_recv_local_data_cb_descriptor = ttnn.CBDescriptor(
+                            total_size=ccl_num_tiles * ccl_page_size_bytes,
+                            core_ranges=gather_core_grid,
+                            format_descriptors=[ccl_recv_local_data_cb_format],
                         )
-                    cb_list.append(ccl_sender_in_cb_descriptor)
+                    cb_list.append(ccl_recv_local_data_cb_descriptor)
 
-                    # CB 9: CCL remote data (backed by intermediate tensor with 1x32 tiles)
-                    # The intermediate tensor is where the CCL sender writes remote data
+                    # CB 53: remote data (backed by intermediate tensor on receiver core)
                     ccl_remote_data_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                        ccl_remote_data_cb, intermediate_tensor_device
+                        ccl_remote_data_cb, intermediate_tensors_per_device[device_idx]
                     )
                     ccl_remote_data_cb_descriptor.core_ranges = gather_core_grid
+                    ccl_remote_data_cb_descriptor.total_size = ccl_num_tiles * ccl_page_size_bytes
+                    ccl_remote_data_cb_descriptor.format_descriptors = [
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=ccl_remote_data_cb,
+                            data_format=data_format,
+                            page_size=ccl_page_size_bytes,
+                            tile=ccl_32x32_tile_descriptor,
+                        )
+                    ]
                     cb_list.append(ccl_remote_data_cb_descriptor)
 
-                    # CB 10: CCL residual (optional, from sharded tensor)
+                    # CB 54: residual (optional, backed by residual tensor)
                     if residual_tensor_mesh is not None:
                         ccl_residual_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                             ccl_residual_cb, residual_tensors_per_device[device_idx]
                         )
                         ccl_residual_cb_descriptor.core_ranges = gather_core_grid
-                        ccl_residual_cb_descriptor.total_size = ccl_num_tiles * tile_1x32_size
+                        ccl_residual_cb_descriptor.total_size = ccl_num_tiles * ccl_page_size_bytes
                         ccl_residual_cb_descriptor.format_descriptors = [
                             ttnn.CBFormatDescriptor(
                                 buffer_index=ccl_residual_cb,
                                 data_format=data_format,
-                                page_size=tile_1x32_size,
-                                tile=matmul1_out_tile_descriptor,  # 1x32 tiles to match gather2
+                                page_size=ccl_page_size_bytes,
+                                tile=ccl_32x32_tile_descriptor,
                             )
                         ]
                         cb_list.append(ccl_residual_cb_descriptor)
 
-                        # CB 11: CCL temp scratch buffer (not backed by tensor)
-                        ccl_temp_cb_format = ttnn.CBFormatDescriptor(
-                            buffer_index=ccl_temp_cb,
-                            data_format=data_format,
-                            page_size=tile_1x32_size,
-                            tile=matmul1_out_tile_descriptor,
-                        )
-                        if sdpa_kv_cache_buffer_device is not None:
-                            ccl_temp_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                                ccl_temp_cb,
-                                sdpa_kv_cache_buffer_device,
-                                address_offset=running_address_offset,
-                                total_size=ccl_num_tiles * tile_1x32_size,
-                            )
-                            ccl_temp_cb_descriptor.format_descriptors = [ccl_temp_cb_format]
-                            running_address_offset += ccl_temp_cb_descriptor.total_size
-                        else:
-                            ccl_temp_cb_descriptor = ttnn.CBDescriptor(
-                                total_size=ccl_num_tiles * tile_1x32_size,
-                                core_ranges=gather_core_grid,
-                                format_descriptors=[ccl_temp_cb_format],
-                            )
-                        cb_list.append(ccl_temp_cb_descriptor)
-
-                    # CB 12: CCL output (from sharded tensor)
+                    # CB 55: output (backed by output tensor on receiver core)
                     ccl_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                        ccl_output_cb, output_tensor_device
+                        ccl_output_cb, output_tensors_per_device[device_idx]
                     )
                     ccl_output_cb_descriptor.core_ranges = gather_core_grid
+                    ccl_output_cb_descriptor.total_size = ccl_num_tiles * ccl_page_size_bytes
+                    ccl_output_cb_descriptor.format_descriptors = [
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=ccl_output_cb,
+                            data_format=data_format,
+                            page_size=ccl_page_size_bytes,
+                            tile=ccl_32x32_tile_descriptor,
+                        )
+                    ]
                     cb_list.append(ccl_output_cb_descriptor)
 
-                    # CB 13: CCL packet headers
-                    ccl_packet_header_cb_format = ttnn.CBFormatDescriptor(
-                        buffer_index=ccl_packet_header_cb,
-                        data_format=ttnn.uint32,
-                        page_size=ccl_packet_header_size_bytes,
-                    )
-                    if sdpa_kv_cache_buffer_device is not None:
-                        ccl_packet_header_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                            ccl_packet_header_cb,
-                            sdpa_kv_cache_buffer_device,
-                            address_offset=running_address_offset,
-                            total_size=2 * ccl_packet_header_size_bytes,
-                        )
-                        ccl_packet_header_cb_descriptor.format_descriptors = [ccl_packet_header_cb_format]
-                        running_address_offset += ccl_packet_header_cb_descriptor.total_size
-                    else:
-                        ccl_packet_header_cb_descriptor = ttnn.CBDescriptor(
-                            total_size=2 * ccl_packet_header_size_bytes,
-                            core_ranges=gather_core_grid.merge(ccl_sender_core_grid),
-                            format_descriptors=[ccl_packet_header_cb_format],
-                        )
-                    cb_list.append(ccl_packet_header_cb_descriptor)
+                # In no-ownership mode, get_cb_descriptors() returns []
+                cb_list.extend(allreduce_config.get_cb_descriptors(coord))
+
                 # SDPA CBs (14-24): only when SDPA is enabled
                 if sdpa_enabled:
                     # Get per-device SDPA tensors
                     sdpa_input_l_device = ttnn.get_device_tensors(sdpa_input_l_mesh)[device_idx]
                     sdpa_input_ms_device = ttnn.get_device_tensors(sdpa_input_ms_mesh)[device_idx]
                     sdpa_output_l_device = ttnn.get_device_tensors(sdpa_output_l_mesh)[device_idx]
-                    sdpa_r1_recv_device = ttnn.get_device_tensors(sdpa_r1_recv_mesh)[device_idx]
-                    sdpa_r2_recv_device = ttnn.get_device_tensors(sdpa_r2_recv_mesh)[device_idx]
+                    sdpa_intermediate_recv_device = ttnn.get_device_tensors(sdpa_intermediate_recv_mesh)[device_idx]
 
                     # CB 14: SDPA local L (aliased to input tensor)
                     sdpa_local_l_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
@@ -1001,26 +951,19 @@ class PostSDPA:
                     # CB 16: SDPA R1 neighbor L (aliased to R1 recv buffer)
                     # The recv buffer holds both L and MS data, but this CB should only
                     # cover the L portion. Override total_size like the original op does.
-                    sdpa_r1_neighbor_l_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                        sdpa_cb_r1_neighbor_l, sdpa_r1_recv_device
+                    sdpa_neighbor_l_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        sdpa_cb_neighbor_l, sdpa_intermediate_recv_device
                     )
-                    sdpa_r1_neighbor_l_cb_descriptor.total_size = sdpa_l_tiles_per_worker * sdpa_l_tile_size
-                    cb_list.append(sdpa_r1_neighbor_l_cb_descriptor)
+                    sdpa_neighbor_l_cb_descriptor.total_size = 2 * sdpa_l_tiles_per_worker * sdpa_l_tile_size
+                    cb_list.append(sdpa_neighbor_l_cb_descriptor)
 
                     # CB 17: SDPA R1 neighbor MS (scratch, not backed by tensor)
                     # Must use sdpa_tile (e.g., 8x32) to match MS input tensor tile format
-                    sdpa_r1_neighbor_ms_cb_format = ttnn.CBFormatDescriptor(
-                        buffer_index=sdpa_cb_r1_neighbor_ms,
-                        data_format=data_format,
-                        page_size=sdpa_ms_tile_size,
-                        tile=ttnn.TileDescriptor(sdpa_tile),
+                    sdpa_neighbor_ms_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        sdpa_cb_neighbor_ms, sdpa_intermediate_recv_device
                     )
-                    sdpa_r1_neighbor_ms_cb_descriptor = ttnn.CBDescriptor(
-                        total_size=sdpa_ms_tile_size,
-                        core_ranges=sdpa_worker_grid,
-                        format_descriptors=[sdpa_r1_neighbor_ms_cb_format],
-                    )
-                    cb_list.append(sdpa_r1_neighbor_ms_cb_descriptor)
+                    sdpa_neighbor_ms_cb_descriptor.total_size = 2 * sdpa_ms_tile_size
+                    cb_list.append(sdpa_neighbor_ms_cb_descriptor)
 
                     # CB 18: SDPA R1 result L (scratch, reused for scatter)
                     # Use actual tile from SDPA input tensor (e.g., 8x32), not hardcoded 32x32
@@ -1052,86 +995,15 @@ class PostSDPA:
                     )
                     cb_list.append(sdpa_r1_result_ms_cb_descriptor)
 
-                    # CB 20: SDPA R2 neighbor L (aliased to R2 recv buffer)
-                    # Same total_size override as R1 neighbor L - only cover L portion.
-                    sdpa_r2_neighbor_l_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                        sdpa_cb_r2_neighbor_l, sdpa_r2_recv_device
-                    )
-                    sdpa_r2_neighbor_l_cb_descriptor.total_size = sdpa_l_tiles_per_worker * sdpa_l_tile_size
-                    cb_list.append(sdpa_r2_neighbor_l_cb_descriptor)
-
-                    # CB 21: SDPA R2 neighbor MS (scratch)
-                    # Must use sdpa_tile to match MS input tensor tile format
-                    sdpa_r2_neighbor_ms_cb_format = ttnn.CBFormatDescriptor(
-                        buffer_index=sdpa_cb_r2_neighbor_ms,
-                        data_format=data_format,
-                        page_size=sdpa_ms_tile_size,
-                        tile=ttnn.TileDescriptor(sdpa_tile),
-                    )
-                    sdpa_r2_neighbor_ms_cb_descriptor = ttnn.CBDescriptor(
-                        total_size=sdpa_ms_tile_size,
-                        core_ranges=sdpa_worker_grid,
-                        format_descriptors=[sdpa_r2_neighbor_ms_cb_format],
-                    )
-                    cb_list.append(sdpa_r2_neighbor_ms_cb_descriptor)
-
-                    # CB 22: SDPA L output (aliased to output tensor)
+                    # CB 20: SDPA L output (aliased to output tensor)
                     sdpa_l_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                         sdpa_cb_l_out, sdpa_output_l_device
                     )
                     cb_list.append(sdpa_l_out_cb_descriptor)
 
-                    # CB 23: SDPA MS output (scratch, only used for R1 intermediate)
-                    # Must use sdpa_tile to match MS input tensor tile format
-                    sdpa_ms_out_cb_format = ttnn.CBFormatDescriptor(
-                        buffer_index=sdpa_cb_ms_out,
-                        data_format=data_format,
-                        page_size=sdpa_ms_tile_size,
-                        tile=ttnn.TileDescriptor(sdpa_tile),
-                    )
-                    sdpa_ms_out_cb_descriptor = ttnn.CBDescriptor(
-                        total_size=sdpa_ms_tile_size,
-                        core_ranges=sdpa_worker_grid,
-                        format_descriptors=[sdpa_ms_out_cb_format],
-                    )
-                    cb_list.append(sdpa_ms_out_cb_descriptor)
-
-                    # CB 24: SDPA packet slot (for fabric packet headers)
-                    sdpa_packet_slot_cb_format = ttnn.CBFormatDescriptor(
-                        buffer_index=sdpa_cb_packet_slot,
-                        data_format=ttnn.uint32,
-                        page_size=256,  # Packet header size
-                    )
-                    sdpa_packet_slot_cb_descriptor = ttnn.CBDescriptor(
-                        total_size=256,
-                        core_ranges=sdpa_worker_grid,
-                        format_descriptors=[sdpa_packet_slot_cb_format],
-                    )
-                    cb_list.append(sdpa_packet_slot_cb_descriptor)
-
                 # ========================================================================
                 # Semaphore descriptors
                 # ========================================================================
-                gather1_noc0_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=gather1_noc0_receiver_semaphore_id,
-                    core_ranges=full_grid,
-                    initial_value=0,
-                )
-                gather1_noc1_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=gather1_noc1_receiver_semaphore_id,
-                    core_ranges=full_grid,
-                    initial_value=0,
-                )
-                mcast_sender_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=mcast_data_sender_semaphore_id,
-                    core_ranges=full_grid,
-                    initial_value=0,
-                )
-                mcast_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=mcast_data_receiver_semaphore_id,
-                    core_ranges=full_grid,
-                    initial_value=0,
-                )
                 gather2_noc0_semaphore_descriptor = ttnn.SemaphoreDescriptor(
                     id=gather2_noc0_receiver_semaphore_id,
                     core_ranges=full_grid,
@@ -1142,23 +1014,36 @@ class PostSDPA:
                     core_ranges=full_grid,
                     initial_value=0,
                 )
+                mcast3_sender_semaphore_descriptor = ttnn.SemaphoreDescriptor(
+                    id=mcast3_data_sender_semaphore_id,
+                    core_ranges=full_grid,
+                    initial_value=0,
+                )
+                mcast3_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
+                    id=mcast3_data_receiver_semaphore_id,
+                    core_ranges=full_grid,
+                    initial_value=0,
+                )
+                gather3_noc0_semaphore_descriptor = ttnn.SemaphoreDescriptor(
+                    id=gather3_noc0_receiver_semaphore_id,
+                    core_ranges=full_grid,
+                    initial_value=0,
+                )
+                gather3_noc1_semaphore_descriptor = ttnn.SemaphoreDescriptor(
+                    id=gather3_noc1_receiver_semaphore_id,
+                    core_ranges=full_grid,
+                    initial_value=0,
+                )
                 semaphore_list = [
-                    gather1_noc0_semaphore_descriptor,
-                    gather1_noc1_semaphore_descriptor,
-                    mcast_sender_semaphore_descriptor,
-                    mcast_receiver_semaphore_descriptor,
                     gather2_noc0_semaphore_descriptor,
                     gather2_noc1_semaphore_descriptor,
+                    mcast3_sender_semaphore_descriptor,
+                    mcast3_receiver_semaphore_descriptor,
+                    gather3_noc0_semaphore_descriptor,
+                    gather3_noc1_semaphore_descriptor,
                 ]
-                if ccl_enabled:
-                    gather2_completion_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                        id=gather2_completion_semaphore_id,
-                        core_ranges=full_grid,
-                        initial_value=0,
-                    )
-                    semaphore_list.append(gather2_completion_semaphore_descriptor)
 
-                # SDPA scatter arrival semaphore (for matmul1 cores to wait for scatter data)
+                # SDPA scatter arrival semaphore (for matmul4 cores to wait for scatter data)
                 if sdpa_enabled:
                     scatter_arrival_semaphore_descriptor = ttnn.SemaphoreDescriptor(
                         id=scatter_arrival_semaphore_id,
@@ -1168,12 +1053,6 @@ class PostSDPA:
                     semaphore_list.append(scatter_arrival_semaphore_descriptor)
 
                     # SDPA forwarder semaphores (workers signal these to forwarders)
-                    sdpa_forwarder_grid = ttnn.CoreRangeSet(
-                        [
-                            ttnn.CoreRange(sdpa_forwarder_cores[0], sdpa_forwarder_cores[0]),
-                            ttnn.CoreRange(sdpa_forwarder_cores[1], sdpa_forwarder_cores[1]),
-                        ]
-                    )
                     sdpa_fwd_r1_semaphore_descriptor = ttnn.SemaphoreDescriptor(
                         id=sdpa_fwd_r1_sem_id,
                         core_ranges=sdpa_forwarder_grid,
@@ -1214,8 +1093,8 @@ class PostSDPA:
 
                 unified_compile_time_core_descriptors = [
                     UnifiedCompileTimeCoreDescriptor(
-                        named_compile_time_arg="is_matmul1_core",
-                        core_range=matmul1_core_grid,
+                        named_compile_time_arg="is_matmul4_core",
+                        core_range=matmul4_core_grid,
                         value=1,
                         other_value=0,
                     ),
@@ -1226,26 +1105,26 @@ class PostSDPA:
                         other_value=0,
                     ),
                     UnifiedCompileTimeCoreDescriptor(
-                        named_compile_time_arg="is_matmul2_core",
-                        core_range=matmul2_active_core_grid,
+                        named_compile_time_arg="is_matmul5_core",
+                        core_range=matmul5_active_core_grid,
                         value=1,
                         other_value=0,
                     ),
                     UnifiedCompileTimeCoreDescriptor(
-                        named_compile_time_arg="is_mcast_receiver_core",
-                        core_range=mcast_core_grid,
+                        named_compile_time_arg="is_mcast3_receiver_core",
+                        core_range=mcast3_core_grid,
                         value=1,
                         other_value=0,
                     ),
                     UnifiedCompileTimeCoreDescriptor(
-                        named_compile_time_arg="is_ccl_sender_core",
-                        core_range=ccl_sender_core_grid,
+                        named_compile_time_arg="is_allreduce_sender_core",
+                        core_range=sender_core_grid,
                         value=1 if ccl_enabled else 0,
                         other_value=0,
                     ),
                     UnifiedCompileTimeCoreDescriptor(
-                        named_compile_time_arg="is_ccl_receiver_core",
-                        core_range=gather_core_grid,  # CCL receiver = gather core
+                        named_compile_time_arg="is_allreduce_receiver_core",
+                        core_range=gather_core_grid,
                         value=1 if ccl_enabled else 0,
                         other_value=0,
                     ),
@@ -1271,136 +1150,48 @@ class PostSDPA:
                     )
 
                 # ========================================================================
-                # Kernel descriptor
+                # Per-core compile-time descriptors
                 # ========================================================================
-                unified_kernel = UnifiedKernelDescriptor(
-                    kernel_source="models/demos/deepseek_v3_b1/fused_ops/post_sdpa/kernels/post_sdpa_kernel.cpp",
-                    core_ranges=full_grid,
-                    ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
-                    brisc_named_compile_time_args=brisc_named_compile_time_args,
-                    trisc_named_compile_time_args=trisc_named_compile_time_args,
-                    trisc_compute_config=ttnn.ComputeConfigDescriptor(
-                        math_fidelity=ttnn.MathFidelity.HiFi4,
-                        math_approx_mode=False,
-                        fp32_dest_acc_en=fp32_dest_acc_en,
-                        dst_full_sync_en=fp32_dest_acc_en,
+                # gather2_sender_idx: each matmul4 core needs a unique index for
+                # non-rectangular kv_b2 grid offset calculation (UsePerCoreSenderIdx=true)
+                # gather3_sender_idx: each matmul5 core needs a unique index for
+                # non-rectangular o_proj grid offset calculation (UsePerCoreSenderIdx=true)
+                per_core_compile_time_descriptors = [
+                    PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg="gather2_sender_idx",
+                        core_values=gather2_sender_idx_per_core,
+                        other_value=0,
                     ),
-                    defines=kernel_defines,
-                    unified_compile_time_core_descriptors=unified_compile_time_core_descriptors,
-                )
-
-                # Get kernel descriptors
-                kernel_result = unified_kernel.get_kernel_descriptors()
-
-                # ========================================================================
-                # Program descriptor
-                # ========================================================================
-                program = ttnn.ProgramDescriptor(
-                    kernels=kernel_result.kernels,
-                    cbs=cb_list,
-                    semaphores=semaphore_list,
-                )
+                    PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg="gather3_sender_idx",
+                        core_values=gather3_sender_idx_per_core,
+                        other_value=0,
+                    ),
+                ]
 
                 # ========================================================================
-                # CCL runtime args and fabric (only when CCL is enabled)
+                # Pre-compute CCL runtime args (fabric setup deferred to op())
                 # ========================================================================
-                if ccl_enabled:
-                    # Get kernel indices for runtime args
-                    ccl_sender_group = kernel_result.get_group_by_arg("is_ccl_sender_core", 1)
-                    ccl_receiver_group = kernel_result.get_group_by_arg("is_ccl_receiver_core", 1)
-
-                    # === COMMON RUNTIME ARGS ===
-                    # Sender NCRISC common runtime args (arg 0)
-                    ccl_sender_ncrisc_common_rt_args = [
-                        gather2_receiver_data_addr,  # tensor_address
-                    ]
-
-                    # Sender BRISC common runtime args (args 0-1)
-                    ccl_sender_brisc_common_rt_args = [
-                        intermediate_tensor_device.buffer_address(),  # receiver_base_address
-                        ccl_sender_semaphore_addr,  # receive_semaphore_addr
-                    ]
-
-                    # Receiver NCRISC common runtime args (arg 0)
-                    ccl_receiver_ncrisc_common_rt_args = [
-                        ccl_receiver_semaphore_addr,  # sender_semaphore_addr
-                    ]
-
-                    # === PER-CORE RUNTIME ARGS (empty, fabric args appended later) ===
-                    ccl_sender_ncrisc_rt_args = ttnn.RuntimeArgs()
-                    ccl_sender_ncrisc_rt_args[ccl_sender_core.x][ccl_sender_core.y] = []
-
-                    ccl_sender_brisc_rt_args = ttnn.RuntimeArgs()
-                    ccl_sender_brisc_rt_args[ccl_sender_core.x][ccl_sender_core.y] = []
-
-                    ccl_receiver_ncrisc_rt_args = ttnn.RuntimeArgs()
-                    ccl_receiver_ncrisc_rt_args[gather_core.x][gather_core.y] = []
-
-                    # Set runtime args and common runtime args for CCL kernels
-                    program.kernels[ccl_sender_group.ncrisc_kernel_index].runtime_args = ccl_sender_ncrisc_rt_args
-                    program.kernels[
-                        ccl_sender_group.ncrisc_kernel_index
-                    ].common_runtime_args = ccl_sender_ncrisc_common_rt_args
-                    program.kernels[ccl_sender_group.brisc_kernel_index].runtime_args = ccl_sender_brisc_rt_args
-                    program.kernels[
-                        ccl_sender_group.brisc_kernel_index
-                    ].common_runtime_args = ccl_sender_brisc_common_rt_args
-                    program.kernels[ccl_receiver_group.ncrisc_kernel_index].runtime_args = ccl_receiver_ncrisc_rt_args
-                    program.kernels[
-                        ccl_receiver_group.ncrisc_kernel_index
-                    ].common_runtime_args = ccl_receiver_ncrisc_common_rt_args
-
-                    # ========================================================================
-                    # Fabric connection setup
-                    # ========================================================================
-                    fabric_node_id = mesh_device.get_fabric_node_id(coord)
-                    neighbor_coord = ttnn.MeshCoordinate(neighbor_row, neighbor_col)
-                    neighbor_fabric_node_id = mesh_device.get_fabric_node_id(neighbor_coord)
-                    # Setup sender fabric connection
-                    sender_brisc_kernel_idx = ccl_sender_group.brisc_kernel_index
-                    sender_brisc_rt_args_ref = program.kernels[sender_brisc_kernel_idx].runtime_args[ccl_sender_core.x][
-                        ccl_sender_core.y
-                    ]
-                    sender_fabric_args = ttnn.setup_routing_plane_connection(
-                        fabric_node_id,
-                        [neighbor_fabric_node_id],
-                        [ccl_sender_link],
-                        program,
-                        sender_brisc_kernel_idx,
-                        ccl_sender_core,
-                    )
-                    sender_brisc_rt_args_ref.extend(sender_fabric_args)
-
-                    # Setup receiver fabric connection
-                    receiver_ncrisc_kernel_idx = ccl_receiver_group.ncrisc_kernel_index
-                    receiver_ncrisc_rt_args_ref = program.kernels[receiver_ncrisc_kernel_idx].runtime_args[
-                        gather_core.x
-                    ][gather_core.y]
-                    receiver_fabric_args = ttnn.setup_routing_plane_connection(
-                        fabric_node_id,
-                        [neighbor_fabric_node_id],
-                        [ccl_receiver_link],
-                        program,
-                        receiver_ncrisc_kernel_idx,
-                        gather_core,
-                    )
-                    receiver_ncrisc_rt_args_ref.extend(receiver_fabric_args)
+                ccl_ctx = {
+                    "allreduce_config": allreduce_config,
+                    "sender_core": sender_core,
+                    "receiver_core": gather_core,
+                    "sender_ncrisc_common_rt_args": allreduce_config.get_sender_ncrisc_common_rt_args(coord),
+                    "sender_brisc_common_rt_args": allreduce_config.get_sender_brisc_common_rt_args(coord),
+                    "receiver_ncrisc_common_rt_args": allreduce_config.get_receiver_ncrisc_common_rt_args(coord),
+                }
 
                 # ========================================================================
-                # SDPA runtime args and fabric (only when SDPA is enabled)
+                # Pre-compute SDPA runtime args (fabric setup deferred to op())
                 # ========================================================================
+                sdpa_ctx = None
                 if sdpa_enabled:
-                    # Get kernel groups for SDPA cores (both from unified kernel)
-                    # sdpa_worker_group = kernel_result.get_group_by_arg("is_sdpa_worker_core", 1)
-                    sdpa_forwarder_group = kernel_result.get_group_by_arg("is_sdpa_forwarder_core", 1)
-
                     # Get per-device SDPA tensors
-                    sdpa_r1_recv_device = ttnn.get_device_tensors(sdpa_r1_recv_mesh)[device_idx]
-                    sdpa_r2_recv_device = ttnn.get_device_tensors(sdpa_r2_recv_mesh)[device_idx]
+                    sdpa_intermediate_recv_device = ttnn.get_device_tensors(sdpa_intermediate_recv_mesh)[device_idx]
                     sdpa_forwarder_scratch_device = ttnn.get_device_tensors(sdpa_forwarder_scratch_mesh)[device_idx]
 
                     # Get device for logical to NOC coordinate conversion
-                    device = sdpa_r1_recv_device.device()
+                    device = sdpa_intermediate_recv_device.device()
 
                     # Get fabric node IDs for SDPA CCL
                     sdpa_fabric_node_id = mesh_device.get_fabric_node_id(coord)
@@ -1427,31 +1218,19 @@ class PostSDPA:
                     sdpa_bwd_ring_idx = bwd_row if sdpa_cluster_axis == 0 else bwd_col
                     sdpa_num_ring_devices = mesh_shape[0] if sdpa_cluster_axis == 0 else mesh_shape[1]
 
-                    # Position tensor address (0 if position disabled)
-                    sdpa_pos_addr = 0
+                    # Metadata tensor address (for position validity)
+                    sdpa_metadata_addr = 0
                     if sdpa_position_enabled:
-                        sdpa_position_device = ttnn.get_device_tensors(sdpa_position_id_tensor_mesh)[device_idx]
-                        sdpa_pos_addr = sdpa_position_device.buffer_address()
+                        sdpa_metadata_device = ttnn.get_device_tensors(sdpa_position_id_tensor_mesh)[device_idx]
+                        sdpa_metadata_addr = sdpa_metadata_device.buffer_address()
 
                     # SDPA worker runtime args (per-core)
                     sdpa_worker_ncrisc_rt_args = ttnn.RuntimeArgs()
                     sdpa_worker_brisc_rt_args = ttnn.RuntimeArgs()
                     sdpa_worker_trisc_rt_args = ttnn.RuntimeArgs() if sdpa_position_enabled else None
 
-                    # Get matmul1 input buffer address for scatter destination
+                    # Get matmul4 input buffer address for scatter destination
                     scatter_dest_l1_addr = input_tensor_device.buffer_address()
-
-                    # Iterate over SDPA worker cores
-                    sdpa_worker_cores = [
-                        ttnn.CoreCoord(2, 8),
-                        ttnn.CoreCoord(3, 8),
-                        ttnn.CoreCoord(4, 8),
-                        ttnn.CoreCoord(5, 8),
-                        ttnn.CoreCoord(2, 9),
-                        ttnn.CoreCoord(3, 9),
-                        ttnn.CoreCoord(4, 9),
-                        ttnn.CoreCoord(5, 9),
-                    ]
 
                     # Type A/B worker split (like original sdpa_reduce_to_all op)
                     # This distributes R1/R2 traffic across both FWD and BWD forwarder instances
@@ -1469,6 +1248,7 @@ class PostSDPA:
                     bwd_r1_count = [0, 0]
                     bwd_r2_count = [0, 0]
 
+                    sdpa_worker_cores = ttnn.corerange_to_cores(sdpa_worker_grid)
                     for worker_idx, worker_core in enumerate(sdpa_worker_cores):
                         # Convert worker core to NOC coordinates (like original sdpa_reduce_to_all op)
                         worker_core_noc = device.worker_core_from_logical_core(worker_core)
@@ -1476,8 +1256,8 @@ class PostSDPA:
                         # NCRISC runtime args: semaphore addresses, recv buffer addresses
                         r1_neighbor_sem_addr = sdpa_semaphore1_addr
                         r2_neighbor_sem_addr = sdpa_semaphore2_addr
-                        r1_recv_buffer_addr = sdpa_r1_recv_device.buffer_address()
-                        r2_recv_buffer_addr = sdpa_r2_recv_device.buffer_address()
+                        r1_recv_buffer_addr = sdpa_intermediate_recv_device.buffer_address()
+                        r2_recv_buffer_addr = r1_recv_buffer_addr + (sdpa_l_tiles_per_worker + 1) * sdpa_l_tile_size
 
                         ncrisc_base_args = [
                             r1_neighbor_sem_addr,
@@ -1488,17 +1268,14 @@ class PostSDPA:
                         sdpa_worker_ncrisc_rt_args[worker_core.x][worker_core.y] = ncrisc_base_args
 
                         # BRISC runtime args: fabric destinations, scatter destinations
-                        # Determine which matmul1 cores this worker scatters to (8 rows per worker)
+                        # Determine which matmul4 cores this worker scatters to (8 rows per worker)
                         scatter_dest_noc_coords = []
                         for scatter_row in range(sdpa_scatter_num_rows):
-                            # Map worker_idx and scatter_row to matmul1 core (logical coordinates)
-                            matmul1_core_idx = worker_idx * sdpa_scatter_num_rows + scatter_row
-                            matmul1_core_x = matmul1_core_idx % 8
-                            matmul1_core_y = matmul1_core_idx // 8
+                            matmul4_core_idx = worker_idx * sdpa_scatter_num_rows + scatter_row
+                            matmul4_core_logical = matmul4_cores[matmul4_core_idx]
                             # Convert to NOC coordinates
-                            matmul1_core_logical = ttnn.CoreCoord(matmul1_core_x, matmul1_core_y)
-                            matmul1_core_noc = device.worker_core_from_logical_core(matmul1_core_logical)
-                            scatter_dest_noc_coords.append((matmul1_core_noc.x, matmul1_core_noc.y))
+                            matmul4_core_noc = device.worker_core_from_logical_core(matmul4_core_logical)
+                            scatter_dest_noc_coords.append((matmul4_core_noc.x, matmul4_core_noc.y))
 
                         # Get forwarder core for this worker (link index)
                         link_idx = worker_idx // 4  # First 4 workers use forwarder 0, next 4 use forwarder 1
@@ -1549,11 +1326,11 @@ class PostSDPA:
                         brisc_rt_args = [
                             int(r1_dst_fabric_node_id.mesh_id),  # r1_dst_mesh_id (varies by type!)
                             r1_dst_fabric_node_id.chip_id,  # r1_dst_chip_id
-                            sdpa_r1_recv_device.buffer_address(),  # r1_neighbor_dst_addr
+                            r1_recv_buffer_addr,  # r1_neighbor_dst_addr
                             sdpa_semaphore1_addr,  # r1_neighbor_sem_addr
                             int(r2_dst_fabric_node_id.mesh_id),  # r2_dst_mesh_id (varies by type!)
                             r2_dst_fabric_node_id.chip_id,  # r2_dst_chip_id
-                            sdpa_r2_recv_device.buffer_address(),  # r2_neighbor_dst_addr
+                            r2_recv_buffer_addr,  # r2_neighbor_dst_addr
                             sdpa_semaphore2_addr,  # r2_neighbor_sem_addr
                             worker_core_noc.x,  # current_core_x (NOC coordinates)
                             worker_core_noc.y,  # current_core_y (NOC coordinates)
@@ -1595,96 +1372,286 @@ class PostSDPA:
                                     pos_r2_neighbor_idx - 1 + sdpa_num_ring_devices
                                 ) % sdpa_num_ring_devices
 
-                            # TRISC args: pos_addr, device_idx, r1_neighbor, r2_neighbor, r2_neighbor_r1_neighbor
+                            # Deterministic reduction order based on device indices so all devices produce identical results.
+                            # R1: swap so lower device index is always arg1 ("worker")
+                            swap_r1_reduction_order = 1 if sdpa_ring_idx < pos_r1_neighbor_idx else 0
+                            # R2: swap so the R1 pair with lower min device index is always arg1 ("worker")
+                            r1_pair_min = min(sdpa_ring_idx, pos_r1_neighbor_idx)
+                            r2_pair_min = min(pos_r2_neighbor_idx, pos_r2_neighbor_r1_idx)
+                            swap_r2_reduction_order = 1 if r1_pair_min < r2_pair_min else 0
+
+                            # TRISC args: device_idx, r1_neighbor, r2_neighbor, r2_neighbor_r1_neighbor
                             sdpa_worker_trisc_rt_args[worker_core.x][worker_core.y] = [
-                                sdpa_pos_addr,
                                 sdpa_ring_idx,
                                 pos_r1_neighbor_idx,
                                 pos_r2_neighbor_idx,
                                 pos_r2_neighbor_r1_idx,
+                                swap_r1_reduction_order,
+                                swap_r2_reduction_order,
                             ]
 
-                            # Extend NCRISC args: pos_addr, r1_neighbor, r2_neighbor, r2_neighbor_r1_neighbor
+                            # Extend NCRISC args: r1_neighbor, r2_neighbor, r2_neighbor_r1_neighbor
                             sdpa_worker_ncrisc_rt_args[worker_core.x][worker_core.y].extend(
                                 [
-                                    sdpa_pos_addr,
                                     pos_r1_neighbor_idx,
                                     pos_r2_neighbor_idx,
                                     pos_r2_neighbor_r1_idx,
                                 ]
                             )
 
-                    # Set SDPA worker runtime args
-                    for group in kernel_result.groups:
-                        if group.compile_time_arg_values.get("is_sdpa_worker_core") == 1:
-                            program.kernels[group.ncrisc_kernel_index].runtime_args = sdpa_worker_ncrisc_rt_args
-                            program.kernels[group.brisc_kernel_index].runtime_args = sdpa_worker_brisc_rt_args
-                            if sdpa_worker_trisc_rt_args is not None:
-                                program.kernels[group.trisc_kernel_index].runtime_args = sdpa_worker_trisc_rt_args
-
-                    # SDPA forwarder runtime args (using setup_fabric_connection like original SDPA op)
-                    # Key: Build RuntimeArgs completely FIRST, then assign to program.kernels AFTER
-                    sdpa_forwarder_brisc_rt_args = ttnn.RuntimeArgs()
-                    sdpa_forwarder_ncrisc_rt_args = ttnn.RuntimeArgs()
-
-                    # forwarder_buffer_base and ncrisc_buffer_offset already defined above
-                    # Use the new semaphore IDs (matching what we defined above)
-
+                    # Pre-compute forwarder base args (fabric args added in op())
+                    sdpa_forwarder_brisc_base_args = {}
+                    sdpa_forwarder_ncrisc_base_args = {}
                     for fwd_idx, fwd_core in enumerate(sdpa_forwarder_cores):
-                        # BRISC handles FWD direction - set base args first
-                        sdpa_forwarder_brisc_rt_args[fwd_core.x][fwd_core.y] = [
+                        sdpa_forwarder_brisc_base_args[(fwd_core.x, fwd_core.y)] = [
                             forwarder_buffer_base,
-                            0,  # buffer_offset (BRISC uses first half)
+                            0,
                             sdpa_fwd_r1_sem_id,
                             sdpa_fwd_r2_sem_id,
                         ]
-                        # Get fabric args using setup_fabric_connection (like original SDPA op)
-                        brisc_fabric_args = ttnn.setup_fabric_connection(
-                            src_fabric_node_id=sdpa_fabric_node_id,
-                            dst_fabric_node_id=fwd_fabric_node_id,
-                            link_idx=fwd_idx,
-                            program_descriptor=program,
-                            worker_core=fwd_core,
-                        )
-                        sdpa_forwarder_brisc_rt_args[fwd_core.x][fwd_core.y].extend(brisc_fabric_args)
-
-                        # NCRISC handles BWD direction - set base args first
-                        sdpa_forwarder_ncrisc_rt_args[fwd_core.x][fwd_core.y] = [
+                        sdpa_forwarder_ncrisc_base_args[(fwd_core.x, fwd_core.y)] = [
                             forwarder_buffer_base,
-                            ncrisc_buffer_offset,  # buffer_offset (NCRISC uses second half)
+                            ncrisc_buffer_offset,
                             sdpa_bwd_r1_sem_id,
                             sdpa_bwd_r2_sem_id,
                         ]
-                        # Get fabric args using setup_fabric_connection (like original SDPA op)
-                        ncrisc_fabric_args = ttnn.setup_fabric_connection(
-                            src_fabric_node_id=sdpa_fabric_node_id,
-                            dst_fabric_node_id=bwd_fabric_node_id,
-                            link_idx=fwd_idx,
-                            program_descriptor=program,
-                            worker_core=fwd_core,
-                        )
-                        sdpa_forwarder_ncrisc_rt_args[fwd_core.x][fwd_core.y].extend(ncrisc_fabric_args)
 
-                    # Assign to program.kernels AFTER all args are built (critical!)
-                    program.kernels[sdpa_forwarder_group.brisc_kernel_index].runtime_args = sdpa_forwarder_brisc_rt_args
-                    program.kernels[
-                        sdpa_forwarder_group.ncrisc_kernel_index
-                    ].runtime_args = sdpa_forwarder_ncrisc_rt_args
-                    # Set for ALL kernel groups that have is_sdpa_forwarder_core=1
-                    # for group in kernel_result.groups:
-                    #    if group.compile_time_arg_values.get("is_sdpa_forwarder_core") == 1:
-                    #        program.kernels[group.brisc_kernel_index].runtime_args = sdpa_forwarder_brisc_rt_args
-                    #        program.kernels[group.ncrisc_kernel_index].runtime_args = sdpa_forwarder_ncrisc_rt_args
+                    sdpa_ctx = {
+                        "worker_ncrisc_rt_args": sdpa_worker_ncrisc_rt_args,
+                        "worker_brisc_rt_args": sdpa_worker_brisc_rt_args,
+                        "worker_trisc_rt_args": sdpa_worker_trisc_rt_args,
+                        "worker_metadata_addr": sdpa_metadata_addr,
+                        "forwarder_brisc_base_args": sdpa_forwarder_brisc_base_args,
+                        "forwarder_ncrisc_base_args": sdpa_forwarder_ncrisc_base_args,
+                        "fabric_node_id": sdpa_fabric_node_id,
+                        "fwd_fabric_node_id": fwd_fabric_node_id,
+                        "bwd_fabric_node_id": bwd_fabric_node_id,
+                    }
 
-                mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
+                per_device_contexts.append(
+                    {
+                        "coord": coord,
+                        "ncrisc_named_compile_time_args": ncrisc_named_compile_time_args,
+                        "brisc_named_compile_time_args": brisc_named_compile_time_args,
+                        "trisc_named_compile_time_args": trisc_named_compile_time_args,
+                        "kernel_defines": kernel_defines,
+                        "unified_compile_time_core_descriptors": unified_compile_time_core_descriptors,
+                        "per_core_compile_time_descriptors": per_core_compile_time_descriptors,
+                        "cb_list": cb_list,
+                        "semaphore_list": semaphore_list,
+                        "fp32_dest_acc_en": fp32_dest_acc_en,
+                        "ccl_enabled": ccl_enabled,
+                        "sdpa_enabled": sdpa_enabled,
+                        "sdpa_forwarder_cores": sdpa_forwarder_cores if sdpa_enabled else None,
+                        "ccl": ccl_ctx,
+                        "sdpa": sdpa_ctx if sdpa_enabled else None,
+                    }
+                )
 
-        # Execute generic_op
-        io_tensors = [
+        return full_grid, per_device_contexts
+
+    @staticmethod
+    def op(
+        input_tensor_mesh,
+        weights1_tensor,
+        weights2_tensor,
+        gather2_output_tensor,
+        gather3_output_tensor,
+        intermediate_tensor=None,
+        output_tensor=None,
+        semaphores=None,
+        cluster_axis=0,
+        residual_tensor_mesh=None,
+        fp32_dest_acc_en=False,
+        ccl_enabled=True,
+        ccl_num_links=1,
+        sdpa_kv_cache_buffer=None,
+        sdpa_input_l_mesh=None,
+        sdpa_input_ms_mesh=None,
+        sdpa_output_l_mesh=None,
+        sdpa_intermediate_recv_mesh=None,
+        sdpa_forwarder_scratch_mesh=None,
+        sdpa_scale_fp32=1.0,
+        sdpa_cluster_axis=0,
+        sdpa_position_id_tensor_mesh=None,
+        sdpa_per_device_chunk_size=0,
+    ):
+        """
+        Execute post_sdpa fused operation with optional SDPA reduce-to-all and CCL all-reduce.
+
+        Args:
+            semaphores: Flat list from ``PostSDPA.create_semaphores()``.
+
+        Returns:
+            When ccl_enabled=True: output_tensor mesh with all-reduced result
+            When ccl_enabled=False: gather3_output_tensor mesh with per-device gather3 result
+        """
+        sdpa_enabled = sdpa_input_l_mesh is not None
+        sdpa_position_enabled = (
+            sdpa_enabled and sdpa_position_id_tensor_mesh is not None and sdpa_per_device_chunk_size > 0
+        )
+
+        full_device_grid, per_device_contexts = PostSDPA.get_program_context(
             input_tensor_mesh,
             weights1_tensor,
             weights2_tensor,
-            gather1_output_tensor,
             gather2_output_tensor,
+            gather3_output_tensor,
+            intermediate_tensor,
+            output_tensor,
+            semaphores,
+            cluster_axis=cluster_axis,
+            residual_tensor_mesh=residual_tensor_mesh,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            ccl_enabled=ccl_enabled,
+            ccl_num_links=ccl_num_links,
+            sdpa_kv_cache_buffer=sdpa_kv_cache_buffer,
+            sdpa_input_l_mesh=sdpa_input_l_mesh,
+            sdpa_input_ms_mesh=sdpa_input_ms_mesh,
+            sdpa_output_l_mesh=sdpa_output_l_mesh,
+            sdpa_intermediate_recv_mesh=sdpa_intermediate_recv_mesh,
+            sdpa_forwarder_scratch_mesh=sdpa_forwarder_scratch_mesh,
+            sdpa_scale_fp32=sdpa_scale_fp32,
+            sdpa_cluster_axis=sdpa_cluster_axis,
+            sdpa_position_id_tensor_mesh=sdpa_position_id_tensor_mesh,
+            sdpa_per_device_chunk_size=sdpa_per_device_chunk_size,
+        )
+
+        mesh_device = input_tensor_mesh.device()
+        mesh_program_descriptor = ttnn.MeshProgramDescriptor()
+
+        for ctx in per_device_contexts:
+            coord = ctx["coord"]
+
+            unified_kernel = UnifiedKernelDescriptor(
+                kernel_source="models/demos/deepseek_v3_b1/fused_ops/post_sdpa/kernels/post_sdpa_kernel.cpp",
+                core_ranges=full_device_grid,
+                ncrisc_named_compile_time_args=ctx["ncrisc_named_compile_time_args"],
+                brisc_named_compile_time_args=ctx["brisc_named_compile_time_args"],
+                trisc_named_compile_time_args=ctx["trisc_named_compile_time_args"],
+                trisc_compute_config=ttnn.ComputeConfigDescriptor(
+                    math_fidelity=ttnn.MathFidelity.HiFi4,
+                    math_approx_mode=False,
+                    fp32_dest_acc_en=ctx["fp32_dest_acc_en"],
+                    dst_full_sync_en=ctx["fp32_dest_acc_en"],
+                ),
+                defines=ctx["kernel_defines"],
+                unified_compile_time_core_descriptors=ctx["unified_compile_time_core_descriptors"],
+                per_core_compile_time_descriptors=ctx["per_core_compile_time_descriptors"],
+                noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+            )
+
+            kernel_result = unified_kernel.get_kernel_descriptors()
+
+            program = ttnn.ProgramDescriptor(
+                kernels=kernel_result.kernels,
+                cbs=ctx["cb_list"],
+                semaphores=ctx["semaphore_list"],
+            )
+
+            # ==================================================================
+            # CCL runtime args and fabric connection setup
+            # ==================================================================
+            ccl = ctx["ccl"]
+            ccl_sender_core = ccl["sender_core"]
+            sender_group = kernel_result.get_group_by_arg("is_allreduce_sender_core", 1)
+            receiver_group = kernel_result.get_group_by_arg("is_allreduce_receiver_core", 1)
+
+            if sender_group is not None:
+                sender_ncrisc_rt_args = ttnn.RuntimeArgs()
+                sender_ncrisc_rt_args[ccl_sender_core.x][ccl_sender_core.y] = ccl[
+                    "allreduce_config"
+                ].get_ncrisc_per_core_rt_args(coord, program, ccl_sender_core)
+                program.kernels[sender_group.ncrisc_kernel_index].runtime_args = sender_ncrisc_rt_args
+                program.kernels[sender_group.ncrisc_kernel_index].common_runtime_args = ccl[
+                    "sender_ncrisc_common_rt_args"
+                ]
+
+                sender_brisc_rt_args = ttnn.RuntimeArgs()
+                sender_brisc_rt_args[ccl_sender_core.x][ccl_sender_core.y] = ccl[
+                    "allreduce_config"
+                ].get_brisc_per_core_rt_args(coord, program, ccl_sender_core)
+                program.kernels[sender_group.brisc_kernel_index].runtime_args = sender_brisc_rt_args
+                program.kernels[sender_group.brisc_kernel_index].common_runtime_args = ccl[
+                    "sender_brisc_common_rt_args"
+                ]
+
+            if receiver_group is not None:
+                program.kernels[receiver_group.ncrisc_kernel_index].common_runtime_args = ccl[
+                    "receiver_ncrisc_common_rt_args"
+                ]
+
+            # ==================================================================
+            # SDPA runtime args and fabric connection setup
+            # ==================================================================
+            if ctx["sdpa"]:
+                sdpa = ctx["sdpa"]
+                sdpa_forwarder_cores = ctx["sdpa_forwarder_cores"]
+
+                for group in kernel_result.groups:
+                    if group.compile_time_arg_values.get("is_sdpa_worker_core") == 1:
+                        crs = group.core_range_set
+                        program.kernels[group.ncrisc_kernel_index].runtime_args = _filter_runtime_args(
+                            sdpa["worker_ncrisc_rt_args"], crs
+                        )
+                        program.kernels[group.brisc_kernel_index].runtime_args = _filter_runtime_args(
+                            sdpa["worker_brisc_rt_args"], crs
+                        )
+                        if sdpa["worker_trisc_rt_args"] is not None:
+                            program.kernels[group.trisc_kernel_index].runtime_args = _filter_runtime_args(
+                                sdpa["worker_trisc_rt_args"], crs
+                            )
+                        if sdpa["worker_metadata_addr"]:
+                            metadata_common_args = [sdpa["worker_metadata_addr"]]
+                            program.kernels[group.ncrisc_kernel_index].common_runtime_args = metadata_common_args
+                            program.kernels[group.trisc_kernel_index].common_runtime_args = metadata_common_args
+
+                sdpa_forwarder_brisc_rt_args = ttnn.RuntimeArgs()
+                sdpa_forwarder_ncrisc_rt_args = ttnn.RuntimeArgs()
+
+                for fwd_idx, fwd_core in enumerate(sdpa_forwarder_cores):
+                    sdpa_forwarder_brisc_rt_args[fwd_core.x][fwd_core.y] = list(
+                        sdpa["forwarder_brisc_base_args"][(fwd_core.x, fwd_core.y)]
+                    )
+                    brisc_fabric_args = ttnn.setup_fabric_connection(
+                        src_fabric_node_id=sdpa["fabric_node_id"],
+                        dst_fabric_node_id=sdpa["fwd_fabric_node_id"],
+                        link_idx=fwd_idx,
+                        program_descriptor=program,
+                        worker_core=fwd_core,
+                    )
+                    sdpa_forwarder_brisc_rt_args[fwd_core.x][fwd_core.y].extend(brisc_fabric_args)
+
+                    sdpa_forwarder_ncrisc_rt_args[fwd_core.x][fwd_core.y] = list(
+                        sdpa["forwarder_ncrisc_base_args"][(fwd_core.x, fwd_core.y)]
+                    )
+                    ncrisc_fabric_args = ttnn.setup_fabric_connection(
+                        src_fabric_node_id=sdpa["fabric_node_id"],
+                        dst_fabric_node_id=sdpa["bwd_fabric_node_id"],
+                        link_idx=fwd_idx,
+                        program_descriptor=program,
+                        worker_core=fwd_core,
+                    )
+                    sdpa_forwarder_ncrisc_rt_args[fwd_core.x][fwd_core.y].extend(ncrisc_fabric_args)
+
+                for group in kernel_result.groups:
+                    if group.compile_time_arg_values.get("is_sdpa_forwarder_core") == 1:
+                        crs = group.core_range_set
+                        program.kernels[group.brisc_kernel_index].runtime_args = _filter_runtime_args(
+                            sdpa_forwarder_brisc_rt_args, crs
+                        )
+                        program.kernels[group.ncrisc_kernel_index].runtime_args = _filter_runtime_args(
+                            sdpa_forwarder_ncrisc_rt_args, crs
+                        )
+
+            mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
+
+        io_tensors = [
+            input_tensor_mesh,
+            weights1_tensor.fused_tensor,
+            weights2_tensor.fused_tensor,
+            gather2_output_tensor,
+            gather3_output_tensor,
         ]
         if ccl_enabled:
             io_tensors.append(intermediate_tensor)
@@ -1699,8 +1666,7 @@ class PostSDPA:
                     sdpa_input_l_mesh,
                     sdpa_input_ms_mesh,
                     sdpa_output_l_mesh,
-                    sdpa_r1_recv_mesh,
-                    sdpa_r2_recv_mesh,
+                    sdpa_intermediate_recv_mesh,
                     sdpa_forwarder_scratch_mesh,
                 ]
             )
@@ -1709,4 +1675,4 @@ class PostSDPA:
 
         ttnn.generic_op(io_tensors, mesh_program_descriptor)
 
-        return output_tensor if ccl_enabled else gather2_output_tensor
+        return output_tensor if ccl_enabled else gather3_output_tensor

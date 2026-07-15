@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -182,6 +182,7 @@ class LazyWeight:
 
         # source
         # todo)) add better fingerprinting for the source tensor to enable cache invalidation when the source tensor changes; for now, use shape.
+        #        maybe a sampled hash (on, say, first N bytes) would be a good solution --> needs testing! --> test_rope_1d.py is a good test case with differring rope_theta values
         parts.append(f"srcshape_{'_'.join(str(dim) for dim in self.source.shape)}")
 
         # dtype
@@ -325,9 +326,9 @@ def _from_torch_and_dump(
         tensor,
         dtype=dtype,
         layout=layout,
-        # For fully replicated tensors, cache unsharded tensor so it can be loaded on any device.
         mesh_mapper=local_mesh_mapper,
         memory_config=memory_config,
+        # For fully replicated tensors, cache unsharded tensor so it can be loaded on any device.
         device=None,
         pad_value=pad_value,
     )

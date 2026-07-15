@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -18,7 +18,7 @@ from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
 from ....utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from ....utils.padding import pad_vision_seq_parallel
-from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch
+from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, float32_tensor, from_torch, local_device_to_torch
 from ....utils.test import line_params, ring_params
 
 # ---------------------------------------------------------------------------
@@ -406,6 +406,7 @@ def test_wan_transformer_model(
     prompt_input = torch.randn((B, prompt_seq_len, TEXT_DIM), dtype=torch.float32)
     timestep_input = torch.randint(0, 1000, (B,), dtype=torch.float32)
     tt_prompt = bf16_tensor(prompt_input.unsqueeze(0), device=mesh_device)
+    tt_timestep = float32_tensor(timestep_input.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=mesh_device)
 
     tt_model = _make_wan_transformer(
         mesh_device=mesh_device,
@@ -427,7 +428,7 @@ def test_wan_transformer_model(
     tt_spatial_out = tt_model(
         spatial=spatial_input,
         prompt=tt_prompt,
-        timestep=timestep_input,
+        timestep=tt_timestep,
     )
     del tt_model
 
@@ -494,7 +495,7 @@ def test_wan_transformer_inner_step(
         num_layers=1,
     )
     start = time.time()
-    tt_model.load_torch_state_dict(torch_model.state_dict(), on_host=True)
+    tt_model.load_torch_state_dict(torch_model.state_dict())
     end = time.time()
     logger.info(f"Time taken to load state dict: {end - start} seconds")
 
@@ -509,10 +510,14 @@ def test_wan_transformer_inner_step(
     rope_cos_1HND, rope_sin_1HND, trans_mat = tt_model.prepare_rope_features(spatial_input)
     prompt_1BLP = tt_model.prepare_text_conditioning(prompt_input)
 
+    spatial_device = from_torch(
+        spatial_host, device=mesh_device, mesh_axes=[None, None, parallel_config.sequence_parallel.mesh_axis, None]
+    )
+
     # Run TT inner_step (returns on-device tensor)
-    logger.info(f"Running TT inner_step with spatial_host shape {spatial_host.shape}, N={N}")
+    logger.info(f"Running TT inner_step with spatial_device shape {spatial_device.shape}, N={N}")
     tt_output_1BNI_tt = tt_model.inner_step(
-        spatial_1BNI_torch=spatial_host,
+        spatial_1BNI=spatial_device,
         prompt_1BLP=prompt_1BLP,
         rope_cos_1HND=rope_cos_1HND,
         rope_sin_1HND=rope_sin_1HND,
@@ -520,7 +525,7 @@ def test_wan_transformer_inner_step(
         N=N,
         timestep_torch=timestep_input,
     )
-    tt_output_1BNI = tt_model.device_to_host(tt_output_1BNI_tt)
+    tt_output_1BNI = local_device_to_torch(tt_output_1BNI_tt)
     tt_output = tt_model.postprocess_spatial_output_host(tt_output_1BNI, T, H, W, N)
     del tt_model
 

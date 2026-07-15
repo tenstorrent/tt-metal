@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,21 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from rich.theme import Theme
+
+
+def safe_path(path: str | None) -> str | None:
+    """Disambiguate an output path per process so parallel tt-run instances don't clobber it."""
+    if not path:
+        return path
+    rank_env = os.environ.get("TT_RUN_RANK")
+    if rank_env is None:
+        return path
+    try:
+        rank = int(rank_env)
+    except ValueError:
+        return path
+    root, ext = os.path.splitext(path)
+    return f"{root}_rank_{rank}{ext}"
 
 
 def should_use_color() -> bool:
@@ -126,9 +141,11 @@ def ERROR(s, **kwargs):
     if Verbosity.supports(Verbosity.ERROR):
         try:
             from triage import console
-
-            console.print(f"[error]{s}[/]", **kwargs)
         except ImportError:
+            console = None
+        if console is not None:
+            console.print(f"[error]{s}[/]", **kwargs)
+        else:
             print(f"ERROR: {s}", **kwargs)
 
 
@@ -136,9 +153,11 @@ def WARN(s, **kwargs):
     if Verbosity.supports(Verbosity.WARN):
         try:
             from triage import console
-
-            console.print(f"[warning]{s}[/]", **kwargs)
         except ImportError:
+            console = None
+        if console is not None:
+            console.print(f"[warning]{s}[/]", **kwargs)
+        else:
             print(f"WARNING: {s}", **kwargs)
 
 
@@ -146,9 +165,11 @@ def DEBUG(s, **kwargs):
     if Verbosity.supports(Verbosity.DEBUG):
         try:
             from triage import console
-
-            console.print(f"[debug]{s}[/]", **kwargs)
         except ImportError:
+            console = None
+        if console is not None:
+            console.print(f"[debug]{s}[/]", **kwargs)
+        else:
             print(f"DEBUG: {s}", **kwargs)
 
 
@@ -156,9 +177,11 @@ def INFO(s, **kwargs):
     if Verbosity.supports(Verbosity.INFO):
         try:
             from triage import console
-
-            console.print(f"[info]{s}[/]", **kwargs)
         except ImportError:
+            console = None
+        if console is not None:
+            console.print(f"[info]{s}[/]", **kwargs)
+        else:
             print(f"INFO: {s}", **kwargs)
 
 
@@ -166,7 +189,9 @@ def VERBOSE(s, **kwargs):
     if Verbosity.supports(Verbosity.VERBOSE):
         try:
             from triage import console
-
-            console.print(f"[verbose]{s}[/]", **kwargs)
         except ImportError:
+            console = None
+        if console is not None:
+            console.print(f"[verbose]{s}[/]", **kwargs)
+        else:
             print(f"VERBOSE: {s}", **kwargs)

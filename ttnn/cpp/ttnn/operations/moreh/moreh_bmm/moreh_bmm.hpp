@@ -1,23 +1,19 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/decorators.hpp"
-
-namespace ttnn::operations::moreh::moreh_bmm {
-struct MorehBMM {
-    static Tensor invoke(
-        const Tensor& input,
-        const Tensor& mat2,
-        const std::optional<Tensor>& output,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
-};
-}  // namespace ttnn::operations::moreh::moreh_bmm
+#include "ttnn/types.hpp"
 
 namespace ttnn {
-constexpr auto moreh_bmm = ttnn::register_operation<"ttnn::moreh_bmm", ttnn::operations::moreh::moreh_bmm::MorehBMM>();
+
+Tensor moreh_bmm(
+    const Tensor& input,
+    const Tensor& mat2,
+    const std::optional<Tensor>& output = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+
 }  // namespace ttnn

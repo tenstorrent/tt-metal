@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -47,10 +47,6 @@ def test_run_average_pool(act_shape, dtype, device):
     out = ttnn.global_avg_pool2d(ttact)
 
     out = out.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
-    out_shape = [batch_size, 1, 1, channels]
-    out_shape_padded = shape_padded(out_shape)
-    if out_shape != out_shape_padded:
-        out = out.unpad_from_tile(out_shape)
 
     out_pytorch = out.to_torch()
 

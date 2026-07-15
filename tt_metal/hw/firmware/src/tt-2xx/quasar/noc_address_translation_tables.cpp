@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 // Version: FFN1.3.0
@@ -12,8 +12,8 @@
 
 #else
 
-#define NOC_WRITE_REG(addr, val) ((*((volatile uint32_t*)(addr))) = (val))
-#define NOC_READ_REG(addr) (*((volatile uint32_t*)(addr)))
+#define NOC_WRITE_REG(addr, val) ((*((volatile uint32_t*)(uintptr_t)(addr))) = (val))
+#define NOC_READ_REG(addr) (*((volatile uint32_t*)(uintptr_t)(addr)))
 
 #endif
 

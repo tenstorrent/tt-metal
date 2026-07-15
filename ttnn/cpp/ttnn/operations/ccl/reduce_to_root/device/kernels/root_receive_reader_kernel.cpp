@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
@@ -112,6 +112,8 @@ void kernel_main() {
     uint32_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
+    Noc noc;
+
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection;
     mux_connection = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
@@ -193,7 +195,7 @@ void kernel_main() {
     noc_async_read(packet_noc_addr, packet_l1_addr, new_packet_size_bytes);
 
     // moving l tensor
-    tt_memmove<true, false, false, 0>(dest_page_base_addr, packet_l1_addr, packet_size_bytes);
+    tt_memmove<true, false, false, 0>(noc, dest_page_base_addr, packet_l1_addr, packet_size_bytes);
     cb_push_back(receiver_cb_id_l, input_num_tiles);
     //  now s and m
     cb_reserve_back(receiver_cb_id_s, 1);
@@ -201,12 +203,15 @@ void kernel_main() {
 
     uint32_t dest_page_base_addr_s = get_write_ptr(receiver_cb_id_s);
     tt_memmove<true, false, false, 0>(
-        dest_page_base_addr_s, packet_l1_addr + packet_size_bytes, aligned_page_size_bytes);
+        noc, dest_page_base_addr_s, packet_l1_addr + packet_size_bytes, aligned_page_size_bytes);
     cb_push_back(receiver_cb_id_s, 1);
 
     uint32_t dest_page_base_addr_m = get_write_ptr(receiver_cb_id_m);
     tt_memmove<true, false, false, 0>(
-        dest_page_base_addr_m, packet_l1_addr + packet_size_bytes + aligned_page_size_bytes, aligned_page_size_bytes);
+        noc,
+        dest_page_base_addr_m,
+        packet_l1_addr + packet_size_bytes + aligned_page_size_bytes,
+        aligned_page_size_bytes);
     cb_push_back(receiver_cb_id_m, 1);
 
     cb_push_back(packet_cb_id, 1);
@@ -298,7 +303,7 @@ void kernel_main() {
     packet_noc_addr = get_noc_addr(core_noc_x, core_noc_y, intermediate_base_addr);
     noc_async_read(packet_noc_addr, packet_l1_addr, new_packet_size_bytes);
 
-    tt_memmove<true, false, false, 0>(dest_page_base_addr, packet_l1_addr, packet_size_bytes);
+    tt_memmove<true, false, false, 0>(noc, dest_page_base_addr, packet_l1_addr, packet_size_bytes);
     cb_push_back(receiver_cb_id_l, input_num_tiles);
 
     cb_reserve_back(receiver_cb_id_s, 1);
@@ -307,9 +312,12 @@ void kernel_main() {
     dest_page_base_addr_m = get_write_ptr(receiver_cb_id_m);
 
     tt_memmove<true, false, false, 0>(
-        dest_page_base_addr_s, packet_l1_addr + packet_size_bytes, aligned_page_size_bytes);
+        noc, dest_page_base_addr_s, packet_l1_addr + packet_size_bytes, aligned_page_size_bytes);
     tt_memmove<true, false, false, 0>(
-        dest_page_base_addr_m, packet_l1_addr + packet_size_bytes + aligned_page_size_bytes, aligned_page_size_bytes);
+        noc,
+        dest_page_base_addr_m,
+        packet_l1_addr + packet_size_bytes + aligned_page_size_bytes,
+        aligned_page_size_bytes);
     cb_push_back(receiver_cb_id_s, 1);
     cb_push_back(receiver_cb_id_m, 1);
     cb_push_back(packet_cb_id, 1);

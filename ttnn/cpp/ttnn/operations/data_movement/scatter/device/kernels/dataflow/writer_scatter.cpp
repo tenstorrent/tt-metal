@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,13 +7,14 @@
 #include "../scatter_common.hpp"
 
 void kernel_main() {
+    Noc noc;
     constexpr auto ctas{get_ctas()};
 
     const uint32_t output_buffer_address = get_arg_val<uint32_t>(0);
     const uint32_t start_stick_id = get_arg_val<uint32_t>(1);
     const uint32_t sticks_for_core = get_arg_val<uint32_t>(2);
 
-    const auto output_addr_gtor = TensorAccessor(ctas.output_args, output_buffer_address, ctas.output_stick_size_bytes);
+    const auto output_addr_gtor = TensorAccessor(ctas.output_args, output_buffer_address);
 
     using output_std_type = std_type_t<get_dataformat(ctas.output_cb)>;
 
@@ -25,7 +26,7 @@ void kernel_main() {
              offset_bytes += input_and_output_chunk_size * sizeof(output_std_type)) {
             const uint32_t chunk_write_bytes = std::min(
                 ctas.output_stick_size_bytes - offset_bytes, input_and_output_chunk_size * sizeof(output_std_type));
-            write_to_output(ctas.output_cb, output_addr_gtor, offset_bytes, chunk_write_bytes, stick_id);
+            write_to_output(noc, ctas.output_cb, output_addr_gtor, offset_bytes, chunk_write_bytes, stick_id);
         }
     }
 }

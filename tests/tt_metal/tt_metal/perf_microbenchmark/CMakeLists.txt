@@ -16,6 +16,7 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
     string(REPLACE "wormhole" "wormhole_b0" TEST_TARGET ${TEST_TARGET})
 
     add_executable(${TEST_TARGET} ${TEST_SRC})
+    target_precompile_headers(${TEST_TARGET} REUSE_FROM metal_common_pch)
     target_link_libraries(${TEST_TARGET} PRIVATE test_metal_common_libs)
 
     if(${TEST_SRC} STREQUAL "dispatch/test_pgm_dispatch.cpp")
@@ -24,11 +25,28 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
     if(${TEST_SRC} STREQUAL "dispatch/benchmark_rw_buffer.cpp")
         target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
     endif()
-
-    if(${TEST_SRC} STREQUAL "routing/test_tt_fabric.cpp")
-        target_sources(${TEST_TARGET} PRIVATE ${TEST_TT_FABRIC_ADDITIONAL_SOURCES})
-        target_link_libraries(${TEST_TARGET} PRIVATE yaml-cpp::yaml-cpp)
+    if(${TEST_SRC} STREQUAL "routing/benchmark_fabric_mux_v2_throughput.cpp")
+        target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
+        target_sources(${TEST_TARGET} PRIVATE routing/fabric_mux_v2_benchmark_program.cpp)
     endif()
+    if(${TEST_SRC} STREQUAL "disaggregation/bench_kv_chunk_address_table.cpp")
+        target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
+    endif()
+    if(${TEST_SRC} STREQUAL "disaggregation/bench_kv_chunk_address_table_serialization.cpp")
+        target_link_libraries(
+            ${TEST_TARGET}
+            PRIVATE
+                benchmark::benchmark
+                protobuf::libprotobuf
+        )
+        target_include_directories(${TEST_TARGET} PRIVATE ${PROJECT_SOURCE_DIR}/tt_metal)
+        target_sources(
+            ${TEST_TARGET}
+            PRIVATE
+                ${PROJECT_SOURCE_DIR}/tt_metal/impl/internal/disaggregation/kv_chunk_address_table_protobuf.cpp
+        )
+    endif()
+
     target_include_directories(
         ${TEST_TARGET}
         BEFORE

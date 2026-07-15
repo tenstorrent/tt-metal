@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 import pytest
@@ -18,7 +18,8 @@ def ensure_devices(ensure_devices_tg):
 
 @pytest.fixture
 def device_params(request, galaxy_type):
-    # Get param dict passed in from test parametrize (or default to empty dict)
+    # Get param dict passed in from test parametrize (or default to empty dict).
+    # TRACE_MODEL_KEY_PARAM is resolved later by the mesh_device fixture (logical SKU).
     params = getattr(request, "param", {}).copy()
 
     if "fabric_config" in params and params["fabric_config"] == True:

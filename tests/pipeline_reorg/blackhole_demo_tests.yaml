@@ -1,0 +1,125 @@
+# This file defines the test matrix for the Blackhole demo tests pipeline.
+
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The command to run.
+#   skus: A mapping of SKU names to their configuration (each SKU has timeout in minutes).
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+# This pipeline holds Blackhole demo / performance tests that have not yet been
+# migrated to the tier 1/2/3 pipelines
+# (tests/pipeline_reorg/models_{e2e,unit,device_perf}_tests.yaml) — currently a
+# mix of diffusion / vision demos plus a few model e2e tests. The Llama / Qwen
+# LLM e2e, data-parallel, and device-perf entries have been migrated out.
+
+# All entries that read HF model checkpoints / tt_cache use the canonical HF_HOME convention
+# (matches tests/pipeline_reorg/models_e2e_tests.yaml on the Wormhole side):
+#   HF_HOME=/localdev/blackhole_demos/huggingface_data
+#   HF_MODEL=<org>/<model>                                    # hub id, not a path
+#   TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/<org>--<model>
+# Exceptions: bh_p300 (LFC) entries keep file-path / HF_HUB_CACHE form because the LFC
+# server hosts checkpoints in a layout that does not match the canonical hub cache.
+
+# ─── mistral-small-3.1-24b ──────────────────────────────────────────────────
+
+- name: mistral-small-3.1-24b e2e tests
+  cmd: |
+    set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    export HF_MODEL=mistralai/Mistral-Small-3.1-24B-Instruct-2503
+    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/mistralai--Mistral-Small-3.1-24B-Instruct-2503
+    export MESH_DEVICE=T3K
+    pytest --timeout 600 models/experimental/mistral_24b/tests/pipeline_tests
+  skus:
+    bh_quietbox_2:
+      timeout: 10
+  owner_id: U03PUAKE719 # Miguel Tairum
+  team: models
+  model-name: mistral-small-3.1-24b
+
+# ─── Mochi (BH QuietBox 2) ──────────────────────────────────────────────────
+
+- name: Mochi BH QuietBox 2 performance (2x2sp0tp1)
+  cmd: |
+    set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
+    pytest models/tt_dit/tests/models/mochi/test_performance_mochi.py -k "dit_2x2sp0tp1_vae_1x4sp0tp1_BH_QB" --timeout=1800
+  skus:
+    bh_quietbox_2:
+      timeout: 30
+  owner_id: U06BXU8RWQ2 # Kevin Mi
+  team: models
+  model-name: mochi
+
+# ─── Wan2.2-T2V-A14B ────────────────────────────────────────────────────────
+
+- name: Wan2.2-T2V-A14B BH QuietBox 2 performance
+  cmd: |
+    set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
+    pytest models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "2x2_sp0tp1 and resolution_480p and t2v" --timeout=1200
+  skus:
+    bh_quietbox_2:
+      timeout: 20
+  owner_id: U08TED0JM9D # Samuel Adesoye
+  team: models
+  model-name: wan2.2-t2v-a14b
+
+# ─── Z-Image-Turbo ──────────────────────────────────────────────────────────
+
+- name: Z-Image-Turbo Text Encoder
+  cmd: |
+    set -e
+    uv pip install -r models/demos/z_image_turbo/requirements.txt
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    pytest models/demos/z_image_turbo/tests/test_text_encoder.py --timeout=600
+  skus:
+    bh_quietbox_2:
+      timeout: 15
+  owner_id: U088VJ79WDB # Jonathan Su
+  team: models
+  model-name: z-image-turbo
+
+- name: Z-Image-Turbo DiT
+  cmd: |
+    set -e
+    uv pip install -r models/demos/z_image_turbo/requirements.txt
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    pytest models/demos/z_image_turbo/tests/test_dit.py --timeout=600
+  skus:
+    bh_quietbox_2:
+      timeout: 15
+  owner_id: U088VJ79WDB # Jonathan Su
+  team: models
+  model-name: z-image-turbo
+
+- name: Z-Image-Turbo VAE decoder
+  cmd: |
+    set -e
+    uv pip install -r models/demos/z_image_turbo/requirements.txt
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    pytest models/demos/z_image_turbo/tests/test_vae.py --timeout=600
+  skus:
+    bh_quietbox_2:
+      timeout: 15
+  owner_id: U088VJ79WDB # Jonathan Su
+  team: models
+  model-name: z-image-turbo
+
+- name: Z-Image-Turbo full pipeline
+  cmd: |
+    set -e
+    uv pip install -r models/demos/z_image_turbo/requirements.txt
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    pytest models/demos/z_image_turbo/tests/test_pipeline.py --timeout=600
+  skus:
+    bh_quietbox_2:
+      timeout: 15
+  owner_id: U088VJ79WDB # Jonathan Su
+  team: models
+  model-name: z-image-turbo

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@
 #include <nanobind/stl/optional.h>
 
 #include "index_fill.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::index_fill {
 
@@ -54,7 +54,14 @@ void bind_index_fill_operation(nb::module_& mod) {
                     - TILE
 
             Memory Support:
-                - Interleaved: DRAM and L1
+                - Interleaved (DRAM or L1): output may be any supported layout
+                - Height sharded (DRAM or L1): output may be any supported layout
+                - Width sharded (DRAM or L1): output may be interleaved, height sharded, width sharded,
+                  or block sharded; for width/block sharded output the column shard width
+                  (shard_spec.shape[1]) must match the input
+                - Block sharded (DRAM or L1): output may be interleaved, height sharded, block sharded,
+                  or width sharded; for width/block sharded output the column shard width
+                  (shard_spec.shape[1]) must match the input
 
             Limitations:
                 -  The input tensor must be on the device.
@@ -63,17 +70,16 @@ void bind_index_fill_operation(nb::module_& mod) {
                 -  The value must be a float or int and must match the dtype of the input tensor.
     )doc";
 
-    bind_registered_operation(
+    ttnn::bind_function<"index_fill">(
         mod,
-        ttnn::index_fill,
         doc,
-        ttnn::nanobind_arguments_t{
-            nb::arg("input"),
-            nb::arg("dim"),
-            nb::arg("index"),
-            nb::arg("value"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+        &ttnn::index_fill,
+        nb::arg("input"),
+        nb::arg("dim"),
+        nb::arg("index"),
+        nb::arg("value"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::index_fill

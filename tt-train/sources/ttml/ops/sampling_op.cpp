@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,13 +15,15 @@ autograd::TensorPtr sample_op(
     const autograd::TensorPtr& logits,
     float temperature,
     uint32_t seed,
-    const autograd::TensorPtr& logits_padding_mask) {
+    const autograd::TensorPtr& logits_padding_mask,
+    std::optional<std::vector<uint32_t>> seed_axes) {
     auto sampled_tensor = ttnn_fixed::sample(
         logits->get_value(),
         temperature,
         seed,
         logits_padding_mask == nullptr ? std::nullopt
-                                       : std::optional<tt::tt_metal::Tensor>(logits_padding_mask->get_value()));
+                                       : std::optional<tt::tt_metal::Tensor>(logits_padding_mask->get_value()),
+        std::move(seed_axes));
 
     auto out = autograd::create_tensor(sampled_tensor);
 
@@ -30,8 +32,7 @@ autograd::TensorPtr sample_op(
         throw std::runtime_error("Sampling operation backward pass is not implemented.");
     };
 
-    auto links = autograd::get_links(logits, logits_padding_mask);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, logits, logits_padding_mask));
 
     return out;
 }

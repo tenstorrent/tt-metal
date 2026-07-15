@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -198,9 +198,18 @@ std::optional<DeviceAddr> FreeListOpt::allocate_at_address(DeviceAddr absolute_s
     // Find the relevant size segregated list
     size_t size_segregated_index = get_size_segregated_index(block_size_[target_block_index]);
     std::vector<size_t>& segregated_list = free_blocks_segregated_by_size_[size_segregated_index];
-    auto it = std::find(segregated_list.begin(), segregated_list.end(), target_block_index);
-    TT_ASSERT(it != segregated_list.end(), "Block not found in size segregated list");
-    segregated_list.erase(it);
+    // Precondition: insert_block_to_segregated_list() keeps each list sorted ascending by block
+    // address, which the lower_bound below relies on. Assert it (debug-only) instead of silently
+    // assuming it.
+    const auto by_address = [this](size_t a, size_t b) { return block_address_[a] < block_address_[b]; };
+    TT_ASSERT(
+        std::is_sorted(segregated_list.begin(), segregated_list.end(), by_address),
+        "Size segregated list must be sorted by block address");
+    auto it = std::lower_bound(segregated_list.begin(), segregated_list.end(), target_block_index, by_address);
+    TT_ASSERT(it != segregated_list.end() && *it == target_block_index, "Block not found in size segregated list");
+    if (it != segregated_list.end() && *it == target_block_index) {
+        segregated_list.erase(it);
+    }
 
     size_t offset = start_address - block_address_[target_block_index];
     // Allocated addresses cache is invalidated by allocate_in_block
@@ -404,7 +413,6 @@ Statistics FreeListOpt::get_statistics() const {
     size_t total_allocated_bytes = 0;
     size_t total_free_bytes = 0;
     size_t largest_free_block_bytes = 0;
-    std::vector<uint32_t> largest_free_block_addrs;
 
     for (size_t i = 0; i < block_address_.size(); i++) {
         if (!meta_block_is_allocated_[i]) {
@@ -414,11 +422,7 @@ Statistics FreeListOpt::get_statistics() const {
             total_allocated_bytes += block_size_[i];
         } else {
             total_free_bytes += block_size_[i];
-            if (block_size_[i] >= largest_free_block_bytes) {
-                largest_free_block_bytes = block_size_[i];
-                // XXX: This is going to overflow
-                largest_free_block_addrs.push_back(block_address_[i] + offset_bytes_);
-            }
+            largest_free_block_bytes = std::max(block_size_[i], largest_free_block_bytes);
         }
     }
 
@@ -432,9 +436,6 @@ Statistics FreeListOpt::get_statistics() const {
         .total_allocated_bytes = total_allocated_bytes,
         .total_free_bytes = total_free_bytes,
         .largest_free_block_bytes = largest_free_block_bytes,
-        // Why do we need largest_free_block_addrs? Without it the entire loop can be removed
-        // and statistics can be tracked during allocation and deallocation
-        .largest_free_block_addrs = std::move(largest_free_block_addrs),
     };
 }
 
@@ -551,11 +552,16 @@ void FreeListOpt::shrink_size(DeviceAddr shrink_size, bool bottom_up) {
     // Find the relevant size segregated list
     size_t size_segregated_index = get_size_segregated_index(block_size_[block_to_shrink]);
     std::vector<size_t>& segregated_list = free_blocks_segregated_by_size_[size_segregated_index];
-    for (size_t i = 0; i < segregated_list.size(); i++) {
-        if (segregated_list[i] == block_to_shrink) {
-            segregated_list.erase(segregated_list.begin() + i);
-            break;
-        }
+    // Precondition: insert_block_to_segregated_list() keeps each list sorted ascending by block
+    // address, which the lower_bound below relies on. Assert it (debug-only) instead of silently
+    // assuming it.
+    const auto by_address = [this](size_t a, size_t b) { return block_address_[a] < block_address_[b]; };
+    TT_ASSERT(
+        std::is_sorted(segregated_list.begin(), segregated_list.end(), by_address),
+        "Size segregated list must be sorted by block address");
+    auto it = std::lower_bound(segregated_list.begin(), segregated_list.end(), block_to_shrink, by_address);
+    if (it != segregated_list.end() && *it == block_to_shrink) {
+        segregated_list.erase(it);
     }
 
     // Shrink the block

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -50,54 +50,62 @@ void safe_fwrite_bytes(
 
 constexpr std::uint32_t kFlatbufferAlignment = alignof(std::uint64_t);
 
-}  // namespace
-
-void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor) {
+void dump_tensor_flatbuffer_impl(const std::string& file_name, const Tensor& tensor, DumpTensorMode mode) {
     Tensor cpu_tensor = tensor.cpu();
 
-    // Dump tensor to disk from (global) rank 0 host.
-    // Note we use global context as opposed to context embedded to the host-side tensor, since the tensor may already
-    // be fully host-local. In this latter case, host buffer context will consist of a single (local) host rank, and
-    // each host will attempt to flush the serialized tensor file to disk.
-    cpu_tensor = ttnn::distributed::host_ccl::all_gather(cpu_tensor);
-    const auto& ctx = distributed::multihost::DistributedContext::get_current_world();
-    if (ctx->rank() == tt::tt_metal::distributed::multihost::Rank(0)) {
-        FILE* output_file = fopen(file_name.c_str(), "wb");
-        TT_FATAL(
-            output_file != nullptr,
-            "Cannot open \"{}\" for writing: errno={} \"{}\"",
-            file_name,
-            errno,
-            strerror(errno));
-        auto cleanup = ttsl::make_cleanup([f = output_file, &file_name]() {
-            if (f && fclose(f) != 0) {
-                log_warning(tt::LogAlways, "Failed to close \"{}\"", file_name);
-            }
-        });
-
-        std::vector<HostBuffer> buffers;
-        flatbuffers::FlatBufferBuilder builder;
-        auto tensor_offset = ttnn::to_flatbuffer(cpu_tensor, builder, buffers);
-        // To be able to read flatbuffer data with `mmap` safely, make sure the serialized flatbuffer is aligned to at
-        // least 8 bytes, just like `header_size`. Individual `buffers` are aligned according to their element size,
-        // which is already what we need for `mmap` to work.
-        builder.Align(kFlatbufferAlignment);
-        builder.Finish(tensor_offset);
-
-        const uint64_t header_size = builder.GetSize();
-        safe_fwrite_bytes(&header_size, sizeof(header_size), output_file, file_name, "tensor header size");
-        safe_fwrite_bytes(builder.GetBufferPointer(), header_size, output_file, file_name, "tensor header");
-
-        for (const auto& buffer : buffers) {
-            auto buffer_view = buffer.view_bytes();
-            TT_FATAL(!buffer_view.empty(), "Unexpected empty buffer during tensor serialization");
-            safe_fwrite_bytes(buffer_view.data(), buffer_view.size(), output_file, file_name, "tensor data");
+    if (mode == DumpTensorMode::DISTRIBUTED_GATHER) {
+        // Dump tensor to disk from (global) rank 0 host.
+        // Note we use global context as opposed to context embedded to the host-side tensor, since the tensor may
+        // already be fully host-local. In this latter case, host buffer context will consist of a single (local) host
+        // rank, and each host will attempt to flush the serialized tensor file to disk.
+        cpu_tensor = ttnn::distributed::host_ccl::all_gather(cpu_tensor);
+        const auto& ctx = distributed::multihost::DistributedContext::get_current_world();
+        if (ctx->rank() != tt::tt_metal::distributed::multihost::Rank(0)) {
+            ctx->barrier();
+            return;
         }
-
-        TT_FATAL(
-            fflush(output_file) == 0, "Failed to flush \"{}\": errno={} \"{}\"", file_name, errno, strerror(errno));
     }
-    ctx->barrier();
+
+    FILE* output_file = fopen(file_name.c_str(), "wb");
+    TT_FATAL(
+        output_file != nullptr, "Cannot open \"{}\" for writing: errno={} \"{}\"", file_name, errno, strerror(errno));
+    auto cleanup = ttsl::make_cleanup([f = output_file, &file_name]() {
+        if (f && fclose(f) != 0) {
+            log_warning(tt::LogAlways, "Failed to close \"{}\"", file_name);
+        }
+    });
+
+    std::vector<HostBuffer> buffers;
+    flatbuffers::FlatBufferBuilder builder;
+    auto tensor_offset = ttnn::to_flatbuffer(cpu_tensor, builder, buffers);
+    // To be able to read flatbuffer data with `mmap` safely, make sure the serialized flatbuffer is aligned to at
+    // least 8 bytes, just like `header_size`. Individual `buffers` are aligned according to their element size,
+    // which is already what we need for `mmap` to work.
+    builder.Align(kFlatbufferAlignment);
+    builder.Finish(tensor_offset);
+
+    const uint64_t header_size = builder.GetSize();
+    safe_fwrite_bytes(&header_size, sizeof(header_size), output_file, file_name, "tensor header size");
+    safe_fwrite_bytes(builder.GetBufferPointer(), header_size, output_file, file_name, "tensor header");
+
+    for (const auto& buffer : buffers) {
+        auto buffer_view = buffer.view_bytes();
+        TT_FATAL(!buffer_view.empty(), "Unexpected empty buffer during tensor serialization");
+        safe_fwrite_bytes(buffer_view.data(), buffer_view.size(), output_file, file_name, "tensor data");
+    }
+
+    TT_FATAL(fflush(output_file) == 0, "Failed to flush \"{}\": errno={} \"{}\"", file_name, errno, strerror(errno));
+
+    if (mode == DumpTensorMode::DISTRIBUTED_GATHER) {
+        const auto& ctx = distributed::multihost::DistributedContext::get_current_world();
+        ctx->barrier();
+    }
+}
+
+}  // namespace
+
+void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor, DumpTensorMode mode) {
+    dump_tensor_flatbuffer_impl(file_name, tensor, mode);
 }
 
 Tensor load_tensor_flatbuffer(const std::string& file_name, distributed::MeshDevice* device) {
@@ -145,7 +153,7 @@ Tensor load_tensor_flatbuffer(const std::string& file_name, distributed::MeshDev
         (reinterpret_cast<uintptr_t>(data_region) & (kFlatbufferAlignment - 1)) == 0,
         "Tensor data pointer must be 8-byte aligned!");
 
-    Tensor tensor = ttnn::from_flatbuffer(fb_tensor, tt::stl::Span<std::byte>(data_region, data_size), memory_pin);
+    Tensor tensor = ttnn::from_flatbuffer(fb_tensor, ttsl::Span<std::byte>(data_region, data_size), memory_pin);
     if (device != nullptr) {
         tensor = tensor.to_device(device, tensor.tensor_spec().memory_config());
     }

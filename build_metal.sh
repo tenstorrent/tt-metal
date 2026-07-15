@@ -16,6 +16,10 @@ fi
 
 # Function to display help
 show_help() {
+    local valid_perf_categories
+    valid_perf_categories=$(grep -vE '^[[:space:]]*(#|$)' \
+        "$(dirname "$0")/tt_metal/tools/profiler/tracy_debug_categories.txt" 2>/dev/null \
+        | awk '{print $1}' | paste -sd, - | sed 's/,/, /g' || true)
     echo "Usage: $0 [options]..."
     echo "  -h, --help                       Show this help message."
     echo "  -e, --export-compile-commands    Enable CMAKE_EXPORT_COMPILE_COMMANDS."
@@ -23,6 +27,7 @@ show_help() {
     echo "  -b, --build-type build_type      Set the build type. Default is Release."
     echo "  -t, --enable-time-trace          Enable build time trace (clang only)."
     echo "  --disable-profiler               Disable Tracy profiler (enabled by default)."
+    echo "  --build-perf-debug <categories>  Tracy debug-verbosity categories to compile in: off (default), all, or a comma-separated list of ${valid_perf_categories}."
     echo "  --install-prefix                 Where to install build artifacts."
     echo "  --build-dir                      Build directory."
     echo "  --build-tests                    Build All Testcases."
@@ -38,6 +43,7 @@ show_help() {
     echo "  --debug                          Set the build type as Debug."
     echo "  --clean                          Remove build workspaces."
     echo "  --build-static-libs              Build tt_metal (not ttnn) as a static lib (BUILD_SHARED_LIBS=OFF)"
+    echo "  --disable-pch                    Disable precompiled headers"
     echo "  --disable-unity-builds           Disable Unity builds"
     echo "  --disable-light-metal-trace      Disable Light Metal tracing to binary."
     echo "  --cxx-compiler-path              Set path to C++ compiler."
@@ -51,6 +57,7 @@ show_help() {
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
     echo "  --enable-fake-kernels-target     Enable fake kernels target, to enable generation of compile_commands.json for the kernels to enable IDE support."
     echo "  --enable-lto                     Enable Link Time Optimization (LTO) for Release/RelWithDebInfo builds."
+    echo "  --disable-warnings-as-errors     Disable treating warnings as errors (CMAKE_COMPILE_WARNING_AS_ERROR=OFF)."
 }
 
 clean() {
@@ -68,6 +75,7 @@ enable_ccache="OFF"
 enable_time_trace="OFF"
 build_type="Release"
 disable_profiler="OFF"
+perf_debug_categories=""
 build_dir=""
 build_tests="OFF"
 build_ttnn_tests="OFF"
@@ -76,6 +84,7 @@ build_umd_tests="OFF"
 build_programming_examples="OFF"
 build_tt_train="OFF"
 build_static_libs="OFF"
+pch="ON"
 unity_builds="ON"
 light_metal_trace="ON"
 build_packages="OFF"
@@ -92,6 +101,7 @@ enable_distributed="ON"
 with_python_bindings="ON"
 enable_fake_kernels_target="OFF"
 enable_lto="OFF"
+warnings_as_errors="ON"
 
 declare -a cmake_args
 
@@ -104,6 +114,7 @@ enable-ccache
 enable-time-trace
 build-type:
 disable-profiler
+build-perf-debug:
 install-prefix:
 build-dir:
 build-tests
@@ -114,6 +125,7 @@ build-programming-examples
 build-tt-train
 build-packages
 build-static-libs
+disable-pch
 disable-unity-builds
 disable-light-metal-trace
 release
@@ -131,6 +143,7 @@ without-distributed
 without-python-bindings
 enable-fake-kernels-target
 enable-lto
+disable-warnings-as-errors
 "
 
 # Flatten LONGOPTIONS into a comma-separated string for getopt
@@ -164,6 +177,8 @@ while true; do
             build_type="$2";shift;;
         --disable-profiler)
             disable_profiler="ON";;
+        --build-perf-debug)
+            perf_debug_categories="$2";shift;;
         --install-prefix)
             install_prefix="$2";shift;;
         --build-tests)
@@ -194,6 +209,10 @@ while true; do
             enable_fake_kernels_target="ON";;
         --enable-lto)
             enable_lto="ON";;
+        --disable-warnings-as-errors)
+            warnings_as_errors="OFF";;
+        --disable-pch)
+	    pch="OFF";;
         --disable-unity-builds)
 	    unity_builds="OFF";;
         --disable-light-metal-trace)
@@ -231,6 +250,10 @@ fi
 tracy_enabled="ON"
 if [ "$disable_profiler" = "ON" ]; then
     tracy_enabled="OFF"
+    if [ -n "$perf_debug_categories" ] && [ "$perf_debug_categories" != "off" ]; then
+        echo "WARNING: --build-perf-debug has no effect with --disable-profiler; debug zones stay compiled out."
+        perf_debug_categories="off"
+    fi
 fi
 
 # Validate the build_type
@@ -264,6 +287,18 @@ if [ -z "$PYTHON_ENV_DIR" ]; then
     PYTHON_ENV_DIR=$(pwd)/python_env
 fi
 
+# ENABLE_TRACY is sticky in the cache, so a prior --disable-profiler carries over.
+if [ "$disable_profiler" != "ON" ] && [ -f "$build_dir/CMakeCache.txt" ]; then
+    cached_enable_tracy=$(sed -n 's/^ENABLE_TRACY:[^=]*=//p' "$build_dir/CMakeCache.txt")
+    if [ "$cached_enable_tracy" = "OFF" ]; then
+        tracy_enabled="OFF"
+        if [ -n "$perf_debug_categories" ] && [ "$perf_debug_categories" != "off" ]; then
+            echo "WARNING: ENABLE_TRACY=OFF is cached from a prior --disable-profiler; --build-perf-debug has no effect until reconfigured."
+            perf_debug_categories="off"
+        fi
+    fi
+fi
+
 # Debug output to verify parsed options
 echo "INFO: Export compile commands: $export_compile_commands"
 echo "INFO: Enable ccache: $enable_ccache"
@@ -272,13 +307,26 @@ echo "INFO: Enable time trace: $enable_time_trace"
 echo "INFO: Build directory: $build_dir"
 echo "INFO: Install Prefix: $cmake_install_prefix"
 echo "INFO: Build tests: $build_tests"
+echo "INFO: Enable PCH: $pch"
 echo "INFO: Enable Unity builds: $unity_builds"
 echo "INFO: TTNN Shared sub libs : $ttnn_shared_sub_libs"
 echo "INFO: Enable Light Metal Trace: $light_metal_trace"
 echo "INFO: Enable Distributed: $enable_distributed"
 echo "INFO: With python bindings: $with_python_bindings"
 echo "INFO: Enable Tracy: $tracy_enabled"
+if [ "$tracy_enabled" != "ON" ]; then
+    perf_debug_categories_effective="off (Tracy disabled)"
+elif [ -n "$perf_debug_categories" ]; then
+    perf_debug_categories_effective="$perf_debug_categories"
+elif [ -f "$build_dir/CMakeCache.txt" ]; then
+    perf_debug_categories_effective=$(sed -n 's/^TRACY_DEBUG_CATEGORY:[^=]*=//p' "$build_dir/CMakeCache.txt")
+    perf_debug_categories_effective="${perf_debug_categories_effective:-off} (cached)"
+else
+    perf_debug_categories_effective="off"
+fi
+echo "INFO: Tracy debug-verbosity categories: $perf_debug_categories_effective"
 echo "INFO: Enable LTO: $enable_lto"
+echo "INFO: Warnings as errors: $warnings_as_errors"
 
 # Prepare cmake arguments
 cmake_args+=("-B" "$build_dir")
@@ -310,6 +358,10 @@ fi
 
 if [ "$disable_profiler" = "ON" ]; then
     cmake_args+=("-DENABLE_TRACY=OFF")
+fi
+
+if [ -n "$perf_debug_categories" ]; then
+    cmake_args+=("-DTRACY_DEBUG_CATEGORY=$perf_debug_categories")
 fi
 
 if [ "$export_compile_commands" = "ON" ]; then
@@ -350,6 +402,10 @@ fi
 if [ "$build_static_libs" = "ON" ]; then
     cmake_args+=("-DBUILD_SHARED_LIBS=OFF")
     cmake_args+=("-DTT_INSTALL=OFF")
+fi
+
+if [ "$pch" = "OFF" ]; then
+    cmake_args+=("-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON")
 fi
 
 if [ "$unity_builds" = "ON" ]; then
@@ -402,7 +458,11 @@ if [ "$enable_lto" = "ON" ]; then
     cmake_args+=("-DTT_ENABLE_LTO=ON")
 fi
 
-# toolchain and cxx_compiler settings would conflict with eachother
+if [ "$warnings_as_errors" = "OFF" ]; then
+    cmake_args+=("-DCMAKE_COMPILE_WARNING_AS_ERROR=OFF")
+fi
+
+# toolchain and cxx_compiler settings would conflict with each other
 # only use toolchain if not setting cxx compiler directly
 if [ "$cxx_compiler_path" == "" ]; then
     echo "INFO: CMAKE_TOOLCHAIN_FILE: $toolchain_path"

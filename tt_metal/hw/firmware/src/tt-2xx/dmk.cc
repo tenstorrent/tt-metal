@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,39 +14,85 @@
 #include "noc_nonblocking_api.h"
 #include "internal/firmware_common.h"
 #include "internal/hw_thread.h"
+#include "hostdev/dev_msgs.h"
 #include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/debug/stack_usage.h"
 #include <kernel_includes.hpp>
+#include "api/kernel_thread_globals.h"
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #include "api/remote_circular_buffer.h"
 #endif
+
+// Per-processor kernel thread info for Quasar (set from kernel_config before kernel runs)
+thread_local uint32_t num_sw_threads __attribute__((used));
+thread_local uint32_t my_thread_id __attribute__((used));
 
 extern "C" [[gnu::section(".start")]]
 uint32_t _start() {
     // Enable GPREL optimizations.
     // asm("0: .reloc 0b, R_RISCV_NONE, __global_pointer$");
-    mark_stack_usage();
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
+    mark_stack_usage();
     wait_for_go_message();
 #ifdef KERNEL_RUN_TIME
     uint64_t end_time = c_tensix_core::read_wall_clock() + KERNEL_RUN_TIME;
     while (c_tensix_core::read_wall_clock() < end_time);
 #endif
 #else
-    // TODO: initilaize globals and bss
+    // TODO: initialize globals and bss
     uint32_t hartid = internal_::get_hw_thread_idx();
+
+    // Obtain launch message from mailbox and derive thread 0 (lowest hartid with same kernel).
+    uint32_t launch_idx = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
+    launch_msg_t tt_l1_ptr* launch_msg = &(*GET_MAILBOX_ADDRESS_DEV(launch))[launch_idx];
+    uint32_t my_kt = launch_msg->kernel_config.kernel_text_offset[hartid];
+    uint32_t thread_0_hartid = hartid;
+    if (launch_msg->kernel_config.enables & (1u << hartid)) {
+        for (uint32_t j = 0; j < MaxDMProcessorsPerCoreType; j++) {
+            // DM0 and DM1 are reserved, so their kernel_text_offset[] slots are
+            // left zero-initialized. Skip reserved slots here, otherwise if the
+            // user binary happens to land at offset 0 (e.g. no RTAs/CRTAs/sems/CBs/DFBs
+            // precede it in the kernel-config ring buffer), the search would falsely
+            // match slot 0 and set thread_0_hartid = 0. DM0 never sets
+            // shared_globals_ready[0] = GO, so the user DMs hang forever in the
+            // wait loop below.
+            if ((launch_msg->kernel_config.enables & (1u << j)) &&
+                launch_msg->kernel_config.kernel_text_offset[j] == my_kt) {
+                thread_0_hartid = j;
+                break;
+            }
+        }
+    }
+
     extern uint32_t __tdata_lma[];
-    // for now this works for legacy kernels, we need to revisit this for new kernels
-    // if (hartid == /* leading core */ 0) {
     extern uint32_t __ldm_tdata_start[];
     extern uint32_t __ldm_tdata_end[];
-    do_crt1(&__tdata_lma[__ldm_tdata_end - __ldm_tdata_start]);
-    // }
-    do_thread_crt1(__tdata_lma);
+
+    // Materialize __tdata_lma's address exactly once. The two references below (do_crt1 in the
+    // thread-0 branch and do_thread_crt1) otherwise emit two R_RISCV_HI20 relocations for
+    // __tdata_lma. On Quasar the XIP relocation pass (ElfFile::Impl::XIPify) pairs HI20<->LO12
+    // heuristically (each LO12 to the nearest preceding HI20); when the second HI20 lands in a loop
+    // tail with its LO12 reached via a back-edge it is left orphaned, throwing "R_RISCV_HI20
+    // relocation ... has no matching R_RISCV_LO12". The asm barrier makes the pointer opaque so the
+    // compiler keeps a single materialization (one HI20) and reuses the register/spill instead of
+    // re-emitting a lui/addi pair.
+    uint32_t* tdata_lma = __tdata_lma;
+    asm volatile("" : "+r"(tdata_lma));
+
+    if (hartid == thread_0_hartid) {
+        do_crt1(&tdata_lma[__ldm_tdata_end - __ldm_tdata_start]);
+        (*GET_MAILBOX_ADDRESS_DEV(shared_globals_ready))[hartid] = SHARED_GLOBALS_READY_GO;
+    }
+
+    do_thread_crt1(tdata_lma);
+
+    // Wait until first thread in the group has set its slot to GO.
+    while ((*GET_MAILBOX_ADDRESS_DEV(shared_globals_ready))[thread_0_hartid] != SHARED_GLOBALS_READY_GO) {
+    }
 
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
-        // noc_local_state_init(NOC_INDEX); //TODO revisit this
+        overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     }
 #ifdef ALIGN_LOCAL_CBS_TO_REMOTE_CBS
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
@@ -54,7 +100,16 @@ uint32_t _start() {
     wait_for_go_message();
     {
         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+
+        // Setup after the go signal so the previous kernel has completed.
+        num_sw_threads = launch_msg->kernel_config.num_sw_threads[hartid];
+        my_thread_id = launch_msg->kernel_config.kernel_thread_id[hartid];
+
+        // Paint stack after all thread_local writes and CRT init are done.
+        mark_stack_usage();
+
         EARLY_RETURN_FOR_DEBUG
+
         WAYPOINT("K");
         kernel_main();
         WAYPOINT("KD");

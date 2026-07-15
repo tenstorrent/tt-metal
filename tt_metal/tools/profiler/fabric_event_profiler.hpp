@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,7 @@
 
 #include "tools/profiler/noc_event_profiler.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
+#include "hostdevcommon/profiler_common.h"
 
 // Type alias for cleaner access to 2D mesh routing constants
 using MeshRoutingFields = tt::tt_fabric::RoutingFieldsConstants::Mesh;
@@ -16,7 +17,7 @@ using MeshRoutingFields = tt::tt_fabric::RoutingFieldsConstants::Mesh;
 namespace kernel_profiler {
 
 // For Unicasts
-template <typename NocAddrU64, uint32_t STATIC_ID = 12345>
+template <typename NocAddrU64, uint32_t STATIC_ID = NOC_TRACING_STATIC_ID>
 FORCE_INLINE void recordFabricNocEvent(
     KernelProfilerNocEventMetadata::NocEventType noc_event_type,
     KernelProfilerNocEventMetadata::FabricPacketType packet_type,
@@ -42,7 +43,7 @@ FORCE_INLINE void recordFabricNocEvent(
     kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
 }
 
-template <uint32_t STATIC_ID = 12345>
+template <uint32_t STATIC_ID = NOC_TRACING_STATIC_ID>
 FORCE_INLINE void recordFabricNocEventMulticast(
     KernelProfilerNocEventMetadata::NocEventType noc_event_type,
     KernelProfilerNocEventMetadata::FabricPacketType packet_type,
@@ -68,7 +69,7 @@ FORCE_INLINE void recordFabricNocEventMulticast(
     kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
 }
 
-template <uint32_t STATIC_ID = 12345>
+template <uint32_t STATIC_ID = NOC_TRACING_STATIC_ID>
 FORCE_INLINE void recordFabricScatterEvent(
     KernelProfilerNocEventMetadata::NocEventType noc_event_type,
     KernelProfilerNocEventMetadata::FabricPacketType packet_type,
@@ -102,7 +103,7 @@ FORCE_INLINE void recordFabricScatterEvent(
     }
 }
 
-template <uint32_t STATIC_ID = 12345>
+template <uint32_t STATIC_ID = NOC_TRACING_STATIC_ID>
 FORCE_INLINE void recordRoutingFields1D(uint32_t routing_fields) {
     KernelProfilerNocEventMetadata event_routing_fields;
     event_routing_fields.data.fabric_routing_fields_1d.noc_xfer_type =
@@ -113,8 +114,8 @@ FORCE_INLINE void recordRoutingFields1D(uint32_t routing_fields) {
     kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(event_routing_fields.asU64());
 }
 
-// how slow is this? alternative is sotring entire route buffer which isn't ideal either...
-template <uint32_t STATIC_ID = 12345>
+// how slow is this? alternative is storing entire route buffer which isn't ideal either...
+template <uint32_t STATIC_ID = NOC_TRACING_STATIC_ID>
 FORCE_INLINE void recordRoutingFields2D(
     const volatile tt::tt_fabric::LowLatencyMeshRoutingFields routing_fields, const volatile uint8_t* route_buffer) {
     KernelProfilerNocEventMetadata ev_md;
@@ -130,14 +131,14 @@ FORCE_INLINE void recordRoutingFields2D(
     routing_fields_2d.ns_hops = total_hops;
 
     // compute e/w hops and check for e/w line mcast
-    while (route_buffer[total_hops] != tt::tt_fabric::MeshRoutingFields::NOOP) {
+    while (route_buffer[total_hops] != MeshRoutingFields::NOOP) {
         total_hops++;
     }
 
     // Look at last entry in buffer to check if west branch exists
     // If west branch exists, compute west hops and east hops as remaining
     // Otherwise, we only have east hops (which is trivially to 0 if we have no e/w hops at all)
-    if (route_buffer[total_hops - 1] == tt::tt_fabric::MeshRoutingFields::FORWARD_EAST) {
+    if (route_buffer[total_hops - 1] == MeshRoutingFields::FORWARD_EAST) {
         routing_fields_2d.w_hops = total_hops - routing_fields.branch_west_offset;
         routing_fields_2d.e_hops = routing_fields.branch_west_offset - routing_fields_2d.ns_hops;
     } else {

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@ import math
 from loguru import logger
 
 import ttnn
-from models.demos.qwen3_vl.tt.common import nearest_multiple
+from models.demos.qwen3_vl.tt.common import get_hf_visual, nearest_multiple
 from models.tt_transformers.tt.model_config import ModelArgs
 
 
@@ -62,7 +62,7 @@ class VisionModelArgs(ModelArgs):
 
         assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
 
-    def prepare_residual_tensor_prefill(self, x_bsh, force_replicated=False):
+    def prepare_residual_tensor_prefill(self, x_bsh):
         """
         Prepare inputs for prefill mode.
         x: (batch, seq, hidden_dim)
@@ -80,8 +80,7 @@ class VisionModelArgs(ModelArgs):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # todo)) refactor this code to make the intent clear, which is data parallelism
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         return xs_1BSH
 
@@ -106,6 +105,7 @@ class VisionModelArgs(ModelArgs):
 
     def reference_vision_model(self, depth=None):
         # Workaround until Qwen2.5-VL is fully integrated into a HF release
+        import torch
         from transformers.models.qwen3_vl.modeling_qwen3_vl import (
             Qwen3VLForConditionalGeneration as AutoModelForCausalLM,
         )
@@ -113,8 +113,10 @@ class VisionModelArgs(ModelArgs):
         print("Loading Qwen3-VL model: ", AutoModelForCausalLM)
         config = AutoModelForCausalLM.config_class.from_pretrained(self.CKPT_DIR)
         config.vision_config.depth = depth if depth is not None else config.vision_config.depth
-        model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR, config=config)
-        return model.visual
+        # transformers 5.x loads in the config dtype (bf16) by default; force float32 so the reference
+        # and its sub-modules match the float32 test inputs (4.x defaulted to float32).
+        model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR, config=config, torch_dtype=torch.float32)
+        return get_hf_visual(model)
 
     def reference_vision_block(self, layer_num=0):
         return self.reference_vision_model().blocks[layer_num]

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,7 @@
 namespace ttnn::prim {
 
 struct FillPadParams {
-    float fill_value;
+    tt::tt_metal::PadValue fill_value;
     tt::tt_metal::MemoryConfig output_mem_config;
 };
 

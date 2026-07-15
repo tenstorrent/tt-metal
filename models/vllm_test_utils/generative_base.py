@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -60,3 +60,15 @@ class GenerativeTestModelBase:
             dtype=torch.float32,
             device=hidden_states.device,
         )
+
+    # Common functions needed to satisfy TT vLLM interface requirements
+    # (dummy test models usually don't need to implement these unlike real models)
+
+    def allocate_kv_cache(self, *args, **kwargs):
+        return None
+
+    def warmup_model_prefill(self, *args, **kwargs):
+        pass
+
+    def warmup_model_decode(self, *args, **kwargs):
+        pass

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -381,7 +381,7 @@ def test_mochi_transformer_model(
     logger.info(
         f"Running TT model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}, timestep shape {timestep_input.shape}"
     )
-    tt_spatial_out = tt_model(
+    tt_spatial_out = tt_model.forward_full(
         spatial=spatial_input,
         prompt=prompt_input,
         timestep=timestep_input,
@@ -495,7 +495,7 @@ def test_mochi_transformer_model_caching(
         is_fsdp=True,
     )
     start = time.time()
-    tt_model.load_torch_state_dict(torch_model.state_dict(), on_host=True)
+    tt_model.load_torch_state_dict(torch_model.state_dict())
     end = time.time()
     logger.info(f"Time taken to load state dict: {end - start} seconds")
 

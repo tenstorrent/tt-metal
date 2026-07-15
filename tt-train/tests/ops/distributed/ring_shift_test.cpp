@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,16 +12,18 @@
 
 #include <gtest/gtest.h>
 
-#include <core/ttnn_all_includes.hpp>
+#include <array>
 #include <core/xtensor_utils.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <umd/device/cluster.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/distributed/socket_manager.hpp"
-#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/distributed/comm_ops.hpp"
+#include "test_utils/random_data.hpp"
+#include "ttnn/distributed/create_socket.hpp"
+#include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
@@ -39,7 +41,7 @@ public:
         if (check_32_chips()) {
             ttml::autograd::ctx().initialize_distributed_context(0, nullptr);
             ttml::ttnn_fixed::distributed::enable_fabric(32);
-            ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(4, 8));
+            ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(8, 4));
             ttml::autograd::ctx().set_seed(42);
             ttml::autograd::ctx().initialize_socket_manager(ttnn::distributed::SocketType::FABRIC);
         }
@@ -75,17 +77,11 @@ static void TestRingShift(
     const uint32_t mesh_rows = mesh_shape[0];
     const uint32_t mesh_cols = mesh_shape[1];
 
-    // Create input tensor with unique values - full tensor that will be sharded
-    std::vector<float> test_data_vec(batch * seq * hidden);
+    // Create input tensor - full tensor that will be sharded
     auto& rng = autograd::ctx().get_generator();
     const auto seed = rng();
-    core::parallel_generate(
-        std::span{test_data_vec.data(), test_data_vec.size()},
-        []() { return std::uniform_real_distribution<float>{0.F, 2.F}; },
-        seed);
-
-    xt::xarray<float> test_data = xt::adapt(test_data_vec);
-    const xt::xarray<float> xtensor = test_data.reshape({batch, 1UL, seq, hidden});
+    const xt::xarray<float> xtensor = ttml::test_utils::make_uniform_xarray<float>(
+        std::array<std::size_t, 4>{batch, 1UL, seq, hidden}, 0.0F, 2.0F, seed);
 
     // Shard tensor across devices along the appropriate dimension
     const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, shard_dim, cluster_axis);
@@ -131,12 +127,9 @@ static void TestRingShift(
 
     // Optionally test backward gradient flow
     if (test_backward_grad) {
-        xt::xarray<float> grad_data = xt::empty<float>(xtensor.shape());
-        const auto seed = rng();
-        core::parallel_generate(
-            std::span{grad_data.data(), grad_data.size()},
-            []() { return std::uniform_real_distribution<float>{0.F, 1.F}; },
-            seed);
+        const auto grad_seed = rng();
+        xt::xarray<float> grad_data = ttml::test_utils::make_uniform_xarray<float>(
+            std::array<std::size_t, 4>{batch, 1UL, seq, hidden}, 0.0F, 1.0F, grad_seed);
 
         const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, shard_dim, cluster_axis);
         const auto tt_grad_tensor =
@@ -177,7 +170,7 @@ TEST_F(GalaxyRingShiftTest, ForwardAlongColumns) {
 
 TEST_F(GalaxyRingShiftTest, ForwardAlongRows) {
     // batch=4 sharded across 4 rows -> 1 per device
-    TestRingShift(4, 32, 64, /*cluster_axis=*/0, /*shard_dim=*/0, RingShiftDirection::Forward);
+    TestRingShift(8, 32, 64, /*cluster_axis=*/0, /*shard_dim=*/0, RingShiftDirection::Forward);
 }
 
 TEST_F(GalaxyRingShiftTest, ForwardBig) {

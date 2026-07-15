@@ -1,10 +1,12 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_layer_norm_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
+
+#include <vector>
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -22,6 +24,31 @@ inline void check_tensor(const Tensor& tensor, const std::string& op_name) {
         op_name,
         tensor.storage_type());
     TT_FATAL(tensor.buffer() != nullptr, "Operands to {} need to be allocated in buffers on device!", op_name);
+}
+
+ttnn::Shape canonicalize_shape_for_validation(const ttnn::Shape& shape) {
+    if (shape.rank() == 0) {
+        return ttnn::Shape({1, 1});
+    }
+    if (shape.rank() == 1) {
+        return ttnn::Shape({1, shape[0]});
+    }
+    return shape;
+}
+
+ttnn::Shape compute_expected_stats_shape(const Tensor& input, uint32_t normalized_dims) {
+    auto logical_shape = input.logical_shape();
+    const auto padded_rank = input.padded_shape().rank();
+    if (logical_shape.rank() < padded_rank) {
+        logical_shape = logical_shape.to_rank(padded_rank);
+    }
+
+    std::vector<uint32_t> dims;
+    dims.reserve(logical_shape.rank() - normalized_dims);
+    for (uint32_t i = 0; i < logical_shape.rank() - normalized_dims; ++i) {
+        dims.push_back(logical_shape[i]);
+    }
+    return canonicalize_shape_for_validation(ttnn::Shape(std::move(dims)));
 }
 }  // namespace
 
@@ -55,14 +82,28 @@ void MorehLayerNormOperation::validate_inputs(
 
     const auto& mean = tensor_args.mean;
     const auto& rstd = tensor_args.rstd;
+    const auto expected_mean_rstd_shape = compute_expected_stats_shape(input, normalized_dims);
 
     if (mean.has_value()) {
         check_tensor(mean.value(), "moreh_layer_norm");
+        TT_FATAL(input.device() == mean.value().device(), "input and mean should be on the same device.");
+        TT_FATAL(
+            canonicalize_shape_for_validation(mean->logical_shape()) == expected_mean_rstd_shape,
+            "mean must have logical shape {}. Got {}.",
+            expected_mean_rstd_shape,
+            mean->logical_shape());
     }
 
     if (rstd.has_value()) {
         check_tensor(rstd.value(), "moreh_layer_norm");
+        TT_FATAL(input.device() == rstd.value().device(), "input and rstd should be on the same device.");
+        TT_FATAL(
+            canonicalize_shape_for_validation(rstd->logical_shape()) == expected_mean_rstd_shape,
+            "rstd must have logical shape {}. Got {}.",
+            expected_mean_rstd_shape,
+            rstd->logical_shape());
     }
+
 }
 
 void MorehLayerNormOperation::validate_on_program_cache_miss(
@@ -136,7 +177,7 @@ ttnn::operations::moreh::moreh_layer_norm::MorehLayerNormOperation::tensor_retur
         normalized_dims,
         eps,
         memory_config.value_or(input.memory_config()),
-        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{input, gamma, beta, output, mean, rstd};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

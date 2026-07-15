@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -18,6 +18,7 @@ from ...layers.module import Module, ModuleList
 from ...layers.normalization import RMSNorm
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
+from ...utils import tensor
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -490,7 +491,7 @@ def optimal_groups(group_count: int, group_size: int, device_count: int) -> tupl
     # 3. Split groups into smaller groups defined by a split factor.
     # For a particular split factor, padding sizes follow from the requirements that the padded
     # group size must be divisible by this factor and the new group count must be divisible by the
-    # device count. We choose this factor such that memory requirments are minimized.
+    # device count. We choose this factor such that memory requirements are minimized.
 
     best_split_factor = 1
     best_size = math.inf
@@ -526,7 +527,7 @@ def prepare_attention_bias(attention_mask: ttnn.Tensor) -> ttnn.Tensor:
     # convert to causal attention mask
     attention_mask = attention_mask.reshape([batch_size, 1, 1, seq_len])
     attention_mask = ttnn.expand(attention_mask, [-1, -1, seq_len, -1])
-    attention_mask = ttnn.tril(attention_mask)
+    attention_mask = tensor.tril(attention_mask)
 
     attention_mask = (attention_mask - 1.0) * math.inf
 

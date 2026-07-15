@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,10 +8,6 @@
 # - name: Human-readable test name
 # - comment: (optional) Additional notes about test behavior and performance
 #
-# Additional metadata fields for NOC estimator consumption:
-# These fields are required for tests that generate CSV reports used by the NOC estimator
-# for offline model training. Only "Packet Sizes" tests need these fields.
-#
 # Required fields for packet sizes tests:
 #   - memory_type: Memory type being accessed
 #       Values: "l1" | "dram"
@@ -19,15 +15,6 @@
 #       Values: "unicast" | "multicast"
 #   - pattern: Communication pattern between cores
 #       Values: "one_to_one" | "one_from_one" | "one_to_all" | "one_from_all" | "all_to_all" | "all_from_all"
-#
-# Optional fields supported by the estimator:
-#   - num_subordinates: Number of destination cores (for *_to_all patterns with fixed grid sizes)
-#       Examples: 4 (for 2x2), 25 (for 5x5)
-#       Omit for tests with variable grid sizes or non-*_to_all patterns
-#       Leave empty to use real kernel data (num_subordinates = "")
-#   - same_axis: Whether the source and destination core share one axis
-#       Examples: true for (0,0)->(0,5), false for (0,0)->(2,2)
-#       Leave empty to use real kernel data (same_axis = "")
 #
 # Bandwidth calculation mode:
 #   - bandwidth_mode: How bandwidth is calculated and reported
@@ -37,6 +24,12 @@
 #           combined_bandwidth = total_bytes / wall_clock_time
 #           where wall_clock_time = max(duration) across all cores
 #           Use this for multi-core DRAM tests where cores are synchronized
+#
+# Bandwidth unit:
+#   - bandwidth_unit: Unit for bandwidth in plots and reports
+#       Values: "bpc" (default) | "gbps"
+#       - "bpc": bytes/cycle
+#       - "gbps": GB/s (requires clock frequency from device or fallback constant)
 #
 # These metadata fields are automatically injected into CSV files when using the --report flag.
 
@@ -80,77 +73,63 @@ tests:
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "one_to_all"
-    num_subordinates: ""
 
   7:
     name: "One to All Unicast 5x5 Packet Sizes"
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "one_to_all"
-    num_subordinates: ""
 
   8:
     name: "One to All Unicast Packet Sizes"
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "one_to_all"
-    num_subordinates: ""
 
   9:
     name: "One to All Multicast 2x2 Packet Sizes"
     memory_type: "l1"
     mechanism: "multicast"
     pattern: "one_to_all"
-    num_subordinates: ""
 
   10:
     name: "One to All Multicast 5x5 Packet Sizes"
     memory_type: "l1"
     mechanism: "multicast"
     pattern: "one_to_all"
-    num_subordinates: ""
 
   11:
     name: "One to All Multicast Packet Sizes"
     memory_type: "l1"
     mechanism: "multicast"
     pattern: "one_to_all"
-    num_subordinates: ""
 
   12:
     name: "One to All Multicast Linked 2x2 Packet Sizes"
     memory_type: "l1"
     mechanism: "multicast"
     pattern: "one_to_all"
-    num_subordinates: ""
-    linked: true
 
   13:
     name: "One to All Multicast Linked 5x5 Packet Sizes"
     memory_type: "l1"
     mechanism: "multicast"
     pattern: "one_to_all"
-    num_subordinates: ""
-    linked: true
 
   14:
     name: "One to All Multicast Linked Packet Sizes"
     memory_type: "l1"
     mechanism: "multicast"
     pattern: "one_to_all"
-    num_subordinates: ""
-    linked: true
 
   15:
     name: "One from All Packet Sizes"
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "one_from_all"
-    num_subordinates: ""
 
   16:
     name: "Loopback Packet Sizes"
-    # TODO issue #35917
 
   17:
     name: "Reshard Hardcoded Small"
@@ -240,7 +219,21 @@ tests:
 
   40:
     name: "DRAM Packet Sizes 2.0"
-    # TODO issue #35917
+
+  41:
+    name: "DRAM Directed Ideal 2.0"
+
+  42:
+    name: "DRAM Core Locations 2.0"
+
+  43:
+    name: "DRAM Channels 2.0"
+
+  44:
+    name: "Loopback Packet Sizes 2.0"
+
+  45:
+    name: "Loopback Directed Ideal 2.0"
 
   50:
     name: "One to One Directed Ideal"
@@ -307,11 +300,9 @@ tests:
 
   80:
     name: "One Packet Read Sizes"
-    # TODO issue #35917
 
   81:
     name: "One Packet Write Sizes"
-    # TODO issue #35917
 
   82:
     name: "One Packet Read Directed Ideal"
@@ -331,6 +322,30 @@ tests:
   87:
     name: "DRAM Sharded Read Transaction ID Directed Ideal"
 
+  90:
+    name: "One Packet Read Sizes 2.0"
+
+  91:
+    name: "One Packet Write Sizes 2.0"
+
+  92:
+    name: "One Packet Read Directed Ideal 2.0"
+
+  93:
+    name: "One Packet Write Directed Ideal 2.0"
+
+  94:
+    name: "DRAM Sharded Read Directed Ideal 2.0"
+
+  95:
+    name: "DRAM Sharded Read Tile Numbers 2.0"
+
+  96:
+    name: "DRAM Sharded Read Bank Numbers 2.0"
+
+  97:
+    name: "DRAM Sharded Read Transaction ID Directed Ideal 2.0"
+
   100:
     name: "Multicast Schemes (Loopback Enabled)"
 
@@ -347,7 +362,6 @@ tests:
   111:
     name: "Multi Interleaved Sizes"
     bandwidth_mode: "combined"
-    # TODO issue #35917
 
   112:
     name: "Multi Interleaved Read Directed Ideal"
@@ -367,7 +381,6 @@ tests:
   115:
     name: "Multi Interleaved Write Sizes"
     bandwidth_mode: "combined"
-    # TODO issue #35917
 
   116:
     name: "Multi Interleaved 2x2 Directed Ideal"
@@ -376,7 +389,6 @@ tests:
   117:
     name: "Multi Interleaved 2x2 Sizes"
     bandwidth_mode: "combined"
-    # TODO issue #35917
 
   118:
     name: "Multi Interleaved 2x2 Read Directed Ideal"
@@ -385,7 +397,6 @@ tests:
   119:
     name: "Multi Interleaved 2x2 Read Sizes"
     bandwidth_mode: "combined"
-    # TODO issue #35917
 
   120:
     name: "Multi Interleaved 2x2 Write Directed Ideal"
@@ -394,7 +405,6 @@ tests:
   121:
     name: "Multi Interleaved 2x2 Write Sizes"
     bandwidth_mode: "combined"
-    # TODO issue #35917
 
   122:
     name: "Multi Interleaved 6x6 Directed Ideal"
@@ -403,7 +413,6 @@ tests:
   123:
     name: "Multi Interleaved 6x6 Sizes"
     bandwidth_mode: "combined"
-    # TODO issue #35917
 
   124:
     name: "Multi Interleaved 6x6 Read Directed Ideal"
@@ -412,7 +421,6 @@ tests:
   125:
     name: "Multi Interleaved 6x6 Read Sizes"
     bandwidth_mode: "combined"
-    # TODO issue #35917
 
   126:
     name: "Multi Interleaved 6x6 Write Directed Ideal"
@@ -421,7 +429,18 @@ tests:
   127:
     name: "Multi Interleaved 6x6 Write Sizes"
     bandwidth_mode: "combined"
-    # TODO issue #35917
+
+  128:
+    name: "Multi Interleaved Grid Sweep Sizes"
+    bandwidth_mode: "combined"
+
+  129:
+    name: "Multi Interleaved Read Grid Sweep Sizes"
+    bandwidth_mode: "combined"
+
+  130:
+    name: "Multi Interleaved Write Grid Sweep Sizes"
+    bandwidth_mode: "combined"
 
   140:
     name: "Core Bidirectional Directed Ideal Same Kernel"
@@ -443,11 +462,9 @@ tests:
 
   146:
     name: "Core Bidirectional Packet Sizes Same Kernel"
-    # TODO issue #35917
 
   147:
     name: "Core Bidirectional Packet Sizes Different Kernels"
-    # TODO issue #35917
 
   148:
     name: "Core Bidirectional Custom"
@@ -475,6 +492,30 @@ tests:
 
   157:
     name: "One from All Custom"
+
+  158:
+    name: "One to One Packet Sizes 2.0"
+
+  159:
+    name: "One from One Packet Sizes 2.0"
+
+  160:
+    name: "One to One Directed Ideal 2.0"
+
+  161:
+    name: "One from One Directed Ideal 2.0"
+
+  162:
+    name: "One from All Packet Sizes 2.0"
+
+  163:
+    name: "One from All Directed Ideal 2.0"
+
+  164:
+    name: "One from All Virtual Channels 2.0"
+
+  165:
+    name: "One from All Custom 2.0"
 
   170:
     name: "One to All Unicast 2x2 Packet Sizes 2.0"
@@ -554,66 +595,139 @@ tests:
   308:
     name: "All to All Custom"
 
+  309:
+    name: "All to All Packet Sizes 2.0"
+    memory_type: "l1"
+    mechanism: "unicast"
+    pattern: "all_to_all"
+
   310:
-    name: "All from All Directed Ideal"
+    name: "All to All Directed Ideal 2.0"
 
   311:
+    name: "All to All 2x2 to 1x1 Directed Ideal 2.0"
+
+  312:
+    name: "All to All 4x4 to 1x1 Directed Ideal 2.0"
+
+  313:
+    name: "All to All 1x1 to 2x2 Directed Ideal 2.0"
+
+  314:
+    name: "All to All 1x1 to 4x4 Directed Ideal 2.0"
+
+  315:
+    name: "All to All 2x2 to 2x2 Directed Ideal 2.0"
+
+  316:
+    name: "All to All Grid Sweep Packet Sizes 2.0"
+    memory_type: "l1"
+    mechanism: "unicast"
+    pattern: "all_to_all"
+    bandwidth_mode: "combined"
+
+  320:
+    name: "All from All Directed Ideal"
+
+  321:
     name: "All from All Packet Sizes"
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "all_from_all"
-    num_subordinates: ""
-
-  312:
-    name: "All from All 2x2 From 1x1 Directed Ideal"
-
-  313:
-    name: "All from All 4x4 From 1x1 Directed Ideal"
-
-  314:
-    name: "All from All 1x1 From 2x2 Directed Ideal"
-
-  315:
-    name: "All from All 1x1 From 4x4 Directed Ideal"
-
-  316:
-    name: "All from All 2x2 From 2x2 Directed Ideal"
-
-  317:
-    name: "All from All Virtual Channels"
-
-  318:
-    name: "All from All Custom"
-
-  319:
-    name: "Atomic Semaphore Adjacent Bandwidth Sweep"
-
-  320:
-    name: "Atomic Semaphore Non Adjacent Bandwidth Sweep"
-
-  321:
-    name: "Single source Multicast Atomic Increment"
 
   322:
-    name: "Multi source Multicast Atomic Increment"
+    name: "All from All 2x2 From 1x1 Directed Ideal"
 
   323:
-    name: "Single source Multicast Atomic Increment - NOC 1"
+    name: "All from All 4x4 From 1x1 Directed Ideal"
 
   324:
-    name: "Multi source Multicast Atomic Increment - NOC 1"
+    name: "All from All 1x1 From 2x2 Directed Ideal"
 
   325:
-    name: "Multicast Atomic Larger Increment"
+    name: "All from All 1x1 From 4x4 Directed Ideal"
 
   326:
-    name: "Multicast Atomic Larger Increment - NOC 1"
+    name: "All from All 2x2 From 2x2 Directed Ideal"
 
   327:
-    name: "Single source Multicast Atomic Increment 2.0 API"
+    name: "All from All Virtual Channels"
 
   328:
-    name: "Multicast Atomic Larger Increment 2.0 API"
+    name: "All from All Custom"
+
+  329:
+    name: "All from All Packet Sizes 2.0"
+    memory_type: "l1"
+    mechanism: "unicast"
+    pattern: "all_from_all"
+
+  330:
+    name: "All from All Directed Ideal 2.0"
+
+  331:
+    name: "All from All 2x2 From 1x1 Directed Ideal 2.0"
+
+  332:
+    name: "All from All 4x4 From 1x1 Directed Ideal 2.0"
+
+  333:
+    name: "All from All 1x1 From 2x2 Directed Ideal 2.0"
+
+  334:
+    name: "All from All 1x1 From 4x4 Directed Ideal 2.0"
+
+  335:
+    name: "All from All 2x2 From 2x2 Directed Ideal 2.0"
+
+  336:
+    name: "All from All Grid Sweep Packet Sizes 2.0"
+    memory_type: "l1"
+    mechanism: "unicast"
+    pattern: "all_from_all"
+    bandwidth_mode: "combined"
+
+  340:
+    name: "Atomic Semaphore Adjacent Bandwidth Sweep"
+
+  341:
+    name: "Atomic Semaphore Non Adjacent Bandwidth Sweep"
+
+  342:
+    name: "Single source Multicast Atomic Increment"
+
+  343:
+    name: "Multi source Multicast Atomic Increment"
+
+  344:
+    name: "Single source Multicast Atomic Increment - NOC 1"
+
+  345:
+    name: "Multi source Multicast Atomic Increment - NOC 1"
+
+  346:
+    name: "Multicast Atomic Larger Increment"
+
+  347:
+    name: "Multicast Atomic Larger Increment - NOC 1"
+
+  348:
+    name: "Single source Multicast Atomic Increment 2.0"
+
+  349:
+    name: "Multicast Atomic Larger Increment 2.0"
+
+  350:
+    name: "Multi source Multicast Atomic Increment 2.0"
+
+  351:
+    name: "Single source Multicast Atomic Increment - NOC 1 2.0"
+
+  352:
+    name: "Multi source Multicast Atomic Increment - NOC 1 2.0"
+
+  353:
+    name: "Multicast Atomic Larger Increment - NOC 1 2.0"
 
   400:
     name: "I2S - DRAM Sharded Row Major Writer"
@@ -674,6 +788,32 @@ tests:
       Evaluates the performance impact of stateful versus stateless approaches under scenarios
       involving both identical and differing values and destinations.
 
+  502:
+    name: "DRAM Neighbour Directed Ideal"
+
+  503:
+    name: "Number of Pages Sweep for DRAM Closest Neighbour"
+    bandwidth_mode: "combined"
+
+  504:
+    name: "Number of Banks Sweep for DRAM Closest Neighbour"
+    bandwidth_mode: "combined"
+
+  505:
+    name: "Number of Pages Sweep for Single Row DRAM"
+    bandwidth_mode: "combined"
+
+  507:
+    name: "Inline Direct Write Multicast"
+
+  508:
+    name: "Number of Pages Sweep for DRAM One Hop"
+    bandwidth_mode: "combined"
+
+  509:
+    name: "Number of Pages Sweep for DRAM Loop Back"
+    bandwidth_mode: "combined"
+
   600:
     name: "Transaction ID - Read After Write"
 
@@ -685,6 +825,20 @@ tests:
 
   603:
     name: "PCIe Read Bandwidth"
+
+  604:
+    name: "PCIe Write Bandwidth Sweep"
+    bandwidth_unit: "gbps"
+
+  605:
+    name: "PCIe Read Bandwidth Sweep"
+    bandwidth_unit: "gbps"
+
+  606:
+    name: "PCIe Host Write (H2D) Bandwidth Sweep"
+
+  607:
+    name: "PCIe Host Read (D2H) Bandwidth Sweep"
 
   610:
     name: "Transaction ID - Write After Read"
@@ -701,6 +855,21 @@ tests:
       has an input and output port. We have a core that is sending and receiving data at the same time,
       with packets circulating around the torus. This does not happen in Read After Write tests because
       the read requests get stuck behind the larger write requests.
+
+  620:
+    name: "Transaction ID - Read After Write 2.0"
+
+  621:
+    name: "Transaction ID - Read After Write One Packet 2.0"
+
+  622:
+    name: "Transaction ID - Read After Write One Packet Stateful 2.0"
+
+  630:
+    name: "Transaction ID - Write After Read 2.0"
+
+  631:
+    name: "Transaction ID - Write After Read One Packet Stateful 2.0"
 
   700:
     name: "NOC API Latency - Unicast Write"
@@ -760,3 +929,229 @@ tests:
       covering all compute cores in the device.
       Important: Since the multicast is transferring a lot of data, the NoC gets congested quickly.
       Because of this, for larger number of transactions, the noc api latency is increasing.
+
+  800:
+    name: "Noc Estimator - L1 One to One"
+
+  801:
+    name: "Noc Estimator - L1 One from One"
+
+  802:
+    name: "Noc Estimator - L1 One to All"
+
+  803:
+    name: "Noc Estimator - L1 One from All"
+
+  804:
+    name: "Noc Estimator - L1 All to All"
+
+  805:
+    name: "Noc Estimator - L1 All from All"
+
+  806:
+    name: "Noc Estimator - L1 One to Row"
+
+  807:
+    name: "Noc Estimator - L1 Row to Row"
+
+  808:
+    name: "Noc Estimator - L1 One to Column"
+
+  809:
+    name: "Noc Estimator - L1 Column to Column"
+
+  810:
+    name: "Noc Estimator - DRAM Sharded One from One"
+
+  811:
+    name: "Noc Estimator - DRAM Sharded All from All"
+    bandwidth_mode: "combined"
+
+  812:
+    name: "Noc Estimator - DRAM Interleaved One from All"
+
+  813:
+    name: "Noc Estimator - DRAM Interleaved All from All"
+    bandwidth_mode: "combined"
+
+  814:
+    name: "Noc Estimator - DRAM Sharded One to One"
+
+  815:
+    name: "Noc Estimator - DRAM Sharded All to All"
+    bandwidth_mode: "combined"
+
+  816:
+    name: "Noc Estimator - DRAM Interleaved One to All"
+
+  817:
+    name: "Noc Estimator - DRAM Interleaved All to All"
+    bandwidth_mode: "combined"
+
+  900:
+    name: "Quasar Addrgen - Strided1D SrcOnly"
+
+  901:
+    name: "Quasar Addrgen - Strided1D DstOnly"
+
+  902:
+    name: "Quasar Addrgen - Strided1D Both"
+
+  903:
+    name: "Quasar Addrgen - Strided2D SrcOnly"
+
+  904:
+    name: "Quasar Addrgen - Strided2D DstOnly"
+
+  905:
+    name: "Quasar Addrgen - Strided2D Both"
+
+  906:
+    name: "Quasar Addrgen - Face SrcOnly"
+
+  907:
+    name: "Quasar Addrgen - Face DstOnly"
+
+  908:
+    name: "Quasar Addrgen - Face Both"
+
+  909:
+    name: "Quasar Addrgen - Interleaved Banking"
+
+  910:
+    name: "Quasar IDMA - Basic"
+
+  911:
+    name: "Quasar IDMA - 1D Strided"
+
+  1012:
+    name: "1D Matmul Test 1012 - 2x2 K=2 Subblock K Sweep"
+    bandwidth_mode: "combined"
+
+  1013:
+    name: "1D Matmul Test 1013 - 3x2 K=3 Subblock K Sweep"
+    bandwidth_mode: "combined"
+
+  1023:
+    name: "1D Matmul Test 1023 - 2x4 K=2 (K<C) Subblock C Sweep"
+    bandwidth_mode: "combined"
+
+  1024:
+    name: "1D Matmul Test 1024 - 2x3 K=3 (K==C) Subblock R Sweep"
+    bandwidth_mode: "combined"
+
+  1025:
+    name: "1D Matmul Test 1025 - 2x3 K=5 (K not div C) Subblock K Sweep"
+    bandwidth_mode: "combined"
+
+  1026:
+    name: "1D Matmul Test 1026 - 4x4 K=4 Subblock K Sweep"
+    bandwidth_mode: "combined"
+
+  1027:
+    name: "1D Matmul Test 1027 - 4x4 K=8 Subblock R Sweep"
+    bandwidth_mode: "combined"
+
+  1028:
+    name: "1D Matmul Test 1028 - 4x4 K=8 Subblock C Sweep"
+    bandwidth_mode: "combined"
+
+  1029:
+    name: "1D Matmul Test 1029 - 4x4 K=1 Subblock R Sweep (single transaction)"
+    bandwidth_mode: "combined"
+
+  1030:
+    name: "1D Matmul Test 1030 - 4x4 K=8 (sub_r, sub_c) 2D Sweep"
+    bandwidth_mode: "combined"
+
+  1031:
+    name: "1D Matmul Test 1031 - 8x7 K=8 (sub_r, sub_c) 2D Sweep"
+    bandwidth_mode: "combined"
+
+  1112:
+    name: "1D V2 Matmul Test 1112 - 2x2 K=2 Subblock K Sweep"
+    bandwidth_mode: "combined"
+
+  1113:
+    name: "1D V2 Matmul Test 1113 - 3x2 K=3 Subblock K Sweep"
+    bandwidth_mode: "combined"
+
+  1123:
+    name: "1D V2 Matmul Test 1123 - 2x4 K=2 (K<C) Subblock C Sweep"
+    bandwidth_mode: "combined"
+
+  1124:
+    name: "1D V2 Matmul Test 1124 - 2x3 K=3 (K==C) Subblock R Sweep"
+    bandwidth_mode: "combined"
+
+  1125:
+    name: "1D V2 Matmul Test 1125 - 2x3 K=5 (K not div C) Subblock K Sweep"
+    bandwidth_mode: "combined"
+
+  1126:
+    name: "1D V2 Matmul Test 1126 - 4x4 K=4 Subblock K Sweep"
+    bandwidth_mode: "combined"
+
+  1127:
+    name: "1D V2 Matmul Test 1127 - 4x4 K=8 Subblock R Sweep"
+    bandwidth_mode: "combined"
+
+  1128:
+    name: "1D V2 Matmul Test 1128 - 4x4 K=8 Subblock C Sweep"
+    bandwidth_mode: "combined"
+
+  1129:
+    name: "1D V2 Matmul Test 1129 - 4x4 K=1 Subblock R Sweep (single transaction)"
+    bandwidth_mode: "combined"
+
+  1130:
+    name: "1D V2 Matmul Test 1130 - 4x4 K=8 (sub_r, sub_c) 2D Sweep"
+    bandwidth_mode: "combined"
+
+  1131:
+    name: "1D V2 Matmul Test 1131 - 8x7 K=8 (sub_r, sub_c) 2D Sweep"
+    bandwidth_mode: "combined"
+
+  1212:
+    name: "2D Matmul Test 1212 - 2x2 K=2 Subblock K Sweep"
+    bandwidth_mode: "combined"
+
+  1213:
+    name: "2D Matmul Test 1213 - 3x2 K=3 Subblock K Sweep"
+    bandwidth_mode: "combined"
+
+  1223:
+    name: "2D Matmul Test 1223 - 2x4 K=2 (K<C) Subblock C Sweep"
+    bandwidth_mode: "combined"
+
+  1224:
+    name: "2D Matmul Test 1224 - 2x3 K=3 (K==C) Subblock R Sweep"
+    bandwidth_mode: "combined"
+
+  1225:
+    name: "2D Matmul Test 1225 - 2x3 K=5 (K not div C) Subblock K Sweep"
+    bandwidth_mode: "combined"
+
+  1226:
+    name: "2D Matmul Test 1226 - 4x4 K=4 Subblock K Sweep"
+    bandwidth_mode: "combined"
+
+  1227:
+    name: "2D Matmul Test 1227 - 4x4 K=8 Subblock R Sweep"
+    bandwidth_mode: "combined"
+
+  1228:
+    name: "2D Matmul Test 1228 - 4x4 K=8 Subblock C Sweep"
+    bandwidth_mode: "combined"
+
+  1229:
+    name: "2D Matmul Test 1229 - 4x4 K=1 Subblock R Sweep (single transaction)"
+    bandwidth_mode: "combined"
+
+  1230:
+    name: "2D Matmul Test 1230 - 4x4 K=8 (sub_r, sub_c) 2D Sweep"
+    bandwidth_mode: "combined"
+
+  1231:
+    name: "2D Matmul Test 1231 - 8x7 K=8 (sub_r, sub_c) 2D Sweep"
+    bandwidth_mode: "combined"

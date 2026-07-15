@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,11 +9,11 @@
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include "ttnn/operations/experimental/ccl/send_recv_async/recv_async/device/recv_async_op_device_operation.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::experimental {
 
-std::vector<ttnn::Tensor> ExecuteRecvAsync::invoke(
-    const Tensor& output_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
+std::vector<ttnn::Tensor> recv_async(
+    const ttnn::Tensor& output_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
     return ttnn::prim::recv_async(output_tensor, mesh_socket);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,7 +15,7 @@ namespace tt::tt_fabric::udm {
 /**
  * @brief Registered response entry for tracking pending write/read responses
  *
- * This struct contains all information needed to send a response back to the requestor
+ * This struct contains all information needed to send a response back to the requester
  * after the NOC operation completes. For writes, this includes acknowledgment info.
  * For reads, this includes source location and memory pool slot tracking.
  */

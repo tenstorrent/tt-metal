@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -19,6 +19,8 @@ from models.tt_transformers.tt.common import (
     get_out_subblock_w,
     encode_prompt_instruct,
     encode_prompt_hf,
+    get_rope_theta,
+    get_rope_scaling,
     nearest_multiple,
 )
 from typing import Tuple
@@ -33,6 +35,11 @@ from models.demos.llama3_70b_galaxy.tt.load_checkpoints import (
     standardize_hf_keys,
 )
 
+# Performance tuning:
+# Chunk size for flexible chunked SDPA (prefix caching). chunk_start_idx must be
+# a multiple of this; generator aligns num_cached_tokens DOWN to this boundary.
+# (That means some tokens, even full pages, can be recomputed.)
+SDPA_CHUNK_ALIGN = 128
 
 PREFETCHER_NOC1_GRID = [
     (6, 6),
@@ -454,6 +461,7 @@ class TtModelArgs:
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
+        self.is_blackhole = ttnn.get_arch_name().lower() == "blackhole"
         self.device_name = {0: "CPU", 1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[self.num_devices]
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
         self.max_seq_len = max_seq_len
@@ -467,10 +475,15 @@ class TtModelArgs:
 
         self.qk_norm = False
         self.is_qwen = False
-        self.unfuse_res_add = False
+        # On the BH no-prefetch path the distributed (non-fused) RMSNorm does not write the residual
+        # sum back in place, so the residual add must be done explicitly in the decoder (its BH branch
+        # handles the mixed-layout add). WH/prefetcher keeps the fused residual path.
+        self.unfuse_res_add = self.is_blackhole and self.num_devices == 32
 
         if self.num_devices == 32:
-            self.use_prefetcher = True
+            # Blackhole galaxy bring-up runs the no-prefetcher path (the prefetcher ring configs
+            # assume Wormhole's 12 DRAM banks / wider tensix grid). Wormhole galaxy is unchanged.
+            self.use_prefetcher = not self.is_blackhole
 
         # Set up prefetcher stuff
         _, _, _, self.pf_receiver_cores_list, _, _, _, _ = get_core_ranges(12, 2, False)
@@ -614,7 +627,12 @@ class TtModelArgs:
             raise ValueError(
                 f"Unsupported number of devices: {self.num_devices}. Only 32 devices (Galaxy) are supported."
             )
-        self.model_config["GALAXY_NUM_LINKS"] = {"6U": 4, "4U": 3}.get(self.galaxy_type)
+        if self.is_blackhole:
+            # Blackhole galaxy physically exposes 2 inter-chip links (Wormhole 6U exposes 4); the
+            # ring/line CCLs index eth channels by link, so 4 overruns the available channels.
+            self.model_config["GALAXY_NUM_LINKS"] = int(os.getenv("GALAXY_NUM_LINKS", "2"))
+        else:
+            self.model_config["GALAXY_NUM_LINKS"] = {"6U": 4, "4U": 3}.get(self.galaxy_type)
         self.model_config["CCL_TOPOLOGY"] = {"6U": ttnn.Topology.Ring, "4U": ttnn.Topology.Linear}.get(self.galaxy_type)
         if device is not None:  # Avoid issue with test_llama_torch.py not having a device
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
@@ -729,12 +747,35 @@ class TtModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
 
-            # Chunk values based on what works best empirically
-            self.model_config["SDPA_PROGCFG"] = lambda seqlen: ttnn.SDPAProgramConfig(
+            # Chunk values based on what works best empirically,
+            # while sticking to sdpa limitations
+            self.model_config["SDPA_PROGCFG"] = lambda seqlen, chunk_start_idx=0: ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(7, 10),
                 exp_approx_mode=False,
-                q_chunk_size=256 if seqlen >= 2048 else 64,
-                k_chunk_size=512 if seqlen >= 2048 else 64,
+                q_chunk_size=256
+                if seqlen >= 2048 and chunk_start_idx == 0
+                else 64
+                if seqlen < 2048 and chunk_start_idx == 0
+                else min(256, chunk_start_idx & -chunk_start_idx)
+                if seqlen >= 2048
+                else min(64, chunk_start_idx & -chunk_start_idx),
+                k_chunk_size=512
+                if seqlen >= 2048 and chunk_start_idx == 0
+                else 64
+                if seqlen < 2048 and chunk_start_idx == 0
+                else min(512, (seqlen + chunk_start_idx) & -(seqlen + chunk_start_idx))
+                if seqlen >= 2048
+                else min(64, (seqlen + chunk_start_idx) & -(seqlen + chunk_start_idx)),
+            )
+
+            # For flexible chunked SDPA (chunk_start_idx_tensor): fixed program config so one trace
+            # works for any block-aligned chunk_start at replay.
+            # Chunk sizes must match SDPA_CHUNK_ALIGN; generator aligns num_cached_tokens to it.
+            self.model_config["SDPA_PROGCFG_FLEXIBLE_CHUNK"] = lambda seqlen, page_size: ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(7, 10),
+                exp_approx_mode=False,
+                q_chunk_size=SDPA_CHUNK_ALIGN,
+                k_chunk_size=SDPA_CHUNK_ALIGN,
             )
 
             def find_largest_divisor(n, max_divisor=8):
@@ -885,57 +926,35 @@ class TtModelArgs:
 
             self.model_config["PREFILL_FF1_FF3_MINIMAL_MATMUL_CONFIG"] = prefill_ff1_ff3_minimal_matmul_config
 
-            #  Only used when seq_len >= 4096
+            # Only used when seq_len >= 4096
+            # Best configs found through sweep (sweep_llama70b_agmm_block_sizes.py)
             def prefill_ff2_minimal_matmul_config(seq_len):
-                """
-                Returns the best minimal matmul config for prefill FF2 based on sequence length.
-                Configurations are optimized based on sweep results.
-                """
-                # Best configurations from sweep results for each M value
-                if seq_len <= 4096:
+                if seq_len <= 16384:
                     return ttnn.MinimalMatmulConfig(
                         M_block_size=8,
-                        K_block_size=8,
+                        K_block_size=7,
                         N_block_size=8,
-                        subblock_h=4,
-                        subblock_w=2,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 9),
-                    )
-                elif seq_len <= 16384:  # Both 8K and 16K share the same config
-                    return ttnn.MinimalMatmulConfig(
-                        M_block_size=8,
-                        K_block_size=8,
-                        N_block_size=8,
-                        subblock_h=2,
+                        subblock_h=1,
                         subblock_w=4,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
-                    )
-                elif seq_len <= 32768:
-                    return ttnn.MinimalMatmulConfig(
-                        M_block_size=8,
-                        K_block_size=8,
-                        N_block_size=8,
-                        subblock_h=4,
-                        subblock_w=2,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                        compute_with_storage_grid_size=ttnn.CoreCoord(6, 8),
                     )
                 elif seq_len <= 65536:
                     return ttnn.MinimalMatmulConfig(
-                        M_block_size=8,
-                        K_block_size=8,
+                        M_block_size=16,
+                        K_block_size=7,
                         N_block_size=8,
-                        subblock_h=2,
+                        subblock_h=1,
                         subblock_w=4,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                        compute_with_storage_grid_size=ttnn.CoreCoord(6, 8),
                     )
-                else:  # For seq_len >= 131072
+                else:  # 128k+
                     return ttnn.MinimalMatmulConfig(
-                        M_block_size=8,
-                        K_block_size=8,
+                        M_block_size=16,
+                        K_block_size=7,
                         N_block_size=8,
-                        subblock_h=2,
+                        subblock_h=1,
                         subblock_w=4,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 9),
+                        compute_with_storage_grid_size=ttnn.CoreCoord(6, 9),
                     )
 
             self.model_config["PREFILL_FF2_MINIMAL_MATMUL_CONFIG"] = prefill_ff2_minimal_matmul_config
@@ -2091,12 +2110,12 @@ class TtModelArgs:
                     )
                     self.hidden_dim = padded_hidden_dim
 
-        # RoPE params
-        self.rope_theta = params.get("rope_theta")
+        # RoPE params (transformers 5.x nests these under `rope_parameters`)
+        self.rope_theta = get_rope_theta(params)
         # If use_scaled_rope is not present, assume setting rope_scaling means use scaled rope
         # If it is present and is set to false, do not use scaled rope
         # Setting self.rope_scaling_factor to None is our way of saying do not use scaled rope
-        rope_scaling_params = params.get("rope_scaling", None)
+        rope_scaling_params = get_rope_scaling(params)
         if rope_scaling_params:
             self.rope_scaling_factor = rope_scaling_params.get("factor", None)
             self.orig_context_len = rope_scaling_params.get("original_max_position_embeddings", None)
@@ -2283,7 +2302,9 @@ class TtModelArgs:
 
     def create_dram_sharded_mem_config(self, k, n):
         """Create DRAM-sharded memory config for width-sharded tensors"""
-        dram_cores = 12
+        # Blackhole exposes 8 DRAM banks vs Wormhole's 12; the shard-width division must match the
+        # actual dram_weight_grid or the shard count exceeds the available banks (TT_FATAL).
+        dram_cores = 8 if self.is_blackhole else 12
         padded_size = math.ceil(n / (self.tile_size * dram_cores)) * (self.tile_size * dram_cores)
         shard_spec = ttnn.ShardSpec(
             self.dram_weight_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR
@@ -2299,7 +2320,7 @@ class TtModelArgs:
             """
             return b * math.ceil(a / b)
 
-        num_cores = 24
+        num_cores = 16 if self.is_blackhole else 24
         N_per_shard = round_up(math.ceil(n // num_cores), ttnn.TILE_SIZE)
         N_per_shard_in_dram = N_per_shard * 2
         in1_shard_shape = [k, N_per_shard_in_dram]

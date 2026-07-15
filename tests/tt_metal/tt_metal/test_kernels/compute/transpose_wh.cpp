@@ -1,24 +1,26 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 
-#include "api/compute/transpose_wh.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/transpose.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t NHtWt = get_compile_time_arg_val(0);
-
-    experimental::CircularBuffer cb0(tt::CBIndex::c_0);
-    experimental::CircularBuffer cb16(tt::CBIndex::c_16);
+    constexpr uint32_t NHtWt = get_arg(args::NHtWt);
+    DataflowBuffer dfb_in(dfb::in);
+    DataflowBuffer dfb_out(dfb::out);
 
 #ifndef SHORT_INIT
-    transpose_wh_init(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(dfb::in, dfb::out);
+    transpose_init(dfb::in);
 #else
-    unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    transpose_wh_init_short(tt::CBIndex::c_0);
+    unary_op_init_common(dfb::in, dfb::out);
+    transpose_init(dfb::in);
 #endif
 
     // transpose a row-major block:
@@ -26,18 +28,18 @@ void kernel_main() {
     // - uses reader_unary_transpose_wh
     // - transpose_wh each tile
     for (uint32_t n = 0; n < NHtWt; n++) {
-        cb0.wait_front(1);
-        cb16.reserve_back(1);
+        dfb_in.wait_front(1);
+        dfb_out.reserve_back(1);
 
         tile_regs_acquire();
-        transpose_wh_tile(tt::CBIndex::c_0, 0, 0);
+        transpose_tile(dfb::in, 0, 0);
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(0, tt::CBIndex::c_16);
+        pack_tile(0, dfb::out);
         tile_regs_release();
 
-        cb16.push_back(1);
-        cb0.pop_front(1);
+        dfb_in.pop_front(1);
+        dfb_out.push_back(1);
     }
 }

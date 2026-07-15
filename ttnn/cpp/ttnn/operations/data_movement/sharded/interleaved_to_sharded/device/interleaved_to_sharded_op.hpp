@@ -1,16 +1,16 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <variant>
-#include "ttnn/decorators.hpp"
 
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "interleaved_to_sharded_op_types.hpp"
 #include "interleaved_to_sharded_program_factory.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::prim {
 
@@ -21,6 +21,8 @@ struct InterleavedToShardedDeviceOperation {
     using tensor_return_value_t = Tensor;
 
     using program_factory_t = std::variant<InterleavedToShardedProgramFactory>;
+    static std::pair<bool, std::string> validate_inputs(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
     static void validate_on_program_cache_miss(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
@@ -30,7 +32,7 @@ struct InterleavedToShardedDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
-    static tt::stl::hash::hash_t compute_program_hash(
+    static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };
 

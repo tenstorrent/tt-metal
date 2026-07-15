@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,6 +15,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 namespace ttnn::prim::sharded_layernorm_helpers {
 
@@ -31,10 +32,12 @@ struct CoreRanges;
 
 void assert_subblock_compute_config_compatible(bool dst_full_sync_en, bool fp32_dest_acc_en, uint32_t subblock_wt);
 
-std::tuple<tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat> get_cb_data_formats(
+std::tuple<tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat>
+get_cb_data_formats(
     const Tensor& output,
     const std::optional<const Tensor>& gamma,
     const std::optional<const Tensor>& beta,
+    const std::optional<const Tensor>& stats,
     bool fp32_dest_acc_en);
 
 //////////////////////////////////////////////////////////////////////////////
@@ -127,7 +130,14 @@ struct KernelDefines {
     KernelDescriptor::Defines compute;
 
     static KernelDefines build(
-        bool has_b, bool has_gamma, bool has_beta, bool rms_norm, bool use_welford, bool skip_write_back);
+        bool has_b,
+        bool has_gamma,
+        bool has_beta,
+        bool rms_norm,
+        bool use_welford,
+        bool skip_write_back,
+        const std::optional<operations::unary::UnaryWithParam>& fused_activation = std::nullopt,
+        std::optional<tt::tt_metal::DataType> output_dtype = std::nullopt);
 };
 
 // Parameters needed to compute CB sizes
@@ -141,6 +151,7 @@ struct CBSizeParams {
     uint32_t out_single_tile_size = 0;
     uint32_t gamma_single_tile_size = 0;
     uint32_t beta_single_tile_size = 0;
+    uint32_t stats_single_tile_size = 0;
     uint32_t bfloat16_tile_size = 0;
     uint32_t reciprocal_CB_size_bytes = 0;
     uint32_t num_rows_per_all_to_all_worker = 0;
@@ -153,6 +164,7 @@ struct CBSizeParams {
     bool use_two_stage_reduce = false;
     bool use_welford = false;
     bool skip_write_back = false;
+    bool rms_norm = false;
 
     // Computes all CB sizes and returns them in a struct
     struct Sizes {
@@ -198,6 +210,9 @@ struct CompileTimeArgsContext {
     uint32_t out_single_tile_size = 0;
     uint32_t block_wt_resharded = 0;
     uint32_t K = 0;
+    // Logical (un-padded) width. Welford normalizes over this element count rather than the
+    // tile-padded width K, so non-tile-aligned widths exclude the padding columns.
+    uint32_t logical_K = 0;
 
     // Flags
     bool rms_norm = false;
@@ -225,6 +240,9 @@ struct CompileTimeArgsContext {
     // Welford-specific
     float eps = 0.0f;
     uint32_t per_core_recip_lut_size = 0;
+
+    // Tile dimensions
+    uint32_t tile_width = 32;
 };
 
 // Result of building compile-time args
@@ -276,14 +294,36 @@ struct KernelConfig {
     KernelDescriptor::RuntimeArgs compute_all_to_all_rt_args;
     KernelDescriptor::RuntimeArgs compute_not_all_to_all_rt_args;
 
+    // Optional gamma/beta writer base-address slots, bound as BufferBindings in
+    // add_kernel_descriptors() (patched on cache hits); null when the tensor is absent.
+    Buffer* gamma_buffer = nullptr;
+    Buffer* beta_buffer = nullptr;
+
     // NOC config
     tt::tt_metal::NOC reader_noc = tt::tt_metal::NOC::NOC_0;
     tt::tt_metal::NOC writer_noc = tt::tt_metal::NOC::NOC_0;
 
     // Compute config
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
+    bool dst_full_sync_en = false;
     bool math_approx_mode = false;
+
+    // Controls the Welford-fp32 alias that allows UnpackToDestFp32 to be set on the
+    // alias, while keeping the original CB descriptor with default value.
+    bool welford_fp32_alias = false;
+
+    // Legacy (non-Welford) column masking for non-tile-aligned widths: zero the padding columns of
+    // the final tile so they do not enter E[x] or the variance.
+    bool do_col_mask = false;
+    // Non-distributed stage generates the CB 19 mask on-device in the writer; this feeds that generation:
+    // the logical (un-padded) width, i.e. where the padding columns begin.
+    uint32_t logical_K = 0;
+
+    // Emitted as named compile-time args on the writer kernels (per-core width in tiles and the Welford
+    // flag).
+    uint32_t block_wt = 0;
+    bool use_welford = false;
 };
 
 // Struct to hold CB configuration for building CB descriptors
@@ -307,6 +347,7 @@ struct CBConfig {
     uint32_t stats_cb_size = 0;
     uint32_t stats_reduced_cb_size = 0;
     uint32_t reciprocal_CB_size_bytes = 0;
+    uint32_t col_mask_gen_CB_size_bytes = 0;  // writer-generated CB 19: block_wt tiles (one tile-row)
 
     // Data formats
     tt::DataFormat in_data_format = tt::DataFormat::Float16_b;
@@ -314,6 +355,7 @@ struct CBConfig {
     tt::DataFormat out_data_format = tt::DataFormat::Float16_b;
     tt::DataFormat gamma_cb_data_format = tt::DataFormat::Float16_b;
     tt::DataFormat beta_cb_data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat stats_cb_data_format = tt::DataFormat::Float16_b;
     tt::DataFormat reciprocal_cb_data_format = tt::DataFormat::Float32;
 
     // Tile sizes
@@ -322,6 +364,7 @@ struct CBConfig {
     uint32_t out_single_tile_size = 0;
     uint32_t gamma_single_tile_size = 0;
     uint32_t beta_single_tile_size = 0;
+    uint32_t stats_single_tile_size = 0;
     uint32_t bfloat16_tile_size = 0;
 
     // Buffers
@@ -343,6 +386,14 @@ struct CBConfig {
     bool is_pre_all_gather = false;
     bool is_post_all_gather = false;
     bool skip_write_back = false;
+    // Column masking for non-tile-aligned widths (zero the final tile's padding cols).
+    // Gates the writer-generated CB 19 mask (every masking stage).
+    bool do_col_mask = false;
+    // Gates CB 14 (E[x] scratch) for the non-distributed LayerNorm only.
+    bool do_legacy_layernorm_col_mask = false;
+    // Controls the Welford-fp32 alias that allows UnpackToDestFp32 to be set on the
+    // alias, while keeping the original CB descriptor with default value.
+    bool welford_fp32_alias = false;
 };
 
 //////////////////////////////////////////////////////////////////////////////
@@ -393,6 +444,7 @@ struct RuntimeArgsContext {
     uint32_t block_wt = 0;
     uint32_t block_wt_resharded = 0;
     uint32_t Kt = 0;
+    uint32_t logical_K = 0;
     uint32_t last_core_width_index = 0;
 
     // Flags
@@ -412,9 +464,14 @@ struct CoreIndices {
     uint32_t width_index = 0;
     uint32_t width_index_two_stage = 0;
     uint32_t all_to_all_worker_tile_offset_bytes = 0;
-    uint32_t gamma_tile_start_id = 0;
-    uint32_t beta_tile_start_id = 0;
+    // This core's first tile index along the width (the normalized dimension): width_index * block_wt,
+    // the start of this core's width shard.
+    uint32_t width_shard_tile_start_id = 0;
     uint32_t num_reduce_tiles_per_block_h = 0;
+    // Real (logical) column count this core reduces over. Equals the per-core block width for full
+    // shards and the remaining logical columns for the final real shard; used by the Welford compute
+    // kernel, which has no per-column mask and must reduce exactly the logical columns.
+    uint32_t welford_reduce_w = 0;
 
     static CoreIndices compute(uint32_t core_idx, const CoreCoord& core, const RuntimeArgsContext& ctx);
 

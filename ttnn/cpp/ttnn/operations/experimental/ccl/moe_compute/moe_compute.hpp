@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,35 +6,56 @@
 
 #include <cstdint>
 #include <optional>
+#include <vector>
 
-#include "ttnn/decorators.hpp"
-#include "ttnn/operations/core/core.hpp"
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include "ttnn/types.hpp"
+#include "device/kernels/moe_ring_common.h"
+#include "device/hostdevcommon/config.hpp"
 
-namespace ttnn {
-namespace operations::experimental::ccl {
+namespace ttnn::experimental {
 
-struct ExecuteMoECompute {
-    static std::vector<ttnn::Tensor> invoke(
-        const ttnn::Tensor& tilize_input_tensor,
-        const ttnn::Tensor& tilize_expert_indices_tensor,
-        const ttnn::Tensor& tilize_expert_scores_tensor,
-        const ttnn::Tensor& tilize_expert_mapping_tensor,
-        const ttnn::Tensor& matmul_w0_w1_tensor,
-        const ttnn::Tensor& matmul_w2_tensor,
-        uint32_t layer_id,
-        uint32_t output_height_shard_dim,
-        uint32_t output_width_shard_dim,
-        const std::optional<uint32_t>& cluster_axis);
-};
+std::vector<ttnn::Tensor> moe_compute(
+    const ttnn::Tensor& tilize_input_tensor,
+    const ttnn::Tensor& tilize_expert_indices_tensor,
+    const ttnn::Tensor& tilize_expert_scores_tensor,
+    const ttnn::Tensor& tilize_expert_mapping_tensor,
+    const ttnn::Tensor& matmul_w0_w1_tensor,
+    const ttnn::Tensor& matmul_w2_tensor,
+    uint32_t layer_id,
+    uint32_t output_height_shard_dim,
+    uint32_t intermediate_size,
+    bool has_bias,
+    const std::optional<uint32_t>& cluster_axis,
+    const std::optional<tt::tt_fabric::Topology>& topology,
+    const std::optional<uint32_t>& num_links,
+    const std::optional<ttnn::CoreRangeSet>& mux_core_range_set,
+    const std::optional<ttnn::MemoryConfig>& output_memory_config,
+    const std::optional<ttnn::Tensor>& optional_output_tensor,
+    const std::optional<ttnn::GlobalSemaphore>& optional_cross_device_semaphore,
+    const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type = std::nullopt,
+    bool compute_only = false,
+    const std::optional<uint32_t>& num_shared_experts_per_device = std::nullopt);
 
-}  // namespace operations::experimental::ccl
+std::vector<ttnn::CoreCoord> get_moe_combine_cores(
+    ttnn::MeshDevice* mesh_device,
+    const uint32_t combine_token_parallel_cores,
+    const uint32_t combine_data_parallel_cores,
+    const uint32_t hidden_size,
+    const CoreRangeSet& mux_core_range_set = CoreRangeSet());
 
-namespace experimental {
+ttnn::CoreCoord get_moe_tilize_drain_core(
+    ttnn::MeshDevice* mesh_device,
+    const uint32_t combine_token_parallel_cores,
+    const uint32_t combine_data_parallel_cores,
+    const uint32_t hidden_size,
+    const CoreRangeSet& mux_core_range_set = CoreRangeSet());
 
-constexpr auto moe_compute = ttnn::
-    register_operation<"ttnn::experimental::moe_compute", ttnn::operations::experimental::ccl::ExecuteMoECompute>();
+ttnn::CoreRange get_moe_worker_mcast_bounding_box(
+    ttnn::MeshDevice* mesh_device,
+    const uint32_t combine_token_parallel_cores,
+    const uint32_t combine_data_parallel_cores,
+    const uint32_t hidden_size,
+    const CoreRangeSet& mux_core_range_set = CoreRangeSet());
 
-std::vector<ttnn::CoreCoord> get_moe_combine_cores(ttnn::MeshDevice* mesh_device);
-
-}  // namespace experimental
-}  // namespace ttnn
+}  // namespace ttnn::experimental

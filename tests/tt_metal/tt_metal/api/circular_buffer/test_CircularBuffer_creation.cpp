@@ -1,10 +1,9 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <map>
@@ -20,6 +19,7 @@
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/tensor/tensor_types.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
@@ -140,6 +140,33 @@ TEST_F(MeshDeviceFixture, TestCreateCircularBufferWithMismatchingConfig) {
         CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}}).set_page_size(1, cb_config.page_size));
 }
 
+// Verifies that the DataType-based CircularBufferConfig constructor produces a config with identical state to the
+// tt::DataFormat-based constructor when the spec entries map to each other via datatype_to_dataformat_converter.
+// CircularBufferConfig::operator== covers total_size, globally_allocated_address, data_formats, page_sizes, tiles,
+// and shadow_global_buffer.
+TEST_F(MeshDeviceFixture, TestCircularBufferConfigConstructorWithDataTypeMatchesDataFormat) {
+    CBConfig cb_config;
+
+    const std::map<uint8_t, DataType> data_type_spec = {
+        {0, DataType::BFLOAT16},
+        {2, DataType::FLOAT32},
+        {16, DataType::UINT32},
+    };
+
+    std::map<uint8_t, tt::DataFormat> data_format_spec;
+    for (const auto& [idx, dtype] : data_type_spec) {
+        data_format_spec[idx] = datatype_to_dataformat_converter(dtype);
+    }
+
+    CircularBufferConfig config_via_data_format(cb_config.page_size, data_format_spec);
+    CircularBufferConfig config_via_data_type(cb_config.page_size, data_type_spec);
+
+    EXPECT_EQ(config_via_data_format, config_via_data_type);
+    EXPECT_EQ(config_via_data_format.total_size(), cb_config.page_size);
+    EXPECT_EQ(config_via_data_type.total_size(), cb_config.page_size);
+    EXPECT_EQ(config_via_data_format.data_formats(), config_via_data_type.data_formats());
+}
+
 TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferAtOverlappingIndex) {
     Program program;
     CBConfig cb_config;
@@ -175,6 +202,30 @@ TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferWithTooManyPages) {
                                       .set_page_size(0, cb_config.page_size);
 
     EXPECT_ANY_THROW(CreateCircularBuffer(program, cr_set, config));
+}
+
+TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferOnOutOfRangeCores) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        auto& cq = devices_.at(id)->mesh_command_queue();
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        Program program;
+        workload.add_program(device_range, std::move(program));
+        auto& program_ = workload.get_programs().at(device_range);
+
+        auto grid_size = devices_.at(id)->compute_with_storage_grid_size();
+        // Extend one column beyond the compute grid into dispatch core territory
+        CoreRange cr({0, 0}, {grid_size.x, grid_size.y - 1});
+        CoreRangeSet cr_set({cr});
+
+        CBConfig cb_config;
+        CircularBufferConfig config = CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}})
+                                          .set_page_size(0, cb_config.page_size);
+        CreateCircularBuffer(program_, cr_set, config);
+
+        EXPECT_ANY_THROW(distributed::EnqueueMeshWorkload(cq, workload, false));
+    }
 }
 
 }  // end namespace basic_tests::circular_buffer

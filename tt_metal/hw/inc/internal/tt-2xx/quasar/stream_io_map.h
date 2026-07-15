@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -39,4 +39,5 @@ inline __attribute__((always_inline)) volatile uint32_t* get_cq_finish_ptr() {
 inline __attribute__((always_inline)) volatile uint32_t* get_sync_register_ptr() {
     return (volatile uint32_t*)(uintptr_t)(STREAM_REG_ADDR(0, STREAM_PHASE_AUTO_CFG_PTR_REG_INDEX));
 }
+
 #endif

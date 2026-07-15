@@ -1,8 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "../scatter_common.hpp"
 
 #include <array>
@@ -12,9 +14,9 @@ namespace {
 // copies source stick to destination stick (first phase of scatter)
 template <typename number_type>
 FORCE_INLINE void copy_input_to_output(
-    const uint32_t& input_cb, const uint32_t& output_cb, const uint32_t& input_chunk_size) {
-    const uint32_t input_l1_read_addr = get_read_ptr(input_cb);
-    const uint32_t output_l1_write_addr = get_write_ptr(output_cb);
+    const CircularBuffer& input_cb, const CircularBuffer& output_cb, const uint32_t& input_chunk_size) {
+    const uint32_t input_l1_read_addr = input_cb.get_read_ptr();
+    const uint32_t output_l1_write_addr = output_cb.get_write_ptr();
     volatile tt_l1_ptr number_type* input_l1_read_ptr =
         reinterpret_cast<volatile tt_l1_ptr number_type*>(input_l1_read_addr);
     volatile tt_l1_ptr number_type* output_l1_write_ptr =
@@ -52,19 +54,19 @@ FORCE_INLINE number_type perform_reduction(
 // performs scatter on data loaded to cb with load_to_cb
 template <typename number_type, typename index_type>
 FORCE_INLINE void scatter_along_chunk(
-    const uint32_t& input_cb,
-    const uint32_t& index_cb,
-    const uint32_t& source_cb,
-    const uint32_t& output_cb,
+    const CircularBuffer& input_cb,
+    const CircularBuffer& index_cb,
+    const CircularBuffer& source_cb,
+    const CircularBuffer& output_cb,
     const uint32_t& input_stick_size,
     const uint32_t& input_offset,
     const uint32_t& input_chunk_size,
     const uint32_t& index_chunk_size,
     const ScatterReductionType& scatter_reduction_type = ScatterReductionType::INVALID) {
-    const uint32_t input_l1_read_addr = get_read_ptr(input_cb);
-    const uint32_t index_l1_read_addr = get_read_ptr(index_cb);
-    const uint32_t source_l1_read_addr = get_read_ptr(source_cb);
-    const uint32_t output_l1_write_addr = get_write_ptr(output_cb);
+    const uint32_t input_l1_read_addr = input_cb.get_read_ptr();
+    const uint32_t index_l1_read_addr = index_cb.get_read_ptr();
+    const uint32_t source_l1_read_addr = source_cb.get_read_ptr();
+    const uint32_t output_l1_write_addr = output_cb.get_write_ptr();
     volatile tt_l1_ptr number_type* input_l1_read_ptr =
         reinterpret_cast<volatile tt_l1_ptr number_type*>(input_l1_read_addr);
     volatile tt_l1_ptr index_type* index_l1_read_ptr =
@@ -88,13 +90,14 @@ FORCE_INLINE void scatter_along_chunk(
         volatile number_type& source_value = source_l1_read_ptr[index_in_index_chunk];
         const uint32_t& output_index = index_value - input_offset;
         output_l1_write_ptr[output_index] = perform_reduction<number_type>(
-            output_l1_write_ptr[output_index], source_value, scatter_reduction_type, get_dataformat(input_cb));
+            output_l1_write_ptr[output_index], source_value, scatter_reduction_type, input_cb.get_dataformat());
     }
 }
 
 }  // namespace
 
 void kernel_main() {
+    Noc noc;
     constexpr auto ctas{get_ctas()};
 
     const uint32_t input_buffer_address = get_arg_val<uint32_t>(0);
@@ -110,9 +113,9 @@ void kernel_main() {
     const uint32_t source_chunk_size = get_arg_val<uint32_t>(7);
     const auto scatter_reduction_type = static_cast<ScatterReductionType>(get_arg_val<uint32_t>(8));
 
-    const auto input_addr_gtor = TensorAccessor(ctas.input_args, input_buffer_address, ctas.input_stick_size_bytes);
-    const auto index_addr_gtor = TensorAccessor(ctas.index_args, index_buffer_address, ctas.index_stick_size_bytes);
-    const auto source_addr_gtor = TensorAccessor(ctas.source_args, source_buffer_address, ctas.source_stick_size_bytes);
+    const auto input_addr_gtor = TensorAccessor(ctas.input_args, input_buffer_address);
+    const auto index_addr_gtor = TensorAccessor(ctas.index_args, index_buffer_address);
+    const auto source_addr_gtor = TensorAccessor(ctas.source_args, source_buffer_address);
 
     using input_std_type = std_type_t<get_dataformat(ctas.input_cb)>;
     using index_std_type = std_type_t<get_dataformat(ctas.index_cb)>;
@@ -126,6 +129,11 @@ void kernel_main() {
 
     std::array<uint32_t, N> coord{from_id<N>(start_stick_id, input_dims)};
 
+    CircularBuffer input_cb(ctas.input_cb);
+    CircularBuffer output_cb(ctas.output_cb);
+    CircularBuffer index_cb(ctas.index_cb);
+    CircularBuffer source_cb(ctas.source_cb);
+
     for (uint32_t input_stick_id = start_stick_id; input_stick_id < start_stick_id + sticks_for_core;
          ++input_stick_id) {
         // process input/output chunks sequentially
@@ -136,15 +144,16 @@ void kernel_main() {
 
             // first phase: copy input data to output
             load_to_cb(
+                noc,
                 ctas.input_cb,
                 input_addr_gtor,
                 input_offset * sizeof(input_std_type),
                 input_chunk_length * sizeof(input_std_type),
                 input_stick_id);
-            cb_wait_front(ctas.input_cb, ONE_PAGE);
-            cb_reserve_back(ctas.output_cb, ONE_PAGE);
+            input_cb.wait_front(ONE_PAGE);
+            output_cb.reserve_back(ONE_PAGE);
 
-            copy_input_to_output<input_std_type>(ctas.input_cb, ctas.output_cb, input_chunk_length);
+            copy_input_to_output<input_std_type>(input_cb, output_cb, input_chunk_length);
 
             if (in_bounds<N>(coord, index_dims)) {
                 const uint32_t index_stick_id = to_id<N>(coord, index_strides);
@@ -158,6 +167,7 @@ void kernel_main() {
                         std::min(ctas.source_stick_size - source_offset, source_chunk_size);
 
                     load_to_cb(
+                        noc,
                         ctas.index_cb,
                         index_addr_gtor,
                         index_offset * sizeof(index_std_type),
@@ -166,31 +176,32 @@ void kernel_main() {
                     // source tensor is sliced beforehand to match index tensor's dimensions, therefore their stick ids
                     // map 1:1
                     load_to_cb(
+                        noc,
                         ctas.source_cb,
                         source_addr_gtor,
                         source_offset * sizeof(input_std_type),
                         source_chunk_length * sizeof(input_std_type),
                         index_stick_id);
-                    cb_wait_front(ctas.index_cb, ONE_PAGE);
-                    cb_wait_front(ctas.source_cb, ONE_PAGE);
+                    index_cb.wait_front(ONE_PAGE);
+                    source_cb.wait_front(ONE_PAGE);
                     scatter_along_chunk<input_std_type, index_std_type>(
-                        ctas.input_cb,
-                        ctas.index_cb,
-                        ctas.source_cb,
-                        ctas.output_cb,
+                        input_cb,
+                        index_cb,
+                        source_cb,
+                        output_cb,
                         ctas.input_stick_size,
                         input_offset,
                         input_chunk_length,
                         index_chunk_length,
                         scatter_reduction_type);
-                    cb_pop_front(ctas.source_cb, ONE_PAGE);
-                    cb_pop_front(ctas.index_cb, ONE_PAGE);
+                    source_cb.pop_front(ONE_PAGE);
+                    index_cb.pop_front(ONE_PAGE);
                 }
             }
 
-                // third phase: push to the output cb
-                cb_push_back(ctas.output_cb, ONE_PAGE);
-                cb_pop_front(ctas.input_cb, ONE_PAGE);
+            // third phase: push to the output cb
+            output_cb.push_back(ONE_PAGE);
+            input_cb.pop_front(ONE_PAGE);
         }
         next_inplace<N>(coord, input_dims);
     }

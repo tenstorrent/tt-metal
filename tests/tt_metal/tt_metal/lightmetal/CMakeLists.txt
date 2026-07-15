@@ -3,6 +3,7 @@ include(sources.cmake)
 
 add_executable(unit_tests_lightmetal ${UNIT_TESTS_LIGHTMETAL_SRC})
 TT_ENABLE_UNITY_BUILD(unit_tests_lightmetal)
+target_precompile_headers(unit_tests_lightmetal REUSE_FROM metal_common_pch)
 
 target_link_libraries(
     unit_tests_lightmetal
@@ -15,6 +16,7 @@ target_include_directories(
     unit_tests_lightmetal
     PRIVATE
         "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        "$<TARGET_PROPERTY:Metalium::Metal::Impl,BINARY_DIR>/flatbuffers"
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
         ${CMAKE_CURRENT_SOURCE_DIR}

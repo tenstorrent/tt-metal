@@ -1,7 +1,6 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-
 
 /*
 Function reads from RM and writes to RM
@@ -14,26 +13,27 @@ Compile arguments
 2. log_base_2_of_page_size: log base 2 of page size
 3. write_size_is_pow2: 1 if write size is power of 2 else 0
 4. log_base_2_of_page_size: log base 2 of page size
-5. needs_read_allignment: 1 if read needs allignment else 0
+5. needs_read_allignment: 1 if read needs alignment else 0
 //Needed if BRAM and page size is not multiple of 64 bytes
 
 Runtime arguments
 0. src_addr: source address
 1. dst_addr: destination address
-2. source_page_size_bytes: source page size in bytes
-3. dest_page_size_bytes: destination page size in bytes
-4. source_read_size_bytes: source read size in bytes
-5. read_start_page: read start page
-6. read_end_page: read end page
-7. write_start_page: write start page
+2. source_read_size_bytes: source read size in bytes
+3. read_start_page: read start page
+4. read_end_page: read end page
+5. write_start_page: write start page
+6. write_start_offset: write start offset
+7. nop: 1 if this core should be skipped
 */
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "api/debug/dprint.h"  // required in all kernels using DPRINT
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
-    //We are guranteed to be in 2D going to 2D
+    // We are guaranteed to be in 2D going to 2D
 
     const uint32_t src_addr                 = get_arg_val<uint32_t>(0);
     const uint32_t dst_addr = get_arg_val<uint32_t>(1);
@@ -43,7 +43,7 @@ void kernel_main() {
     const uint32_t read_end_page = get_arg_val<uint32_t>(4);
     const uint32_t write_start_page = get_arg_val<uint32_t>(5);
     const uint32_t write_start_offset = get_arg_val<uint32_t>(6);
-    const uint32_t nop = get_arg_val<uint32_t>(9);
+    const uint32_t nop = get_arg_val<uint32_t>(7);
 
     constexpr bool src_aligned_to_64 = get_compile_time_arg_val(0) == 1;
     constexpr bool src_aligned_to_16 = get_compile_time_arg_val(1) == 1;
@@ -60,9 +60,10 @@ void kernel_main() {
         return;
     }
 
-    const auto s = TensorAccessor(src_args, src_addr, source_page_size_bytes);
-    const auto d = TensorAccessor(dst_args, dst_addr, dest_page_size_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
+    const auto d = TensorAccessor(dst_args, dst_addr);
 
+    Noc noc;
     uint32_t read_offset = 0;
     uint32_t write_page = write_start_page;
     uint32_t readable = 0;
@@ -78,7 +79,7 @@ void kernel_main() {
     cb_push_back(cb_id_in1, 1);
     cb_push_back(cb_id_in0, 1);
 
-    uint64_t dst_noc_addr = get_noc_addr(write_page, d);
+    uint64_t dst_noc_addr = d.get_noc_addr(write_page);
     uint64_t write_offset = (dst_noc_addr & OFFSET_16) + write_start_offset;
     uint64_t begin_write_offset = write_offset;
     constexpr bool can_be_clean = ((source_page_size_bytes % 16) == 0 && (dest_page_size_bytes % 16) == 0);
@@ -90,15 +91,15 @@ void kernel_main() {
         if constexpr (src_aligned_to_64 || ((!src_args.is_dram) && src_aligned_to_16)) {  // Aligned to 64 bytes or 16
                                                                                           // bytes but L1
             tt::data_movement::common::enhanced_noc_async_read<source_page_size_bytes, false>(
-                src_noc_addr, source_buffer, source_page_size_bytes);
+                noc, src_noc_addr, source_buffer, source_page_size_bytes);
             read_offset = 0;
-        } else if constexpr (src_args.is_dram) {  // DDR but not alligned to 64 (potentially also not alligned to 16)
+        } else if constexpr (src_args.is_dram) {  // DDR but not aligned to 64 (potentially also not aligned to 16)
             tt::data_movement::common::enhanced_noc_async_read<(source_page_size_bytes + 128), false>(
-                src_noc_addr & MASK_64, source_buffer, source_read_size_bytes);
+                noc, src_noc_addr & MASK_64, source_buffer, source_read_size_bytes);
             read_offset = src_noc_addr & OFFSET_64;
-        } else {  // L1 but not alligned to 16
+        } else {  // L1 but not aligned to 16
             tt::data_movement::common::enhanced_noc_async_read<(source_page_size_bytes + 128), false>(
-                src_noc_addr & MASK_16, source_buffer, source_read_size_bytes);
+                noc, src_noc_addr & MASK_16, source_buffer, source_read_size_bytes);
             read_offset = src_noc_addr & OFFSET_16;
         }
 
@@ -113,14 +114,14 @@ void kernel_main() {
             {
                 if constexpr (can_be_clean) {
                     tt::data_movement::common::enhanced_noc_async_write<dest_page_size_bytes, false>(
-                        source_buffer + read_offset, dst_noc_addr + dst_noc_addr_offset, readable);
+                        noc, source_buffer + read_offset, dst_noc_addr + dst_noc_addr_offset, readable);
                     dst_noc_addr_offset = dst_noc_addr_offset + readable;
                 } else {
                     tt::data_movement::common::tt_memmove<false, true, false, dest_page_size_bytes>(
-                        dest_buffer + write_offset, source_buffer + read_offset, readable);
+                        noc, dest_buffer + write_offset, source_buffer + read_offset, readable);
                     if (i == read_end_page - 1) {
                         tt::data_movement::common::enhanced_noc_async_write<dest_page_size_bytes, false>(
-                            dest_buffer + begin_write_offset, dst_noc_addr, end_to_write);
+                            noc, dest_buffer + begin_write_offset, dst_noc_addr, end_to_write);
                         noc_async_write_barrier();
                         return;
                     }
@@ -135,12 +136,12 @@ void kernel_main() {
             {
                 if constexpr (can_be_clean) {
                     tt::data_movement::common::enhanced_noc_async_write<dest_page_size_bytes, false>(
-                        source_buffer + read_offset, dst_noc_addr + dst_noc_addr_offset, readable);
+                        noc, source_buffer + read_offset, dst_noc_addr + dst_noc_addr_offset, readable);
                 } else {
                     tt::data_movement::common::tt_memmove<false, false, false, dest_page_size_bytes>(
-                        dest_buffer + write_offset, source_buffer + read_offset, readable);
+                        noc, dest_buffer + write_offset, source_buffer + read_offset, readable);
                     tt::data_movement::common::enhanced_noc_async_write<dest_page_size_bytes, false>(
-                        dest_buffer + begin_write_offset, dst_noc_addr, dest_page_size_bytes);
+                        noc, dest_buffer + begin_write_offset, dst_noc_addr, dest_page_size_bytes);
                 }
                 dst_noc_addr_offset = 0;
 
@@ -151,7 +152,7 @@ void kernel_main() {
                     return;
                 }
                 write_page++;
-                dst_noc_addr = get_noc_addr(write_page, d);
+                dst_noc_addr = d.get_noc_addr(write_page);
                 if constexpr (!can_be_clean) {
                     end_to_write = 0;
                     write_offset = dst_noc_addr & OFFSET_16;
@@ -162,19 +163,19 @@ void kernel_main() {
             {
                 if constexpr (can_be_clean) {
                     tt::data_movement::common::enhanced_noc_async_write<dest_page_size_bytes, false>(
-                        source_buffer + read_offset, dst_noc_addr + dst_noc_addr_offset, writable);
+                        noc, source_buffer + read_offset, dst_noc_addr + dst_noc_addr_offset, writable);
                 } else {
                     tt::data_movement::common::tt_memmove<false, false, false, dest_page_size_bytes>(
-                        dest_buffer + write_offset, source_buffer + read_offset, writable);
+                        noc, dest_buffer + write_offset, source_buffer + read_offset, writable);
                     tt::data_movement::common::enhanced_noc_async_write<dest_page_size_bytes, false>(
-                        dest_buffer + begin_write_offset, dst_noc_addr, dest_page_size_bytes);
+                        noc, dest_buffer + begin_write_offset, dst_noc_addr, dest_page_size_bytes);
                 }
                 // writable < readable
                 readable = readable - writable;
                 read_offset = read_offset + writable;
                 write_page++;
                 dst_noc_addr_offset = 0;
-                dst_noc_addr = get_noc_addr(write_page, d);
+                dst_noc_addr = d.get_noc_addr(write_page);
                 if constexpr (!can_be_clean) {
                     end_to_write = 0;
                     write_offset = dst_noc_addr & OFFSET_16;

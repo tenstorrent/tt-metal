@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,18 +10,21 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/experimental/paged_cache/paged_cache.hpp"
 
-namespace ttnn::operations::experimental::paged_cache {
+namespace ttnn::experimental {
 
-ttnn::Tensor PagedUpdateCacheOperation::invoke(
+ttnn::Tensor paged_update_cache(
     const Tensor& cache_tensor,
     const Tensor& input_tensor,
     const std::vector<uint32_t>& update_idxs,
-    const std::optional<const Tensor>& update_idxs_tensor = std::nullopt,
-    const std::optional<bool> share_cache = std::nullopt,
-    const std::optional<const Tensor>& page_table = std::nullopt,
-    const uint32_t batch_offset = 0,
-    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt) {
+    const std::optional<const Tensor>& update_idxs_tensor,
+    std::optional<bool> share_cache,
+    const std::optional<const Tensor>& page_table,
+    uint32_t batch_offset,
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords,
+    std::optional<uint32_t> block_size_override,
+    std::optional<uint32_t> num_kv_heads_override,
+    std::optional<uint32_t> cache_position_modulo) {
     return ttnn::prim::paged_update_cache(
         cache_tensor,
         input_tensor,
@@ -31,21 +34,24 @@ ttnn::Tensor PagedUpdateCacheOperation::invoke(
         page_table,
         batch_offset,
         compute_kernel_config,
-        mesh_coords);
+        mesh_coords,
+        block_size_override,
+        num_kv_heads_override,
+        cache_position_modulo);
 }
 
-std::tuple<ttnn::Tensor, ttnn::Tensor> PagedFusedUpdateCacheOperation::invoke(
+std::tuple<ttnn::Tensor, ttnn::Tensor> paged_fused_update_cache(
     const Tensor& cache_tensor1,
     const Tensor& input_tensor1,
     const Tensor& cache_tensor2,
     const Tensor& input_tensor2,
     const std::vector<uint32_t>& update_idxs,
-    const std::optional<const Tensor>& update_idxs_tensor = std::nullopt,
-    const std::optional<bool> share_cache = std::nullopt,
-    const std::optional<const Tensor>& page_table = std::nullopt,
-    const uint32_t batch_offset = 0,
-    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt) {
+    const std::optional<const Tensor>& update_idxs_tensor,
+    std::optional<bool> share_cache,
+    const std::optional<const Tensor>& page_table,
+    uint32_t batch_offset,
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords) {
     return ttnn::prim::paged_fused_update_cache(
         cache_tensor1,
         input_tensor1,
@@ -60,19 +66,28 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> PagedFusedUpdateCacheOperation::invoke(
         mesh_coords);
 }
 
-ttnn::Tensor PagedFillCacheOperation::invoke(
+ttnn::Tensor paged_fill_cache(
     const Tensor& cache_tensor,
     const Tensor& input_tensor,
     const Tensor& page_table,
     const std::optional<const Tensor>& batch_idx_tensor,
-    const uint32_t batch_idx_fallback,
-    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt) {
+    uint32_t batch_idx,
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords,
+    std::optional<uint32_t> block_size_override,
+    std::optional<uint32_t> cache_position_modulo) {
     // Note: compute_kernel_config is not used by fill_cache operation
     (void)compute_kernel_config;
 
     return ttnn::prim::paged_fill_cache(
-        cache_tensor, input_tensor, page_table, batch_idx_tensor, batch_idx_fallback, mesh_coords);
+        cache_tensor,
+        input_tensor,
+        page_table,
+        batch_idx_tensor,
+        batch_idx,
+        mesh_coords,
+        block_size_override,
+        cache_position_modulo);
 }
 
-}  // namespace ttnn::operations::experimental::paged_cache
+}  // namespace ttnn::experimental

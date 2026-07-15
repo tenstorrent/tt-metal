@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,7 @@
 namespace tt::tt_fabric {
 
 FabricSwitchManager& FabricSwitchManager::instance() {
-    static tt::stl::Indestructible<FabricSwitchManager> inst;
+    static ttsl::Indestructible<FabricSwitchManager> inst;
     return inst.get();
 }
 
@@ -49,7 +49,7 @@ void FabricSwitchManager::setup(FabricConfig fabric_config, FabricReliabilityMod
         DEFAULT_WORKER_L1_SIZE,  // worker_l1_size
         false,                   // init_profiler
         true,                    // use_max_eth_core_count_on_all_devices
-        // TOD: for future optimzation, switch meshes don't need dispatch fw.
+        // TOD: for future optimization, switch meshes don't need dispatch fw.
         true);  // initialize_fabric_and_dispatch_fw
 }
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,16 +14,18 @@ void kernel_main() {
         reinterpret_cast<volatile uint32_t* const>(get_arg_val<uint32_t>(0));
     const uint32_t expected_num_signals = get_arg_val<uint32_t>(1);
 
-    DPRINT << "receiver_signal_wait: Starting. Waiting for " << expected_num_signals
-           << " signals at global semaphore addr: " << (uint32_t)completion_semaphore_address << "\n";
+    DPRINT(
+        "receiver_signal_wait: Starting. Waiting for {} signals at global semaphore addr: {}\n",
+        expected_num_signals,
+        (uint32_t)completion_semaphore_address);
 
     // Wait for the sender to signal completion
     noc_semaphore_wait(completion_semaphore_address, expected_num_signals);
 
-    DPRINT << "receiver_signal_wait: Received completion signal. All data has been received.\n";
+    DPRINT("receiver_signal_wait: Received completion signal. All data has been received.\n");
 
     // Reset the global semaphore to 0 before exit for potential reuse
     *completion_semaphore_address = 0;
 
-    DPRINT << "receiver_signal_wait: Reset global semaphore to 0. Exiting.\n";
+    DPRINT("receiver_signal_wait: Reset global semaphore to 0. Exiting.\n");
 }

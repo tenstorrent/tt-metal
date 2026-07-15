@@ -1,7 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "ttnn/distributed/host_ccl.hpp"
 
 #include <tt_stl/assert.hpp>
@@ -24,7 +25,8 @@ using ::tt::tt_metal::HostBuffer;
 Tensor all_gather(const Tensor& tensor) {
     TT_FATAL(tensor.storage_type() == tt::tt_metal::StorageType::HOST, "Tensor must be on host");
     const auto& ctx = tensor.host_storage().buffer().context();
-    if (*ctx->size() == 1) {
+    // A null context is the sentinel for "single-host degenerate"; treat it like a size-1 context.
+    if (!ctx || *ctx->size() == 1) {
         // Single-host deployment. Validate this host has all the data.
         for (const auto& coord : tensor.host_storage().buffer().shard_coords()) {
             auto shard = tensor.host_storage().buffer().get_shard(coord);
@@ -102,7 +104,7 @@ Tensor all_gather(const Tensor& tensor) {
         }
     }
 
-    return Tensor(
-        tt::tt_metal::HostStorage{std::move(all_gather_buffer)}, tensor.tensor_spec(), tensor.tensor_topology());
+    return Tensor(tt::tt_metal::HostTensor::from_buffer(
+        std::move(all_gather_buffer), tensor.tensor_spec(), tensor.tensor_topology()));
 }
 }  // namespace ttnn::distributed::host_ccl

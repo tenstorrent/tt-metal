@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@
 #include <core/ttnn_all_includes.hpp>
 #include <memory>
 #include <random>
+#include <string>
 
 #include "core/distributed/ccl_resources.hpp"
 #include "core/distributed/socket_manager.hpp"
@@ -21,6 +22,7 @@ enum class GradMode { ENABLED, DISABLED };
 struct DistributedConfig {
     bool enable_ddp = false;
     bool enable_tp = false;
+    bool enable_cp = false;
 };
 
 class ParallelismContext {
@@ -38,10 +40,14 @@ public:
     [[nodiscard]] std::optional<uint32_t> get_tp_axis() const {
         return m_tp_axis;
     }
+    [[nodiscard]] std::optional<uint32_t> get_cp_axis() const {
+        return m_cp_axis;
+    }
 
     // Size queries (computed from mesh_device->shape())
     [[nodiscard]] const uint32_t get_ddp_size() const;
     [[nodiscard]] const uint32_t get_tp_size() const;
+    [[nodiscard]] const uint32_t get_cp_size() const;
 
     [[nodiscard]] const bool is_tp_enabled() const {
         return m_tp_axis.has_value();
@@ -49,10 +55,15 @@ public:
     [[nodiscard]] const bool is_ddp_enabled() const {
         return m_ddp_axis.has_value();
     }
+    [[nodiscard]] const bool is_cp_enabled() const {
+        return m_cp_axis.has_value();
+    }
 
 private:
     std::optional<uint32_t> m_ddp_axis = std::nullopt;
     std::optional<uint32_t> m_tp_axis = std::nullopt;
+    std::optional<uint32_t> m_cp_axis = std::nullopt;
+    uint32_t m_num_cp_devices = 1U;
     uint32_t m_num_ddp_devices = 1U;
     uint32_t m_num_tp_devices = 1U;
 };
@@ -69,6 +80,9 @@ public:
 
     std::mt19937& get_generator();
     void set_generator(const std::mt19937& generator);
+
+    [[nodiscard]] std::string get_generator_state() const;
+    void set_generator_state(const std::string& state);
 
     void set_seed(uint32_t seed);
 
@@ -109,6 +123,8 @@ public:
     [[nodiscard]] core::distributed::SocketManager& get_socket_manager();
 
     [[nodiscard]] const ParallelismContext& get_parallelism_context() const;
+
+    [[nodiscard]] bool is_parallelism_context_initialized() const;
 
     void initialize_parallelism_context(const DistributedConfig& config);
 

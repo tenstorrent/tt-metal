@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,12 +7,12 @@
 
 void kernel_main() {
     // Define all compile-time arguments at the beginning
-    constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t intermediate_cb = get_compile_time_arg_val(1);
-    constexpr uint32_t output_cb = get_compile_time_arg_val(2);
-    constexpr uint32_t tile_granularity = get_compile_time_arg_val(3);
-    constexpr uint32_t ring_size = get_compile_time_arg_val(4);
-    constexpr uint32_t slice_B = get_compile_time_arg_val(5);
+    constexpr uint32_t input_cb_id = get_named_compile_time_arg_val("cb_input_id");
+    constexpr uint32_t intermediate_cb = get_named_compile_time_arg_val("cb_interm_id");
+    constexpr uint32_t output_cb = get_named_compile_time_arg_val("cb_compute_output_id");
+    constexpr uint32_t tile_granularity = get_named_compile_time_arg_val("tile_granularity");
+    constexpr uint32_t ring_size = get_named_compile_time_arg_val("ring_size");
+    constexpr uint32_t slice_B = get_named_compile_time_arg_val("slice_B");
 
     uint32_t arg_idx = 0;
     uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
@@ -45,15 +45,24 @@ void kernel_main() {
                 }
                 cb_wait_front(input_cb_id, tile_granularity);
                 cb_wait_front(intermediate_cb, tile_granularity);
-                cb_reserve_back(output_cb, tile_granularity);
-                acquire_dst();
+
+                tile_regs_acquire();
                 for (uint32_t tile_id = 0; tile_id < num_pages_to_read; tile_id++) {
                     add_tiles(input_cb_id, intermediate_cb, tile_id, tile_id, tile_id);
-                    pack_tile(tile_id, output_cb);
                 }
-                release_dst();
+                tile_regs_commit();
+
                 cb_pop_front(input_cb_id, tile_granularity);
                 cb_pop_front(intermediate_cb, tile_granularity);
+
+                cb_reserve_back(output_cb, tile_granularity);
+
+                tile_regs_wait();
+                for (uint32_t tile_id = 0; tile_id < num_pages_to_read; tile_id++) {
+                    pack_tile(tile_id, output_cb);
+                }
+                tile_regs_release();
+
                 cb_push_back(output_cb, tile_granularity);
                 tiles_read += num_pages_to_read;
 

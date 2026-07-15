@@ -1,29 +1,39 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
 """Python modules package for ttml."""
 
-import sys
+# C++ bindings from _ttml.modules
+# Use _ttml directly (compiled .so has no __path__, so .._ttml fails)
+from _ttml.modules import InferenceMode, ModuleBase, RunMode
 
-# Import C++ bindings
-from .. import _ttml
-from .._recursive_import import _recursive_import_from_ttml
-
-if hasattr(_ttml, "modules"):
-    _recursive_import_from_ttml(_ttml.modules, sys.modules[__name__])
-
-from .._ttml.modules import RunMode, ModuleBase
-
+# Python implementations
+from .embedding import Embedding
+from .linear import LinearLayer, ColumnParallelLinear, RowParallelLinear
+from .lora import LoraConfig, LoraLinear, LoraColumnParallelLinear, LoraRowParallelLinear, LoraModel
 from .module_base import AbstractModuleBase, ModuleDict, ModuleList
-from .parameter import Buffer, Parameter
+from .parameter import Buffer, Parameter, TensorMetadata
 
 __all__ = [
-    "AbstractModuleBase",
+    # C++ bindings
+    "InferenceMode",
     "ModuleBase",
+    "RunMode",
+    # Python classes
+    "ColumnParallelLinear",
+    "RowParallelLinear",
+    "AbstractModuleBase",
+    "Buffer",
+    "Embedding",
+    "LinearLayer",
+    "LoraColumnParallelLinear",
+    "LoraConfig",
+    "LoraLinear",
+    "LoraModel",
+    "LoraRowParallelLinear",
     "ModuleDict",
     "ModuleList",
     "Parameter",
-    "Buffer",
-    "RunMode",
+    "TensorMetadata",
 ]

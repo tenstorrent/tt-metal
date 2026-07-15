@@ -1,7 +1,8 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from itertools import product
 
 import torch
@@ -22,31 +23,46 @@ class WarmupForwardMixin:
     - self.decode_forward(): method to perform decode forward pass
     """
 
-    def _create_sampling_params(self, can_sample_on_device, non_greedy_decoding_on_device, max_batch_size, mode):
+    def _create_sampling_params(self, can_sample_on_device, batch_size, greedy_only: bool = False):
         """
-        non_greedy_decoding_on_device: when True, device supports non-greedy sampling (temperature,
-        top_k, top_p, presence/frequency/repetition penalties, log_probs); warmup then includes
-        those configs. When False, only greedy decoding is warmed up (temperature=0.0, top_k=1, top_p=1.0).
+        greedy_only: when True, warmup only covers greedy decoding on device (temperature=0.0,
+        top_k=1, top_p=1.0). When False (the default), warmup also exercises non-greedy variants
+        — temperature/top_k/top_p, presence/frequency/repetition penalties, and log_probs.
         """
         if not can_sample_on_device:
             return [None]
 
         sampling_configs = []
 
-        if non_greedy_decoding_on_device:
-            for penalties, log_probs in product([True, False], repeat=2):
+        if not greedy_only:
+            # Full warmup pre-captures every penalties × log_probs permutation so
+            # no on-device-sampling request ever pays a one-time trace-capture
+            # cost on first use. Each permutation is a *separate resident trace*,
+            # though, and for large MoE models the combined trace region can run
+            # into the gigabytes (e.g. Gemma4-26B-A4B). ``TT_LEAN_DECODE_WARMUP``
+            # restricts the sweep to the plain (no-penalty, no-logprob) sampling
+            # config — what a throughput benchmark with default sampling actually
+            # exercises — trading a one-time runtime capture for the rarer
+            # penalty/logprob request shapes in exchange for a much smaller trace
+            # region. Greedy and ``None`` are still captured below.
+            if os.environ.get("TT_LEAN_DECODE_WARMUP"):
+                penalty_logprob_combos = [(False, False)]
+            else:
+                penalty_logprob_combos = list(product([True, False], repeat=2))
+
+            for penalties, log_probs in penalty_logprob_combos:
                 presence_penalty, frequency_penalty, repetition_penalty = None, None, None
 
                 if penalties:
-                    presence_penalty = [1.2] * max_batch_size if mode == "decode" else 1.2
-                    frequency_penalty = [1.2] * max_batch_size if mode == "decode" else 1.2
-                    repetition_penalty = [1.5] * max_batch_size if mode == "decode" else 1.5
+                    presence_penalty = [1.2] * batch_size
+                    frequency_penalty = [1.2] * batch_size
+                    repetition_penalty = [1.5] * batch_size
 
-                enable_log_probs = [log_probs] * max_batch_size if mode == "decode" else log_probs
+                enable_log_probs = [log_probs] * batch_size
 
-                temperature = [1.0] * max_batch_size if mode == "decode" else 1.0
-                top_k = [10] * max_batch_size if mode == "decode" else 10
-                top_p = [0.9] * max_batch_size if mode == "decode" else 0.9
+                temperature = [1.0] * batch_size
+                top_k = [10] * batch_size
+                top_p = [0.9] * batch_size
 
                 sampling_configs.append(
                     SamplingParams(
@@ -62,9 +78,9 @@ class WarmupForwardMixin:
 
         sampling_configs.append(
             SamplingParams(
-                temperature=[0.0] * max_batch_size if mode == "decode" else 0.0,
-                top_k=[1] * max_batch_size if mode == "decode" else 1,
-                top_p=[1.0] * max_batch_size if mode == "decode" else 1.0,
+                temperature=[0.0] * batch_size,
+                top_k=[1] * batch_size,
+                top_p=[1.0] * batch_size,
             )
         )
 
@@ -85,14 +101,13 @@ class WarmupForwardMixin:
         max_batch_size,
         num_blocks,
         can_sample_on_device,
-        non_greedy_decoding_on_device,
+        read_from_device=True,
+        greedy_only: bool = False,
     ):
         """
         This function is called by vLLM
         """
-        sampling_params = self._create_sampling_params(
-            can_sample_on_device, non_greedy_decoding_on_device, max_batch_size, mode="decode"
-        )
+        sampling_params = self._create_sampling_params(can_sample_on_device, max_batch_size, greedy_only=greedy_only)
 
         tokens, start_pos, page_table = self._create_decode_warmup_inputs(max_batch_size, num_blocks)
 
@@ -109,7 +124,7 @@ class WarmupForwardMixin:
                 page_table=page_table,
                 kv_cache=kv_cache,
                 enable_trace=enable_trace,
-                read_from_device=True,
+                read_from_device=read_from_device,
                 sampling_params=param,
             )
 

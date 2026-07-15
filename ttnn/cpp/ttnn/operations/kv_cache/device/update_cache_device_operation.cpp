@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -56,30 +56,20 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
         "Input tensor height ({}) must equal cache tensor height ({})",
         input_tensor.padded_shape()[1],
         cache_tensor.padded_shape()[1]);
+
     TT_FATAL(
-        cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "Cache tensor memory layout must be INTERLEAVED but got {}",
+        cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
+            cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED ||
+            (cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+             cache_tensor.memory_config().created_with_nd_shard_spec() &&
+             cache_tensor.memory_config()
+                 .is_dram()),  // ND_SHARDED layout can collapse to HEIGHT_SHARDED when each bank holds single shard
+        "Cache tensor memory layout must be INTERLEAVED, ND_SHARDED, or HEIGHT_SHARDED (created from ND shard spec) "
+        "but got {}",
         cache_tensor.memory_config().memory_layout());
     if (args.op_type == UpdateCacheOpType::FILL) {
         // TODO: If we want to support mixed precision like decode, we need to add simple compute kernel for conversion
         TT_FATAL(input_tensor.dtype() == cache_tensor.dtype(), "Input and cache tensors must have same dtype!");
-
-        // TODO: For interleaved, assume each core handles 1 tile of seq_len if kv_heads > 1
-        // For 56 cores and 2 heads, this effectively caps max seq len at 56 / 2 * 32 = 896
-        // Can generalize interleaved to infer and check arbitrary number of tiles along seq_len per core; or, add more
-        // robust logic in reader/writer loops to handle generic blocking of work For sharded, we infer number of tiles
-        // each core handles from shard so no issues there
-        if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED and
-            input_tensor.padded_shape()[1] > 1) {
-            const uint32_t num_blocks_of_work =
-                input_tensor.padded_shape()[1] * input_tensor.padded_shape()[-2] / TILE_HEIGHT;
-            const auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
-            TT_FATAL(
-                (num_blocks_of_work <= compute_with_storage_grid_size.x * compute_with_storage_grid_size.y),
-                "Number of work blocks ({}) must be <= total grid size ({})",
-                num_blocks_of_work,
-                compute_with_storage_grid_size.x * compute_with_storage_grid_size.y);
-        }
 
         if (input_tensor.is_sharded()) {
             TT_FATAL(
@@ -103,8 +93,15 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
             args.batch_idx,
             cache_tensor.padded_shape()[0]);
         TT_FATAL(
-            input_tensor.padded_shape()[-2] <= cache_tensor.padded_shape()[-2],
-            "Input tensor height ({}) must be <= cache tensor height ({})",
+            args.update_idx % TILE_HEIGHT == 0,
+            "Fill update_idx ({}) must be a multiple of TILE_HEIGHT ({})",
+            args.update_idx,
+            TILE_HEIGHT);
+        TT_FATAL(
+            args.update_idx <= cache_tensor.padded_shape()[-2] &&
+                input_tensor.padded_shape()[-2] <= cache_tensor.padded_shape()[-2] - args.update_idx,
+            "Fill update_idx ({}) + input tensor height ({}) must be <= cache tensor height ({})",
+            args.update_idx,
             input_tensor.padded_shape()[-2],
             cache_tensor.padded_shape()[-2]);
     } else if (args.op_type == UpdateCacheOpType::UPDATE) {
@@ -164,6 +161,53 @@ tt::tt_metal::operation::Hash UpdateKVCacheOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return tt::tt_metal::operation::hash_operation<UpdateKVCacheOperation>(
         args.op_type, std::vector<Tensor>{tensor_args.cache, tensor_args.input});
+}
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> UpdateKVCacheOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& /*tensor_return_value*/,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // The work-split (hence the core set) depends only on shapes, which ARE in the program hash, so
+    // the active core set is identical on every cache hit — no freeze hazard from growing cores.
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+
+    if (operation_attributes.op_type == UpdateCacheOpType::FILL) {
+        // FILL: kernel push order in FillCacheMultiCoreProgramFactory::create_descriptor is
+        // reader(0), writer(1). Only writer arg 2 (cache_start_id) is derived from the
+        // hash-excluded batch_idx/update_idx; the reader args are shape-only.
+        constexpr uint32_t kWriterKernelIdx = 1;
+        constexpr uint32_t kCacheStartIdArgIdx = 2;
+        const auto start_ids = compute_fill_cache_start_ids(operation_attributes, tensor_args);
+        dynamic_args.reserve(start_ids.size());
+        for (const auto& [core, cache_start_id] : start_ids) {
+            dynamic_args.push_back({kWriterKernelIdx, core, kCacheStartIdArgIdx, cache_start_id});
+        }
+        return dynamic_args;
+    }
+
+    // UPDATE: kernel push order in UpdateCacheMultiCoreProgramFactory::create_descriptor is
+    // reader(0), writer(1), compute(2), [optional compute(3)]. The hash-excluded values are:
+    //   reader arg 8  = cache_start_id (per core)
+    //   writer arg 7  = cache_start_id (per core)
+    //   writer arg 10 = tile_update_offset (op-wide)
+    //   writer arg 11 = batch_read_offset (op-wide)
+    constexpr uint32_t kReaderKernelIdx = 0;
+    constexpr uint32_t kWriterKernelIdx = 1;
+    constexpr uint32_t kReaderCacheStartIdArgIdx = 8;
+    constexpr uint32_t kWriterCacheStartIdArgIdx = 7;
+    constexpr uint32_t kWriterTileUpdateOffsetArgIdx = 10;
+    constexpr uint32_t kWriterBatchReadOffsetArgIdx = 11;
+
+    const auto dyn = compute_update_cache_dynamic_args(operation_attributes, tensor_args);
+    dynamic_args.reserve(dyn.cache_start_ids.size() * 4);
+    for (const auto& [core, cache_start_id] : dyn.cache_start_ids) {
+        dynamic_args.push_back({kReaderKernelIdx, core, kReaderCacheStartIdArgIdx, cache_start_id});
+        dynamic_args.push_back({kWriterKernelIdx, core, kWriterCacheStartIdArgIdx, cache_start_id});
+        dynamic_args.push_back({kWriterKernelIdx, core, kWriterTileUpdateOffsetArgIdx, dyn.tile_update_offset});
+        dynamic_args.push_back({kWriterKernelIdx, core, kWriterBatchReadOffsetArgIdx, dyn.batch_read_offset});
+    }
+    return dynamic_args;
 }
 
 Tensor update_cache(
