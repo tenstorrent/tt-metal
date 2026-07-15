@@ -362,15 +362,14 @@ void validate_matmul_input_count(
     }
 }
 
-// Bias Shape: runs only when a bias is present. Checks the bias is a single tile-row,
-// N-wide, batch-1, tilized row vector whose tile size and width line up with the
-// matmul output.
 void validate_matmul_bias_shape(
     const std::optional<const Tensor>& optional_bias,
     const tt::tt_metal::Tile& in0_tile,
     const tt::tt_metal::Tile& in1_tile,
+    const ttnn::Shape& a_shape_padded,
     const ttnn::Shape& b_shape,
-    const ttnn::Shape& b_shape_padded) {
+    const ttnn::Shape& b_shape_padded,
+    const operations::matmul::MatmulProgramConfig& chosen_program_config) {
     if (!optional_bias.has_value()) {
         return;
     }
@@ -388,12 +387,20 @@ void validate_matmul_bias_shape(
     const auto& bias_shape_padded = bias.padded_shape();
     uint32_t bias_batch_size = get_batch_size(bias_shape);
     TT_FATAL(bias_batch_size == 1, "Unsupported bias shape: batch size must be 1, got {}", bias_batch_size);
+    // MatmulMultiCoreReuseProgramConfig fuses a full per-batch [M, N] bias block, so its height must
+    // cover exactly M; every other config indexes a single bias tile-row.
+    const bool is_reuse_config =
+        std::holds_alternative<operations::matmul::MatmulMultiCoreReuseProgramConfig>(chosen_program_config);
+    const uint32_t Mt = operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, /*fuse_batch=*/false);
+    const uint32_t expected_bias_height = (is_reuse_config ? Mt : 1) * in0_tile.get_height();
     TT_FATAL(
-        bias_shape_padded[-2] % in0_tile.get_height() == 0,
-        "Unsupported bias shape: padded second last dimension of bias, "
-        "{}, not a multiple of tile height, {}",
+        bias_shape_padded[-2] == expected_bias_height,
+        "Unsupported bias shape: padded second last dimension of bias, {}, not equal to expected bias height, "
+        "{} (tile height {} x {} bias tile-row(s))",
         bias_shape_padded[-2],
-        in0_tile.get_height());
+        expected_bias_height,
+        in0_tile.get_height(),
+        is_reuse_config ? Mt : 1);
     TT_FATAL(
         bias_shape_padded[-1] == b_shape_padded[-1],
         "Unsupported bias shape: padded last dimension of bias, {}, not "
@@ -2160,7 +2167,8 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         attributes, input_tensor_a, input_tensor_b, a_shape, b_shape, chosen_program_config);
     validate_matmul_mcast1d_subdevice_worker_grid(input_tensor_a, attributes, chosen_program_config);
     validate_matmul_input_count(attributes, input_tensors, input_tensor_b, chosen_program_config);
-    validate_matmul_bias_shape(optional_bias, in0_tile, in1_tile, b_shape, b_shape_padded);
+    validate_matmul_bias_shape(
+        optional_bias, in0_tile, in1_tile, a_shape_padded, b_shape, b_shape_padded, chosen_program_config);
     validate_matmul_untilize_out(attributes, chosen_program_config);
 
     // ---- per-config validation: one std::visit over the chosen program config ----
