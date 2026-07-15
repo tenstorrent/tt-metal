@@ -213,27 +213,26 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramF
     run_args.kernel_run_args = {
         KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = {KernelRunArgs::NodeRuntimeArgs{
-                .node = core_0, .args = {{"num_pages", static_cast<uint32_t>(num_tiles)}, {"start_id", 0u}}}}},
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+                core_0, {{"num_pages", static_cast<uint32_t>(num_tiles)}, {"start_id", 0u}})},
         KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = {KernelRunArgs::NodeRuntimeArgs{
-                .node = core_0,
-                .args =
-                    {{"num_unpadded_W", static_cast<uint32_t>(output_w)},
-                     {"padded_W_diff_blocks", padded_W_diff_blocks},
-                     {"num_unpadded_Z", static_cast<uint32_t>(output_z)},
-                     {"padded_Z_diff_blocks", padded_Z_diff_blocks},
-                     {"num_unpadded_Y", static_cast<uint32_t>(output_y)},
-                     {"padded_Y_diff_blocks", padded_Y_diff_blocks},
-                     {"num_leftover_Y", num_leftover_Y},
-                     {"num_unpadded_X", static_cast<uint32_t>(output_x)},
-                     {"padded_X_size", padded_stick_size},
-                     {"num_blocks_w_input", num_blocks_w_input},
-                     {"num_blocks_w_output", num_blocks_w_output},
-                     {"num_blocks_w_diff", num_blocks_w_diff},
-                     {"block_row_size", block_row_size},
-                     {"block_row_leftover_size", block_row_leftover_size}}}}},
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+                core_0,
+                {{"num_unpadded_W", static_cast<uint32_t>(output_w)},
+                 {"padded_W_diff_blocks", padded_W_diff_blocks},
+                 {"num_unpadded_Z", static_cast<uint32_t>(output_z)},
+                 {"padded_Z_diff_blocks", padded_Z_diff_blocks},
+                 {"num_unpadded_Y", static_cast<uint32_t>(output_y)},
+                 {"padded_Y_diff_blocks", padded_Y_diff_blocks},
+                 {"num_leftover_Y", num_leftover_Y},
+                 {"num_unpadded_X", static_cast<uint32_t>(output_x)},
+                 {"padded_X_size", padded_stick_size},
+                 {"num_blocks_w_input", num_blocks_w_input},
+                 {"num_blocks_w_output", num_blocks_w_output},
+                 {"num_blocks_w_diff", num_blocks_w_diff},
+                 {"block_row_size", block_row_size},
+                 {"block_row_leftover_size", block_row_leftover_size}})},
     };
     run_args.tensor_args = {{INPUT, input_mesh_tensor}, {OUTPUT, output_mesh_tensor}};
 

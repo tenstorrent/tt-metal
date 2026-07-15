@@ -60,7 +60,6 @@ on:
       - "(Tier 3) Models Unit Tests"
       - "(Galaxy) Choose your pipeline"
       - "ttnn - run sweeps"
-      - "ttnn stress tests"
       - "Blackhole sanity tests"
       - "(Blackhole) e2e tests"
       - "(Blackhole) Demo tests"

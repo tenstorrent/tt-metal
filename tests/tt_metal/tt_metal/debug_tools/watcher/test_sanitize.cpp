@@ -53,9 +53,11 @@ enum watcher_features_t {
     SanitizeNOCAlignmentL1Read,
     SanitizeNOCZeroL1Write,
     SanitizeNOCMailboxWrite,
+    SanitizeNOCMailboxWriteUncachedAlias,
     SanitizeNOCInlineWriteDram,
     SanitizeNOCLinkedTransaction,
     SanitizeL1Overflow,
+    SanitizeL1OverflowStraddle,
     SanitizeEthSrcL1Overflow,
     SanitizeEthDestL1Overflow,
     SanitizeNOCMulticastInvalidRange,
@@ -112,13 +114,18 @@ void RunTestOnCore(
         GTEST_SKIP();
     }
 
+    // Non-IDLE_ETH cores (TENSIX/ACTIVE_ETH, all archs) run under both fast and slow dispatch.
     // IDLE_ETH cores only support slow dispatch (FD not yet implemented for them).
-    // All other cores (TENSIX/ACTIVE_ETH, including Quasar) run under fast dispatch.
-    if (fixture->IsSlowDispatch() && !is_idle_eth_core) {
-        GTEST_SKIP() << "Slow Dispatch only runs IDLE_ETH core tests";
+    if (is_idle_eth_core && !fixture->IsSlowDispatch()) {
+        GTEST_SKIP() << "IDLE_ETH core tests only run under Slow Dispatch";
     }
     if (multi_dm_race && !is_quasar) {
         GTEST_SKIP() << "Multi-DM race test only runs on Quasar";
+    }
+    // Both exercise Quasar's uncached L1 alias, which only exists on Quasar DM cores.
+    if ((feature == SanitizeNOCMailboxWriteUncachedAlias || feature == SanitizeL1OverflowStraddle) &&
+        (!is_quasar || is_eth_core)) {
+        GTEST_SKIP() << "Uncached-alias tests only apply to Quasar DM cores";
     }
 
     // TENSIX cores use the Metal 2.0 variant; ETH cores stay on the legacy kernel/API.
@@ -329,9 +336,21 @@ void RunTestOnCore(
             // This is illegal because we'd be writing to the mailbox memory
             buffer_addr = get_address_for_test(is_eth_core, HalL1MemAddrType::MAILBOX);
             break;
+        case SanitizeNOCMailboxWriteUncachedAlias:
+            // Quasar-only (skipped at the top otherwise): the mailbox is aliased into the uncached L1
+            // window (upper 4 MB, same physical memory as the cached view). Target the alias so a NoC
+            // access landing in the mailbox through it is still flagged. Complements
+            // SanitizeNOCMailboxWrite, which covers the cached view.
+            buffer_addr = get_address_for_test(is_eth_core, HalL1MemAddrType::MAILBOX) +
+                          hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
+            break;
         case SanitizeNOCInlineWriteDram: use_inline_dw_write = true; break;
         case SanitizeNOCLinkedTransaction: bad_linked_transaction = true; break;
         case SanitizeL1Overflow: l1_overflow_addr = 0xDDDDDDDD; break;
+        case SanitizeL1OverflowStraddle:
+            // 4-byte access starting 2 bytes below the top of L1, straddling the cached/uncached-alias seam.
+            l1_overflow_addr = hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) - 2;
+            break;
         case SanitizeEthSrcL1Overflow: eth_src_overflow_addr_words = 0xAAAAAAAA; break;
         case SanitizeEthDestL1Overflow: eth_dest_overflow_addr_words = 0xBBBBBBBB; break;
         case SanitizeNOCMulticastInvalidRange: {
@@ -424,30 +443,31 @@ void RunTestOnCore(
         // ETH cores still go through the legacy API.
         tt_metal::SetRuntimeArgs(program, dram_copy_kernel, core, rta_values);
     } else {
+        const experimental::NodeCoord node{core};
         experimental::ProgramRunArgs params;
         params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DRAM_COPY_KERNEL_NAME,
-            .runtime_arg_values =
-                {{experimental::NodeCoord{core},
-                  {{"local_buffer_addr", buffer_addr},
-                   {"buffer_src_addr", input_buffer_addr},
-                   {"src_noc_x", input_buf_noc_xy.x},
-                   {"src_noc_y", input_buf_noc_xy.y},
-                   {"buffer_dst_addr", output_buffer_addr},
-                   {"dst_noc_x", output_buf_noc_xy.x},
-                   {"dst_noc_y", output_buf_noc_xy.y},
-                   {"buffer_size", buffer_size},
-                   {"use_inline_dw_write", use_inline_dw_write},
-                   {"bad_linked_transaction", bad_linked_transaction},
-                   {"l1_overflow_addr", l1_overflow_addr},
-                   {"eth_src_overflow_addr", eth_src_overflow_addr_words},
-                   {"eth_dest_overflow_addr", eth_dest_overflow_addr_words},
-                   {"use_multicast_semaphore_inc", use_multicast_semaphore_inc},
-                   {"mcast_dst_end_x", mcast_dst_end_x},
-                   {"mcast_dst_end_y", mcast_dst_end_y},
-                   {"use_write_with_state", use_write_with_state},
-                   {"use_inline_dw_write_from_state", use_inline_dw_write_from_state},
-                   {"use_inline_dw_write_with_state", use_inline_dw_write_with_state}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"local_buffer_addr", buffer_addr},
+                 {"buffer_src_addr", input_buffer_addr},
+                 {"src_noc_x", input_buf_noc_xy.x},
+                 {"src_noc_y", input_buf_noc_xy.y},
+                 {"buffer_dst_addr", output_buffer_addr},
+                 {"dst_noc_x", output_buf_noc_xy.x},
+                 {"dst_noc_y", output_buf_noc_xy.y},
+                 {"buffer_size", buffer_size},
+                 {"use_inline_dw_write", use_inline_dw_write},
+                 {"bad_linked_transaction", bad_linked_transaction},
+                 {"l1_overflow_addr", l1_overflow_addr},
+                 {"eth_src_overflow_addr", eth_src_overflow_addr_words},
+                 {"eth_dest_overflow_addr", eth_dest_overflow_addr_words},
+                 {"use_multicast_semaphore_inc", use_multicast_semaphore_inc},
+                 {"mcast_dst_end_x", mcast_dst_end_x},
+                 {"mcast_dst_end_y", mcast_dst_end_y},
+                 {"use_write_with_state", use_write_with_state},
+                 {"use_inline_dw_write_from_state", use_inline_dw_write_from_state},
+                 {"use_inline_dw_write_with_state", use_inline_dw_write_with_state}}),
         }};
         experimental::SetProgramRunArgs(program, params);
     }
@@ -559,6 +579,7 @@ void RunTestOnCore(
                 input_core_virtual_coords,
                 output_buffer_addr);
         } break;
+        case SanitizeNOCMailboxWriteUncachedAlias:
         case SanitizeNOCMailboxWrite: {
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast read {} "
@@ -611,6 +632,7 @@ void RunTestOnCore(
                 output_core_virtual_coords.str(),
                 output_buffer_addr);
         } break;
+        case SanitizeL1OverflowStraddle:
         case SanitizeL1Overflow: {
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} core overflowed L1 with access to {:#x} "
@@ -837,6 +859,15 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCMailboxWrite) {
         this->devices_[0]);
 }
 
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCMailboxWriteUncachedAlias) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCMailboxWriteUncachedAlias);
+        },
+        this->devices_[0]);
+}
+
 TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCInlineWriteDram) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
@@ -908,6 +939,15 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeL1Overflow) {
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, mesh_device, core, false, SanitizeL1Overflow);
+        },
+        this->devices_[0]);
+}
+
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeL1OverflowStraddle) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeL1OverflowStraddle);
         },
         this->devices_[0]);
 }
