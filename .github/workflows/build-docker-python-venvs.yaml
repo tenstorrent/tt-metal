@@ -13,7 +13,7 @@ permissions:
 env:
   # zstd level 22 (max) produces ~5-15% smaller images vs level 3 but compresses ~10-20x slower.
   # Venv images are built infrequently; monitor push duration if this becomes a bottleneck.
-  BAKE_OUTPUT: type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true
+  BAKE_OUTPUT: type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true,provenance=false,sbom=false
 
 on:
   workflow_call:
