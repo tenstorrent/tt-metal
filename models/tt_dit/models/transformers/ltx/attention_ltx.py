@@ -251,11 +251,14 @@ class LTXAttention(Module):
             k_chunk_size=ring_sdpa_chunk_size[1],
             exp_approx_mode=False,
         )
+        # The self-attn call site reads this per-N map first (N is always a key here), so it
+        # shadows ring_sdpa_program_config — the sweep override must also force these entries or
+        # it never reaches the S1/S2 ring self-attn it targets.
         self._ring_pc_by_n = {
             n: ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=self.sdpa_worker_grid,
-                q_chunk_size=chunk[0],
-                k_chunk_size=chunk[1],
+                q_chunk_size=ring_sdpa_chunk_size[0] if _ring_chunk_override else chunk[0],
+                k_chunk_size=ring_sdpa_chunk_size[1] if _ring_chunk_override else chunk[1],
                 exp_approx_mode=False,
             )
             for (b, sp, tp, n), chunk in self.ring_sdpa_chunk_by_n.items()
