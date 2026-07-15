@@ -494,6 +494,21 @@ The global `--schema <name>` flag can appear anywhere on the command line and ap
 | `verify [original] [reconstructed]` | Compare two JSON files |
 | `find-lines <op> <i1,i2,...>` | Find line numbers for config indices in a JSON file |
 
+### Trace Validator (fail-fast, standalone)
+
+`python model_tracer/validate_trace.py [options]` — validate a master JSON (and optionally the registry) before loading/running. Runs independently of pytest and the database.
+
+| Option | Description |
+|---|---|
+| `--manifest <master.json>` | Master JSON to validate. If omitted, resolves via `TTNN_MASTER_JSON_PATH`, then the canonical `model_tracer/traced_operations/ttnn_operations_master.json`. |
+| `--registry <registry.yaml>` | Also validate a trace-selection registry: `status` enum (`draft`/`active`/`deprecated`) and pinned `targets.trace` IDs present in `registry`. |
+| `--print-resolved N` | Print resolved artifact info (op, `config_hash`, hardware, `source`) for the first N configurations. |
+| `--strict` | Treat warnings as failures. |
+
+Checks: required fields (`config_hash`; per-execution `source`, provenance via `trace_uid` or `trace_run_ids`, and `machine_info.{board_type, device_series, card_count, mesh_device_shape, device_count}`), artifact path resolution/existence, enum prefixes (`Layout.`/`StorageType.`/`DataType.`/`BufferType.`/`TensorMemoryLayout.`), and tensor shape consistency (well-formed `original_shape`/`logical_shape`, and inline `values` element count vs `original_shape`).
+
+**Exit codes**: `0` = valid; `1` = validation failed or the manifest could not be found / parsed.
+
 ---
 
 ## File Locations
@@ -501,6 +516,7 @@ The global `--schema <name>` flag can appear anywhere on the command line and ap
 | File | Purpose |
 |---|---|
 | `model_tracer/generic_ops_tracer.py` | Trace models, produce master JSON |
+| `model_tracer/validate_trace.py` | Fail-fast validation of a master JSON / registry |
 | `model_tracer/trace_selection_registry.yaml` | Targets + trace registry (source of truth for CI) |
 | `model_tracer/destructively_create_ttnn_ops_schema_v6.sql` | `ttnn_ops_v6` schema DDL |
 | `tests/sweep_framework/load_ttnn_ops_data_v2.py` | Load, reconstruct, manifest resolution |
