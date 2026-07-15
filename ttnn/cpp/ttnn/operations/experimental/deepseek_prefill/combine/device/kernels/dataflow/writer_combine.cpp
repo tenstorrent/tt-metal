@@ -13,6 +13,7 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/relay_config.hpp"
 
 // [debug] Fabric-supplied API to open/close a router's detailed flow-control logging window ([rxlog]/[txlog]).
 #include "tt_metal/fabric/hw/inc/edm_fabric/detailed_fabric_log_command.hpp"
@@ -138,7 +139,14 @@ void kernel_main() {
 
     // [debug] per-sender index (RT arg appended by the program factory); used for the eRISC combine marker
     // value written to each connected eth router's telemetry scratch[0] to open/close the flow-log window.
+    // USE_RELAY: the sender is NOT the fabric endpoint (the relay is), so the factory does not append this arg
+    // and the fabric/flow-log path below is dead code (the USE_RELAY block returns first) -- use a dummy value
+    // so the shared code still compiles without consuming an RT arg that would shift the relay pipe args.
+#if USE_RELAY
+    [[maybe_unused]] const uint32_t combine_sender_index = 0;
+#else
     [[maybe_unused]] const uint32_t combine_sender_index = get_arg_val<uint32_t>(rt_args_idx++);
+#endif
 
 #ifdef AXIS
     constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
@@ -160,6 +168,99 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(output_init_complete_semaphore_address);
     noc_semaphore_wait(output_init_complete_sem_ptr, 1);
     noc_semaphore_set(output_init_complete_sem_ptr, 0);
+#endif
+
+#if USE_RELAY
+    {
+        // USE_RELAY: the sender is NOT the fabric endpoint (the relay is). It forwards each token
+        // (route_info + payload) from its cb_route_info (c_3) into the relay's c_24 receive ring over NOC,
+        // credit-flow-controlled; the relay reads them and sends to fabric. No fabric connection / handshake
+        // here (the relay owns it). Terminates by forwarding the ROUTE_INFO_SENTINEL slot so the relay's
+        // consumer stops. (INIT_ZEROS + USE_RELAY is unsupported: the reader-barrier signal below is skipped
+        // by this early return; the test path uses init_zeros=false.)
+        //
+        // Pipe RT args, appended by the factory right after the per-core barrier NOC coords:
+        uint32_t relay_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
+        uint32_t relay_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
+        uint32_t relay_data_ready_sem_id = get_arg_val<uint32_t>(rt_args_idx++);
+        uint32_t relay_credits_sem_id = get_arg_val<uint32_t>(rt_args_idx++);
+        uint32_t relay_buf_addr_sem_id = get_arg_val<uint32_t>(rt_args_idx++);
+
+        // Discover the relay's c_24 base (published by the relay into relay_buf_addr after its init handshake).
+        volatile tt_l1_ptr uint32_t* relay_buf_addr_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(relay_buf_addr_sem_id));
+        do {
+            invalidate_l1_cache();
+        } while (*relay_buf_addr_ptr == 0);
+        const uint32_t relay_c24_base = *relay_buf_addr_ptr;
+
+        // Credit-based flow control: local counter seeded with the FULL ring budget (RELAY_SLOTS), refilled
+        // by sucking the credits sem the relay increments as it frees slots. The sem itself starts at 0 (it
+        // carries slot RETURNS only) -- the initial budget lives solely in local_credits, so the total
+        // outstanding writes can never exceed RELAY_SLOTS and the ring is never lapped.
+        const uint32_t relay_slot_size = l1_alignment + aligned_output_page_size;
+        const uint64_t relay_data_ready_noc_addr =
+            get_noc_addr(relay_noc_x, relay_noc_y, get_semaphore(relay_data_ready_sem_id));
+        const uint32_t relay_credits_l1 = get_semaphore(relay_credits_sem_id);
+        volatile tt_l1_ptr uint32_t* relay_credits_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(relay_credits_l1);
+        const uint64_t self_relay_credits_noc_addr = get_noc_addr(my_x[noc_index], my_y[noc_index], relay_credits_l1);
+        uint32_t local_credits = RELAY_SLOTS;
+        uint32_t w = 0;
+
+        // Forward one slot_size L1 region ([route_info | payload]) from `src_l1` into the relay's next c_24
+        // slot, credit-flow-controlled, then signal data_ready. The relay READS this slot (route_info in the
+        // first bytes AND the payload) as soon as it sees data_ready, so the whole slot must have LANDED in
+        // the relay's L1 before the inc: noc_async_write_barrier() waits for the write to be acked (landed),
+        // unlike noc_async_writes_flushed() which only waits for it to be sent. (Matches the untilizer->
+        // sender handoff, which barriers before its own data_ready inc.)
+        auto forward_slot = [&](uint32_t src_l1) {
+            if (local_credits == 0) {
+                while (true) {
+                    invalidate_l1_cache();
+                    if (*relay_credits_ptr > 0) {
+                        break;
+                    }
+                }
+                uint32_t n = *relay_credits_ptr;
+                noc_semaphore_inc(self_relay_credits_noc_addr, (uint32_t)(-(int32_t)n));
+                noc_async_atomic_barrier();
+                local_credits += n;
+            }
+            const uint32_t relay_slot_l1 = relay_c24_base + w * relay_slot_size;
+            const uint64_t relay_slot_noc = get_noc_addr(relay_noc_x, relay_noc_y, relay_slot_l1);
+            noc_async_write(src_l1, relay_slot_noc, relay_slot_size);
+            noc_async_write_barrier();  // wait for the slot to LAND at the relay (not just be sent)
+            noc_semaphore_inc<true>(relay_data_ready_noc_addr, 1);
+            local_credits--;
+            w = (w + 1 == RELAY_SLOTS) ? 0u : w + 1u;
+        };
+
+        // Drain c_3 (filled by reader_combine with route_info + payload, ROUTE_INFO_SENTINEL-terminated),
+        // forwarding each token's whole slot to the relay.
+        while (true) {
+            cb_wait_front(cb_route_info_id, 1);
+            const uint32_t cb_base = get_read_ptr(cb_route_info_id);
+            volatile tt_l1_ptr uint32_t* route_info = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_base);
+            if (route_info[0] == ROUTE_INFO_SENTINEL) {
+                cb_pop_front(cb_route_info_id, 1);
+                break;
+            }
+            forward_slot(cb_base);
+            cb_pop_front(cb_route_info_id, 1);
+        }
+
+        // Forward a sentinel slot so the relay's consumer terminates. Reuse the (now free) c_3 write slot
+        // as scratch: reader_combine has finished (pushed its sentinel, which we consumed) so it won't
+        // touch c_3 again.
+        const uint32_t stage_base = get_write_ptr(cb_route_info_id);
+        volatile tt_l1_ptr uint32_t* stage_route_info = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage_base);
+        stage_route_info[0] = ROUTE_INFO_SENTINEL;
+        forward_slot(stage_base);
+
+        // The relay owns the exit handshake + teardown; the sender is done once all tokens are queued.
+        return;
+    }
 #endif
 
 #ifdef DEST_CHIP_ID

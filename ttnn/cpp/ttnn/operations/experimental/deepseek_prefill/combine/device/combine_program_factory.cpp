@@ -21,6 +21,7 @@
 #include <tt-metalium/workload_descriptor.hpp>
 #include <ttnn/global_semaphore.hpp>
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/relay_config.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine {
 
@@ -241,6 +242,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     std::vector<std::vector<CoreCoord>> sender_untilizer_groups(num_cores);
     std::vector<CoreCoord> all_untilizer_cores;
     std::vector<uint32_t> untilizer_sender_map;
+    std::vector<CoreCoord> relay_cores;  // USE_RELAY: one relay ("R") core per sender battery, left of the sender
 
     // Both TILE_LAYOUT and ROW_MAJOR route dispatched_buffer through the untilizer pipeline, so
     // both use the same layout: divide the line into per-sender groups with the sender at the
@@ -299,6 +301,74 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         num_cores);
     uint32_t untilizer_cores_per_sender = num_untilizer_cores / num_cores;
     uint32_t senders_with_extra_untilizer = num_untilizer_cores % num_cores;
+
+#if USE_RELAY
+    // ===================== USE_RELAY — explicit relay-battery placement =====================
+    // Discard the default line split above and rebuild placement explicitly so each battery reads
+    // R-S-U-U-U-U, with a dedicated relay core prepended to the LEFT of the sender. Coordinates below
+    // are PHYSICAL NOC0 (== virtual for unharvested BH tensix); we invert virtual_core_from_logical_core
+    // to recover the logical worker cores the rest of the factory addresses. Both batteries sit on the
+    // bottom tensix rows (physical y=10, y=11), farthest from the eth cores:
+    //   y=10: R@x1, S@x2, U@x3, U@x4, U@x5, U@x6
+    //   y=11: R@x2, S@x7, U@x10, U@x11, U@x12, U@x13
+    TT_FATAL(num_cores == 2, "USE_RELAY currently supports exactly 2 senders (num_links>=2); got {}", num_cores);
+    {
+        // physical NOC0 (x,y) -> logical worker CoreCoord, by inverting the logical->virtual map.
+        std::map<std::pair<uint32_t, uint32_t>, CoreCoord> phys_to_logical;
+        auto cg = mesh_device->compute_with_storage_grid_size();
+        for (uint32_t ly = 0; ly < cg.y; ly++) {
+            for (uint32_t lx = 0; lx < cg.x; lx++) {
+                CoreCoord lc(lx, ly);
+                auto v = mesh_device->virtual_core_from_logical_core(lc, tt::CoreType::WORKER);
+                phys_to_logical[{(uint32_t)v.x, (uint32_t)v.y}] = lc;
+            }
+        }
+        auto phys_to_logical_core = [&](uint32_t px, uint32_t py) -> CoreCoord {
+            auto it = phys_to_logical.find({px, py});
+            TT_FATAL(
+                it != phys_to_logical.end(),
+                "USE_RELAY: requested physical worker core ({}, {}) is not a tensix worker on this device",
+                px,
+                py);
+            return it->second;
+        };
+
+        struct RelayBattery {
+            uint32_t phys_y;
+            uint32_t relay_x;
+            uint32_t sender_x;
+            std::array<uint32_t, 4> untilizer_x;
+        };
+        const std::array<RelayBattery, 2> relay_batteries = {{
+            {/*phys_y=*/10, /*relay_x=*/1, /*sender_x=*/2, {{3, 4, 5, 6}}},
+            {/*phys_y=*/11, /*relay_x=*/2, /*sender_x=*/7, {{10, 11, 12, 13}}},
+        }};
+
+        // Clear the default split's assignments and rebuild from the explicit table.
+        sender_cores.clear();
+        for (auto& g : sender_untilizer_groups) {
+            g.clear();
+        }
+        all_untilizer_cores.clear();
+        untilizer_sender_map.clear();
+        relay_cores.clear();
+
+        for (uint32_t s = 0; s < num_cores; s++) {
+            const auto& b = relay_batteries[s];
+            relay_cores.push_back(phys_to_logical_core(b.relay_x, b.phys_y));
+            sender_cores.push_back(phys_to_logical_core(b.sender_x, b.phys_y));
+            for (uint32_t u = 0; u < b.untilizer_x.size(); u++) {
+                CoreCoord uc = phys_to_logical_core(b.untilizer_x[u], b.phys_y);
+                sender_untilizer_groups[s].push_back(uc);
+                all_untilizer_cores.push_back(uc);
+                untilizer_sender_map.push_back(s);
+            }
+        }
+        num_untilizer_cores = static_cast<uint32_t>(all_untilizer_cores.size());
+        untilizer_cores_per_sender = num_untilizer_cores / num_cores;
+        senders_with_extra_untilizer = num_untilizer_cores % num_cores;
+    }
+#endif
 
     // Build sender_core_grid from selected sender cores
     std::set<CoreRange> sender_ranges_set;
@@ -471,6 +541,51 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             }}},
         });
     }
+
+#if USE_RELAY
+    // Relay cores: dedicated single-writer-kernel cores = the combine FABRIC ENDPOINT. Build the core
+    // grid + L1 buffers here; the writer kernel is created later (after writer_defines) and its fabric
+    // connection + RT args are appended in the RT-arg section.
+    CoreRangeSet relay_core_grid;
+    tt::tt_metal::KernelHandle relay_writer_kernel_id = 0;
+    {
+        std::set<CoreRange> relay_ranges_set;
+        for (const auto& rc : relay_cores) {
+            relay_ranges_set.insert(CoreRange(rc));
+        }
+        relay_core_grid = CoreRangeSet(relay_ranges_set);
+        TT_FATAL(relay_cores.size() == num_cores, "Expected {} relay cores, got {}", num_cores, relay_cores.size());
+
+        // c_24: relay receive ring. RELAY_SLOTS slots, each = route_info (l1_alignment) + one aligned
+        // output page (token), mirroring the sender's c_3 layout.
+        uint32_t relay_slot_size = l1_alignment + detail::get_aligned_page_size(output_tensor);
+        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = RELAY_SLOTS * relay_slot_size,
+            .core_ranges = relay_core_grid,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_24),
+                .data_format = tt::DataFormat::UInt8,
+                .page_size = relay_slot_size,
+            }}},
+        });
+
+        // c_5: packet-header CB on the relay (2 headers: unicast + handshake), mirroring the sender's c_5.
+        // The relay owns the fabric endpoint now, so it owns the header pool.
+        if (num_links > 0) {
+            constexpr uint32_t num_relay_packet_headers = 2;
+            auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+            desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+                .total_size = num_relay_packet_headers * packet_header_size_bytes,
+                .core_ranges = relay_core_grid,
+                .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_5),
+                    .data_format = tt::DataFormat::UInt8,
+                    .page_size = packet_header_size_bytes,
+                }}},
+            });
+        }
+    }
+#endif
 
     // Iterate over every coordinate in the mesh (full coord range derived from the
     // mesh shape) — replaces the legacy `tensor_coords` parameter, which the new
@@ -688,6 +803,29 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             }
         }
     }
+
+#if USE_RELAY
+    // sender->relay flow-control semaphores (1:1 sender:relay), scoped to each {sender, relay} pair so
+    // the id is valid on both cores:
+    //   relay_data_ready (lives on relay, init 0): sender ++ after writing a token slot; relay waits
+    //                     on a monotonic `consumed` counter.
+    //   relay_credits    (lives on sender, init 0): relay ++ when it frees a slot; sender keeps a local
+    //                     credit counter (seeded with the full ring budget of RELAY_SLOTS) and sucks this
+    //                     sem when it runs out. MUST init 0 -- it carries slot RETURNS, not the initial
+    //                     budget; seeding it to RELAY_SLOTS as well would double the sender's write budget
+    //                     to 2*RELAY_SLOTS, letting it lap the ring and overwrite unconsumed slots.
+    //   relay_buf_addr   (lives on sender, init 0): relay publishes get_write_ptr(c_24) here so the sender
+    //                     learns where to NOC-write tokens; the sender spins until it is non-zero.
+    std::vector<uint32_t> relay_data_ready_sem_ids(num_cores);
+    std::vector<uint32_t> relay_credits_sem_ids(num_cores);
+    std::vector<uint32_t> relay_buf_addr_sem_ids(num_cores);
+    for (uint32_t s = 0; s < num_cores; s++) {
+        CoreRangeSet pair_grid(std::set<CoreRange>{CoreRange(sender_cores[s]), CoreRange(relay_cores[s])});
+        relay_data_ready_sem_ids[s] = add_sema(pair_grid, 0);
+        relay_credits_sem_ids[s] = add_sema(pair_grid, 0);
+        relay_buf_addr_sem_ids[s] = add_sema(pair_grid, 0);
+    }
+#endif
 
     // Largest divisor of (hidden_size / 32) that is <= 8.  Reader_untilize pushes tiles into
     // cb_dispatched_buffer (c_0) in chunks of this size, and the untilize compute kernel consumes
@@ -1013,6 +1151,47 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     tt::tt_metal::KernelHandle writer_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
     desc.kernels.push_back(std::move(writer_kd));
 
+#if USE_RELAY
+    // Relay writer kernel = the fabric endpoint (opens eth connections, runs the init/exit handshake,
+    // drains its c_24 ring, sends tokens to fabric). Single kernel on its core -> free to use NOC_0. Gets
+    // the same fabric defines as writer_combine (DEST_CHIP_ID / DEST_MESH_ID / DIRECTIONS / AXIS). num_chips
+    // mirrors writer_combine's compile arg 13 (== dispatch_group_size).
+    {
+        std::vector<uint32_t> relay_compile_time_args = {
+            detail::get_num_pages(output_tensor),          // 0:  output_pages
+            detail::get_aligned_page_size(output_tensor),  // 1:  aligned_output_page_size
+            (uint32_t)fabric_max_packet_size,              // 2:  fabric_max_packet_size
+            l1_alignment,                                  // 3:  l1_alignment
+            static_cast<uint32_t>(num_links),              // 4:  num_links
+            static_cast<uint32_t>(topology),               // 5:  topology
+            mesh_rows,                                     // 6:  mesh_rows
+            mesh_cols,                                     // 7:  mesh_cols
+            linearized_mesh_coord,                         // 8:  linearized_mesh_coord
+            src_chip_id,                                   // 9:  src_chip_id
+            src_mesh_id,                                   // 10: src_mesh_id
+            operation_attributes.dispatch_group_size,      // 11: num_chips (== writer_combine arg 13)
+            static_cast<uint32_t>(tt::CBIndex::c_5),       // 12: cb_packet_header_id
+            static_cast<uint32_t>(tt::CBIndex::c_24),      // 13: cb_relay_buf
+        };
+        tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(relay_compile_time_args);  // 14+
+
+        tt::tt_metal::KernelDescriptor relay_writer_kd;
+        relay_writer_kd.kernel_source =
+            "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/"
+            "writer_relay.cpp";
+        relay_writer_kd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+        relay_writer_kd.core_ranges = relay_core_grid;
+        relay_writer_kd.compile_time_args = std::move(relay_compile_time_args);
+        relay_writer_kd.defines = {writer_defines.begin(), writer_defines.end()};
+        relay_writer_kd.config = tt::tt_metal::DataMovementConfigDescriptor{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::NOC_0,
+        };
+        relay_writer_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
+        desc.kernels.push_back(std::move(relay_writer_kd));
+    }
+#endif
+
     // Compute kernel on untilizer cores that untilizes dispatched_buffer data (TILE_LAYOUT only).
     // Compile-time args are shared across all untilizer cores; per-sender values (core_id,
     // num_untilizer_cores, expert range) are passed via SetRuntimeArgs below.  Initialized to 0
@@ -1232,12 +1411,32 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             writer_runtime_args_raw.push_back(noc_y);
         }
 
-        // [debug] per-sender index, used by the writer kernel to build the eRISC combine marker value
-        // (100 + chip*10 + index) written into the connected eth router's telemetry scratch[0]. Read
-        // unconditionally by the kernel (before the fabric-connection args), so append it here for all cores.
+#if USE_RELAY
+        // sender->relay pipe args (owning relay NOC coords + the 3 flow-control sem ids), appended right
+        // after the barrier NOC coords; the sender reads them in its USE_RELAY producer block. No
+        // fabric-connection args follow (the sender is not the fabric endpoint), so these are the last of
+        // the sender's RT args. NOTE: the combine_sender_index arg is NOT appended in this build -- the relay
+        // owns the flow-log window -- and writer_combine skips reading it under USE_RELAY (kept in sync).
+        {
+            auto relay_v = mesh_device->virtual_core_from_logical_core(relay_cores[core_idx], tt::CoreType::WORKER);
+            writer_runtime_args_raw.push_back((uint32_t)relay_v.x);
+            writer_runtime_args_raw.push_back((uint32_t)relay_v.y);
+            writer_runtime_args_raw.push_back(relay_data_ready_sem_ids[core_idx]);
+            writer_runtime_args_raw.push_back(relay_credits_sem_ids[core_idx]);
+            writer_runtime_args_raw.push_back(relay_buf_addr_sem_ids[core_idx]);
+        }
+#else
+        // [debug] per-sender index, used by writer_combine to build the eRISC combine marker value
+        // (100 + chip*10 + index) written into the connected eth router's telemetry scratch[0] to open/close
+        // the flow-log window. Read unconditionally by the kernel (before the fabric-connection args), so
+        // append it here for all cores.
         writer_runtime_args_raw.push_back(core_idx);
+#endif
 
-        if (num_links > 0) {
+        // USE_RELAY: the relay is the fabric endpoint, so the sender opens no fabric connection and gets
+        // no fabric-connection RT args (writer_combine returns before it would read them). The relay's
+        // connection is appended in the relay RT-arg loop below.
+        if (num_links > 0 && !USE_RELAY) {
             // Combine-axis neighbors (each a distinct fabric direction) as fabric nodes.
             std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
             for (const auto& neighbor_coordinate : neighbors) {
@@ -1299,6 +1498,58 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         desc.kernels[reader_kernel_ids[core_idx]].emplace_runtime_args(sender_core, reader_runtime_args);
         core_idx++;
     }
+
+#if USE_RELAY
+    // Relay RT args = the fabric endpoint's args. Order the relay kernel reads:
+    //   output_addr, init_sem_addr, exit_sem_addr, sender pipe args (sender NOC x/y + 3 sem ids),
+    //   combine_window_index, then the fabric-connection args (FABRIC_1D per-target unicast). output_addr is
+    //   promoted to a Buffer* below for the cache-hit fast path.
+    TT_FATAL(!is_2d_fabric, "USE_RELAY relay endpoint is FABRIC_1D only.");
+    for (uint32_t s = 0; s < num_cores; s++) {
+        const CoreCoord& relay_core = relay_cores[s];
+        std::vector<uint32_t> relay_rt_raw = {
+            output_tensor.buffer()->address(),   // 0: output_addr (promoted to Buffer* below)
+            (uint32_t)init_semaphore.address(),  // 1: init_semaphore_address
+            (uint32_t)exit_semaphore.address(),  // 2: exit_semaphore_address
+        };
+        // 3..7: sender->relay pipe args (owning sender NOC coords + the 3 flow-control sem ids). Read by
+        // the relay BEFORE open_direction_connections, so they must precede the fabric-connection args.
+        auto sender_v = mesh_device->virtual_core_from_logical_core(sender_cores[s], tt::CoreType::WORKER);
+        relay_rt_raw.push_back((uint32_t)sender_v.x);
+        relay_rt_raw.push_back((uint32_t)sender_v.y);
+        relay_rt_raw.push_back(relay_data_ready_sem_ids[s]);
+        relay_rt_raw.push_back(relay_credits_sem_ids[s]);
+        relay_rt_raw.push_back(relay_buf_addr_sem_ids[s]);
+        // 8: [debug] per-relay index (== sender index) for the eth-router detailed flow-log window id
+        // (100 + chip*10 + index). The relay is the fabric endpoint under USE_RELAY, so it -- not the sender --
+        // opens/closes the [rxlog]/[txlog] window. Read before open_direction_connections (see writer_relay).
+        relay_rt_raw.push_back(s);
+
+        if (num_links > 0) {
+            std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
+            for (const auto& neighbor_coordinate : neighbors) {
+                if (neighbor_coordinate[0] == mesh_coordinate[0] && neighbor_coordinate[1] == mesh_coordinate[1]) {
+                    continue;
+                }
+                dst_nodes.push_back(mesh_device->get_fabric_node_id(neighbor_coordinate));
+            }
+            const uint32_t core_link = s % num_links;
+            for (const auto& dst_node : dst_nodes) {
+                tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
+                    src_fabric_node_id, dst_node, core_link, desc, relay_core, relay_rt_raw);
+            }
+        }
+
+        // Promote: output_addr slot -> Buffer*, everything else stays uint32.
+        tt::tt_metal::KernelDescriptor::RTArgList relay_rt_args;
+        relay_rt_args.reserve(relay_rt_raw.size());
+        relay_rt_args.push_back(output_tensor.buffer());
+        for (size_t i = 1; i < relay_rt_raw.size(); ++i) {
+            relay_rt_args.push_back(relay_rt_raw[i]);
+        }
+        desc.kernels[relay_writer_kernel_id].emplace_runtime_args(relay_core, relay_rt_args);
+    }
+#endif
 
     // Set runtime args for untilizer cores (both layouts — reader_untilize kernel).
     // Layout: counter_ready_sem, dispatched_buffer_addr, expert_start, expert_end,
@@ -1364,8 +1615,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     {
         std::vector<CoreDesc> cores;
         int32_t next_id = 0;
-        // NoC each tensix writer uses (writer_untilize / writer_combine): preferred_noc_for_dram_write. If a
-        // relay stage is added, its cores would be appended here with their own .noc (NOC_0).
+        // NoC each tensix writer uses (writer_untilize / writer_combine): preferred_noc_for_dram_write. Under
+        // USE_RELAY the relay ('R') cores are appended below with their own NoC (NOC_0, the write-to-eth NOC).
         const int32_t worker_noc =
             static_cast<int32_t>(tt::tt_metal::detail::preferred_noc_for_dram_write(mesh_device->arch()));
 
@@ -1414,14 +1665,43 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             }
         }
 
-        // --- Sender ('S') cores: sender core_idx connects on plane (core_idx % num_links) and fans out to the
-        // eth toward EACH combine neighbor on that plane (one downstream per neighbor). ---
+        // --- Relay ('R') cores (USE_RELAY only): the fabric endpoint. relay s connects on plane (s % num_links)
+        // and fans out to the eth toward EACH combine neighbor on that plane, writing to eth over NOC_0. The
+        // sender ('S') no longer touches eth -- it writes tokens to its relay, which forwards them to fabric. ---
+        [[maybe_unused]] std::vector<int32_t> relay_id(relay_cores.size(), -1);
+#if USE_RELAY
+        for (uint32_t r = 0; r < relay_cores.size(); ++r) {
+            CoreDesc rd;
+            rd.type = 'R';
+            rd.id = next_id++;
+            rd.coord = relay_cores[r];
+            const uint32_t plane = num_links > 0 ? r % num_links : 0;
+            auto it = eth_idx_by_plane.find(plane);
+            if (it != eth_idx_by_plane.end()) {
+                for (size_t idx : it->second) {
+                    rd.downstream_ids.push_back(cores[idx].id);
+                }
+            }
+            rd.downstream_noc = 0;  // relay->eth on NOC_0 (writer_relay is the single kernel on its core)
+            relay_id[r] = rd.id;
+            cores.push_back(rd);
+        }
+#endif
+
+        // --- Sender ('S') cores: without a relay the sender connects on plane (core_idx % num_links) and fans
+        // out to the eth toward EACH combine neighbor on that plane. Under USE_RELAY it instead writes to its
+        // single owning relay (which is the fabric endpoint). Either way its NoC is worker_noc. ---
         std::vector<int32_t> sender_id(sender_cores.size(), -1);
         for (uint32_t s = 0; s < sender_cores.size(); ++s) {
             CoreDesc sd;
             sd.type = 'S';
             sd.id = next_id++;
             sd.coord = sender_cores[s];
+#if USE_RELAY
+            if (s < relay_id.size() && relay_id[s] >= 0) {
+                sd.downstream_ids.push_back(relay_id[s]);
+            }
+#else
             const uint32_t plane = num_links > 0 ? s % num_links : 0;
             auto it = eth_idx_by_plane.find(plane);
             if (it != eth_idx_by_plane.end()) {
@@ -1429,6 +1709,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                     sd.downstream_ids.push_back(cores[idx].id);
                 }
             }
+#endif
             sd.downstream_noc = worker_noc;
             sender_id[s] = sd.id;
             cores.push_back(sd);
