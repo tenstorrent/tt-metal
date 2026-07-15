@@ -20,6 +20,8 @@
 
 import pytest
 import torch
+from loguru import logger
+
 import ttnn
 
 FABRIC_1D = [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}]
@@ -40,7 +42,7 @@ def test_all_gather(mesh_device):
 
     # Gather each device's shard along dim 0: output[dim] = input[dim] * num_devices.
     output = ttnn.all_gather(tt_input, dim=0)
-    print(output.shape)  # [2, 1, 32, 256]
+    logger.info(output.shape)  # [2, 1, 32, 256]
 
 
 @pytest.mark.parametrize("device_params", FABRIC_1D, indirect=True)
@@ -57,7 +59,7 @@ def test_all_broadcast(mesh_device):
 
     # Returns a list of num_devices tensors, each identical and of the input shape.
     outputs = ttnn.all_broadcast(tt_input)
-    print(len(outputs), outputs[0].shape)  # 2 [1, 1, 32, 256]
+    logger.info(f"{len(outputs)} {outputs[0].shape}")  # 2 [1, 1, 32, 256]
 
 
 @pytest.mark.parametrize("device_params", FABRIC_1D, indirect=True)
@@ -74,7 +76,7 @@ def test_broadcast(mesh_device):
 
     # Copy the data on the sender coordinate to every device along the cluster axis.
     output = ttnn.broadcast(tt_input, ttnn.MeshCoordinate(0, 0), cluster_axis=1)
-    print(output.shape)  # [1, 1, 32, 256]
+    logger.info(output.shape)  # [1, 1, 32, 256]
 
 
 @pytest.mark.parametrize("device_params", FABRIC_1D, indirect=True)
@@ -91,7 +93,7 @@ def test_all_reduce(mesh_device):
 
     # Sum-reduce across devices; result is replicated and shape is preserved.
     output = ttnn.all_reduce(tt_input, cluster_axis=1)
-    print(output.shape)  # [1, 1, 32, 256]
+    logger.info(output.shape)  # [1, 1, 32, 256]
 
 
 @pytest.mark.parametrize("device_params", FABRIC_1D, indirect=True)
@@ -109,7 +111,7 @@ def test_reduce_scatter(mesh_device):
 
     # Sum-reduce across devices then scatter along dim 3: output[dim] = input[dim] / num_devices.
     output = ttnn.reduce_scatter(tt_input, dim=3, cluster_axis=1)
-    print(output.shape)  # [1, 1, 32, 128]
+    logger.info(output.shape)  # [1, 1, 32, 128]
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
@@ -127,7 +129,7 @@ def test_mesh_partition(mesh_device):
 
     # Keep this device's 1/num_devices slice along dim 1: output[dim] = input[dim] / num_devices.
     output = ttnn.mesh_partition(tt_input, dim=1, cluster_axis=1)
-    print(output.shape)  # [1, 2, 32, 256]
+    logger.info(output.shape)  # [1, 2, 32, 256]
 
 
 @pytest.mark.parametrize("device_params", FABRIC_1D, indirect=True)
@@ -146,7 +148,7 @@ def test_point_to_point(mesh_device):
     sender_coord = ttnn.MeshCoordinate(0, 0)
     receiver_coord = ttnn.MeshCoordinate(0, 1)
     output = ttnn.point_to_point(tt_input, sender_coord, receiver_coord, topology=ttnn.Topology.Linear)
-    print(output.shape)  # same spec as the input
+    logger.info(output.shape)  # same spec as the input
 
 
 @pytest.mark.parametrize("device_params", FABRIC_1D, indirect=True)
@@ -194,7 +196,7 @@ def test_reduce_to_root(mesh_device):
     # Reduce the three states along the line to the root coordinate; outputs match the input specs.
     root_coord = ttnn.MeshCoordinate(1, 0)
     out_l, out_s, out_m = ttnn.reduce_to_root(l, s, m, root_coord, scale_fp32=1.0, topology=ttnn.Topology.Linear)
-    print(out_l.shape, out_s.shape, out_m.shape)
+    logger.info(f"{out_l.shape} {out_s.shape} {out_m.shape}")
 
 
 @pytest.mark.parametrize("device_params", FABRIC_2D, indirect=True)
@@ -237,7 +239,7 @@ def test_all_to_all_dispatch(mesh_device):
     output_tokens, output_metadata = ttnn.all_to_all_dispatch(
         tokens, expert_indices, expert_mapping, cluster_axis=1, num_links=1
     )
-    print(output_tokens.shape, output_metadata.shape)
+    logger.info(f"{output_tokens.shape} {output_metadata.shape}")
 
 
 @pytest.mark.parametrize("device_params", FABRIC_2D, indirect=True)
@@ -281,4 +283,4 @@ def test_all_to_all_combine(mesh_device):
 
     # cluster_axis is required for all_to_all_combine.
     output = ttnn.all_to_all_combine(contributions, expert_metadata, expert_mapping, cluster_axis=1, num_links=1)
-    print(output.shape)
+    logger.info(output.shape)
