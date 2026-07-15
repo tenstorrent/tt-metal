@@ -16,6 +16,7 @@ on:
         options:
           - all
           - mistral-small-3.1-24b
+          - seamless-m4t-v2-large
           - mochi
           - wan2.2-t2v-a14b
           - z-image-turbo
@@ -26,6 +27,7 @@ on:
         type: choice
         options:
           - all
+          - bh_p150b_civ2
           - bh_quietbox_2
       build-type:
         required: false

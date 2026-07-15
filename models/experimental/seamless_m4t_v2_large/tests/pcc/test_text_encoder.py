@@ -1,0 +1,96 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Single-shot PCC test for the SeamlessM4Tv2 text encoder at sequence length 4096.
+
+Encoder design max = ``max_position_embeddings = 4096`` (HF NLLB-style sinusoidal positions).
+A single test at ``seq=4096`` exercises the single-shot block-sharded TP linears and the
+L1-resident residual / all-reduce path at the design-max sequence.
+
+Inputs are derived from the real downloaded weights (no synthetic weights). If
+``huggingface_hub`` is missing or the snapshot download fails the test is skipped — no fallback,
+per the project policy "real weights or skip".
+"""
+
+import pytest
+import torch
+from loguru import logger
+
+from tests.ttnn.utils_for_testing import check_with_pcc
+
+from models.experimental.seamless_m4t_v2_large.reference.torch_text_encoder import (
+    forward_torch_reference,
+    load_pretrained_text_encoder,
+)
+from models.experimental.seamless_m4t_v2_large.tests.pcc.pcc_test_common import (
+    legacy_device_params,
+    legacy_mesh_device_param,
+    weights_dir_or_skip,
+)
+from models.experimental.seamless_m4t_v2_large.tt.common import to_torch_replicated_first_shard
+from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
+    from_torch_uint32_rm,
+    mesh_default_device,
+)
+from models.experimental.seamless_m4t_v2_large.tt.model_preprocessing import create_text_encoder_parameters
+from models.experimental.seamless_m4t_v2_large.tt.tt_text_encoder import TTSeamlessM4Tv2Encoder
+
+PCC_THRESHOLD = 0.99
+MAX_SEQ = 4096  # HF ``max_position_embeddings``
+
+
+def _create_position_ids_from_input_ids(input_ids: torch.Tensor, padding_idx: int) -> torch.Tensor:
+    """HF helper used by SeamlessM4Tv2 positional embedding."""
+    mask = input_ids.ne(padding_idx).int()
+    incremental_indices = torch.cumsum(mask, dim=1).type_as(mask) * mask
+    return incremental_indices.long() + padding_idx
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("mesh_device", [legacy_mesh_device_param()], indirect=True)
+@pytest.mark.parametrize("device_params", [legacy_device_params()], indirect=True)
+def test_seamless_m4t_v2_text_encoder_max_seq_pcc(mesh_device, device_params, reset_seeds):
+    """Text encoder PCC ≥ 0.99 at the HF maximum sequence length (``max_position_embeddings`` = 4096).
+
+    Exercises every long-sequence code path: chunked DRAM-sharded matmul, DRAM activations, and the
+    sinusoidal position embedding at the full position table extent.
+    """
+    _ = reset_seeds
+    _ = device_params
+
+    weights_dir = weights_dir_or_skip()
+
+    with mesh_default_device(mesh_device):
+        torch.manual_seed(0)
+        encoder, cfg = load_pretrained_text_encoder(weights_dir, dtype=torch.bfloat16)
+
+        batch = 1
+        seq = MAX_SEQ
+        input_ids = torch.randint(1, min(cfg.vocab_size - 1, 2**31 - 1), (batch, seq), dtype=torch.int64)
+        attn_mask = torch.ones(batch, seq, dtype=torch.long)
+
+        with torch.no_grad():
+            position_ids = _create_position_ids_from_input_ids(input_ids, cfg.pad_token_id)
+            ref = forward_torch_reference(encoder, input_ids, attn_mask).to(torch.bfloat16)
+
+        params = create_text_encoder_parameters(encoder, device=mesh_device)
+        tt_enc = TTSeamlessM4Tv2Encoder(
+            mesh_device,
+            params,
+            layer_norm_eps=cfg.layer_norm_eps,
+            num_hidden_layers=cfg.encoder_layers,
+            num_attention_heads=cfg.encoder_attention_heads,
+            hidden_size=cfg.hidden_size,
+        )
+
+        input_ids_tt = from_torch_uint32_rm(mesh_device, input_ids)
+        position_ids_tt = from_torch_uint32_rm(mesh_device, position_ids)
+
+        out_tt = tt_enc.forward(input_ids_tt, position_ids_tt, attention_mask=None)
+        tt_cpu = (
+            to_torch_replicated_first_shard(out_tt).to(torch.bfloat16).reshape(batch, seq, cfg.hidden_size).contiguous()
+        )
+
+        ok, msg = check_with_pcc(ref, tt_cpu, pcc=PCC_THRESHOLD)
+        logger.info(f"SeamlessM4Tv2 text encoder PCC @ seq={seq}: {msg} (threshold {PCC_THRESHOLD})")
+        assert ok, msg

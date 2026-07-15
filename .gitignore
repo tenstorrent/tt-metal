@@ -170,3 +170,6 @@ models/experimental/petr/resources/*.pth
 tray_to_pcie_device_mapping.yaml
 
 .DS_Store
+
+# Local-only skill file (not tracked)
+/SKILL.md
