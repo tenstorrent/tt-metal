@@ -136,6 +136,38 @@ def wide_mm_program_config(device, M: int, K: int, N: int):
     )
 
 
+def decode_mm_program_config(device, M: int, K: int, N: int):
+    """1D-multicast config for a single-M-tile (decode) projection: broadcasts the
+    one M-tile row of activations and splits N across the widest core count that
+    divides Nt. Complements wide_mm_program_config (which handles Mt > 1). Measured
+    ~1.3-1.55x vs auto on the single-token expert matmuls
+    (tests/perf/test_expert_down_sweep.py).
+
+    Returns None (=> auto) unless every dim is tile-aligned and Mt == 1, so callers
+    can pass it for any M and only the decode shape is affected.
+    """
+    if M % TILE or K % TILE or N % TILE:
+        return None
+    Mt, Kt, Nt = M // TILE, K // TILE, N // TILE
+    if Mt != 1:
+        return None
+    grid = device.compute_with_storage_grid_size()
+    ncols = _largest_divisor_leq(Nt, grid.x * grid.y)
+    per_core_n = Nt // ncols
+    osw = next((w for w in (4, 3, 2, 1) if per_core_n % w == 0), 1)
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(grid.x, grid.y),
+        in0_block_w=_largest_divisor_leq(Kt, 8),
+        out_subblock_h=1,
+        out_subblock_w=osw,
+        per_core_M=Mt,
+        per_core_N=per_core_n,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
 # --- L1-residency seq gate for per-device (sp-sharded) residual-stream / attention
 # ops (input/post-attn RMSNorm, residual adds, QKV/create-heads/RoPE/SDPA/concat/
 # o_proj). These run on the PER-DEVICE sequence Sd = S/sp_factor. Above a sequence
