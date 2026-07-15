@@ -245,7 +245,7 @@ public:
     const distributed::MeshBuffer& mesh_buffer() const;
 
     // Returns the device the tensor is allocated on.
-    // Throws if the tensor is not allocated on a device.
+    // Returns nullptr if the tensor is not allocated on a device (on host/ deallocated).
     distributed::MeshDevice* device() const;
 
     bool is_sharded() const;
