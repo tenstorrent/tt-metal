@@ -374,3 +374,43 @@ def test_prefix_growth_invalidates_and_recaptures_trace(monkeypatch):
     assert _FakeTtnn.executions == ["new-trace"]
     assert controller.captured_prefix_len == 288
     assert torch.equal(trajectory.committed, torch.tensor([[11]]))
+
+
+def test_frozen_prefix_reuses_block0_trace_without_recapture(monkeypatch):
+    # DG_DENOISE_FROZEN_PREFIX: capture-once/replay-many — prefix growth must NOT recapture;
+    # the block-0 trace is reused (restores the pre-recapture steady serving speed).
+    monkeypatch.setenv("DG_DENOISE_FROZEN_PREFIX", "1")
+    controller = _controller(steps=1)
+    controller.captured = True
+    controller.captured_prefix_len = 32
+    controller.traces = ["block0-trace"]
+    controller.canvas_buf = _FakeTensor("canvas-buf")
+    controller.committed_buf = _FakeTensor("committed-buf")
+    controller.gumbel_mode = "argmax"
+    events = []
+    monkeypatch.setattr(controller, "release", lambda: events.append("release"))
+    monkeypatch.setattr(controller, "_capture", lambda *a, **k: events.append("capture"))
+    monkeypatch.setattr(controller, "_refresh_noise_buffers_from", lambda fn: None)
+    monkeypatch.setattr(controller, "_refresh_chunked_gumbel_seed_from", lambda fn: None)
+    monkeypatch.setattr(controller, "_validate_argmax_gumbel_from", lambda fn: None)
+    monkeypatch.setattr(TD, "_ids_to_torch", lambda tensor: torch.tensor([[13]], dtype=torch.long))
+    adapter = SimpleNamespace(
+        prompt_len=288,  # prefix grew 32 -> 288
+        q_rope_offset=288,
+        update_canvas_rope_buffers=lambda start_pos: None,
+        reset_signal_buffer=lambda: None,
+    )
+
+    trajectory = controller.denoise_block(
+        adapter,
+        _FakeTensor("init-canvas"),
+        controller.config,
+        gumbel_noise_fn=lambda step: None,
+        noise_tokens_fn=lambda step: _FakeTensor("noise"),
+    )
+
+    # No release, no recapture; the frozen block-0 trace replays and captured_prefix_len is unchanged.
+    assert events == []
+    assert controller.captured_prefix_len == 32
+    assert _FakeTtnn.executions == ["block0-trace"]
+    assert torch.equal(trajectory.committed, torch.tensor([[13]]))

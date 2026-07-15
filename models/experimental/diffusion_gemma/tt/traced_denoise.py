@@ -92,6 +92,26 @@ def traced_denoise_enabled() -> bool:
     return os.environ.get("DG_DENOISE_TRACED", "0").lower() in ("1", "true", "yes", "on")
 
 
+def frozen_prefix_enabled() -> bool:
+    """Capture-once / replay-many: reuse the block-0 trace across blocks instead of
+    RECAPTURING when the committed prefix grows (``DG_DENOISE_FROZEN_PREFIX``, default OFF).
+
+    Restores the pre-``ec5b64b4891`` steady serving speed (~16-18 tok/s vs ~3.6 with
+    per-block recapture): the growing prefix is the only shape that forces recapture
+    (RoPE is already a constant-shape written input), so freezing it makes the trace
+    shape invariant → one capture replays every block.
+
+    TRADE-OFF (why this is opt-in, not the default): the block-0 trace baked the prefix
+    KV slice at block-0 length, so replayed blocks read only the block-0 prefix — later
+    blocks do NOT attend to earlier blocks' committed KV. This is **bit-correct for
+    single-block generation** (no growth) and the historical perf-sweep mode ("hold a
+    prompt-only prefix"); for multi-block it trades cross-block fidelity for speed. The
+    correct-and-fast path (capture-once WITH growing-prefix visibility) needs the
+    fixed-shape paged/reveal-mask read — see ``doc/optimize_perf/denoise_replay_recovery_plan.md``.
+    """
+    return os.environ.get("DG_DENOISE_FROZEN_PREFIX", "0").lower() in ("1", "true", "yes", "on")
+
+
 def _trace_metric(event: str, **fields) -> None:
     """Emit a stable, machine-readable live-serving trace marker."""
     logger.info("DG_TRACE_METRIC " + json.dumps({"event": event, **fields}, sort_keys=True, default=str))
@@ -433,13 +453,22 @@ class TracedDenoiseController:
         start_pos = getattr(adapter, "q_rope_offset", None)
         current_prefix_len = int(getattr(adapter, "prompt_len", 0))
         if self.captured and self.captured_prefix_len is not None and self.captured_prefix_len != current_prefix_len:
-            _trace_metric(
-                "invalidate_prefix_growth",
-                captured_prefix_len=self.captured_prefix_len,
-                next_prefix_len=current_prefix_len,
-                **self.stats(),
-            )
-            self.release()
+            if frozen_prefix_enabled():
+                # Capture-once: reuse the block-0 trace (frozen prefix) — no recapture.
+                _trace_metric(
+                    "frozen_prefix_reuse",
+                    captured_prefix_len=self.captured_prefix_len,
+                    next_prefix_len=current_prefix_len,
+                    **self.stats(),
+                )
+            else:
+                _trace_metric(
+                    "invalidate_prefix_growth",
+                    captured_prefix_len=self.captured_prefix_len,
+                    next_prefix_len=current_prefix_len,
+                    **self.stats(),
+                )
+                self.release()
         captured_this_block = not self.captured
 
         if not self.captured:
@@ -941,13 +970,21 @@ class EarlyHaltTracedDenoiseController(MultiStepTracedDenoiseController):
 
         current_prefix_len = int(getattr(adapter, "prompt_len", 0))
         if self.captured and self.captured_prefix_len is not None and self.captured_prefix_len != current_prefix_len:
-            _trace_metric(
-                "invalidate_prefix_growth",
-                captured_prefix_len=self.captured_prefix_len,
-                next_prefix_len=current_prefix_len,
-                **self.stats(),
-            )
-            self.release()
+            if frozen_prefix_enabled():
+                _trace_metric(
+                    "frozen_prefix_reuse",
+                    captured_prefix_len=self.captured_prefix_len,
+                    next_prefix_len=current_prefix_len,
+                    **self.stats(),
+                )
+            else:
+                _trace_metric(
+                    "invalidate_prefix_growth",
+                    captured_prefix_len=self.captured_prefix_len,
+                    next_prefix_len=current_prefix_len,
+                    **self.stats(),
+                )
+                self.release()
         captured_this_block = not self.captured
         if not self.captured:
             try:
