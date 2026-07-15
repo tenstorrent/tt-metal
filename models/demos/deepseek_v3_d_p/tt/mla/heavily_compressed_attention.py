@@ -16,13 +16,6 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
 
 
-def rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
-    input_dtype = x.dtype
-    x = x.to(torch.float32)
-    x = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps)
-    return weight * x.to(input_dtype)
-
-
 def compress_rope_cos_sin(
     n_windows: int, compress_rate: int, rope_head_dim: int, theta: float
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -73,11 +66,10 @@ class TtHCACompressor(LightweightModule):
         self.compress_rope_theta = float(compress_rope_theta)
         self.rms_norm_eps = float(rms_norm_eps)
 
-        self.kv_norm_weight = kv_norm_weight.detach().float().contiguous()
-
         self.wkv = self._to_tt_linear_weight(kv_proj_weight)
         self.wgate = self._to_tt_linear_weight(gate_proj_weight)
         self.position_bias = self._from_torch(position_bias.detach().reshape(1, 1, self.compress_rate, self.head_dim))
+        self.kv_norm_weight = self._from_torch(kv_norm_weight.detach().reshape(1, 1, 1, self.head_dim))
         self.trans_mat = ttnn.from_torch(
             get_rot_transformation_mat(),
             device=device,
@@ -147,15 +139,14 @@ class TtHCACompressor(LightweightModule):
             kv = ttnn.reshape(kv, [batch, n_windows, self.compress_rate, self.head_dim])
             pooled = ttnn.sum(ttnn.multiply(kv, weights), dim=2)
 
-            # host boundary: RMSNorm on host (fp32); RoPE on device
-            pooled = ttnn.to_torch(pooled).float()
-            compressed = rms_norm(pooled, self.kv_norm_weight.to(pooled.dtype), self.rms_norm_eps)
+            # device: RMSNorm over head_dim
+            compressed = ttnn.reshape(pooled, [batch, 1, n_windows, self.head_dim])
+            compressed = ttnn.rms_norm(compressed, weight=self.kv_norm_weight, epsilon=self.rms_norm_eps)
 
             # RoPE (device) on the trailing rope_head_dim channels only (op caps head_dim <= 256).
-            compressed_dev = self._from_torch(compressed.unsqueeze(1))
             nope_dim = self.head_dim - self.rope_head_dim
-            nope = ttnn.slice(compressed_dev, [0, 0, 0, 0], [batch, 1, n_windows, nope_dim])
-            rope = ttnn.slice(compressed_dev, [0, 0, 0, nope_dim], [batch, 1, n_windows, self.head_dim])
+            nope = ttnn.slice(compressed, [0, 0, 0, 0], [batch, 1, n_windows, nope_dim])
+            rope = ttnn.slice(compressed, [0, 0, 0, nope_dim], [batch, 1, n_windows, self.head_dim])
             cos, sin = compress_rope_cos_sin(
                 n_windows, self.compress_rate, self.rope_head_dim, self.compress_rope_theta
             )
