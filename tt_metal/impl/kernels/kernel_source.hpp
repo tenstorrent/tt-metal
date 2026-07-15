@@ -6,6 +6,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <sstream>
 #include <string>
 
@@ -28,6 +29,17 @@ struct KernelSource {
             return this->path_.stem().string();
         }
         return "Kernel_Source_Code";
+    }
+
+    // Build-argument-independent identifier that is unique per distinct source: the full file path for
+    // file kernels, a content hash for inline source. Unlike name() (just the file stem, which recurs
+    // across ops), this uniquely identifies the source, so the profiler can assign one zone file-id per
+    // source instead of one per compile variant. Contains no tab/newline, so it is registry-line safe.
+    std::string profiler_zone_src_id() const {
+        if (this->source_type_ == SourceType::FILE_PATH) {
+            return this->path_.string();
+        }
+        return "inline:" + std::to_string(std::hash<std::string>{}(this->source_));
     }
 
     // Returns the actual source code (file content or source string)

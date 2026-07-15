@@ -605,10 +605,18 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
 
     // Give this translation unit a stable, globally-unique file id so KERNEL_PROFILER zone ids are
     // (file_id << LOCAL_BITS) | local -- collision-free by construction (see kernel_profiler.hpp).
-    // Keyed on the config-specific object path so a cached kernel keeps the id baked into its binary.
+    // Key it on the kernel's source identity + processor, NOT the per-build output path: every compile
+    // variant of a source (different shapes/dtypes/compile-time args) has identical zone source
+    // locations, so they must share one id. Keying per output path instead assigns a fresh id to every
+    // variant, which exhausts the id space on machines whose kernel cache accumulates thousands of
+    // variants (e.g. CI running many models). Firmware TUs (settings == null) fall back to the
+    // config-stable output path, which is already built once per config.
     if (env_.get_rtoptions().get_profiler_enabled()) {
         const std::string registry_path = env_.get_out_root_path() + ".profiler_zone_file_ids";
-        const uint32_t file_id = get_or_assign_profiler_file_id(registry_path, out_dir + this->objs_[src_index]);
+        const std::string key = (settings != nullptr)
+                                    ? settings->get_profiler_zone_src_id() + '\x1f' + this->target_name_
+                                    : out_dir + this->objs_[src_index];
+        const uint32_t file_id = get_or_assign_profiler_file_id(registry_path, key);
         defines += fmt::format("-DKERNEL_PROFILER_FILE_ID={} ", file_id);
     }
 

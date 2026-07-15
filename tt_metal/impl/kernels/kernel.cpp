@@ -210,6 +210,8 @@ void Kernel::register_kernel_elf_paths_with_watcher(IDevice& device, const std::
 
 std::string Kernel::name() const { return this->kernel_src_.name(); }
 
+std::string Kernel::get_profiler_zone_src_id() const { return this->kernel_src_.profiler_zone_src_id(); }
+
 const std::set<CoreCoord>& Kernel::logical_cores() const { return this->logical_cores_; }
 
 std::vector<CoreRange> Kernel::logical_coreranges() const {

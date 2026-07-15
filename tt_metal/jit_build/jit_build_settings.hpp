@@ -51,6 +51,11 @@ class JitBuildSettings {
 public:
     // Returns the full kernel name
     virtual const std::string& get_full_kernel_name() const = 0;
+    // Returns a build-argument-independent identifier for the kernel's source, stable across every
+    // compile variant. Used to assign a single profiler zone file-id per source rather than one per
+    // build-args hash (see JitBuildState::compile_one). Defaults to the full (hashed) name for settings
+    // with no distinct source identity.
+    virtual std::string get_profiler_zone_src_id() const { return this->get_full_kernel_name(); }
     // Returns the compiler optimization level
     virtual std::string_view get_compiler_opt_level() const = 0;
     // Returns the linker optimization level
