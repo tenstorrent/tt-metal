@@ -3,18 +3,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Kill stray host processes still holding a /dev/tenstorrent handle.
+"""SIGKILL stray host processes still holding a /dev/tenstorrent handle.
 
-A stale or crashed process from a previous CI run can keep the device's
-hugepage sysmem NOC space and TLB windows claimed. A board reset
-(``tt-smi -glx_reset_auto``) resets the ASIC but does NOT kill that host
-process or release its kernel-side resources, so the next cluster open fails
-with "tt_tlb_alloc failed with error code -12" / "another process is already
-holding the sysmem NOC address space". The UMD warning explicitly says to find
-and kill those processes, then retry -- which is what this script does.
-
-Run as root (e.g. via sudo) so /proc/<pid>/fd of processes owned by other users
-(such as leftover privileged containers) is readable.
+A leftover process from a previous CI run keeps the device's sysmem/TLB windows
+claimed, which a board reset does not release, so the next cluster open fails
+with "tt_tlb_alloc failed with error code -12". Run as root (via sudo) so other
+users' /proc/<pid>/fd (e.g. leftover privileged containers) is readable.
 """
 
 import os
