@@ -25,8 +25,14 @@ from models.common.lightweightmodule import LightweightModule
 from .gate import HunyuanTtTopKGate
 from .mlp import HunyuanTtMLP
 from ..cache import cache_file
-from ..matmul_utils import l1_sharded_linear
-from ..parallel_utils import moe_full_seq_mem_config, resid_mem_config, sp_gather, sp_shard
+from ..parallel_utils import (
+    decode_mm_program_config,
+    moe_full_seq_mem_config,
+    resid_mem_config,
+    sp_gather,
+    sp_shard,
+    wide_mm_program_config,
+)
 
 
 class HunyuanTtMoEParallel(LightweightModule):
@@ -200,12 +206,22 @@ class HunyuanTtMoEParallel(LightweightModule):
         """Run local expert `el` (its weight slice differs per device)."""
         wgu = self.w_gate_up_experts[el]  # [H, 2I] (different global expert per device)
         wdn = self.w_down_experts[el]  # [I, H]
-        # l1_sharded_linear self-gates the two matmuls (small-M -> L1 width-sharded,
-        # large full-sequence M -> DRAM). The transient SwiGLU multiply runs on the
-        # full gathered sequence, so its L1 buffer scales with S and clashes with the
-        # ops' static CBs past the measured bound — follow the seq-length L1->DRAM gate.
+        # The transient SwiGLU multiply runs on the full gathered sequence, so its L1
+        # buffer scales with S and clashes with the ops' static CBs past the measured
+        # bound — follow the seq-length L1->DRAM gate.
         mc = moe_full_seq_mem_config(x.shape[1])
-        gu = l1_sharded_linear(x, wgu, compute_kernel_config=self.compute_kernel_config)
+        # gate_up (M x 4096 x 6144): same M-dependent schedule as down below — small/mid M
+        # (Mt 1-7) wins 1.3-1.36x with the 1D split-N config vs auto; large M uses wide_mm.
+        M_gu, K_gu, N_gu = x.shape[-2], x.shape[-1], wgu.shape[-1]
+        Mt_gu = (M_gu + 31) // 32
+        gu_pc = (
+            wide_mm_program_config(self.mesh_device, M_gu, K_gu, N_gu)
+            if Mt_gu >= 8
+            else decode_mm_program_config(self.mesh_device, M_gu, K_gu, N_gu)
+        )
+        gu = ttnn.linear(
+            x, wgu, compute_kernel_config=self.compute_kernel_config, memory_config=mc, program_config=gu_pc
+        )
         x1, x2 = ttnn.chunk(gu, 2, dim=-1)
         ttnn.deallocate(gu)
         # SwiGLU x1 * silu(x2), with SiLU folded into the multiply's LHS activation
@@ -214,11 +230,22 @@ class HunyuanTtMoEParallel(LightweightModule):
         h = ttnn.multiply(x2, x1, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=mc)
         ttnn.deallocate(x1)
         ttnn.deallocate(x2)
-        # Down-proj (M x 3072 x 4096) schedule is M-dependent (measured,
-        # tests/perf/test_expert_down_sweep.py): Mt==1 decode -> width-sharded L1,
-        # mid M (Mt 2-7) -> ttnn auto (25-33% faster than wide_mm), large M (Mt >= 8)
-        # -> rectangular-grid 2D-mcast. l1_sharded_linear applies exactly this policy.
-        out = l1_sharded_linear(h, wdn, compute_kernel_config=self.compute_kernel_config)
+        # Down-proj (M x 3072 x 4096) schedule is M-dependent (measured, both L1/DRAM
+        # input, tests/perf/test_expert_down_sweep.py::test_expert_down_threshold):
+        #   * small/mid M (Mt 1-7, decode + M=64 recaption): 1D split-N config, 1.3-1.83x
+        #     vs auto (auto under-distributes N; the 2D wide_mm is ~1.7x SLOWER here).
+        #   * large M (>= 256 / Mt >= 8): auto mis-schedules onto 110 cores at ~3% FLOP
+        #     and degrades catastrophically with M (5.3 ms at M=2048 L1), so force the
+        #     rectangular-grid wide_mm_program_config (360 us at 2048).
+        M_down, K_down, N_down = h.shape[-2], h.shape[-1], wdn.shape[-1]
+        Mt = (M_down + 31) // 32
+        if Mt >= 8:
+            down_pc = wide_mm_program_config(self.mesh_device, M_down, K_down, N_down)
+        else:
+            down_pc = decode_mm_program_config(self.mesh_device, M_down, K_down, N_down)
+        out = ttnn.linear(
+            h, wdn, compute_kernel_config=self.compute_kernel_config, memory_config=mc, program_config=down_pc
+        )
         ttnn.deallocate(h)
         return out
 

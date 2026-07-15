@@ -101,6 +101,13 @@ def wide_mm_program_config(device, M: int, K: int, N: int):
     Returns None (=> auto) unless every dim is tile-aligned and M is more than one
     tile (the single-M-tile decode path uses the 1D config instead), so it is always
     safe to pass at any tp_factor / seq.
+
+    L1 guard: this 2D config has no out_block sub-tiling — each core materializes its
+    full per_core_M x per_core_N output block plus the double-buffered in0/in1 blocks
+    in L1. At large Mt (e.g. the T2I denoise QKV proj at seq~10.5k -> Mt~328) the
+    per-core block exceeds the 1.5 MB L1 (a hard TT_THROW in program.cpp CB validation),
+    so if no L1-fitting block is found we fall back to None (=> auto, which DOES
+    out_block-iterate and handles arbitrary M, just slower on the mid-large range).
     """
     if M % TILE or K % TILE or N % TILE:
         return None
@@ -116,12 +123,27 @@ def wide_mm_program_config(device, M: int, K: int, N: int):
     per_core_M = Mt // gy
     per_core_N = Nt // gx
 
+    # L1 guard (per_core cap): the CBs (in0/in1/out + fp32 partials + mcast buffers)
+    # scale with the per-core work per_core_M x per_core_N, and this config has no
+    # out_block sub-tiling. Exact byte modeling is unreliable (subblock/fp32-acc/mcast
+    # internals) AND the real ceiling is lower in-graph than in isolation because the
+    # resident expert weights / KV / residual stream already occupy L1 on every core
+    # (measured: the T2I denoise o_proj at per_core_M=13 x per_core_N=16 = 208 tiles
+    # fits in isolation but TT_THROWs at ~1.86 MB in the full forward). So cap the
+    # per-core work conservatively — comfortably above the small mid-M expert/proj
+    # blocks this is meant to accelerate (M<=2048 / Mt<=64 => <=128 tiles) but below
+    # the in-graph-crashing 208 — and fall back to auto (which out_block-iterates and
+    # is fine at large M) above it.
+    PER_CORE_TILE_CAP = 160
+    if per_core_M * per_core_N > PER_CORE_TILE_CAP:
+        return None
+
+    # K reduction chunk: a divisor of Kt, capped so the in0/in1 blocks stay small.
+    in0_block_w = _largest_divisor_leq(Kt, 4)
+
     # out_subblock_h * out_subblock_w <= 4 (dest register tiles). Prefer wide subblocks.
     out_subblock_w = next((w for w in (4, 3, 2, 1) if per_core_N % w == 0), 1)
     out_subblock_h = next((hh for hh in range(4 // out_subblock_w, 0, -1) if per_core_M % hh == 0), 1)
-
-    # K reduction chunk: a divisor of Kt, capped so the in0/in1 blocks stay L1-sized.
-    in0_block_w = _largest_divisor_leq(Kt, 4)
 
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(gx, gy),
@@ -137,19 +159,24 @@ def wide_mm_program_config(device, M: int, K: int, N: int):
 
 
 def decode_mm_program_config(device, M: int, K: int, N: int):
-    """1D-multicast config for a single-M-tile (decode) projection: broadcasts the
-    one M-tile row of activations and splits N across the widest core count that
-    divides Nt. Complements wide_mm_program_config (which handles Mt > 1). Measured
-    ~1.3-1.55x vs auto on the single-token expert matmuls
-    (tests/perf/test_expert_down_sweep.py).
+    """1D-multicast config for a small-M (decode / mid-M) projection: broadcasts the
+    M-tile rows of activations and splits N across the widest core count that divides
+    Nt. Complements wide_mm_program_config (which handles the LARGE-M / Mt>=8 prefill
+    regime, where a 2D rectangular grid is needed). Measured on hardware:
+      * Mt==1 (single-token decode): ~1.3-1.55x vs auto.
+      * Mt 2-7 (mid-M, e.g. the M=64 recaption gate_up/down): 1.3-1.83x vs auto — auto
+        under-distributes N at these M and leaves the 110-core grid idle (the `wide_mm`
+        2D config is ~1.7x SLOWER here; only this 1D split-N config wins). PCC 0.9999.
+        (tests/perf/test_expert_down_sweep.py; benchmarked gate_up 100->74us, down 64->39us.)
 
-    Returns None (=> auto) unless every dim is tile-aligned and Mt == 1, so callers
-    can pass it for any M and only the decode shape is affected.
+    Returns None (=> auto) unless every dim is tile-aligned and Mt <= 7, so callers can
+    pass it for any M — the large-M (Mt>=8) prefill shape falls through to wide_mm and
+    the caller's own auto path.
     """
     if M % TILE or K % TILE or N % TILE:
         return None
     Mt, Kt, Nt = M // TILE, K // TILE, N // TILE
-    if Mt != 1:
+    if Mt < 1 or Mt >= 8:
         return None
     grid = device.compute_with_storage_grid_size()
     ncols = _largest_divisor_leq(Nt, grid.x * grid.y)
