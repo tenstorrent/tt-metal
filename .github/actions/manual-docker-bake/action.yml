@@ -68,6 +68,24 @@ inputs:
     required: false
     default: ""
 
+  enrich-sbom:
+    description: >-
+      After a successful attested push, replace BuildKit's SBOM attestation with
+      one enriched from the image's own OCI labels. BuildKit generates the SBOM
+      by mounting the image rootfs to the scanner as a plain directory (see
+      moby/buildkit sbom-protocol.md), so the scanner never sees the image
+      Config/Labels and the SBOM's describing package always reports
+      licenseDeclared/downloadLocation/supplier = NOASSERTION - even though the
+      real values live in the image's org.opencontainers.image.* labels one
+      manifest over. syft can't map those labels into SPDX on its own either
+      (anchore/syft#3098). When "true" (and enable-attestations is also true),
+      the manual-docker-bake action rescans each pushed image with syft, patches
+      the describing package from the labels, and rebuilds the attestation
+      manifest in place, preserving BuildKit's exact OCI shape. Set "false" to
+      keep BuildKit's raw (NOASSERTION) SBOM. See tenstorrent/tt-metal#49882.
+    required: false
+    default: "true"
+
 runs:
   using: "composite"
   steps:
@@ -84,6 +102,7 @@ runs:
         INPUT_USE_DEFAULT_BUILDER: ${{ inputs.use-default-builder }}
         INPUT_VALIDATE_IMAGES: ${{ inputs.validate-images }}
         INPUT_ENABLE_ATTESTATIONS: ${{ inputs.enable-attestations }}
+        INPUT_ENRICH_SBOM: ${{ inputs.enrich-sbom }}
         INPUT_HARBOR_PREFIX: ${{ inputs.harbor-prefix }}
       run: |
         set -euo pipefail
@@ -127,6 +146,27 @@ runs:
             BAKE_SETS+=(--set "${t}.attest=type=provenance,disabled=true")
             BAKE_SETS+=(--set "${t}.attest=type=sbom,disabled=true")
           done
+        fi
+
+        # Install syft + oras once per job when SBOM enrichment is requested (see
+        # enrich-sbom input). Pinned versions - do not float to latest.
+        SYFT_VERSION="v1.18.1"
+        ORAS_VERSION="1.2.0"
+        if [ "${INPUT_ENRICH_SBOM}" = "true" ] && [ "${INPUT_ENABLE_ATTESTATIONS}" = "true" ]; then
+          if ! command -v syft >/dev/null 2>&1; then
+            echo "Installing syft ${SYFT_VERSION}..."
+            curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
+              | sh -s -- -b /usr/local/bin "${SYFT_VERSION}"
+          fi
+          if ! command -v oras >/dev/null 2>&1; then
+            echo "Installing oras ${ORAS_VERSION}..."
+            curl -sSfL "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz" \
+              -o /tmp/oras.tar.gz
+            mkdir -p /tmp/oras-install
+            tar -xzf /tmp/oras.tar.gz -C /tmp/oras-install
+            install /tmp/oras-install/oras /usr/local/bin/oras
+            rm -rf /tmp/oras.tar.gz /tmp/oras-install
+          fi
         fi
 
         retries="${INPUT_RETRIES}"
@@ -282,6 +322,29 @@ runs:
                       "'docker buildx imagetools inspect ${target_tag} --format \"{{json .SBOM}}\"')"
                   else
                     echo "  WARNING: no SBOM attestation found for $target_tag"
+                  fi
+
+                  # Enrich the SBOM attestation from the image's OCI labels,
+                  # replacing BuildKit's NOASSERTION directory-scan SBOM in place.
+                  # A target with no attestation-manifest is a safe no-op (handled
+                  # inside the script); a real failure hard-fails the job.
+                  if [ "${INPUT_ENRICH_SBOM}" = "true" ] && [ "${INPUT_ENABLE_ATTESTATIONS}" = "true" ]; then
+                    echo "  Enriching SBOM attestation for $target_tag from OCI labels..."
+                    "${GITHUB_ACTION_PATH}/../../scripts/enrich-sbom.sh" "$target_tag"
+                    ENRICHED_SBOM_JSON=$(docker buildx imagetools inspect "$target_tag" --format '{{json .SBOM}}' 2>/dev/null || echo "")
+                    if [ -n "$ENRICHED_SBOM_JSON" ] && [ "$ENRICHED_SBOM_JSON" != "null" ]; then
+                      echo "  SBOM attestation enriched - describing package now reflects OCI labels:"
+                      echo "$ENRICHED_SBOM_JSON" | jq -r '
+                        .SPDX as $s |
+                        "    documentNamespace: " + ($s.documentNamespace // "?"),
+                        ($s.packages // [] | .[0] // {} | 
+                          "    licenseDeclared: " + (.licenseDeclared // "NOASSERTION"),
+                          "    downloadLocation: " + (.downloadLocation // "NOASSERTION"),
+                          "    supplier: " + (.supplier // "NOASSERTION"))
+                      ' 2>/dev/null || echo "    (could not parse enriched SBOM JSON)"
+                    else
+                      echo "  WARNING: could not re-fetch SBOM after enrichment for $target_tag"
+                    fi
                   fi
                 fi
               else
