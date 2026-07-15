@@ -386,6 +386,9 @@ MoEComputeDeviceOperation::tensor_return_value_t MoEComputeDeviceOperation::crea
             matmul_output_tensor};
     }
 
+    // The combine output buffer is zero-initialized upstream (MoeComputeOp::
+    // allocateBuffers binds a ttnn.zeros as optional_output_tensor) so the
+    // top-k slots not written by this device's local experts read as 0.
     const auto& combine_output_tensor = tensor_args.optional_output_tensor.value_or(
         create_device_tensor(output_specs[5], tensor_args.tilize_input_tensor.device()));
 
