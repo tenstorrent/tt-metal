@@ -47,6 +47,7 @@ class Operand:
     acc_atol: float = 0.0
     acc_rtol: float = 0.0
     acc_pcc: float = 1.0
+    buf_desc_id: Optional[int] = None
 
     def __post_init__(self):
         self.tile_count_x = self.dimensions[1] // self.tile_shape.total_col_dim()

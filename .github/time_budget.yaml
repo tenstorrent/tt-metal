@@ -165,6 +165,10 @@ ttsim:
 shield:
   e2e:
     wh_llmbox: 110
+  e2e_tier3:
+    bh_p150b_civ2: 18
+  unit_tier3:
+    bh_p150b_civ2: 20
   unit:
     wh_n150: 90
     wh_n300: 115
@@ -177,7 +181,7 @@ scaleout:
     cpu_medium_prio: 10
     wh_n300_civ2: 10
   unit:
-    cpu_medium: 100 # 5 fabric CPU-only shards × 15 min + bh-blitz-decode × 25 min (grown suite)
+    cpu_medium: 225 # fabric CPU-only shards: unit/sp4-glx/subtorus/pod-revAB/pod-revC ×15 + bh-slices ×25 + pod-llama ×55 + bh-subtorus-sc20 ×40 + bh-blitz-decode ×30
     wh_llmbox: 60
     wh_galaxy: 25
   stress:
@@ -256,7 +260,7 @@ triage:
 llk:
   pr_gate:
     wh_n150_civ2: 40
-    bh_p150b_civ2: 40
+    bh_p150b_civ2_viommu_prio: 40
   unit:
     wh_n150_civ2: 40
     wh_n300_civ2: 40
@@ -284,14 +288,21 @@ models:
     wh_n300_civ2: 5
     bh_p150b_civ2_viommu: 110
     bh_p300: 10
+  frequent:
+    wh_n150: 765
+    wh_n300: 765
+    wh_n150_civ2: 30
+    wh_n300_civ2: 30
+    bh_p150b_civ2: 120
   stress:
     wh_galaxy_perf: 500
   e2e:
     wh_llmbox: 198
-    bh_p150b_civ2: 63
+    bh_p150b_civ2: 8
     bh_p300: 20
     bh_loudbox: 190
     bh_quietbox_2: 80
+    bh_spsg: 20 # single galaxy MLA chunked prefill
   # Per-tier e2e budgets, consumed by the tiered model pipelines;
   # The plain `e2e` key is used for the non-tiered pipelines (blackhole-e2e, t3000-e2e).
   e2e_tier1:
@@ -355,6 +366,8 @@ models:
     wh_galaxy: 345
     wh_galaxy_perf: 150
     bh_galaxy: 470
+    # blaze_models_prefill_tests.yaml sum of bh_spsg job timeouts (tightened from 840)
+    bh_spsg: 480
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600

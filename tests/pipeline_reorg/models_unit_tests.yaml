@@ -740,3 +740,23 @@
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+
+- name: panoptic-deeplab unit tests
+  cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/tests/pcc/ --timeout=420
+  model: panoptic-deeplab
+  skus:
+    bh_p150b_civ2:
+      timeout: 8
+      tier: 3
+  owner_id: U09LK84G4TF # Nikola Milicevic
+  team: shield
+
+- name: bevformer unit tests
+  cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/bevformer/tests/pcc/ --timeout=660
+  model: bevformer
+  skus:
+    bh_p150b_civ2:
+      timeout: 12
+      tier: 3
+  owner_id: U08E1JCMAJF # Marko Bezulj
+  team: shield
