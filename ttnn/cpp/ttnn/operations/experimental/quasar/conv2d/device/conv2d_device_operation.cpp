@@ -47,8 +47,9 @@ TensorSpec Conv2dDeviceOperation::compute_output_specs(
     // chained at the host level later). The output tensor is the per-core tilized activation shard:
     // [per_core_out_matrix_height_ntile*32 rows, act_block_w_ntiles(=K)*32 cols], height-sharded TILE. This
     // must match the OUT DFB the factory sizes for split_program_tilize_only (num_entries = M*K tiles).
-    if ((std::getenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM") != nullptr) && args.memory_config.is_sharded() &&
-        args.memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+    if (((std::getenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM") != nullptr) ||
+         (std::getenv("TT_METAL_QSR_CONV_UNPACK_TILIZE") != nullptr)) &&
+        args.memory_config.is_sharded() && args.memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
         const uint32_t m_ntiles = args.parallelization_config.per_core_out_matrix_height_ntile;
         const uint32_t k_ntiles = args.block_config.act_block_w_ntiles;
         const uint32_t num_cores_nhw = args.parallelization_config.num_cores_nhw;
@@ -139,7 +140,8 @@ void Conv2dDeviceOperation::validate_on_program_cache_miss(
     // OPTION B / Program A (TT_METAL_QSR_CONV_SPLIT_PROGRAM): the op output is the tilized activation
     // (width = act_block_w_ntiles = K), NOT the conv output (width = per_core_out_matrix_width_ntile = N),
     // so the N-width / out_subblock checks below do not apply. Skip them for the split-program path.
-    if (args.memory_config.is_sharded() && std::getenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM") == nullptr) {
+    if (args.memory_config.is_sharded() && std::getenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM") == nullptr &&
+        std::getenv("TT_METAL_QSR_CONV_UNPACK_TILIZE") == nullptr) {
         uint32_t per_core_out_matrix_width_ntiles = args.parallelization_config.per_core_out_matrix_width_ntile;
         uint32_t out_width_ntiles =
             compute_output_specs(args, tensor_args).padded_shape()[-1] / tt::constants::TILE_WIDTH;

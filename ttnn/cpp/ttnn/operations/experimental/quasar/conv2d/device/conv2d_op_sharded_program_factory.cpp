@@ -215,6 +215,7 @@ const m2::DFBSpecName DFB_BIAS{"bias"};                        // weights writer
 const m2::DFBSpecName DFB_MATMUL_PARTIALS{"matmul_partials"};  // compute self-loop (borrows OUTPUT when aliased)
 const m2::DFBSpecName DFB_OUT{"out"};                          // compute packer -> OUTPUT (degenerate DM consumer)
 const m2::DFBSpecName DFB_READER_INDICES{"reader_indices"};    // fresh L1 DMA landing (DRAM-config path only)
+const m2::DFBSpecName DFB_IN_SCALAR{"in_scalar"};              // reduce scalar srcB (unpack-tilize probe only)
 
 const m2::TensorParamName TP_INPUT{"input"};
 const m2::TensorParamName TP_OUTPUT{"output"};
@@ -717,10 +718,24 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // confirm the Quasar 0x19 (stale MATH DEST-dvalid left by the matmul rejecting the tilize datacopy) clears.
     // Program B (the matmul over these tilized activations) is chained separately at the host level in a later
     // increment. Same eligibility as Option C: the resnet stem / 1x1 height-sharded single-K-block shape.
-    const bool split_program_tilize_only = (std::getenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM") != nullptr) &&
-                                           height_sharded && !is_conv_1d_depthwise_conv && !enable_split_reader &&
-                                           !enable_activation_reuse && (in0_num_blocks_w == 1) &&
-                                           (num_blocks_weight_w_per_core == 1);
+    // OPTION B — UNPACK-TILIZE PROBE (TT_METAL_QSR_CONV_UNPACK_TILIZE). Runs the conv's gathered activation
+    // through the MAXPOOL-style unpack-tilize path (unpack_tilizeA_B_block + reduce) instead of tilize_block,
+    // to localize the intrinsic Quasar 0x19 to tilize_block vs unpack-tilize. Shares ALL the standalone
+    // Program-A plumbing below (folded into split_program_tilize_only); differs only in the compute kernel,
+    // an extra reduce-scalar (srcB) DFB, and REDUCE_OP/REDUCE_DIM compute defines.
+    const bool split_program_unpack_tilize = (std::getenv("TT_METAL_QSR_CONV_UNPACK_TILIZE") != nullptr) &&
+                                             height_sharded && !is_conv_1d_depthwise_conv && !enable_split_reader &&
+                                             !enable_activation_reuse && (in0_num_blocks_w == 1) &&
+                                             (num_blocks_weight_w_per_core == 1);
+
+    // "Standalone Program A" plumbing flag — TRUE for BOTH the tilize-only kernel (TT_METAL_QSR_CONV_SPLIT_PROGRAM)
+    // AND the unpack-tilize probe (above): reader gather + tilize into a PLAIN ACT_TILIZED, no matmul / weights /
+    // writer, borrowed OUT kept only to satisfy TP_OUTPUT. They differ only where split_program_unpack_tilize is
+    // consulted (compute kernel selection, scalar DFB, compute defines, compute bindings).
+    const bool split_program_tilize_only =
+        ((std::getenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM") != nullptr) || split_program_unpack_tilize) &&
+        height_sharded && !is_conv_1d_depthwise_conv && !enable_split_reader && !enable_activation_reuse &&
+        (in0_num_blocks_w == 1) && (num_blocks_weight_w_per_core == 1);
 
     // Program A (tilize-only) EXPERIMENT: the pure tilize (conv_tilize_only_metal2.cpp) faults with ERROR_TRISC1
     // 0x19 mid-stream (after several 4-wide blocks tilize cleanly, config identical to the PASSING standalone
@@ -1091,6 +1106,19 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                 .num_entries = tilized_info.num_pages * num_blocks_act_h_per_core,
                 .data_format_metadata = tilized_info.data_format,
             });
+            if (split_program_unpack_tilize) {
+                // UNPACK-TILIZE PROBE: reduce-scalar (srcB) DFB — one tile, face geometry {face_r_dim=1,
+                // num_faces=4} mirroring the pool's scalar CB (pool_multi_core_program_factory.cpp scalar_face).
+                // The probe compute kernel provides its credit as a self-loop and leaves the value unfilled
+                // (throwaway reduce). Reuse the ACT_TILIZED tile size for the entry.
+                spec.dataflow_buffers.push_back(m2::DataflowBufferSpec{
+                    .unique_id = DFB_IN_SCALAR,
+                    .entry_size = tilized_info.page_size,
+                    .num_entries = 1,
+                    .data_format_metadata = tilized_info.data_format,
+                    .unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 1, .num_faces = 4},
+                });
+            }
         } else if (split_tilize_matmul) {
             // OPTION C: hold ALL height blocks of tilized activation at once (num_blocks_act_h_per_core x
             // one block) so Phase 1 can tilize every block before Phase 2's matmul consumes them. NB: the
@@ -1173,14 +1201,16 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                "reader_conv_activations_padded_with_halo_3x3_weights_v2_metal2.cpp";
     }();
     const std::string compute_kernel =
-        is_conv_1d_depthwise_conv   ? "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
-                                      "compute_depthwise_conv1d_metal2.cpp"
-        : split_program_tilize_only ? "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
-                                      "conv_tilize_only_metal2.cpp"
-        : split_tilize_matmul       ? "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
-                                      "conv_bmm_split_tilize_metal2.cpp"
-                                    : "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
-                                      "conv_bmm_tilize_metal2.cpp";
+        is_conv_1d_depthwise_conv     ? "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
+                                        "compute_depthwise_conv1d_metal2.cpp"
+        : split_program_unpack_tilize ? "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
+                                        "conv_unpack_tilize_probe_metal2.cpp"
+        : split_program_tilize_only   ? "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
+                                        "conv_tilize_only_metal2.cpp"
+        : split_tilize_matmul         ? "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
+                                        "conv_bmm_split_tilize_metal2.cpp"
+                                      : "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
+                                        "conv_bmm_tilize_metal2.cpp";
     const std::string writer_sender_kernel =
         block_sharded ? "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
                         "writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks_metal2.cpp"
@@ -1642,6 +1672,18 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             m2::DFBBinding{
                 .dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER},
         };
+        if (split_program_unpack_tilize) {
+            // UNPACK-TILIZE PROBE: the reduce scalar (srcB). Compute self-loop (PRODUCER + CONSUMER): the probe
+            // reserves+pushes the credit once and waits on it, never popping (one-scalar-per-core style).
+            compute_dfb_bindings.push_back(m2::DFBBinding{
+                .dfb_spec_name = DFB_IN_SCALAR,
+                .accessor_name = "in_scalar",
+                .endpoint_type = m2::DFBEndpointType::PRODUCER});
+            compute_dfb_bindings.push_back(m2::DFBBinding{
+                .dfb_spec_name = DFB_IN_SCALAR,
+                .accessor_name = "in_scalar",
+                .endpoint_type = m2::DFBEndpointType::CONSUMER});
+        }
     } else if (is_conv_1d_depthwise_conv) {
         // Depthwise: consumes ACT (raw RM) + WEIGHTS, produces ACT_TILIZED (tilize out) and consumes it,
         // produces OUT (dest-reuse accumulate, packer-into-output; no MATMUL_PARTIALS CB).
@@ -1804,6 +1846,12 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         if (check_skip_compute) {
             compute_kernel_spec.compiler_options.defines.insert({"CHECK_SKIP_COMPUTE", "1"});
             compute_kernel_spec.runtime_arg_schema = {.runtime_arg_names = {"skip_compute"}};
+        }
+        if (split_program_unpack_tilize) {
+            // UNPACK-TILIZE PROBE: tilizeA_B_reduce_init + reduce_tile_math read REDUCE_OP / REDUCE_DIM macros
+            // (mirroring the pool). MAX / REDUCE_ROW — the reduce output is throwaway; only completion matters.
+            compute_kernel_spec.compiler_options.defines.insert({"REDUCE_OP", "PoolType::MAX"});
+            compute_kernel_spec.compiler_options.defines.insert({"REDUCE_DIM", "ReduceDim::REDUCE_ROW"});
         }
     }
 
