@@ -519,6 +519,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-model-len", type=int, required=True)
     parser.add_argument("--num-gpu-blocks-override", type=int, default=None)
     parser.add_argument("--prompt-lengths", type=_parse_lengths, required=True)
+    parser.add_argument(
+        "--prompt-text",
+        default=None,
+        help="Use this REAL prompt text (tokenized on the server) instead of the synthetic filler "
+        "prefix; --prompt-lengths then just controls how many times it runs. Lets early-halt be "
+        "measured on natural content (which converges), not repetitive filler.",
+    )
     parser.add_argument("--blocks", type=int, default=4)
     parser.add_argument("--max-denoise-steps", type=_parse_max_denoise_steps, default=MAX_DENOISE_STEPS)
     parser.add_argument("--warmup-requests", type=int, default=0)
@@ -628,7 +635,24 @@ def run(args) -> dict:
         result["server"]["model_build"] = builds[0]
 
         for target in args.prompt_lengths:
-            prompt_ids, prompt_meta = _token_prefix(base_url, target)
+            if args.prompt_text:
+                tok = _http_json(
+                    base_url,
+                    "/tokenize",
+                    {"model": MODEL_NAME, "prompt": args.prompt_text, "add_special_tokens": True},
+                    timeout=120,
+                )
+                prompt_ids = [int(t) for t in tok["tokens"]]
+                target = len(prompt_ids)
+                prompt_meta = {
+                    "recipe": "real prompt text",
+                    "text": args.prompt_text,
+                    "prompt_token_sha256": hashlib.sha256(
+                        json.dumps(prompt_ids, separators=(",", ":")).encode()
+                    ).hexdigest(),
+                }
+            else:
+                prompt_ids, prompt_meta = _token_prefix(base_url, target)
             payload = {
                 "model": MODEL_NAME,
                 "prompt": prompt_ids,
